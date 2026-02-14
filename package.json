@@ -1,7 +1,7 @@
 {
   "name": "@hasna/skills",
-  "version": "0.0.1",
-  "description": "Open source skill library - Install AI agent skills with a single command",
+  "version": "0.0.2",
+  "description": "Skills library for AI coding agents",
   "type": "module",
   "bin": {
     "skills": "./bin/index.js",
@@ -59,6 +59,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/open-skills.git"
+    "url": "git+https://github.com/hasna/skills.git"
   }
 }
