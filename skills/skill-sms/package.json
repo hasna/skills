@@ -1,0 +1,38 @@
+{
+  "name": "mcp-sms",
+  "version": "1.0.0",
+  "description": "MCP SMS server for AI agents - Bun/TypeScript with Twilio",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "mcp-sms": "./src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun --watch src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target node",
+    "test": "bun test",
+    "test:send": "bun run scripts/test-send.ts",
+    "server": "bun run src/server.ts"
+  },
+  "keywords": [
+    "mcp",
+    "sms",
+    "twilio",
+    "ai",
+    "agent"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.24.3",
+    "twilio": "^5.6.0",
+    "zod": "^4.1.13"
+  }
+}

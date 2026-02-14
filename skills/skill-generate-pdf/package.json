@@ -1,0 +1,21 @@
+{
+  "name": "@hasnaxyz/skill-generate-pdf",
+  "version": "0.1.0",
+  "description": "Generate PDF documents",
+  "type": "module",
+  "bin": {
+    "skill-generate-pdf": "./bin/cli.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun run --watch src/index.ts",
+    "cli": "bun run bin/cli.ts"
+  },
+  "dependencies": {
+    "commander": "^13.1.0"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "restricted"
+  }
+}

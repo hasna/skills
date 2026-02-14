@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+*.png
+*.jpg
+*.jpeg
+*.zip
+output/

@@ -1,0 +1,49 @@
+{
+  "name": "@hasnaxyz/skill-subtitlegenerate",
+  "version": "0.1.0",
+  "description": "Generate styled subtitles from audio using OpenAI Whisper",
+  "type": "module",
+  "bin": {
+    "skill-subtitlegenerate": "./bin/cli.ts",
+    "subtitle-generate": "./bin/cli.ts"
+  },
+  "scripts": {
+    "dev": "bun run bin/cli.ts",
+    "build": "bun build bin/cli.ts --outdir dist --target node",
+    "typecheck": "tsc --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hasnaxyz/skill-subtitlegenerate.git"
+  },
+  "author": "Hasna",
+  "license": "MIT",
+  "keywords": [
+    "subtitles",
+    "srt",
+    "vtt",
+    "ass",
+    "transcription",
+    "openai",
+    "whisper",
+    "styling"
+  ],
+  "files": [
+    "bin",
+    "src",
+    "tsconfig.json"
+  ],
+  "dependencies": {
+    "chalk": "^5.4.1",
+    "commander": "^13.0.0",
+    "openai": "^4.77.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.0",
+    "typescript": "^5.7.0"
+  },
+  "publishConfig": {
+    "access": "restricted",
+    "registry": "https://registry.npmjs.org/"
+  }
+}

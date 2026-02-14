@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment files
+.env
+.env.local
+!.env.example
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Downloaded videos
+downloads/
+/data/
+
+# Legacy Python files
+__pycache__/
+*.py[cod]
+venv/
+.pytest_cache/

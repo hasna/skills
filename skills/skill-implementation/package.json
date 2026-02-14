@@ -1,0 +1,34 @@
+{
+  "name": "skill-implementation",
+  "version": "1.0.0",
+  "description": "Creates .implementation scaffold for project development tracking",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "skill-implementation": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun run --watch src/index.ts",
+    "test": "bun test"
+  },
+  "keywords": [
+    "claude-code",
+    "implementation",
+    "scaffold",
+    "project",
+    "bun"
+  ],
+  "author": "Hasna",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasnaxyz/skill-implementation.git"
+  }
+}

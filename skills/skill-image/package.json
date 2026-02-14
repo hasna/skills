@@ -1,0 +1,36 @@
+{
+  "name": "skill-image",
+  "version": "1.0.0",
+  "description": "Generate images using AI providers (OpenAI, Google Gemini 3.0, xAI Aurora)",
+  "main": "src/index.ts",
+  "type": "module",
+  "bin": {
+    "skill-image": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "generate": "bun run src/index.ts generate"
+  },
+  "keywords": [
+    "image-generation",
+    "ai",
+    "dall-e",
+    "imagen",
+    "aurora",
+    "openai",
+    "google",
+    "xai"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasnaxyz/skill-image.git"
+  }
+}

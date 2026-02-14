@@ -1,0 +1,22 @@
+{
+  "name": "skill-deploy",
+  "version": "1.0.0",
+  "description": "Deployment CLI for managing EC2 deployments with automated health checks",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "skill-deploy": "src/index-local.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun run --watch src/index.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasnaxyz/skill-deploy.git"
+  }
+}

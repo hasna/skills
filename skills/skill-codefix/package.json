@@ -1,0 +1,25 @@
+{
+  "name": "skill-codefix",
+  "version": "1.0.0",
+  "description": "Code quality CLI for auto-linting, formatting, and fixing code issues",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "skill-codefix": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun run --watch src/index.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasnaxyz/skill-codefix.git"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "skill-projectbuild",
+  "version": "1.0.0",
+  "description": "Project build skill",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "skill-projectbuild": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun run --watch src/index.ts"
+  },
+  "keywords": [
+    "claude",
+    "ai",
+    "skill"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasnaxyz/skill-projectbuild.git"
+  }
+}

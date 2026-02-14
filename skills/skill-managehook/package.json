@@ -1,0 +1,27 @@
+{
+  "name": "service-{{name}}",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "{{description}}",
+  "bin": {
+    "{{name}}": "./bin/cli.ts"
+  },
+  "scripts": {
+    "dev": "bun run --watch src/server/index.ts",
+    "start": "bun run src/server/index.ts",
+    "cli": "bun run bin/cli.ts",
+    "db:migrate": "bun run scripts/migrate.ts",
+    "db:seed": "bun run scripts/seed.ts",
+    "db:reset": "bun run scripts/migrate.ts && bun run scripts/seed.ts"
+  },
+  "dependencies": {
+    "commander": "^13.0.0",
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "typescript": "^5.7.2"
+  },
+  "author": "{{author}}",
+  "license": "MIT"
+}

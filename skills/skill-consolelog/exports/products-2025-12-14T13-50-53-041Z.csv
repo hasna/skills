@@ -1,0 +1,16 @@
+id,name,codename,displayName,sku,type,category,price,recurring,shipping,createdAt,inventory,status
+prod_3,Supplement Package 6 Bottles,prod_3,Supplement Package 6 Bottles,,Frontend,,$149.99,,,"February 16, 2025",0,active
+prod_2,Supplement Package 3 Bottles,prod_2,Supplement Package 3 Bottles,,Frontend,,$79.99,,,"February 16, 2025",0,active
+prod_1,Supplement Package 1 Bottle,prod_1,Supplement Package 1 Bottle,,Frontend,,$29.99,,,"February 16, 2025",0,active
+DummyProduct,Dummy Product,DummyProduct,Dummy Product,,Frontend,,$0.00,,,"February 16, 2025",0,active
+7037-prod11:6,Grow Big Or - 6 Bottles (10% off),prod11,Grow Big Or - 6 Bottles (10% off),7037-prod11:6,Frontend,,$264.00,,,"December 20, 2021",0,active
+7037-prod10:4,Grow Big Or - 4 Bottles (10% off),prod10,Grow Big Or - 4 Bottles (10% off),7037-prod10:4,Frontend,,$176.00,,,"December 20, 2021",0,active
+7037-prod9:6,Grow Big Or - 6 Bottles,prod9,Grow Big Or - 6 Bottles,7037-prod9:6,Frontend,,$294.00,,,"December 20, 2021",0,active
+7037-prod8:3,Grow Big Or - 3 Bottles,prod8,Grow Big Or - 3 Bottles,7037-prod8:3,Frontend,,$177.00,,International ($15.95),"December 20, 2021",0,active
+7037-prod7:1,Grow Big Or - 1 Bottle,prod7,Grow Big Or - 1 Bottle,7037-prod7:1,Frontend,,$69.00,,International ($15.95),"December 20, 2021",0,active
+7037-prod6:3,Life Defend - 3 Bottles (upsell),prod6,Life Defend - 3 Bottles,7037-prod6:3,Frontend,,$147.00,,International ($15.95),"December 20, 2021",0,active
+7037-prod5:3,Grow Big Or - 3 Bottles Discount (upsell),prod5,Grow Big Or - 3 Bottles Discount,7037-prod5:3,Frontend,,$117.00,,International ($15.95),"December 20, 2021",0,active
+7037-prod4:6,Grow Big Or - 6 Bottles (upsell),prod4,Grow Big Or - 6 Bottles,7037-prod4:6,Frontend,,$234.00,,International ($15.95),"December 20, 2021",0,active
+7037-prod3:4,Grow Big Or - 4 Bottles,prod3,Grow Big Or - 4 Bottles,7037-prod3:4,Frontend,,$196.00,,International ($15.95),"December 20, 2021",0,active
+7037-prod2:2,Grow Big Or - 2 Bottles,prod2,Grow Big Or - 2 Bottles,7037-prod2:2,Frontend,,$118.00,,,"December 20, 2021",0,active
+7037-prod1:1,Grow Big Or - 1 Bottle,prod1,Grow Big Or - 1 Bottle,7037-prod1:1,Frontend,,$69.00,,,"December 6, 2021",0,active

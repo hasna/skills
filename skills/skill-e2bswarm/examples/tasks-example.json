@@ -1,0 +1,38 @@
+[
+  {
+    "id": "1",
+    "subject": "Setup project structure",
+    "description": "Create the basic project structure with src/, tests/, and config files.\n\n**Files to create:**\n- src/index.ts\n- tests/index.test.ts\n- tsconfig.json\n\n**Acceptance criteria:**\n- All files exist\n- TypeScript compiles without errors",
+    "activeForm": "Setting up project structure",
+    "status": "pending",
+    "blocks": ["2", "3"],
+    "blockedBy": []
+  },
+  {
+    "id": "2",
+    "subject": "Implement core functionality",
+    "description": "Implement the main feature in src/index.ts.\n\n**Requirements:**\n- Export a main function\n- Handle errors gracefully\n- Add logging\n\n**Acceptance criteria:**\n- Function works as expected\n- Errors are caught and logged",
+    "activeForm": "Implementing core functionality",
+    "status": "pending",
+    "blocks": ["4"],
+    "blockedBy": ["1"]
+  },
+  {
+    "id": "3",
+    "subject": "Write unit tests",
+    "description": "Write comprehensive unit tests for the core functionality.\n\n**Test cases:**\n- Happy path\n- Error handling\n- Edge cases\n\n**Acceptance criteria:**\n- All tests pass\n- Coverage > 80%",
+    "activeForm": "Writing unit tests",
+    "status": "pending",
+    "blocks": ["4"],
+    "blockedBy": ["1"]
+  },
+  {
+    "id": "4",
+    "subject": "Add documentation",
+    "description": "Add README and inline documentation.\n\n**Documentation:**\n- README.md with usage examples\n- JSDoc comments on exported functions\n\n**Acceptance criteria:**\n- README is clear and complete\n- All exports have documentation",
+    "activeForm": "Adding documentation",
+    "status": "pending",
+    "blocks": [],
+    "blockedBy": ["2", "3"]
+  }
+]

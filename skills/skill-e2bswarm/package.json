@@ -1,0 +1,65 @@
+{
+  "name": "@hasnaxyz/skill-e2bswarm",
+  "version": "0.4.1",
+  "description": "Spawn E2B sandbox instances for parallel Claude Code task execution",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "skill-e2bswarm": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "SKILL.md",
+    "README.md",
+    "templates",
+    "examples"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun --watch src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target bun --minify && chmod +x dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run build",
+    "link": "ln -sf $(pwd) ~/.claude/skills/skill-e2bswarm",
+    "link:global": "bun link"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "e2b": "^1.0.5",
+    "ora": "^8.0.1"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  },
+  "keywords": [
+    "e2b",
+    "claude-code",
+    "claude",
+    "sandbox",
+    "parallel-execution",
+    "task-runner",
+    "ai-agent",
+    "swarm"
+  ],
+  "author": "hasnaxyz",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hasnaxyz/skill-e2bswarm.git"
+  },
+  "homepage": "https://github.com/hasnaxyz/skill-e2bswarm#readme",
+  "bugs": {
+    "url": "https://github.com/hasnaxyz/skill-e2bswarm/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "private": false,
+  "publishConfig": {
+    "access": "restricted"
+  }
+}

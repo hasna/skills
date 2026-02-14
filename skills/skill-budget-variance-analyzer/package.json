@@ -1,0 +1,26 @@
+{
+  "name": "@hasnaxyz/skill-budget-variance-analyzer",
+  "version": "0.1.0",
+  "description": "Budget vs actual variance analysis",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "skill-budget-variance-analyzer": "bin/cli.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun run --watch src/index.ts",
+    "lint": "bunx --bun tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.8.3"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "restricted"
+  }
+}

@@ -1,0 +1,186 @@
+{
+  "description": "Top 100 API documentation sources for indexing",
+  "defaultMaxPages": 1000,
+  "categories": {
+    "llm-providers": {
+      "description": "Large Language Model and AI providers",
+      "apis": [
+        { "name": "openai", "url": "https://platform.openai.com/docs/api-reference", "priority": 1, "maxPages": 1000 },
+        { "name": "anthropic", "url": "https://docs.anthropic.com/en/api", "priority": 1, "maxPages": 1000 },
+        { "name": "google-gemini", "url": "https://ai.google.dev/gemini-api/docs", "priority": 1, "maxPages": 1000 },
+        { "name": "mistral", "url": "https://docs.mistral.ai/api", "priority": 1, "maxPages": 1000 },
+        { "name": "perplexity", "url": "https://docs.perplexity.ai/api-reference", "priority": 1, "maxPages": 1000 },
+        { "name": "xai", "url": "https://docs.x.ai/api", "priority": 1, "maxPages": 1000 },
+        { "name": "cohere", "url": "https://docs.cohere.com/reference", "priority": 2, "maxPages": 1000 },
+        { "name": "together", "url": "https://docs.together.ai/reference", "priority": 2, "maxPages": 1000 },
+        { "name": "groq", "url": "https://console.groq.com/docs/api-reference", "priority": 2, "maxPages": 1000 },
+        { "name": "fireworks", "url": "https://docs.fireworks.ai/api-reference", "priority": 2, "maxPages": 1000 },
+        { "name": "deepseek", "url": "https://api-docs.deepseek.com", "priority": 2, "maxPages": 1000 },
+        { "name": "replicate", "url": "https://replicate.com/docs/reference/http", "priority": 2, "maxPages": 1000 },
+        { "name": "huggingface", "url": "https://huggingface.co/docs/api-inference", "priority": 2, "maxPages": 1000 },
+        { "name": "amazon-bedrock", "url": "https://docs.aws.amazon.com/bedrock/latest/APIReference", "priority": 2, "maxPages": 1000 },
+        { "name": "azure-openai", "url": "https://learn.microsoft.com/en-us/azure/ai-services/openai/reference", "priority": 2, "maxPages": 1000 }
+      ]
+    },
+    "ai-tools": {
+      "description": "AI-powered tools and services",
+      "apis": [
+        { "name": "stabilityai", "url": "https://platform.stability.ai/docs/api-reference", "priority": 1, "maxPages": 1000 },
+        { "name": "elevenlabs", "url": "https://elevenlabs.io/docs/api-reference", "priority": 2, "maxPages": 1000 },
+        { "name": "assemblyai", "url": "https://www.assemblyai.com/docs/api-reference", "priority": 2, "maxPages": 1000 },
+        { "name": "deepgram", "url": "https://developers.deepgram.com/reference", "priority": 2, "maxPages": 1000 },
+        { "name": "pinecone", "url": "https://docs.pinecone.io/reference/api", "priority": 2, "maxPages": 1000 },
+        { "name": "weaviate", "url": "https://weaviate.io/developers/weaviate/api/rest", "priority": 3, "maxPages": 1000 },
+        { "name": "qdrant", "url": "https://qdrant.tech/documentation/interfaces", "priority": 3, "maxPages": 1000 },
+        { "name": "langchain", "url": "https://python.langchain.com/docs", "priority": 2, "maxPages": 1000 },
+        { "name": "llamaindex", "url": "https://docs.llamaindex.ai/en/stable/api_reference", "priority": 3, "maxPages": 1000 }
+      ]
+    },
+    "search-data": {
+      "description": "Search and data retrieval APIs",
+      "apis": [
+        { "name": "exa", "url": "https://docs.exa.ai/reference", "priority": 1, "maxPages": 1000 },
+        { "name": "firecrawl", "url": "https://docs.firecrawl.dev", "priority": 1, "maxPages": 1000 },
+        { "name": "serper", "url": "https://serper.dev/api-reference", "priority": 2, "maxPages": 1000 },
+        { "name": "serpapi", "url": "https://serpapi.com/search-api", "priority": 2, "maxPages": 1000 },
+        { "name": "tavily", "url": "https://docs.tavily.com/docs/tavily-api/rest-api", "priority": 2, "maxPages": 1000 },
+        { "name": "browserless", "url": "https://docs.browserless.io/reference", "priority": 3, "maxPages": 1000 },
+        { "name": "scrapingbee", "url": "https://www.scrapingbee.com/documentation", "priority": 3, "maxPages": 1000 },
+        { "name": "algolia", "url": "https://www.algolia.com/doc/api-reference/rest-api", "priority": 2, "maxPages": 1000 },
+        { "name": "elasticsearch", "url": "https://www.elastic.co/guide/en/elasticsearch/reference/current/rest-apis.html", "priority": 3, "maxPages": 1000 }
+      ]
+    },
+    "communication": {
+      "description": "Email, SMS, and messaging APIs",
+      "apis": [
+        { "name": "resend", "url": "https://resend.com/docs/api-reference", "priority": 1, "maxPages": 1000 },
+        { "name": "twilio", "url": "https://www.twilio.com/docs/usage/api", "priority": 1, "maxPages": 1000 },
+        { "name": "sendgrid", "url": "https://docs.sendgrid.com/api-reference", "priority": 2, "maxPages": 1000 },
+        { "name": "postmark", "url": "https://postmarkapp.com/developer/api", "priority": 3, "maxPages": 1000 },
+        { "name": "mailgun", "url": "https://documentation.mailgun.com/en/latest/api_reference.html", "priority": 3, "maxPages": 1000 },
+        { "name": "messagebird", "url": "https://developers.messagebird.com/api", "priority": 3, "maxPages": 1000 },
+        { "name": "vonage", "url": "https://developer.vonage.com/api", "priority": 3, "maxPages": 1000 },
+        { "name": "slack", "url": "https://api.slack.com/methods", "priority": 1, "maxPages": 1000 },
+        { "name": "discord", "url": "https://discord.com/developers/docs/reference", "priority": 2, "maxPages": 1000 },
+        { "name": "telegram", "url": "https://core.telegram.org/bots/api", "priority": 2, "maxPages": 1000 }
+      ]
+    },
+    "social-media": {
+      "description": "Social media platform APIs",
+      "apis": [
+        { "name": "twitter-x", "url": "https://developer.x.com/en/docs/x-api", "priority": 1, "maxPages": 1000 },
+        { "name": "meta-graph", "url": "https://developers.facebook.com/docs/graph-api/reference", "priority": 1, "maxPages": 1000 },
+        { "name": "instagram", "url": "https://developers.facebook.com/docs/instagram-api/reference", "priority": 2, "maxPages": 1000 },
+        { "name": "youtube", "url": "https://developers.google.com/youtube/v3/docs", "priority": 1, "maxPages": 1000 },
+        { "name": "tiktok", "url": "https://developers.tiktok.com/doc/overview", "priority": 2, "maxPages": 1000 },
+        { "name": "snapchat", "url": "https://marketingapi.snapchat.com/docs", "priority": 2, "maxPages": 1000 },
+        { "name": "linkedin", "url": "https://learn.microsoft.com/en-us/linkedin/shared/api-guide", "priority": 2, "maxPages": 1000 },
+        { "name": "reddit", "url": "https://www.reddit.com/dev/api", "priority": 3, "maxPages": 1000 },
+        { "name": "pinterest", "url": "https://developers.pinterest.com/docs/api/v5", "priority": 3, "maxPages": 1000 }
+      ]
+    },
+    "productivity": {
+      "description": "Productivity and collaboration tools",
+      "apis": [
+        { "name": "notion", "url": "https://developers.notion.com/reference", "priority": 1, "maxPages": 1000 },
+        { "name": "linear", "url": "https://developers.linear.app/docs/graphql/working-with-the-graphql-api", "priority": 1, "maxPages": 1000 },
+        { "name": "asana", "url": "https://developers.asana.com/reference/rest-api-reference", "priority": 2, "maxPages": 1000 },
+        { "name": "jira", "url": "https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro", "priority": 2, "maxPages": 1000 },
+        { "name": "monday", "url": "https://developer.monday.com/api-reference/reference", "priority": 3, "maxPages": 1000 },
+        { "name": "clickup", "url": "https://clickup.com/api", "priority": 3, "maxPages": 1000 },
+        { "name": "airtable", "url": "https://airtable.com/developers/web/api", "priority": 2, "maxPages": 1000 },
+        { "name": "trello", "url": "https://developer.atlassian.com/cloud/trello/rest/api-group-actions", "priority": 3, "maxPages": 1000 },
+        { "name": "todoist", "url": "https://developer.todoist.com/rest/v2", "priority": 3, "maxPages": 1000 }
+      ]
+    },
+    "google-cloud": {
+      "description": "Google Cloud and Workspace APIs",
+      "apis": [
+        { "name": "google-cloud", "url": "https://cloud.google.com/apis/docs/overview", "priority": 2, "maxPages": 1000 },
+        { "name": "gmail", "url": "https://developers.google.com/gmail/api/reference/rest", "priority": 1, "maxPages": 1000 },
+        { "name": "google-calendar", "url": "https://developers.google.com/calendar/api/v3/reference", "priority": 1, "maxPages": 1000 },
+        { "name": "google-drive", "url": "https://developers.google.com/drive/api/reference/rest/v3", "priority": 1, "maxPages": 1000 },
+        { "name": "google-sheets", "url": "https://developers.google.com/sheets/api/reference/rest", "priority": 2, "maxPages": 1000 },
+        { "name": "google-contacts", "url": "https://developers.google.com/people/api/rest", "priority": 2, "maxPages": 1000 },
+        { "name": "google-maps", "url": "https://developers.google.com/maps/documentation", "priority": 2, "maxPages": 1000 }
+      ]
+    },
+    "payments-finance": {
+      "description": "Payment processing and financial APIs",
+      "apis": [
+        { "name": "stripe", "url": "https://docs.stripe.com/api", "priority": 1, "maxPages": 1000 },
+        { "name": "mercury", "url": "https://docs.mercury.com/reference", "priority": 1, "maxPages": 1000 },
+        { "name": "plaid", "url": "https://plaid.com/docs/api", "priority": 2, "maxPages": 1000 },
+        { "name": "square", "url": "https://developer.squareup.com/reference/square", "priority": 2, "maxPages": 1000 },
+        { "name": "paypal", "url": "https://developer.paypal.com/api/rest", "priority": 2, "maxPages": 1000 },
+        { "name": "wise", "url": "https://docs.wise.com/api-docs", "priority": 3, "maxPages": 1000 },
+        { "name": "coinbase", "url": "https://docs.cdp.coinbase.com/exchange/reference", "priority": 3, "maxPages": 1000 },
+        { "name": "quickbooks", "url": "https://developer.intuit.com/app/developer/qbo/docs/api/accounting/all-entities", "priority": 3, "maxPages": 1000 }
+      ]
+    },
+    "developer-tools": {
+      "description": "Developer infrastructure and tools",
+      "apis": [
+        { "name": "github", "url": "https://docs.github.com/en/rest", "priority": 1, "maxPages": 1000 },
+        { "name": "gitlab", "url": "https://docs.gitlab.com/ee/api/api_resources.html", "priority": 2, "maxPages": 1000 },
+        { "name": "cloudflare", "url": "https://developers.cloudflare.com/api", "priority": 1, "maxPages": 1000 },
+        { "name": "vercel", "url": "https://vercel.com/docs/rest-api", "priority": 2, "maxPages": 1000 },
+        { "name": "netlify", "url": "https://docs.netlify.com/api/get-started", "priority": 3, "maxPages": 1000 },
+        { "name": "railway", "url": "https://docs.railway.app/reference/public-api", "priority": 3, "maxPages": 1000 },
+        { "name": "render", "url": "https://api-docs.render.com/reference/introduction", "priority": 3, "maxPages": 1000 },
+        { "name": "supabase", "url": "https://supabase.com/docs/reference", "priority": 2, "maxPages": 1000 },
+        { "name": "firebase", "url": "https://firebase.google.com/docs/reference/rest", "priority": 2, "maxPages": 1000 },
+        { "name": "aws", "url": "https://docs.aws.amazon.com", "priority": 2, "maxPages": 1000 },
+        { "name": "digitalocean", "url": "https://docs.digitalocean.com/reference/api", "priority": 3, "maxPages": 1000 }
+      ]
+    },
+    "crm-support": {
+      "description": "CRM and customer support platforms",
+      "apis": [
+        { "name": "zendesk", "url": "https://developer.zendesk.com/api-reference", "priority": 1, "maxPages": 1000 },
+        { "name": "hubspot", "url": "https://developers.hubspot.com/docs/api/overview", "priority": 2, "maxPages": 1000 },
+        { "name": "salesforce", "url": "https://developer.salesforce.com/docs/apis", "priority": 2, "maxPages": 1000 },
+        { "name": "intercom", "url": "https://developers.intercom.com/docs/references/rest-api/api.intercom.io", "priority": 2, "maxPages": 1000 },
+        { "name": "freshdesk", "url": "https://developers.freshdesk.com/api", "priority": 3, "maxPages": 1000 },
+        { "name": "crisp", "url": "https://docs.crisp.chat/api/v1", "priority": 3, "maxPages": 1000 }
+      ]
+    },
+    "documents-esign": {
+      "description": "Document management and e-signature",
+      "apis": [
+        { "name": "pandadoc", "url": "https://developers.pandadoc.com/reference", "priority": 1, "maxPages": 1000 },
+        { "name": "docusign", "url": "https://developers.docusign.com/docs/esign-rest-api/reference", "priority": 2, "maxPages": 1000 },
+        { "name": "dropbox", "url": "https://www.dropbox.com/developers/documentation/http/documentation", "priority": 2, "maxPages": 1000 },
+        { "name": "box", "url": "https://developer.box.com/reference", "priority": 3, "maxPages": 1000 }
+      ]
+    },
+    "analytics-data": {
+      "description": "Analytics and data platforms",
+      "apis": [
+        { "name": "mixpanel", "url": "https://developer.mixpanel.com/reference/overview", "priority": 2, "maxPages": 1000 },
+        { "name": "amplitude", "url": "https://www.docs.developers.amplitude.com/analytics/apis", "priority": 2, "maxPages": 1000 },
+        { "name": "segment", "url": "https://segment.com/docs/api", "priority": 2, "maxPages": 1000 },
+        { "name": "posthog", "url": "https://posthog.com/docs/api", "priority": 3, "maxPages": 1000 },
+        { "name": "datadog", "url": "https://docs.datadoghq.com/api/latest", "priority": 3, "maxPages": 1000 }
+      ]
+    },
+    "ecommerce": {
+      "description": "E-commerce platforms",
+      "apis": [
+        { "name": "shopify", "url": "https://shopify.dev/docs/api", "priority": 2, "maxPages": 1000 },
+        { "name": "woocommerce", "url": "https://woocommerce.github.io/woocommerce-rest-api-docs", "priority": 3, "maxPages": 1000 },
+        { "name": "bigcommerce", "url": "https://developer.bigcommerce.com/docs/rest", "priority": 3, "maxPages": 1000 }
+      ]
+    },
+    "domains-affiliate": {
+      "description": "Domain and affiliate marketing",
+      "apis": [
+        { "name": "sedo", "url": "https://sedo.com/us/about-us/partners/api", "priority": 2, "maxPages": 1000 },
+        { "name": "clickbank", "url": "https://api.clickbank.com/rest/1.3", "priority": 2, "maxPages": 1000 },
+        { "name": "godaddy", "url": "https://developer.godaddy.com/doc", "priority": 3, "maxPages": 1000 },
+        { "name": "namecheap", "url": "https://www.namecheap.com/support/api/intro", "priority": 3, "maxPages": 1000 }
+      ]
+    }
+  },
+  "total": 100
+}

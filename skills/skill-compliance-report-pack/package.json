@@ -1,0 +1,32 @@
+{
+  "name": "@hasnaxyz/skill-compliance-report-pack",
+  "version": "0.1.0",
+  "description": "Compliance Report Pack skill",
+  "type": "module",
+  "bin": {
+    "skill-compliance-report-pack": "./bin/cli.ts"
+  },
+  "scripts": {
+    "dev": "bun run bin/cli.ts",
+    "build": "bun build bin/cli.ts --outdir dist --target node",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  },
+  "publishConfig": {
+    "access": "restricted",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "files": ["bin", "src", "tsconfig.json"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hasnaxyz/skill-compliance-report-pack.git"
+  },
+  "author": "Hasna",
+  "license": "MIT"
+}

@@ -1,0 +1,27 @@
+{
+  "name": "@hasnaxyz/skill-brand-style-guide",
+  "version": "0.1.0",
+  "description": "Brand style guide generation",
+  "type": "module",
+  "bin": {
+    "skill-brand-style-guide": "./bin/cli.ts"
+  },
+  "scripts": {
+    "start": "bun run bin/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "bun build bin/cli.ts --outdir dist --target node"
+  },
+  "dependencies": {
+    "chalk": "^5.4.1",
+    "commander": "^13.0.0",
+    "openai": "^4.77.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.0.0"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "restricted"
+  }
+}

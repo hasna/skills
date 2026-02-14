@@ -1,0 +1,31 @@
+{
+  "name": "skill-context7",
+  "version": "1.0.0",
+  "description": "Access up-to-date library documentation and code examples",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "skill-context7": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun run --watch src/index.ts"
+  },
+  "keywords": [
+    "claude",
+    "ai",
+    "skill"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasnaxyz/skill-context7.git"
+  }
+}

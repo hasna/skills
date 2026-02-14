@@ -1,0 +1,32 @@
+{
+  "name": "@hasnaxyz/skill-implementation-index",
+  "version": "0.1.0",
+  "description": "Implementation Index skill",
+  "type": "module",
+  "bin": {
+    "skill-implementation-index": "./bin/cli.ts"
+  },
+  "scripts": {
+    "dev": "bun run bin/cli.ts",
+    "build": "bun build bin/cli.ts --outdir dist --target node",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  },
+  "publishConfig": {
+    "access": "restricted",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "files": ["bin", "src", "tsconfig.json"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hasnaxyz/skill-implementation-index.git"
+  },
+  "author": "Hasna",
+  "license": "MIT"
+}

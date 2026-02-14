@@ -1,0 +1,26 @@
+{
+  "name": "@hasnaxyz/skill-invoicegenerate",
+  "version": "0.1.0",
+  "description": "Invoice generator CLI",
+  "type": "module",
+  "bin": {
+    "skill-invoicegenerate": "./bin/cli.ts"
+  },
+  "scripts": {
+    "start": "bun run bin/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "bun build bin/cli.ts --outdir dist --target node"
+  },
+  "dependencies": {
+    "chalk": "^5.4.1",
+    "commander": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.0.0"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "restricted"
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "name": "skill-audio",
+  "version": "1.0.0",
+  "description": "Audio generation skill for Claude Code using ElevenLabs, OpenAI TTS, and Google Text-to-Speech",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "skill-audio": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun run --watch src/index.ts"
+  },
+  "keywords": [
+    "audio",
+    "tts",
+    "text-to-speech",
+    "elevenlabs",
+    "openai",
+    "google",
+    "ai"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasnaxyz/skill-audio.git"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "@hasnaxyz/skill-businessactivity",
+  "version": "0.1.2",
+  "type": "module",
+  "description": "Business activity, workflow, and ownership management service",
+  "bin": {
+    "skill-businessactivity": "./bin/cli.ts"
+  },
+  "scripts": {
+    "dev": "bun run bin/cli.ts",
+    "build": "bun build ./bin/cli.ts --outdir ./dist --target node",
+    "release": "bun run ./scripts/publish.ts",
+    "release:patch": "bun run ./scripts/publish.ts patch",
+    "release:minor": "bun run ./scripts/publish.ts minor",
+    "release:major": "bun run ./scripts/publish.ts major",
+    "release:dry": "bun run ./scripts/publish.ts --dry-run"
+  },
+  "dependencies": {
+    "commander": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "typescript": "^5.7.2"
+  },
+  "author": "Hasna",
+  "license": "MIT"
+}

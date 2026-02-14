@@ -1,0 +1,30 @@
+{
+  "name": "@hasnaxyz/skill-generate-audio",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "skill-generate-audio": "./bin/cli.ts"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target bun",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "^13.1.0"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "restricted"
+  },
+  "files": [
+    "bin",
+    "src",
+    "dist",
+    "SKILL.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasnaxyz/skill-generate-audio.git"
+  }
+}

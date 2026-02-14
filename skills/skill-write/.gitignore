@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+bun.lockb
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Output
+dist/
+*.log
+
+# Generated articles (keep these out of version control)
+articles/
+output/
+*.md
+!README.md
+!SKILL.md
+!QUICKSTART.md
+
+# Generated images
+*.png
+*.jpg
+*.jpeg
+*.webp
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# pnpm
+pnpm-debug.log*

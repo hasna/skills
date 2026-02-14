@@ -1,0 +1,60 @@
+{
+  "name": "@hasnaxyz/skill-apidocs",
+  "version": "1.0.0",
+  "description": "Agentic web crawler for API documentation indexing and semantic search",
+  "type": "module",
+  "bin": {
+    "skill-apidocs": "./bin/cli.ts"
+  },
+  "scripts": {
+    "dev": "bun run bin/cli.ts",
+    "build": "bun build bin/cli.ts --outdir dist --target node",
+    "typecheck": "tsc --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hasnaxyz/skill-apidocs.git"
+  },
+  "author": "Hasna",
+  "license": "MIT",
+  "keywords": [
+    "api",
+    "documentation",
+    "crawler",
+    "semantic-search",
+    "embeddings",
+    "openai",
+    "anthropic",
+    "vector-search",
+    "llm"
+  ],
+  "files": [
+    "bin",
+    "src",
+    "api-docs-list.json",
+    "tsconfig.json"
+  ],
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0",
+    "@aws-sdk/client-s3vectors": "^3.0.0",
+    "chalk": "^5.4.1",
+    "commander": "^13.0.0",
+    "openai": "^4.77.0",
+    "remark-gfm": "^4.0.0",
+    "remark-mdx": "^3.1.0",
+    "remark-parse": "11",
+    "turndown": "^7.2.0",
+    "unified": "11",
+    "unist-util-visit": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.0",
+    "@types/mdast": "^4.0.0",
+    "@types/turndown": "^5.0.5",
+    "typescript": "^5.7.0"
+  },
+  "publishConfig": {
+    "access": "restricted",
+    "registry": "https://registry.npmjs.org/"
+  }
+}

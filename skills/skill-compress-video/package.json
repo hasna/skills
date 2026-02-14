@@ -1,0 +1,30 @@
+{
+  "name": "@hasnaxyz/skill-compress-video",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "skill-compress-video": "./bin/cli.ts"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target node",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "^13.1.0"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "restricted"
+  },
+  "files": [
+    "bin",
+    "src",
+    "dist",
+    "SKILL.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hasnaxyz/skill-compress-video.git"
+  }
+}

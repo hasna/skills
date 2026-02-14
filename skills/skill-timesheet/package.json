@@ -1,0 +1,53 @@
+{
+  "name": "@hasnaxyz/skill-timesheetgenerate",
+  "version": "1.0.3",
+  "type": "module",
+  "description": "Lightweight CLI tool for generating employee timesheets with multi-profile support",
+  "bin": {
+    "skill-timesheetgenerate": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "bun build ./bin/cli.ts --outdir ./dist --target bun",
+    "dev": "bun run ./bin/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run build",
+    "release": "bun run ./scripts/publish.ts",
+    "release:patch": "bun run ./scripts/publish.ts patch",
+    "release:minor": "bun run ./scripts/publish.ts minor",
+    "release:major": "bun run ./scripts/publish.ts major",
+    "release:dry": "bun run ./scripts/publish.ts --dry-run"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "dependencies": {
+    "commander": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "typescript": "^5.7.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasnaxyz/skill-timesheetgenerate.git"
+  },
+  "homepage": "https://github.com/hasnaxyz/skill-timesheetgenerate#readme",
+  "bugs": {
+    "url": "https://github.com/hasnaxyz/skill-timesheetgenerate/issues"
+  },
+  "keywords": [
+    "timesheet",
+    "employee",
+    "hours",
+    "tracking",
+    "cli",
+    "hasnaxyz"
+  ],
+  "author": "Hasna",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "restricted",
+    "registry": "https://registry.npmjs.org/"
+  }
+}

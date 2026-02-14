@@ -1,0 +1,29 @@
+node_modules/
+.DS_Store
+*.log
+.env
+.env.local
+.env.*.local
+*.mp4
+*.mov
+*.avi
+dist/
+build/
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# pnpm
+pnpm-debug.log*

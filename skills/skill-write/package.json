@@ -1,0 +1,37 @@
+{
+  "name": "skill-write",
+  "version": "1.0.0",
+  "description": "Article writing skill that spawns parallel AI agents to research and write articles with image generation",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "skill-write": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun run --watch src/index.ts"
+  },
+  "keywords": [
+    "article",
+    "writing",
+    "ai-agent",
+    "content-generation",
+    "research",
+    "parallel-agents"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.36.3"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasnaxyz/skill-write.git"
+  }
+}

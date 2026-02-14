@@ -1,0 +1,40 @@
+{
+  "name": "skill-extract",
+  "version": "1.0.0",
+  "description": "Extract text and structured data from images and PDFs using OpenAI Vision",
+  "main": "src/index.ts",
+  "type": "module",
+  "bin": {
+    "skill-extract": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "extract": "bun run src/index.ts extract"
+  },
+  "keywords": [
+    "extraction",
+    "ocr",
+    "pdf",
+    "image",
+    "vision",
+    "openai",
+    "gpt-4",
+    "text-extraction"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "pdf-parse": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/pdf-parse": "^1.1.4"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasnaxyz/skill-extract.git"
+  }
+}

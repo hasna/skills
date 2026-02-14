@@ -1,0 +1,35 @@
+{
+  "name": "skill-transcript",
+  "version": "1.0.0",
+  "description": "Audio/video transcription skill supporting ElevenLabs, OpenAI Whisper, and Google Gemini with automatic chunking for large files",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "skill-transcript": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun run --watch src/index.ts"
+  },
+  "keywords": [
+    "transcription",
+    "speech-to-text",
+    "whisper",
+    "elevenlabs",
+    "gemini",
+    "audio",
+    "ai"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasnaxyz/skill-transcript.git"
+  }
+}

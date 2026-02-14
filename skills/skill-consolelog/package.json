@@ -1,0 +1,47 @@
+{
+  "name": "@hasnaxyz/skill-consolelog",
+  "version": "0.2.2",
+  "type": "module",
+  "description": "Monitor console logs from web applications using Playwright headless browser",
+  "private": true,
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "restricted"
+  },
+  "bin": {
+    "skill-consolelog": "./bin/cli.ts"
+  },
+  "files": [
+    "bin",
+    "src",
+    "scripts",
+    "tsconfig.json"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasnaxyz/skill-consolelog.git"
+  },
+  "scripts": {
+    "start": "bun run bin/cli.ts",
+    "dev": "bun --watch run bin/cli.ts",
+    "server": "bun run src/server/index.ts",
+    "server:dev": "bun --watch run src/server/index.ts",
+    "build": "bun build bin/cli.ts --compile --outfile=consolelog",
+    "db:migrate": "bun run scripts/migrate.ts",
+    "db:seed": "bun run scripts/seed.ts",
+    "db:reset": "rm -f data/consolelog.db && bun run db:migrate && bun run db:seed",
+    "test": "bun test",
+    "test:watch": "bun test --watch"
+  },
+  "dependencies": {
+    "commander": "^13.0.0",
+    "playwright": "^1.49.0",
+    "postgres": "^3.4.4"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "typescript": "^5.7.2"
+  },
+  "author": "Hasna <dev@hasna.com>",
+  "license": "MIT"
+}

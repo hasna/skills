@@ -1,0 +1,31 @@
+{
+  "name": "skill-browseruse",
+  "version": "1.0.0",
+  "description": "AI-powered browser automation for complex web tasks",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "skill-browseruse": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun run --watch src/index.ts"
+  },
+  "keywords": [
+    "claude",
+    "ai",
+    "skill"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasnaxyz/skill-browseruse.git"
+  }
+}

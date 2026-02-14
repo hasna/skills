@@ -1,0 +1,32 @@
+{
+  "name": "skill-emoji",
+  "version": "1.0.0",
+  "description": "Generate emoji packs using AI (OpenAI or Gemini) with automatic prompt generation",
+  "main": "src/index.ts",
+  "type": "module",
+  "bin": {
+    "skill-emoji": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "generate": "bun run src/index.ts generate"
+  },
+  "keywords": [
+    "emoji-generation",
+    "ai",
+    "dall-e",
+    "gemini",
+    "openai",
+    "google",
+    "icon",
+    "emoji-pack"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
