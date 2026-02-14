@@ -17,7 +17,7 @@
     "url": "https://github.com/hasnaxyz/skill-subtitlegenerate.git"
   },
   "author": "Hasna",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": [
     "subtitles",
     "srt",

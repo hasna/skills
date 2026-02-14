@@ -89,9 +89,11 @@ export function SearchView({
 
       {results.length > 0 && (
         <Box flexDirection="column">
-          <Text dimColor marginBottom={1}>
-            Found {results.length} skill(s):
-          </Text>
+          <Box marginBottom={1}>
+            <Text dimColor>
+              Found {results.length} skill(s):
+            </Text>
+          </Box>
           <SelectInput items={items} onSelect={handleSelect} />
         </Box>
       )}

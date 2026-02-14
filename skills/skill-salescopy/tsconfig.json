@@ -1,19 +1,23 @@
 {
+  "extends": "../tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2022",
     "module": "ESNext",
-    "moduleResolution": "bundler",
-    "types": ["bun"],
-    "strict": true,
-    "skipLibCheck": true,
-    "esModuleInterop": true,
+    "types": [
+      "bun"
+    ],
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
-    "declaration": true,
     "declarationMap": true,
     "outDir": "./dist",
     "rootDir": "."
   },
-  "include": ["bin/**/*", "src/**/*"],
-  "exclude": ["node_modules", "dist", "legacy"]
+  "include": [
+    "bin/**/*",
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "legacy"
+  ]
 }

@@ -5,10 +5,10 @@ function getConnectionString(): string {
 
   const {
     DB_USER = 'postgres',
-    DB_PASSWORD = 'postgres',
+    DB_PASSWORD = '',
     DB_HOST = 'localhost',
     DB_PORT = '5432',
-    DB_NAME = 'app_db',
+    DB_NAME = 'managemcp_db',
   } = process.env;
 
   return `postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}`;

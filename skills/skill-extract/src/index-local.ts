@@ -4,7 +4,7 @@
  * Extraction CLI
  * Extract text and structured data from images and PDFs using OpenAI Vision
  */
-import { handleInstallCommand } from './skill-install';
+import { handleInstallCommand } from '../../_common';
 
 
 // Handle install/uninstall commands

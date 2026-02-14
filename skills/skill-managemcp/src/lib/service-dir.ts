@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, writeFileSync, appendFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 
-const SERVICE_NAME = "service-{{name}}";
+const SERVICE_NAME = "skill-managemcp";
 const SERVICE_DIR_NAME = `.${SERVICE_NAME}`;
 
 export function getServiceDir(): string {
@@ -72,7 +72,7 @@ This directory contains local configuration and logs for \`${SERVICE_NAME}\`.
 
 ## What is ${SERVICE_NAME}?
 
-\`${SERVICE_NAME}\` is a {{description}}.
+\`${SERVICE_NAME}\` is a tool for managing MCP server connections.
 
 ## Log File
 

@@ -1,7 +1,7 @@
 import { sql, testConnection, closeConnection } from '../db';
 
 const PORT = parseInt(process.env.PORT || '3000');
-const PATH_PREFIX = '/{{name}}';
+const PATH_PREFIX = '/manageskill';
 const API_KEY = process.env.API_KEY || '';
 
 // API Key validation
@@ -38,7 +38,7 @@ async function handleRequest(req: Request): Promise<Response> {
     if (pathname === '/health' && method === 'GET') {
       return Response.json({
         status: 'ok',
-        service: 'service-{{name}}',
+        service: 'skill-manageskill',
         timestamp: new Date().toISOString(),
       });
     }

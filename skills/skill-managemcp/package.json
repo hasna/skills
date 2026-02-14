@@ -1,10 +1,10 @@
 {
-  "name": "service-{{name}}",
+  "name": "skill-managemcp",
   "version": "0.1.0",
   "type": "module",
-  "description": "{{description}}",
+  "description": "Manage MCP servers - list, install, remove, and configure MCP server connections",
   "bin": {
-    "{{name}}": "./bin/cli.ts"
+    "managemcp": "./bin/cli.ts"
   },
   "scripts": {
     "dev": "bun run --watch src/server/index.ts",
@@ -15,13 +15,12 @@
     "db:reset": "bun run scripts/migrate.ts && bun run scripts/seed.ts"
   },
   "dependencies": {
-    "commander": "^13.0.0",
     "postgres": "^3.4.5"
   },
   "devDependencies": {
     "@types/bun": "^1.1.14",
     "typescript": "^5.7.2"
   },
-  "author": "{{author}}",
-  "license": "MIT"
+  "author": "Hasna",
+  "license": "Apache-2.0"
 }

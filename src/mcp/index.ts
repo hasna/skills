@@ -11,19 +11,21 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import pkg from "../../package.json" with { type: "json" };
 import {
   SKILLS,
   CATEGORIES,
   getSkill,
   getSkillsByCategory,
   searchSkills,
+  type Category,
 } from "../lib/registry.js";
 import {
   installSkill,
   installSkillForAgent,
   removeSkill,
   removeSkillForAgent,
-  AGENT_TARGETS,
+  resolveAgents,
   type AgentTarget,
 } from "../lib/installer.js";
 import {
@@ -31,11 +33,12 @@ import {
   getSkillBestDoc,
   getSkillRequirements,
   generateSkillMd,
+  runSkill,
 } from "../lib/skillinfo.js";
 
 const server = new McpServer({
   name: "skills",
-  version: "0.0.3",
+  version: pkg.version,
 });
 
 // ---- Tools ----
@@ -48,7 +51,7 @@ server.registerTool("list_skills", {
   },
 }, async ({ category }) => {
   const skills = category
-    ? getSkillsByCategory(category)
+    ? getSkillsByCategory(category as Category)
     : SKILLS;
 
   return {
@@ -109,11 +112,17 @@ server.registerTool("install_skill", {
     for: z.string().optional().describe("Agent target: claude, codex, gemini, or all"),
     scope: z.string().optional().describe("Install scope: global or project (default: global)"),
   },
-}, async ({ name, for: agent, scope }) => {
-  if (agent) {
-    const agents: AgentTarget[] = agent === "all"
-      ? [...AGENT_TARGETS]
-      : [agent as AgentTarget];
+}, async ({ name, for: agentArg, scope }) => {
+  if (agentArg) {
+    let agents: AgentTarget[];
+    try {
+      agents = resolveAgents(agentArg);
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: (err as Error).message }],
+        isError: true,
+      };
+    }
 
     const results = agents.map(a =>
       installSkillForAgent(name, { agent: a, scope: (scope as "global" | "project") || "global" }, generateSkillMd)
@@ -140,11 +149,17 @@ server.registerTool("remove_skill", {
     for: z.string().optional().describe("Agent target: claude, codex, gemini, or all"),
     scope: z.string().optional().describe("Remove scope: global or project (default: global)"),
   },
-}, async ({ name, for: agent, scope }) => {
-  if (agent) {
-    const agents: AgentTarget[] = agent === "all"
-      ? [...AGENT_TARGETS]
-      : [agent as AgentTarget];
+}, async ({ name, for: agentArg, scope }) => {
+  if (agentArg) {
+    let agents: AgentTarget[];
+    try {
+      agents = resolveAgents(agentArg);
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: (err as Error).message }],
+        isError: true,
+      };
+    }
 
     const results = agents.map(a => ({
       skill: name,
@@ -186,6 +201,31 @@ server.registerTool("get_requirements", {
     return { content: [{ type: "text", text: `Skill '${name}' not found` }], isError: true };
   }
   return { content: [{ type: "text", text: JSON.stringify(reqs, null, 2) }] };
+});
+
+server.registerTool("run_skill", {
+  title: "Run Skill",
+  description: "Run a skill by name with optional arguments. Returns the exit code and any error message.",
+  inputSchema: {
+    name: z.string().describe("Skill name to run"),
+    args: z.array(z.string()).optional().describe("Arguments to pass to the skill"),
+  },
+}, async ({ name, args }) => {
+  const skill = getSkill(name);
+  if (!skill) {
+    return { content: [{ type: "text", text: `Skill '${name}' not found` }], isError: true };
+  }
+
+  const result = await runSkill(name, args || []);
+  if (result.error) {
+    return {
+      content: [{ type: "text", text: JSON.stringify({ exitCode: result.exitCode, error: result.error }, null, 2) }],
+      isError: true,
+    };
+  }
+  return {
+    content: [{ type: "text", text: JSON.stringify({ exitCode: result.exitCode, skill: name }, null, 2) }],
+  };
 });
 
 // ---- Resources ----

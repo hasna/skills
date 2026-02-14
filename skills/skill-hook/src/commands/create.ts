@@ -125,7 +125,7 @@ function generatePackageJson(hookName: string, shortName: string): string {
       },
       keywords: ['claude-code', 'hook', shortName],
       author: '',
-      license: 'MIT',
+      license: 'Apache-2.0',
       devDependencies: {
         '@types/bun': 'latest',
       },

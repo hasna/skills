@@ -67,4 +67,4 @@ cd legacy && docker-compose up -d
 
 ## License
 
-MIT License - Copyright (c) 2024 Hasna
+Apache-2.0 - Copyright (c) 2025 Hasna

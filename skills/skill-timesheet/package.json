@@ -45,7 +45,7 @@
     "hasnaxyz"
   ],
   "author": "Hasna",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "publishConfig": {
     "access": "restricted",
     "registry": "https://registry.npmjs.org/"

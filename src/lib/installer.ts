@@ -6,6 +6,7 @@ import { existsSync, cpSync, mkdirSync, writeFileSync, rmSync, readdirSync, stat
 import { join, dirname } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
+import { normalizeSkillName } from "./utils.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -40,7 +41,7 @@ export interface InstallOptions {
  * Get the path to a skill in the package
  */
 export function getSkillPath(name: string): string {
-  const skillName = name.startsWith("skill-") ? name : `skill-${name}`;
+  const skillName = normalizeSkillName(name);
   return join(SKILLS_DIR, skillName);
 }
 
@@ -60,7 +61,7 @@ export function installSkill(
 ): InstallResult {
   const { targetDir = process.cwd(), overwrite = false } = options;
 
-  const skillName = name.startsWith("skill-") ? name : `skill-${name}`;
+  const skillName = normalizeSkillName(name);
   const sourcePath = getSkillPath(name);
   const destDir = join(targetDir, ".skills");
   const destPath = join(destDir, skillName);
@@ -184,7 +185,7 @@ export function removeSkill(
   name: string,
   targetDir: string = process.cwd()
 ): boolean {
-  const skillName = name.startsWith("skill-") ? name : `skill-${name}`;
+  const skillName = normalizeSkillName(name);
   const skillsDir = join(targetDir, ".skills");
   const skillPath = join(skillsDir, skillName);
 
@@ -203,6 +204,19 @@ export type AgentTarget = "claude" | "codex" | "gemini";
 export type AgentScope = "global" | "project";
 
 export const AGENT_TARGETS: AgentTarget[] = ["claude", "codex", "gemini"];
+
+/**
+ * Resolve an agent argument ("all" or a specific agent name) to a list of AgentTarget values.
+ * Throws if the agent name is not recognized.
+ */
+export function resolveAgents(agentArg: string): AgentTarget[] {
+  if (agentArg === "all") return [...AGENT_TARGETS];
+  const agent = agentArg as AgentTarget;
+  if (!AGENT_TARGETS.includes(agent)) {
+    throw new Error(`Unknown agent: ${agent}. Available: ${AGENT_TARGETS.join(", ")}, all`);
+  }
+  return [agent];
+}
 
 export interface AgentInstallOptions {
   agent: AgentTarget;
@@ -227,7 +241,7 @@ export function getAgentSkillsDir(agent: AgentTarget, scope: AgentScope = "globa
  * Get the full path where a skill's SKILL.md would be installed for an agent
  */
 export function getAgentSkillPath(name: string, agent: AgentTarget, scope: AgentScope = "global", projectDir?: string): string {
-  const skillName = name.startsWith("skill-") ? name : `skill-${name}`;
+  const skillName = normalizeSkillName(name);
   return join(getAgentSkillsDir(agent, scope, projectDir), skillName);
 }
 
@@ -242,7 +256,7 @@ export function installSkillForAgent(
 ): InstallResult {
   const { agent, scope = "global", projectDir } = options;
 
-  const skillName = name.startsWith("skill-") ? name : `skill-${name}`;
+  const skillName = normalizeSkillName(name);
   const sourcePath = getSkillPath(name);
 
   if (!existsSync(sourcePath)) {

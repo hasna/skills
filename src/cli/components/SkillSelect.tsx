@@ -49,9 +49,9 @@ export function SkillSelect({
 
   return (
     <Box flexDirection="column">
-      <Text bold marginBottom={1}>
-        Select skills (enter to toggle, then confirm):
-      </Text>
+      <Box marginBottom={1}>
+        <Text bold>Select skills (enter to toggle, then confirm):</Text>
+      </Box>
 
       <Box flexDirection="row">
         <Box flexDirection="column" width="50%">

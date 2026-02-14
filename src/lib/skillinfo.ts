@@ -6,6 +6,7 @@ import { existsSync, readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import { getSkillPath } from "./installer.js";
 import { getSkill } from "./registry.js";
+import { normalizeSkillName } from "./utils.js";
 
 export interface SkillDocs {
   skillMd: string | null;
@@ -59,15 +60,7 @@ export function getSkillRequirements(name: string): SkillRequirements | null {
   const allText = texts.join("\n");
 
   // Extract env vars
-  const envVarPattern = /\b([A-Z][A-Z0-9_]{2,}(?:_API_KEY|_KEY|_TOKEN|_SECRET|_URL|_ID|_PASSWORD|_ENDPOINT|_REGION|_BUCKET))\b/g;
-  const genericEnvPattern = /\b((?:OPENAI|ANTHROPIC|GEMINI|XAI|ELEVENLABS|DEEPGRAM|REPLICATE|FAL|STABILITY|EXA|FIRECRAWL|TWILIO|SENDGRID|RESEND|SLACK|DISCORD|NOTION|LINEAR|GITHUB|AWS|GOOGLE|CLOUDFLARE|VERCEL|SUPABASE|STRIPE)_[A-Z_]+)\b/g;
-  const envVars = new Set<string>();
-  for (const pattern of [envVarPattern, genericEnvPattern]) {
-    let match;
-    while ((match = pattern.exec(allText)) !== null) {
-      envVars.add(match[1]);
-    }
-  }
+  const envVars = extractEnvVars(allText);
 
   // Extract system deps
   const systemDeps = new Set<string>();
@@ -121,7 +114,7 @@ export async function runSkill(
   options: { installed?: boolean } = {}
 ): Promise<{ exitCode: number; error?: string }> {
   // Look in .skills/ first (installed), then fall back to package skills/
-  const skillName = name.startsWith("skill-") ? name : `skill-${name}`;
+  const skillName = normalizeSkillName(name);
   let skillPath: string;
 
   if (options.installed) {
@@ -216,19 +209,13 @@ export function generateEnvExample(targetDir: string = process.cwd()): string {
     }
     const allText = texts.join("\n");
 
-    const envVarPattern = /\b([A-Z][A-Z0-9_]{2,}(?:_API_KEY|_KEY|_TOKEN|_SECRET|_URL|_ID|_PASSWORD|_ENDPOINT|_REGION|_BUCKET))\b/g;
-    const genericEnvPattern = /\b((?:OPENAI|ANTHROPIC|GEMINI|XAI|ELEVENLABS|DEEPGRAM|REPLICATE|FAL|STABILITY|EXA|FIRECRAWL|TWILIO|SENDGRID|RESEND|SLACK|DISCORD|NOTION|LINEAR|GITHUB|AWS|GOOGLE|CLOUDFLARE|VERCEL|SUPABASE|STRIPE)_[A-Z_]+)\b/g;
-
-    for (const pattern of [envVarPattern, genericEnvPattern]) {
-      let match;
-      while ((match = pattern.exec(allText)) !== null) {
-        const envVar = match[1];
-        if (!envMap.has(envVar)) {
-          envMap.set(envVar, []);
-        }
-        if (!envMap.get(envVar)!.includes(skillName)) {
-          envMap.get(envVar)!.push(skillName);
-        }
+    const foundVars = extractEnvVars(allText);
+    for (const envVar of foundVars) {
+      if (!envMap.has(envVar)) {
+        envMap.set(envVar, []);
+      }
+      if (!envMap.get(envVar)!.includes(skillName)) {
+        envMap.get(envVar)!.push(skillName);
       }
     }
   }
@@ -344,6 +331,24 @@ export function generateSkillMd(name: string): string | null {
   sections.push(`Tags: ${meta.tags.join(", ")}`);
 
   return frontmatter + "\n\n" + sections.join("\n") + "\n";
+}
+
+const ENV_VAR_PATTERN = /\b([A-Z][A-Z0-9_]{2,}(?:_API_KEY|_KEY|_TOKEN|_SECRET|_URL|_ID|_PASSWORD|_ENDPOINT|_REGION|_BUCKET))\b/g;
+const GENERIC_ENV_PATTERN = /\b((?:OPENAI|ANTHROPIC|GEMINI|XAI|ELEVENLABS|DEEPGRAM|REPLICATE|FAL|STABILITY|EXA|FIRECRAWL|TWILIO|SENDGRID|RESEND|SLACK|DISCORD|NOTION|LINEAR|GITHUB|AWS|GOOGLE|CLOUDFLARE|VERCEL|SUPABASE|STRIPE)_[A-Z_]+)\b/g;
+
+/**
+ * Extract environment variable names from text using known patterns
+ */
+function extractEnvVars(text: string): Set<string> {
+  const envVars = new Set<string>();
+  for (const pattern of [ENV_VAR_PATTERN, GENERIC_ENV_PATTERN]) {
+    pattern.lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      envVars.add(match[1]);
+    }
+  }
+  return envVars;
 }
 
 function readIfExists(path: string): string | null {

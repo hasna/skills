@@ -1474,14 +1474,53 @@ export function getSkillsByCategory(category: Category): SkillMeta[] {
 }
 
 export function searchSkills(query: string): SkillMeta[] {
-  const q = query.toLowerCase();
-  return SKILLS.filter(
-    (s) =>
-      s.name.toLowerCase().includes(q) ||
-      s.displayName.toLowerCase().includes(q) ||
-      s.description.toLowerCase().includes(q) ||
-      s.tags.some((t) => t.includes(q))
-  );
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [];
+
+  const scored: { skill: SkillMeta; score: number }[] = [];
+
+  for (const skill of SKILLS) {
+    const nameLower = skill.name.toLowerCase();
+    const displayNameLower = skill.displayName.toLowerCase();
+    const descriptionLower = skill.description.toLowerCase();
+    const tagsLower = skill.tags.map((t) => t.toLowerCase());
+
+    let score = 0;
+    let allWordsMatch = true;
+
+    for (const word of words) {
+      let wordMatched = false;
+
+      if (nameLower.includes(word)) {
+        score += 10;
+        wordMatched = true;
+      }
+      if (displayNameLower.includes(word)) {
+        score += 7;
+        wordMatched = true;
+      }
+      if (tagsLower.some((t) => t.includes(word))) {
+        score += 5;
+        wordMatched = true;
+      }
+      if (descriptionLower.includes(word)) {
+        score += 2;
+        wordMatched = true;
+      }
+
+      if (!wordMatched) {
+        allWordsMatch = false;
+        break;
+      }
+    }
+
+    if (allWordsMatch && score > 0) {
+      scored.push({ skill, score });
+    }
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored.map((s) => s.skill);
 }
 
 export function getSkill(name: string): SkillMeta | undefined {

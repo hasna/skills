@@ -3,7 +3,7 @@
 import { parseArgs, validateGenerateOptions, validateStatusOptions } from './cli';
 import { getProvider } from './providers';
 import { resolve } from 'path';
-import { handleInstallCommand } from './skill-install';
+import { handleInstallCommand } from '../../_common';
 
 
 // Handle install/uninstall commands

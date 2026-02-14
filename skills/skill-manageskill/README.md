@@ -1,12 +1,12 @@
-# service-{{name}}
+# skill-manageskill
 
-{{description}}
+Manage Claude Code skills - list, install, remove, and configure skills.
 
-A TypeScript service template with CLI, API client, and database integration.
+A TypeScript service with CLI, API client, and database integration.
 
 ## Features
 
-- CLI tool for managing items
+- CLI tool for managing skills
 - HTTP server with REST API
 - PostgreSQL database with migrations
 - Configuration management
@@ -34,9 +34,9 @@ Edit `.env` file with your configuration:
 # Database
 DB_HOST=localhost
 DB_PORT=5432
-DB_NAME={{name}}_db
+DB_NAME=manageskill_db
 DB_USER=postgres
-DB_PASSWORD=postgres
+DB_PASSWORD=your-password-here
 
 # Server
 PORT=3000
@@ -93,48 +93,48 @@ bun run start
 bun run cli setup
 ```
 
-### Managing Items
+### Managing Skills
 
 ```bash
-# List all items
+# List all skills
 bun run cli list
 
 # List with options
 bun run cli list --filter "category" --limit 20
 
-# Get item by ID
-bun run cli get <item-id>
+# Get skill by ID
+bun run cli get <skill-id>
 
-# Search items
+# Search skills
 bun run cli search "query" --limit 10
 
-# Add item
-bun run cli add --name "Item Name" --description "Description"
+# Add skill
+bun run cli add --name "Skill Name" --description "Description"
 
-# Add item with metadata
-bun run cli add --name "Item" --metadata '{"key": "value"}'
+# Add skill with metadata
+bun run cli add --name "Skill" --metadata '{"key": "value"}'
 ```
 
 ### Installation to Claude/Codex
 
 ```bash
 # Install to both
-bun run cli install <item-id>
+bun run cli install <skill-id>
 
 # Install to specific target
-bun run cli install <item-id> --target claude
-bun run cli install <item-id> --target codex
+bun run cli install <skill-id> --target claude
+bun run cli install <skill-id> --target codex
 
-# Install multiple items
+# Install multiple skills
 bun run cli install <id1> <id2> <id3>
 
 # Force overwrite
-bun run cli install <item-id> --force
+bun run cli install <skill-id> --force
 
-# Clear installed items
+# Clear installed skills
 bun run cli install --clear
 
-# List installed items
+# List installed skills
 bun run cli install --list
 ```
 
@@ -161,8 +161,8 @@ POST /api/items
 Content-Type: application/json
 
 {
-  "name": "Item name",
-  "description": "Item description",
+  "name": "Skill name",
+  "description": "Skill description",
   "metadata": {"key": "value"}
 }
 ```
@@ -177,7 +177,8 @@ Content-Type: application/json
 │   ├── lib/
 │   │   ├── api-client.ts   # API client functions
 │   │   ├── config.ts       # Configuration management
-│   │   └── installer.ts    # Claude/Codex installer
+│   │   ├── installer.ts    # Claude/Codex installer
+│   │   └── service-dir.ts  # Service directory management
 │   ├── db/
 │   │   └── index.ts        # Database connection
 │   └── server/
@@ -202,8 +203,8 @@ Content-Type: application/json
 
 ## License
 
-MIT
+Apache-2.0
 
 ## Author
 
-{{author}}
+Hasna

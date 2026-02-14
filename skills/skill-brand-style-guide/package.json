@@ -4,16 +4,15 @@
   "description": "Brand style guide generation",
   "type": "module",
   "bin": {
-    "skill-brand-style-guide": "./bin/cli.ts"
+    "skill-brand-style-guide": "./src/index.ts"
   },
   "scripts": {
-    "start": "bun run bin/cli.ts",
+    "start": "bun run src/index.ts",
     "typecheck": "tsc --noEmit",
-    "build": "bun build bin/cli.ts --outdir dist --target node"
+    "build": "bun build src/index.ts --outdir dist --target node"
   },
   "dependencies": {
     "chalk": "^5.4.1",
-    "commander": "^13.0.0",
     "openai": "^4.77.0"
   },
   "devDependencies": {

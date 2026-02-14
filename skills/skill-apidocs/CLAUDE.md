@@ -104,7 +104,7 @@ Required:
 Optional:
 - `USE_S3_VECTORS` - Set to `true` to use AWS S3 Vectors (default: local JSON files)
 - `AWS_REGION` - AWS region (default: us-east-1)
-- `S3_VECTORS_BUCKET` - Vector bucket name (default: hasnaxyz-prod-service-apidocs)
+- `S3_VECTORS_BUCKET` - Vector bucket name (default: service-apidocs-vectors)
 
 ## CLI Commands
 

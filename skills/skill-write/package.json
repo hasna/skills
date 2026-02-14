@@ -20,7 +20,7 @@
     "parallel-agents"
   ],
   "author": "",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.36.3"
   },

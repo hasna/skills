@@ -4,7 +4,7 @@
  * Browser Automation CLI
  * AI-powered web browsing using Browser-Use Cloud API
  */
-import { handleInstallCommand } from './skill-install';
+import { handleInstallCommand } from '../../_common';
 
 
 // Handle install/uninstall commands

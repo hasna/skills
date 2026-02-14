@@ -4,7 +4,7 @@
  * Deployment CLI
  * Automates deployment to EC2 instances with health checks
  */
-import { handleInstallCommand } from './skill-install';
+import { handleInstallCommand } from '../../_common';
 
 
 // Handle install/uninstall commands

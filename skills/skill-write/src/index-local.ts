@@ -4,7 +4,7 @@
  * Article Writing CLI
  * Spawns parallel AI agents to research and write articles
  */
-import { handleInstallCommand } from './skill-install';
+import { handleInstallCommand } from '../../_common';
 
 
 // Handle install/uninstall commands

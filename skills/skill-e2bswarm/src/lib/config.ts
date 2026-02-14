@@ -3,8 +3,8 @@ import { paths, ensureSkillDirs } from './paths';
 
 const SECRETS_FILE = `${process.env.HOME}/.secrets`;
 
-// Default E2B template (with Claude Code pre-installed)
-const DEFAULT_TEMPLATE = 'hasnaxyz-codebox';
+// Default E2B template - set to your custom template or use 'base' for default
+const DEFAULT_TEMPLATE = process.env.E2B_TEMPLATE || 'base';
 
 export async function loadConfig(template?: string): Promise<SwarmConfig> {
   // Ensure skill directories exist
@@ -68,11 +68,8 @@ export function getStateFilePath(): string {
  * See: https://e2b.dev/docs/sandbox/templates
  */
 export const E2B_TEMPLATES = {
-  // Custom templates
-  'hasnaxyz-codebox': 'Ubuntu sandbox with Claude Code, Bun, Node.js, and gh CLI pre-installed',
-
   // Base templates
-  base: 'Default E2B Ubuntu sandbox (no Claude Code)',
+  base: 'Default E2B Ubuntu sandbox',
 } as const;
 
 export type E2BTemplate = keyof typeof E2B_TEMPLATES | string;

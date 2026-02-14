@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { join } from "path";
+import pkg from "../../package.json" with { type: "json" };
 
 const CLI_PATH = join(import.meta.dir, "index.tsx");
 
@@ -35,7 +36,7 @@ describe("CLI", () => {
 
     test("shows version with --version", async () => {
       const { stdout } = await runCli(["--version"]);
-      expect(stdout.trim()).toBe("0.0.3");
+      expect(stdout.trim()).toBe(pkg.version);
     });
   });
 

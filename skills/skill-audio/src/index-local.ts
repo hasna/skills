@@ -4,7 +4,7 @@
  * Audio Generation CLI
  * Unified interface for ElevenLabs, OpenAI TTS, and Google Text-to-Speech
  */
-import { handleInstallCommand } from './skill-install';
+import { handleInstallCommand } from '../../_common';
 
 
 // Handle install/uninstall commands

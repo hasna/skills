@@ -5,7 +5,7 @@
  * Speech-to-text using ElevenLabs, OpenAI Whisper, or Google Gemini
  * Supports automatic chunking for large files
  */
-import { handleInstallCommand } from './skill-install';
+import { handleInstallCommand } from '../../_common';
 
 
 // Handle install/uninstall commands

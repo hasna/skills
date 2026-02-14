@@ -4,7 +4,7 @@
  * File Format Conversion CLI
  * Convert between images, PDFs, documents, and data formats with AI-powered extraction
  */
-import { handleInstallCommand } from './skill-install';
+import { handleInstallCommand } from '../../_common';
 
 
 // Handle install/uninstall commands

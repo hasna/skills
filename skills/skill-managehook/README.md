@@ -1,12 +1,12 @@
-# service-{{name}}
+# skill-managehook
 
-{{description}}
+Manage Claude Code hooks - list, install, remove, and configure hooks.
 
-A TypeScript service template with CLI, API client, and database integration.
+A TypeScript service with CLI, API client, and database integration.
 
 ## Features
 
-- CLI tool for managing items
+- CLI tool for managing hooks
 - HTTP server with REST API
 - PostgreSQL database with migrations
 - Configuration management
@@ -34,9 +34,9 @@ Edit `.env` file with your configuration:
 # Database
 DB_HOST=localhost
 DB_PORT=5432
-DB_NAME={{name}}_db
+DB_NAME=managehook_db
 DB_USER=postgres
-DB_PASSWORD=postgres
+DB_PASSWORD=your-password-here
 
 # Server
 PORT=3000
@@ -93,48 +93,48 @@ bun run start
 bun run cli setup
 ```
 
-### Managing Items
+### Managing Hooks
 
 ```bash
-# List all items
+# List all hooks
 bun run cli list
 
 # List with options
 bun run cli list --filter "category" --limit 20
 
-# Get item by ID
-bun run cli get <item-id>
+# Get hook by ID
+bun run cli get <hook-id>
 
-# Search items
+# Search hooks
 bun run cli search "query" --limit 10
 
-# Add item
-bun run cli add --name "Item Name" --description "Description"
+# Add hook
+bun run cli add --name "Hook Name" --description "Description"
 
-# Add item with metadata
-bun run cli add --name "Item" --metadata '{"key": "value"}'
+# Add hook with metadata
+bun run cli add --name "Hook" --metadata '{"key": "value"}'
 ```
 
 ### Installation to Claude/Codex
 
 ```bash
 # Install to both
-bun run cli install <item-id>
+bun run cli install <hook-id>
 
 # Install to specific target
-bun run cli install <item-id> --target claude
-bun run cli install <item-id> --target codex
+bun run cli install <hook-id> --target claude
+bun run cli install <hook-id> --target codex
 
-# Install multiple items
+# Install multiple hooks
 bun run cli install <id1> <id2> <id3>
 
 # Force overwrite
-bun run cli install <item-id> --force
+bun run cli install <hook-id> --force
 
-# Clear installed items
+# Clear installed hooks
 bun run cli install --clear
 
-# List installed items
+# List installed hooks
 bun run cli install --list
 ```
 
@@ -161,8 +161,8 @@ POST /api/items
 Content-Type: application/json
 
 {
-  "name": "Item name",
-  "description": "Item description",
+  "name": "Hook name",
+  "description": "Hook description",
   "metadata": {"key": "value"}
 }
 ```
@@ -177,7 +177,8 @@ Content-Type: application/json
 │   ├── lib/
 │   │   ├── api-client.ts   # API client functions
 │   │   ├── config.ts       # Configuration management
-│   │   └── installer.ts    # Claude/Codex installer
+│   │   ├── installer.ts    # Claude/Codex installer
+│   │   └── service-dir.ts  # Service directory management
 │   ├── db/
 │   │   └── index.ts        # Database connection
 │   └── server/
@@ -202,8 +203,8 @@ Content-Type: application/json
 
 ## License
 
-MIT
+Apache-2.0
 
 ## Author
 
-{{author}}
+Hasna

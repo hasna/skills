@@ -7,7 +7,7 @@ export interface Config {
   apiKey?: string;
 }
 
-export const CONFIG_FILE = join(homedir(), '.{{name}}.json');
+export const CONFIG_FILE = join(homedir(), '.managehook.json');
 
 export async function loadConfig(): Promise<Config> {
   try {

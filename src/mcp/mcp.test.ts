@@ -19,7 +19,7 @@ class McpClient {
       stderr: "pipe",
       env: { ...process.env, NO_COLOR: "1" },
     });
-    this.reader = this.proc.stdout.getReader();
+    this.reader = (this.proc.stdout as ReadableStream<Uint8Array>).getReader();
     this._readLoop();
   }
 
@@ -45,7 +45,7 @@ class McpClient {
   }
 
   send(msg: any) {
-    this.proc.stdin.write(JSON.stringify(msg) + "\n");
+    (this.proc.stdin as import("bun").FileSink).write(JSON.stringify(msg) + "\n");
   }
 
   async waitForMessage(id: number, timeout = 8000): Promise<any> {
@@ -86,7 +86,7 @@ class McpClient {
   async close() {
     try {
       this.reader.cancel();
-      this.proc.stdin.end();
+      (this.proc.stdin as import("bun").FileSink).end();
       this.proc.kill();
       await this.proc.exited;
     } catch {}

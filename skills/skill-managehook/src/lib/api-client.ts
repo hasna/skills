@@ -40,11 +40,11 @@ async function makeRequest<T>(
   const apiKey = await getApiKey();
 
   if (!apiUrl) {
-    throw new ApiError('API URL not configured. Run: {{name}} config --set-api-url <url>');
+    throw new ApiError('API URL not configured. Run: managehook config --set-api-url <url>');
   }
 
   if (!apiKey) {
-    throw new ApiError('API key not configured. Run: {{name}} config --set-api-key <key>');
+    throw new ApiError('API key not configured. Run: managehook config --set-api-key <key>');
   }
 
   const url = `${apiUrl}${endpoint}`;

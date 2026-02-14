@@ -8,36 +8,19 @@
 import type { HostConfig } from './types';
 
 export const HOSTS: Record<string, HostConfig> = {
-  'lab-mcp': {
-    name: 'Lab MCP',
-    sshHost: 'lab-mcp',
-    deployPath: '/opt/mcp-mail',
-    service: 'mcp-mail.service',
-    healthUrl: 'http://localhost:3847/health',
-    gitRepo: 'git@github.com:example/mcp-mail.git',
+  'example-app': {
+    name: 'Example App',
+    sshHost: 'example-app',
+    deployPath: '/opt/example-app',
+    service: 'example-app.service',
+    healthUrl: 'http://localhost:3000/health',
+    gitRepo: 'git@github.com:example/example-app.git',
     gitBranch: 'main',
     user: 'root',
   },
 
-  'prod-skill': {
-    name: 'Prod Skill',
-    sshHost: 'prod-skill',
-    deployPath: '/opt/skills',
-    // service: 'skills.service', // Uncomment when service is configured
-    // healthUrl: 'http://localhost:8080/health', // Uncomment when health endpoint exists
-    gitRepo: 'git@github.com:example/skills.git', // Update with actual repo
-    gitBranch: 'main',
-    user: 'ec2-user',
-  },
-
-  'skill-emoji': {
-    name: 'Skill Emoji',
-    sshHost: 'prod-skill',
-    deployPath: '/opt/skills/skill-emoji',
-    gitRepo: 'git@github.com:example/skill-emoji.git',
-    gitBranch: 'dev',
-    user: 'ec2-user',
-  },
+  // Add your deployment hosts here following the pattern above.
+  // Each host should match an entry in your ~/.ssh/config.
 };
 
 /**

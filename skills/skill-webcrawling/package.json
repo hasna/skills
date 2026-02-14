@@ -17,7 +17,7 @@
     "url": "https://github.com/hasnaxyz/skill-webcrawling.git"
   },
   "author": "Hasna",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["webcrawl", "firecrawl", "scrape", "crawl"],
   "files": ["bin", "src", "tsconfig.json"],
   "dependencies": {

@@ -5,8 +5,8 @@ node_modules/
 dist/
 bin/
 
-# Bun
-bun.lock
+# pnpm
+pnpm-lock.yaml
 
 # OS
 .DS_Store
@@ -27,3 +27,28 @@ temp/
 
 # Installed skills
 .skills/
+
+# Auth tokens
+.npmrc
+
+# Certificates and keys
+*.pem
+*.key
+*.p12
+
+# Logs
+*.log
+
+# OS
+Thumbs.db
+
+# Editor swap files
+*.swp
+*.swo
+
+# Build caches
+.eslintcache
+.tsbuildinfo
+
+# npm pack output
+*.tgz

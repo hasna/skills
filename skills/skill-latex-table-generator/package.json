@@ -4,16 +4,14 @@
   "description": "Latex Table Generator skill",
   "type": "module",
   "bin": {
-    "skill-latex-table-generator": "./bin/cli.ts"
+    "skill-latex-table-generator": "./src/index.ts"
   },
   "scripts": {
-    "dev": "bun run bin/cli.ts",
-    "build": "bun build bin/cli.ts --outdir dist --target node",
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target node",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "commander": "^13.0.0"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@types/bun": "latest",
     "typescript": "^5.7.0"
@@ -22,11 +20,14 @@
     "access": "restricted",
     "registry": "https://registry.npmjs.org/"
   },
-  "files": ["bin", "src", "tsconfig.json"],
+  "files": [
+    "src",
+    "tsconfig.json"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/hasnaxyz/skill-latex-table-generator.git"
   },
   "author": "Hasna",
-  "license": "MIT"
+  "license": "Apache-2.0"
 }

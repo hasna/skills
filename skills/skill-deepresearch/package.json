@@ -28,7 +28,7 @@
     "rag",
     "deep-research"
   ],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun --watch src/index.ts",

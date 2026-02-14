@@ -16,7 +16,7 @@ export interface Config {
 
 const CONFIG_DIR = join(homedir(), ".config", "service-domainpurchase");
 export const CONFIG_FILE = join(CONFIG_DIR, "config.json");
-const AWS_SECRET_NAME = process.env.AWS_SECRET_NAME || "your-org/tool/brandsight/api/live";
+const AWS_SECRET_NAME = process.env.AWS_SECRET_NAME || "your-org/your-tool/api/live";
 
 const DEFAULT_CONFIG: Config = {
   apiUrl: "https://api.godaddy.com",
@@ -195,7 +195,7 @@ export async function getRemoteApiKeyAsync(): Promise<string | undefined> {
     );
     const client = new SecretsManagerClient({ region: "us-east-1" });
     const response = await client.send(
-      new GetSecretValueCommand({ SecretId: process.env.DOMAIN_API_KEY_SECRET_ID || "your-org/prod/service/domainpurchase/api-key" })
+      new GetSecretValueCommand({ SecretId: process.env.DOMAIN_API_KEY_SECRET_ID || "your-org/prod/your-service/api-key" })
     );
     return response.SecretString;
   } catch {

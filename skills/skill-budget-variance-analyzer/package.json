@@ -5,16 +5,14 @@
   "type": "module",
   "main": "src/index.ts",
   "bin": {
-    "skill-budget-variance-analyzer": "bin/cli.ts"
+    "skill-budget-variance-analyzer": "./src/index.ts"
   },
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun run --watch src/index.ts",
     "lint": "bunx --bun tsc --noEmit"
   },
-  "dependencies": {
-    "commander": "^13.1.0"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@types/bun": "latest",
     "typescript": "^5.8.3"

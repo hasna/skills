@@ -2,7 +2,7 @@
   "name": "@hasnaxyz/skill-domainsearch",
   "version": "0.1.2",
   "type": "module",
-  "description": "CLI tool and HTTP API for domain search and availability checking via GoDaddy/Brandsight API",
+  "description": "CLI tool and HTTP API for domain search and availability checking via GoDaddy API",
   "private": true,
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
@@ -29,13 +29,11 @@
     "start": "bun run src/server/index.ts",
     "cli": "bun run bin/cli.ts"
   },
-  "dependencies": {
-    "commander": "^13.0.0"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@types/bun": "^1.1.14",
     "typescript": "^5.7.2"
   },
   "author": "Hasna <dev@hasna.com>",
-  "license": "MIT"
+  "license": "Apache-2.0"
 }

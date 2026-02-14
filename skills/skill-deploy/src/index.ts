@@ -6,7 +6,7 @@
  */
 
 import { executeAndSave, executeSkill } from './http-client';
-import { handleInstallCommand } from './skill-install';
+import { handleInstallCommand } from '../../_common';
 
 // Skill metadata for install command
 const SKILL_META = {

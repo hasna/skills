@@ -7,7 +7,7 @@ import type { GenerateOptions, ImageProvider } from './types';
 import { OpenAIProvider } from './providers/openai';
 import { GoogleProvider } from './providers/google';
 import { XAIProvider } from './providers/xai';
-import { handleInstallCommand } from './skill-install';
+import { handleInstallCommand } from '../../_common';
 
 
 // Handle install/uninstall commands

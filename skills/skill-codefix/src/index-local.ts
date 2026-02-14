@@ -4,7 +4,7 @@
  * Code Fix CLI
  * Auto-linting, formatting, and code quality fixes
  */
-import { handleInstallCommand } from './skill-install';
+import { handleInstallCommand } from '../../_common';
 
 
 // Handle install/uninstall commands

@@ -34,7 +34,6 @@
     "test:watch": "bun test --watch"
   },
   "dependencies": {
-    "commander": "^13.0.0",
     "playwright": "^1.49.0",
     "postgres": "^3.4.4"
   },
@@ -43,5 +42,5 @@
     "typescript": "^5.7.2"
   },
   "author": "Hasna <dev@hasna.com>",
-  "license": "MIT"
+  "license": "Apache-2.0"
 }

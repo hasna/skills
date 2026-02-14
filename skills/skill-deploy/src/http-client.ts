@@ -5,7 +5,7 @@
  * Usage: import and call executeSkill() from your skill CLI
  */
 
-const SKILL_API_URL = process.env.SKILL_API_URL || "http://44.195.55.5:3000";
+const SKILL_API_URL = process.env.SKILL_API_URL || "http://localhost:3000";
 
 export interface SkillRequest {
   skill: string;

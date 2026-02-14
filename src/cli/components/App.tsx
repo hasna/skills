@@ -86,7 +86,9 @@ export function App({ initialSkills, overwrite = false }: AppProps) {
 
       {view === "main" && (
         <Box flexDirection="column">
-          <Text marginBottom={1}>What would you like to do?</Text>
+          <Box marginBottom={1}>
+            <Text>What would you like to do?</Text>
+          </Box>
           <SelectInput items={mainMenuItems} onSelect={handleMainSelect} />
           <Box marginTop={1}>
             <Text dimColor>Press q to quit</Text>
@@ -136,9 +138,11 @@ export function App({ initialSkills, overwrite = false }: AppProps) {
 
       {view === "done" && (
         <Box flexDirection="column">
-          <Text bold color="green" marginBottom={1}>
-            Installation complete!
-          </Text>
+          <Box marginBottom={1}>
+            <Text bold color="green">
+              Installation complete!
+            </Text>
+          </Box>
 
           {results.filter((r) => r.success).length > 0 && (
             <Box flexDirection="column" marginBottom={1}>
@@ -171,7 +175,7 @@ export function App({ initialSkills, overwrite = false }: AppProps) {
           <Box marginTop={1} flexDirection="column">
             <Text bold>Next steps:</Text>
             <Text>1. Import from .skills/</Text>
-            <Text dimColor>   import {"{"} generate_image {"}"} from './.skills'</Text>
+            <Text dimColor>   import {"{"} image {"}"} from './.skills'</Text>
             <Text>2. Configure your API keys</Text>
             <Text>3. Start building!</Text>
           </Box>

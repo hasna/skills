@@ -27,7 +27,7 @@
     "claude",
     "codex"
   ],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "scripts": {
     "start": "bun run src/index.ts",
     "typecheck": "tsc --noEmit"

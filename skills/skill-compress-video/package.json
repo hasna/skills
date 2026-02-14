@@ -3,22 +3,19 @@
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "skill-compress-video": "./bin/cli.ts"
+    "skill-compress-video": "./src/index.ts"
   },
   "scripts": {
     "dev": "bun run src/index.ts",
     "build": "bun build src/index.ts --outdir dist --target node",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "commander": "^13.1.0"
-  },
+  "dependencies": {},
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
     "access": "restricted"
   },
   "files": [
-    "bin",
     "src",
     "dist",
     "SKILL.md"

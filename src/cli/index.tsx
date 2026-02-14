@@ -5,6 +5,7 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { existsSync, writeFileSync, appendFileSync, readFileSync } from "fs";
 import { join } from "path";
+import pkg from "../../package.json" with { type: "json" };
 import { App } from "./components/App.js";
 import {
   SKILLS,
@@ -19,7 +20,7 @@ import {
   removeSkillForAgent,
   getInstalledSkills,
   removeSkill,
-  AGENT_TARGETS,
+  resolveAgents,
   type AgentTarget,
 } from "../lib/installer.js";
 import {
@@ -31,20 +32,32 @@ import {
   generateSkillMd,
 } from "../lib/skillinfo.js";
 
+const isTTY = process.stdout.isTTY ?? false;
 const program = new Command();
 
 program
   .name("skills")
   .description("Install AI agent skills for your project")
-  .version("0.0.3")
+  .version(pkg.version)
+  .option("--verbose", "Enable verbose logging", false)
   .enablePositionalOptions();
 
-// Interactive mode
+// Interactive mode (default when no subcommand given)
 program
-  .command("interactive")
+  .command("interactive", { isDefault: true })
   .alias("i")
   .description("Interactive skill browser (TUI)")
   .action(() => {
+    if (!isTTY) {
+      console.log("Non-interactive environment detected. Use a subcommand:\n");
+      console.log("  skills list          List available skills");
+      console.log("  skills search <q>    Search skills");
+      console.log("  skills install <n>   Install a skill");
+      console.log("  skills info <n>      Show skill details");
+      console.log("  skills serve         Start web dashboard");
+      console.log("  skills --help        Show all commands\n");
+      process.exit(0);
+    }
     render(<App />);
   });
 
@@ -57,23 +70,29 @@ program
   .option("--json", "Output results as JSON", false)
   .option("--for <agent>", "Install for agent: claude, codex, gemini, or all")
   .option("--scope <scope>", "Install scope: global or project", "global")
+  .option("--dry-run", "Print what would happen without actually installing", false)
   .description("Install one or more skills")
   .action((skills: string[], options) => {
     const results = [];
 
     if (options.for) {
       // Agent install mode: copy SKILL.md to agent skill dir
-      const agents: AgentTarget[] = options.for === "all"
-        ? [...AGENT_TARGETS]
-        : [options.for as AgentTarget];
+      let agents: AgentTarget[];
+      try {
+        agents = resolveAgents(options.for);
+      } catch (err) {
+        console.error(chalk.red((err as Error).message));
+        process.exitCode = 1;
+        return;
+      }
 
-      // Validate agent names
-      for (const agent of agents) {
-        if (!AGENT_TARGETS.includes(agent)) {
-          console.error(chalk.red(`Unknown agent: ${agent}. Available: ${AGENT_TARGETS.join(", ")}, all`));
-          process.exitCode = 1;
-          return;
+      if (options.dryRun) {
+        for (const name of skills) {
+          for (const agent of agents) {
+            console.log(chalk.dim(`[dry-run] Would install ${name} for ${agent} (${options.scope})`));
+          }
         }
+        return;
       }
 
       for (const name of skills) {
@@ -101,6 +120,13 @@ program
         console.log(chalk.dim("\nSKILL.md copied to agent skill directories"));
       }
     } else {
+      if (options.dryRun) {
+        for (const name of skills) {
+          console.log(chalk.dim(`[dry-run] Would install ${name} to .skills/`));
+        }
+        return;
+      }
+
       // Default: full source install to .skills/
       for (const name of skills) {
         const result = installSkill(name, { overwrite: options.overwrite });
@@ -428,19 +454,24 @@ program
   .option("--json", "Output as JSON", false)
   .option("--for <agent>", "Remove from agent: claude, codex, gemini, or all")
   .option("--scope <scope>", "Remove scope: global or project", "global")
+  .option("--dry-run", "Print what would happen without actually removing", false)
   .description("Remove an installed skill")
-  .action((skill: string, options: { json: boolean; for?: string; scope: string }) => {
+  .action((skill: string, options: { json: boolean; for?: string; scope: string; dryRun: boolean }) => {
     if (options.for) {
-      const agents: AgentTarget[] = options.for === "all"
-        ? [...AGENT_TARGETS]
-        : [options.for as AgentTarget];
+      let agents: AgentTarget[];
+      try {
+        agents = resolveAgents(options.for);
+      } catch (err) {
+        console.error(chalk.red((err as Error).message));
+        process.exitCode = 1;
+        return;
+      }
 
-      for (const agent of agents) {
-        if (!AGENT_TARGETS.includes(agent)) {
-          console.error(chalk.red(`Unknown agent: ${agent}. Available: ${AGENT_TARGETS.join(", ")}, all`));
-          process.exitCode = 1;
-          return;
+      if (options.dryRun) {
+        for (const agent of agents) {
+          console.log(chalk.dim(`[dry-run] Would remove ${skill} from ${agent} (${options.scope})`));
         }
+        return;
       }
 
       const results = [];
@@ -469,6 +500,11 @@ program
         process.exitCode = 1;
       }
     } else {
+      if (options.dryRun) {
+        console.log(chalk.dim(`[dry-run] Would remove ${skill} from .skills/`));
+        return;
+      }
+
       const removed = removeSkill(skill);
       if (options.json) {
         console.log(JSON.stringify({ skill, removed }));
@@ -478,6 +514,44 @@ program
         console.log(chalk.red(`\u2717 ${skill} is not installed`));
         process.exitCode = 1;
       }
+    }
+  });
+
+// Update command
+program
+  .command("update")
+  .argument("[skills...]", "Skills to update (default: all installed)")
+  .option("--json", "Output results as JSON", false)
+  .description("Update installed skills (reinstall with --overwrite)")
+  .action((skills: string[], options: { json: boolean }) => {
+    const toUpdate =
+      skills.length > 0 ? skills : getInstalledSkills();
+
+    if (toUpdate.length === 0) {
+      console.log(chalk.dim("No skills installed. Run: skills install <name>"));
+      return;
+    }
+
+    const results = toUpdate.map((name) =>
+      installSkill(name, { overwrite: true })
+    );
+
+    if (options.json) {
+      console.log(JSON.stringify(results, null, 2));
+    } else {
+      console.log(chalk.bold("\nUpdating skills...\n"));
+      for (const result of results) {
+        if (result.success) {
+          console.log(chalk.green(`\u2713 ${result.skill}`));
+        } else {
+          console.log(chalk.red(`\u2717 ${result.skill}: ${result.error}`));
+        }
+      }
+      console.log(chalk.dim("\nSkills updated in .skills/"));
+    }
+
+    if (results.some((r) => !r.success)) {
+      process.exitCode = 1;
     }
   });
 
@@ -551,9 +625,16 @@ program
     await import("../mcp/index.js");
   });
 
-// Default: show help (not interactive - agents can't use TUI)
-program.action(() => {
-  program.help();
-});
+// Serve command (web dashboard)
+program
+  .command("serve")
+  .description("Start the Skills Dashboard web server")
+  .option("-p, --port <port>", "Port number", "3579")
+  .option("--no-open", "Don't open browser automatically")
+  .action(async (options: { port: string; open: boolean }) => {
+    const { startServer } = await import("../server/serve.js");
+    const port = parseInt(options.port, 10);
+    await startServer(port, { open: options.open });
+  });
 
 program.parse();

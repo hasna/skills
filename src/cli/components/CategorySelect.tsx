@@ -9,7 +9,7 @@ interface CategorySelectProps {
 }
 
 export function CategorySelect({ onSelect, onBack }: CategorySelectProps) {
-  const items = CATEGORIES.map((cat) => ({
+  const items: { label: string; value: string }[] = CATEGORIES.map((cat) => ({
     label: `${cat} (${getSkillsByCategory(cat).length})`,
     value: cat,
   }));
@@ -29,9 +29,9 @@ export function CategorySelect({ onSelect, onBack }: CategorySelectProps) {
 
   return (
     <Box flexDirection="column">
-      <Text bold marginBottom={1}>
-        Select a category:
-      </Text>
+      <Box marginBottom={1}>
+        <Text bold>Select a category:</Text>
+      </Box>
       <SelectInput items={items} onSelect={handleSelect} />
     </Box>
   );

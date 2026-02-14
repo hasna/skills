@@ -49,4 +49,4 @@ temp/
 *.sqlite3
 
 # Config
-.{{name}}.json
+.managehook.json
