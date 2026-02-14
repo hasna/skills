@@ -36,7 +36,7 @@ const program = new Command();
 program
   .name("skills")
   .description("Install AI agent skills for your project")
-  .version("0.0.2")
+  .version("0.0.3")
   .enablePositionalOptions();
 
 // Interactive mode

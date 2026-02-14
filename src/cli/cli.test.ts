@@ -35,7 +35,7 @@ describe("CLI", () => {
 
     test("shows version with --version", async () => {
       const { stdout } = await runCli(["--version"]);
-      expect(stdout.trim()).toBe("0.0.2");
+      expect(stdout.trim()).toBe("0.0.3");
     });
   });
 
