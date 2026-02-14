@@ -11,8 +11,8 @@ import {
 
 describe("registry", () => {
   describe("SKILLS", () => {
-    test("has 266 skills", () => {
-      expect(SKILLS.length).toBe(266);
+    test("has 200 skills", () => {
+      expect(SKILLS.length).toBe(200);
     });
 
     test("all skills have required fields", () => {
@@ -60,10 +60,10 @@ describe("registry", () => {
 
   describe("getSkill", () => {
     test("finds existing skill by name", () => {
-      const skill = getSkill("deep-research");
+      const skill = getSkill("deepresearch");
       expect(skill).toBeDefined();
-      expect(skill!.name).toBe("deep-research");
-      expect(skill!.displayName).toBe("Deep Research");
+      expect(skill!.name).toBe("deepresearch");
+      expect(skill!.displayName).toBe("Deep Research (Agentic)");
     });
 
     test("returns undefined for nonexistent skill", () => {
@@ -81,7 +81,7 @@ describe("registry", () => {
   describe("getSkillsByCategory", () => {
     test("returns skills for Development Tools", () => {
       const skills = getSkillsByCategory("Development Tools");
-      expect(skills.length).toBe(46);
+      expect(skills.length).toBe(32);
       for (const skill of skills) {
         expect(skill.category).toBe("Development Tools");
       }
@@ -108,18 +108,18 @@ describe("registry", () => {
 
   describe("searchSkills", () => {
     test("finds skills by name", () => {
-      const results = searchSkills("deep-research");
+      const results = searchSkills("deepresearch");
       expect(results.length).toBeGreaterThanOrEqual(1);
-      expect(results.some((s) => s.name === "deep-research")).toBe(true);
+      expect(results.some((s) => s.name === "deepresearch")).toBe(true);
     });
 
     test("finds skills by displayName", () => {
-      const results = searchSkills("Deep Research");
+      const results = searchSkills("Deep Research (Agentic)");
       expect(results.length).toBeGreaterThanOrEqual(1);
     });
 
     test("finds skills by description", () => {
-      const results = searchSkills("voiceover");
+      const results = searchSkills("invoice");
       expect(results.length).toBeGreaterThanOrEqual(1);
     });
 

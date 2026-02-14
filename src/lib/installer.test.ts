@@ -30,13 +30,13 @@ afterEach(() => {
 describe("installer", () => {
   describe("getSkillPath", () => {
     test("returns path for skill name without prefix", () => {
-      const path = getSkillPath("deep-research");
-      expect(path).toContain("skill-deep-research");
+      const path = getSkillPath("deepresearch");
+      expect(path).toContain("skill-deepresearch");
     });
 
     test("returns path for skill name with prefix", () => {
-      const path = getSkillPath("skill-deep-research");
-      expect(path).toContain("skill-deep-research");
+      const path = getSkillPath("skill-deepresearch");
+      expect(path).toContain("skill-deepresearch");
       // Should not double-prefix
       expect(path).not.toContain("skill-skill-");
     });
@@ -44,11 +44,11 @@ describe("installer", () => {
 
   describe("skillExists", () => {
     test("returns true for existing skill", () => {
-      expect(skillExists("deep-research")).toBe(true);
+      expect(skillExists("deepresearch")).toBe(true);
     });
 
     test("returns true with skill- prefix", () => {
-      expect(skillExists("skill-deep-research")).toBe(true);
+      expect(skillExists("skill-deepresearch")).toBe(true);
     });
 
     test("returns false for nonexistent skill", () => {
@@ -58,26 +58,26 @@ describe("installer", () => {
 
   describe("installSkill", () => {
     test("installs a skill to target directory", () => {
-      const result = installSkill("deep-research", { targetDir: testDir });
+      const result = installSkill("deepresearch", { targetDir: testDir });
       expect(result.success).toBe(true);
-      expect(result.skill).toBe("deep-research");
+      expect(result.skill).toBe("deepresearch");
       expect(result.path).toBeDefined();
-      expect(existsSync(join(testDir, ".skills", "skill-deep-research"))).toBe(true);
+      expect(existsSync(join(testDir, ".skills", "skill-deepresearch"))).toBe(true);
     });
 
     test("creates .skills directory if it does not exist", () => {
       expect(existsSync(join(testDir, ".skills"))).toBe(false);
-      installSkill("deep-research", { targetDir: testDir });
+      installSkill("deepresearch", { targetDir: testDir });
       expect(existsSync(join(testDir, ".skills"))).toBe(true);
     });
 
     test("creates index.ts in .skills directory", () => {
-      installSkill("deep-research", { targetDir: testDir });
+      installSkill("deepresearch", { targetDir: testDir });
       const indexPath = join(testDir, ".skills", "index.ts");
       expect(existsSync(indexPath)).toBe(true);
       const content = readFileSync(indexPath, "utf-8");
-      expect(content).toContain("deep_research");
-      expect(content).toContain("skill-deep-research");
+      expect(content).toContain("deepresearch");
+      expect(content).toContain("skill-deepresearch");
     });
 
     test("fails for nonexistent skill", () => {
@@ -87,50 +87,50 @@ describe("installer", () => {
     });
 
     test("fails if already installed without overwrite", () => {
-      installSkill("deep-research", { targetDir: testDir });
-      const result = installSkill("deep-research", { targetDir: testDir });
+      installSkill("deepresearch", { targetDir: testDir });
+      const result = installSkill("deepresearch", { targetDir: testDir });
       expect(result.success).toBe(false);
       expect(result.error).toContain("Already installed");
     });
 
     test("succeeds with overwrite flag", () => {
-      installSkill("deep-research", { targetDir: testDir });
-      const result = installSkill("deep-research", { targetDir: testDir, overwrite: true });
+      installSkill("deepresearch", { targetDir: testDir });
+      const result = installSkill("deepresearch", { targetDir: testDir, overwrite: true });
       expect(result.success).toBe(true);
     });
 
     test("does not copy .git directory", () => {
-      installSkill("deep-research", { targetDir: testDir });
-      const gitDir = join(testDir, ".skills", "skill-deep-research", ".git");
+      installSkill("deepresearch", { targetDir: testDir });
+      const gitDir = join(testDir, ".skills", "skill-deepresearch", ".git");
       expect(existsSync(gitDir)).toBe(false);
     });
 
     test("handles skill- prefix in name", () => {
-      const result = installSkill("skill-deep-research", { targetDir: testDir });
+      const result = installSkill("skill-deepresearch", { targetDir: testDir });
       expect(result.success).toBe(true);
-      expect(existsSync(join(testDir, ".skills", "skill-deep-research"))).toBe(true);
+      expect(existsSync(join(testDir, ".skills", "skill-deepresearch"))).toBe(true);
     });
   });
 
   describe("installSkills", () => {
     test("installs multiple skills", () => {
-      const results = installSkills(["deep-research", "image"], { targetDir: testDir });
+      const results = installSkills(["deepresearch", "image"], { targetDir: testDir });
       expect(results.length).toBe(2);
       expect(results[0].success).toBe(true);
       expect(results[1].success).toBe(true);
     });
 
     test("returns mixed results for valid and invalid skills", () => {
-      const results = installSkills(["deep-research", "nonexistent-xyz"], { targetDir: testDir });
+      const results = installSkills(["deepresearch", "nonexistent-xyz"], { targetDir: testDir });
       expect(results.length).toBe(2);
       expect(results[0].success).toBe(true);
       expect(results[1].success).toBe(false);
     });
 
     test("index.ts contains all installed skills", () => {
-      installSkills(["deep-research", "image"], { targetDir: testDir });
+      installSkills(["deepresearch", "image"], { targetDir: testDir });
       const content = readFileSync(join(testDir, ".skills", "index.ts"), "utf-8");
-      expect(content).toContain("deep_research");
+      expect(content).toContain("deepresearch");
       expect(content).toContain("image");
     });
   });
@@ -148,16 +148,16 @@ describe("installer", () => {
     });
 
     test("returns installed skill names without prefix", () => {
-      installSkill("deep-research", { targetDir: testDir });
+      installSkill("deepresearch", { targetDir: testDir });
       installSkill("image", { targetDir: testDir });
       const installed = getInstalledSkills(testDir);
-      expect(installed).toContain("deep-research");
+      expect(installed).toContain("deepresearch");
       expect(installed).toContain("image");
       expect(installed.length).toBe(2);
     });
 
     test("does not include non-skill files", () => {
-      installSkill("deep-research", { targetDir: testDir });
+      installSkill("deepresearch", { targetDir: testDir });
       // Create a non-skill file
       writeFileSync(join(testDir, ".skills", "random.txt"), "test");
       const installed = getInstalledSkills(testDir);
@@ -167,11 +167,11 @@ describe("installer", () => {
 
   describe("removeSkill", () => {
     test("removes an installed skill", () => {
-      installSkill("deep-research", { targetDir: testDir });
-      expect(getInstalledSkills(testDir)).toContain("deep-research");
-      const result = removeSkill("deep-research", testDir);
+      installSkill("deepresearch", { targetDir: testDir });
+      expect(getInstalledSkills(testDir)).toContain("deepresearch");
+      const result = removeSkill("deepresearch", testDir);
       expect(result).toBe(true);
-      expect(getInstalledSkills(testDir)).not.toContain("deep-research");
+      expect(getInstalledSkills(testDir)).not.toContain("deepresearch");
     });
 
     test("returns false for non-installed skill", () => {
@@ -180,18 +180,18 @@ describe("installer", () => {
     });
 
     test("updates index.ts after removal", () => {
-      installSkills(["deep-research", "image"], { targetDir: testDir });
-      removeSkill("deep-research", testDir);
+      installSkills(["deepresearch", "image"], { targetDir: testDir });
+      removeSkill("deepresearch", testDir);
       const content = readFileSync(join(testDir, ".skills", "index.ts"), "utf-8");
-      expect(content).not.toContain("deep_research");
+      expect(content).not.toContain("deepresearch");
       expect(content).toContain("image");
     });
 
     test("handles skill- prefix in name", () => {
-      installSkill("deep-research", { targetDir: testDir });
-      const result = removeSkill("skill-deep-research", testDir);
+      installSkill("deepresearch", { targetDir: testDir });
+      const result = removeSkill("skill-deepresearch", testDir);
       expect(result).toBe(true);
-      expect(getInstalledSkills(testDir)).not.toContain("deep-research");
+      expect(getInstalledSkills(testDir)).not.toContain("deepresearch");
     });
   });
 
@@ -254,7 +254,7 @@ describe("installer", () => {
       });
 
       test("generates SKILL.md when skill lacks one", () => {
-        const result = installSkillForAgent("deep-research", {
+        const result = installSkillForAgent("deepresearch", {
           agent: "claude",
           scope: "project",
           projectDir: testDir,
@@ -265,8 +265,8 @@ describe("installer", () => {
       });
 
       test("fails without generator when skill has no SKILL.md", () => {
-        // deep-research has no SKILL.md
-        const result = installSkillForAgent("deep-research", {
+        // scaffold-project has no SKILL.md
+        const result = installSkillForAgent("scaffold-project", {
           agent: "claude",
           scope: "project",
           projectDir: testDir,

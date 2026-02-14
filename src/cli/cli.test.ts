@@ -60,7 +60,7 @@ describe("CLI", () => {
   describe("list", () => {
     test("lists all skills", async () => {
       const { stdout } = await runCli(["list"]);
-      expect(stdout).toContain("Available skills (266)");
+      expect(stdout).toContain("Available skills (200)");
       expect(stdout).toContain("Development Tools");
     });
 
@@ -80,14 +80,14 @@ describe("CLI", () => {
       const { stdout } = await runCli(["list", "--json"]);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBe(266);
+      expect(data.length).toBe(200);
     });
 
     test("lists by category with --json", async () => {
       const { stdout } = await runCli(["list", "--category", "Event Management", "--json"]);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBe(5);
+      expect(data.length).toBe(4);
       for (const skill of data) {
         expect(skill.category).toBe("Event Management");
       }
@@ -123,8 +123,8 @@ describe("CLI", () => {
 
   describe("info", () => {
     test("shows skill info", async () => {
-      const { stdout } = await runCli(["info", "deep-research"]);
-      expect(stdout).toContain("Deep Research");
+      const { stdout } = await runCli(["info", "deepresearch"]);
+      expect(stdout).toContain("Deep Research (Agentic)");
       expect(stdout).toContain("Research & Writing");
     });
 
@@ -135,10 +135,10 @@ describe("CLI", () => {
     });
 
     test("outputs JSON with --json", async () => {
-      const { stdout } = await runCli(["info", "deep-research", "--json"]);
+      const { stdout } = await runCli(["info", "deepresearch", "--json"]);
       const data = JSON.parse(stdout);
-      expect(data.name).toBe("deep-research");
-      expect(data.displayName).toBe("Deep Research");
+      expect(data.name).toBe("deepresearch");
+      expect(data.displayName).toBe("Deep Research (Agentic)");
       expect(data.category).toBe("Research & Writing");
       expect(Array.isArray(data.tags)).toBe(true);
     });
@@ -151,8 +151,8 @@ describe("CLI", () => {
     });
 
     test("shows CLAUDE.md when no SKILL.md", async () => {
-      const { stdout } = await runCli(["docs", "deep-research"]);
-      expect(stdout).toContain("deep-research");
+      const { stdout } = await runCli(["docs", "deepresearch"]);
+      expect(stdout).toContain("deepresearch");
     });
 
     test("fails for nonexistent skill", async () => {
@@ -175,8 +175,8 @@ describe("CLI", () => {
     });
 
     test("shows claude file with --file claude", async () => {
-      const { stdout } = await runCli(["docs", "deep-research", "--file", "claude"]);
-      expect(stdout).toContain("deep-research");
+      const { stdout } = await runCli(["docs", "deepresearch", "--file", "claude"]);
+      expect(stdout).toContain("deepresearch");
     });
   });
 
@@ -209,7 +209,7 @@ describe("CLI", () => {
     });
 
     test("shows npm dependencies", async () => {
-      const { stdout } = await runCli(["requires", "deep-research"]);
+      const { stdout } = await runCli(["requires", "deepresearch"]);
       expect(stdout).toContain("npm dependencies");
       expect(stdout).toContain("commander");
     });

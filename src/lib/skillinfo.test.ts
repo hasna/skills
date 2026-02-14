@@ -32,7 +32,7 @@ describe("skillinfo", () => {
     });
 
     test("returns docs for skill with CLAUDE.md only", () => {
-      const docs = getSkillDocs("deep-research");
+      const docs = getSkillDocs("deepresearch");
       expect(docs).not.toBeNull();
       expect(docs!.claudeMd).toBeTruthy();
     });
@@ -60,7 +60,7 @@ describe("skillinfo", () => {
     });
 
     test("falls back to CLAUDE.md", () => {
-      const doc = getSkillBestDoc("deep-research");
+      const doc = getSkillBestDoc("deepresearch");
       expect(doc).toBeTruthy();
     });
 
@@ -85,9 +85,9 @@ describe("skillinfo", () => {
     });
 
     test("extracts CLI command for deep-research", () => {
-      const reqs = getSkillRequirements("deep-research");
+      const reqs = getSkillRequirements("deepresearch");
       expect(reqs).not.toBeNull();
-      expect(reqs!.cliCommand).toBe("skill-deep-research");
+      expect(reqs!.cliCommand).toBe("skill-deepresearch");
     });
 
     test("returns null for nonexistent skill", () => {
@@ -104,7 +104,7 @@ describe("skillinfo", () => {
     });
 
     test("extracts dependencies from package.json", () => {
-      const reqs = getSkillRequirements("deep-research");
+      const reqs = getSkillRequirements("deepresearch");
       expect(reqs).not.toBeNull();
       expect(reqs!.dependencies).toHaveProperty("commander");
     });
@@ -146,12 +146,12 @@ describe("skillinfo", () => {
 
   describe("generateSkillMd", () => {
     test("generates SKILL.md for a skill without one", () => {
-      const md = generateSkillMd("deep-research");
+      const md = generateSkillMd("deepresearch");
       expect(md).not.toBeNull();
       expect(md!).toContain("---");
-      expect(md!).toContain("name: deep-research");
+      expect(md!).toContain("name: deepresearch");
       expect(md!).toContain("description:");
-      expect(md!).toContain("Deep Research");
+      expect(md!).toContain("Deep Research (Agentic)");
     });
 
     test("generates SKILL.md for a skill with existing SKILL.md source", () => {
@@ -162,17 +162,17 @@ describe("skillinfo", () => {
     });
 
     test("includes category and tags", () => {
-      const md = generateSkillMd("deep-research");
+      const md = generateSkillMd("deepresearch");
       expect(md).not.toBeNull();
       expect(md!).toContain("Category: Research & Writing");
       expect(md!).toContain("Tags:");
     });
 
     test("includes CLI section for skills with bin entry", () => {
-      const md = generateSkillMd("deep-research");
+      const md = generateSkillMd("deepresearch");
       expect(md).not.toBeNull();
       expect(md!).toContain("## CLI");
-      expect(md!).toContain("skills run deep-research");
+      expect(md!).toContain("skills run deepresearch");
     });
 
     test("returns null for nonexistent skill", () => {
@@ -181,7 +181,7 @@ describe("skillinfo", () => {
     });
 
     test("has valid YAML frontmatter", () => {
-      const md = generateSkillMd("deep-research");
+      const md = generateSkillMd("deepresearch");
       expect(md).not.toBeNull();
       // Check frontmatter structure
       const parts = md!.split("---");
