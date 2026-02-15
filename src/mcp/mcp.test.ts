@@ -209,4 +209,155 @@ describe("MCP Server", () => {
       await client.close();
     }
   }, 15000);
+
+  test("calls get_skill_docs tool", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "get_skill_docs",
+        arguments: { name: "image" },
+      }, 10);
+      expect(response).not.toBeNull();
+      expect(response.result).toBeDefined();
+      const text = response.result.content[0].text;
+      expect(text).toContain("Image Generation");
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("get_skill_docs returns error for nonexistent skill", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "get_skill_docs",
+        arguments: { name: "nonexistent-xyz" },
+      }, 11);
+      expect(response).not.toBeNull();
+      expect(response.result.isError).toBe(true);
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("calls get_requirements tool", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "get_requirements",
+        arguments: { name: "image" },
+      }, 12);
+      expect(response).not.toBeNull();
+      expect(response.result).toBeDefined();
+      const reqs = JSON.parse(response.result.content[0].text);
+      expect(Array.isArray(reqs.envVars)).toBe(true);
+      expect(reqs.envVars).toContain("OPENAI_API_KEY");
+      expect(reqs.cliCommand).toBe("skill-image");
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("get_requirements returns error for nonexistent skill", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "get_requirements",
+        arguments: { name: "nonexistent-xyz" },
+      }, 13);
+      expect(response).not.toBeNull();
+      expect(response.result.isError).toBe(true);
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("calls list_skills tool with no filter", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "list_skills",
+        arguments: {},
+      }, 14);
+      expect(response).not.toBeNull();
+      const skills = JSON.parse(response.result.content[0].text);
+      expect(Array.isArray(skills)).toBe(true);
+      expect(skills.length).toBe(200);
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("calls list_skills tool with category filter", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "list_skills",
+        arguments: { category: "Event Management" },
+      }, 15);
+      expect(response).not.toBeNull();
+      const skills = JSON.parse(response.result.content[0].text);
+      expect(Array.isArray(skills)).toBe(true);
+      expect(skills.length).toBe(4);
+      for (const s of skills) {
+        expect(s.category).toBe("Event Management");
+      }
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("calls install_skill tool for nonexistent skill", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "install_skill",
+        arguments: { name: "nonexistent-xyz-999" },
+      }, 16);
+      expect(response).not.toBeNull();
+      expect(response.result.isError).toBe(true);
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("calls remove_skill tool for non-installed skill", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "remove_skill",
+        arguments: { name: "nonexistent-xyz-999" },
+      }, 17);
+      expect(response).not.toBeNull();
+      const result = JSON.parse(response.result.content[0].text);
+      expect(result.removed).toBe(false);
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("reads skills://registry resource", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("resources/read", {
+        uri: "skills://registry",
+      }, 18);
+      expect(response).not.toBeNull();
+      expect(response.result).toBeDefined();
+      const skills = JSON.parse(response.result.contents[0].text);
+      expect(Array.isArray(skills)).toBe(true);
+      expect(skills.length).toBe(200);
+    } finally {
+      await client.close();
+    }
+  }, 15000);
 });

@@ -14,6 +14,7 @@ import {
   installSkillForAgent,
   removeSkillForAgent,
   AGENT_TARGETS,
+  resolveAgents,
 } from "./installer";
 
 let testDir: string;
@@ -323,6 +324,23 @@ describe("installer", () => {
         });
         expect(result).toBe(false);
       });
+    });
+  });
+
+  describe("resolveAgents", () => {
+    test("returns all agents for 'all'", () => {
+      const agents = resolveAgents("all");
+      expect(agents).toEqual(["claude", "codex", "gemini"]);
+    });
+
+    test("returns single agent for valid name", () => {
+      expect(resolveAgents("claude")).toEqual(["claude"]);
+      expect(resolveAgents("codex")).toEqual(["codex"]);
+      expect(resolveAgents("gemini")).toEqual(["gemini"]);
+    });
+
+    test("throws for unknown agent", () => {
+      expect(() => resolveAgents("invalid-agent")).toThrow("Unknown agent");
     });
   });
 });

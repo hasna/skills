@@ -1,5 +1,5 @@
 import * as React from "react";
-import { RefreshCwIcon, ZapIcon } from "lucide-react";
+import { RefreshCwIcon } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { StatsCards } from "@/components/stats-cards";
 import { SkillsTable } from "@/components/skills-table";
@@ -80,11 +80,15 @@ export function App() {
       <header className="border-b">
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
           <div className="flex items-center gap-3">
-            <ZapIcon className="size-5 text-primary" />
+            <img
+              src="/logo.jpg"
+              alt="Hasna"
+              className="h-7 w-auto rounded"
+            />
             <h1 className="text-base font-semibold">
-              Skills{" "}
+              Hasna{" "}
               <span className="font-normal text-muted-foreground">
-                Dashboard
+                Skills
               </span>
             </h1>
           </div>

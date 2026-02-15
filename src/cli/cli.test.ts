@@ -18,15 +18,14 @@ async function runCli(args: string[]): Promise<{ stdout: string; stderr: string;
 
 describe("CLI", () => {
   describe("help", () => {
-    test("shows help with no arguments", async () => {
+    test("shows non-interactive fallback with no arguments (non-TTY)", async () => {
       const { stdout } = await runCli([]);
-      expect(stdout).toContain("Install AI agent skills");
-      expect(stdout).toContain("install|add");
-      expect(stdout).toContain("list|ls");
-      expect(stdout).toContain("search");
-      expect(stdout).toContain("info");
-      expect(stdout).toContain("remove|rm");
-      expect(stdout).toContain("categories");
+      expect(stdout).toContain("Non-interactive environment detected");
+      expect(stdout).toContain("skills list");
+      expect(stdout).toContain("skills search");
+      expect(stdout).toContain("skills install");
+      expect(stdout).toContain("skills serve");
+      expect(stdout).toContain("skills --help");
     });
 
     test("shows help with --help", async () => {
