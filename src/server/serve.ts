@@ -3,12 +3,25 @@
  * Serves the Vite-built React dashboard and provides API routes.
  */
 
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { join, dirname, extname } from "path";
 import { fileURLToPath } from "url";
 import { SKILLS, CATEGORIES, getSkill, getSkillsByCategory, searchSkills } from "../lib/registry.js";
 import { getInstalledSkills, installSkill, removeSkill } from "../lib/installer.js";
 import { getSkillDocs, getSkillBestDoc, getSkillRequirements } from "../lib/skillinfo.js";
+
+function getPackageVersion(): string {
+  try {
+    const scriptDir = dirname(fileURLToPath(import.meta.url));
+    for (const rel of ["../..", ".."]) {
+      const pkgPath = join(scriptDir, rel, "package.json");
+      if (existsSync(pkgPath)) {
+        return JSON.parse(readFileSync(pkgPath, "utf-8")).version;
+      }
+    }
+  } catch {}
+  return "unknown";
+}
 
 interface SkillWithStatus {
   name: string;
@@ -217,6 +230,30 @@ export async function startServer(port: number, options?: { open?: boolean }): P
         if (!isValidSkillName(name)) return json({ error: "Invalid skill name" }, 400);
         const success = removeSkill(name);
         return json({ success, skill: name }, success ? 200 : 404);
+      }
+
+      // GET /api/version - Current package version
+      if (path === "/api/version" && method === "GET") {
+        return json({ version: getPackageVersion() });
+      }
+
+      // POST /api/self-update - Update @hasna/skills package
+      if (path === "/api/self-update" && method === "POST") {
+        try {
+          const proc = Bun.spawn(["bun", "add", "-g", "@hasna/skills@latest"], {
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+          const stdout = await new Response(proc.stdout).text();
+          const stderr = await new Response(proc.stderr).text();
+          const exitCode = await proc.exited;
+          if (exitCode === 0) {
+            return json({ success: true, output: stdout.trim() || stderr.trim() });
+          }
+          return json({ success: false, error: stderr.trim() || stdout.trim() }, 500);
+        } catch (e) {
+          return json({ success: false, error: e instanceof Error ? e.message : "Update failed" }, 500);
+        }
       }
 
       // ── CORS ──

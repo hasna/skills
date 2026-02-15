@@ -32,7 +32,7 @@ import {
   generateSkillMd,
 } from "../lib/skillinfo.js";
 
-const isTTY = process.stdout.isTTY ?? false;
+const isTTY = (process.stdout.isTTY ?? false) && (process.stdin.isTTY ?? false);
 const program = new Command();
 
 program
@@ -635,6 +635,29 @@ program
     const { startServer } = await import("../server/serve.js");
     const port = parseInt(options.port, 10);
     await startServer(port, { open: options.open });
+  });
+
+// Self-update command
+program
+  .command("self-update")
+  .description("Update @hasna/skills to the latest version")
+  .action(async () => {
+    console.log(chalk.bold("\nUpdating @hasna/skills...\n"));
+    const proc = Bun.spawn(["bun", "add", "-g", "@hasna/skills@latest"], {
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    const exitCode = await proc.exited;
+    if (exitCode === 0) {
+      console.log(chalk.green("\n\u2713 Updated to latest version"));
+      // Show new version
+      const vProc = Bun.spawn(["skills", "--version"], { stdout: "pipe" });
+      const ver = (await new Response(vProc.stdout).text()).trim();
+      console.log(chalk.dim(`  Version: ${ver}`));
+    } else {
+      console.error(chalk.red("\n\u2717 Update failed"));
+      process.exitCode = 1;
+    }
   });
 
 program.parse();

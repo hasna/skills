@@ -1,5 +1,5 @@
 import * as React from "react";
-import { RefreshCwIcon } from "lucide-react";
+import { RefreshCwIcon, ArrowUpCircleIcon } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { StatsCards } from "@/components/stats-cards";
 import { SkillsTable } from "@/components/skills-table";
@@ -16,6 +16,16 @@ export function App() {
     message: string;
     type: "success" | "error";
   } | null>(null);
+  const [version, setVersion] = React.useState<string>("");
+  const [updating, setUpdating] = React.useState(false);
+
+  const loadVersion = React.useCallback(async () => {
+    try {
+      const res = await fetch("/api/version");
+      const data = await res.json();
+      setVersion(data.version || "");
+    } catch {}
+  }, []);
 
   const loadSkills = React.useCallback(async () => {
     setLoading(true);
@@ -32,7 +42,8 @@ export function App() {
 
   React.useEffect(() => {
     loadSkills();
-  }, [loadSkills]);
+    loadVersion();
+  }, [loadSkills, loadVersion]);
 
   function showToast(message: string, type: "success" | "error") {
     setToast({ message, type });
@@ -74,6 +85,24 @@ export function App() {
     }
   }
 
+  async function handleSelfUpdate() {
+    setUpdating(true);
+    try {
+      const res = await fetch("/api/self-update", { method: "POST" });
+      const data = await res.json();
+      if (data.success) {
+        showToast("Package updated! Restart server to use new version.", "success");
+        loadVersion();
+      } else {
+        showToast(data.error || "Update failed", "error");
+      }
+    } catch {
+      showToast("Failed to update package", "error");
+    } finally {
+      setUpdating(false);
+    }
+  }
+
   return (
     <div className="min-h-screen">
       {/* Header */}
@@ -91,8 +120,24 @@ export function App() {
                 Skills
               </span>
             </h1>
+            {version && (
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                v{version}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleSelfUpdate}
+              disabled={updating}
+            >
+              <ArrowUpCircleIcon
+                className={`size-3.5 ${updating ? "animate-spin" : ""}`}
+              />
+              {updating ? "Updating..." : "Update"}
+            </Button>
             <Button
               variant="ghost"
               size="sm"
