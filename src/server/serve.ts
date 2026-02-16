@@ -122,6 +122,163 @@ function serveStaticFile(filePath: string): Response | null {
   });
 }
 
+export function createFetchHandler(options?: {
+  dashboardDir?: string;
+  dashboardExists?: boolean;
+}): (req: Request) => Promise<Response> {
+  const dashboardDir = options?.dashboardDir ?? resolveDashboardDir();
+  const dashboardExists = options?.dashboardExists ?? existsSync(dashboardDir);
+
+  return async function fetchHandler(req: Request): Promise<Response> {
+    const url = new URL(req.url);
+    const path = url.pathname;
+    const method = req.method;
+
+    // ── API Routes ──
+
+    // GET /api/skills - All skills with status
+    if (path === "/api/skills" && method === "GET") {
+      return json(getAllSkillsWithStatus());
+    }
+
+    // GET /api/categories - List categories with counts
+    if (path === "/api/categories" && method === "GET") {
+      const counts = CATEGORIES.map((cat) => ({
+        name: cat,
+        count: getSkillsByCategory(cat).length,
+      }));
+      return json(counts);
+    }
+
+    // GET /api/skills/search?q= - Search skills
+    if (path === "/api/skills/search" && method === "GET") {
+      const query = url.searchParams.get("q") || "";
+      if (!query.trim()) return json([]);
+      const results = searchSkills(query);
+      const installed = new Set(getInstalledSkills());
+      return json(
+        results.map((meta) => {
+          const reqs = getSkillRequirements(meta.name);
+          return {
+            name: meta.name,
+            displayName: meta.displayName,
+            description: meta.description,
+            category: meta.category,
+            tags: meta.tags,
+            installed: installed.has(meta.name),
+            envVars: reqs?.envVars || [],
+            systemDeps: reqs?.systemDeps || [],
+            cliCommand: reqs?.cliCommand || null,
+          };
+        })
+      );
+    }
+
+    // GET /api/skills/:name - Single skill detail
+    const singleMatch = path.match(/^\/api\/skills\/([^/]+)$/);
+    if (singleMatch && method === "GET") {
+      const name = singleMatch[1];
+      if (!isValidSkillName(name)) return json({ error: "Invalid skill name" }, 400);
+      const meta = getSkill(name);
+      if (!meta) return json({ error: `Skill '${name}' not found` }, 404);
+
+      const reqs = getSkillRequirements(name);
+      const docs = getSkillBestDoc(name);
+      const installed = new Set(getInstalledSkills());
+      return json({
+        name: meta.name,
+        displayName: meta.displayName,
+        description: meta.description,
+        category: meta.category,
+        tags: meta.tags,
+        installed: installed.has(meta.name),
+        envVars: reqs?.envVars || [],
+        systemDeps: reqs?.systemDeps || [],
+        cliCommand: reqs?.cliCommand || null,
+        docs: docs || null,
+      });
+    }
+
+    // GET /api/skills/:name/docs - Raw documentation text
+    const docsMatch = path.match(/^\/api\/skills\/([^/]+)\/docs$/);
+    if (docsMatch && method === "GET") {
+      const name = docsMatch[1];
+      if (!isValidSkillName(name)) return json({ error: "Invalid skill name" }, 400);
+      const content = getSkillBestDoc(name);
+      return json({ content: content || null });
+    }
+
+    // POST /api/skills/:name/install - Install skill
+    const installMatch = path.match(/^\/api\/skills\/([^/]+)\/install$/);
+    if (installMatch && method === "POST") {
+      const name = installMatch[1];
+      if (!isValidSkillName(name)) return json({ error: "Invalid skill name" }, 400);
+      const result = installSkill(name);
+      return json(result, result.success ? 200 : 400);
+    }
+
+    // POST /api/skills/:name/remove - Remove skill
+    const removeMatch = path.match(/^\/api\/skills\/([^/]+)\/remove$/);
+    if (removeMatch && method === "POST") {
+      const name = removeMatch[1];
+      if (!isValidSkillName(name)) return json({ error: "Invalid skill name" }, 400);
+      const success = removeSkill(name);
+      return json({ success, skill: name }, success ? 200 : 404);
+    }
+
+    // GET /api/version - Current package version
+    if (path === "/api/version" && method === "GET") {
+      return json({ version: getPackageVersion() });
+    }
+
+    // POST /api/self-update - Update @hasna/skills package
+    if (path === "/api/self-update" && method === "POST") {
+      try {
+        const proc = Bun.spawn(["bun", "add", "-g", "@hasna/skills@latest"], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const stdout = await new Response(proc.stdout).text();
+        const stderr = await new Response(proc.stderr).text();
+        const exitCode = await proc.exited;
+        if (exitCode === 0) {
+          return json({ success: true, output: stdout.trim() || stderr.trim() });
+        }
+        return json({ success: false, error: stderr.trim() || stdout.trim() }, 500);
+      } catch (e) {
+        return json({ success: false, error: e instanceof Error ? e.message : "Update failed" }, 500);
+      }
+    }
+
+    // ── CORS ──
+    if (method === "OPTIONS") {
+      return new Response(null, {
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type",
+        },
+      });
+    }
+
+    // ── Static Files (Vite dashboard) ──
+    if (dashboardExists && (method === "GET" || method === "HEAD")) {
+      if (path !== "/") {
+        const filePath = join(dashboardDir, path);
+        const res = serveStaticFile(filePath);
+        if (res) return res;
+      }
+
+      // SPA fallback: serve index.html for all other GET routes
+      const indexPath = join(dashboardDir, "index.html");
+      const res = serveStaticFile(indexPath);
+      if (res) return res;
+    }
+
+    return json({ error: "Not found" }, 404);
+  };
+}
+
 export async function startServer(port: number, options?: { open?: boolean }): Promise<void> {
   const shouldOpen = options?.open ?? true;
   const dashboardDir = resolveDashboardDir();
@@ -135,154 +292,7 @@ export async function startServer(port: number, options?: { open?: boolean }): P
 
   const server = Bun.serve({
     port,
-    async fetch(req) {
-      const url = new URL(req.url);
-      const path = url.pathname;
-      const method = req.method;
-
-      // ── API Routes ──
-
-      // GET /api/skills - All skills with status
-      if (path === "/api/skills" && method === "GET") {
-        return json(getAllSkillsWithStatus());
-      }
-
-      // GET /api/categories - List categories with counts
-      if (path === "/api/categories" && method === "GET") {
-        const counts = CATEGORIES.map((cat) => ({
-          name: cat,
-          count: getSkillsByCategory(cat).length,
-        }));
-        return json(counts);
-      }
-
-      // GET /api/skills/search?q= - Search skills
-      if (path === "/api/skills/search" && method === "GET") {
-        const query = url.searchParams.get("q") || "";
-        if (!query.trim()) return json([]);
-        const results = searchSkills(query);
-        const installed = new Set(getInstalledSkills());
-        return json(
-          results.map((meta) => {
-            const reqs = getSkillRequirements(meta.name);
-            return {
-              name: meta.name,
-              displayName: meta.displayName,
-              description: meta.description,
-              category: meta.category,
-              tags: meta.tags,
-              installed: installed.has(meta.name),
-              envVars: reqs?.envVars || [],
-              systemDeps: reqs?.systemDeps || [],
-              cliCommand: reqs?.cliCommand || null,
-            };
-          })
-        );
-      }
-
-      // GET /api/skills/:name - Single skill detail
-      const singleMatch = path.match(/^\/api\/skills\/([^/]+)$/);
-      if (singleMatch && method === "GET") {
-        const name = singleMatch[1];
-        if (!isValidSkillName(name)) return json({ error: "Invalid skill name" }, 400);
-        const meta = getSkill(name);
-        if (!meta) return json({ error: `Skill '${name}' not found` }, 404);
-
-        const reqs = getSkillRequirements(name);
-        const docs = getSkillBestDoc(name);
-        const installed = new Set(getInstalledSkills());
-        return json({
-          name: meta.name,
-          displayName: meta.displayName,
-          description: meta.description,
-          category: meta.category,
-          tags: meta.tags,
-          installed: installed.has(meta.name),
-          envVars: reqs?.envVars || [],
-          systemDeps: reqs?.systemDeps || [],
-          cliCommand: reqs?.cliCommand || null,
-          docs: docs || null,
-        });
-      }
-
-      // GET /api/skills/:name/docs - Raw documentation text
-      const docsMatch = path.match(/^\/api\/skills\/([^/]+)\/docs$/);
-      if (docsMatch && method === "GET") {
-        const name = docsMatch[1];
-        if (!isValidSkillName(name)) return json({ error: "Invalid skill name" }, 400);
-        const content = getSkillBestDoc(name);
-        return json({ content: content || null });
-      }
-
-      // POST /api/skills/:name/install - Install skill
-      const installMatch = path.match(/^\/api\/skills\/([^/]+)\/install$/);
-      if (installMatch && method === "POST") {
-        const name = installMatch[1];
-        if (!isValidSkillName(name)) return json({ error: "Invalid skill name" }, 400);
-        const result = installSkill(name);
-        return json(result, result.success ? 200 : 400);
-      }
-
-      // POST /api/skills/:name/remove - Remove skill
-      const removeMatch = path.match(/^\/api\/skills\/([^/]+)\/remove$/);
-      if (removeMatch && method === "POST") {
-        const name = removeMatch[1];
-        if (!isValidSkillName(name)) return json({ error: "Invalid skill name" }, 400);
-        const success = removeSkill(name);
-        return json({ success, skill: name }, success ? 200 : 404);
-      }
-
-      // GET /api/version - Current package version
-      if (path === "/api/version" && method === "GET") {
-        return json({ version: getPackageVersion() });
-      }
-
-      // POST /api/self-update - Update @hasna/skills package
-      if (path === "/api/self-update" && method === "POST") {
-        try {
-          const proc = Bun.spawn(["bun", "add", "-g", "@hasna/skills@latest"], {
-            stdout: "pipe",
-            stderr: "pipe",
-          });
-          const stdout = await new Response(proc.stdout).text();
-          const stderr = await new Response(proc.stderr).text();
-          const exitCode = await proc.exited;
-          if (exitCode === 0) {
-            return json({ success: true, output: stdout.trim() || stderr.trim() });
-          }
-          return json({ success: false, error: stderr.trim() || stdout.trim() }, 500);
-        } catch (e) {
-          return json({ success: false, error: e instanceof Error ? e.message : "Update failed" }, 500);
-        }
-      }
-
-      // ── CORS ──
-      if (method === "OPTIONS") {
-        return new Response(null, {
-          headers: {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type",
-          },
-        });
-      }
-
-      // ── Static Files (Vite dashboard) ──
-      if (dashboardExists && (method === "GET" || method === "HEAD")) {
-        if (path !== "/") {
-          const filePath = join(dashboardDir, path);
-          const res = serveStaticFile(filePath);
-          if (res) return res;
-        }
-
-        // SPA fallback: serve index.html for all other GET routes
-        const indexPath = join(dashboardDir, "index.html");
-        const res = serveStaticFile(indexPath);
-        if (res) return res;
-      }
-
-      return json({ error: "Not found" }, 404);
-    },
+    fetch: createFetchHandler({ dashboardDir, dashboardExists }),
   });
 
   // Graceful shutdown

@@ -1,37 +1,11 @@
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { join } from "path";
+import { describe, test, expect } from "bun:test";
+import { createFetchHandler } from "./serve";
 
-const SERVER_PATH = join(import.meta.dir, "serve.ts");
-const PORT = 13579; // High port unlikely to conflict
-
-let serverProc: ReturnType<typeof Bun.spawn>;
-
-beforeAll(async () => {
-  serverProc = Bun.spawn(["bun", "run", SERVER_PATH], {
-    stdout: "pipe",
-    stderr: "pipe",
-    env: { ...process.env, PORT: String(PORT), NO_OPEN: "1" },
-  });
-  // Wait for server to be ready
-  const maxWait = 10000;
-  const start = Date.now();
-  while (Date.now() - start < maxWait) {
-    try {
-      const res = await fetch(`http://localhost:${PORT}/api/categories`);
-      if (res.ok) break;
-    } catch {}
-    await new Promise((r) => setTimeout(r, 200));
-  }
-});
-
-afterAll(() => {
-  try {
-    serverProc.kill();
-  } catch {}
-});
+const handler = createFetchHandler();
 
 async function api(path: string, options?: RequestInit): Promise<Response> {
-  return fetch(`http://localhost:${PORT}${path}`, options);
+  const req = new Request(`http://localhost${path}`, options);
+  return handler(req);
 }
 
 describe("Dashboard Server", () => {
