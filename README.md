@@ -1,378 +1,350 @@
-# Skills
+# @hasna/skills
 
-Open source library of 200 AI agent skills. Install any skill with a single command.
-
-## Quick Start
+Open source skill library for AI coding agents. 202 pre-built skills across 17 categories -- search, install, and run any skill with a single command.
 
 ```bash
-# Interactive mode - browse and select skills
 npx @hasna/skills
-
-# Install specific skills
-npx @hasna/skills install deep-research image generate-pdf
-
-# List all available skills
-npx @hasna/skills list
 ```
+
+## Features
+
+- **202 ready-to-use skills** across development, business, content, data, media, design, and more
+- **Interactive TUI** -- browse by category, search, and install from the terminal
+- **MCP server** -- 9 tools and 2 resources for AI agent integration
+- **HTTP dashboard** -- React web UI to browse, search, install, and manage skills
+- **Agent-aware installs** -- copies SKILL.md to `~/.claude/skills/`, `~/.codex/skills/`, or `~/.gemini/skills/`
+- **Auto-generated index** -- `.skills/index.ts` is updated on every install for easy imports
+- **Library exports** -- use the registry, installer, and skill info programmatically
 
 ## Installation
 
 ```bash
-# Global install
+# Global install (recommended)
 bun install -g @hasna/skills
 
 # Or use npx (no install needed)
 npx @hasna/skills
+
+# Or install as a project dependency
+bun add @hasna/skills
 ```
 
-## Usage
-
-### Interactive Mode
-
-Run without arguments to browse skills by category:
+## Quick Start
 
 ```bash
+# Launch interactive browser (TUI)
 skills
+
+# Search for skills
+skills search "image generation"
+
+# Install skills to .skills/ in your project
+skills install image deep-research generate-pdf
+
+# Install a skill for Claude Code (copies SKILL.md)
+skills install image --for claude
+
+# Get skill details
+skills info image
+
+# Run a skill directly
+skills run image --prompt "a sunset over mountains"
+
+# Start the web dashboard
+skills serve
 ```
 
-### Install Skills
+## Categories
+
+| Category | Count | Examples |
+|----------|------:|---------|
+| Development Tools | 32 | api-test-suite, deploy, mcp-builder, scaffold-project |
+| Business & Marketing | 25 | email-campaign, salescopy, seo-brief-builder, persona-generator |
+| Finance & Compliance | 16 | invoice, extract-invoice, budget-variance-analyzer |
+| Content Generation | 14 | image, video, audio, generate-pdf, generate-presentation |
+| Media Processing | 13 | subtitle, transcript, compress-video, remove-background |
+| Data & Analysis | 12 | analyze-data, extract, dashboard-builder, generate-chart |
+| Productivity & Organization | 11 | convert, merge-pdfs, file-organizer, notion-manager |
+| Design & Branding | 11 | brand-style-guide, generate-favicon, product-mockup |
+| Research & Writing | 10 | deepresearch, write, create-blog-article, create-ebook |
+| Science & Academic | 10 | advanced-math, chemistry-calculator, citation-formatter |
+| Education & Learning | 10 | study-guide-builder, lesson-plan-customizer, exam-readiness-check |
+| Project Management | 9 | implementation, implementation-plan, action-item-router |
+| Health & Wellness | 8 | meal-plan-designer, workout-cycle-planner, habit-reflection-digest |
+| Travel & Lifestyle | 7 | itinerary-architect, destination-briefing, travel-budget-balancer |
+| Communication | 4 | gmail, slack-assistant, sms, calendar-events |
+| Web & Browser | 4 | browse, webcrawling, domainsearch, domainpurchase |
+| Event Management | 4 | seating-chart-maker, livestream-runofshow, onsite-ops-checklist |
+
+## CLI Commands
+
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `skills` | `skills i` | Interactive TUI browser (default) |
+| `skills install <names...>` | `skills add` | Install one or more skills to `.skills/` |
+| `skills install <name> --for <agent>` | | Install SKILL.md for claude, codex, gemini, or all |
+| `skills remove <name>` | `skills rm` | Remove an installed skill |
+| `skills list` | `skills ls` | List all available skills |
+| `skills list --category <cat>` | | List skills in a category |
+| `skills list --installed` | | List installed skills |
+| `skills search <query>` | | Search skills by name, description, or tags |
+| `skills info <name>` | | Show skill metadata, requirements, and env vars |
+| `skills docs <name>` | | Show skill documentation (SKILL.md/README.md/CLAUDE.md) |
+| `skills requires <name>` | | Show env vars, system deps, and npm dependencies |
+| `skills run <name> [args...]` | | Run a skill directly |
+| `skills categories` | | List all categories with counts |
+| `skills init` | | Generate `.env.example` and update `.gitignore` |
+| `skills update [names...]` | | Update installed skills (reinstall with overwrite) |
+| `skills serve` | | Start the HTTP dashboard (default port 3579) |
+| `skills mcp` | | Start the MCP server on stdio |
+| `skills mcp --register <agent>` | | Register MCP server with claude, codex, gemini, or all |
+| `skills self-update` | | Update `@hasna/skills` to the latest version |
+
+All list/search/info commands support `--json` for machine-readable output.
+
+## MCP Server
+
+The MCP server exposes the full skill library to AI agents over stdio.
+
+### Starting the server
 
 ```bash
-# Install one or more skills
-skills install deep-research image generate-pdf
+# Via CLI
+skills mcp
 
-# Skills are installed to .skills/ in your project
+# Direct binary
+skills-mcp
+
+# Register with Claude Code
+skills mcp --register claude
 ```
 
-### Search
+### Configuration for Claude Code
+
+Add to your MCP config:
+
+```json
+{
+  "mcpServers": {
+    "skills": {
+      "command": "skills-mcp"
+    }
+  }
+}
+```
+
+### Tools (9)
+
+| Tool | Description |
+|------|-------------|
+| `list_skills` | List all skills, optionally filtered by category |
+| `search_skills` | Search skills by query (name, description, tags) |
+| `get_skill_info` | Get skill metadata including requirements and env vars |
+| `get_skill_docs` | Get documentation (SKILL.md, README.md, or CLAUDE.md) |
+| `install_skill` | Install a skill (full source to `.skills/` or SKILL.md to agent dir) |
+| `remove_skill` | Remove an installed skill |
+| `list_categories` | List all categories with skill counts |
+| `get_requirements` | Get env vars, system deps, and npm dependencies |
+| `run_skill` | Run a skill by name with optional arguments |
+
+### Resources (2)
+
+| URI | Description |
+|-----|-------------|
+| `skills://registry` | Full skill registry as JSON |
+| `skills://{name}` | Individual skill metadata and documentation |
+
+## HTTP Dashboard
+
+A React web UI for browsing, searching, and managing skills.
 
 ```bash
-# Search by name, description, or tags
-skills search payment
-skills search ai
+# Start the dashboard
+skills serve
+
+# Custom port
+skills serve --port 8080
+
+# Don't auto-open browser
+skills serve --no-open
 ```
 
-### List by Category
+The dashboard runs at `http://localhost:3579` and provides:
 
-```bash
-skills list --category "Development Tools"
-skills list --category "Content Generation"
-```
+- Searchable, sortable skills table with category filters
+- Skill detail dialog with documentation, tags, and requirements
+- One-click install and remove
+- Dark/light/system theme toggle
+- Self-update button
 
-### Remove
+### REST API
 
-```bash
-skills remove deep-research
-```
+The dashboard server also exposes a REST API:
 
-## Available Skills (200)
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/skills` | GET | All skills with install status |
+| `/api/categories` | GET | Categories with counts |
+| `/api/skills/search?q=` | GET | Search skills |
+| `/api/skills/:name` | GET | Single skill detail with docs |
+| `/api/skills/:name/docs` | GET | Raw documentation text |
+| `/api/skills/:name/install` | POST | Install a skill |
+| `/api/skills/:name/remove` | POST | Remove a skill |
+| `/api/version` | GET | Current package version |
+| `/api/self-update` | POST | Update to latest version |
 
-### Development Tools (32)
-| Skill | Description |
-|-------|-------------|
-| api-test-suite | Generate and run API test suites with comprehensive endpoint coverage |
-| apidocs | Agentic web crawler for API documentation indexing and semantic search |
-| codefix | Code quality CLI for auto-linting, formatting, and fixing code issues |
-| consolelog | Monitor console logs from web applications using Playwright headless browser |
-| database-explorer | Explore and query databases with an interactive interface |
-| deploy | Deployment CLI for managing EC2 deployments with automated health checks |
-| diff-viewer | View and analyze file differences with visual diff representation |
-| e2bswarm | Spawn E2B sandbox instances for parallel Claude Code task execution |
-| generate-api-client | Generate API client libraries from OpenAPI specs and documentation |
-| generate-dockerfile | Generate optimized Dockerfiles for containerized applications |
-| generate-documentation | Generate comprehensive project documentation from codebase analysis |
-| generate-env | Generate environment variable files from templates and configurations |
-| generate-mock-data | Generate realistic mock data for testing and development |
-| generate-pr-description | Generate pull request descriptions from code diffs and commit history |
-| generate-regex | Generate regular expressions from natural language descriptions |
-| generate-sitemap | Generate XML sitemaps for websites and web applications |
-| generate-sql | Generate SQL queries and database schemas from natural language |
-| github-manager | Manage GitHub repositories, issues, PRs, and workflows |
-| hook | Claude Code hook creation skill - generates standardized hook scaffolds |
-| http-server | Spin up local HTTP servers for development and testing |
-| lorem-generator | Generate placeholder text in various styles and lengths |
-| managehook | Manage Claude Code hooks with install, configure, and lifecycle operations |
-| managemcp | Manage MCP servers with install, configure, and lifecycle operations |
-| manageskill | Manage Claude Code skills with install, configure, and lifecycle operations |
-| markdown-validator | Validate markdown files for syntax, links, and formatting issues |
-| mcp-builder | Build MCP server packages with standardized structure and tooling |
-| npmpublish | Publish npm packages with sensible defaults: private access, patch version bumps |
-| regex-tester | Test and validate regular expressions with sample inputs |
-| scaffold-project | Scaffold new projects with standardized structure and boilerplate |
-| security-audit | Perform security audits on codebases and infrastructure configurations |
-| terraform-generator | Generate Terraform infrastructure-as-code configurations |
-| validate-config | Validate configuration files for syntax and schema compliance |
+## Library Usage
 
-### Business & Marketing (25)
-| Skill | Description |
-|-------|-------------|
-| ad-creative-generator | Generate ad creatives with copy, visuals, and layouts for marketing campaigns |
-| banner-ad-suite | Create banner ad sets in multiple sizes for display advertising campaigns |
-| campaign-metric-brief | Generate campaign performance metric briefs and analytics summaries |
-| campaign-moodboard | Create visual moodboards for marketing and creative campaigns |
-| caption-style-stylist | Style and format captions for social media and video content |
-| churn-risk-notifier | Identify and notify about customer churn risk indicators |
-| competitor-ad-analyzer | Analyze competitor advertising strategies, creatives, and messaging |
-| crm-note-enhancer | Enhance CRM notes with structured summaries and action items |
-| customer-journey-mapper | Map and visualize customer journey touchpoints and experiences |
-| email-campaign | Design and create email marketing campaigns with templates and sequences |
-| feedback-survey-designer | Design feedback surveys with optimized questions and response formats |
-| generate-social-posts | Generate social media posts optimized for different platforms |
-| landing-page-copy | Write conversion-optimized landing page copy with headlines and CTAs |
-| onboarding-sequence-builder | Build employee or customer onboarding sequences with steps and milestones |
-| outreach-cadence-designer | Design multi-touch outreach cadences for sales and marketing campaigns |
-| partner-kit-assembler | Assemble partner kits with brand assets, guidelines, and marketing materials |
-| persona-based-adwriter | Write targeted ads based on customer persona profiles |
-| persona-generator | Generate detailed customer and user personas for marketing and UX |
-| product-demo-script | Write product demo scripts with talking points and flow |
-| sales-call-recapper | Recap sales calls with key points, objections, and follow-up actions |
-| salescopy | Generate persuasive sales copy using AI for products and services |
-| seo-brief-builder | Build SEO content briefs with keyword research and competitive analysis |
-| social-media-kit | Create social media kits with graphics, templates, and brand guidelines |
-| sponsorship-proposal-lab | Create sponsorship proposals with packages, ROI projections, and benefits |
-| webinar-script-coach | Coach and refine webinar scripts with engagement tips and flow optimization |
-
-### Productivity & Organization (11)
-| Skill | Description |
-|-------|-------------|
-| convert | File format conversion CLI with AI-powered extraction between images, PDFs, documents, and data formats |
-| decision-journal | Track and reflect on decisions with structured journaling |
-| file-organizer | Organize files into structured directories based on type, date, or content |
-| folder-tree | Generate and display folder tree structures for documentation |
-| form-filler | Automatically fill out web forms and document templates |
-| inbox-priority-planner | Prioritize and organize email inbox items by importance and urgency |
-| meeting-insight-summarizer | Summarize meetings with key insights, decisions, and action items |
-| merge-pdfs | Merge multiple PDF files into a single document |
-| notion-manager | Advanced Notion management with templates, automation, and bulk operations |
-| personal-daily-ops | Manage personal daily operations with routines, tasks, and priorities |
-| split-pdf | Split PDF documents into separate pages or sections |
-
-### Project Management (9)
-| Skill | Description |
-|-------|-------------|
-| action-item-router | Route and assign action items from meetings or documents to appropriate owners |
-| businessactivity | Business activity, workflow, and ownership management service |
-| delegation-brief-writer | Write clear delegation briefs with context, expectations, and deadlines |
-| goal-quarterly-roadmap | Create quarterly goal roadmaps with milestones and tracking |
-| implementation | Create .implementation scaffold for project development tracking |
-| implementation-agent | AI agent for managing implementation workflows and task execution |
-| implementation-plan | Generate detailed implementation plans with phases and milestones |
-| implementation-todo | Manage implementation task lists and todo items |
-| project-retro-companion | Facilitate project retrospectives with structured reflection and action items |
-
-### Content Generation (14)
-| Skill | Description |
-|-------|-------------|
-| audio | Generate high-quality audio using AI-powered text-to-speech APIs |
-| audiobook-chapter-proofer | Proofread and validate audiobook chapters for consistency and quality |
-| emoji | Generate complete emoji packs using AI with DALL-E 3 or Gemini |
-| generate-diagram | Generate diagrams including flowcharts, sequence diagrams, and system architecture |
-| generate-docx | Generate DOCX documents with formatted content and styling |
-| generate-excel | Generate Excel spreadsheets with formatted data, formulas, and charts |
-| generate-pdf | Generate PDF documents with rich formatting and layouts |
-| generate-presentation | Generate presentation decks with slides, content, and visuals |
-| generate-qrcode | Generate QR codes with custom styling and embedded data |
-| generate-resume | Generate professional resumes with formatting and content optimization |
-| image | Generate images using multiple AI providers: DALL-E 3, Imagen 3, and Aurora |
-| jingle-composer | Compose advertising jingles and short musical pieces for brands |
-| video | Generate videos using AI models from Google Veo, OpenAI Sora, and Runway |
-| voiceover-casting-assistant | Assist with voiceover casting by matching voice profiles to project needs |
-
-### Finance & Compliance (16)
-| Skill | Description |
-|-------|-------------|
-| budget-variance-analyzer | Analyze budget versus actual spending with variance reporting |
-| compliance-copy-check | Check marketing copy for regulatory compliance and legal requirements |
-| compliance-report-pack | Generate compliance report packages for regulatory submissions |
-| contract-plainlanguage | Convert legal contracts into plain language summaries for easy understanding |
-| extract-invoice | Extract structured data from invoice documents using AI |
-| forecast-scenario-lab | Model business forecast scenarios with multiple variable assumptions |
-| grant-application-drafter | Draft grant applications with structured proposals and budgets |
-| invoice | Generate professional invoices with company management and PDF export |
-| invoice-dispute-helper | Assist with invoice disputes by analyzing charges and generating responses |
-| payroll-change-prepper | Prepare payroll change documentation and calculations |
-| procurement-scorecard | Generate procurement scorecards for vendor evaluation and comparison |
-| proposal-redline-advisor | Review and redline proposals with suggested edits and negotiations |
-| risk-disclosure-kit | Generate risk disclosure documents and compliance statements |
-| roi-comparison-tool | Compare return on investment across different options and scenarios |
-| subscription-spend-watcher | Track and analyze subscription spending with alerts and optimization tips |
-| timesheet | Generate employee timesheets with multi-profile support |
-
-### Data & Analysis (12)
-| Skill | Description |
-|-------|-------------|
-| analyze-data | Data science insights for CSV and JSON datasets with statistical analysis |
-| anomaly-investigator | Investigate and diagnose anomalies in data, logs, and system metrics |
-| benchmark-finder | Find industry benchmarks and performance metrics for comparison analysis |
-| dashboard-builder | Build data dashboards with charts, metrics, and visualizations |
-| dashboard-narrator | Generate narrative summaries from dashboard data and metrics |
-| data-anonymizer | Anonymize sensitive data in datasets for privacy compliance |
-| dataset-health-check | Validate dataset quality with completeness, consistency, and accuracy checks |
-| extract | Extract text and structured data from images and PDFs using OpenAI Vision |
-| generate-chart | Generate data charts and visualizations from datasets |
-| kpi-digest-generator | Generate KPI digest reports with trends, alerts, and performance summaries |
-| spreadsheet-cleanroom | Clean and sanitize spreadsheet data for analysis readiness |
-| survey-insight-extractor | Extract actionable insights and trends from survey response data |
-
-### Media Processing (13)
-| Skill | Description |
-|-------|-------------|
-| audio-cleanup-lab | Professional audio cleanup recipes with structured workflows for processing audio files |
-| compress-video | Compress video files while preserving visual quality using ffmpeg |
-| extract-audio | Extract audio tracks from video files with multiple format support |
-| extract-frames | Extract frames from video files at specified intervals or timestamps |
-| gif-maker | Create animated GIFs from images, videos, or screen recordings |
-| highlight-reel-generator | Generate video highlight reels from longer content with key moments |
-| remove-background | Remove backgrounds from images using AI segmentation |
-| subtitle | Generate styled subtitles from audio using OpenAI Whisper |
-| transcript | Generate transcripts from audio and video files with timestamps |
-| video-cut-suggester | Suggest video cuts and edits based on content analysis and pacing |
-| video-downloader | Download videos from various online platforms and services |
-| video-thumbnail | Generate eye-catching video thumbnails with text overlays |
-| watermark | Add watermarks to images and documents for copyright protection |
-
-### Design & Branding (11)
-| Skill | Description |
-|-------|-------------|
-| brand-style-guide | Generate comprehensive brand style guides with visual identity guidelines |
-| brand-voice-audit | Audit content for brand voice consistency and tone alignment |
-| color-palette-harmonizer | Generate harmonious color palettes for design and branding projects |
-| generate-book-cover | Generate professional book cover designs with AI |
-| generate-favicon | Generate favicons in multiple sizes and formats for websites |
-| microcopy-generator | Generate UI microcopy including button text, tooltips, and error messages |
-| packaging-concept-studio | Design product packaging concepts with mockups and specifications |
-| presentation-theme-maker | Create custom presentation themes with color schemes and layouts |
-| print-collateral-designer | Design print collateral including brochures, flyers, and business cards |
-| product-mockup | Generate product mockups for visualization and marketing materials |
-| testimonial-graphics | Create visual testimonial graphics for social proof and marketing |
-
-### Web & Browser (4)
-| Skill | Description |
-|-------|-------------|
-| browse | Browser automation using Browser-Use Cloud API for AI agents |
-| domainpurchase | Purchase and manage domains via GoDaddy API |
-| domainsearch | Search domain availability and suggestions via GoDaddy API |
-| webcrawling | Web crawling service using Firecrawl API for content extraction |
-
-### Research & Writing (10)
-| Skill | Description |
-|-------|-------------|
-| blog-topic-cluster | Generate topic clusters and content strategies for blog SEO planning |
-| copytone-translator | Translate copy between different tones and writing styles |
-| create-blog-article | Create SEO-optimized blog articles with structured content |
-| create-ebook | Create complete eBooks with chapters, formatting, and cover design |
-| deepresearch | Agentic deep research using Exa.ai for parallel semantic search and LLM synthesis |
-| faq-packager | Package and organize frequently asked questions into structured documents |
-| longform-structurer | Structure long-form content with outlines, chapters, and sections |
-| podcast-show-notes | Generate podcast show notes with timestamps, summaries, and links |
-| press-release-drafter | Draft professional press releases for announcements and media distribution |
-| write | Write short or long-form content - articles, books, documentation at scale |
-
-### Science & Academic (10)
-| Skill | Description |
-|-------|-------------|
-| academic-journal-matcher | Match research papers to appropriate academic journals for submission |
-| advanced-math | Solve advanced mathematical problems including calculus, algebra, and statistics |
-| bio-sequence-tool | Analyze and manipulate biological sequences including DNA, RNA, and protein data |
-| chemistry-calculator | Perform chemistry calculations including molecular weights, reactions, and stoichiometry |
-| citation-formatter | Format academic citations in APA, MLA, Chicago, and other styles |
-| experiment-power-calculator | Calculate statistical power and sample size for experiments |
-| lab-notebook-formatter | Format laboratory notebook entries with structured scientific records |
-| latex-table-generator | Generate formatted LaTeX tables from data for academic papers |
-| scientific-figure-check | Validate scientific figures for accuracy, formatting, and publication standards |
-| statistical-test-selector | Recommend appropriate statistical tests based on data and research questions |
-
-### Education & Learning (10)
-| Skill | Description |
-|-------|-------------|
-| classroom-newsletter-kit | Create classroom newsletters with templates for teachers and educators |
-| educational-resource-finder | Find educational resources, courses, and learning materials by topic |
-| exam-readiness-check | Assess exam readiness with practice questions and gap analysis |
-| field-trip-planner | Plan educational field trips with logistics, safety, and learning objectives |
-| homework-feedback-coach | Provide constructive feedback on homework assignments with improvement suggestions |
-| learning-style-profiler | Profile individual learning styles and recommend personalized study strategies |
-| lesson-plan-customizer | Customize lesson plans for different age groups, subjects, and learning objectives |
-| parent-teacher-brief | Generate parent-teacher conference briefs with student progress summaries |
-| scholarship-tracker | Track scholarship applications, deadlines, and requirements |
-| study-guide-builder | Build comprehensive study guides with summaries, key concepts, and practice questions |
-
-### Communication (4)
-| Skill | Description |
-|-------|-------------|
-| calendar-events | Create, manage, and organize calendar events and scheduling |
-| gmail | Compose Gmail messages with AI assistance |
-| slack-assistant | Automate Slack interactions with message management and channel operations |
-| sms | Send and receive SMS messages via Twilio |
-
-### Health & Wellness (8)
-| Skill | Description |
-|-------|-------------|
-| grocery-basket-optimizer | Optimize grocery shopping lists for budget, nutrition, and preferences |
-| habit-reflection-digest | Generate habit tracking digests with reflection prompts and insights |
-| meal-plan-designer | Design weekly meal plans with nutrition, recipes, and shopping lists |
-| mindfulness-prompt-cache | Curate and deliver mindfulness prompts for meditation and relaxation |
-| sleep-routine-analyzer | Analyze sleep patterns and provide improvement recommendations |
-| stress-relief-playbook | Generate personalized stress relief strategies and relaxation techniques |
-| wellness-progress-reporter | Generate wellness progress reports with health metrics and trends |
-| workout-cycle-planner | Plan workout cycles with periodization, exercises, and progression |
-
-### Travel & Lifestyle (7)
-| Skill | Description |
-|-------|-------------|
-| destination-briefing | Create travel destination briefings with local info, tips, and logistics |
-| family-activity-curator | Curate family-friendly activities based on age, interests, and location |
-| household-maintenance-mgr | Track and schedule household maintenance tasks and reminders |
-| itinerary-architect | Design detailed travel itineraries with activities, timing, and logistics |
-| packing-plan-pro | Create detailed packing plans for trips with weather-based recommendations |
-| pet-care-scheduler | Schedule and track pet care activities including feeding, walks, and vet visits |
-| travel-budget-balancer | Balance travel budgets across categories with optimization suggestions |
-
-### Event Management (4)
-| Skill | Description |
-|-------|-------------|
-| guest-communication-suite | Manage guest communications for events, hospitality, and venues |
-| livestream-runofshow | Create run-of-show documents for livestream events with timing and cues |
-| onsite-ops-checklist | Create operational checklists for on-site events and activities |
-| seating-chart-maker | Create seating charts for events, classrooms, and venues |
-
-## Using Installed Skills
-
-After installing, import from the `.skills` directory:
+Use the registry, installer, and skill info modules programmatically:
 
 ```typescript
-import { deep_research, image } from './.skills';
+import {
+  SKILLS,
+  CATEGORIES,
+  searchSkills,
+  getSkill,
+  getSkillsByCategory,
+} from "@hasna/skills";
+
+// Search skills
+const results = searchSkills("image");
+
+// Get skills in a category
+const devTools = getSkillsByCategory("Development Tools");
+
+// Get a specific skill
+const skill = getSkill("image");
+// => { name: "image", displayName: "Image", description: "...", category: "Content Generation", tags: [...] }
 ```
 
-Each skill provides:
-- TypeScript source code
-- CLI tool
-- Programmatic API
+```typescript
+import {
+  installSkill,
+  installSkillForAgent,
+  removeSkill,
+  getInstalledSkills,
+} from "@hasna/skills";
 
-## Installing Individual Skills
+// Install a skill to .skills/
+const result = installSkill("image");
+// => { skill: "image", success: true, path: "/path/to/.skills/skill-image" }
 
-You can also install skills individually as npm packages:
+// Install SKILL.md for Claude Code
+installSkillForAgent("image", { agent: "claude", scope: "global" });
 
-```bash
-# Install individual skill packages
-bun install @hasna/skill-deep-research
-bun install @hasna/skill-generate-image
+// List installed skills
+const installed = getInstalledSkills();
+// => ["image", "deep-research"]
+```
+
+```typescript
+import {
+  getSkillDocs,
+  getSkillRequirements,
+  runSkill,
+} from "@hasna/skills";
+
+// Read documentation
+const docs = getSkillDocs("image");
+// => { skillMd: "...", readme: "...", claudeMd: "..." }
+
+// Check requirements
+const reqs = getSkillRequirements("image");
+// => { envVars: ["OPENAI_API_KEY"], systemDeps: [], cliCommand: "image", dependencies: {...} }
+
+// Run a skill
+const { exitCode } = await runSkill("image", ["--prompt", "a cat"]);
 ```
 
 ## Skill Structure
 
-Each skill follows a consistent structure:
+Each skill is a self-contained directory under `skills/skill-{name}/`:
 
 ```
-skill-{name}/
+skills/skill-{name}/
 ├── src/
-│   ├── commands/      # CLI commands
-│   ├── lib/           # Core logic
-│   ├── types/         # TypeScript types
-│   └── utils/         # Utilities
-├── CLAUDE.md          # Development guide
-├── SKILL.md           # Skill definition
-├── README.md          # Usage documentation
-└── package.json
+│   ├── index.ts          # Main entry point / programmatic API
+│   ├── commands/          # CLI command handlers (optional)
+│   ├── lib/               # Core logic
+│   ├── types/             # TypeScript types
+│   └── utils/             # Utility functions
+├── SKILL.md               # Skill definition (used by agent installs)
+├── README.md              # Usage documentation
+├── CLAUDE.md              # Development guide (optional)
+├── package.json           # Dependencies and bin entry
+└── tsconfig.json          # Extends skills/tsconfig.base.json
+```
+
+Key files:
+
+- **SKILL.md** -- the primary doc file, copied to agent skill directories on `--for` installs. Contains frontmatter (name, description) and usage instructions.
+- **package.json** -- must have a `bin` entry for the skill to be runnable via `skills run`.
+- **src/index.ts** -- exported in the auto-generated `.skills/index.ts` when installed.
+
+## Using Installed Skills
+
+After installing, skills are available via the auto-generated index:
+
+```typescript
+import { image, deep_research } from "./.skills";
+```
+
+Or import directly:
+
+```typescript
+import { generateImage } from "./.skills/skill-image/src/index.js";
+```
+
+## Creating a Custom Skill
+
+1. Create the skill directory:
+
+```bash
+mkdir -p skills/skill-my-skill/src
+```
+
+2. Add `package.json`:
+
+```json
+{
+  "name": "@hasna/skill-my-skill",
+  "version": "0.0.1",
+  "bin": { "my-skill": "./src/index.ts" },
+  "dependencies": {}
+}
+```
+
+3. Add `SKILL.md` with frontmatter:
+
+```markdown
+---
+name: my-skill
+description: What this skill does
+---
+
+# My Skill
+
+Usage instructions here.
+```
+
+4. Add `src/index.ts` with your logic.
+
+5. Register in `src/lib/registry.ts`:
+
+```typescript
+{
+  name: "my-skill",
+  displayName: "My Skill",
+  description: "What this skill does",
+  category: "Development Tools",
+  tags: ["my", "skill"],
+}
+```
+
+6. Run tests to validate:
+
+```bash
+bun test
 ```
 
 ## Development
@@ -381,22 +353,74 @@ skill-{name}/
 # Install dependencies
 bun install
 
-# Run CLI in development
+# Run CLI in dev mode
 bun run dev
 
-# Build
+# Build CLI, MCP server, and library
 bun run build
 
 # Type check
 bun run typecheck
+
+# Run all tests
+bun test
+
+# Build the dashboard
+bun run dashboard:build
+
+# Run dashboard dev server
+bun run dashboard:dev
+
+# Start HTTP server (with dashboard)
+bun run server:dev
 ```
 
-## Contributing
+## Architecture
 
-1. Fork the repository
-2. Create a new skill in `skills/skill-{name}/`
-3. Follow the existing skill patterns
-4. Submit a pull request
+```
+src/
+├── cli/
+│   ├── index.tsx              # Commander.js CLI + Ink TUI
+│   ├── cli.test.ts            # CLI integration tests
+│   └── components/
+│       └── App.tsx            # Interactive TUI (React/Ink)
+├── mcp/
+│   ├── index.ts               # MCP server (stdio transport)
+│   └── mcp.test.ts            # MCP integration tests
+├── server/
+│   ├── serve.ts               # Bun HTTP server + REST API
+│   └── serve.test.ts          # Server tests
+├── lib/
+│   ├── registry.ts            # SKILLS array (202) + CATEGORIES (17)
+│   ├── installer.ts           # Install/remove to .skills/ and agent dirs
+│   ├── skillinfo.ts           # Docs, requirements, env vars, run
+│   ├── utils.ts               # normalizeSkillName()
+│   ├── registry.test.ts       # Registry tests
+│   ├── installer.test.ts      # Installer tests
+│   ├── skillinfo.test.ts      # Skill info tests
+│   ├── skillinfo-run.test.ts  # Skill run tests
+│   ├── utils.test.ts          # Utils tests
+│   └── validation.test.ts     # Structural validation (all 202 skills)
+├── index.ts                   # Library re-exports
+└── index.test.ts              # Library export tests
+
+dashboard/                     # Vite + React 19 + Tailwind v4 + shadcn/ui
+├── src/components/
+│   ├── skills-table.tsx       # Main skills table (TanStack Table)
+│   ├── skill-detail-dialog.tsx# Skill detail dialog
+│   ├── stats-cards.tsx        # Summary cards
+│   ├── theme-provider.tsx     # Dark/light/system theme
+│   ├── theme-toggle.tsx       # Theme toggle button
+│   └── ui/                    # shadcn/ui primitives
+└── package.json
+
+skills/                        # 202 self-contained skill directories
+├── _common/                   # Shared utilities
+├── skill-image/
+├── skill-deep-research/
+├── ...
+└── tsconfig.base.json         # Shared TS config for skills
+```
 
 ## License
 
