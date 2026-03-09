@@ -31,6 +31,7 @@ interface SkillWithStatus {
   tags: string[];
   installed: boolean;
   envVars: string[];
+  envVarsSet: string[];
   systemDeps: string[];
   cliCommand: string | null;
 }
@@ -97,6 +98,7 @@ function getAllSkillsWithStatus(): SkillWithStatus[] {
   const installed = new Set(getInstalledSkills());
   return SKILLS.map((meta) => {
     const reqs = getSkillRequirements(meta.name);
+    const envVars = reqs?.envVars || [];
     return {
       name: meta.name,
       displayName: meta.displayName,
@@ -104,7 +106,8 @@ function getAllSkillsWithStatus(): SkillWithStatus[] {
       category: meta.category,
       tags: meta.tags,
       installed: installed.has(meta.name),
-      envVars: reqs?.envVars || [],
+      envVars,
+      envVarsSet: envVars.filter((v) => !!process.env[v]),
       systemDeps: reqs?.systemDeps || [],
       cliCommand: reqs?.cliCommand || null,
     };
@@ -159,6 +162,7 @@ export function createFetchHandler(options?: {
       return json(
         results.map((meta) => {
           const reqs = getSkillRequirements(meta.name);
+          const envVars = reqs?.envVars || [];
           return {
             name: meta.name,
             displayName: meta.displayName,
@@ -166,7 +170,8 @@ export function createFetchHandler(options?: {
             category: meta.category,
             tags: meta.tags,
             installed: installed.has(meta.name),
-            envVars: reqs?.envVars || [],
+            envVars,
+            envVarsSet: envVars.filter((v) => !!process.env[v]),
             systemDeps: reqs?.systemDeps || [],
             cliCommand: reqs?.cliCommand || null,
           };
@@ -185,6 +190,7 @@ export function createFetchHandler(options?: {
       const reqs = getSkillRequirements(name);
       const docs = getSkillBestDoc(name);
       const installed = new Set(getInstalledSkills());
+      const envVars = reqs?.envVars || [];
       return json({
         name: meta.name,
         displayName: meta.displayName,
@@ -192,7 +198,8 @@ export function createFetchHandler(options?: {
         category: meta.category,
         tags: meta.tags,
         installed: installed.has(meta.name),
-        envVars: reqs?.envVars || [],
+        envVars,
+        envVarsSet: envVars.filter((v) => !!process.env[v]),
         systemDeps: reqs?.systemDeps || [],
         cliCommand: reqs?.cliCommand || null,
         docs: docs || null,

@@ -7,6 +7,7 @@ import { join, dirname } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { normalizeSkillName } from "./utils.js";
+import { getSkill } from "./registry.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -107,6 +108,18 @@ export function installSkill(
 
     // Update or create .skills/index.ts for easy imports
     updateSkillsIndex(destDir);
+
+    // Check for missing skill dependencies and warn
+    const meta = getSkill(name);
+    if (meta?.dependencies && meta.dependencies.length > 0) {
+      const installed = getInstalledSkills(targetDir);
+      const installedSet = new Set(installed);
+      for (const dep of meta.dependencies) {
+        if (!installedSet.has(dep)) {
+          console.warn(`Warning: skill-${meta.name} depends on skill-${dep} which is not installed`);
+        }
+      }
+    }
 
     return {
       skill: name,
