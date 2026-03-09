@@ -47,7 +47,7 @@ export function App() {
 
   function showToast(message: string, type: "success" | "error") {
     setToast({ message, type });
-    setTimeout(() => setToast(null), 3000);
+    setTimeout(() => setToast(null), type === "error" ? 5000 : 3000);
   }
 
   function handleViewDetails(skill: SkillWithStatus) {
@@ -82,6 +82,12 @@ export function App() {
       }
     } catch {
       showToast(`Failed to remove ${name}`, "error");
+    }
+  }
+
+  async function handleBulkInstall(names: string[]) {
+    for (const name of names) {
+      await handleInstall(name);
     }
   }
 
@@ -162,6 +168,7 @@ export function App() {
           onViewDetails={handleViewDetails}
           onInstall={handleInstall}
           onRemove={handleRemove}
+          onBulkInstall={handleBulkInstall}
         />
       </main>
 

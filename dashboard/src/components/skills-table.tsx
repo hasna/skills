@@ -8,6 +8,7 @@ import {
   useReactTable,
   type ColumnDef,
   type ColumnFiltersState,
+  type RowSelectionState,
   type SortingState,
 } from "@tanstack/react-table";
 import {
@@ -18,10 +19,13 @@ import {
   CopyIcon,
   CheckIcon,
   EyeIcon,
+  DownloadIcon,
+  TrashIcon,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
   Table,
@@ -71,6 +75,7 @@ interface SkillsTableProps {
   onViewDetails: (skill: SkillWithStatus) => void;
   onInstall: (name: string) => void;
   onRemove: (name: string) => void;
+  onBulkInstall: (names: string[]) => void;
 }
 
 export function SkillsTable({
@@ -78,15 +83,59 @@ export function SkillsTable({
   onViewDetails,
   onInstall,
   onRemove,
+  onBulkInstall,
 }: SkillsTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] =
     React.useState<ColumnFiltersState>([]);
   const [columnVisibility, setColumnVisibility] = React.useState({});
   const [globalFilter, setGlobalFilter] = React.useState("");
+  const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
+  const [categoryFilter, setCategoryFilter] = React.useState("");
+
+  const categories = React.useMemo(() => {
+    const cats = new Set(data.map((s) => s.category));
+    return Array.from(cats).sort();
+  }, [data]);
+
+  // Apply category filter as a column filter
+  React.useEffect(() => {
+    if (categoryFilter) {
+      setColumnFilters((prev) => {
+        const without = prev.filter((f) => f.id !== "category");
+        return [...without, { id: "category", value: categoryFilter }];
+      });
+    } else {
+      setColumnFilters((prev) => prev.filter((f) => f.id !== "category"));
+    }
+  }, [categoryFilter]);
 
   const columns: ColumnDef<SkillWithStatus>[] = React.useMemo(
     () => [
+      {
+        id: "select",
+        header: ({ table }) => (
+          <Checkbox
+            checked={
+              table.getIsAllPageRowsSelected() ||
+              (table.getIsSomePageRowsSelected() && false)
+            }
+            onCheckedChange={(value) =>
+              table.toggleAllPageRowsSelected(!!value)
+            }
+            aria-label="Select all"
+          />
+        ),
+        cell: ({ row }) => (
+          <Checkbox
+            checked={row.getIsSelected()}
+            onCheckedChange={(value) => row.toggleSelected(!!value)}
+            aria-label="Select row"
+          />
+        ),
+        enableSorting: false,
+        enableHiding: false,
+      },
       {
         accessorKey: "displayName",
         header: ({ column }) => (
@@ -129,6 +178,7 @@ export function SkillsTable({
             {row.getValue("category")}
           </span>
         ),
+        filterFn: "equals",
       },
       {
         id: "tags",
@@ -181,6 +231,26 @@ export function SkillsTable({
           return (
             <div className="flex justify-end gap-1">
               <CopyCommand command={`skills install ${s.name}`} />
+              {s.installed ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => onRemove(s.name)}
+                  className="text-destructive hover:text-destructive"
+                >
+                  <TrashIcon className="size-3.5" />
+                  Remove
+                </Button>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => onInstall(s.name)}
+                >
+                  <DownloadIcon className="size-3.5" />
+                  Install
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="sm"
@@ -194,7 +264,7 @@ export function SkillsTable({
         },
       },
     ],
-    [onViewDetails]
+    [onViewDetails, onInstall, onRemove]
   );
 
   const table = useReactTable({
@@ -203,12 +273,14 @@ export function SkillsTable({
     onSortingChange: setSorting,
     onColumnFiltersChange: setColumnFilters,
     onGlobalFilterChange: setGlobalFilter,
+    onRowSelectionChange: setRowSelection,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     onColumnVisibilityChange: setColumnVisibility,
     globalFilterFn: "includesString",
+    enableRowSelection: true,
     initialState: {
       pagination: { pageSize: 20 },
     },
@@ -217,8 +289,23 @@ export function SkillsTable({
       columnFilters,
       columnVisibility,
       globalFilter,
+      rowSelection,
     },
   });
+
+  const selectedNotInstalled = React.useMemo(() => {
+    return table
+      .getSelectedRowModel()
+      .rows.filter((row) => !row.original.installed)
+      .map((row) => row.original.name);
+  }, [table, rowSelection]);
+
+  function handleBulkInstall() {
+    if (selectedNotInstalled.length > 0) {
+      onBulkInstall(selectedNotInstalled);
+      setRowSelection({});
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -229,6 +316,24 @@ export function SkillsTable({
           onChange={(e) => setGlobalFilter(e.target.value)}
           className="max-w-sm"
         />
+        <select
+          value={categoryFilter}
+          onChange={(e) => setCategoryFilter(e.target.value)}
+          className="h-9 rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        >
+          <option value="">All Categories</option>
+          {categories.map((cat) => (
+            <option key={cat} value={cat}>
+              {cat}
+            </option>
+          ))}
+        </select>
+        {selectedNotInstalled.length > 0 && (
+          <Button size="sm" onClick={handleBulkInstall}>
+            <DownloadIcon className="size-3.5" />
+            Install Selected ({selectedNotInstalled.length})
+          </Button>
+        )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" className="ml-auto">
@@ -277,6 +382,7 @@ export function SkillsTable({
               table.getRowModel().rows.map((row) => (
                 <TableRow
                   key={row.id}
+                  data-state={row.getIsSelected() && "selected"}
                   className={
                     !row.original.installed ? "opacity-60" : undefined
                   }
@@ -306,6 +412,11 @@ export function SkillsTable({
       </div>
       <div className="flex items-center justify-between">
         <div className="text-muted-foreground text-sm">
+          {Object.keys(rowSelection).length > 0 && (
+            <span className="mr-3">
+              {Object.keys(rowSelection).length} selected
+            </span>
+          )}
           Page {table.getState().pagination.pageIndex + 1} of{" "}
           {table.getPageCount()} ({table.getFilteredRowModel().rows.length}{" "}
           skill{table.getFilteredRowModel().rows.length !== 1 ? "s" : ""})
