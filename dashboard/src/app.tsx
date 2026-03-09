@@ -4,6 +4,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { StatsCards } from "@/components/stats-cards";
 import { SkillsTable } from "@/components/skills-table";
 import { SkillDetailDialog } from "@/components/skill-detail-dialog";
+import { InstallDialog, type InstallOptions } from "@/components/install-dialog";
 import { Button } from "@/components/ui/button";
 import type { SkillWithStatus } from "@/types";
 
@@ -18,6 +19,8 @@ export function App() {
   } | null>(null);
   const [version, setVersion] = React.useState<string>("");
   const [updating, setUpdating] = React.useState(false);
+  const [installDialogOpen, setInstallDialogOpen] = React.useState(false);
+  const [installDialogSkills, setInstallDialogSkills] = React.useState<string[]>([]);
 
   const loadVersion = React.useCallback(async () => {
     try {
@@ -55,19 +58,34 @@ export function App() {
     setDialogOpen(true);
   }
 
-  async function handleInstall(name: string) {
-    try {
-      const res = await fetch(`/api/skills/${name}/install`, { method: "POST" });
-      const data = await res.json();
-      if (data.success) {
-        showToast(`Installed ${name}`, "success");
-        loadSkills();
-      } else {
-        showToast(data.error || `Failed to install ${name}`, "error");
+  function openInstallDialog(names: string[]) {
+    setInstallDialogSkills(names);
+    setInstallDialogOpen(true);
+  }
+
+  async function handleInstallConfirm(options: InstallOptions) {
+    for (const name of installDialogSkills) {
+      try {
+        const res = await fetch(`/api/skills/${name}/install`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: options.for ? JSON.stringify(options) : undefined,
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast(`Installed ${name}`, "success");
+        } else {
+          showToast(data.error || `Failed to install ${name}`, "error");
+        }
+      } catch {
+        showToast(`Failed to install ${name}`, "error");
       }
-    } catch {
-      showToast(`Failed to install ${name}`, "error");
     }
+    loadSkills();
+  }
+
+  function handleInstall(name: string) {
+    openInstallDialog([name]);
   }
 
   async function handleRemove(name: string) {
@@ -85,10 +103,8 @@ export function App() {
     }
   }
 
-  async function handleBulkInstall(names: string[]) {
-    for (const name of names) {
-      await handleInstall(name);
-    }
+  function handleBulkInstall(names: string[]) {
+    openInstallDialog(names);
   }
 
   async function handleSelfUpdate() {
@@ -179,6 +195,14 @@ export function App() {
         onOpenChange={setDialogOpen}
         onInstall={handleInstall}
         onRemove={handleRemove}
+      />
+
+      {/* Install Options Dialog */}
+      <InstallDialog
+        open={installDialogOpen}
+        onOpenChange={setInstallDialogOpen}
+        skillNames={installDialogSkills}
+        onConfirm={handleInstallConfirm}
       />
 
       {/* Toast */}

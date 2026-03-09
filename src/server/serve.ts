@@ -7,8 +7,9 @@ import { existsSync, readFileSync } from "fs";
 import { join, dirname, extname } from "path";
 import { fileURLToPath } from "url";
 import { SKILLS, CATEGORIES, getSkill, getSkillsByCategory, searchSkills } from "../lib/registry.js";
-import { getInstalledSkills, installSkill, removeSkill } from "../lib/installer.js";
-import { getSkillDocs, getSkillBestDoc, getSkillRequirements } from "../lib/skillinfo.js";
+import { getInstalledSkills, installSkill, removeSkill, installSkillForAgent, resolveAgents } from "../lib/installer.js";
+import type { AgentScope } from "../lib/installer.js";
+import { getSkillDocs, getSkillBestDoc, getSkillRequirements, generateSkillMd } from "../lib/skillinfo.js";
 
 function getPackageVersion(): string {
   try {
@@ -216,12 +217,49 @@ export function createFetchHandler(options?: {
     }
 
     // POST /api/skills/:name/install - Install skill
+    // Accepts optional JSON body: { for?: "claude"|"codex"|"gemini"|"all", scope?: "global"|"project" }
     const installMatch = path.match(/^\/api\/skills\/([^/]+)\/install$/);
     if (installMatch && method === "POST") {
       const name = installMatch[1];
       if (!isValidSkillName(name)) return json({ error: "Invalid skill name" }, 400);
-      const result = installSkill(name);
-      return json(result, result.success ? 200 : 400);
+
+      // Parse optional JSON body for install options
+      let body: { for?: string; scope?: string } = {};
+      try {
+        const text = await req.text();
+        if (text) body = JSON.parse(text);
+      } catch {}
+
+      if (body.for) {
+        // Agent install mode
+        try {
+          const agents = resolveAgents(body.for);
+          const scope = (body.scope === "project" ? "project" : "global") as AgentScope;
+          const results = agents.map((agent) =>
+            installSkillForAgent(name, { agent, scope }, generateSkillMd)
+          );
+          const allSuccess = results.every((r) => r.success);
+          const errors = results.filter((r) => !r.success).map((r) => r.error);
+          return json(
+            {
+              skill: name,
+              success: allSuccess,
+              results,
+              ...(errors.length > 0 ? { error: errors.join("; ") } : {}),
+            },
+            allSuccess ? 200 : 400
+          );
+        } catch (e) {
+          return json(
+            { skill: name, success: false, error: e instanceof Error ? e.message : "Unknown error" },
+            400
+          );
+        }
+      } else {
+        // Full source install (default)
+        const result = installSkill(name);
+        return json(result, result.success ? 200 : 400);
+      }
     }
 
     // POST /api/skills/:name/remove - Remove skill
