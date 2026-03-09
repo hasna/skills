@@ -327,6 +327,77 @@ describe("installer", () => {
     });
   });
 
+  describe("install/use/remove lifecycle", () => {
+    test("full lifecycle: install → verify → list → remove → verify cleanup", () => {
+      // 1. Install a skill to a temp directory
+      const result = installSkill("image", { targetDir: testDir });
+      expect(result.success).toBe(true);
+      expect(result.path).toBeDefined();
+
+      // 2. Verify the skill files exist
+      const skillDir = join(testDir, ".skills", "skill-image");
+      expect(existsSync(skillDir)).toBe(true);
+      const entries = readdirSync(skillDir);
+      expect(entries.length).toBeGreaterThan(0);
+
+      // 3. Check getInstalledSkills() returns it
+      const installed = getInstalledSkills(testDir);
+      expect(installed).toContain("image");
+
+      // Also verify index.ts was generated with the skill
+      const indexPath = join(testDir, ".skills", "index.ts");
+      expect(existsSync(indexPath)).toBe(true);
+      const indexContent = readFileSync(indexPath, "utf-8");
+      expect(indexContent).toContain("image");
+
+      // 4. Remove the skill
+      const removed = removeSkill("image", testDir);
+      expect(removed).toBe(true);
+
+      // 5. Verify files are cleaned up
+      expect(existsSync(skillDir)).toBe(false);
+
+      // 6. Verify getInstalledSkills() no longer returns it
+      const installedAfter = getInstalledSkills(testDir);
+      expect(installedAfter).not.toContain("image");
+
+      // Verify index.ts no longer references the skill
+      const indexAfter = readFileSync(indexPath, "utf-8");
+      expect(indexAfter).not.toContain("image");
+    });
+
+    test("lifecycle with multiple skills: install two, remove one, verify state", () => {
+      // Install two skills
+      const r1 = installSkill("image", { targetDir: testDir });
+      const r2 = installSkill("deepresearch", { targetDir: testDir });
+      expect(r1.success).toBe(true);
+      expect(r2.success).toBe(true);
+
+      // Both should be listed
+      let installed = getInstalledSkills(testDir);
+      expect(installed).toContain("image");
+      expect(installed).toContain("deepresearch");
+      expect(installed.length).toBe(2);
+
+      // Remove one
+      const removed = removeSkill("image", testDir);
+      expect(removed).toBe(true);
+
+      // Only the other should remain
+      installed = getInstalledSkills(testDir);
+      expect(installed).not.toContain("image");
+      expect(installed).toContain("deepresearch");
+      expect(installed.length).toBe(1);
+
+      // Remove the second
+      const removed2 = removeSkill("deepresearch", testDir);
+      expect(removed2).toBe(true);
+
+      installed = getInstalledSkills(testDir);
+      expect(installed.length).toBe(0);
+    });
+  });
+
   describe("resolveAgents", () => {
     test("returns all agents for 'all'", () => {
       const agents = resolveAgents("all");

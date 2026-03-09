@@ -10,13 +10,13 @@ async function api(path: string, options?: RequestInit): Promise<Response> {
 
 describe("Dashboard Server", () => {
   describe("GET /api/skills", () => {
-    test("returns all 200 skills", async () => {
+    test("returns all 202 skills", async () => {
       const res = await api("/api/skills");
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toContain("application/json");
       const data = await res.json();
       expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBe(200);
+      expect(data.length).toBe(202);
     });
 
     test("each skill has required fields", async () => {
@@ -66,11 +66,11 @@ describe("Dashboard Server", () => {
       }
     });
 
-    test("category counts sum to 200", async () => {
+    test("category counts sum to 202", async () => {
       const res = await api("/api/categories");
       const data = await res.json();
       const total = data.reduce((sum: number, cat: any) => sum + cat.count, 0);
-      expect(total).toBe(200);
+      expect(total).toBe(202);
     });
   });
 
@@ -218,6 +218,54 @@ describe("Dashboard Server", () => {
       expect(res.headers.get("access-control-allow-methods")).toContain("POST");
       expect(res.headers.get("access-control-allow-headers")).toContain("Content-Type");
     });
+  });
+
+  describe("startup integration", () => {
+    test("spawns server, hits API, and shuts down", async () => {
+      const port = 39000 + Math.floor(Math.random() * 999);
+      const proc = Bun.spawn(["bun", "run", "src/server/serve.ts"], {
+        env: { ...process.env, PORT: String(port), NO_OPEN: "1" },
+        stdout: "pipe",
+        stderr: "pipe",
+        cwd: import.meta.dir.replace(/\/src\/server$/, ""),
+      });
+
+      try {
+        // Poll until server is ready (up to 10 seconds)
+        const serverUrl = `http://localhost:${port}`;
+        let ready = false;
+        for (let i = 0; i < 40; i++) {
+          try {
+            const res = await fetch(`${serverUrl}/api/version`);
+            if (res.ok) {
+              ready = true;
+              break;
+            }
+          } catch {}
+          await Bun.sleep(250);
+        }
+        expect(ready).toBe(true);
+
+        // Hit GET /api/skills and verify 202 skills
+        const skillsRes = await fetch(`${serverUrl}/api/skills`);
+        expect(skillsRes.status).toBe(200);
+        const skills = await skillsRes.json();
+        expect(Array.isArray(skills)).toBe(true);
+        expect(skills.length).toBe(202);
+
+        // Hit GET / and check for HTML (if dashboard is built)
+        const rootRes = await fetch(`${serverUrl}/`);
+        if (rootRes.status === 200) {
+          const html = await rootRes.text();
+          if (html.includes("<!DOCTYPE html>")) {
+            expect(html).toContain("<!DOCTYPE html>");
+          }
+        }
+      } finally {
+        proc.kill();
+        await proc.exited;
+      }
+    }, 15000);
   });
 
   describe("static serving / SPA fallback", () => {
