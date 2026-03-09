@@ -60,7 +60,7 @@ describe("CLI", () => {
   describe("list", () => {
     test("lists all skills", async () => {
       const { stdout } = await runCli(["list"]);
-      expect(stdout).toContain("Available skills (200)");
+      expect(stdout).toContain("Available skills (202)");
       expect(stdout).toContain("Development Tools");
     });
 
@@ -80,7 +80,7 @@ describe("CLI", () => {
       const { stdout } = await runCli(["list", "--json"]);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBe(200);
+      expect(data.length).toBe(202);
     });
 
     test("lists by category with --json", async () => {
@@ -312,6 +312,107 @@ describe("CLI", () => {
       const { stdout, exitCode } = await runCli(["remove", "nonexistent-xyz-123", "--for", "claude", "--scope", "project"]);
       expect(stdout).toContain("not found");
       expect(exitCode).not.toBe(0);
+    });
+  });
+
+  describe("list --installed", () => {
+    test("lists installed skills or shows none message", async () => {
+      const { stdout, exitCode } = await runCli(["list", "--installed"]);
+      // Either shows installed skills or "No skills installed"
+      const hasInstalled = stdout.includes("Installed skills");
+      const hasNone = stdout.includes("No skills installed");
+      expect(hasInstalled || hasNone).toBe(true);
+      expect(exitCode).toBe(0);
+    });
+
+    test("outputs JSON array for installed", async () => {
+      const { stdout } = await runCli(["list", "--installed", "--json"]);
+      const data = JSON.parse(stdout);
+      expect(Array.isArray(data)).toBe(true);
+    });
+  });
+
+  describe("install progress", () => {
+    test("shows progress for multiple skills", async () => {
+      const { stdout } = await runCli(["install", "nonexistent-aaa-111", "nonexistent-bbb-222"]);
+      expect(stdout).toContain("[1/2] Installing nonexistent-aaa-111...");
+      expect(stdout).toContain("[2/2] Installing nonexistent-bbb-222...");
+    });
+
+    test("shows done/failed status in progress", async () => {
+      const { stdout } = await runCli(["install", "nonexistent-aaa-111", "nonexistent-bbb-222"]);
+      expect(stdout).toContain("failed");
+    });
+
+    test("no progress indicator for single skill", async () => {
+      const { stdout } = await runCli(["install", "nonexistent-xyz-123"]);
+      expect(stdout).not.toContain("[1/1]");
+    });
+  });
+
+  describe("search --category", () => {
+    test("filters search results by category", async () => {
+      const { stdout } = await runCli(["search", "plan", "--category", "Health & Wellness"]);
+      expect(stdout).toContain("Health & Wellness");
+    });
+
+    test("filters search results by category with --json", async () => {
+      const { stdout } = await runCli(["search", "plan", "--category", "Health & Wellness", "--json"]);
+      const data = JSON.parse(stdout);
+      expect(Array.isArray(data)).toBe(true);
+      for (const s of data) {
+        expect(s.category).toBe("Health & Wellness");
+      }
+    });
+
+    test("fails for invalid category in search", async () => {
+      const { stderr, exitCode } = await runCli(["search", "test", "--category", "Fake Category"]);
+      expect(stderr).toContain("Unknown category");
+      expect(exitCode).not.toBe(0);
+    });
+
+    test("returns empty when category has no matches", async () => {
+      const { stdout } = await runCli(["search", "zzzznonexistentzzzzz", "--category", "Health & Wellness"]);
+      expect(stdout).toContain("No skills found");
+    });
+  });
+
+  describe("doctor", () => {
+    test("runs doctor and shows output", async () => {
+      const { stdout, exitCode } = await runCli(["doctor"]);
+      // Either shows doctor report or "No skills installed" depending on cwd
+      const hasReport = stdout.includes("Skills Doctor");
+      const hasNone = stdout.includes("No skills installed");
+      expect(hasReport || hasNone).toBe(true);
+      expect(exitCode).toBe(0);
+    });
+
+    test("outputs valid JSON", async () => {
+      const { stdout } = await runCli(["doctor", "--json"]);
+      const data = JSON.parse(stdout);
+      // Either an array (skills found) or object with message (none installed)
+      const isArray = Array.isArray(data);
+      const isEmptyMsg = data.message === "No skills installed";
+      expect(isArray || isEmptyMsg).toBe(true);
+    });
+
+    test("shows help for doctor command", async () => {
+      const { stdout } = await runCli(["doctor", "--help"]);
+      expect(stdout).toContain("Check environment variables");
+    });
+
+    test("JSON report includes env var status when skills installed", async () => {
+      const { stdout } = await runCli(["doctor", "--json"]);
+      const data = JSON.parse(stdout);
+      if (Array.isArray(data) && data.length > 0) {
+        // Each entry should have skill and envVars
+        expect(data[0]).toHaveProperty("skill");
+        expect(data[0]).toHaveProperty("envVars");
+        if (data[0].envVars.length > 0) {
+          expect(data[0].envVars[0]).toHaveProperty("name");
+          expect(data[0].envVars[0]).toHaveProperty("set");
+        }
+      }
     });
   });
 
