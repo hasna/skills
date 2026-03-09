@@ -287,7 +287,7 @@ describe("MCP Server", () => {
       expect(response).not.toBeNull();
       const skills = JSON.parse(response.result.content[0].text);
       expect(Array.isArray(skills)).toBe(true);
-      expect(skills.length).toBe(200);
+      expect(skills.length).toBe(202);
     } finally {
       await client.close();
     }
@@ -355,7 +355,7 @@ describe("MCP Server", () => {
       expect(response.result).toBeDefined();
       const skills = JSON.parse(response.result.contents[0].text);
       expect(Array.isArray(skills)).toBe(true);
-      expect(skills.length).toBe(200);
+      expect(skills.length).toBe(202);
     } finally {
       await client.close();
     }

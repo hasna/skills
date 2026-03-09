@@ -11,8 +11,8 @@ import {
 
 describe("registry", () => {
   describe("SKILLS", () => {
-    test("has 200 skills", () => {
-      expect(SKILLS.length).toBe(200);
+    test("has 202 skills", () => {
+      expect(SKILLS.length).toBe(202);
     });
 
     test("all skills have required fields", () => {
@@ -81,7 +81,7 @@ describe("registry", () => {
   describe("getSkillsByCategory", () => {
     test("returns skills for Development Tools", () => {
       const skills = getSkillsByCategory("Development Tools");
-      expect(skills.length).toBe(32);
+      expect(skills.length).toBe(34);
       for (const skill of skills) {
         expect(skill.category).toBe("Development Tools");
       }

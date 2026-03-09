@@ -1,0 +1,44 @@
+#!/usr/bin/env bun
+
+/**
+ * skill-scancommitpr - Instruction-set skill
+ *
+ * This skill is an instruction set (SKILL.md is the primary artifact).
+ * It instructs Claude Code agents to scan, group, commit, push,
+ * and optionally create a pull request on GitHub.
+ *
+ * Install to Claude Code:
+ *   skills install scancommitpr --for claude
+ */
+
+function printHelp(): void {
+  console.log(`skill-scancommitpr - Scan, Commit, Push & PR
+
+DESCRIPTION:
+  Instruction-set skill for Claude Code agents.
+  When loaded, instructs the agent to:
+    1. Scan the entire repo for changes
+    2. Group changes into logical commits
+    3. Write clear, conventional commit messages
+    4. Push to GitHub
+    5. Optionally create a pull request (only when explicitly asked)
+
+USAGE:
+  This skill is designed to be used as a Claude Code skill (SKILL.md).
+  Install it with:
+
+    skills install scancommitpr --for claude
+
+  The CLI itself has no runtime functionality.
+`);
+}
+
+const args = process.argv.slice(2);
+
+if (args.includes("--help") || args.includes("-h") || args.length === 0) {
+  printHelp();
+  process.exit(0);
+}
+
+console.log("This is an instruction-set skill. Install it to Claude Code with:");
+console.log("  skills install scancommitpr --for claude");

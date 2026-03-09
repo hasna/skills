@@ -8,6 +8,7 @@ export interface SkillMeta {
   description: string;
   category: string;
   tags: string[];
+  dependencies?: string[];
 }
 
 export const CATEGORIES = [
@@ -236,6 +237,21 @@ export const SKILLS: SkillMeta[] = [
     description: "Scaffold new projects with standardized structure and boilerplate",
     category: "Development Tools",
     tags: ["scaffold", "project", "boilerplate", "template"],
+  },
+  {
+    name: "scancommitpr",
+    displayName: "Scan Commit PR",
+    description: "Scan repo changes, group into logical commits, push, and optionally create a PR",
+    category: "Development Tools",
+    tags: ["git", "commit", "push", "pull-request", "automation"],
+    dependencies: ["scancommitpush"],
+  },
+  {
+    name: "scancommitpush",
+    displayName: "Scan Commit Push",
+    description: "Scan repo changes, group into logical commits with conventional messages, and push to GitHub",
+    category: "Development Tools",
+    tags: ["git", "commit", "push", "automation"],
   },
   {
     name: "security-audit",

@@ -1,0 +1,34 @@
+{
+  "name": "@hasnaxyz/skill-scancommitpush",
+  "version": "0.1.0",
+  "description": "Instruction-set skill: scan repo changes, group into logical commits, and push to GitHub",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "skill-scancommitpush": "src/index.ts"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target node"
+  },
+  "keywords": [
+    "git",
+    "commit",
+    "push",
+    "automation",
+    "claude-code",
+    "skill"
+  ],
+  "author": "Hasna",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "publishConfig": {
+    "access": "restricted",
+    "registry": "https://registry.npmjs.org/"
+  }
+}
