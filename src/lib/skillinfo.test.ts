@@ -8,6 +8,7 @@ import {
   getSkillRequirements,
   generateEnvExample,
   generateSkillMd,
+  detectProjectSkills,
 } from "./skillinfo";
 import { installSkill } from "./installer";
 
@@ -199,6 +200,125 @@ describe("skillinfo", () => {
       const frontmatter = parts[1];
       expect(frontmatter).toContain("name:");
       expect(frontmatter).toContain("description:");
+    });
+  });
+
+  describe("detectProjectSkills", () => {
+    test("returns always-recommended skills when no package.json", () => {
+      const result = detectProjectSkills(testDir);
+      expect(result.detected).toEqual([]);
+      const names = result.recommended.map((s) => s.name);
+      expect(names).toContain("implementation-plan");
+      expect(names).toContain("write");
+      expect(names).toContain("deepresearch");
+    });
+
+    test("detects react and recommends frontend skills", () => {
+      writeFileSync(
+        join(testDir, "package.json"),
+        JSON.stringify({ dependencies: { react: "^18.0.0", typescript: "^5.0.0" } })
+      );
+      const result = detectProjectSkills(testDir);
+      expect(result.detected).toContain("react");
+      expect(result.detected).toContain("typescript");
+      const names = result.recommended.map((s) => s.name);
+      expect(names).toContain("image");
+      expect(names).toContain("generate-favicon");
+      expect(names).toContain("seo-brief-builder");
+      expect(names).toContain("scaffold-project");
+      expect(names).toContain("deploy");
+      // Always included
+      expect(names).toContain("implementation-plan");
+      expect(names).toContain("write");
+      expect(names).toContain("deepresearch");
+    });
+
+    test("detects express and recommends backend skills", () => {
+      writeFileSync(
+        join(testDir, "package.json"),
+        JSON.stringify({ dependencies: { express: "^4.0.0" } })
+      );
+      const result = detectProjectSkills(testDir);
+      expect(result.detected).toContain("express");
+      const names = result.recommended.map((s) => s.name);
+      expect(names).toContain("api-test-suite");
+      expect(names).toContain("apidocs");
+    });
+
+    test("detects anthropic SDK and recommends AI skills", () => {
+      writeFileSync(
+        join(testDir, "package.json"),
+        JSON.stringify({ dependencies: { "@anthropic-ai/sdk": "^0.20.0" } })
+      );
+      const result = detectProjectSkills(testDir);
+      expect(result.detected).toContain("@anthropic-ai/sdk");
+      const names = result.recommended.map((s) => s.name);
+      expect(names).toContain("deepresearch");
+      expect(names).toContain("webcrawling");
+    });
+
+    test("detects stripe and recommends invoice skill", () => {
+      writeFileSync(
+        join(testDir, "package.json"),
+        JSON.stringify({ dependencies: { stripe: "^14.0.0" } })
+      );
+      const result = detectProjectSkills(testDir);
+      expect(result.detected).toContain("stripe");
+      const names = result.recommended.map((s) => s.name);
+      expect(names).toContain("invoice");
+    });
+
+    test("detects test framework and recommends api-test-suite", () => {
+      writeFileSync(
+        join(testDir, "package.json"),
+        JSON.stringify({ devDependencies: { vitest: "^1.0.0" } })
+      );
+      const result = detectProjectSkills(testDir);
+      expect(result.detected).toContain("vitest");
+      const names = result.recommended.map((s) => s.name);
+      expect(names).toContain("api-test-suite");
+    });
+
+    test("returns unique recommended skills with no duplicates", () => {
+      writeFileSync(
+        join(testDir, "package.json"),
+        JSON.stringify({
+          dependencies: {
+            react: "^18.0.0",
+            "@anthropic-ai/sdk": "^0.20.0",
+          },
+          devDependencies: {
+            vitest: "^1.0.0",
+          },
+        })
+      );
+      const result = detectProjectSkills(testDir);
+      const names = result.recommended.map((s) => s.name);
+      const uniqueNames = Array.from(new Set(names));
+      expect(names).toEqual(uniqueNames);
+    });
+
+    test("recommended skills are all valid SkillMeta objects", () => {
+      writeFileSync(
+        join(testDir, "package.json"),
+        JSON.stringify({ dependencies: { next: "^14.0.0", typescript: "^5.0.0" } })
+      );
+      const result = detectProjectSkills(testDir);
+      for (const skill of result.recommended) {
+        expect(skill).toHaveProperty("name");
+        expect(skill).toHaveProperty("displayName");
+        expect(skill).toHaveProperty("description");
+        expect(skill).toHaveProperty("category");
+        expect(skill).toHaveProperty("tags");
+      }
+    });
+
+    test("handles invalid JSON in package.json gracefully", () => {
+      writeFileSync(join(testDir, "package.json"), "{ invalid json }");
+      const result = detectProjectSkills(testDir);
+      expect(result.detected).toEqual([]);
+      const names = result.recommended.map((s) => s.name);
+      expect(names).toContain("implementation-plan");
     });
   });
 });

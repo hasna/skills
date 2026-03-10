@@ -5,7 +5,7 @@
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import { getSkillPath } from "./installer.js";
-import { getSkill } from "./registry.js";
+import { getSkill, SKILLS, type SkillMeta } from "./registry.js";
 import { normalizeSkillName } from "./utils.js";
 
 export interface SkillDocs {
@@ -183,6 +183,133 @@ export async function runSkill(
 
   const exitCode = await proc.exited;
   return { exitCode };
+}
+
+export interface DetectedProjectSkills {
+  detected: string[];
+  recommended: SkillMeta[];
+}
+
+/**
+ * Detect project type from package.json and recommend relevant skills
+ */
+export function detectProjectSkills(cwd: string = process.cwd()): DetectedProjectSkills {
+  const pkgPath = join(cwd, "package.json");
+  if (!existsSync(pkgPath)) {
+    // No package.json — return always-recommended skills only
+    const alwaysRecommend = ["implementation-plan", "write", "deepresearch"];
+    const recommended = alwaysRecommend
+      .map((name) => SKILLS.find((s) => s.name === name))
+      .filter((s): s is SkillMeta => s !== undefined);
+    return { detected: [], recommended };
+  }
+
+  let pkg: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+  try {
+    pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+  } catch {
+    const alwaysRecommend = ["implementation-plan", "write", "deepresearch"];
+    const recommended = alwaysRecommend
+      .map((name) => SKILLS.find((s) => s.name === name))
+      .filter((s): s is SkillMeta => s !== undefined);
+    return { detected: [], recommended };
+  }
+
+  const allDeps = {
+    ...pkg.dependencies,
+    ...pkg.devDependencies,
+  };
+
+  const depNames = Object.keys(allDeps);
+
+  const detected: string[] = [];
+  const recommendedNames = new Set<string>();
+
+  // Always recommend these
+  for (const name of ["implementation-plan", "write", "deepresearch"]) {
+    recommendedNames.add(name);
+  }
+
+  // Frontend frameworks
+  const frontendDeps = ["next", "react", "vue", "svelte", "nuxt", "@nuxtjs/nuxt"];
+  for (const dep of frontendDeps) {
+    if (depNames.some((d) => d === dep || d.startsWith(`${dep}/`))) {
+      detected.push(dep);
+      for (const name of ["image", "generate-favicon", "seo-brief-builder"]) {
+        recommendedNames.add(name);
+      }
+      break;
+    }
+  }
+
+  // Backend frameworks
+  const backendDeps = ["express", "fastify", "hono", "koa", "@hono/hono"];
+  for (const dep of backendDeps) {
+    if (depNames.some((d) => d === dep || d.startsWith(`${dep}/`))) {
+      detected.push(dep);
+      for (const name of ["api-test-suite", "apidocs"]) {
+        recommendedNames.add(name);
+      }
+      break;
+    }
+  }
+
+  // AI SDKs
+  const aiDeps = ["@anthropic-ai/sdk", "openai", "@openai/openai", "anthropic"];
+  for (const dep of aiDeps) {
+    if (depNames.includes(dep)) {
+      detected.push(dep);
+      for (const name of ["deepresearch", "webcrawling"]) {
+        recommendedNames.add(name);
+      }
+      break;
+    }
+  }
+
+  // Stripe
+  if (depNames.includes("stripe")) {
+    detected.push("stripe");
+    recommendedNames.add("invoice");
+  }
+
+  // Email
+  const emailDeps = ["nodemailer", "@sendgrid/mail", "@sendgrid/client"];
+  for (const dep of emailDeps) {
+    if (depNames.includes(dep)) {
+      detected.push(dep);
+      for (const name of ["gmail", "email-campaign"]) {
+        recommendedNames.add(name);
+      }
+      break;
+    }
+  }
+
+  // Test frameworks
+  const testDeps = ["vitest", "jest", "mocha", "@jest/core"];
+  for (const dep of testDeps) {
+    if (depNames.includes(dep)) {
+      detected.push(dep);
+      recommendedNames.add("api-test-suite");
+      break;
+    }
+  }
+
+  // TypeScript
+  if (depNames.includes("typescript")) {
+    detected.push("typescript");
+    for (const name of ["scaffold-project", "deploy"]) {
+      recommendedNames.add(name);
+    }
+  }
+
+  // Deduplicate detected list
+  const uniqueDetected = Array.from(new Set(detected));
+
+  const recommended = Array.from(recommendedNames)
+    .map((name) => SKILLS.find((s) => s.name === name))
+    .filter((s): s is SkillMeta => s !== undefined);
+
+  return { detected: uniqueDetected, recommended };
 }
 
 /**
