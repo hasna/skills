@@ -155,6 +155,20 @@ export function createFetchHandler(options?: {
       return json(counts);
     }
 
+    // GET /api/tags - List all unique tags with counts
+    if (path === "/api/tags" && method === "GET") {
+      const tagCounts = new Map<string, number>();
+      for (const skill of SKILLS) {
+        for (const tag of skill.tags) {
+          tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+        }
+      }
+      const sorted = Array.from(tagCounts.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([name, count]) => ({ name, count }));
+      return json(sorted);
+    }
+
     // GET /api/skills/search?q= - Search skills
     if (path === "/api/skills/search" && method === "GET") {
       const query = url.searchParams.get("q") || "";

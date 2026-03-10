@@ -423,4 +423,226 @@ describe("CLI", () => {
       expect(stdout).toContain("--register");
     });
   });
+
+  describe("tags", () => {
+    test("lists tags with counts", async () => {
+      const { stdout, exitCode } = await runCli(["tags"]);
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("Tags:");
+      // "api" is a common tag in the registry
+      expect(stdout).toContain("api");
+    });
+
+    test("outputs JSON with --json", async () => {
+      const { stdout, exitCode } = await runCli(["tags", "--json"]);
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(Array.isArray(data)).toBe(true);
+      expect(data.length).toBeGreaterThan(0);
+      // Each entry has name and count
+      expect(data[0]).toHaveProperty("name");
+      expect(data[0]).toHaveProperty("count");
+      expect(typeof data[0].name).toBe("string");
+      expect(typeof data[0].count).toBe("number");
+      // Should be sorted alphabetically
+      for (let i = 1; i < data.length; i++) {
+        expect(data[i].name.localeCompare(data[i - 1].name)).toBeGreaterThanOrEqual(0);
+      }
+    });
+
+    test("all tag counts are positive integers", async () => {
+      const { stdout } = await runCli(["tags", "--json"]);
+      const data = JSON.parse(stdout);
+      for (const entry of data) {
+        expect(entry.count).toBeGreaterThan(0);
+        expect(Number.isInteger(entry.count)).toBe(true);
+      }
+    });
+  });
+
+  describe("list --tags", () => {
+    test("filters skills by a single tag", async () => {
+      const { stdout, exitCode } = await runCli(["list", "--tags", "api"]);
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("api");
+      // Should show the filtered header
+      expect(stdout).toContain("Skills matching tags");
+    });
+
+    test("returns JSON array filtered by tag", async () => {
+      const { stdout, exitCode } = await runCli(["list", "--tags", "api", "--json"]);
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(Array.isArray(data)).toBe(true);
+      expect(data.length).toBeGreaterThan(0);
+      // Every returned skill must have the "api" tag
+      for (const s of data) {
+        expect(s.tags.map((t: string) => t.toLowerCase())).toContain("api");
+      }
+    });
+
+    test("filters by multiple tags (OR logic)", async () => {
+      const { stdout: singleOut } = await runCli(["list", "--tags", "api", "--json"]);
+      const { stdout: multiOut } = await runCli(["list", "--tags", "api,testing", "--json"]);
+      const single = JSON.parse(singleOut);
+      const multi = JSON.parse(multiOut);
+      // Multi-tag OR should return >= results of single tag
+      expect(multi.length).toBeGreaterThanOrEqual(single.length);
+    });
+
+    test("tag matching is case-insensitive", async () => {
+      const { stdout: lower } = await runCli(["list", "--tags", "api", "--json"]);
+      const { stdout: upper } = await runCli(["list", "--tags", "API", "--json"]);
+      const lowerData = JSON.parse(lower);
+      const upperData = JSON.parse(upper);
+      expect(lowerData.length).toBe(upperData.length);
+    });
+
+    test("returns empty for non-existent tag", async () => {
+      const { stdout, exitCode } = await runCli(["list", "--tags", "zzzznonexistenttag", "--json"]);
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(data).toEqual([]);
+    });
+
+    test("works with --category and --tags together", async () => {
+      const { stdout, exitCode } = await runCli(["list", "--category", "Development Tools", "--tags", "api", "--json"]);
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(Array.isArray(data)).toBe(true);
+      for (const s of data) {
+        expect(s.category).toBe("Development Tools");
+        expect(s.tags.map((t: string) => t.toLowerCase())).toContain("api");
+      }
+    });
+  });
+
+  describe("search --tags", () => {
+    test("filters search results by tag", async () => {
+      const { stdout, exitCode } = await runCli(["search", "image", "--tags", "api"]);
+      expect(exitCode).toBe(0);
+      // Either finds matching results or says no results found
+      const hasResults = stdout.includes("Found") || stdout.includes("No skills found");
+      expect(hasResults).toBe(true);
+    });
+
+    test("returns JSON filtered by tag", async () => {
+      const { stdout, exitCode } = await runCli(["search", "api", "--tags", "api", "--json"]);
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(Array.isArray(data)).toBe(true);
+      for (const s of data) {
+        expect(s.tags.map((t: string) => t.toLowerCase())).toContain("api");
+      }
+    });
+
+    test("tag filter narrows search results", async () => {
+      const { stdout: allOut } = await runCli(["search", "api", "--json"]);
+      const { stdout: tagOut } = await runCli(["search", "api", "--tags", "api", "--json"]);
+      const all = JSON.parse(allOut);
+      const tagged = JSON.parse(tagOut);
+      // Filtered by tag should return <= results of unfiltered
+      expect(tagged.length).toBeLessThanOrEqual(all.length);
+    });
+
+    test("returns empty for tag with no matches in search results", async () => {
+      const { stdout } = await runCli(["search", "zzzznonexistentzzzzz", "--tags", "api", "--json"]);
+      const data = JSON.parse(stdout);
+      expect(data).toEqual([]);
+    });
+  });
+
+  describe("init --for", () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = require("fs");
+    const { tmpdir } = require("os");
+
+    async function runCliInDir(args: string[], cwd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+      const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", ...args], {
+        stdout: "pipe",
+        stderr: "pipe",
+        cwd,
+        env: { ...process.env, NO_COLOR: "1" },
+      });
+      const stdout = await new Response(proc.stdout).text();
+      const stderr = await new Response(proc.stderr).text();
+      const exitCode = await proc.exited;
+      return { stdout, stderr, exitCode };
+    }
+
+    test("shows --for and --scope flags in init help", async () => {
+      const { stdout } = await runCli(["init", "--help"]);
+      expect(stdout).toContain("--for");
+      expect(stdout).toContain("--scope");
+    });
+
+    test("detects project type and installs for claude with --scope project", async () => {
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-init-test-"));
+      try {
+        writeFileSync(
+          require("path").join(tmpDir, "package.json"),
+          JSON.stringify({ dependencies: { react: "^18.0.0", typescript: "^5.0.0" } })
+        );
+        const { stdout, exitCode } = await runCliInDir(["init", "--for", "claude", "--scope", "project"], tmpDir);
+        expect(exitCode).toBe(0);
+        expect(stdout).toContain("Detected project technologies");
+        expect(stdout).toContain("react");
+        expect(stdout).toContain("typescript");
+        expect(stdout).toContain("Recommended skills");
+        expect(stdout).toContain("image");
+        expect(stdout).toContain("implementation-plan");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("outputs JSON with --json flag", async () => {
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-init-json-test-"));
+      try {
+        writeFileSync(
+          require("path").join(tmpDir, "package.json"),
+          JSON.stringify({ dependencies: { express: "^4.0.0" } })
+        );
+        const { stdout, exitCode } = await runCliInDir(["init", "--for", "claude", "--scope", "project", "--json"], tmpDir);
+        expect(exitCode).toBe(0);
+        const data = JSON.parse(stdout);
+        expect(data).toHaveProperty("detected");
+        expect(data).toHaveProperty("recommended");
+        expect(data).toHaveProperty("installed");
+        expect(Array.isArray(data.detected)).toBe(true);
+        expect(Array.isArray(data.recommended)).toBe(true);
+        expect(data.detected).toContain("express");
+        expect(data.recommended).toContain("api-test-suite");
+        expect(data.recommended).toContain("implementation-plan");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("rejects invalid agent name with --for", async () => {
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-init-bad-agent-"));
+      try {
+        writeFileSync(
+          require("path").join(tmpDir, "package.json"),
+          JSON.stringify({ dependencies: {} })
+        );
+        const { stderr, exitCode } = await runCliInDir(["init", "--for", "invalid-agent"], tmpDir);
+        expect(exitCode).not.toBe(0);
+        expect(stderr).toContain("Unknown agent");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("existing init (no --for) still works", async () => {
+      // Running init without --for in a dir with no installed skills should show the no-skills message
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-init-noskills-"));
+      try {
+        const { stdout, exitCode } = await runCliInDir(["init"], tmpDir);
+        expect(exitCode).toBe(0);
+        expect(stdout).toContain("No skills installed");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+  });
 });

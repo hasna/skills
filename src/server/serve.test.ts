@@ -74,6 +74,50 @@ describe("Dashboard Server", () => {
     });
   });
 
+  describe("GET /api/tags", () => {
+    test("returns tags array with name and count", async () => {
+      const res = await api("/api/tags");
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      const data = await res.json();
+      expect(Array.isArray(data)).toBe(true);
+      expect(data.length).toBeGreaterThan(0);
+      expect(data[0]).toHaveProperty("name");
+      expect(data[0]).toHaveProperty("count");
+      expect(typeof data[0].name).toBe("string");
+      expect(typeof data[0].count).toBe("number");
+    });
+
+    test("tags are sorted alphabetically", async () => {
+      const res = await api("/api/tags");
+      const data = await res.json();
+      for (let i = 1; i < data.length; i++) {
+        expect(data[i].name.localeCompare(data[i - 1].name)).toBeGreaterThanOrEqual(0);
+      }
+    });
+
+    test("all tag counts are positive integers", async () => {
+      const res = await api("/api/tags");
+      const data = await res.json();
+      for (const entry of data) {
+        expect(entry.count).toBeGreaterThan(0);
+        expect(Number.isInteger(entry.count)).toBe(true);
+      }
+    });
+
+    test("includes common tags like 'api'", async () => {
+      const res = await api("/api/tags");
+      const data = await res.json();
+      const tagNames = data.map((t: any) => t.name);
+      expect(tagNames).toContain("api");
+    });
+
+    test("includes security headers", async () => {
+      const res = await api("/api/tags");
+      expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    });
+  });
+
   describe("GET /api/skills/search", () => {
     test("returns results for valid query", async () => {
       const res = await api("/api/skills/search?q=email");

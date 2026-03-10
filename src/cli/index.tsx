@@ -32,6 +32,7 @@ import {
   runSkill,
   generateEnvExample,
   generateSkillMd,
+  detectProjectSkills,
 } from "../lib/skillinfo.js";
 
 const isTTY = (process.stdout.isTTY ?? false) && (process.stdin.isTTY ?? false);
@@ -171,6 +172,7 @@ program
   .alias("ls")
   .option("-c, --category <category>", "Filter by category")
   .option("-i, --installed", "Show only installed skills", false)
+  .option("-t, --tags <tags>", "Filter by comma-separated tags (OR logic, case-insensitive)")
   .option("--json", "Output as JSON", false)
   .description("List available or installed skills")
   .action((options) => {
@@ -191,6 +193,11 @@ program
       return;
     }
 
+    // Parse tags filter
+    const tagFilter = options.tags
+      ? options.tags.split(",").map((t: string) => t.trim().toLowerCase()).filter(Boolean)
+      : null;
+
     if (options.category) {
       const category = CATEGORIES.find(
         (c) => c.toLowerCase() === options.category.toLowerCase()
@@ -201,7 +208,12 @@ program
         process.exitCode = 1;
         return;
       }
-      const skills = getSkillsByCategory(category);
+      let skills = getSkillsByCategory(category);
+      if (tagFilter) {
+        skills = skills.filter((s) =>
+          s.tags.some((tag) => tagFilter.includes(tag.toLowerCase()))
+        );
+      }
       if (options.json) {
         console.log(JSON.stringify(skills, null, 2));
         return;
@@ -209,6 +221,21 @@ program
       console.log(chalk.bold(`\n${category} (${skills.length}):\n`));
       for (const s of skills) {
         console.log(`  ${chalk.cyan(s.name)} - ${s.description}`);
+      }
+      return;
+    }
+
+    if (tagFilter) {
+      const skills = SKILLS.filter((s) =>
+        s.tags.some((tag) => tagFilter.includes(tag.toLowerCase()))
+      );
+      if (options.json) {
+        console.log(JSON.stringify(skills, null, 2));
+        return;
+      }
+      console.log(chalk.bold(`\nSkills matching tags [${tagFilter.join(", ")}] (${skills.length}):\n`));
+      for (const s of skills) {
+        console.log(`  ${chalk.cyan(s.name)} ${chalk.dim(`[${s.category}]`)} - ${s.description}`);
       }
       return;
     }
@@ -236,8 +263,9 @@ program
   .argument("<query>", "Search term")
   .option("--json", "Output as JSON", false)
   .option("-c, --category <category>", "Filter results by category")
+  .option("-t, --tags <tags>", "Filter results by comma-separated tags (OR logic, case-insensitive)")
   .description("Search for skills")
-  .action((query: string, options: { json: boolean; category?: string }) => {
+  .action((query: string, options: { json: boolean; category?: string; tags?: string }) => {
     let results = searchSkills(query);
 
     if (options.category) {
@@ -251,6 +279,13 @@ program
         return;
       }
       results = results.filter((s) => s.category === category);
+    }
+
+    if (options.tags) {
+      const tagFilter = options.tags.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
+      results = results.filter((s) =>
+        s.tags.some((tag) => tagFilter.includes(tag.toLowerCase()))
+      );
     }
 
     if (options.json) {
@@ -434,12 +469,86 @@ program
 program
   .command("init")
   .option("--json", "Output as JSON", false)
+  .option("--for <agent>", "Detect project type and install recommended skills for agent: claude, codex, gemini, or all")
+  .option("--scope <scope>", "Install scope: global or project", "global")
   .description("Initialize project for installed skills (.env.example, .gitignore)")
-  .action((options: { json: boolean }) => {
+  .action((options: { json: boolean; for?: string; scope: string }) => {
     const cwd = process.cwd();
+
+    // --for mode: detect project type, recommend, and install skills for the agent
+    if (options.for) {
+      let agents: AgentTarget[];
+      try {
+        agents = resolveAgents(options.for);
+      } catch (err) {
+        console.error(chalk.red((err as Error).message));
+        process.exitCode = 1;
+        return;
+      }
+
+      const { detected, recommended } = detectProjectSkills(cwd);
+
+      if (options.json) {
+        const installResults = [];
+        for (const skill of recommended) {
+          for (const agent of agents) {
+            const result = installSkillForAgent(skill.name, {
+              agent,
+              scope: options.scope as "global" | "project",
+            }, generateSkillMd);
+            installResults.push({ ...result, agent, scope: options.scope });
+          }
+        }
+        console.log(JSON.stringify({
+          detected,
+          recommended: recommended.map((s) => s.name),
+          installed: installResults,
+        }, null, 2));
+        return;
+      }
+
+      if (detected.length > 0) {
+        console.log(chalk.bold("\nDetected project technologies:"));
+        for (const tech of detected) {
+          console.log(`  ${chalk.cyan(tech)}`);
+        }
+      } else {
+        console.log(chalk.dim("\nNo specific project dependencies detected"));
+      }
+
+      console.log(chalk.bold(`\nRecommended skills (${recommended.length}):`));
+      for (const skill of recommended) {
+        console.log(`  ${chalk.cyan(skill.name)} - ${skill.description}`);
+      }
+
+      console.log(chalk.bold(`\nInstalling recommended skills for ${options.for} (${options.scope})...\n`));
+      const installResults = [];
+      for (const skill of recommended) {
+        for (const agent of agents) {
+          const result = installSkillForAgent(skill.name, {
+            agent,
+            scope: options.scope as "global" | "project",
+          }, generateSkillMd);
+          installResults.push({ ...result, agent });
+          const label = `${skill.name} → ${agent} (${options.scope})`;
+          if (result.success) {
+            console.log(chalk.green(`\u2713 ${label}`));
+          } else {
+            console.log(chalk.red(`\u2717 ${label}: ${result.error}`));
+          }
+        }
+      }
+
+      if (installResults.some((r) => !r.success)) {
+        process.exitCode = 1;
+      }
+
+      // Fall through to also do the standard .env.example / .gitignore setup
+    }
+
     const installed = getInstalledSkills();
 
-    if (installed.length === 0) {
+    if (installed.length === 0 && !options.for) {
       if (options.json) {
         console.log(JSON.stringify({ skills: [], envVars: 0, gitignoreUpdated: false }));
       } else {
@@ -447,6 +556,9 @@ program
       }
       return;
     }
+
+    // Skip .env.example / .gitignore if no installed skills and in --for mode
+    if (installed.length === 0) return;
 
     // Collect env vars per skill for detailed .env.example
     const envMap = new Map<string, string[]>();
@@ -518,24 +630,26 @@ program
       }
     }
 
-    if (options.json) {
-      console.log(JSON.stringify({
-        skills: installed,
-        envVars: envVarCount,
-        gitignoreUpdated,
-      }, null, 2));
-    } else {
-      // Print summary of skills and their env vars
-      if (envMap.size > 0) {
-        console.log(chalk.bold("\nSkill environment requirements:"));
-        for (const name of installed) {
-          const reqs = getSkillRequirements(name);
-          if (reqs?.envVars.length) {
-            console.log(`  ${chalk.cyan(name)}: ${reqs.envVars.join(", ")}`);
+    if (!options.for) {
+      if (options.json) {
+        console.log(JSON.stringify({
+          skills: installed,
+          envVars: envVarCount,
+          gitignoreUpdated,
+        }, null, 2));
+      } else {
+        // Print summary of skills and their env vars
+        if (envMap.size > 0) {
+          console.log(chalk.bold("\nSkill environment requirements:"));
+          for (const name of installed) {
+            const reqs = getSkillRequirements(name);
+            if (reqs?.envVars.length) {
+              console.log(`  ${chalk.cyan(name)}: ${reqs.envVars.join(", ")}`);
+            }
           }
         }
+        console.log(chalk.bold(`\nInitialized for ${installed.length} installed skill(s)`));
       }
-      console.log(chalk.bold(`\nInitialized for ${installed.length} installed skill(s)`));
     }
   });
 
@@ -719,6 +833,32 @@ program
     console.log(chalk.bold("\nCategories:\n"));
     for (const { name, count } of cats) {
       console.log(`  ${name} (${count})`);
+    }
+  });
+
+// Tags command
+program
+  .command("tags")
+  .option("--json", "Output as JSON", false)
+  .description("List all unique tags with counts")
+  .action((options: { json: boolean }) => {
+    const tagCounts = new Map<string, number>();
+    for (const skill of SKILLS) {
+      for (const tag of skill.tags) {
+        tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+      }
+    }
+    const sorted = Array.from(tagCounts.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, count]) => ({ name, count }));
+
+    if (options.json) {
+      console.log(JSON.stringify(sorted, null, 2));
+      return;
+    }
+    console.log(chalk.bold("\nTags:\n"));
+    for (const { name, count } of sorted) {
+      console.log(`  ${chalk.cyan(name)} (${count})`);
     }
   });
 

@@ -344,6 +344,42 @@ describe("MCP Server", () => {
     }
   }, 15000);
 
+  test("calls list_tags tool", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "list_tags",
+        arguments: {},
+      }, 20);
+      expect(response).not.toBeNull();
+      expect(response.result).toBeDefined();
+      const tags = JSON.parse(response.result.content[0].text);
+      expect(Array.isArray(tags)).toBe(true);
+      expect(tags.length).toBeGreaterThan(0);
+      expect(tags[0]).toHaveProperty("name");
+      expect(tags[0]).toHaveProperty("count");
+      // Tags should be sorted alphabetically
+      for (let i = 1; i < tags.length; i++) {
+        expect(tags[i].name.localeCompare(tags[i - 1].name)).toBeGreaterThanOrEqual(0);
+      }
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("list_tags is included in tools list", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("tools/list");
+      const toolNames = response.result.tools.map((t: any) => t.name);
+      expect(toolNames).toContain("list_tags");
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
   test("reads skills://registry resource", async () => {
     const client = new McpClient();
     try {
