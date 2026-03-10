@@ -5,6 +5,8 @@ import {
   getSkill,
   getSkillsByCategory,
   searchSkills,
+  getSkillsByTag,
+  getAllTags,
   type SkillMeta,
   type Category,
 } from "./registry";
@@ -142,6 +144,91 @@ describe("registry", () => {
     test("returns multiple results for broad query", () => {
       const results = searchSkills("generate");
       expect(results.length).toBeGreaterThan(5);
+    });
+
+    test('fuzzy match: "imge" finds "image" (edit distance 1 for 4-char word)', () => {
+      const results = searchSkills("imge");
+      expect(results.some((s) => s.name === "image" || s.tags.includes("image"))).toBe(true);
+    });
+
+    test('fuzzy match: "emal" finds skills related to "email" (edit distance 1)', () => {
+      const results = searchSkills("emal");
+      expect(
+        results.some(
+          (s) =>
+            s.tags.some((t) => t.includes("email")) ||
+            s.displayName.toLowerCase().includes("email") ||
+            s.description.toLowerCase().includes("email")
+        )
+      ).toBe(true);
+    });
+
+    test('fuzzy match: "depl" prefix-matches "deploy"', () => {
+      const results = searchSkills("depl");
+      expect(results.some((s) => s.name === "deploy")).toBe(true);
+    });
+  });
+
+  describe("getSkillsByTag", () => {
+    test("returns skills tagged with 'api'", () => {
+      const results = getSkillsByTag("api");
+      expect(results.length).toBeGreaterThan(0);
+      for (const skill of results) {
+        expect(skill.tags.some((t) => t.toLowerCase().includes("api"))).toBe(true);
+      }
+    });
+
+    test("is case-insensitive (uppercased tag)", () => {
+      const lower = getSkillsByTag("api");
+      const upper = getSkillsByTag("API");
+      expect(lower.length).toBe(upper.length);
+      expect(lower.map((s) => s.name)).toEqual(upper.map((s) => s.name));
+    });
+
+    test("supports partial tag match", () => {
+      // "gen" should match tags like "generation", "generate", etc.
+      const results = getSkillsByTag("gen");
+      expect(results.length).toBeGreaterThan(0);
+    });
+
+    test("returns empty array for a tag that doesn't exist", () => {
+      const results = getSkillsByTag("zzznomatch_xyz_999");
+      expect(results.length).toBe(0);
+    });
+  });
+
+  describe("getAllTags", () => {
+    test("returns a non-empty array", () => {
+      const tags = getAllTags();
+      expect(tags.length).toBeGreaterThan(0);
+    });
+
+    test("tags are sorted alphabetically", () => {
+      const tags = getAllTags();
+      const sorted = [...tags].sort();
+      expect(tags).toEqual(sorted);
+    });
+
+    test("tags are unique", () => {
+      const tags = getAllTags();
+      const unique = new Set(tags);
+      expect(unique.size).toBe(tags.length);
+    });
+
+    test("all tags are lowercase", () => {
+      const tags = getAllTags();
+      for (const tag of tags) {
+        expect(tag).toBe(tag.toLowerCase());
+      }
+    });
+
+    test("every skill tag appears in getAllTags()", () => {
+      const allTags = new Set(getAllTags());
+      for (const skill of SKILLS) {
+        for (const tag of skill.tags) {
+          expect(allTags.has(tag.toLowerCase())).toBe(true);
+        }
+      }
     });
   });
 });

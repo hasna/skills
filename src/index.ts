@@ -14,6 +14,8 @@ export {
   getSkill,
   getSkillsByCategory,
   searchSkills,
+  getSkillsByTag,
+  getAllTags,
   type SkillMeta,
   type Category,
 } from "./lib/registry.js";
