@@ -11,17 +11,18 @@ import { getInstalledSkills, installSkill, removeSkill, installSkillForAgent, re
 import type { AgentScope } from "../lib/installer.js";
 import { getSkillDocs, getSkillBestDoc, getSkillRequirements, generateSkillMd } from "../lib/skillinfo.js";
 
-function getPackageVersion(): string {
+function getPackageJson(): { version: string; name: string } {
   try {
     const scriptDir = dirname(fileURLToPath(import.meta.url));
     for (const rel of ["../..", ".."]) {
       const pkgPath = join(scriptDir, rel, "package.json");
       if (existsSync(pkgPath)) {
-        return JSON.parse(readFileSync(pkgPath, "utf-8")).version;
+        const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+        return { version: pkg.version || "unknown", name: pkg.name || "skills" };
       }
     }
   } catch {}
-  return "unknown";
+  return { version: "unknown", name: "skills" };
 }
 
 interface SkillWithStatus {
@@ -273,13 +274,15 @@ export function createFetchHandler(options?: {
 
     // GET /api/version - Current package version
     if (path === "/api/version" && method === "GET") {
-      return json({ version: getPackageVersion() });
+      const pkg = getPackageJson();
+      return json({ version: pkg.version, name: pkg.name });
     }
 
-    // POST /api/self-update - Update @hasna/skills package
+    // POST /api/self-update - Update package to latest
     if (path === "/api/self-update" && method === "POST") {
       try {
-        const proc = Bun.spawn(["bun", "add", "-g", "@hasna/skills@latest"], {
+        const pkg = getPackageJson();
+        const proc = Bun.spawn(["bun", "add", "-g", `${pkg.name}@latest`], {
           stdout: "pipe",
           stderr: "pipe",
         });

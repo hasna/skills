@@ -95,7 +95,7 @@ skills serve
 | `skills categories` | | List all categories with counts |
 | `skills init` | | Generate `.env.example` and update `.gitignore` |
 | `skills update [names...]` | | Update installed skills (reinstall with overwrite) |
-| `skills serve` | | Start the HTTP dashboard (default port 3579) |
+| `skills serve` | | Start the HTTP dashboard (auto-assigns free port) |
 | `skills mcp` | | Start the MCP server on stdio |
 | `skills mcp --register <agent>` | | Register MCP server with claude, codex, gemini, or all |
 | `skills self-update` | | Update `@hasna/skills` to the latest version |
@@ -169,7 +169,7 @@ skills serve --port 8080
 skills serve --no-open
 ```
 
-The dashboard runs at `http://localhost:3579` and provides:
+The dashboard picks a random free port automatically (or use `--port` to pin one) and provides:
 
 - Searchable, sortable skills table with category filters
 - Skill detail dialog with documentation, tags, and requirements
@@ -307,7 +307,7 @@ mkdir -p skills/skill-my-skill/src
 
 ```json
 {
-  "name": "@hasna/skill-my-skill",
+  "name": "skill-my-skill",
   "version": "0.0.1",
   "bin": { "my-skill": "./src/index.ts" },
   "dependencies": {}

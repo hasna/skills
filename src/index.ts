@@ -1,11 +1,11 @@
 /**
- * @hasna/skills - Open source skill library
+ * Open Skills - Open source skill library for AI coding agents
  *
  * Install AI agent skills with a single command:
- *   npx @hasna/skills install generate-image deep-research
+ *   npx skills install image deep-research
  *
  * Or use the interactive CLI:
- *   npx @hasna/skills
+ *   skills
  */
 
 export {

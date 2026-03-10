@@ -787,10 +787,10 @@ program
 // Self-update command
 program
   .command("self-update")
-  .description("Update @hasna/skills to the latest version")
+  .description(`Update ${pkg.name} to the latest version`)
   .action(async () => {
-    console.log(chalk.bold("\nUpdating @hasna/skills...\n"));
-    const proc = Bun.spawn(["bun", "add", "-g", "@hasna/skills@latest"], {
+    console.log(chalk.bold(`\nUpdating ${pkg.name}...\n`));
+    const proc = Bun.spawn(["bun", "add", "-g", `${pkg.name}@latest`], {
       stdout: "inherit",
       stderr: "inherit",
     });
