@@ -324,7 +324,7 @@ export function createFetchHandler(options?: {
   };
 }
 
-export async function startServer(port: number, options?: { open?: boolean }): Promise<void> {
+export async function startServer(port: number = 0, options?: { open?: boolean }): Promise<void> {
   const shouldOpen = options?.open ?? true;
   const dashboardDir = resolveDashboardDir();
   const dashboardExists = existsSync(dashboardDir);
@@ -348,7 +348,8 @@ export async function startServer(port: number, options?: { open?: boolean }): P
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
-  const serverUrl = `http://localhost:${port}`;
+  const actualPort = server.port;
+  const serverUrl = `http://localhost:${actualPort}`;
   console.log(`Skills Dashboard running at ${serverUrl}`);
 
   if (shouldOpen) {
@@ -370,6 +371,6 @@ const isMain = import.meta.url === `file://${process.argv[1]}` ||
   process.argv[1]?.endsWith("serve.js");
 
 if (isMain) {
-  const port = parseInt(process.env.PORT || "3579", 10);
+  const port = parseInt(process.env.PORT || "0", 10);
   startServer(port, { open: !process.env.NO_OPEN });
 }

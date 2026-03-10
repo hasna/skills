@@ -776,7 +776,7 @@ program
 program
   .command("serve")
   .description("Start the Skills Dashboard web server")
-  .option("-p, --port <port>", "Port number", "3579")
+  .option("-p, --port <port>", "Port number (0 = auto-assign free port)", "0")
   .option("--no-open", "Don't open browser automatically")
   .action(async (options: { port: string; open: boolean }) => {
     const { startServer } = await import("../server/serve.js");
