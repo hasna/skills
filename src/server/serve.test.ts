@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { createFetchHandler } from "./serve";
+import { createFetchHandler, startServer } from "./serve";
 
 const handler = createFetchHandler();
 
@@ -210,6 +210,101 @@ describe("Dashboard Server", () => {
     });
   });
 
+  describe("GET /api/version", () => {
+    test("returns version string", async () => {
+      const res = await api("/api/version");
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data).toHaveProperty("version");
+      expect(typeof data.version).toBe("string");
+      expect(data.version).not.toBe("");
+    });
+  });
+
+  describe("POST /api/skills/:name/install with agent options", () => {
+    test("installs skill for a specific agent with for param", async () => {
+      const res = await api("/api/skills/image/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ for: "claude", scope: "project" }),
+      });
+      const data = await res.json();
+      expect(data).toHaveProperty("skill", "image");
+      expect(data).toHaveProperty("success");
+      expect(data).toHaveProperty("results");
+      expect(Array.isArray(data.results)).toBe(true);
+    });
+
+    test("returns 400 for invalid agent name via for param", async () => {
+      const res = await api("/api/skills/image/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ for: "invalid-agent" }),
+      });
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.success).toBe(false);
+      expect(data.error).toContain("Unknown agent");
+    });
+
+    test("handles empty POST body gracefully (full source install)", async () => {
+      const res = await api("/api/skills/image/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "",
+      });
+      const data = await res.json();
+      expect(data).toHaveProperty("skill");
+    });
+
+    test("handles malformed JSON body gracefully", async () => {
+      const res = await api("/api/skills/image/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "not json",
+      });
+      const data = await res.json();
+      // Falls through to full source install since body parsing fails silently
+      expect(data).toHaveProperty("skill");
+    });
+
+    test("agent install for nonexistent skill returns 400", async () => {
+      const res = await api("/api/skills/nonexistent-xyz-999/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ for: "claude", scope: "global" }),
+      });
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.success).toBe(false);
+    });
+
+    test("scope defaults to global when not specified", async () => {
+      const res = await api("/api/skills/image/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ for: "claude" }),
+      });
+      const data = await res.json();
+      expect(data).toHaveProperty("skill", "image");
+      expect(data).toHaveProperty("results");
+    });
+  });
+
+  describe("POST /api/self-update", () => {
+    test("attempts self-update and returns result", async () => {
+      const res = await api("/api/self-update", { method: "POST" });
+      const data = await res.json();
+      expect(data).toHaveProperty("success");
+      // Either succeeds or fails — both are valid responses
+      if (data.success) {
+        expect(data).toHaveProperty("output");
+      } else {
+        expect(data).toHaveProperty("error");
+      }
+    });
+  });
+
   describe("CORS", () => {
     test("OPTIONS returns CORS headers", async () => {
       const res = await api("/api/skills", { method: "OPTIONS" });
@@ -288,5 +383,87 @@ describe("Dashboard Server", () => {
         expect(res.status).toBe(404);
       }
     });
+  });
+
+  describe("no-dashboard handler", () => {
+    test("returns 404 for GET / when dashboard does not exist", async () => {
+      const noDbHandler = createFetchHandler({
+        dashboardDir: "/tmp/nonexistent-dashboard-dir",
+        dashboardExists: false,
+      });
+      const req = new Request("http://localhost/");
+      const res = await noDbHandler(req);
+      expect(res.status).toBe(404);
+      const data = await res.json();
+      expect(data.error).toBe("Not found");
+    });
+
+    test("returns 404 for unknown GET paths when dashboard does not exist", async () => {
+      const noDbHandler = createFetchHandler({
+        dashboardDir: "/tmp/nonexistent-dashboard-dir",
+        dashboardExists: false,
+      });
+      const req = new Request("http://localhost/some/path");
+      const res = await noDbHandler(req);
+      expect(res.status).toBe(404);
+    });
+
+    test("API routes still work when dashboard does not exist", async () => {
+      const noDbHandler = createFetchHandler({
+        dashboardDir: "/tmp/nonexistent-dashboard-dir",
+        dashboardExists: false,
+      });
+      const req = new Request("http://localhost/api/version");
+      const res = await noDbHandler(req);
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data).toHaveProperty("version");
+    });
+  });
+
+  describe("startServer", () => {
+    test("starts on port 0 and picks a random free port", async () => {
+      // We can't easily test startServer directly since it blocks,
+      // but we can test via subprocess
+      const proc = Bun.spawn(["bun", "run", "src/server/serve.ts"], {
+        env: { ...process.env, PORT: "0", NO_OPEN: "1" },
+        stdout: "pipe",
+        stderr: "pipe",
+        cwd: import.meta.dir.replace(/\/src\/server$/, ""),
+      });
+
+      try {
+        // Read stdout to get the assigned port
+        const reader = proc.stdout.getReader();
+        let output = "";
+        const decoder = new TextDecoder();
+
+        // Read until we find the "running at" message
+        for (let i = 0; i < 80; i++) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          output += decoder.decode(value, { stream: true });
+          if (output.includes("running at")) break;
+          await Bun.sleep(250);
+        }
+        reader.releaseLock();
+
+        expect(output).toContain("Skills Dashboard running at http://localhost:");
+
+        // Extract the port
+        const portMatch = output.match(/localhost:(\d+)/);
+        expect(portMatch).not.toBeNull();
+        const port = parseInt(portMatch![1]);
+        expect(port).toBeGreaterThan(0);
+        expect(port).not.toBe(3579); // Should not be the old default
+
+        // Verify the server is actually responding
+        const res = await fetch(`http://localhost:${port}/api/version`);
+        expect(res.status).toBe(200);
+      } finally {
+        proc.kill();
+        await proc.exited;
+      }
+    }, 15000);
   });
 });

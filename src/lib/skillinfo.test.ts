@@ -180,6 +180,15 @@ describe("skillinfo", () => {
       expect(md).toBeNull();
     });
 
+    test("uses CLAUDE.md content when README.md is absent", () => {
+      // academic-journal-matcher has CLAUDE.md but no README.md and no SKILL.md
+      const md = generateSkillMd("academic-journal-matcher");
+      expect(md).not.toBeNull();
+      expect(md!).toContain("name: academic-journal-matcher");
+      // Should include content from CLAUDE.md
+      expect(md!.length).toBeGreaterThan(100);
+    });
+
     test("has valid YAML frontmatter", () => {
       const md = generateSkillMd("deepresearch");
       expect(md).not.toBeNull();

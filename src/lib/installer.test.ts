@@ -113,6 +113,37 @@ describe("installer", () => {
     });
   });
 
+  describe("installSkill dependency warnings", () => {
+    test("warns when a dependency is not installed", () => {
+      // scancommitpr depends on scancommitpush — install only scancommitpr
+      const warnSpy: string[] = [];
+      const originalWarn = console.warn;
+      console.warn = (msg: string) => warnSpy.push(msg);
+      try {
+        const result = installSkill("scancommitpr", { targetDir: testDir });
+        expect(result.success).toBe(true);
+        expect(warnSpy.some((m) => m.includes("scancommitpush") && m.includes("not installed"))).toBe(true);
+      } finally {
+        console.warn = originalWarn;
+      }
+    });
+
+    test("does not warn when dependency is already installed", () => {
+      // Install the dependency first, then the dependent skill
+      installSkill("scancommitpush", { targetDir: testDir });
+      const warnSpy: string[] = [];
+      const originalWarn = console.warn;
+      console.warn = (msg: string) => warnSpy.push(msg);
+      try {
+        const result = installSkill("scancommitpr", { targetDir: testDir });
+        expect(result.success).toBe(true);
+        expect(warnSpy.some((m) => m.includes("scancommitpush") && m.includes("not installed"))).toBe(false);
+      } finally {
+        console.warn = originalWarn;
+      }
+    });
+  });
+
   describe("installSkills", () => {
     test("installs multiple skills", () => {
       const results = installSkills(["deepresearch", "image"], { targetDir: testDir });
