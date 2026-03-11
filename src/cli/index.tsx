@@ -63,14 +63,40 @@ program
 program
   .command("install")
   .alias("add")
-  .argument("<skills...>", "Skills to install")
+  .argument("[skills...]", "Skills to install")
   .option("-o, --overwrite", "Overwrite existing skills", false)
   .option("--json", "Output results as JSON", false)
   .option("--for <agent>", "Install for agent: claude, codex, gemini, or all")
   .option("--scope <scope>", "Install scope: global or project", "global")
   .option("--dry-run", "Print what would happen without actually installing", false)
+  .option("--category <category>", "Install all skills in a category (case-insensitive)")
   .description("Install one or more skills")
   .action((skills: string[], options) => {
+    // Validate that either skills or --category is provided
+    if (skills.length === 0 && !options.category) {
+      console.error("error: missing required argument 'skills' or --category option");
+      process.exitCode = 1;
+      return;
+    }
+
+    // Resolve skills list from --category if provided
+    if (options.category) {
+      const matchedCategory = CATEGORIES.find(
+        (c) => c.toLowerCase() === options.category.toLowerCase()
+      );
+      if (!matchedCategory) {
+        console.error(`Unknown category: ${options.category}`);
+        console.error(`Available: ${CATEGORIES.join(", ")}`);
+        process.exitCode = 1;
+        return;
+      }
+      const categorySkills = getSkillsByCategory(matchedCategory);
+      skills = categorySkills.map((s) => s.name);
+      if (!options.json) {
+        console.log(chalk.bold(`\nInstalling ${skills.length} skills from "${matchedCategory}"...\n`));
+      }
+    }
+
     const results = [];
 
     if (options.for) {
@@ -169,8 +195,12 @@ program
   .option("-i, --installed", "Show only installed skills", false)
   .option("-t, --tags <tags>", "Filter by comma-separated tags (OR logic, case-insensitive)")
   .option("--json", "Output as JSON", false)
+  .option("--brief", "One line per skill: name \u2014 description [category]", false)
   .description("List available or installed skills")
   .action((options) => {
+    // --json wins over --brief when both are given
+    const brief = options.brief && !options.json;
+
     if (options.installed) {
       const installed = getInstalledSkills();
       if (options.json) {
@@ -179,6 +209,12 @@ program
       }
       if (installed.length === 0) {
         console.log(chalk.dim("No skills installed"));
+        return;
+      }
+      if (brief) {
+        for (const name of installed) {
+          console.log(name);
+        }
         return;
       }
       console.log(chalk.bold(`\nInstalled skills (${installed.length}):\n`));
@@ -213,6 +249,12 @@ program
         console.log(JSON.stringify(skills, null, 2));
         return;
       }
+      if (brief) {
+        for (const s of skills) {
+          console.log(`${s.name} \u2014 ${s.description} [${s.category}]`);
+        }
+        return;
+      }
       console.log(chalk.bold(`\n${category} (${skills.length}):\n`));
       for (const s of skills) {
         console.log(`  ${chalk.cyan(s.name)} - ${s.description}`);
@@ -228,6 +270,12 @@ program
         console.log(JSON.stringify(skills, null, 2));
         return;
       }
+      if (brief) {
+        for (const s of skills) {
+          console.log(`${s.name} \u2014 ${s.description} [${s.category}]`);
+        }
+        return;
+      }
       console.log(chalk.bold(`\nSkills matching tags [${tagFilter.join(", ")}] (${skills.length}):\n`));
       for (const s of skills) {
         console.log(`  ${chalk.cyan(s.name)} ${chalk.dim(`[${s.category}]`)} - ${s.description}`);
@@ -238,6 +286,18 @@ program
     // Show all
     if (options.json) {
       console.log(JSON.stringify(SKILLS, null, 2));
+      return;
+    }
+
+    if (brief) {
+      // Sort by category then name
+      const sorted = [...SKILLS].sort((a, b) => {
+        const catCmp = a.category.localeCompare(b.category);
+        return catCmp !== 0 ? catCmp : a.name.localeCompare(b.name);
+      });
+      for (const s of sorted) {
+        console.log(`${s.name} \u2014 ${s.description} [${s.category}]`);
+      }
       return;
     }
 
@@ -257,10 +317,11 @@ program
   .command("search")
   .argument("<query>", "Search term")
   .option("--json", "Output as JSON", false)
+  .option("--brief", "One line per skill: name \u2014 description [category]", false)
   .option("-c, --category <category>", "Filter results by category")
   .option("-t, --tags <tags>", "Filter results by comma-separated tags (OR logic, case-insensitive)")
   .description("Search for skills")
-  .action((query: string, options: { json: boolean; category?: string; tags?: string }) => {
+  .action((query: string, options: { json: boolean; brief: boolean; category?: string; tags?: string }) => {
     let results = searchSkills(query);
 
     if (options.category) {
@@ -283,12 +344,21 @@ program
       );
     }
 
+    // --json wins over --brief when both are given
+    const brief = options.brief && !options.json;
+
     if (options.json) {
       console.log(JSON.stringify(results, null, 2));
       return;
     }
     if (results.length === 0) {
       console.log(chalk.dim(`No skills found for "${query}"`));
+      return;
+    }
+    if (brief) {
+      for (const s of results) {
+        console.log(`${s.name} \u2014 ${s.description} [${s.category}]`);
+      }
       return;
     }
     console.log(chalk.bold(`\nFound ${results.length} skill(s):\n`));
@@ -305,8 +375,9 @@ program
   .command("info")
   .argument("<skill>", "Skill name")
   .option("--json", "Output as JSON", false)
+  .option("--brief", "Single line: name \u2014 description [category] (tags: ...)", false)
   .description("Show details about a specific skill")
-  .action((name: string, options: { json: boolean }) => {
+  .action((name: string, options: { json: boolean; brief: boolean }) => {
     const skill = getSkill(name);
     if (!skill) {
       console.error(`Skill '${name}' not found`);
@@ -320,6 +391,13 @@ program
       console.log(JSON.stringify({ ...skill, ...reqs }, null, 2));
       return;
     }
+
+    // --json wins over --brief when both are given (json handled above)
+    if (options.brief) {
+      console.log(`${skill.name} \u2014 ${skill.description} [${skill.category}] (tags: ${skill.tags.join(", ")})`);
+      return;
+    }
+
     console.log(`\n${chalk.bold(skill.displayName)}`);
     console.log(`${skill.description}`);
     console.log(`${chalk.dim("Category:")} ${skill.category}`);
@@ -951,7 +1029,7 @@ program
     const subcommands = [
       "install", "list", "search", "info", "docs", "requires", "run",
       "remove", "update", "categories", "tags", "mcp", "serve", "init",
-      "self-update", "completion", "outdated", "doctor",
+      "self-update", "completion", "outdated", "doctor", "auth",
     ];
     const skillNames = SKILLS.map((s) => s.name);
     const categoryNames = CATEGORIES.map((c) => c);
@@ -1074,6 +1152,147 @@ _skills "$@"
     }
   });
 
+// Export command
+program
+  .command("export")
+  .option("--json", "Output as JSON (default behavior)", false)
+  .description("Export installed skills to JSON for sharing or backup")
+  .action((_options: { json: boolean }) => {
+    const skills = getInstalledSkills();
+    const payload = {
+      version: 1,
+      skills,
+      timestamp: new Date().toISOString(),
+    };
+    console.log(JSON.stringify(payload, null, 2));
+  });
+
+// Import command
+program
+  .command("import")
+  .argument("<file>", "JSON file to import (use - for stdin)")
+  .option("--json", "Output results as JSON", false)
+  .option("--for <agent>", "Install for agent: claude, codex, gemini, or all")
+  .option("--scope <scope>", "Install scope: global or project", "global")
+  .option("--dry-run", "Show what would be installed without actually installing", false)
+  .description("Import and install skills from a JSON export file")
+  .action(async (file: string, options: { json: boolean; for?: string; scope: string; dryRun: boolean }) => {
+    // Read input
+    let raw: string;
+    try {
+      if (file === "-") {
+        raw = await new Response(process.stdin as unknown as ReadableStream).text();
+      } else {
+        if (!existsSync(file)) {
+          console.error(chalk.red(`File not found: ${file}`));
+          process.exitCode = 1;
+          return;
+        }
+        raw = readFileSync(file, "utf-8");
+      }
+    } catch (err) {
+      console.error(chalk.red(`Failed to read file: ${(err as Error).message}`));
+      process.exitCode = 1;
+      return;
+    }
+
+    // Parse and validate
+    let payload: { version: number; skills: string[]; timestamp?: string };
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      console.error(chalk.red("Invalid JSON in import file"));
+      process.exitCode = 1;
+      return;
+    }
+
+    if (!payload || typeof payload !== "object" || !Array.isArray(payload.skills)) {
+      console.error(chalk.red('Invalid format: expected { "version": 1, "skills": [...] }'));
+      process.exitCode = 1;
+      return;
+    }
+
+    const skillList: string[] = payload.skills;
+    const total = skillList.length;
+
+    if (total === 0) {
+      if (options.json) {
+        console.log(JSON.stringify({ imported: 0, results: [] }));
+      } else {
+        console.log(chalk.dim("No skills to import"));
+      }
+      return;
+    }
+
+    // Dry-run mode
+    if (options.dryRun) {
+      if (options.json) {
+        console.log(JSON.stringify({ dryRun: true, skills: skillList }));
+      } else {
+        console.log(chalk.bold(`\n[dry-run] Would install ${total} skill(s):\n`));
+        for (let i = 0; i < total; i++) {
+          const target = options.for ? ` for ${options.for} (${options.scope})` : " to .skills/";
+          console.log(chalk.dim(`  [${i + 1}/${total}] ${skillList[i]}${target}`));
+        }
+      }
+      return;
+    }
+
+    const results = [];
+
+    if (options.for) {
+      // Agent install mode
+      let agents: AgentTarget[];
+      try {
+        agents = resolveAgents(options.for);
+      } catch (err) {
+        console.error(chalk.red((err as Error).message));
+        process.exitCode = 1;
+        return;
+      }
+
+      for (let i = 0; i < total; i++) {
+        const name = skillList[i];
+        if (!options.json) {
+          process.stdout.write(`[${i + 1}/${total}] Installing ${name}...`);
+        }
+        const agentResults = agents.map((agent) =>
+          installSkillForAgent(name, { agent, scope: options.scope as "global" | "project" }, generateSkillMd)
+        );
+        const success = agentResults.every((r) => r.success);
+        results.push({ skill: name, success, agentResults });
+        if (!options.json) {
+          console.log(success ? " done" : " failed");
+        }
+      }
+    } else {
+      // Full source install
+      for (let i = 0; i < total; i++) {
+        const name = skillList[i];
+        if (!options.json) {
+          process.stdout.write(`[${i + 1}/${total}] Installing ${name}...`);
+        }
+        const result = installSkill(name);
+        results.push(result);
+        if (!options.json) {
+          console.log(result.success ? " done" : " failed");
+        }
+      }
+    }
+
+    if (options.json) {
+      console.log(JSON.stringify({ imported: results.filter((r) => r.success).length, total, results }));
+    } else {
+      const succeeded = results.filter((r) => r.success).length;
+      const failed = total - succeeded;
+      console.log(chalk.bold(`\nImported ${succeeded}/${total} skill(s)${failed > 0 ? ` (${failed} failed)` : ""}`));
+    }
+
+    if (results.some((r) => !r.success)) {
+      process.exitCode = 1;
+    }
+  });
+
 // Doctor command
 program
   .command("doctor")
@@ -1118,6 +1337,316 @@ program
           console.log(`    ${v.name} [${status}]`);
         }
       }
+    }
+  });
+
+// Auth command
+program
+  .command("auth")
+  .argument("[skill]", "Skill name (omit to check all installed skills)")
+  .option("--set <assignment>", "Set an env var in .env file (format: KEY=VALUE)")
+  .option("--json", "Output as JSON", false)
+  .description("Show auth/env var status for a skill or all installed skills")
+  .action((name: string | undefined, options: { set?: string; json: boolean }) => {
+    const cwd = process.cwd();
+    const envFilePath = join(cwd, ".env");
+
+    // --set mode: write KEY=VALUE to .env file
+    if (options.set) {
+      const eqIdx = options.set.indexOf("=");
+      if (eqIdx === -1) {
+        console.error(chalk.red(`Invalid format for --set. Expected KEY=VALUE, got: ${options.set}`));
+        process.exitCode = 1;
+        return;
+      }
+      const key = options.set.slice(0, eqIdx).trim();
+      const value = options.set.slice(eqIdx + 1);
+
+      if (!key) {
+        console.error(chalk.red("Key cannot be empty"));
+        process.exitCode = 1;
+        return;
+      }
+
+      let existing = "";
+      if (existsSync(envFilePath)) {
+        existing = readFileSync(envFilePath, "utf-8");
+      }
+
+      const keyPattern = new RegExp(`^${key}=.*$`, "m");
+      let updated: string;
+      if (keyPattern.test(existing)) {
+        // Replace existing line
+        updated = existing.replace(keyPattern, `${key}=${value}`);
+      } else {
+        // Append new line
+        updated = existing.endsWith("\n") || existing === ""
+          ? existing + `${key}=${value}\n`
+          : existing + `\n${key}=${value}\n`;
+      }
+
+      writeFileSync(envFilePath, updated, "utf-8");
+      console.log(chalk.green(`Set ${key} in ${envFilePath}`));
+      return;
+    }
+
+    // Single skill mode
+    if (name) {
+      const reqs = getSkillRequirements(name);
+      if (!reqs) {
+        console.error(`Skill '${name}' not found`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const envVars = reqs.envVars.map((v) => ({ name: v, set: !!process.env[v] }));
+
+      if (options.json) {
+        console.log(JSON.stringify({ skill: name, envVars }, null, 2));
+        return;
+      }
+
+      console.log(chalk.bold(`\nAuth status for ${name}:\n`));
+      if (envVars.length === 0) {
+        console.log(chalk.dim("  No environment variables required"));
+      } else {
+        for (const v of envVars) {
+          const icon = v.set ? chalk.green("✓") : chalk.red("✗");
+          const status = v.set ? chalk.green("set") : chalk.red("missing");
+          console.log(`  ${icon} ${v.name} (${status})`);
+        }
+      }
+      return;
+    }
+
+    // All installed skills mode
+    const installed = getInstalledSkills();
+
+    if (installed.length === 0) {
+      if (options.json) {
+        console.log(JSON.stringify([]));
+      } else {
+        console.log("No skills installed");
+      }
+      return;
+    }
+
+    const report: Array<{ skill: string; envVars: Array<{ name: string; set: boolean }> }> = [];
+    for (const skillName of installed) {
+      const reqs = getSkillRequirements(skillName);
+      const envVars = (reqs?.envVars ?? []).map((v) => ({ name: v, set: !!process.env[v] }));
+      report.push({ skill: skillName, envVars });
+    }
+
+    if (options.json) {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+
+    console.log(chalk.bold(`\nAuth status (${installed.length} installed skills):\n`));
+    for (const entry of report) {
+      console.log(chalk.bold(`  ${entry.skill}`));
+      if (entry.envVars.length === 0) {
+        console.log(chalk.dim("    No environment variables required"));
+      } else {
+        for (const v of entry.envVars) {
+          const icon = v.set ? chalk.green("✓") : chalk.red("✗");
+          const status = v.set ? chalk.green("set") : chalk.red("missing");
+          console.log(`    ${icon} ${v.name} (${status})`);
+        }
+      }
+    }
+  });
+
+// Whoami command
+program
+  .command("whoami")
+  .option("--json", "Output as JSON", false)
+  .description("Show setup summary: version, installed skills, agent configs, and paths")
+  .action((options: { json: boolean }) => {
+    const { homedir } = require("os") as typeof import("os");
+    const version = pkg.version;
+    const cwd = process.cwd();
+
+    // Installed skills in cwd
+    const installed = getInstalledSkills();
+
+    // Agent configs: check ~/.claude/skills/, ~/.codex/skills/, ~/.gemini/skills/
+    const agentNames = ["claude", "codex", "gemini"] as const;
+    const agentConfigs: Array<{ agent: string; path: string; exists: boolean; skillCount: number }> = [];
+    for (const agent of agentNames) {
+      const agentSkillsPath = join(homedir(), `.${agent}`, "skills");
+      const exists = existsSync(agentSkillsPath);
+      let skillCount = 0;
+      if (exists) {
+        try {
+          skillCount = readdirSync(agentSkillsPath).filter((f) => {
+            const full = join(agentSkillsPath, f);
+            return f.startsWith("skill-") && statSync(full).isDirectory();
+          }).length;
+        } catch {}
+      }
+      agentConfigs.push({ agent, path: agentSkillsPath, exists, skillCount });
+    }
+
+    // Skills directory location (the package's skills/ dir)
+    const skillsDir = getSkillPath("image").replace(/[/\\][^/\\]*$/, "");
+
+    if (options.json) {
+      console.log(JSON.stringify({
+        version,
+        installedCount: installed.length,
+        installed,
+        agents: agentConfigs,
+        skillsDir,
+        cwd,
+      }, null, 2));
+      return;
+    }
+
+    console.log(chalk.bold(`\nskills v${version}\n`));
+    console.log(`${chalk.dim("Working directory:")} ${cwd}`);
+    console.log(`${chalk.dim("Skills directory:")}  ${skillsDir}`);
+    console.log();
+
+    if (installed.length === 0) {
+      console.log(chalk.dim("No skills installed in current project"));
+    } else {
+      console.log(chalk.bold(`Installed skills (${installed.length}):`));
+      for (const name of installed) {
+        console.log(`  ${chalk.cyan(name)}`);
+      }
+    }
+    console.log();
+
+    console.log(chalk.bold("Agent configurations:"));
+    for (const cfg of agentConfigs) {
+      if (cfg.exists) {
+        console.log(`  ${chalk.green("\u2713")} ${cfg.agent} \u2014 ${cfg.skillCount} skill(s) at ${cfg.path}`);
+      } else {
+        console.log(`  ${chalk.dim("\u2717")} ${cfg.agent} \u2014 not configured`);
+      }
+    }
+  });
+
+// Test command
+program
+  .command("test")
+  .argument("[skill]", "Skill name to test (omit to test all installed skills)")
+  .option("--json", "Output results as JSON", false)
+  .description("Test skill readiness: env vars, system deps, and npm deps")
+  .action(async (skillArg: string | undefined, options: { json: boolean }) => {
+    // Determine which skills to test
+    let skillNames: string[];
+    if (skillArg) {
+      const registryName = skillArg.startsWith("skill-") ? skillArg.replace("skill-", "") : skillArg;
+      const skill = getSkill(registryName);
+      if (!skill) {
+        if (options.json) {
+          console.log(JSON.stringify({ error: `Skill '${skillArg}' not found` }));
+        } else {
+          console.error(chalk.red(`Skill '${skillArg}' not found`));
+        }
+        process.exitCode = 1;
+        return;
+      }
+      skillNames = [registryName];
+    } else {
+      skillNames = getInstalledSkills();
+      if (skillNames.length === 0) {
+        if (options.json) {
+          console.log(JSON.stringify([]));
+        } else {
+          console.log(chalk.dim("No skills installed. Run: skills install <name>"));
+        }
+        return;
+      }
+    }
+
+    // Run tests for each skill
+    const results: Array<{
+      skill: string;
+      envVars: Array<{ name: string; set: boolean }>;
+      systemDeps: Array<{ name: string; available: boolean }>;
+      npmDeps: Array<{ name: string; version: string }>;
+      ready: boolean;
+    }> = [];
+
+    for (const name of skillNames) {
+      const reqs = getSkillRequirements(name);
+
+      // Check env vars
+      const envVars = (reqs?.envVars ?? []).map((v) => ({
+        name: v,
+        set: !!process.env[v],
+      }));
+
+      // Check system deps via `which`
+      const systemDeps = (reqs?.systemDeps ?? []).map((dep) => {
+        const proc = Bun.spawnSync(["which", dep]);
+        return { name: dep, available: proc.exitCode === 0 };
+      });
+
+      // npm deps from package.json
+      const npmDeps = Object.entries(reqs?.dependencies ?? {}).map(([pkgName, version]) => ({
+        name: pkgName,
+        version: version as string,
+      }));
+
+      const ready =
+        envVars.every((v) => v.set) &&
+        systemDeps.every((d) => d.available);
+
+      results.push({ skill: name, envVars, systemDeps, npmDeps, ready });
+    }
+
+    if (options.json) {
+      console.log(JSON.stringify(results, null, 2));
+      return;
+    }
+
+    const allReady = results.every((r) => r.ready);
+    console.log(chalk.bold(`\nSkills Test (${results.length} skill${results.length === 1 ? "" : "s"}):\n`));
+
+    for (const result of results) {
+      const readyLabel = result.ready ? chalk.green("ready") : chalk.red("not ready");
+      console.log(chalk.bold(`  ${result.skill}`) + chalk.dim(` [${readyLabel}]`));
+
+      if (result.envVars.length === 0 && result.systemDeps.length === 0) {
+        console.log(chalk.dim("    No requirements"));
+      }
+
+      for (const v of result.envVars) {
+        if (v.set) {
+          console.log(`    ${chalk.green("\u2713")} ${v.name}`);
+        } else {
+          console.log(`    ${chalk.red("\u2717")} ${v.name} ${chalk.dim("(missing)")}`);
+        }
+      }
+
+      for (const dep of result.systemDeps) {
+        if (dep.available) {
+          console.log(`    ${chalk.green("\u2713")} ${dep.name} ${chalk.dim("(system)")}`);
+        } else {
+          console.log(`    ${chalk.red("\u2717")} ${dep.name} ${chalk.dim("(not installed)")}`);
+        }
+      }
+
+      if (result.npmDeps.length > 0) {
+        console.log(chalk.dim(`    npm: ${result.npmDeps.map((d) => d.name).join(", ")}`));
+      }
+    }
+
+    console.log();
+    if (allReady) {
+      console.log(chalk.green(`All ${results.length} skill(s) ready`));
+    } else {
+      const notReady = results.filter((r) => !r.ready).length;
+      console.log(chalk.yellow(`${notReady} skill(s) not ready`));
+    }
+
+    if (!allReady) {
+      process.exitCode = 1;
     }
   });
 

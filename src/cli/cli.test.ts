@@ -333,6 +333,87 @@ describe("CLI", () => {
     });
   });
 
+  describe("install --category", () => {
+    const { mkdtempSync, rmSync } = require("fs");
+    const { tmpdir } = require("os");
+
+    async function runCliInDir(args: string[], cwd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+      const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", ...args], {
+        stdout: "pipe",
+        stderr: "pipe",
+        cwd,
+        env: { ...process.env, NO_COLOR: "1" },
+      });
+      const stdout = await new Response(proc.stdout).text();
+      const stderr = await new Response(proc.stderr).text();
+      const exitCode = await proc.exited;
+      return { stdout, stderr, exitCode };
+    }
+
+    test("installs all skills in a category with --json", async () => {
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-install-cat-"));
+      try {
+        const { stdout, exitCode } = await runCliInDir(
+          ["install", "--category", "Event Management", "--json"],
+          tmpDir
+        );
+        expect(exitCode).toBe(0);
+        const data = JSON.parse(stdout);
+        expect(Array.isArray(data)).toBe(true);
+        expect(data.length).toBe(4);
+        for (const r of data) {
+          expect(r).toHaveProperty("success");
+          expect(r).toHaveProperty("skill");
+        }
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("category matching is case-insensitive", async () => {
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-install-cat-ci-"));
+      try {
+        const { stdout, exitCode } = await runCliInDir(
+          ["install", "--category", "event management", "--json"],
+          tmpDir
+        );
+        expect(exitCode).toBe(0);
+        const data = JSON.parse(stdout);
+        expect(Array.isArray(data)).toBe(true);
+        expect(data.length).toBe(4);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("errors for unknown category", async () => {
+      const { stderr, exitCode } = await runCli(["install", "--category", "Fake Category"]);
+      expect(stderr).toContain("Unknown category");
+      expect(exitCode).not.toBe(0);
+    });
+
+    test("errors when no skills and no --category provided", async () => {
+      const { stderr, exitCode } = await runCli(["install"]);
+      expect(stderr).toContain("missing required argument");
+      expect(exitCode).not.toBe(0);
+    });
+
+    test("shows category header message before installing", async () => {
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-install-cat-header-"));
+      try {
+        const { stdout, exitCode } = await runCliInDir(
+          ["install", "--category", "Event Management"],
+          tmpDir
+        );
+        expect(exitCode).toBe(0);
+        expect(stdout).toContain("4 skills");
+        expect(stdout).toContain("Event Management");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe("install progress", () => {
     test("shows progress for multiple skills", async () => {
       const { stdout } = await runCli(["install", "nonexistent-aaa-111", "nonexistent-bbb-222"]);
@@ -553,6 +634,109 @@ describe("CLI", () => {
     });
   });
 
+  describe("--brief flag", () => {
+    test("list --brief outputs one line per skill with name and description on same line", async () => {
+      const { stdout, exitCode } = await runCli(["list", "--brief"]);
+      expect(exitCode).toBe(0);
+      const lines = stdout.trim().split("\n").filter(Boolean);
+      // Each line should contain name \u2014 description [category]
+      expect(lines.length).toBe(202);
+      for (const line of lines) {
+        expect(line).toContain(" \u2014 ");
+        expect(line).toMatch(/\[.+\]$/);
+      }
+    });
+
+    test("list --brief output has fewer lines than default list output", async () => {
+      const { stdout: brief } = await runCli(["list", "--brief"]);
+      const { stdout: normal } = await runCli(["list"]);
+      const briefLines = brief.trim().split("\n").filter(Boolean).length;
+      const normalLines = normal.trim().split("\n").filter(Boolean).length;
+      expect(briefLines).toBeLessThan(normalLines);
+    });
+
+    test("list --brief with --category shows compact results", async () => {
+      const { stdout, exitCode } = await runCli(["list", "--brief", "--category", "Health & Wellness"]);
+      expect(exitCode).toBe(0);
+      const lines = stdout.trim().split("\n").filter(Boolean);
+      expect(lines.length).toBeGreaterThan(0);
+      for (const line of lines) {
+        expect(line).toContain(" \u2014 ");
+        expect(line).toContain("[Health & Wellness]");
+      }
+    });
+
+    test("list --brief with --tags shows compact results", async () => {
+      const { stdout, exitCode } = await runCli(["list", "--brief", "--tags", "api"]);
+      expect(exitCode).toBe(0);
+      const lines = stdout.trim().split("\n").filter(Boolean);
+      expect(lines.length).toBeGreaterThan(0);
+      for (const line of lines) {
+        expect(line).toContain(" \u2014 ");
+        expect(line).toMatch(/\[.+\]$/);
+      }
+    });
+
+    test("list --brief --json uses json (--json wins)", async () => {
+      const { stdout, exitCode } = await runCli(["list", "--brief", "--json"]);
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(Array.isArray(data)).toBe(true);
+    });
+
+    test("search image --brief shows compact results", async () => {
+      const { stdout, exitCode } = await runCli(["search", "image", "--brief"]);
+      expect(exitCode).toBe(0);
+      const lines = stdout.trim().split("\n").filter(Boolean);
+      expect(lines.length).toBeGreaterThan(0);
+      for (const line of lines) {
+        expect(line).toContain(" \u2014 ");
+        expect(line).toMatch(/\[.+\]$/);
+      }
+    });
+
+    test("search --brief output has fewer lines than default search output", async () => {
+      const { stdout: brief } = await runCli(["search", "image", "--brief"]);
+      const { stdout: normal } = await runCli(["search", "image"]);
+      const briefLines = brief.trim().split("\n").filter(Boolean).length;
+      const normalLines = normal.trim().split("\n").filter(Boolean).length;
+      expect(briefLines).toBeLessThan(normalLines);
+    });
+
+    test("search --brief --json uses json (--json wins)", async () => {
+      const { stdout, exitCode } = await runCli(["search", "image", "--brief", "--json"]);
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(Array.isArray(data)).toBe(true);
+    });
+
+    test("info image --brief shows single line", async () => {
+      const { stdout, exitCode } = await runCli(["info", "image", "--brief"]);
+      expect(exitCode).toBe(0);
+      const lines = stdout.trim().split("\n").filter(Boolean);
+      expect(lines.length).toBe(1);
+      expect(lines[0]).toContain("image");
+      expect(lines[0]).toContain(" \u2014 ");
+      expect(lines[0]).toContain("[");
+      expect(lines[0]).toContain("(tags:");
+    });
+
+    test("info --brief output has fewer lines than default info output", async () => {
+      const { stdout: brief } = await runCli(["info", "image", "--brief"]);
+      const { stdout: normal } = await runCli(["info", "image"]);
+      const briefLines = brief.trim().split("\n").filter(Boolean).length;
+      const normalLines = normal.trim().split("\n").filter(Boolean).length;
+      expect(briefLines).toBeLessThan(normalLines);
+    });
+
+    test("info --brief --json uses json (--json wins)", async () => {
+      const { stdout, exitCode } = await runCli(["info", "image", "--brief", "--json"]);
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(data.name).toBe("image");
+    });
+  });
+
   describe("init --for", () => {
     const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = require("fs");
     const { tmpdir } = require("os");
@@ -644,6 +828,419 @@ describe("CLI", () => {
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe("export", () => {
+    test("outputs valid JSON with version, skills, and timestamp", async () => {
+      const { stdout, exitCode } = await runCli(["export"]);
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(data).toHaveProperty("version", 1);
+      expect(data).toHaveProperty("skills");
+      expect(data).toHaveProperty("timestamp");
+      expect(Array.isArray(data.skills)).toBe(true);
+      // timestamp should be a valid ISO date string
+      expect(new Date(data.timestamp).toISOString()).toBe(data.timestamp);
+    });
+
+    test("skills list comes from installed skills (array of strings)", async () => {
+      const { stdout } = await runCli(["export"]);
+      const data = JSON.parse(stdout);
+      for (const skill of data.skills) {
+        expect(typeof skill).toBe("string");
+      }
+    });
+
+    test("shows help for export command", async () => {
+      const { stdout } = await runCli(["export", "--help"]);
+      expect(stdout).toContain("Export installed skills");
+    });
+  });
+
+  describe("auth", () => {
+    const { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync: writeFsSync } = require("fs");
+    const { tmpdir } = require("os");
+
+    async function runCliInDir(args: string[], cwd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+      const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", ...args], {
+        stdout: "pipe",
+        stderr: "pipe",
+        cwd,
+        env: { ...process.env, NO_COLOR: "1" },
+      });
+      const stdout = await new Response(proc.stdout).text();
+      const stderr = await new Response(proc.stderr).text();
+      const exitCode = await proc.exited;
+      return { stdout, stderr, exitCode };
+    }
+
+    test("shows env var status for a skill", async () => {
+      const { stdout, exitCode } = await runCli(["auth", "image"]);
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("Auth status for image");
+      expect(stdout).toContain("OPENAI_API_KEY");
+    });
+
+    test("shows set/missing markers for env vars", async () => {
+      const { stdout } = await runCli(["auth", "image"]);
+      const hasStatus = stdout.includes("set") || stdout.includes("missing");
+      expect(hasStatus).toBe(true);
+    });
+
+    test("outputs JSON with --json flag", async () => {
+      const { stdout, exitCode } = await runCli(["auth", "image", "--json"]);
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(data.skill).toBe("image");
+      expect(Array.isArray(data.envVars)).toBe(true);
+      expect(data.envVars.length).toBeGreaterThan(0);
+      expect(data.envVars[0]).toHaveProperty("name");
+      expect(data.envVars[0]).toHaveProperty("set");
+      expect(typeof data.envVars[0].set).toBe("boolean");
+    });
+
+    test("JSON output contains OPENAI_API_KEY for image skill", async () => {
+      const { stdout } = await runCli(["auth", "image", "--json"]);
+      const data = JSON.parse(stdout);
+      const openaiVar = data.envVars.find((v: { name: string }) => v.name === "OPENAI_API_KEY");
+      expect(openaiVar).toBeDefined();
+    });
+
+    test("fails for nonexistent skill", async () => {
+      const { stderr, exitCode } = await runCli(["auth", "nonexistent-xyz"]);
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("not found");
+    });
+
+    test("--set creates .env file with KEY=VALUE", async () => {
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-auth-set-"));
+      try {
+        const { stdout, exitCode } = await runCliInDir(["auth", "--set", "TEST_VAR=hello"], tmpDir);
+        expect(exitCode).toBe(0);
+        expect(stdout).toContain("TEST_VAR");
+
+        const envPath = require("path").join(tmpDir, ".env");
+        expect(existsSync(envPath)).toBe(true);
+        const content = readFileSync(envPath, "utf-8");
+        expect(content).toContain("TEST_VAR=hello");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("--set updates existing key in .env", async () => {
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-auth-update-"));
+      try {
+        const envPath = require("path").join(tmpDir, ".env");
+        writeFsSync(envPath, "TEST_VAR=old\nOTHER=keep\n");
+
+        await runCliInDir(["auth", "--set", "TEST_VAR=new"], tmpDir);
+
+        const content = readFileSync(envPath, "utf-8");
+        expect(content).toContain("TEST_VAR=new");
+        expect(content).not.toContain("TEST_VAR=old");
+        expect(content).toContain("OTHER=keep");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("--set rejects invalid format (no equals sign)", async () => {
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-auth-bad-set-"));
+      try {
+        const { stderr, exitCode } = await runCliInDir(["auth", "--set", "INVALID_NO_EQUALS"], tmpDir);
+        expect(exitCode).not.toBe(0);
+        expect(stderr).toContain("Invalid format");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("no args shows all installed skills or empty message", async () => {
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-auth-all-"));
+      try {
+        const { stdout, exitCode } = await runCliInDir(["auth"], tmpDir);
+        expect(exitCode).toBe(0);
+        const hasInstalled = stdout.includes("Auth status");
+        const hasNone = stdout.includes("No skills installed");
+        expect(hasInstalled || hasNone).toBe(true);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("no args with --json returns array", async () => {
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-auth-all-json-"));
+      try {
+        const { stdout, exitCode } = await runCliInDir(["auth", "--json"], tmpDir);
+        expect(exitCode).toBe(0);
+        const data = JSON.parse(stdout);
+        expect(Array.isArray(data)).toBe(true);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("env var set field reflects actual environment", async () => {
+      const { stdout } = await runCli(["auth", "image", "--json"]);
+      const data = JSON.parse(stdout);
+      for (const v of data.envVars) {
+        const expectedSet = !!process.env[v.name];
+        expect(v.set).toBe(expectedSet);
+      }
+    });
+  });
+
+  describe("import", () => {
+    const { mkdtempSync, writeFileSync, rmSync } = require("fs");
+    const { tmpdir } = require("os");
+
+    test("shows help for import command", async () => {
+      const { stdout } = await runCli(["import", "--help"]);
+      expect(stdout).toContain("import");
+      expect(stdout).toContain("--dry-run");
+      expect(stdout).toContain("--for");
+      expect(stdout).toContain("--scope");
+    });
+
+    test("fails when file does not exist", async () => {
+      const { stderr, exitCode } = await runCli(["import", "/tmp/does-not-exist-xyz.json"]);
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("not found");
+    });
+
+    test("fails for invalid JSON", async () => {
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-import-test-"));
+      const filePath = require("path").join(tmpDir, "bad.json");
+      try {
+        writeFileSync(filePath, "not json at all");
+        const { stderr, exitCode } = await runCli(["import", filePath]);
+        expect(exitCode).not.toBe(0);
+        expect(stderr).toContain("Invalid JSON");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("fails for JSON missing skills array", async () => {
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-import-test-"));
+      const filePath = require("path").join(tmpDir, "bad.json");
+      try {
+        writeFileSync(filePath, JSON.stringify({ version: 1 }));
+        const { stderr, exitCode } = await runCli(["import", filePath]);
+        expect(exitCode).not.toBe(0);
+        expect(stderr).toContain("Invalid format");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("--dry-run shows what would be installed without installing", async () => {
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-import-dryrun-"));
+      const filePath = require("path").join(tmpDir, "skills.json");
+      try {
+        const payload = { version: 1, skills: ["image", "deepresearch"], timestamp: new Date().toISOString() };
+        writeFileSync(filePath, JSON.stringify(payload));
+        const { stdout, exitCode } = await runCli(["import", filePath, "--dry-run"]);
+        expect(exitCode).toBe(0);
+        expect(stdout).toContain("[dry-run]");
+        expect(stdout).toContain("image");
+        expect(stdout).toContain("deepresearch");
+        // Should show [1/2] and [2/2]
+        expect(stdout).toContain("[1/2]");
+        expect(stdout).toContain("[2/2]");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("--dry-run with --json outputs structured result", async () => {
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-import-dryrun-json-"));
+      const filePath = require("path").join(tmpDir, "skills.json");
+      try {
+        const payload = { version: 1, skills: ["image"], timestamp: new Date().toISOString() };
+        writeFileSync(filePath, JSON.stringify(payload));
+        const { stdout, exitCode } = await runCli(["import", filePath, "--dry-run", "--json"]);
+        expect(exitCode).toBe(0);
+        const data = JSON.parse(stdout);
+        expect(data.dryRun).toBe(true);
+        expect(data.skills).toContain("image");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("import with empty skills array reports 0 imported", async () => {
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-import-empty-"));
+      const filePath = require("path").join(tmpDir, "skills.json");
+      try {
+        const payload = { version: 1, skills: [], timestamp: new Date().toISOString() };
+        writeFileSync(filePath, JSON.stringify(payload));
+        const { stdout, exitCode } = await runCli(["import", filePath]);
+        expect(exitCode).toBe(0);
+        expect(stdout).toContain("No skills to import");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("import nonexistent skill with --json shows failure in results", async () => {
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-import-fail-"));
+      const filePath = require("path").join(tmpDir, "skills.json");
+      try {
+        const payload = { version: 1, skills: ["nonexistent-xyz-999"], timestamp: new Date().toISOString() };
+        writeFileSync(filePath, JSON.stringify(payload));
+        const { stdout, exitCode } = await runCli(["import", filePath, "--json"]);
+        expect(exitCode).not.toBe(0);
+        const data = JSON.parse(stdout);
+        expect(data).toHaveProperty("imported", 0);
+        expect(data).toHaveProperty("total", 1);
+        expect(Array.isArray(data.results)).toBe(true);
+        expect(data.results[0].success).toBe(false);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("export then import --dry-run round-trips cleanly", async () => {
+      const { stdout: exportOut } = await runCli(["export"]);
+      const exported = JSON.parse(exportOut);
+
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-roundtrip-"));
+      const filePath = require("path").join(tmpDir, "exported.json");
+      try {
+        writeFileSync(filePath, exportOut);
+        const { stdout, exitCode } = await runCli(["import", filePath, "--dry-run", "--json"]);
+        expect(exitCode).toBe(0);
+        const data = JSON.parse(stdout);
+        expect(data.dryRun).toBe(true);
+        // skills in dry-run should match exported skills
+        expect(data.skills).toEqual(exported.skills);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("whoami", () => {
+    test("outputs version and working directory", async () => {
+      const { stdout, exitCode } = await runCli(["whoami"]);
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain(pkg.version);
+      expect(stdout).toContain(process.cwd());
+    });
+
+    test("outputs agent configurations section", async () => {
+      const { stdout, exitCode } = await runCli(["whoami"]);
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("Agent configurations");
+      expect(stdout).toContain("claude");
+      expect(stdout).toContain("codex");
+      expect(stdout).toContain("gemini");
+    });
+
+    test("--json returns valid JSON with expected fields", async () => {
+      const { stdout, exitCode } = await runCli(["whoami", "--json"]);
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(data).toHaveProperty("version", pkg.version);
+      expect(data).toHaveProperty("cwd");
+      expect(data).toHaveProperty("skillsDir");
+      expect(data).toHaveProperty("installedCount");
+      expect(data).toHaveProperty("installed");
+      expect(data).toHaveProperty("agents");
+      expect(Array.isArray(data.installed)).toBe(true);
+      expect(Array.isArray(data.agents)).toBe(true);
+      expect(data.agents.length).toBe(3);
+      for (const agent of data.agents) {
+        expect(agent).toHaveProperty("agent");
+        expect(agent).toHaveProperty("path");
+        expect(agent).toHaveProperty("exists");
+        expect(agent).toHaveProperty("skillCount");
+      }
+    });
+
+    test("--json cwd is a non-empty string", async () => {
+      const { stdout } = await runCli(["whoami", "--json"]);
+      const data = JSON.parse(stdout);
+      expect(typeof data.cwd).toBe("string");
+      expect(data.cwd.length).toBeGreaterThan(0);
+    });
+
+    test("shows help for whoami command", async () => {
+      const { stdout } = await runCli(["whoami", "--help"]);
+      expect(stdout).toContain("setup summary");
+    });
+  });
+
+  describe("test", () => {
+    test("handles missing skill gracefully", async () => {
+      const { stderr, exitCode } = await runCli(["test", "nonexistent-xyz"]);
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("not found");
+    });
+
+    test("missing skill with --json returns error object", async () => {
+      const { stdout, exitCode } = await runCli(["test", "nonexistent-xyz", "--json"]);
+      expect(exitCode).not.toBe(0);
+      const data = JSON.parse(stdout);
+      expect(data).toHaveProperty("error");
+      expect(data.error).toContain("not found");
+    });
+
+    test("--json with no installed skills returns empty array", async () => {
+      const { mkdtempSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-test-empty-"));
+      try {
+        const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", "test", "--json"], {
+          stdout: "pipe",
+          stderr: "pipe",
+          cwd: tmpDir,
+          env: { ...process.env, NO_COLOR: "1" },
+        });
+        const stdout = await new Response(proc.stdout).text();
+        const exitCode = await proc.exited;
+        expect(exitCode).toBe(0);
+        const data = JSON.parse(stdout);
+        expect(Array.isArray(data)).toBe(true);
+        expect(data.length).toBe(0);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("testing a valid skill returns correct JSON structure", async () => {
+      const { stdout } = await runCli(["test", "image", "--json"]);
+      // exit code may be non-zero if env vars are missing, that's fine
+      const data = JSON.parse(stdout);
+      expect(Array.isArray(data)).toBe(true);
+      expect(data.length).toBe(1);
+      const entry = data[0];
+      expect(entry).toHaveProperty("skill", "image");
+      expect(entry).toHaveProperty("envVars");
+      expect(entry).toHaveProperty("systemDeps");
+      expect(entry).toHaveProperty("npmDeps");
+      expect(entry).toHaveProperty("ready");
+      expect(Array.isArray(entry.envVars)).toBe(true);
+      expect(typeof entry.ready).toBe("boolean");
+    });
+
+    test("each envVars entry has name and set fields", async () => {
+      const { stdout } = await runCli(["test", "image", "--json"]);
+      const data = JSON.parse(stdout);
+      for (const v of data[0].envVars) {
+        expect(v).toHaveProperty("name");
+        expect(v).toHaveProperty("set");
+        expect(typeof v.name).toBe("string");
+        expect(typeof v.set).toBe("boolean");
+      }
+    });
+
+    test("shows help for test command", async () => {
+      const { stdout } = await runCli(["test", "--help"]);
+      expect(stdout).toContain("readiness");
     });
   });
 });

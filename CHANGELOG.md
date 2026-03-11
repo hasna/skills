@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.8] - 2026-03-11
+
+### Added
+- `skills install --category <cat>` — bulk install all skills in a category
+- `skills export` / `skills import` — portable skill configs across machines
+- `skills whoami` — setup summary (installed skills, agent configs, env vars, version)
+- `skills test [name]` — verify env vars and system deps are ready
+- `skills auth [name]` — check and set env vars per skill (`--set KEY=VALUE`)
+- `--brief` flag on list, search, info for compact one-line-per-skill output
+- MCP tools: `install_category`, `export_skills`, `import_skills`, `whoami`
+- REST API: `POST /api/skills/install-category`, `GET /api/export`, `POST /api/import`
+- Dashboard: keyboard shortcuts (/, j/k, Enter, Escape, ? help overlay)
+- Dashboard: bulk install/remove with checkbox selection and floating action bar
+- Dashboard: enhanced detail panel (env var status, system deps, Copy MCP config, agent install buttons)
+- 365 tests across 10 files
+
 ## [0.1.6] - 2026-03-11
 
 ### Added
