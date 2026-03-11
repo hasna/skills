@@ -21,6 +21,7 @@ import {
   EyeIcon,
   DownloadIcon,
   TrashIcon,
+  XIcon,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -76,6 +77,11 @@ interface SkillsTableProps {
   onInstall: (name: string) => void;
   onRemove: (name: string) => void;
   onBulkInstall: (names: string[]) => void;
+  onBulkRemove: (names: string[]) => void;
+  selectedIndex: number;
+  onSelectedIndexChange: (index: number) => void;
+  onVisibleRowsChange: (skills: SkillWithStatus[], count: number) => void;
+  searchInputRef: React.RefObject<HTMLInputElement | null>;
 }
 
 export function SkillsTable({
@@ -84,6 +90,11 @@ export function SkillsTable({
   onInstall,
   onRemove,
   onBulkInstall,
+  onBulkRemove,
+  selectedIndex,
+  onSelectedIndexChange,
+  onVisibleRowsChange,
+  searchInputRef,
 }: SkillsTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] =
@@ -293,12 +304,23 @@ export function SkillsTable({
     },
   });
 
-  const selectedNotInstalled = React.useMemo(() => {
-    return table
-      .getSelectedRowModel()
-      .rows.filter((row) => !row.original.installed)
-      .map((row) => row.original.name);
+  const selectedRows = React.useMemo(() => {
+    return table.getSelectedRowModel().rows;
   }, [table, rowSelection]);
+
+  const selectedNotInstalled = React.useMemo(() => {
+    return selectedRows
+      .filter((row) => !row.original.installed)
+      .map((row) => row.original.name);
+  }, [selectedRows]);
+
+  const selectedInstalled = React.useMemo(() => {
+    return selectedRows
+      .filter((row) => row.original.installed)
+      .map((row) => row.original.name);
+  }, [selectedRows]);
+
+  const totalSelected = selectedRows.length;
 
   function handleBulkInstall() {
     if (selectedNotInstalled.length > 0) {
@@ -307,11 +329,23 @@ export function SkillsTable({
     }
   }
 
+  function handleBulkRemove() {
+    if (selectedInstalled.length > 0) {
+      onBulkRemove(selectedInstalled);
+      setRowSelection({});
+    }
+  }
+
+  function handleClearSelection() {
+    setRowSelection({});
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
         <Input
-          placeholder="Search skills..."
+          ref={searchInputRef}
+          placeholder="Search skills... (/)"
           value={globalFilter}
           onChange={(e) => setGlobalFilter(e.target.value)}
           className="max-w-sm"
@@ -328,12 +362,6 @@ export function SkillsTable({
             </option>
           ))}
         </select>
-        {selectedNotInstalled.length > 0 && (
-          <Button size="sm" onClick={handleBulkInstall}>
-            <DownloadIcon className="size-3.5" />
-            Install Selected ({selectedNotInstalled.length})
-          </Button>
-        )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" className="ml-auto">
@@ -379,13 +407,20 @@ export function SkillsTable({
           </TableHeader>
           <TableBody>
             {table.getRowModel().rows?.length ? (
-              table.getRowModel().rows.map((row) => (
+              table.getRowModel().rows.map((row, rowIndex) => (
                 <TableRow
                   key={row.id}
                   data-state={row.getIsSelected() && "selected"}
-                  className={
-                    !row.original.installed ? "opacity-60" : undefined
-                  }
+                  data-keyboard-selected={rowIndex === selectedIndex ? "true" : undefined}
+                  className={[
+                    !row.original.installed ? "opacity-60" : "",
+                    rowIndex === selectedIndex
+                      ? "ring-2 ring-inset ring-primary/50 bg-primary/5"
+                      : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ") || undefined}
+                  onClick={() => onSelectedIndexChange(rowIndex)}
                 >
                   {row.getVisibleCells().map((cell) => (
                     <TableCell key={cell.id}>
@@ -440,6 +475,39 @@ export function SkillsTable({
           </Button>
         </div>
       </div>
+
+      {/* Floating bulk action bar — appears when rows are selected */}
+      {totalSelected > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded-xl border bg-background/95 px-4 py-2.5 shadow-xl backdrop-blur-sm">
+          <span className="text-sm font-medium text-muted-foreground mr-1">
+            {totalSelected} selected
+          </span>
+          {selectedNotInstalled.length > 0 && (
+            <Button size="sm" onClick={handleBulkInstall}>
+              <DownloadIcon className="size-3.5" />
+              Install {selectedNotInstalled.length}
+            </Button>
+          )}
+          {selectedInstalled.length > 0 && (
+            <Button
+              size="sm"
+              variant="destructive"
+              onClick={handleBulkRemove}
+            >
+              <TrashIcon className="size-3.5" />
+              Remove {selectedInstalled.length}
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={handleClearSelection}
+          >
+            <XIcon className="size-3.5" />
+            Clear
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

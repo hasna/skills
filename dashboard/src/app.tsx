@@ -5,6 +5,7 @@ import { StatsCards } from "@/components/stats-cards";
 import { SkillsTable } from "@/components/skills-table";
 import { SkillDetailDialog } from "@/components/skill-detail-dialog";
 import { InstallDialog, type InstallOptions } from "@/components/install-dialog";
+import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
 import { Button } from "@/components/ui/button";
 import type { SkillWithStatus } from "@/types";
 
@@ -21,6 +22,11 @@ export function App() {
   const [updating, setUpdating] = React.useState(false);
   const [installDialogOpen, setInstallDialogOpen] = React.useState(false);
   const [installDialogSkills, setInstallDialogSkills] = React.useState<string[]>([]);
+
+  // Keyboard navigation state
+  const [selectedIndex, setSelectedIndex] = React.useState(-1);
+  const [visibleSkills, setVisibleSkills] = React.useState<SkillWithStatus[]>([]);
+  const searchInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const loadVersion = React.useCallback(async () => {
     try {
@@ -56,6 +62,18 @@ export function App() {
   function handleViewDetails(skill: SkillWithStatus) {
     setSelected(skill);
     setDialogOpen(true);
+  }
+
+  function handleKeyboardEnter() {
+    if (selectedIndex >= 0 && selectedIndex < visibleSkills.length) {
+      handleViewDetails(visibleSkills[selectedIndex]);
+    }
+  }
+
+  function handleVisibleRowsChange(skills: SkillWithStatus[], _count: number) {
+    setVisibleSkills(skills);
+    // Clamp selectedIndex when rows shrink (e.g. after filtering)
+    setSelectedIndex((prev) => (prev >= skills.length ? Math.max(0, skills.length - 1) : prev));
   }
 
   function openInstallDialog(names: string[]) {
@@ -105,6 +123,23 @@ export function App() {
 
   function handleBulkInstall(names: string[]) {
     openInstallDialog(names);
+  }
+
+  async function handleBulkRemove(names: string[]) {
+    for (const name of names) {
+      try {
+        const res = await fetch(`/api/skills/${name}/remove`, { method: "POST" });
+        const data = await res.json();
+        if (data.success) {
+          showToast(`Removed ${name}`, "success");
+        } else {
+          showToast(data.error || `Failed to remove ${name}`, "error");
+        }
+      } catch {
+        showToast(`Failed to remove ${name}`, "error");
+      }
+    }
+    loadSkills();
   }
 
   async function handleSelfUpdate() {
@@ -185,6 +220,11 @@ export function App() {
           onInstall={handleInstall}
           onRemove={handleRemove}
           onBulkInstall={handleBulkInstall}
+          onBulkRemove={handleBulkRemove}
+          selectedIndex={selectedIndex}
+          onSelectedIndexChange={setSelectedIndex}
+          onVisibleRowsChange={handleVisibleRowsChange}
+          searchInputRef={searchInputRef}
         />
       </main>
 
@@ -203,6 +243,15 @@ export function App() {
         onOpenChange={setInstallDialogOpen}
         skillNames={installDialogSkills}
         onConfirm={handleInstallConfirm}
+      />
+
+      {/* Keyboard Shortcuts */}
+      <KeyboardShortcuts
+        rowCount={visibleSkills.length}
+        selectedIndex={selectedIndex}
+        onSelectedIndexChange={setSelectedIndex}
+        onEnter={handleKeyboardEnter}
+        searchInputRef={searchInputRef}
       />
 
       {/* Toast */}

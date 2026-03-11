@@ -6,6 +6,7 @@ export interface SkillWithStatus {
   tags: string[];
   installed: boolean;
   envVars: string[];
+  envVarsSet: string[];
   systemDeps: string[];
   cliCommand: string | null;
 }

@@ -8,6 +8,7 @@ import {
   TerminalIcon,
   KeyIcon,
   PackageIcon,
+  ServerIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +21,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { SkillWithStatus } from "@/types";
+
+const MCP_CONFIG = JSON.stringify(
+  { mcpServers: { skills: { command: "skills-mcp" } } },
+  null,
+  2
+);
 
 interface SkillDetailDialogProps {
   skill: SkillWithStatus | null;
@@ -39,6 +46,8 @@ export function SkillDetailDialog({
   const [docs, setDocs] = React.useState<string | null>(null);
   const [loadingDocs, setLoadingDocs] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
+  const [copiedMcp, setCopiedMcp] = React.useState(false);
+  const [agentInstalling, setAgentInstalling] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (open && skill) {
@@ -62,6 +71,28 @@ export function SkillDetailDialog({
       setTimeout(() => setCopied(false), 2000);
     });
   }
+
+  function handleCopyMcp() {
+    navigator.clipboard.writeText(MCP_CONFIG).then(() => {
+      setCopiedMcp(true);
+      setTimeout(() => setCopiedMcp(false), 2000);
+    });
+  }
+
+  async function handleInstallForAgent(agent: "claude" | "codex" | "gemini") {
+    setAgentInstalling(agent);
+    try {
+      await fetch(`/api/skills/${skill.name}/install`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ for: agent }),
+      });
+    } finally {
+      setAgentInstalling(null);
+    }
+  }
+
+  const envVarsSetSet = new Set(skill.envVarsSet ?? []);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -112,6 +143,53 @@ export function SkillDetailDialog({
             </div>
           </div>
 
+          {/* MCP Config */}
+          <div className="space-y-1.5">
+            <p className="text-sm font-medium flex items-center gap-1.5">
+              <ServerIcon className="size-3.5" />
+              MCP Configuration
+            </p>
+            <div className="flex items-start gap-2">
+              <pre className="flex-1 rounded border bg-muted px-3 py-2 text-xs font-mono text-muted-foreground whitespace-pre">
+                {MCP_CONFIG}
+              </pre>
+              <Button variant="outline" size="sm" onClick={handleCopyMcp} className="shrink-0">
+                {copiedMcp ? (
+                  <CheckIcon className="size-3.5 text-green-500" />
+                ) : (
+                  <CopyIcon className="size-3.5" />
+                )}
+                {copiedMcp ? "Copied" : "Copy"}
+              </Button>
+            </div>
+          </div>
+
+          {/* Install for agent */}
+          <div className="space-y-1.5">
+            <p className="text-sm font-medium flex items-center gap-1.5">
+              <DownloadIcon className="size-3.5" />
+              Install for Agent
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {(["claude", "codex", "gemini"] as const).map((agent) => (
+                <Button
+                  key={agent}
+                  variant="outline"
+                  size="sm"
+                  disabled={agentInstalling === agent}
+                  onClick={() => handleInstallForAgent(agent)}
+                >
+                  {agentInstalling === agent ? (
+                    <CheckIcon className="size-3.5 animate-spin" />
+                  ) : (
+                    <DownloadIcon className="size-3.5" />
+                  )}
+                  Install for {agent.charAt(0).toUpperCase() + agent.slice(1)}
+                </Button>
+              ))}
+            </div>
+          </div>
+
           {/* Environment Variables */}
           {skill.envVars.length > 0 && (
             <div className="space-y-1.5">
@@ -119,16 +197,27 @@ export function SkillDetailDialog({
                 <KeyIcon className="size-3.5" />
                 Environment Variables
               </p>
-              <div className="space-y-1">
+              <div className="flex flex-wrap gap-1.5">
                 {skill.envVars.map((v) => (
-                  <code
+                  <Badge
                     key={v}
-                    className="block rounded border bg-muted px-2 py-1 text-xs font-mono text-muted-foreground"
+                    variant="outline"
+                    className={`text-xs font-mono ${
+                      envVarsSetSet.has(v)
+                        ? "border-green-500 bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300"
+                        : "border-red-400 bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300"
+                    }`}
                   >
+                    {envVarsSetSet.has(v) ? (
+                      <CheckIcon className="size-3 mr-1 inline-block" />
+                    ) : null}
                     {v}
-                  </code>
+                  </Badge>
                 ))}
               </div>
+              <p className="text-xs text-muted-foreground">
+                Green = set in environment, Red = not set
+              </p>
             </div>
           )}
 
