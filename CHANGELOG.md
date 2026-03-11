@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.6] - 2026-03-11
+
+### Added
+- Fuzzy search in `searchSkills()` — typos and abbreviations are tolerated (Levenshtein edit distance + prefix matching)
+- `skills tags` command lists all tags with skill counts (CLI, MCP `list_tags` tool, REST `GET /api/tags`)
+- `--tags` filter on `skills list` and `skills search` (comma-separated, OR logic, case-insensitive)
+- `skills init --for <agent>` smart init — detects project type from package.json and installs recommended skills
+- `detectProjectSkills()` function in skillinfo module (exported from library)
+- `getSkillsByTag()` and `getAllTags()` registry functions (exported from library)
+- 290 tests across 10 files
+
+## [0.1.5] - 2026-03-10
+
+### Changed
+- Server defaults to OS-assigned port (port 0) instead of hardcoded 3579 — prevents port conflicts
+- Self-update reads package name dynamically from package.json (forks work correctly)
+
+### Fixed
+- Removed hardcoded `@hasna/skills` in CLI and server self-update commands
+- Stale port reference in README
+
+### Added
+- Test coverage for server (version, agent install, self-update, no-dashboard), installer (dependency warnings), skillinfo (CLAUDE.md fallback)
+- 244 tests, 99% function coverage, 96% line coverage
+
 ## [0.1.2] - 2026-02-15
 
 ### Added

@@ -41,6 +41,12 @@
     "typescript",
     "bun",
     "claude",
+    "codex",
+    "gemini",
+    "mcp",
+    "model-context-protocol",
+    "open-source",
+    "skill-library",
     "automation"
   ],
   "author": "Hasna",

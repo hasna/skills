@@ -18,14 +18,15 @@ async function runCli(args: string[]): Promise<{ stdout: string; stderr: string;
 
 describe("CLI", () => {
   describe("help", () => {
-    test("shows non-interactive fallback with no arguments (non-TTY)", async () => {
+    test("outputs JSON skills list in non-TTY mode (no arguments)", async () => {
       const { stdout } = await runCli([]);
-      expect(stdout).toContain("Non-interactive environment detected");
-      expect(stdout).toContain("skills list");
-      expect(stdout).toContain("skills search");
-      expect(stdout).toContain("skills install");
-      expect(stdout).toContain("skills serve");
-      expect(stdout).toContain("skills --help");
+      const data = JSON.parse(stdout);
+      expect(Array.isArray(data)).toBe(true);
+      expect(data.length).toBe(202);
+      expect(data[0]).toHaveProperty("name");
+      expect(data[0]).toHaveProperty("description");
+      expect(data[0]).toHaveProperty("category");
+      expect(data[0]).toHaveProperty("tags");
     });
 
     test("shows help with --help", async () => {

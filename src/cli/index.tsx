@@ -52,13 +52,8 @@ program
   .description("Interactive skill browser (TUI)")
   .action(() => {
     if (!isTTY) {
-      console.log("Non-interactive environment detected. Use a subcommand:\n");
-      console.log("  skills list          List available skills");
-      console.log("  skills search <q>    Search skills");
-      console.log("  skills install <n>   Install a skill");
-      console.log("  skills info <n>      Show skill details");
-      console.log("  skills serve         Start web dashboard");
-      console.log("  skills --help        Show all commands\n");
+      // Non-interactive: output structured JSON for AI agents
+      console.log(JSON.stringify(SKILLS, null, 2));
       process.exit(0);
     }
     render(<App />);
@@ -955,8 +950,8 @@ program
   .action((shell: string) => {
     const subcommands = [
       "install", "list", "search", "info", "docs", "requires", "run",
-      "remove", "update", "categories", "mcp", "serve", "init",
-      "self-update", "completion", "outdated",
+      "remove", "update", "categories", "tags", "mcp", "serve", "init",
+      "self-update", "completion", "outdated", "doctor",
     ];
     const skillNames = SKILLS.map((s) => s.name);
     const categoryNames = CATEGORIES.map((c) => c);

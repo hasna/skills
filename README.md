@@ -10,7 +10,7 @@ npx @hasna/skills
 
 - **202 ready-to-use skills** across development, business, content, data, media, design, and more
 - **Interactive TUI** -- browse by category, search, and install from the terminal
-- **MCP server** -- 9 tools and 2 resources for AI agent integration
+- **MCP server** -- 10 tools and 2 resources for AI agent integration
 - **HTTP dashboard** -- React web UI to browse, search, install, and manage skills
 - **Agent-aware installs** -- copies SKILL.md to `~/.claude/skills/`, `~/.codex/skills/`, or `~/.gemini/skills/`
 - **Auto-generated index** -- `.skills/index.ts` is updated on every install for easy imports
@@ -52,6 +52,12 @@ skills run image --prompt "a sunset over mountains"
 
 # Start the web dashboard
 skills serve
+
+# Smart init: detect project type and install skills for Claude
+skills init --for claude
+
+# Browse skills by tag
+skills list --tags api,testing
 ```
 
 ## Categories
@@ -84,23 +90,24 @@ skills serve
 | `skills install <names...>` | `skills add` | Install one or more skills to `.skills/` |
 | `skills install <name> --for <agent>` | | Install SKILL.md for claude, codex, gemini, or all |
 | `skills remove <name>` | `skills rm` | Remove an installed skill |
-| `skills list` | `skills ls` | List all available skills |
+| `skills list` | `skills ls` | List all available skills (supports `--tags` to filter by tags) |
 | `skills list --category <cat>` | | List skills in a category |
 | `skills list --installed` | | List installed skills |
-| `skills search <query>` | | Search skills by name, description, or tags |
+| `skills search <query>` | | Search skills by name, description, or tags (supports `--tags` to filter by tags) |
 | `skills info <name>` | | Show skill metadata, requirements, and env vars |
 | `skills docs <name>` | | Show skill documentation (SKILL.md/README.md/CLAUDE.md) |
 | `skills requires <name>` | | Show env vars, system deps, and npm dependencies |
 | `skills run <name> [args...]` | | Run a skill directly |
 | `skills categories` | | List all categories with counts |
-| `skills init` | | Generate `.env.example` and update `.gitignore` |
+| `skills tags` | | List all tags with skill counts |
+| `skills init` | | Initialize project, detect deps, and optionally install for agents |
 | `skills update [names...]` | | Update installed skills (reinstall with overwrite) |
 | `skills serve` | | Start the HTTP dashboard (auto-assigns free port) |
 | `skills mcp` | | Start the MCP server on stdio |
 | `skills mcp --register <agent>` | | Register MCP server with claude, codex, gemini, or all |
 | `skills self-update` | | Update `@hasna/skills` to the latest version |
 
-All list/search/info commands support `--json` for machine-readable output.
+All list/search/info commands support `--json` for machine-readable output. Search uses fuzzy matching -- typos and abbreviations are tolerated.
 
 ## MCP Server
 
@@ -133,7 +140,7 @@ Add to your MCP config:
 }
 ```
 
-### Tools (9)
+### Tools (10)
 
 | Tool | Description |
 |------|-------------|
@@ -144,6 +151,7 @@ Add to your MCP config:
 | `install_skill` | Install a skill (full source to `.skills/` or SKILL.md to agent dir) |
 | `remove_skill` | Remove an installed skill |
 | `list_categories` | List all categories with skill counts |
+| `list_tags` | List all skill tags with counts |
 | `get_requirements` | Get env vars, system deps, and npm dependencies |
 | `run_skill` | Run a skill by name with optional arguments |
 
@@ -190,6 +198,7 @@ The dashboard server also exposes a REST API:
 | `/api/skills/:name/docs` | GET | Raw documentation text |
 | `/api/skills/:name/install` | POST | Install a skill |
 | `/api/skills/:name/remove` | POST | Remove a skill |
+| `/api/tags` | GET | All tags with skill counts |
 | `/api/version` | GET | Current package version |
 | `/api/self-update` | POST | Update to latest version |
 
