@@ -18,15 +18,16 @@ async function runCli(args: string[]): Promise<{ stdout: string; stderr: string;
 
 describe("CLI", () => {
   describe("help", () => {
-    test("outputs JSON skills list in non-TTY mode (no arguments)", async () => {
+    test("outputs compact JSON skills list in non-TTY mode (no arguments)", async () => {
       const { stdout } = await runCli([]);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
       expect(data.length).toBe(202);
       expect(data[0]).toHaveProperty("name");
-      expect(data[0]).toHaveProperty("description");
       expect(data[0]).toHaveProperty("category");
-      expect(data[0]).toHaveProperty("tags");
+      // Compact mode — no description/tags to keep tokens low
+      expect(data[0]).not.toHaveProperty("description");
+      expect(data[0]).not.toHaveProperty("tags");
     });
 
     test("shows help with --help", async () => {

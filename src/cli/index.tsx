@@ -52,8 +52,9 @@ program
   .description("Interactive skill browser (TUI)")
   .action(() => {
     if (!isTTY) {
-      // Non-interactive: output structured JSON for AI agents
-      console.log(JSON.stringify(SKILLS, null, 2));
+      // Non-interactive: output compact list for AI agents (name+category only)
+      // Use `skills list --json` for full objects
+      console.log(JSON.stringify(SKILLS.map(s => ({ name: s.name, category: s.category }))));
       process.exit(0);
     }
     render(<App />);

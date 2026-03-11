@@ -46,58 +46,76 @@ const server = new McpServer({
   version: pkg.version,
 });
 
+/** Strip null/undefined/empty-array fields to reduce token usage */
+function stripNulls(obj: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(obj).filter(([, v]) =>
+      v !== null && v !== undefined && !(Array.isArray(v) && v.length === 0)
+    )
+  );
+}
+
 // ---- Tools ----
 
 server.registerTool("list_skills", {
   title: "List Skills",
-  description: "List all available skills, optionally filtered by category",
+  description: "List skills. Returns {name,category} by default; detail:true for full objects.",
   inputSchema: {
-    category: z.string().optional().describe("Filter by category name"),
+    category: z.string().optional().describe("Filter by category"),
+    detail: z.boolean().optional().describe("Return full objects (default: false)"),
   },
-}, async ({ category }) => {
+}, async ({ category, detail }) => {
   const skills = category
     ? getSkillsByCategory(category as Category)
     : SKILLS;
 
+  const result = detail
+    ? skills
+    : skills.map(s => ({ name: s.name, category: s.category }));
+
   return {
-    content: [{ type: "text", text: JSON.stringify(skills, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(result) }],
   };
 });
 
 server.registerTool("search_skills", {
   title: "Search Skills",
-  description: "Search skills by query string (matches name, description, and tags)",
+  description: "Search skills by name, description, or tags. Returns compact list by default.",
   inputSchema: {
-    query: z.string().describe("Search query"),
+    query: z.string().describe("Search query (fuzzy-matched)"),
+    detail: z.boolean().optional().describe("Return full objects (default: false)"),
   },
-}, async ({ query }) => {
+}, async ({ query, detail }) => {
   const results = searchSkills(query);
+  const out = detail
+    ? results
+    : results.map(s => ({ name: s.name, category: s.category }));
   return {
-    content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(out) }],
   };
 });
 
 server.registerTool("get_skill_info", {
   title: "Get Skill Info",
-  description: "Get detailed metadata about a skill including requirements, env vars, and dependencies",
+  description: "Get skill metadata, env vars, and dependencies.",
   inputSchema: {
-    name: z.string().describe("Skill name (e.g. 'image', 'deep-research')"),
+    name: z.string().describe("Skill name (e.g. 'image')"),
   },
 }, async ({ name }) => {
   const skill = getSkill(name);
   if (!skill) {
     return { content: [{ type: "text", text: `Skill '${name}' not found` }], isError: true };
   }
-
   const reqs = getSkillRequirements(name);
+  const result = stripNulls({ ...skill, ...reqs });
   return {
-    content: [{ type: "text", text: JSON.stringify({ ...skill, ...reqs }, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(result) }],
   };
 });
 
 server.registerTool("get_skill_docs", {
   title: "Get Skill Docs",
-  description: "Get documentation for a skill (SKILL.md, README.md, or CLAUDE.md)",
+  description: "Get skill documentation (SKILL.md > README.md > CLAUDE.md).",
   inputSchema: {
     name: z.string().describe("Skill name"),
   },
@@ -111,7 +129,7 @@ server.registerTool("get_skill_docs", {
 
 server.registerTool("install_skill", {
   title: "Install Skill",
-  description: "Install a skill. Without --for, installs full source to .skills/. With --for, copies SKILL.md to agent skill directory.",
+  description: "Install a skill to .skills/ or to an agent dir (for: claude|codex|gemini|all).",
   inputSchema: {
     name: z.string().describe("Skill name to install"),
     for: z.string().optional().describe("Agent target: claude, codex, gemini, or all"),
@@ -148,7 +166,7 @@ server.registerTool("install_skill", {
 
 server.registerTool("install_category", {
   title: "Install Category",
-  description: "Install all skills in a category. Optionally install for a specific agent (claude, codex, gemini, or all) with a given scope.",
+  description: "Install all skills in a category, optionally for a specific agent.",
   inputSchema: {
     category: z.string().describe("Category name (case-insensitive, e.g. 'Event Management')"),
     for: z.string().optional().describe("Agent target: claude, codex, gemini, or all"),
@@ -204,7 +222,7 @@ server.registerTool("install_category", {
 
 server.registerTool("remove_skill", {
   title: "Remove Skill",
-  description: "Remove an installed skill. Without --for, removes from .skills/. With --for, removes from agent skill directory.",
+  description: "Remove a skill from .skills/ or from an agent dir.",
   inputSchema: {
     name: z.string().describe("Skill name to remove"),
     for: z.string().optional().describe("Agent target: claude, codex, gemini, or all"),
@@ -241,7 +259,7 @@ server.registerTool("remove_skill", {
 
 server.registerTool("list_categories", {
   title: "List Categories",
-  description: "List all skill categories with counts",
+  description: "List all 17 skill categories with skill counts.",
 }, async () => {
   const cats = CATEGORIES.map(category => ({
     name: category,
@@ -252,7 +270,7 @@ server.registerTool("list_categories", {
 
 server.registerTool("list_tags", {
   title: "List Tags",
-  description: "List all unique tags across all skills with their occurrence counts",
+  description: "List all unique skill tags with occurrence counts.",
 }, async () => {
   const tagCounts = new Map<string, number>();
   for (const skill of SKILLS) {
@@ -268,7 +286,7 @@ server.registerTool("list_tags", {
 
 server.registerTool("get_requirements", {
   title: "Get Requirements",
-  description: "Get environment variables, system dependencies, and npm dependencies for a skill",
+  description: "Get env vars, system deps, and npm dependencies for a skill.",
   inputSchema: {
     name: z.string().describe("Skill name"),
   },
@@ -282,7 +300,7 @@ server.registerTool("get_requirements", {
 
 server.registerTool("run_skill", {
   title: "Run Skill",
-  description: "Run a skill by name with optional arguments. Returns the exit code and any error message.",
+  description: "Run a skill by name with optional arguments.",
   inputSchema: {
     name: z.string().describe("Skill name to run"),
     args: z.array(z.string()).optional().describe("Arguments to pass to the skill"),
@@ -307,7 +325,7 @@ server.registerTool("run_skill", {
 
 server.registerTool("export_skills", {
   title: "Export Skills",
-  description: "Export the list of currently installed skills as a JSON payload that can be imported elsewhere",
+  description: "Export installed skills as a JSON payload for import elsewhere.",
 }, async () => {
   const skills = getInstalledSkills();
   const payload = {
@@ -320,7 +338,7 @@ server.registerTool("export_skills", {
 
 server.registerTool("import_skills", {
   title: "Import Skills",
-  description: "Install a list of skills from an export payload. Supports agent-specific installs via the 'for' parameter.",
+  description: "Install skills from an export payload. Supports agent installs via 'for'.",
   inputSchema: {
     skills: z.array(z.string()).describe("List of skill names to install"),
     for: z.string().optional().describe("Agent target: claude, codex, gemini, or all"),
@@ -370,7 +388,7 @@ server.registerTool("import_skills", {
 
 server.registerTool("whoami", {
   title: "Skills Whoami",
-  description: "Show setup summary: package version, installed skills, agent configurations, skills directory location, and working directory",
+  description: "Show setup summary: version, installed skills, agent configs, cwd.",
 }, async () => {
   const version = pkg.version;
   const cwd = process.cwd();
@@ -411,11 +429,11 @@ server.registerTool("whoami", {
 // ---- Resources ----
 
 server.registerResource("Skills Registry", "skills://registry", {
-  description: "Full list of all available skills as JSON",
+  description: "Compact skill list [{name,category}]. Use skills://{name} for detail.",
 }, async () => ({
   contents: [{
     uri: "skills://registry",
-    text: JSON.stringify(SKILLS, null, 2),
+    text: JSON.stringify(SKILLS.map(s => ({ name: s.name, category: s.category }))),
     mimeType: "application/json",
   }],
 }));
