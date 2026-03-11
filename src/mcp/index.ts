@@ -459,6 +459,49 @@ server.registerResource(
   }
 );
 
+// ---- Meta tools (token optimization: search then describe on demand) ----
+
+server.registerTool("search_tools", {
+  title: "Search Tools",
+  description: "List tool names, optionally filtered by keyword.",
+  inputSchema: { query: z.string().optional().describe("Keyword filter") },
+}, async ({ query }) => {
+  const all = [
+    "list_skills", "search_skills", "get_skill_info", "get_skill_docs",
+    "install_skill", "install_category", "remove_skill",
+    "list_categories", "list_tags", "get_requirements",
+    "run_skill", "export_skills", "import_skills", "whoami",
+    "search_tools", "describe_tools",
+  ];
+  const matches = query ? all.filter(n => n.includes(query.toLowerCase())) : all;
+  return { content: [{ type: "text", text: matches.join(", ") }] };
+});
+
+server.registerTool("describe_tools", {
+  title: "Describe Tools",
+  description: "Get descriptions for specific tools by name.",
+  inputSchema: { names: z.array(z.string()).describe("Tool names from search_tools") },
+}, async ({ names }) => {
+  const descriptions: Record<string, string> = {
+    list_skills: "List skills {name,category}. Params: category?, detail?",
+    search_skills: "Search skills by name/tags. Params: query, detail?",
+    get_skill_info: "Get skill metadata and env vars. Params: name",
+    get_skill_docs: "Get skill documentation. Params: name",
+    install_skill: "Install a skill for an agent. Params: name, agent?",
+    install_category: "Install all skills in a category. Params: category, agent?",
+    remove_skill: "Remove an installed skill. Params: name, agent?",
+    list_categories: "List skill categories with counts.",
+    list_tags: "List all tags across skills.",
+    get_requirements: "Get skill requirements/dependencies. Params: name",
+    run_skill: "Execute a skill. Params: name, args?",
+    export_skills: "Export skill config. Params: format?",
+    import_skills: "Import skill config. Params: data",
+    whoami: "Show setup: version, installed skills, agent configs.",
+  };
+  const result = names.map((n: string) => `${n}: ${descriptions[n] || "See tool schema"}`).join("\n");
+  return { content: [{ type: "text", text: result }] };
+});
+
 // ---- Start server ----
 
 async function main() {
