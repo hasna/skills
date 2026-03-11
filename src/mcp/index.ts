@@ -10,6 +10,9 @@
 
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { existsSync, readdirSync, statSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
 import { z } from "zod";
 import pkg from "../../package.json" with { type: "json" };
 import {
@@ -23,9 +26,11 @@ import {
 import {
   installSkill,
   installSkillForAgent,
+  getInstalledSkills,
   removeSkill,
   removeSkillForAgent,
   resolveAgents,
+  getSkillPath,
   type AgentTarget,
 } from "../lib/installer.js";
 import {
@@ -141,6 +146,62 @@ server.registerTool("install_skill", {
   };
 });
 
+server.registerTool("install_category", {
+  title: "Install Category",
+  description: "Install all skills in a category. Optionally install for a specific agent (claude, codex, gemini, or all) with a given scope.",
+  inputSchema: {
+    category: z.string().describe("Category name (case-insensitive, e.g. 'Event Management')"),
+    for: z.string().optional().describe("Agent target: claude, codex, gemini, or all"),
+    scope: z.string().optional().describe("Install scope: global or project (default: global)"),
+  },
+}, async ({ category, for: agentArg, scope }) => {
+  // Validate category
+  const matchedCategory = CATEGORIES.find(
+    (c) => c.toLowerCase() === category.toLowerCase()
+  );
+  if (!matchedCategory) {
+    return {
+      content: [{ type: "text", text: `Unknown category: ${category}. Available: ${CATEGORIES.join(", ")}` }],
+      isError: true,
+    };
+  }
+
+  const categorySkills = getSkillsByCategory(matchedCategory as Category);
+  const names = categorySkills.map((s) => s.name);
+
+  if (agentArg) {
+    let agents: AgentTarget[];
+    try {
+      agents = resolveAgents(agentArg);
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: (err as Error).message }],
+        isError: true,
+      };
+    }
+
+    const results = [];
+    for (const name of names) {
+      for (const a of agents) {
+        const r = installSkillForAgent(name, { agent: a, scope: (scope as "global" | "project") || "global" }, generateSkillMd);
+        results.push({ ...r, agent: a, scope: scope || "global" });
+      }
+    }
+
+    return {
+      content: [{ type: "text", text: JSON.stringify({ category: matchedCategory, count: names.length, results }, null, 2) }],
+      isError: results.some(r => !r.success),
+    };
+  }
+
+  // Full source install
+  const results = names.map(name => installSkill(name));
+  return {
+    content: [{ type: "text", text: JSON.stringify({ category: matchedCategory, count: names.length, results }, null, 2) }],
+    isError: results.some(r => !r.success),
+  };
+});
+
 server.registerTool("remove_skill", {
   title: "Remove Skill",
   description: "Remove an installed skill. Without --for, removes from .skills/. With --for, removes from agent skill directory.",
@@ -242,6 +303,109 @@ server.registerTool("run_skill", {
   return {
     content: [{ type: "text", text: JSON.stringify({ exitCode: result.exitCode, skill: name }, null, 2) }],
   };
+});
+
+server.registerTool("export_skills", {
+  title: "Export Skills",
+  description: "Export the list of currently installed skills as a JSON payload that can be imported elsewhere",
+}, async () => {
+  const skills = getInstalledSkills();
+  const payload = {
+    version: 1,
+    skills,
+    timestamp: new Date().toISOString(),
+  };
+  return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
+});
+
+server.registerTool("import_skills", {
+  title: "Import Skills",
+  description: "Install a list of skills from an export payload. Supports agent-specific installs via the 'for' parameter.",
+  inputSchema: {
+    skills: z.array(z.string()).describe("List of skill names to install"),
+    for: z.string().optional().describe("Agent target: claude, codex, gemini, or all"),
+    scope: z.string().optional().describe("Install scope: global or project (default: global)"),
+  },
+}, async ({ skills: skillList, for: agentArg, scope }) => {
+  if (!skillList || skillList.length === 0) {
+    return { content: [{ type: "text", text: JSON.stringify({ imported: 0, results: [] }, null, 2) }] };
+  }
+
+  const results: Array<{ skill: string; success: boolean; error?: string }> = [];
+
+  if (agentArg) {
+    let agents: AgentTarget[];
+    try {
+      agents = resolveAgents(agentArg);
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: (err as Error).message }],
+        isError: true,
+      };
+    }
+
+    for (const name of skillList) {
+      const agentResults = agents.map((a) =>
+        installSkillForAgent(name, { agent: a, scope: (scope as "global" | "project") || "global" }, generateSkillMd)
+      );
+      const success = agentResults.every((r) => r.success);
+      const errors = agentResults.filter((r) => !r.success).map((r) => r.error).filter(Boolean);
+      results.push({ skill: name, success, ...(errors.length > 0 ? { error: errors.join("; ") } : {}) });
+    }
+  } else {
+    for (const name of skillList) {
+      const result = installSkill(name);
+      results.push({ skill: result.skill, success: result.success, ...(result.error ? { error: result.error } : {}) });
+    }
+  }
+
+  const imported = results.filter((r) => r.success).length;
+  const hasErrors = results.some((r) => !r.success);
+
+  return {
+    content: [{ type: "text", text: JSON.stringify({ imported, total: skillList.length, results }, null, 2) }],
+    isError: hasErrors,
+  };
+});
+
+server.registerTool("whoami", {
+  title: "Skills Whoami",
+  description: "Show setup summary: package version, installed skills, agent configurations, skills directory location, and working directory",
+}, async () => {
+  const version = pkg.version;
+  const cwd = process.cwd();
+
+  const installed = getInstalledSkills();
+
+  const agentNames = ["claude", "codex", "gemini"] as const;
+  const agents: Array<{ agent: string; path: string; exists: boolean; skillCount: number }> = [];
+  for (const agent of agentNames) {
+    const agentSkillsPath = join(homedir(), `.${agent}`, "skills");
+    const exists = existsSync(agentSkillsPath);
+    let skillCount = 0;
+    if (exists) {
+      try {
+        skillCount = readdirSync(agentSkillsPath).filter((f) => {
+          const full = join(agentSkillsPath, f);
+          return f.startsWith("skill-") && statSync(full).isDirectory();
+        }).length;
+      } catch {}
+    }
+    agents.push({ agent, path: agentSkillsPath, exists, skillCount });
+  }
+
+  const skillsDir = getSkillPath("image").replace(/[/\\][^/\\]*$/, "");
+
+  const result = {
+    version,
+    installedCount: installed.length,
+    installed,
+    agents,
+    skillsDir,
+    cwd,
+  };
+
+  return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
 });
 
 // ---- Resources ----

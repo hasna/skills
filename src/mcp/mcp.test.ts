@@ -380,6 +380,54 @@ describe("MCP Server", () => {
     }
   }, 15000);
 
+  test("install_category is included in tools list", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("tools/list");
+      const toolNames = response.result.tools.map((t: any) => t.name);
+      expect(toolNames).toContain("install_category");
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("install_category returns error for unknown category", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "install_category",
+        arguments: { category: "Fake Category" },
+      }, 30);
+      expect(response).not.toBeNull();
+      expect(response.result.isError).toBe(true);
+      expect(response.result.content[0].text).toContain("Unknown category");
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("install_category installs all skills in a category", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "install_category",
+        arguments: { category: "Event Management" },
+      }, 31);
+      expect(response).not.toBeNull();
+      expect(response.result).toBeDefined();
+      const result = JSON.parse(response.result.content[0].text);
+      expect(result.category).toBe("Event Management");
+      expect(result.count).toBe(4);
+      expect(Array.isArray(result.results)).toBe(true);
+      expect(result.results.length).toBe(4);
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
   test("reads skills://registry resource", async () => {
     const client = new McpClient();
     try {
@@ -392,6 +440,105 @@ describe("MCP Server", () => {
       const skills = JSON.parse(response.result.contents[0].text);
       expect(Array.isArray(skills)).toBe(true);
       expect(skills.length).toBe(202);
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("export_skills is included in tools list", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("tools/list");
+      const toolNames = response.result.tools.map((t: any) => t.name);
+      expect(toolNames).toContain("export_skills");
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("import_skills is included in tools list", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("tools/list");
+      const toolNames = response.result.tools.map((t: any) => t.name);
+      expect(toolNames).toContain("import_skills");
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("calls export_skills tool and returns valid payload", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "export_skills",
+        arguments: {},
+      }, 40);
+      expect(response).not.toBeNull();
+      expect(response.result).toBeDefined();
+      const payload = JSON.parse(response.result.content[0].text);
+      expect(payload).toHaveProperty("version", 1);
+      expect(payload).toHaveProperty("skills");
+      expect(payload).toHaveProperty("timestamp");
+      expect(Array.isArray(payload.skills)).toBe(true);
+      // timestamp should be a valid ISO date
+      expect(new Date(payload.timestamp).toISOString()).toBe(payload.timestamp);
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("calls import_skills with empty list returns 0 imported", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "import_skills",
+        arguments: { skills: [] },
+      }, 41);
+      expect(response).not.toBeNull();
+      expect(response.result).toBeDefined();
+      const result = JSON.parse(response.result.content[0].text);
+      expect(result.imported).toBe(0);
+      expect(Array.isArray(result.results)).toBe(true);
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("import_skills nonexistent skill returns isError", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "import_skills",
+        arguments: { skills: ["nonexistent-xyz-999"] },
+      }, 42);
+      expect(response).not.toBeNull();
+      expect(response.result).toBeDefined();
+      expect(response.result.isError).toBe(true);
+      const result = JSON.parse(response.result.content[0].text);
+      expect(result.imported).toBe(0);
+      expect(result.total).toBe(1);
+      expect(result.results[0].success).toBe(false);
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("import_skills with invalid agent returns isError", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "import_skills",
+        arguments: { skills: ["image"], for: "invalid-agent" },
+      }, 43);
+      expect(response).not.toBeNull();
+      expect(response.result.isError).toBe(true);
     } finally {
       await client.close();
     }

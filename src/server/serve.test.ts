@@ -240,6 +240,83 @@ describe("Dashboard Server", () => {
     });
   });
 
+  describe("POST /api/skills/install-category", () => {
+    test("installs all skills in a valid category", async () => {
+      const res = await api("/api/skills/install-category", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category: "Event Management" }),
+      });
+      const data = await res.json();
+      expect([200, 207]).toContain(res.status);
+      expect(data).toHaveProperty("category", "Event Management");
+      expect(data).toHaveProperty("count", 4);
+      expect(data).toHaveProperty("results");
+      expect(Array.isArray(data.results)).toBe(true);
+      expect(data.results.length).toBe(4);
+    });
+
+    test("category matching is case-insensitive", async () => {
+      const res = await api("/api/skills/install-category", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category: "event management" }),
+      });
+      const data = await res.json();
+      expect([200, 207]).toContain(res.status);
+      expect(data.category).toBe("Event Management");
+      expect(data.count).toBe(4);
+    });
+
+    test("returns 400 for unknown category", async () => {
+      const res = await api("/api/skills/install-category", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category: "Fake Category" }),
+      });
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data).toHaveProperty("error");
+      expect(data.error).toContain("Unknown category");
+    });
+
+    test("returns 400 when category field is missing", async () => {
+      const res = await api("/api/skills/install-category", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toContain("category");
+    });
+
+    test("installs for agent when --for is provided", async () => {
+      const res = await api("/api/skills/install-category", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category: "Event Management", for: "claude", scope: "project" }),
+      });
+      const data = await res.json();
+      expect([200, 207]).toContain(res.status);
+      expect(data.category).toBe("Event Management");
+      expect(data.count).toBe(4);
+      expect(Array.isArray(data.results)).toBe(true);
+    });
+
+    test("returns 400 for invalid agent name", async () => {
+      const res = await api("/api/skills/install-category", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category: "Event Management", for: "invalid-agent" }),
+      });
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.success).toBe(false);
+      expect(data.error).toContain("Unknown agent");
+    });
+  });
+
   describe("POST /api/skills/:name/remove", () => {
     test("returns result for remove attempt", async () => {
       const res = await api("/api/skills/nonexistent-xyz-999/remove", { method: "POST" });
@@ -509,5 +586,115 @@ describe("Dashboard Server", () => {
         await proc.exited;
       }
     }, 15000);
+  });
+
+  describe("GET /api/export", () => {
+    test("returns export payload with version, skills, and timestamp", async () => {
+      const res = await api("/api/export");
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      const data = await res.json();
+      expect(data).toHaveProperty("version", 1);
+      expect(data).toHaveProperty("skills");
+      expect(data).toHaveProperty("timestamp");
+      expect(Array.isArray(data.skills)).toBe(true);
+    });
+
+    test("timestamp is a valid ISO date string", async () => {
+      const res = await api("/api/export");
+      const data = await res.json();
+      const ts = data.timestamp;
+      expect(typeof ts).toBe("string");
+      expect(new Date(ts).toISOString()).toBe(ts);
+    });
+
+    test("skills list contains only strings", async () => {
+      const res = await api("/api/export");
+      const data = await res.json();
+      for (const skill of data.skills) {
+        expect(typeof skill).toBe("string");
+      }
+    });
+
+    test("includes security headers", async () => {
+      const res = await api("/api/export");
+      expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    });
+  });
+
+  describe("POST /api/import", () => {
+    test("returns 400 when skills array is missing", async () => {
+      const res = await api("/api/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ version: 1 }),
+      });
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toContain("skills");
+    });
+
+    test("returns 400 for invalid JSON body", async () => {
+      const res = await api("/api/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "not json",
+      });
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toContain("Invalid JSON");
+    });
+
+    test("returns 400 for invalid agent via for param", async () => {
+      const res = await api("/api/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ skills: ["image"], for: "invalid-agent" }),
+      });
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toContain("Unknown agent");
+    });
+
+    test("importing empty skills array returns 200 with 0 imported", async () => {
+      const res = await api("/api/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ skills: [] }),
+      });
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.imported).toBe(0);
+      expect(data.total).toBe(0);
+      expect(Array.isArray(data.results)).toBe(true);
+    });
+
+    test("importing nonexistent skill returns 207 with failure in results", async () => {
+      const res = await api("/api/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ skills: ["nonexistent-xyz-999"] }),
+      });
+      expect(res.status).toBe(207);
+      const data = await res.json();
+      expect(data.imported).toBe(0);
+      expect(data.total).toBe(1);
+      expect(Array.isArray(data.results)).toBe(true);
+      expect(data.results[0].success).toBe(false);
+    });
+
+    test("response shape includes imported, total, and results", async () => {
+      const res = await api("/api/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ skills: ["nonexistent-xyz-999"] }),
+      });
+      const data = await res.json();
+      expect(data).toHaveProperty("imported");
+      expect(data).toHaveProperty("total");
+      expect(data).toHaveProperty("results");
+      expect(typeof data.imported).toBe("number");
+      expect(typeof data.total).toBe("number");
+    });
   });
 });

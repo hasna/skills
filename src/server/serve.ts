@@ -277,6 +277,51 @@ export function createFetchHandler(options?: {
       }
     }
 
+    // POST /api/skills/install-category - Install all skills in a category
+    // Body: { category: string, for?: string, scope?: string }
+    if (path === "/api/skills/install-category" && method === "POST") {
+      let body: { category?: string; for?: string; scope?: string } = {};
+      try {
+        const text = await req.text();
+        if (text) body = JSON.parse(text);
+      } catch {}
+
+      if (!body.category) {
+        return json({ error: "Missing required field: category" }, 400);
+      }
+
+      const matchedCategory = CATEGORIES.find(
+        (c) => c.toLowerCase() === body.category!.toLowerCase()
+      );
+      if (!matchedCategory) {
+        return json({ error: `Unknown category: ${body.category}. Available: ${CATEGORIES.join(", ")}` }, 400);
+      }
+
+      const categorySkills = getSkillsByCategory(matchedCategory);
+      const names = categorySkills.map((s) => s.name);
+
+      if (body.for) {
+        try {
+          const agents = resolveAgents(body.for);
+          const scope = (body.scope === "project" ? "project" : "global") as AgentScope;
+          const results = [];
+          for (const name of names) {
+            for (const agent of agents) {
+              results.push(installSkillForAgent(name, { agent, scope }, generateSkillMd));
+            }
+          }
+          const allSuccess = results.every((r) => r.success);
+          return json({ category: matchedCategory, count: names.length, success: allSuccess, results }, allSuccess ? 200 : 207);
+        } catch (e) {
+          return json({ success: false, error: e instanceof Error ? e.message : "Unknown error" }, 400);
+        }
+      } else {
+        const results = names.map((name) => installSkill(name));
+        const allSuccess = results.every((r) => r.success);
+        return json({ category: matchedCategory, count: names.length, success: allSuccess, results }, allSuccess ? 200 : 207);
+      }
+    }
+
     // POST /api/skills/:name/remove - Remove skill
     const removeMatch = path.match(/^\/api\/skills\/([^/]+)\/remove$/);
     if (removeMatch && method === "POST") {
@@ -290,6 +335,63 @@ export function createFetchHandler(options?: {
     if (path === "/api/version" && method === "GET") {
       const pkg = getPackageJson();
       return json({ version: pkg.version, name: pkg.name });
+    }
+
+    // GET /api/export - Export installed skills as JSON
+    if (path === "/api/export" && method === "GET") {
+      const skills = getInstalledSkills();
+      return json({
+        version: 1,
+        skills,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // POST /api/import - Import and install a list of skills
+    // Body: { skills: string[], for?: string, scope?: string }
+    if (path === "/api/import" && method === "POST") {
+      let body: { skills?: string[]; for?: string; scope?: string } = {};
+      try {
+        const text = await req.text();
+        if (text) body = JSON.parse(text);
+      } catch {
+        return json({ error: "Invalid JSON body" }, 400);
+      }
+
+      if (!Array.isArray(body.skills)) {
+        return json({ error: 'Body must include "skills" array' }, 400);
+      }
+
+      const skillList: string[] = body.skills;
+      const results: Array<{ skill: string; success: boolean; error?: string }> = [];
+
+      if (body.for) {
+        try {
+          const agents = resolveAgents(body.for);
+          const scope = (body.scope === "project" ? "project" : "global") as AgentScope;
+          for (const name of skillList) {
+            const agentResults = agents.map((agent) =>
+              installSkillForAgent(name, { agent, scope }, generateSkillMd)
+            );
+            const success = agentResults.every((r) => r.success);
+            const errors = agentResults.filter((r) => !r.success).map((r) => r.error).filter(Boolean);
+            results.push({ skill: name, success, ...(errors.length > 0 ? { error: errors.join("; ") } : {}) });
+          }
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Unknown error" }, 400);
+        }
+      } else {
+        for (const name of skillList) {
+          const result = installSkill(name);
+          results.push({ skill: result.skill, success: result.success, ...(result.error ? { error: result.error } : {}) });
+        }
+      }
+
+      const imported = results.filter((r) => r.success).length;
+      return json(
+        { imported, total: skillList.length, results },
+        imported === skillList.length ? 200 : 207
+      );
     }
 
     // POST /api/self-update - Update package to latest
