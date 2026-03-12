@@ -352,8 +352,8 @@ describe("Dashboard Server", () => {
       const data = await res.json();
       expect(data).toHaveProperty("skill", "image");
       expect(data).toHaveProperty("success");
-      expect(data).toHaveProperty("results");
-      expect(Array.isArray(data.results)).toBe(true);
+      // Compact success response — no results array on success
+      expect(data.success).toBe(true);
     });
 
     test("returns 400 for invalid agent name via for param", async () => {
@@ -408,7 +408,7 @@ describe("Dashboard Server", () => {
       });
       const data = await res.json();
       expect(data).toHaveProperty("skill", "image");
-      expect(data).toHaveProperty("results");
+      expect(data).toHaveProperty("success");
     });
   });
 

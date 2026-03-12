@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.12] - 2026-03-12
+
+### Added
+- REST `?fields=` filtering on `GET /api/skills`, `/api/skills/search`, `/api/skills/:name` — specify only the fields you need (60-80% response size reduction)
+- CLI `--format=compact` — outputs skill names only (one per line)
+- CLI `--format=csv` — outputs `name,category,description` CSV for agent processing
+
+### Changed
+- Compact mutation responses — `POST /api/skills/:name/install` and `/remove` return minimal `{skill,success}` on success; full detail only on failure (~80% smaller on mutations)
+
 ## [0.1.11] - 2026-03-12
 
 ### Changed

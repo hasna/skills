@@ -197,10 +197,12 @@ program
   .option("-t, --tags <tags>", "Filter by comma-separated tags (OR logic, case-insensitive)")
   .option("--json", "Output as JSON", false)
   .option("--brief", "One line per skill: name \u2014 description [category]", false)
+  .option("--format <format>", "Output format: compact (names only) or csv (name,category,description)")
   .description("List available or installed skills")
   .action((options) => {
-    // --json wins over --brief when both are given
+    // --json wins over --brief/--format when given
     const brief = options.brief && !options.json;
+    const fmt = !options.json ? (options.format as string | undefined) : undefined;
 
     if (options.installed) {
       const installed = getInstalledSkills();
@@ -290,6 +292,20 @@ program
       return;
     }
 
+    if (fmt === "compact") {
+      for (const s of SKILLS) console.log(s.name);
+      return;
+    }
+
+    if (fmt === "csv") {
+      console.log("name,category,description");
+      for (const s of SKILLS) {
+        const desc = s.description.replace(/"/g, '""');
+        console.log(`${s.name},${s.category},"${desc}"`);
+      }
+      return;
+    }
+
     if (brief) {
       // Sort by category then name
       const sorted = [...SKILLS].sort((a, b) => {
@@ -319,10 +335,11 @@ program
   .argument("<query>", "Search term")
   .option("--json", "Output as JSON", false)
   .option("--brief", "One line per skill: name \u2014 description [category]", false)
+  .option("--format <format>", "Output format: compact (names only) or csv (name,category,description)")
   .option("-c, --category <category>", "Filter results by category")
   .option("-t, --tags <tags>", "Filter results by comma-separated tags (OR logic, case-insensitive)")
   .description("Search for skills")
-  .action((query: string, options: { json: boolean; brief: boolean; category?: string; tags?: string }) => {
+  .action((query: string, options: { json: boolean; brief: boolean; format?: string; category?: string; tags?: string }) => {
     let results = searchSkills(query);
 
     if (options.category) {
@@ -345,8 +362,9 @@ program
       );
     }
 
-    // --json wins over --brief when both are given
+    // --json wins over --brief/--format when given
     const brief = options.brief && !options.json;
+    const fmt = !options.json ? options.format : undefined;
 
     if (options.json) {
       console.log(JSON.stringify(results, null, 2));
@@ -354,6 +372,18 @@ program
     }
     if (results.length === 0) {
       console.log(chalk.dim(`No skills found for "${query}"`));
+      return;
+    }
+    if (fmt === "compact") {
+      for (const s of results) console.log(s.name);
+      return;
+    }
+    if (fmt === "csv") {
+      console.log("name,category,description");
+      for (const s of results) {
+        const desc = s.description.replace(/"/g, '""');
+        console.log(`${s.name},${s.category},"${desc}"`);
+      }
       return;
     }
     if (brief) {

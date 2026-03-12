@@ -96,6 +96,21 @@ function isValidSkillName(name: string): boolean {
   return /^[a-z0-9-]+$/.test(name);
 }
 
+/** Filter object keys to only requested fields (for ?fields= param) */
+function pickFields(obj: object, fields: string[]): Record<string, unknown> {
+  if (fields.length === 0) return obj as Record<string, unknown>;
+  const rec = obj as Record<string, unknown>;
+  return Object.fromEntries(
+    fields.filter(f => f in rec).map(f => [f, rec[f]])
+  );
+}
+
+function parseFields(searchParams: URLSearchParams): string[] {
+  const raw = searchParams.get("fields");
+  if (!raw) return [];
+  return raw.split(",").map(f => f.trim()).filter(Boolean);
+}
+
 function getAllSkillsWithStatus(): SkillWithStatus[] {
   const installed = new Set(getInstalledSkills());
   return SKILLS.map((meta) => {
@@ -142,8 +157,11 @@ export function createFetchHandler(options?: {
     // ── API Routes ──
 
     // GET /api/skills - All skills with status
+    // Supports ?fields=name,category,installed to reduce payload
     if (path === "/api/skills" && method === "GET") {
-      return json(getAllSkillsWithStatus());
+      const fields = parseFields(url.searchParams);
+      const skills = getAllSkillsWithStatus();
+      return json(fields.length ? skills.map(s => pickFields(s, fields)) : skills);
     }
 
     // GET /api/categories - List categories with counts
@@ -170,32 +188,35 @@ export function createFetchHandler(options?: {
     }
 
     // GET /api/skills/search?q= - Search skills
+    // Supports ?fields=name,category to reduce payload
     if (path === "/api/skills/search" && method === "GET") {
       const query = url.searchParams.get("q") || "";
       if (!query.trim()) return json([]);
+      const fields = parseFields(url.searchParams);
       const results = searchSkills(query);
       const installed = new Set(getInstalledSkills());
-      return json(
-        results.map((meta) => {
-          const reqs = getSkillRequirements(meta.name);
-          const envVars = reqs?.envVars || [];
-          return {
-            name: meta.name,
-            displayName: meta.displayName,
-            description: meta.description,
-            category: meta.category,
-            tags: meta.tags,
-            installed: installed.has(meta.name),
-            envVars,
-            envVarsSet: envVars.filter((v) => !!process.env[v]),
-            systemDeps: reqs?.systemDeps || [],
-            cliCommand: reqs?.cliCommand || null,
-          };
-        })
-      );
+      const mapped = results.map((meta) => {
+        const reqs = getSkillRequirements(meta.name);
+        const envVars = reqs?.envVars || [];
+        const obj = {
+          name: meta.name,
+          displayName: meta.displayName,
+          description: meta.description,
+          category: meta.category,
+          tags: meta.tags,
+          installed: installed.has(meta.name),
+          envVars,
+          envVarsSet: envVars.filter((v) => !!process.env[v]),
+          systemDeps: reqs?.systemDeps || [],
+          cliCommand: reqs?.cliCommand || null,
+        };
+        return fields.length ? pickFields(obj, fields) : obj;
+      });
+      return json(mapped);
     }
 
     // GET /api/skills/:name - Single skill detail
+    // Supports ?fields=name,description,envVars to reduce payload
     const singleMatch = path.match(/^\/api\/skills\/([^/]+)$/);
     if (singleMatch && method === "GET") {
       const name = singleMatch[1];
@@ -203,11 +224,12 @@ export function createFetchHandler(options?: {
       const meta = getSkill(name);
       if (!meta) return json({ error: `Skill '${name}' not found` }, 404);
 
+      const fields = parseFields(url.searchParams);
       const reqs = getSkillRequirements(name);
       const docs = getSkillBestDoc(name);
       const installed = new Set(getInstalledSkills());
       const envVars = reqs?.envVars || [];
-      return json({
+      const obj = {
         name: meta.name,
         displayName: meta.displayName,
         description: meta.description,
@@ -219,7 +241,8 @@ export function createFetchHandler(options?: {
         systemDeps: reqs?.systemDeps || [],
         cliCommand: reqs?.cliCommand || null,
         docs: docs || null,
-      });
+      };
+      return json(fields.length ? pickFields(obj, fields) : obj);
     }
 
     // GET /api/skills/:name/docs - Raw documentation text
@@ -255,13 +278,11 @@ export function createFetchHandler(options?: {
           );
           const allSuccess = results.every((r) => r.success);
           const errors = results.filter((r) => !r.success).map((r) => r.error);
+          // Compact success response — full results only on failure
           return json(
-            {
-              skill: name,
-              success: allSuccess,
-              results,
-              ...(errors.length > 0 ? { error: errors.join("; ") } : {}),
-            },
+            allSuccess
+              ? { skill: name, success: true }
+              : { skill: name, success: false, results, error: errors.join("; ") },
             allSuccess ? 200 : 400
           );
         } catch (e) {
@@ -271,9 +292,14 @@ export function createFetchHandler(options?: {
           );
         }
       } else {
-        // Full source install (default)
+        // Full source install (default) — compact success response
         const result = installSkill(name);
-        return json(result, result.success ? 200 : 400);
+        return json(
+          result.success
+            ? { skill: name, success: true }
+            : { skill: name, success: false, error: result.error },
+          result.success ? 200 : 400
+        );
       }
     }
 
