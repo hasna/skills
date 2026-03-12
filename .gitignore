@@ -54,3 +54,9 @@ Thumbs.db
 
 # npm pack output
 *.tgz
+
+# Claude Code local session data
+.claude/
+
+# Playwright MCP browser data
+.playwright-mcp/
