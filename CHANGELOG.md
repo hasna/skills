@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.11] - 2026-03-12
+
+### Changed
+- MCP lean stubs — stripped all param `.describe()` annotations from inputSchema across all 16 tools. Full descriptions available on demand via `describe_tools`.
+
+## [0.1.10] - 2026-03-12
+
+### Added
+- MCP `search_tools` tool — list tool names, optionally filtered by keyword
+- MCP `describe_tools` tool — get full descriptions for specific tools by name (on-demand schema lookup)
+
+## [0.1.9] - 2026-03-12
+
+### Changed
+- `list_skills` and `search_skills` MCP tools now return `[{name,category}]` by default — add `detail: true` for full objects (~90% token reduction on discovery calls)
+- `skills://registry` resource now compact `[{name,category}]` instead of full objects
+- All 14 MCP tool descriptions trimmed to ≤60 chars
+- Non-TTY CLI default output changed to compact `[{name,category}]` (use `skills list --json` for full objects)
+- `get_skill_info` strips null/empty fields from response
+
 ## [0.1.8] - 2026-03-11
 
 ### Added
