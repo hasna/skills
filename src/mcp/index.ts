@@ -61,8 +61,8 @@ server.registerTool("list_skills", {
   title: "List Skills",
   description: "List skills. Returns {name,category} by default; detail:true for full objects.",
   inputSchema: {
-    category: z.string().optional().describe("Filter by category"),
-    detail: z.boolean().optional().describe("Return full objects (default: false)"),
+    category: z.string().optional(),
+    detail: z.boolean().optional(),
   },
 }, async ({ category, detail }) => {
   const skills = category
@@ -82,8 +82,8 @@ server.registerTool("search_skills", {
   title: "Search Skills",
   description: "Search skills by name, description, or tags. Returns compact list by default.",
   inputSchema: {
-    query: z.string().describe("Search query (fuzzy-matched)"),
-    detail: z.boolean().optional().describe("Return full objects (default: false)"),
+    query: z.string(),
+    detail: z.boolean().optional(),
   },
 }, async ({ query, detail }) => {
   const results = searchSkills(query);
@@ -99,7 +99,7 @@ server.registerTool("get_skill_info", {
   title: "Get Skill Info",
   description: "Get skill metadata, env vars, and dependencies.",
   inputSchema: {
-    name: z.string().describe("Skill name (e.g. 'image')"),
+    name: z.string(),
   },
 }, async ({ name }) => {
   const skill = getSkill(name);
@@ -117,7 +117,7 @@ server.registerTool("get_skill_docs", {
   title: "Get Skill Docs",
   description: "Get skill documentation (SKILL.md > README.md > CLAUDE.md).",
   inputSchema: {
-    name: z.string().describe("Skill name"),
+    name: z.string(),
   },
 }, async ({ name }) => {
   const doc = getSkillBestDoc(name);
@@ -131,9 +131,9 @@ server.registerTool("install_skill", {
   title: "Install Skill",
   description: "Install a skill to .skills/ or to an agent dir (for: claude|codex|gemini|all).",
   inputSchema: {
-    name: z.string().describe("Skill name to install"),
-    for: z.string().optional().describe("Agent target: claude, codex, gemini, or all"),
-    scope: z.string().optional().describe("Install scope: global or project (default: global)"),
+    name: z.string(),
+    for: z.string().optional(),
+    scope: z.string().optional(),
   },
 }, async ({ name, for: agentArg, scope }) => {
   if (agentArg) {
@@ -168,9 +168,9 @@ server.registerTool("install_category", {
   title: "Install Category",
   description: "Install all skills in a category, optionally for a specific agent.",
   inputSchema: {
-    category: z.string().describe("Category name (case-insensitive, e.g. 'Event Management')"),
-    for: z.string().optional().describe("Agent target: claude, codex, gemini, or all"),
-    scope: z.string().optional().describe("Install scope: global or project (default: global)"),
+    category: z.string(),
+    for: z.string().optional(),
+    scope: z.string().optional(),
   },
 }, async ({ category, for: agentArg, scope }) => {
   // Validate category
@@ -224,9 +224,9 @@ server.registerTool("remove_skill", {
   title: "Remove Skill",
   description: "Remove a skill from .skills/ or from an agent dir.",
   inputSchema: {
-    name: z.string().describe("Skill name to remove"),
-    for: z.string().optional().describe("Agent target: claude, codex, gemini, or all"),
-    scope: z.string().optional().describe("Remove scope: global or project (default: global)"),
+    name: z.string(),
+    for: z.string().optional(),
+    scope: z.string().optional(),
   },
 }, async ({ name, for: agentArg, scope }) => {
   if (agentArg) {
@@ -288,7 +288,7 @@ server.registerTool("get_requirements", {
   title: "Get Requirements",
   description: "Get env vars, system deps, and npm dependencies for a skill.",
   inputSchema: {
-    name: z.string().describe("Skill name"),
+    name: z.string(),
   },
 }, async ({ name }) => {
   const reqs = getSkillRequirements(name);
@@ -302,8 +302,8 @@ server.registerTool("run_skill", {
   title: "Run Skill",
   description: "Run a skill by name with optional arguments.",
   inputSchema: {
-    name: z.string().describe("Skill name to run"),
-    args: z.array(z.string()).optional().describe("Arguments to pass to the skill"),
+    name: z.string(),
+    args: z.array(z.string()).optional(),
   },
 }, async ({ name, args }) => {
   const skill = getSkill(name);
@@ -340,9 +340,9 @@ server.registerTool("import_skills", {
   title: "Import Skills",
   description: "Install skills from an export payload. Supports agent installs via 'for'.",
   inputSchema: {
-    skills: z.array(z.string()).describe("List of skill names to install"),
-    for: z.string().optional().describe("Agent target: claude, codex, gemini, or all"),
-    scope: z.string().optional().describe("Install scope: global or project (default: global)"),
+    skills: z.array(z.string()),
+    for: z.string().optional(),
+    scope: z.string().optional(),
   },
 }, async ({ skills: skillList, for: agentArg, scope }) => {
   if (!skillList || skillList.length === 0) {
@@ -464,7 +464,7 @@ server.registerResource(
 server.registerTool("search_tools", {
   title: "Search Tools",
   description: "List tool names, optionally filtered by keyword.",
-  inputSchema: { query: z.string().optional().describe("Keyword filter") },
+  inputSchema: { query: z.string().optional() },
 }, async ({ query }) => {
   const all = [
     "list_skills", "search_skills", "get_skill_info", "get_skill_docs",
@@ -480,7 +480,7 @@ server.registerTool("search_tools", {
 server.registerTool("describe_tools", {
   title: "Describe Tools",
   description: "Get descriptions for specific tools by name.",
-  inputSchema: { names: z.array(z.string()).describe("Tool names from search_tools") },
+  inputSchema: { names: z.array(z.string()) },
 }, async ({ names }) => {
   const descriptions: Record<string, string> = {
     list_skills: "List skills {name,category}. Params: category?, detail?",
