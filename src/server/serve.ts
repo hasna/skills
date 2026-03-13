@@ -86,6 +86,7 @@ function json(data: unknown, status = 200): Response {
     status,
     headers: {
       "Content-Type": "application/json",
+      "X-API-Version": "1",
       ...SECURITY_HEADERS,
     },
   });
@@ -151,7 +152,8 @@ export function createFetchHandler(options?: {
 
   return async function fetchHandler(req: Request): Promise<Response> {
     const url = new URL(req.url);
-    const path = url.pathname;
+    // Support both /api/v1/... and /api/... (v1 is the default)
+    const path = url.pathname.replace(/^\/api\/v1\//, "/api/");
     const method = req.method;
 
     // ── API Routes ──

@@ -78,6 +78,20 @@ server.registerTool("list_skills", {
   };
 });
 
+server.registerTool("list_installed_skills", {
+  title: "List Installed Skills",
+  description: "List skills installed in the current project's .skills/ directory.",
+  inputSchema: {
+    directory: z.string().optional(),
+  },
+}, async ({ directory }) => {
+  const dir = directory || process.cwd();
+  const installed = getInstalledSkills(dir);
+  return {
+    content: [{ type: "text", text: JSON.stringify({ directory: dir, count: installed.length, skills: installed }) }],
+  };
+});
+
 server.registerTool("search_skills", {
   title: "Search Skills",
   description: "Search skills by name, description, or tags. Returns compact list by default.",
@@ -467,7 +481,7 @@ server.registerTool("search_tools", {
   inputSchema: { query: z.string().optional() },
 }, async ({ query }) => {
   const all = [
-    "list_skills", "search_skills", "get_skill_info", "get_skill_docs",
+    "list_skills", "list_installed_skills", "search_skills", "get_skill_info", "get_skill_docs",
     "install_skill", "install_category", "remove_skill",
     "list_categories", "list_tags", "get_requirements",
     "run_skill", "export_skills", "import_skills", "whoami",
@@ -484,6 +498,7 @@ server.registerTool("describe_tools", {
 }, async ({ names }) => {
   const descriptions: Record<string, string> = {
     list_skills: "List skills {name,category}. Params: category?, detail?",
+    list_installed_skills: "List installed skills in .skills/. Params: directory?",
     search_skills: "Search skills by name/tags. Params: query, detail?",
     get_skill_info: "Get skill metadata and env vars. Params: name",
     get_skill_docs: "Get skill documentation. Params: name",

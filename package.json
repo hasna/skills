@@ -23,9 +23,12 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/index.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --declaration --outDir dist",
+    "clean": "rm -rf bin/ dist/",
+    "build": "bun run clean && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/index.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --declaration --outDir dist",
     "test": "bun test",
     "dev": "bun run ./src/cli/index.tsx",
+    "dev:watch": "bun --watch run ./src/cli/index.tsx",
+    "dev:mcp": "bun --watch run ./src/mcp/index.ts",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "bun run build",
     "dashboard:dev": "cd dashboard && bun run dev",

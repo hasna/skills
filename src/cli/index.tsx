@@ -34,9 +34,23 @@ import {
   generateSkillMd,
   detectProjectSkills,
 } from "../lib/skillinfo.js";
+import { loadConfig, saveConfig, getConfigPath } from "../lib/config.js";
 
 const isTTY = (process.stdout.isTTY ?? false) && (process.stdin.isTTY ?? false);
 const program = new Command();
+
+/** Debug logger — writes to stderr so stdout piping is unaffected.
+ *  Checks both the parent program option and raw argv so --verbose works
+ *  regardless of position (before or after the subcommand). */
+let _verbose: boolean | undefined;
+function debug(msg: string): void {
+  if (_verbose === undefined) {
+    _verbose = program.opts().verbose || process.argv.includes("--verbose");
+  }
+  if (_verbose) {
+    console.error(`[debug] ${msg}`);
+  }
+}
 
 program
   .name("skills")
@@ -65,6 +79,7 @@ program
   .command("install")
   .alias("add")
   .argument("[skills...]", "Skills to install")
+  .option("--verbose", "Enable verbose debug logging", false)
   .option("-o, --overwrite", "Overwrite existing skills", false)
   .option("--json", "Output results as JSON", false)
   .option("--for <agent>", "Install for agent: claude, codex, gemini, or all")
@@ -73,6 +88,19 @@ program
   .option("--category <category>", "Install all skills in a category (case-insensitive)")
   .description("Install one or more skills")
   .action((skills: string[], options) => {
+    // Apply config defaults when CLI flags are not explicitly provided
+    const config = loadConfig();
+    if (!options.for && config.defaultAgent) {
+      options.for = config.defaultAgent;
+    }
+    // --scope has a Commander default of "global", so we only override
+    // if the user did NOT pass --scope explicitly AND config has a value.
+    // Commander sets the default before action runs, so we check raw argv.
+    if (!process.argv.includes("--scope") && config.defaultScope) {
+      options.scope = config.defaultScope;
+    }
+    debug(`install: skills=[${skills.join(", ")}] overwrite=${options.overwrite} for=${options.for ?? "none"} scope=${options.scope} dryRun=${options.dryRun}`);
+
     // Validate that either skills or --category is provided
     if (skills.length === 0 && !options.category) {
       console.error("error: missing required argument 'skills' or --category option");
@@ -105,6 +133,7 @@ program
       let agents: AgentTarget[];
       try {
         agents = resolveAgents(options.for);
+        debug(`install: resolved agents=[${agents.join(", ")}]`);
       } catch (err) {
         console.error(chalk.red((err as Error).message));
         process.exitCode = 1;
@@ -122,10 +151,12 @@ program
 
       for (const name of skills) {
         for (const agent of agents) {
+          debug(`install: installing ${name} for agent=${agent} scope=${options.scope}`);
           const result = installSkillForAgent(name, {
             agent,
             scope: options.scope as "global" | "project",
           }, generateSkillMd);
+          debug(`install: ${name} → ${result.success ? "ok" : "failed"} path=${result.path ?? "n/a"}`);
           results.push({ ...result, agent, scope: options.scope });
         }
       }
@@ -156,10 +187,12 @@ program
       const total = skills.length;
       for (let i = 0; i < total; i++) {
         const name = skills[i];
+        debug(`install: source=${getSkillPath(name)} dest=.skills/${normalizeSkillName(name)}`);
         if (total > 1 && !options.json) {
           process.stdout.write(`[${i + 1}/${total}] Installing ${name}...`);
         }
         const result = installSkill(name, { overwrite: options.overwrite });
+        debug(`install: ${name} → ${result.success ? "ok" : "failed"} path=${result.path ?? "n/a"}`);
         results.push(result);
         if (total > 1 && !options.json) {
           console.log(result.success ? " done" : " failed");
@@ -332,7 +365,9 @@ program
 // Search command
 program
   .command("search")
+  .alias("s")
   .argument("<query>", "Search term")
+  .option("--verbose", "Enable verbose debug logging", false)
   .option("--json", "Output as JSON", false)
   .option("--brief", "One line per skill: name \u2014 description [category]", false)
   .option("--format <format>", "Output format: compact (names only) or csv (name,category,description)")
@@ -341,6 +376,7 @@ program
   .description("Search for skills")
   .action((query: string, options: { json: boolean; brief: boolean; format?: string; category?: string; tags?: string }) => {
     let results = searchSkills(query);
+    debug(`search: query="${query}" results=${results.length} category=${options.category ?? "none"} tags=${options.tags ?? "none"}`);
 
     if (options.category) {
       const category = CATEGORIES.find(
@@ -762,16 +798,37 @@ program
   .command("remove")
   .alias("rm")
   .argument("<skill>", "Skill to remove")
+  .option("--verbose", "Enable verbose debug logging", false)
   .option("--json", "Output as JSON", false)
   .option("--for <agent>", "Remove from agent: claude, codex, gemini, or all")
   .option("--scope <scope>", "Remove scope: global or project", "global")
   .option("--dry-run", "Print what would happen without actually removing", false)
+  .option("-y, --yes", "Skip confirmation prompt", false)
   .description("Remove an installed skill")
-  .action((skill: string, options: { json: boolean; for?: string; scope: string; dryRun: boolean }) => {
+  .action(async (skill: string, options: { json: boolean; for?: string; scope: string; dryRun: boolean; yes: boolean }) => {
+    debug(`remove: skill=${skill} for=${options.for ?? "none"} scope=${options.scope} dryRun=${options.dryRun}`);
+
+    // Confirmation prompt (skip if --yes, --dry-run, or non-TTY)
+    if (!options.yes && !options.dryRun && isTTY) {
+      const skillName = normalizeSkillName(skill);
+      const target = options.for ? `from ${options.for} (${options.scope})` : "from .skills/";
+      const readline = await import("readline");
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await new Promise<string>(resolve => {
+        rl.question(`Remove ${skillName} ${target}? (y/N) `, resolve);
+      });
+      rl.close();
+      if (answer.toLowerCase() !== "y") {
+        console.log("Cancelled.");
+        return;
+      }
+    }
+
     if (options.for) {
       let agents: AgentTarget[];
       try {
         agents = resolveAgents(options.for);
+        debug(`remove: resolved agents=[${agents.join(", ")}]`);
       } catch (err) {
         console.error(chalk.red((err as Error).message));
         process.exitCode = 1;
@@ -787,10 +844,12 @@ program
 
       const results = [];
       for (const agent of agents) {
+        debug(`remove: removing ${skill} from agent=${agent} scope=${options.scope}`);
         const removed = removeSkillForAgent(skill, {
           agent,
           scope: options.scope as "global" | "project",
         });
+        debug(`remove: ${skill} from ${agent} → ${removed ? "removed" : "not found"}`);
         results.push({ skill, agent, scope: options.scope, removed });
       }
 
@@ -816,7 +875,9 @@ program
         return;
       }
 
+      debug(`remove: deleting .skills/${normalizeSkillName(skill)}`);
       const removed = removeSkill(skill);
+      debug(`remove: ${skill} → ${removed ? "removed" : "not found"}`);
       if (options.json) {
         console.log(JSON.stringify({ skill, removed }));
       } else if (removed) {
@@ -1753,6 +1814,64 @@ program
       console.log(chalk.dim(`\n${upToDate.length} skill(s) up to date`));
     }
     console.log(chalk.dim(`\nRun ${chalk.bold("skills update")} to update all outdated skills`));
+  });
+
+// Config command
+const configCmd = program
+  .command("config")
+  .description("Manage skills configuration");
+
+configCmd
+  .command("show", { isDefault: true })
+  .description("Show current merged configuration")
+  .action(() => {
+    const config = loadConfig();
+    const keys = Object.keys(config);
+    if (keys.length === 0) {
+      console.log(chalk.dim("No configuration set"));
+      return;
+    }
+    for (const [key, value] of Object.entries(config)) {
+      console.log(`${chalk.cyan(key)} = ${chalk.bold(value as string)}`);
+    }
+  });
+
+configCmd
+  .command("set <key> <value>")
+  .option("--global", "Save to global config (~/.skillsrc)", false)
+  .description("Set a configuration value")
+  .action((key: string, value: string, options) => {
+    const scope = options.global ? "global" : "project";
+    try {
+      saveConfig(key, value, scope);
+      console.log(chalk.green(`Set ${key} = ${value} (${scope})`));
+    } catch (err) {
+      console.error(chalk.red((err as Error).message));
+      process.exitCode = 1;
+    }
+  });
+
+configCmd
+  .command("get <key>")
+  .description("Get a specific configuration value")
+  .action((key: string) => {
+    const config = loadConfig();
+    const value = (config as any)[key];
+    if (value === undefined) {
+      console.log(chalk.dim(`${key} is not set`));
+    } else {
+      console.log(value);
+    }
+  });
+
+configCmd
+  .command("path")
+  .description("Show configuration file paths")
+  .action(() => {
+    const globalPath = getConfigPath("global");
+    const projectPath = getConfigPath("project");
+    console.log(`${chalk.cyan("global")}:  ${globalPath}${existsSync(globalPath) ? chalk.green(" (exists)") : chalk.dim(" (not found)")}`);
+    console.log(`${chalk.cyan("project")}: ${projectPath}${existsSync(projectPath) ? chalk.green(" (exists)") : chalk.dim(" (not found)")}`);
   });
 
 program.parse();
