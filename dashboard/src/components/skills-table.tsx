@@ -20,6 +20,7 @@ import {
   CheckIcon,
   EyeIcon,
   DownloadIcon,
+  Loader2Icon,
   TrashIcon,
   XIcon,
 } from "lucide-react";
@@ -78,6 +79,8 @@ interface SkillsTableProps {
   onRemove: (name: string) => void;
   onBulkInstall: (names: string[]) => void;
   onBulkRemove: (names: string[]) => void;
+  installingNames: Set<string>;
+  removingNames: Set<string>;
   selectedIndex: number;
   onSelectedIndexChange: (index: number) => void;
   onVisibleRowsChange: (skills: SkillWithStatus[], count: number) => void;
@@ -91,6 +94,8 @@ export function SkillsTable({
   onRemove,
   onBulkInstall,
   onBulkRemove,
+  installingNames,
+  removingNames,
   selectedIndex,
   onSelectedIndexChange,
   onVisibleRowsChange,
@@ -239,6 +244,8 @@ export function SkillsTable({
         header: () => <span className="sr-only">Actions</span>,
         cell: ({ row }) => {
           const s = row.original;
+          const isInstalling = installingNames.has(s.name);
+          const isRemoving = removingNames.has(s.name);
           return (
             <div className="flex justify-end gap-1">
               <CopyCommand command={`skills install ${s.name}`} />
@@ -247,19 +254,29 @@ export function SkillsTable({
                   variant="ghost"
                   size="sm"
                   onClick={() => onRemove(s.name)}
+                  disabled={isRemoving}
                   className="text-destructive hover:text-destructive"
                 >
-                  <TrashIcon className="size-3.5" />
-                  Remove
+                  {isRemoving ? (
+                    <Loader2Icon className="size-3.5 animate-spin" />
+                  ) : (
+                    <TrashIcon className="size-3.5" />
+                  )}
+                  {isRemoving ? "Removing..." : "Remove"}
                 </Button>
               ) : (
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => onInstall(s.name)}
+                  disabled={isInstalling}
                 >
-                  <DownloadIcon className="size-3.5" />
-                  Install
+                  {isInstalling ? (
+                    <Loader2Icon className="size-3.5 animate-spin" />
+                  ) : (
+                    <DownloadIcon className="size-3.5" />
+                  )}
+                  {isInstalling ? "Installing..." : "Install"}
                 </Button>
               )}
               <Button
@@ -275,7 +292,7 @@ export function SkillsTable({
         },
       },
     ],
-    [onViewDetails, onInstall, onRemove]
+    [onViewDetails, onInstall, onRemove, installingNames, removingNames]
   );
 
   const table = useReactTable({
@@ -483,8 +500,16 @@ export function SkillsTable({
             {totalSelected} selected
           </span>
           {selectedNotInstalled.length > 0 && (
-            <Button size="sm" onClick={handleBulkInstall}>
-              <DownloadIcon className="size-3.5" />
+            <Button
+              size="sm"
+              onClick={handleBulkInstall}
+              disabled={selectedNotInstalled.some((n) => installingNames.has(n))}
+            >
+              {selectedNotInstalled.some((n) => installingNames.has(n)) ? (
+                <Loader2Icon className="size-3.5 animate-spin" />
+              ) : (
+                <DownloadIcon className="size-3.5" />
+              )}
               Install {selectedNotInstalled.length}
             </Button>
           )}
@@ -493,8 +518,13 @@ export function SkillsTable({
               size="sm"
               variant="destructive"
               onClick={handleBulkRemove}
+              disabled={selectedInstalled.some((n) => removingNames.has(n))}
             >
-              <TrashIcon className="size-3.5" />
+              {selectedInstalled.some((n) => removingNames.has(n)) ? (
+                <Loader2Icon className="size-3.5 animate-spin" />
+              ) : (
+                <TrashIcon className="size-3.5" />
+              )}
               Remove {selectedInstalled.length}
             </Button>
           )}

@@ -9,6 +9,8 @@ import {
   KeyIcon,
   PackageIcon,
   ServerIcon,
+  AlertTriangleIcon,
+  Loader2Icon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -34,6 +36,8 @@ interface SkillDetailDialogProps {
   onOpenChange: (open: boolean) => void;
   onInstall: (name: string) => void;
   onRemove: (name: string) => void;
+  installingNames: Set<string>;
+  removingNames: Set<string>;
 }
 
 export function SkillDetailDialog({
@@ -42,6 +46,8 @@ export function SkillDetailDialog({
   onOpenChange,
   onInstall,
   onRemove,
+  installingNames,
+  removingNames,
 }: SkillDetailDialogProps) {
   const [docs, setDocs] = React.useState<string | null>(null);
   const [loadingDocs, setLoadingDocs] = React.useState(false);
@@ -180,7 +186,7 @@ export function SkillDetailDialog({
                   onClick={() => handleInstallForAgent(agent)}
                 >
                   {agentInstalling === agent ? (
-                    <CheckIcon className="size-3.5 animate-spin" />
+                    <Loader2Icon className="size-3.5 animate-spin" />
                   ) : (
                     <DownloadIcon className="size-3.5" />
                   )}
@@ -189,6 +195,32 @@ export function SkillDetailDialog({
               ))}
             </div>
           </div>
+
+          {/* Env Var Validation Warning */}
+          {skill.envVars.length > 0 &&
+            skill.envVars.some((v) => !envVarsSetSet.has(v)) && (
+              <div className="rounded-md border border-amber-400 bg-amber-50 px-3 py-2.5 dark:border-amber-600 dark:bg-amber-950">
+                <div className="flex items-start gap-2">
+                  <AlertTriangleIcon className="size-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                  <div className="text-sm text-amber-800 dark:text-amber-200">
+                    <p className="font-medium">Missing environment variables</p>
+                    <p className="mt-0.5 text-xs text-amber-700 dark:text-amber-300">
+                      This skill requires environment variables that are not set:{" "}
+                      {skill.envVars
+                        .filter((v) => !envVarsSetSet.has(v))
+                        .map((v) => (
+                          <code
+                            key={v}
+                            className="mx-0.5 rounded bg-amber-100 px-1 py-0.5 font-mono dark:bg-amber-900"
+                          >
+                            {v}
+                          </code>
+                        ))}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
 
           {/* Environment Variables */}
           {skill.envVars.length > 0 && (
@@ -256,24 +288,34 @@ export function SkillDetailDialog({
             <Button
               variant="destructive"
               size="sm"
+              disabled={removingNames.has(skill.name)}
               onClick={() => {
                 onRemove(skill.name);
                 onOpenChange(false);
               }}
             >
-              <TrashIcon className="size-3.5" />
-              Remove
+              {removingNames.has(skill.name) ? (
+                <Loader2Icon className="size-3.5 animate-spin" />
+              ) : (
+                <TrashIcon className="size-3.5" />
+              )}
+              {removingNames.has(skill.name) ? "Removing..." : "Remove"}
             </Button>
           ) : (
             <Button
               size="sm"
+              disabled={installingNames.has(skill.name)}
               onClick={() => {
                 onInstall(skill.name);
                 onOpenChange(false);
               }}
             >
-              <DownloadIcon className="size-3.5" />
-              Install
+              {installingNames.has(skill.name) ? (
+                <Loader2Icon className="size-3.5 animate-spin" />
+              ) : (
+                <DownloadIcon className="size-3.5" />
+              )}
+              {installingNames.has(skill.name) ? "Installing..." : "Install"}
             </Button>
           )}
         </DialogFooter>

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { DownloadIcon } from "lucide-react";
+import { DownloadIcon, Loader2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -20,6 +20,7 @@ interface InstallDialogProps {
   onOpenChange: (open: boolean) => void;
   skillNames: string[];
   onConfirm: (options: InstallOptions) => void;
+  installing?: boolean;
 }
 
 export function InstallDialog({
@@ -27,6 +28,7 @@ export function InstallDialog({
   onOpenChange,
   skillNames,
   onConfirm,
+  installing = false,
 }: InstallDialogProps) {
   const [installType, setInstallType] = React.useState<"full" | "agent">(
     "full"
@@ -166,9 +168,13 @@ export function InstallDialog({
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button size="sm" onClick={handleConfirm}>
-            <DownloadIcon className="size-3.5" />
-            Install
+          <Button size="sm" onClick={handleConfirm} disabled={installing}>
+            {installing ? (
+              <Loader2Icon className="size-3.5 animate-spin" />
+            ) : (
+              <DownloadIcon className="size-3.5" />
+            )}
+            {installing ? "Installing..." : "Install"}
           </Button>
         </DialogFooter>
       </DialogContent>

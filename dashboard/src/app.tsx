@@ -22,6 +22,8 @@ export function App() {
   const [updating, setUpdating] = React.useState(false);
   const [installDialogOpen, setInstallDialogOpen] = React.useState(false);
   const [installDialogSkills, setInstallDialogSkills] = React.useState<string[]>([]);
+  const [installingNames, setInstallingNames] = React.useState<Set<string>>(new Set());
+  const [removingNames, setRemovingNames] = React.useState<Set<string>>(new Set());
 
   // Keyboard navigation state
   const [selectedIndex, setSelectedIndex] = React.useState(-1);
@@ -82,24 +84,34 @@ export function App() {
   }
 
   async function handleInstallConfirm(options: InstallOptions) {
-    for (const name of installDialogSkills) {
-      try {
-        const res = await fetch(`/api/skills/${name}/install`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: options.for ? JSON.stringify(options) : undefined,
-        });
-        const data = await res.json();
-        if (data.success) {
-          showToast(`Installed ${name}`, "success");
-        } else {
-          showToast(data.error || `Failed to install ${name}`, "error");
+    const names = [...installDialogSkills];
+    setInstallingNames((prev) => new Set([...prev, ...names]));
+    try {
+      for (const name of names) {
+        try {
+          const res = await fetch(`/api/skills/${name}/install`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: options.for ? JSON.stringify(options) : undefined,
+          });
+          const data = await res.json();
+          if (data.success) {
+            showToast(`Installed ${name}`, "success");
+          } else {
+            showToast(data.error || `Failed to install ${name}`, "error");
+          }
+        } catch {
+          showToast(`Failed to install ${name}`, "error");
         }
-      } catch {
-        showToast(`Failed to install ${name}`, "error");
       }
+      loadSkills();
+    } finally {
+      setInstallingNames((prev) => {
+        const next = new Set(prev);
+        for (const n of names) next.delete(n);
+        return next;
+      });
     }
-    loadSkills();
   }
 
   function handleInstall(name: string) {
@@ -107,6 +119,7 @@ export function App() {
   }
 
   async function handleRemove(name: string) {
+    setRemovingNames((prev) => new Set([...prev, name]));
     try {
       const res = await fetch(`/api/skills/${name}/remove`, { method: "POST" });
       const data = await res.json();
@@ -118,6 +131,12 @@ export function App() {
       }
     } catch {
       showToast(`Failed to remove ${name}`, "error");
+    } finally {
+      setRemovingNames((prev) => {
+        const next = new Set(prev);
+        next.delete(name);
+        return next;
+      });
     }
   }
 
@@ -126,20 +145,29 @@ export function App() {
   }
 
   async function handleBulkRemove(names: string[]) {
-    for (const name of names) {
-      try {
-        const res = await fetch(`/api/skills/${name}/remove`, { method: "POST" });
-        const data = await res.json();
-        if (data.success) {
-          showToast(`Removed ${name}`, "success");
-        } else {
-          showToast(data.error || `Failed to remove ${name}`, "error");
+    setRemovingNames((prev) => new Set([...prev, ...names]));
+    try {
+      for (const name of names) {
+        try {
+          const res = await fetch(`/api/skills/${name}/remove`, { method: "POST" });
+          const data = await res.json();
+          if (data.success) {
+            showToast(`Removed ${name}`, "success");
+          } else {
+            showToast(data.error || `Failed to remove ${name}`, "error");
+          }
+        } catch {
+          showToast(`Failed to remove ${name}`, "error");
         }
-      } catch {
-        showToast(`Failed to remove ${name}`, "error");
       }
+      loadSkills();
+    } finally {
+      setRemovingNames((prev) => {
+        const next = new Set(prev);
+        for (const n of names) next.delete(n);
+        return next;
+      });
     }
-    loadSkills();
   }
 
   async function handleSelfUpdate() {
@@ -221,6 +249,8 @@ export function App() {
           onRemove={handleRemove}
           onBulkInstall={handleBulkInstall}
           onBulkRemove={handleBulkRemove}
+          installingNames={installingNames}
+          removingNames={removingNames}
           selectedIndex={selectedIndex}
           onSelectedIndexChange={setSelectedIndex}
           onVisibleRowsChange={handleVisibleRowsChange}
@@ -235,6 +265,8 @@ export function App() {
         onOpenChange={setDialogOpen}
         onInstall={handleInstall}
         onRemove={handleRemove}
+        installingNames={installingNames}
+        removingNames={removingNames}
       />
 
       {/* Install Options Dialog */}
@@ -243,6 +275,7 @@ export function App() {
         onOpenChange={setInstallDialogOpen}
         skillNames={installDialogSkills}
         onConfirm={handleInstallConfirm}
+        installing={installDialogSkills.some((n) => installingNames.has(n))}
       />
 
       {/* Keyboard Shortcuts */}
