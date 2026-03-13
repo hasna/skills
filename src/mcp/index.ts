@@ -21,6 +21,7 @@ import {
   getSkill,
   getSkillsByCategory,
   searchSkills,
+  findSimilarSkills,
   type Category,
 } from "../lib/registry.js";
 import {
@@ -55,26 +56,59 @@ function stripNulls(obj: Record<string, unknown>): Record<string, unknown> {
   );
 }
 
+/** Simple LRU cache for search results */
+const searchCache = new Map<string, unknown>();
+const CACHE_MAX = 100;
+function cacheGet(key: string): unknown | undefined { return searchCache.get(key); }
+function cacheSet(key: string, value: unknown): void {
+  if (searchCache.size >= CACHE_MAX) {
+    const first = searchCache.keys().next().value;
+    if (first !== undefined) searchCache.delete(first);
+  }
+  searchCache.set(key, value);
+}
+function cacheClear(): void { searchCache.clear(); }
+
+/** Structured MCP error response */
+function mcpError(code: string, message: string, suggestions?: string[]) {
+  const obj: { code: string; message: string; suggestions?: string[] } = { code, message };
+  if (suggestions && suggestions.length > 0) obj.suggestions = suggestions;
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(obj) }],
+    isError: true,
+  };
+}
+
 // ---- Tools ----
 
 server.registerTool("list_skills", {
   title: "List Skills",
-  description: "List skills. Returns {name,category} by default; detail:true for full objects.",
+  description: "List skills. Returns {name,category} by default; detail:true for full objects. Supports limit/offset pagination.",
   inputSchema: {
     category: z.string().optional(),
     detail: z.boolean().optional(),
+    limit: z.number().optional(),
+    offset: z.number().optional(),
   },
-}, async ({ category, detail }) => {
+}, async ({ category, detail, limit, offset }) => {
   const skills = category
     ? getSkillsByCategory(category as Category)
     : SKILLS;
 
-  const result = detail
+  const mapped = detail
     ? skills
     : skills.map(s => ({ name: s.name, category: s.category }));
 
+  if (limit !== undefined || offset !== undefined) {
+    const start = offset || 0;
+    const sliced = limit !== undefined ? mapped.slice(start, start + limit) : mapped.slice(start);
+    return {
+      content: [{ type: "text", text: JSON.stringify({ skills: sliced, total: mapped.length, offset: start, limit: limit ?? null }) }],
+    };
+  }
+
   return {
-    content: [{ type: "text", text: JSON.stringify(result) }],
+    content: [{ type: "text", text: JSON.stringify(mapped) }],
   };
 });
 
@@ -94,16 +128,30 @@ server.registerTool("list_installed_skills", {
 
 server.registerTool("search_skills", {
   title: "Search Skills",
-  description: "Search skills by name, description, or tags. Returns compact list by default.",
+  description: "Search skills by name, description, or tags. Returns compact list by default. Supports limit/offset pagination.",
   inputSchema: {
     query: z.string(),
     detail: z.boolean().optional(),
+    limit: z.number().optional(),
+    offset: z.number().optional(),
   },
-}, async ({ query, detail }) => {
-  const results = searchSkills(query);
+}, async ({ query, detail, limit, offset }) => {
+  const cacheKey = `${query}:${detail ?? false}`;
+  const cached = cacheGet(cacheKey);
+  const results = cached ? cached as typeof SKILLS : searchSkills(query);
+  if (!cached) cacheSet(cacheKey, results);
   const out = detail
     ? results
     : results.map(s => ({ name: s.name, category: s.category }));
+
+  if (limit !== undefined || offset !== undefined) {
+    const start = offset || 0;
+    const sliced = limit !== undefined ? out.slice(start, start + limit) : out.slice(start);
+    return {
+      content: [{ type: "text", text: JSON.stringify({ skills: sliced, total: out.length, offset: start, limit: limit ?? null }) }],
+    };
+  }
+
   return {
     content: [{ type: "text", text: JSON.stringify(out) }],
   };
@@ -118,7 +166,7 @@ server.registerTool("get_skill_info", {
 }, async ({ name }) => {
   const skill = getSkill(name);
   if (!skill) {
-    return { content: [{ type: "text", text: `Skill '${name}' not found` }], isError: true };
+    return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
   }
   const reqs = getSkillRequirements(name);
   const result = stripNulls({ ...skill, ...reqs });
@@ -136,7 +184,7 @@ server.registerTool("get_skill_docs", {
 }, async ({ name }) => {
   const doc = getSkillBestDoc(name);
   if (!doc) {
-    return { content: [{ type: "text", text: `No documentation found for '${name}'` }], isError: true };
+    return mcpError("NO_DOCS", `No documentation found for '${name}'`);
   }
   return { content: [{ type: "text", text: doc }] };
 });
@@ -155,10 +203,7 @@ server.registerTool("install_skill", {
     try {
       agents = resolveAgents(agentArg);
     } catch (err) {
-      return {
-        content: [{ type: "text", text: (err as Error).message }],
-        isError: true,
-      };
+      return mcpError("INVALID_AGENT", (err as Error).message, ["claude", "codex", "gemini", "all"]);
     }
 
     const results = agents.map(a =>
@@ -172,6 +217,7 @@ server.registerTool("install_skill", {
   }
 
   const result = installSkill(name);
+  if (result.success) cacheClear();
   return {
     content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     isError: !result.success,
@@ -193,8 +239,7 @@ server.registerTool("install_category", {
   );
   if (!matchedCategory) {
     return {
-      content: [{ type: "text", text: `Unknown category: ${category}. Available: ${CATEGORIES.join(", ")}` }],
-      isError: true,
+      ...mcpError("UNKNOWN_CATEGORY", `Unknown category: ${category}`, CATEGORIES.slice()),
     };
   }
 
@@ -206,10 +251,7 @@ server.registerTool("install_category", {
     try {
       agents = resolveAgents(agentArg);
     } catch (err) {
-      return {
-        content: [{ type: "text", text: (err as Error).message }],
-        isError: true,
-      };
+      return mcpError("INVALID_AGENT", (err as Error).message, ["claude", "codex", "gemini", "all"]);
     }
 
     const results = [];
@@ -248,10 +290,7 @@ server.registerTool("remove_skill", {
     try {
       agents = resolveAgents(agentArg);
     } catch (err) {
-      return {
-        content: [{ type: "text", text: (err as Error).message }],
-        isError: true,
-      };
+      return mcpError("INVALID_AGENT", (err as Error).message, ["claude", "codex", "gemini", "all"]);
     }
 
     const results = agents.map(a => ({
@@ -266,6 +305,7 @@ server.registerTool("remove_skill", {
   }
 
   const removed = removeSkill(name);
+  if (removed) cacheClear();
   return {
     content: [{ type: "text", text: JSON.stringify({ skill: name, removed }, null, 2) }],
   };
@@ -307,7 +347,7 @@ server.registerTool("get_requirements", {
 }, async ({ name }) => {
   const reqs = getSkillRequirements(name);
   if (!reqs) {
-    return { content: [{ type: "text", text: `Skill '${name}' not found` }], isError: true };
+    return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
   }
   return { content: [{ type: "text", text: JSON.stringify(reqs, null, 2) }] };
 });
@@ -322,7 +362,7 @@ server.registerTool("run_skill", {
 }, async ({ name, args }) => {
   const skill = getSkill(name);
   if (!skill) {
-    return { content: [{ type: "text", text: `Skill '${name}' not found` }], isError: true };
+    return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
   }
 
   const result = await runSkill(name, args || []);
@@ -370,10 +410,7 @@ server.registerTool("import_skills", {
     try {
       agents = resolveAgents(agentArg);
     } catch (err) {
-      return {
-        content: [{ type: "text", text: (err as Error).message }],
-        isError: true,
-      };
+      return mcpError("INVALID_AGENT", (err as Error).message, ["claude", "codex", "gemini", "all"]);
     }
 
     for (const name of skillList) {

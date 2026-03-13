@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from "fs";
 import { join, dirname, extname } from "path";
 import { fileURLToPath } from "url";
 import { SKILLS, CATEGORIES, getSkill, getSkillsByCategory, searchSkills } from "../lib/registry.js";
-import { getInstalledSkills, installSkill, removeSkill, installSkillForAgent, resolveAgents } from "../lib/installer.js";
+import { getInstalledSkills, getInstallMeta, installSkill, removeSkill, installSkillForAgent, resolveAgents } from "../lib/installer.js";
 import type { AgentScope } from "../lib/installer.js";
 import { getSkillDocs, getSkillBestDoc, getSkillRequirements, generateSkillMd } from "../lib/skillinfo.js";
 
@@ -158,12 +158,50 @@ export function createFetchHandler(options?: {
 
     // ── API Routes ──
 
+    // GET /health - Health check for monitoring
+    if (path === "/api/health" && method === "GET") {
+      const pkg = getPackageJson();
+      return json({
+        status: "ok",
+        version: pkg.version,
+        uptime: Math.floor(process.uptime()),
+        skillCount: SKILLS.length,
+      });
+    }
+
     // GET /api/skills - All skills with status
     // Supports ?fields=name,category,installed to reduce payload
+    // Supports ?stream=true for chunked JSON array streaming
     if (path === "/api/skills" && method === "GET") {
       const fields = parseFields(url.searchParams);
       const skills = getAllSkillsWithStatus();
-      return json(fields.length ? skills.map(s => pickFields(s, fields)) : skills);
+      const data = fields.length ? skills.map(s => pickFields(s, fields)) : skills;
+
+      if (url.searchParams.get("stream") === "true") {
+        const CHUNK_SIZE = 20;
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue("[");
+            for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+              const chunk = data.slice(i, i + CHUNK_SIZE);
+              const prefix = i === 0 ? "" : ",";
+              controller.enqueue(prefix + chunk.map(s => JSON.stringify(s)).join(","));
+            }
+            controller.enqueue("]");
+            controller.close();
+          },
+        });
+        return new Response(stream, {
+          headers: {
+            "Content-Type": "application/json",
+            "Transfer-Encoding": "chunked",
+            "X-API-Version": "1",
+            ...SECURITY_HEADERS,
+          },
+        });
+      }
+
+      return json(data);
     }
 
     // GET /api/categories - List categories with counts
@@ -230,14 +268,30 @@ export function createFetchHandler(options?: {
       const reqs = getSkillRequirements(name);
       const docs = getSkillBestDoc(name);
       const installed = new Set(getInstalledSkills());
+      const isInstalled = installed.has(meta.name);
       const envVars = reqs?.envVars || [];
+
+      // Include install metadata (timestamp + version) when installed
+      let installedAt: string | null = null;
+      let installedVersion: string | null = null;
+      if (isInstalled) {
+        const installMeta = getInstallMeta();
+        const skillMeta = installMeta.skills?.[meta.name];
+        if (skillMeta) {
+          installedAt = skillMeta.installedAt || null;
+          installedVersion = skillMeta.version || null;
+        }
+      }
+
       const obj = {
         name: meta.name,
         displayName: meta.displayName,
         description: meta.description,
         category: meta.category,
         tags: meta.tags,
-        installed: installed.has(meta.name),
+        installed: isInstalled,
+        installedAt,
+        installedVersion,
         envVars,
         envVarsSet: envVars.filter((v) => !!process.env[v]),
         systemDeps: reqs?.systemDeps || [],
