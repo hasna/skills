@@ -14,6 +14,7 @@ import {
   getSkill,
   getSkillsByCategory,
   searchSkills,
+  findSimilarSkills,
 } from "../lib/registry.js";
 import {
   installSkill,
@@ -37,6 +38,15 @@ import {
 import { loadConfig, saveConfig, getConfigPath } from "../lib/config.js";
 
 const isTTY = (process.stdout.isTTY ?? false) && (process.stdin.isTTY ?? false);
+
+// Respect --no-color flag (chalk also respects NO_COLOR env var natively)
+// Strip from argv so Commander doesn't reject it on subcommands
+if (process.argv.includes("--no-color")) {
+  chalk.level = 0;
+  const idx = process.argv.indexOf("--no-color");
+  process.argv.splice(idx, 1);
+}
+
 const program = new Command();
 
 /** Debug logger — writes to stderr so stdout piping is unaffected.
@@ -52,11 +62,21 @@ function debug(msg: string): void {
   }
 }
 
+/** Print "Skill not found" with fuzzy suggestions */
+function skillNotFound(name: string): void {
+  console.error(`Skill '${name}' not found`);
+  const similar = findSimilarSkills(name);
+  if (similar.length > 0) {
+    console.error(chalk.dim(`Did you mean: ${similar.join(", ")}?`));
+  }
+}
+
 program
   .name("skills")
   .description("Install AI agent skills for your project")
   .version(pkg.version)
   .option("--verbose", "Enable verbose logging", false)
+  .option("--no-color", "Disable colored output (also respects NO_COLOR env var)")
   .enablePositionalOptions();
 
 // Interactive mode (default when no subcommand given)
@@ -185,6 +205,7 @@ program
 
       // Default: full source install to .skills/
       const total = skills.length;
+      const startTime = Date.now();
       for (let i = 0; i < total; i++) {
         const name = skills[i];
         debug(`install: source=${getSkillPath(name)} dest=.skills/${normalizeSkillName(name)}`);
@@ -195,7 +216,18 @@ program
         debug(`install: ${name} → ${result.success ? "ok" : "failed"} path=${result.path ?? "n/a"}`);
         results.push(result);
         if (total > 1 && !options.json) {
-          console.log(result.success ? " done" : " failed");
+          console.log(result.success ? " done" : ` ${chalk.red("failed")}`);
+        }
+      }
+      if (total > 1 && !options.json) {
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        const succeeded = results.filter(r => r.success).length;
+        const failed = results.filter(r => !r.success);
+        if (failed.length > 0) {
+          console.log(chalk.yellow(`\n${succeeded}/${total} installed in ${elapsed}s, ${failed.length} failed: ${failed.map(r => r.skill).join(", ")}`));
+          process.exitCode = 1;
+        } else {
+          console.log(chalk.green(`\n${succeeded}/${total} installed in ${elapsed}s`));
         }
       }
 
@@ -408,6 +440,10 @@ program
     }
     if (results.length === 0) {
       console.log(chalk.dim(`No skills found for "${query}"`));
+      const similar = findSimilarSkills(query, 5);
+      if (similar.length > 0) {
+        console.log(chalk.dim(`Related skills: ${similar.join(", ")}`));
+      }
       return;
     }
     if (fmt === "compact") {
@@ -447,7 +483,7 @@ program
   .action((name: string, options: { json: boolean; brief: boolean }) => {
     const skill = getSkill(name);
     if (!skill) {
-      console.error(`Skill '${name}' not found`);
+      skillNotFound(name);
       process.exitCode = 1;
       return;
     }
@@ -491,7 +527,7 @@ program
   .action((name: string, options: { json: boolean; file: string }) => {
     const docs = getSkillDocs(name);
     if (!docs) {
-      console.error(`Skill '${name}' not found`);
+      skillNotFound(name);
       process.exitCode = 1;
       return;
     }
@@ -540,7 +576,7 @@ program
   .action((name: string, options: { json: boolean }) => {
     const reqs = getSkillRequirements(name);
     if (!reqs) {
-      console.error(`Skill '${name}' not found`);
+      skillNotFound(name);
       process.exitCode = 1;
       return;
     }
@@ -593,7 +629,7 @@ program
   .action(async (name: string, args: string[]) => {
     const skill = getSkill(name);
     if (!skill) {
-      console.error(`Skill '${name}' not found in registry`);
+      skillNotFound(name);
       process.exitCode = 1;
       return;
     }

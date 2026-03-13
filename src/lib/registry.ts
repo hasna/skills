@@ -1630,3 +1630,33 @@ export function getAllTags(): string[] {
   }
   return Array.from(tagSet).sort();
 }
+
+/**
+ * Levenshtein distance between two strings
+ */
+function levenshtein(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, (_, i) =>
+    Array.from({ length: n + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0))
+  );
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1][j - 1]
+        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return dp[m][n];
+}
+
+/**
+ * Find skills with names similar to the given query (for "did you mean?" suggestions)
+ */
+export function findSimilarSkills(query: string, maxResults = 3): string[] {
+  const q = query.toLowerCase();
+  const scored = SKILLS
+    .map(s => ({ name: s.name, dist: levenshtein(q, s.name.toLowerCase()) }))
+    .filter(s => s.dist <= Math.max(3, Math.floor(q.length / 2)))
+    .sort((a, b) => a.dist - b.dist);
+  return scored.slice(0, maxResults).map(s => s.name);
+}

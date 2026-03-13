@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { existsSync, readFileSync, readdirSync } from "fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { SKILLS } from "./registry";
@@ -95,5 +95,22 @@ describe("structural validation of all 202 skills", () => {
       if (!hasDoc) missingCount++;
     }
     expect(missingCount).toBe(0);
+  });
+
+  test("all skills have a non-trivial src/index.ts", () => {
+    const minimal: string[] = [];
+    for (const dir of skillDirs) {
+      const indexPath = join(SKILLS_DIR, dir, "src", "index.ts");
+      if (existsSync(indexPath)) {
+        const size = statSync(indexPath).size;
+        if (size < 50) minimal.push(`${dir} (${size}B)`);
+      }
+    }
+    // Report but don't fail — some skills may legitimately be thin wrappers
+    if (minimal.length > 0) {
+      console.warn(`Skills with minimal src/index.ts (<50B): ${minimal.join(", ")}`);
+    }
+    // Allow up to 10% of skills to be minimal
+    expect(minimal.length).toBeLessThan(Math.floor(skillDirs.length * 0.1));
   });
 });

@@ -16,6 +16,7 @@ export {
   searchSkills,
   getSkillsByTag,
   getAllTags,
+  findSimilarSkills,
   type SkillMeta,
   type Category,
 } from "./lib/registry.js";
