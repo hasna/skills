@@ -1,5 +1,5 @@
 import * as React from "react";
-import { RefreshCwIcon, ArrowUpCircleIcon } from "lucide-react";
+import { RefreshCwIcon, ArrowUpCircleIcon, DownloadIcon } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { StatsCards } from "@/components/stats-cards";
 import { SkillsTable } from "@/components/skills-table";
@@ -17,7 +17,9 @@ export function App() {
   const [toast, setToast] = React.useState<{
     message: string;
     type: "success" | "error";
+    onUndo?: () => void;
   } | null>(null);
+  const toastTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const [version, setVersion] = React.useState<string>("");
   const [updating, setUpdating] = React.useState(false);
   const [installDialogOpen, setInstallDialogOpen] = React.useState(false);
@@ -56,9 +58,15 @@ export function App() {
     loadVersion();
   }, [loadSkills, loadVersion]);
 
-  function showToast(message: string, type: "success" | "error") {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), type === "error" ? 5000 : 3000);
+  function showToast(message: string, type: "success" | "error", onUndo?: () => void) {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast({ message, type, onUndo });
+    toastTimerRef.current = setTimeout(() => setToast(null), 5000);
+  }
+
+  function dismissToast() {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast(null);
   }
 
   function handleViewDetails(skill: SkillWithStatus) {
@@ -69,6 +77,21 @@ export function App() {
   function handleKeyboardEnter() {
     if (selectedIndex >= 0 && selectedIndex < visibleSkills.length) {
       handleViewDetails(visibleSkills[selectedIndex]);
+    }
+  }
+
+  function handleKeyboardInstall() {
+    if (selectedIndex >= 0 && selectedIndex < visibleSkills.length) {
+      handleInstall(visibleSkills[selectedIndex].name);
+    }
+  }
+
+  function handleKeyboardRemove() {
+    if (selectedIndex >= 0 && selectedIndex < visibleSkills.length) {
+      const skill = visibleSkills[selectedIndex];
+      if (skill.installed) {
+        handleRemove(skill.name);
+      }
     }
   }
 
@@ -96,7 +119,7 @@ export function App() {
           });
           const data = await res.json();
           if (data.success) {
-            showToast(`Installed ${name}`, "success");
+            showToast(`Installed ${name}`, "success", () => undoInstall(name));
           } else {
             showToast(data.error || `Failed to install ${name}`, "error");
           }
@@ -124,7 +147,7 @@ export function App() {
       const res = await fetch(`/api/skills/${name}/remove`, { method: "POST" });
       const data = await res.json();
       if (data.success) {
-        showToast(`Removed ${name}`, "success");
+        showToast(`Removed ${name}`, "success", () => undoRemove(name));
         loadSkills();
       } else {
         showToast(data.error || `Failed to remove ${name}`, "error");
@@ -152,7 +175,7 @@ export function App() {
           const res = await fetch(`/api/skills/${name}/remove`, { method: "POST" });
           const data = await res.json();
           if (data.success) {
-            showToast(`Removed ${name}`, "success");
+            showToast(`Removed ${name}`, "success", () => undoRemove(name));
           } else {
             showToast(data.error || `Failed to remove ${name}`, "error");
           }
@@ -168,6 +191,83 @@ export function App() {
         return next;
       });
     }
+  }
+
+  // Undo helpers: reverse install/remove operations
+  async function undoInstall(name: string) {
+    dismissToast();
+    setRemovingNames((prev) => new Set([...prev, name]));
+    try {
+      const res = await fetch(`/api/skills/${name}/remove`, { method: "POST" });
+      const data = await res.json();
+      if (data.success) {
+        showToast(`Undone: removed ${name}`, "success");
+      } else {
+        showToast(data.error || `Failed to undo install of ${name}`, "error");
+      }
+    } catch {
+      showToast(`Failed to undo install of ${name}`, "error");
+    } finally {
+      setRemovingNames((prev) => {
+        const next = new Set(prev);
+        next.delete(name);
+        return next;
+      });
+      loadSkills();
+    }
+  }
+
+  async function undoRemove(name: string) {
+    dismissToast();
+    setInstallingNames((prev) => new Set([...prev, name]));
+    try {
+      const res = await fetch(`/api/skills/${name}/install`, { method: "POST" });
+      const data = await res.json();
+      if (data.success) {
+        showToast(`Undone: reinstalled ${name}`, "success");
+      } else {
+        showToast(data.error || `Failed to undo removal of ${name}`, "error");
+      }
+    } catch {
+      showToast(`Failed to undo removal of ${name}`, "error");
+    } finally {
+      setInstallingNames((prev) => {
+        const next = new Set(prev);
+        next.delete(name);
+        return next;
+      });
+      loadSkills();
+    }
+  }
+
+  function handleExportInstalled() {
+    const installed = skills.filter((s) => s.installed);
+    if (installed.length === 0) {
+      showToast("No installed skills to export", "error");
+      return;
+    }
+    const exportData = {
+      exportedAt: new Date().toISOString(),
+      count: installed.length,
+      skills: installed.map((s) => ({
+        name: s.name,
+        displayName: s.displayName,
+        category: s.category,
+        tags: s.tags,
+      })),
+    };
+    const json = JSON.stringify(exportData, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const date = new Date().toISOString().slice(0, 10);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `skills-export-${date}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast(`Exported ${installed.length} installed skills`, "success");
   }
 
   async function handleSelfUpdate() {
@@ -222,6 +322,14 @@ export function App() {
                 className={`size-3.5 ${updating ? "animate-spin" : ""}`}
               />
               {updating ? "Updating..." : "Update"}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleExportInstalled}
+            >
+              <DownloadIcon className="size-3.5" />
+              Export
             </Button>
             <Button
               variant="ghost"
@@ -284,19 +392,30 @@ export function App() {
         selectedIndex={selectedIndex}
         onSelectedIndexChange={setSelectedIndex}
         onEnter={handleKeyboardEnter}
+        onInstall={handleKeyboardInstall}
+        onRemove={handleKeyboardRemove}
         searchInputRef={searchInputRef}
       />
 
       {/* Toast */}
       {toast && (
         <div
-          className={`fixed bottom-6 right-6 z-50 rounded-lg border px-4 py-3 text-sm shadow-lg transition-all ${
+          className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 rounded-lg border px-4 py-3 text-sm shadow-lg transition-all ${
             toast.type === "success"
               ? "border-green-200 bg-green-50 text-green-800 dark:border-green-900 dark:bg-green-950 dark:text-green-200"
               : "border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200"
           }`}
         >
-          {toast.message}
+          <span>{toast.message}</span>
+          {toast.onUndo && (
+            <button
+              type="button"
+              onClick={toast.onUndo}
+              className="ml-1 shrink-0 rounded px-2 py-0.5 text-xs font-medium underline underline-offset-2 hover:opacity-80"
+            >
+              Undo
+            </button>
+          )}
         </div>
       )}
     </div>

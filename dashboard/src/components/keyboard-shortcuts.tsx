@@ -16,6 +16,8 @@ const SHORTCUTS: KeyboardShortcut[] = [
   { key: "j", description: "Move selection down" },
   { key: "k", description: "Move selection up" },
   { key: "Enter", description: "Open detail dialog for selected skill" },
+  { key: "i", description: "Install selected skill" },
+  { key: "r", description: "Remove selected skill" },
   { key: "Escape", description: "Close open dialog" },
   { key: "?", description: "Toggle this help overlay" },
 ];
@@ -25,6 +27,8 @@ interface KeyboardShortcutsProps {
   selectedIndex: number;
   onSelectedIndexChange: (index: number) => void;
   onEnter: () => void;
+  onInstall: () => void;
+  onRemove: () => void;
   searchInputRef: React.RefObject<HTMLInputElement | null>;
 }
 
@@ -33,6 +37,8 @@ export function KeyboardShortcuts({
   selectedIndex,
   onSelectedIndexChange,
   onEnter,
+  onInstall,
+  onRemove,
   searchInputRef,
 }: KeyboardShortcutsProps) {
   const [helpOpen, setHelpOpen] = React.useState(false);
@@ -77,12 +83,22 @@ export function KeyboardShortcuts({
           e.preventDefault();
           onEnter();
         }
+      } else if (e.key === "i") {
+        if (selectedIndex >= 0 && rowCount > 0) {
+          e.preventDefault();
+          onInstall();
+        }
+      } else if (e.key === "r") {
+        if (selectedIndex >= 0 && rowCount > 0) {
+          e.preventDefault();
+          onRemove();
+        }
       }
     }
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [rowCount, selectedIndex, onSelectedIndexChange, onEnter, searchInputRef]);
+  }, [rowCount, selectedIndex, onSelectedIndexChange, onEnter, onInstall, onRemove, searchInputRef]);
 
   return (
     <Dialog open={helpOpen} onOpenChange={setHelpOpen}>

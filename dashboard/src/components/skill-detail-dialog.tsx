@@ -11,6 +11,7 @@ import {
   ServerIcon,
   AlertTriangleIcon,
   Loader2Icon,
+  CalendarIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -51,6 +52,8 @@ export function SkillDetailDialog({
 }: SkillDetailDialogProps) {
   const [docs, setDocs] = React.useState<string | null>(null);
   const [loadingDocs, setLoadingDocs] = React.useState(false);
+  const [installedAt, setInstalledAt] = React.useState<string | null>(null);
+  const [installedVersion, setInstalledVersion] = React.useState<string | null>(null);
   const [copied, setCopied] = React.useState(false);
   const [copiedMcp, setCopiedMcp] = React.useState(false);
   const [agentInstalling, setAgentInstalling] = React.useState<string | null>(null);
@@ -59,11 +62,23 @@ export function SkillDetailDialog({
     if (open && skill) {
       setLoadingDocs(true);
       setDocs(null);
+      setInstalledAt(null);
+      setInstalledVersion(null);
       fetch(`/api/skills/${skill.name}/docs`)
         .then((res) => res.json())
         .then((data) => setDocs(data.content || null))
         .catch(() => setDocs(null))
         .finally(() => setLoadingDocs(false));
+      // Fetch install metadata (timestamp + version)
+      if (skill.installed) {
+        fetch(`/api/skills/${skill.name}?fields=installedAt,installedVersion`)
+          .then((res) => res.json())
+          .then((data) => {
+            setInstalledAt(data.installedAt || null);
+            setInstalledVersion(data.installedVersion || null);
+          })
+          .catch(() => {});
+      }
     }
   }, [open, skill]);
 
@@ -112,6 +127,16 @@ export function SkillDetailDialog({
         </DialogHeader>
 
         <div className="space-y-4">
+          {/* Install history */}
+          {skill.installed && installedAt && (
+            <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+              <CalendarIcon className="size-3.5" />
+              <span>
+                Installed: {new Date(installedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                {installedVersion && installedVersion !== "unknown" ? ` (v${installedVersion})` : ""}
+              </span>
+            </div>
+          )}
           {/* Category & Tags */}
           <div className="space-y-2">
             <div className="flex items-center gap-2">
