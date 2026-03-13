@@ -2,7 +2,7 @@
  * Skill installer - handles copying skills to user projects
  */
 
-import { existsSync, cpSync, mkdirSync, writeFileSync, rmSync, readdirSync, statSync, readFileSync } from "fs";
+import { existsSync, cpSync, mkdirSync, writeFileSync, rmSync, readdirSync, statSync, readFileSync, accessSync, constants } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
@@ -109,6 +109,9 @@ export function installSkill(
     // Update or create .skills/index.ts for easy imports
     updateSkillsIndex(destDir);
 
+    // Track installation metadata
+    recordInstall(destDir, name);
+
     // Check for missing skill dependencies and warn
     const meta = getSkill(name);
     if (meta?.dependencies && meta.dependencies.length > 0) {
@@ -146,13 +149,16 @@ export function installSkills(
 }
 
 /**
- * Update the .skills/index.ts file to export all installed skills
+ * Update the .skills/index.ts file to export all installed skills (excluding disabled)
  */
 function updateSkillsIndex(skillsDir: string): void {
   const indexPath = join(skillsDir, "index.ts");
 
+  const meta = loadMeta(skillsDir);
+  const disabledSet = new Set(meta.disabled || []);
+
   const skills = readdirSync(skillsDir).filter(
-    (f: string) => f.startsWith("skill-") && !f.includes(".")
+    (f: string) => f.startsWith("skill-") && !f.includes(".") && !disabledSet.has(f.replace("skill-", ""))
   );
 
   const exports = skills
@@ -171,6 +177,106 @@ ${exports}
 `;
 
   writeFileSync(indexPath, content);
+}
+
+// ---- Installation metadata tracking ----
+
+interface SkillMeta {
+  installedAt: string;
+  version: string;
+}
+
+interface MetaFile {
+  skills: Record<string, SkillMeta>;
+  disabled?: string[];
+}
+
+function getMetaPath(skillsDir: string): string {
+  return join(skillsDir, ".meta.json");
+}
+
+function loadMeta(skillsDir: string): MetaFile {
+  const metaPath = getMetaPath(skillsDir);
+  if (existsSync(metaPath)) {
+    try {
+      return JSON.parse(readFileSync(metaPath, "utf-8"));
+    } catch {}
+  }
+  return { skills: {} };
+}
+
+function saveMeta(skillsDir: string, meta: MetaFile): void {
+  writeFileSync(getMetaPath(skillsDir), JSON.stringify(meta, null, 2));
+}
+
+function recordInstall(skillsDir: string, name: string): void {
+  const meta = loadMeta(skillsDir);
+  const skillName = normalizeSkillName(name);
+  // Try to read version from the installed skill's package.json
+  let version = "unknown";
+  try {
+    const pkgPath = join(skillsDir, skillName, "package.json");
+    if (existsSync(pkgPath)) {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+      version = pkg.version || "unknown";
+    }
+  } catch {}
+  meta.skills[name] = { installedAt: new Date().toISOString(), version };
+  saveMeta(skillsDir, meta);
+}
+
+function recordRemove(skillsDir: string, name: string): void {
+  const meta = loadMeta(skillsDir);
+  delete meta.skills[name];
+  saveMeta(skillsDir, meta);
+}
+
+/**
+ * Get installation metadata for installed skills
+ */
+export function getInstallMeta(targetDir: string = process.cwd()): MetaFile {
+  return loadMeta(join(targetDir, ".skills"));
+}
+
+/**
+ * Disable a skill (exclude from .skills/index.ts without removing files)
+ */
+export function disableSkill(name: string, targetDir: string = process.cwd()): boolean {
+  const skillsDir = join(targetDir, ".skills");
+  const skillName = normalizeSkillName(name);
+  if (!existsSync(join(skillsDir, skillName))) return false;
+
+  const meta = loadMeta(skillsDir);
+  const disabled = new Set(meta.disabled || []);
+  if (disabled.has(name)) return false; // already disabled
+  disabled.add(name);
+  meta.disabled = [...disabled];
+  saveMeta(skillsDir, meta);
+  updateSkillsIndex(skillsDir);
+  return true;
+}
+
+/**
+ * Enable a previously disabled skill (re-add to .skills/index.ts)
+ */
+export function enableSkill(name: string, targetDir: string = process.cwd()): boolean {
+  const skillsDir = join(targetDir, ".skills");
+  const meta = loadMeta(skillsDir);
+  const disabled = new Set(meta.disabled || []);
+  if (!disabled.has(name)) return false; // not disabled
+  disabled.delete(name);
+  meta.disabled = [...disabled];
+  saveMeta(skillsDir, meta);
+  updateSkillsIndex(skillsDir);
+  return true;
+}
+
+/**
+ * Get list of disabled skills
+ */
+export function getDisabledSkills(targetDir: string = process.cwd()): string[] {
+  const meta = loadMeta(join(targetDir, ".skills"));
+  return meta.disabled || [];
 }
 
 /**
@@ -208,6 +314,7 @@ export function removeSkill(
 
   rmSync(skillPath, { recursive: true, force: true });
   updateSkillsIndex(skillsDir);
+  recordRemove(skillsDir, name);
   return true;
 }
 
@@ -291,6 +398,33 @@ export function installSkillForAgent(
   }
 
   const destDir = getAgentSkillPath(name, agent, scope, projectDir);
+
+  // For global scope, validate that the agent config directory exists (e.g. ~/.claude/)
+  // For project scope, directories will be created as needed
+  if (scope === "global") {
+    const agentBaseDir = join(homedir(), `.${agent}`);
+    if (!existsSync(agentBaseDir)) {
+      const agentLabels: Record<AgentTarget, string> = {
+        claude: "Claude Code",
+        codex: "Codex CLI",
+        gemini: "Gemini CLI",
+      };
+      return {
+        skill: name,
+        success: false,
+        error: `Agent directory ${agentBaseDir} does not exist. Is ${agentLabels[agent]} installed?`,
+      };
+    }
+    try {
+      accessSync(agentBaseDir, constants.W_OK);
+    } catch {
+      return {
+        skill: name,
+        success: false,
+        error: `Agent directory ${agentBaseDir} is not writable. Check permissions.`,
+      };
+    }
+  }
 
   try {
     mkdirSync(destDir, { recursive: true });

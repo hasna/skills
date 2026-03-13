@@ -83,12 +83,10 @@ describe("structural validation of all 202 skills", () => {
         missing.push(dir);
       }
     }
-    // These two skills are known to lack doc files (only have LICENSE, package.json, src/, tsconfig.json)
-    const knownMissing = ["skill-domainpurchase", "skill-domainsearch"];
-    expect(missing.sort()).toEqual(knownMissing.sort());
+    expect(missing).toEqual([]);
   });
 
-  test("at most 2 skills are missing doc files", () => {
+  test("no skills are missing doc files", () => {
     const docFiles = ["SKILL.md", "README.md", "CLAUDE.md"];
     let missingCount = 0;
     for (const dir of skillDirs) {
@@ -96,7 +94,6 @@ describe("structural validation of all 202 skills", () => {
       const hasDoc = docFiles.some((f) => existsSync(join(dirPath, f)));
       if (!hasDoc) missingCount++;
     }
-    // Ensure this number does not grow
-    expect(missingCount).toBeLessThanOrEqual(2);
+    expect(missingCount).toBe(0);
   });
 });

@@ -37,6 +37,10 @@ export {
   type AgentTarget,
   type AgentScope,
   type AgentInstallOptions,
+  getInstallMeta,
+  disableSkill,
+  enableSkill,
+  getDisabledSkills,
 } from "./lib/installer.js";
 
 export {
@@ -49,3 +53,26 @@ export {
   type SkillDocs,
   type SkillRequirements,
 } from "./lib/skillinfo.js";
+
+export {
+  loadConfig,
+  saveConfig,
+  getConfigPath,
+  type SkillsConfig,
+  type ConfigScope,
+} from "./lib/config.js";
+
+export type {
+  SkillResponse,
+  SkillDetailResponse,
+  CategoryResponse,
+  TagResponse,
+  InstallResponse,
+  RemoveResponse,
+  VersionResponse,
+  ExportResponse,
+  ImportResponse,
+  SearchResponse,
+  CategoryInstallResponse,
+  ErrorResponse,
+} from "./types/api.js";
