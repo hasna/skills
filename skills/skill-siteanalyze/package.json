@@ -8,6 +8,6 @@
   "scripts": { "start": "bun run src/index.ts" },
   "keywords": ["design", "shadcn", "tailwind", "colors", "typography", "playwright", "analysis", "open-styles"],
   "license": "Apache-2.0",
-  "dependencies": { "@anthropic-ai/sdk": "^0.39.0" },
+  "dependencies": {},
   "devDependencies": { "@types/bun": "latest" }
 }

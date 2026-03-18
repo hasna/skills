@@ -1,10 +1,17 @@
 #!/usr/bin/env bun
 /**
- * skill-colorextract — Extract color palettes from screenshots via Claude Vision
+ * skill-colorextract — Extract color palettes from screenshots via AI Vision
+ * Supports multiple providers: anthropic, openai, xai, gemini
  */
-import Anthropic from "@anthropic-ai/sdk";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { extname } from "path";
+import {
+  analyzeImage,
+  detectProvider,
+  listAvailableProviders,
+  parseJsonResponse,
+  type VisionProvider,
+} from "../../_common/vision.js";
 
 // ============================================================================
 // Types
@@ -31,6 +38,8 @@ export interface ColorExtractResult {
   source: string;
   colors: ExtractedColor[];
   palette: ColorPalette;
+  provider: VisionProvider;
+  model: string;
   openStylesProfile: {
     name: string;
     displayName: string;
@@ -67,10 +76,15 @@ function getMediaType(imagePath: string): "image/png" | "image/jpeg" | "image/we
 // Core extraction function
 // ============================================================================
 
-export async function extractColors(imagePath: string): Promise<ColorExtractResult> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    throw new Error("ANTHROPIC_API_KEY environment variable is not set");
+export async function extractColors(
+  imagePath: string,
+  options?: { provider?: VisionProvider; model?: string }
+): Promise<ColorExtractResult> {
+  const provider = options?.provider ?? detectProvider();
+  if (!provider) {
+    throw new Error(
+      "No AI provider API key found. Set one of: ANTHROPIC_API_KEY, OPENAI_API_KEY, XAI_API_KEY, GEMINI_API_KEY"
+    );
   }
 
   const isUrl = imagePath.startsWith("http://") || imagePath.startsWith("https://");
@@ -105,8 +119,6 @@ export async function extractColors(imagePath: string): Promise<ColorExtractResu
     mediaType = getMediaType(imagePath);
   }
 
-  const client = new Anthropic({ apiKey });
-
   const prompt = `Analyze this screenshot/image and extract ALL colors used. For each color provide:
 1. Exact hex value (#RRGGBB)
 2. Human-readable name
@@ -131,46 +143,17 @@ Respond ONLY with valid JSON matching this schema:
   "styleReasoning": "..."
 }`;
 
-  const message = await client.messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 2048,
-    system: "You are a design systems expert and color analyst. Extract colors precisely.",
-    messages: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: mediaType,
-              data: imageBase64,
-            },
-          },
-          {
-            type: "text",
-            text: prompt,
-          },
-        ],
-      },
-    ],
+  const result = await analyzeImage(imageBase64, mediaType, prompt, {
+    provider,
+    model: options?.model,
+    systemPrompt: "You are a design systems expert and color analyst. Extract colors precisely.",
+    jsonMode: true,
+    maxTokens: 2048,
   });
 
-  const rawAnalysis = message.content
-    .filter((block) => block.type === "text")
-    .map((block) => (block as { type: "text"; text: string }).text)
-    .join("\n");
+  const rawAnalysis = result.text;
 
-  // Parse JSON — strip code fences if present
-  let jsonStr = rawAnalysis.trim();
-  if (jsonStr.startsWith("```")) {
-    jsonStr = jsonStr
-      .replace(/^```(?:json)?\n?/, "")
-      .replace(/\n?```$/, "")
-      .trim();
-  }
-
-  let parsed: {
+  const parsed = parseJsonResponse(rawAnalysis) as {
     colors: ExtractedColor[];
     palette: {
       primary: string | null;
@@ -183,12 +166,6 @@ Respond ONLY with valid JSON matching this schema:
     styleCategory: string;
     styleReasoning: string;
   };
-
-  try {
-    parsed = JSON.parse(jsonStr);
-  } catch {
-    throw new Error(`Failed to parse color extraction response as JSON.\nRaw response:\n${rawAnalysis}`);
-  }
 
   const { colors, palette, styleCategory, styleReasoning } = parsed;
 
@@ -228,6 +205,8 @@ Respond ONLY with valid JSON matching this schema:
     source: imagePath,
     colors,
     palette: fullPalette,
+    provider: result.provider,
+    model: result.model,
     openStylesProfile,
     rawAnalysis,
   };
@@ -243,6 +222,8 @@ interface CliOptions {
   image: string | null;
   format: OutputFormat;
   output: string | null;
+  provider: VisionProvider | null;
+  model: string | null;
 }
 
 function parseArgs(argv: string[]): { command: string; options: CliOptions } {
@@ -253,6 +234,8 @@ function parseArgs(argv: string[]): { command: string; options: CliOptions } {
     image: null,
     format: "full",
     output: null,
+    provider: null,
+    model: null,
   };
 
   if (args.length === 0) {
@@ -284,6 +267,16 @@ function parseArgs(argv: string[]): { command: string; options: CliOptions } {
       }
     } else if ((arg === "--output" || arg === "-o") && args[i + 1]) {
       options.output = args[++i];
+    } else if (arg === "--provider" && args[i + 1]) {
+      const p = args[++i] as VisionProvider;
+      if (["anthropic", "openai", "xai", "gemini"].includes(p)) {
+        options.provider = p;
+      } else {
+        console.error(`Invalid provider: ${p}. Use: anthropic, openai, xai, gemini`);
+        process.exit(1);
+      }
+    } else if (arg === "--model" && args[i + 1]) {
+      options.model = args[++i];
     }
   }
 
@@ -291,8 +284,9 @@ function parseArgs(argv: string[]): { command: string; options: CliOptions } {
 }
 
 function printHelp(): void {
+  const available = listAvailableProviders();
   console.log(`
-skill-colorextract — Extract color palettes from screenshots and images via Claude Vision
+skill-colorextract — Extract color palettes from screenshots and images via AI Vision
 
 USAGE
   skill-colorextract extract --image <path-or-url> [options]
@@ -306,6 +300,8 @@ OPTIONS
   --image, -i <path|url>   Path to local image or HTTP/HTTPS URL (required)
   --format, -f <format>    Output format: colors | profile | full (default: full)
   --output, -o <file>      Write JSON result to file instead of stdout
+  --provider <name>        AI provider: anthropic | openai | xai | gemini (auto-detected)
+  --model <name>           Model override (uses provider default if not set)
 
 FORMATS
   colors    Print only the extracted colors array
@@ -317,9 +313,17 @@ EXAMPLES
   skill-colorextract extract --image https://example.com/screenshot.png
   skill-colorextract extract --image ./screenshot.png --format profile
   skill-colorextract extract --image ./screenshot.png --output ./colors.json
+  skill-colorextract extract --image ./screenshot.png --provider openai
+  skill-colorextract extract --image ./screenshot.png --provider gemini --model gemini-2.0-flash
 
 ENVIRONMENT
-  ANTHROPIC_API_KEY   Required — Claude API key for Vision analysis
+  ANTHROPIC_API_KEY   Claude API key (anthropic provider)
+  OPENAI_API_KEY      OpenAI API key (openai provider)
+  XAI_API_KEY         xAI API key (xai provider)
+  GEMINI_API_KEY      Google Gemini API key (gemini provider)
+
+AVAILABLE PROVIDERS
+  ${available.length > 0 ? available.join(", ") : "(none — set an API key)"}
 `);
 }
 
@@ -332,10 +336,11 @@ async function main(): Promise<void> {
   }
 
   if (command === "extract") {
-    // Validate API key
-    if (!process.env.ANTHROPIC_API_KEY) {
-      console.error("Error: ANTHROPIC_API_KEY environment variable is not set.");
-      console.error("Set it with: export ANTHROPIC_API_KEY=your_api_key");
+    // Check for a provider (auto-detect or explicit)
+    const provider = options.provider ?? detectProvider();
+    if (!provider) {
+      console.error("Error: No AI provider API key found.");
+      console.error("Set one of: ANTHROPIC_API_KEY, OPENAI_API_KEY, XAI_API_KEY, GEMINI_API_KEY");
       process.exit(1);
     }
 
@@ -356,7 +361,10 @@ async function main(): Promise<void> {
     }
 
     try {
-      const result = await extractColors(options.image);
+      const result = await extractColors(options.image, {
+        provider: options.provider ?? undefined,
+        model: options.model ?? undefined,
+      });
 
       // Determine output value based on format
       let output: unknown;
@@ -368,6 +376,8 @@ async function main(): Promise<void> {
         // full — omit rawAnalysis for cleaner output
         output = {
           source: result.source,
+          provider: result.provider,
+          model: result.model,
           colors: result.colors,
           palette: result.palette,
           openStylesProfile: result.openStylesProfile,

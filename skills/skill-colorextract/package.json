@@ -1,13 +1,13 @@
 {
   "name": "skill-colorextract",
   "version": "1.0.0",
-  "description": "Extract color palettes from screenshots and images using Claude Vision",
+  "description": "Extract color palettes from screenshots and images using AI Vision (anthropic/openai/xai/gemini)",
   "main": "src/index.ts",
   "type": "module",
   "bin": { "skill-colorextract": "src/index.ts" },
   "scripts": { "start": "bun run src/index.ts" },
   "keywords": ["colors", "palette", "design", "vision", "screenshot", "extract"],
   "license": "Apache-2.0",
-  "dependencies": { "@anthropic-ai/sdk": "^0.39.0" },
+  "dependencies": {},
   "devDependencies": { "@types/bun": "latest" }
 }
