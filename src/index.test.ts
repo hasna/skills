@@ -24,7 +24,7 @@ describe("public API exports", () => {
 
   test("AGENT_TARGETS array is populated", () => {
     expect(Array.isArray(publicAPI.AGENT_TARGETS)).toBe(true);
-    expect(publicAPI.AGENT_TARGETS.length).toBe(3);
+    expect(publicAPI.AGENT_TARGETS.length).toBe(5);
   });
 
   test("getSkill is a function", () => {

@@ -228,11 +228,13 @@ describe("installer", () => {
   });
 
   describe("agent install", () => {
-    test("AGENT_TARGETS contains all three agents", () => {
+    test("AGENT_TARGETS contains all supported agents", () => {
       expect(AGENT_TARGETS).toContain("claude");
       expect(AGENT_TARGETS).toContain("codex");
       expect(AGENT_TARGETS).toContain("gemini");
-      expect(AGENT_TARGETS.length).toBe(3);
+      expect(AGENT_TARGETS).toContain("pi");
+      expect(AGENT_TARGETS).toContain("opencode");
+      expect(AGENT_TARGETS.length).toBe(5);
     });
 
     describe("getAgentSkillsDir", () => {
@@ -432,7 +434,7 @@ describe("installer", () => {
   describe("resolveAgents", () => {
     test("returns all agents for 'all'", () => {
       const agents = resolveAgents("all");
-      expect(agents).toEqual(["claude", "codex", "gemini"]);
+      expect(agents).toEqual(["claude", "codex", "gemini", "pi", "opencode"]);
     });
 
     test("returns single agent for valid name", () => {

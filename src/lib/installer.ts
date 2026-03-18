@@ -11,12 +11,15 @@ import { getSkill } from "./registry.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Find the skills directory - works from both src/lib/ (dev) and bin/ or dist/ (built)
+// Find the skills directory - works from both src/lib/ (dev) and bin/ or dist/ (built).
+// Guards against accidentally returning a path that is inside a .skills/ install dir.
 function findSkillsDir(): string {
   let dir = __dirname;
   for (let i = 0; i < 5; i++) {
     const candidate = join(dir, "skills");
-    if (existsSync(candidate)) {
+    // Only accept if the candidate itself is not inside a .skills/ directory
+    // (prevents double-nesting when run from within an installed project)
+    if (existsSync(candidate) && !dir.includes(".skills")) {
       return candidate;
     }
     dir = dirname(dir);
@@ -320,10 +323,19 @@ export function removeSkill(
 
 // ---- Agent install support ----
 
-export type AgentTarget = "claude" | "codex" | "gemini";
+export type AgentTarget = "claude" | "codex" | "gemini" | "pi" | "opencode";
 export type AgentScope = "global" | "project";
 
-export const AGENT_TARGETS: AgentTarget[] = ["claude", "codex", "gemini"];
+export const AGENT_TARGETS: AgentTarget[] = ["claude", "codex", "gemini", "pi", "opencode"];
+
+/** Human-readable labels for each agent */
+export const AGENT_LABELS: Record<AgentTarget, string> = {
+  claude: "Claude Code",
+  codex: "Codex CLI",
+  gemini: "Gemini CLI",
+  pi: "pi.dev",
+  opencode: "OpenCode",
+};
 
 /**
  * Resolve an agent argument ("all" or a specific agent name) to a list of AgentTarget values.
@@ -345,16 +357,34 @@ export interface AgentInstallOptions {
 }
 
 /**
- * Get the skills directory for a given agent and scope
+ * Get the skills directory for a given agent and scope.
+ *
+ * Agent config dir conventions:
+ *   claude  — ~/.claude/skills/          | .claude/skills/
+ *   codex   — ~/.codex/skills/           | .codex/skills/
+ *   gemini  — ~/.gemini/skills/          | .gemini/skills/
+ *   pi      — ~/.pi/agent/skills/        | .pi/skills/
+ *   opencode — ~/.opencode/skills/       | .opencode/skills/
  */
 export function getAgentSkillsDir(agent: AgentTarget, scope: AgentScope = "global", projectDir?: string): string {
-  const agentDir = `.${agent}`;
+  const base = projectDir || process.cwd();
 
-  if (scope === "project") {
-    return join(projectDir || process.cwd(), agentDir, "skills");
+  switch (agent) {
+    case "pi":
+      // pi.dev: global uses ~/.pi/agent/skills/, project uses .pi/skills/
+      return scope === "project"
+        ? join(base, ".pi", "skills")
+        : join(homedir(), ".pi", "agent", "skills");
+    case "opencode":
+      return scope === "project"
+        ? join(base, ".opencode", "skills")
+        : join(homedir(), ".opencode", "skills");
+    default:
+      // claude, codex, gemini: ~/.{agent}/skills/ or .{agent}/skills/
+      return scope === "project"
+        ? join(base, `.${agent}`, "skills")
+        : join(homedir(), `.${agent}`, "skills");
   }
-
-  return join(homedir(), agentDir, "skills");
 }
 
 /**
@@ -399,20 +429,18 @@ export function installSkillForAgent(
 
   const destDir = getAgentSkillPath(name, agent, scope, projectDir);
 
-  // For global scope, validate that the agent config directory exists (e.g. ~/.claude/)
+  // For global scope, validate that the agent config directory exists
   // For project scope, directories will be created as needed
   if (scope === "global") {
-    const agentBaseDir = join(homedir(), `.${agent}`);
+    // Determine the agent's top-level config dir (used for existence check)
+    const agentBaseDir = agent === "pi"
+      ? join(homedir(), ".pi", "agent")
+      : join(homedir(), `.${agent}`);
     if (!existsSync(agentBaseDir)) {
-      const agentLabels: Record<AgentTarget, string> = {
-        claude: "Claude Code",
-        codex: "Codex CLI",
-        gemini: "Gemini CLI",
-      };
       return {
         skill: name,
         success: false,
-        error: `Agent directory ${agentBaseDir} does not exist. Is ${agentLabels[agent]} installed?`,
+        error: `Agent directory ${agentBaseDir} does not exist. Is ${AGENT_LABELS[agent]} installed?`,
       };
     }
     try {
