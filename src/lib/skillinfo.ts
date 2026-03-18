@@ -5,7 +5,7 @@
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import { getSkillPath } from "./installer.js";
-import { getSkill, SKILLS, type SkillMeta } from "./registry.js";
+import { getSkill, loadRegistry, type SkillMeta } from "./registry.js";
 import { normalizeSkillName } from "./utils.js";
 
 export interface SkillDocs {
@@ -199,7 +199,7 @@ export function detectProjectSkills(cwd: string = process.cwd()): DetectedProjec
     // No package.json — return always-recommended skills only
     const alwaysRecommend = ["implementation-plan", "write", "deepresearch"];
     const recommended = alwaysRecommend
-      .map((name) => SKILLS.find((s) => s.name === name))
+      .map((name) => loadRegistry().find((s) => s.name === name))
       .filter((s): s is SkillMeta => s !== undefined);
     return { detected: [], recommended };
   }
@@ -210,7 +210,7 @@ export function detectProjectSkills(cwd: string = process.cwd()): DetectedProjec
   } catch {
     const alwaysRecommend = ["implementation-plan", "write", "deepresearch"];
     const recommended = alwaysRecommend
-      .map((name) => SKILLS.find((s) => s.name === name))
+      .map((name) => loadRegistry().find((s) => s.name === name))
       .filter((s): s is SkillMeta => s !== undefined);
     return { detected: [], recommended };
   }
@@ -306,7 +306,7 @@ export function detectProjectSkills(cwd: string = process.cwd()): DetectedProjec
   const uniqueDetected = Array.from(new Set(detected));
 
   const recommended = Array.from(recommendedNames)
-    .map((name) => SKILLS.find((s) => s.name === name))
+    .map((name) => loadRegistry().find((s) => s.name === name))
     .filter((s): s is SkillMeta => s !== undefined);
 
   return { detected: uniqueDetected, recommended };

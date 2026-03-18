@@ -2,6 +2,10 @@
  * Skill registry - metadata about all available skills
  */
 
+import { existsSync, readFileSync, readdirSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
+
 export interface SkillMeta {
   name: string;
   displayName: string;
@@ -9,6 +13,7 @@ export interface SkillMeta {
   category: string;
   tags: string[];
   dependencies?: string[];
+  source?: "official" | "custom";
 }
 
 export const CATEGORIES = [
@@ -1485,8 +1490,103 @@ export const SKILLS: SkillMeta[] = [
 
 ];
 
+/**
+ * Parse frontmatter from a SKILL.md file.
+ * Supports: name, description, displayName/display_name, category, tags
+ */
+function parseSkillMdFrontmatter(content: string): Partial<SkillMeta> | null {
+  const match = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!match) return null;
+  const result: Partial<SkillMeta> = {};
+  for (const line of match[1].split("\n")) {
+    const colon = line.indexOf(":");
+    if (colon === -1) continue;
+    const key = line.slice(0, colon).trim();
+    const value = line.slice(colon + 1).trim();
+    if (!key || !value) continue;
+    if (key === "name") result.name = value;
+    else if (key === "description") result.description = value;
+    else if (key === "displayName" || key === "display_name") result.displayName = value;
+    else if (key === "category") result.category = value;
+    else if (key === "tags") {
+      result.tags = value.replace(/[\[\]]/g, "").split(",").map((t) => t.trim()).filter(Boolean);
+    }
+  }
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+/**
+ * Discover skills from a directory. Each subdirectory is expected to be a skill
+ * with a SKILL.md file containing frontmatter metadata.
+ */
+function discoverSkillsInDir(dir: string): SkillMeta[] {
+  if (!existsSync(dir)) return [];
+  const result: SkillMeta[] = [];
+  try {
+    const entries = readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const skillMdPath = join(dir, entry.name, "SKILL.md");
+      if (!existsSync(skillMdPath)) continue;
+      let content: string;
+      try { content = readFileSync(skillMdPath, "utf-8"); } catch { continue; }
+      const fm = parseSkillMdFrontmatter(content);
+      if (!fm?.name) continue;
+      const name = fm.name.replace(/^skill-/, "");
+      result.push({
+        name,
+        displayName: fm.displayName || name.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+        description: fm.description || "",
+        category: fm.category || "Development Tools",
+        tags: fm.tags || [],
+        source: "custom",
+      });
+    }
+  } catch {}
+  return result;
+}
+
+let _registryCache: SkillMeta[] | null = null;
+let _registryCacheTime = 0;
+const REGISTRY_CACHE_TTL = 5000;
+
+/**
+ * Load the full registry: official skills merged with custom skills from:
+ * - ~/.skills/ (global custom)
+ * - ./.custom-skills/ (project-level custom, relative to cwd)
+ *
+ * Custom skills with the same name as official skills take precedence.
+ * Results are cached for 5 seconds.
+ */
+export function loadRegistry(cwd?: string): SkillMeta[] {
+  const now = Date.now();
+  if (_registryCache && now - _registryCacheTime < REGISTRY_CACHE_TTL) {
+    return _registryCache;
+  }
+
+  const official = SKILLS.map((s) => ({ ...s, source: "official" as const }));
+
+  // Global custom: ~/.skills/ (user-built or imported from agents via `skills sync`)
+  const globalCustom = discoverSkillsInDir(join(homedir(), ".skills"));
+  // Project custom: ./.custom-skills/ (project-scoped user skills)
+  const projectCustom = discoverSkillsInDir(join(cwd || process.cwd(), ".custom-skills"));
+
+  const customNames = new Set([...globalCustom, ...projectCustom].map((s) => s.name));
+  const filtered = official.filter((s) => !customNames.has(s.name));
+
+  _registryCache = [...filtered, ...globalCustom, ...projectCustom];
+  _registryCacheTime = now;
+  return _registryCache;
+}
+
+/** Invalidate the registry cache (e.g. after installing a custom skill). */
+export function clearRegistryCache(): void {
+  _registryCache = null;
+  _registryCacheTime = 0;
+}
+
 export function getSkillsByCategory(category: Category): SkillMeta[] {
-  return SKILLS.filter((s) => s.category === category);
+  return loadRegistry().filter((s) => s.category === category);
 }
 
 /**
@@ -1559,7 +1659,7 @@ export function searchSkills(query: string): SkillMeta[] {
 
   const scored: { skill: SkillMeta; score: number }[] = [];
 
-  for (const skill of SKILLS) {
+  for (const skill of loadRegistry()) {
     const nameLower = skill.name.toLowerCase();
     const displayNameLower = skill.displayName.toLowerCase();
     const descriptionLower = skill.description.toLowerCase();
@@ -1605,7 +1705,7 @@ export function searchSkills(query: string): SkillMeta[] {
 }
 
 export function getSkill(name: string): SkillMeta | undefined {
-  return SKILLS.find((s) => s.name === name);
+  return loadRegistry().find((s) => s.name === name);
 }
 
 /**
@@ -1613,7 +1713,7 @@ export function getSkill(name: string): SkillMeta | undefined {
  */
 export function getSkillsByTag(tag: string): SkillMeta[] {
   const needle = tag.toLowerCase();
-  return SKILLS.filter((s) =>
+  return loadRegistry().filter((s) =>
     s.tags.some((t) => t.toLowerCase().includes(needle))
   );
 }
@@ -1623,7 +1723,7 @@ export function getSkillsByTag(tag: string): SkillMeta[] {
  */
 export function getAllTags(): string[] {
   const tagSet = new Set<string>();
-  for (const skill of SKILLS) {
+  for (const skill of loadRegistry()) {
     for (const tag of skill.tags) {
       tagSet.add(tag.toLowerCase());
     }
@@ -1654,7 +1754,7 @@ function levenshtein(a: string, b: string): number {
  */
 export function findSimilarSkills(query: string, maxResults = 3): string[] {
   const q = query.toLowerCase();
-  const scored = SKILLS
+  const scored = loadRegistry()
     .map(s => ({ name: s.name, dist: levenshtein(q, s.name.toLowerCase()) }))
     .filter(s => s.dist <= Math.max(3, Math.floor(q.length / 2)))
     .sort((a, b) => a.dist - b.dist);
