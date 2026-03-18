@@ -33,6 +33,9 @@ import {
   removeSkillForAgent,
   resolveAgents,
   getSkillPath,
+  getAgentSkillsDir,
+  AGENT_TARGETS,
+  AGENT_LABELS,
   type AgentTarget,
 } from "../lib/installer.js";
 import {
@@ -43,6 +46,13 @@ import {
   runSkill,
   detectProjectSkills,
 } from "../lib/skillinfo.js";
+import {
+  addSchedule,
+  listSchedules,
+  removeSchedule,
+  setScheduleEnabled,
+  getDueSchedules,
+} from "../lib/scheduler.js";
 
 const server = new McpServer({
   name: "skills",
@@ -193,7 +203,7 @@ server.registerTool("get_skill_docs", {
 
 server.registerTool("install_skill", {
   title: "Install Skill",
-  description: "Install a skill to .skills/ or to an agent dir (for: claude|codex|gemini|all).",
+  description: "Install a skill to .skills/ or to an agent dir (for: claude|codex|gemini|pi|opencode|all).",
   inputSchema: {
     name: z.string(),
     for: z.string().optional(),
@@ -205,7 +215,7 @@ server.registerTool("install_skill", {
     try {
       agents = resolveAgents(agentArg);
     } catch (err) {
-      return mcpError("INVALID_AGENT", (err as Error).message, ["claude", "codex", "gemini", "all"]);
+      return mcpError("INVALID_AGENT", (err as Error).message, [...AGENT_TARGETS, "all"]);
     }
 
     const results = agents.map(a =>
@@ -253,7 +263,7 @@ server.registerTool("install_category", {
     try {
       agents = resolveAgents(agentArg);
     } catch (err) {
-      return mcpError("INVALID_AGENT", (err as Error).message, ["claude", "codex", "gemini", "all"]);
+      return mcpError("INVALID_AGENT", (err as Error).message, [...AGENT_TARGETS, "all"]);
     }
 
     const results = [];
@@ -292,7 +302,7 @@ server.registerTool("remove_skill", {
     try {
       agents = resolveAgents(agentArg);
     } catch (err) {
-      return mcpError("INVALID_AGENT", (err as Error).message, ["claude", "codex", "gemini", "all"]);
+      return mcpError("INVALID_AGENT", (err as Error).message, [...AGENT_TARGETS, "all"]);
     }
 
     const results = agents.map(a => ({
@@ -412,7 +422,7 @@ server.registerTool("import_skills", {
     try {
       agents = resolveAgents(agentArg);
     } catch (err) {
-      return mcpError("INVALID_AGENT", (err as Error).message, ["claude", "codex", "gemini", "all"]);
+      return mcpError("INVALID_AGENT", (err as Error).message, [...AGENT_TARGETS, "all"]);
     }
 
     for (const name of skillList) {
@@ -448,10 +458,9 @@ server.registerTool("whoami", {
 
   const installed = getInstalledSkills();
 
-  const agentNames = ["claude", "codex", "gemini"] as const;
-  const agents: Array<{ agent: string; path: string; exists: boolean; skillCount: number }> = [];
-  for (const agent of agentNames) {
-    const agentSkillsPath = join(homedir(), `.${agent}`, "skills");
+  const agents: Array<{ agent: string; label: string; path: string; exists: boolean; skillCount: number }> = [];
+  for (const agent of AGENT_TARGETS) {
+    const agentSkillsPath = getAgentSkillsDir(agent, "global");
     const exists = existsSync(agentSkillsPath);
     let skillCount = 0;
     if (exists) {
@@ -462,7 +471,7 @@ server.registerTool("whoami", {
         }).length;
       } catch {}
     }
-    agents.push({ agent, path: agentSkillsPath, exists, skillCount });
+    agents.push({ agent, label: AGENT_LABELS[agent], path: agentSkillsPath, exists, skillCount });
   }
 
   const skillsDir = getSkillPath("image").replace(/[/\\][^/\\]*$/, "");
@@ -477,6 +486,43 @@ server.registerTool("whoami", {
   };
 
   return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+});
+
+server.registerTool("schedule_skill", {
+  title: "Schedule Skill",
+  description: "Add a cron schedule to run a skill at a recurring time. Cron format: 'minute hour dom month dow' (e.g. '0 9 * * *' = daily at 9am).",
+  inputSchema: {
+    skill: z.string(),
+    cron: z.string(),
+    name: z.string().optional(),
+    args: z.array(z.string()).optional(),
+  },
+}, async ({ skill, cron, name, args }) => {
+  const { schedule, error } = addSchedule(skill, cron, { name, args });
+  if (error || !schedule) {
+    return { content: [{ type: "text", text: JSON.stringify({ error: error || "Failed to add schedule" }) }] };
+  }
+  return { content: [{ type: "text", text: JSON.stringify(schedule, null, 2) }] };
+});
+
+server.registerTool("list_schedules", {
+  title: "List Schedules",
+  description: "List all scheduled skill runs.",
+  inputSchema: {},
+}, async () => {
+  const schedules = listSchedules();
+  return { content: [{ type: "text", text: JSON.stringify(schedules, null, 2) }] };
+});
+
+server.registerTool("remove_schedule", {
+  title: "Remove Schedule",
+  description: "Remove a schedule by its ID or name.",
+  inputSchema: {
+    id_or_name: z.string(),
+  },
+}, async ({ id_or_name }) => {
+  const removed = removeSchedule(id_or_name);
+  return { content: [{ type: "text", text: JSON.stringify({ removed, id_or_name }) }] };
 });
 
 server.registerTool("detect_project_skills", {

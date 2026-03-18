@@ -27,6 +27,9 @@ import {
   resolveAgents,
   getSkillPath,
   getInstallMeta,
+  getAgentSkillsDir,
+  AGENT_TARGETS,
+  AGENT_LABELS,
   type AgentTarget,
 } from "../lib/installer.js";
 import {
@@ -39,6 +42,15 @@ import {
   detectProjectSkills,
 } from "../lib/skillinfo.js";
 import { loadConfig, saveConfig, getConfigPath } from "../lib/config.js";
+import {
+  addSchedule,
+  listSchedules,
+  removeSchedule,
+  setScheduleEnabled,
+  getDueSchedules,
+  recordScheduleRun,
+  validateCron,
+} from "../lib/scheduler.js";
 
 const isTTY = (process.stdout.isTTY ?? false) && (process.stdin.isTTY ?? false);
 
@@ -105,7 +117,7 @@ program
   .option("--verbose", "Enable verbose debug logging", false)
   .option("-o, --overwrite", "Overwrite existing skills", false)
   .option("--json", "Output results as JSON", false)
-  .option("--for <agent>", "Install for agent: claude, codex, gemini, or all")
+  .option("--for <agent>", "Install for agent: claude, codex, gemini, pi, opencode, or all")
   .option("--scope <scope>", "Install scope: global or project", "global")
   .option("--dry-run", "Print what would happen without actually installing", false)
   .option("--category <category>", "Install all skills in a category (case-insensitive)")
@@ -687,7 +699,7 @@ program
 program
   .command("init")
   .option("--json", "Output as JSON", false)
-  .option("--for <agent>", "Detect project type and install recommended skills for agent: claude, codex, gemini, or all")
+  .option("--for <agent>", "Detect project type and install recommended skills for agent: claude, codex, gemini, pi, opencode, or all")
   .option("--scope <scope>", "Install scope: global or project", "global")
   .description("Initialize project for installed skills (.env.example, .gitignore)")
   .action((options: { json: boolean; for?: string; scope: string }) => {
@@ -878,7 +890,7 @@ program
   .argument("<skill>", "Skill to remove")
   .option("--verbose", "Enable verbose debug logging", false)
   .option("--json", "Output as JSON", false)
-  .option("--for <agent>", "Remove from agent: claude, codex, gemini, or all")
+  .option("--for <agent>", "Remove from agent: claude, codex, gemini, pi, opencode, or all")
   .option("--scope <scope>", "Remove scope: global or project", "global")
   .option("--dry-run", "Print what would happen without actually removing", false)
   .option("-y, --yes", "Skip confirmation prompt", false)
@@ -1108,15 +1120,16 @@ program
 // MCP command
 program
   .command("mcp")
-  .option("--register <agent>", "Register MCP server with agent: claude, codex, gemini, or all")
+  .option("--register <agent>", "Register MCP server with agent: claude, codex, gemini, pi, opencode, or all")
   .description("Start MCP server (stdio) or register with an agent")
   .action(async (options: { register?: string }) => {
     if (options.register) {
       const agents = options.register === "all"
-        ? ["claude", "codex", "gemini"]
+        ? [...AGENT_TARGETS]
         : [options.register];
 
       const binPath = join(import.meta.dir, "..", "mcp", "index.ts");
+      const { homedir: hd } = await import("os");
 
       for (const agent of agents) {
         if (agent === "claude") {
@@ -1130,21 +1143,27 @@ program
             console.log(chalk.yellow(`Manual registration: claude mcp add skills -- bun run ${binPath}`));
           }
         } else if (agent === "codex") {
-          const { homedir } = await import("os");
-          const configPath = join(homedir(), ".codex", "config.toml");
+          const configPath = join(hd(), ".codex", "config.toml");
           console.log(chalk.bold(`\nAdd to ${configPath}:`));
           console.log(chalk.dim(`[mcp_servers.skills]\ncommand = "bun"\nargs = ["run", "${binPath}"]`));
           console.log(chalk.green(`\u2713 Codex MCP config shown above`));
         } else if (agent === "gemini") {
-          const { homedir } = await import("os");
-          const configPath = join(homedir(), ".gemini", "settings.json");
+          const configPath = join(hd(), ".gemini", "settings.json");
           console.log(chalk.bold(`\nAdd to ${configPath} mcpServers:`));
-          console.log(chalk.dim(JSON.stringify({
-            skills: { command: "bun", args: ["run", binPath] }
-          }, null, 2)));
+          console.log(chalk.dim(JSON.stringify({ skills: { command: "bun", args: ["run", binPath] } }, null, 2)));
           console.log(chalk.green(`\u2713 Gemini MCP config shown above`));
+        } else if (agent === "pi") {
+          const configPath = join(hd(), ".pi", "agent", "mcp.json");
+          console.log(chalk.bold(`\nAdd to ${configPath}:`));
+          console.log(chalk.dim(JSON.stringify({ skills: { command: "bun", args: ["run", binPath] } }, null, 2)));
+          console.log(chalk.green(`\u2713 pi.dev MCP config shown above`));
+        } else if (agent === "opencode") {
+          const configPath = join(hd(), ".opencode", "config.json");
+          console.log(chalk.bold(`\nAdd to ${configPath} mcp section:`));
+          console.log(chalk.dim(JSON.stringify({ skills: { command: "bun", args: ["run", binPath] } }, null, 2)));
+          console.log(chalk.green(`\u2713 OpenCode MCP config shown above`));
         } else {
-          console.error(chalk.red(`Unknown agent: ${agent}. Available: claude, codex, gemini, all`));
+          console.error(chalk.red(`Unknown agent: ${agent}. Available: ${AGENT_TARGETS.join(", ")}, all`));
           process.exitCode = 1;
         }
       }
@@ -1342,7 +1361,7 @@ program
   .command("import")
   .argument("<file>", "JSON file to import (use - for stdin)")
   .option("--json", "Output results as JSON", false)
-  .option("--for <agent>", "Install for agent: claude, codex, gemini, or all")
+  .option("--for <agent>", "Install for agent: claude, codex, gemini, pi, opencode, or all")
   .option("--scope <scope>", "Install scope: global or project", "global")
   .option("--dry-run", "Show what would be installed without actually installing", false)
   .description("Import and install skills from a JSON export file")
@@ -1660,11 +1679,10 @@ program
     // Installed skills in cwd
     const installed = getInstalledSkills();
 
-    // Agent configs: check ~/.claude/skills/, ~/.codex/skills/, ~/.gemini/skills/
-    const agentNames = ["claude", "codex", "gemini"] as const;
-    const agentConfigs: Array<{ agent: string; path: string; exists: boolean; skillCount: number }> = [];
-    for (const agent of agentNames) {
-      const agentSkillsPath = join(homedir(), `.${agent}`, "skills");
+    // Agent configs: check skills dir for each supported agent
+    const agentConfigs: Array<{ agent: string; label: string; path: string; exists: boolean; skillCount: number }> = [];
+    for (const agent of AGENT_TARGETS) {
+      const agentSkillsPath = getAgentSkillsDir(agent, "global");
       const exists = existsSync(agentSkillsPath);
       let skillCount = 0;
       if (exists) {
@@ -1675,7 +1693,7 @@ program
           }).length;
         } catch {}
       }
-      agentConfigs.push({ agent, path: agentSkillsPath, exists, skillCount });
+      agentConfigs.push({ agent, label: AGENT_LABELS[agent], path: agentSkillsPath, exists, skillCount });
     }
 
     // Skills directory location (the package's skills/ dir)
@@ -1978,7 +1996,7 @@ program
   .option("--category <category>", "Skill category", "Development Tools")
   .option("--description <description>", "Short description of what the skill does")
   .option("--tags <tags>", "Comma-separated tags (e.g. api,testing,automation)")
-  .option("--global", "Create in ~/.skills/ instead of ./.custom-skills/", false)
+  .option("--global", "Create in ~/.skills/ instead of .skills/custom-skills/", false)
   .option("--json", "Output result as JSON", false)
   .description("Scaffold a new custom skill directory")
   .action((name: string, options: { category: string; description?: string; tags?: string; global: boolean; json: boolean }) => {
@@ -1991,7 +2009,7 @@ program
     // Determine target directory
     const baseDir = options.global
       ? join(homedir(), ".skills")
-      : join(process.cwd(), ".custom-skills");
+      : join(process.cwd(), ".skills", "custom-skills");
     const skillDir = join(baseDir, dirName);
 
     if (existsSync(skillDir)) {
@@ -2055,9 +2073,15 @@ program
       dependencies: {},
     }, null, 2) + "\n");
 
-    // tsconfig.json
+    // tsconfig.json — standalone (custom skills don't extend the package base)
     writeFileSync(join(skillDir, "tsconfig.json"), JSON.stringify({
-      extends: "../../skills/tsconfig.base.json",
+      compilerOptions: {
+        target: "ES2022",
+        module: "ESNext",
+        moduleResolution: "bundler",
+        strict: true,
+        outDir: "dist",
+      },
       include: ["src/**/*.ts"],
     }, null, 2) + "\n");
 
@@ -2067,7 +2091,7 @@ program
     if (options.json) {
       console.log(JSON.stringify({ created: true, name: bare, path: skillDir, category, tags }));
     } else {
-      console.log(chalk.green(`✓ Created skill '${bare}' at ${skillDir}`));
+      console.log(chalk.green(`✓ Created custom skill '${bare}' at ${skillDir}`));
       console.log(chalk.dim(`  Category: ${category}`));
       console.log(chalk.dim(`  Tags: ${tags.join(", ")}`));
       console.log("");
@@ -2080,7 +2104,7 @@ program
 // Sync command — push custom skills to agent dirs or pull agent skills into registry
 program
   .command("sync")
-  .option("--to <agent>", "Push custom skills to agent: claude, codex, gemini, or all")
+  .option("--to <agent>", "Push custom skills to agent: claude, codex, gemini, pi, opencode, or all")
   .option("--from <agent>", "List agent skills and show which are unknown to the registry")
   .option("--register", "With --from: copy unknown agent skills into ~/.skills/ to add them to the registry", false)
   .option("--scope <scope>", "Agent install scope: global or project", "global")
@@ -2097,10 +2121,13 @@ program
 
     if (options.from) {
       // Scan agent dir and show which skills are present
-      const agentName = options.from;
-      const agentDir = options.scope === "project"
-        ? join(process.cwd(), `.${agentName}`, "skills")
-        : join(homedir(), `.${agentName}`, "skills");
+      const agentName = options.from as AgentTarget;
+      if (!AGENT_TARGETS.includes(agentName)) {
+        console.error(chalk.red(`Unknown agent: ${agentName}. Available: ${AGENT_TARGETS.join(", ")}`));
+        process.exitCode = 1;
+        return;
+      }
+      const agentDir = getAgentSkillsDir(agentName, options.scope as "global" | "project");
 
       if (!existsSync(agentDir)) {
         if (options.json) {
@@ -2146,7 +2173,7 @@ program
           console.log(JSON.stringify({ agentDir, skills: found, registered }));
         } else {
           for (const name of registered) {
-            console.log(chalk.green(`✓ Registered '${name}' into ~/.skills/`));
+            console.log(chalk.green(`✓ Registered '${name}' into ~/.skills/ (global custom)`));
           }
           if (registered.length === 0) console.log(chalk.dim("No new skills to register (all SKILL.md files missing)"));
         }
@@ -2348,6 +2375,170 @@ program
     for (const f of added) console.log(chalk.green(`  + ${f}`));
     for (const f of removed) console.log(chalk.red(`  - ${f}`));
     console.log(`\n${chalk.dim(`Run 'skills update ${bare}' to apply changes`)}`);
+  });
+
+// Schedule command — manage cron-based skill execution
+const scheduleCmd = program
+  .command("schedule")
+  .description("Manage scheduled skill runs (cron-based)");
+
+scheduleCmd
+  .command("add")
+  .argument("<skill>", "Skill to schedule (bare name, e.g. image)")
+  .argument("<cron>", "5-field cron expression (e.g. \"0 9 * * *\" = daily at 9am)")
+  .option("--name <label>", "Human-readable label for this schedule")
+  .option("--args <args>", "Space-separated args to pass to the skill")
+  .option("--json", "Output as JSON", false)
+  .description("Add a cron schedule for a skill")
+  .action((skill: string, cron: string, options: { name?: string; args?: string; json: boolean }) => {
+    const args = options.args ? options.args.split(" ").filter(Boolean) : undefined;
+    const { schedule, error } = addSchedule(skill, cron, { name: options.name, args });
+    if (options.json) {
+      console.log(JSON.stringify(schedule ? { schedule } : { error }));
+      return;
+    }
+    if (error || !schedule) {
+      console.error(chalk.red(`✗ ${error || "Failed to add schedule"}`));
+      process.exitCode = 1;
+      return;
+    }
+    console.log(chalk.green(`✓ Scheduled '${schedule.name}'`));
+    console.log(chalk.dim(`  Cron: ${schedule.cron}`));
+    if (schedule.nextRun) {
+      console.log(chalk.dim(`  Next run: ${new Date(schedule.nextRun).toLocaleString()}`));
+    }
+    console.log(chalk.dim(`  ID: ${schedule.id}`));
+  });
+
+scheduleCmd
+  .command("list")
+  .option("--json", "Output as JSON", false)
+  .description("List all scheduled skills")
+  .action((options: { json: boolean }) => {
+    const schedules = listSchedules();
+    if (options.json) {
+      console.log(JSON.stringify(schedules));
+      return;
+    }
+    if (schedules.length === 0) {
+      console.log(chalk.dim("No schedules. Run: skills schedule add <skill> <cron>"));
+      return;
+    }
+    console.log(chalk.bold(`\nScheduled skills (${schedules.length}):\n`));
+    for (const s of schedules) {
+      const status = s.enabled ? chalk.green("enabled") : chalk.dim("disabled");
+      const last = s.lastRun
+        ? `last: ${new Date(s.lastRun).toLocaleString()} [${s.lastRunStatus ?? "?"}]`
+        : "never run";
+      const next = s.nextRun ? `next: ${new Date(s.nextRun).toLocaleString()}` : "";
+      console.log(`  ${chalk.cyan(s.name)} [${status}]`);
+      console.log(chalk.dim(`    skill: ${s.skill}  cron: ${s.cron}  ${last}  ${next}`));
+    }
+  });
+
+scheduleCmd
+  .command("remove")
+  .argument("<id-or-name>", "Schedule ID or name to remove")
+  .option("--json", "Output as JSON", false)
+  .description("Remove a schedule")
+  .action((idOrName: string, options: { json: boolean }) => {
+    const removed = removeSchedule(idOrName);
+    if (options.json) {
+      console.log(JSON.stringify({ removed, idOrName }));
+      return;
+    }
+    if (removed) {
+      console.log(chalk.green(`✓ Removed schedule '${idOrName}'`));
+    } else {
+      console.error(chalk.red(`Schedule '${idOrName}' not found`));
+      process.exitCode = 1;
+    }
+  });
+
+scheduleCmd
+  .command("enable")
+  .argument("<id-or-name>", "Schedule ID or name")
+  .description("Enable a disabled schedule")
+  .action((idOrName: string) => {
+    const ok = setScheduleEnabled(idOrName, true);
+    if (ok) console.log(chalk.green(`✓ Enabled '${idOrName}'`));
+    else { console.error(chalk.red(`Schedule '${idOrName}' not found`)); process.exitCode = 1; }
+  });
+
+scheduleCmd
+  .command("disable")
+  .argument("<id-or-name>", "Schedule ID or name")
+  .description("Disable a schedule without removing it")
+  .action((idOrName: string) => {
+    const ok = setScheduleEnabled(idOrName, false);
+    if (ok) console.log(chalk.green(`✓ Disabled '${idOrName}'`));
+    else { console.error(chalk.red(`Schedule '${idOrName}' not found`)); process.exitCode = 1; }
+  });
+
+scheduleCmd
+  .command("run")
+  .option("--dry-run", "Show which schedules are due without running them", false)
+  .option("--json", "Output as JSON", false)
+  .description("Execute all due schedules now")
+  .action(async (options: { dryRun: boolean; json: boolean }) => {
+    const due = getDueSchedules();
+    if (due.length === 0) {
+      if (options.json) console.log(JSON.stringify({ ran: 0, schedules: [] }));
+      else console.log(chalk.dim("No schedules are due."));
+      return;
+    }
+    if (options.dryRun) {
+      if (options.json) console.log(JSON.stringify({ due: due.map((s) => s.name) }));
+      else {
+        console.log(chalk.bold(`${due.length} schedule(s) due:\n`));
+        for (const s of due) console.log(`  ${chalk.cyan(s.name)} — ${s.skill} (${s.cron})`);
+      }
+      return;
+    }
+    const results: Array<{ name: string; skill: string; status: string; error?: string }> = [];
+    for (const s of due) {
+      try {
+        const { runSkill } = await import("../lib/skillinfo.js");
+        await runSkill(s.skill, s.args ?? []);
+        recordScheduleRun(s.id, "success");
+        results.push({ name: s.name, skill: s.skill, status: "success" });
+      } catch (err) {
+        recordScheduleRun(s.id, "error");
+        results.push({ name: s.name, skill: s.skill, status: "error", error: (err as Error).message });
+      }
+    }
+    if (options.json) {
+      console.log(JSON.stringify({ ran: results.length, results }));
+    } else {
+      for (const r of results) {
+        const icon = r.status === "success" ? chalk.green("✓") : chalk.red("✗");
+        console.log(`${icon} ${r.name} (${r.skill})`);
+        if (r.error) console.log(chalk.dim(`  ${r.error}`));
+      }
+    }
+  });
+
+scheduleCmd
+  .command("validate")
+  .argument("<cron>", "Cron expression to validate")
+  .description("Validate a cron expression and show the next 5 run times")
+  .action((cron: string) => {
+    const { getNextRun } = require("../lib/scheduler.js") as typeof import("../lib/scheduler.js");
+    const { valid, error } = validateCron(cron);
+    if (!valid) {
+      console.error(chalk.red(`Invalid cron: ${error}`));
+      process.exitCode = 1;
+      return;
+    }
+    console.log(chalk.green(`✓ Valid cron: "${cron}"`));
+    console.log(chalk.dim("\nNext 5 run times:"));
+    let d = new Date();
+    for (let i = 0; i < 5; i++) {
+      const next = getNextRun(cron, d);
+      if (!next) break;
+      console.log(`  ${next.toLocaleString()}`);
+      d = next;
+    }
   });
 
 program.parse();

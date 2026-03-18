@@ -1153,7 +1153,7 @@ describe("CLI", () => {
       expect(data).toHaveProperty("agents");
       expect(Array.isArray(data.installed)).toBe(true);
       expect(Array.isArray(data.agents)).toBe(true);
-      expect(data.agents.length).toBe(3);
+      expect(data.agents.length).toBe(5);
       for (const agent of data.agents) {
         expect(agent).toHaveProperty("agent");
         expect(agent).toHaveProperty("path");

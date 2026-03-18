@@ -65,6 +65,18 @@ export {
   type ConfigScope,
 } from "./lib/config.js";
 
+export {
+  addSchedule,
+  listSchedules,
+  removeSchedule,
+  setScheduleEnabled,
+  getDueSchedules,
+  recordScheduleRun,
+  validateCron,
+  getNextRun,
+  type SkillSchedule,
+} from "./lib/scheduler.js";
+
 export type {
   SkillResponse,
   SkillDetailResponse,

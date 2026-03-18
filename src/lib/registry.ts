@@ -1568,8 +1568,8 @@ export function loadRegistry(cwd?: string): SkillMeta[] {
 
   // Global custom: ~/.skills/ (user-built or imported from agents via `skills sync`)
   const globalCustom = discoverSkillsInDir(join(homedir(), ".skills"));
-  // Project custom: ./.custom-skills/ (project-scoped user skills)
-  const projectCustom = discoverSkillsInDir(join(cwd || process.cwd(), ".custom-skills"));
+  // Project custom: .skills/custom-skills/ (project-scoped user skills)
+  const projectCustom = discoverSkillsInDir(join(cwd || process.cwd(), ".skills", "custom-skills"));
 
   const customNames = new Set([...globalCustom, ...projectCustom].map((s) => s.name));
   const filtered = official.filter((s) => !customNames.has(s.name));
