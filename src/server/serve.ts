@@ -6,7 +6,7 @@
 import { existsSync, readFileSync } from "fs";
 import { join, dirname, extname } from "path";
 import { fileURLToPath } from "url";
-import { SKILLS, CATEGORIES, getSkill, getSkillsByCategory, searchSkills } from "../lib/registry.js";
+import { SKILLS, CATEGORIES, getSkill, getSkillsByCategory, searchSkills, loadRegistry } from "../lib/registry.js";
 import { getInstalledSkills, getInstallMeta, installSkill, removeSkill, installSkillForAgent, resolveAgents } from "../lib/installer.js";
 import type { AgentScope } from "../lib/installer.js";
 import { getSkillDocs, getSkillBestDoc, getSkillRequirements, generateSkillMd } from "../lib/skillinfo.js";
@@ -36,6 +36,7 @@ interface SkillWithStatus {
   envVarsSet: string[];
   systemDeps: string[];
   cliCommand: string | null;
+  source?: "official" | "custom";
 }
 
 // Resolve the dashboard dist directory
@@ -114,7 +115,7 @@ function parseFields(searchParams: URLSearchParams): string[] {
 
 function getAllSkillsWithStatus(): SkillWithStatus[] {
   const installed = new Set(getInstalledSkills());
-  return SKILLS.map((meta) => {
+  return loadRegistry().map((meta) => {
     const reqs = getSkillRequirements(meta.name);
     const envVars = reqs?.envVars || [];
     return {
@@ -128,6 +129,7 @@ function getAllSkillsWithStatus(): SkillWithStatus[] {
       envVarsSet: envVars.filter((v) => !!process.env[v]),
       systemDeps: reqs?.systemDeps || [],
       cliCommand: reqs?.cliCommand || null,
+      source: meta.source ?? "official",
     };
   });
 }
@@ -165,7 +167,7 @@ export function createFetchHandler(options?: {
         status: "ok",
         version: pkg.version,
         uptime: Math.floor(process.uptime()),
-        skillCount: SKILLS.length,
+        skillCount: loadRegistry().length,
       });
     }
 
@@ -216,7 +218,7 @@ export function createFetchHandler(options?: {
     // GET /api/tags - List all unique tags with counts
     if (path === "/api/tags" && method === "GET") {
       const tagCounts = new Map<string, number>();
-      for (const skill of SKILLS) {
+      for (const skill of loadRegistry()) {
         for (const tag of skill.tags) {
           tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
         }

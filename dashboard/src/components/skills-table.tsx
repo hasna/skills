@@ -20,6 +20,7 @@ import {
   CheckIcon,
   EyeIcon,
   DownloadIcon,
+  KeyIcon,
   Loader2Icon,
   TagIcon,
   TrashIcon,
@@ -226,9 +227,11 @@ export function SkillsTable({
   const [globalFilter, setGlobalFilter] = React.useState("");
   const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
   const [categoryFilter, setCategoryFilter] = React.useState("");
-  const [selectedTags, setSelectedTags] = React.useState<Set<string>>(
-    new Set()
-  );
+  const [selectedTags, setSelectedTags] = React.useState<Set<string>>(new Set());
+  const [installedOnly, setInstalledOnly] = React.useState(false);
+  const [hasRequirements, setHasRequirements] = React.useState(false);
+  const [customOnly, setCustomOnly] = React.useState(false);
+  const [installingCategory, setInstallingCategory] = React.useState(false);
 
   const categories = React.useMemo(() => {
     const cats = new Set(data.map((s) => s.category));
@@ -458,8 +461,30 @@ export function SkillsTable({
     [onViewDetails, onInstall, onRemove, installingNames, removingNames]
   );
 
+  const filteredData = React.useMemo(() => {
+    let d = data;
+    if (installedOnly) d = d.filter((s) => s.installed);
+    if (hasRequirements) d = d.filter((s) => s.envVars.length > 0 || s.systemDeps.length > 0);
+    if (customOnly) d = d.filter((s) => s.source === "custom");
+    return d;
+  }, [data, installedOnly, hasRequirements, customOnly]);
+
+  async function handleInstallAllInCategory() {
+    if (!categoryFilter) return;
+    setInstallingCategory(true);
+    try {
+      await fetch("/api/skills/install-category", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category: categoryFilter }),
+      });
+    } finally {
+      setInstallingCategory(false);
+    }
+  }
+
   const table = useReactTable({
-    data,
+    data: filteredData,
     columns,
     onSortingChange: setSorting,
     onColumnFiltersChange: setColumnFilters,
@@ -580,6 +605,49 @@ export function SkillsTable({
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
+        <Button
+          variant={installedOnly ? "default" : "outline"}
+          size="sm"
+          onClick={() => setInstalledOnly((v) => !v)}
+          title="Show only installed skills"
+        >
+          <CheckCircle2Icon className="size-3.5" />
+          Installed
+        </Button>
+        <Button
+          variant={hasRequirements ? "default" : "outline"}
+          size="sm"
+          onClick={() => setHasRequirements((v) => !v)}
+          title="Show only skills with env vars or system deps"
+        >
+          <KeyIcon className="size-3.5" />
+          Has requirements
+        </Button>
+        <Button
+          variant={customOnly ? "default" : "outline"}
+          size="sm"
+          onClick={() => setCustomOnly((v) => !v)}
+          title="Show only custom skills"
+        >
+          <CircleDashedIcon className="size-3.5" />
+          Custom
+        </Button>
+        {categoryFilter && (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={installingCategory}
+            onClick={handleInstallAllInCategory}
+            title={`Install all skills in ${categoryFilter}`}
+          >
+            {installingCategory ? (
+              <Loader2Icon className="size-3.5 animate-spin" />
+            ) : (
+              <DownloadIcon className="size-3.5" />
+            )}
+            Install all in category
+          </Button>
+        )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" className={`ml-auto ${isMobile ? "hidden" : ""}`}>

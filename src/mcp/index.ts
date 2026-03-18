@@ -22,6 +22,7 @@ import {
   getSkillsByCategory,
   searchSkills,
   findSimilarSkills,
+  loadRegistry,
   type Category,
 } from "../lib/registry.js";
 import {
@@ -40,6 +41,7 @@ import {
   getSkillRequirements,
   generateSkillMd,
   runSkill,
+  detectProjectSkills,
 } from "../lib/skillinfo.js";
 
 const server = new McpServer({
@@ -93,7 +95,7 @@ server.registerTool("list_skills", {
 }, async ({ category, detail, limit, offset }) => {
   const skills = category
     ? getSkillsByCategory(category as Category)
-    : SKILLS;
+    : loadRegistry();
 
   const mapped = detail
     ? skills
@@ -327,7 +329,7 @@ server.registerTool("list_tags", {
   description: "List all unique skill tags with occurrence counts.",
 }, async () => {
   const tagCounts = new Map<string, number>();
-  for (const skill of SKILLS) {
+  for (const skill of loadRegistry()) {
     for (const tag of skill.tags) {
       tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
     }
@@ -477,6 +479,72 @@ server.registerTool("whoami", {
   return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
 });
 
+server.registerTool("detect_project_skills", {
+  title: "Detect Project Skills",
+  description: "Detect project type from package.json and return recommended skills based on dependencies.",
+  inputSchema: {
+    directory: z.string().optional(),
+  },
+}, async ({ directory }) => {
+  const cwd = directory || process.cwd();
+  const { detected, recommended } = detectProjectSkills(cwd);
+  return {
+    content: [{
+      type: "text",
+      text: JSON.stringify({
+        directory: cwd,
+        detected,
+        recommended: recommended.map((s) => ({ name: s.name, displayName: s.displayName, description: s.description, category: s.category })),
+      }, null, 2),
+    }],
+  };
+});
+
+server.registerTool("validate_skill", {
+  title: "Validate Skill",
+  description: "Check a skill's structure: SKILL.md, package.json with bin entry, tsconfig.json, src/index.ts. Returns validation result with list of issues.",
+  inputSchema: {
+    name: z.string(),
+  },
+}, async ({ name }) => {
+  const skillPath = getSkillPath(name);
+  const issues: string[] = [];
+
+  if (!existsSync(skillPath)) {
+    return {
+      content: [{ type: "text", text: JSON.stringify({ name, valid: false, issues: [`Skill directory not found: ${skillPath}`] }) }],
+    };
+  }
+
+  // Check required files
+  if (!existsSync(join(skillPath, "SKILL.md"))) issues.push("Missing SKILL.md");
+  if (!existsSync(join(skillPath, "tsconfig.json"))) issues.push("Missing tsconfig.json");
+
+  const pkgPath = join(skillPath, "package.json");
+  if (!existsSync(pkgPath)) {
+    issues.push("Missing package.json");
+  } else {
+    try {
+      const pkg = JSON.parse(require("fs").readFileSync(pkgPath, "utf-8"));
+      if (!pkg.bin || Object.keys(pkg.bin).length === 0) issues.push("package.json missing 'bin' entry");
+    } catch {
+      issues.push("package.json is invalid JSON");
+    }
+  }
+
+  const srcDir = join(skillPath, "src");
+  if (!existsSync(srcDir)) {
+    issues.push("Missing src/ directory");
+  } else if (!existsSync(join(srcDir, "index.ts"))) {
+    issues.push("Missing src/index.ts");
+  }
+
+  const valid = issues.length === 0;
+  return {
+    content: [{ type: "text", text: JSON.stringify({ name, valid, path: skillPath, issues }) }],
+  };
+});
+
 // ---- Resources ----
 
 server.registerResource("Skills Registry", "skills://registry", {
@@ -484,7 +552,7 @@ server.registerResource("Skills Registry", "skills://registry", {
 }, async () => ({
   contents: [{
     uri: "skills://registry",
-    text: JSON.stringify(SKILLS.map(s => ({ name: s.name, category: s.category }))),
+    text: JSON.stringify(loadRegistry().map(s => ({ name: s.name, category: s.category }))),
     mimeType: "application/json",
   }],
 }));

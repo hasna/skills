@@ -11,4 +11,5 @@ export interface SkillWithStatus {
   envVarsSet: string[];
   systemDeps: string[];
   cliCommand: string | null;
+  source?: "official" | "custom";
 }
