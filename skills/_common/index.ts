@@ -21,3 +21,7 @@ export {
   type AssistantType,
 } from './installer';
 export { handleInstallCommand } from './skill-install';
+
+// Vision client — multi-provider (anthropic/openai/xai/gemini)
+// import { analyzeImage, detectProvider } from './vision.js'
+export * from './vision.js';
