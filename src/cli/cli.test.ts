@@ -481,7 +481,7 @@ describe("CLI", () => {
 
     test("shows help for doctor command", async () => {
       const { stdout } = await runCli(["doctor", "--help"]);
-      expect(stdout).toContain("Check environment variables");
+      expect(stdout).toContain("env vars");
     });
 
     test("JSON report includes env var status when skills installed", async () => {

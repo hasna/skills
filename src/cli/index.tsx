@@ -3,7 +3,7 @@ import React from "react";
 import { render } from "ink";
 import { Command } from "commander";
 import chalk from "chalk";
-import { existsSync, writeFileSync, appendFileSync, readFileSync, readdirSync, statSync } from "fs";
+import { existsSync, writeFileSync, appendFileSync, readFileSync, readdirSync, statSync, mkdirSync } from "fs";
 import { join } from "path";
 import { normalizeSkillName } from "../lib/utils.js";
 import pkg from "../../package.json" with { type: "json" };
@@ -15,6 +15,8 @@ import {
   getSkillsByCategory,
   searchSkills,
   findSimilarSkills,
+  loadRegistry,
+  clearRegistryCache,
 } from "../lib/registry.js";
 import {
   installSkill,
@@ -24,6 +26,7 @@ import {
   removeSkill,
   resolveAgents,
   getSkillPath,
+  getInstallMeta,
   type AgentTarget,
 } from "../lib/installer.js";
 import {
@@ -272,7 +275,14 @@ program
     if (options.installed) {
       const installed = getInstalledSkills();
       if (options.json) {
-        console.log(JSON.stringify(installed));
+        const meta = getInstallMeta();
+        const registry = loadRegistry();
+        const output = installed.map((name) => {
+          const m = meta.skills[name];
+          const s = registry.find((r) => r.name === name);
+          return { name, version: m?.version ?? null, installedAt: m?.installedAt ?? null, source: s?.source ?? "official" };
+        });
+        console.log(JSON.stringify(output));
         return;
       }
       if (installed.length === 0) {
@@ -280,14 +290,19 @@ program
         return;
       }
       if (brief) {
-        for (const name of installed) {
-          console.log(name);
-        }
+        for (const name of installed) console.log(name);
         return;
       }
+      const meta = getInstallMeta();
+      const registry = loadRegistry();
       console.log(chalk.bold(`\nInstalled skills (${installed.length}):\n`));
       for (const name of installed) {
-        console.log(`  ${name}`);
+        const m = meta.skills[name];
+        const s = registry.find((r) => r.name === name);
+        const version = m?.version ? chalk.dim(`v${m.version}`) : "";
+        const installedAt = m?.installedAt ? chalk.dim(new Date(m.installedAt).toLocaleDateString()) : "";
+        const source = s?.source === "custom" ? chalk.yellow(" [custom]") : "";
+        console.log(`  ${chalk.cyan(name)}${source}  ${version}  ${installedAt}`);
       }
       return;
     }
@@ -331,7 +346,7 @@ program
     }
 
     if (tagFilter) {
-      const skills = SKILLS.filter((s) =>
+      const skills = loadRegistry().filter((s) =>
         s.tags.some((tag) => tagFilter.includes(tag.toLowerCase()))
       );
       if (options.json) {
@@ -346,34 +361,36 @@ program
       }
       console.log(chalk.bold(`\nSkills matching tags [${tagFilter.join(", ")}] (${skills.length}):\n`));
       for (const s of skills) {
-        console.log(`  ${chalk.cyan(s.name)} ${chalk.dim(`[${s.category}]`)} - ${s.description}`);
+        const customBadge = s.source === "custom" ? chalk.yellow(" [custom]") : "";
+        console.log(`  ${chalk.cyan(s.name)}${customBadge} ${chalk.dim(`[${s.category}]`)} - ${s.description}`);
       }
       return;
     }
 
+    const allSkills = loadRegistry();
+
     // Show all
     if (options.json) {
-      console.log(JSON.stringify(SKILLS, null, 2));
+      console.log(JSON.stringify(allSkills, null, 2));
       return;
     }
 
     if (fmt === "compact") {
-      for (const s of SKILLS) console.log(s.name);
+      for (const s of allSkills) console.log(s.name);
       return;
     }
 
     if (fmt === "csv") {
-      console.log("name,category,description");
-      for (const s of SKILLS) {
+      console.log("name,category,description,source");
+      for (const s of allSkills) {
         const desc = s.description.replace(/"/g, '""');
-        console.log(`${s.name},${s.category},"${desc}"`);
+        console.log(`${s.name},${s.category},"${desc}",${s.source ?? "official"}`);
       }
       return;
     }
 
     if (brief) {
-      // Sort by category then name
-      const sorted = [...SKILLS].sort((a, b) => {
+      const sorted = [...allSkills].sort((a, b) => {
         const catCmp = a.category.localeCompare(b.category);
         return catCmp !== 0 ? catCmp : a.name.localeCompare(b.name);
       });
@@ -383,14 +400,26 @@ program
       return;
     }
 
-    console.log(chalk.bold(`\nAvailable skills (${SKILLS.length}):\n`));
+    console.log(chalk.bold(`\nAvailable skills (${allSkills.length}):\n`));
     for (const category of CATEGORIES) {
       const skills = getSkillsByCategory(category);
+      if (skills.length === 0) continue;
       console.log(chalk.bold(`${category} (${skills.length}):`));
       for (const s of skills) {
-        console.log(`  ${chalk.cyan(s.name)} - ${s.description}`);
+        const customBadge = s.source === "custom" ? chalk.yellow(" [custom]") : "";
+        console.log(`  ${chalk.cyan(s.name)}${customBadge} - ${s.description}`);
       }
       console.log();
+    }
+    // Show custom skills that don't fit in standard categories
+    const customUncategorized = allSkills.filter(
+      (s) => s.source === "custom" && !CATEGORIES.includes(s.category as (typeof CATEGORIES)[number])
+    );
+    if (customUncategorized.length > 0) {
+      console.log(chalk.bold(`Custom (${customUncategorized.length}):`));
+      for (const s of customUncategorized) {
+        console.log(`  ${chalk.yellow(s.name)} - ${s.description}`);
+      }
     }
   });
 
@@ -501,7 +530,12 @@ program
       return;
     }
 
-    console.log(`\n${chalk.bold(skill.displayName)}`);
+    const { execSync: execSyncInfo } = require("child_process") as typeof import("child_process");
+    function cmdAvailable(cmd: string): boolean {
+      try { execSyncInfo(`which ${cmd}`, { stdio: "ignore" }); return true; } catch { return false; }
+    }
+
+    console.log(`\n${chalk.bold(skill.displayName)}${skill.source === "custom" ? chalk.yellow(" [custom]") : ""}`);
     console.log(`${skill.description}`);
     console.log(`${chalk.dim("Category:")} ${skill.category}`);
     console.log(`${chalk.dim("Tags:")} ${skill.tags.join(", ")}`);
@@ -509,10 +543,18 @@ program
       console.log(`${chalk.dim("CLI:")} ${reqs.cliCommand}`);
     }
     if (reqs?.envVars.length) {
-      console.log(`${chalk.dim("Env vars:")} ${reqs.envVars.join(", ")}`);
+      console.log(`${chalk.dim("Env vars:")}`);
+      for (const v of reqs.envVars) {
+        const set = !!process.env[v];
+        console.log(`  ${set ? chalk.green("✓") : chalk.red("✗")} ${v}${set ? "" : chalk.dim(" (not set)")}`);
+      }
     }
     if (reqs?.systemDeps.length) {
-      console.log(`${chalk.dim("System deps:")} ${reqs.systemDeps.join(", ")}`);
+      console.log(`${chalk.dim("System deps:")}`);
+      for (const d of reqs.systemDeps) {
+        const avail = cmdAvailable(d);
+        console.log(`  ${avail ? chalk.green("✓") : chalk.red("✗")} ${d}${avail ? "" : chalk.dim(" (not found)")}`);
+      }
     }
     console.log(`${chalk.dim("Install:")} skills install ${skill.name}`);
   });
@@ -1425,8 +1467,9 @@ program
 program
   .command("doctor")
   .option("--json", "Output as JSON", false)
-  .description("Check environment variables for installed skills")
+  .description("Check env vars, system deps, and install health for installed skills")
   .action((options: { json: boolean }) => {
+    const { execSync } = require("child_process") as typeof import("child_process");
     const installed = getInstalledSkills();
 
     if (installed.length === 0) {
@@ -1438,15 +1481,23 @@ program
       return;
     }
 
-    const report: Array<{ skill: string; envVars: Array<{ name: string; set: boolean }> }> = [];
+    function isCommandAvailable(cmd: string): boolean {
+      try { execSync(`which ${cmd}`, { stdio: "ignore" }); return true; } catch { return false; }
+    }
+
+    const report: Array<{
+      skill: string;
+      envVars: Array<{ name: string; set: boolean }>;
+      systemDeps: Array<{ name: string; available: boolean }>;
+      healthy: boolean;
+    }> = [];
 
     for (const name of installed) {
       const reqs = getSkillRequirements(name);
-      const envVars = (reqs?.envVars ?? []).map((v) => ({
-        name: v,
-        set: !!process.env[v],
-      }));
-      report.push({ skill: name, envVars });
+      const envVars = (reqs?.envVars ?? []).map((v) => ({ name: v, set: !!process.env[v] }));
+      const systemDeps = (reqs?.systemDeps ?? []).map((d) => ({ name: d, available: isCommandAvailable(d) }));
+      const healthy = envVars.every((v) => v.set) && systemDeps.every((d) => d.available);
+      report.push({ skill: name, envVars, systemDeps, healthy });
     }
 
     if (options.json) {
@@ -1454,17 +1505,27 @@ program
       return;
     }
 
-    console.log(chalk.bold(`\nSkills Doctor (${installed.length} installed):\n`));
+    const issues = report.filter((r) => !r.healthy);
+    console.log(chalk.bold(`\nSkills Doctor — ${installed.length} installed, ${issues.length} with issues:\n`));
+
     for (const entry of report) {
-      console.log(chalk.bold(`  ${entry.skill}`));
-      if (entry.envVars.length === 0) {
-        console.log(chalk.dim("    No environment variables required"));
-      } else {
-        for (const v of entry.envVars) {
-          const status = v.set ? chalk.green("set") : chalk.red("missing");
-          console.log(`    ${v.name} [${status}]`);
-        }
+      const icon = entry.healthy ? chalk.green("✓") : chalk.red("✗");
+      console.log(`  ${icon} ${chalk.bold(entry.skill)}`);
+      for (const v of entry.envVars) {
+        const status = v.set ? chalk.green("set") : chalk.red("missing");
+        console.log(`      ${v.name} [${status}]`);
       }
+      for (const d of entry.systemDeps) {
+        const status = d.available ? chalk.green("available") : chalk.red("not found");
+        console.log(`      ${d.name} [${status}]`);
+      }
+      if (entry.envVars.length === 0 && entry.systemDeps.length === 0) {
+        console.log(chalk.dim("      No requirements"));
+      }
+    }
+
+    if (issues.length === 0) {
+      console.log(chalk.green("\n  All skills healthy! ✓"));
     }
   });
 
@@ -1908,6 +1969,385 @@ configCmd
     const projectPath = getConfigPath("project");
     console.log(`${chalk.cyan("global")}:  ${globalPath}${existsSync(globalPath) ? chalk.green(" (exists)") : chalk.dim(" (not found)")}`);
     console.log(`${chalk.cyan("project")}: ${projectPath}${existsSync(projectPath) ? chalk.green(" (exists)") : chalk.dim(" (not found)")}`);
+  });
+
+// Create command — scaffold a new custom skill in .custom-skills/
+program
+  .command("create")
+  .argument("<name>", "Skill name (e.g. my-tool)")
+  .option("--category <category>", "Skill category", "Development Tools")
+  .option("--description <description>", "Short description of what the skill does")
+  .option("--tags <tags>", "Comma-separated tags (e.g. api,testing,automation)")
+  .option("--global", "Create in ~/.skills/ instead of ./.custom-skills/", false)
+  .option("--json", "Output result as JSON", false)
+  .description("Scaffold a new custom skill directory")
+  .action((name: string, options: { category: string; description?: string; tags?: string; global: boolean; json: boolean }) => {
+    const { homedir } = require("os") as typeof import("os");
+
+    // Normalize name
+    const bare = name.replace(/^skill-/, "");
+    const dirName = `skill-${bare}`;
+
+    // Determine target directory
+    const baseDir = options.global
+      ? join(homedir(), ".skills")
+      : join(process.cwd(), ".custom-skills");
+    const skillDir = join(baseDir, dirName);
+
+    if (existsSync(skillDir)) {
+      if (options.json) {
+        console.log(JSON.stringify({ error: `Skill '${bare}' already exists at ${skillDir}` }));
+      } else {
+        console.error(chalk.red(`Skill '${bare}' already exists at ${skillDir}`));
+      }
+      process.exitCode = 1;
+      return;
+    }
+
+    const description = options.description || `${bare} skill`;
+    const tags = options.tags ? options.tags.split(",").map((t) => t.trim()).filter(Boolean) : [bare];
+    const displayName = bare.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    const category = options.category;
+
+    // Create directory structure
+    mkdirSync(join(skillDir, "src"), { recursive: true });
+
+    // SKILL.md
+    writeFileSync(join(skillDir, "SKILL.md"), [
+      "---",
+      `name: ${bare}`,
+      `description: ${description}`,
+      `displayName: ${displayName}`,
+      `category: ${category}`,
+      `tags: [${tags.join(", ")}]`,
+      "---",
+      "",
+      `# ${displayName}`,
+      "",
+      description,
+      "",
+      "## Usage",
+      "",
+      "```bash",
+      `${bare} --help`,
+      "```",
+      "",
+    ].join("\n"));
+
+    // src/index.ts
+    writeFileSync(join(skillDir, "src", "index.ts"), [
+      `#!/usr/bin/env bun`,
+      `/**`,
+      ` * ${displayName} — ${description}`,
+      ` */`,
+      "",
+      `console.log("${displayName}");`,
+      "",
+    ].join("\n"));
+
+    // package.json
+    writeFileSync(join(skillDir, "package.json"), JSON.stringify({
+      name: `skill-${bare}`,
+      version: "0.1.0",
+      description,
+      bin: { [bare]: "./src/index.ts" },
+      scripts: { dev: `bun src/index.ts` },
+      dependencies: {},
+    }, null, 2) + "\n");
+
+    // tsconfig.json
+    writeFileSync(join(skillDir, "tsconfig.json"), JSON.stringify({
+      extends: "../../skills/tsconfig.base.json",
+      include: ["src/**/*.ts"],
+    }, null, 2) + "\n");
+
+    // Invalidate registry cache so skill shows up immediately
+    clearRegistryCache();
+
+    if (options.json) {
+      console.log(JSON.stringify({ created: true, name: bare, path: skillDir, category, tags }));
+    } else {
+      console.log(chalk.green(`✓ Created skill '${bare}' at ${skillDir}`));
+      console.log(chalk.dim(`  Category: ${category}`));
+      console.log(chalk.dim(`  Tags: ${tags.join(", ")}`));
+      console.log("");
+      console.log(`  ${chalk.cyan("Edit:")} ${join(skillDir, "src", "index.ts")}`);
+      console.log(`  ${chalk.cyan("Run:")}  bun ${join(skillDir, "src", "index.ts")}`);
+      console.log(`  ${chalk.cyan("Docs:")} ${join(skillDir, "SKILL.md")}`);
+    }
+  });
+
+// Sync command — push custom skills to agent dirs or pull agent skills into registry
+program
+  .command("sync")
+  .option("--to <agent>", "Push custom skills to agent: claude, codex, gemini, or all")
+  .option("--from <agent>", "List agent skills and show which are unknown to the registry")
+  .option("--register", "With --from: copy unknown agent skills into ~/.skills/ to add them to the registry", false)
+  .option("--scope <scope>", "Agent install scope: global or project", "global")
+  .option("--json", "Output as JSON", false)
+  .description("Sync custom skills with agent directories (--to or --from)")
+  .action((options: { to?: string; from?: string; register: boolean; scope: string; json: boolean }) => {
+    const { homedir } = require("os") as typeof import("os");
+
+    if (!options.to && !options.from) {
+      console.error(chalk.red("Specify --to <agent> or --from <agent>"));
+      process.exitCode = 1;
+      return;
+    }
+
+    if (options.from) {
+      // Scan agent dir and show which skills are present
+      const agentName = options.from;
+      const agentDir = options.scope === "project"
+        ? join(process.cwd(), `.${agentName}`, "skills")
+        : join(homedir(), `.${agentName}`, "skills");
+
+      if (!existsSync(agentDir)) {
+        if (options.json) {
+          console.log(JSON.stringify({ agentDir, skills: [], message: "Directory not found" }));
+        } else {
+          console.log(chalk.dim(`No skills directory found at ${agentDir}`));
+        }
+        return;
+      }
+
+      const registry = loadRegistry();
+      const registryNames = new Set(registry.map((s) => s.name));
+
+      const found: Array<{ name: string; path: string; inRegistry: boolean }> = [];
+      for (const entry of readdirSync(agentDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const bare = entry.name.replace(/^skill-/, "");
+        found.push({
+          name: bare,
+          path: join(agentDir, entry.name),
+          inRegistry: registryNames.has(bare),
+        });
+      }
+
+      const unknown = found.filter((s) => !s.inRegistry);
+
+      // --register: copy unknown SKILL.md files into ~/.skills/ to add them to the global registry
+      if (options.register && unknown.length > 0) {
+        const globalSkillsDir = join(homedir(), ".skills");
+        const registered: string[] = [];
+        for (const s of unknown) {
+          const srcSkillMd = join(s.path, "SKILL.md");
+          if (!existsSync(srcSkillMd)) continue;
+          const destDir = join(globalSkillsDir, `skill-${s.name}`);
+          if (!existsSync(destDir)) {
+            mkdirSync(destDir, { recursive: true });
+          }
+          writeFileSync(join(destDir, "SKILL.md"), readFileSync(srcSkillMd, "utf-8"));
+          registered.push(s.name);
+        }
+        clearRegistryCache();
+        if (options.json) {
+          console.log(JSON.stringify({ agentDir, skills: found, registered }));
+        } else {
+          for (const name of registered) {
+            console.log(chalk.green(`✓ Registered '${name}' into ~/.skills/`));
+          }
+          if (registered.length === 0) console.log(chalk.dim("No new skills to register (all SKILL.md files missing)"));
+        }
+        return;
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify({ agentDir, skills: found }));
+      } else {
+        console.log(chalk.bold(`\nAgent skills in ~/.${agentName}/skills/ (${found.length} found):\n`));
+        for (const s of found) {
+          const label = s.inRegistry ? chalk.green("✓ in registry") : chalk.yellow("✗ not in registry");
+          console.log(`  ${chalk.cyan(s.name)} — ${label}`);
+        }
+        if (unknown.length > 0) {
+          console.log("");
+          console.log(chalk.dim(`Tip: ${unknown.length} skill(s) not in registry. Run with --register to add them to ~/.skills/.`));
+        }
+      }
+      return;
+    }
+
+    if (options.to) {
+      // Push custom skills to agent dir
+      let agents: AgentTarget[];
+      try {
+        agents = resolveAgents(options.to);
+      } catch (err) {
+        console.error(chalk.red((err as Error).message));
+        process.exitCode = 1;
+        return;
+      }
+
+      const registry = loadRegistry();
+      const customSkills = registry.filter((s) => s.source === "custom");
+
+      if (customSkills.length === 0) {
+        if (options.json) {
+          console.log(JSON.stringify({ pushed: 0, message: "No custom skills found" }));
+        } else {
+          console.log(chalk.dim("No custom skills found. Use 'skills create <name>' to scaffold one."));
+        }
+        return;
+      }
+
+      const results: Array<{ skill: string; agent: string; success: boolean; error?: string }> = [];
+
+      for (const skill of customSkills) {
+        for (const agent of agents) {
+          const result = installSkillForAgent(skill.name, {
+            agent,
+            scope: options.scope as "global" | "project",
+          }, generateSkillMd);
+          results.push({ skill: skill.name, agent, success: result.success, error: result.error });
+        }
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify({ pushed: results.filter((r) => r.success).length, results }));
+      } else {
+        for (const r of results) {
+          if (r.success) {
+            console.log(chalk.green(`✓ ${r.skill} → ${r.agent}`));
+          } else {
+            console.log(chalk.red(`✗ ${r.skill} → ${r.agent}: ${r.error}`));
+          }
+        }
+      }
+    }
+  });
+
+// Validate command — check a skill's structure is correct
+program
+  .command("validate")
+  .argument("<name>", "Skill name to validate")
+  .option("--json", "Output as JSON", false)
+  .description("Validate a skill's directory structure (SKILL.md, package.json, src/index.ts, tsconfig.json)")
+  .action((name: string, options: { json: boolean }) => {
+    const skillPath = getSkillPath(name);
+    const issues: string[] = [];
+
+    if (!existsSync(skillPath)) {
+      if (options.json) {
+        console.log(JSON.stringify({ name, valid: false, issues: [`Skill directory not found: ${skillPath}`] }));
+      } else {
+        console.error(chalk.red(`Skill '${name}' not found at ${skillPath}`));
+      }
+      process.exitCode = 1;
+      return;
+    }
+
+    if (!existsSync(join(skillPath, "SKILL.md"))) issues.push("Missing SKILL.md");
+    if (!existsSync(join(skillPath, "tsconfig.json"))) issues.push("Missing tsconfig.json");
+
+    const pkgPath = join(skillPath, "package.json");
+    if (!existsSync(pkgPath)) {
+      issues.push("Missing package.json");
+    } else {
+      try {
+        const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+        if (!pkg.bin || Object.keys(pkg.bin).length === 0) issues.push("package.json missing 'bin' entry");
+      } catch {
+        issues.push("package.json is invalid JSON");
+      }
+    }
+
+    if (!existsSync(join(skillPath, "src"))) {
+      issues.push("Missing src/ directory");
+    } else if (!existsSync(join(skillPath, "src", "index.ts"))) {
+      issues.push("Missing src/index.ts");
+    }
+
+    const valid = issues.length === 0;
+
+    if (options.json) {
+      console.log(JSON.stringify({ name, valid, path: skillPath, issues }));
+    } else if (valid) {
+      console.log(chalk.green(`✓ ${name} — all checks passed`));
+    } else {
+      console.log(chalk.red(`✗ ${name} — ${issues.length} issue(s):`));
+      for (const issue of issues) console.log(chalk.red(`  • ${issue}`));
+      process.exitCode = 1;
+    }
+  });
+
+// Diff command — show what would change before a skill install/update
+program
+  .command("diff")
+  .argument("<name>", "Skill name to diff")
+  .option("--json", "Output as JSON", false)
+  .description("Show files that differ between installed version and source (preview before update)")
+  .action((name: string, options: { json: boolean }) => {
+    const bare = name.replace(/^skill-/, "");
+    const skillName = `skill-${bare}`;
+    const destPath = join(process.cwd(), ".skills", skillName);
+    const sourcePath = getSkillPath(bare);
+
+    if (!existsSync(sourcePath)) {
+      if (options.json) {
+        console.log(JSON.stringify({ error: `Skill '${bare}' not found in registry` }));
+      } else {
+        skillNotFound(bare);
+      }
+      process.exitCode = 1;
+      return;
+    }
+
+    if (!existsSync(destPath)) {
+      if (options.json) {
+        console.log(JSON.stringify({ installed: false, message: `'${bare}' is not installed locally` }));
+      } else {
+        console.log(chalk.dim(`'${bare}' is not installed. Run: skills install ${bare}`));
+      }
+      return;
+    }
+
+    function collectFiles(dir: string, base = ""): Map<string, string> {
+      const files = new Map<string, string>();
+      if (!existsSync(dir)) return files;
+      for (const entry of readdirSync(dir)) {
+        const full = join(dir, entry);
+        const rel = base ? `${base}/${entry}` : entry;
+        if (statSync(full).isDirectory()) {
+          for (const [k, v] of collectFiles(full, rel)) files.set(k, v);
+        } else {
+          try { files.set(rel, readFileSync(full, "utf-8")); } catch { files.set(rel, ""); }
+        }
+      }
+      return files;
+    }
+
+    const installed = collectFiles(destPath);
+    const source = collectFiles(sourcePath);
+
+    const changed: string[] = [];
+    const added: string[] = [];
+    const removed: string[] = [];
+
+    for (const [file, content] of source) {
+      if (!installed.has(file)) added.push(file);
+      else if (installed.get(file) !== content) changed.push(file);
+    }
+    for (const file of installed.keys()) {
+      if (!source.has(file)) removed.push(file);
+    }
+
+    if (options.json) {
+      console.log(JSON.stringify({ name: bare, changed, added, removed, upToDate: changed.length === 0 && added.length === 0 && removed.length === 0 }));
+      return;
+    }
+
+    if (changed.length === 0 && added.length === 0 && removed.length === 0) {
+      console.log(chalk.green(`✓ ${bare} — up to date`));
+      return;
+    }
+
+    console.log(chalk.bold(`\nDiff for '${bare}':\n`));
+    for (const f of changed) console.log(chalk.yellow(`  ~ ${f}`));
+    for (const f of added) console.log(chalk.green(`  + ${f}`));
+    for (const f of removed) console.log(chalk.red(`  - ${f}`));
+    console.log(`\n${chalk.dim(`Run 'skills update ${bare}' to apply changes`)}`);
   });
 
 program.parse();
