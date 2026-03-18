@@ -14,7 +14,7 @@ describe("public API exports", () => {
 
   test("SKILLS array is populated", () => {
     expect(Array.isArray(publicAPI.SKILLS)).toBe(true);
-    expect(publicAPI.SKILLS.length).toBe(202);
+    expect(publicAPI.SKILLS.length).toBe(204);
   });
 
   test("CATEGORIES array is populated", () => {

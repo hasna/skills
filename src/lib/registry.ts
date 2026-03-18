@@ -1072,6 +1072,20 @@ export const SKILLS: SkillMeta[] = [
     category: "Design & Branding",
     tags: ["testimonials", "graphics", "social-proof", "marketing"],
   },
+  {
+    name: "colorextract",
+    displayName: "Color Extract",
+    description: "Extract complete color palettes from screenshots and images using Claude Vision. Outputs open-styles compatible profiles.",
+    category: "Design & Branding",
+    tags: ["colors", "palette", "design", "vision", "screenshot", "extract", "open-styles"],
+  },
+  {
+    name: "siteanalyze",
+    displayName: "Site Analyze",
+    description: "Analyze any website's design system — detects shadcn/ui, Tailwind, extracts colors, typography, and components via Playwright + Claude Vision.",
+    category: "Design & Branding",
+    tags: ["design", "shadcn", "tailwind", "colors", "typography", "playwright", "analysis", "open-styles"],
+  },
 
   // Web & Browser
   {

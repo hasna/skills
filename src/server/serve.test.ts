@@ -10,13 +10,13 @@ async function api(path: string, options?: RequestInit): Promise<Response> {
 
 describe("Dashboard Server", () => {
   describe("GET /api/skills", () => {
-    test("returns all 202 skills", async () => {
+    test("returns all 204 skills", async () => {
       const res = await api("/api/skills");
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toContain("application/json");
       const data = await res.json();
       expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBe(202);
+      expect(data.length).toBe(204);
     });
 
     test("each skill has required fields", async () => {
@@ -66,11 +66,11 @@ describe("Dashboard Server", () => {
       }
     });
 
-    test("category counts sum to 202", async () => {
+    test("category counts sum to 204", async () => {
       const res = await api("/api/categories");
       const data = await res.json();
       const total = data.reduce((sum: number, cat: any) => sum + cat.count, 0);
-      expect(total).toBe(202);
+      expect(total).toBe(204);
     });
   });
 
@@ -462,12 +462,12 @@ describe("Dashboard Server", () => {
         }
         expect(ready).toBe(true);
 
-        // Hit GET /api/skills and verify 202 skills
+        // Hit GET /api/skills and verify 204 skills
         const skillsRes = await fetch(`${serverUrl}/api/skills`);
         expect(skillsRes.status).toBe(200);
         const skills = await skillsRes.json();
         expect(Array.isArray(skills)).toBe(true);
-        expect(skills.length).toBe(202);
+        expect(skills.length).toBe(204);
 
         // Hit GET / and check for HTML (if dashboard is built)
         const rootRes = await fetch(`${serverUrl}/`);

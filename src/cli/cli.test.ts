@@ -22,7 +22,7 @@ describe("CLI", () => {
       const { stdout } = await runCli([]);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBe(202);
+      expect(data.length).toBe(204);
       expect(data[0]).toHaveProperty("name");
       expect(data[0]).toHaveProperty("category");
       // Compact mode — no description/tags to keep tokens low
@@ -62,7 +62,7 @@ describe("CLI", () => {
   describe("list", () => {
     test("lists all skills", async () => {
       const { stdout } = await runCli(["list"]);
-      expect(stdout).toContain("Available skills (202)");
+      expect(stdout).toContain("Available skills (204)");
       expect(stdout).toContain("Development Tools");
     });
 
@@ -82,7 +82,7 @@ describe("CLI", () => {
       const { stdout } = await runCli(["list", "--json"]);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBe(202);
+      expect(data.length).toBe(204);
     });
 
     test("lists by category with --json", async () => {
@@ -641,7 +641,7 @@ describe("CLI", () => {
       expect(exitCode).toBe(0);
       const lines = stdout.trim().split("\n").filter(Boolean);
       // Each line should contain name \u2014 description [category]
-      expect(lines.length).toBe(202);
+      expect(lines.length).toBe(204);
       for (const line of lines) {
         expect(line).toContain(" \u2014 ");
         expect(line).toMatch(/\[.+\]$/);

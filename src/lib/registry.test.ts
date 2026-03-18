@@ -13,8 +13,8 @@ import {
 
 describe("registry", () => {
   describe("SKILLS", () => {
-    test("has 202 skills", () => {
-      expect(SKILLS.length).toBe(202);
+    test("has 204 skills", () => {
+      expect(SKILLS.length).toBe(204);
     });
 
     test("all skills have required fields", () => {
