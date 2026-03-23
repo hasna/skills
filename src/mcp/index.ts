@@ -10,9 +10,10 @@
 
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { existsSync, readdirSync, statSync } from "fs";
-import { join } from "path";
+import { existsSync, mkdirSync, readdirSync, statSync } from "fs";
+import { join, dirname } from "path";
 import { homedir } from "os";
+import { SqliteAdapter as Database } from "@hasna/cloud";
 import { z } from "zod";
 import pkg from "../../package.json" with { type: "json" };
 import {
@@ -636,6 +637,7 @@ server.registerTool("search_tools", {
     "install_skill", "install_category", "remove_skill",
     "list_categories", "list_tags", "get_requirements",
     "run_skill", "export_skills", "import_skills", "whoami",
+    "register_agent", "heartbeat", "set_focus", "list_agents",
     "search_tools", "describe_tools",
   ];
   const matches = query ? all.filter(n => n.includes(query.toLowerCase())) : all;
@@ -663,6 +665,10 @@ server.registerTool("describe_tools", {
     export_skills: "Export skill config. Params: format?",
     import_skills: "Import skill config. Params: data",
     whoami: "Show setup: version, installed skills, agent configs.",
+    register_agent: "Register agent session (idempotent). Params: name, session_id?",
+    heartbeat: "Update last_seen_at to signal agent is active. Params: agent_id",
+    set_focus: "Set active project context. Params: agent_id, project_id?",
+    list_agents: "List all registered agents.",
   };
   const result = names.map((n: string) => `${n}: ${descriptions[n] || "See tool schema"}`).join("\n");
   return { content: [{ type: "text", text: result }] };
@@ -708,6 +714,44 @@ server.tool(
     if (!ag) return { content: [{ type: "text" as const, text: `Agent not found: ${a.agent_id}` }], isError: true };
     (ag as any).project_id = a.project_id;
     return { content: [{ type: "text" as const, text: a.project_id ? `Focus: ${a.project_id}` : "Focus cleared" }] };
+  }
+);
+
+server.tool(
+  "list_agents",
+  "List all registered agents.",
+  {},
+  async () => {
+    const agents = [..._agentReg.values()];
+    if (agents.length === 0) return { content: [{ type: "text" as const, text: "No agents registered." }] };
+    return { content: [{ type: "text" as const, text: JSON.stringify(agents, null, 2) }] };
+  }
+);
+
+function getFeedbackDb(): Database {
+  const home = homedir();
+  const dbPath = join(home, ".hasna", "skills", "skills.db");
+  const dir = dirname(dbPath);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const db = new Database(dbPath, { create: true });
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))), message TEXT NOT NULL, email TEXT, category TEXT DEFAULT 'general', version TEXT, machine_id TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')))");
+  return db;
+}
+
+server.tool(
+  "send_feedback",
+  "Send feedback about this service",
+  { message: z.string(), email: z.string().optional(), category: z.enum(["bug", "feature", "general"]).optional() },
+  async (params: { message: string; email?: string; category?: string }) => {
+    try {
+      const db = getFeedbackDb();
+      db.run("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)", [params.message, params.email || null, params.category || "general", pkg.version]);
+      db.close();
+      return { content: [{ type: "text" as const, text: "Feedback saved. Thank you!" }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: String(e) }], isError: true };
+    }
   }
 );
 
