@@ -1996,7 +1996,7 @@ program
   .option("--category <category>", "Skill category", "Development Tools")
   .option("--description <description>", "Short description of what the skill does")
   .option("--tags <tags>", "Comma-separated tags (e.g. api,testing,automation)")
-  .option("--global", "Create in ~/.skills/ instead of .skills/custom-skills/", false)
+  .option("--global", "Create in ~/.hasna/skills/custom/ instead of .skills/custom-skills/", false)
   .option("--json", "Output result as JSON", false)
   .description("Scaffold a new custom skill directory")
   .action((name: string, options: { category: string; description?: string; tags?: string; global: boolean; json: boolean }) => {
@@ -2008,7 +2008,7 @@ program
 
     // Determine target directory
     const baseDir = options.global
-      ? join(homedir(), ".skills")
+      ? join(homedir(), ".hasna", "skills", "custom")
       : join(process.cwd(), ".skills", "custom-skills");
     const skillDir = join(baseDir, dirName);
 
@@ -2106,7 +2106,7 @@ program
   .command("sync")
   .option("--to <agent>", "Push custom skills to agent: claude, codex, gemini, pi, opencode, or all")
   .option("--from <agent>", "List agent skills and show which are unknown to the registry")
-  .option("--register", "With --from: copy unknown agent skills into ~/.skills/ to add them to the registry", false)
+  .option("--register", "With --from: copy unknown agent skills into ~/.hasna/skills/custom/ to add them to the registry", false)
   .option("--scope <scope>", "Agent install scope: global or project", "global")
   .option("--json", "Output as JSON", false)
   .description("Sync custom skills with agent directories (--to or --from)")
@@ -2154,9 +2154,9 @@ program
 
       const unknown = found.filter((s) => !s.inRegistry);
 
-      // --register: copy unknown SKILL.md files into ~/.skills/ to add them to the global registry
+      // --register: copy unknown SKILL.md files into ~/.hasna/skills/custom/ to add them to the global registry
       if (options.register && unknown.length > 0) {
-        const globalSkillsDir = join(homedir(), ".skills");
+        const globalSkillsDir = join(homedir(), ".hasna", "skills", "custom");
         const registered: string[] = [];
         for (const s of unknown) {
           const srcSkillMd = join(s.path, "SKILL.md");
@@ -2173,7 +2173,7 @@ program
           console.log(JSON.stringify({ agentDir, skills: found, registered }));
         } else {
           for (const name of registered) {
-            console.log(chalk.green(`✓ Registered '${name}' into ~/.skills/ (global custom)`));
+            console.log(chalk.green(`✓ Registered '${name}' into ~/.hasna/skills/custom/ (global custom)`));
           }
           if (registered.length === 0) console.log(chalk.dim("No new skills to register (all SKILL.md files missing)"));
         }
@@ -2190,7 +2190,7 @@ program
         }
         if (unknown.length > 0) {
           console.log("");
-          console.log(chalk.dim(`Tip: ${unknown.length} skill(s) not in registry. Run with --register to add them to ~/.skills/.`));
+          console.log(chalk.dim(`Tip: ${unknown.length} skill(s) not in registry. Run with --register to add them to ~/.hasna/skills/custom/.`));
         }
       }
       return;

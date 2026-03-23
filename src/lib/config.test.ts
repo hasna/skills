@@ -34,7 +34,7 @@ describe("config", () => {
 
     test("returns global path for 'global' scope", () => {
       const p = getConfigPath("global");
-      expect(p).toContain(".skillsrc");
+      expect(p).toContain(join(".hasna", "skills", "config.json"));
     });
   });
 

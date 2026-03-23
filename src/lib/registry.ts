@@ -1566,7 +1566,8 @@ const REGISTRY_CACHE_TTL = 5000;
 
 /**
  * Load the full registry: official skills merged with custom skills from:
- * - ~/.skills/ (global custom)
+ * - ~/.hasna/skills/custom/ (global custom, new path)
+ * - ~/.skills/ (global custom, legacy path)
  * - ./.custom-skills/ (project-level custom, relative to cwd)
  *
  * Custom skills with the same name as official skills take precedence.
@@ -1580,8 +1581,12 @@ export function loadRegistry(cwd?: string): SkillMeta[] {
 
   const official = SKILLS.map((s) => ({ ...s, source: "official" as const }));
 
-  // Global custom: ~/.skills/ (user-built or imported from agents via `skills sync`)
-  const globalCustom = discoverSkillsInDir(join(homedir(), ".skills"));
+  // Global custom: ~/.hasna/skills/custom/ (new path) + ~/.skills/ (legacy, backward compat)
+  const globalCustomNew = discoverSkillsInDir(join(homedir(), ".hasna", "skills", "custom"));
+  const globalCustomOld = discoverSkillsInDir(join(homedir(), ".skills"));
+  // Merge: new path takes precedence over old
+  const oldNames = new Set(globalCustomNew.map((s) => s.name));
+  const globalCustom = [...globalCustomNew, ...globalCustomOld.filter((s) => !oldNames.has(s.name))];
   // Project custom: .skills/custom-skills/ (project-scoped user skills)
   const projectCustom = discoverSkillsInDir(join(cwd || process.cwd(), ".skills", "custom-skills"));
 

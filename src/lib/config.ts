@@ -3,12 +3,13 @@
  *
  * Loads configuration from:
  *   1. Project-local: ./skills.config.json (highest priority)
- *   2. Global: ~/.skillsrc (JSON format, lowest priority)
+ *   2. Global: ~/.hasna/skills/config.json (JSON format, lowest priority)
+ *      (backward compat: also checks ~/.skillsrc)
  *
  * Values from the project config override global config.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
 
@@ -27,11 +28,35 @@ const VALID_KEYS: Record<keyof SkillsConfig, string[]> = {
 export type ConfigScope = "global" | "project";
 
 /**
+ * Get the data directory for skills global config/data.
+ * New default: ~/.hasna/skills/
+ * Auto-migrates from ~/.skillsrc if the new config doesn't exist yet.
+ */
+export function getDataDir(): string {
+  const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
+  const newDir = join(home, ".hasna", "skills");
+  const oldConfigFile = join(home, ".skillsrc");
+
+  // Auto-migrate: if old config exists and new dir doesn't have config.json, copy it
+  if (existsSync(oldConfigFile) && !existsSync(join(newDir, "config.json"))) {
+    mkdirSync(newDir, { recursive: true });
+    try {
+      copyFileSync(oldConfigFile, join(newDir, "config.json"));
+    } catch {
+      // If we can't copy, just continue with the new path
+    }
+  }
+
+  mkdirSync(newDir, { recursive: true });
+  return newDir;
+}
+
+/**
  * Get the config file path for a given scope
  */
 export function getConfigPath(scope: ConfigScope): string {
   if (scope === "global") {
-    return join(homedir(), ".skillsrc");
+    return join(getDataDir(), "config.json");
   }
   return join(process.cwd(), "skills.config.json");
 }
