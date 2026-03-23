@@ -35,7 +35,7 @@
     "dashboard:build": "cd dashboard && bun install && bun run build",
     "server": "bun run src/server/serve.ts",
     "server:dev": "bun --watch run src/server/serve.ts",
-    "postinstall": "mkdir -p $HOME/.hasna/skills 2>/dev/null || true"
+    "postinstall": "mkdir -p $HOME/.hasna/skills/custom 2>/dev/null || true"
   },
   "keywords": [
     "skills",
