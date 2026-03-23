@@ -733,7 +733,7 @@ function getFeedbackDb(): Database {
   const dbPath = join(home, ".hasna", "skills", "skills.db");
   const dir = dirname(dbPath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const db = new Database(dbPath, { create: true });
+  const db = new Database(dbPath);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))), message TEXT NOT NULL, email TEXT, category TEXT DEFAULT 'general', version TEXT, machine_id TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')))");
   return db;
