@@ -13,7 +13,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
-import { SqliteAdapter as Database } from "@hasna/cloud";
+import { SqliteAdapter as Database, registerCloudTools } from "@hasna/cloud";
 import { z } from "zod";
 import pkg from "../../package.json" with { type: "json" };
 import {
@@ -757,6 +757,7 @@ server.tool(
 
 async function main() {
   const transport = new StdioServerTransport();
+  registerCloudTools(server, "skills");
   await server.connect(transport);
 }
 
