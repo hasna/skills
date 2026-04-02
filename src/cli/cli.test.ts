@@ -1244,4 +1244,36 @@ describe("CLI", () => {
       expect(stdout).toContain("readiness");
     });
   });
+
+  describe("completion", () => {
+    test("bash completion includes all current top-level commands", async () => {
+      const { stdout } = await runCli(["completion", "bash"]);
+      expect(stdout).toContain("interactive");
+      expect(stdout).toContain("export");
+      expect(stdout).toContain("import");
+      expect(stdout).toContain("whoami");
+      expect(stdout).toContain("test");
+      expect(stdout).toContain("config");
+      expect(stdout).toContain("create");
+      expect(stdout).toContain("sync");
+      expect(stdout).toContain("validate");
+      expect(stdout).toContain("diff");
+      expect(stdout).toContain("schedule");
+    });
+
+    test("zsh completion includes all current top-level commands", async () => {
+      const { stdout } = await runCli(["completion", "zsh"]);
+      expect(stdout).toContain("'interactive:interactive command'");
+      expect(stdout).toContain("'export:export command'");
+      expect(stdout).toContain("'import:import command'");
+      expect(stdout).toContain("'whoami:whoami command'");
+      expect(stdout).toContain("'test:test command'");
+      expect(stdout).toContain("'config:config command'");
+      expect(stdout).toContain("'create:create command'");
+      expect(stdout).toContain("'sync:sync command'");
+      expect(stdout).toContain("'validate:validate command'");
+      expect(stdout).toContain("'diff:diff command'");
+      expect(stdout).toContain("'schedule:schedule command'");
+    });
+  });
 });
