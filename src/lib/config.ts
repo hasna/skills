@@ -14,13 +14,13 @@ import { join, dirname } from "path";
 import { homedir } from "os";
 
 export interface SkillsConfig {
-  defaultAgent?: "claude" | "codex" | "gemini" | "all";
+  defaultAgent?: "claude" | "codex" | "gemini" | "pi" | "opencode" | "all";
   defaultScope?: "global" | "project";
   format?: "compact" | "json" | "csv";
 }
 
 const VALID_KEYS: Record<keyof SkillsConfig, string[]> = {
-  defaultAgent: ["claude", "codex", "gemini", "all"],
+  defaultAgent: ["claude", "codex", "gemini", "pi", "opencode", "all"],
   defaultScope: ["global", "project"],
   format: ["compact", "json", "csv"],
 };

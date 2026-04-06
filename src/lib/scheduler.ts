@@ -50,11 +50,68 @@ function saveSchedules(data: SchedulesFile, targetDir: string = process.cwd()): 
   writeFileSync(path, JSON.stringify(data, null, 2));
 }
 
-/** Validate a 5-field cron expression (basic syntax check). */
+/** Validate a single number or list/range/step value within bounds */
+function validateCronField(expr: string, min: number, max: number, label: string): { valid: boolean; error?: string } {
+  // Handle comma-separated lists
+  for (const part of expr.split(",")) {
+    // Wildcard
+    if (part === "*") continue;
+
+    // Step: */N or range/N or number/N
+    let valuePart = part;
+    if (part.includes("/")) {
+      const slashIdx = part.indexOf("/");
+      valuePart = part.slice(0, slashIdx);
+      const stepStr = part.slice(slashIdx + 1);
+      const step = parseInt(stepStr);
+      if (isNaN(step) || step < 1) return { valid: false, error: `Invalid step value in "${part}" in ${label}` };
+    }
+
+    // If valuePart is "*", that's a bare wildcard with step — valid, nothing more to check
+    if (valuePart === "*") continue;
+
+    // Range: N-M
+    if (valuePart.includes("-")) {
+      const rangeParts = valuePart.split("-");
+      if (rangeParts.length !== 2) return { valid: false, error: `Invalid range expression "${valuePart}" in ${label}` };
+      const lo = parseInt(rangeParts[0]);
+      const hi = parseInt(rangeParts[1]);
+      if (isNaN(lo) || isNaN(hi)) return { valid: false, error: `Invalid range "${valuePart}" in ${label}` };
+      if (lo < min || hi > max || lo > hi) {
+        return { valid: false, error: `Range ${lo}-${hi} outside valid ${min}-${max} in ${label}` };
+      }
+      continue;
+    }
+
+    // Single number
+    const n = parseInt(valuePart);
+    if (isNaN(n)) return { valid: false, error: `Invalid value "${valuePart}" in ${label}` };
+    if (n < min || n > max) {
+      return { valid: false, error: `Value ${n} outside valid ${min}-${max} in ${label}` };
+    }
+  }
+  return { valid: true };
+}
+
+/** Validate a 5-field cron expression with range checking. */
 export function validateCron(expr: string): { valid: boolean; error?: string } {
   const fields = expr.trim().split(/\s+/);
   if (fields.length !== 5) {
     return { valid: false, error: `Expected 5 fields, got ${fields.length}. Format: "minute hour day-of-month month day-of-week"` };
+  }
+  const [minuteF, hourF, domF, monthF, dowF] = fields;
+
+  const checks = [
+    { expr: minuteF, min: 0, max: 59, label: "minute" },
+    { expr: hourF, min: 0, max: 23, label: "hour" },
+    { expr: domF, min: 1, max: 31, label: "day-of-month" },
+    { expr: monthF, min: 1, max: 12, label: "month" },
+    { expr: dowF, min: 0, max: 6, label: "day-of-week" },
+  ];
+
+  for (const { expr: f, min, max, label } of checks) {
+    const result = validateCronField(f, min, max, label);
+    if (!result.valid) return result;
   }
   return { valid: true };
 }
