@@ -1,7 +1,9 @@
 import { describe, test, expect } from "bun:test";
 import { join } from "path";
+import { SKILLS } from "../lib/registry.js";
 
 const MCP_PATH = join(import.meta.dir, "index.ts");
+const EXPECTED_SKILL_COUNT = SKILLS.length;
 
 /**
  * Helper class to communicate with the MCP server over stdio.
@@ -287,7 +289,7 @@ describe("MCP Server", () => {
       expect(response).not.toBeNull();
       const skills = JSON.parse(response.result.content[0].text);
       expect(Array.isArray(skills)).toBe(true);
-      expect(skills.length).toBe(204);
+      expect(skills.length).toBe(EXPECTED_SKILL_COUNT);
     } finally {
       await client.close();
     }
@@ -439,7 +441,7 @@ describe("MCP Server", () => {
       expect(response.result).toBeDefined();
       const skills = JSON.parse(response.result.contents[0].text);
       expect(Array.isArray(skills)).toBe(true);
-      expect(skills.length).toBe(204);
+      expect(skills.length).toBe(EXPECTED_SKILL_COUNT);
     } finally {
       await client.close();
     }

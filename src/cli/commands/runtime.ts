@@ -44,6 +44,11 @@ export function registerRuntime(parent: Command) {
     .command("self-update")
     .description("Update @hasna/skills to the latest version")
     .action(async () => {
+    if (process.env.SKILLS_TEST_MODE === "1") {
+      console.error(chalk.yellow("Self-update disabled in test mode"));
+      process.exitCode = 1;
+      return;
+    }
     const name = "@hasna/skills";
     console.log(chalk.bold(`\nUpdating ${name}...\n`));
     const proc = Bun.spawn(["bun", "add", "-g", `${name}@latest`], { stdout: "inherit", stderr: "inherit" });

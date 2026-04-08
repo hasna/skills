@@ -1,7 +1,9 @@
 import { describe, test, expect } from "bun:test";
 import { createFetchHandler, startServer } from "./serve";
+import { SKILLS } from "../lib/registry.js";
 
 const handler = createFetchHandler();
+const EXPECTED_SKILL_COUNT = SKILLS.length;
 
 async function api(path: string, options?: RequestInit): Promise<Response> {
   const req = new Request(`http://localhost${path}`, options);
@@ -10,13 +12,13 @@ async function api(path: string, options?: RequestInit): Promise<Response> {
 
 describe("Dashboard Server", () => {
   describe("GET /api/skills", () => {
-    test("returns all 204 skills", async () => {
+    test("returns all registered skills", async () => {
       const res = await api("/api/skills");
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toContain("application/json");
       const data = await res.json();
       expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBe(204);
+      expect(data.length).toBe(EXPECTED_SKILL_COUNT);
     });
 
     test("each skill has required fields", async () => {
@@ -66,11 +68,11 @@ describe("Dashboard Server", () => {
       }
     });
 
-    test("category counts sum to 204", async () => {
+    test("category counts sum to registry size", async () => {
       const res = await api("/api/categories");
       const data = await res.json();
       const total = data.reduce((sum: number, cat: any) => sum + cat.count, 0);
-      expect(total).toBe(204);
+      expect(total).toBe(EXPECTED_SKILL_COUNT);
     });
   });
 
@@ -414,14 +416,24 @@ describe("Dashboard Server", () => {
 
   describe("POST /api/self-update", () => {
     test("attempts self-update and returns result", async () => {
-      const res = await api("/api/self-update", { method: "POST" });
-      const data = await res.json();
-      expect(data).toHaveProperty("success");
-      // Either succeeds or fails — both are valid responses
-      if (data.success) {
-        expect(data).toHaveProperty("output");
-      } else {
-        expect(data).toHaveProperty("error");
+      const previous = process.env.SKILLS_TEST_MODE;
+      process.env.SKILLS_TEST_MODE = "1";
+      try {
+        const res = await api("/api/self-update", { method: "POST" });
+        const data = await res.json();
+        expect(data).toHaveProperty("success");
+        // Either succeeds or fails — both are valid responses
+        if (data.success) {
+          expect(data).toHaveProperty("output");
+        } else {
+          expect(data).toHaveProperty("error");
+        }
+      } finally {
+        if (previous === undefined) {
+          delete process.env.SKILLS_TEST_MODE;
+        } else {
+          process.env.SKILLS_TEST_MODE = previous;
+        }
       }
     });
   });
@@ -462,12 +474,12 @@ describe("Dashboard Server", () => {
         }
         expect(ready).toBe(true);
 
-        // Hit GET /api/skills and verify 204 skills
+        // Hit GET /api/skills and verify the registry size
         const skillsRes = await fetch(`${serverUrl}/api/skills`);
         expect(skillsRes.status).toBe(200);
         const skills = await skillsRes.json();
         expect(Array.isArray(skills)).toBe(true);
-        expect(skills.length).toBe(204);
+        expect(skills.length).toBe(EXPECTED_SKILL_COUNT);
 
         // Hit GET / and check for HTML (if dashboard is built)
         const rootRes = await fetch(`${serverUrl}/`);

@@ -480,6 +480,9 @@ export function createFetchHandler(options?: {
 
     // POST /api/self-update - Update package to latest
     if (path === "/api/self-update" && method === "POST") {
+      if (process.env.SKILLS_TEST_MODE === "1") {
+        return json({ success: false, error: "Self-update disabled in test mode" }, 503);
+      }
       try {
         const pkg = getPackageJson();
         const proc = Bun.spawn(["bun", "add", "-g", `${pkg.name}@latest`], {

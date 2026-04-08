@@ -26,7 +26,7 @@ const skillDirs = readdirSync(SKILLS_DIR).filter(
   (f) => f.startsWith("skill-")
 );
 
-describe("structural validation of all 204 skills", () => {
+describe("structural validation of all registered skills", () => {
   test("every skill in the SKILLS registry has a corresponding skills/skill-{name}/ directory", () => {
     const missing: string[] = [];
     for (const skill of SKILLS) {

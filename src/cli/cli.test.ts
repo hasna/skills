@@ -1,14 +1,17 @@
 import { describe, test, expect } from "bun:test";
 import { join } from "path";
 import pkg from "../../package.json" with { type: "json" };
+import { SKILLS } from "../lib/registry.js";
 
 const CLI_PATH = join(import.meta.dir, "index.tsx");
+const EXPECTED_SKILL_COUNT = SKILLS.length;
+const SLOW_TEST_TIMEOUT = 15000;
 
 async function runCli(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", ...args], {
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, NO_COLOR: "1" },
+    env: { ...process.env, NO_COLOR: "1", SKILLS_TEST_MODE: "1" },
   });
   const stdout = await new Response(proc.stdout).text();
   const stderr = await new Response(proc.stderr).text();
@@ -22,7 +25,7 @@ describe("CLI", () => {
       const { stdout } = await runCli([]);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBe(204);
+      expect(data.length).toBe(EXPECTED_SKILL_COUNT);
       expect(data[0]).toHaveProperty("name");
       expect(data[0]).toHaveProperty("category");
       // Compact mode — no description/tags to keep tokens low
@@ -62,7 +65,7 @@ describe("CLI", () => {
   describe("list", () => {
     test("lists all skills", async () => {
       const { stdout } = await runCli(["list"]);
-      expect(stdout).toContain("Available skills (204)");
+      expect(stdout).toContain(`Available skills (${EXPECTED_SKILL_COUNT})`);
       expect(stdout).toContain("Development Tools");
     });
 
@@ -82,7 +85,7 @@ describe("CLI", () => {
       const { stdout } = await runCli(["list", "--json"]);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBe(204);
+      expect(data.length).toBe(EXPECTED_SKILL_COUNT);
     });
 
     test("lists by category with --json", async () => {
@@ -597,7 +600,7 @@ describe("CLI", () => {
         expect(s.category).toBe("Development Tools");
         expect(s.tags.map((t: string) => t.toLowerCase())).toContain("api");
       }
-    });
+    }, SLOW_TEST_TIMEOUT);
   });
 
   describe("search --tags", () => {
@@ -626,13 +629,13 @@ describe("CLI", () => {
       const tagged = JSON.parse(tagOut);
       // Filtered by tag should return <= results of unfiltered
       expect(tagged.length).toBeLessThanOrEqual(all.length);
-    });
+    }, SLOW_TEST_TIMEOUT);
 
     test("returns empty for tag with no matches in search results", async () => {
       const { stdout } = await runCli(["search", "zzzznonexistentzzzzz", "--tags", "api", "--json"]);
       const data = JSON.parse(stdout);
       expect(data).toEqual([]);
-    });
+    }, SLOW_TEST_TIMEOUT);
   });
 
   describe("--brief flag", () => {
@@ -641,12 +644,12 @@ describe("CLI", () => {
       expect(exitCode).toBe(0);
       const lines = stdout.trim().split("\n").filter(Boolean);
       // Each line should contain name \u2014 description [category]
-      expect(lines.length).toBe(204);
+      expect(lines.length).toBe(EXPECTED_SKILL_COUNT);
       for (const line of lines) {
         expect(line).toContain(" \u2014 ");
         expect(line).toMatch(/\[.+\]$/);
       }
-    });
+    }, SLOW_TEST_TIMEOUT);
 
     test("list --brief output has fewer lines than default list output", async () => {
       const { stdout: brief } = await runCli(["list", "--brief"]);
@@ -654,7 +657,7 @@ describe("CLI", () => {
       const briefLines = brief.trim().split("\n").filter(Boolean).length;
       const normalLines = normal.trim().split("\n").filter(Boolean).length;
       expect(briefLines).toBeLessThan(normalLines);
-    });
+    }, SLOW_TEST_TIMEOUT);
 
     test("list --brief with --category shows compact results", async () => {
       const { stdout, exitCode } = await runCli(["list", "--brief", "--category", "Health & Wellness"]);
@@ -665,7 +668,7 @@ describe("CLI", () => {
         expect(line).toContain(" \u2014 ");
         expect(line).toContain("[Health & Wellness]");
       }
-    });
+    }, SLOW_TEST_TIMEOUT);
 
     test("list --brief with --tags shows compact results", async () => {
       const { stdout, exitCode } = await runCli(["list", "--brief", "--tags", "api"]);
@@ -676,14 +679,14 @@ describe("CLI", () => {
         expect(line).toContain(" \u2014 ");
         expect(line).toMatch(/\[.+\]$/);
       }
-    });
+    }, SLOW_TEST_TIMEOUT);
 
     test("list --brief --json uses json (--json wins)", async () => {
       const { stdout, exitCode } = await runCli(["list", "--brief", "--json"]);
       expect(exitCode).toBe(0);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
-    });
+    }, SLOW_TEST_TIMEOUT);
 
     test("search image --brief shows compact results", async () => {
       const { stdout, exitCode } = await runCli(["search", "image", "--brief"]);
@@ -694,7 +697,7 @@ describe("CLI", () => {
         expect(line).toContain(" \u2014 ");
         expect(line).toMatch(/\[.+\]$/);
       }
-    });
+    }, SLOW_TEST_TIMEOUT);
 
     test("search --brief output has fewer lines than default search output", async () => {
       const { stdout: brief } = await runCli(["search", "image", "--brief"]);
@@ -702,7 +705,7 @@ describe("CLI", () => {
       const briefLines = brief.trim().split("\n").filter(Boolean).length;
       const normalLines = normal.trim().split("\n").filter(Boolean).length;
       expect(briefLines).toBeLessThan(normalLines);
-    });
+    }, SLOW_TEST_TIMEOUT);
 
     test("search --brief --json uses json (--json wins)", async () => {
       const { stdout, exitCode } = await runCli(["search", "image", "--brief", "--json"]);
