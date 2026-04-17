@@ -660,8 +660,8 @@ export const SKILLS: SkillMeta[] = [
     tags: ["diagrams", "flowcharts", "visualization", "architecture"],
   },
   {
-    name: "doc",
-    displayName: "Doc",
+    name: "doc-generate",
+    displayName: "Doc Generate",
     description: "Generate DOCX documents with rich formatting, templates, and AI content",
     category: "Content Generation",
     tags: ["docx", "document", "word", "generation"],
@@ -674,8 +674,8 @@ export const SKILLS: SkillMeta[] = [
     tags: ["excel", "spreadsheet", "generation", "data"],
   },
   {
-    name: "pdf",
-    displayName: "PDF",
+    name: "pdf-generate",
+    displayName: "PDF Generate",
     description: "Generate PDF documents with rich formatting and layouts",
     category: "Content Generation",
     tags: ["pdf", "document", "generation", "formatting"],
@@ -949,6 +949,13 @@ export const SKILLS: SkillMeta[] = [
     description: "Read multiple PDFs with page-range selection, chunked reading, and parallel processing",
     category: "Data & Analysis",
     tags: ["pdf", "reader", "extraction", "parallel"],
+  },
+  {
+    name: "doc-read",
+    displayName: "Doc Read",
+    description: "Read and extract text from DOCX files with section parsing and metadata extraction",
+    category: "Data & Analysis",
+    tags: ["docx", "reader", "extraction", "word"],
   },
   {
     name: "spreadsheet-cleanroom",

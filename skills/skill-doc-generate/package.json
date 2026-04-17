@@ -1,10 +1,10 @@
 {
-  "name": "@hasnaxyz/skill-pdf",
+  "name": "@hasnaxyz/skill-doc-generate",
   "version": "0.1.0",
-  "description": "Generate PDF documents",
+  "description": "Generate DOCX documents with rich formatting and templates",
   "type": "module",
   "bin": {
-    "skill-pdf": "./src/index.ts"
+    "skill-doc-generate": "./src/index.ts"
   },
   "scripts": {
     "start": "bun run src/index.ts",

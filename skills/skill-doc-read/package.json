@@ -1,0 +1,27 @@
+{
+  "name": "@hasnaxyz/skill-doc-read",
+  "version": "0.1.0",
+  "description": "Read and extract text from DOCX files with section parsing and metadata extraction",
+  "type": "module",
+  "bin": {
+    "skill-doc-read": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target node",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  },
+  "publishConfig": {
+    "access": "restricted",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "files": [
+    "src",
+    "tsconfig.json"
+  ]
+}
