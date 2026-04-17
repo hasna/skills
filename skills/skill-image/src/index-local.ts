@@ -4,6 +4,7 @@ import { writeFile } from 'fs/promises';
 import { resolve, dirname } from 'path';
 import { mkdir } from 'fs/promises';
 import type { GenerateOptions, ImageProvider } from './types';
+import { MinimaxProvider } from './providers/minimax';
 import { OpenAIProvider } from './providers/openai';
 import { GoogleProvider } from './providers/google';
 import { XAIProvider } from './providers/xai';
@@ -70,8 +71,7 @@ function parseArgs(): GenerateOptions | null {
 
   // Validate required options
   if (!options.provider) {
-    console.error('Error: --provider is required');
-    process.exit(1);
+    options.provider = 'minimax';
   }
 
   if (!options.prompt) {
@@ -85,7 +85,7 @@ function parseArgs(): GenerateOptions | null {
   }
 
   // Validate provider
-  const validProviders = ['openai', 'google', 'xai'];
+  const validProviders = ['minimax', 'openai', 'google', 'xai'];
   if (!validProviders.includes(options.provider)) {
     console.error(
       `Error: Invalid provider. Choose from: ${validProviders.join(', ')}`
@@ -149,6 +149,8 @@ PROVIDER-SPECIFIC OPTIONS:
 
 function getProvider(provider: string): ImageProvider {
   switch (provider) {
+    case 'minimax':
+      return new MinimaxProvider();
     case 'openai':
       return new OpenAIProvider();
     case 'google':

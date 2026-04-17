@@ -1,10 +1,13 @@
 import type { Provider, VideoProvider } from '../types';
+import { MinimaxProvider } from './minimax';
 import { GoogleVeoProvider } from './google-veo';
 import { OpenAISoraProvider } from './openai-sora';
 import { RunwayProvider } from './runway';
 
 export function getProvider(provider: Provider): VideoProvider {
   switch (provider) {
+    case 'minimax':
+      return new MinimaxProvider();
     case 'google':
       return new GoogleVeoProvider();
     case 'openai':
@@ -16,4 +19,4 @@ export function getProvider(provider: Provider): VideoProvider {
   }
 }
 
-export { GoogleVeoProvider, OpenAISoraProvider, RunwayProvider };
+export { MinimaxProvider, GoogleVeoProvider, OpenAISoraProvider, RunwayProvider };

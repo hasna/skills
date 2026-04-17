@@ -2,7 +2,7 @@
  * Shared types and interfaces for audio generation providers
  */
 
-export type Provider = 'elevenlabs' | 'openai' | 'google';
+export type Provider = 'minimax' | 'elevenlabs' | 'openai' | 'google';
 
 export interface GenerateOptions {
   text: string;

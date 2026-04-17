@@ -1,4 +1,4 @@
-export type Provider = 'google' | 'openai' | 'runway';
+export type Provider = 'minimax' | 'google' | 'openai' | 'runway';
 
 export interface GenerateOptions {
   provider: Provider;

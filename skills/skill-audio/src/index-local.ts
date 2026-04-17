@@ -20,6 +20,7 @@ if (await handleInstallCommand(SKILL_META, process.argv.slice(2))) {
   process.exit(0);
 }
 
+import { MinimaxProvider } from './providers/minimax';
 import { ElevenLabsProvider } from './providers/elevenlabs';
 import { OpenAIProvider } from './providers/openai';
 import { GoogleProvider } from './providers/google';
@@ -56,6 +57,8 @@ function parseArgs(): {
 // Get provider instance
 function getProvider(providerName: Provider): AudioProvider {
   switch (providerName) {
+    case 'minimax':
+      return new MinimaxProvider();
     case 'elevenlabs':
       return new ElevenLabsProvider();
     case 'openai':
@@ -64,7 +67,7 @@ function getProvider(providerName: Provider): AudioProvider {
       return new GoogleProvider();
     default:
       throw new Error(
-        `Unknown provider: ${providerName}. Use: elevenlabs, openai, or google`
+        `Unknown provider: ${providerName}. Use: minimax, elevenlabs, openai, or google`
       );
   }
 }

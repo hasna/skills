@@ -1,5 +1,5 @@
 export interface GenerateOptions {
-  provider: 'openai' | 'google' | 'xai';
+  provider: 'minimax' | 'openai' | 'google' | 'xai';
   prompt: string;
   output: string;
   model?: string;
