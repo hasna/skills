@@ -634,9 +634,9 @@ export const SKILLS: SkillMeta[] = [
   {
     name: "audio",
     displayName: "Audio",
-    description: "Generate audio, voiceovers, and speech using AI-powered TTS APIs (ElevenLabs, OpenAI)",
+    description: "Generate audio, voiceovers, and speech using AI-powered TTS APIs (Minimax, ElevenLabs, OpenAI)",
     category: "Content Generation",
-    tags: ["audio", "tts", "speech", "ai"],
+    tags: ["audio", "tts", "speech", "ai", "minimax"],
   },
   {
     name: "audiobook-chapter-proofer",
@@ -660,22 +660,22 @@ export const SKILLS: SkillMeta[] = [
     tags: ["diagrams", "flowcharts", "visualization", "architecture"],
   },
   {
-    name: "generate-docx",
-    displayName: "Generate DOCX",
-    description: "Generate DOCX documents with formatted content and styling",
+    name: "doc",
+    displayName: "Doc",
+    description: "Generate DOCX documents with rich formatting, templates, and AI content",
     category: "Content Generation",
     tags: ["docx", "document", "word", "generation"],
   },
   {
-    name: "generate-excel",
-    displayName: "Generate Excel",
-    description: "Generate Excel spreadsheets with formatted data, formulas, and charts",
+    name: "excel",
+    displayName: "Excel",
+    description: "Generate Excel spreadsheets with data, formulas, and professional styling",
     category: "Content Generation",
     tags: ["excel", "spreadsheet", "generation", "data"],
   },
   {
-    name: "generate-pdf",
-    displayName: "Generate PDF",
+    name: "pdf",
+    displayName: "PDF",
     description: "Generate PDF documents with rich formatting and layouts",
     category: "Content Generation",
     tags: ["pdf", "document", "generation", "formatting"],
@@ -704,23 +704,23 @@ export const SKILLS: SkillMeta[] = [
   {
     name: "image",
     displayName: "Image",
-    description: "Generate images using multiple AI providers: DALL-E 3, Imagen 3, and Aurora",
+    description: "Generate images using AI providers: Minimax, DALL-E 3, Imagen 3, and Aurora",
     category: "Content Generation",
-    tags: ["image", "generation", "ai", "dalle"],
+    tags: ["image", "generation", "ai", "minimax", "dalle"],
   },
   {
-    name: "jingle-composer",
-    displayName: "Jingle Composer",
-    description: "Compose advertising jingles and short musical pieces for brands",
+    name: "music",
+    displayName: "Music",
+    description: "Generate music tracks using AI models (Minimax Music-01)",
     category: "Content Generation",
-    tags: ["jingle", "music", "composition", "advertising"],
+    tags: ["music", "generation", "ai", "minimax"],
   },
   {
     name: "video",
     displayName: "Video",
-    description: "Generate videos using AI models from Google Veo, OpenAI Sora, and Runway",
+    description: "Generate videos using AI models: Minimax, Google Veo, OpenAI Sora, and Runway",
     category: "Content Generation",
-    tags: ["video", "generation", "ai", "sora"],
+    tags: ["video", "generation", "ai", "minimax", "sora"],
   },
   {
     name: "voiceover-casting-assistant",
@@ -944,6 +944,13 @@ export const SKILLS: SkillMeta[] = [
     tags: ["pdf", "documents", "extraction", "analysis"],
   },
   {
+    name: "pdf-read",
+    displayName: "PDF Read",
+    description: "Read multiple PDFs with page-range selection, chunked reading, and parallel processing",
+    category: "Data & Analysis",
+    tags: ["pdf", "reader", "extraction", "parallel"],
+  },
+  {
     name: "spreadsheet-cleanroom",
     displayName: "Spreadsheet Cleanroom",
     description: "Clean and sanitize spreadsheet data for analysis readiness",
@@ -974,8 +981,8 @@ export const SKILLS: SkillMeta[] = [
     tags: ["video", "compression", "ffmpeg", "optimization"],
   },
   {
-    name: "extract-audio",
-    displayName: "Extract Audio",
+    name: "audio-extract",
+    displayName: "Audio Extract",
     description: "Extract audio tracks from video files with multiple format support",
     category: "Media Processing",
     tags: ["audio", "extraction", "video", "conversion"],
@@ -1049,6 +1056,13 @@ export const SKILLS: SkillMeta[] = [
     description: "Add watermarks to images and documents for copyright protection",
     category: "Media Processing",
     tags: ["watermark", "protection", "copyright", "images"],
+  },
+  {
+    name: "sound-effects",
+    displayName: "Sound Effects",
+    description: "Generate realistic sound effects from text descriptions using AI (Minimax)",
+    category: "Media Processing",
+    tags: ["audio", "sound-effects", "sfx", "ai", "minimax"],
   },
 
   // Design & Branding
@@ -1142,6 +1156,13 @@ export const SKILLS: SkillMeta[] = [
     description: "Analyze any website's design system — detects shadcn/ui, Tailwind, extracts colors, typography, and components via Playwright + Claude Vision.",
     category: "Design & Branding",
     tags: ["design", "shadcn", "tailwind", "colors", "typography", "playwright", "analysis", "open-styles"],
+  },
+  {
+    name: "logo-design",
+    displayName: "Logo Design",
+    description: "Generate professional logos using AI providers (OpenAI GPT Image, Google Gemini Nano Banana) via connectors REST API",
+    category: "Design & Branding",
+    tags: ["logo", "design", "branding", "ai", "openai", "gemini", "connectors"],
   },
 
   // Web & Browser

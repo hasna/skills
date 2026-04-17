@@ -1,9 +1,9 @@
 ---
-name: Extract Audio
+name: Audio Extract
 version: 0.1.0
 description: Extract audio tracks from video files using FFmpeg with format conversion options
 author: skills.md
-category: Design & Creative
+category: Media Processing
 tags:
   - audio
   - video
