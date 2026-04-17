@@ -16,10 +16,6 @@
     "src",
     "tsconfig.json"
   ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/hasnaxyz/skill-domainpurchase.git"
-  },
   "homepage": "https://github.com/hasnaxyz/skill-domainpurchase#readme",
   "bugs": {
     "url": "https://github.com/hasnaxyz/skill-domainpurchase/issues"
@@ -35,7 +31,5 @@
   "devDependencies": {
     "@types/bun": "^1.1.14",
     "typescript": "^5.7.2"
-  },
-  "author": "Hasna <dev@hasna.com>",
-  "license": "Apache-2.0"
+  }
 }

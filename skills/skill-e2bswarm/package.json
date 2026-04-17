@@ -45,12 +45,6 @@
     "ai-agent",
     "swarm"
   ],
-  "author": "hasnaxyz",
-  "license": "Apache-2.0",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/hasnaxyz/skill-e2bswarm.git"
-  },
   "homepage": "https://github.com/hasnaxyz/skill-e2bswarm#readme",
   "bugs": {
     "url": "https://github.com/hasnaxyz/skill-e2bswarm/issues"

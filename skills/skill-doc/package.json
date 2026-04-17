@@ -1,10 +1,10 @@
 {
-  "name": "@hasnaxyz/skill-generate-docx",
+  "name": "@hasnaxyz/skill-doc",
   "version": "0.1.0",
-  "description": "Generate DOCX documents",
+  "description": "Generate DOCX documents with rich formatting and templates",
   "type": "module",
   "bin": {
-    "skill-generate-docx": "./src/index.ts"
+    "skill-doc": "./src/index.ts"
   },
   "scripts": {
     "start": "bun run src/index.ts",

@@ -4,10 +4,24 @@
   "description": "Analyze any website's design system — detects shadcn/ui, Tailwind, extracts colors, typography, and components",
   "main": "src/index.ts",
   "type": "module",
-  "bin": { "skill-siteanalyze": "src/index.ts" },
-  "scripts": { "start": "bun run src/index.ts" },
-  "keywords": ["design", "shadcn", "tailwind", "colors", "typography", "playwright", "analysis", "open-styles"],
-  "license": "Apache-2.0",
+  "bin": {
+    "skill-siteanalyze": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts"
+  },
+  "keywords": [
+    "design",
+    "shadcn",
+    "tailwind",
+    "colors",
+    "typography",
+    "playwright",
+    "analysis",
+    "open-styles"
+  ],
   "dependencies": {},
-  "devDependencies": { "@types/bun": "latest" }
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
 }

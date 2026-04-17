@@ -17,10 +17,6 @@
     "scripts",
     "tsconfig.json"
   ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/hasnaxyz/skill-consolelog.git"
-  },
   "scripts": {
     "start": "bun run bin/cli.ts",
     "dev": "bun --watch run bin/cli.ts",
@@ -40,7 +36,5 @@
   "devDependencies": {
     "@types/bun": "^1.1.14",
     "typescript": "^5.7.2"
-  },
-  "author": "Hasna <dev@hasna.com>",
-  "license": "Apache-2.0"
+  }
 }

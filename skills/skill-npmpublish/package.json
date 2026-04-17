@@ -15,10 +15,6 @@
   "publishConfig": {
     "access": "restricted"
   },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/hasnaxyz/skill-npmpublish.git"
-  },
   "keywords": [
     "npm",
     "publish",
@@ -27,7 +23,6 @@
     "claude",
     "codex"
   ],
-  "license": "Apache-2.0",
   "scripts": {
     "start": "bun run src/index.ts",
     "typecheck": "tsc --noEmit"

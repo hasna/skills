@@ -4,10 +4,22 @@
   "description": "Extract color palettes from screenshots and images using AI Vision (anthropic/openai/xai/gemini)",
   "main": "src/index.ts",
   "type": "module",
-  "bin": { "skill-colorextract": "src/index.ts" },
-  "scripts": { "start": "bun run src/index.ts" },
-  "keywords": ["colors", "palette", "design", "vision", "screenshot", "extract"],
-  "license": "Apache-2.0",
+  "bin": {
+    "skill-colorextract": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts"
+  },
+  "keywords": [
+    "colors",
+    "palette",
+    "design",
+    "vision",
+    "screenshot",
+    "extract"
+  ],
   "dependencies": {},
-  "devDependencies": { "@types/bun": "latest" }
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
 }

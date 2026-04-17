@@ -23,11 +23,5 @@
   "files": [
     "src",
     "tsconfig.json"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/hasnaxyz/skill-database-explorer.git"
-  },
-  "author": "Hasna",
-  "license": "Apache-2.0"
+  ]
 }

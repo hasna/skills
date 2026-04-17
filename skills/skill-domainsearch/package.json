@@ -16,10 +16,6 @@
     "src",
     "tsconfig.json"
   ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/hasnaxyz/skill-domainsearch.git"
-  },
   "homepage": "https://github.com/hasnaxyz/skill-domainsearch#readme",
   "bugs": {
     "url": "https://github.com/hasnaxyz/skill-domainsearch/issues"
@@ -33,7 +29,5 @@
   "devDependencies": {
     "@types/bun": "^1.1.14",
     "typescript": "^5.7.2"
-  },
-  "author": "Hasna <dev@hasna.com>",
-  "license": "Apache-2.0"
+  }
 }

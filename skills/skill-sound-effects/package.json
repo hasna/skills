@@ -1,0 +1,27 @@
+{
+  "name": "@hasnaxyz/skill-sound-effects",
+  "version": "0.1.0",
+  "description": "Generate sound effects using AI (Minimax)",
+  "type": "module",
+  "bin": {
+    "skill-sound-effects": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target node",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  },
+  "publishConfig": {
+    "access": "restricted",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "files": [
+    "src",
+    "tsconfig.json"
+  ]
+}

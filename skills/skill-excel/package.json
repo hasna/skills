@@ -1,10 +1,10 @@
 {
-  "name": "@hasnaxyz/skill-jingle-composer",
+  "name": "@hasnaxyz/skill-excel",
   "version": "0.1.0",
-  "description": "Jingle Composer skill",
+  "description": "Generate Excel spreadsheets with data, formulas, and professional styling",
   "type": "module",
   "bin": {
-    "skill-jingle-composer": "./src/index.ts"
+    "skill-excel": "./src/index.ts"
   },
   "scripts": {
     "dev": "bun run src/index.ts",
@@ -23,11 +23,5 @@
   "files": [
     "src",
     "tsconfig.json"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/hasnaxyz/skill-jingle-composer.git"
-  },
-  "author": "Hasna",
-  "license": "Apache-2.0"
+  ]
 }

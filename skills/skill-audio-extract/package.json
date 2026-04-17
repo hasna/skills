@@ -1,9 +1,9 @@
 {
-  "name": "@hasnaxyz/skill-extract-audio",
+  "name": "@hasnaxyz/skill-audio-extract",
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "skill-extract-audio": "./src/index.ts"
+    "skill-audio-extract": "./src/index.ts"
   },
   "scripts": {
     "dev": "bun run src/index.ts",
@@ -19,9 +19,5 @@
     "src",
     "dist",
     "SKILL.md"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/hasnaxyz/skill-extract-audio.git"
-  }
+  ]
 }

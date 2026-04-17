@@ -1,10 +1,10 @@
 {
-  "name": "@hasnaxyz/skill-generate-excel",
+  "name": "@hasnaxyz/skill-music",
   "version": "0.1.0",
-  "description": "Generate Excel skill",
+  "description": "Generate music tracks using AI models (Minimax Music-01)",
   "type": "module",
   "bin": {
-    "skill-generate-excel": "./src/index.ts"
+    "skill-music": "./src/index.ts"
   },
   "scripts": {
     "dev": "bun run src/index.ts",
@@ -23,11 +23,5 @@
   "files": [
     "src",
     "tsconfig.json"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/hasnaxyz/skill-generate-excel.git"
-  },
-  "author": "Hasna",
-  "license": "Apache-2.0"
+  ]
 }

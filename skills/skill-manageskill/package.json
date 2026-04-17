@@ -20,7 +20,5 @@
   "devDependencies": {
     "@types/bun": "^1.1.14",
     "typescript": "^5.7.2"
-  },
-  "author": "Hasna",
-  "license": "Apache-2.0"
+  }
 }

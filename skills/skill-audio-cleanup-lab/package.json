@@ -19,9 +19,5 @@
     "src",
     "dist",
     "SKILL.md"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/hasnaxyz/skill-audio-cleanup-lab.git"
-  }
+  ]
 }

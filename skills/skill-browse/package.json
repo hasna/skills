@@ -23,7 +23,6 @@
     "mcp"
   ],
   "author": "",
-  "license": "Apache-2.0",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "cors": "^2.8.5",
@@ -37,9 +36,5 @@
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/hasnaxyz/skill-browse.git"
   }
 }
