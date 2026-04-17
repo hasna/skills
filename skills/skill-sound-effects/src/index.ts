@@ -5,10 +5,10 @@ import { resolve, dirname } from 'path';
 import { handleInstallCommand } from '../../_common';
 
 const SKILL_META = {
-  name: 'skill-music',
-  description: 'Generate music tracks using AI (Minimax Music-01)',
+  name: 'skill-sound-effects',
+  description: 'Generate sound effects using AI (Minimax)',
   version: '1.0.0',
-  commands: `Use: skill-music --help`,
+  commands: `Use: skill-sound-effects --help`,
   requiredEnvVars: ['MINIMAX_API_KEY'],
 };
 
@@ -22,10 +22,6 @@ interface GenerateOptions {
   provider: Provider;
   prompt: string;
   output: string;
-  lyrics?: string;
-  genre?: string;
-  mood?: string;
-  tempo?: number;
   duration?: number;
 }
 
@@ -49,10 +45,6 @@ function parseArgs(): GenerateOptions | null {
       case '--provider': case '-p': options.provider = args[++i] as Provider; break;
       case '--prompt': options.prompt = args[++i]; break;
       case '--output': case '-o': options.output = args[++i]; break;
-      case '--lyrics': options.lyrics = args[++i]; break;
-      case '--genre': options.genre = args[++i]; break;
-      case '--mood': options.mood = args[++i]; break;
-      case '--tempo': options.tempo = parseInt(args[++i]); break;
       case '--duration': options.duration = parseInt(args[++i]); break;
       default: console.error(`Unknown option: ${args[i]}`); process.exit(1);
     }
@@ -66,31 +58,26 @@ function parseArgs(): GenerateOptions | null {
 
 function printHelp() {
   console.log(`
-Music Generation Skill
+Sound Effects Generation Skill
 
-Generate music using AI models (Minimax Music-01)
+Generate sound effects using AI models (Minimax)
 
 USAGE:
-  skill-music generate [OPTIONS]
+  skill-sound-effects generate [OPTIONS]
 
 OPTIONS:
   --provider, -p <provider>   Provider (minimax) [default: minimax]
-  --prompt <text>             Description of the music to generate [required]
+  --prompt <text>             Description of the sound effect [required]
   --output, -o <path>         Output file path [required]
-  --lyrics <text>             Song lyrics
-  --genre <genre>             Music genre (pop, rock, jazz, classical, electronic, etc.)
-  --mood <mood>               Desired mood (happy, sad, energetic, calm, etc.)
-  --tempo <bpm>               Tempo in BPM
   --duration <seconds>        Duration in seconds
 
 EXAMPLES:
-  skill-music generate --prompt "upbeat jazz piano" --output ./jazz.mp3
-  skill-music generate --prompt "rock anthem" --lyrics "We are the champions" --output ./rock.mp3
-  skill-music generate --prompt "lo-fi beats" --mood calm --tempo 80 --output ./lofi.mp3
+  skill-sound-effects generate --prompt "thunder rolling" --output ./thunder.mp3
+  skill-sound-effects generate --prompt "footsteps on gravel" --duration 5 --output ./steps.mp3
+  skill-sound-effects generate --prompt "rain on a tin roof" --output ./rain.mp3
 
 ENVIRONMENT VARIABLES:
   MINIMAX_API_KEY             API key for Minimax
-  MINIMAX_GROUP_ID            Group ID for Minimax (optional)
 `);
 }
 
@@ -98,29 +85,23 @@ async function generateMinimax(options: GenerateOptions): Promise<Buffer> {
   const apiKey = process.env.MINIMAX_API_KEY;
   if (!apiKey) throw new Error('MINIMAX_API_KEY environment variable is required');
 
-  const groupId = process.env.MINIMAX_GROUP_ID;
   const baseUrl = 'https://api.minimax.chat/v1';
 
-  console.log(`Generating music with Minimax Music-01...`);
+  console.log(`Generating sound effect with Minimax...`);
   console.log(`Prompt: ${options.prompt}`);
 
   const body: Record<string, unknown> = {
-    model: 'music-01',
+    model: 'sound-effects-01',
     prompt: options.prompt,
   };
-  if (options.lyrics) body.lyrics = options.lyrics;
-  if (options.genre) body.genre = options.genre;
-  if (options.mood) body.mood = options.mood;
-  if (options.tempo) body.tempo = options.tempo;
   if (options.duration) body.duration = options.duration;
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${apiKey}`,
   };
-  if (groupId) headers['X-Group-Id'] = groupId;
 
-  const response = await fetch(`${baseUrl}/music_generation`, {
+  const response = await fetch(`${baseUrl}/sound_generation`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
@@ -135,11 +116,12 @@ async function generateMinimax(options: GenerateOptions): Promise<Buffer> {
   console.log(`Task started: ${data.task_id}`);
   console.log('Polling for completion...');
 
-  for (let i = 0; i < 120; i++) {
-    await new Promise(r => setTimeout(r, 5000));
+  for (let i = 0; i < 60; i++) {
+    await new Promise(r => setTimeout(r, 3000));
 
-    const statusUrl = `${baseUrl}/query/music_generation?task_id=${data.task_id}`;
-    const statusRes = await fetch(statusUrl, { headers: { 'Authorization': `Bearer ${apiKey}` } });
+    const statusRes = await fetch(`${baseUrl}/query/sound_generation?task_id=${data.task_id}`, {
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+    });
     const status = await statusRes.json() as {
       status: string;
       extra_info?: { audio_url?: string };
@@ -151,20 +133,18 @@ async function generateMinimax(options: GenerateOptions): Promise<Buffer> {
       const audioUrl = status.extra_info?.audio_url || status.audio_file;
       if (!audioUrl) throw new Error('No audio URL in response');
 
-      console.log('Music generated. Downloading...');
+      console.log('Sound effect generated. Downloading...');
       const audioRes = await fetch(audioUrl);
       if (!audioRes.ok) throw new Error(`Download failed: ${audioRes.status}`);
       return Buffer.from(await audioRes.arrayBuffer());
     }
 
     if (status.status === 'Fail') {
-      throw new Error(`Music generation failed: ${status.base_resp?.status_msg || 'Unknown error'}`);
+      throw new Error(`Sound effect generation failed: ${status.base_resp?.status_msg || 'Unknown error'}`);
     }
-
-    if (i % 6 === 0) console.log(`  Still processing... (${Math.round((i * 5) / 60)}m elapsed)`);
   }
 
-  throw new Error('Music generation timed out');
+  throw new Error('Sound effect generation timed out');
 }
 
 async function main() {
@@ -172,7 +152,7 @@ async function main() {
   if (!options) return;
 
   try {
-    console.log('\n=== Music Generation ===\n');
+    console.log('\n=== Sound Effect Generation ===\n');
 
     const buffer = await generateMinimax(options);
 
@@ -180,7 +160,7 @@ async function main() {
     await mkdir(dirname(outputPath), { recursive: true });
     await writeFile(outputPath, buffer);
 
-    console.log(`\nMusic saved to: ${outputPath}`);
+    console.log(`\nSound effect saved to: ${outputPath}`);
     console.log(`Size: ${(buffer.length / 1024).toFixed(1)} KB`);
     console.log('\nDone!\n');
   } catch (error) {

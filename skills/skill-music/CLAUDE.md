@@ -1,19 +1,9 @@
-# skill-jingle-composer
+# skill-music
 
-Jingle Composer skill.
+AI music generation skill using Minimax Music-01.
 
-## Tech Stack
+## Development
 
 - Runtime: Bun
-- Language: TypeScript
-- CLI: Commander.js
-
-## CLI
-
-```bash
-skill-jingle-composer run
-```
-
-## Data Directory
-
-~/.skill/skill-jingle-composer/
+- Use `bun run dev` to run locally
+- Use `bun run typecheck` to check types
