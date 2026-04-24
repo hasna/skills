@@ -1190,13 +1190,6 @@ export const SKILLS: SkillMeta[] = [
     category: "Design & Branding",
     tags: ["design", "shadcn", "tailwind", "colors", "typography", "playwright", "analysis", "open-styles"],
   },
-  {
-    name: "logo-design",
-    displayName: "Logo Design",
-    description: "Generate professional logos using AI providers (OpenAI GPT Image, Google Gemini Nano Banana) via connectors REST API",
-    category: "Design & Branding",
-    tags: ["logo", "design", "branding", "ai", "openai", "gemini", "connectors"],
-  },
 
   // Web & Browser
   {
