@@ -1,5 +1,5 @@
 ---
-name: Doc Read
+name: doc-read
 version: 0.1.0
 description: Read and extract text from DOCX files with section parsing, metadata extraction, and multiple file support
 category: Data & Analysis

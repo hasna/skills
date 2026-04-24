@@ -1,9 +1,10 @@
 import { describe, test, expect } from "bun:test";
 import { join } from "path";
-import { SKILLS } from "../lib/registry.js";
+import { BASIC_SKILL_NAMES, SKILLS } from "../lib/registry.js";
 
 const MCP_PATH = join(import.meta.dir, "index.ts");
-const EXPECTED_SKILL_COUNT = SKILLS.length;
+const EXPECTED_ALL_SKILL_COUNT = SKILLS.length;
+const EXPECTED_BASIC_SKILL_COUNT = BASIC_SKILL_NAMES.length;
 
 /**
  * Helper class to communicate with the MCP server over stdio.
@@ -289,7 +290,26 @@ describe("MCP Server", () => {
       expect(response).not.toBeNull();
       const skills = JSON.parse(response.result.content[0].text);
       expect(Array.isArray(skills)).toBe(true);
-      expect(skills.length).toBe(EXPECTED_SKILL_COUNT);
+      expect(skills.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
+      expect(skills.map((s: any) => s.name)).not.toContain("deepresearch");
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("calls list_skills tool with full profile", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "list_skills",
+        arguments: { profile: "all" },
+      }, 19);
+      expect(response).not.toBeNull();
+      const skills = JSON.parse(response.result.content[0].text);
+      expect(Array.isArray(skills)).toBe(true);
+      expect(skills.length).toBe(EXPECTED_ALL_SKILL_COUNT);
+      expect(skills.map((s: any) => s.name)).toContain("deepresearch");
     } finally {
       await client.close();
     }
@@ -301,7 +321,7 @@ describe("MCP Server", () => {
       await client.initialize();
       const response = await client.request("tools/call", {
         name: "list_skills",
-        arguments: { category: "Event Management" },
+        arguments: { category: "Event Management", profile: "all" },
       }, 15);
       expect(response).not.toBeNull();
       const skills = JSON.parse(response.result.content[0].text);
@@ -441,7 +461,8 @@ describe("MCP Server", () => {
       expect(response.result).toBeDefined();
       const skills = JSON.parse(response.result.contents[0].text);
       expect(Array.isArray(skills)).toBe(true);
-      expect(skills.length).toBe(EXPECTED_SKILL_COUNT);
+      expect(skills.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
+      expect(skills.map((s: any) => s.name)).not.toContain("deepresearch");
     } finally {
       await client.close();
     }

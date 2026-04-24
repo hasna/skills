@@ -4,7 +4,14 @@ import { readFile, writeFile, stat, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { basename, extname, dirname, resolve } from 'path';
 import { parseArgs } from 'util';
-import JSZip from 'jszip';
+
+async function loadJSZip() {
+  try {
+    return (await import('jszip')).default;
+  } catch {
+    throw new Error("Missing dependency 'jszip'. Run bun install in this skill directory.");
+  }
+}
 
 interface DocResult {
   file: string;
@@ -32,6 +39,7 @@ interface DocMetadata {
 }
 
 async function extractDocxText(buffer: Buffer): Promise<{ text: string; sections: DocSection[] }> {
+  const JSZip = await loadJSZip();
   const zip = await JSZip.loadAsync(buffer);
 
   const documentXml = await zip.file('word/document.xml')?.async('string');
@@ -89,6 +97,7 @@ async function extractDocxText(buffer: Buffer): Promise<{ text: string; sections
 }
 
 async function extractDocxMetadata(buffer: Buffer): Promise<DocMetadata> {
+  const JSZip = await loadJSZip();
   const zip = await JSZip.loadAsync(buffer);
 
   const coreXml = await zip.file('docProps/core.xml')?.async('string');

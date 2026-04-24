@@ -1,31 +1,92 @@
 #!/usr/bin/env bun
 
-import {
-  Document,
-  Packer,
-  Paragraph,
-  TextRun,
-  HeadingLevel,
-  Table,
-  TableRow,
-  TableCell,
-  WidthType,
-  AlignmentType,
-  BorderStyle,
-  PageNumber,
-  NumberFormat,
-  Header,
-  Footer,
-  TableOfContents,
-  ImageRun,
-  ExternalHyperlink,
-  PageBreak,
-} from "docx";
 import * as fs from "fs";
 import * as path from "path";
-import minimist from "minimist";
-import { marked } from "marked";
-import OpenAI from "openai";
+
+let Document: any;
+let Packer: any;
+let Paragraph: any;
+let TextRun: any;
+let HeadingLevel: any;
+let Table: any;
+let TableRow: any;
+let TableCell: any;
+let WidthType: any;
+let AlignmentType: any;
+let BorderStyle: any;
+let PageNumber: any;
+let NumberFormat: any;
+let Header: any;
+let Footer: any;
+let TableOfContents: any;
+let PageBreak: any;
+let marked: any;
+
+function printHelpAndExit(): never {
+  console.log(`
+Generate DOCX - Create Word documents from markdown or AI
+
+Usage:
+  skill-doc-generate <markdown-file> [options]
+  skill-doc-generate --topic "Topic" [options]
+  skill-doc-generate --prompt "Prompt" [options]
+
+Input Options:
+  <file>              Input markdown file
+  --topic <text>      Topic for AI to write about
+  --prompt <text>     Direct prompt for AI generation
+  --text <text>       Plain text content
+
+Output Options:
+  -o, --output <path> Output file path
+  --dir <path>        Output directory (default: .skills/exports)
+  --template <name>   Template: default, report, letter, memo, resume, article
+  --help, -h          Show this help
+`);
+  process.exit(0);
+}
+
+if (process.argv.includes("--help") || process.argv.includes("-h")) {
+  printHelpAndExit();
+}
+
+async function loadDocumentDeps(): Promise<void> {
+  if (Document && marked) return;
+  try {
+    const docx = await import("docx");
+    Document = docx.Document;
+    Packer = docx.Packer;
+    Paragraph = docx.Paragraph;
+    TextRun = docx.TextRun;
+    HeadingLevel = docx.HeadingLevel;
+    Table = docx.Table;
+    TableRow = docx.TableRow;
+    TableCell = docx.TableCell;
+    WidthType = docx.WidthType;
+    AlignmentType = docx.AlignmentType;
+    BorderStyle = docx.BorderStyle;
+    PageNumber = docx.PageNumber;
+    NumberFormat = docx.NumberFormat;
+    Header = docx.Header;
+    Footer = docx.Footer;
+    TableOfContents = docx.TableOfContents;
+    PageBreak = docx.PageBreak;
+    ({ marked } = await import("marked"));
+  } catch {
+    throw new Error("Missing document generation dependencies. Run bun install in this skill directory.");
+  }
+}
+
+async function createOpenAIClient(apiKey: string) {
+  try {
+    const { default: OpenAI } = await import("openai");
+    return new OpenAI({ apiKey });
+  } catch {
+    throw new Error("Missing dependency 'openai'. Run bun install in this skill directory.");
+  }
+}
+
+const minimist = (await import("minimist")).default;
 
 // Types
 interface DocOptions {
@@ -190,7 +251,7 @@ async function generateWithAI(topic: string, isPrompt: boolean = false): Promise
     throw new Error("OPENAI_API_KEY environment variable is required for AI generation");
   }
 
-  const openai = new OpenAI({ apiKey });
+  const openai = await createOpenAIClient(apiKey);
 
   const lengthGuide = {
     short: "Keep it concise, around 500 words total.",
@@ -377,8 +438,8 @@ function parseMarkdown(markdown: string): ParsedContent {
 }
 
 // Parse inline formatting
-function parseInlineFormatting(text: string): TextRun[] {
-  const runs: TextRun[] = [];
+function parseInlineFormatting(text: string): any[] {
+  const runs: any[] = [];
   let remaining = text;
 
   // Simple regex-based parsing for bold, italic, code
@@ -429,7 +490,7 @@ function getPageSize(size: string): { width: number; height: number } {
 }
 
 // Build document from parsed content
-function buildDocument(content: ParsedContent): Document {
+function buildDocument(content: ParsedContent): any {
   const pageSize = getPageSize(options.pageSize);
   const marginTwips = options.margins * 1440; // Convert inches to twips
 
@@ -697,6 +758,8 @@ async function main(): Promise<void> {
       console.error("Error: No input specified. Provide a markdown file, --topic, --prompt, or --text");
       process.exit(1);
     }
+
+    await loadDocumentDeps();
 
     // Parse content
     console.log("Parsing content...");

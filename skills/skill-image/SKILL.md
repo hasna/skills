@@ -7,6 +7,8 @@ description: Generate images using AI providers (OpenAI DALL-E 3, Google Gemini 
 
 Generate high-quality images from text prompts using multiple AI providers.
 
+This CLI is API-backed. Set `SKILL_API_KEY` when routing through the hosted skills/connectors runtime; provider-specific keys are managed by that runtime.
+
 ## Supported Providers
 
 ### OpenAI

@@ -1,5 +1,5 @@
 ---
-name: skill-read-image
+name: read-image
 description: Analyze an image from a local path or URL with Claude vision. Supports prompt-controlled description, OCR, object counting, and brand/visual extraction.
 ---
 

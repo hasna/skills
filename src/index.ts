@@ -10,6 +10,7 @@
 
 export {
   SKILLS,
+  BASIC_SKILL_NAMES,
   CATEGORIES,
   getSkill,
   getSkillsByCategory,
@@ -17,10 +18,14 @@ export {
   getSkillsByTag,
   getAllTags,
   findSimilarSkills,
+  isBasicSkillName,
   loadRegistry,
+  loadBasicRegistry,
+  loadRegistryProfile,
   clearRegistryCache,
   type SkillMeta,
   type Category,
+  type SkillRegistryProfile,
 } from "./lib/registry.js";
 
 export {

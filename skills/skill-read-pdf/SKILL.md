@@ -1,5 +1,5 @@
 ---
-name: skill-read-pdf
+name: read-pdf
 description: Analyze PDF files with Claude document blocks. Supports page-range selection, 20-page chunking, and merged structured output.
 ---
 

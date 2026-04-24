@@ -38,6 +38,32 @@ export const CATEGORIES = [
 
 export type Category = (typeof CATEGORIES)[number];
 
+export const BASIC_SKILL_NAMES = [
+  "image",
+  "video",
+  "audio",
+  "music",
+  "sound-effects",
+  "transcript",
+  "audio-extract",
+  "read-image",
+  "read-pdf",
+  "pdf-read",
+  "doc-read",
+  "pdf-generate",
+  "doc-generate",
+  "read-csv",
+  "read-excel",
+  "excel",
+  "convert",
+] as const;
+
+export type SkillRegistryProfile = "basic" | "all";
+
+export function isBasicSkillName(name: string): boolean {
+  return (BASIC_SKILL_NAMES as readonly string[]).includes(name.replace(/^skill-/, ""));
+}
+
 export const SKILLS: SkillMeta[] = [
   // Development Tools
   {
@@ -1681,6 +1707,16 @@ export function loadRegistry(cwd?: string): SkillMeta[] {
   _registryCache = [...filtered, ...globalCustom, ...projectCustom];
   _registryCacheTime = now;
   return _registryCache;
+}
+
+export function loadBasicRegistry(cwd?: string): SkillMeta[] {
+  const registry = loadRegistry(cwd);
+  const byName = new Map(registry.map((skill) => [skill.name, skill]));
+  return BASIC_SKILL_NAMES.map((name) => byName.get(name)).filter((skill): skill is SkillMeta => skill !== undefined);
+}
+
+export function loadRegistryProfile(profile: SkillRegistryProfile = "basic", cwd?: string): SkillMeta[] {
+  return profile === "all" ? loadRegistry(cwd) : loadBasicRegistry(cwd);
 }
 
 /** Invalidate the registry cache (e.g. after installing a custom skill). */

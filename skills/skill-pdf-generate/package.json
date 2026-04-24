@@ -11,7 +11,9 @@
     "dev": "bun run --watch src/index.ts",
     "cli": "bun run src/index.ts"
   },
-  "dependencies": {},
+  "dependencies": {
+    "pdf-lib": "^1.17.1"
+  },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
     "access": "restricted"

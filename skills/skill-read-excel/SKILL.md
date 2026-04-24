@@ -1,5 +1,5 @@
 ---
-name: skill-read-excel
+name: read-excel
 description: Parse XLS and XLSX workbooks into structured JSON with sheet metadata, named ranges, and formatted cell snapshots.
 ---
 

@@ -1,11 +1,13 @@
 ---
-name: Audio Transcription
+name: transcript
 description: Transcribe audio and video files using ElevenLabs Scribe, OpenAI Whisper, or Google Gemini. Supports automatic chunking for large files, speaker diarization, timestamps, and multiple output formats (text, SRT, VTT, JSON).
 ---
 
 # Audio Transcription Skill
 
 This skill provides high-quality speech-to-text transcription using multiple AI providers. It automatically handles large files through compression and chunking.
+
+This CLI is API-backed. Set `SKILL_API_KEY` when routing through the hosted skills/connectors runtime; provider-specific keys are managed by that runtime.
 
 ## Supported Providers
 

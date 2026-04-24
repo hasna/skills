@@ -1,5 +1,5 @@
 ---
-name: PDF Read
+name: pdf-read
 version: 0.1.0
 description: Read and extract text from multiple PDF files with page-range selection and parallel processing
 category: Data & Analysis

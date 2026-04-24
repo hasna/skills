@@ -2,7 +2,6 @@
 
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { dirname, resolve } from "path";
-import { PDFDocument } from "pdf-lib";
 
 const VERSION = "0.1.0";
 const DEFAULT_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514";
@@ -11,6 +10,8 @@ const DEFAULT_PROMPT =
 const API_URL = process.env.ANTHROPIC_API_URL || "https://api.anthropic.com/v1/messages";
 const MAX_CHUNK_SIZE = 20;
 const MAX_REQUEST_BYTES = 32 * 1024 * 1024;
+type PdfLib = typeof import("pdf-lib");
+type LoadedPdfDocument = Awaited<ReturnType<PdfLib["PDFDocument"]["load"]>>;
 
 type OutputFormat = "json" | "markdown" | "text";
 
@@ -180,6 +181,14 @@ async function loadPdfBytes(input: string): Promise<{ input: string; bytes: Uint
   };
 }
 
+async function loadPdfLib(): Promise<PdfLib> {
+  try {
+    return await import("pdf-lib");
+  } catch {
+    throw new Error("Missing dependency 'pdf-lib'. Run bun install in this skill directory.");
+  }
+}
+
 function parsePageRanges(spec: string | undefined, totalPages: number): number[] {
   if (!spec) {
     return Array.from({ length: totalPages }, (_, index) => index + 1);
@@ -223,7 +232,8 @@ function chunkPages(pages: number[], size: number): number[][] {
   return chunks;
 }
 
-async function buildChunkPdf(sourcePdf: PDFDocument, pages: number[]): Promise<Uint8Array> {
+async function buildChunkPdf(pdfLib: PdfLib, sourcePdf: LoadedPdfDocument, pages: number[]): Promise<Uint8Array> {
+  const { PDFDocument } = pdfLib;
   const output = await PDFDocument.create();
   const copiedPages = await output.copyPages(sourcePdf, pages.map((page) => page - 1));
   for (const page of copiedPages) {
@@ -315,6 +325,8 @@ async function writeOutput(path: string, value: string): Promise<void> {
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
+  const pdfLib = await loadPdfLib();
+  const { PDFDocument } = pdfLib;
   const { input, bytes } = await loadPdfBytes(options.input!);
   const sourcePdf = await PDFDocument.load(bytes);
   const totalPages = sourcePdf.getPageCount();
@@ -325,7 +337,7 @@ async function main(): Promise<void> {
 
   for (let index = 0; index < pageChunks.length; index += 1) {
     const pages = pageChunks[index];
-    const chunkPdf = await buildChunkPdf(sourcePdf, pages);
+    const chunkPdf = await buildChunkPdf(pdfLib, sourcePdf, pages);
     const prompt = [
       options.prompt,
       formatInstruction(options.format),

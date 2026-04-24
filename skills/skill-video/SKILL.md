@@ -1,11 +1,13 @@
 ---
-name: video-generation
+name: video
 description: Generate videos using AI providers like Google Veo 3.1, OpenAI Sora, and Runway. Supports text-to-video generation with professional cinematography controls.
 ---
 
 # Video Generation Skill
 
 Generate high-quality videos using state-of-the-art AI models from multiple providers.
+
+This CLI is API-backed. Set `SKILL_API_KEY` when routing through the hosted skills/connectors runtime; provider-specific keys are managed by that runtime.
 
 ## Supported Providers
 

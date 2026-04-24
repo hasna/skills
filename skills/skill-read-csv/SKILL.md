@@ -1,5 +1,5 @@
 ---
-name: skill-read-csv
+name: read-csv
 description: Parse CSV files into structured JSON with delimiter auto-detection, header handling, common encoding support, and streaming reads for large files.
 ---
 

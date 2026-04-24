@@ -5,7 +5,7 @@ import { Command } from "commander";
 import chalk from "chalk";
 import pkg from "../../package.json" with { type: "json" };
 import { App } from "./components/App.js";
-import { SKILLS } from "../lib/registry.js";
+import { loadBasicRegistry } from "../lib/registry.js";
 import { normalizeSkillName } from "../lib/utils.js";
 
 const isTTY = (process.stdout.isTTY ?? false) && (process.stdin.isTTY ?? false);
@@ -34,7 +34,7 @@ program
   .description("Interactive skill browser (TUI)")
   .action(() => {
     if (!isTTY) {
-      console.log(JSON.stringify(SKILLS.map(s => ({ name: s.name, category: s.category }))));
+      console.log(JSON.stringify(loadBasicRegistry().map(s => ({ name: s.name, category: s.category }))));
       process.exit(0);
     }
     render(<App />);

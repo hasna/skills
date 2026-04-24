@@ -1,11 +1,13 @@
 ---
-name: Audio Generation
+name: audio
 description: Generate high-quality audio using ElevenLabs, OpenAI TTS, and Google Text-to-Speech APIs. Support for text-to-speech, voice cloning, multiple languages, and various voice options.
 ---
 
 # Audio Generation Skill
 
 This skill provides a unified interface for generating audio from text using multiple AI-powered text-to-speech providers.
+
+This CLI is API-backed. Set `SKILL_API_KEY` when routing through the hosted skills/connectors runtime; provider-specific keys are managed by that runtime.
 
 ## Supported Providers
 

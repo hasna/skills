@@ -1,5 +1,5 @@
 ---
-name: Generate Pdf
+name: pdf-generate
 version: 0.1.0
 description: Generate high-quality PDF documents from markdown, HTML, or templates
 category: Productivity

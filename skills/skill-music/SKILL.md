@@ -1,5 +1,5 @@
 ---
-name: Music
+name: music
 version: 0.1.0
 description: Generate music tracks using AI models (Minimax Music-01)
 category: Content Generation

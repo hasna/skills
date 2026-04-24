@@ -1,5 +1,5 @@
 ---
-name: Sound Effects
+name: sound-effects
 version: 0.1.0
 description: Generate sound effects using AI models (Minimax)
 category: Media Processing

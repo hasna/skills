@@ -24,6 +24,8 @@ import {
   searchSkills,
   findSimilarSkills,
   loadRegistry,
+  loadRegistryProfile,
+  type SkillRegistryProfile,
   type Category,
 } from "../lib/registry.js";
 import {
@@ -96,17 +98,19 @@ function mcpError(code: string, message: string, suggestions?: string[]) {
 
 server.registerTool("list_skills", {
   title: "List Skills",
-  description: "List skills. Returns {name,category} by default; detail:true for full objects. Supports limit/offset pagination.",
+  description: "List skills. Defaults to the clean basic profile to avoid context overflow. Set profile:'all' for the full registry. Returns {name,category} by default; detail:true for full objects. Supports limit/offset pagination.",
   inputSchema: {
     category: z.string().optional(),
+    profile: z.enum(["basic", "all"]).optional(),
     detail: z.boolean().optional(),
     limit: z.number().optional(),
     offset: z.number().optional(),
   },
-}, async ({ category, detail, limit, offset }) => {
+}, async ({ category, profile, detail, limit, offset }) => {
+  const selectedProfile = (profile || "basic") as SkillRegistryProfile;
   const skills = category
-    ? getSkillsByCategory(category as Category)
-    : loadRegistry();
+    ? loadRegistryProfile(selectedProfile).filter((s) => s.category === category)
+    : loadRegistryProfile(selectedProfile);
 
   const mapped = detail
     ? skills
@@ -141,17 +145,19 @@ server.registerTool("list_installed_skills", {
 
 server.registerTool("search_skills", {
   title: "Search Skills",
-  description: "Search skills by name, description, or tags. Returns compact list by default. Supports limit/offset pagination.",
+  description: "Search skills by name, description, or tags. Defaults to the clean basic profile; set profile:'all' for the full registry. Returns compact list by default. Supports limit/offset pagination.",
   inputSchema: {
     query: z.string(),
+    profile: z.enum(["basic", "all"]).optional(),
     detail: z.boolean().optional(),
     limit: z.number().optional(),
     offset: z.number().optional(),
   },
-}, async ({ query, detail, limit, offset }) => {
-  const cacheKey = `${query}:${detail ?? false}`;
+}, async ({ query, profile, detail, limit, offset }) => {
+  const selectedProfile = (profile || "basic") as SkillRegistryProfile;
+  const cacheKey = `${selectedProfile}:${query}:${detail ?? false}`;
   const cached = cacheGet(cacheKey);
-  const results = cached ? cached as typeof SKILLS : searchSkills(query);
+  const results = cached ? cached as typeof SKILLS : searchSkills(query, loadRegistryProfile(selectedProfile));
   if (!cached) cacheSet(cacheKey, results);
   const out = detail
     ? results
@@ -595,11 +601,11 @@ server.registerTool("validate_skill", {
 // ---- Resources ----
 
 server.registerResource("Skills Registry", "skills://registry", {
-  description: "Compact skill list [{name,category}]. Use skills://{name} for detail.",
+  description: "Compact default basic skill list [{name,category}]. Use list_skills with profile:'all' for the full registry, and skills://{name} for detail.",
 }, async () => ({
   contents: [{
     uri: "skills://registry",
-    text: JSON.stringify(loadRegistry().map(s => ({ name: s.name, category: s.category }))),
+    text: JSON.stringify(loadRegistryProfile("basic").map(s => ({ name: s.name, category: s.category }))),
     mimeType: "application/json",
   }],
 }));

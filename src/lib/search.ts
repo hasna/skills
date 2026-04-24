@@ -69,13 +69,13 @@ function fuzzyMatchScore(word: string, target: string): number {
 /**
  * Search skills by name, description, and tags using fuzzy matching.
  */
-export function searchSkills(query: string): SkillMeta[] {
+export function searchSkills(query: string, registry: SkillMeta[] = loadRegistry()): SkillMeta[] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (words.length === 0) return [];
 
   const scored: { skill: SkillMeta; score: number }[] = [];
 
-  for (const skill of loadRegistry()) {
+  for (const skill of registry) {
     const nameLower = skill.name.toLowerCase();
     const displayNameLower = skill.displayName.toLowerCase();
     const descriptionLower = skill.description.toLowerCase();
@@ -123,9 +123,9 @@ export function searchSkills(query: string): SkillMeta[] {
 /**
  * Find skills with names similar to the given query (for "did you mean?" suggestions).
  */
-export function findSimilarSkills(query: string, maxResults = 3): string[] {
+export function findSimilarSkills(query: string, maxResults = 3, registry: SkillMeta[] = loadRegistry()): string[] {
   const q = query.toLowerCase();
-  const scored = loadRegistry()
+  const scored = registry
     .map(s => ({ name: s.name, dist: editDistance(q, s.name.toLowerCase()) }))
     .filter(s => s.dist <= Math.max(3, Math.floor(q.length / 2)))
     .sort((a, b) => a.dist - b.dist);

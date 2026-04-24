@@ -3,6 +3,8 @@
 import { existsSync, mkdirSync, appendFileSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+type PdfLibModule = typeof import("pdf-lib");
+
 // Skill configuration
 const SKILL_NAME = "generate-pdf";
 const SESSION_ID = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
@@ -27,6 +29,14 @@ function log(message: string, level: "info" | "error" | "warn" = "info") {
   appendFileSync(LOG_FILE, logMessage);
   if (level === "error") {
     console.error(message);
+  }
+}
+
+async function loadPdfLib(): Promise<PdfLibModule> {
+  try {
+    return await import("pdf-lib");
+  } catch {
+    throw new Error("Missing dependency 'pdf-lib'. Run bun install in this skill directory.");
   }
 }
 
@@ -685,6 +695,99 @@ function generateHtml(options: GenerateOptions): string {
 </html>`;
 }
 
+function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<\/(h1|h2|h3|p|div|li|tr)>/gi, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;/g, "'")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function pageSizeToPoints(format: string, orientation: "portrait" | "landscape"): [number, number] {
+  const size = PAGE_FORMATS[format] ?? PAGE_FORMATS.A4;
+  const width = (size.width / 25.4) * 72;
+  const height = (size.height / 25.4) * 72;
+  return orientation === "landscape" ? [height, width] : [width, height];
+}
+
+function wrapText(text: string, maxCharacters: number): string[] {
+  const lines: string[] = [];
+  for (const paragraph of text.split("\n")) {
+    let current = "";
+    for (const word of paragraph.split(/\s+/).filter(Boolean)) {
+      const candidate = current ? `${current} ${word}` : word;
+      if (candidate.length > maxCharacters && current) {
+        lines.push(current);
+        current = word;
+      } else {
+        current = candidate;
+      }
+    }
+    if (current) lines.push(current);
+    lines.push("");
+  }
+  return lines;
+}
+
+async function writePdfDocument(html: string, options: GenerateOptions, outputPath: string): Promise<void> {
+  const { PDFDocument, StandardFonts, rgb } = await loadPdfLib();
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const [width, height] = pageSizeToPoints(options.format, options.orientation);
+  const margin = 54;
+  const fontSize = 11;
+  const lineHeight = 16;
+  const maxCharacters = Math.max(40, Math.floor((width - margin * 2) / (fontSize * 0.52)));
+  const lines = wrapText(htmlToPlainText(html), maxCharacters);
+
+  let page = pdfDoc.addPage([width, height]);
+  let y = height - margin;
+
+  if (options.title) {
+    page.drawText(options.title, {
+      x: margin,
+      y,
+      size: 18,
+      font: boldFont,
+      color: rgb(0.12, 0.18, 0.26),
+    });
+    y -= lineHeight * 2;
+  }
+
+  for (const line of lines) {
+    if (y < margin) {
+      page = pdfDoc.addPage([width, height]);
+      y = height - margin;
+    }
+
+    if (line) {
+      page.drawText(line, {
+        x: margin,
+        y,
+        size: fontSize,
+        font,
+        color: rgb(0.1, 0.1, 0.1),
+      });
+    }
+    y -= lineHeight;
+  }
+
+  const bytes = await pdfDoc.save();
+  writeFileSync(outputPath, bytes);
+}
+
 // Main execution
 async function main() {
   try {
@@ -709,28 +812,26 @@ async function main() {
       ? `${options.filename}.pdf`
       : `document_${SESSION_ID}.pdf`;
 
-    // Since we can't use Puppeteer in Bun easily, we'll output the HTML
-    // and create a simple text-based PDF representation
-    // In production, this would use a proper PDF library
-
-    // For now, save HTML that can be converted to PDF
     const htmlFile = join(EXPORTS_DIR, filename.replace('.pdf', '.html'));
     writeFileSync(htmlFile, html);
     log(`Saved HTML to: ${htmlFile}`);
+    const pdfFile = join(EXPORTS_DIR, filename);
+    await writePdfDocument(html, options, pdfFile);
+    log(`Saved PDF to: ${pdfFile}`);
 
     // Output result
     const result = {
       success: true,
-      message: "HTML document generated successfully",
+      message: "PDF document generated successfully",
       data: {
+        pdfFile,
         htmlFile,
-        filename: filename.replace('.pdf', '.html'),
+        filename,
         format: options.format,
         orientation: options.orientation,
         contentLength: html.length,
         template: options.template || null,
       },
-      note: "PDF conversion requires Puppeteer/Playwright. HTML file exported instead.",
     };
 
     console.log(JSON.stringify(result, null, 2));

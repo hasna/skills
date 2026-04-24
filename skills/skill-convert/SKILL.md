@@ -1,8 +1,15 @@
+---
+name: convert
+description: File format conversion and transformation CLI between images, PDFs, documents, CSV, and data formats.
+---
+
 # skill-convert
 
 ## Description
 
 File format conversion skill with AI-powered extraction capabilities. Converts between images, PDFs, documents, and data formats with optional quality control and AI cleanup.
+
+This CLI is API-backed. Set `SKILL_API_KEY` when routing through the hosted skills/connectors runtime; provider-specific keys are managed by that runtime.
 
 ## Category
 

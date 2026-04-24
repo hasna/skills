@@ -22,6 +22,11 @@ describe("public API exports", () => {
     expect(publicAPI.CATEGORIES.length).toBe(17);
   });
 
+  test("BASIC_SKILL_NAMES array is populated", () => {
+    expect(Array.isArray(publicAPI.BASIC_SKILL_NAMES)).toBe(true);
+    expect(publicAPI.BASIC_SKILL_NAMES.length).toBe(17);
+  });
+
   test("AGENT_TARGETS array is populated", () => {
     expect(Array.isArray(publicAPI.AGENT_TARGETS)).toBe(true);
     expect(publicAPI.AGENT_TARGETS.length).toBe(5);
@@ -37,6 +42,12 @@ describe("public API exports", () => {
 
   test("searchSkills is a function", () => {
     expect(typeof publicAPI.searchSkills).toBe("function");
+  });
+
+  test("basic registry helpers are exported", () => {
+    expect(typeof publicAPI.loadBasicRegistry).toBe("function");
+    expect(typeof publicAPI.loadRegistryProfile).toBe("function");
+    expect(typeof publicAPI.isBasicSkillName).toBe("function");
   });
 
   test("installSkill is a function", () => {
@@ -112,6 +123,12 @@ describe("public API exports", () => {
     // Verify searchSkills works through the public API
     const results = publicAPI.searchSkills("image");
     expect(results.length).toBeGreaterThan(0);
+
+    // Verify clean basic profile works through the public API
+    const basic = publicAPI.loadRegistryProfile("basic");
+    expect(basic.map((s) => s.name)).toEqual([...publicAPI.BASIC_SKILL_NAMES]);
+    expect(publicAPI.isBasicSkillName("skill-image")).toBe(true);
+    expect(publicAPI.isBasicSkillName("deepresearch")).toBe(false);
 
     // Verify skillExists works through the public API
     expect(publicAPI.skillExists("image")).toBe(true);

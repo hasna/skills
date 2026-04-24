@@ -1,10 +1,11 @@
 import { describe, test, expect } from "bun:test";
 import { join } from "path";
 import pkg from "../../package.json" with { type: "json" };
-import { SKILLS } from "../lib/registry.js";
+import { BASIC_SKILL_NAMES, SKILLS } from "../lib/registry.js";
 
 const CLI_PATH = join(import.meta.dir, "index.tsx");
-const EXPECTED_SKILL_COUNT = SKILLS.length;
+const EXPECTED_ALL_SKILL_COUNT = SKILLS.length;
+const EXPECTED_BASIC_SKILL_COUNT = BASIC_SKILL_NAMES.length;
 const SLOW_TEST_TIMEOUT = 15000;
 
 async function runCli(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -25,7 +26,7 @@ describe("CLI", () => {
       const { stdout } = await runCli([]);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBe(EXPECTED_SKILL_COUNT);
+      expect(data.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
       expect(data[0]).toHaveProperty("name");
       expect(data[0]).toHaveProperty("category");
       // Compact mode — no description/tags to keep tokens low
@@ -63,14 +64,27 @@ describe("CLI", () => {
   });
 
   describe("list", () => {
-    test("lists all skills", async () => {
+    test("lists default basic skills", async () => {
       const { stdout } = await runCli(["list"]);
-      expect(stdout).toContain(`Available skills (${EXPECTED_SKILL_COUNT})`);
-      expect(stdout).toContain("Development Tools");
+      expect(stdout).toContain(`Available default skills (${EXPECTED_BASIC_SKILL_COUNT})`);
+      expect(stdout).toContain("image");
+      expect(stdout).not.toContain("workout-cycle-planner");
+    });
+
+    test("lists all skills with --all", async () => {
+      const { stdout } = await runCli(["list", "--all"]);
+      expect(stdout).toContain(`Available skills (${EXPECTED_ALL_SKILL_COUNT})`);
+      expect(stdout).toContain("Health & Wellness");
     });
 
     test("lists by category", async () => {
-      const { stdout } = await runCli(["list", "--category", "Health & Wellness"]);
+      const { stdout } = await runCli(["list", "--category", "Data & Analysis"]);
+      expect(stdout).toContain("Data & Analysis (6)");
+      expect(stdout).toContain("read-pdf");
+    });
+
+    test("lists full-registry categories with --all", async () => {
+      const { stdout } = await runCli(["list", "--category", "Health & Wellness", "--all"]);
       expect(stdout).toContain("Health & Wellness (8)");
       expect(stdout).toContain("workout-cycle-planner");
     });
@@ -85,11 +99,18 @@ describe("CLI", () => {
       const { stdout } = await runCli(["list", "--json"]);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBe(EXPECTED_SKILL_COUNT);
+      expect(data.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
+    });
+
+    test("outputs full JSON with --all --json", async () => {
+      const { stdout } = await runCli(["list", "--all", "--json"]);
+      const data = JSON.parse(stdout);
+      expect(Array.isArray(data)).toBe(true);
+      expect(data.length).toBe(EXPECTED_ALL_SKILL_COUNT);
     });
 
     test("lists by category with --json", async () => {
-      const { stdout } = await runCli(["list", "--category", "Event Management", "--json"]);
+      const { stdout } = await runCli(["list", "--category", "Event Management", "--all", "--json"]);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
       expect(data.length).toBe(4);
@@ -101,7 +122,7 @@ describe("CLI", () => {
 
   describe("search", () => {
     test("finds skills", async () => {
-      const { stdout } = await runCli(["search", "email"]);
+      const { stdout } = await runCli(["search", "pdf"]);
       expect(stdout).toContain("Found");
       expect(stdout).toContain("skill(s)");
     });
@@ -438,12 +459,12 @@ describe("CLI", () => {
 
   describe("search --category", () => {
     test("filters search results by category", async () => {
-      const { stdout } = await runCli(["search", "plan", "--category", "Health & Wellness"]);
+      const { stdout } = await runCli(["search", "plan", "--category", "Health & Wellness", "--all"]);
       expect(stdout).toContain("Health & Wellness");
     });
 
     test("filters search results by category with --json", async () => {
-      const { stdout } = await runCli(["search", "plan", "--category", "Health & Wellness", "--json"]);
+      const { stdout } = await runCli(["search", "plan", "--category", "Health & Wellness", "--all", "--json"]);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
       for (const s of data) {
@@ -548,7 +569,7 @@ describe("CLI", () => {
 
   describe("list --tags", () => {
     test("filters skills by a single tag", async () => {
-      const { stdout, exitCode } = await runCli(["list", "--tags", "api"]);
+      const { stdout, exitCode } = await runCli(["list", "--tags", "api", "--all"]);
       expect(exitCode).toBe(0);
       expect(stdout).toContain("api");
       // Should show the filtered header
@@ -556,7 +577,7 @@ describe("CLI", () => {
     });
 
     test("returns JSON array filtered by tag", async () => {
-      const { stdout, exitCode } = await runCli(["list", "--tags", "api", "--json"]);
+      const { stdout, exitCode } = await runCli(["list", "--tags", "api", "--all", "--json"]);
       expect(exitCode).toBe(0);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
@@ -568,8 +589,8 @@ describe("CLI", () => {
     });
 
     test("filters by multiple tags (OR logic)", async () => {
-      const { stdout: singleOut } = await runCli(["list", "--tags", "api", "--json"]);
-      const { stdout: multiOut } = await runCli(["list", "--tags", "api,testing", "--json"]);
+      const { stdout: singleOut } = await runCli(["list", "--tags", "api", "--all", "--json"]);
+      const { stdout: multiOut } = await runCli(["list", "--tags", "api,testing", "--all", "--json"]);
       const single = JSON.parse(singleOut);
       const multi = JSON.parse(multiOut);
       // Multi-tag OR should return >= results of single tag
@@ -577,8 +598,8 @@ describe("CLI", () => {
     });
 
     test("tag matching is case-insensitive", async () => {
-      const { stdout: lower } = await runCli(["list", "--tags", "api", "--json"]);
-      const { stdout: upper } = await runCli(["list", "--tags", "API", "--json"]);
+      const { stdout: lower } = await runCli(["list", "--tags", "api", "--all", "--json"]);
+      const { stdout: upper } = await runCli(["list", "--tags", "API", "--all", "--json"]);
       const lowerData = JSON.parse(lower);
       const upperData = JSON.parse(upper);
       expect(lowerData.length).toBe(upperData.length);
@@ -592,7 +613,7 @@ describe("CLI", () => {
     });
 
     test("works with --category and --tags together", async () => {
-      const { stdout, exitCode } = await runCli(["list", "--category", "Development Tools", "--tags", "api", "--json"]);
+      const { stdout, exitCode } = await runCli(["list", "--category", "Development Tools", "--tags", "api", "--all", "--json"]);
       expect(exitCode).toBe(0);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
@@ -613,7 +634,7 @@ describe("CLI", () => {
     });
 
     test("returns JSON filtered by tag", async () => {
-      const { stdout, exitCode } = await runCli(["search", "api", "--tags", "api", "--json"]);
+      const { stdout, exitCode } = await runCli(["search", "api", "--tags", "api", "--all", "--json"]);
       expect(exitCode).toBe(0);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
@@ -623,8 +644,8 @@ describe("CLI", () => {
     });
 
     test("tag filter narrows search results", async () => {
-      const { stdout: allOut } = await runCli(["search", "api", "--json"]);
-      const { stdout: tagOut } = await runCli(["search", "api", "--tags", "api", "--json"]);
+      const { stdout: allOut } = await runCli(["search", "api", "--all", "--json"]);
+      const { stdout: tagOut } = await runCli(["search", "api", "--tags", "api", "--all", "--json"]);
       const all = JSON.parse(allOut);
       const tagged = JSON.parse(tagOut);
       // Filtered by tag should return <= results of unfiltered
@@ -644,7 +665,7 @@ describe("CLI", () => {
       expect(exitCode).toBe(0);
       const lines = stdout.trim().split("\n").filter(Boolean);
       // Each line should contain name \u2014 description [category]
-      expect(lines.length).toBe(EXPECTED_SKILL_COUNT);
+      expect(lines.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
       for (const line of lines) {
         expect(line).toContain(" \u2014 ");
         expect(line).toMatch(/\[.+\]$/);
@@ -660,7 +681,7 @@ describe("CLI", () => {
     }, SLOW_TEST_TIMEOUT);
 
     test("list --brief with --category shows compact results", async () => {
-      const { stdout, exitCode } = await runCli(["list", "--brief", "--category", "Health & Wellness"]);
+      const { stdout, exitCode } = await runCli(["list", "--brief", "--category", "Health & Wellness", "--all"]);
       expect(exitCode).toBe(0);
       const lines = stdout.trim().split("\n").filter(Boolean);
       expect(lines.length).toBeGreaterThan(0);
@@ -671,7 +692,7 @@ describe("CLI", () => {
     }, SLOW_TEST_TIMEOUT);
 
     test("list --brief with --tags shows compact results", async () => {
-      const { stdout, exitCode } = await runCli(["list", "--brief", "--tags", "api"]);
+      const { stdout, exitCode } = await runCli(["list", "--brief", "--tags", "api", "--all"]);
       expect(exitCode).toBe(0);
       const lines = stdout.trim().split("\n").filter(Boolean);
       expect(lines.length).toBeGreaterThan(0);

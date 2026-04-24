@@ -1,10 +1,14 @@
 #!/usr/bin/env bun
-import * as XLSX from "xlsx";
 import { parseArgs } from "util";
 import { existsSync, mkdirSync, appendFileSync } from "fs";
 import { join } from "path";
-import OpenAI from "openai";
 import { randomUUID } from "crypto";
+
+type XlsxModule = typeof import("xlsx");
+type WorkSheet = import("xlsx").WorkSheet;
+type WorkBook = import("xlsx").WorkBook;
+
+let XLSX: XlsxModule;
 
 const SKILL_NAME = "generate-excel";
 const SESSION_ID = randomUUID().slice(0, 8);
@@ -36,11 +40,6 @@ function log(message: string, level: "info" | "error" | "success" | "warn" = "in
     console.log(`${prefix} ${message}`);
   }
 }
-
-// OpenAI client
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 // Type definitions
 interface ExcelCell {
@@ -117,6 +116,23 @@ const TEMPLATES: Record<string, (rows: number) => SheetData> = {
     formulas: ['=IF(F{row}>=90,"On Track",IF(F{row}>=50,"At Risk","Behind"))'],
   }),
 };
+
+async function loadXlsx(): Promise<XlsxModule> {
+  try {
+    return await import("xlsx");
+  } catch {
+    throw new Error("Missing dependency 'xlsx'. Run bun install in this skill directory.");
+  }
+}
+
+async function createOpenAIClient() {
+  try {
+    const { default: OpenAI } = await import("openai");
+    return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  } catch {
+    throw new Error("Missing dependency 'openai'. Run bun install in this skill directory.");
+  }
+}
 
 // Data generators
 function generateBudgetData(rows: number): any[][] {
@@ -297,6 +313,7 @@ Return a JSON object with:
 
 Generate exactly ${rows} rows of data. Make the data realistic and varied.`;
 
+  const openai = await createOpenAIClient();
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [
@@ -341,7 +358,7 @@ function parseJsonData(jsonString: string): SheetData {
 
 // Apply styling to worksheet
 function applyStyles(
-  ws: XLSX.WorkSheet,
+  ws: WorkSheet,
   sheetData: SheetData,
   styling: "none" | "basic" | "professional"
 ) {
@@ -401,7 +418,7 @@ function applyStyles(
 
 // Add formulas to worksheet
 function addFormulas(
-  ws: XLSX.WorkSheet,
+  ws: WorkSheet,
   sheetData: SheetData,
   startRow: number = 2
 ) {
@@ -423,7 +440,7 @@ function addFormulas(
 
 // Add summary row with totals
 function addSummaryRow(
-  ws: XLSX.WorkSheet,
+  ws: WorkSheet,
   sheetData: SheetData
 ): void {
   const lastRow = sheetData.rows.length + 1;
@@ -458,7 +475,7 @@ function addSummaryRow(
 function createWorkbook(
   sheets: SheetData[],
   options: GenerateOptions
-): XLSX.WorkBook {
+): WorkBook {
   const wb = XLSX.utils.book_new();
 
   sheets.forEach((sheetData) => {
@@ -494,6 +511,12 @@ function createWorkbook(
 
 // Main function
 async function main() {
+  if (process.argv.includes("--help") || process.argv.includes("-h")) {
+    printHelpAndExit();
+  }
+
+  XLSX = await loadXlsx();
+
   const { values, positionals } = parseArgs({
     args: process.argv.slice(2),
     options: {
@@ -510,7 +533,11 @@ async function main() {
   });
 
   if (values.help) {
-    console.log(`
+    printHelpAndExit();
+  }
+
+function printHelpAndExit(): never {
+  console.log(`
 Generate Excel - Create Excel spreadsheets with data and formatting
 
 Usage:
@@ -526,8 +553,8 @@ Options:
   --output <path>      Output file path
   --help, -h           Show this help
 `);
-    process.exit(0);
-  }
+  process.exit(0);
+}
 
   const prompt = positionals[0];
 

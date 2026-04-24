@@ -4,7 +4,15 @@
 
 import chalk from "chalk";
 import type { Command } from "commander";
-import { CATEGORIES, getSkillsByCategory, loadRegistry, searchSkills, findSimilarSkills } from "../../lib/registry.js";
+import {
+  CATEGORIES,
+  getSkillsByCategory,
+  loadRegistry,
+  loadRegistryProfile,
+  searchSkills,
+  findSimilarSkills,
+  type SkillRegistryProfile,
+} from "../../lib/registry.js";
 import { getInstalledSkills, getInstallMeta } from "../../lib/installer.js";
 import { normalizeSkillName } from "../../lib/utils.js";
 
@@ -16,6 +24,7 @@ export function registerBrowse(parent: Command) {
     .option("-c, --category <category>", "Filter by category")
     .option("-i, --installed", "Show only installed skills", false)
     .option("-t, --tags <tags>", "Filter by comma-separated tags (OR logic, case-insensitive)")
+    .option("--all", "Show the full skill registry instead of the default basic set", false)
     .option("--json", "Output as JSON", false)
     .option("--brief", "One line per skill: name \u2014 description [category]", false)
     .option("--format <format>", "Output format: compact (names only) or csv (name,category,description)")
@@ -31,6 +40,7 @@ export function registerBrowse(parent: Command) {
     .option("--format <format>", "Output format: compact (names only) or csv (name,category,description)")
     .option("-c, --category <category>", "Filter results by category")
     .option("-t, --tags <tags>", "Filter results by comma-separated tags (OR logic, case-insensitive)")
+    .option("--all", "Search the full skill registry instead of the default basic set", false)
     .description("Search for skills")
     .action((query: string, options) => handleSearch(query, options));
 
@@ -56,6 +66,7 @@ function formatBrief(skill: { name: string; description: string; category: strin
 function handleList(options: any) {
   const brief = options.brief && !options.json;
   const fmt = !options.json ? (options.format as string | undefined) : undefined;
+  const profile: SkillRegistryProfile = options.all ? "all" : "basic";
 
   if (options.installed) {
     const installed = getInstalledSkills();
@@ -87,7 +98,7 @@ function handleList(options: any) {
   if (options.category) {
     const category = CATEGORIES.find((c: string) => c.toLowerCase() === options.category.toLowerCase());
     if (!category) { console.error(`Unknown category: ${options.category}\nAvailable: ${CATEGORIES.join(", ")}`); process.exitCode = 1; return; }
-    let skills = getSkillsByCategory(category);
+    let skills = loadRegistryProfile(profile).filter((s) => s.category === category);
     if (tagFilter) skills = skills.filter((s) => s.tags.some((tag) => tagFilter.includes(tag.toLowerCase())));
     if (options.json) { console.log(JSON.stringify(skills, null, 2)); return; }
     if (brief) { for (const s of skills) console.log(formatBrief(s)); return; }
@@ -97,7 +108,7 @@ function handleList(options: any) {
   }
 
   if (tagFilter) {
-    const skills = loadRegistry().filter((s) => s.tags.some((tag) => tagFilter.includes(tag.toLowerCase())));
+    const skills = loadRegistryProfile(profile).filter((s) => s.tags.some((tag) => tagFilter.includes(tag.toLowerCase())));
     if (options.json) { console.log(JSON.stringify(skills, null, 2)); return; }
     if (brief) { for (const s of skills) console.log(formatBrief(s)); return; }
     console.log(chalk.bold(`\nSkills matching tags [${tagFilter.join(", ")}] (${skills.length}):\n`));
@@ -105,7 +116,7 @@ function handleList(options: any) {
     return;
   }
 
-  const allSkills = loadRegistry();
+  const allSkills = loadRegistryProfile(profile);
   if (options.json) { console.log(JSON.stringify(allSkills, null, 2)); return; }
   if (fmt === "compact") { for (const s of allSkills) console.log(s.name); return; }
   if (fmt === "csv") {
@@ -118,9 +129,9 @@ function handleList(options: any) {
     return;
   }
 
-  console.log(chalk.bold(`\nAvailable skills (${allSkills.length}):\n`));
+  console.log(chalk.bold(`\nAvailable ${profile === "basic" ? "default " : ""}skills (${allSkills.length}):\n`));
   for (const category of CATEGORIES) {
-    const skills = getSkillsByCategory(category);
+    const skills = allSkills.filter((s) => s.category === category);
     if (skills.length === 0) continue;
     console.log(chalk.bold(`${category} (${skills.length}):`));
     for (const s of skills) console.log(`  ${chalk.cyan(s.name)}${s.source === "custom" ? chalk.yellow(" [custom]") : ""} - ${s.description}`);
@@ -134,7 +145,8 @@ function handleList(options: any) {
 }
 
 function handleSearch(query: string, options: any) {
-  let results = searchSkills(query);
+  const profile: SkillRegistryProfile = options.all ? "all" : "basic";
+  let results = searchSkills(query, loadRegistryProfile(profile));
 
   if (options.category) {
     const category = CATEGORIES.find((c: string) => c.toLowerCase() === options.category!.toLowerCase());
@@ -152,7 +164,7 @@ function handleSearch(query: string, options: any) {
   if (options.json) { console.log(JSON.stringify(results, null, 2)); return; }
   if (results.length === 0) {
     console.log(chalk.dim(`No skills found for "${query}"`));
-    const similar = findSimilarSkills(query, 5);
+    const similar = findSimilarSkills(query, 5, loadRegistryProfile(profile));
     if (similar.length > 0) console.log(chalk.dim(`Related skills: ${similar.join(", ")}`));
     return;
   }

@@ -2,7 +2,11 @@
 
 import { mkdir, writeFile } from "fs/promises";
 import { dirname, resolve } from "path";
-import * as XLSX from "xlsx";
+
+type XlsxModule = typeof import("xlsx");
+type WorkBook = import("xlsx").WorkBook;
+type WorkSheet = import("xlsx").WorkSheet;
+type CellObject = import("xlsx").CellObject;
 
 const VERSION = "0.1.0";
 
@@ -37,6 +41,14 @@ interface WorkbookResult {
     namedRanges: NamedRange[];
   };
   sheets: SheetResult[];
+}
+
+async function loadXlsx(): Promise<XlsxModule> {
+  try {
+    return await import("xlsx");
+  } catch {
+    throw new Error("Missing dependency 'xlsx'. Run bun install in this skill directory.");
+  }
 }
 
 function printHelp(): void {
@@ -141,7 +153,7 @@ function inferHeader(rows: unknown[][]): boolean {
   return unique.size === first.length && mostlyText && secondHasNumeric;
 }
 
-function collectFormattedCells(sheet: XLSX.WorkSheet, maxCells = 50): Array<{ cell: string; raw?: unknown; formatted?: string; format?: string }> {
+function collectFormattedCells(sheet: WorkSheet, maxCells = 50): Array<{ cell: string; raw?: unknown; formatted?: string; format?: string }> {
   const result: Array<{ cell: string; raw?: unknown; formatted?: string; format?: string }> = [];
   const entries = Object.entries(sheet).filter(([key]) => !key.startsWith("!"));
 
@@ -149,7 +161,7 @@ function collectFormattedCells(sheet: XLSX.WorkSheet, maxCells = 50): Array<{ ce
     if (result.length >= maxCells) {
       break;
     }
-    const cellValue = value as XLSX.CellObject;
+    const cellValue = value as CellObject;
     if (cellValue.z || cellValue.w) {
       result.push({
         cell,
@@ -163,8 +175,8 @@ function collectFormattedCells(sheet: XLSX.WorkSheet, maxCells = 50): Array<{ ce
   return result;
 }
 
-function parseSheet(name: string, index: number, sheet: XLSX.WorkSheet, limit?: number): SheetResult {
-  const rows = XLSX.utils.sheet_to_json(sheet, {
+function parseSheet(xlsx: XlsxModule, name: string, index: number, sheet: WorkSheet, limit?: number): SheetResult {
+  const rows = xlsx.utils.sheet_to_json(sheet, {
     header: 1,
     defval: null,
     raw: false,
@@ -198,7 +210,7 @@ function parseSheet(name: string, index: number, sheet: XLSX.WorkSheet, limit?: 
   };
 }
 
-function collectNamedRanges(workbook: XLSX.WorkBook): NamedRange[] {
+function collectNamedRanges(workbook: WorkBook): NamedRange[] {
   const names = workbook.Workbook?.Names ?? [];
   return names.map((entry) => ({
     name: entry.Name ?? "",
@@ -214,8 +226,9 @@ async function writeJson(path: string, payload: WorkbookResult): Promise<void> {
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
+  const xlsx = await loadXlsx();
   const inputPath = resolve(options.input!);
-  const workbook = XLSX.readFile(inputPath, {
+  const workbook = xlsx.readFile(inputPath, {
     cellDates: true,
     cellNF: true,
     cellStyles: true,
@@ -236,7 +249,7 @@ async function main(): Promise<void> {
       sheetNames: workbook.SheetNames,
       namedRanges: collectNamedRanges(workbook),
     },
-    sheets: selectedSheetNames.map((name) => parseSheet(name, workbook.SheetNames.indexOf(name), workbook.Sheets[name], options.limit)),
+    sheets: selectedSheetNames.map((name) => parseSheet(xlsx, name, workbook.SheetNames.indexOf(name), workbook.Sheets[name], options.limit)),
   };
 
   if (options.output) {

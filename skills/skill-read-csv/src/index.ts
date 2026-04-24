@@ -3,9 +3,6 @@
 import { createReadStream } from "fs";
 import { mkdir, open, readFile, writeFile } from "fs/promises";
 import { dirname, resolve } from "path";
-import { parse as createParser } from "csv-parse";
-import { parse as parseCsvSync } from "csv-parse/sync";
-import iconv from "iconv-lite";
 
 const VERSION = "0.1.0";
 const SAMPLE_BYTES = 128 * 1024;
@@ -30,6 +27,30 @@ interface CsvResult {
   rowCount: number;
   truncated: boolean;
   rows: Array<Record<string, string | null>>;
+}
+
+async function loadCsvParse() {
+  try {
+    return (await import("csv-parse")).parse;
+  } catch {
+    throw new Error("Missing dependency 'csv-parse'. Run bun install in this skill directory.");
+  }
+}
+
+async function loadCsvParseSync() {
+  try {
+    return (await import("csv-parse/sync")).parse;
+  } catch {
+    throw new Error("Missing dependency 'csv-parse'. Run bun install in this skill directory.");
+  }
+}
+
+async function loadIconv() {
+  try {
+    return (await import("iconv-lite")).default;
+  } catch {
+    throw new Error("Missing dependency 'iconv-lite'. Run bun install in this skill directory.");
+  }
 }
 
 function printHelp(): void {
@@ -195,7 +216,8 @@ function detectDelimiter(sampleText: string): string {
   return bestDelimiter;
 }
 
-function parseSampleRows(sampleText: string, delimiter: string): string[][] {
+async function parseSampleRows(sampleText: string, delimiter: string): Promise<string[][]> {
+  const parseCsvSync = await loadCsvParseSync();
   const records = parseCsvSync(sampleText, {
     delimiter,
     relax_column_count: true,
@@ -266,6 +288,8 @@ async function parseCsvFile(
   columns: string[],
   hasHeader: boolean,
 ): Promise<{ rows: Array<Record<string, string | null>>; truncated: boolean }> {
+  const iconv = await loadIconv();
+  const createParser = await loadCsvParse();
   const rows: Array<Record<string, string | null>> = [];
   let truncated = false;
   const stream = createReadStream(path, bomBytes > 0 ? { start: bomBytes } : undefined)
@@ -299,10 +323,11 @@ async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   const inputPath = resolve(options.input!);
   const sample = await readSample(inputPath);
+  const iconv = await loadIconv();
   const { encoding, bomBytes } = detectEncoding(sample, options.encoding.toLowerCase());
   const sampleText = iconv.decode(sample.subarray(bomBytes), encoding);
   const delimiter = normalizeDelimiter(options.delimiter) ?? detectDelimiter(sampleText);
-  const sampleRows = parseSampleRows(sampleText, delimiter);
+  const sampleRows = await parseSampleRows(sampleText, delimiter);
   const { hasHeader, columns } = buildColumns(sampleRows, options.headers);
   const { rows, truncated } = await parseCsvFile(inputPath, options, encoding, bomBytes, delimiter, columns, hasHeader);
 
