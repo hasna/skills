@@ -14,6 +14,7 @@ export interface SkillResponse {
   envVarsSet: string[];
   systemDeps: string[];
   cliCommand: string | null;
+  source?: "official" | "custom" | "remote";
 }
 
 export interface SkillDetailResponse extends SkillResponse {

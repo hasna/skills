@@ -71,6 +71,14 @@ export {
 } from "./lib/config.js";
 
 export {
+  buildSkillsApiUrl,
+  getConfiguredApiUrl,
+  loadRemoteRegistry,
+  parseRemoteRegistryPayload,
+  type RemoteRegistryOptions,
+} from "./lib/remote-registry.js";
+
+export {
   addSchedule,
   listSchedules,
   removeSchedule,

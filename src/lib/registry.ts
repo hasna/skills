@@ -13,7 +13,7 @@ export interface SkillMeta {
   category: string;
   tags: string[];
   dependencies?: string[];
-  source?: "official" | "custom";
+  source?: "official" | "custom" | "remote";
 }
 
 export const CATEGORIES = [

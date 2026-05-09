@@ -10,11 +10,14 @@ const EXPECTED_ALL_SKILL_COUNT = SKILLS.length;
 const EXPECTED_BASIC_SKILL_COUNT = BASIC_SKILL_NAMES.length;
 const SLOW_TEST_TIMEOUT = 15000;
 
-async function runCli(args: string[], env: Record<string, string> = {}): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+async function runCli(
+  args: string[],
+  env: Record<string, string> = {},
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", ...args], {
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, NO_COLOR: "1", SKILLS_TEST_MODE: "1", ...env },
+    env: { ...process.env, ...env, NO_COLOR: "1", SKILLS_TEST_MODE: "1" },
   });
   const stdout = await new Response(proc.stdout).text();
   const stderr = await new Response(proc.stderr).text();
@@ -63,6 +66,26 @@ describe("CLI", () => {
       expect(data[0]).toHaveProperty("name");
       expect(data[0]).toHaveProperty("count");
     });
+
+    test("outputs remote categories with --remote --json", async () => {
+      const server = Bun.serve({
+        port: 0,
+        fetch: () => Response.json([
+          { name: "remote-one", category: "Remote Tools", tags: ["remote"] },
+          { name: "remote-two", category: "Remote Tools", tags: ["remote"] },
+        ]),
+      });
+
+      try {
+        const { stdout, exitCode } = await runCli(["categories", "--remote", "--json"], {
+          SKILLS_API_URL: `http://localhost:${server.port}`,
+        });
+        expect(exitCode).toBe(0);
+        expect(JSON.parse(stdout)).toEqual([{ name: "Remote Tools", count: 2 }]);
+      } finally {
+        server.stop(true);
+      }
+    });
   });
 
   describe("list", () => {
@@ -104,6 +127,39 @@ describe("CLI", () => {
       expect(data.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
     });
 
+    test("lists remote registry with --remote --json", async () => {
+      const server = Bun.serve({
+        port: 0,
+        fetch: (req) => {
+          expect(new URL(req.url).pathname).toBe("/api/v1/skills");
+          return Response.json({
+            skills: [
+              {
+                name: "remote-demo",
+                displayName: "Remote Demo",
+                description: "Demo from remote registry",
+                category: "Remote Tools",
+                tags: ["remote", "demo"],
+              },
+            ],
+          });
+        },
+      });
+
+      try {
+        const { stdout, exitCode } = await runCli(["list", "--remote", "--json"], {
+          SKILLS_API_URL: `http://localhost:${server.port}`,
+        });
+        const data = JSON.parse(stdout);
+        expect(exitCode).toBe(0);
+        expect(data).toHaveLength(1);
+        expect(data[0].name).toBe("remote-demo");
+        expect(data[0].source).toBe("remote");
+      } finally {
+        server.stop(true);
+      }
+    });
+
     test("outputs full JSON with --all --json", async () => {
       const { stdout } = await runCli(["list", "--all", "--json"]);
       const data = JSON.parse(stdout);
@@ -140,6 +196,33 @@ describe("CLI", () => {
       expect(Array.isArray(data)).toBe(true);
       expect(data.length).toBeGreaterThan(0);
       expect(data[0]).toHaveProperty("name");
+    });
+
+    test("searches remote registry with --remote --json", async () => {
+      const server = Bun.serve({
+        port: 0,
+        fetch: () => Response.json([
+          {
+            name: "remote-transcribe",
+            displayName: "Remote Transcribe",
+            description: "Transcribe audio on the hosted platform",
+            category: "Remote Tools",
+            tags: ["audio", "remote"],
+          },
+        ]),
+      });
+
+      try {
+        const { stdout, exitCode } = await runCli(["search", "transcribe", "--remote", "--json"], {
+          SKILLS_API_URL: `http://localhost:${server.port}`,
+        });
+        const data = JSON.parse(stdout);
+        expect(exitCode).toBe(0);
+        expect(data).toHaveLength(1);
+        expect(data[0].name).toBe("remote-transcribe");
+      } finally {
+        server.stop(true);
+      }
     });
 
     test("JSON output is empty array for no results", async () => {
@@ -556,6 +639,29 @@ describe("CLI", () => {
       // Should be sorted alphabetically
       for (let i = 1; i < data.length; i++) {
         expect(data[i].name.localeCompare(data[i - 1].name)).toBeGreaterThanOrEqual(0);
+      }
+    });
+
+    test("outputs remote tags with --remote --json", async () => {
+      const server = Bun.serve({
+        port: 0,
+        fetch: () => Response.json([
+          { name: "remote-one", category: "Remote Tools", tags: ["audio", "remote"] },
+          { name: "remote-two", category: "Remote Tools", tags: ["remote"] },
+        ]),
+      });
+
+      try {
+        const { stdout, exitCode } = await runCli(["tags", "--remote", "--json"], {
+          SKILLS_API_URL: `http://localhost:${server.port}`,
+        });
+        expect(exitCode).toBe(0);
+        expect(JSON.parse(stdout)).toEqual([
+          { name: "audio", count: 1 },
+          { name: "remote", count: 2 },
+        ]);
+      } finally {
+        server.stop(true);
       }
     });
 

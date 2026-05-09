@@ -76,10 +76,31 @@ skills run image "a cat sitting on a windowsill"
 
 - `--json` — Output as JSON (pipeable)
 - `--brief` — One-line format
+- `--remote` — Read browse/search data from `SKILLS_API_URL` or `config apiUrl`
 - `--dry-run` — Preview without applying changes
 - `--verbose` — Debug logging to stderr
 - `--no-color` — Disable ANSI colors
 - `-o, --overwrite` — Overwrite existing files during install
+
+## Remote Registry Mode
+
+Local bundled skills remain the default. To point browse/search commands at a
+compatible hosted registry, set an API base URL:
+
+```bash
+export SKILLS_API_URL=https://skills.md/api/v1
+# or persist it:
+skills config set apiUrl https://skills.md/api/v1
+
+skills list --remote --json
+skills search transcribe --remote --json
+skills categories --remote
+skills tags --remote --json
+```
+
+If the URL is an origin such as `https://skills.md`, the CLI requests
+`/api/v1/skills`. If it already ends in `/api` or `/api/v1`, the CLI appends
+`/skills`.
 
 ## MCP Server
 

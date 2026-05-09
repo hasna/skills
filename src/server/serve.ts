@@ -36,7 +36,7 @@ interface SkillWithStatus {
   envVarsSet: string[];
   systemDeps: string[];
   cliCommand: string | null;
-  source?: "official" | "custom";
+  source?: "official" | "custom" | "remote";
 }
 
 // Resolve the dashboard dist directory
