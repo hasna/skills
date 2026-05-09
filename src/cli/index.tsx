@@ -71,4 +71,7 @@ registerSchedule(program);
 const { registerFeedback } = await import("./commands/feedback.js");
 registerFeedback(program);
 
+const { registerRegistry } = await import("./commands/registry.js");
+registerRegistry(program);
+
 await program.parseAsync();

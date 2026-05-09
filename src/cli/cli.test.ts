@@ -25,6 +25,23 @@ async function runCli(
   return { stdout, stderr, exitCode };
 }
 
+async function runCliInCwd(
+  args: string[],
+  cwd: string,
+  env: Record<string, string> = {},
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+    cwd,
+    env: { ...process.env, ...env, NO_COLOR: "1", SKILLS_TEST_MODE: "1" },
+  });
+  const stdout = await new Response(proc.stdout).text();
+  const stderr = await new Response(proc.stderr).text();
+  const exitCode = await proc.exited;
+  return { stdout, stderr, exitCode };
+}
+
 describe("CLI", () => {
   describe("help", () => {
     test("outputs compact JSON skills list in non-TTY mode (no arguments)", async () => {
@@ -47,6 +64,96 @@ describe("CLI", () => {
     test("shows version with --version", async () => {
       const { stdout } = await runCli(["--version"]);
       expect(stdout.trim()).toBe(pkg.version);
+    });
+  });
+
+  describe("config --json", () => {
+    test("shows, sets, gets, and reports paths as JSON", async () => {
+      const { mkdtempSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-config-json-"));
+      try {
+        const empty = await runCliInCwd(["config", "show", "--json"], tmpDir, { HOME: tmpDir });
+        expect(empty.exitCode).toBe(0);
+        expect(JSON.parse(empty.stdout)).toEqual({});
+
+        const set = await runCliInCwd(["config", "set", "apiUrl", "https://skills.md/api/v1/", "--json"], tmpDir, { HOME: tmpDir });
+        expect(set.exitCode).toBe(0);
+        const setData = JSON.parse(set.stdout);
+        expect(setData).toMatchObject({ key: "apiUrl", value: "https://skills.md/api/v1", scope: "project" });
+
+        const get = await runCliInCwd(["config", "get", "apiUrl", "--json"], tmpDir, { HOME: tmpDir });
+        expect(JSON.parse(get.stdout)).toMatchObject({ key: "apiUrl", value: "https://skills.md/api/v1", set: true });
+
+        const paths = await runCliInCwd(["config", "path", "--json"], tmpDir, { HOME: tmpDir });
+        const pathData = JSON.parse(paths.stdout);
+        expect(pathData.project.exists).toBe(true);
+        expect(pathData.global.exists).toBe(false);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("registry sync", () => {
+    test("outputs a registry sync artifact as JSON", async () => {
+      const { stdout, exitCode } = await runCli([
+        "registry",
+        "sync",
+        "--profile",
+        "basic",
+        "--no-docs",
+        "--no-requirements",
+        "--no-validation",
+        "--json",
+      ]);
+      const data = JSON.parse(stdout);
+      expect(exitCode).toBe(0);
+      expect(data.schemaVersion).toBe(1);
+      expect(data.source).toMatchObject({ packageName: "@hasna/skills", profile: "basic" });
+      expect(data.summary.skillCount).toBe(EXPECTED_BASIC_SKILL_COUNT);
+      expect(data.skills).toHaveLength(EXPECTED_BASIC_SKILL_COUNT);
+      expect(data.skills[0]).not.toHaveProperty("docs");
+      expect(data.skills[0]).not.toHaveProperty("requirements");
+      expect(data.skills[0]).not.toHaveProperty("validation");
+    });
+
+    test("writes a registry sync artifact to --output", async () => {
+      const { mkdtempSync, readFileSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-registry-sync-"));
+      const output = require("path").join(tmpDir, "registry", "skills.json");
+      try {
+        const { stdout, exitCode } = await runCliInCwd([
+          "registry",
+          "sync",
+          "--profile",
+          "basic",
+          "--no-docs",
+          "--no-requirements",
+          "--no-validation",
+          "--output",
+          output,
+        ], tmpDir);
+        expect(exitCode).toBe(0);
+        expect(stdout).toContain("Registry sync artifact written");
+        const data = JSON.parse(readFileSync(output, "utf8"));
+        expect(data.summary.skillCount).toBe(EXPECTED_BASIC_SKILL_COUNT);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("rejects unknown registry profiles", async () => {
+      const { stdout, exitCode } = await runCli([
+        "registry",
+        "sync",
+        "--profile",
+        "unknown",
+        "--json",
+      ]);
+      expect(exitCode).not.toBe(0);
+      expect(JSON.parse(stdout).error).toContain("Unknown registry profile");
     });
   });
 
@@ -1392,6 +1499,7 @@ describe("CLI", () => {
       expect(stdout).toContain("diff");
       expect(stdout).toContain("schedule");
       expect(stdout).toContain("feedback");
+      expect(stdout).toContain("registry");
     });
 
     test("zsh completion includes all current top-level commands", async () => {
@@ -1408,6 +1516,7 @@ describe("CLI", () => {
       expect(stdout).toContain("'diff:diff command'");
       expect(stdout).toContain("'schedule:schedule command'");
       expect(stdout).toContain("'feedback:feedback command'");
+      expect(stdout).toContain("'registry:registry command'");
     });
   });
 

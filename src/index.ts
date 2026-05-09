@@ -90,6 +90,24 @@ export {
   type SkillSchedule,
 } from "./lib/scheduler.js";
 
+export {
+  parseSkillFrontmatter,
+  validateRegistryConsistency,
+  validateSkillDirectory,
+  type RegistryConsistencyResult,
+  type SkillFrontmatter,
+  type SkillValidationMessage,
+  type SkillValidationResult,
+} from "./lib/skill-validation.js";
+
+export {
+  createRegistrySyncArtifact,
+  writeRegistrySyncArtifact,
+  type RegistrySyncArtifact,
+  type RegistrySyncOptions,
+  type RegistrySyncSkill,
+} from "./lib/registry-sync.js";
+
 export type {
   SkillResponse,
   SkillDetailResponse,

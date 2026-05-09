@@ -10,7 +10,7 @@ const subcommands = [
   "run", "init", "remove", "update", "categories", "tags", "mcp", "serve",
   "self-update", "completion", "export", "import", "doctor", "auth", "whoami",
   "test", "outdated", "config", "create", "sync", "validate", "diff", "schedule",
-  "feedback",
+  "feedback", "registry",
 ];
 const skillCmds = ["install", "info", "docs", "requires", "run", "remove"];
 const skillNames = SKILLS.map((s) => s.name);
