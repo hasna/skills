@@ -15,8 +15,11 @@
   },
   "files": [
     "dist/",
+    "!dist/**/*.test.d.ts",
     "bin/",
     "skills/",
+    "!skills/**/node_modules",
+    "!skills/**/.skills",
     "LICENSE",
     "README.md"
   ],
@@ -50,7 +53,7 @@
     "mcp",
     "model-context-protocol",
     "open-source",
-    "skill-library",
+    "skills-library",
     "automation"
   ],
   "author": "Hasna",

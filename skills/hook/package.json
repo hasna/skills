@@ -1,0 +1,28 @@
+{
+  "name": "hook",
+  "version": "1.0.0",
+  "description": "Claude Code hook creation skill - generates standardized hook scaffolds",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "hook": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun run --watch src/index.ts",
+    "test": "bun test"
+  },
+  "keywords": [
+    "claude-code",
+    "hooks",
+    "cli",
+    "scaffold",
+    "bun"
+  ],
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

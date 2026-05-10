@@ -131,7 +131,7 @@ server.registerTool("list_skills", {
 
 server.registerTool("list_installed_skills", {
   title: "List Installed Skills",
-  description: "List skills installed in the current project's .skills/ directory.",
+  description: "List skills installed in the current project's .skills/skills/ directory.",
   inputSchema: {
     directory: z.string().optional(),
   },
@@ -210,7 +210,7 @@ server.registerTool("get_skill_docs", {
 
 server.registerTool("install_skill", {
   title: "Install Skill",
-  description: "Install a skill to .skills/ or to an agent dir (for: claude|codex|gemini|pi|opencode|all).",
+  description: "Install a skill to .skills/skills/ or to an agent dir (for: claude|codex|gemini|pi|opencode|all).",
   inputSchema: {
     name: z.string(),
     for: z.string().optional(),
@@ -297,7 +297,7 @@ server.registerTool("install_category", {
 
 server.registerTool("remove_skill", {
   title: "Remove Skill",
-  description: "Remove a skill from .skills/ or from an agent dir.",
+  description: "Remove a skill from .skills/skills/ or from an agent dir.",
   inputSchema: {
     name: z.string(),
     for: z.string().optional(),
@@ -657,7 +657,7 @@ server.registerTool("describe_tools", {
 }, async ({ names }) => {
   const descriptions: Record<string, string> = {
     list_skills: "List skills {name,category}. Params: category?, detail?",
-    list_installed_skills: "List installed skills in .skills/. Params: directory?",
+    list_installed_skills: "List installed skills in .skills/skills/. Params: directory?",
     search_skills: "Search skills by name/tags. Params: query, detail?",
     get_skill_info: "Get skill metadata and env vars. Params: name",
     get_skill_docs: "Get skill documentation. Params: name",

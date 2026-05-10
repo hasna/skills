@@ -196,7 +196,7 @@ function handleOutdated(options: { json: boolean }) {
   const outdated: Array<{ skill: string; installedVersion: string; registryVersion: string }> = [];
   const upToDate: string[] = [];
   for (const name of installed) {
-    const installedPkgPath = join(process.cwd(), ".skills", normalizeSkillName(name), "package.json");
+    const installedPkgPath = join(process.cwd(), ".skills", "skills", normalizeSkillName(name), "package.json");
     let installedVersion = "unknown";
     if (existsSync(installedPkgPath)) try { installedVersion = JSON.parse(readFileSync(installedPkgPath, "utf-8")).version || "unknown"; } catch {}
     const registryPath = getSkillPath(name);

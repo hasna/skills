@@ -21,16 +21,16 @@ function findSkillsDir(): string {
 
 const SKILLS_DIR = findSkillsDir();
 
-// Get all skill-* directories from the filesystem
-const skillDirs = readdirSync(SKILLS_DIR).filter(
-  (f) => f.startsWith("skill-")
-);
+const skillDirs = readdirSync(SKILLS_DIR).filter((f) => {
+  const fullPath = join(SKILLS_DIR, f);
+  return f !== "_common" && !f.startsWith(".") && statSync(fullPath).isDirectory();
+});
 
 describe("structural validation of all registered skills", () => {
-  test("every skill in the SKILLS registry has a corresponding skills/skill-{name}/ directory", () => {
+  test("every skill in the SKILLS registry has a corresponding skills/{name}/ directory", () => {
     const missing: string[] = [];
     for (const skill of SKILLS) {
-      const dirName = `skill-${skill.name}`;
+      const dirName = skill.name;
       const dirPath = join(SKILLS_DIR, dirName);
       if (!existsSync(dirPath)) {
         missing.push(skill.name);
@@ -43,7 +43,7 @@ describe("structural validation of all registered skills", () => {
     const registryNames = new Set(SKILLS.map((s) => s.name));
     const orphanDirs: string[] = [];
     for (const dir of skillDirs) {
-      const name = dir.replace("skill-", "");
+      const name = dir;
       if (!registryNames.has(name)) {
         orphanDirs.push(dir);
       }
@@ -65,7 +65,13 @@ describe("structural validation of all registered skills", () => {
       }
       try {
         const content = readFileSync(pkgPath, "utf-8");
-        JSON.parse(content);
+        const pkg = JSON.parse(content);
+        if (typeof pkg.name === "string" && pkg.name.includes("skill-")) {
+          failures.push(`${dir}: package name must not include skill-`);
+        }
+        if (pkg.bin && Object.keys(pkg.bin).some((bin) => bin.includes("skill-"))) {
+          failures.push(`${dir}: bin command must not include skill-`);
+        }
       } catch (e) {
         failures.push(`${dir}: invalid JSON in package.json`);
       }

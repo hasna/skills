@@ -1,0 +1,36 @@
+{
+  "name": "read-pdf",
+  "version": "0.1.0",
+  "description": "Analyze PDFs with Claude document blocks and merge chunked output",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "read-pdf": "src/index.ts"
+  },
+  "files": [
+    "src",
+    "SKILL.md",
+    "tsconfig.json"
+  ],
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "keywords": [
+    "pdf",
+    "claude",
+    "document",
+    "ocr",
+    "skill"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "pdf-lib": "^1.17.1"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}

@@ -8,7 +8,7 @@ Skills library for AI coding agents — discover, install, and run reusable capa
 ## Install
 
 ```bash
-npm install -g @hasna/skills
+bun install -g @hasna/skills
 ```
 
 Requires [Bun](https://bun.sh/) 1.0+.
@@ -37,7 +37,7 @@ skills run image "a cat sitting on a windowsill"
 | Command | Alias | Description |
 |---------|-------|-------------|
 | `skills` | | Interactive TUI to browse, search, and install skills |
-| `skills install <name>` | `add` | Install one or more skills to `.skills/` |
+| `skills install <name>` | `add` | Install one or more skills to `.skills/skills/` |
 | `skills install --for claude` | | Copy SKILL.md to `~/.claude/skills/` (also `codex`, `gemini`, `pi`, `opencode`, `all`) |
 | `skills install --category "Development Tools"` | | Install all skills in a category |
 | `skills list` | `ls` | List available skills (filter with `-c`, `-i`, `-t`, `--brief`) |
@@ -122,7 +122,7 @@ src/
 ├── server/serve.ts          # Bun.serve HTTP server + REST API
 ├── lib/
 │   ├── registry.ts          # 202+ entries, search, categories, tags
-│   ├── installer.ts         # Copy skills to .skills/ or agent dirs
+│   ├── installer.ts         # Copy skills to .skills/skills/ or agent dirs
 │   ├── skillinfo.ts         # Docs, requirements, env/system detection
 │   ├── scheduler.ts         # Cron-based skill execution
 │   ├── config.ts            # Global + project config loading
@@ -130,16 +130,16 @@ src/
 ├── index.ts                 # Library re-exports (npm package entry)
 └── *.test.ts                # Test files
 
-skills/                      # 202+ skill directories
+skills/                      # skill directories
 ├── _common/                 # Shared utilities
-└── skill-*/                 # Each skill: src/, SKILL.md, package.json
+└── */                       # Each skill: src/, SKILL.md, package.json
 
 dashboard/                   # Vite + React 19 + Tailwind v4 SPA
 ```
 
 ## Installation Types
 
-1. **Full source** — copies skill to `.skills/` in your project (default)
+1. **Full source** — copies skill to `.skills/skills/` in your project (default)
 2. **Agent config** — copies only SKILL.md to `~/.{agent}/skills/` (use `--for`)
 3. **Global custom** — create with `skills create --global` (stores in `~/.hasna/skills/custom/`)
 
@@ -157,7 +157,7 @@ bun run typecheck          # TypeScript type checking
 
 ## Adding a New Skill
 
-1. Create `skills/skill-{name}/` with `src/index.ts`, `package.json`, `tsconfig.json`, `SKILL.md`
+1. Create `skills/{name}/` with `src/index.ts`, `package.json`, `tsconfig.json`, `SKILL.md`
 2. Add an entry to the `SKILLS` array in `src/lib/registry.ts`
 3. Run `bun test` to verify validation passes
 

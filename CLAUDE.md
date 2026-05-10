@@ -36,7 +36,7 @@ src/
 │   └── serve.test.ts
 ├── lib/
 │   ├── registry.ts               # SKILLS array (202 entries) + CATEGORIES (17)
-│   ├── installer.ts              # Install/remove to .skills/ and agent dirs
+│   ├── installer.ts              # Install/remove to .skills/skills/ and agent dirs
 │   ├── skillinfo.ts              # Docs, requirements, env var extraction, run
 │   ├── utils.ts                  # normalizeSkillName()
 │   ├── registry.test.ts
@@ -62,8 +62,8 @@ dashboard/                        # Vite + React 19 + Tailwind v4 + shadcn/ui
 
 skills/                           # 202 self-contained skill directories
 ├── _common/                      # Shared utilities for skills
-├── skill-image/
-├── skill-deep-research/
+├── image/
+├── deepresearch/
 ├── ...
 └── tsconfig.base.json
 ```
@@ -82,22 +82,22 @@ skills/                           # 202 self-contained skill directories
 
 **`src/lib/registry.ts`** -- The `SKILLS` array (202 entries) with `SkillMeta` interface (name, displayName, description, category, tags) and `CATEGORIES` tuple (17 categories). Functions: `getSkill()`, `getSkillsByCategory()`, `searchSkills()`.
 
-**`src/lib/installer.ts`** -- Copies skill source into `.skills/` in the user's project. Updates `.skills/index.ts` on every install/remove. Also supports agent-specific installs (copies SKILL.md to `~/.claude/skills/`, `~/.codex/skills/`, or `~/.gemini/skills/`). Functions: `installSkill()`, `installSkills()`, `removeSkill()`, `getInstalledSkills()`, `installSkillForAgent()`, `removeSkillForAgent()`, `resolveAgents()`.
+**`src/lib/installer.ts`** -- Copies skill source into `.skills/skills/` in the user's project. Updates `.skills/index.ts` on every install/remove. Also supports agent-specific installs (copies SKILL.md to `~/.claude/skills/`, `~/.codex/skills/`, or `~/.gemini/skills/`). Functions: `installSkill()`, `installSkills()`, `removeSkill()`, `getInstalledSkills()`, `installSkillForAgent()`, `removeSkillForAgent()`, `resolveAgents()`.
 
 **`src/lib/skillinfo.ts`** -- Reads docs (priority: SKILL.md > README.md > CLAUDE.md), extracts env vars and system deps via regex patterns, reads CLI command from package.json bin field, generates SKILL.md from metadata if missing, can execute skills via `runSkill()` (auto-installs deps, spawns via Bun). Functions: `getSkillDocs()`, `getSkillBestDoc()`, `getSkillRequirements()`, `runSkill()`, `generateEnvExample()`, `generateSkillMd()`.
 
-**`src/lib/utils.ts`** -- `normalizeSkillName()` which prefixes `skill-` if missing.
+**`src/lib/utils.ts`** -- `normalizeSkillName()` preserves the exact requested skill name. Legacy `skill-*` aliases are intentionally not supported.
 
 ## Key Patterns
 
 ### Skill Name Normalization
 
-Registry uses bare names (`image`), filesystem uses prefixed names (`skill-image`). `normalizeSkillName()` in `src/lib/utils.ts` handles conversion. This applies everywhere: installer, skillinfo, server, MCP.
+Registry, filesystem directories, package names, and bin names all use bare names such as `image`. Legacy `skill-*` aliases are intentionally not supported.
 
 ### Installation Modes
 
-1. **Full source install** (default): copies entire `skills/skill-{name}/` to `.skills/skill-{name}/` in the project, auto-generates `.skills/index.ts` with re-exports.
-2. **Agent install** (`--for claude|codex|gemini|all`): copies only SKILL.md to `~/.{agent}/skills/skill-{name}/SKILL.md`. If SKILL.md does not exist, one is generated from registry metadata + README.md/CLAUDE.md content via `generateSkillMd()`.
+1. **Full source install** (default): copies entire `skills/{name}/` to `.skills/skills/{name}/` in the project, auto-generates `.skills/index.ts` with re-exports.
+2. **Agent install** (`--for claude|codex|gemini|all`): copies only SKILL.md to `~/.{agent}/skills/{name}/SKILL.md`. If SKILL.md does not exist, one is generated from registry metadata + README.md/CLAUDE.md content via `generateSkillMd()`.
 
 ### Path Resolution
 
@@ -135,10 +135,10 @@ Three separate `bun build` invocations in the build script:
 
 ## Skill Structure Template
 
-Each skill under `skills/skill-{name}/` follows this structure:
+Each skill under `skills/{name}/` follows this structure:
 
 ```
-skills/skill-{name}/
+skills/{name}/
 ├── src/
 │   ├── index.ts          # Main entry / programmatic API
 │   ├── commands/          # CLI command handlers (optional)
@@ -210,7 +210,7 @@ Dashboard tech: React 19, TanStack Table, Radix UI, Lucide icons, oklch color to
 
 ## Adding a New Skill
 
-1. Create `skills/skill-{name}/` with `src/index.ts`, `package.json`, `tsconfig.json`, `SKILL.md`
+1. Create `skills/{name}/` with `src/index.ts`, `package.json`, `tsconfig.json`, `SKILL.md`
 2. Add entry to the `SKILLS` array in `src/lib/registry.ts` (name, displayName, description, category from `CATEGORIES`, tags)
 3. Run `bun test` to verify the registry and structural validation tests pass
 

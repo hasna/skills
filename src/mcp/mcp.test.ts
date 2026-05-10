@@ -258,7 +258,7 @@ describe("MCP Server", () => {
       const reqs = JSON.parse(response.result.content[0].text);
       expect(Array.isArray(reqs.envVars)).toBe(true);
       expect(reqs.envVars).toContain("OPENAI_API_KEY");
-      expect(reqs.cliCommand).toBe("skill-image");
+      expect(reqs.cliCommand).toBe("skills run image");
     } finally {
       await client.close();
     }

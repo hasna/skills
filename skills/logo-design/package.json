@@ -1,0 +1,21 @@
+{
+  "name": "logo-design",
+  "version": "1.0.0",
+  "description": "Generate professional logos using AI image providers",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "logo-design": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "generate": "bun run src/index.ts generate"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

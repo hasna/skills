@@ -29,6 +29,7 @@ temp/
 
 # Installed skills
 .skills/
+skills/**/.skills/
 
 # Auth tokens
 .npmrc

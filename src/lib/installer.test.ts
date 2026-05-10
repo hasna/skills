@@ -30,16 +30,14 @@ afterEach(() => {
 
 describe("installer", () => {
   describe("getSkillPath", () => {
-    test("returns path for skill name without prefix", () => {
+    test("returns path for bare skill name", () => {
       const path = getSkillPath("deepresearch");
-      expect(path).toContain("skill-deepresearch");
+      expect(path).toContain("deepresearch");
     });
 
-    test("returns path for skill name with prefix", () => {
+    test("does not normalize legacy skill-prefixed names", () => {
       const path = getSkillPath("skill-deepresearch");
       expect(path).toContain("skill-deepresearch");
-      // Should not double-prefix
-      expect(path).not.toContain("skill-skill-");
     });
   });
 
@@ -48,8 +46,8 @@ describe("installer", () => {
       expect(skillExists("deepresearch")).toBe(true);
     });
 
-    test("returns true with skill- prefix", () => {
-      expect(skillExists("skill-deepresearch")).toBe(true);
+    test("returns false for legacy skill-prefixed name", () => {
+      expect(skillExists("skill-deepresearch")).toBe(false);
     });
 
     test("returns false for nonexistent skill", () => {
@@ -63,7 +61,7 @@ describe("installer", () => {
       expect(result.success).toBe(true);
       expect(result.skill).toBe("deepresearch");
       expect(result.path).toBeDefined();
-      expect(existsSync(join(testDir, ".skills", "skill-deepresearch"))).toBe(true);
+      expect(existsSync(join(testDir, ".skills", "skills", "deepresearch"))).toBe(true);
     });
 
     test("creates .skills directory if it does not exist", () => {
@@ -78,7 +76,7 @@ describe("installer", () => {
       expect(existsSync(indexPath)).toBe(true);
       const content = readFileSync(indexPath, "utf-8");
       expect(content).toContain("deepresearch");
-      expect(content).toContain("skill-deepresearch");
+      expect(content).toContain("./skills/deepresearch/src/index.js");
     });
 
     test("fails for nonexistent skill", () => {
@@ -102,14 +100,14 @@ describe("installer", () => {
 
     test("does not copy .git directory", () => {
       installSkill("deepresearch", { targetDir: testDir });
-      const gitDir = join(testDir, ".skills", "skill-deepresearch", ".git");
+      const gitDir = join(testDir, ".skills", "skills", "deepresearch", ".git");
       expect(existsSync(gitDir)).toBe(false);
     });
 
-    test("handles skill- prefix in name", () => {
+    test("rejects legacy skill-prefixed name", () => {
       const result = installSkill("skill-deepresearch", { targetDir: testDir });
-      expect(result.success).toBe(true);
-      expect(existsSync(join(testDir, ".skills", "skill-deepresearch"))).toBe(true);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("not found");
     });
   });
 
@@ -191,7 +189,7 @@ describe("installer", () => {
     test("does not include non-skill files", () => {
       installSkill("deepresearch", { targetDir: testDir });
       // Create a non-skill file
-      writeFileSync(join(testDir, ".skills", "random.txt"), "test");
+      writeFileSync(join(testDir, ".skills", "skills", "random.txt"), "test");
       const installed = getInstalledSkills(testDir);
       expect(installed.length).toBe(1);
     });
@@ -219,11 +217,11 @@ describe("installer", () => {
       expect(content).toContain("image");
     });
 
-    test("handles skill- prefix in name", () => {
+    test("does not remove using legacy skill-prefixed name", () => {
       installSkill("deepresearch", { targetDir: testDir });
       const result = removeSkill("skill-deepresearch", testDir);
-      expect(result).toBe(true);
-      expect(getInstalledSkills(testDir)).not.toContain("deepresearch");
+      expect(result).toBe(false);
+      expect(getInstalledSkills(testDir)).toContain("deepresearch");
     });
   });
 
@@ -260,15 +258,14 @@ describe("installer", () => {
     });
 
     describe("getAgentSkillPath", () => {
-      test("returns correct path with skill- prefix", () => {
+      test("returns correct path with bare skill name", () => {
         const path = getAgentSkillPath("image", "claude", "project", testDir);
-        expect(path).toBe(join(testDir, ".claude", "skills", "skill-image"));
+        expect(path).toBe(join(testDir, ".claude", "skills", "image"));
       });
 
-      test("does not double-prefix", () => {
-        const path = getAgentSkillPath("skill-image", "claude", "project", testDir);
-        expect(path).toContain("skill-image");
-        expect(path).not.toContain("skill-skill-");
+      test("does not normalize legacy skill-prefixed agent names", () => {
+        const path = getAgentSkillPath("image", "claude", "project", testDir);
+        expect(path).toBe(join(testDir, ".claude", "skills", "image"));
       });
     });
 
@@ -326,7 +323,7 @@ describe("installer", () => {
             scope: "project",
             projectDir: testDir,
           });
-          const expected = join(testDir, `.${agent}`, "skills", "skill-image", "SKILL.md");
+          const expected = join(testDir, `.${agent}`, "skills", "image", "SKILL.md");
           expect(existsSync(expected)).toBe(true);
         }
       });
@@ -345,7 +342,7 @@ describe("installer", () => {
           projectDir: testDir,
         });
         expect(result).toBe(true);
-        const skillDir = join(testDir, ".claude", "skills", "skill-image");
+        const skillDir = join(testDir, ".claude", "skills", "image");
         expect(existsSync(skillDir)).toBe(false);
       });
 
@@ -368,10 +365,11 @@ describe("installer", () => {
       expect(result.path).toBeDefined();
 
       // 2. Verify the skill files exist
-      const skillDir = join(testDir, ".skills", "skill-image");
+      const skillDir = join(testDir, ".skills", "skills", "image");
       expect(existsSync(skillDir)).toBe(true);
       const entries = readdirSync(skillDir);
       expect(entries.length).toBeGreaterThan(0);
+      expect(existsSync(join(testDir, ".skills", "skills", "_common", "index.ts"))).toBe(true);
 
       // 3. Check getInstalledSkills() returns it
       const installed = getInstalledSkills(testDir);

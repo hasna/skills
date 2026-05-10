@@ -163,8 +163,8 @@ function handleValidate(name: string, options: { json: boolean }) {
 }
 
 function handleDiff(name: string, options: { json: boolean }) {
-  const bare = name.replace(/^skill-/, "");
-  const destPath = join(process.cwd(), ".skills", `skill-${bare}`);
+  const bare = normalizeSkillName(name);
+  const destPath = join(process.cwd(), ".skills", "skills", bare);
   const sourcePath = getSkillPath(bare);
 
   if (!existsSync(sourcePath)) {

@@ -2,7 +2,7 @@
  * Skill info - reads docs, requirements, and metadata from skill source
  */
 
-import { existsSync, readFileSync, readdirSync } from "fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import { getSkillPath } from "./installer.js";
 import { getSkill, loadRegistry, type SkillMeta } from "./registry.js";
@@ -82,17 +82,15 @@ export function getSkillRequirements(name: string): SkillRequirements | null {
     }
   }
 
-  // Read CLI command from package.json
-  let cliCommand: string | null = null;
+  // User-facing execution goes through the root CLI. package.json bin entries
+  // are implementation details for runSkill() resolution.
+  const skillName = normalizeSkillName(name);
+  let cliCommand: string | null = `skills run ${skillName}`;
   let dependencies: Record<string, string> = {};
   const pkgPath = join(skillPath, "package.json");
   if (existsSync(pkgPath)) {
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-      if (pkg.bin) {
-        const binKeys = Object.keys(pkg.bin);
-        if (binKeys.length > 0) cliCommand = binKeys[0];
-      }
       dependencies = pkg.dependencies || {};
     } catch {}
   }
@@ -113,15 +111,15 @@ export async function runSkill(
   args: string[],
   options: { installed?: boolean } = {}
 ): Promise<{ exitCode: number; error?: string }> {
-  // Look in .skills/ first (installed), then fall back to package skills/
+  // Look in .skills/skills/ first (installed), then fall back to package skills/
   const skillName = normalizeSkillName(name);
   let skillPath: string;
 
   if (options.installed) {
-    skillPath = join(process.cwd(), ".skills", skillName);
+    skillPath = join(process.cwd(), ".skills", "skills", skillName);
   } else {
     // Check installed first
-    const installedPath = join(process.cwd(), ".skills", skillName);
+    const installedPath = join(process.cwd(), ".skills", "skills", skillName);
     if (existsSync(installedPath)) {
       skillPath = installedPath;
     } else {
@@ -316,17 +314,23 @@ export function detectProjectSkills(cwd: string = process.cwd()): DetectedProjec
  * Generate a .env.example from installed skills
  */
 export function generateEnvExample(targetDir: string = process.cwd()): string {
-  const skillsDir = join(targetDir, ".skills");
+  const skillsDir = join(targetDir, ".skills", "skills");
   if (!existsSync(skillsDir)) return "";
 
-  const dirs = readdirSync(skillsDir).filter(
-    (f) => f.startsWith("skill-") && existsSync(join(skillsDir, f, "package.json"))
-  );
+  const dirs = readdirSync(skillsDir).filter((f) => {
+    const fullPath = join(skillsDir, f);
+    return (
+      f !== "_common" &&
+      !f.startsWith(".") &&
+      statSync(fullPath).isDirectory() &&
+      existsSync(join(fullPath, "package.json"))
+    );
+  });
 
   const envMap = new Map<string, string[]>();
 
   for (const dir of dirs) {
-    const skillName = dir.replace("skill-", "");
+    const skillName = dir;
     const skillPath = join(skillsDir, dir);
 
     const texts: string[] = [];

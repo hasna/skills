@@ -3,28 +3,28 @@ import { normalizeSkillName } from "./utils";
 
 describe("utils", () => {
   describe("normalizeSkillName", () => {
-    test("adds skill- prefix when missing", () => {
-      expect(normalizeSkillName("deepresearch")).toBe("skill-deepresearch");
+    test("keeps bare names unchanged", () => {
+      expect(normalizeSkillName("deepresearch")).toBe("deepresearch");
     });
 
-    test("does not double-prefix when already has skill-", () => {
+    test("does not normalize legacy skill-prefixed names", () => {
       expect(normalizeSkillName("skill-deepresearch")).toBe("skill-deepresearch");
     });
 
     test("handles empty string", () => {
-      expect(normalizeSkillName("")).toBe("skill-");
+      expect(normalizeSkillName("")).toBe("");
     });
 
     test("handles name with hyphens", () => {
-      expect(normalizeSkillName("api-test-suite")).toBe("skill-api-test-suite");
+      expect(normalizeSkillName("api-test-suite")).toBe("api-test-suite");
     });
 
     test("handles name that starts with 'skill' but not 'skill-'", () => {
-      expect(normalizeSkillName("skillful")).toBe("skill-skillful");
+      expect(normalizeSkillName("skillful")).toBe("skillful");
     });
 
-    test("preserves exact prefix 'skill-'", () => {
-      expect(normalizeSkillName("skill-image")).toBe("skill-image");
+    test("keeps image unchanged", () => {
+      expect(normalizeSkillName("image")).toBe("image");
     });
   });
 });

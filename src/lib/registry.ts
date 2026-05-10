@@ -61,7 +61,7 @@ export const BASIC_SKILL_NAMES = [
 export type SkillRegistryProfile = "basic" | "all";
 
 export function isBasicSkillName(name: string): boolean {
-  return (BASIC_SKILL_NAMES as readonly string[]).includes(name.replace(/^skill-/, ""));
+  return (BASIC_SKILL_NAMES as readonly string[]).includes(name);
 }
 
 export const SKILLS: SkillMeta[] = [
@@ -660,9 +660,9 @@ export const SKILLS: SkillMeta[] = [
   {
     name: "audio",
     displayName: "Audio",
-    description: "Generate audio, voiceovers, and speech using AI-powered TTS APIs (Minimax, ElevenLabs, OpenAI)",
+    description: "Generate speech and audio using provider-cost AI backends: OpenAI, Minimax, and Gemini",
     category: "Content Generation",
-    tags: ["audio", "tts", "speech", "ai", "minimax"],
+    tags: ["audio", "speech", "tts", "generation", "ai", "openai", "minimax", "gemini"],
   },
   {
     name: "audiobook-chapter-proofer",
@@ -730,23 +730,23 @@ export const SKILLS: SkillMeta[] = [
   {
     name: "image",
     displayName: "Image",
-    description: "Generate images using AI providers: Minimax, DALL-E 3, Imagen 3, and Aurora",
+    description: "Generate images using provider-cost AI backends: OpenAI, Minimax, and Gemini",
     category: "Content Generation",
-    tags: ["image", "generation", "ai", "minimax", "dalle"],
+    tags: ["image", "generation", "ai", "openai", "minimax", "gemini"],
   },
   {
     name: "music",
     displayName: "Music",
-    description: "Generate music tracks using AI models (Minimax Music-01)",
+    description: "Generate music using provider-cost AI backends: Minimax and Gemini Lyria",
     category: "Content Generation",
-    tags: ["music", "generation", "ai", "minimax"],
+    tags: ["music", "generation", "ai", "minimax", "gemini"],
   },
   {
     name: "video",
     displayName: "Video",
-    description: "Generate videos using AI models: Minimax, Google Veo, OpenAI Sora, and Runway",
+    description: "Generate videos using provider-cost AI backends: OpenAI Sora, Minimax Hailuo, Gemini Veo, and Seedance",
     category: "Content Generation",
-    tags: ["video", "generation", "ai", "minimax", "sora"],
+    tags: ["video", "generation", "ai", "openai", "minimax", "gemini", "seedance"],
   },
   {
     name: "voiceover-casting-assistant",
@@ -1133,6 +1133,13 @@ export const SKILLS: SkillMeta[] = [
     description: "Generate favicons in multiple sizes and formats for websites",
     category: "Design & Branding",
     tags: ["favicon", "icon", "design", "web"],
+  },
+  {
+    name: "logo-design",
+    displayName: "Logo Design",
+    description: "Generate professional logos using AI image providers",
+    category: "Design & Branding",
+    tags: ["logo", "design", "branding", "image", "ai"],
   },
   {
     name: "microcopy-generator",

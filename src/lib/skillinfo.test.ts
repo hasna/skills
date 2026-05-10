@@ -82,13 +82,13 @@ describe("skillinfo", () => {
     test("extracts CLI command from package.json", () => {
       const reqs = getSkillRequirements("image");
       expect(reqs).not.toBeNull();
-      expect(reqs!.cliCommand).toBe("skill-image");
+      expect(reqs!.cliCommand).toBe("skills run image");
     });
 
     test("extracts CLI command for deep-research", () => {
       const reqs = getSkillRequirements("deepresearch");
       expect(reqs).not.toBeNull();
-      expect(reqs!.cliCommand).toBe("skill-deepresearch");
+      expect(reqs!.cliCommand).toBe("skills run deepresearch");
     });
 
     test("returns null for nonexistent skill", () => {

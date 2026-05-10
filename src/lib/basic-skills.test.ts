@@ -13,7 +13,7 @@ import { getSkillPath } from "./installer";
 
 const BASIC_SKILLS = [...BASIC_SKILL_NAMES];
 
-const CONNECTOR_BACKED_SKILLS = ["image", "video", "audio", "transcript", "convert"];
+const CONNECTOR_BACKED_SKILLS = ["image", "video", "audio", "music", "transcript", "convert"];
 
 const EXPECTED_PACKAGE_DEPS: Record<string, string[]> = {
   "read-pdf": ["pdf-lib"],

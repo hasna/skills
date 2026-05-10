@@ -28,6 +28,8 @@ function findSkillsDir(): string {
 }
 
 const SKILLS_DIR = findSkillsDir();
+const INSTALL_ROOT_DIR = ".skills";
+const INSTALLED_SKILLS_DIR = "skills";
 
 export interface InstallResult {
   skill: string;
@@ -67,8 +69,9 @@ export function installSkill(
 
   const skillName = normalizeSkillName(name);
   const sourcePath = getSkillPath(name);
-  const destDir = join(targetDir, ".skills");
-  const destPath = join(destDir, skillName);
+  const destDir = join(targetDir, INSTALL_ROOT_DIR);
+  const installedSkillsDir = join(destDir, INSTALLED_SKILLS_DIR);
+  const destPath = join(installedSkillsDir, skillName);
 
   // Check if skill exists in package
   if (!existsSync(sourcePath)) {
@@ -90,9 +93,9 @@ export function installSkill(
   }
 
   try {
-    // Ensure .skills directory exists
-    if (!existsSync(destDir)) {
-      mkdirSync(destDir, { recursive: true });
+    // Ensure structured local install directories exist.
+    if (!existsSync(installedSkillsDir)) {
+      mkdirSync(installedSkillsDir, { recursive: true });
     }
 
     // Remove existing if overwriting
@@ -109,6 +112,18 @@ export function installSkill(
       },
     });
 
+    const commonSourcePath = join(SKILLS_DIR, "_common");
+    const commonDestPath = join(installedSkillsDir, "_common");
+    if (existsSync(commonSourcePath) && !existsSync(commonDestPath)) {
+      cpSync(commonSourcePath, commonDestPath, {
+        recursive: true,
+        filter: (src) => {
+          const rel = src.slice(commonSourcePath.length);
+          return !rel.includes("/.git") && !rel.includes("/node_modules");
+        },
+      });
+    }
+
     // Update or create .skills/index.ts for easy imports
     updateSkillsIndex(destDir);
 
@@ -122,7 +137,7 @@ export function installSkill(
       const installedSet = new Set(installed);
       for (const dep of meta.dependencies) {
         if (!installedSet.has(dep)) {
-          console.warn(`Warning: skill-${meta.name} depends on skill-${dep} which is not installed`);
+          console.warn(`Warning: ${meta.name} depends on ${dep} which is not installed`);
         }
       }
     }
@@ -156,18 +171,28 @@ export function installSkills(
  */
 function updateSkillsIndex(skillsDir: string): void {
   const indexPath = join(skillsDir, "index.ts");
+  const installedSkillsDir = join(skillsDir, INSTALLED_SKILLS_DIR);
 
   const meta = loadMeta(skillsDir);
   const disabledSet = new Set(meta.disabled || []);
 
-  const skills = readdirSync(skillsDir).filter(
-    (f: string) => f.startsWith("skill-") && !f.includes(".") && !disabledSet.has(f.replace("skill-", ""))
-  );
+  const skills = existsSync(installedSkillsDir)
+    ? readdirSync(installedSkillsDir).filter((f: string) => {
+        const fullPath = join(installedSkillsDir, f);
+        return (
+          f !== "_common" &&
+          !f.startsWith(".") &&
+          !f.includes(".") &&
+          !disabledSet.has(f) &&
+          statSync(fullPath).isDirectory()
+        );
+      })
+    : [];
 
   const exports = skills
     .map((s: string) => {
-      const name = s.replace("skill-", "").replace(/-/g, "_");
-      return `export * as ${name} from './${s}/src/index.js';`;
+      const name = s.replace(/-/g, "_");
+      return `export * as ${name} from './${INSTALLED_SKILLS_DIR}/${s}/src/index.js';`;
     })
     .join("\n");
 
@@ -218,19 +243,19 @@ function recordInstall(skillsDir: string, name: string): void {
   // Try to read version from the installed skill's package.json
   let version = "unknown";
   try {
-    const pkgPath = join(skillsDir, skillName, "package.json");
+    const pkgPath = join(skillsDir, INSTALLED_SKILLS_DIR, skillName, "package.json");
     if (existsSync(pkgPath)) {
       const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
       version = pkg.version || "unknown";
     }
   } catch {}
-  meta.skills[name] = { installedAt: new Date().toISOString(), version };
+  meta.skills[skillName] = { installedAt: new Date().toISOString(), version };
   saveMeta(skillsDir, meta);
 }
 
 function recordRemove(skillsDir: string, name: string): void {
   const meta = loadMeta(skillsDir);
-  delete meta.skills[name];
+  delete meta.skills[normalizeSkillName(name)];
   saveMeta(skillsDir, meta);
 }
 
@@ -238,21 +263,21 @@ function recordRemove(skillsDir: string, name: string): void {
  * Get installation metadata for installed skills
  */
 export function getInstallMeta(targetDir: string = process.cwd()): MetaFile {
-  return loadMeta(join(targetDir, ".skills"));
+  return loadMeta(join(targetDir, INSTALL_ROOT_DIR));
 }
 
 /**
  * Disable a skill (exclude from .skills/index.ts without removing files)
  */
 export function disableSkill(name: string, targetDir: string = process.cwd()): boolean {
-  const skillsDir = join(targetDir, ".skills");
+  const skillsDir = join(targetDir, INSTALL_ROOT_DIR);
   const skillName = normalizeSkillName(name);
-  if (!existsSync(join(skillsDir, skillName))) return false;
+  if (!existsSync(join(skillsDir, INSTALLED_SKILLS_DIR, skillName))) return false;
 
   const meta = loadMeta(skillsDir);
   const disabled = new Set(meta.disabled || []);
-  if (disabled.has(name)) return false; // already disabled
-  disabled.add(name);
+  if (disabled.has(skillName)) return false; // already disabled
+  disabled.add(skillName);
   meta.disabled = [...disabled];
   saveMeta(skillsDir, meta);
   updateSkillsIndex(skillsDir);
@@ -263,11 +288,12 @@ export function disableSkill(name: string, targetDir: string = process.cwd()): b
  * Enable a previously disabled skill (re-add to .skills/index.ts)
  */
 export function enableSkill(name: string, targetDir: string = process.cwd()): boolean {
-  const skillsDir = join(targetDir, ".skills");
+  const skillsDir = join(targetDir, INSTALL_ROOT_DIR);
+  const skillName = normalizeSkillName(name);
   const meta = loadMeta(skillsDir);
   const disabled = new Set(meta.disabled || []);
-  if (!disabled.has(name)) return false; // not disabled
-  disabled.delete(name);
+  if (!disabled.has(skillName)) return false; // not disabled
+  disabled.delete(skillName);
   meta.disabled = [...disabled];
   saveMeta(skillsDir, meta);
   updateSkillsIndex(skillsDir);
@@ -278,7 +304,7 @@ export function enableSkill(name: string, targetDir: string = process.cwd()): bo
  * Get list of disabled skills
  */
 export function getDisabledSkills(targetDir: string = process.cwd()): string[] {
-  const meta = loadMeta(join(targetDir, ".skills"));
+  const meta = loadMeta(join(targetDir, INSTALL_ROOT_DIR));
   return meta.disabled || [];
 }
 
@@ -286,7 +312,7 @@ export function getDisabledSkills(targetDir: string = process.cwd()): string[] {
  * Get list of installed skills in a directory
  */
 export function getInstalledSkills(targetDir: string = process.cwd()): string[] {
-  const skillsDir = join(targetDir, ".skills");
+  const skillsDir = join(targetDir, INSTALL_ROOT_DIR, INSTALLED_SKILLS_DIR);
 
   if (!existsSync(skillsDir)) {
     return [];
@@ -295,9 +321,9 @@ export function getInstalledSkills(targetDir: string = process.cwd()): string[] 
   return readdirSync(skillsDir)
     .filter((f: string) => {
       const fullPath = join(skillsDir, f);
-      return f.startsWith("skill-") && statSync(fullPath).isDirectory();
+      return f !== "_common" && !f.startsWith(".") && statSync(fullPath).isDirectory();
     })
-    .map((f: string) => f.replace("skill-", ""));
+    .map((f: string) => f);
 }
 
 /**
@@ -308,8 +334,8 @@ export function removeSkill(
   targetDir: string = process.cwd()
 ): boolean {
   const skillName = normalizeSkillName(name);
-  const skillsDir = join(targetDir, ".skills");
-  const skillPath = join(skillsDir, skillName);
+  const skillsDir = join(targetDir, INSTALL_ROOT_DIR);
+  const skillPath = join(skillsDir, INSTALLED_SKILLS_DIR, skillName);
 
   if (!existsSync(skillPath)) {
     return false;

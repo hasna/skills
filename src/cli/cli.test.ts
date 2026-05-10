@@ -215,7 +215,7 @@ describe("CLI", () => {
 
     test("shows CLI command", async () => {
       const { stdout } = await runCli(["requires", "image"]);
-      expect(stdout).toContain("skill-image");
+      expect(stdout).toContain("image");
     });
 
     test("fails for nonexistent skill", async () => {
@@ -229,7 +229,7 @@ describe("CLI", () => {
       const data = JSON.parse(stdout);
       expect(Array.isArray(data.envVars)).toBe(true);
       expect(data.envVars).toContain("OPENAI_API_KEY");
-      expect(data.cliCommand).toBe("skill-image");
+      expect(data.cliCommand).toBe("skills run image");
       expect(data).toHaveProperty("systemDeps");
       expect(data).toHaveProperty("dependencies");
     });
@@ -247,7 +247,7 @@ describe("CLI", () => {
       const data = JSON.parse(stdout);
       expect(data.name).toBe("image");
       expect(data.envVars).toContain("OPENAI_API_KEY");
-      expect(data.cliCommand).toBe("skill-image");
+      expect(data.cliCommand).toBe("skills run image");
     });
 
     test("human-readable shows env vars", async () => {

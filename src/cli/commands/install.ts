@@ -108,7 +108,7 @@ async function handleInstall(skills: string[], options: any) {
     if (agentResults.some((r) => !r.success)) process.exitCode = 1;
   } else {
     const sourceResults: InstallResult[] = [];
-    if (options.dryRun) { for (const name of skills) console.log(chalk.dim(`[dry-run] Would install ${name} to .skills/`)); return; }
+    if (options.dryRun) { for (const name of skills) console.log(chalk.dim(`[dry-run] Would install ${name} to .skills/skills/`)); return; }
 
     const total = skills.length;
     const startTime = Date.now();
@@ -130,7 +130,7 @@ async function handleInstall(skills: string[], options: any) {
     else if (total <= 1) {
       console.log(chalk.bold("\nInstalling skills...\n"));
       for (const r of sourceResults) console.log(r.success ? chalk.green(`\u2713 ${r.skill}`) : chalk.red(`\u2717 ${r.skill}: ${r.error}`));
-      console.log(chalk.dim("\nSkills installed to .skills/"));
+      console.log(chalk.dim("\nSkills installed to .skills/skills/"));
     }
     if (sourceResults.some((r) => !r.success)) process.exitCode = 1;
   }
@@ -140,7 +140,7 @@ async function handleRemove(skill: string, options: any) {
   const isTTY = (process.stdout.isTTY ?? false) && (process.stdin.isTTY ?? false);
   if (!options.yes && !options.dryRun && isTTY) {
     const skillName = normalizeSkillName(skill);
-    const target = options.for ? `from ${options.for} (${options.scope})` : "from .skills/";
+    const target = options.for ? `from ${options.for} (${options.scope})` : "from .skills/skills/";
     const readline = await import("readline");
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const answer = await new Promise<string>(resolve => rl.question(`Remove ${skillName} ${target}? (y/N) `, resolve));
@@ -163,7 +163,7 @@ async function handleRemove(skill: string, options: any) {
     else for (const r of results) console.log(r.removed ? chalk.green(`\u2713 Removed ${r.skill} from ${r.agent} (${r.scope})`) : chalk.red(`\u2717 ${r.skill} from ${r.agent} (${r.scope}) not found`));
     if (results.every((r) => !r.removed)) process.exitCode = 1;
   } else {
-    if (options.dryRun) { console.log(chalk.dim(`[dry-run] Would remove ${skill} from .skills/`)); return; }
+    if (options.dryRun) { console.log(chalk.dim(`[dry-run] Would remove ${skill} from .skills/skills/`)); return; }
     const removed = removeSkill(skill);
     if (options.json) console.log(JSON.stringify({ skill, removed }));
     else if (removed) console.log(chalk.green(`\u2713 Removed ${skill}`));
@@ -190,7 +190,7 @@ function handleUpdate(skills: string[], options: { json: boolean }) {
   const results: Array<{ skill: string; success: boolean; error?: string; newFiles: string[]; removedFiles: string[]; unchangedCount: number }> = [];
   for (const name of toUpdate) {
     const skillName = normalizeSkillName(name);
-    const destPath = join(process.cwd(), ".skills", skillName);
+    const destPath = join(process.cwd(), ".skills", "skills", skillName);
     const beforeFiles = collectFiles(destPath);
     const result = installSkill(name, { overwrite: true });
     const afterFiles = collectFiles(destPath);
@@ -213,7 +213,7 @@ function handleUpdate(skills: string[], options: { json: boolean }) {
         console.log(chalk.dim(`    ${r.unchangedCount} file(s) updated`));
       } else console.log(chalk.red(`\u2717 ${r.skill}: ${r.error}`));
     }
-    console.log(chalk.dim("\nSkills updated in .skills/"));
+    console.log(chalk.dim("\nSkills updated in .skills/skills/"));
   }
   if (results.some((r) => !r.success)) process.exitCode = 1;
 }

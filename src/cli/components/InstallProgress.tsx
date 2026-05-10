@@ -88,7 +88,7 @@ export function InstallProgress({
             )}
           </Text>
           <Text dimColor>
-            Skills installed to .skills/
+            Skills installed to .skills/skills/
           </Text>
         </Box>
       )}

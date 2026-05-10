@@ -28,14 +28,14 @@ describe("runSkill", () => {
 
   test("skill with valid package.json and bin entry resolves correctly", async () => {
     // Create a fake installed skill with bin entry
-    const skillDir = join(testDir, ".skills", "skill-test-bin");
+    const skillDir = join(testDir, ".skills", "skills", "test-bin");
     mkdirSync(skillDir, { recursive: true });
 
     writeFileSync(
       join(skillDir, "package.json"),
       JSON.stringify({
-        name: "skill-test-bin",
-        bin: { "skill-test-bin": "src/index.ts" },
+        name: "test-bin",
+        bin: { "test-bin": "src/index.ts" },
       })
     );
 
@@ -52,13 +52,13 @@ describe("runSkill", () => {
 
   test("skill with scripts.dev parses the entry point", async () => {
     // Create a fake installed skill with scripts.dev but no bin
-    const skillDir = join(testDir, ".skills", "skill-test-dev");
+    const skillDir = join(testDir, ".skills", "skills", "test-dev");
     mkdirSync(skillDir, { recursive: true });
 
     writeFileSync(
       join(skillDir, "package.json"),
       JSON.stringify({
-        name: "skill-test-dev",
+        name: "test-dev",
         scripts: { dev: "bun run bin/cli.ts" },
       })
     );
@@ -76,13 +76,13 @@ describe("runSkill", () => {
 
   test("fallback to bin/cli.ts when no bin and no scripts.dev", async () => {
     // Create a fake installed skill with neither bin nor scripts.dev
-    const skillDir = join(testDir, ".skills", "skill-test-fallback");
+    const skillDir = join(testDir, ".skills", "skills", "test-fallback");
     mkdirSync(skillDir, { recursive: true });
 
     writeFileSync(
       join(skillDir, "package.json"),
       JSON.stringify({
-        name: "skill-test-fallback",
+        name: "test-fallback",
       })
     );
 
@@ -100,14 +100,14 @@ describe("runSkill", () => {
   test("installed .skills/ path is preferred over package skills/ path", async () => {
     // Install a fake skill in .skills/ that shadows a real package skill
     // We use "image" since it exists in the package
-    const skillDir = join(testDir, ".skills", "skill-image");
+    const skillDir = join(testDir, ".skills", "skills", "image");
     mkdirSync(skillDir, { recursive: true });
 
     writeFileSync(
       join(skillDir, "package.json"),
       JSON.stringify({
-        name: "skill-image",
-        bin: { "skill-image": "src/index.ts" },
+        name: "image",
+        bin: { "image": "src/index.ts" },
       })
     );
 
@@ -125,7 +125,7 @@ describe("runSkill", () => {
 
   test("returns error when package.json is missing", async () => {
     // Create a skill directory without package.json
-    const skillDir = join(testDir, ".skills", "skill-no-pkg");
+    const skillDir = join(testDir, ".skills", "skills", "no-pkg");
     mkdirSync(skillDir, { recursive: true });
 
     const result = await runSkill("no-pkg", [], { installed: true });
@@ -135,14 +135,14 @@ describe("runSkill", () => {
 
   test("returns error when entry point file does not exist", async () => {
     // Create a skill with bin pointing to non-existent file
-    const skillDir = join(testDir, ".skills", "skill-bad-entry");
+    const skillDir = join(testDir, ".skills", "skills", "bad-entry");
     mkdirSync(skillDir, { recursive: true });
 
     writeFileSync(
       join(skillDir, "package.json"),
       JSON.stringify({
-        name: "skill-bad-entry",
-        bin: { "skill-bad-entry": "src/missing.ts" },
+        name: "bad-entry",
+        bin: { "bad-entry": "src/missing.ts" },
       })
     );
 

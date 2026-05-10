@@ -2,9 +2,9 @@
  * Skill Installation Handler
  *
  * Add this code to your skill's index.ts to enable:
- *   skill-[name] install claude
- *   skill-[name] install codex
- *   skill-[name] uninstall claude
+ *   skills install [name] --for claude
+ *   skills install [name] --for codex
+ *   skills remove [name] --for claude
  */
 
 import { writeFileSync, mkdirSync, existsSync } from 'fs';
@@ -116,8 +116,7 @@ async function uninstallSkill(meta: SkillMeta, assistant: string): Promise<void>
 }
 
 function generateSkillMd(meta: SkillMeta): string {
-  // Extract skill type from name (e.g., "skill-audio" -> "audio")
-  const skillType = meta.name.replace('skill-', '');
+  const skillType = meta.name;
 
   // Create gerund form for description trigger (e.g., "audio" -> "generating audio")
   const gerundForms: Record<string, string> = {
@@ -164,7 +163,7 @@ ${meta.description}
 ## Quick Start
 
 \`\`\`bash
-${meta.commands}
+skills run ${skillType}
 \`\`\`
 
 ## Version
@@ -199,7 +198,7 @@ See [SKILL.md](./SKILL.md) for complete documentation.
 ## Quick Reference
 
 \`\`\`bash
-${meta.name} --help
+skills run ${meta.name} -- --help
 \`\`\`
 `;
 }

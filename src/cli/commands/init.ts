@@ -160,7 +160,7 @@ async function handleImport(file: string, options: { json: boolean; for?: string
     if (options.json) console.log(JSON.stringify({ dryRun: true, skills: skillList }));
     else {
       console.log(chalk.bold(`\n[dry-run] Would install ${skillList.length} skill(s):\n`));
-      for (let i = 0; i < skillList.length; i++) console.log(chalk.dim(`  [${i + 1}/${skillList.length}] ${skillList[i]}${options.for ? ` for ${options.for} (${options.scope})` : " to .skills/"}`));
+      for (let i = 0; i < skillList.length; i++) console.log(chalk.dim(`  [${i + 1}/${skillList.length}] ${skillList[i]}${options.for ? ` for ${options.for} (${options.scope})` : " to .skills/skills/"}`));
     }
     return;
   }
