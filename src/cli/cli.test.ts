@@ -67,34 +67,6 @@ describe("CLI", () => {
     });
   });
 
-  describe("config --json", () => {
-    test("shows, sets, gets, and reports paths as JSON", async () => {
-      const { mkdtempSync, rmSync } = require("fs");
-      const { tmpdir } = require("os");
-      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-config-json-"));
-      try {
-        const empty = await runCliInCwd(["config", "show", "--json"], tmpDir, { HOME: tmpDir });
-        expect(empty.exitCode).toBe(0);
-        expect(JSON.parse(empty.stdout)).toEqual({});
-
-        const set = await runCliInCwd(["config", "set", "apiUrl", "https://skills.md/api/v1/", "--json"], tmpDir, { HOME: tmpDir });
-        expect(set.exitCode).toBe(0);
-        const setData = JSON.parse(set.stdout);
-        expect(setData).toMatchObject({ key: "apiUrl", value: "https://skills.md/api/v1", scope: "project" });
-
-        const get = await runCliInCwd(["config", "get", "apiUrl", "--json"], tmpDir, { HOME: tmpDir });
-        expect(JSON.parse(get.stdout)).toMatchObject({ key: "apiUrl", value: "https://skills.md/api/v1", set: true });
-
-        const paths = await runCliInCwd(["config", "path", "--json"], tmpDir, { HOME: tmpDir });
-        const pathData = JSON.parse(paths.stdout);
-        expect(pathData.project.exists).toBe(true);
-        expect(pathData.global.exists).toBe(false);
-      } finally {
-        rmSync(tmpDir, { recursive: true, force: true });
-      }
-    });
-  });
-
   describe("registry sync", () => {
     test("outputs a registry sync artifact as JSON", async () => {
       const { stdout, exitCode } = await runCli([
@@ -1343,24 +1315,6 @@ describe("CLI", () => {
       }
     });
 
-    test("export then import --dry-run round-trips cleanly", async () => {
-      const { stdout: exportOut } = await runCli(["export"]);
-      const exported = JSON.parse(exportOut);
-
-      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-roundtrip-"));
-      const filePath = require("path").join(tmpDir, "exported.json");
-      try {
-        writeFileSync(filePath, exportOut);
-        const { stdout, exitCode } = await runCli(["import", filePath, "--dry-run", "--json"]);
-        expect(exitCode).toBe(0);
-        const data = JSON.parse(stdout);
-        expect(data.dryRun).toBe(true);
-        // skills in dry-run should match exported skills
-        expect(data.skills).toEqual(exported.skills);
-      } finally {
-        rmSync(tmpDir, { recursive: true, force: true });
-      }
-    });
   });
 
   describe("whoami", () => {

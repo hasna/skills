@@ -44,7 +44,7 @@ describe("registry sync artifact", () => {
       packageName: "@hasna/skills",
       packageVersion: pkg.version,
       repository: "hasna/skills",
-      directory: "skills/skill-image",
+      directory: "skills/image",
     });
     expect(image?.docs?.best).toContain("Generate");
     expect(Array.isArray(image?.requirements?.envVars)).toBe(true);
