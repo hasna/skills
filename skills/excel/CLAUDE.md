@@ -11,9 +11,9 @@ Generate Excel skill.
 ## CLI
 
 ```bash
-excel run
+skills run excel
 ```
 
 ## Data Directory
 
-~/.skill/excel/
+~/.hasna/skills/excel/

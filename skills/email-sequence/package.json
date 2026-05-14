@@ -1,0 +1,14 @@
+{
+  "name": "email-sequence",
+  "version": "0.1.0",
+  "description": "Hosted premium email sequence artifact generator",
+  "type": "module",
+  "bin": {
+    "email-sequence": "./src/index.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}

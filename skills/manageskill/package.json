@@ -4,7 +4,7 @@
   "type": "module",
   "description": "Manage Claude Code skills - list, install, remove, and configure skills",
   "bin": {
-    "manageskill": "./bin/cli.ts"
+    "manageskill": "src/index.ts"
   },
   "scripts": {
     "dev": "bun run --watch src/server/index.ts",

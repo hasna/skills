@@ -1,10 +1,7 @@
 #!/usr/bin/env bun
 import { readFile, readdir } from "fs/promises";
 import { join } from "path";
-import markdownlint from "markdownlint";
-import { promisify } from "util";
-
-const markdownlintAsync = promisify(markdownlint);
+import { lint as markdownlintAsync } from "markdownlint/async";
 
 function showHelp(): void {
   console.log(`

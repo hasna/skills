@@ -2,6 +2,19 @@
 import { LoremIpsum } from "lorem-ipsum";
 
 const args = process.argv.slice(2);
+if (args.includes("--help") || args.includes("-h")) {
+  console.log(`lorem-generator
+
+Usage:
+  lorem-generator count=<number> units=<paragraphs|sentences|words> [format=<text|html|markdown>]
+
+Options:
+  count=<number>   Number of units to generate
+  units=<units>    paragraphs, sentences, or words
+  format=<format>  text, html, or markdown`);
+  process.exit(0);
+}
+
 const countArg = args.find(a => a.startsWith("count="))?.split("=")[1] || "1";
 const unitsArg = args.find(a => a.startsWith("units="))?.split("=")[1] || "paragraphs";
 const formatArg = args.find(a => a.startsWith("format="))?.split("=")[1] || "text";

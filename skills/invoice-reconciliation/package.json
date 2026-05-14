@@ -1,0 +1,10 @@
+{
+  "name": "invoice-reconciliation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hosted premium invoice reconciliation report generator",
+  "type": "module",
+  "bin": {
+    "invoice-reconciliation": "./src/index.ts"
+  }
+}

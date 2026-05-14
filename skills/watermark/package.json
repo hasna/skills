@@ -11,7 +11,12 @@
     "build": "bun build src/index.ts --outdir dist --target node",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {},
+  "dependencies": {
+    "sharp": "^0.33.5",
+    "pdf-lib": "^1.17.1",
+    "minimist": "^1.2.8",
+    "glob": "^11.1.0"
+  },
   "devDependencies": {
     "@types/bun": "latest",
     "typescript": "^5.7.0"

@@ -9,7 +9,7 @@
     "access": "restricted"
   },
   "bin": {
-    "consolelog": "./bin/cli.ts"
+    "consolelog": "src/index.ts"
   },
   "files": [
     "bin",

@@ -1,5 +1,5 @@
 ---
-name: Budget Variance Analyzer
+name: budget-variance-analyzer
 version: 0.1.0
 description: Explain budget versus actual variances with performance insights, key drivers, and recommended actions
 author: skills.md

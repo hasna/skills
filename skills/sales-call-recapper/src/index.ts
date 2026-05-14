@@ -110,6 +110,25 @@ function parseJsonTemplate(content: string): RecapTemplate | undefined {
 }
 
 function parseOptions(): SkillOptions {
+  if (Bun.argv.includes("--help") || Bun.argv.includes("-h")) {
+    console.log(`sales-call-recapper
+
+Usage:
+  skills run sales-call-recapper -- --text <notes> [options]
+
+Options:
+  --text <notes>      Sales call notes or transcript
+  --account <name>    Account name
+  --contact <name>    Contact name
+  --stage <stage>     Deal stage
+  --tone <tone>       professional, friendly, or concise
+  --cta <text>        Call to action
+  --format <format>   markdown or json
+  --model <model>     OpenAI model
+  --output <path>     Output file path`);
+    process.exit(0);
+  }
+
   const { values, positionals } = parseArgs({
     args: Bun.argv.slice(2),
     options: {
@@ -122,6 +141,7 @@ function parseOptions(): SkillOptions {
       format: { type: "string", default: "markdown" },
       model: { type: "string", default: "gpt-4o-mini" },
       output: { type: "string" },
+      help: { type: "boolean", short: "h" },
     },
     allowPositionals: true,
   });

@@ -1,5 +1,5 @@
 ---
-name: Audio Cleanup Lab
+name: audio-cleanup-lab
 version: 0.1.0
 description: Generate professional audio cleanup recipes and mastering guidelines for noisy recordings
 author: skills.md

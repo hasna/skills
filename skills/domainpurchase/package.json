@@ -9,7 +9,7 @@
     "access": "restricted"
   },
   "bin": {
-    "domainpurchase": "./bin/cli.ts"
+    "domainpurchase": "src/index.ts"
   },
   "files": [
     "bin",

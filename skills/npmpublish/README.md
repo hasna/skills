@@ -4,7 +4,7 @@ Publish npm packages with sensible defaults:
 - **Private by default** - Sets `publishConfig.access: restricted`
 - **Patch bump by default** - Increments version by 0.0.1 (not 0.1.0)
 
-Works as both a **Claude Code** skill and **OpenAI Codex** skill.
+Use it directly as a CLI, or expose it to agents through the root Skills MCP server.
 
 ## Installation
 
@@ -16,35 +16,14 @@ bun add -g @hasnaxyz/npmpublish
 bunx @hasnaxyz/npmpublish
 ```
 
-### Claude Code Skill
+### Agent Integration
 
-Link to Claude Code skills directory:
+Do not symlink, copy, or install this skill into agent-native skill folders.
+Register the shared Skills MCP server instead:
+
 ```bash
-ln -s ~/Workspace/dev/hasnaxyz/skill/skilldev/npmpublish ~/.claude/skills/npmpublish
+skills mcp --register all
 ```
-
-Or copy the SKILL.md:
-```bash
-mkdir -p ~/.claude/skills/npmpublish
-cp SKILL.md ~/.claude/skills/npmpublish/
-```
-
-Then invoke with `/npmpublish` in Claude Code.
-
-### OpenAI Codex Skill
-
-Link to Codex skills directory:
-```bash
-ln -s ~/Workspace/dev/hasnaxyz/skill/skilldev/npmpublish ~/.codex/skills/npmpublish
-```
-
-Or for project-specific:
-```bash
-mkdir -p .codex/skills/npmpublish
-cp SKILL.md .codex/skills/npmpublish/
-```
-
-Then invoke with `/npmpublish` in Codex.
 
 ## Usage
 

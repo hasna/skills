@@ -4,7 +4,7 @@
   "type": "module",
   "description": "Lightweight CLI tool for generating employee timesheets with multi-profile support",
   "bin": {
-    "timesheet": "dist/cli.js"
+    "timesheetgenerate": "src/index.ts"
   },
   "scripts": {
     "build": "bun build ./bin/cli.ts --outdir ./dist --target bun",

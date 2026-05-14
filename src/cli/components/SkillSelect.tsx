@@ -26,7 +26,7 @@ export function SkillSelect({
     })),
     { label: "", value: "__sep__" },
     {
-      label: `\u2713 Install selected (${selected.size})`,
+      label: `\u2713 Pin selected (${selected.size})`,
       value: "__confirm__",
     },
   ];

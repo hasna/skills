@@ -1,0 +1,10 @@
+{
+  "name": "voiceover-jingle-pack",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hosted premium voiceover and jingle package generator",
+  "type": "module",
+  "bin": {
+    "voiceover-jingle-pack": "./src/index.ts"
+  }
+}

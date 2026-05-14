@@ -16,4 +16,4 @@ gmail run
 
 ## Data Directory
 
-~/.skill/gmail/
+~/.hasna/skills/gmail/

@@ -6,24 +6,24 @@ import chalk from "chalk";
 import { existsSync, readFileSync, writeFileSync, appendFileSync } from "fs";
 import { join } from "path";
 import type { Command } from "commander";
-import { getSkillRequirements, detectProjectSkills, generateSkillMd } from "../../lib/skillinfo.js";
-import { getInstalledSkills, installSkillForAgent, resolveAgents, type AgentTarget } from "../../lib/installer.js";
+import { getSkillRequirements, detectProjectSkills } from "../../lib/skillinfo.js";
+import { getInstalledSkills, resolveAgents, type AgentTarget } from "../../lib/installer.js";
 
 export function registerSetup(parent: Command) {
   // Init
   parent
     .command("init")
     .option("--json", "Output as JSON", false)
-    .option("--for <agent>", "Detect project type and install recommended skills for agent")
-    .option("--scope <scope>", "Install scope: global or project", "global")
-    .description("Initialize project for installed skills (.env.example, .gitignore)")
+    .option("--for <agent>", "Detect project type and show MCP registration guidance for agent")
+    .option("--scope <scope>", "Deprecated; agent skill-folder installs are disabled", "global")
+    .description("Initialize project for pinned skills (.env.example, .gitignore)")
     .action((options: { json: boolean; for?: string; scope: string }) => handleInit(options));
 
   // Export
   parent
     .command("export")
     .option("--json", "Output as JSON (default behavior)", false)
-    .description("Export installed skills to JSON for sharing or backup")
+    .description("Export pinned skills to JSON for sharing or backup")
     .action((_options: { json: boolean }) => handleExport());
 
   // Import
@@ -31,10 +31,10 @@ export function registerSetup(parent: Command) {
     .command("import")
     .argument("<file>", "JSON file to import (use - for stdin)")
     .option("--json", "Output results as JSON", false)
-    .option("--for <agent>", "Install for agent")
-    .option("--scope <scope>", "Install scope: global or project", "global")
-    .option("--dry-run", "Show what would be installed without actually installing", false)
-    .description("Import and install skills from a JSON export file")
+    .option("--for <agent>", "Deprecated: use skills mcp --register <agent|all>")
+    .option("--scope <scope>", "Deprecated agent install scope", "global")
+    .option("--dry-run", "Show what would be pinned without actually writing project pins", false)
+    .description("Import and pin skills from a JSON export file")
     .action(async (file: string, options) => handleImport(file, options));
 }
 
@@ -44,17 +44,21 @@ async function handleInit(options: { json: boolean; for?: string; scope: string 
   if (options.for) {
     let agents: AgentTarget[];
     try { agents = resolveAgents(options.for); }
-    catch (err) { console.error(chalk.red((err as Error).message)); process.exitCode = 1; return; }
+    catch (err) {
+      if (options.json) console.log(JSON.stringify({ error: (err as Error).message }));
+      else console.error(chalk.red((err as Error).message));
+      process.exitCode = 1; return;
+    }
 
     const { detected, recommended } = detectProjectSkills(cwd);
 
     if (options.json) {
-      const installResults = [];
-      for (const skill of recommended) for (const agent of agents) {
-        const result = installSkillForAgent(skill.name, { agent, scope: options.scope as "global" | "project" }, generateSkillMd);
-        installResults.push({ ...result, agent, scope: options.scope });
-      }
-      console.log(JSON.stringify({ detected, recommended: recommended.map((s) => s.name), installed: installResults }, null, 2));
+      console.log(JSON.stringify({
+        detected,
+        recommended: recommended.map((s) => s.name),
+        agents,
+        mcpRegister: `skills mcp --register ${options.for}`,
+      }, null, 2));
       return;
     }
 
@@ -66,19 +70,14 @@ async function handleInit(options: { json: boolean; for?: string; scope: string 
     console.log(chalk.bold(`\nRecommended skills (${recommended.length}):`));
     for (const skill of recommended) console.log(`  ${chalk.cyan(skill.name)} - ${skill.description}`);
 
-    console.log(chalk.bold(`\nInstalling recommended skills for ${options.for} (${options.scope})...\n`));
-    const installResults = [];
-    for (const skill of recommended) for (const agent of agents) {
-      const result = installSkillForAgent(skill.name, { agent, scope: options.scope as "global" | "project" }, generateSkillMd);
-      installResults.push({ ...result, agent });
-      console.log(result.success ? chalk.green(`\u2713 ${skill.name} → ${agent} (${options.scope})`) : chalk.red(`\u2717 ${skill.name} → ${agent} (${options.scope}): ${result.error}`));
-    }
-    if (installResults.some((r) => !r.success)) process.exitCode = 1;
+    console.log(chalk.bold(`\nRecommended skills are available through Skills MCP.\n`));
+    for (const agent of agents) console.log(chalk.dim(`  ${agent}: skills mcp --register ${agent}`));
+    console.log(chalk.dim(`\nUse: skills mcp --register ${options.for}`));
   }
 
   const installed = getInstalledSkills();
   if (!installed.length && !options.for) {
-    console.log(options.json ? JSON.stringify({ skills: [], envVars: 0, gitignoreUpdated: false }) : chalk.dim("No skills installed. Run: skills install <name>"));
+    console.log(options.json ? JSON.stringify({ skills: [], envVars: 0, gitignoreUpdated: false }) : chalk.dim("No pinned skills. Run: skills pin <name>"));
     return;
   }
   if (!installed.length) return;
@@ -94,7 +93,7 @@ async function handleInit(options: { json: boolean; for?: string; scope: string 
 
   let envVarCount = 0;
   if (envMap.size > 0) {
-    const lines = ["# Environment variables for installed skills", "# Auto-generated by: skills init", ""];
+    const lines = ["# Environment variables for pinned skills", "# Auto-generated by: skills init", ""];
     const sorted = Array.from(envMap.entries()).sort(([a], [b]) => a.localeCompare(b));
     let lastPrefix = "";
     for (const [envVar, skills] of sorted) {
@@ -106,18 +105,19 @@ async function handleInit(options: { json: boolean; for?: string; scope: string 
     writeFileSync(join(cwd, ".env.example"), lines.join("\n") + "\n");
     envVarCount = envMap.size;
     if (!options.json) console.log(chalk.green(`\u2713 Generated .env.example (${envVarCount} variables from ${installed.length} skills)`));
-  } else if (!options.json) console.log(chalk.dim("  No environment variables detected across installed skills"));
+  } else if (!options.json) console.log(chalk.dim("  No environment variables detected across pinned skills"));
 
   const gitignorePath = join(cwd, ".gitignore");
-  const gitignoreEntry = ".skills/";
+  const gitignoreEntries = [".skills/runs/", ".skills/exports/", ".skills/tmp/"];
   let gitignoreContent = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf-8") : "";
   let gitignoreUpdated = false;
-  if (!gitignoreContent.includes(gitignoreEntry)) {
-    const addition = gitignoreContent.endsWith("\n") || gitignoreContent === "" ? `\n# Installed skills\n${gitignoreEntry}\n` : `\n\n# Installed skills\n${gitignoreEntry}\n`;
+  const missingEntries = gitignoreEntries.filter((entry) => !gitignoreContent.includes(entry));
+  if (missingEntries.length > 0) {
+    const addition = `${gitignoreContent.endsWith("\n") || gitignoreContent === "" ? "\n" : "\n\n"}# Skills runtime outputs\n${missingEntries.join("\n")}\n`;
     appendFileSync(gitignorePath, addition);
     gitignoreUpdated = true;
-    if (!options.json) console.log(chalk.green(`\u2713 Added .skills/ to .gitignore`));
-  } else if (!options.json) console.log(chalk.dim("  .skills/ already in .gitignore"));
+    if (!options.json) console.log(chalk.green(`\u2713 Added Skills runtime outputs to .gitignore`));
+  } else if (!options.json) console.log(chalk.dim("  Skills runtime outputs already in .gitignore"));
 
   if (!options.for) {
     if (options.json) console.log(JSON.stringify({ skills: installed, envVars: envVarCount, gitignoreUpdated }, null, 2));
@@ -129,7 +129,7 @@ async function handleInit(options: { json: boolean; for?: string; scope: string 
           if (reqs?.envVars.length) console.log(`  ${chalk.cyan(name)}: ${reqs.envVars.join(", ")}`);
         }
       }
-      console.log(chalk.bold(`\nInitialized for ${installed.length} installed skill(s)`));
+      console.log(chalk.bold(`\nInitialized for ${installed.length} pinned skill(s)`));
     }
   }
 }
@@ -144,14 +144,34 @@ async function handleImport(file: string, options: { json: boolean; for?: string
   try {
     if (file === "-") raw = await new Response(process.stdin as unknown as ReadableStream).text();
     else {
-      if (!existsSync(file)) { console.error(chalk.red(`File not found: ${file}`)); process.exitCode = 1; return; }
+      if (!existsSync(file)) {
+        const error = `File not found: ${file}`;
+        if (options.json) console.log(JSON.stringify({ imported: 0, error }));
+        else console.error(chalk.red(error));
+        process.exitCode = 1; return;
+      }
       raw = readFileSync(file, "utf-8");
     }
-  } catch (err) { console.error(chalk.red(`Failed to read file: ${(err as Error).message}`)); process.exitCode = 1; return; }
+  } catch (err) {
+    const error = `Failed to read file: ${(err as Error).message}`;
+    if (options.json) console.log(JSON.stringify({ imported: 0, error }));
+    else console.error(chalk.red(error));
+    process.exitCode = 1; return;
+  }
 
   let payload: { version: number; skills: string[]; timestamp?: string };
-  try { payload = JSON.parse(raw); } catch { console.error(chalk.red("Invalid JSON in import file")); process.exitCode = 1; return; }
-  if (!payload || typeof payload !== "object" || !Array.isArray(payload.skills)) { console.error(chalk.red('Invalid format: expected { "version": 1, "skills": [...] }')); process.exitCode = 1; return; }
+  try { payload = JSON.parse(raw); } catch {
+    const error = "Invalid JSON in import file";
+    if (options.json) console.log(JSON.stringify({ imported: 0, error }));
+    else console.error(chalk.red(error));
+    process.exitCode = 1; return;
+  }
+  if (!payload || typeof payload !== "object" || !Array.isArray(payload.skills)) {
+    const error = 'Invalid format: expected { "version": 1, "skills": [...] }';
+    if (options.json) console.log(JSON.stringify({ imported: 0, error }));
+    else console.error(chalk.red(error));
+    process.exitCode = 1; return;
+  }
 
   const skillList = payload.skills;
   if (!skillList.length) { console.log(options.json ? JSON.stringify({ imported: 0, results: [] }) : chalk.dim("No skills to import")); return; }
@@ -159,8 +179,8 @@ async function handleImport(file: string, options: { json: boolean; for?: string
   if (options.dryRun) {
     if (options.json) console.log(JSON.stringify({ dryRun: true, skills: skillList }));
     else {
-      console.log(chalk.bold(`\n[dry-run] Would install ${skillList.length} skill(s):\n`));
-      for (let i = 0; i < skillList.length; i++) console.log(chalk.dim(`  [${i + 1}/${skillList.length}] ${skillList[i]}${options.for ? ` for ${options.for} (${options.scope})` : " to .skills/skills/"}`));
+      console.log(chalk.bold(`\n[dry-run] Would pin ${skillList.length} skill(s):\n`));
+      for (let i = 0; i < skillList.length; i++) console.log(chalk.dim(`  [${i + 1}/${skillList.length}] ${skillList[i]}${options.for ? ` via MCP for ${options.for}` : " in .skills/project.json"}`));
     }
     return;
   }
@@ -169,12 +189,15 @@ async function handleImport(file: string, options: { json: boolean; for?: string
   if (options.for) {
     let agents: AgentTarget[];
     try { agents = resolveAgents(options.for); }
-    catch (err) { console.error(chalk.red((err as Error).message)); process.exitCode = 1; return; }
+    catch (err) {
+      if (options.json) console.log(JSON.stringify({ imported: 0, total: skillList.length, error: (err as Error).message }));
+      else console.error(chalk.red((err as Error).message));
+      process.exitCode = 1; return;
+    }
     for (let i = 0; i < skillList.length; i++) {
       const name = skillList[i];
-      const agentResults = agents.map(agent => installSkillForAgent(name, { agent, scope: options.scope as "global" | "project" }, generateSkillMd));
-      results.push({ skill: name, success: agentResults.every((r) => r.success), agentResults });
-      if (!options.json) process.stdout.write(`[${i + 1}/${skillList.length}] Installing ${name}...${agentResults.every((r) => r.success) ? " done" : " failed"}\n`);
+      results.push({ skill: name, success: true, agents, mcpRegister: `skills mcp --register ${options.for}` });
+      if (!options.json) process.stdout.write(`[${i + 1}/${skillList.length}] ${name}: available through Skills MCP\n`);
     }
   } else {
     const { installSkill } = await import("../../lib/installer.js");
@@ -182,14 +205,14 @@ async function handleImport(file: string, options: { json: boolean; for?: string
       const name = skillList[i];
       const result = installSkill(name);
       results.push(result);
-      if (!options.json) process.stdout.write(`[${i + 1}/${skillList.length}] Installing ${name}...${result.success ? " done" : " failed"}\n`);
+      if (!options.json) process.stdout.write(`[${i + 1}/${skillList.length}] Pinning ${name}...${result.success ? " done" : " failed"}\n`);
     }
   }
 
   if (options.json) console.log(JSON.stringify({ imported: results.filter((r) => r.success).length, total: skillList.length, results }));
   else {
     const succeeded = results.filter((r) => r.success).length;
-    console.log(chalk.bold(`\nImported ${succeeded}/${skillList.length} skill(s)${skillList.length - succeeded > 0 ? ` (${skillList.length - succeeded} failed)` : ""}`));
+    console.log(chalk.bold(`\nImported ${succeeded}/${skillList.length} pin(s)${skillList.length - succeeded > 0 ? ` (${skillList.length - succeeded} failed)` : ""}`));
   }
   if (results.some((r) => !r.success)) process.exitCode = 1;
 }

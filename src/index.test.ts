@@ -29,7 +29,7 @@ describe("public API exports", () => {
 
   test("AGENT_TARGETS array is populated", () => {
     expect(Array.isArray(publicAPI.AGENT_TARGETS)).toBe(true);
-    expect(publicAPI.AGENT_TARGETS.length).toBe(5);
+    expect(publicAPI.AGENT_TARGETS.length).toBe(7);
   });
 
   test("getSkill is a function", () => {
@@ -112,6 +112,14 @@ describe("public API exports", () => {
 
   test("generateSkillMd is a function", () => {
     expect(typeof publicAPI.generateSkillMd).toBe("function");
+  });
+
+  test("MCP contract helpers are exported", () => {
+    expect(typeof publicAPI.createMcpContractManifest).toBe("function");
+    expect(typeof publicAPI.createSkillMcpMetadata).toBe("function");
+    expect(typeof publicAPI.describeMcpToolContracts).toBe("function");
+    expect(typeof publicAPI.listMcpToolContracts).toBe("function");
+    expect(typeof publicAPI.getMcpResourceContracts).toBe("function");
   });
 
   test("key functions return expected results", () => {

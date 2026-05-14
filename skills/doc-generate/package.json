@@ -14,7 +14,6 @@
   "dependencies": {
     "docx": "^9.5.1",
     "marked": "^15.0.4",
-    "minimist": "^1.2.8",
     "openai": "^4.77.0"
   },
   "publishConfig": {

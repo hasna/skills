@@ -292,6 +292,19 @@ function generateTestFile(parsed: ParsedInput, tests: TestCase[], options: Optio
  */
 async function main() {
   try {
+    if (process.argv.includes("--help") || process.argv.includes("-h")) {
+      console.log(`api-test-suite
+
+Usage:
+  skills run api-test-suite -- "POST /api/users with name, email" [options]
+
+Options:
+  --format <framework>          Test framework output, default vitest
+  --include-auth=false          Disable auth test generation
+  --include-rate-limit          Include rate limit tests`);
+      return;
+    }
+
     const input = process.env.SKILLS_INPUT || "";
     const outputDir = process.env.SKILLS_OUTPUT_DIR || process.cwd();
     const exportsDir = process.env.SKILLS_EXPORTS_DIR || join(outputDir, "exports");

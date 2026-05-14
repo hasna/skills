@@ -2,11 +2,12 @@
  * Skill info - reads docs, requirements, and metadata from skill source
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { join } from "path";
-import { getSkillPath } from "./installer.js";
+import { getInstalledSkills, getSkillPath } from "./installer.js";
 import { getSkill, loadRegistry, type SkillMeta } from "./registry.js";
 import { normalizeSkillName } from "./utils.js";
+import { isPremiumSkill } from "../platform/skills/pricing.js";
 
 export interface SkillDocs {
   skillMd: string | null;
@@ -20,6 +21,24 @@ export interface SkillRequirements {
   cliCommand: string | null;
   dependencies: Record<string, string>;
 }
+
+const HOSTED_PROVIDER_ENV_PREFIXES = [
+  "OPENAI_",
+  "ANTHROPIC_",
+  "GEMINI_",
+  "GOOGLE_",
+  "XAI_",
+  "MINIMAX_",
+  "ELEVENLABS_",
+  "DEEPGRAM_",
+  "REPLICATE_",
+  "FAL_",
+  "STABILITY_",
+  "EXA_",
+  "FIRECRAWL_",
+  "AWS_",
+  "STRIPE_",
+];
 
 /**
  * Read documentation files from a skill
@@ -58,9 +77,19 @@ export function getSkillRequirements(name: string): SkillRequirements | null {
     if (content) texts.push(content);
   }
   const allText = texts.join("\n");
+  const meta = getSkill(name);
+  const canonicalName = meta?.name ?? normalizeSkillName(name);
 
   // Extract env vars
   const envVars = extractEnvVars(allText);
+  if (isHostedPremiumSkill(canonicalName, meta)) {
+    for (const envVar of Array.from(envVars)) {
+      if (HOSTED_PROVIDER_ENV_PREFIXES.some((prefix) => envVar.startsWith(prefix))) {
+        envVars.delete(envVar);
+      }
+    }
+    envVars.add("SKILL_API_KEY");
+  }
 
   // Extract system deps
   const systemDeps = new Set<string>();
@@ -103,29 +132,22 @@ export function getSkillRequirements(name: string): SkillRequirements | null {
   };
 }
 
+function isHostedPremiumSkill(skillName: string, meta?: SkillMeta): boolean {
+  return isPremiumSkill(skillName) || Boolean(meta?.tags.includes("premium") || meta?.tags.includes("remote"));
+}
+
 /**
  * Run a skill by name with given arguments
  */
 export async function runSkill(
   name: string,
   args: string[],
-  options: { installed?: boolean } = {}
-): Promise<{ exitCode: number; error?: string }> {
-  // Look in .skills/skills/ first (installed), then fall back to package skills/
-  const skillName = normalizeSkillName(name);
-  let skillPath: string;
-
-  if (options.installed) {
-    skillPath = join(process.cwd(), ".skills", "skills", skillName);
-  } else {
-    // Check installed first
-    const installedPath = join(process.cwd(), ".skills", "skills", skillName);
-    if (existsSync(installedPath)) {
-      skillPath = installedPath;
-    } else {
-      skillPath = getSkillPath(name);
-    }
-  }
+  options: { installed?: boolean; stdio?: "inherit" | "pipe"; env?: Record<string, string> } = {}
+): Promise<{ exitCode: number; error?: string; stdout?: string; stderr?: string }> {
+  // Skills execute from the bundled package source. Project `.skills/` is only
+  // for pins, run metadata, logs, and exports; it is never a source directory.
+  const canonicalName = getSkill(name)?.name ?? name;
+  const skillPath = getSkillPath(canonicalName);
 
   if (!existsSync(skillPath)) {
     return { exitCode: 1, error: `Skill '${name}' not found` };
@@ -174,10 +196,20 @@ export async function runSkill(
   // Run the skill
   const proc = Bun.spawn(["bun", "run", entryPath, ...args], {
     cwd: skillPath,
-    stdout: "inherit",
-    stderr: "inherit",
+    stdout: options.stdio === "pipe" ? "pipe" : "inherit",
+    stderr: options.stdio === "pipe" ? "pipe" : "inherit",
     stdin: "inherit",
+    env: { ...process.env, ...options.env },
   });
+
+  if (options.stdio === "pipe") {
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { exitCode, stdout, stderr };
+  }
 
   const exitCode = await proc.exited;
   return { exitCode };
@@ -311,37 +343,18 @@ export function detectProjectSkills(cwd: string = process.cwd()): DetectedProjec
 }
 
 /**
- * Generate a .env.example from installed skills
+ * Generate a .env.example from pinned skills
  */
 export function generateEnvExample(targetDir: string = process.cwd()): string {
-  const skillsDir = join(targetDir, ".skills", "skills");
-  if (!existsSync(skillsDir)) return "";
-
-  const dirs = readdirSync(skillsDir).filter((f) => {
-    const fullPath = join(skillsDir, f);
-    return (
-      f !== "_common" &&
-      !f.startsWith(".") &&
-      statSync(fullPath).isDirectory() &&
-      existsSync(join(fullPath, "package.json"))
-    );
-  });
+  const dirs = getInstalledSkills(targetDir);
+  if (!dirs.length) return "";
 
   const envMap = new Map<string, string[]>();
 
   for (const dir of dirs) {
-    const skillName = dir;
-    const skillPath = join(skillsDir, dir);
-
-    const texts: string[] = [];
-    for (const file of ["SKILL.md", "README.md", "CLAUDE.md", ".env.example"]) {
-      const content = readIfExists(join(skillPath, file));
-      if (content) texts.push(content);
-    }
-    const allText = texts.join("\n");
-
-    const foundVars = extractEnvVars(allText);
-    for (const envVar of foundVars) {
+    const skillName = normalizeSkillName(dir);
+    const reqs = getSkillRequirements(skillName);
+    for (const envVar of reqs?.envVars ?? []) {
       if (!envMap.has(envVar)) {
         envMap.set(envVar, []);
       }
@@ -354,7 +367,7 @@ export function generateEnvExample(targetDir: string = process.cwd()): string {
   if (envMap.size === 0) return "";
 
   const lines = [
-    "# Environment variables for installed skills",
+    "# Environment variables for pinned skills",
     "# Auto-generated by: skills init",
     "",
   ];

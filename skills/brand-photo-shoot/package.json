@@ -1,0 +1,10 @@
+{
+  "name": "brand-photo-shoot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hosted premium brand photo shoot package generator",
+  "type": "module",
+  "bin": {
+    "brand-photo-shoot": "./src/index.ts"
+  }
+}

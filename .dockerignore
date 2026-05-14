@@ -1,0 +1,12 @@
+.git
+.github
+.skills
+bin
+dashboard/dist
+dist
+exports
+logs
+node_modules
+dashboard/node_modules
+*.log
+.DS_Store

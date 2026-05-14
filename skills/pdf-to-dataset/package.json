@@ -1,0 +1,10 @@
+{
+  "name": "pdf-to-dataset",
+  "version": "0.1.0",
+  "description": "Extract PDF tables and forms into CSV and JSON datasets through the hosted Skills runtime",
+  "type": "module",
+  "bin": {
+    "pdf-to-dataset": "src/index.ts"
+  },
+  "dependencies": {}
+}

@@ -4,7 +4,8 @@
   "description": "Web crawling service using Firecrawl API",
   "type": "module",
   "bin": {
-    "webcrawling": "./bin/cli.ts"
+    "webcrawling": "src/index.ts",
+    "webcrawl": "src/index.ts"
   },
   "scripts": {
     "dev": "bun run bin/cli.ts",

@@ -1,0 +1,9 @@
+{
+  "name": "api-docs-portal",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "api-docs-portal": "src/index.ts"
+  }
+}

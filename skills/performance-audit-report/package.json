@@ -1,0 +1,10 @@
+{
+  "name": "performance-audit-report",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hosted premium performance audit report generator",
+  "type": "module",
+  "bin": {
+    "performance-audit-report": "./src/index.ts"
+  }
+}

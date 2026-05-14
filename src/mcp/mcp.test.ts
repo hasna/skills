@@ -15,12 +15,12 @@ class McpClient {
   private messages: any[] = [];
   private reader: ReadableStreamDefaultReader<Uint8Array>;
 
-  constructor() {
+  constructor(env: Record<string, string> = {}) {
     this.proc = Bun.spawn(["bun", "run", MCP_PATH], {
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, NO_COLOR: "1" },
+      env: { ...process.env, ...env, NO_COLOR: "1" },
     });
     this.reader = (this.proc.stdout as ReadableStream<Uint8Array>).getReader();
     this._readLoop();
@@ -112,12 +112,190 @@ describe("MCP Server", () => {
       expect(toolNames).toContain("search_skills");
       expect(toolNames).toContain("get_skill_info");
       expect(toolNames).toContain("get_skill_docs");
-      expect(toolNames).toContain("install_skill");
-      expect(toolNames).toContain("remove_skill");
+      expect(toolNames).toContain("pin_skill");
+      expect(toolNames).toContain("unpin_skill");
       expect(toolNames).toContain("list_categories");
       expect(toolNames).toContain("get_requirements");
+      expect(toolNames).toContain("quote_skill");
+      expect(toolNames).toContain("run_skill");
+      expect(toolNames).toContain("get_run_status");
+      expect(toolNames).toContain("get_mcp_contracts");
     } finally {
       await client.close();
+    }
+  }, 15000);
+
+  test("quote_skill validates create-blog-article options", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const validResponse = await client.request("tools/call", {
+        name: "quote_skill",
+        arguments: {
+          name: "create-blog-article",
+          input: {
+            topic: "SaaS onboarding",
+            count: 8,
+            audience: "founders",
+            tone: "technical",
+            length: "long",
+            seo: true,
+            outline: "Problem, workflow, rollout",
+          },
+        },
+      }, 80);
+      expect(validResponse).not.toBeNull();
+      const valid = JSON.parse(validResponse.result.content[0].text);
+      expect(valid).toMatchObject({
+        skill: "blog-article",
+        pricing: {
+          billingUnit: "article",
+          unitCount: 8,
+          costCents: 200,
+          formattedCost: "$2.00 total",
+        },
+      });
+
+      const invalidResponse = await client.request("tools/call", {
+        name: "quote_skill",
+        arguments: {
+          name: "create-blog-article",
+          input: { topic: "SaaS onboarding", count: 13 },
+        },
+      }, 81);
+      expect(invalidResponse).not.toBeNull();
+      expect(invalidResponse.result.isError).toBe(true);
+      const invalid = JSON.parse(invalidResponse.result.content[0].text);
+      expect(invalid).toMatchObject({
+        code: "INVALID_BLOG_ARTICLE_OPTIONS",
+        message: "Count must be an integer between 1 and 12.",
+      });
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("run_skill rejects unauthenticated premium skills without local fallback", async () => {
+    const { mkdtempSync, rmSync } = require("fs");
+    const { tmpdir } = require("os");
+    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-premium-no-auth-"));
+    const client = new McpClient({
+      HOME: tmpDir,
+      SKILLS_API_KEY: "",
+      SKILLS_TEST_MODE: "1",
+    });
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "run_skill",
+        arguments: {
+          name: "image",
+          args: ["--help"],
+        },
+      }, 82);
+      expect(response).not.toBeNull();
+      expect(response.result.isError).toBe(true);
+      const error = JSON.parse(response.result.content[0].text);
+      expect(error).toMatchObject({ code: "AUTH_REQUIRED" });
+      expect(error.message).toContain("skills auth login");
+      expect(error.message).not.toContain("Skill Image CLI");
+    } finally {
+      await client.close();
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  test("run_skill fails closed for premium skills when platform access fails", async () => {
+    const { mkdtempSync, rmSync } = require("fs");
+    const { tmpdir } = require("os");
+    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-premium-platform-down-"));
+    const client = new McpClient({
+      HOME: tmpDir,
+      SKILLS_API_KEY: "sk_test_platform_down",
+      SKILLS_API_URL: "http://127.0.0.1:1",
+      SKILLS_TEST_MODE: "1",
+    });
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "run_skill",
+        arguments: {
+          name: "image",
+          args: ["--help"],
+        },
+      }, 83);
+      expect(response).not.toBeNull();
+      expect(response.result.isError).toBe(true);
+      const error = JSON.parse(response.result.content[0].text);
+      expect(error).toMatchObject({ code: "PLATFORM_ERROR" });
+      expect(error.message).toContain("requires platform access");
+      expect(error.message).not.toContain("Skill Image CLI");
+    } finally {
+      await client.close();
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  test("run_skill returns normalized remote run contract for premium submissions", async () => {
+    const { mkdtempSync, rmSync } = require("fs");
+    const { tmpdir } = require("os");
+    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-premium-contract-"));
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        expect(req.headers.get("authorization")).toBe("Bearer sk_test_contract");
+        if (url.pathname === "/api/v1/runs/logo-design" && req.method === "POST") {
+          return Response.json({
+            id: "run_mcp_contract",
+            skill: "logo-design",
+            status: "queued",
+            correlationId: "corr_mcp_contract",
+          }, { status: 202 });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const client = new McpClient({
+      HOME: tmpDir,
+      SKILLS_API_KEY: "sk_test_contract",
+      SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+      SKILLS_TEST_MODE: "1",
+    });
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "run_skill",
+        arguments: {
+          name: "logo-design",
+          args: ["make a mark"],
+        },
+      }, 84);
+      expect(response).not.toBeNull();
+      const payload = JSON.parse(response.result.content[0].text);
+      expect(payload).toMatchObject({
+        contractVersion: 1,
+        id: "run_mcp_contract",
+        skill: "logo-design",
+        status: "queued",
+        correlationId: "corr_mcp_contract",
+        remote: true,
+        remoteRun: {
+          contractVersion: 1,
+          id: "run_mcp_contract",
+          skill: "logo-design",
+          status: "queued",
+        },
+        nextActions: {
+          poll: "skills runs status run_mcp_contract",
+          download: "skills exports download run_mcp_contract",
+        },
+      });
+      expect(payload.run.remoteRunId).toBe("run_mcp_contract");
+    } finally {
+      await client.close();
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
     }
   }, 15000);
 
@@ -133,6 +311,7 @@ describe("MCP Server", () => {
 
       const uris = resources.map((r: any) => r.uri);
       expect(uris).toContain("skills://registry");
+      expect(uris).toContain("skills://mcp/contracts");
     } finally {
       await client.close();
     }
@@ -192,6 +371,21 @@ describe("MCP Server", () => {
       expect(info.name).toBe("image");
       expect(info.displayName).toBeDefined();
       expect(info.category).toBeDefined();
+      expect(info.pricing).toMatchObject({
+        tier: "premium",
+        quoteDependsOnInput: true,
+      });
+      expect(info.envVars).toContain("SKILL_API_KEY");
+      expect(info.envVars).not.toContain("OPENAI_API_KEY");
+      expect(info.mcp.schemas.run.inputSchema.properties.name).toMatchObject({
+        const: "image",
+      });
+      expect(info.mcp.schemas.install.inputSchema.properties.name).toMatchObject({
+        const: "image",
+      });
+      expect(JSON.stringify(info).toLowerCase()).not.toContain("openai");
+      expect(JSON.stringify(info).toLowerCase()).not.toContain("gemini");
+      expect(JSON.stringify(info).toLowerCase()).not.toContain("minimax");
     } finally {
       await client.close();
     }
@@ -257,7 +451,8 @@ describe("MCP Server", () => {
       expect(response.result).toBeDefined();
       const reqs = JSON.parse(response.result.content[0].text);
       expect(Array.isArray(reqs.envVars)).toBe(true);
-      expect(reqs.envVars).toContain("OPENAI_API_KEY");
+      expect(reqs.envVars).toContain("SKILL_API_KEY");
+      expect(reqs.envVars).not.toContain("OPENAI_API_KEY");
       expect(reqs.cliCommand).toBe("skills run image");
     } finally {
       await client.close();
@@ -292,6 +487,7 @@ describe("MCP Server", () => {
       expect(Array.isArray(skills)).toBe(true);
       expect(skills.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
       expect(skills.map((s: any) => s.name)).not.toContain("deepresearch");
+      expect(skills[0].pricing).toHaveProperty("formattedCost");
     } finally {
       await client.close();
     }
@@ -310,6 +506,11 @@ describe("MCP Server", () => {
       expect(Array.isArray(skills)).toBe(true);
       expect(skills.length).toBe(EXPECTED_ALL_SKILL_COUNT);
       expect(skills.map((s: any) => s.name)).toContain("deepresearch");
+      const deepresearch = skills.find((s: any) => s.name === "deepresearch");
+      expect(deepresearch.pricing).toMatchObject({
+        tier: "premium",
+        formattedCost: "$0.20/run",
+      });
     } finally {
       await client.close();
     }
@@ -335,12 +536,12 @@ describe("MCP Server", () => {
     }
   }, 15000);
 
-  test("calls install_skill tool for nonexistent skill", async () => {
+  test("calls pin_skill tool for nonexistent skill", async () => {
     const client = new McpClient();
     try {
       await client.initialize();
       const response = await client.request("tools/call", {
-        name: "install_skill",
+        name: "pin_skill",
         arguments: { name: "nonexistent-xyz-999" },
       }, 16);
       expect(response).not.toBeNull();
@@ -350,12 +551,12 @@ describe("MCP Server", () => {
     }
   }, 15000);
 
-  test("calls remove_skill tool for non-installed skill", async () => {
+  test("calls unpin_skill tool for non-pinned skill", async () => {
     const client = new McpClient();
     try {
       await client.initialize();
       const response = await client.request("tools/call", {
-        name: "remove_skill",
+        name: "unpin_skill",
         arguments: { name: "nonexistent-xyz-999" },
       }, 17);
       expect(response).not.toBeNull();
@@ -402,24 +603,24 @@ describe("MCP Server", () => {
     }
   }, 15000);
 
-  test("install_category is included in tools list", async () => {
+  test("pin_category is included in tools list", async () => {
     const client = new McpClient();
     try {
       await client.initialize();
       const response = await client.request("tools/list");
       const toolNames = response.result.tools.map((t: any) => t.name);
-      expect(toolNames).toContain("install_category");
+      expect(toolNames).toContain("pin_category");
     } finally {
       await client.close();
     }
   }, 15000);
 
-  test("install_category returns error for unknown category", async () => {
+  test("pin_category returns error for unknown category", async () => {
     const client = new McpClient();
     try {
       await client.initialize();
       const response = await client.request("tools/call", {
-        name: "install_category",
+        name: "pin_category",
         arguments: { category: "Fake Category" },
       }, 30);
       expect(response).not.toBeNull();
@@ -430,12 +631,12 @@ describe("MCP Server", () => {
     }
   }, 15000);
 
-  test("install_category installs all skills in a category", async () => {
+  test("pin_category pins all skills in a category", async () => {
     const client = new McpClient();
     try {
       await client.initialize();
       const response = await client.request("tools/call", {
-        name: "install_category",
+        name: "pin_category",
         arguments: { category: "Event Management" },
       }, 31);
       expect(response).not.toBeNull();
@@ -463,6 +664,74 @@ describe("MCP Server", () => {
       expect(Array.isArray(skills)).toBe(true);
       expect(skills.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
       expect(skills.map((s: any) => s.name)).not.toContain("deepresearch");
+      expect(skills[0].pricing).toHaveProperty("formattedCost");
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("reads skills://mcp/contracts resource", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("resources/read", {
+        uri: "skills://mcp/contracts",
+      }, 82);
+      expect(response).not.toBeNull();
+      expect(response.result).toBeDefined();
+      const manifest = JSON.parse(response.result.contents[0].text);
+      expect(manifest.schemaVersion).toBe(1);
+      expect(manifest.tools.map((tool: any) => tool.name)).toContain("run_skill");
+      const runSkill = manifest.tools.find((tool: any) => tool.name === "run_skill");
+      expect(runSkill.inputSchema.properties).toHaveProperty("args");
+      expect(manifest.resources.map((resource: any) => resource.uri)).toContain("skills://{name}");
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("reads public skill resource with pricing and sanitized premium metadata", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("resources/read", {
+        uri: "skills://image",
+      }, 33);
+      expect(response).not.toBeNull();
+      expect(response.result).toBeDefined();
+      const info = JSON.parse(response.result.contents[0].text);
+      expect(info.name).toBe("image");
+      expect(info.pricing).toMatchObject({
+        tier: "premium",
+        quoteDependsOnInput: true,
+      });
+      expect(info.documentation).toContain("SKILL_API_KEY");
+      expect(info.requirements.envVars).toContain("SKILL_API_KEY");
+      expect(info.requirements.envVars).not.toContain("OPENAI_API_KEY");
+      expect(info.mcp).toMatchObject({
+        schemaVersion: 1,
+        name: "image",
+        schemas: {
+          install: {
+            inputSchema: {
+              properties: {
+                name: { const: "image" },
+              },
+            },
+          },
+          run: {
+            inputSchema: {
+              properties: {
+                name: { const: "image" },
+                args: { type: "array" },
+              },
+            },
+          },
+        },
+      });
+      expect(JSON.stringify(info).toLowerCase()).not.toContain("openai");
+      expect(JSON.stringify(info).toLowerCase()).not.toContain("gemini");
+      expect(JSON.stringify(info).toLowerCase()).not.toContain("minimax");
     } finally {
       await client.close();
     }
@@ -562,6 +831,139 @@ describe("MCP Server", () => {
       }, 43);
       expect(response).not.toBeNull();
       expect(response.result.isError).toBe(true);
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("validate_skill uses structured validation result", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const validResponse = await client.request("tools/call", {
+        name: "validate_skill",
+        arguments: { name: "image" },
+      }, 44);
+      expect(validResponse).not.toBeNull();
+      const validResult = JSON.parse(validResponse.result.content[0].text);
+      expect(validResult.valid).toBe(true);
+      expect(validResult.metadata.binCommands).toContain("image");
+
+      const missingResponse = await client.request("tools/call", {
+        name: "validate_skill",
+        arguments: { name: "not-a-skill" },
+      }, 45);
+      expect(missingResponse).not.toBeNull();
+      expect(missingResponse.result.isError).toBe(true);
+      const missingResult = JSON.parse(missingResponse.result.content[0].text);
+      expect(missingResult.valid).toBe(false);
+      expect(missingResult.issues[0].code).toBe("skill.dir_missing");
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("meta tools return structured tool contracts", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const searchResponse = await client.request("tools/call", {
+        name: "search_tools",
+        arguments: { query: "skill" },
+      }, 46);
+      expect(searchResponse).not.toBeNull();
+      const searchResult = JSON.parse(searchResponse.result.content[0].text);
+      expect(searchResult.schemaVersion).toBe(1);
+      expect(searchResult.tools).toContain("validate_skill");
+      expect(searchResult.tools).toContain("quote_skill");
+      expect(searchResult.tools).toContain("run_skill");
+
+      const detailedSearchResponse = await client.request("tools/call", {
+        name: "search_tools",
+        arguments: { query: "run", detail: true },
+      }, 83);
+      expect(detailedSearchResponse).not.toBeNull();
+      const detailedSearchResult = JSON.parse(detailedSearchResponse.result.content[0].text);
+      const runSummary = detailedSearchResult.tools.find((tool: any) => tool.name === "run_skill");
+      expect(runSummary).toMatchObject({
+        category: "execution",
+        sideEffects: "local-process-or-remote-run",
+      });
+
+      const describeResponse = await client.request("tools/call", {
+        name: "describe_tools",
+        arguments: { names: ["validate_skill", "send_feedback", "get_run_status"] },
+      }, 47);
+      expect(describeResponse).not.toBeNull();
+      const describeResult = JSON.parse(describeResponse.result.content[0].text);
+      expect(describeResult.schemaVersion).toBe(1);
+      expect(describeResult.tools[0]).toMatchObject({
+        name: "validate_skill",
+        known: true,
+        description: "Validate a skill directory using the shared skill validator.",
+        params: ["name"],
+        inputSchema: {
+          type: "object",
+          required: ["name"],
+        },
+      });
+      expect(describeResult.tools[1].params).toContain("category?");
+      expect(describeResult.tools[2]).toMatchObject({
+        name: "get_run_status",
+        known: true,
+        description: "Fetch remote run status and next actions.",
+        params: ["run_id"],
+      });
+
+      const contractsResponse = await client.request("tools/call", {
+        name: "get_mcp_contracts",
+        arguments: { names: ["pin_skill", "run_skill"], includeResources: true },
+      }, 84);
+      expect(contractsResponse).not.toBeNull();
+      const contractsResult = JSON.parse(contractsResponse.result.content[0].text);
+      expect(contractsResult.schemaVersion).toBe(1);
+      expect(contractsResult.tools.map((tool: any) => tool.name)).toEqual(["pin_skill", "run_skill"]);
+      expect(contractsResult.resources.map((resource: any) => resource.uri)).toContain("skills://mcp/contracts");
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("agent registration tools return JSON contracts", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const registerResponse = await client.request("tools/call", {
+        name: "register_agent",
+        arguments: { name: "McpTestAgent", session_id: "test-session" },
+      }, 48);
+      expect(registerResponse).not.toBeNull();
+      const agent = JSON.parse(registerResponse.result.content[0].text);
+      expect(agent.name).toBe("McpTestAgent");
+      expect(agent.registered).toBe(true);
+      expect(typeof agent.id).toBe("string");
+
+      const heartbeatResponse = await client.request("tools/call", {
+        name: "heartbeat",
+        arguments: { agent_id: agent.id },
+      }, 49);
+      const heartbeat = JSON.parse(heartbeatResponse.result.content[0].text);
+      expect(heartbeat).toMatchObject({ agent_id: agent.id, name: "McpTestAgent", active: true });
+
+      const focusResponse = await client.request("tools/call", {
+        name: "set_focus",
+        arguments: { agent_id: agent.id, project_id: "platform-skills" },
+      }, 50);
+      const focus = JSON.parse(focusResponse.result.content[0].text);
+      expect(focus).toEqual({ agent_id: agent.id, project_id: "platform-skills" });
+
+      const listResponse = await client.request("tools/call", {
+        name: "list_agents",
+        arguments: {},
+      }, 51);
+      const list = JSON.parse(listResponse.result.content[0].text);
+      expect(list.total).toBe(1);
+      expect(list.agents[0].name).toBe("McpTestAgent");
     } finally {
       await client.close();
     }

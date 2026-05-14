@@ -65,20 +65,24 @@ export function registerSchedule(parent: Command) {
   scheduleCmd
     .command("enable")
     .argument("<id-or-name>", "Schedule ID or name")
+    .option("--json", "Output as JSON", false)
     .description("Enable a disabled schedule")
-    .action((idOrName: string) => {
+    .action((idOrName: string, options: { json: boolean }) => {
       const ok = setScheduleEnabled(idOrName, true);
-      console.log(ok ? chalk.green(`✓ Enabled '${idOrName}'`) : chalk.red(`Schedule '${idOrName}' not found`));
+      if (options.json) console.log(JSON.stringify({ idOrName, enabled: true, success: ok }));
+      else console.log(ok ? chalk.green(`✓ Enabled '${idOrName}'`) : chalk.red(`Schedule '${idOrName}' not found`));
       if (!ok) process.exitCode = 1;
     });
 
   scheduleCmd
     .command("disable")
     .argument("<id-or-name>", "Schedule ID or name")
+    .option("--json", "Output as JSON", false)
     .description("Disable a schedule without removing it")
-    .action((idOrName: string) => {
+    .action((idOrName: string, options: { json: boolean }) => {
       const ok = setScheduleEnabled(idOrName, false);
-      console.log(ok ? chalk.green(`✓ Disabled '${idOrName}'`) : chalk.red(`Schedule '${idOrName}' not found`));
+      if (options.json) console.log(JSON.stringify({ idOrName, enabled: false, success: ok }));
+      else console.log(ok ? chalk.green(`✓ Disabled '${idOrName}'`) : chalk.red(`Schedule '${idOrName}' not found`));
       if (!ok) process.exitCode = 1;
     });
 
@@ -98,8 +102,7 @@ export function registerSchedule(parent: Command) {
       const results = [];
       for (const s of due) {
         try {
-          const { runSkill } = await import("../../lib/skillinfo.js");
-          await runSkill(s.skill, s.args ?? []);
+          await executeScheduledSkill(s.skill, s.args ?? []);
           recordScheduleRun(s.id, "success");
           results.push({ name: s.name, skill: s.skill, status: "success" });
         } catch (err) {
@@ -119,13 +122,53 @@ export function registerSchedule(parent: Command) {
   scheduleCmd
     .command("validate")
     .argument("<cron>", "Cron expression to validate")
+    .option("--json", "Output as JSON", false)
     .description("Validate a cron expression and show the next 5 run times")
-    .action((cron: string) => {
+    .action((cron: string, options: { json: boolean }) => {
       const { valid, error } = validateCron(cron);
-      if (!valid) { console.error(chalk.red(`Invalid cron: ${error}`)); process.exitCode = 1; return; }
+      if (!valid) {
+        if (options.json) console.log(JSON.stringify({ cron, valid, error }));
+        else console.error(chalk.red(`Invalid cron: ${error}`));
+        process.exitCode = 1; return;
+      }
+      const nextRuns: string[] = [];
+      let d = new Date();
+      for (let i = 0; i < 5; i++) {
+        const next = getNextRun(cron, d);
+        if (!next) break;
+        nextRuns.push(next.toISOString());
+        d = next;
+      }
+      if (options.json) { console.log(JSON.stringify({ cron, valid, nextRuns }, null, 2)); return; }
       console.log(chalk.green(`✓ Valid cron: "${cron}"`));
       console.log(chalk.dim("\nNext 5 run times:"));
-      let d = new Date();
-      for (let i = 0; i < 5; i++) { const next = getNextRun(cron, d); if (!next) break; console.log(`  ${next.toLocaleString()}`); d = next; }
+      for (const nextRun of nextRuns) console.log(`  ${new Date(nextRun).toLocaleString()}`);
     });
+}
+
+async function executeScheduledSkill(skillName: string, args: string[]) {
+  const { getSkill } = await import("../../lib/registry.js");
+  const skill = getSkill(skillName);
+  if (!skill) throw new Error(`Skill '${skillName}' not found`);
+
+  const pricing = await import("../../platform/skills/pricing.js");
+  if (pricing.isPremiumSkill(skill.name)) {
+    const { getApiKey } = await import("../../lib/auth-store.js");
+    const apiKey = getApiKey();
+    if (!apiKey) {
+      throw new Error(`${skill.name} is a premium remote skill. Run: skills auth login`);
+    }
+
+    const { PlatformClient } = await import("../../platform/api/client.js");
+    const client = new PlatformClient(apiKey);
+    const run = await client.submitRun(skill.name, {}, args);
+    if (run.error) throw new Error(String(run.error));
+    return;
+  }
+
+  const { runSkill } = await import("../../lib/skillinfo.js");
+  const result = await runSkill(skill.name, args);
+  if (result.exitCode !== 0) {
+    throw new Error(result.error || result.stderr || `Skill '${skill.name}' exited with ${result.exitCode}`);
+  }
 }

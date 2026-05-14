@@ -81,7 +81,7 @@ export function App({ initialSkills, overwrite = false }: AppProps) {
     <Box flexDirection="column" padding={1}>
       <Header
         title="Skills"
-        subtitle="Install AI agent skills for your project"
+        subtitle="Discover, pin, and run skills through the Skills MCP"
       />
 
       {view === "main" && (
@@ -140,13 +140,13 @@ export function App({ initialSkills, overwrite = false }: AppProps) {
         <Box flexDirection="column">
           <Box marginBottom={1}>
             <Text bold color="green">
-              Installation complete!
+              Pinning complete!
             </Text>
           </Box>
 
           {results.filter((r) => r.success).length > 0 && (
             <Box flexDirection="column" marginBottom={1}>
-              <Text bold>Installed:</Text>
+              <Text bold>Pinned:</Text>
               {results
                 .filter((r) => r.success)
                 .map((r) => (
@@ -174,10 +174,10 @@ export function App({ initialSkills, overwrite = false }: AppProps) {
 
           <Box marginTop={1} flexDirection="column">
             <Text bold>Next steps:</Text>
-            <Text>1. Import from .skills/</Text>
-            <Text dimColor>   import {"{"} image {"}"} from './.skills'</Text>
-            <Text>2. Configure your API keys</Text>
-            <Text>3. Start building!</Text>
+            <Text>1. Register the MCP server</Text>
+            <Text dimColor>   skills setup agents</Text>
+            <Text>2. Run skills through the CLI or your agent</Text>
+            <Text dimColor>   skills run image -- --prompt "..."</Text>
           </Box>
 
           <Box marginTop={1}>

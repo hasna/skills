@@ -4,7 +4,7 @@
   "description": "Agentic web crawler for API documentation indexing and semantic search",
   "type": "module",
   "bin": {
-    "apidocs": "./bin/cli.ts"
+    "apidocs": "src/index.ts"
   },
   "scripts": {
     "dev": "bun run bin/cli.ts",

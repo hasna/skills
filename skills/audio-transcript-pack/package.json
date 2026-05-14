@@ -1,0 +1,10 @@
+{
+  "name": "audio-transcript-pack",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hosted premium audio transcript package generator",
+  "type": "module",
+  "bin": {
+    "audio-transcript-pack": "./src/index.ts"
+  }
+}

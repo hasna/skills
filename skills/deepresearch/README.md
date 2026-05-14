@@ -21,23 +21,14 @@ cd ~/Workspace/dev/hasnaxyz/skill/skilldev/deepresearch
 bun install
 ```
 
-### Claude Code Skill
+### Agent Integration
 
-Link to Claude Code skills directory:
+Do not symlink, copy, or install this skill into agent-native skill folders.
+Register the shared Skills MCP server instead:
+
 ```bash
-ln -s ~/Workspace/dev/hasnaxyz/skill/skilldev/deepresearch ~/.claude/skills/deepresearch
+skills mcp --register all
 ```
-
-Then invoke with `/deepresearch "your topic"` in Claude Code.
-
-### OpenAI Codex Skill
-
-Link to Codex skills directory:
-```bash
-ln -s ~/Workspace/dev/hasnaxyz/skill/skilldev/deepresearch ~/.codex/skills/deepresearch
-```
-
-Then invoke with `/deepresearch "your topic"` in Codex.
 
 ## Configuration
 
