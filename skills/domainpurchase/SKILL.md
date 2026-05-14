@@ -1,5 +1,5 @@
 ---
-name: Domain Purchase
+name: domainpurchase
 description: Purchase and manage domains via GoDaddy API with CLI and HTTP server
 ---
 

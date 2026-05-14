@@ -47,7 +47,7 @@ export async function executeSkill(request: SkillRequest): Promise<SkillResponse
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "User-Agent": `${skill}-cli/1.0`,
+        "User-Agent": `skill-${skill}-cli/1.0`,
         "X-API-Key": apiKey
       },
       body: JSON.stringify(params)

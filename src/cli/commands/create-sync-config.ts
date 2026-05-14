@@ -3,14 +3,12 @@
  */
 
 import chalk from "chalk";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "fs";
+import { existsSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import type { Command } from "commander";
 import { loadConfig, saveConfig, getConfigPath } from "../../lib/config.js";
-import { clearRegistryCache, loadRegistry } from "../../lib/registry.js";
-import { installSkillForAgent, resolveAgents, getAgentSkillsDir, type AgentTarget, AGENT_TARGETS } from "../../lib/installer.js";
-import { generateSkillMd } from "../../lib/skillinfo.js";
+import { clearRegistryCache } from "../../lib/registry.js";
 
 export function registerCreateSync(parent: Command) {
   // Config
@@ -20,10 +18,12 @@ export function registerCreateSync(parent: Command) {
 
   configCmd
     .command("show", { isDefault: true })
+    .option("--json", "Output as JSON", false)
     .description("Show current merged configuration")
-    .action(() => {
+    .action((options: { json: boolean }) => {
       const config = loadConfig();
       const keys = Object.keys(config);
+      if (options.json) { console.log(JSON.stringify(config, null, 2)); return; }
       if (!keys.length) { console.log(chalk.dim("No configuration set")); return; }
       for (const [key, value] of Object.entries(config)) console.log(`${chalk.cyan(key)} = ${chalk.bold(value as string)}`);
     });
@@ -31,27 +31,48 @@ export function registerCreateSync(parent: Command) {
   configCmd
     .command("set <key> <value>")
     .option("--global", "Save to global config (~/.skillsrc)", false)
+    .option("--json", "Output as JSON", false)
     .description("Set a configuration value")
     .action((key: string, value: string, options) => {
-      try { saveConfig(key, value, options.global ? "global" : "project"); console.log(chalk.green(`Set ${key} = ${value} (${options.global ? "global" : "project"})`)); }
-      catch (err) { console.error(chalk.red((err as Error).message)); process.exitCode = 1; }
+      const scope = options.global ? "global" : "project";
+      try {
+        saveConfig(key, value, scope);
+        const savedValue = (loadConfig() as Record<string, string | undefined>)[key];
+        if (options.json) console.log(JSON.stringify({ key, value: savedValue, scope, path: getConfigPath(scope) }));
+        else console.log(chalk.green(`Set ${key} = ${savedValue ?? value} (${scope})`));
+      }
+      catch (err) {
+        if (options.json) console.log(JSON.stringify({ key, value, scope, error: (err as Error).message }));
+        else console.error(chalk.red((err as Error).message));
+        process.exitCode = 1;
+      }
     });
 
   configCmd
     .command("get <key>")
+    .option("--json", "Output as JSON", false)
     .description("Get a specific configuration value")
-    .action((key: string) => {
+    .action((key: string, options: { json: boolean }) => {
       const config = loadConfig();
       const value = (config as any)[key];
+      if (options.json) { console.log(JSON.stringify({ key, value: value ?? null, set: value !== undefined })); return; }
       console.log(value === undefined ? chalk.dim(`${key} is not set`) : value);
     });
 
   configCmd
     .command("path")
+    .option("--json", "Output as JSON", false)
     .description("Show configuration file paths")
-    .action(() => {
+    .action((options: { json: boolean }) => {
       const gp = getConfigPath("global");
       const pp = getConfigPath("project");
+      if (options.json) {
+        console.log(JSON.stringify({
+          global: { path: gp, exists: existsSync(gp) },
+          project: { path: pp, exists: existsSync(pp) },
+        }, null, 2));
+        return;
+      }
       console.log(`${chalk.cyan("global")}:  ${gp}${existsSync(gp) ? chalk.green(" (exists)") : chalk.dim(" (not found)")}`);
       console.log(`${chalk.cyan("project")}: ${pp}${existsSync(pp) ? chalk.green(" (exists)") : chalk.dim(" (not found)")}`);
     });
@@ -63,7 +84,7 @@ export function registerCreateSync(parent: Command) {
     .option("--category <category>", "Skill category", "Development Tools")
     .option("--description <description>", "Short description of what the skill does")
     .option("--tags <tags>", "Comma-separated tags (e.g. api,testing,automation)")
-    .option("--global", "Create in ~/.hasna/skills/custom/ instead of .skills/custom-skills/", false)
+    .option("--global", "Deprecated; custom skills are always global", false)
     .option("--json", "Output result as JSON", false)
     .description("Scaffold a new custom skill directory")
     .action((name: string, options: any) => handleCreate(name, options));
@@ -71,19 +92,19 @@ export function registerCreateSync(parent: Command) {
   // Sync
   parent
     .command("sync")
-    .option("--to <agent>", "Push custom skills to agent")
-    .option("--from <agent>", "List agent skills and show which are unknown")
-    .option("--register", "Copy unknown agent skills into ~/.hasna/skills/custom/", false)
-    .option("--scope <scope>", "Agent install scope: global or project", "global")
+    .option("--to <agent>", "Deprecated; use skills mcp --register <agent|all>")
+    .option("--from <agent>", "Deprecated; agent skill-folder sync is disabled")
+    .option("--register", "Deprecated; agent skill-folder imports are disabled", false)
+    .option("--scope <scope>", "Deprecated; ignored", "global")
     .option("--json", "Output as JSON", false)
-    .description("Sync custom skills with agent directories (--to or --from)")
+    .description("Disabled legacy agent skill-folder sync")
     .action((options) => handleSync(options));
 }
 
 function handleCreate(name: string, options: { category: string; description?: string; tags?: string; global: boolean; json: boolean }) {
   const bare = name.trim();
   const dirName = bare;
-  const baseDir = options.global ? join(homedir(), ".hasna", "skills", "custom") : join(process.cwd(), ".skills", "custom-skills");
+  const baseDir = join(homedir(), ".hasna", "skills", "custom");
   const skillDir = join(baseDir, dirName);
 
   if (existsSync(skillDir)) {
@@ -116,68 +137,13 @@ function handleCreate(name: string, options: { category: string; description?: s
 }
 
 function handleSync(options: { to?: string; from?: string; register: boolean; scope: string; json: boolean }) {
-  if (!options.to && !options.from) { console.error(chalk.red("Specify --to <agent> or --from <agent>")); process.exitCode = 1; return; }
-
-  if (options.from) {
-    const agentName = options.from as AgentTarget;
-    if (!AGENT_TARGETS.includes(agentName)) { console.error(chalk.red(`Unknown agent: ${agentName}. Available: ${AGENT_TARGETS.join(", ")}`)); process.exitCode = 1; return; }
-    const agentDir = getAgentSkillsDir(agentName, options.scope as "global" | "project");
-    if (!existsSync(agentDir)) {
-      console.log(options.json ? JSON.stringify({ agentDir, skills: [], message: "Directory not found" }) : chalk.dim(`No skills directory found at ${agentDir}`));
-      return;
-    }
-    const registry = loadRegistry();
-    const registryNames = new Set(registry.map((s) => s.name));
-    const found: Array<{ name: string; path: string; inRegistry: boolean }> = [];
-    for (const entry of readdirSync(agentDir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const bare = entry.name;
-      found.push({ name: bare, path: join(agentDir, entry.name), inRegistry: registryNames.has(bare) });
-    }
-    const unknown = found.filter((s) => !s.inRegistry);
-
-    if (options.register && unknown.length > 0) {
-      const globalSkillsDir = join(homedir(), ".hasna", "skills", "custom");
-      const registered: string[] = [];
-      for (const s of unknown) {
-        const srcSkillMd = join(s.path, "SKILL.md");
-        if (!existsSync(srcSkillMd)) continue;
-        const destDir = join(globalSkillsDir, s.name);
-        if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true });
-        writeFileSync(join(destDir, "SKILL.md"), readFileSync(srcSkillMd, "utf-8"));
-        registered.push(s.name);
-      }
-      clearRegistryCache();
-      if (options.json) console.log(JSON.stringify({ agentDir, skills: found, registered }));
-      else {
-        for (const name of registered) console.log(chalk.green(`✓ Registered '${name}' into ~/.hasna/skills/custom/ (global custom)`));
-        if (!registered.length) console.log(chalk.dim("No new skills to register (all SKILL.md files missing)"));
-      }
-      return;
-    }
-
-    if (options.json) console.log(JSON.stringify({ agentDir, skills: found }));
-    else {
-      console.log(chalk.bold(`\nAgent skills in ~/.${agentName}/skills/ (${found.length} found):\n`));
-      for (const s of found) console.log(`  ${chalk.cyan(s.name)} — ${s.inRegistry ? chalk.green("✓ in registry") : chalk.yellow("✗ not in registry")}`);
-      if (unknown.length > 0) console.log(chalk.dim(`\nTip: ${unknown.length} skill(s) not in registry. Run with --register to add them to ~/.hasna/skills/custom/.`));
-    }
-    return;
+  const target = options.to ?? options.from ?? "all";
+  const error = "Agent skill-folder sync is disabled. Skills are discovered through the Skills MCP server.";
+  const mcpRegister = `skills mcp --register ${target}`;
+  if (options.json) console.log(JSON.stringify({ error, mcpRegister }));
+  else {
+    console.error(chalk.red(error));
+    console.error(chalk.dim(`Use: ${mcpRegister}`));
   }
-
-  if (options.to) {
-    let agents: AgentTarget[];
-    try { agents = resolveAgents(options.to); }
-    catch (err) { console.error(chalk.red((err as Error).message)); process.exitCode = 1; return; }
-    const registry = loadRegistry();
-    const custom = registry.filter((s) => s.source === "custom");
-    if (!custom.length) { console.log(options.json ? JSON.stringify({ pushed: 0, message: "No custom skills found" }) : chalk.dim("No custom skills found. Use 'skills create <name>' to scaffold one.")); return; }
-    const results = [];
-    for (const skill of custom) for (const agent of agents) {
-      const r = installSkillForAgent(skill.name, { agent, scope: options.scope as "global" | "project" }, generateSkillMd);
-      results.push({ skill: skill.name, agent, success: r.success, error: r.error });
-    }
-    if (options.json) console.log(JSON.stringify({ pushed: results.filter((r) => r.success).length, results }));
-    else for (const r of results) console.log(r.success ? chalk.green(`✓ ${r.skill} → ${r.agent}`) : chalk.red(`✗ ${r.skill} → ${r.agent}: ${r.error}`));
-  }
+  process.exitCode = 1;
 }

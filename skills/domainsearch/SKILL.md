@@ -1,5 +1,5 @@
 ---
-name: Domain Search
+name: domainsearch
 description: Search domain availability and suggestions via GoDaddy API
 ---
 

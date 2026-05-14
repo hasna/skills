@@ -11,7 +11,10 @@
     "build": "bun build src/index.ts --outdir dist --target node",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {},
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "sharp": "^0.33.5"
+  },
   "devDependencies": {
     "@types/bun": "latest",
     "typescript": "^5.7.0"

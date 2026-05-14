@@ -1,0 +1,10 @@
+{
+  "name": "proposal-pack",
+  "version": "0.1.0",
+  "description": "Generate client proposal packages through the hosted Skills runtime",
+  "type": "module",
+  "bin": {
+    "proposal-pack": "src/index.ts"
+  },
+  "dependencies": {}
+}

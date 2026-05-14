@@ -17,8 +17,7 @@
     "openai",
     "minimax",
     "gemini",
-    "imagen",
-    "provider-cost"
+    "imagen"
   ],
   "author": "",
   "devDependencies": {

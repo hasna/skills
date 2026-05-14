@@ -28,29 +28,29 @@ Read and extract text from PDF files. Supports multiple PDFs at once, page-range
 
 ```bash
 # Read entire PDF
-pdf-read read document.pdf
+skills run pdf-read -- read document.pdf
 
 # Read specific pages
-pdf-read read report.pdf --pages 1-5
+skills run pdf-read -- read report.pdf --pages 1-5
 
 # Read multiple PDFs
-pdf-read read file1.pdf file2.pdf file3.pdf
+skills run pdf-read -- read file1.pdf file2.pdf file3.pdf
 
 # Read in chunks of 10 pages
-pdf-read read large-book.pdf --chunk-size 10
+skills run pdf-read -- read large-book.pdf --chunk-size 10
 
 # Get metadata only
-pdf-read info document.pdf
+skills run pdf-read -- info document.pdf
 
 # Output as JSON with page structure
-pdf-read read document.pdf --format json --output result.json
+skills run pdf-read -- read document.pdf --format json --output result.json
 ```
 
-## Environment Variables
+## Runtime
 
-- None required (pure local processing)
+This is a premium remote skill. Authenticate with `skills auth login` and run it through Skills MCP or `skills run`.
 
 ## Requirements
 
-- Bun runtime
-- pdf-parse (auto-installed)
+- Skills CLI/MCP registration
+- Hosted Skills runtime access

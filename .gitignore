@@ -5,6 +5,7 @@ node_modules/
 dist/
 bin/
 dashboard/dist/
+dashboard/out/
 dashboard/node_modules/
 
 # pnpm
@@ -63,3 +64,4 @@ Thumbs.db
 
 # Playwright MCP browser data
 .playwright-mcp/
+.next

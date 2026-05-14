@@ -1,10 +1,9 @@
 #!/usr/bin/env bun
 
 import { program } from "commander";
-import { readFile, writeFile, mkdir } from "fs/promises";
+import { readFile, writeFile } from "fs/promises";
 import { join } from "path";
 import { execSync } from "child_process";
-import { homedir } from "os";
 import chalk from "chalk";
 import ora from "ora";
 import semver from "semver";
@@ -20,7 +19,6 @@ interface PackageJson {
 }
 
 type BumpType = "patch" | "minor" | "major";
-type Platform = "claude" | "codex";
 
 // ============================================================================
 // Publish Command
@@ -147,131 +145,6 @@ async function publish(options: {
 }
 
 // ============================================================================
-// Install Command
-// ============================================================================
-
-const SKILL_MD_CONTENT = `---
-name: npmpublish
-description: Publish npm packages with sensible defaults. Automatically sets private access and bumps patch version (0.0.1). Use when publishing packages to npm, especially for internal/private packages.
----
-
-# npm Publish
-
-Publish npm packages to the npm registry with sensible defaults:
-- **Private by default** - Sets \`publishConfig.access: restricted\`
-- **Patch bump by default** - Increments version by 0.0.1
-
-## CLI Usage
-
-Run the CLI directly:
-
-\`\`\`bash
-# Publish with defaults (private, patch bump)
-npmpublish
-
-# Specify bump type
-npmpublish --bump minor    # 0.1.0
-npmpublish --bump major    # 1.0.0
-npmpublish --bump patch    # 0.0.1 (default)
-
-# Publish as public (use carefully!)
-npmpublish --public
-
-# Dry run (see what would happen)
-npmpublish --dry-run
-
-# Publish from a different directory
-npmpublish --dir /path/to/package
-\`\`\`
-
-## Options
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| \`-b, --bump <type>\` | Version bump: patch, minor, major | patch |
-| \`--public\` | Publish as public package | false (private) |
-| \`--dry-run\` | Preview without publishing | false |
-| \`-d, --dir <path>\` | Package directory | current dir |
-
-## Data Directories
-
-- **exports/** - Published package logs
-- **uploads/** - Files to include in publish
-- **logs/** - Execution logs
-
-## Requirements
-
-- \`NPM_TOKEN\` in \`~/.secrets\` for authentication
-- Valid \`package.json\` in target directory
-- Bun runtime with \`npmpublish\` installed globally
-
-## Install CLI
-
-\`\`\`bash
-bun add -g @hasnaxyz/npmpublish
-\`\`\`
-`;
-
-async function ensureDir(dir: string): Promise<void> {
-  await mkdir(dir, { recursive: true });
-}
-
-function getSkillsDir(platform: Platform, local: boolean): string {
-  if (local) {
-    return platform === "claude" ? ".claude/skills" : ".codex/skills";
-  }
-  const home = homedir();
-  return platform === "claude"
-    ? join(home, ".claude", "skills")
-    : join(home, ".codex", "skills");
-}
-
-async function installSkill(options: {
-  platform: Platform;
-  local: boolean;
-}): Promise<void> {
-  const spinner = ora();
-  const skillName = "npmpublish";
-  const baseDir = getSkillsDir(options.platform, options.local);
-  const skillDir = join(baseDir, skillName);
-
-  try {
-    spinner.start(`Installing skill to ${options.platform === "claude" ? "Claude Code" : "Codex"}...`);
-
-    // Create skill directory structure
-    await ensureDir(skillDir);
-    await ensureDir(join(skillDir, "exports"));
-    await ensureDir(join(skillDir, "uploads"));
-    await ensureDir(join(skillDir, "logs"));
-
-    // Write SKILL.md
-    const skillMdPath = join(skillDir, "SKILL.md");
-    await writeFile(skillMdPath, SKILL_MD_CONTENT, "utf-8");
-
-    spinner.succeed(`Installed to ${chalk.cyan(skillDir)}`);
-
-    console.log();
-    console.log(chalk.green("✓"), `Skill ${chalk.cyan(skillName)} installed successfully`);
-    console.log();
-    console.log("Created structure:");
-    console.log(chalk.dim(`  ${skillDir}/`));
-    console.log(chalk.dim(`  ├── SKILL.md`));
-    console.log(chalk.dim(`  ├── exports/`));
-    console.log(chalk.dim(`  ├── uploads/`));
-    console.log(chalk.dim(`  └── logs/`));
-    console.log();
-    console.log(`Invoke with: ${chalk.cyan(`/${skillName}`)}`);
-
-  } catch (error) {
-    spinner.fail("Install failed");
-    if (error instanceof Error) {
-      console.error(chalk.red(error.message));
-    }
-    process.exit(1);
-  }
-}
-
-// ============================================================================
 // CLI Setup
 // ============================================================================
 
@@ -305,26 +178,15 @@ program
 // Install subcommand
 program
   .command("install")
-  .description("Install this skill to Claude Code or Codex")
-  .option("--claude", "Install to Claude Code (~/.claude/skills/)")
-  .option("--codex", "Install to OpenAI Codex (~/.codex/skills/)")
-  .option("--local", "Install to local repo (.claude/skills/ or .codex/skills/)")
+  .description("Disabled: register the root Skills MCP server instead")
+  .option("--claude", "Show Claude Code MCP registration guidance")
+  .option("--codex", "Show Codex MCP registration guidance")
+  .option("--local", "Ignored; per-skill local folders are disabled")
   .action(async (options) => {
-    if (!options.claude && !options.codex) {
-      console.error(chalk.red("Please specify --claude or --codex"));
-      process.exit(1);
-    }
-
-    const platforms: Platform[] = [];
-    if (options.claude) platforms.push("claude");
-    if (options.codex) platforms.push("codex");
-
-    for (const platform of platforms) {
-      await installSkill({
-        platform,
-        local: options.local || false,
-      });
-    }
+    const target = options.claude ? "claude" : options.codex ? "codex" : "all";
+    console.error(chalk.red("Direct per-skill installs are disabled."));
+    console.error(`Use: skills mcp --register ${target}`);
+    process.exit(1);
   });
 
 program.parse();

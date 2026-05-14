@@ -1,0 +1,14 @@
+{
+  "name": "brand-kit",
+  "version": "0.1.0",
+  "description": "Hosted premium brand kit artifact generator",
+  "type": "module",
+  "bin": {
+    "brand-kit": "./src/index.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}

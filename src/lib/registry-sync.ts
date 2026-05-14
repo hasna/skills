@@ -57,7 +57,7 @@ export function createRegistrySyncArtifact(options: RegistrySyncOptions = {}): R
   const includeDocs = options.includeDocs ?? true;
   const includeRequirements = options.includeRequirements ?? true;
   const includeValidation = options.includeValidation ?? true;
-  const packageName = options.packageName ?? pkg.name;
+  const packageName = options.packageName ?? "@hasna/skills";
   const packageVersion = options.packageVersion ?? pkg.version;
   const sourceRepository = options.sourceRepository ?? "hasna/skills";
 

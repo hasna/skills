@@ -3,11 +3,11 @@ import { normalizeSkillName } from "./utils";
 
 describe("utils", () => {
   describe("normalizeSkillName", () => {
-    test("keeps bare names unchanged", () => {
+    test("preserves bare skill names", () => {
       expect(normalizeSkillName("deepresearch")).toBe("deepresearch");
     });
 
-    test("does not normalize legacy skill-prefixed names", () => {
+    test("does not strip legacy skill- prefixes", () => {
       expect(normalizeSkillName("skill-deepresearch")).toBe("skill-deepresearch");
     });
 
@@ -23,7 +23,7 @@ describe("utils", () => {
       expect(normalizeSkillName("skillful")).toBe("skillful");
     });
 
-    test("keeps image unchanged", () => {
+    test("preserves image name", () => {
       expect(normalizeSkillName("image")).toBe("image");
     });
   });

@@ -4,6 +4,21 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import twilio from "twilio";
 
+if (process.argv.includes("--help") || process.argv.includes("-h")) {
+  console.log(`sms
+
+Usage:
+  sms
+
+Commands:
+  Starts the MCP SMS server over stdio.
+
+Environment:
+  TWILIO_ACCOUNT_SID
+  TWILIO_AUTH_TOKEN`);
+  process.exit(0);
+}
+
 // Configuration
 const CONFIG = {
   accountSid: process.env.TWILIO_ACCOUNT_SID || "",

@@ -2,6 +2,7 @@
   "name": "music",
   "version": "1.0.0",
   "description": "Generate music using provider-cost AI backends",
+  "main": "src/index.ts",
   "type": "module",
   "bin": {
     "music": "src/index.ts"
@@ -17,10 +18,8 @@
     "gemini",
     "lyria"
   ],
-  "dependencies": {},
   "devDependencies": {
-    "@types/bun": "latest",
-    "typescript": "^5.0.0"
+    "@types/bun": "latest"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"

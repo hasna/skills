@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-import { glob } from "glob";
 import { readFile, writeFile } from "fs/promises";
 import { join } from "path";
 
@@ -52,7 +51,11 @@ const PATTERNS = [
   { name: "Generic API Key", regex: /api_key\s*[:=]\s*['"][a-zA-Z0-9]{20,}['"]/, severity: "HIGH" },
   { name: "Hardcoded Password", regex: /password\s*[:=]\s*['"][a-zA-Z0-9]{8,}['"]/, severity: "HIGH" },
   { name: "Eval Usage", regex: /eval\(/, severity: "MEDIUM" },
-  { name: "Insecure HTTP", regex: /http:\/\//, severity: "LOW" },
+  {
+    name: "Insecure HTTP",
+    regex: /http:\/\/(?!localhost(?:[:/$]|$)|127\.0\.0\.1(?:[:/$]|$)|0\.0\.0\.0(?:[:/$]|$))/,
+    severity: "LOW",
+  },
 ];
 
 interface Finding {
@@ -66,10 +69,23 @@ interface Finding {
 async function main() {
   console.log(`Scanning ${pathArg}...`);
 
-  const files = await glob("**/*.{js,ts,json,yml,yaml,env,md}", { 
-    cwd: pathArg, 
-    ignore: ["**/node_modules/**", "**/.git/**", "**/dist/**", "**/build/**"] 
-  });
+  const glob = new Bun.Glob("**/*.{js,ts,json,yml,yaml,env,md,sh,bash}");
+  const files: string[] = [];
+  for await (const file of glob.scan({ cwd: pathArg })) {
+    if (
+      file.includes("/node_modules/") ||
+      file.startsWith("node_modules/") ||
+      file.includes("/.git/") ||
+      file.startsWith(".git/") ||
+      file.includes("/dist/") ||
+      file.startsWith("dist/") ||
+      file.includes("/build/") ||
+      file.startsWith("build/")
+    ) {
+      continue;
+    }
+    files.push(file);
+  }
 
   const findings: Finding[] = [];
 
@@ -79,6 +95,9 @@ async function main() {
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
+      if (line.includes("regex:") && line.includes("severity:")) {
+        continue;
+      }
       for (const pattern of PATTERNS) {
         if (pattern.regex.test(line)) {
           findings.push({

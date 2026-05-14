@@ -109,6 +109,24 @@ function parseJsonTemplate(content: string): RetroTemplate | undefined {
 }
 
 function parseOptions(): SkillOptions {
+  if (Bun.argv.includes("--help") || Bun.argv.includes("-h")) {
+    console.log(`project-retro-companion
+
+Usage:
+  skills run project-retro-companion -- --text <feedback> [options]
+
+Options:
+  --text <feedback>   Retro notes or feedback
+  --cadence <value>   Sprint, monthly, quarterly
+  --team <name>       Team name
+  --focus <area>      process, delivery, collaboration, quality, or all
+  --history <text>    Prior retro context
+  --format <format>   markdown or json
+  --model <model>     OpenAI model
+  --output <path>     Output file path`);
+    process.exit(0);
+  }
+
   const { values, positionals } = parseArgs({
     args: Bun.argv.slice(2),
     options: {
@@ -120,6 +138,7 @@ function parseOptions(): SkillOptions {
       format: { type: "string", default: "markdown" },
       model: { type: "string", default: "gpt-4o-mini" },
       output: { type: "string" },
+      help: { type: "boolean", short: "h" },
     },
     allowPositionals: true,
   });

@@ -1,4 +1,4 @@
-# extract-audio
+# audio-extract
 
 Skill for extracting audio tracks from video files. Supports multiple output formats and codec configurations.
 

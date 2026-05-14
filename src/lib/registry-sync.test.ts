@@ -20,7 +20,7 @@ describe("registry sync artifact", () => {
 
     expect(artifact.schemaVersion).toBe(1);
     expect(artifact.source).toEqual({
-      packageName: pkg.name,
+      packageName: "@hasna/skills",
       packageVersion: pkg.version,
       repository: "hasna/skills",
       profile: "basic",

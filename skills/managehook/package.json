@@ -4,7 +4,7 @@
   "type": "module",
   "description": "Manage Claude Code hooks - list, install, remove, and configure hooks",
   "bin": {
-    "managehook": "./bin/cli.ts"
+    "managehook": "src/index.ts"
   },
   "scripts": {
     "dev": "bun run --watch src/server/index.ts",

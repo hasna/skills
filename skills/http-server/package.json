@@ -11,7 +11,9 @@
     "build": "bun build src/index.ts --outdir dist --target node",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {},
+  "dependencies": {
+    "serve-handler": "^6.1.6"
+  },
   "devDependencies": {
     "@types/bun": "latest",
     "typescript": "^5.7.0"

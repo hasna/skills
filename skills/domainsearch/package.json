@@ -9,7 +9,7 @@
     "access": "restricted"
   },
   "bin": {
-    "domainsearch": "./bin/cli.ts"
+    "domainsearch": "src/index.ts"
   },
   "files": [
     "bin",
