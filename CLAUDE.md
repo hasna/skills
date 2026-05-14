@@ -74,7 +74,7 @@ skills/                           # 202 self-contained skill directories
 
 **MCP Server (`src/mcp/index.ts`)** -- Model Context Protocol server over stdio. 9 tools (`list_skills`, `search_skills`, `get_skill_info`, `get_skill_docs`, `install_skill`, `remove_skill`, `list_categories`, `get_requirements`, `run_skill`) and 2 resources (`skills://registry`, `skills://{name}`).
 
-**HTTP Server (`src/server/serve.ts`)** -- Bun.serve that serves the Next.js dashboard, provides a REST API for the dashboard (`GET /api/skills`, `GET /api/categories`, etc.), and when `DATABASE_URL` is set, lazy-loads the platform v1 API (`/api/v1/*`, `/api/auth/*`) for SaaS functionality including auth, Skill.md delivery, run management, and billing.
+**HTTP Server** — not shipped in OSS. The SaaS dashboard and `/api/v1/*` endpoints live in the private `platform-skills` repo.
 
 **Library (`src/index.ts`)** -- npm package `@hasna/skills` re-exporting registry, installer, and skillinfo modules.
 
@@ -194,58 +194,6 @@ bun test                              # All tests
 bun test src/lib/registry.test.ts     # Single file
 bun test --timeout 30000              # Increase timeout for slow tests
 ```
-
-## Dashboard (Next.js)
-
-The dashboard is a Next.js App Router app in `dashboard/` with SSR. Pages: `/` (landing), `/privacy`, `/terms`.
-
-```bash
-bun run dashboard:build    # next build
-bun run dashboard:dev      # next dev --port 3505 --turbopack (proxies /api to :3579)
-```
-
-Tech: Next.js 16, React 19, Tailwind v4 (via @tailwindcss/postcss), shadcn/ui, Lucide icons, oklch color tokens. Client components: HeroDemo, CopyCommand, SkillsPreview, FloatingInstall, ThemeToggle, SiteHeader. Public files: `/llms.txt`, `/agent.txt`, `/.well-known/agents.json`.
-
-## Platform API (SaaS)
-
-When `DATABASE_URL` is set, `serve.ts` lazy-loads the platform API at `/api/v1/*` and `/api/auth/*`. The platform uses PostgreSQL with Drizzle ORM and Row Level Security for multi-tenant isolation.
-
-### API Routes
-
-| Route | Method | Auth | Description |
-|-------|--------|------|-------------|
-| `/api/auth/register` | POST | - | Create org + user, sends verification email |
-| `/api/auth/verify?token=` | GET | - | Verify email, returns JWT |
-| `/api/auth/resend-verification` | POST | - | Resend verification email |
-| `/api/auth/login` | POST | - | Returns JWT (requires verified email) |
-| `/api/auth/keys` | GET/POST | JWT | List/create API keys |
-| `/api/auth/keys/:id` | DELETE | JWT | Revoke API key |
-| `/api/v1/skills` | GET | optional | List skills (public + private with auth) |
-| `/api/v1/skills/:slug` | GET | optional | Skill detail |
-| `/api/v1/skills/:slug/skill.md` | GET | - | Skill.md content delivery |
-| `/api/v1/runs/:slug` | POST | required | Submit a skill run |
-| `/api/v1/runs` | GET | required | List runs |
-| `/api/v1/runs/:id` | GET | required | Run status + output |
-| `/api/v1/runs/:id/logs` | GET | required | Run logs |
-| `/api/v1/runs/:id/artifacts` | GET | required | Run artifacts |
-| `/api/v1/billing/status` | GET | required | Plan + credits |
-| `/api/v1/billing/checkout` | POST | required | Stripe checkout URL |
-| `/api/v1/billing/webhook` | POST | - | Stripe webhook |
-| `/api/v1/billing/usage` | GET | required | Credit transactions |
-| `/api/v1/billing/invoices` | GET | required | Invoices |
-| `/api/v1/admin/sync` | POST | owner | Sync upstream registry to DB |
-
-### DB Schema
-
-27 tables across: organizations, users, api_keys, sessions, skills, skill_versions, skill_sources, skill_artifacts, skill_aliases, skill_runs, run_steps, run_logs, run_events, run_artifacts, approval_requests, approval_decisions, approval_events, billing_customers, subscriptions, credit_balances, credit_transactions, payment_events, invoices, skill_entitlements, installed_skills, agent_installations, install_events.
-
-### Auth
-
-- JWT (HMAC-SHA256) for dashboard sessions
-- API keys (`sk_` prefix) for CLI/MCP
-- RLS via `SET LOCAL app.current_org_id` on every request
-- Email verification via Resend (RESEND_API_KEY env var)
-- DB name: `platform_skills` (not `skillsmd`)
 
 ## Adding a New Skill
 
