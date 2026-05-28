@@ -3,5 +3,5 @@
  */
 
 export function normalizeSkillName(name: string): string {
-  return name.startsWith("skill-") ? name : `skill-${name}`;
+  return name;
 }

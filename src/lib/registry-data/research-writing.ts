@@ -1,0 +1,81 @@
+import type { SkillMeta } from "../registry-types.js";
+
+export const RESEARCH_WRITING_SKILLS: SkillMeta[] = [
+  {
+    name: "blog-topic-cluster",
+    displayName: "Blog Topic Cluster",
+    description: "Generate topic clusters and content strategies for blog SEO planning",
+    category: "Research & Writing",
+    tags: ["blog", "seo", "topics", "content-strategy"],
+  },
+  {
+    name: "copytone-translator",
+    displayName: "Copy Tone Translator",
+    description: "Translate copy between different tones and writing styles",
+    category: "Research & Writing",
+    tags: ["copywriting", "tone", "translation", "style"],
+  },
+  {
+    name: "blog-article",
+    displayName: "Blog Article",
+    description: "Create SEO-optimized blog article artifact packages through the hosted runtime",
+    category: "Research & Writing",
+    tags: ["blog", "article", "writing", "seo", "premium", "remote"],
+  },
+  {
+    name: "market-research-report",
+    displayName: "Market Research Report",
+    description: "Generate premium market research packages with competitor tables, positioning, pricing notes, source notes, and PDF/Markdown artifacts",
+    category: "Research & Writing",
+    tags: ["market-research", "competitors", "positioning", "pricing", "report", "premium", "remote"],
+  },
+  {
+    name: "create-ebook",
+    displayName: "Create eBook",
+    description: "Create complete eBooks with chapters, formatting, and cover design",
+    category: "Research & Writing",
+    tags: ["ebook", "writing", "publishing", "content"],
+  },
+  {
+    name: "deepresearch",
+    displayName: "Deep Research (Agentic)",
+    description: "Agentic deep research using Exa.ai for parallel semantic search and LLM synthesis",
+    category: "Research & Writing",
+    tags: ["research", "exa", "semantic-search", "synthesis"],
+  },
+  {
+    name: "faq-packager",
+    displayName: "FAQ Packager",
+    description: "Package and organize frequently asked questions into structured documents",
+    category: "Research & Writing",
+    tags: ["faq", "documentation", "knowledge-base", "content"],
+  },
+  {
+    name: "longform-structurer",
+    displayName: "Longform Structurer",
+    description: "Structure long-form content with outlines, chapters, and sections",
+    category: "Research & Writing",
+    tags: ["longform", "structure", "outline", "writing"],
+  },
+  {
+    name: "podcast-show-notes",
+    displayName: "Podcast Show Notes",
+    description: "Generate podcast show notes with timestamps, summaries, and links",
+    category: "Research & Writing",
+    tags: ["podcast", "show-notes", "summary", "content"],
+  },
+  {
+    name: "press-release-drafter",
+    displayName: "Press Release Drafter",
+    description: "Draft professional press releases for announcements and media distribution",
+    category: "Research & Writing",
+    tags: ["press-release", "pr", "media", "writing"],
+  },
+  {
+    name: "write",
+    displayName: "Write",
+    description: "Write short or long-form content - articles, books, documentation at scale",
+    category: "Research & Writing",
+    tags: ["writing", "content", "articles", "documentation"],
+  },
+];

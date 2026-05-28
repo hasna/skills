@@ -1,0 +1,88 @@
+import type { SkillMeta } from "../registry-types.js";
+
+export const PRODUCTIVITY_ORGANIZATION_SKILLS: SkillMeta[] = [
+  {
+    name: "convert",
+    displayName: "Convert",
+    description: "File format conversion and transformation CLI between images, PDFs, documents, CSV, and data formats",
+    category: "Productivity & Organization",
+    tags: ["conversion", "formats", "files", "transform"],
+  },
+  {
+    name: "decision-journal",
+    displayName: "Decision Journal",
+    description: "Track and reflect on decisions with structured journaling",
+    category: "Productivity & Organization",
+    tags: ["decisions", "journal", "reflection", "tracking"],
+  },
+  {
+    name: "file-organizer",
+    displayName: "File Organizer",
+    description: "Organize files into structured directories based on type, date, or content",
+    category: "Productivity & Organization",
+    tags: ["files", "organization", "sorting", "cleanup"],
+  },
+  {
+    name: "folder-tree",
+    displayName: "Folder Tree",
+    description: "Generate and display folder tree structures for documentation",
+    category: "Productivity & Organization",
+    tags: ["folder", "tree", "structure", "visualization"],
+  },
+  {
+    name: "form-filler",
+    displayName: "Form Filler",
+    description: "Automatically fill out web forms and document templates",
+    category: "Productivity & Organization",
+    tags: ["forms", "automation", "filling", "data-entry"],
+  },
+  {
+    name: "inbox-priority-planner",
+    displayName: "Inbox Priority Planner",
+    description: "Prioritize and organize email inbox items by importance and urgency",
+    category: "Productivity & Organization",
+    tags: ["inbox", "priority", "email", "organization"],
+  },
+  {
+    name: "meeting-insight-summarizer",
+    displayName: "Meeting Insight Summarizer",
+    description: "Summarize meetings with key insights, decisions, and action items",
+    category: "Productivity & Organization",
+    tags: ["meeting", "summary", "insights", "action-items"],
+  },
+  {
+    name: "meeting-pack",
+    displayName: "Meeting Pack",
+    description: "Generate premium meeting artifact packages with summaries, decisions, action items, follow-up email, timeline, project export, and manifest",
+    category: "Productivity & Organization",
+    tags: ["meeting", "summary", "action-items", "decisions", "premium", "remote"],
+  },
+  {
+    name: "merge-pdfs",
+    displayName: "Merge PDFs",
+    description: "Merge multiple PDF files into a single document",
+    category: "Productivity & Organization",
+    tags: ["pdf", "merge", "documents", "combining"],
+  },
+  {
+    name: "notion-manager",
+    displayName: "Notion Manager",
+    description: "Advanced Notion management with templates, automation, and bulk operations",
+    category: "Productivity & Organization",
+    tags: ["notion", "management", "automation", "templates"],
+  },
+  {
+    name: "personal-daily-ops",
+    displayName: "Personal Daily Ops",
+    description: "Manage personal daily operations with routines, tasks, and priorities",
+    category: "Productivity & Organization",
+    tags: ["daily", "operations", "routines", "personal"],
+  },
+  {
+    name: "split-pdf",
+    displayName: "Split PDF",
+    description: "Split PDF documents into separate pages or sections",
+    category: "Productivity & Organization",
+    tags: ["pdf", "split", "documents", "pages"],
+  },
+];

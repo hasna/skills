@@ -1,0 +1,29 @@
+{
+  "name": "advanced-math",
+  "version": "0.1.0",
+  "description": "Advanced Math skill",
+  "type": "module",
+  "bin": {
+    "advanced-math": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target node",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "mathjs": "^15.1.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  },
+  "publishConfig": {
+    "access": "restricted",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "files": [
+    "src",
+    "tsconfig.json"
+  ]
+}

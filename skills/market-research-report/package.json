@@ -1,0 +1,10 @@
+{
+  "name": "market-research-report",
+  "version": "0.1.0",
+  "description": "Generate market research report artifacts through the hosted Skills runtime",
+  "type": "module",
+  "bin": {
+    "market-research-report": "src/index.ts"
+  },
+  "dependencies": {}
+}

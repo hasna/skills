@@ -3,15 +3,21 @@
  */
 
 import chalk from "chalk";
-import { existsSync, readFileSync, readdirSync, statSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import type { Command } from "commander";
 import { execSync } from "child_process";
 import { getSkill, findSimilarSkills, loadRegistry, clearRegistryCache } from "../../lib/registry.js";
+import { loadRemoteRegistry, loadRemoteSkill } from "../../lib/remote-registry.js";
 import { getSkillDocs, getSkillRequirements } from "../../lib/skillinfo.js";
-import { getSkillPath } from "../../lib/installer.js";
-import { normalizeSkillName } from "../../lib/utils.js";
-import { getInstalledSkills } from "../../lib/installer.js";
+import { getInstallMeta, getInstalledSkills, getSkillPath } from "../../lib/installer.js";
+import { validateSkillDirectory } from "../../lib/skill-validation.js";
+import {
+  getPublicSkillDiscovery,
+  publicDiscoveryDependencies,
+  publicDiscoveryEnvVars,
+  publicDiscoveryPriceLabel,
+} from "../../platform/skills/discovery.js";
 
 export function registerIntrospect(parent: Command) {
   // Info
@@ -20,8 +26,16 @@ export function registerIntrospect(parent: Command) {
     .argument("<skill>", "Skill name")
     .option("--json", "Output as JSON", false)
     .option("--brief", "Single line: name \u2014 description [category] (tags: ...)", false)
+    .option("--remote", "Use remote registry from SKILLS_API_URL or config apiUrl", false)
     .description("Show details about a specific skill")
-    .action((name: string, options: { json: boolean; brief: boolean }) => handleInfo(name, options));
+    .action((name: string, options: { json: boolean; brief: boolean; remote: boolean }) => {
+      void handleInfo(name, options).catch(async (error) => {
+        const notFound = await resolveRemoteNotFound(name, options.remote, (error as Error).message);
+        if (options.json) console.log(JSON.stringify(notFound));
+        else skillNotFound(name, notFound.similar);
+        process.exitCode = 1;
+      });
+    });
 
   // Docs
   parent
@@ -53,44 +67,80 @@ export function registerIntrospect(parent: Command) {
     .command("diff")
     .argument("<name>", "Skill name to diff")
     .option("--json", "Output as JSON", false)
-    .description("Show files that differ between installed version and source")
+    .description("Show pinned version metadata against bundled registry")
     .action((name: string, options: { json: boolean }) => handleDiff(name, options));
 }
 
-function skillNotFound(name: string) {
+function skillNotFound(name: string, similar: string[] = findSimilarSkills(name)) {
   console.error(`Skill '${name}' not found`);
-  const similar = findSimilarSkills(name);
   if (similar.length > 0) console.error(chalk.dim(`Did you mean: ${similar.join(", ")}?`));
 }
 
-function handleInfo(name: string, options: { json: boolean; brief: boolean }) {
-  const skill = getSkill(name);
-  if (!skill) { skillNotFound(name); process.exitCode = 1; return; }
-  const reqs = getSkillRequirements(name);
-  if (options.json) { console.log(JSON.stringify({ ...skill, ...reqs }, null, 2)); return; }
-  if (options.brief) { console.log(`${skill.name} \u2014 ${skill.description} [${skill.category}] (tags: ${skill.tags.join(", ")})`); return; }
+async function handleInfo(name: string, options: { json: boolean; brief: boolean; remote?: boolean }) {
+  const skill = options.remote ? await loadRemoteSkill(name) : getSkill(name);
+  if (!skill) {
+    if (options.json) console.log(JSON.stringify({ error: `Skill '${name}' not found`, similar: findSimilarSkills(name) }));
+    else skillNotFound(name);
+    process.exitCode = 1; return;
+  }
+  const reqs = options.remote ? null : getSkillRequirements(name);
+  const discovery = getPublicSkillDiscovery(skill);
+  const pricing = discovery.pricing;
+  const publicReqs = reqs ? {
+    ...reqs,
+    envVars: publicDiscoveryEnvVars(skill.name, reqs.envVars),
+    dependencies: publicDiscoveryDependencies(skill.name, reqs.dependencies),
+  } : reqs;
+  if (options.json) { console.log(JSON.stringify({ ...discovery, ...publicReqs, pricing }, null, 2)); return; }
+  if (options.brief) {
+    const tags = discovery.tags.length ? discovery.tags.join(", ") : "none";
+    console.log(`${discovery.name} \u2014 ${discovery.description} (${publicDiscoveryPriceLabel(discovery)}) [${discovery.category}] (tags: ${tags})`);
+    return;
+  }
 
   function cmdAvailable(cmd: string): boolean { try { execSync(`which ${cmd}`, { stdio: "ignore" }); return true; } catch { return false; } }
 
-  console.log(`\n${chalk.bold(skill.displayName)}${skill.source === "custom" ? chalk.yellow(" [custom]") : ""}`);
-  console.log(skill.description);
-  console.log(`${chalk.dim("Category:")} ${skill.category}`);
-  console.log(`${chalk.dim("Tags:")} ${skill.tags.join(", ")}`);
-  if (reqs?.cliCommand) console.log(`${chalk.dim("CLI:")} ${reqs.cliCommand}`);
-  if (reqs?.envVars.length) {
+  console.log(`\n${chalk.bold(discovery.displayName)}${discovery.source === "custom" ? chalk.yellow(" [custom]") : ""}`);
+  console.log(discovery.description);
+  console.log(`${chalk.dim("Category:")} ${discovery.category}`);
+  if (discovery.tags.length) console.log(`${chalk.dim("Tags:")} ${discovery.tags.join(", ")}`);
+  console.log(`${chalk.dim("Pricing:")} ${pricing.formattedCost}`);
+  if (publicReqs?.cliCommand) console.log(`${chalk.dim("CLI:")} ${publicReqs.cliCommand}`);
+  if (publicReqs?.envVars.length) {
     console.log(chalk.dim("Env vars:"));
-    for (const v of reqs.envVars) { const set = !!process.env[v]; console.log(`  ${set ? chalk.green("✓") : chalk.red("✗")} ${v}${set ? "" : chalk.dim(" (not set)")}`); }
+    for (const v of publicReqs.envVars) { const set = !!process.env[v]; console.log(`  ${set ? chalk.green("✓") : chalk.red("✗")} ${v}${set ? "" : chalk.dim(" (not set)")}`); }
   }
-  if (reqs?.systemDeps.length) {
+  if (publicReqs?.systemDeps.length) {
     console.log(chalk.dim("System deps:"));
-    for (const d of reqs.systemDeps) { const avail = cmdAvailable(d); console.log(`  ${avail ? chalk.green("✓") : chalk.red("✗")} ${d}${avail ? "" : chalk.dim(" (not found)")}`); }
+    for (const d of publicReqs.systemDeps) { const avail = cmdAvailable(d); console.log(`  ${avail ? chalk.green("✓") : chalk.red("✗")} ${d}${avail ? "" : chalk.dim(" (not found)")}`); }
   }
-  console.log(`${chalk.dim("Install:")} skills install ${skill.name}`);
+  console.log(`${chalk.dim("Pin:")} skills pin ${discovery.name}${options.remote ? " --remote" : ""}`);
+}
+
+async function resolveRemoteNotFound(name: string, remote: boolean | undefined, message: string) {
+  if (!remote) {
+    return { error: message, similar: findSimilarSkills(name) };
+  }
+
+  if (!message.includes("404")) {
+    return { error: message, similar: [] };
+  }
+
+  try {
+    const registry = await loadRemoteRegistry();
+    return { error: `Skill '${name}' not found`, similar: findSimilarSkills(name, 3, registry) };
+  } catch {
+    return { error: `Skill '${name}' not found`, similar: [] };
+  }
 }
 
 function handleDocs(name: string, options: { json: boolean; file: string }) {
   const docs = getSkillDocs(name);
-  if (!docs) { skillNotFound(name); process.exitCode = 1; return; }
+  if (!docs) {
+    if (options.json) console.log(JSON.stringify({ skill: name, error: `Skill '${name}' not found`, similar: findSimilarSkills(name) }));
+    else skillNotFound(name);
+    process.exitCode = 1; return;
+  }
   if (options.json) {
     console.log(JSON.stringify({
       skill: name, hasSkillMd: docs.skillMd !== null, hasReadme: docs.readme !== null, hasClaudeMd: docs.claudeMd !== null,
@@ -117,7 +167,11 @@ function handleDocs(name: string, options: { json: boolean; file: string }) {
 
 function handleRequires(name: string, options: { json: boolean }) {
   const reqs = getSkillRequirements(name);
-  if (!reqs) { skillNotFound(name); process.exitCode = 1; return; }
+  if (!reqs) {
+    if (options.json) console.log(JSON.stringify({ skill: name, error: `Skill '${name}' not found`, similar: findSimilarSkills(name) }));
+    else skillNotFound(name);
+    process.exitCode = 1; return;
+  }
   if (options.json) { console.log(JSON.stringify(reqs, null, 2)); return; }
   console.log(`\n${chalk.bold(`Requirements for ${name}`)}\n`);
   if (reqs.cliCommand) console.log(`${chalk.dim("CLI command:")} ${reqs.cliCommand}`);
@@ -138,33 +192,29 @@ function handleRequires(name: string, options: { json: boolean }) {
 
 function handleValidate(name: string, options: { json: boolean }) {
   const sp = getSkillPath(name);
-  const issues: string[] = [];
-  if (!existsSync(sp)) {
-    if (options.json) console.log(JSON.stringify({ name, valid: false, issues: [`Skill directory not found: ${sp}`] }));
-    else console.error(chalk.red(`Skill '${name}' not found at ${sp}`));
-    process.exitCode = 1; return;
-  }
-  if (!existsSync(join(sp, "SKILL.md"))) issues.push("Missing SKILL.md");
-  if (!existsSync(join(sp, "tsconfig.json"))) issues.push("Missing tsconfig.json");
-  const pkgPath = join(sp, "package.json");
-  if (!existsSync(pkgPath)) issues.push("Missing package.json");
-  else {
-    try {
-      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-      if (!pkg.bin || Object.keys(pkg.bin).length === 0) issues.push("package.json missing 'bin' entry");
-    } catch { issues.push("package.json is invalid JSON"); }
-  }
-  if (!existsSync(join(sp, "src"))) issues.push("Missing src/ directory");
-  else if (!existsSync(join(sp, "src", "index.ts"))) issues.push("Missing src/index.ts");
+  const result = validateSkillDirectory(name, sp, getSkill(name));
 
-  if (options.json) console.log(JSON.stringify({ name, valid: !issues.length, path: sp, issues }));
-  else if (!issues.length) console.log(chalk.green(`✓ ${name} — all checks passed`));
-  else { console.log(chalk.red(`✗ ${name} — ${issues.length} issue(s):`)); for (const i of issues) console.log(chalk.red(`  • ${i}`)); process.exitCode = 1; }
+  if (options.json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else if (result.valid) {
+    console.log(chalk.green(`✓ ${name} — all required checks passed`));
+    if (result.warnings.length > 0) {
+      console.log(chalk.yellow(`  ${result.warnings.length} warning(s):`));
+      for (const warning of result.warnings) console.log(chalk.yellow(`  • ${warning.message}`));
+    }
+  } else {
+    console.log(chalk.red(`✗ ${name} — ${result.issues.length} issue(s):`));
+    for (const issue of result.issues) console.log(chalk.red(`  • ${issue.message}`));
+    if (result.warnings.length > 0) {
+      console.log(chalk.yellow(`  ${result.warnings.length} warning(s):`));
+      for (const warning of result.warnings) console.log(chalk.yellow(`  • ${warning.message}`));
+    }
+  }
+  if (!result.valid) process.exitCode = 1;
 }
 
 function handleDiff(name: string, options: { json: boolean }) {
-  const bare = name.replace(/^skill-/, "");
-  const destPath = join(process.cwd(), ".skills", `skill-${bare}`);
+  const bare = name;
   const sourcePath = getSkillPath(bare);
 
   if (!existsSync(sourcePath)) {
@@ -172,35 +222,30 @@ function handleDiff(name: string, options: { json: boolean }) {
     else skillNotFound(bare);
     process.exitCode = 1; return;
   }
-  if (!existsSync(destPath)) {
-    if (options.json) console.log(JSON.stringify({ installed: false, message: `'${bare}' is not installed locally` }));
-    else console.log(chalk.dim(`'${bare}' is not installed. Run: skills install ${bare}`));
+  if (!getInstalledSkills().includes(bare)) {
+    if (options.json) console.log(JSON.stringify({ pinned: false, message: `'${bare}' is not pinned locally` }));
+    else console.log(chalk.dim(`'${bare}' is not pinned. Run: skills pin ${bare}`));
     return;
   }
 
-  function collectFiles(dir: string, base = ""): Map<string, string> {
-    const files = new Map<string, string>();
-    if (!existsSync(dir)) return files;
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      const rel = base ? `${base}/${entry}` : entry;
-      if (statSync(full).isDirectory()) for (const [k, v] of collectFiles(full, rel)) files.set(k, v);
-      else { try { files.set(rel, readFileSync(full, "utf-8")); } catch { files.set(rel, ""); } }
-    }
-    return files;
+  const installMeta = getInstallMeta();
+  const installedVersion = installMeta.skills[bare]?.version ?? "unknown";
+  const registryPkgPath = join(sourcePath, "package.json");
+  let registryVersion = "unknown";
+  if (existsSync(registryPkgPath)) {
+    try {
+      registryVersion = JSON.parse(readFileSync(registryPkgPath, "utf-8")).version || "unknown";
+    } catch {}
   }
-
-  const installed = collectFiles(destPath);
-  const source = collectFiles(sourcePath);
-  const changed: string[] = []; const added: string[] = []; const removed: string[] = [];
-  for (const [file, content] of source) { if (!installed.has(file)) added.push(file); else if (installed.get(file) !== content) changed.push(file); }
-  for (const file of installed.keys()) if (!source.has(file)) removed.push(file);
-
-  if (options.json) { console.log(JSON.stringify({ name: bare, changed, added, removed, upToDate: !changed.length && !added.length && !removed.length })); return; }
-  if (!changed.length && !added.length && !removed.length) { console.log(chalk.green(`✓ ${bare} — up to date`)); return; }
-  console.log(chalk.bold(`\nDiff for '${bare}':\n`));
-  for (const f of changed) console.log(chalk.yellow(`  ~ ${f}`));
-  for (const f of added) console.log(chalk.green(`  + ${f}`));
-  for (const f of removed) console.log(chalk.red(`  - ${f}`));
-  console.log(chalk.dim(`\nRun 'skills update ${bare}' to apply changes`));
+  const upToDate = installedVersion === registryVersion;
+  if (options.json) {
+    console.log(JSON.stringify({ name: bare, pinned: true, installedVersion, registryVersion, upToDate }));
+    return;
+  }
+  if (upToDate) {
+    console.log(chalk.green(`✓ ${bare} pin is up to date (${installedVersion})`));
+    return;
+  }
+  console.log(chalk.yellow(`${bare} pin metadata differs: ${installedVersion} → ${registryVersion}`));
+  console.log(chalk.dim(`\nRun 'skills update ${bare}' to refresh the pin`));
 }

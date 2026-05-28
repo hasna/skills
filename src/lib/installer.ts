@@ -1,27 +1,39 @@
 /**
- * Skill installer - handles copying skills to user projects
+ * Skill setup and project preferences.
+ *
+ * Skills are discovered through the CLI/MCP registry and executed from the
+ * bundled package or the remote platform. This module deliberately does not
+ * copy skill source, SKILL.md, package.json, scripts, or runtime folders into
+ * projects or agent-native skill folders.
  */
 
-import { existsSync, cpSync, mkdirSync, writeFileSync, rmSync, readdirSync, statSync, readFileSync, accessSync, constants } from "fs";
-import { join, dirname } from "path";
+import { existsSync, readFileSync } from "fs";
+import { dirname, join } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { normalizeSkillName } from "./utils.js";
-import { getSkill } from "./registry.js";
+import { getSkill, type SkillMeta } from "./registry.js";
+import { normalizeSkillSlug, resolveSkillAlias } from "./skill-aliases.js";
+import {
+  getDisabledProjectSkills,
+  loadProjectConfig,
+  getProjectConfigPath,
+  listPinnedSkills,
+  pinProjectSkill,
+  setSkillDisabled,
+  unpinProjectSkill,
+  type ProjectSkillPin,
+  type SkillsProjectConfig,
+} from "./project-state.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Find the skills directory - works from both src/lib/ (dev) and bin/ or dist/ (built).
-// Guards against accidentally returning a path that is inside a .skills/ install dir.
+// Find the bundled skills directory - works from both src/lib/ and built dist.
 function findSkillsDir(): string {
   let dir = __dirname;
   for (let i = 0; i < 5; i++) {
     const candidate = join(dir, "skills");
-    // Only accept if the candidate itself is not inside a .skills/ directory
-    // (prevents double-nesting when run from within an installed project)
-    if (existsSync(candidate) && !dir.includes(".skills")) {
-      return candidate;
-    }
+    if (existsSync(candidate) && !dir.includes(".skills")) return candidate;
     dir = dirname(dir);
   }
   return join(__dirname, "..", "skills");
@@ -34,6 +46,8 @@ export interface InstallResult {
   success: boolean;
   error?: string;
   path?: string;
+  mode?: InstallMode;
+  source?: InstallSource;
 }
 
 export interface InstallOptions {
@@ -41,306 +55,253 @@ export interface InstallOptions {
   overwrite?: boolean;
 }
 
-/**
- * Get the path to a skill in the package
- */
-export function getSkillPath(name: string): string {
-  const skillName = normalizeSkillName(name);
-  return join(SKILLS_DIR, skillName);
+export type InstallMode = "pin" | "source" | "manifest";
+export type InstallSource = ProjectSkillPin["source"];
+
+export interface SkillInstallManifest {
+  name: string;
+  skillMd: string;
+  version?: string;
+  source?: InstallSource;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ManifestInstallOptions extends InstallOptions {
+  source?: InstallSource;
+  createRuntimeDirs?: boolean;
+  writeManifestFile?: boolean;
+}
+
+interface InstallMetaEntry {
+  installedAt: string;
+  version: string;
+  mode?: InstallMode;
+  source?: InstallSource;
+}
+
+interface MetaFile {
+  skills: Record<string, InstallMetaEntry>;
+  disabled?: string[];
 }
 
 /**
- * Check if a skill exists in the package
+ * Get the path to a bundled skill in the package.
+ */
+export function getSkillPath(name: string): string {
+  const skillName = normalizeSkillName(getCanonicalSkillName(name));
+  return join(SKILLS_DIR, skillName);
+}
+
+function getCanonicalSkillName(name: string): string {
+  return getSkill(name)?.name ?? resolveSkillAlias(normalizeSkillSlug(name));
+}
+
+/**
+ * Check if a skill exists in the bundled/registered catalog.
  */
 export function skillExists(name: string): boolean {
   return existsSync(getSkillPath(name));
 }
 
 /**
- * Install a single skill to the target directory
+ * Pin a skill in .skills/project.json.
+ *
+ * This intentionally does not write .skills/skills or any SKILL.md/source files.
  */
-export function installSkill(
-  name: string,
-  options: InstallOptions = {}
-): InstallResult {
+export function installSkill(name: string, options: InstallOptions = {}): InstallResult {
   const { targetDir = process.cwd(), overwrite = false } = options;
-
-  const skillName = normalizeSkillName(name);
-  const sourcePath = getSkillPath(name);
-  const destDir = join(targetDir, ".skills");
-  const destPath = join(destDir, skillName);
-
-  // Check if skill exists in package
-  if (!existsSync(sourcePath)) {
+  const canonicalName = getCanonicalSkillName(name);
+  const skillName = normalizeSkillName(canonicalName);
+  if (!existsSync(getSkillPath(name))) {
+    return { skill: canonicalName, success: false, error: `Skill '${name}' not found`, mode: "pin" };
+  }
+  const existing = new Set(listPinnedSkills(targetDir));
+  if (existing.has(skillName) && !overwrite) {
     return {
-      skill: name,
+      skill: canonicalName,
       success: false,
-      error: `Skill '${name}' not found`,
+      error: "Already pinned. Use --overwrite to refresh.",
+      path: getProjectConfigPath(targetDir),
+      mode: "pin",
+    };
+  }
+  const meta = getSkill(canonicalName);
+  const version = readBundledSkillVersion(name);
+  pinProjectSkill(skillName, { version, source: meta?.source ?? "official" }, targetDir);
+  warnMissingDependencies(canonicalName, targetDir);
+  return { skill: canonicalName, success: true, path: getProjectConfigPath(targetDir), mode: "pin", source: meta?.source ?? "official" };
+}
+
+export function installRemoteSkill(skill: SkillMeta, options: InstallOptions = {}): InstallResult {
+  const { targetDir = process.cwd(), overwrite = false } = options;
+  const skillName = normalizeSkillName(skill.name);
+  const existing = new Set(listPinnedSkills(targetDir));
+  if (existing.has(skillName) && !overwrite) {
+    return {
+      skill: skillName,
+      success: false,
+      error: "Already pinned. Use --overwrite to refresh.",
+      path: getProjectConfigPath(targetDir),
+      mode: "pin",
+      source: "remote",
     };
   }
 
-  // Check if already installed
-  if (existsSync(destPath) && !overwrite) {
-    return {
-      skill: name,
-      success: false,
-      error: `Already installed. Use --overwrite to replace.`,
-      path: destPath,
-    };
-  }
-
-  try {
-    // Ensure .skills directory exists
-    if (!existsSync(destDir)) {
-      mkdirSync(destDir, { recursive: true });
-    }
-
-    // Remove existing if overwriting
-    if (existsSync(destPath) && overwrite) {
-      rmSync(destPath, { recursive: true, force: true });
-    }
-
-    // Copy skill (skip .git, node_modules)
-    cpSync(sourcePath, destPath, {
-      recursive: true,
-      filter: (src) => {
-        const rel = src.slice(sourcePath.length);
-        return !rel.includes("/.git") && !rel.includes("/node_modules");
-      },
-    });
-
-    // Update or create .skills/index.ts for easy imports
-    updateSkillsIndex(destDir);
-
-    // Track installation metadata
-    recordInstall(destDir, name);
-
-    // Check for missing skill dependencies and warn
-    const meta = getSkill(name);
-    if (meta?.dependencies && meta.dependencies.length > 0) {
-      const installed = getInstalledSkills(targetDir);
-      const installedSet = new Set(installed);
-      for (const dep of meta.dependencies) {
-        if (!installedSet.has(dep)) {
-          console.warn(`Warning: skill-${meta.name} depends on skill-${dep} which is not installed`);
-        }
-      }
-    }
-
-    return {
-      skill: name,
-      success: true,
-      path: destPath,
-    };
-  } catch (error) {
-    return {
-      skill: name,
-      success: false,
-      error: error instanceof Error ? error.message : "Unknown error",
-    };
-  }
+  pinProjectSkill(skillName, { version: skill.version ?? "remote", source: "remote" }, targetDir);
+  return {
+    skill: skillName,
+    success: true,
+    path: getProjectConfigPath(targetDir),
+    mode: "pin",
+    source: "remote",
+  };
 }
 
 /**
- * Install multiple skills
+ * Source installs are disabled by design. Runtime source stays in the package
+ * or on the platform, never in a user project.
  */
-export function installSkills(
-  names: string[],
-  options: InstallOptions = {}
-): InstallResult[] {
+export function installSkillSource(name: string, _options: InstallOptions = {}): InstallResult {
+  const canonicalName = getCanonicalSkillName(name);
+  if (!existsSync(getSkillPath(name))) {
+    return { skill: canonicalName, success: false, error: `Skill '${name}' not found`, mode: "source" };
+  }
+  return {
+    skill: canonicalName,
+    success: false,
+    error: "Source installs are disabled. Use Skills MCP discovery and project pins instead.",
+    mode: "source",
+  };
+}
+
+/**
+ * SKILL.md manifest installs are disabled. Docs are served by the remote or
+ * bundled registry and must not be cached into project skill folders.
+ */
+export function installSkillManifest(
+  manifest: SkillInstallManifest,
+  _options: ManifestInstallOptions = {},
+): InstallResult {
+  const skillName = normalizeSkillName(manifest.name);
+  return {
+    skill: skillName,
+    success: false,
+    error: "Manifest installs are disabled. Fetch skill docs through Skills CLI/MCP instead.",
+    mode: "manifest",
+  };
+}
+
+/**
+ * Build an in-memory manifest from a bundled local skill.
+ */
+export function createLocalSkillManifest(
+  name: string,
+  generateSkillMd?: (name: string) => string | null,
+): SkillInstallManifest | null {
+  const sourcePath = getSkillPath(name);
+  if (!existsSync(sourcePath)) return null;
+
+  let skillMd = "";
+  const skillMdPath = join(sourcePath, "SKILL.md");
+  if (existsSync(skillMdPath)) {
+    skillMd = readFileSync(skillMdPath, "utf-8");
+  } else if (generateSkillMd) {
+    skillMd = generateSkillMd(name) ?? "";
+  } else {
+    skillMd = generateMinimalSkillMd(name) ?? "";
+  }
+  if (!skillMd) return null;
+
+  const registryMeta = getSkill(name);
+  return {
+    name: registryMeta?.name ?? name,
+    skillMd,
+    version: readBundledSkillVersion(name),
+    source: "local",
+    metadata: registryMeta ? {
+      displayName: registryMeta.displayName,
+      description: registryMeta.description,
+      category: registryMeta.category,
+      tags: registryMeta.tags,
+      dependencies: registryMeta.dependencies,
+    } : undefined,
+  };
+}
+
+export function installSkills(names: string[], options: InstallOptions = {}): InstallResult[] {
   return names.map((name) => installSkill(name, options));
 }
 
-/**
- * Update the .skills/index.ts file to export all installed skills (excluding disabled)
- */
-function updateSkillsIndex(skillsDir: string): void {
-  const indexPath = join(skillsDir, "index.ts");
-
-  const meta = loadMeta(skillsDir);
-  const disabledSet = new Set(meta.disabled || []);
-
-  const skills = readdirSync(skillsDir).filter(
-    (f: string) => f.startsWith("skill-") && !f.includes(".") && !disabledSet.has(f.replace("skill-", ""))
-  );
-
-  const exports = skills
-    .map((s: string) => {
-      const name = s.replace("skill-", "").replace(/-/g, "_");
-      return `export * as ${name} from './${s}/src/index.js';`;
-    })
-    .join("\n");
-
-  const content = `/**
- * Auto-generated index of installed skills
- * Do not edit manually - run 'skills install' to update
- */
-
-${exports}
-`;
-
-  writeFileSync(indexPath, content);
-}
-
-// ---- Installation metadata tracking ----
-
-interface SkillMeta {
-  installedAt: string;
-  version: string;
-}
-
-interface MetaFile {
-  skills: Record<string, SkillMeta>;
-  disabled?: string[];
-}
-
-function getMetaPath(skillsDir: string): string {
-  return join(skillsDir, ".meta.json");
-}
-
-function loadMeta(skillsDir: string): MetaFile {
-  const metaPath = getMetaPath(skillsDir);
-  if (existsSync(metaPath)) {
-    try {
-      return JSON.parse(readFileSync(metaPath, "utf-8"));
-    } catch {}
-  }
-  return { skills: {} };
-}
-
-function saveMeta(skillsDir: string, meta: MetaFile): void {
-  writeFileSync(getMetaPath(skillsDir), JSON.stringify(meta, null, 2));
-}
-
-function recordInstall(skillsDir: string, name: string): void {
-  const meta = loadMeta(skillsDir);
-  const skillName = normalizeSkillName(name);
-  // Try to read version from the installed skill's package.json
-  let version = "unknown";
-  try {
-    const pkgPath = join(skillsDir, skillName, "package.json");
-    if (existsSync(pkgPath)) {
-      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-      version = pkg.version || "unknown";
-    }
-  } catch {}
-  meta.skills[name] = { installedAt: new Date().toISOString(), version };
-  saveMeta(skillsDir, meta);
-}
-
-function recordRemove(skillsDir: string, name: string): void {
-  const meta = loadMeta(skillsDir);
-  delete meta.skills[name];
-  saveMeta(skillsDir, meta);
-}
-
-/**
- * Get installation metadata for installed skills
- */
 export function getInstallMeta(targetDir: string = process.cwd()): MetaFile {
-  return loadMeta(join(targetDir, ".skills"));
+  const config = loadProjectConfigCompat(targetDir);
+  if (!config) return { skills: {} };
+  const skills: Record<string, InstallMetaEntry> = {};
+  for (const name of config.pinnedSkills) {
+    const pin = config.pins[name];
+    skills[name] = {
+      installedAt: pin?.pinnedAt ?? config.createdAt,
+      version: pin?.version ?? "unknown",
+      mode: "pin",
+      source: pin?.source ?? "official",
+    };
+  }
+  return { skills, disabled: config.disabledSkills ?? [] };
 }
 
-/**
- * Disable a skill (exclude from .skills/index.ts without removing files)
- */
 export function disableSkill(name: string, targetDir: string = process.cwd()): boolean {
-  const skillsDir = join(targetDir, ".skills");
-  const skillName = normalizeSkillName(name);
-  if (!existsSync(join(skillsDir, skillName))) return false;
-
-  const meta = loadMeta(skillsDir);
-  const disabled = new Set(meta.disabled || []);
-  if (disabled.has(name)) return false; // already disabled
-  disabled.add(name);
-  meta.disabled = [...disabled];
-  saveMeta(skillsDir, meta);
-  updateSkillsIndex(skillsDir);
-  return true;
+  return setSkillDisabled(getCanonicalSkillName(name), true, targetDir);
 }
 
-/**
- * Enable a previously disabled skill (re-add to .skills/index.ts)
- */
 export function enableSkill(name: string, targetDir: string = process.cwd()): boolean {
-  const skillsDir = join(targetDir, ".skills");
-  const meta = loadMeta(skillsDir);
-  const disabled = new Set(meta.disabled || []);
-  if (!disabled.has(name)) return false; // not disabled
-  disabled.delete(name);
-  meta.disabled = [...disabled];
-  saveMeta(skillsDir, meta);
-  updateSkillsIndex(skillsDir);
-  return true;
+  return setSkillDisabled(getCanonicalSkillName(name), false, targetDir);
 }
 
-/**
- * Get list of disabled skills
- */
 export function getDisabledSkills(targetDir: string = process.cwd()): string[] {
-  const meta = loadMeta(join(targetDir, ".skills"));
-  return meta.disabled || [];
+  return getDisabledProjectSkills(targetDir);
 }
 
 /**
- * Get list of installed skills in a directory
+ * Project-pinned skills. Historically this represented copied installs; it now
+ * reads .skills/project.json only.
  */
 export function getInstalledSkills(targetDir: string = process.cwd()): string[] {
-  const skillsDir = join(targetDir, ".skills");
-
-  if (!existsSync(skillsDir)) {
-    return [];
-  }
-
-  return readdirSync(skillsDir)
-    .filter((f: string) => {
-      const fullPath = join(skillsDir, f);
-      return f.startsWith("skill-") && statSync(fullPath).isDirectory();
-    })
-    .map((f: string) => f.replace("skill-", ""));
+  return listPinnedSkills(targetDir);
 }
 
-/**
- * Remove an installed skill
- */
-export function removeSkill(
-  name: string,
-  targetDir: string = process.cwd()
-): boolean {
-  const skillName = normalizeSkillName(name);
-  const skillsDir = join(targetDir, ".skills");
-  const skillPath = join(skillsDir, skillName);
-
-  if (!existsSync(skillPath)) {
-    return false;
-  }
-
-  rmSync(skillPath, { recursive: true, force: true });
-  updateSkillsIndex(skillsDir);
-  recordRemove(skillsDir, name);
-  return true;
+export function removeSkill(name: string, targetDir: string = process.cwd()): boolean {
+  const canonicalName = getCanonicalSkillName(name);
+  return unpinProjectSkill(canonicalName, targetDir).unpinned;
 }
 
-// ---- Agent install support ----
+export function pinSkill(name: string, options: InstallOptions = {}): InstallResult {
+  return installSkill(name, options);
+}
 
-export type AgentTarget = "claude" | "codex" | "gemini" | "pi" | "opencode";
+export function unpinSkill(name: string, targetDir: string = process.cwd()): boolean {
+  return removeSkill(name, targetDir);
+}
+
+export function getPinnedSkills(targetDir: string = process.cwd()): string[] {
+  return getInstalledSkills(targetDir);
+}
+
+// ---- Agent setup support ----
+
+export type AgentTarget = "claude" | "codex" | "gemini" | "pi" | "opencode" | "cursor" | "windsurf";
 export type AgentScope = "global" | "project";
 
-export const AGENT_TARGETS: AgentTarget[] = ["claude", "codex", "gemini", "pi", "opencode"];
+export const AGENT_TARGETS: AgentTarget[] = ["claude", "codex", "gemini", "pi", "opencode", "cursor", "windsurf"];
 
-/** Human-readable labels for each agent */
 export const AGENT_LABELS: Record<AgentTarget, string> = {
   claude: "Claude Code",
   codex: "Codex CLI",
   gemini: "Gemini CLI",
   pi: "pi.dev",
   opencode: "OpenCode",
+  cursor: "Cursor",
+  windsurf: "Windsurf",
 };
 
-/**
- * Resolve an agent argument ("all" or a specific agent name) to a list of AgentTarget values.
- * Throws if the agent name is not recognized.
- */
 export function resolveAgents(agentArg: string): AgentTarget[] {
   if (agentArg === "all") return [...AGENT_TARGETS];
   const agent = agentArg as AgentTarget;
@@ -356,131 +317,91 @@ export interface AgentInstallOptions {
   projectDir?: string;
 }
 
-/**
- * Get the skills directory for a given agent and scope.
- *
- * Agent config dir conventions:
- *   claude  — ~/.claude/skills/          | .claude/skills/
- *   codex   — ~/.codex/skills/           | .codex/skills/
- *   gemini  — ~/.gemini/skills/          | .gemini/skills/
- *   pi      — ~/.pi/agent/skills/        | .pi/skills/
- *   opencode — ~/.opencode/skills/       | .opencode/skills/
- */
 export function getAgentSkillsDir(agent: AgentTarget, scope: AgentScope = "global", projectDir?: string): string {
   const base = projectDir || process.cwd();
-
   switch (agent) {
     case "pi":
-      // pi.dev: global uses ~/.pi/agent/skills/, project uses .pi/skills/
-      return scope === "project"
-        ? join(base, ".pi", "skills")
-        : join(homedir(), ".pi", "agent", "skills");
+      return scope === "project" ? join(base, ".pi", "skills") : join(homedir(), ".pi", "agent", "skills");
     case "opencode":
-      return scope === "project"
-        ? join(base, ".opencode", "skills")
-        : join(homedir(), ".opencode", "skills");
+      return scope === "project" ? join(base, ".opencode", "skills") : join(homedir(), ".config", "opencode", "skills");
     default:
-      // claude, codex, gemini: ~/.{agent}/skills/ or .{agent}/skills/
-      return scope === "project"
-        ? join(base, `.${agent}`, "skills")
-        : join(homedir(), `.${agent}`, "skills");
+      return scope === "project" ? join(base, `.${agent}`, "skills") : join(homedir(), `.${agent}`, "skills");
   }
 }
 
-/**
- * Get the full path where a skill's SKILL.md would be installed for an agent
- */
 export function getAgentSkillPath(name: string, agent: AgentTarget, scope: AgentScope = "global", projectDir?: string): string {
-  const skillName = normalizeSkillName(name);
+  const skillName = normalizeSkillName(getCanonicalSkillName(name));
   return join(getAgentSkillsDir(agent, scope, projectDir), skillName);
 }
 
-/**
- * Install a skill's SKILL.md for a specific agent
- * If the skill has no SKILL.md, one will be generated using the provided generator function
- */
 export function installSkillForAgent(
   name: string,
   options: AgentInstallOptions,
-  generateSkillMd?: (name: string) => string | null
+  _generateSkillMd?: (name: string) => string | null,
 ): InstallResult {
-  const { agent, scope = "global", projectDir } = options;
-
-  const skillName = normalizeSkillName(name);
-  const sourcePath = getSkillPath(name);
-
-  if (!existsSync(sourcePath)) {
-    return { skill: name, success: false, error: `Skill '${name}' not found` };
+  const canonicalName = getCanonicalSkillName(name);
+  if (!existsSync(getSkillPath(name))) {
+    return { skill: canonicalName, success: false, error: `Skill '${name}' not found` };
   }
+  return {
+    skill: canonicalName,
+    success: false,
+    error: `Direct agent skill-folder installs are disabled. Register Skills MCP instead: skills mcp --register ${options.agent}`,
+  };
+}
 
-  // Find or generate SKILL.md content
-  let skillMdContent: string | null = null;
-  const skillMdPath = join(sourcePath, "SKILL.md");
+export function removeSkillForAgent(_name: string, _options: AgentInstallOptions): boolean {
+  return false;
+}
 
-  if (existsSync(skillMdPath)) {
-    skillMdContent = readFileSync(skillMdPath, "utf-8");
-  } else if (generateSkillMd) {
-    skillMdContent = generateSkillMd(name);
-  }
-
-  if (!skillMdContent) {
-    return { skill: name, success: false, error: `No SKILL.md found and could not generate one for '${name}'` };
-  }
-
-  const destDir = getAgentSkillPath(name, agent, scope, projectDir);
-
-  // For global scope, validate that the agent config directory exists
-  // For project scope, directories will be created as needed
-  if (scope === "global") {
-    // Determine the agent's top-level config dir (used for existence check)
-    const agentBaseDir = agent === "pi"
-      ? join(homedir(), ".pi", "agent")
-      : join(homedir(), `.${agent}`);
-    if (!existsSync(agentBaseDir)) {
-      return {
-        skill: name,
-        success: false,
-        error: `Agent directory ${agentBaseDir} does not exist. Is ${AGENT_LABELS[agent]} installed?`,
-      };
+function warnMissingDependencies(name: string, targetDir: string): void {
+  const meta = getSkill(name);
+  if (!meta?.dependencies?.length) return;
+  const installedSet = new Set(getInstalledSkills(targetDir));
+  for (const dep of meta.dependencies) {
+    if (!installedSet.has(dep)) {
+      console.warn(`Warning: ${meta.name} depends on ${dep} which is not pinned`);
     }
-    try {
-      accessSync(agentBaseDir, constants.W_OK);
-    } catch {
-      return {
-        skill: name,
-        success: false,
-        error: `Agent directory ${agentBaseDir} is not writable. Check permissions.`,
-      };
-    }
-  }
-
-  try {
-    mkdirSync(destDir, { recursive: true });
-    writeFileSync(join(destDir, "SKILL.md"), skillMdContent);
-    return { skill: name, success: true, path: destDir };
-  } catch (error) {
-    return {
-      skill: name,
-      success: false,
-      error: error instanceof Error ? error.message : "Unknown error",
-    };
   }
 }
 
-/**
- * Remove a skill from an agent's skill directory
- */
-export function removeSkillForAgent(
-  name: string,
-  options: AgentInstallOptions
-): boolean {
-  const { agent, scope = "global", projectDir } = options;
-  const destDir = getAgentSkillPath(name, agent, scope, projectDir);
+function generateMinimalSkillMd(name: string): string | null {
+  const sourcePath = getSkillPath(name);
+  if (!existsSync(sourcePath)) return null;
+  const canonicalName = getCanonicalSkillName(name);
+  const meta = getSkill(canonicalName);
+  const description = meta?.description ?? `${canonicalName} skill`;
+  const tags = meta?.tags ?? [];
+  const frontmatter = [
+    "---",
+    `name: ${canonicalName}`,
+    `description: ${JSON.stringify(description)}`,
+    tags.length ? "tags:" : "",
+    ...tags.map((tag) => `  - ${tag}`),
+    "---",
+    "",
+  ].filter(Boolean);
+  const fallbackDoc = readFileIfExists(join(sourcePath, "README.md")) || readFileIfExists(join(sourcePath, "CLAUDE.md"));
+  if (fallbackDoc) return `${frontmatter.join("\n")}${fallbackDoc.trim()}\n`;
+  const displayName = meta?.displayName ?? canonicalName;
+  return `${frontmatter.join("\n")}# ${displayName}\n\n${description}\n\n## Usage\n\n\`\`\`bash\nskills run ${canonicalName}\n\`\`\`\n`;
+}
 
-  if (!existsSync(destDir)) {
-    return false;
+function readBundledSkillVersion(name: string): string {
+  const pkgPath = join(getSkillPath(name), "package.json");
+  if (!existsSync(pkgPath)) return "unknown";
+  try {
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+    return pkg.version || "unknown";
+  } catch {
+    return "unknown";
   }
+}
 
-  rmSync(destDir, { recursive: true, force: true });
-  return true;
+function readFileIfExists(path: string): string | null {
+  return existsSync(path) ? readFileSync(path, "utf-8") : null;
+}
+
+function loadProjectConfigCompat(targetDir: string): SkillsProjectConfig | null {
+  return loadProjectConfig(targetDir);
 }

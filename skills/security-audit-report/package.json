@@ -1,0 +1,10 @@
+{
+  "name": "security-audit-report",
+  "version": "0.1.0",
+  "description": "Generate security hardening report artifacts through the hosted Skills runtime",
+  "type": "module",
+  "bin": {
+    "security-audit-report": "src/index.ts"
+  },
+  "dependencies": {}
+}

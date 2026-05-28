@@ -1,0 +1,9 @@
+{
+  "name": "playlist-maker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "playlist-maker": "./src/index.ts"
+  }
+}

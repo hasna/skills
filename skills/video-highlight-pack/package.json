@@ -1,0 +1,10 @@
+{
+  "name": "video-highlight-pack",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hosted premium video highlight package generator",
+  "type": "module",
+  "bin": {
+    "video-highlight-pack": "./src/index.ts"
+  }
+}

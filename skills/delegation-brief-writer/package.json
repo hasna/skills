@@ -1,0 +1,27 @@
+{
+  "name": "delegation-brief-writer",
+  "version": "0.1.0",
+  "description": "Delegation Brief Writer skill",
+  "type": "module",
+  "bin": {
+    "delegation-brief-writer": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target node",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  },
+  "publishConfig": {
+    "access": "restricted",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "files": [
+    "src",
+    "tsconfig.json"
+  ]
+}

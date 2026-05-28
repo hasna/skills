@@ -1,0 +1,29 @@
+{
+  "name": "image",
+  "version": "1.0.0",
+  "description": "Generate images using provider-cost AI backends",
+  "main": "src/index.ts",
+  "type": "module",
+  "bin": {
+    "image": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "generate": "bun run src/index.ts generate"
+  },
+  "keywords": [
+    "image-generation",
+    "ai",
+    "openai",
+    "minimax",
+    "gemini",
+    "imagen"
+  ],
+  "author": "",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

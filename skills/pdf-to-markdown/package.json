@@ -1,0 +1,10 @@
+{
+  "name": "pdf-to-markdown",
+  "version": "0.1.0",
+  "description": "Convert PDFs into clean markdown through the hosted Skills runtime",
+  "type": "module",
+  "bin": {
+    "pdf-to-markdown": "src/index.ts"
+  },
+  "dependencies": {}
+}

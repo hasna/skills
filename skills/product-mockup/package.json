@@ -1,0 +1,10 @@
+{
+  "name": "product-mockup",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hosted premium product mockup artifact generator",
+  "type": "module",
+  "bin": {
+    "product-mockup": "./src/index.ts"
+  }
+}

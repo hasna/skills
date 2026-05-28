@@ -1,0 +1,25 @@
+{
+  "name": "colorextract",
+  "version": "1.0.0",
+  "description": "Extract color palettes from screenshots and images using AI Vision (anthropic/openai/xai/gemini)",
+  "main": "src/index.ts",
+  "type": "module",
+  "bin": {
+    "colorextract": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts"
+  },
+  "keywords": [
+    "colors",
+    "palette",
+    "design",
+    "vision",
+    "screenshot",
+    "extract"
+  ],
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

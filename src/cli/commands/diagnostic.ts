@@ -10,52 +10,52 @@ import { execSync } from "child_process";
 import pkg from "../../../package.json" with { type: "json" };
 import { getSkill } from "../../lib/registry.js";
 import { getSkillRequirements } from "../../lib/skillinfo.js";
-import { getInstalledSkills, getSkillPath, getAgentSkillsDir, AGENT_TARGETS, AGENT_LABELS } from "../../lib/installer.js";
-import { normalizeSkillName } from "../../lib/utils.js";
+import { getInstallMeta, getInstalledSkills, getSkillPath, getAgentSkillsDir, AGENT_TARGETS, AGENT_LABELS } from "../../lib/installer.js";
 
 export function registerDiagnostic(parent: Command) {
   // Doctor
   parent
     .command("doctor")
     .option("--json", "Output as JSON", false)
-    .description("Check env vars, system deps, and install health for installed skills")
+    .description("Check env vars, system deps, and readiness for pinned skills")
     .action((options: { json: boolean }) => handleDoctor(options));
 
   // Test
   parent
     .command("test")
-    .argument("[skill]", "Skill name to test (omit to test all installed)")
+    .argument("[skill]", "Skill name to test (omit to test all pinned)")
     .option("--json", "Output results as JSON", false)
     .description("Test skill readiness: env vars, system deps, and npm deps")
     .action(async (skillArg: string | undefined, options) => handleTest(skillArg, options));
 
-  // Auth
+  // Env check (was "auth" — renamed to avoid conflict with skills auth login)
   parent
-    .command("auth")
-    .argument("[skill]", "Skill name (omit to check all installed skills)")
+    .command("env-check")
+    .alias("check-env")
+    .argument("[skill]", "Skill name (omit to check all pinned skills)")
     .option("--set <assignment>", "Set an env var in .env file (format: KEY=VALUE)")
     .option("--json", "Output as JSON", false)
-    .description("Show auth/env var status for a skill or all installed skills")
+    .description("Show env var status for a skill or all pinned skills")
     .action((name: string | undefined, options) => handleAuth(name, options));
 
-  // Whoami
+  // Info (was "whoami" — renamed to avoid conflict with skills auth whoami)
   parent
-    .command("whoami")
+    .command("setup-info")
     .option("--json", "Output as JSON", false)
-    .description("Show setup summary: version, installed skills, agent configs, and paths")
+    .description("Show setup summary: version, pinned skills, MCP/agent config paths")
     .action((options: { json: boolean }) => handleWhoami(options));
 
   // Outdated
   parent
     .command("outdated")
     .option("--json", "Output as JSON", false)
-    .description("Check for outdated installed skills")
+    .description("Check for outdated pinned skills")
     .action((options: { json: boolean }) => handleOutdated(options));
 }
 
 function handleDoctor(options: { json: boolean }) {
   const installed = getInstalledSkills();
-  if (!installed.length) { console.log(options.json ? JSON.stringify({ skills: [], message: "No skills installed" }) : "No skills installed"); return; }
+  if (!installed.length) { console.log(options.json ? JSON.stringify({ skills: [], message: "No pinned skills" }) : "No pinned skills"); return; }
 
   function cmdAvailable(cmd: string): boolean { try { execSync(`which ${cmd}`, { stdio: "ignore" }); return true; } catch { return false; } }
 
@@ -69,7 +69,7 @@ function handleDoctor(options: { json: boolean }) {
 
   if (options.json) { console.log(JSON.stringify(report, null, 2)); return; }
   const issues = report.filter((r) => !r.healthy);
-  console.log(chalk.bold(`\nSkills Doctor — ${installed.length} installed, ${issues.length} with issues:\n`));
+  console.log(chalk.bold(`\nSkills Doctor — ${installed.length} pinned, ${issues.length} with issues:\n`));
   for (const entry of report) {
     console.log(`  ${entry.healthy ? chalk.green("✓") : chalk.red("✗")} ${chalk.bold(entry.skill)}`);
     for (const v of entry.envVars) console.log(`      ${v.name} [${v.set ? chalk.green("set") : chalk.red("missing")}]`);
@@ -82,7 +82,7 @@ function handleDoctor(options: { json: boolean }) {
 async function handleTest(skillArg: string | undefined, options: { json: boolean }) {
   let skillNames: string[];
   if (skillArg) {
-    const registryName = skillArg.startsWith("skill-") ? skillArg.replace("skill-", "") : skillArg;
+    const registryName = skillArg;
     if (!getSkill(registryName)) {
       if (options.json) { console.log(JSON.stringify({ error: `Skill '${skillArg}' not found` })); }
       else console.error(chalk.red(`Skill '${skillArg}' not found`));
@@ -91,7 +91,7 @@ async function handleTest(skillArg: string | undefined, options: { json: boolean
     skillNames = [registryName];
   } else {
     skillNames = getInstalledSkills();
-    if (!skillNames.length) { console.log(options.json ? JSON.stringify([]) : chalk.dim("No skills installed. Run: skills install <name>")); return; }
+    if (!skillNames.length) { console.log(options.json ? JSON.stringify([]) : chalk.dim("No pinned skills. Run: skills pin <name>")); return; }
   }
 
   const results = [];
@@ -128,21 +128,35 @@ function handleAuth(name: string | undefined, options: { set?: string; json: boo
 
   if (options.set) {
     const eqIdx = options.set.indexOf("=");
-    if (eqIdx === -1) { console.error(chalk.red(`Invalid format for --set. Expected KEY=VALUE, got: ${options.set}`)); process.exitCode = 1; return; }
+    if (eqIdx === -1) {
+      const error = `Invalid format for --set. Expected KEY=VALUE, got: ${options.set}`;
+      if (options.json) console.log(JSON.stringify({ set: false, error }));
+      else console.error(chalk.red(error));
+      process.exitCode = 1; return;
+    }
     const key = options.set.slice(0, eqIdx).trim();
     const value = options.set.slice(eqIdx + 1);
-    if (!key) { console.error(chalk.red("Key cannot be empty")); process.exitCode = 1; return; }
+    if (!key) {
+      if (options.json) console.log(JSON.stringify({ set: false, error: "Key cannot be empty" }));
+      else console.error(chalk.red("Key cannot be empty"));
+      process.exitCode = 1; return;
+    }
     let existing = existsSync(envFilePath) ? readFileSync(envFilePath, "utf-8") : "";
     const keyPattern = new RegExp(`^${key}=.*$`, "m");
     const updated = keyPattern.test(existing) ? existing.replace(keyPattern, `${key}=${value}`) : existing.endsWith("\n") || existing === "" ? existing + `${key}=${value}\n` : existing + `\n${key}=${value}\n`;
     writeFileSync(envFilePath, updated, "utf-8");
-    console.log(chalk.green(`Set ${key} in ${envFilePath}`));
+    if (options.json) console.log(JSON.stringify({ set: true, key, path: envFilePath }));
+    else console.log(chalk.green(`Set ${key} in ${envFilePath}`));
     return;
   }
 
   if (name) {
     const reqs = getSkillRequirements(name);
-    if (!reqs) { console.error(`Skill '${name}' not found`); process.exitCode = 1; return; }
+    if (!reqs) {
+      if (options.json) console.log(JSON.stringify({ skill: name, error: `Skill '${name}' not found` }));
+      else console.error(`Skill '${name}' not found`);
+      process.exitCode = 1; return;
+    }
     const envVars = reqs.envVars.map((v) => ({ name: v, set: !!process.env[v] }));
     if (options.json) { console.log(JSON.stringify({ skill: name, envVars }, null, 2)); return; }
     console.log(chalk.bold(`\nAuth status for ${name}:\n`));
@@ -152,10 +166,10 @@ function handleAuth(name: string | undefined, options: { set?: string; json: boo
   }
 
   const installed = getInstalledSkills();
-  if (!installed.length) { console.log(options.json ? JSON.stringify([]) : "No skills installed"); return; }
+  if (!installed.length) { console.log(options.json ? JSON.stringify([]) : "No pinned skills"); return; }
   const report = installed.map(skillName => ({ skill: skillName, envVars: (getSkillRequirements(skillName)?.envVars ?? []).map((v) => ({ name: v, set: !!process.env[v] })) }));
   if (options.json) { console.log(JSON.stringify(report, null, 2)); return; }
-  console.log(chalk.bold(`\nAuth status (${installed.length} installed skills):\n`));
+  console.log(chalk.bold(`\nAuth status (${installed.length} pinned skills):\n`));
   for (const entry of report) {
     console.log(chalk.bold(`  ${entry.skill}`));
     if (!entry.envVars.length) console.log(chalk.dim("    No environment variables required"));
@@ -171,7 +185,7 @@ function handleWhoami(options: { json: boolean }) {
     const agentSkillsPath = getAgentSkillsDir(agent, "global");
     const exists = existsSync(agentSkillsPath);
     let skillCount = 0;
-    if (exists) try { skillCount = readdirSync(agentSkillsPath).filter((f) => f.startsWith("skill-") && statSync(join(agentSkillsPath, f)).isDirectory()).length; } catch {}
+    if (exists) try { skillCount = readdirSync(agentSkillsPath).filter((f) => !f.startsWith(".") && statSync(join(agentSkillsPath, f)).isDirectory()).length; } catch {}
     agentConfigs.push({ agent, label: AGENT_LABELS[agent], path: agentSkillsPath, exists, skillCount });
   }
   const skillsDir = getSkillPath("image").replace(/[/\\][^/\\]*$/, "");
@@ -183,8 +197,8 @@ function handleWhoami(options: { json: boolean }) {
   console.log(`${chalk.dim("Working directory:")} ${process.cwd()}`);
   console.log(`${chalk.dim("Skills directory:")}  ${skillsDir}`);
   console.log();
-  if (!installed.length) console.log(chalk.dim("No skills installed in current project"));
-  else { console.log(chalk.bold(`Installed skills (${installed.length}):`)); for (const name of installed) console.log(`  ${chalk.cyan(name)}`); }
+  if (!installed.length) console.log(chalk.dim("No pinned skills in current project"));
+  else { console.log(chalk.bold(`Pinned skills (${installed.length}):`)); for (const name of installed) console.log(`  ${chalk.cyan(name)}`); }
   console.log();
   console.log(chalk.bold("Agent configurations:"));
   for (const cfg of agentConfigs) console.log(cfg.exists ? `  ${chalk.green("\u2713")} ${cfg.agent} \u2014 ${cfg.skillCount} skill(s) at ${cfg.path}` : `  ${chalk.dim("\u2717")} ${cfg.agent} \u2014 not configured`);
@@ -192,13 +206,12 @@ function handleWhoami(options: { json: boolean }) {
 
 function handleOutdated(options: { json: boolean }) {
   const installed = getInstalledSkills();
-  if (!installed.length) { console.log(options.json ? JSON.stringify([]) : chalk.dim("No skills installed. Run: skills install <name>")); return; }
+  if (!installed.length) { console.log(options.json ? JSON.stringify([]) : chalk.dim("No pinned skills. Run: skills pin <name>")); return; }
   const outdated: Array<{ skill: string; installedVersion: string; registryVersion: string }> = [];
   const upToDate: string[] = [];
+  const meta = getInstallMeta();
   for (const name of installed) {
-    const installedPkgPath = join(process.cwd(), ".skills", normalizeSkillName(name), "package.json");
-    let installedVersion = "unknown";
-    if (existsSync(installedPkgPath)) try { installedVersion = JSON.parse(readFileSync(installedPkgPath, "utf-8")).version || "unknown"; } catch {}
+    const installedVersion = meta.skills[name]?.version ?? "unknown";
     const registryPath = getSkillPath(name);
     const registryPkgPath = join(registryPath, "package.json");
     let registryVersion = "unknown";
@@ -207,9 +220,9 @@ function handleOutdated(options: { json: boolean }) {
     else upToDate.push(name);
   }
   if (options.json) { console.log(JSON.stringify(outdated, null, 2)); return; }
-  if (!outdated.length) { console.log(chalk.green(`\nAll ${installed.length} installed skill(s) are up to date`)); return; }
-  console.log(chalk.bold(`\nOutdated skills (${outdated.length}):\n`));
+  if (!outdated.length) { console.log(chalk.green(`\nAll ${installed.length} pinned skill(s) are up to date`)); return; }
+  console.log(chalk.bold(`\nOutdated pinned skills (${outdated.length}):\n`));
   for (const entry of outdated) console.log(`  ${chalk.cyan(entry.skill)}  ${chalk.red(entry.installedVersion)} → ${chalk.green(entry.registryVersion)}`);
   if (upToDate.length > 0) console.log(chalk.dim(`\n${upToDate.length} skill(s) up to date`));
-  console.log(chalk.dim(`\nRun ${chalk.bold("skills update")} to update all outdated skills`));
+  console.log(chalk.dim(`\nRun ${chalk.bold("skills update")} to refresh outdated pins`));
 }

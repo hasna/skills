@@ -6,12 +6,13 @@ import type { Command } from "commander";
 import { SKILLS, CATEGORIES } from "../../lib/registry.js";
 
 const subcommands = [
-  "interactive", "install", "list", "search", "info", "docs", "requires",
+  "interactive", "install", "pin", "unpin", "pins", "list", "search", "info", "docs", "requires",
   "run", "init", "remove", "update", "categories", "tags", "mcp", "serve",
-  "self-update", "completion", "export", "import", "doctor", "auth", "whoami",
-  "test", "outdated", "config", "create", "sync", "validate", "diff", "schedule",
+  "self-update", "completion", "export", "import", "doctor", "auth", "env-check",
+  "setup-info", "test", "outdated", "config", "create", "sync", "validate", "diff",
+  "schedule", "registry", "feedback", "quote",
 ];
-const skillCmds = ["install", "info", "docs", "requires", "run", "remove"];
+const skillCmds = ["pin", "unpin", "info", "docs", "requires", "run", "quote"];
 const skillNames = SKILLS.map((s) => s.name);
 const categoryNames = CATEGORIES.map((c) => c);
 

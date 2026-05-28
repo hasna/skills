@@ -53,7 +53,7 @@ export function SearchView({
   if (selected.size > 0) {
     items.push({ label: "", value: "__sep__" });
     items.push({
-      label: `\u2713 Install selected (${selected.size})`,
+      label: `\u2713 Pin selected (${selected.size})`,
       value: "__confirm__",
     });
   }

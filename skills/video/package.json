@@ -1,0 +1,31 @@
+{
+  "name": "video",
+  "version": "1.0.0",
+  "description": "Generate videos using provider-cost AI backends",
+  "main": "src/index.ts",
+  "type": "module",
+  "bin": {
+    "video": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "generate": "bun run src/index.ts generate"
+  },
+  "keywords": [
+    "video-generation",
+    "ai",
+    "openai",
+    "sora",
+    "minimax",
+    "hailuo",
+    "gemini",
+    "veo",
+    "seedance"
+  ],
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

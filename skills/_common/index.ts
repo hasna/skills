@@ -1,9 +1,8 @@
 /**
  * Shared SDK for skills
  *
- * Common utilities used across skill-audio, skill-browse, skill-codefix,
- * skill-convert, skill-deploy, skill-extract, skill-image, skill-transcript,
- * skill-video, and skill-write.
+ * Common utilities used across audio, browse, codefix, convert, deploy,
+ * extract, image, transcript, video, and write.
  */
 
 export { checkSkillAuth, isRemoteExecution, requireAuthIfRemote } from './auth';

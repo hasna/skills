@@ -11,10 +11,10 @@ bun run dev                       # Run CLI in development mode (bun run src/cli
 bun test                          # Run all tests (Bun native test runner)
 bun test src/lib/registry.test.ts # Run a single test file
 bun run typecheck                 # Type-check without emitting (tsc --noEmit)
-bun run dashboard:build           # Build dashboard (cd dashboard && bun install && bun run build)
-bun run dashboard:dev             # Vite dev server for dashboard
-bun run server                    # Start HTTP dashboard server (port 3579)
-bun run server:dev                # Start dashboard server with --watch
+bun run dashboard:build           # Build Next.js dashboard (cd dashboard && bun install && bun run build)
+bun run dashboard:dev             # Next.js dev server with HMR (port 3505, proxies /api to :3579)
+bun run server                    # Start HTTP server (port 3579, serves dashboard + API)
+bun run server:dev                # Start server with --watch
 ```
 
 ## Architecture
@@ -74,7 +74,7 @@ skills/                           # 202 self-contained skill directories
 
 **MCP Server (`src/mcp/index.ts`)** -- Model Context Protocol server over stdio. 9 tools (`list_skills`, `search_skills`, `get_skill_info`, `get_skill_docs`, `install_skill`, `remove_skill`, `list_categories`, `get_requirements`, `run_skill`) and 2 resources (`skills://registry`, `skills://{name}`).
 
-**HTTP Dashboard (`src/server/serve.ts`)** -- Bun.serve that serves the Vite-built React SPA from `dashboard/dist/` and provides a REST API (`GET /api/skills`, `GET /api/categories`, `GET /api/skills/search?q=`, `GET /api/skills/:name`, `GET /api/skills/:name/docs`, `POST /api/skills/:name/install`, `POST /api/skills/:name/remove`, `GET /api/version`, `POST /api/self-update`).
+**HTTP Server** — not shipped in OSS. The SaaS dashboard and `/api/v1/*` endpoints live in the private `platform-skills` repo.
 
 **Library (`src/index.ts`)** -- npm package `@hasna/skills` re-exporting registry, installer, and skillinfo modules.
 
@@ -194,19 +194,6 @@ bun test                              # All tests
 bun test src/lib/registry.test.ts     # Single file
 bun test --timeout 30000              # Increase timeout for slow tests
 ```
-
-## Dashboard Build
-
-The dashboard is a separate Vite + React 19 + Tailwind v4 + shadcn/ui app in the `dashboard/` directory with its own `package.json`, `tsconfig.json`, and `vite.config.ts`.
-
-```bash
-bun run dashboard:build    # Installs deps and builds to dashboard/dist/
-bun run dashboard:dev      # Vite dev server with HMR
-```
-
-The built SPA is served by the HTTP server in `src/server/serve.ts`. The server resolves `dashboard/dist/` by walking up from its own `__dirname`. All non-API GET requests fall through to SPA routing (serves `index.html`).
-
-Dashboard tech: React 19, TanStack Table, Radix UI, Lucide icons, oklch color tokens with dark/light/system toggle (localStorage key: `skills-dashboard-theme`).
 
 ## Adding a New Skill
 

@@ -29,7 +29,7 @@ describe("public API exports", () => {
 
   test("AGENT_TARGETS array is populated", () => {
     expect(Array.isArray(publicAPI.AGENT_TARGETS)).toBe(true);
-    expect(publicAPI.AGENT_TARGETS.length).toBe(5);
+    expect(publicAPI.AGENT_TARGETS.length).toBe(7);
   });
 
   test("getSkill is a function", () => {
@@ -114,6 +114,14 @@ describe("public API exports", () => {
     expect(typeof publicAPI.generateSkillMd).toBe("function");
   });
 
+  test("MCP contract helpers are exported", () => {
+    expect(typeof publicAPI.createMcpContractManifest).toBe("function");
+    expect(typeof publicAPI.createSkillMcpMetadata).toBe("function");
+    expect(typeof publicAPI.describeMcpToolContracts).toBe("function");
+    expect(typeof publicAPI.listMcpToolContracts).toBe("function");
+    expect(typeof publicAPI.getMcpResourceContracts).toBe("function");
+  });
+
   test("key functions return expected results", () => {
     // Verify getSkill works through the public API
     const skill = publicAPI.getSkill("image");
@@ -127,7 +135,7 @@ describe("public API exports", () => {
     // Verify clean basic profile works through the public API
     const basic = publicAPI.loadRegistryProfile("basic");
     expect(basic.map((s) => s.name)).toEqual([...publicAPI.BASIC_SKILL_NAMES]);
-    expect(publicAPI.isBasicSkillName("skill-image")).toBe(true);
+    expect(publicAPI.isBasicSkillName("image")).toBe(true);
     expect(publicAPI.isBasicSkillName("deepresearch")).toBe(false);
 
     // Verify skillExists works through the public API

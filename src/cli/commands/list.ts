@@ -6,15 +6,20 @@ import chalk from "chalk";
 import type { Command } from "commander";
 import {
   CATEGORIES,
-  getSkillsByCategory,
   loadRegistry,
   loadRegistryProfile,
   searchSkills,
   findSimilarSkills,
+  type SkillMeta,
   type SkillRegistryProfile,
 } from "../../lib/registry.js";
+import { loadRemoteRegistry } from "../../lib/remote-registry.js";
 import { getInstalledSkills, getInstallMeta } from "../../lib/installer.js";
-import { normalizeSkillName } from "../../lib/utils.js";
+import {
+  getPublicSkillDiscovery,
+  publicDiscoveryPriceLabel,
+  type PublicSkillDiscovery,
+} from "../../platform/skills/discovery.js";
 
 export function registerBrowse(parent: Command) {
   // List
@@ -22,13 +27,16 @@ export function registerBrowse(parent: Command) {
     .command("list")
     .alias("ls")
     .option("-c, --category <category>", "Filter by category")
-    .option("-i, --installed", "Show only installed skills", false)
+    .option("-p, --pinned", "Show only pinned skills", false)
     .option("-t, --tags <tags>", "Filter by comma-separated tags (OR logic, case-insensitive)")
     .option("--all", "Show the full skill registry instead of the default basic set", false)
+    .option("--remote", "Use remote registry from SKILLS_API_URL or config apiUrl", false)
     .option("--json", "Output as JSON", false)
     .option("--brief", "One line per skill: name \u2014 description [category]", false)
-    .option("--format <format>", "Output format: compact (names only) or csv (name,category,description)")
-    .action((options) => handleList(options));
+    .option("--format <format>", "Output format: compact (names only) or csv (name,category,price,description)")
+    .action((options) => {
+      void handleList(options).catch(handleBrowseError);
+    });
 
   // Search
   parent
@@ -37,38 +45,79 @@ export function registerBrowse(parent: Command) {
     .argument("<query>", "Search term")
     .option("--json", "Output as JSON", false)
     .option("--brief", "One line per skill: name \u2014 description [category]", false)
-    .option("--format <format>", "Output format: compact (names only) or csv (name,category,description)")
+    .option("--format <format>", "Output format: compact (names only) or csv (name,category,price,description)")
     .option("-c, --category <category>", "Filter results by category")
     .option("-t, --tags <tags>", "Filter results by comma-separated tags (OR logic, case-insensitive)")
     .option("--all", "Search the full skill registry instead of the default basic set", false)
+    .option("--remote", "Use remote registry from SKILLS_API_URL or config apiUrl", false)
     .description("Search for skills")
-    .action((query: string, options) => handleSearch(query, options));
+    .action((query: string, options) => {
+      void handleSearch(query, options).catch(handleBrowseError);
+    });
 
   // Categories
   parent
     .command("categories")
     .option("--json", "Output as JSON", false)
+    .option("--remote", "Use remote registry from SKILLS_API_URL or config apiUrl", false)
     .description("List all categories")
-    .action((options: { json: boolean }) => handleCategories(options));
+    .action((options: { json: boolean; remote: boolean }) => {
+      void handleCategories(options).catch(handleBrowseError);
+    });
 
   // Tags
   parent
     .command("tags")
     .option("--json", "Output as JSON", false)
+    .option("--remote", "Use remote registry from SKILLS_API_URL or config apiUrl", false)
     .description("List all unique tags with counts")
-    .action((options: { json: boolean }) => handleTags(options));
+    .action((options: { json: boolean; remote: boolean }) => {
+      void handleTags(options).catch(handleBrowseError);
+    });
 }
 
-function formatBrief(skill: { name: string; description: string; category: string }) {
-  return `${skill.name} \u2014 ${skill.description} [${skill.category}]`;
+function formatBrief(skill: PublicSkillDiscovery) {
+  return `${skill.name} \u2014 ${skill.description} (${publicDiscoveryPriceLabel(skill)}) [${skill.category}]`;
 }
 
-function handleList(options: any) {
+function formatSkillLine(skill: PublicSkillDiscovery): string {
+  return `  ${chalk.cyan(skill.name)}${skill.source === "custom" ? chalk.yellow(" [custom]") : ""} ${chalk.dim(`(${publicDiscoveryPriceLabel(skill)})`)} - ${skill.description}`;
+}
+
+function enrichDiscovery<T extends SkillMeta>(skills: T[]): Array<PublicSkillDiscovery<T>> {
+  return skills.map(getPublicSkillDiscovery);
+}
+
+function handleBrowseError(error: unknown) {
+  console.error(chalk.red((error as Error).message));
+  process.exitCode = 1;
+}
+
+async function getBrowseRegistry(options: { all?: boolean; remote?: boolean }): Promise<SkillMeta[]> {
+  if (options.remote) return loadRemoteRegistry();
+  const profile: SkillRegistryProfile = options.all ? "all" : "basic";
+  return loadRegistryProfile(profile);
+}
+
+function registryCategories(registry: SkillMeta[]): string[] {
+  const known = CATEGORIES.filter((category) => registry.some((skill) => skill.category === category));
+  const extra = Array.from(new Set(registry.map((skill) => skill.category)))
+    .filter((category) => !CATEGORIES.includes(category as (typeof CATEGORIES)[number]))
+    .sort();
+  return [...known, ...extra];
+}
+
+function availableCategories(options: { remote?: boolean }, registry: SkillMeta[]): string[] {
+  return options.remote ? registryCategories(registry) : [...CATEGORIES];
+}
+
+async function handleList(options: any) {
   const brief = options.brief && !options.json;
   const fmt = !options.json ? (options.format as string | undefined) : undefined;
   const profile: SkillRegistryProfile = options.all ? "all" : "basic";
+  const registry = await getBrowseRegistry(options);
 
-  if (options.installed) {
+  if (options.pinned) {
     const installed = getInstalledSkills();
     if (options.json) {
       const meta = getInstallMeta();
@@ -80,11 +129,11 @@ function handleList(options: any) {
       })));
       return;
     }
-    if (installed.length === 0) { console.log(chalk.dim("No skills installed")); return; }
+    if (installed.length === 0) { console.log(chalk.dim("No pinned skills")); return; }
     if (brief) { for (const name of installed) console.log(name); return; }
     const meta = getInstallMeta();
     const registry = loadRegistry();
-    console.log(chalk.bold(`\nInstalled skills (${installed.length}):\n`));
+    console.log(chalk.bold(`\nPinned skills (${installed.length}):\n`));
     for (const name of installed) {
       const m = meta.skills[name];
       const s = registry.find((r) => r.name === name);
@@ -96,32 +145,35 @@ function handleList(options: any) {
   const tagFilter = options.tags ? options.tags.split(",").map((t: string) => t.trim().toLowerCase()).filter(Boolean) : null;
 
   if (options.category) {
-    const category = CATEGORIES.find((c: string) => c.toLowerCase() === options.category.toLowerCase());
-    if (!category) { console.error(`Unknown category: ${options.category}\nAvailable: ${CATEGORIES.join(", ")}`); process.exitCode = 1; return; }
-    let skills = loadRegistryProfile(profile).filter((s) => s.category === category);
+    const categories = availableCategories(options, registry);
+    const category = categories.find((c: string) => c.toLowerCase() === options.category.toLowerCase());
+    if (!category) { console.error(`Unknown category: ${options.category}\nAvailable: ${categories.join(", ")}`); process.exitCode = 1; return; }
+    let skills = registry.filter((s) => s.category === category);
     if (tagFilter) skills = skills.filter((s) => s.tags.some((tag) => tagFilter.includes(tag.toLowerCase())));
-    if (options.json) { console.log(JSON.stringify(skills, null, 2)); return; }
-    if (brief) { for (const s of skills) console.log(formatBrief(s)); return; }
+    const output = enrichDiscovery(skills);
+    if (options.json) { console.log(JSON.stringify(output, null, 2)); return; }
+    if (brief) { for (const s of output) console.log(formatBrief(s)); return; }
     console.log(chalk.bold(`\n${category} (${skills.length}):\n`));
-    for (const s of skills) console.log(`  ${chalk.cyan(s.name)} - ${s.description}`);
+    for (const s of output) console.log(formatSkillLine(s));
     return;
   }
 
   if (tagFilter) {
-    const skills = loadRegistryProfile(profile).filter((s) => s.tags.some((tag) => tagFilter.includes(tag.toLowerCase())));
-    if (options.json) { console.log(JSON.stringify(skills, null, 2)); return; }
-    if (brief) { for (const s of skills) console.log(formatBrief(s)); return; }
+    const skills = registry.filter((s) => s.tags.some((tag) => tagFilter.includes(tag.toLowerCase())));
+    const output = enrichDiscovery(skills);
+    if (options.json) { console.log(JSON.stringify(output, null, 2)); return; }
+    if (brief) { for (const s of output) console.log(formatBrief(s)); return; }
     console.log(chalk.bold(`\nSkills matching tags [${tagFilter.join(", ")}] (${skills.length}):\n`));
-    for (const s of skills) console.log(`  ${chalk.cyan(s.name)}${s.source === "custom" ? chalk.yellow(" [custom]") : ""} ${chalk.dim(`[${s.category}]`)} - ${s.description}`);
+    for (const s of output) console.log(`  ${chalk.cyan(s.name)}${s.source === "custom" ? chalk.yellow(" [custom]") : ""} ${chalk.dim(`[${s.category}]`)} ${chalk.dim(`(${publicDiscoveryPriceLabel(s)})`)} - ${s.description}`);
     return;
   }
 
-  const allSkills = loadRegistryProfile(profile);
+  const allSkills = enrichDiscovery(registry);
   if (options.json) { console.log(JSON.stringify(allSkills, null, 2)); return; }
   if (fmt === "compact") { for (const s of allSkills) console.log(s.name); return; }
   if (fmt === "csv") {
-    console.log("name,category,description,source");
-    for (const s of allSkills) { const desc = s.description.replace(/"/g, '""'); console.log(`${s.name},${s.category},"${desc}",${s.source ?? "official"}`); }
+    console.log("name,category,price,description,source");
+    for (const s of allSkills) { const desc = s.description.replace(/"/g, '""'); console.log(`${s.name},${s.category},"${publicDiscoveryPriceLabel(s)}","${desc}",${s.source ?? "official"}`); }
     return;
   }
   if (brief) {
@@ -130,27 +182,28 @@ function handleList(options: any) {
   }
 
   console.log(chalk.bold(`\nAvailable ${profile === "basic" ? "default " : ""}skills (${allSkills.length}):\n`));
-  for (const category of CATEGORIES) {
+  for (const category of registryCategories(allSkills)) {
     const skills = allSkills.filter((s) => s.category === category);
     if (skills.length === 0) continue;
     console.log(chalk.bold(`${category} (${skills.length}):`));
-    for (const s of skills) console.log(`  ${chalk.cyan(s.name)}${s.source === "custom" ? chalk.yellow(" [custom]") : ""} - ${s.description}`);
+    for (const s of skills) console.log(formatSkillLine(s));
     console.log();
   }
   const customUncategorized = allSkills.filter((s) => s.source === "custom" && !CATEGORIES.includes(s.category as (typeof CATEGORIES)[number]));
   if (customUncategorized.length > 0) {
     console.log(chalk.bold(`Custom (${customUncategorized.length}):`));
-    for (const s of customUncategorized) console.log(`  ${chalk.yellow(s.name)} - ${s.description}`);
+    for (const s of customUncategorized) console.log(`  ${chalk.yellow(s.name)} ${chalk.dim(`(${publicDiscoveryPriceLabel(s)})`)} - ${s.description}`);
   }
 }
 
-function handleSearch(query: string, options: any) {
-  const profile: SkillRegistryProfile = options.all ? "all" : "basic";
-  let results = searchSkills(query, loadRegistryProfile(profile));
+async function handleSearch(query: string, options: any) {
+  const registry = await getBrowseRegistry(options);
+  let results = searchSkills(query, registry);
 
   if (options.category) {
-    const category = CATEGORIES.find((c: string) => c.toLowerCase() === options.category!.toLowerCase());
-    if (!category) { console.error(`Unknown category: ${options.category}\nAvailable: ${CATEGORIES.join(", ")}`); process.exitCode = 1; return; }
+    const categories = availableCategories(options, registry);
+    const category = categories.find((c: string) => c.toLowerCase() === options.category!.toLowerCase());
+    if (!category) { console.error(`Unknown category: ${options.category}\nAvailable: ${categories.join(", ")}`); process.exitCode = 1; return; }
     results = results.filter((s) => s.category === category);
   }
   if (options.tags) {
@@ -161,37 +214,45 @@ function handleSearch(query: string, options: any) {
   const brief = options.brief && !options.json;
   const fmt = !options.json ? options.format : undefined;
 
-  if (options.json) { console.log(JSON.stringify(results, null, 2)); return; }
+  const output = enrichDiscovery(results);
+  if (options.json) { console.log(JSON.stringify(output, null, 2)); return; }
   if (results.length === 0) {
     console.log(chalk.dim(`No skills found for "${query}"`));
-    const similar = findSimilarSkills(query, 5, loadRegistryProfile(profile));
+    const similar = findSimilarSkills(query, 5, registry);
     if (similar.length > 0) console.log(chalk.dim(`Related skills: ${similar.join(", ")}`));
     return;
   }
-  if (fmt === "compact") { for (const s of results) console.log(s.name); return; }
+  if (fmt === "compact") { for (const s of output) console.log(s.name); return; }
   if (fmt === "csv") {
-    console.log("name,category,description");
-    for (const s of results) { const desc = s.description.replace(/"/g, '""'); console.log(`${s.name},${s.category},"${desc}"`); }
+    console.log("name,category,price,description");
+    for (const s of output) { const desc = s.description.replace(/"/g, '""'); console.log(`${s.name},${s.category},"${publicDiscoveryPriceLabel(s)}","${desc}"`); }
     return;
   }
-  if (brief) { for (const s of results) console.log(formatBrief(s)); return; }
-  console.log(chalk.bold(`\nFound ${results.length} skill(s):\n`));
-  for (const s of results) {
+  if (brief) { for (const s of output) console.log(formatBrief(s)); return; }
+  console.log(chalk.bold(`\nFound ${output.length} skill(s):\n`));
+  for (const s of output) {
     console.log(`  ${chalk.cyan(s.name)} ${chalk.dim(`[${s.category}]`)}`);
+    console.log(`    ${chalk.dim("Price:")} ${publicDiscoveryPriceLabel(s)}`);
     console.log(`    ${s.description}`);
   }
 }
 
-function handleCategories(options: { json: boolean }) {
-  const cats = CATEGORIES.map((category) => ({ name: category, count: getSkillsByCategory(category).length }));
+async function handleCategories(options: { json: boolean; remote: boolean }) {
+  const registry = await getBrowseRegistry({ all: true, remote: options.remote });
+  const cats = registryCategories(registry).map((category) => ({
+    name: category,
+    count: registry.filter((skill) => skill.category === category).length,
+  }));
   if (options.json) { console.log(JSON.stringify(cats, null, 2)); return; }
   console.log(chalk.bold("\nCategories:\n"));
   for (const { name, count } of cats) console.log(`  ${name} (${count})`);
 }
 
-function handleTags(options: { json: boolean }) {
+async function handleTags(options: { json: boolean; remote: boolean }) {
   const tagCounts = new Map<string, number>();
-  for (const skill of loadRegistry()) for (const tag of skill.tags) tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+  for (const skill of await getBrowseRegistry({ all: true, remote: options.remote })) {
+    for (const tag of skill.tags) tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+  }
   const sorted = Array.from(tagCounts.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([name, count]) => ({ name, count }));
   if (options.json) { console.log(JSON.stringify(sorted, null, 2)); return; }
   console.log(chalk.bold("\nTags:\n"));

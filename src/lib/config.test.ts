@@ -80,11 +80,19 @@ describe("config", () => {
         defaultAgent: "gemini",
         defaultScope: "project",
         format: "csv",
+        apiUrl: "https://skills.example.com/api/v1/",
       }));
       const config = loadConfig();
       expect(config.defaultAgent).toBe("gemini");
       expect(config.defaultScope).toBe("project");
       expect(config.format).toBe("csv");
+      expect(config.apiUrl).toBe("https://skills.example.com/api/v1");
+    });
+
+    test("ignores invalid apiUrl values", () => {
+      writeFileSync(join(tmpDir, "skills.config.json"), JSON.stringify({ apiUrl: "not a url" }));
+      const config = loadConfig();
+      expect(config.apiUrl).toBeUndefined();
     });
   });
 
@@ -123,6 +131,16 @@ describe("config", () => {
 
     test("throws on invalid value", () => {
       expect(() => saveConfig("defaultAgent", "badAgent")).toThrow("Invalid value");
+    });
+
+    test("saves apiUrl after URL validation", () => {
+      saveConfig("apiUrl", "https://skills.example.com/api/v1/", "project");
+      const content = JSON.parse(readFileSync(join(tmpDir, "skills.config.json"), "utf-8"));
+      expect(content.apiUrl).toBe("https://skills.example.com/api/v1");
+    });
+
+    test("throws on invalid apiUrl", () => {
+      expect(() => saveConfig("apiUrl", "file:///tmp/skills")).toThrow("Expected an http(s) URL");
     });
 
     test("overwrites existing malformed file", () => {
