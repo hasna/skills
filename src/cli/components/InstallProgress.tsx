@@ -44,8 +44,8 @@ export function InstallProgress({
       <Box marginBottom={1}>
         <Text bold>
           {installing
-            ? `Installing skills (${current + 1}/${skills.length})...`
-            : "Installation complete!"}
+            ? `Pinning skills (${current + 1}/${skills.length})...`
+            : "Pinning complete!"}
         </Text>
       </Box>
 
@@ -79,7 +79,7 @@ export function InstallProgress({
         <Box marginTop={1} flexDirection="column">
           <Text>
             <Text color="green">
-              {results.filter((r) => r.success).length} installed
+              {results.filter((r) => r.success).length} pinned
             </Text>
             {results.some((r) => !r.success) && (
               <Text color="red">
@@ -88,7 +88,7 @@ export function InstallProgress({
             )}
           </Text>
           <Text dimColor>
-            Skills installed to .skills/skills/
+            Pins saved to .skills/project.json
           </Text>
         </Box>
       )}

@@ -18,16 +18,13 @@ bun run src/index.ts
 ## Project Structure
 
 - `src/index.ts` - CLI entry point
-- `SKILL.md` - Claude Code / Codex skill definition
+- `SKILL.md` - bundled skill instructions served through Skills CLI/MCP
 
-## Skill Installation
+## Agent Integration
 
-For Claude Code:
+Do not copy or symlink this skill into agent-native skill folders. Register the
+root Skills MCP server instead:
+
 ```bash
-ln -s $(pwd) ~/.claude/skills/npmpublish
-```
-
-For Codex:
-```bash
-ln -s $(pwd) ~/.codex/skills/npmpublish
+skills mcp --register all
 ```

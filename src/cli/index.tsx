@@ -6,7 +6,7 @@ import chalk from "chalk";
 import pkg from "../../package.json" with { type: "json" };
 import { App } from "./components/App.js";
 import { loadBasicRegistry } from "../lib/registry.js";
-import { normalizeSkillName } from "../lib/utils.js";
+import { getCompactSkillDiscovery } from "../platform/skills/discovery.js";
 
 const isTTY = (process.stdout.isTTY ?? false) && (process.stdin.isTTY ?? false);
 
@@ -21,7 +21,7 @@ const program = new Command();
 
 program
   .name("skills")
-  .description("Install AI agent skills for your project")
+  .description("Discover and run AI agent skills through the Skills CLI/MCP")
   .version(pkg.version)
   .option("--verbose", "Enable verbose logging", false)
   .option("--no-color", "Disable colored output (also respects NO_COLOR env var)")
@@ -34,7 +34,7 @@ program
   .description("Interactive skill browser (TUI)")
   .action(() => {
     if (!isTTY) {
-      console.log(JSON.stringify(loadBasicRegistry().map(s => ({ name: s.name, category: s.category }))));
+      console.log(JSON.stringify(loadBasicRegistry().map(getCompactSkillDiscovery)));
       process.exit(0);
     }
     render(<App />);
@@ -68,7 +68,13 @@ registerCreateSync(program);
 const { registerSchedule } = await import("./commands/schedule.js");
 registerSchedule(program);
 
+const { registerRegistry } = await import("./commands/registry.js");
+registerRegistry(program);
+
+const { registerAuth } = await import("./commands/auth.js");
+registerAuth(program);
+
 const { registerFeedback } = await import("./commands/feedback.js");
 registerFeedback(program);
 
-program.parse();
+await program.parseAsync();

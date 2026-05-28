@@ -10,6 +10,7 @@ export const SKILL_ALIASES = {
   "pdf-reader": "read-pdf",
   "generate-image": "image",
   "image-generator": "image",
+  "create-blog-article": "blog-article",
 } as const;
 
 export type SkillAlias = keyof typeof SKILL_ALIASES;

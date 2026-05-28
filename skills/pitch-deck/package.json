@@ -1,0 +1,9 @@
+{
+  "name": "pitch-deck",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "pitch-deck": "src/index.ts"
+  }
+}

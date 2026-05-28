@@ -17,13 +17,39 @@ export interface SkillsConfig {
   defaultAgent?: "claude" | "codex" | "gemini" | "pi" | "opencode" | "all";
   defaultScope?: "global" | "project";
   format?: "compact" | "json" | "csv";
+  apiUrl?: string;
 }
 
-const VALID_KEYS: Record<keyof SkillsConfig, string[]> = {
+const ENUM_KEYS: Partial<Record<keyof SkillsConfig, string[]>> = {
   defaultAgent: ["claude", "codex", "gemini", "pi", "opencode", "all"],
   defaultScope: ["global", "project"],
   format: ["compact", "json", "csv"],
 };
+
+const STRING_KEYS = ["apiUrl"] as const satisfies readonly (keyof SkillsConfig)[];
+
+function validKeys(): string[] {
+  return [...Object.keys(ENUM_KEYS), ...STRING_KEYS];
+}
+
+function normalizeConfigValue(key: keyof SkillsConfig, value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+
+  const allowed = ENUM_KEYS[key];
+  if (allowed) return allowed.includes(value) ? value : undefined;
+
+  if (key === "apiUrl") {
+    try {
+      const url = new URL(value);
+      if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+      return value.replace(/\/+$/, "");
+    } catch {
+      return undefined;
+    }
+  }
+
+  return undefined;
+}
 
 export type ConfigScope = "global" | "project";
 
@@ -70,13 +96,10 @@ function readConfigFile(path: string): Partial<SkillsConfig> {
     const raw = readFileSync(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
-    // Basic type filtering — only keep known keys with valid values
     const config: Partial<SkillsConfig> = {};
-    for (const [key, allowed] of Object.entries(VALID_KEYS)) {
-      const val = parsed[key];
-      if (typeof val === "string" && allowed.includes(val)) {
-        (config as any)[key] = val;
-      }
+    for (const key of validKeys() as (keyof SkillsConfig)[]) {
+      const value = normalizeConfigValue(key, parsed[key]);
+      if (value !== undefined) (config as Record<string, string>)[key] = value;
     }
     return config;
   } catch {
@@ -97,12 +120,18 @@ export function loadConfig(): SkillsConfig {
  * Save a single config key-value pair to the specified scope
  */
 export function saveConfig(key: string, value: string, scope: ConfigScope = "project"): void {
-  if (!(key in VALID_KEYS)) {
-    throw new Error(`Unknown config key: ${key}. Valid keys: ${Object.keys(VALID_KEYS).join(", ")}`);
+  if (!validKeys().includes(key)) {
+    throw new Error(`Unknown config key: ${key}. Valid keys: ${validKeys().join(", ")}`);
   }
-  const allowed = VALID_KEYS[key as keyof SkillsConfig];
-  if (!allowed.includes(value)) {
-    throw new Error(`Invalid value '${value}' for ${key}. Allowed: ${allowed.join(", ")}`);
+
+  const normalized = normalizeConfigValue(key as keyof SkillsConfig, value);
+  if (normalized === undefined) {
+    const allowed = ENUM_KEYS[key as keyof SkillsConfig];
+    throw new Error(
+      allowed
+        ? `Invalid value '${value}' for ${key}. Allowed: ${allowed.join(", ")}`
+        : `Invalid value '${value}' for ${key}. Expected an http(s) URL`
+    );
   }
 
   const filePath = getConfigPath(scope);
@@ -124,6 +153,6 @@ export function saveConfig(key: string, value: string, scope: ConfigScope = "pro
     }
   }
 
-  existing[key] = value;
+  existing[key] = normalized;
   writeFileSync(filePath, JSON.stringify(existing, null, 2) + "\n");
 }

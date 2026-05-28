@@ -117,6 +117,8 @@ export {
   buildSkillsApiUrl,
   getConfiguredApiUrl,
   loadRemoteRegistry,
+  loadRemoteSkill,
+  parseRemoteSkillPayload,
   parseRemoteRegistryPayload,
   type RemoteRegistryOptions,
 } from "./lib/remote-registry.js";
@@ -142,6 +144,35 @@ export {
   type SkillValidationMessage,
   type SkillValidationResult,
 } from "./lib/skill-validation.js";
+
+export {
+  createRegistrySyncArtifact,
+  writeRegistrySyncArtifact,
+  type RegistrySyncArtifact,
+  type RegistrySyncOptions,
+  type RegistrySyncSkill,
+} from "./lib/registry-sync.js";
+
+export {
+  MCP_CONTRACT_SCHEMA_VERSION,
+  createMcpContractManifest,
+  createSkillMcpMetadata,
+  describeMcpToolContracts,
+  getMcpResourceContracts,
+  getMcpToolDescriptions,
+  listMcpToolContracts,
+  summarizeMcpToolContract,
+  type DescribedMcpToolContract,
+  type JsonSchemaObject,
+  type McpContractManifest,
+  type McpResourceContract,
+  type McpToolCategory,
+  type McpToolContract,
+  type McpToolSideEffect,
+  type SkillMcpMetadata,
+  type SkillMcpSchemaContract,
+  type UnknownMcpToolContract,
+} from "./lib/mcp-contracts.js";
 
 export {
   getFeedbackDbPath,

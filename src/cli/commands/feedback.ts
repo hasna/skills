@@ -31,7 +31,7 @@ export function registerFeedback(parent: Command) {
           version: pkg.version,
         });
         if (options.json) console.log(JSON.stringify(result, null, 2));
-        else console.log(chalk.green(`Feedback saved (${result.category})`));
+        else console.log(chalk.green(`✓ Feedback saved (${result.category})`));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (options.json) console.log(JSON.stringify({ saved: false, error: message }));

@@ -11,10 +11,10 @@ bun run dev                       # Run CLI in development mode (bun run src/cli
 bun test                          # Run all tests (Bun native test runner)
 bun test src/lib/registry.test.ts # Run a single test file
 bun run typecheck                 # Type-check without emitting (tsc --noEmit)
-bun run dashboard:build           # Build dashboard (cd dashboard && bun install && bun run build)
-bun run dashboard:dev             # Vite dev server for dashboard
-bun run server                    # Start HTTP dashboard server (port 3579)
-bun run server:dev                # Start dashboard server with --watch
+bun run dashboard:build           # Build Next.js dashboard (cd dashboard && bun install && bun run build)
+bun run dashboard:dev             # Next.js dev server with HMR (port 3505, proxies /api to :3579)
+bun run server                    # Start HTTP server (port 3579, serves dashboard + API)
+bun run server:dev                # Start server with --watch
 ```
 
 ## Architecture
@@ -36,7 +36,7 @@ src/
 │   └── serve.test.ts
 ├── lib/
 │   ├── registry.ts               # SKILLS array (202 entries) + CATEGORIES (17)
-│   ├── installer.ts              # Install/remove to .skills/skills/ and agent dirs
+│   ├── installer.ts              # Install/remove to .skills/ and agent dirs
 │   ├── skillinfo.ts              # Docs, requirements, env var extraction, run
 │   ├── utils.ts                  # normalizeSkillName()
 │   ├── registry.test.ts
@@ -62,8 +62,8 @@ dashboard/                        # Vite + React 19 + Tailwind v4 + shadcn/ui
 
 skills/                           # 202 self-contained skill directories
 ├── _common/                      # Shared utilities for skills
-├── image/
-├── deepresearch/
+├── skill-image/
+├── skill-deep-research/
 ├── ...
 └── tsconfig.base.json
 ```
@@ -74,7 +74,7 @@ skills/                           # 202 self-contained skill directories
 
 **MCP Server (`src/mcp/index.ts`)** -- Model Context Protocol server over stdio. 9 tools (`list_skills`, `search_skills`, `get_skill_info`, `get_skill_docs`, `install_skill`, `remove_skill`, `list_categories`, `get_requirements`, `run_skill`) and 2 resources (`skills://registry`, `skills://{name}`).
 
-**HTTP Dashboard (`src/server/serve.ts`)** -- Bun.serve that serves the Vite-built React SPA from `dashboard/dist/` and provides a REST API (`GET /api/skills`, `GET /api/categories`, `GET /api/skills/search?q=`, `GET /api/skills/:name`, `GET /api/skills/:name/docs`, `POST /api/skills/:name/install`, `POST /api/skills/:name/remove`, `GET /api/version`, `POST /api/self-update`).
+**HTTP Server** — not shipped in OSS. The SaaS dashboard and `/api/v1/*` endpoints live in the private `platform-skills` repo.
 
 **Library (`src/index.ts`)** -- npm package `@hasna/skills` re-exporting registry, installer, and skillinfo modules.
 
@@ -82,22 +82,22 @@ skills/                           # 202 self-contained skill directories
 
 **`src/lib/registry.ts`** -- The `SKILLS` array (202 entries) with `SkillMeta` interface (name, displayName, description, category, tags) and `CATEGORIES` tuple (17 categories). Functions: `getSkill()`, `getSkillsByCategory()`, `searchSkills()`.
 
-**`src/lib/installer.ts`** -- Copies skill source into `.skills/skills/` in the user's project. Updates `.skills/index.ts` on every install/remove. Also supports agent-specific installs (copies SKILL.md to `~/.claude/skills/`, `~/.codex/skills/`, or `~/.gemini/skills/`). Functions: `installSkill()`, `installSkills()`, `removeSkill()`, `getInstalledSkills()`, `installSkillForAgent()`, `removeSkillForAgent()`, `resolveAgents()`.
+**`src/lib/installer.ts`** -- Copies skill source into `.skills/` in the user's project. Updates `.skills/index.ts` on every install/remove. Also supports agent-specific installs (copies SKILL.md to `~/.claude/skills/`, `~/.codex/skills/`, or `~/.gemini/skills/`). Functions: `installSkill()`, `installSkills()`, `removeSkill()`, `getInstalledSkills()`, `installSkillForAgent()`, `removeSkillForAgent()`, `resolveAgents()`.
 
 **`src/lib/skillinfo.ts`** -- Reads docs (priority: SKILL.md > README.md > CLAUDE.md), extracts env vars and system deps via regex patterns, reads CLI command from package.json bin field, generates SKILL.md from metadata if missing, can execute skills via `runSkill()` (auto-installs deps, spawns via Bun). Functions: `getSkillDocs()`, `getSkillBestDoc()`, `getSkillRequirements()`, `runSkill()`, `generateEnvExample()`, `generateSkillMd()`.
 
-**`src/lib/utils.ts`** -- `normalizeSkillName()` preserves the exact requested skill name. Legacy `skill-*` aliases are intentionally not supported.
+**`src/lib/utils.ts`** -- `normalizeSkillName()` which prefixes `skill-` if missing.
 
 ## Key Patterns
 
 ### Skill Name Normalization
 
-Registry, filesystem directories, package names, and bin names all use bare names such as `image`. Legacy `skill-*` aliases are intentionally not supported.
+Registry uses bare names (`image`), filesystem uses prefixed names (`skill-image`). `normalizeSkillName()` in `src/lib/utils.ts` handles conversion. This applies everywhere: installer, skillinfo, server, MCP.
 
 ### Installation Modes
 
-1. **Full source install** (default): copies entire `skills/{name}/` to `.skills/skills/{name}/` in the project, auto-generates `.skills/index.ts` with re-exports.
-2. **Agent install** (`--for claude|codex|gemini|all`): copies only SKILL.md to `~/.{agent}/skills/{name}/SKILL.md`. If SKILL.md does not exist, one is generated from registry metadata + README.md/CLAUDE.md content via `generateSkillMd()`.
+1. **Full source install** (default): copies entire `skills/skill-{name}/` to `.skills/skill-{name}/` in the project, auto-generates `.skills/index.ts` with re-exports.
+2. **Agent install** (`--for claude|codex|gemini|all`): copies only SKILL.md to `~/.{agent}/skills/skill-{name}/SKILL.md`. If SKILL.md does not exist, one is generated from registry metadata + README.md/CLAUDE.md content via `generateSkillMd()`.
 
 ### Path Resolution
 
@@ -135,10 +135,10 @@ Three separate `bun build` invocations in the build script:
 
 ## Skill Structure Template
 
-Each skill under `skills/{name}/` follows this structure:
+Each skill under `skills/skill-{name}/` follows this structure:
 
 ```
-skills/{name}/
+skills/skill-{name}/
 ├── src/
 │   ├── index.ts          # Main entry / programmatic API
 │   ├── commands/          # CLI command handlers (optional)
@@ -195,22 +195,9 @@ bun test src/lib/registry.test.ts     # Single file
 bun test --timeout 30000              # Increase timeout for slow tests
 ```
 
-## Dashboard Build
-
-The dashboard is a separate Vite + React 19 + Tailwind v4 + shadcn/ui app in the `dashboard/` directory with its own `package.json`, `tsconfig.json`, and `vite.config.ts`.
-
-```bash
-bun run dashboard:build    # Installs deps and builds to dashboard/dist/
-bun run dashboard:dev      # Vite dev server with HMR
-```
-
-The built SPA is served by the HTTP server in `src/server/serve.ts`. The server resolves `dashboard/dist/` by walking up from its own `__dirname`. All non-API GET requests fall through to SPA routing (serves `index.html`).
-
-Dashboard tech: React 19, TanStack Table, Radix UI, Lucide icons, oklch color tokens with dark/light/system toggle (localStorage key: `skills-dashboard-theme`).
-
 ## Adding a New Skill
 
-1. Create `skills/{name}/` with `src/index.ts`, `package.json`, `tsconfig.json`, `SKILL.md`
+1. Create `skills/skill-{name}/` with `src/index.ts`, `package.json`, `tsconfig.json`, `SKILL.md`
 2. Add entry to the `SKILLS` array in `src/lib/registry.ts` (name, displayName, description, category from `CATEGORIES`, tags)
 3. Run `bun test` to verify the registry and structural validation tests pass
 

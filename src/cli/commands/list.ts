@@ -15,6 +15,11 @@ import {
 } from "../../lib/registry.js";
 import { loadRemoteRegistry } from "../../lib/remote-registry.js";
 import { getInstalledSkills, getInstallMeta } from "../../lib/installer.js";
+import {
+  getPublicSkillDiscovery,
+  publicDiscoveryPriceLabel,
+  type PublicSkillDiscovery,
+} from "../../platform/skills/discovery.js";
 
 export function registerBrowse(parent: Command) {
   // List
@@ -28,7 +33,7 @@ export function registerBrowse(parent: Command) {
     .option("--remote", "Use remote registry from SKILLS_API_URL or config apiUrl", false)
     .option("--json", "Output as JSON", false)
     .option("--brief", "One line per skill: name \u2014 description [category]", false)
-    .option("--format <format>", "Output format: compact (names only) or csv (name,category,description)")
+    .option("--format <format>", "Output format: compact (names only) or csv (name,category,price,description)")
     .action((options) => {
       void handleList(options).catch(handleBrowseError);
     });
@@ -40,7 +45,7 @@ export function registerBrowse(parent: Command) {
     .argument("<query>", "Search term")
     .option("--json", "Output as JSON", false)
     .option("--brief", "One line per skill: name \u2014 description [category]", false)
-    .option("--format <format>", "Output format: compact (names only) or csv (name,category,description)")
+    .option("--format <format>", "Output format: compact (names only) or csv (name,category,price,description)")
     .option("-c, --category <category>", "Filter results by category")
     .option("-t, --tags <tags>", "Filter results by comma-separated tags (OR logic, case-insensitive)")
     .option("--all", "Search the full skill registry instead of the default basic set", false)
@@ -71,8 +76,16 @@ export function registerBrowse(parent: Command) {
     });
 }
 
-function formatBrief(skill: { name: string; description: string; category: string }) {
-  return `${skill.name} \u2014 ${skill.description} [${skill.category}]`;
+function formatBrief(skill: PublicSkillDiscovery) {
+  return `${skill.name} \u2014 ${skill.description} (${publicDiscoveryPriceLabel(skill)}) [${skill.category}]`;
+}
+
+function formatSkillLine(skill: PublicSkillDiscovery): string {
+  return `  ${chalk.cyan(skill.name)}${skill.source === "custom" ? chalk.yellow(" [custom]") : ""} ${chalk.dim(`(${publicDiscoveryPriceLabel(skill)})`)} - ${skill.description}`;
+}
+
+function enrichDiscovery<T extends SkillMeta>(skills: T[]): Array<PublicSkillDiscovery<T>> {
+  return skills.map(getPublicSkillDiscovery);
 }
 
 function handleBrowseError(error: unknown) {
@@ -137,28 +150,30 @@ async function handleList(options: any) {
     if (!category) { console.error(`Unknown category: ${options.category}\nAvailable: ${categories.join(", ")}`); process.exitCode = 1; return; }
     let skills = registry.filter((s) => s.category === category);
     if (tagFilter) skills = skills.filter((s) => s.tags.some((tag) => tagFilter.includes(tag.toLowerCase())));
-    if (options.json) { console.log(JSON.stringify(skills, null, 2)); return; }
-    if (brief) { for (const s of skills) console.log(formatBrief(s)); return; }
+    const output = enrichDiscovery(skills);
+    if (options.json) { console.log(JSON.stringify(output, null, 2)); return; }
+    if (brief) { for (const s of output) console.log(formatBrief(s)); return; }
     console.log(chalk.bold(`\n${category} (${skills.length}):\n`));
-    for (const s of skills) console.log(`  ${chalk.cyan(s.name)} - ${s.description}`);
+    for (const s of output) console.log(formatSkillLine(s));
     return;
   }
 
   if (tagFilter) {
     const skills = registry.filter((s) => s.tags.some((tag) => tagFilter.includes(tag.toLowerCase())));
-    if (options.json) { console.log(JSON.stringify(skills, null, 2)); return; }
-    if (brief) { for (const s of skills) console.log(formatBrief(s)); return; }
+    const output = enrichDiscovery(skills);
+    if (options.json) { console.log(JSON.stringify(output, null, 2)); return; }
+    if (brief) { for (const s of output) console.log(formatBrief(s)); return; }
     console.log(chalk.bold(`\nSkills matching tags [${tagFilter.join(", ")}] (${skills.length}):\n`));
-    for (const s of skills) console.log(`  ${chalk.cyan(s.name)}${s.source === "custom" ? chalk.yellow(" [custom]") : ""} ${chalk.dim(`[${s.category}]`)} - ${s.description}`);
+    for (const s of output) console.log(`  ${chalk.cyan(s.name)}${s.source === "custom" ? chalk.yellow(" [custom]") : ""} ${chalk.dim(`[${s.category}]`)} ${chalk.dim(`(${publicDiscoveryPriceLabel(s)})`)} - ${s.description}`);
     return;
   }
 
-  const allSkills = registry;
+  const allSkills = enrichDiscovery(registry);
   if (options.json) { console.log(JSON.stringify(allSkills, null, 2)); return; }
   if (fmt === "compact") { for (const s of allSkills) console.log(s.name); return; }
   if (fmt === "csv") {
-    console.log("name,category,description,source");
-    for (const s of allSkills) { const desc = s.description.replace(/"/g, '""'); console.log(`${s.name},${s.category},"${desc}",${s.source ?? "official"}`); }
+    console.log("name,category,price,description,source");
+    for (const s of allSkills) { const desc = s.description.replace(/"/g, '""'); console.log(`${s.name},${s.category},"${publicDiscoveryPriceLabel(s)}","${desc}",${s.source ?? "official"}`); }
     return;
   }
   if (brief) {
@@ -171,13 +186,13 @@ async function handleList(options: any) {
     const skills = allSkills.filter((s) => s.category === category);
     if (skills.length === 0) continue;
     console.log(chalk.bold(`${category} (${skills.length}):`));
-    for (const s of skills) console.log(`  ${chalk.cyan(s.name)}${s.source === "custom" ? chalk.yellow(" [custom]") : ""} - ${s.description}`);
+    for (const s of skills) console.log(formatSkillLine(s));
     console.log();
   }
   const customUncategorized = allSkills.filter((s) => s.source === "custom" && !CATEGORIES.includes(s.category as (typeof CATEGORIES)[number]));
   if (customUncategorized.length > 0) {
     console.log(chalk.bold(`Custom (${customUncategorized.length}):`));
-    for (const s of customUncategorized) console.log(`  ${chalk.yellow(s.name)} - ${s.description}`);
+    for (const s of customUncategorized) console.log(`  ${chalk.yellow(s.name)} ${chalk.dim(`(${publicDiscoveryPriceLabel(s)})`)} - ${s.description}`);
   }
 }
 
@@ -199,23 +214,25 @@ async function handleSearch(query: string, options: any) {
   const brief = options.brief && !options.json;
   const fmt = !options.json ? options.format : undefined;
 
-  if (options.json) { console.log(JSON.stringify(results, null, 2)); return; }
+  const output = enrichDiscovery(results);
+  if (options.json) { console.log(JSON.stringify(output, null, 2)); return; }
   if (results.length === 0) {
     console.log(chalk.dim(`No skills found for "${query}"`));
     const similar = findSimilarSkills(query, 5, registry);
     if (similar.length > 0) console.log(chalk.dim(`Related skills: ${similar.join(", ")}`));
     return;
   }
-  if (fmt === "compact") { for (const s of results) console.log(s.name); return; }
+  if (fmt === "compact") { for (const s of output) console.log(s.name); return; }
   if (fmt === "csv") {
-    console.log("name,category,description");
-    for (const s of results) { const desc = s.description.replace(/"/g, '""'); console.log(`${s.name},${s.category},"${desc}"`); }
+    console.log("name,category,price,description");
+    for (const s of output) { const desc = s.description.replace(/"/g, '""'); console.log(`${s.name},${s.category},"${publicDiscoveryPriceLabel(s)}","${desc}"`); }
     return;
   }
-  if (brief) { for (const s of results) console.log(formatBrief(s)); return; }
-  console.log(chalk.bold(`\nFound ${results.length} skill(s):\n`));
-  for (const s of results) {
+  if (brief) { for (const s of output) console.log(formatBrief(s)); return; }
+  console.log(chalk.bold(`\nFound ${output.length} skill(s):\n`));
+  for (const s of output) {
     console.log(`  ${chalk.cyan(s.name)} ${chalk.dim(`[${s.category}]`)}`);
+    console.log(`    ${chalk.dim("Price:")} ${publicDiscoveryPriceLabel(s)}`);
     console.log(`    ${s.description}`);
   }
 }

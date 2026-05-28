@@ -20,7 +20,7 @@ export interface FeedbackResult {
 }
 
 export function getFeedbackDbPath(): string {
-  return process.env.SKILLS_FEEDBACK_DB_PATH || join(homedir(), ".hasna", "skills", "skills.db");
+  return join(homedir(), ".hasna", "skills", "skills.db");
 }
 
 function getFeedbackDb(): Database {
@@ -56,7 +56,7 @@ export function saveFeedback(input: FeedbackInput): FeedbackResult {
   try {
     db.run(
       "INSERT INTO feedback (message, email, category, agent, version) VALUES (?, ?, ?, ?, ?)",
-      [message, input.email || null, category, input.agent || null, input.version || null],
+      [message, input.email || null, category, input.agent || null, input.version || null]
     );
   } finally {
     db.close();

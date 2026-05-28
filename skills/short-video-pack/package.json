@@ -1,0 +1,10 @@
+{
+  "name": "short-video-pack",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hosted premium short-form video package generator",
+  "type": "module",
+  "bin": {
+    "short-video-pack": "./src/index.ts"
+  }
+}

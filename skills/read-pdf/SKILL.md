@@ -16,19 +16,20 @@ Analyze a PDF with Claude's native document support and return structured output
 
 ## Requirements
 
-- `ANTHROPIC_API_KEY` must be available in the environment
+- Authenticate with `skills auth login`.
+- This premium skill runs through the hosted Skills runtime; local installs expose only `SKILL.md`.
 
 ## Usage
 
 ```bash
 # Read the whole PDF with markdown output
-read-pdf --input ./deck.pdf
+skills run read-pdf -- --input ./deck.pdf
 
 # Restrict to a few pages
-read-pdf --input ./contract.pdf --pages 1-3,8 --format text
+skills run read-pdf -- --input ./contract.pdf --pages 1-3,8 --format text
 
 # Ask for specific structure and save it
-read-pdf \
+skills run read-pdf -- \
   --input ./invoice.pdf \
   --prompt "Extract invoice metadata, every line item, and the payment terms." \
   --format json \

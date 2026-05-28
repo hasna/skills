@@ -1,3 +1,0 @@
-# E2B Codebox Template Configuration
-dockerfile = "e2b.Dockerfile"
-name = "codebox"

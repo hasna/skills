@@ -1,0 +1,29 @@
+{
+  "name": "icon-pack",
+  "version": "0.1.0",
+  "description": "Generate a coordinated icon pack as SVGs and transparent PNGs",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "icon-pack": "src/index.ts"
+  },
+  "files": [
+    "README.md",
+    "SKILL.md"
+  ],
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "keywords": [
+    "icons",
+    "icon-pack",
+    "svg",
+    "png",
+    "design"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun --watch src/index.ts",
+    "typecheck": "tsc --noEmit"
+  }
+}

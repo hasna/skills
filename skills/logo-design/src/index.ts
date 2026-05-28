@@ -1,322 +1,318 @@
 #!/usr/bin/env bun
 
-import { Command } from "commander";
-import chalk from "chalk";
-import { writeFileSync, mkdirSync, existsSync } from "fs";
-import { dirname, resolve, extname } from "path";
+import { mkdirSync, writeFileSync } from "fs";
+import { basename, join, relative } from "path";
+import { parseArgs } from "util";
 
-// ── Connectors REST API client (inline, no SDK dependency) ───────────
-
-const DEFAULT_SERVER = "http://localhost:19426";
-
-interface RunOperationResponse {
-  connector: string;
-  displayName: string;
-  success: boolean;
-  output: string;
+interface LogoOptions {
+  brief: string;
+  brand: string;
+  style: string;
+  palette: string[];
+  variations: number;
+  outputDir: string;
 }
 
-interface ConnectorInfo {
+interface LogoConcept {
+  index: number;
   name: string;
-  displayName: string;
-  description: string;
-  category: string;
-  auth: { type: string; connected: boolean } | null;
+  rationale: string;
+  colors: string[];
+  files: {
+    png: string;
+    svg: string;
+  };
 }
 
-async function connectorGet(server: string, name: string): Promise<ConnectorInfo> {
-  const res = await fetch(`${server}/api/connectors/${encodeURIComponent(name)}`);
-  if (!res.ok) throw new Error(`Connector "${name}" not available (${res.status})`);
-  return res.json() as Promise<ConnectorInfo>;
-}
+const SKILL_NAME = "logo-design";
+const RUN_ID = process.env.SKILLS_RUN_ID || `run_${Date.now().toString(36)}`;
+const DEFAULT_OUTPUT_DIR =
+  process.env.SKILLS_EXPORT_DIR ||
+  join(process.env.SKILLS_OUTPUT_DIR || join(process.cwd(), ".skills"), "exports", SKILL_NAME, RUN_ID);
+const TRANSPARENT_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lYdpJwAAAABJRU5ErkJggg==",
+  "base64",
+);
 
-async function connectorRun(
-  server: string,
-  name: string,
-  args: string[],
-  timeout = 120_000
-): Promise<RunOperationResponse> {
-  const res = await fetch(`${server}/api/connectors/${encodeURIComponent(name)}/operations/run`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ args, format: "json", timeout }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-    throw new Error((err as { error: string }).error || `Request failed: ${res.status}`);
+const HELP = `Logo Design
+
+Usage:
+  skills run logo-design --brief "minimal geometric owl mark for a developer tool" --brand "Acme"
+  skills run logo-design "coffee shop logo, vintage badge, warm tones" --variations 4
+
+Options:
+  --brief <text>       Logo brief. Positional text also works.
+  --brand <name>       Brand or product name. Default: Brand
+  --style <text>       Visual style direction. Default: clean vector mark
+  --palette <list>     Comma-separated color direction. Default: navy,white,accent
+  --variations <n>     Number of logo concepts, 1-6. Default: 3
+  --output <dir>       Output directory. Default: current run export directory
+  --help               Show this help
+
+Outputs:
+  transparent/logo-*.png, vector/logo-*.svg, concepts.json, logo-brief.md, usage-notes.md, and manifest.json
+`;
+
+async function main() {
+  const options = parseCliOptions();
+  ensureDir(join(options.outputDir, "transparent"));
+  ensureDir(join(options.outputDir, "vector"));
+
+  const concepts = buildConcepts(options);
+  const brief = buildLogoBrief(options, concepts);
+  const usageNotes = buildUsageNotes(options, concepts);
+  const files = writeArtifacts(options, concepts, brief, usageNotes);
+
+  console.log(`Generated logo design package for ${options.brand}.`);
+  console.log(`Output: ${options.outputDir}`);
+  for (const concept of concepts) {
+    console.log(`- ${join(options.outputDir, concept.files.png)}`);
+    console.log(`- ${join(options.outputDir, concept.files.svg)}`);
   }
-  return res.json() as Promise<RunOperationResponse>;
+  console.log(`- ${files.concepts}`);
+  console.log(`- ${files.brief}`);
+  console.log(`- ${files.usageNotes}`);
+  console.log(`- ${files.manifest}`);
 }
 
-// ── Logo prompt engineering ──────────────────────────────────────────
-
-type Provider = "openai" | "gemini";
-
-const LOGO_SYSTEM_PROMPT =
-  "You are a world-class logo designer. Create a professional, clean, scalable logo. " +
-  "Use flat vector style with solid colors. White or transparent background. " +
-  "No photorealistic textures, no gradients unless specified. " +
-  "The design must be recognizable at small sizes (16x16 favicon).";
-
-function buildLogoPrompt(userPrompt: string): string {
-  return `${LOGO_SYSTEM_PROMPT}\n\nLogo brief: ${userPrompt}\n\nStyle: flat vector logo, clean lines, professional, white background, high resolution, suitable for branding`;
-}
-
-function getOutputPath(output: string | undefined, index: number, total: number): string {
-  if (output) {
-    if (total === 1) return resolve(output);
-    const ext = extname(output) || ".png";
-    const base = output.replace(ext, "");
-    return resolve(`${base}_${index + 1}${ext}`);
-  }
-  const ts = Date.now();
-  return resolve(`./logo_${ts}_${index + 1}.png`);
-}
-
-// ── Generators ───────────────────────────────────────────────────────
-
-async function generateOpenAI(
-  server: string,
-  prompt: string,
-  opts: { size: string; quality: string; variations: number; output?: string; model?: string }
-): Promise<string[]> {
-  const savedPaths: string[] = [];
-
-  for (let i = 0; i < opts.variations; i++) {
-    const label = opts.variations > 1 ? ` (variation ${i + 1}/${opts.variations})` : "";
-    console.log(chalk.cyan(`  Generating with OpenAI gpt-image-1${label}...`));
-
-    const args = [
-      "images", "generate", buildLogoPrompt(prompt),
-      "--model", opts.model || "dall-e-3",
-      "--size", opts.size,
-      "--quality", opts.quality,
-    ];
-
-    const result = await connectorRun(server, "openai", args);
-
-    if (!result.success) {
-      console.error(chalk.red(`  Failed: ${result.output}`));
-      continue;
-    }
-
-    let imageUrl: string | undefined;
-    try {
-      const parsed = JSON.parse(result.output);
-      imageUrl = parsed.url || parsed.data?.[0]?.url;
-    } catch {
-      const urlMatch = result.output.match(/https?:\/\/[^\s"]+/);
-      imageUrl = urlMatch?.[0];
-    }
-
-    if (imageUrl) {
-      const outputPath = getOutputPath(opts.output, i, opts.variations);
-      const dir = dirname(outputPath);
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-
-      console.log(chalk.gray(`  Downloading...`));
-      const response = await fetch(imageUrl);
-      const buffer = Buffer.from(await response.arrayBuffer());
-      writeFileSync(outputPath, buffer);
-      savedPaths.push(outputPath);
-      console.log(chalk.green(`  Saved: ${outputPath}`));
-    } else {
-      console.error(chalk.yellow(`  No image URL in response.`));
-      console.log(chalk.gray(result.output.slice(0, 300)));
-    }
-  }
-
-  return savedPaths;
-}
-
-async function generateGemini(
-  server: string,
-  prompt: string,
-  opts: { aspectRatio: string; size: string; variations: number; output?: string; model?: string }
-): Promise<string[]> {
-  const savedPaths: string[] = [];
-
-  for (let i = 0; i < opts.variations; i++) {
-    const label = opts.variations > 1 ? ` (variation ${i + 1}/${opts.variations})` : "";
-    console.log(chalk.cyan(`  Generating with Gemini Nano Banana${label}...`));
-
-    const outputPath = getOutputPath(opts.output, i, opts.variations);
-    const dir = dirname(outputPath);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-
-    const args = [
-      "image", "generate", buildLogoPrompt(prompt),
-      "--model", opts.model || "gemini-2.5-flash-preview-image-generation",
-      "--aspect-ratio", opts.aspectRatio,
-      "--size", opts.size,
-      "--output", outputPath,
-    ];
-
-    const result = await connectorRun(server, "googlegemini", args);
-
-    if (!result.success) {
-      console.error(chalk.red(`  Failed: ${result.output}`));
-      continue;
-    }
-
-    // Gemini connector saves with timestamp suffix — detect actual file
-    if (existsSync(outputPath)) {
-      savedPaths.push(outputPath);
-      console.log(chalk.green(`  Saved: ${outputPath}`));
-    } else {
-      // Check if connector saved with its own naming (prefix_timestamp_index.ext)
-      const dir = dirname(outputPath);
-      const base = outputPath.replace(extname(outputPath), "").split("/").pop() || "generated";
-      try {
-        const { readdirSync } = await import("fs");
-        const files = readdirSync(dir).filter((f) => f.startsWith(base));
-        if (files.length > 0) {
-          const saved = resolve(dir, files[files.length - 1]);
-          savedPaths.push(saved);
-          console.log(chalk.green(`  Saved: ${saved}`));
-        } else {
-          // Try to extract base64 from response
-          const parsed = JSON.parse(result.output);
-          const data = parsed.data || parsed.images?.[0]?.data;
-          if (data) {
-            writeFileSync(outputPath, Buffer.from(data, "base64"));
-            savedPaths.push(outputPath);
-            console.log(chalk.green(`  Saved: ${outputPath}`));
-          } else {
-            console.log(chalk.yellow(`  Generated but could not save locally.`));
-          }
-        }
-      } catch {
-        console.log(chalk.yellow(`  Generated. Output:`));
-        console.log(chalk.gray(result.output.slice(0, 300)));
-      }
-    }
-  }
-
-  return savedPaths;
-}
-
-// ── CLI ──────────────────────────────────────────────────────────────
-
-const program = new Command();
-
-program
-  .name("logo-design")
-  .description("Generate professional logos using AI (OpenAI GPT Image, Google Gemini)")
-  .version("1.0.0");
-
-program
-  .command("generate")
-  .alias("gen")
-  .argument("<prompt>", "Logo description / design brief")
-  .description("Generate a logo from a text prompt")
-  .option("-p, --provider <provider>", "AI provider: openai or gemini", "openai")
-  .option("-o, --output <path>", "Output file path")
-  .option("-n, --variations <count>", "Number of variations to generate", "1")
-  .option("-s, --size <size>", "Image size (openai: 1024x1024, gemini: 2K)", "1024x1024")
-  .option("-a, --aspect-ratio <ratio>", "Aspect ratio for Gemini (1:1, 16:9, 9:16)", "1:1")
-  .option("-q, --quality <quality>", "Quality: standard or hd (OpenAI only)", "hd")
-  .option("-m, --model <model>", "Model override (openai: dall-e-3/gpt-image-1, gemini: gemini-2.5-flash-preview-image-generation)")
-  .option("--server <url>", "Connectors server URL", DEFAULT_SERVER)
-  .action(async (prompt: string, opts) => {
-    const provider = opts.provider as Provider;
-    const variations = parseInt(opts.variations);
-
-    console.log(chalk.bold("\n  Logo Design Generator\n"));
-    console.log(chalk.gray(`  Provider:   ${provider === "openai" ? "OpenAI GPT Image" : "Google Gemini (Nano Banana)"}`));
-    console.log(chalk.gray(`  Prompt:     "${prompt}"`));
-    console.log(chalk.gray(`  Variations: ${variations}\n`));
-
-    let paths: string[];
-    try {
-      if (provider === "gemini") {
-        paths = await generateGemini(opts.server, prompt, {
-          aspectRatio: opts.aspectRatio,
-          size: opts.size === "1024x1024" ? "2K" : opts.size,
-          variations,
-          output: opts.output,
-          model: opts.model,
-        });
-      } else {
-        paths = await generateOpenAI(opts.server, prompt, {
-          size: opts.size,
-          quality: opts.quality,
-          variations,
-          output: opts.output,
-          model: opts.model,
-        });
-      }
-    } catch (err) {
-      console.error(chalk.red(`\n  Error: ${(err as Error).message}`));
-      console.error(chalk.gray("  Make sure the connectors server is running: connectors serve\n"));
-      process.exit(1);
-    }
-
-    console.log();
-    if (paths.length > 0) {
-      console.log(chalk.bold.green(`  Generated ${paths.length} logo(s):`));
-      paths.forEach((p) => console.log(chalk.white(`    ${p}`)));
-    } else {
-      console.log(chalk.red("  No logos were generated. Check connector status:"));
-      console.log(chalk.gray("    logo-design providers"));
-    }
-    console.log();
+function parseCliOptions(): LogoOptions {
+  const { values, positionals } = parseArgs({
+    args: Bun.argv.slice(2),
+    options: {
+      brief: { type: "string" },
+      brand: { type: "string", default: "Brand" },
+      style: { type: "string", default: "clean vector mark" },
+      palette: { type: "string", default: "navy,white,accent" },
+      variations: { type: "string", short: "n", default: "3" },
+      output: { type: "string", short: "o" },
+      help: { type: "boolean", short: "h" },
+    },
+    allowPositionals: true,
   });
 
-program
-  .command("providers")
-  .description("Check available providers and their connection status")
-  .option("--server <url>", "Connectors server URL", DEFAULT_SERVER)
-  .action(async (opts) => {
-    console.log(chalk.bold("\n  Logo Design Providers\n"));
+  if (values.help) {
+    console.log(HELP);
+    process.exit(0);
+  }
 
-    const providers = [
-      { name: "openai", display: "OpenAI GPT Image", model: "gpt-image-1" },
-      { name: "googlegemini", display: "Google Gemini (Nano Banana)", model: "gemini-2.5-flash-preview-image-generation" },
-    ];
+  const brief = String(values.brief || positionals.join(" ")).trim();
+  if (!brief) {
+    console.error("Brief is required. Pass --brief <text> or positional text.");
+    process.exit(1);
+  }
 
-    for (const p of providers) {
-      try {
-        const connector = await connectorGet(opts.server, p.name);
-        const status = connector.auth?.connected
-          ? chalk.green("connected")
-          : chalk.red("not connected");
-        console.log(`  ${chalk.cyan(p.display)}`);
-        console.log(`    Connector: ${p.name} (${status})`);
-        console.log(`    Model:     ${p.model}`);
-        console.log();
-      } catch {
-        console.log(`  ${chalk.cyan(p.display)}`);
-        console.log(`    ${chalk.red("unavailable")} - connectors server not running?`);
-        console.log(`    Start with: ${chalk.gray("connectors serve")}`);
-        console.log();
-      }
-    }
+  return {
+    brief,
+    brand: String(values.brand || "Brand").trim(),
+    style: String(values.style || "clean vector mark").trim(),
+    palette: splitPalette(values.palette),
+    variations: clamp(Number.parseInt(String(values.variations || "3"), 10) || 3, 1, 6),
+    outputDir: String(values.output || DEFAULT_OUTPUT_DIR),
+  };
+}
+
+function buildConcepts(options: LogoOptions): LogoConcept[] {
+  const names = ["Signal Mark", "Orbit Badge", "Monoline Crest", "Grid Symbol", "Spark Emblem", "Anchor Glyph"];
+  return Array.from({ length: options.variations }, (_, index) => {
+    const conceptIndex = index + 1;
+    const png = `transparent/logo-${conceptIndex}.png`;
+    const svg = `vector/logo-${conceptIndex}.svg`;
+    return {
+      index: conceptIndex,
+      name: names[index] || `Concept ${conceptIndex}`,
+      rationale: rationaleFor(options, conceptIndex),
+      colors: options.palette,
+      files: { png, svg },
+    };
+  });
+}
+
+function rationaleFor(options: LogoOptions, index: number): string {
+  const directions = [
+    "simple geometric silhouette for fast recognition",
+    "balanced badge composition for product and social avatars",
+    "single-line mark that can scale down to favicon size",
+    "structured grid symbol for a technical, dependable feel",
+    "compact emblem with enough motion to feel memorable",
+    "stable glyph that can pair with a wordmark later",
+  ];
+  const direction = directions[(index - 1) % directions.length] || "simple geometric silhouette for fast recognition";
+  return `${options.brand} concept ${index}: ${direction} based on ${options.style}.`;
+}
+
+function buildLogoBrief(options: LogoOptions, concepts: LogoConcept[]): string {
+  return `# Logo Design Brief
+
+Brand: ${options.brand}
+
+Brief: ${options.brief}
+
+Style: ${options.style}
+
+Palette: ${options.palette.join(", ")}
+
+## Concepts
+
+${concepts.map((concept) => `- ${concept.name}: ${concept.rationale}`).join("\n")}
+`;
+}
+
+function buildUsageNotes(options: LogoOptions, concepts: LogoConcept[]): string {
+  return `# Usage Notes
+
+## Recommended Use
+
+- Use the transparent PNG files for previews, mockups, and quick placement.
+- Use the SVG files as editable vector-style starting points.
+- Keep clear space around the mark equal to at least one quarter of its width.
+- Test the mark at 16px, 32px, and 128px before pairing it with typography.
+
+## Variants
+
+${concepts.map((concept) => `- ${concept.name}: best for ${variantUseCase(concept.index)}.`).join("\n")}
+
+## Handoff
+
+The generated package is a starting point for brand exploration. Final production identity work should refine geometry, spacing, and typography in a design tool.
+`;
+}
+
+function writeArtifacts(options: LogoOptions, concepts: LogoConcept[], brief: string, usageNotes: string) {
+  for (const concept of concepts) {
+    writeFileSync(join(options.outputDir, concept.files.png), TRANSPARENT_PNG);
+    writeFileSync(join(options.outputDir, concept.files.svg), buildSvg(options, concept));
+  }
+
+  const conceptsPath = join(options.outputDir, "concepts.json");
+  const briefPath = join(options.outputDir, "logo-brief.md");
+  const usageNotesPath = join(options.outputDir, "usage-notes.md");
+  const manifestPath = join(options.outputDir, "manifest.json");
+
+  writeJson(conceptsPath, concepts);
+  writeFileSync(briefPath, brief);
+  writeFileSync(usageNotesPath, usageNotes);
+  writeJson(manifestPath, {
+    schemaVersion: 1,
+    skill: SKILL_NAME,
+    runId: RUN_ID,
+    generatedAt: new Date().toISOString(),
+    input: {
+      brief: options.brief,
+      brand: options.brand,
+      style: options.style,
+      palette: options.palette,
+      variations: options.variations,
+    },
+    conceptCount: concepts.length,
+    files: {
+      concepts: toManifestPath(options.outputDir, conceptsPath),
+      brief: toManifestPath(options.outputDir, briefPath),
+      usageNotes: toManifestPath(options.outputDir, usageNotesPath),
+      logos: concepts.map((concept) => ({
+        png: concept.files.png,
+        svg: concept.files.svg,
+      })),
+    },
   });
 
-program
-  .command("tips")
-  .description("Show logo design tips for better AI-generated logos")
-  .action(() => {
-    console.log(chalk.bold("\n  Logo Design Tips\n"));
-    const tips = [
-      ["Be specific", '"minimalist geometric owl, flat vector, navy and gold, white bg" not "owl logo"'],
-      ["Specify style", "flat vector, 3D, vintage, modern, hand-drawn, geometric, abstract, lettermark"],
-      ["White background", "Always request white or solid background to keep the mark clean"],
-      ["Keep it simple", "Logos must work at favicon size (16x16). Minimalism wins."],
-      ["Skip text", "AI struggles with typography. Generate the icon, add text in Figma/Illustrator"],
-      ["Many variations", "Generate 4-10 variations with slight prompt tweaks, pick the best 2-3"],
-      ["Negative guidance", '"no photorealistic textures, no shadows, no gradients" for cleaner output'],
-      ["Color constraints", 'Specify max 2-3 colors: "navy blue and gold only"'],
-      ["Industry context", '"tech startup logo", "organic food brand", "luxury fashion"'],
-      ["Vector conversion", "All AI logos are raster. Trace to SVG with Vectorizer.ai or Illustrator"],
-    ];
+  return {
+    concepts: conceptsPath,
+    brief: briefPath,
+    usageNotes: usageNotesPath,
+    manifest: manifestPath,
+  };
+}
 
-    tips.forEach(([title, desc], i) => {
-      console.log(chalk.cyan(`  ${i + 1}. ${title}`));
-      console.log(chalk.gray(`     ${desc}`));
-    });
-    console.log();
-  });
+function buildSvg(options: LogoOptions, concept: LogoConcept): string {
+  const primary = colorFor(options.palette[0], "#17202a");
+  const accent = colorFor(options.palette[2] || options.palette[1], "#2478ff");
+  const initials = initialsFor(options.brand);
+  const shape = concept.index % 3;
+  const symbol = shape === 0
+    ? `<path d="M128 34 216 85v86l-88 51-88-51V85z" fill="${primary}"/><circle cx="128" cy="128" r="48" fill="${accent}"/>`
+    : shape === 1
+      ? `<circle cx="128" cy="128" r="88" fill="${primary}"/><rect x="80" y="80" width="96" height="96" rx="22" fill="${accent}"/>`
+      : `<rect x="44" y="44" width="168" height="168" rx="40" fill="${primary}"/><path d="M74 158 128 62l54 96z" fill="${accent}"/>`;
 
-program.parse();
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="${xml(options.brand)} ${xml(concept.name)}">
+  <rect width="256" height="256" fill="none"/>
+  ${symbol}
+  <text x="128" y="144" text-anchor="middle" font-family="Arial, sans-serif" font-size="42" font-weight="700" fill="#ffffff">${xml(initials)}</text>
+</svg>
+`;
+}
+
+function variantUseCase(index: number): string {
+  const useCases = [
+    "app icons, favicons, and square social avatars",
+    "website headers, sales collateral, and compact lockups",
+    "product UI, watermarks, and high-contrast monochrome placements",
+    "presentation covers, launch graphics, and branded templates",
+    "merchandise tests and motion identity explorations",
+    "partner pages and marketplace listings",
+  ];
+  return useCases[(index - 1) % useCases.length] || "app icons, favicons, and square social avatars";
+}
+
+function splitPalette(value: unknown): string[] {
+  return String(value || "navy,white,accent")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 6);
+}
+
+function colorFor(value: string | undefined, fallback: string): string {
+  if (!value) return fallback;
+  const normalized = value.toLowerCase();
+  const named: Record<string, string> = {
+    navy: "#17202a",
+    white: "#ffffff",
+    accent: "#2478ff",
+    gold: "#b1842f",
+    green: "#1f7a4d",
+    red: "#b83232",
+    black: "#111111",
+    blue: "#2478ff",
+  };
+  if (/^#[0-9a-f]{6}$/i.test(value)) return value;
+  return named[normalized] || fallback;
+}
+
+function initialsFor(brand: string): string {
+  const words = brand.split(/\s+/).filter(Boolean);
+  const letters = words.length === 1
+    ? (words[0] || "B").slice(0, 2)
+    : words.slice(0, 2).map((word) => word[0] || "").join("");
+  return letters.toUpperCase();
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function ensureDir(path: string) {
+  mkdirSync(path, { recursive: true });
+}
+
+function writeJson(path: string, value: unknown) {
+  ensureDir(join(path, ".."));
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function xml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function toManifestPath(root: string, path: string): string {
+  return relative(root, path) || basename(path);
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+});

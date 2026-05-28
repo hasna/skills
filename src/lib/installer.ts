@@ -12,7 +12,7 @@ import { dirname, join } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { normalizeSkillName } from "./utils.js";
-import { getSkill } from "./registry.js";
+import { getSkill, type SkillMeta } from "./registry.js";
 import { normalizeSkillSlug, resolveSkillAlias } from "./skill-aliases.js";
 import {
   getDisabledProjectSkills,
@@ -47,6 +47,7 @@ export interface InstallResult {
   error?: string;
   path?: string;
   mode?: InstallMode;
+  source?: InstallSource;
 }
 
 export interface InstallOptions {
@@ -128,7 +129,32 @@ export function installSkill(name: string, options: InstallOptions = {}): Instal
   const version = readBundledSkillVersion(name);
   pinProjectSkill(skillName, { version, source: meta?.source ?? "official" }, targetDir);
   warnMissingDependencies(canonicalName, targetDir);
-  return { skill: canonicalName, success: true, path: getProjectConfigPath(targetDir), mode: "pin" };
+  return { skill: canonicalName, success: true, path: getProjectConfigPath(targetDir), mode: "pin", source: meta?.source ?? "official" };
+}
+
+export function installRemoteSkill(skill: SkillMeta, options: InstallOptions = {}): InstallResult {
+  const { targetDir = process.cwd(), overwrite = false } = options;
+  const skillName = normalizeSkillName(skill.name);
+  const existing = new Set(listPinnedSkills(targetDir));
+  if (existing.has(skillName) && !overwrite) {
+    return {
+      skill: skillName,
+      success: false,
+      error: "Already pinned. Use --overwrite to refresh.",
+      path: getProjectConfigPath(targetDir),
+      mode: "pin",
+      source: "remote",
+    };
+  }
+
+  pinProjectSkill(skillName, { version: skill.version ?? "remote", source: "remote" }, targetDir);
+  return {
+    skill: skillName,
+    success: true,
+    path: getProjectConfigPath(targetDir),
+    mode: "pin",
+    source: "remote",
+  };
 }
 
 /**

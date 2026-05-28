@@ -4,9 +4,11 @@
 
 import chalk from "chalk";
 import type { Command } from "commander";
-import { CATEGORIES, getSkillsByCategory } from "../../lib/registry.js";
+import { CATEGORIES, getSkillsByCategory, type SkillMeta } from "../../lib/registry.js";
+import { loadRemoteRegistry } from "../../lib/remote-registry.js";
 import {
   installSkill,
+  installRemoteSkill,
   getInstalledSkills,
   removeSkill,
   type InstallResult,
@@ -27,8 +29,11 @@ export function registerInstall(parent: Command) {
     .option("--json", "Output results as JSON", false)
     .option("--dry-run", "Print what would happen without actually pinning", false)
     .option("--category <category>", "Pin all skills in a category (case-insensitive)")
+    .option("--remote", "Pin skills from the remote registry configured by SKILLS_API_URL or config apiUrl", false)
     .description("Pin skills in .skills/project.json without copying source")
-    .action((skills: string[], options) => handlePin(skills, options));
+    .action((skills: string[], options) => {
+      void handlePin(skills, options).catch(handlePinError);
+    });
 
   parent
     .command("unpin")
@@ -81,7 +86,12 @@ function handleDeprecatedRemove(skill: string | undefined, options: { json: bool
   process.exitCode = 1;
 }
 
-function handlePin(skills: string[], options: any) {
+function handlePinError(error: unknown) {
+  console.error(chalk.red((error as Error).message));
+  process.exitCode = 1;
+}
+
+async function handlePin(skills: string[], options: any) {
   if (skills.length === 0 && !options.category) {
     const error = "missing required argument 'skills' or --category option";
     if (options.json) console.log(JSON.stringify({ error }));
@@ -90,19 +100,28 @@ function handlePin(skills: string[], options: any) {
     return;
   }
 
+  let remoteRegistry: SkillMeta[] | null = null;
+  const useRemote = Boolean(options.remote);
   if (options.category) {
-    const matchedCategory = CATEGORIES.find((c: string) => c.toLowerCase() === options.category.toLowerCase());
+    remoteRegistry = useRemote ? await loadRemoteRegistry() : null;
+    const remoteSkills = remoteRegistry ?? [];
+    const categories = useRemote
+      ? [...new Set(remoteSkills.map((skill) => skill.category))].sort()
+      : [...CATEGORIES];
+    const matchedCategory = categories.find((c: string) => c.toLowerCase() === options.category.toLowerCase());
     if (!matchedCategory) {
       const error = `Unknown category: ${options.category}`;
-      if (options.json) console.log(JSON.stringify({ error, available: CATEGORIES }));
+      if (options.json) console.log(JSON.stringify({ error, available: categories }));
       else {
         console.error(error);
-        console.error(`Available: ${CATEGORIES.join(", ")}`);
+        console.error(`Available: ${categories.join(", ")}`);
       }
       process.exitCode = 1;
       return;
     }
-    const categorySkills = getSkillsByCategory(matchedCategory);
+    const categorySkills = useRemote
+      ? remoteSkills.filter((skill) => skill.category === matchedCategory)
+      : getSkillsByCategory(matchedCategory as (typeof CATEGORIES)[number]);
     skills = categorySkills.map((s: { name: string }) => s.name);
     if (!options.json) console.log(chalk.bold(`\nPinning ${skills.length} skills from "${matchedCategory}"...\n`));
   }
@@ -117,9 +136,13 @@ function handlePin(skills: string[], options: any) {
   const results: InstallResult[] = [];
   const total = skills.length;
   const startTime = Date.now();
+  if (useRemote && !remoteRegistry) remoteRegistry = await loadRemoteRegistry();
+  const remoteByName = new Map((remoteRegistry ?? []).map((skill) => [skill.name, skill]));
   for (let i = 0; i < total; i++) {
     if (total > 1 && !options.json) process.stdout.write(`[${i + 1}/${total}] Pinning ${skills[i]}...`);
-    const result = installSkill(skills[i], { overwrite: options.overwrite });
+    const result = useRemote
+      ? pinRemoteSkill(skills[i], remoteByName, options.overwrite)
+      : installSkill(skills[i], { overwrite: options.overwrite });
     results.push(result);
     if (total > 1 && !options.json) console.log(result.success ? " done" : ` ${chalk.red("failed")}`);
   }
@@ -141,6 +164,20 @@ function handlePin(skills: string[], options: any) {
     console.log(chalk.dim("\nPins saved to .skills/project.json; no skill source was copied"));
   }
   if (results.some((r) => !r.success)) process.exitCode = 1;
+}
+
+function pinRemoteSkill(name: string, remoteByName: Map<string, SkillMeta>, overwrite: boolean): InstallResult {
+  const skill = remoteByName.get(name);
+  if (!skill) {
+    return {
+      skill: name,
+      success: false,
+      error: `Remote skill '${name}' not found`,
+      mode: "pin",
+      source: "remote",
+    };
+  }
+  return installRemoteSkill(skill, { overwrite });
 }
 
 function handleUnpin(skill: string, options: { json: boolean; dryRun?: boolean }) {

@@ -3,34 +3,39 @@
  */
 
 import chalk from "chalk";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { mkdirSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import { homedir } from "os";
 import type { Command } from "commander";
 import { getSkill, findSimilarSkills } from "../../lib/registry.js";
 import { runSkill } from "../../lib/skillinfo.js";
-import { AGENT_TARGETS, resolveAgents, type AgentTarget } from "../../lib/installer.js";
+import {
+  ARTICLE_GENERATION_SLUG,
+  getPublicSkillPricing,
+  validateBlogArticleRunOptions,
+} from "../../platform/skills/pricing.js";
+import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../../platform/api/run-contract.js";
 import {
   completeSkillRun,
   createSkillRun,
   findSkillRun,
+  getRunExportDir,
   listSkillRuns,
+  updateSkillRun,
   writeRunLogs,
 } from "../../lib/run-state.js";
-
-const MCP_SERVER_NAME = "skills";
-const MCP_COMMAND_NAME = "skills-mcp";
-
-interface McpRegistrationResult {
-  agent: string;
-  success: boolean;
-  path?: string;
-  config?: string;
-  command?: string;
-  error?: string;
-}
+import { handleMcp } from "./runtime-mcp.js";
 
 export function registerRuntime(parent: Command) {
+  parent
+    .command("quote")
+    .argument("<skill>", "Skill name")
+    .argument("[args...]", "Arguments that affect pricing, such as --count 8")
+    .allowUnknownOption(true)
+    .passThroughOptions(true)
+    .option("--json", "Output quote as JSON", false)
+    .description("Quote a skill run before spending account balance")
+    .action((name: string, args: string[], options: { json: boolean }) => handleQuote(name, args, options));
+
   // Run
   parent
     .command("run")
@@ -39,8 +44,11 @@ export function registerRuntime(parent: Command) {
     .allowUnknownOption(true)
     .passThroughOptions(true)
     .option("--json", "Output result as JSON", false)
+    .option("--wait", "Poll remote runs until a terminal status", false)
+    .option("--poll-interval-ms <ms>", "Remote polling interval in milliseconds", "1000")
+    .option("--poll-timeout-ms <ms>", "Maximum time to wait for a remote run", "300000")
     .description("Run a skill directly")
-    .action(async (name: string, args: string[], options: { json: boolean }) => handleRun(name, args, options));
+    .action(async (name: string, args: string[], options: RunCommandOptions) => handleRun(name, args, options));
 
   const runs = parent
     .command("runs")
@@ -60,6 +68,13 @@ export function registerRuntime(parent: Command) {
     .description("Show a skill run record")
     .action((runId: string, options: { json: boolean }) => handleRunsShow(runId, options));
 
+  runs
+    .command("status")
+    .argument("<run-id>", "Remote run id, or local run id linked to a remote run")
+    .option("--json", "Output as JSON", false)
+    .description("Fetch remote run status")
+    .action((runId: string, options: { json: boolean }) => handleRunsStatus(runId, options));
+
   const exportsCommand = parent
     .command("exports")
     .description("Inspect or open skill run exports");
@@ -70,6 +85,13 @@ export function registerRuntime(parent: Command) {
     .option("--json", "Output as JSON", false)
     .description("Open the export directory for a run")
     .action((runId: string, options: { json: boolean }) => handleExportsOpen(runId, options));
+
+  exportsCommand
+    .command("download")
+    .argument("<run-id>", "Remote run id")
+    .option("--json", "Output as JSON", false)
+    .description("Download remote run artifacts into .skills/exports")
+    .action((runId: string, options: { json: boolean }) => handleExportsDownload(runId, options));
 
   // MCP
   parent
@@ -88,17 +110,6 @@ export function registerRuntime(parent: Command) {
     .option("--json", "Output registration result as JSON", false)
     .description("Register the Skills MCP server with all supported agents")
     .action(async (options: { json: boolean }) => handleMcp({ register: "all", json: options.json }));
-
-  // Serve
-  parent
-    .command("serve")
-    .description("Start the Skills Dashboard web server")
-    .option("-p, --port <port>", "Port number (0 = auto-assign free port)", "0")
-    .option("--no-open", "Don't open browser automatically")
-    .action(async (options: { port: string; open: boolean }) => {
-      const { startServer } = await import("../../server/serve.js");
-      await startServer(parseInt(options.port, 10), { open: options.open });
-    });
 
   // Self-update
   parent
@@ -139,7 +150,54 @@ export function registerRuntime(parent: Command) {
     });
 }
 
-async function handleRun(name: string, args: string[], options: { json: boolean }) {
+function handleQuote(name: string, args: string[], options: { json: boolean }) {
+  const json = options.json || args.includes("--json");
+  const quoteArgs = args.filter((arg) => arg !== "--json");
+  const skill = getSkill(name);
+  if (!skill) {
+    const error = `Skill '${name}' not found`;
+    if (json) console.log(JSON.stringify({ error, similar: findSimilarSkills(name) }));
+    else {
+      console.error(chalk.red(error));
+      const similar = findSimilarSkills(name);
+      if (similar.length > 0) console.error(chalk.dim(`Did you mean: ${similar.join(", ")}?`));
+    }
+    process.exitCode = 1;
+    return;
+  }
+
+  if (skill.name === ARTICLE_GENERATION_SLUG) {
+    const validation = validateBlogArticleRunOptions({}, quoteArgs);
+    if (!validation.ok) {
+      writeBlogArticleValidationError(validation.errors, json);
+      return;
+    }
+  }
+
+  const pricing = getPublicSkillPricing(skill.name, {}, quoteArgs);
+  const payload = { skill: skill.name, pricing };
+  if (json) {
+    console.log(JSON.stringify(payload, null, 2));
+    return;
+  }
+
+  console.log(chalk.bold(`\nQuote for ${skill.name}\n`));
+  console.log(`${chalk.dim("Price:")} ${pricing.formattedCost}`);
+  if (pricing.formattedUnitCost && pricing.unitCount) {
+    console.log(`${chalk.dim("Unit:")} ${pricing.formattedUnitCost} x ${pricing.unitCount}`);
+  }
+  console.log(`${chalk.dim("Type:")} ${pricing.tier}`);
+  if (pricing.quoteDependsOnInput) console.log(chalk.dim("Final price depends on run options."));
+}
+
+interface RunCommandOptions {
+  json: boolean;
+  wait?: boolean;
+  pollIntervalMs?: string;
+  pollTimeoutMs?: string;
+}
+
+async function handleRun(name: string, args: string[], options: RunCommandOptions) {
   const skill = getSkill(name);
   if (!skill) {
     const similar = findSimilarSkills(name);
@@ -153,12 +211,114 @@ async function handleRun(name: string, args: string[], options: { json: boolean 
   }
 
   const prompt = extractPrompt(args);
+  const pricing = await import("../../platform/skills/pricing.js");
+  if (skill.name === ARTICLE_GENERATION_SLUG) {
+    const validation = pricing.validateBlogArticleRunOptions({}, args, { requireTopic: true });
+    if (!validation.ok) {
+      writeBlogArticleValidationError(validation.errors, options.json);
+      return;
+    }
+  }
+  const isPremium = pricing.isPremiumSkill(skill.name);
+  const costCents = isPremium ? pricing.getSkillRunCostCents(skill.name, {}, args) : undefined;
+  const publicPricing = pricing.getPublicSkillPricing(skill.name, {}, args);
   const runContext = createSkillRun({
     skill: skill.name,
     args,
     prompt,
-    remote: false,
+    remote: isPremium,
+    costCents,
   });
+
+  if (isPremium) {
+      const { getApiKey } = await import("../../lib/auth-store.js");
+      const apiKey = getApiKey();
+      if (!apiKey) {
+        const error = `${skill.name} is a premium remote skill (${pricing.formatCost(costCents ?? 0)}). Run: skills auth login`;
+        writeRunLogs(runContext, "", error + "\n");
+        const run = completeSkillRun(runContext, { status: "failed", error, costCents });
+        if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, pricing: publicPricing, run }, null, 2));
+        else console.error(chalk.red(error));
+        process.exitCode = 1;
+        return;
+      }
+
+      try {
+        const { PlatformClient } = await import("../../platform/api/client.js");
+        const client = new PlatformClient(apiKey);
+        if (!options.json) console.log(`${chalk.dim("Price:")} ${publicPricing.formattedCost}`);
+        const run = await client.submitRun(skill.name, {}, args);
+        if (run.error) {
+          writeRunLogs(runContext, "", String(run.error) + "\n");
+          const localRun = completeSkillRun(runContext, { status: "failed", error: String(run.error), costCents });
+          if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error: run.error, pricing: publicPricing, remoteRun: run, run: localRun }, null, 2));
+          else console.error(chalk.red(run.error));
+          process.exitCode = 1;
+          return;
+        }
+        const remoteRunId = typeof run.id === "string" ? run.id : undefined;
+        const nextActions = remoteRunNextActions(remoteRunId);
+        const polling = parsePollingOptions(options);
+        const polled: PollRemoteRunResult = options.wait && remoteRunId && !isTerminalRemoteStatus(run.status)
+          ? await pollRemoteRun(client, remoteRunId, polling)
+          : { run, attempts: 0, waited: false };
+        const remoteRun = polled.run ?? run;
+        const status = normalizeRemoteStatus(remoteRun.status);
+        const timedOutError = polled.timedOut && remoteRunId
+          ? `Remote run '${remoteRunId}' did not reach a terminal status within ${polling.timeoutMs}ms`
+          : undefined;
+        const exitCode = timedOutError ? 124 : remoteExitCode(remoteRun, status);
+        const error = timedOutError ?? remoteRunError(remoteRun);
+        const localRun = await persistRemoteRun({
+          client,
+          context: runContext,
+          remoteRun,
+          remoteRunId,
+          costCents,
+          fallbackError: error,
+        });
+        if (options.json) {
+          console.log(JSON.stringify({
+            contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION,
+            skill: skill.name,
+            args,
+            exitCode,
+            remote: true,
+            pricing: publicPricing,
+            remoteRun,
+            run: localRun,
+            nextActions,
+            ...(options.wait ? { polling: { waited: polled.waited, attempts: polled.attempts, timeoutMs: polling.timeoutMs, timedOut: Boolean(polled.timedOut) } } : {}),
+            ...(error ? { error } : {}),
+          }, null, 2));
+        }
+        else {
+          if (status === "failed") console.log(chalk.red(`Remote run failed for ${skill.name}`));
+          else if (status === "completed") console.log(chalk.green(`Completed remote run for ${skill.name}`));
+          else console.log(chalk.green(`Submitted remote run for ${skill.name}`));
+          console.log(chalk.dim(`  Local run: ${localRun.id}`));
+          console.log(chalk.dim(`  Run: ${remoteRun.id ?? "unknown"}`));
+          console.log(chalk.dim(`  Status: ${remoteRun.status ?? "queued"}`));
+          console.log(chalk.dim(`  Metadata: ${localRun.paths.runDir}/run.json`));
+          if (options.wait) console.log(chalk.dim(`  Poll attempts: ${polled.attempts}`));
+          if (error) console.log(chalk.red(`  Error: ${error}`));
+          if (nextActions) {
+            console.log(chalk.dim(`  Next: ${nextActions.poll}`));
+            console.log(chalk.dim(`  When complete: ${nextActions.download}`));
+          }
+        }
+        process.exitCode = exitCode;
+        return;
+      } catch (err) {
+        const error = `Premium skill ${skill.name} requires platform access: ${(err as Error).message}`;
+        writeRunLogs(runContext, "", error + "\n");
+        const run = completeSkillRun(runContext, { status: "failed", error, costCents });
+        if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, pricing: publicPricing, run }, null, 2));
+        else console.error(chalk.red(error));
+        process.exitCode = 1;
+        return;
+      }
+  }
 
   const result = await runSkill(name, args, {
     stdio: "pipe",
@@ -184,6 +344,20 @@ async function handleRun(name: string, args: string[], options: { json: boolean 
   process.exitCode = result.exitCode;
 }
 
+function writeBlogArticleValidationError(errors: string[], json: boolean) {
+  const payload = {
+    error: "invalid blog article options",
+    code: "INVALID_BLOG_ARTICLE_OPTIONS",
+    details: errors,
+  };
+  if (json) console.log(JSON.stringify(payload, null, 2));
+  else {
+    console.error(chalk.red(payload.error));
+    for (const error of errors) console.error(chalk.dim(`  ${error}`));
+  }
+  process.exitCode = 1;
+}
+
 function handleRunsList(options: { json: boolean; limit: string }) {
   const limit = Number.parseInt(options.limit, 10);
   const runs = listSkillRuns(process.cwd(), Number.isFinite(limit) ? limit : 20);
@@ -205,7 +379,7 @@ function handleRunsShow(runId: string, options: { json: boolean }) {
   const run = findSkillRun(runId);
   if (!run) {
     const error = `Run '${runId}' not found`;
-    if (options.json) console.log(JSON.stringify({ error }, null, 2));
+    if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, error }, null, 2));
     else console.error(chalk.red(error));
     process.exitCode = 1;
     return;
@@ -221,6 +395,73 @@ function handleRunsShow(runId: string, options: { json: boolean }) {
     if (run.error) console.log(`${chalk.dim("Error:")} ${chalk.red(run.error)}`);
     console.log(`${chalk.dim("Run dir:")} ${run.paths.runDir}`);
     console.log(`${chalk.dim("Exports:")} ${run.paths.exportDir}`);
+  }
+}
+
+async function handleRunsStatus(runId: string, options: { json: boolean }) {
+  const { getApiKey } = await import("../../lib/auth-store.js");
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    const error = "Remote run status requires platform access. Run: skills auth login";
+    if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, error }, null, 2));
+    else console.error(chalk.red(error));
+    process.exitCode = 1;
+    return;
+  }
+
+  const localRun = findSkillRun(runId);
+  const remoteRunId = localRun?.remoteRunId || runId;
+  if (localRun && !localRun.remoteRunId) {
+    const error = `Run '${runId}' is local and has no remote run id`;
+    if (options.json) console.log(JSON.stringify({ error }, null, 2));
+    else console.error(chalk.red(error));
+    process.exitCode = 1;
+    return;
+  }
+
+  try {
+    const { PlatformClient } = await import("../../platform/api/client.js");
+    const client = new PlatformClient(apiKey);
+    const run = await client.getRun(remoteRunId);
+    if (!run) {
+      const error = `Remote run '${remoteRunId}' not found`;
+      if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, error }, null, 2));
+      else console.error(chalk.red(error));
+      process.exitCode = 1;
+      return;
+    }
+
+    const nextActions = remoteRunNextActions(remoteRunId);
+    const payload = {
+      contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION,
+      runId: remoteRunId,
+      ...(localRun ? { localRunId: localRun.id } : {}),
+      run,
+      nextActions,
+    };
+    if (options.json) {
+      console.log(JSON.stringify(payload, null, 2));
+      return;
+    }
+
+    console.log(chalk.bold(`\n${remoteRunId}\n`));
+    if (localRun) console.log(`${chalk.dim("Local run:")} ${localRun.id}`);
+    if (typeof run.skill === "string") console.log(`${chalk.dim("Skill:")} ${run.skill}`);
+    console.log(`${chalk.dim("Status:")} ${statusColor(String(run.status || "queued"))}`);
+    if (run.createdAt) console.log(`${chalk.dim("Created:")} ${run.createdAt}`);
+    if (run.startedAt) console.log(`${chalk.dim("Started:")} ${run.startedAt}`);
+    if (run.completedAt) console.log(`${chalk.dim("Completed:")} ${run.completedAt}`);
+    if (run.errorMessage) console.log(`${chalk.dim("Error:")} ${chalk.red(run.errorMessage)}`);
+    if (nextActions) {
+      console.log(`${chalk.dim("Next:")} ${nextActions.poll}`);
+      const label = run.status === "completed" ? "Download" : "When complete";
+      console.log(`${chalk.dim(`${label}:`)} ${nextActions.download}`);
+    }
+  } catch (err) {
+    const error = (err as Error).message;
+    if (options.json) console.log(JSON.stringify({ error }, null, 2));
+    else console.error(chalk.red(error));
+    process.exitCode = 1;
   }
 }
 
@@ -246,210 +487,228 @@ async function handleExportsOpen(runId: string, options: { json: boolean }) {
   } catch {}
 }
 
-async function handleMcp(options: { register?: string; json: boolean }) {
-  if (options.register) {
-    let agents: AgentTarget[];
-    try { agents = resolveAgents(options.register); }
-    catch (err) {
-      const error = (err as Error).message;
-      if (options.json) console.log(JSON.stringify({ registered: 0, results: [{ agent: options.register, success: false, error }] }, null, 2));
+async function handleExportsDownload(runId: string, options: { json: boolean }) {
+  const { getApiKey } = await import("../../lib/auth-store.js");
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    const error = "Remote artifact downloads require platform access. Run: skills auth login";
+    if (options.json) console.log(JSON.stringify({ error }, null, 2));
+    else console.error(chalk.red(error));
+    process.exitCode = 1;
+    return;
+  }
+
+  try {
+    const { PlatformClient } = await import("../../platform/api/client.js");
+    const client = new PlatformClient(apiKey);
+    const remoteRun = await client.getRun(runId);
+    if (!remoteRun) {
+      const error = `Remote run '${runId}' not found`;
+      if (options.json) console.log(JSON.stringify({ error }, null, 2));
       else console.error(chalk.red(error));
       process.exitCode = 1;
       return;
     }
 
-    const command = findCommandOnPath(MCP_COMMAND_NAME);
-    const results: McpRegistrationResult[] = [];
-    for (const agent of agents) {
-      const result = await registerMcpForAgent(agent, command);
-      results.push(result);
-      if (!options.json) {
-        const label = result.path ? `${agent} (${result.path})` : agent;
-        console.log(result.success ? chalk.green(`\u2713 Registered MCP server with ${label}`) : chalk.red(`\u2717 ${agent}: ${result.error}`));
-      }
+    const artifacts = await client.getRunArtifacts(runId);
+    const canonicalSkill = typeof remoteRun.skill === "string" ? remoteRun.skill : "remote";
+    const requestedSkill = typeof remoteRun.requestedSlug === "string" && remoteRun.requestedSlug.trim()
+      ? remoteRun.requestedSlug
+      : canonicalSkill;
+    const exportDir = getRunExportDir(runId, requestedSkill);
+    mkdirSync(exportDir, { recursive: true });
+    const downloaded: Array<{ id: string; path: string; byteSize: number }> = [];
+
+    for (const artifact of artifacts) {
+      const artifactId = String(artifact.id || "");
+      if (!artifactId) continue;
+      const response = await client.downloadRunArtifact(runId, artifactId);
+      if (!response.ok) throw new Error(`download failed for artifact ${artifactId}: ${response.status}`);
+      const relativePath = safeArtifactRelativePath(
+        typeof artifact.relativePath === "string" ? artifact.relativePath : artifact.fileName,
+        String(artifact.fileName || artifactId),
+      );
+      const outputPath = join(exportDir, relativePath);
+      mkdirSync(dirname(outputPath), { recursive: true });
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      writeFileSync(outputPath, bytes);
+      downloaded.push({ id: artifactId, path: outputPath, byteSize: bytes.byteLength });
     }
-    if (options.json) console.log(JSON.stringify({ registered: results.filter((r) => r.success).length, results }, null, 2));
-    if (results.some((r) => !r.success)) process.exitCode = 1;
-    return;
-  }
-  await import("../../mcp/index.js");
-}
 
-async function registerMcpForAgent(agent: AgentTarget, command: string): Promise<McpRegistrationResult> {
-  switch (agent) {
-    case "claude":
-      return registerClaudeMcp(command);
-    case "codex":
-      return registerCodexMcp(command);
-    case "gemini":
-      return registerJsonMcpServer(agent, join(homedir(), ".gemini", "settings.json"), "mcpServers", {
-        command,
-        args: [],
-      });
-    case "pi":
-      return registerJsonMcpServer(agent, join(homedir(), ".pi", "agent", "mcp.json"), "mcpServers", {
-        command,
-        args: [],
-      });
-    case "opencode":
-      return registerOpenCodeMcp(command);
-    case "cursor":
-      return registerJsonMcpServer(agent, join(homedir(), ".cursor", "mcp.json"), "mcpServers", {
-        command,
-        args: [],
-      });
-    case "windsurf":
-      return registerJsonMcpServer(agent, join(homedir(), ".windsurf", "mcp.json"), "mcpServers", {
-        command,
-        args: [],
-      });
-    default:
-      return { agent, success: false, error: `Unknown agent: ${agent}. Available: ${AGENT_TARGETS.join(", ")}, all` };
-  }
-}
-
-async function registerClaudeMcp(command: string): Promise<McpRegistrationResult> {
-  const cliCommand = `claude mcp add -s user ${MCP_SERVER_NAME} -- ${command}`;
-  try {
-    const proc = Bun.spawn(["claude", "mcp", "add", "-s", "user", MCP_SERVER_NAME, "--", command], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
-    if (exitCode === 0) {
-      return { agent: "claude", success: true, command: cliCommand };
+    const payload = {
+      runId,
+      skill: requestedSkill,
+      ...(requestedSkill !== canonicalSkill ? { canonicalSkill } : {}),
+      exportDir,
+      downloaded,
+    };
+    if (options.json) console.log(JSON.stringify(payload, null, 2));
+    else {
+      console.log(chalk.green(`Downloaded ${downloaded.length} artifact${downloaded.length === 1 ? "" : "s"}`));
+      console.log(chalk.dim(`  Exports: ${exportDir}`));
     }
-    const fallback = registerJsonMcpServer("claude", join(homedir(), ".claude", ".mcp.json"), "mcpServers", {
-      command,
-      args: [],
+  } catch (err) {
+    const error = (err as Error).message;
+    if (options.json) console.log(JSON.stringify({ error }, null, 2));
+    else console.error(chalk.red(error));
+    process.exitCode = 1;
+  }
+}
+
+function safeArtifactRelativePath(value: unknown, fallback: string): string {
+  const raw = typeof value === "string" && value.trim() ? value : fallback;
+  const parts = raw.split(/[\\/]+/).filter((part) => part && part !== ".");
+  if (parts.length === 0 || parts.some((part) => part === "..")) {
+    return fallback.replace(/[\\/\r\n"]/g, "_");
+  }
+  return parts.join("/");
+}
+
+interface RemoteRunApiClient {
+  getRun(runId: string): Promise<any | null>;
+  getRunLogs(runId: string): Promise<any[]>;
+}
+
+interface PollingOptions {
+  intervalMs: number;
+  timeoutMs: number;
+}
+
+interface PollRemoteRunResult {
+  run: any;
+  attempts: number;
+  waited: boolean;
+  timedOut?: boolean;
+}
+
+function parsePollingOptions(options: RunCommandOptions): PollingOptions {
+  return {
+    intervalMs: parsePositiveInt(options.pollIntervalMs, 1000),
+    timeoutMs: parsePositiveInt(options.pollTimeoutMs, 300_000),
+  };
+}
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+async function pollRemoteRun(
+  client: RemoteRunApiClient,
+  runId: string,
+  options: PollingOptions,
+): Promise<PollRemoteRunResult> {
+  const deadline = Date.now() + options.timeoutMs;
+  let attempts = 0;
+  let current: any = null;
+
+  while (Date.now() <= deadline) {
+    attempts += 1;
+    current = await client.getRun(runId);
+    if (!current) throw new Error(`Remote run '${runId}' not found`);
+    if (isTerminalRemoteStatus(current.status)) return { run: current, attempts, waited: true };
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(options.intervalMs, remaining)));
+  }
+
+  return {
+    run: current ?? { id: runId, status: "queued" },
+    attempts,
+    waited: true,
+    timedOut: true,
+  };
+}
+
+async function persistRemoteRun(params: {
+  client: RemoteRunApiClient;
+  context: ReturnType<typeof createSkillRun>;
+  remoteRun: any;
+  remoteRunId?: string;
+  costCents?: number;
+  fallbackError?: string;
+}) {
+  const status = normalizeRemoteStatus(params.remoteRun.status);
+  await writeRemoteRunLogs(params.client, params.context, params.remoteRun, params.remoteRunId, params.fallbackError);
+  if (isTerminalNormalizedStatus(status)) {
+    return completeSkillRun(params.context, {
+      status,
+      remoteRunId: params.remoteRunId,
+      costCents: params.costCents,
+      ...(status === "failed" ? { error: params.fallbackError ?? "Remote run failed" } : {}),
     });
-    return {
-      ...fallback,
-      command: cliCommand,
-      error: fallback.success ? undefined : `claude exited with ${exitCode}: ${(stderr || stdout).trim()}`,
-    };
-  } catch (err) {
-    const fallback = registerJsonMcpServer("claude", join(homedir(), ".claude", ".mcp.json"), "mcpServers", {
-      command,
-      args: [],
-    });
-    return {
-      ...fallback,
-      command: cliCommand,
-      error: fallback.success ? undefined : (err as Error).message,
-    };
   }
+
+  return updateSkillRun(params.context, {
+    status,
+    remoteRunId: params.remoteRunId,
+    costCents: params.costCents,
+  });
 }
 
-function registerCodexMcp(command: string): McpRegistrationResult {
-  const path = join(homedir(), ".codex", "config.toml");
-  const config = `[mcp_servers.${MCP_SERVER_NAME}]\ncommand = ${JSON.stringify(command)}`;
+async function writeRemoteRunLogs(
+  client: RemoteRunApiClient,
+  context: ReturnType<typeof createSkillRun>,
+  remoteRun: any,
+  remoteRunId?: string,
+  fallbackError?: string,
+): Promise<void> {
+  const logs = remoteRunId ? await fetchRemoteRunLogs(client, remoteRunId) : [];
+  const { stdout, stderr } = splitRemoteLogs(remoteRun, logs, fallbackError);
+  writeRunLogs(context, stdout, stderr);
+}
+
+async function fetchRemoteRunLogs(client: RemoteRunApiClient, runId: string): Promise<any[]> {
   try {
-    const current = existsSync(path) ? readFileSync(path, "utf-8") : "";
-    writeTextFile(path, upsertTomlSection(current, `[mcp_servers.${MCP_SERVER_NAME}]`, `command = ${JSON.stringify(command)}`));
-    return { agent: "codex", success: true, path, config };
-  } catch (err) {
-    return { agent: "codex", success: false, path, config, error: (err as Error).message };
+    return await client.getRunLogs(runId);
+  } catch {
+    return [];
   }
 }
 
-function registerOpenCodeMcp(command: string): McpRegistrationResult {
-  const path = join(homedir(), ".config", "opencode", "opencode.json");
-  const config = JSON.stringify({
-    $schema: "https://opencode.ai/config.json",
-    mcp: {
-      [MCP_SERVER_NAME]: {
-        type: "local",
-        command: [command],
-        enabled: true,
-      },
-    },
-  }, null, 2);
+function splitRemoteLogs(remoteRun: any, logs: any[], fallbackError?: string): { stdout: string; stderr: string } {
+  let stdout = typeof remoteRun.stdout === "string" ? remoteRun.stdout : "";
+  let stderr = typeof remoteRun.stderr === "string" ? remoteRun.stderr : "";
 
-  try {
-    const data = readJsonObject(path);
-    if (!data.$schema) data.$schema = "https://opencode.ai/config.json";
-    const mcp = isPlainObject(data.mcp) ? data.mcp : {};
-    mcp[MCP_SERVER_NAME] = {
-      type: "local",
-      command: [command],
-      enabled: true,
-    };
-    data.mcp = mcp;
-    writeJsonObject(path, data);
-    return { agent: "opencode", success: true, path, config };
-  } catch (err) {
-    return { agent: "opencode", success: false, path, config, error: (err as Error).message };
-  }
-}
-
-function registerJsonMcpServer(agent: AgentTarget, path: string, containerKey: "mcpServers", server: Record<string, unknown>): McpRegistrationResult {
-  const config = JSON.stringify({ [containerKey]: { [MCP_SERVER_NAME]: server } }, null, 2);
-  try {
-    const data = readJsonObject(path);
-    const servers = isPlainObject(data[containerKey]) ? data[containerKey] as Record<string, unknown> : {};
-    servers[MCP_SERVER_NAME] = server;
-    data[containerKey] = servers;
-    writeJsonObject(path, data);
-    return { agent, success: true, path, config };
-  } catch (err) {
-    return { agent, success: false, path, config, error: (err as Error).message };
-  }
-}
-
-function readJsonObject(path: string): Record<string, unknown> {
-  if (!existsSync(path)) return {};
-  const raw = readFileSync(path, "utf-8").trim();
-  if (!raw) return {};
-  const parsed = JSON.parse(raw);
-  if (!isPlainObject(parsed)) throw new Error(`${path} must contain a JSON object`);
-  return parsed;
-}
-
-function writeJsonObject(path: string, data: Record<string, unknown>) {
-  writeTextFile(path, `${JSON.stringify(data, null, 2)}\n`);
-}
-
-function writeTextFile(path: string, content: string) {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, content.endsWith("\n") ? content : `${content}\n`);
-}
-
-function upsertTomlSection(content: string, header: string, body: string): string {
-  const sectionLines = [header, ...body.trim().split(/\r?\n/)];
-  const lines = content.trimEnd() ? content.trimEnd().split(/\r?\n/) : [];
-  const start = lines.findIndex((line) => line.trim() === header);
-  if (start === -1) {
-    const prefix = lines.length ? [...lines, ""] : [];
-    return [...prefix, ...sectionLines, ""].join("\n");
-  }
-  let end = lines.length;
-  for (let i = start + 1; i < lines.length; i++) {
-    if (/^\s*\[[^\]]+\]\s*$/.test(lines[i])) {
-      end = i;
-      break;
+  if (logs.length > 0) {
+    const out: string[] = [];
+    const err: string[] = [];
+    for (const entry of logs) {
+      const line = formatRemoteLogLine(entry);
+      const level = typeof entry?.level === "string" ? entry.level.toLowerCase() : "info";
+      if (level === "error" || level === "warn") err.push(line);
+      else out.push(line);
     }
+    stdout = appendLines(stdout, out);
+    stderr = appendLines(stderr, err);
   }
-  lines.splice(start, end - start, ...sectionLines);
-  return `${lines.join("\n")}\n`;
+
+  if (!stdout && typeof remoteRun.outputPreview === "string" && normalizeRemoteStatus(remoteRun.status) === "completed") {
+    stdout = `${remoteRun.outputPreview}\n`;
+  }
+  if (!stderr && fallbackError) stderr = `${fallbackError}\n`;
+
+  return { stdout, stderr };
 }
 
-function findCommandOnPath(command: string): string {
-  const pathValue = process.env.PATH || "";
-  for (const dir of pathValue.split(":")) {
-    if (!dir) continue;
-    const candidate = join(dir, command);
-    if (existsSync(candidate)) return candidate;
-  }
-  return command;
+function formatRemoteLogLine(entry: any): string {
+  const message = typeof entry?.message === "string" ? entry.message : JSON.stringify(entry);
+  const level = typeof entry?.level === "string" ? entry.level : "info";
+  const sequence = Number.isFinite(Number(entry?.sequence)) ? `${entry.sequence} ` : "";
+  return `[${level}] ${sequence}${message}`;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function appendLines(existing: string, lines: string[]): string {
+  const rendered = lines.length > 0 ? `${lines.join("\n")}\n` : "";
+  return existing ? `${existing}${existing.endsWith("\n") || !rendered ? "" : "\n"}${rendered}` : rendered;
+}
+
+function remoteRunNextActions(runId: string | undefined): { poll: string; download: string } | undefined {
+  if (!runId) return undefined;
+  return {
+    poll: `skills runs status ${runId}`,
+    download: `skills exports download ${runId}`,
+  };
 }
 
 function extractPrompt(args: string[]): string | undefined {
@@ -459,6 +718,53 @@ function extractPrompt(args: string[]): string | undefined {
     if (arg.startsWith("--prompt=")) return arg.slice("--prompt=".length);
   }
   return undefined;
+}
+
+function normalizeRemoteStatus(status: unknown): "queued" | "running" | "completed" | "failed" {
+  switch (String(status ?? "queued").toLowerCase()) {
+    case "running":
+    case "processing":
+    case "in_progress":
+      return "running";
+    case "completed":
+    case "complete":
+    case "succeeded":
+    case "success":
+      return "completed";
+    case "failed":
+    case "failure":
+    case "error":
+    case "errored":
+    case "cancelled":
+    case "canceled":
+    case "timed_out":
+    case "timeout":
+      return "failed";
+    default:
+      return "queued";
+  }
+}
+
+function isTerminalRemoteStatus(status: unknown): boolean {
+  return isTerminalNormalizedStatus(normalizeRemoteStatus(status));
+}
+
+function isTerminalNormalizedStatus(status: "queued" | "running" | "completed" | "failed"): boolean {
+  return status === "completed" || status === "failed";
+}
+
+function remoteRunError(run: any): string | undefined {
+  for (const key of ["error", "errorMessage", "message"]) {
+    if (typeof run?.[key] === "string" && run[key].trim()) return run[key];
+  }
+  return normalizeRemoteStatus(run?.status) === "failed" ? "Remote run failed" : undefined;
+}
+
+function remoteExitCode(run: any, status: "queued" | "running" | "completed" | "failed"): number {
+  const rawExitCode = Number(run?.exitCode);
+  const hasExitCode = Number.isInteger(rawExitCode) && rawExitCode >= 0 && rawExitCode <= 255;
+  if (hasExitCode) return rawExitCode;
+  return status === "failed" ? 1 : 0;
 }
 
 function statusColor(status: string): string {

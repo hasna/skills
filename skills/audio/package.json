@@ -2,14 +2,14 @@
   "name": "audio",
   "version": "1.0.0",
   "description": "Generate speech and audio using provider-cost AI backends",
-  "type": "module",
   "main": "src/index.ts",
+  "type": "module",
   "bin": {
     "audio": "src/index.ts"
   },
   "scripts": {
     "start": "bun run src/index.ts",
-    "dev": "bun run --watch src/index.ts"
+    "generate": "bun run src/index.ts generate"
   },
   "keywords": [
     "audio-generation",
@@ -20,7 +20,6 @@
     "minimax",
     "gemini"
   ],
-  "author": "",
   "devDependencies": {
     "@types/bun": "latest"
   },

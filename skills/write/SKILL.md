@@ -1,5 +1,5 @@
 ---
-name: Article Writer
+name: write
 description: Generate high-quality articles using parallel AI agents. Supports research, writing, and optional cover image generation. Write single articles or batch process multiple topics with configurable parallelism.
 ---
 

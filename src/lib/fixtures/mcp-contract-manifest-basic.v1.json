@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "toolNames": [
+    "describe_tools",
+    "get_mcp_contracts",
+    "list_skills",
+    "pin_skill",
+    "run_skill",
+    "validate_skill"
+  ],
+  "resourceUris": [
+    "skills://mcp/contracts",
+    "skills://registry",
+    "skills://{name}"
+  ],
+  "contracts": {
+    "pin_skill": {
+      "category": "pinning",
+      "sideEffects": "filesystem",
+      "required": [
+        "name"
+      ],
+      "properties": [
+        "for",
+        "name",
+        "scope"
+      ]
+    },
+    "run_skill": {
+      "category": "execution",
+      "sideEffects": "local-process-or-remote-run",
+      "required": [
+        "name"
+      ],
+      "properties": [
+        "args",
+        "input",
+        "name"
+      ]
+    },
+    "validate_skill": {
+      "category": "validation",
+      "sideEffects": "none",
+      "required": [
+        "name"
+      ],
+      "properties": [
+        "name"
+      ]
+    }
+  }
+}

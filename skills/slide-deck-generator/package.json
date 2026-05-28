@@ -1,0 +1,10 @@
+{
+  "name": "slide-deck-generator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hosted premium slide deck generator",
+  "type": "module",
+  "bin": {
+    "slide-deck-generator": "./src/index.ts"
+  }
+}

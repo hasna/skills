@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "fs";
-import { join } from "path";
+import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "fs";
+import { isAbsolute, join, normalize } from "path";
 import type { SkillMeta } from "./registry.js";
 
 export interface SkillValidationMessage {
@@ -19,6 +19,7 @@ export interface SkillValidationResult {
     binCommands: string[];
     docFiles: string[];
     skillMdFrontmatter?: SkillFrontmatter;
+    provenance?: SkillValidationProvenance;
   };
 }
 
@@ -39,6 +40,14 @@ export interface SkillFrontmatter {
   source?: string;
 }
 
+export interface SkillValidationProvenance {
+  directoryName: string;
+  packageName?: string;
+  packageVersion?: string;
+  frontmatterSource?: string;
+  registrySource?: string;
+}
+
 interface PackageJson {
   name?: unknown;
   version?: unknown;
@@ -47,6 +56,49 @@ interface PackageJson {
 }
 
 const DOC_FILES = ["SKILL.md", "README.md", "CLAUDE.md"];
+const RESERVED_SKILL_ENTRIES = new Set([
+  ".env",
+  ".npmrc",
+  ".pypirc",
+  ".netrc",
+  "id_rsa",
+  "id_ed25519",
+]);
+const KNOWN_TOP_LEVEL_ENTRIES = new Set([
+  ".claude",
+  ".env.example",
+  ".gitignore",
+  ".skills",
+  "CLAUDE.md",
+  "LICENSE",
+  "PROJECT_OVERVIEW.md",
+  "QUICKSTART.md",
+  "README.md",
+  "SKILL.md",
+  "api-docs-list.json",
+  "auth.ts",
+  "bun.lock",
+  "bunfig.toml",
+  "data",
+  "dist",
+  "examples",
+  "exports",
+  "http-client.ts",
+  "index.ts",
+  "install.sh",
+  "installer.ts",
+  "logs",
+  "node_modules",
+  "package.json",
+  "scripts",
+  "skill-install.ts",
+  "src",
+  "tests",
+  "tsconfig.json",
+  "vision.ts",
+]);
+const VALID_PROVENANCE_SOURCES = new Set(["official", "custom", "remote", "private", "private-hosted", "upstream"]);
+const VALID_BIN_COMMAND = /^[a-z0-9][a-z0-9._-]*$/;
 
 function add(target: SkillValidationMessage[], code: string, message: string): void {
   target.push({ code, message });
@@ -60,6 +112,16 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
+}
+
+function sortMessages(messages: SkillValidationMessage[]): SkillValidationMessage[] {
+  return [...messages].sort((a, b) => a.code.localeCompare(b.code) || a.message.localeCompare(b.message));
+}
+
+function isSafeRelativePath(value: string): boolean {
+  if (!value.trim() || isAbsolute(value)) return false;
+  const normalized = normalize(value).replace(/\\/g, "/");
+  return normalized !== ".." && !normalized.startsWith("../") && !normalized.includes("/../");
 }
 
 export function parseSkillFrontmatter(content: string): SkillFrontmatter | null {
@@ -119,7 +181,31 @@ export function validateSkillDirectory(
 
   if (!existsSync(skillPath)) {
     add(issues, "skill.dir_missing", `Skill directory not found: ${skillPath}`);
-    return { name: bareName, path: skillPath, valid: false, issues, warnings, metadata };
+    return {
+      name: bareName,
+      path: skillPath,
+      valid: false,
+      issues: sortMessages(issues),
+      warnings: sortMessages(warnings),
+      metadata,
+    };
+  }
+
+  if (!VALID_BIN_COMMAND.test(bareName)) {
+    add(issues, "skill.name_invalid", `Skill name '${bareName}' must use lowercase letters, numbers, dots, underscores, or hyphens`);
+  }
+
+  for (const entry of readdirSync(skillPath).sort()) {
+    const entryPath = join(skillPath, entry);
+    if (RESERVED_SKILL_ENTRIES.has(entry)) {
+      add(issues, "skill.reserved_file", `Reserved file '${entry}' is not allowed in skill packages`);
+    }
+    if (lstatSync(entryPath).isSymbolicLink()) {
+      add(issues, "skill.symlink_forbidden", `Symlink '${entry}' is not allowed in skill packages`);
+    }
+    if (!KNOWN_TOP_LEVEL_ENTRIES.has(entry)) {
+      add(warnings, "skill.file_unrecognized", `Unrecognized top-level skill entry '${entry}'`);
+    }
   }
 
   for (const docFile of DOC_FILES) {
@@ -136,13 +222,27 @@ export function validateSkillDirectory(
       add(warnings, "skill.frontmatter_missing", "SKILL.md has no YAML frontmatter");
     } else {
       metadata.skillMdFrontmatter = frontmatter;
+      metadata.provenance = {
+        ...(metadata.provenance ?? { directoryName: bareName }),
+        ...(frontmatter.source ? { frontmatterSource: frontmatter.source } : {}),
+        ...(registryMeta?.source ? { registrySource: registryMeta.source } : {}),
+      };
       if (!frontmatter.name) add(issues, "skill.frontmatter_name_missing", "SKILL.md frontmatter missing name");
       if (!frontmatter.description) add(issues, "skill.frontmatter_description_missing", "SKILL.md frontmatter missing description");
       if (frontmatter.name && frontmatter.name !== bareName) {
         add(issues, "skill.frontmatter_name_mismatch", `SKILL.md name '${frontmatter.name}' does not match '${bareName}'`);
       }
+      if (frontmatter.source && !VALID_PROVENANCE_SOURCES.has(frontmatter.source)) {
+        add(issues, "skill.frontmatter_source_invalid", `SKILL.md source '${frontmatter.source}' is not one of: ${[...VALID_PROVENANCE_SOURCES].join(", ")}`);
+      }
+      if (frontmatter.tags && frontmatter.tags.some((tag) => !tag.trim())) {
+        add(issues, "skill.frontmatter_tags_invalid", "SKILL.md tags must be non-empty strings");
+      }
       if (registryMeta?.description && frontmatter.description && frontmatter.description.length < 8) {
         add(warnings, "skill.frontmatter_description_short", "SKILL.md description is very short");
+      }
+      if (registryMeta?.category && frontmatter.category && frontmatter.category !== registryMeta.category) {
+        add(warnings, "skill.frontmatter_category_mismatch", `SKILL.md category '${frontmatter.category}' does not match registry category '${registryMeta.category}'`);
       }
     }
   } else {
@@ -159,24 +259,47 @@ export function validateSkillDirectory(
       if (!packageRecord) {
         add(issues, "package.invalid_shape", "package.json must be an object");
       } else {
-        if (typeof pkg.name === "string") metadata.packageName = pkg.name;
-        else add(issues, "package.name_missing", "package.json missing string name");
+        if (typeof pkg.name === "string") {
+          metadata.packageName = pkg.name;
+          if (pkg.name !== bareName) {
+            add(issues, "package.name_mismatch", `package.json name '${pkg.name}' does not match '${bareName}'`);
+          }
+        } else {
+          add(issues, "package.name_missing", "package.json missing string name");
+        }
 
         if (typeof pkg.version === "string" && pkg.version.trim()) metadata.version = pkg.version;
         else add(warnings, "package.version_missing", "package.json missing string version");
+
+        metadata.provenance = {
+          ...(metadata.provenance ?? { directoryName: bareName }),
+          ...(typeof pkg.name === "string" ? { packageName: pkg.name } : {}),
+          ...(typeof pkg.version === "string" && pkg.version.trim() ? { packageVersion: pkg.version } : {}),
+          ...(registryMeta?.source ? { registrySource: registryMeta.source } : {}),
+        };
 
         const binRecord = asRecord(pkg.bin);
         if (!binRecord || Object.keys(binRecord).length === 0) {
           add(issues, "package.bin_missing", "package.json missing non-empty bin object");
         } else {
           for (const [command, target] of Object.entries(binRecord)) {
+            if (!VALID_BIN_COMMAND.test(command)) {
+              add(issues, "package.bin_command_invalid", `package.json bin command '${command}' must use lowercase letters, numbers, dots, underscores, or hyphens`);
+            }
             if (typeof target !== "string" || !target.trim()) {
               add(issues, "package.bin_invalid", `package.json bin '${command}' must point to a file`);
               continue;
             }
             metadata.binCommands.push(command);
-            if (!existsSync(join(skillPath, target))) {
+            if (!isSafeRelativePath(target)) {
+              add(issues, "package.bin_target_unsafe", `package.json bin '${command}' target '${target}' must stay inside the skill directory`);
+              continue;
+            }
+            const targetPath = join(skillPath, target);
+            if (!existsSync(targetPath)) {
               add(warnings, "package.bin_target_missing", `package.json bin '${command}' target '${target}' is not present before build`);
+            } else if (statSync(targetPath).isDirectory()) {
+              add(issues, "package.bin_target_directory", `package.json bin '${command}' target '${target}' must point to a file, not a directory`);
             }
           }
         }
@@ -201,8 +324,8 @@ export function validateSkillDirectory(
     name: bareName,
     path: skillPath,
     valid: issues.length === 0,
-    issues,
-    warnings,
+    issues: sortMessages(issues),
+    warnings: sortMessages(warnings),
     metadata,
   };
 }

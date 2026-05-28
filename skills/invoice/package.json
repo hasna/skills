@@ -4,7 +4,7 @@
   "description": "Invoice generator CLI",
   "type": "module",
   "bin": {
-    "invoice": "./bin/cli.ts"
+    "invoicegenerate": "src/index.ts"
   },
   "scripts": {
     "start": "bun run bin/cli.ts",

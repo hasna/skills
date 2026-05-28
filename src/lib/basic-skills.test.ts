@@ -16,13 +16,11 @@ const BASIC_SKILLS = [...BASIC_SKILL_NAMES];
 const CONNECTOR_BACKED_SKILLS = ["image", "video", "audio", "music", "transcript", "convert"];
 
 const EXPECTED_PACKAGE_DEPS: Record<string, string[]> = {
-  "read-pdf": ["pdf-lib"],
-  "pdf-read": ["pdf-parse"],
   "doc-read": ["jszip"],
   "read-csv": ["csv-parse", "iconv-lite"],
   "read-excel": ["xlsx"],
   "pdf-generate": ["pdf-lib"],
-  "doc-generate": ["docx", "marked", "minimist", "openai"],
+  "doc-generate": ["docx", "marked", "openai"],
   excel: ["openai", "xlsx"],
 };
 
@@ -91,7 +89,7 @@ describe("basic skill profile for Takumi", () => {
   });
 
   test("connector-backed basic skills declare the hosted runtime key", () => {
-    for (const skill of CONNECTOR_BACKED_SKILLS) {
+    for (const skill of [...CONNECTOR_BACKED_SKILLS, "read-pdf", "pdf-read", "pdf-to-markdown"]) {
       const reqs = getSkillRequirements(skill);
       expect(reqs?.envVars, `${skill} should disclose SKILL_API_KEY`).toContain("SKILL_API_KEY");
     }

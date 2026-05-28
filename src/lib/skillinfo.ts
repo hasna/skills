@@ -7,6 +7,7 @@ import { join } from "path";
 import { getInstalledSkills, getSkillPath } from "./installer.js";
 import { getSkill, loadRegistry, type SkillMeta } from "./registry.js";
 import { normalizeSkillName } from "./utils.js";
+import { isPremiumSkill } from "../platform/skills/pricing.js";
 
 export interface SkillDocs {
   skillMd: string | null;
@@ -20,6 +21,24 @@ export interface SkillRequirements {
   cliCommand: string | null;
   dependencies: Record<string, string>;
 }
+
+const HOSTED_PROVIDER_ENV_PREFIXES = [
+  "OPENAI_",
+  "ANTHROPIC_",
+  "GEMINI_",
+  "GOOGLE_",
+  "XAI_",
+  "MINIMAX_",
+  "ELEVENLABS_",
+  "DEEPGRAM_",
+  "REPLICATE_",
+  "FAL_",
+  "STABILITY_",
+  "EXA_",
+  "FIRECRAWL_",
+  "AWS_",
+  "STRIPE_",
+];
 
 /**
  * Read documentation files from a skill
@@ -59,10 +78,16 @@ export function getSkillRequirements(name: string): SkillRequirements | null {
   }
   const allText = texts.join("\n");
   const meta = getSkill(name);
+  const canonicalName = meta?.name ?? normalizeSkillName(name);
 
   // Extract env vars
   const envVars = extractEnvVars(allText);
-  if (meta?.tags.includes("premium") || meta?.tags.includes("remote")) {
+  if (isHostedPremiumSkill(canonicalName, meta)) {
+    for (const envVar of Array.from(envVars)) {
+      if (HOSTED_PROVIDER_ENV_PREFIXES.some((prefix) => envVar.startsWith(prefix))) {
+        envVars.delete(envVar);
+      }
+    }
     envVars.add("SKILL_API_KEY");
   }
 
@@ -105,6 +130,10 @@ export function getSkillRequirements(name: string): SkillRequirements | null {
     cliCommand,
     dependencies,
   };
+}
+
+function isHostedPremiumSkill(skillName: string, meta?: SkillMeta): boolean {
+  return isPremiumSkill(skillName) || Boolean(meta?.tags.includes("premium") || meta?.tags.includes("remote"));
 }
 
 /**

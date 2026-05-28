@@ -1,0 +1,10 @@
+{
+  "name": "repo-onboarding-report",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hosted premium repository onboarding report generator",
+  "type": "module",
+  "bin": {
+    "repo-onboarding-report": "./src/index.ts"
+  }
+}

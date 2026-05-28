@@ -11,7 +11,10 @@
     "build": "bun build src/index.ts --outdir dist --target node",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {},
+  "dependencies": {
+    "diff": "^8.0.2",
+    "chalk": "^5.4.1"
+  },
   "devDependencies": {
     "@types/bun": "latest",
     "typescript": "^5.7.0"

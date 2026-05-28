@@ -86,6 +86,24 @@ function slugify(value: string): string {
 }
 
 function parseOptions(): SkillOptions {
+  if (Bun.argv.includes("--help") || Bun.argv.includes("-h")) {
+    console.log(`highlight-reel-generator
+
+Usage:
+  skills run highlight-reel-generator -- --text <transcript> [options]
+
+Options:
+  --text <transcript>       Transcript text
+  --reel-length <seconds>   Target reel length
+  --segments <count>        Number of segments
+  --tone <tone>             Editorial tone
+  --music <style>           Music direction
+  --format <format>         markdown or json
+  --model <model>           OpenAI model
+  --output <path>           Output file path`);
+    process.exit(0);
+  }
+
   const { values, positionals } = parseArgs({
     args: Bun.argv.slice(2),
     options: {
@@ -97,6 +115,7 @@ function parseOptions(): SkillOptions {
       format: { type: "string", default: "markdown" },
       model: { type: "string", default: "gpt-4o-mini" },
       output: { type: "string" },
+      help: { type: "boolean", short: "h" },
     },
     allowPositionals: true,
   });

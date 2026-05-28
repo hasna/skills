@@ -1,5 +1,5 @@
 ---
-name: Compress Video
+name: compress-video
 version: 0.1.0
 description: Compress videos while preserving quality using FFmpeg with multiple codec options and preset configurations
 author: skills.md

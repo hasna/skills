@@ -1,0 +1,14 @@
+{
+  "name": "landing-page-pack",
+  "version": "0.1.0",
+  "description": "Hosted premium landing page copy and conversion artifact generator",
+  "type": "module",
+  "bin": {
+    "landing-page-pack": "./src/index.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}

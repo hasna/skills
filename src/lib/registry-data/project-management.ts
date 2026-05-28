@@ -1,0 +1,67 @@
+import type { SkillMeta } from "../registry-types.js";
+
+export const PROJECT_MANAGEMENT_SKILLS: SkillMeta[] = [
+  {
+    name: "action-item-router",
+    displayName: "Action Item Router",
+    description: "Route and assign action items from meetings or documents to appropriate owners",
+    category: "Project Management",
+    tags: ["action-items", "routing", "delegation", "tasks"],
+  },
+  {
+    name: "businessactivity",
+    displayName: "Business Activity",
+    description: "Business activity, workflow, and ownership management service",
+    category: "Project Management",
+    tags: ["business", "workflow", "activities", "management"],
+  },
+  {
+    name: "delegation-brief-writer",
+    displayName: "Delegation Brief Writer",
+    description: "Write clear delegation briefs with context, expectations, and deadlines",
+    category: "Project Management",
+    tags: ["delegation", "briefs", "management", "tasks"],
+  },
+  {
+    name: "goal-quarterly-roadmap",
+    displayName: "Goal Quarterly Roadmap",
+    description: "Create quarterly goal roadmaps with milestones and tracking",
+    category: "Project Management",
+    tags: ["goals", "roadmap", "quarterly", "planning"],
+  },
+  {
+    name: "implementation",
+    displayName: "Implementation",
+    description: "Create .implementation scaffold for project development tracking",
+    category: "Project Management",
+    tags: ["implementation", "tracking", "scaffold", "project"],
+  },
+  {
+    name: "implementation-agent",
+    displayName: "Implementation Agent",
+    description: "AI agent for managing implementation workflows and task execution",
+    category: "Project Management",
+    tags: ["implementation", "agent", "workflow", "execution"],
+  },
+  {
+    name: "implementation-plan",
+    displayName: "Implementation Plan",
+    description: "Generate detailed implementation plans with phases and milestones",
+    category: "Project Management",
+    tags: ["implementation", "planning", "milestones", "phases"],
+  },
+  {
+    name: "implementation-todo",
+    displayName: "Implementation Todo",
+    description: "Manage implementation task lists and todo items",
+    category: "Project Management",
+    tags: ["implementation", "todo", "tasks", "tracking"],
+  },
+  {
+    name: "project-retro-companion",
+    displayName: "Project Retro Companion",
+    description: "Facilitate project retrospectives with structured reflection and action items",
+    category: "Project Management",
+    tags: ["retrospective", "project", "feedback", "improvement"],
+  },
+];

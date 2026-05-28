@@ -1,0 +1,14 @@
+{
+  "name": "ad-creative-pack",
+  "version": "0.1.0",
+  "description": "Hosted premium paid ad creative artifact generator",
+  "type": "module",
+  "bin": {
+    "ad-creative-pack": "./src/index.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}

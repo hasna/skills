@@ -4,7 +4,7 @@
   "description": "Sales copy generator using AI",
   "type": "module",
   "bin": {
-    "salescopy": "./bin/cli.ts"
+    "salescopygenerate": "src/index.ts"
   },
   "scripts": {
     "start": "bun run bin/cli.ts",
