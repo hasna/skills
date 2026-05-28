@@ -112,8 +112,8 @@ describe("MCP Server", () => {
       expect(toolNames).toContain("search_skills");
       expect(toolNames).toContain("get_skill_info");
       expect(toolNames).toContain("get_skill_docs");
-      expect(toolNames).toContain("install_skill");
-      expect(toolNames).toContain("remove_skill");
+      expect(toolNames).toContain("pin_skill");
+      expect(toolNames).toContain("unpin_skill");
       expect(toolNames).toContain("list_categories");
       expect(toolNames).toContain("get_requirements");
     } finally {
@@ -335,12 +335,12 @@ describe("MCP Server", () => {
     }
   }, 15000);
 
-  test("calls install_skill tool for nonexistent skill", async () => {
+  test("calls pin_skill tool for nonexistent skill", async () => {
     const client = new McpClient();
     try {
       await client.initialize();
       const response = await client.request("tools/call", {
-        name: "install_skill",
+        name: "pin_skill",
         arguments: { name: "nonexistent-xyz-999" },
       }, 16);
       expect(response).not.toBeNull();
@@ -350,12 +350,12 @@ describe("MCP Server", () => {
     }
   }, 15000);
 
-  test("calls remove_skill tool for non-installed skill", async () => {
+  test("calls unpin_skill tool for non-pinned skill", async () => {
     const client = new McpClient();
     try {
       await client.initialize();
       const response = await client.request("tools/call", {
-        name: "remove_skill",
+        name: "unpin_skill",
         arguments: { name: "nonexistent-xyz-999" },
       }, 17);
       expect(response).not.toBeNull();
@@ -402,24 +402,24 @@ describe("MCP Server", () => {
     }
   }, 15000);
 
-  test("install_category is included in tools list", async () => {
+  test("pin_category is included in tools list", async () => {
     const client = new McpClient();
     try {
       await client.initialize();
       const response = await client.request("tools/list");
       const toolNames = response.result.tools.map((t: any) => t.name);
-      expect(toolNames).toContain("install_category");
+      expect(toolNames).toContain("pin_category");
     } finally {
       await client.close();
     }
   }, 15000);
 
-  test("install_category returns error for unknown category", async () => {
+  test("pin_category returns error for unknown category", async () => {
     const client = new McpClient();
     try {
       await client.initialize();
       const response = await client.request("tools/call", {
-        name: "install_category",
+        name: "pin_category",
         arguments: { category: "Fake Category" },
       }, 30);
       expect(response).not.toBeNull();
@@ -430,12 +430,12 @@ describe("MCP Server", () => {
     }
   }, 15000);
 
-  test("install_category installs all skills in a category", async () => {
+  test("pin_category pins all skills in a category", async () => {
     const client = new McpClient();
     try {
       await client.initialize();
       const response = await client.request("tools/call", {
-        name: "install_category",
+        name: "pin_category",
         arguments: { category: "Event Management" },
       }, 31);
       expect(response).not.toBeNull();
@@ -562,6 +562,103 @@ describe("MCP Server", () => {
       }, 43);
       expect(response).not.toBeNull();
       expect(response.result.isError).toBe(true);
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("validate_skill uses structured validation result", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const validResponse = await client.request("tools/call", {
+        name: "validate_skill",
+        arguments: { name: "image" },
+      }, 44);
+      expect(validResponse).not.toBeNull();
+      const validResult = JSON.parse(validResponse.result.content[0].text);
+      expect(validResult.valid).toBe(true);
+      expect(validResult.metadata.binCommands).toContain("image");
+
+      const missingResponse = await client.request("tools/call", {
+        name: "validate_skill",
+        arguments: { name: "not-a-skill" },
+      }, 45);
+      expect(missingResponse).not.toBeNull();
+      expect(missingResponse.result.isError).toBe(true);
+      const missingResult = JSON.parse(missingResponse.result.content[0].text);
+      expect(missingResult.valid).toBe(false);
+      expect(missingResult.issues[0].code).toBe("skill.dir_missing");
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("meta tools return structured tool contracts", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const searchResponse = await client.request("tools/call", {
+        name: "search_tools",
+        arguments: { query: "skill" },
+      }, 46);
+      expect(searchResponse).not.toBeNull();
+      const searchResult = JSON.parse(searchResponse.result.content[0].text);
+      expect(searchResult.tools).toContain("validate_skill");
+      expect(searchResult.tools).toContain("run_skill");
+
+      const describeResponse = await client.request("tools/call", {
+        name: "describe_tools",
+        arguments: { names: ["validate_skill", "send_feedback"] },
+      }, 47);
+      expect(describeResponse).not.toBeNull();
+      const describeResult = JSON.parse(describeResponse.result.content[0].text);
+      expect(describeResult.tools[0]).toEqual({
+        name: "validate_skill",
+        description: "Validate a skill directory using the shared skill validator.",
+        params: ["name"],
+      });
+      expect(describeResult.tools[1].params).toContain("category?");
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("agent registration tools return JSON contracts", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const registerResponse = await client.request("tools/call", {
+        name: "register_agent",
+        arguments: { name: "McpTestAgent", session_id: "test-session" },
+      }, 48);
+      expect(registerResponse).not.toBeNull();
+      const agent = JSON.parse(registerResponse.result.content[0].text);
+      expect(agent.name).toBe("McpTestAgent");
+      expect(agent.registered).toBe(true);
+      expect(typeof agent.id).toBe("string");
+
+      const heartbeatResponse = await client.request("tools/call", {
+        name: "heartbeat",
+        arguments: { agent_id: agent.id },
+      }, 49);
+      const heartbeat = JSON.parse(heartbeatResponse.result.content[0].text);
+      expect(heartbeat).toMatchObject({ agent_id: agent.id, name: "McpTestAgent", active: true });
+
+      const focusResponse = await client.request("tools/call", {
+        name: "set_focus",
+        arguments: { agent_id: agent.id, project_id: "platform-skills" },
+      }, 50);
+      const focus = JSON.parse(focusResponse.result.content[0].text);
+      expect(focus).toEqual({ agent_id: agent.id, project_id: "platform-skills" });
+
+      const listResponse = await client.request("tools/call", {
+        name: "list_agents",
+        arguments: {},
+      }, 51);
+      const list = JSON.parse(listResponse.result.content[0].text);
+      expect(list.total).toBe(1);
+      expect(list.agents[0].name).toBe("McpTestAgent");
     } finally {
       await client.close();
     }

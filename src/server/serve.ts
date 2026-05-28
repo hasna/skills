@@ -7,9 +7,8 @@ import { existsSync, readFileSync } from "fs";
 import { join, dirname, extname } from "path";
 import { fileURLToPath } from "url";
 import { SKILLS, CATEGORIES, getSkill, getSkillsByCategory, searchSkills, loadRegistry } from "../lib/registry.js";
-import { getInstalledSkills, getInstallMeta, installSkill, removeSkill, installSkillForAgent, resolveAgents } from "../lib/installer.js";
-import type { AgentScope } from "../lib/installer.js";
-import { getSkillDocs, getSkillBestDoc, getSkillRequirements, generateSkillMd } from "../lib/skillinfo.js";
+import { getInstalledSkills, getInstallMeta, installSkill, removeSkill, resolveAgents } from "../lib/installer.js";
+import { getSkillDocs, getSkillBestDoc, getSkillRequirements } from "../lib/skillinfo.js";
 
 function getPackageJson(): { version: string; name: string } {
   try {
@@ -31,7 +30,7 @@ interface SkillWithStatus {
   description: string;
   category: string;
   tags: string[];
-  installed: boolean;
+  pinned: boolean;
   envVars: string[];
   envVarsSet: string[];
   systemDeps: string[];
@@ -114,7 +113,7 @@ function parseFields(searchParams: URLSearchParams): string[] {
 }
 
 function getAllSkillsWithStatus(): SkillWithStatus[] {
-  const installed = new Set(getInstalledSkills());
+  const pinned = new Set(getInstalledSkills());
   return loadRegistry().map((meta) => {
     const reqs = getSkillRequirements(meta.name);
     const envVars = reqs?.envVars || [];
@@ -124,7 +123,7 @@ function getAllSkillsWithStatus(): SkillWithStatus[] {
       description: meta.description,
       category: meta.category,
       tags: meta.tags,
-      installed: installed.has(meta.name),
+      pinned: pinned.has(meta.name),
       envVars,
       envVarsSet: envVars.filter((v) => !!process.env[v]),
       systemDeps: reqs?.systemDeps || [],
@@ -172,7 +171,7 @@ export function createFetchHandler(options?: {
     }
 
     // GET /api/skills - All skills with status
-    // Supports ?fields=name,category,installed to reduce payload
+    // Supports ?fields=name,category,pinned to reduce payload
     // Supports ?stream=true for chunked JSON array streaming
     if (path === "/api/skills" && method === "GET") {
       const fields = parseFields(url.searchParams);
@@ -236,7 +235,7 @@ export function createFetchHandler(options?: {
       if (!query.trim()) return json([]);
       const fields = parseFields(url.searchParams);
       const results = searchSkills(query);
-      const installed = new Set(getInstalledSkills());
+      const pinned = new Set(getInstalledSkills());
       const mapped = results.map((meta) => {
         const reqs = getSkillRequirements(meta.name);
         const envVars = reqs?.envVars || [];
@@ -246,7 +245,7 @@ export function createFetchHandler(options?: {
           description: meta.description,
           category: meta.category,
           tags: meta.tags,
-          installed: installed.has(meta.name),
+          pinned: pinned.has(meta.name),
           envVars,
           envVarsSet: envVars.filter((v) => !!process.env[v]),
           systemDeps: reqs?.systemDeps || [],
@@ -269,19 +268,19 @@ export function createFetchHandler(options?: {
       const fields = parseFields(url.searchParams);
       const reqs = getSkillRequirements(name);
       const docs = getSkillBestDoc(name);
-      const installed = new Set(getInstalledSkills());
-      const isInstalled = installed.has(meta.name);
+      const pinned = new Set(getInstalledSkills());
+      const isPinned = pinned.has(meta.name);
       const envVars = reqs?.envVars || [];
 
-      // Include install metadata (timestamp + version) when installed
-      let installedAt: string | null = null;
-      let installedVersion: string | null = null;
-      if (isInstalled) {
+      // Include pin metadata (timestamp + version) when pinned.
+      let pinnedAt: string | null = null;
+      let pinnedVersion: string | null = null;
+      if (isPinned) {
         const installMeta = getInstallMeta();
         const skillMeta = installMeta.skills?.[meta.name];
         if (skillMeta) {
-          installedAt = skillMeta.installedAt || null;
-          installedVersion = skillMeta.version || null;
+          pinnedAt = skillMeta.installedAt || null;
+          pinnedVersion = skillMeta.version || null;
         }
       }
 
@@ -291,9 +290,9 @@ export function createFetchHandler(options?: {
         description: meta.description,
         category: meta.category,
         tags: meta.tags,
-        installed: isInstalled,
-        installedAt,
-        installedVersion,
+        pinned: isPinned,
+        pinnedAt,
+        pinnedVersion,
         envVars,
         envVarsSet: envVars.filter((v) => !!process.env[v]),
         systemDeps: reqs?.systemDeps || [],
@@ -312,9 +311,9 @@ export function createFetchHandler(options?: {
       return json({ content: content || null });
     }
 
-    // POST /api/skills/:name/install - Install skill
+    // POST /api/skills/:name/pin - Pin skill in .skills/project.json
     // Accepts optional JSON body: { for?: "claude"|"codex"|"gemini"|"all", scope?: "global"|"project" }
-    const installMatch = path.match(/^\/api\/skills\/([^/]+)\/install$/);
+    const installMatch = path.match(/^\/api\/skills\/([^/]+)\/pin$/);
     if (installMatch && method === "POST") {
       const name = installMatch[1];
       if (!isValidSkillName(name)) return json({ error: "Invalid skill name" }, 400);
@@ -327,22 +326,14 @@ export function createFetchHandler(options?: {
       } catch {}
 
       if (body.for) {
-        // Agent install mode
         try {
           const agents = resolveAgents(body.for);
-          const scope = (body.scope === "project" ? "project" : "global") as AgentScope;
-          const results = agents.map((agent) =>
-            installSkillForAgent(name, { agent, scope }, generateSkillMd)
-          );
-          const allSuccess = results.every((r) => r.success);
-          const errors = results.filter((r) => !r.success).map((r) => r.error);
-          // Compact success response — full results only on failure
-          return json(
-            allSuccess
-              ? { skill: name, success: true }
-              : { skill: name, success: false, results, error: errors.join("; ") },
-            allSuccess ? 200 : 400
-          );
+          return json({
+            skill: name,
+            success: false,
+            agents,
+            error: `Direct agent skill-folder installs are disabled. Register Skills MCP instead: skills mcp --register ${body.for}`,
+          }, 400);
         } catch (e) {
           return json(
             { skill: name, success: false, error: e instanceof Error ? e.message : "Unknown error" },
@@ -350,7 +341,6 @@ export function createFetchHandler(options?: {
           );
         }
       } else {
-        // Full source install (default) — compact success response
         const result = installSkill(name);
         return json(
           result.success
@@ -361,9 +351,9 @@ export function createFetchHandler(options?: {
       }
     }
 
-    // POST /api/skills/install-category - Install all skills in a category
+    // POST /api/skills/pin-category - Pin all skills in a category
     // Body: { category: string, for?: string, scope?: string }
-    if (path === "/api/skills/install-category" && method === "POST") {
+    if (path === "/api/skills/pin-category" && method === "POST") {
       let body: { category?: string; for?: string; scope?: string } = {};
       try {
         const text = await req.text();
@@ -387,15 +377,13 @@ export function createFetchHandler(options?: {
       if (body.for) {
         try {
           const agents = resolveAgents(body.for);
-          const scope = (body.scope === "project" ? "project" : "global") as AgentScope;
-          const results = [];
-          for (const name of names) {
-            for (const agent of agents) {
-              results.push(installSkillForAgent(name, { agent, scope }, generateSkillMd));
-            }
-          }
-          const allSuccess = results.every((r) => r.success);
-          return json({ category: matchedCategory, count: names.length, success: allSuccess, results }, allSuccess ? 200 : 207);
+          return json({
+            category: matchedCategory,
+            count: names.length,
+            success: false,
+            agents,
+            error: `Direct agent skill-folder installs are disabled. Register Skills MCP instead: skills mcp --register ${body.for}`,
+          }, 400);
         } catch (e) {
           return json({ success: false, error: e instanceof Error ? e.message : "Unknown error" }, 400);
         }
@@ -406,8 +394,8 @@ export function createFetchHandler(options?: {
       }
     }
 
-    // POST /api/skills/:name/remove - Remove skill
-    const removeMatch = path.match(/^\/api\/skills\/([^/]+)\/remove$/);
+    // POST /api/skills/:name/unpin - Unpin skill
+    const removeMatch = path.match(/^\/api\/skills\/([^/]+)\/unpin$/);
     if (removeMatch && method === "POST") {
       const name = removeMatch[1];
       if (!isValidSkillName(name)) return json({ error: "Invalid skill name" }, 400);
@@ -421,7 +409,7 @@ export function createFetchHandler(options?: {
       return json({ version: pkg.version, name: pkg.name });
     }
 
-    // GET /api/export - Export installed skills as JSON
+    // GET /api/export - Export pinned skills as JSON
     if (path === "/api/export" && method === "GET") {
       const skills = getInstalledSkills();
       return json({
@@ -431,7 +419,7 @@ export function createFetchHandler(options?: {
       });
     }
 
-    // POST /api/import - Import and install a list of skills
+    // POST /api/import - Import and pin a list of skills
     // Body: { skills: string[], for?: string, scope?: string }
     if (path === "/api/import" && method === "POST") {
       let body: { skills?: string[]; for?: string; scope?: string } = {};
@@ -452,14 +440,12 @@ export function createFetchHandler(options?: {
       if (body.for) {
         try {
           const agents = resolveAgents(body.for);
-          const scope = (body.scope === "project" ? "project" : "global") as AgentScope;
           for (const name of skillList) {
-            const agentResults = agents.map((agent) =>
-              installSkillForAgent(name, { agent, scope }, generateSkillMd)
-            );
-            const success = agentResults.every((r) => r.success);
-            const errors = agentResults.filter((r) => !r.success).map((r) => r.error).filter(Boolean);
-            results.push({ skill: name, success, ...(errors.length > 0 ? { error: errors.join("; ") } : {}) });
+            results.push({
+              skill: name,
+              success: false,
+              error: `Direct agent skill-folder installs are disabled. Register Skills MCP instead: skills mcp --register ${agents.join(",")}`,
+            });
           }
         } catch (e) {
           return json({ error: e instanceof Error ? e.message : "Unknown error" }, 400);

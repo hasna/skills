@@ -30,11 +30,11 @@ describe("Dashboard Server", () => {
       expect(skill).toHaveProperty("description");
       expect(skill).toHaveProperty("category");
       expect(skill).toHaveProperty("tags");
-      expect(skill).toHaveProperty("installed");
+      expect(skill).toHaveProperty("pinned");
       expect(skill).toHaveProperty("envVars");
       expect(skill).toHaveProperty("systemDeps");
       expect(skill).toHaveProperty("cliCommand");
-      expect(typeof skill.installed).toBe("boolean");
+      expect(typeof skill.pinned).toBe("boolean");
       expect(Array.isArray(skill.tags)).toBe(true);
       expect(Array.isArray(skill.envVars)).toBe(true);
       expect(Array.isArray(skill.systemDeps)).toBe(true);
@@ -156,7 +156,7 @@ describe("Dashboard Server", () => {
       expect(data.length).toBeGreaterThan(0);
       const skill = data[0];
       expect(skill).toHaveProperty("name");
-      expect(skill).toHaveProperty("installed");
+      expect(skill).toHaveProperty("pinned");
       expect(skill).toHaveProperty("envVars");
     });
   });
@@ -220,31 +220,31 @@ describe("Dashboard Server", () => {
     });
   });
 
-  describe("POST /api/skills/:name/install", () => {
-    test("attempts to install a skill", async () => {
-      const res = await api("/api/skills/image/install", { method: "POST" });
+  describe("POST /api/skills/:name/pin", () => {
+    test("attempts to pin a skill", async () => {
+      const res = await api("/api/skills/image/pin", { method: "POST" });
       const data = await res.json();
-      // Will either succeed or say already installed
+      // Will either succeed or say already pinned
       expect(data).toHaveProperty("skill");
       expect(data.skill).toBe("image");
     });
 
     test("returns 400 for invalid name", async () => {
-      const res = await api("/api/skills/INVALID..NAME/install", { method: "POST" });
+      const res = await api("/api/skills/INVALID..NAME/pin", { method: "POST" });
       expect(res.status).toBe(400);
     });
 
     test("returns error for nonexistent skill", async () => {
-      const res = await api("/api/skills/nonexistent-xyz-999/install", { method: "POST" });
+      const res = await api("/api/skills/nonexistent-xyz-999/pin", { method: "POST" });
       const data = await res.json();
       expect(data.success).toBe(false);
       expect(data.error).toContain("not found");
     });
   });
 
-  describe("POST /api/skills/install-category", () => {
-    test("installs all skills in a valid category", async () => {
-      const res = await api("/api/skills/install-category", {
+  describe("POST /api/skills/pin-category", () => {
+    test("pins all skills in a valid category", async () => {
+      const res = await api("/api/skills/pin-category", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ category: "Event Management" }),
@@ -259,7 +259,7 @@ describe("Dashboard Server", () => {
     });
 
     test("category matching is case-insensitive", async () => {
-      const res = await api("/api/skills/install-category", {
+      const res = await api("/api/skills/pin-category", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ category: "event management" }),
@@ -271,7 +271,7 @@ describe("Dashboard Server", () => {
     });
 
     test("returns 400 for unknown category", async () => {
-      const res = await api("/api/skills/install-category", {
+      const res = await api("/api/skills/pin-category", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ category: "Fake Category" }),
@@ -283,7 +283,7 @@ describe("Dashboard Server", () => {
     });
 
     test("returns 400 when category field is missing", async () => {
-      const res = await api("/api/skills/install-category", {
+      const res = await api("/api/skills/pin-category", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
@@ -293,21 +293,22 @@ describe("Dashboard Server", () => {
       expect(data.error).toContain("category");
     });
 
-    test("installs for agent when --for is provided", async () => {
-      const res = await api("/api/skills/install-category", {
+    test("rejects direct agent folder pins when --for is provided", async () => {
+      const res = await api("/api/skills/pin-category", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ category: "Event Management", for: "claude", scope: "project" }),
       });
       const data = await res.json();
-      expect([200, 207]).toContain(res.status);
+      expect(res.status).toBe(400);
       expect(data.category).toBe("Event Management");
       expect(data.count).toBe(4);
-      expect(Array.isArray(data.results)).toBe(true);
+      expect(data.success).toBe(false);
+      expect(data.error).toContain("skills mcp --register claude");
     });
 
     test("returns 400 for invalid agent name", async () => {
-      const res = await api("/api/skills/install-category", {
+      const res = await api("/api/skills/pin-category", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ category: "Event Management", for: "invalid-agent" }),
@@ -319,16 +320,16 @@ describe("Dashboard Server", () => {
     });
   });
 
-  describe("POST /api/skills/:name/remove", () => {
-    test("returns result for remove attempt", async () => {
-      const res = await api("/api/skills/nonexistent-xyz-999/remove", { method: "POST" });
+  describe("POST /api/skills/:name/unpin", () => {
+    test("returns result for unpin attempt", async () => {
+      const res = await api("/api/skills/nonexistent-xyz-999/unpin", { method: "POST" });
       const data = await res.json();
       expect(data).toHaveProperty("success");
       expect(data).toHaveProperty("skill");
     });
 
     test("returns 400 for invalid name", async () => {
-      const res = await api("/api/skills/INVALID..NAME/remove", { method: "POST" });
+      const res = await api("/api/skills/INVALID..NAME/unpin", { method: "POST" });
       expect(res.status).toBe(400);
     });
   });
@@ -344,22 +345,23 @@ describe("Dashboard Server", () => {
     });
   });
 
-  describe("POST /api/skills/:name/install with agent options", () => {
-    test("installs skill for a specific agent with for param", async () => {
-      const res = await api("/api/skills/image/install", {
+  describe("POST /api/skills/:name/pin with agent options", () => {
+    test("rejects direct agent folder pin with for param", async () => {
+      const res = await api("/api/skills/image/pin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ for: "claude", scope: "project" }),
       });
       const data = await res.json();
+      expect(res.status).toBe(400);
       expect(data).toHaveProperty("skill", "image");
       expect(data).toHaveProperty("success");
-      // Compact success response — no results array on success
-      expect(data.success).toBe(true);
+      expect(data.success).toBe(false);
+      expect(data.error).toContain("skills mcp --register claude");
     });
 
     test("returns 400 for invalid agent name via for param", async () => {
-      const res = await api("/api/skills/image/install", {
+      const res = await api("/api/skills/image/pin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ for: "invalid-agent" }),
@@ -370,8 +372,8 @@ describe("Dashboard Server", () => {
       expect(data.error).toContain("Unknown agent");
     });
 
-    test("handles empty POST body gracefully (full source install)", async () => {
-      const res = await api("/api/skills/image/install", {
+    test("handles empty POST body gracefully (full source pin)", async () => {
+      const res = await api("/api/skills/image/pin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: "",
@@ -381,18 +383,18 @@ describe("Dashboard Server", () => {
     });
 
     test("handles malformed JSON body gracefully", async () => {
-      const res = await api("/api/skills/image/install", {
+      const res = await api("/api/skills/image/pin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: "not json",
       });
       const data = await res.json();
-      // Falls through to full source install since body parsing fails silently
+      // Falls through to full source pin since body parsing fails silently
       expect(data).toHaveProperty("skill");
     });
 
-    test("agent install for nonexistent skill returns 400", async () => {
-      const res = await api("/api/skills/nonexistent-xyz-999/install", {
+    test("agent pin for nonexistent skill returns 400", async () => {
+      const res = await api("/api/skills/nonexistent-xyz-999/pin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ for: "claude", scope: "global" }),
@@ -403,14 +405,16 @@ describe("Dashboard Server", () => {
     });
 
     test("scope defaults to global when not specified", async () => {
-      const res = await api("/api/skills/image/install", {
+      const res = await api("/api/skills/image/pin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ for: "claude" }),
       });
       const data = await res.json();
+      expect(res.status).toBe(400);
       expect(data).toHaveProperty("skill", "image");
       expect(data).toHaveProperty("success");
+      expect(data.success).toBe(false);
     });
   });
 

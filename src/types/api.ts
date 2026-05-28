@@ -9,7 +9,7 @@ export interface SkillResponse {
   description: string;
   category: string;
   tags: string[];
-  installed: boolean;
+  pinned: boolean;
   envVars: string[];
   envVarsSet: string[];
   systemDeps: string[];
@@ -30,14 +30,14 @@ export interface TagResponse {
   count: number;
 }
 
-export interface InstallResponse {
+export interface PinResponse {
   skill: string;
   success: boolean;
   error?: string;
   results?: Array<{ skill: string; success: boolean; error?: string }>;
 }
 
-export interface RemoveResponse {
+export interface UnpinResponse {
   skill: string;
   success: boolean;
 }
@@ -61,12 +61,16 @@ export interface ImportResponse {
 
 export interface SearchResponse extends SkillResponse {}
 
-export interface CategoryInstallResponse {
+export interface CategoryPinResponse {
   category: string;
   count: number;
   success: boolean;
   results: Array<{ skill: string; success: boolean; error?: string }>;
 }
+
+export type InstallResponse = PinResponse;
+export type RemoveResponse = UnpinResponse;
+export type CategoryInstallResponse = CategoryPinResponse;
 
 export interface ErrorResponse {
   error: string;

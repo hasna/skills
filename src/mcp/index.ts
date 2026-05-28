@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * MCP server for the skills library.
- * Exposes tools for listing, searching, and installing skills.
+ * Exposes tools for listing, searching, pinning, and running skills.
  *
  * Usage:
  *   skills mcp          # Start MCP server on stdio
@@ -29,10 +29,8 @@ import {
 } from "../lib/registry.js";
 import {
   installSkill,
-  installSkillForAgent,
   getInstalledSkills,
   removeSkill,
-  removeSkillForAgent,
   resolveAgents,
   getSkillPath,
   getAgentSkillsDir,
@@ -41,13 +39,16 @@ import {
   type AgentTarget,
 } from "../lib/installer.js";
 import {
-  getSkillDocs,
   getSkillBestDoc,
   getSkillRequirements,
-  generateSkillMd,
   runSkill,
   detectProjectSkills,
 } from "../lib/skillinfo.js";
+import {
+  completeSkillRun,
+  createSkillRun,
+  writeRunLogs,
+} from "../lib/run-state.js";
 import {
   addSchedule,
   listSchedules,
@@ -55,6 +56,7 @@ import {
   setScheduleEnabled,
   getDueSchedules,
 } from "../lib/scheduler.js";
+import { validateSkillDirectory } from "../lib/skill-validation.js";
 import { saveFeedback, type FeedbackCategory } from "../lib/feedback.js";
 
 const server = new McpServer({
@@ -94,6 +96,42 @@ function mcpError(code: string, message: string, suggestions?: string[]) {
   };
 }
 
+function mcpJson(payload: unknown, pretty = false) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(payload, null, pretty ? 2 : 0) }],
+  };
+}
+
+const TOOL_DESCRIPTIONS: Record<string, { description: string; params: string[] }> = {
+  list_skills: { description: "List skills from the basic or full registry profile.", params: ["category?", "profile?", "detail?", "limit?", "offset?"] },
+  list_pinned_skills: { description: "List project-pinned skills from .skills/project.json.", params: ["directory?"] },
+  search_skills: { description: "Search skills by name, description, or tags.", params: ["query", "profile?", "detail?", "limit?", "offset?"] },
+  get_skill_info: { description: "Get skill metadata, env vars, and dependencies.", params: ["name"] },
+  get_skill_docs: { description: "Get best available skill documentation.", params: ["name"] },
+  pin_skill: { description: "Pin a skill locally, or return MCP setup guidance for agent targets.", params: ["name", "for?", "scope?"] },
+  pin_category: { description: "Pin all skills in a category.", params: ["category", "for?", "scope?"] },
+  unpin_skill: { description: "Unpin a skill locally. Agent skill folders are unmanaged.", params: ["name", "for?", "scope?"] },
+  list_categories: { description: "List skill categories with counts.", params: [] },
+  list_tags: { description: "List all skill tags with counts.", params: [] },
+  get_requirements: { description: "Get env vars, system deps, and npm dependencies for a skill.", params: ["name"] },
+  run_skill: { description: "Run a skill by name with optional arguments.", params: ["name", "args?"] },
+  export_skills: { description: "Export pinned skills as a portable JSON payload.", params: [] },
+  import_skills: { description: "Pin skills from an export payload.", params: ["skills", "for?", "scope?"] },
+  whoami: { description: "Show package, install, and agent setup details.", params: [] },
+  schedule_skill: { description: "Create a cron schedule for a skill.", params: ["skill", "cron", "name?", "args?"] },
+  list_schedules: { description: "List scheduled skill runs.", params: [] },
+  remove_schedule: { description: "Remove a schedule by id or name.", params: ["id_or_name"] },
+  detect_project_skills: { description: "Detect project type and recommended skills.", params: ["directory?"] },
+  validate_skill: { description: "Validate a skill directory using the shared skill validator.", params: ["name"] },
+  search_tools: { description: "List tool names, optionally filtered by keyword.", params: ["query?"] },
+  describe_tools: { description: "Return structured descriptions for named tools.", params: ["names"] },
+  register_agent: { description: "Register an agent session and return an agent id.", params: ["name", "session_id?"] },
+  heartbeat: { description: "Update agent last_seen_at.", params: ["agent_id"] },
+  set_focus: { description: "Set or clear active project context for an agent.", params: ["agent_id", "project_id?"] },
+  list_agents: { description: "List registered in-memory agent sessions.", params: [] },
+  send_feedback: { description: "Store local feedback for this service.", params: ["message", "email?", "category?"] },
+};
+
 // ---- Tools ----
 
 server.registerTool("list_skills", {
@@ -129,9 +167,9 @@ server.registerTool("list_skills", {
   };
 });
 
-server.registerTool("list_installed_skills", {
-  title: "List Installed Skills",
-  description: "List skills installed in the current project's .skills/skills/ directory.",
+server.registerTool("list_pinned_skills", {
+  title: "List Pinned Skills",
+  description: "List skills pinned in the current project's .skills/project.json.",
   inputSchema: {
     directory: z.string().optional(),
   },
@@ -208,9 +246,9 @@ server.registerTool("get_skill_docs", {
   return { content: [{ type: "text", text: doc }] };
 });
 
-server.registerTool("install_skill", {
-  title: "Install Skill",
-  description: "Install a skill to .skills/skills/ or to an agent dir (for: claude|codex|gemini|pi|opencode|all).",
+server.registerTool("pin_skill", {
+  title: "Pin Skill",
+  description: "Pin a skill to .skills/project.json. Agent skill-folder installs are disabled; use skills mcp --register.",
   inputSchema: {
     name: z.string(),
     for: z.string().optional(),
@@ -225,9 +263,13 @@ server.registerTool("install_skill", {
       return mcpError("INVALID_AGENT", (err as Error).message, [...AGENT_TARGETS, "all"]);
     }
 
-    const results = agents.map(a =>
-      installSkillForAgent(name, { agent: a, scope: (scope as "global" | "project") || "global" }, generateSkillMd)
-    );
+    const results = agents.map(a => ({
+      skill: name,
+      success: false,
+      agent: a,
+      scope: (scope as "global" | "project") || "global",
+      error: `Direct agent skill-folder installs are disabled. Register Skills MCP instead: skills mcp --register ${a}`,
+    }));
 
     return {
       content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
@@ -243,9 +285,9 @@ server.registerTool("install_skill", {
   };
 });
 
-server.registerTool("install_category", {
-  title: "Install Category",
-  description: "Install all skills in a category, optionally for a specific agent.",
+server.registerTool("pin_category", {
+  title: "Pin Category",
+  description: "Pin all skills in a category. Agent skill-folder installs are disabled.",
   inputSchema: {
     category: z.string(),
     for: z.string().optional(),
@@ -276,7 +318,11 @@ server.registerTool("install_category", {
     const results = [];
     for (const name of names) {
       for (const a of agents) {
-        const r = installSkillForAgent(name, { agent: a, scope: (scope as "global" | "project") || "global" }, generateSkillMd);
+        const r = {
+          skill: name,
+          success: false,
+          error: `Direct agent skill-folder installs are disabled. Register Skills MCP instead: skills mcp --register ${a}`,
+        };
         results.push({ ...r, agent: a, scope: scope || "global" });
       }
     }
@@ -287,7 +333,6 @@ server.registerTool("install_category", {
     };
   }
 
-  // Full source install
   const results = names.map(name => installSkill(name));
   return {
     content: [{ type: "text", text: JSON.stringify({ category: matchedCategory, count: names.length, results }, null, 2) }],
@@ -295,9 +340,9 @@ server.registerTool("install_category", {
   };
 });
 
-server.registerTool("remove_skill", {
-  title: "Remove Skill",
-  description: "Remove a skill from .skills/skills/ or from an agent dir.",
+server.registerTool("unpin_skill", {
+  title: "Unpin Skill",
+  description: "Unpin a skill from .skills/project.json. Agent skill folders are unmanaged.",
   inputSchema: {
     name: z.string(),
     for: z.string().optional(),
@@ -315,7 +360,8 @@ server.registerTool("remove_skill", {
     const results = agents.map(a => ({
       skill: name,
       agent: a,
-      removed: removeSkillForAgent(name, { agent: a, scope: (scope as "global" | "project") || "global" }),
+      removed: false,
+      error: `Agent skill folders are unmanaged. Register Skills MCP instead: skills mcp --register ${a}`,
     }));
 
     return {
@@ -379,26 +425,44 @@ server.registerTool("run_skill", {
     args: z.array(z.string()).optional(),
   },
 }, async ({ name, args }) => {
+  const runContext = createSkillRun({
+    skill: name,
+    args: args || [],
+    remote: false,
+  });
+
   const skill = getSkill(name);
   if (!skill) {
     return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
   }
 
-  const result = await runSkill(name, args || []);
+  const result = await runSkill(name, args || [], {
+    stdio: "pipe",
+    env: {
+      SKILLS_RUN_ID: runContext.record.id,
+      SKILLS_RUN_DIR: runContext.runDir,
+      SKILLS_EXPORT_DIR: runContext.exportDir,
+    },
+  });
+  writeRunLogs(runContext, result.stdout ?? "", result.stderr ?? result.error ?? "");
+  const localRun = completeSkillRun(runContext, {
+    status: result.exitCode === 0 ? "completed" : "failed",
+    error: result.error,
+  });
   if (result.error) {
     return {
-      content: [{ type: "text", text: JSON.stringify({ exitCode: result.exitCode, error: result.error }, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify({ exitCode: result.exitCode, error: result.error, run: localRun }, null, 2) }],
       isError: true,
     };
   }
   return {
-    content: [{ type: "text", text: JSON.stringify({ exitCode: result.exitCode, skill: name }, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify({ exitCode: result.exitCode, skill: name, stdout: result.stdout, stderr: result.stderr, run: localRun }, null, 2) }],
   };
 });
 
 server.registerTool("export_skills", {
-  title: "Export Skills",
-  description: "Export installed skills as a JSON payload for import elsewhere.",
+  title: "Export Pinned Skills",
+  description: "Export pinned skills as a JSON payload for import elsewhere.",
 }, async () => {
   const skills = getInstalledSkills();
   const payload = {
@@ -410,8 +474,8 @@ server.registerTool("export_skills", {
 });
 
 server.registerTool("import_skills", {
-  title: "Import Skills",
-  description: "Install skills from an export payload. Supports agent installs via 'for'.",
+  title: "Import Pinned Skills",
+  description: "Pin skills from an export payload. Supports MCP setup guidance via 'for'.",
   inputSchema: {
     skills: z.array(z.string()),
     for: z.string().optional(),
@@ -433,12 +497,11 @@ server.registerTool("import_skills", {
     }
 
     for (const name of skillList) {
-      const agentResults = agents.map((a) =>
-        installSkillForAgent(name, { agent: a, scope: (scope as "global" | "project") || "global" }, generateSkillMd)
-      );
-      const success = agentResults.every((r) => r.success);
-      const errors = agentResults.filter((r) => !r.success).map((r) => r.error).filter(Boolean);
-      results.push({ skill: name, success, ...(errors.length > 0 ? { error: errors.join("; ") } : {}) });
+      results.push({
+        skill: name,
+        success: false,
+        error: `Direct agent skill-folder installs are disabled. Register Skills MCP instead: skills mcp --register ${agents.join(",")}`,
+      });
     }
   } else {
     for (const name of skillList) {
@@ -458,7 +521,7 @@ server.registerTool("import_skills", {
 
 server.registerTool("whoami", {
   title: "Skills Whoami",
-  description: "Show setup summary: version, installed skills, agent configs, cwd.",
+  description: "Show setup summary: version, pinned skills, agent configs, cwd.",
 }, async () => {
   const version = pkg.version;
   const cwd = process.cwd();
@@ -555,46 +618,16 @@ server.registerTool("detect_project_skills", {
 
 server.registerTool("validate_skill", {
   title: "Validate Skill",
-  description: "Check a skill's structure: SKILL.md, package.json with bin entry, tsconfig.json, src/index.ts. Returns validation result with list of issues.",
+  description: "Validate a skill directory with structured issues, warnings, and metadata.",
   inputSchema: {
     name: z.string(),
   },
 }, async ({ name }) => {
   const skillPath = getSkillPath(name);
-  const issues: string[] = [];
-
-  if (!existsSync(skillPath)) {
-    return {
-      content: [{ type: "text", text: JSON.stringify({ name, valid: false, issues: [`Skill directory not found: ${skillPath}`] }) }],
-    };
-  }
-
-  // Check required files
-  if (!existsSync(join(skillPath, "SKILL.md"))) issues.push("Missing SKILL.md");
-  if (!existsSync(join(skillPath, "tsconfig.json"))) issues.push("Missing tsconfig.json");
-
-  const pkgPath = join(skillPath, "package.json");
-  if (!existsSync(pkgPath)) {
-    issues.push("Missing package.json");
-  } else {
-    try {
-      const pkg = JSON.parse(require("fs").readFileSync(pkgPath, "utf-8"));
-      if (!pkg.bin || Object.keys(pkg.bin).length === 0) issues.push("package.json missing 'bin' entry");
-    } catch {
-      issues.push("package.json is invalid JSON");
-    }
-  }
-
-  const srcDir = join(skillPath, "src");
-  if (!existsSync(srcDir)) {
-    issues.push("Missing src/ directory");
-  } else if (!existsSync(join(srcDir, "index.ts"))) {
-    issues.push("Missing src/index.ts");
-  }
-
-  const valid = issues.length === 0;
+  const result = validateSkillDirectory(name, skillPath, getSkill(name));
   return {
-    content: [{ type: "text", text: JSON.stringify({ name, valid, path: skillPath, issues }) }],
+    content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    isError: !result.valid,
   };
 });
 
@@ -638,16 +671,11 @@ server.registerTool("search_tools", {
   description: "List tool names, optionally filtered by keyword.",
   inputSchema: { query: z.string().optional() },
 }, async ({ query }) => {
-  const all = [
-    "list_skills", "list_installed_skills", "search_skills", "get_skill_info", "get_skill_docs",
-    "install_skill", "install_category", "remove_skill",
-    "list_categories", "list_tags", "get_requirements",
-    "run_skill", "export_skills", "import_skills", "whoami",
-    "register_agent", "heartbeat", "set_focus", "list_agents",
-    "search_tools", "describe_tools",
-  ];
-  const matches = query ? all.filter(n => n.includes(query.toLowerCase())) : all;
-  return { content: [{ type: "text", text: matches.join(", ") }] };
+  const needle = query?.toLowerCase();
+  const tools = Object.keys(TOOL_DESCRIPTIONS)
+    .filter((name) => !needle || name.includes(needle) || TOOL_DESCRIPTIONS[name].description.toLowerCase().includes(needle))
+    .sort();
+  return mcpJson({ tools, total: tools.length });
 });
 
 server.registerTool("describe_tools", {
@@ -655,29 +683,11 @@ server.registerTool("describe_tools", {
   description: "Get descriptions for specific tools by name.",
   inputSchema: { names: z.array(z.string()) },
 }, async ({ names }) => {
-  const descriptions: Record<string, string> = {
-    list_skills: "List skills {name,category}. Params: category?, detail?",
-    list_installed_skills: "List installed skills in .skills/skills/. Params: directory?",
-    search_skills: "Search skills by name/tags. Params: query, detail?",
-    get_skill_info: "Get skill metadata and env vars. Params: name",
-    get_skill_docs: "Get skill documentation. Params: name",
-    install_skill: "Install a skill for an agent. Params: name, agent?",
-    install_category: "Install all skills in a category. Params: category, agent?",
-    remove_skill: "Remove an installed skill. Params: name, agent?",
-    list_categories: "List skill categories with counts.",
-    list_tags: "List all tags across skills.",
-    get_requirements: "Get skill requirements/dependencies. Params: name",
-    run_skill: "Execute a skill. Params: name, args?",
-    export_skills: "Export skill config. Params: format?",
-    import_skills: "Import skill config. Params: data",
-    whoami: "Show setup: version, installed skills, agent configs.",
-    register_agent: "Register agent session (idempotent). Params: name, session_id?",
-    heartbeat: "Update last_seen_at to signal agent is active. Params: agent_id",
-    set_focus: "Set active project context. Params: agent_id, project_id?",
-    list_agents: "List all registered agents.",
-  };
-  const result = names.map((n: string) => `${n}: ${descriptions[n] || "See tool schema"}`).join("\n");
-  return { content: [{ type: "text", text: result }] };
+  const tools = names.map((name: string) => ({
+    name,
+    ...(TOOL_DESCRIPTIONS[name] || { description: "Unknown tool", params: [] }),
+  }));
+  return mcpJson({ tools });
 });
 
 // ---- Start server ----
@@ -691,11 +701,14 @@ server.tool(
   { name: z.string(), session_id: z.string().optional() },
   async (a: { name: string; session_id?: string }) => {
     const existing = [..._agentReg.values()].find(x => x.name === a.name);
-    if (existing) { existing.last_seen_at = new Date().toISOString(); return { content: [{ type: "text" as const, text: JSON.stringify(existing) }] }; }
+    if (existing) {
+      existing.last_seen_at = new Date().toISOString();
+      return mcpJson({ ...existing, registered: false });
+    }
     const id = Math.random().toString(36).slice(2, 10);
     const ag = { id, name: a.name, last_seen_at: new Date().toISOString() };
     _agentReg.set(id, ag);
-    return { content: [{ type: "text" as const, text: JSON.stringify(ag) }] };
+    return mcpJson({ ...ag, registered: true });
   }
 );
 
@@ -705,9 +718,9 @@ server.tool(
   { agent_id: z.string() },
   async (a: { agent_id: string }) => {
     const ag = _agentReg.get(a.agent_id);
-    if (!ag) return { content: [{ type: "text" as const, text: `Agent not found: ${a.agent_id}` }], isError: true };
+    if (!ag) return mcpError("AGENT_NOT_FOUND", `Agent not found: ${a.agent_id}`);
     ag.last_seen_at = new Date().toISOString();
-    return { content: [{ type: "text" as const, text: `♥ ${ag.name} — active` }] };
+    return mcpJson({ agent_id: a.agent_id, name: ag.name, active: true, last_seen_at: ag.last_seen_at });
   }
 );
 
@@ -717,9 +730,9 @@ server.tool(
   { agent_id: z.string(), project_id: z.string().optional() },
   async (a: { agent_id: string; project_id?: string }) => {
     const ag = _agentReg.get(a.agent_id);
-    if (!ag) return { content: [{ type: "text" as const, text: `Agent not found: ${a.agent_id}` }], isError: true };
+    if (!ag) return mcpError("AGENT_NOT_FOUND", `Agent not found: ${a.agent_id}`);
     (ag as any).project_id = a.project_id;
-    return { content: [{ type: "text" as const, text: a.project_id ? `Focus: ${a.project_id}` : "Focus cleared" }] };
+    return mcpJson({ agent_id: a.agent_id, project_id: a.project_id ?? null });
   }
 );
 
@@ -729,21 +742,20 @@ server.tool(
   {},
   async () => {
     const agents = [..._agentReg.values()];
-    if (agents.length === 0) return { content: [{ type: "text" as const, text: "No agents registered." }] };
-    return { content: [{ type: "text" as const, text: JSON.stringify(agents, null, 2) }] };
+    return mcpJson({ agents, total: agents.length }, true);
   }
 );
 
 server.tool(
   "send_feedback",
   "Send feedback about this service",
-  { message: z.string(), email: z.string().optional(), agent: z.string().optional(), category: z.enum(["bug", "feature", "general"]).optional() },
-  async (params: { message: string; email?: string; agent?: string; category?: FeedbackCategory }) => {
+  { message: z.string(), email: z.string().optional(), category: z.enum(["bug", "feature", "general"]).optional() },
+  async (params: { message: string; email?: string; category?: FeedbackCategory }) => {
     try {
       const result = saveFeedback({ ...params, version: pkg.version });
-      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+      return mcpJson(result);
     } catch (e) {
-      return { content: [{ type: "text" as const, text: String(e) }], isError: true };
+      return mcpError("FEEDBACK_SAVE_FAILED", String(e));
     }
   }
 );
