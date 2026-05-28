@@ -6,29 +6,57 @@
  * Usage:
  *   skills mcp          # Start MCP server on stdio
  *   skills-mcp          # Direct binary
+ *   skills-mcp --http   # Streamable HTTP on 127.0.0.1:8836
  */
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { registerCloudTools } from "@hasna/cloud";
+import pkg from "../../package.json" with { type: "json" };
 
-import { registerDiscoveryTools } from "./discovery-tools.js";
-import { registerOperationTools } from "./operation-tools.js";
-import { registerResourceMetaTools } from "./resource-meta-tools.js";
-import { registerScheduleTools } from "./schedule-tools.js";
-import { server } from "./server.js";
+import { buildServer } from "./server.js";
+import { isMcpHttpMode, parseMcpHttpPort, startSkillsMcpHttpServer } from "./http.js";
 
-registerDiscoveryTools(server);
-registerOperationTools(server);
-registerScheduleTools(server);
-registerResourceMetaTools(server);
+const args = process.argv.slice(2);
 
-async function main() {
-  const transport = new StdioServerTransport();
-  registerCloudTools(server, "skills");
-  await server.connect(transport);
+function printHelp(): void {
+  console.log(`Usage: skills-mcp [options]
+
+MCP server for ${pkg.name}
+
+Options:
+  -V, --version  output the version number
+  -h, --help     display help for command
+  --http         run Streamable HTTP transport on 127.0.0.1 (default port 8836)
+  --port <n>     HTTP port (--http or MCP_HTTP=1)`);
 }
 
-main().catch((error) => {
-  console.error("MCP server error:", error);
-  process.exit(1);
-});
+if (args.includes("--help") || args.includes("-h")) {
+  printHelp();
+  process.exit(0);
+}
+
+if (args.includes("--version") || args.includes("-V")) {
+  console.log(pkg.version);
+  process.exit(0);
+}
+
+async function main() {
+  if (isMcpHttpMode(args)) {
+    const port = parseMcpHttpPort(args);
+    await startSkillsMcpHttpServer({ port, hostname: "127.0.0.1" });
+    return;
+  }
+
+  const server = buildServer();
+  registerCloudTools(server, "skills");
+  await server.connect(new StdioServerTransport());
+}
+
+if (import.meta.main) {
+  main().catch((error) => {
+    console.error("MCP server error:", error);
+    process.exit(1);
+  });
+}
+
+export { buildServer } from "./server.js";

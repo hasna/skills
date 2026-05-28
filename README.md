@@ -169,6 +169,24 @@ For the reusable upstream contract, see
 skills mcp    # stdio transport (use with Claude/Codex MCP config)
 ```
 
+### HTTP mode
+
+Long-lived Streamable HTTP transport (default port **8836**, bind `127.0.0.1` only):
+
+```bash
+skills-mcp --http
+# or
+MCP_HTTP=1 skills-mcp
+
+# override port
+skills-mcp --http --port 8836
+MCP_HTTP_PORT=8836 skills-mcp --http
+```
+
+Endpoints: `GET /health` → `{"status":"ok","name":"skills"}`, MCP at `/mcp`.
+Uses stateless `StreamableHTTPServerTransport` (shared process, many clients).
+`skills-mcp` without flags still uses stdio (unchanged).
+
 The MCP server exposes 20+ tools including `list_skills`, `search_skills`, `pin_skill`, `unpin_skill`, `pin_category`, `list_pinned_skills`, `get_skill_info`, `get_skill_docs`, `get_requirements`, `run_skill`, `get_run_status`, `schedule_skill`, `detect_project_skills`, `validate_skill`, and more.
 
 ### Register with an Agent
