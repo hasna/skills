@@ -1,13 +1,17 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from "fs";
+import { mkdtempSync, existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import {
   getSkillPath,
   skillExists,
   installSkill,
+  installSkillSource,
+  installSkillManifest,
+  createLocalSkillManifest,
   installSkills,
   getInstalledSkills,
+  getInstallMeta,
   removeSkill,
   getAgentSkillsDir,
   getAgentSkillPath,
@@ -30,12 +34,12 @@ afterEach(() => {
 
 describe("installer", () => {
   describe("getSkillPath", () => {
-    test("returns path for bare skill name", () => {
+    test("returns path for skill name without prefix", () => {
       const path = getSkillPath("deepresearch");
       expect(path).toContain("deepresearch");
     });
 
-    test("does not normalize legacy skill-prefixed names", () => {
+    test("does not rewrite legacy skill-prefixed names", () => {
       const path = getSkillPath("skill-deepresearch");
       expect(path).toContain("skill-deepresearch");
     });
@@ -46,7 +50,7 @@ describe("installer", () => {
       expect(skillExists("deepresearch")).toBe(true);
     });
 
-    test("returns false for legacy skill-prefixed name", () => {
+    test("returns false with legacy skill- prefix", () => {
       expect(skillExists("skill-deepresearch")).toBe(false);
     });
 
@@ -56,12 +60,16 @@ describe("installer", () => {
   });
 
   describe("installSkill", () => {
-    test("installs a skill to target directory", () => {
+    test("pins a skill to project.json without copying source", () => {
       const result = installSkill("deepresearch", { targetDir: testDir });
       expect(result.success).toBe(true);
       expect(result.skill).toBe("deepresearch");
+      expect(result.mode).toBe("pin");
       expect(result.path).toBeDefined();
-      expect(existsSync(join(testDir, ".skills", "skills", "deepresearch"))).toBe(true);
+      expect(existsSync(join(testDir, ".skills", "project.json"))).toBe(true);
+      expect(existsSync(join(testDir, ".skills", "skills"))).toBe(false);
+      const config = JSON.parse(readFileSync(join(testDir, ".skills", "project.json"), "utf-8"));
+      expect(config.pinnedSkills).toContain("deepresearch");
     });
 
     test("creates .skills directory if it does not exist", () => {
@@ -70,13 +78,11 @@ describe("installer", () => {
       expect(existsSync(join(testDir, ".skills"))).toBe(true);
     });
 
-    test("creates index.ts in .skills directory", () => {
+    test("does not create index.ts or source exports for pins", () => {
       installSkill("deepresearch", { targetDir: testDir });
       const indexPath = join(testDir, ".skills", "index.ts");
-      expect(existsSync(indexPath)).toBe(true);
-      const content = readFileSync(indexPath, "utf-8");
-      expect(content).toContain("deepresearch");
-      expect(content).toContain("./skills/deepresearch/src/index.js");
+      expect(existsSync(indexPath)).toBe(false);
+      expect(existsSync(join(testDir, ".skills", "skills"))).toBe(false);
     });
 
     test("fails for nonexistent skill", () => {
@@ -89,7 +95,7 @@ describe("installer", () => {
       installSkill("deepresearch", { targetDir: testDir });
       const result = installSkill("deepresearch", { targetDir: testDir });
       expect(result.success).toBe(false);
-      expect(result.error).toContain("Already installed");
+      expect(result.error).toContain("Already pinned");
     });
 
     test("succeeds with overwrite flag", () => {
@@ -100,14 +106,58 @@ describe("installer", () => {
 
     test("does not copy .git directory", () => {
       installSkill("deepresearch", { targetDir: testDir });
-      const gitDir = join(testDir, ".skills", "skills", "deepresearch", ".git");
-      expect(existsSync(gitDir)).toBe(false);
+      expect(existsSync(join(testDir, ".skills", "skills"))).toBe(false);
     });
 
-    test("rejects legacy skill-prefixed name", () => {
+    test("rejects legacy skill- prefix in name", () => {
       const result = installSkill("skill-deepresearch", { targetDir: testDir });
       expect(result.success).toBe(false);
       expect(result.error).toContain("not found");
+      expect(existsSync(join(testDir, ".skills", "skills"))).toBe(false);
+    });
+  });
+
+  describe("manifest installs", () => {
+    test("creates a local manifest from a bundled skill", () => {
+      const manifest = createLocalSkillManifest("image");
+      expect(manifest).not.toBeNull();
+      expect(manifest?.name).toBe("image");
+      expect(manifest?.source).toBe("local");
+      expect(manifest?.skillMd).toContain("Image Generation");
+      expect(manifest?.metadata?.category).toBe("Content Generation");
+    });
+
+    test("rejects remote manifest installs without writing docs or source files", () => {
+      const result = installSkillManifest({
+        name: "remote-transcribe",
+        version: "1.2.3",
+        source: "remote",
+        skillMd: "---\nname: remote-transcribe\n---\n\n# Remote Transcribe\n",
+        metadata: { category: "Remote Tools", tags: ["remote", "audio"] },
+      }, { targetDir: testDir });
+
+      expect(result.success).toBe(false);
+      expect(result.mode).toBe("manifest");
+      expect(result.error).toContain("Manifest installs are disabled");
+      expect(existsSync(join(testDir, ".skills"))).toBe(false);
+    });
+
+    test("source installs are disabled", () => {
+      const result = installSkillSource("image", { targetDir: testDir });
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Source installs are disabled");
+      expect(existsSync(join(testDir, ".skills", "skills"))).toBe(false);
+    });
+
+    test("manifest install remains disabled even with overwrite", () => {
+      const first = installSkillManifest({ name: "remote-demo", skillMd: "# Remote Demo\n" }, { targetDir: testDir });
+      const second = installSkillManifest({ name: "remote-demo", skillMd: "# Remote Demo\n" }, { targetDir: testDir });
+      const third = installSkillManifest({ name: "remote-demo", skillMd: "# Remote Demo Updated\n" }, { targetDir: testDir, overwrite: true });
+
+      expect(first.success).toBe(false);
+      expect(second.success).toBe(false);
+      expect(third.success).toBe(false);
+      expect(existsSync(join(testDir, ".skills", "skills"))).toBe(false);
     });
   });
 
@@ -120,7 +170,7 @@ describe("installer", () => {
       try {
         const result = installSkill("scancommitpr", { targetDir: testDir });
         expect(result.success).toBe(true);
-        expect(warnSpy.some((m) => m.includes("scancommitpush") && m.includes("not installed"))).toBe(true);
+        expect(warnSpy.some((m) => m.includes("scancommitpush") && m.includes("not pinned"))).toBe(true);
       } finally {
         console.warn = originalWarn;
       }
@@ -135,7 +185,7 @@ describe("installer", () => {
       try {
         const result = installSkill("scancommitpr", { targetDir: testDir });
         expect(result.success).toBe(true);
-        expect(warnSpy.some((m) => m.includes("scancommitpush") && m.includes("not installed"))).toBe(false);
+        expect(warnSpy.some((m) => m.includes("scancommitpush") && m.includes("not pinned"))).toBe(false);
       } finally {
         console.warn = originalWarn;
       }
@@ -157,16 +207,15 @@ describe("installer", () => {
       expect(results[1].success).toBe(false);
     });
 
-    test("index.ts contains all installed skills", () => {
+    test("does not create source index for pinned skills", () => {
       installSkills(["deepresearch", "image"], { targetDir: testDir });
-      const content = readFileSync(join(testDir, ".skills", "index.ts"), "utf-8");
-      expect(content).toContain("deepresearch");
-      expect(content).toContain("image");
+      expect(existsSync(join(testDir, ".skills", "index.ts"))).toBe(false);
+      expect(existsSync(join(testDir, ".skills", "skills"))).toBe(false);
     });
   });
 
   describe("getInstalledSkills", () => {
-    test("returns empty array when no skills installed", () => {
+    test("returns empty array when no skills are pinned", () => {
       const installed = getInstalledSkills(testDir);
       expect(installed).toEqual([]);
     });
@@ -177,7 +226,7 @@ describe("installer", () => {
       expect(installed).toEqual([]);
     });
 
-    test("returns installed skill names without prefix", () => {
+    test("returns pinned skill names without prefix", () => {
       installSkill("deepresearch", { targetDir: testDir });
       installSkill("image", { targetDir: testDir });
       const installed = getInstalledSkills(testDir);
@@ -189,14 +238,14 @@ describe("installer", () => {
     test("does not include non-skill files", () => {
       installSkill("deepresearch", { targetDir: testDir });
       // Create a non-skill file
-      writeFileSync(join(testDir, ".skills", "skills", "random.txt"), "test");
+      writeFileSync(join(testDir, ".skills", "random.txt"), "test");
       const installed = getInstalledSkills(testDir);
       expect(installed.length).toBe(1);
     });
   });
 
   describe("removeSkill", () => {
-    test("removes an installed skill", () => {
+    test("unpins a pinned skill", () => {
       installSkill("deepresearch", { targetDir: testDir });
       expect(getInstalledSkills(testDir)).toContain("deepresearch");
       const result = removeSkill("deepresearch", testDir);
@@ -204,20 +253,20 @@ describe("installer", () => {
       expect(getInstalledSkills(testDir)).not.toContain("deepresearch");
     });
 
-    test("returns false for non-installed skill", () => {
+    test("returns false for non-pinned skill", () => {
       const result = removeSkill("nonexistent-xyz", testDir);
       expect(result).toBe(false);
     });
 
-    test("updates index.ts after removal", () => {
+    test("updates project pins after removal", () => {
       installSkills(["deepresearch", "image"], { targetDir: testDir });
       removeSkill("deepresearch", testDir);
-      const content = readFileSync(join(testDir, ".skills", "index.ts"), "utf-8");
-      expect(content).not.toContain("deepresearch");
-      expect(content).toContain("image");
+      expect(getInstalledSkills(testDir)).not.toContain("deepresearch");
+      expect(getInstalledSkills(testDir)).toContain("image");
+      expect(existsSync(join(testDir, ".skills", "skills"))).toBe(false);
     });
 
-    test("does not remove using legacy skill-prefixed name", () => {
+    test("does not remove when called with legacy skill- prefix", () => {
       installSkill("deepresearch", { targetDir: testDir });
       const result = removeSkill("skill-deepresearch", testDir);
       expect(result).toBe(false);
@@ -232,7 +281,7 @@ describe("installer", () => {
       expect(AGENT_TARGETS).toContain("gemini");
       expect(AGENT_TARGETS).toContain("pi");
       expect(AGENT_TARGETS).toContain("opencode");
-      expect(AGENT_TARGETS.length).toBe(5);
+      expect(AGENT_TARGETS.length).toBe(7);
     });
 
     describe("getAgentSkillsDir", () => {
@@ -255,6 +304,11 @@ describe("installer", () => {
         const dir = getAgentSkillsDir("gemini", "global");
         expect(dir).toContain(".gemini/skills");
       });
+
+      test("returns current global path for opencode", () => {
+        const dir = getAgentSkillsDir("opencode", "global");
+        expect(dir).toContain(".config/opencode/skills");
+      });
     });
 
     describe("getAgentSkillPath", () => {
@@ -263,50 +317,36 @@ describe("installer", () => {
         expect(path).toBe(join(testDir, ".claude", "skills", "image"));
       });
 
-      test("does not normalize legacy skill-prefixed agent names", () => {
-        const path = getAgentSkillPath("image", "claude", "project", testDir);
-        expect(path).toBe(join(testDir, ".claude", "skills", "image"));
+      test("does not rewrite legacy skill-prefixed names", () => {
+        const path = getAgentSkillPath("skill-image", "claude", "project", testDir);
+        expect(path).toBe(join(testDir, ".claude", "skills", "skill-image"));
       });
     });
 
     describe("installSkillForAgent", () => {
-      test("installs SKILL.md for a skill that has one", () => {
+      test("does not copy SKILL.md into agent skill folders", () => {
         const result = installSkillForAgent("image", {
           agent: "claude",
           scope: "project",
           projectDir: testDir,
         });
-        expect(result.success).toBe(true);
-        expect(result.path).toBeDefined();
-        const skillMdPath = join(result.path!, "SKILL.md");
-        expect(existsSync(skillMdPath)).toBe(true);
-        const content = readFileSync(skillMdPath, "utf-8");
-        expect(content).toContain("Image Generation");
+        expect(result.success).toBe(false);
+        expect(result.error).toContain("skills mcp --register claude");
+        expect(existsSync(join(testDir, ".claude", "skills", "image", "SKILL.md"))).toBe(false);
       });
 
-      test("generates SKILL.md when skill lacks one", () => {
+      test("does not generate agent skill files", () => {
         const result = installSkillForAgent("deepresearch", {
           agent: "claude",
           scope: "project",
           projectDir: testDir,
         }, (name) => `---\nname: ${name}\ndescription: test\n---\n\n# Test\n`);
-        expect(result.success).toBe(true);
-        const skillMdPath = join(result.path!, "SKILL.md");
-        expect(existsSync(skillMdPath)).toBe(true);
-      });
-
-      test("fails without generator when skill has no SKILL.md", () => {
-        // scaffold-project has no SKILL.md
-        const result = installSkillForAgent("scaffold-project", {
-          agent: "claude",
-          scope: "project",
-          projectDir: testDir,
-        });
         expect(result.success).toBe(false);
-        expect(result.error).toContain("SKILL.md");
+        expect(result.error).toContain("Direct agent skill-folder installs are disabled");
+        expect(existsSync(join(testDir, ".claude", "skills", "deepresearch", "SKILL.md"))).toBe(false);
       });
 
-      test("fails for nonexistent skill", () => {
+      test("still rejects nonexistent skills", () => {
         const result = installSkillForAgent("nonexistent-xyz", {
           agent: "claude",
           scope: "project",
@@ -316,37 +356,33 @@ describe("installer", () => {
         expect(result.error).toContain("not found");
       });
 
-      test("installs to correct agent directory", () => {
+      test("never writes to any supported agent directory", () => {
         for (const agent of AGENT_TARGETS) {
-          installSkillForAgent("image", {
+          const result = installSkillForAgent("image", {
             agent,
             scope: "project",
             projectDir: testDir,
           });
           const expected = join(testDir, `.${agent}`, "skills", "image", "SKILL.md");
-          expect(existsSync(expected)).toBe(true);
+          expect(result.success).toBe(false);
+          expect(existsSync(expected)).toBe(false);
         }
       });
     });
 
     describe("removeSkillForAgent", () => {
-      test("removes an installed skill", () => {
-        installSkillForAgent("image", {
-          agent: "claude",
-          scope: "project",
-          projectDir: testDir,
-        });
+      test("is disabled because agent skill folders are unmanaged", () => {
         const result = removeSkillForAgent("image", {
           agent: "claude",
           scope: "project",
           projectDir: testDir,
         });
-        expect(result).toBe(true);
+        expect(result).toBe(false);
         const skillDir = join(testDir, ".claude", "skills", "image");
         expect(existsSync(skillDir)).toBe(false);
       });
 
-      test("returns false for non-installed skill", () => {
+      test("returns false for non-pinned skill", () => {
         const result = removeSkillForAgent("nonexistent-xyz", {
           agent: "claude",
           scope: "project",
@@ -364,37 +400,31 @@ describe("installer", () => {
       expect(result.success).toBe(true);
       expect(result.path).toBeDefined();
 
-      // 2. Verify the skill files exist
+      // 2. Verify no skill files were copied
       const skillDir = join(testDir, ".skills", "skills", "image");
-      expect(existsSync(skillDir)).toBe(true);
-      const entries = readdirSync(skillDir);
-      expect(entries.length).toBeGreaterThan(0);
-      expect(existsSync(join(testDir, ".skills", "skills", "_common", "index.ts"))).toBe(true);
+      expect(existsSync(skillDir)).toBe(false);
+      expect(existsSync(join(testDir, ".skills", "skills"))).toBe(false);
 
       // 3. Check getInstalledSkills() returns it
       const installed = getInstalledSkills(testDir);
       expect(installed).toContain("image");
 
-      // Also verify index.ts was generated with the skill
+      // Also verify index.ts was not generated.
       const indexPath = join(testDir, ".skills", "index.ts");
-      expect(existsSync(indexPath)).toBe(true);
-      const indexContent = readFileSync(indexPath, "utf-8");
-      expect(indexContent).toContain("image");
+      expect(existsSync(indexPath)).toBe(false);
 
       // 4. Remove the skill
       const removed = removeSkill("image", testDir);
       expect(removed).toBe(true);
 
-      // 5. Verify files are cleaned up
+      // 5. Verify no source directory exists
       expect(existsSync(skillDir)).toBe(false);
 
       // 6. Verify getInstalledSkills() no longer returns it
       const installedAfter = getInstalledSkills(testDir);
       expect(installedAfter).not.toContain("image");
 
-      // Verify index.ts no longer references the skill
-      const indexAfter = readFileSync(indexPath, "utf-8");
-      expect(indexAfter).not.toContain("image");
+      expect(existsSync(indexPath)).toBe(false);
     });
 
     test("lifecycle with multiple skills: install two, remove one, verify state", () => {
@@ -432,7 +462,7 @@ describe("installer", () => {
   describe("resolveAgents", () => {
     test("returns all agents for 'all'", () => {
       const agents = resolveAgents("all");
-      expect(agents).toEqual(["claude", "codex", "gemini", "pi", "opencode"]);
+      expect(agents).toEqual(["claude", "codex", "gemini", "pi", "opencode", "cursor", "windsurf"]);
     });
 
     test("returns single agent for valid name", () => {
