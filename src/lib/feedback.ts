@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync } from "fs";
 import { homedir } from "os";
 import { dirname, join } from "path";
-import { SqliteAdapter as Database } from "@hasna/cloud";
+import { Database } from "bun:sqlite";
 
 export type FeedbackCategory = "bug" | "feature" | "general";
 

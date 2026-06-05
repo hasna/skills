@@ -11,30 +11,33 @@ describe("upstream sync workflow", () => {
 
   test("documents a no-worktree branch and cherry-pick workflow", () => {
     expect(doc).toContain("Do not use git worktrees");
-    expect(doc).toContain("git switch -c upstream/<topic> upstream/main");
+    expect(doc).toContain("git switch -c public/<topic> origin/main");
     expect(doc).toContain("git cherry-pick <generic-commit-sha>");
-    expect(doc).toContain("git push upstream upstream/<topic>");
   });
 
   test("documents preflight and required package gates", () => {
-    expect(doc).toContain("bun run upstream:check upstream/main..HEAD");
+    expect(doc).toContain("scripts/check_upstream_sync.sh --strict-private-markers main..HEAD");
     expect(doc).toContain("bun run typecheck");
     expect(doc).toContain("bun test");
     expect(doc).toContain("bun run build");
+    expect(doc).toContain("npm pack --dry-run --json --ignore-scripts");
     expect(boundaryDoc).toContain("docs/architecture/upstream-sync.md");
   });
 
-  test("package exposes upstream preflight command", () => {
-    expect(pkg.scripts["upstream:check"]).toBe("bash scripts/check_upstream_sync.sh");
+  test("package does not expose private upstream preflight commands", () => {
+    const scripts = pkg.scripts as Record<string, string>;
+    expect(scripts["upstream:check"]).toBeUndefined();
+    expect(JSON.stringify(scripts)).not.toContain("hasnatools/platform-skills");
   });
 
-  test("preflight script verifies remotes and rejects private paths", () => {
+  test("preflight script verifies public origin and rejects private paths", () => {
     expect(script.startsWith("#!/usr/bin/env bash\nset -euo pipefail")).toBe(true);
-    expect(script).toContain("hasnatools/platform-skills");
     expect(script).toContain("hasna/skills");
     expect(script).toContain("private_path_pattern");
     expect(script).toContain("strict_private_markers");
     expect(script).toContain("never uses git worktrees");
+    expect(script).toContain("@hasna/cloud");
+    expect(script).toContain("src/platform");
     expect((statSync(scriptPath).mode & 0o111) > 0).toBe(true);
   });
 });

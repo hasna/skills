@@ -10,7 +10,6 @@
  */
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { registerCloudTools } from "@hasna/cloud";
 import pkg from "../../package.json" with { type: "json" };
 
 import { buildServer } from "./server.js";
@@ -43,7 +42,6 @@ if (args.includes("--version") || args.includes("-V")) {
 async function main() {
   if (isMcpStdioMode(args)) {
     const server = buildServer();
-    registerCloudTools(server, "skills");
     await server.connect(new StdioServerTransport());
     return;
   }

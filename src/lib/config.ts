@@ -14,6 +14,7 @@ import { join, dirname } from "path";
 import { homedir } from "os";
 
 export interface SkillsConfig {
+  mode?: "local" | "skills.md";
   defaultAgent?: "claude" | "codex" | "gemini" | "pi" | "opencode" | "all";
   defaultScope?: "global" | "project";
   format?: "compact" | "json" | "csv";
@@ -21,6 +22,7 @@ export interface SkillsConfig {
 }
 
 const ENUM_KEYS: Partial<Record<keyof SkillsConfig, string[]>> = {
+  mode: ["local", "skills.md"],
   defaultAgent: ["claude", "codex", "gemini", "pi", "opencode", "all"],
   defaultScope: ["global", "project"],
   format: ["compact", "json", "csv"],

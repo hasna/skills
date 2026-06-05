@@ -486,17 +486,13 @@ describe("installer", () => {
       expect(disabled).toEqual([]);
     });
 
-    test("disableSkill excludes skill from index.ts", () => {
+    test("disableSkill records disabled state without generating source files", () => {
       installSkills(["image", "deepresearch"], { targetDir: testDir });
       const result = disableSkill("image", testDir);
       expect(result).toBe(true);
 
-      // Check index.ts no longer references image but still has deepresearch
-      const content = readFileSync(join(testDir, ".skills", "index.ts"), "utf-8");
-      expect(content).not.toContain("skill-image");
-      expect(content).toContain("skill-deepresearch");
-
-      // Check getDisabledSkills returns it
+      expect(existsSync(join(testDir, ".skills", "index.ts"))).toBe(false);
+      expect(getInstalledSkills(testDir)).toEqual(["deepresearch", "image"]);
       expect(getDisabledSkills(testDir)).toContain("image");
     });
 
@@ -512,15 +508,14 @@ describe("installer", () => {
       expect(result).toBe(false);
     });
 
-    test("enableSkill re-adds skill to index.ts", () => {
+    test("enableSkill clears disabled state without generating source files", () => {
       installSkills(["image", "deepresearch"], { targetDir: testDir });
       disableSkill("image", testDir);
       const result = enableSkill("image", testDir);
       expect(result).toBe(true);
 
-      const content = readFileSync(join(testDir, ".skills", "index.ts"), "utf-8");
-      expect(content).toContain("skill-image");
-      expect(content).toContain("skill-deepresearch");
+      expect(existsSync(join(testDir, ".skills", "index.ts"))).toBe(false);
+      expect(getInstalledSkills(testDir)).toEqual(["deepresearch", "image"]);
       expect(getDisabledSkills(testDir)).not.toContain("image");
     });
 

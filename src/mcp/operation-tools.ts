@@ -32,7 +32,7 @@ import {
   writeRunLogs,
 } from "../lib/run-state.js";
 import { cacheClear, mcpError, mcpJson, remoteRunNextActions } from "./helpers.js";
-import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../platform/api/run-contract.js";
+import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../lib/remote-run-contract.js";
 
 export function registerOperationTools(server: McpServer): void {
   server.registerTool("pin_skill", {
@@ -220,7 +220,7 @@ export function registerOperationTools(server: McpServer): void {
       return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
     }
 
-    const { ARTICLE_GENERATION_SLUG, getPublicSkillPricing, validateBlogArticleRunOptions } = await import("../platform/skills/pricing");
+    const { ARTICLE_GENERATION_SLUG, getPublicSkillPricing, validateBlogArticleRunOptions } = await import("../lib/pricing.js");
     const runInput = input || {};
     const runArgs = args || [];
     if (skill.name === ARTICLE_GENERATION_SLUG) {
@@ -257,7 +257,7 @@ export function registerOperationTools(server: McpServer): void {
       getSkillRunCostCents,
       formatCost,
       validateBlogArticleRunOptions,
-    } = await import("../platform/skills/pricing");
+    } = await import("../lib/pricing.js");
     const skillName = skill.name;
     const runInput = input || {};
     const runArgs = args || [];
@@ -279,7 +279,7 @@ export function registerOperationTools(server: McpServer): void {
 
     if (isPremiumSkill(skillName) && !apiKey) {
       const cost = formatCost(costCents ?? 0);
-      const error = `${skillName} is a premium skill (${cost}). Run: skills auth login`;
+      const error = `${skillName} is a hosted skill (${cost}). Run: skills setup --mode skills.md && skills auth login`;
       writeRunLogs(runContext, "", error + "\n");
       const run = completeSkillRun(runContext, { status: "failed", error, costCents });
       return mcpError("AUTH_REQUIRED", `${error}. Local run metadata: ${run.paths.runDir}/run.json`, ["skills auth login"]);
@@ -287,8 +287,8 @@ export function registerOperationTools(server: McpServer): void {
 
     if (apiKey) {
       try {
-        const { PlatformClient } = await import("../platform/api/client");
-        const client = new PlatformClient(apiKey);
+        const { RemoteSkillsClient } = await import("../lib/remote-client.js");
+        const client = new RemoteSkillsClient(apiKey);
         const run = await client.submitRun(skillName, runInput, runArgs);
         if (run.error) {
           writeRunLogs(runContext, "", String(run.error) + "\n");
@@ -314,9 +314,9 @@ export function registerOperationTools(server: McpServer): void {
           nextActions: remoteRunNextActions(remoteRunId),
         });
       } catch (err) {
-        console.error(`[skills] Platform API failed for ${skillName}, falling back to local:`, (err as Error).message);
+        console.error(`[skills] skills.md API failed for ${skillName}, falling back to local:`, (err as Error).message);
         if (isPremiumSkill(skillName)) {
-          const error = `Premium skill ${skillName} requires platform access: ${(err as Error).message}`;
+          const error = `Hosted skill ${skillName} requires skills.md access: ${(err as Error).message}`;
           writeRunLogs(runContext, "", error + "\n");
           const localRun = completeSkillRun(runContext, { status: "failed", error });
           return mcpError("PLATFORM_ERROR", `${error}. Local run metadata: ${localRun.paths.runDir}/run.json`);
@@ -358,7 +358,7 @@ export function registerOperationTools(server: McpServer): void {
     const { getApiKey } = await import("../lib/auth-store.js");
     const apiKey = getApiKey();
     if (!apiKey) {
-      return mcpError("AUTH_REQUIRED", "Remote run status requires platform access. Run: skills auth login", ["skills auth login"]);
+      return mcpError("AUTH_REQUIRED", "Remote run status requires skills.md access. Run: skills auth login", ["skills auth login"]);
     }
 
     const localRun = findSkillRun(run_id);
@@ -368,8 +368,8 @@ export function registerOperationTools(server: McpServer): void {
     }
 
     try {
-      const { PlatformClient } = await import("../platform/api/client");
-      const client = new PlatformClient(apiKey);
+      const { RemoteSkillsClient } = await import("../lib/remote-client.js");
+      const client = new RemoteSkillsClient(apiKey);
       const run = await client.getRun(remoteRunId);
       if (!run) return mcpError("RUN_NOT_FOUND", `Remote run '${remoteRunId}' not found`);
       return mcpJson({
@@ -380,7 +380,7 @@ export function registerOperationTools(server: McpServer): void {
         nextActions: remoteRunNextActions(remoteRunId),
       });
     } catch (err) {
-      return mcpError("PLATFORM_ERROR", (err as Error).message);
+      return mcpError("SKILLS_MD_ERROR", (err as Error).message);
     }
   });
 

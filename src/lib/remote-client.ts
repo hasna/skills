@@ -1,7 +1,7 @@
-import { getApiKey as getStoredApiKey, getApiUrl } from "../../lib/auth-store.js";
-import { normalizeRemoteSkillRunContract, type RemoteSkillRunContract } from "./run-contract.js";
+import { getApiKey as getStoredApiKey, getApiUrl } from "./auth-store.js";
+import { normalizeRemoteSkillRunContract, type RemoteSkillRunContract } from "./remote-run-contract.js";
 
-export class PlatformClient {
+export class RemoteSkillsClient {
   private apiUrl: string;
   private apiKey: string;
 
@@ -83,37 +83,10 @@ export class PlatformClient {
     });
   }
 
-  async getBillingStatus(): Promise<any> {
-    const res = await this.request("/api/v1/billing/status");
-    return res.json();
-  }
-
-  async createCheckout(): Promise<{ url: string }> {
-    const res = await this.request("/api/v1/billing/checkout", { method: "POST" });
-    return res.json();
-  }
-
-  async createPortal(): Promise<{ url: string }> {
-    const res = await this.request("/api/v1/billing/portal", { method: "POST" });
-    return res.json();
-  }
-
-  async createCreditCheckout(amount: "1" | "5" | "20" | "50" | "100"): Promise<{ url: string; pack: string }> {
-    const res = await this.request("/api/v1/billing/credits", {
-      method: "POST",
-      body: JSON.stringify({ amount }),
-    });
-    return res.json();
-  }
-
-  async syncUpstream(): Promise<any> {
-    const res = await this.request("/api/v1/admin/sync", { method: "POST" });
-    return res.json();
-  }
 }
 
-export function createPlatformClient(): PlatformClient | null {
+export function createRemoteSkillsClient(): RemoteSkillsClient | null {
   const apiKey = getStoredApiKey();
   if (!apiKey) return null;
-  return new PlatformClient(apiKey);
+  return new RemoteSkillsClient(apiKey);
 }

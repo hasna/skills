@@ -10,21 +10,21 @@ describe("package ownership and sync strategy", () => {
 
   test("chooses package dependency plus generated registry sync", () => {
     expect(content).toContain("canonical upstream package");
-    expect(content).toContain("package dependency plus generated registry sync");
+    expect(content).toContain("released package APIs plus generated registry sync");
     expect(content).toContain("Released npm package pinned by lockfile");
     expect(content).toContain("Generated Registry Sync");
   });
 
-  test("assigns ownership between upstream and private SaaS", () => {
+  test("assigns ownership between upstream and hosted wrappers", () => {
     for (const phrase of [
       "`hasna/skills`, npm `@hasna/skills`",
       "Agent CLI",
       "MCP server",
       "Bundled skill corpus",
-      "SaaS API",
-      "SaaS workers",
-      "SaaS web app",
-      "SaaS infrastructure",
+      "Hosted API",
+      "Hosted workers",
+      "Hosted web app",
+      "Hosted infrastructure",
     ]) {
       expect(content).toContain(phrase);
     }
@@ -41,21 +41,21 @@ describe("package ownership and sync strategy", () => {
     }
   });
 
-  test("documents bootstrap transition out of public package identity", () => {
-    expect(content).toContain("Bootstrap State");
-    expect(content).toContain("repository now presents itself as the private");
-    expect(content).toContain("@hasnatools/platform-skills");
-    expect(content).toContain("Keep `@hasna/skills` as an external dependency");
+  test("keeps hosted wrappers as package consumers", () => {
+    expect(content).toContain("Hosted wrappers should consume `@hasna/skills`");
+    expect(content).toContain("Released npm package pinned by lockfile");
+    expect(content).toContain("public-boundary preflight");
+    expect(content).not.toContain("@hasnatools/platform-skills");
+    expect(content).not.toContain("src/platform");
   });
 
-  test("keeps private SaaS concerns out of upstream", () => {
+  test("keeps hosted wrapper concerns out of upstream", () => {
     for (const phrase of [
-      "No private SaaS module should publish as `@hasna/skills`",
-      "No upstream module should require PostgreSQL",
-      "Stripe",
-      "AWS",
+      "No private or hosted wrapper module should publish as `@hasna/skills`",
+      "No upstream module should require hosted account state",
+      "billing",
       "tenants",
-      "No hosted or paid skill should download private source code",
+      "No hosted or paid skill should download protected source code",
     ]) {
       expect(content).toContain(phrase);
     }
@@ -64,14 +64,15 @@ describe("package ownership and sync strategy", () => {
   test("defines remote-only premium boundary while preserving local user-key skills", () => {
     for (const phrase of [
       "Premium Remote-Only Boundary",
-      "premium skills must submit to the skills.md API",
+      "hosted premium skills must submit to a compatible hosted API",
       "must not fall back to bundled local execution",
-      "OSS package may expose public contracts for premium skills",
+      "OSS package may expose public contracts for hosted skills",
       "must not expose private provider routing",
-      "`SKILLS_API_KEY` authenticates the user to skills.md",
-      "provider keys such as `OPENAI_API_KEY`",
-      "Free or explicitly local OSS skills may still read user-provided",
-      "must exclude `skills/<premium>/src` implementation",
+      "`SKILLS_API_KEY` authenticates the user to a hosted skills API",
+      "provider keys such as",
+      "`OPENAI_API_KEY`",
+      "skill-specific local credentials",
+      "protected hosted implementation source",
     ]) {
       expect(content).toContain(phrase);
     }

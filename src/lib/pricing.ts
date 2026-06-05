@@ -1,4 +1,4 @@
-import { resolveSkillAlias } from "../../lib/skill-aliases.js";
+import { resolveSkillAlias } from "./skill-aliases.js";
 
 export type BillingTier = "free" | "premium";
 

@@ -19,7 +19,7 @@ import {
   getPublicSkillDiscovery,
   publicDiscoveryPriceLabel,
   type PublicSkillDiscovery,
-} from "../../platform/skills/discovery.js";
+} from "../../lib/discovery.js";
 
 export function registerBrowse(parent: Command) {
   // List

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/skills",
-  "version": "0.1.30",
+  "version": "0.1.31",
   "description": "Skills library for AI coding agents",
   "type": "module",
   "bin": {
@@ -36,17 +36,6 @@
     "dev:watch": "bun --watch run ./src/cli/index.tsx",
     "dev:mcp": "bun --watch run ./src/mcp/index.ts",
     "typecheck": "tsc --noEmit",
-    "db:migrate:preview": "bun run scripts/apply_database_migrations.ts",
-    "aws:bootstrap:ecs": "bash scripts/bootstrap_ecs_foundation.sh",
-    "aws:bootstrap:s3": "bash scripts/bootstrap_s3_buckets.sh",
-    "aws:bootstrap:secrets": "bash scripts/bootstrap_secrets.sh",
-    "aws:bootstrap:preview-edge": "bash scripts/bootstrap_preview_edge.sh",
-    "aws:bootstrap:preview-stripe": "bash scripts/preview_bootstrap_stripe.sh",
-    "aws:verify:preview-stripe": "bash scripts/preview_verify_stripe.sh",
-    "aws:bootstrap:production-edge": "bash scripts/bootstrap_production_edge.sh",
-    "aws:bootstrap:production-stripe": "bash scripts/production_bootstrap_stripe.sh",
-    "aws:production:readiness": "bash scripts/production_readiness.sh",
-    "upstream:check": "bash scripts/check_upstream_sync.sh",
     "prepublishOnly": "bun run build",
     "postinstall": "mkdir -p $HOME/.hasna/skills/custom 2>/dev/null || true"
   },
@@ -70,11 +59,10 @@
   "license": "Apache-2.0",
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/react": "^18.2.0",
     "typescript": "^5"
   },
   "dependencies": {
-    "@hasna/cloud": "^0.1.24",
-    "@hasna/skills": "0.1.27",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
@@ -82,6 +70,7 @@
     "ink-select-input": "^6.0.0",
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",
+    "react": "^18.2.0",
     "zod": "^4.3.6"
   },
   "engines": {

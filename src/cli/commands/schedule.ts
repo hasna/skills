@@ -151,16 +151,16 @@ async function executeScheduledSkill(skillName: string, args: string[]) {
   const skill = getSkill(skillName);
   if (!skill) throw new Error(`Skill '${skillName}' not found`);
 
-  const pricing = await import("../../platform/skills/pricing.js");
+  const pricing = await import("../../lib/pricing.js");
   if (pricing.isPremiumSkill(skill.name)) {
     const { getApiKey } = await import("../../lib/auth-store.js");
     const apiKey = getApiKey();
     if (!apiKey) {
-      throw new Error(`${skill.name} is a premium remote skill. Run: skills auth login`);
+      throw new Error(`${skill.name} is a hosted skill. Run: skills setup --mode skills.md && skills auth login`);
     }
 
-    const { PlatformClient } = await import("../../platform/api/client.js");
-    const client = new PlatformClient(apiKey);
+    const { RemoteSkillsClient } = await import("../../lib/remote-client.js");
+    const client = new RemoteSkillsClient(apiKey);
     const run = await client.submitRun(skill.name, {}, args);
     if (run.error) throw new Error(String(run.error));
     return;

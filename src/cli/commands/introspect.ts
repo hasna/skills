@@ -17,7 +17,7 @@ import {
   publicDiscoveryDependencies,
   publicDiscoveryEnvVars,
   publicDiscoveryPriceLabel,
-} from "../../platform/skills/discovery.js";
+} from "../../lib/discovery.js";
 
 export function registerIntrospect(parent: Command) {
   // Info

@@ -6,7 +6,7 @@ import chalk from "chalk";
 import pkg from "../../package.json" with { type: "json" };
 import { App } from "./components/App.js";
 import { loadBasicRegistry } from "../lib/registry.js";
-import { getCompactSkillDiscovery } from "../platform/skills/discovery.js";
+import { getCompactSkillDiscovery } from "../lib/discovery.js";
 
 const isTTY = (process.stdout.isTTY ?? false) && (process.stdin.isTTY ?? false);
 

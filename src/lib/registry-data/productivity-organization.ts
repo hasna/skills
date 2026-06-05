@@ -6,7 +6,7 @@ export const PRODUCTIVITY_ORGANIZATION_SKILLS: SkillMeta[] = [
     displayName: "Convert",
     description: "File format conversion and transformation CLI between images, PDFs, documents, CSV, and data formats",
     category: "Productivity & Organization",
-    tags: ["conversion", "formats", "files", "transform"],
+    tags: ["conversion", "formats", "files", "transform", "remote"],
   },
   {
     name: "decision-journal",

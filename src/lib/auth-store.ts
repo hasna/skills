@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync, unlinkSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import { loadConfig } from "./config.js";
 
 const AUTH_DIR = join(homedir(), ".skills");
 const AUTH_FILE = join(AUTH_DIR, "auth.json");
@@ -48,7 +49,7 @@ export function getApiKey(): string | null {
   return getAuthConfig()?.apiKey || null;
 }
 
-export function normalizePlatformApiOrigin(apiUrl: string): string {
+export function normalizeSkillsApiOrigin(apiUrl: string): string {
   const url = new URL(apiUrl);
   const pathname = url.pathname.replace(/\/+$/, "");
   if (pathname === "/api" || pathname === "/api/v1") {
@@ -62,5 +63,5 @@ export function normalizePlatformApiOrigin(apiUrl: string): string {
 }
 
 export function getApiUrl(): string {
-  return normalizePlatformApiOrigin(process.env.SKILLS_API_URL || "https://skills.md");
+  return normalizeSkillsApiOrigin(process.env.SKILLS_API_URL || loadConfig().apiUrl || "https://skills.md");
 }

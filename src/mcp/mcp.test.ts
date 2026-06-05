@@ -20,7 +20,7 @@ class McpClient {
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, ...env, NO_COLOR: "1" },
+      env: { ...process.env, ...env, MCP_STDIO: "1", NO_COLOR: "1" },
     });
     this.reader = (this.proc.stdout as ReadableStream<Uint8Array>).getReader();
     this._readLoop();
@@ -205,13 +205,13 @@ describe("MCP Server", () => {
     }
   }, 15000);
 
-  test("run_skill fails closed for premium skills when platform access fails", async () => {
+  test("run_skill fails closed for premium skills when skills.md access fails", async () => {
     const { mkdtempSync, rmSync } = require("fs");
     const { tmpdir } = require("os");
-    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-premium-platform-down-"));
+    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-premium-skillsmd-down-"));
     const client = new McpClient({
       HOME: tmpDir,
-      SKILLS_API_KEY: "sk_test_platform_down",
+      SKILLS_API_KEY: "sk_test_skillsmd_down",
       SKILLS_API_URL: "http://127.0.0.1:1",
       SKILLS_TEST_MODE: "1",
     });
@@ -228,7 +228,7 @@ describe("MCP Server", () => {
       expect(response.result.isError).toBe(true);
       const error = JSON.parse(response.result.content[0].text);
       expect(error).toMatchObject({ code: "PLATFORM_ERROR" });
-      expect(error.message).toContain("requires platform access");
+      expect(error.message).toContain("requires skills.md access");
       expect(error.message).not.toContain("Skill Image CLI");
     } finally {
       await client.close();

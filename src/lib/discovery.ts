@@ -1,4 +1,4 @@
-import type { SkillMeta } from "../../lib/registry-types.js";
+import type { SkillMeta } from "./registry-types.js";
 import { getPublicSkillPricing, isPremiumSkill, type PublicSkillPricing } from "./pricing.js";
 
 const VENDOR_TERMS = [

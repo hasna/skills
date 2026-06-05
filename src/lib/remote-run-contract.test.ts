@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   REMOTE_SKILL_RUN_CONTRACT_VERSION,
   normalizeRemoteSkillRunContract,
-} from "./run-contract";
+} from "./remote-run-contract";
 
 describe("remote skill run contract", () => {
   test("normalizes submitted run payloads for CLI, MCP, and web clients", () => {

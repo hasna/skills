@@ -5,7 +5,7 @@ usage() {
   cat <<'EOF'
 Usage: scripts/check_upstream_sync.sh [options] [range]
 
-Preflight a commit range before preparing an upstream hasna/skills PR.
+Preflight a commit range before merging or publishing public hasna/skills work.
 
 Arguments:
   range                         Git revision range to inspect.
@@ -19,7 +19,7 @@ This script does not create branches and never uses git worktrees.
 EOF
 }
 
-range="upstream/main..HEAD"
+range="main..HEAD"
 strict_private_markers=0
 
 while (($# > 0)); do
@@ -43,15 +43,9 @@ repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
 origin_url="$(git remote get-url origin 2>/dev/null || true)"
-upstream_url="$(git remote get-url upstream 2>/dev/null || true)"
 
-if [[ "$origin_url" != *"hasnatools/platform-skills"* ]]; then
-  echo "origin must point at hasnatools/platform-skills; got: ${origin_url:-<missing>}" >&2
-  exit 1
-fi
-
-if [[ "$upstream_url" != *"hasna/skills"* ]]; then
-  echo "upstream must point at hasna/skills; got: ${upstream_url:-<missing>}" >&2
+if [[ -n "$origin_url" && "$origin_url" != *"hasna/skills"* ]]; then
+  echo "origin should point at hasna/skills for public package work; got: ${origin_url}" >&2
   exit 1
 fi
 
@@ -68,7 +62,7 @@ if ((${#changed_files[@]} == 0)); then
   exit 0
 fi
 
-private_path_pattern='^(apps/|packages/database/|infra/|terraform/|cdk/|aws/|deploy/|\.github/workflows/(deploy|preview|production)|docker-compose\.prod\.yml)'
+private_path_pattern='^(apps/|packages/database/|infra/|terraform/|cdk/|aws/|deploy/|src/platform/|platform/|\.github/workflows/(deploy|preview|production)|docker-compose\.prod\.yml)'
 private_paths=()
 
 for file in "${changed_files[@]}"; do
@@ -83,7 +77,7 @@ if ((${#private_paths[@]} > 0)); then
   exit 1
 fi
 
-marker_pattern='(skills\.md|hasnatools|Stripe|PostgreSQL|AWS|tenant|billing|SaaS|preview deploy|production deploy)'
+marker_pattern='(@hasna/cloud|@hasnatools/|src/platform|aws:bootstrap|preview-stripe|production-stripe|STRIPE_|tenant|billing|private cloud|preview deploy|production deploy)'
 marker_hits=()
 
 for file in "${changed_files[@]}"; do

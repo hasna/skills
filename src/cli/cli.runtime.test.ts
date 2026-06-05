@@ -10,6 +10,48 @@ import {
 } from "./cli.test-utils";
 
 describe("CLI runtime and misc commands", () => {
+  describe("setup mode", () => {
+    test("stores local mode in project config", async () => {
+      const { mkdtempSync, rmSync, readFileSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-local-"));
+      try {
+        const { stdout, exitCode } = await runCliInCwd(["setup", "--mode", "local", "--json"], tmpDir, { HOME: tmpDir });
+        expect(exitCode).toBe(0);
+        const data = JSON.parse(stdout);
+        expect(data).toMatchObject({ mode: "local", scope: "project" });
+        const config = JSON.parse(readFileSync(join(tmpDir, "skills.config.json"), "utf8"));
+        expect(config.mode).toBe("local");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("stores skills.md mode and API URL", async () => {
+      const { mkdtempSync, rmSync, readFileSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-skillsmd-"));
+      try {
+        const { stdout, exitCode } = await runCliInCwd(
+          ["setup", "--mode", "skills.md", "--api-url", "https://skills.example.com/api/v1", "--json"],
+          tmpDir,
+          { HOME: tmpDir },
+        );
+        expect(exitCode).toBe(0);
+        const data = JSON.parse(stdout);
+        expect(data).toMatchObject({ mode: "skills.md", scope: "project" });
+        expect(data.next).toContain("skills auth login");
+        const config = JSON.parse(readFileSync(join(tmpDir, "skills.config.json"), "utf8"));
+        expect(config.mode).toBe("skills.md");
+        expect(config.apiUrl).toBe("https://skills.example.com/api/v1");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe("setup-info", () => {
     test("outputs version and working directory", async () => {
       const { stdout, exitCode } = await runCli(["setup-info"]);
@@ -186,7 +228,7 @@ describe("CLI runtime and misc commands", () => {
             },
           ],
         });
-        expect(result.results[0].error).toContain("premium remote skill");
+        expect(result.results[0].error).toContain("hosted skill");
         expect(result.results[0].error).toContain("skills auth login");
         expect(result.results[0].error).not.toContain("Skill Image CLI");
       } finally {

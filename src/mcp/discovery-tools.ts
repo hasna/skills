@@ -18,7 +18,7 @@ import {
   getPublicSkillDiscovery,
   publicDiscoveryDependencies,
   publicDiscoveryEnvVars,
-} from "../platform/skills/discovery.js";
+} from "../lib/discovery.js";
 import { cacheGet, cacheSet, mcpError, stripNulls } from "./helpers.js";
 
 export function registerDiscoveryTools(server: McpServer): void {

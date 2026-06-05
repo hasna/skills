@@ -5,34 +5,32 @@ import { join } from "node:path";
 describe("v1 acceptance criteria", () => {
   const doc = readFileSync(join(process.cwd(), "docs/release/v1-acceptance.md"), "utf8");
 
-  test("anchors product, domain, port, and upstream strategy", () => {
-    expect(doc).toContain("`skills.md` is the production domain");
-    expect(doc).toContain("port `3505`");
-    expect(doc).toContain("open `hasna/skills` package remains upstream");
-    expect(doc).toContain("PostgreSQL, Stripe, AWS, hosted execution");
+  test("anchors product, package, and hosted-wrapper strategy", () => {
+    expect(doc).toContain("`hasna/skills` is the canonical open repository");
+    expect(doc).toContain("`@hasna/skills` is the public npm package");
+    expect(doc).toContain("Local-only setup works without API credentials");
+    expect(doc).toContain("Private worker, billing, tenant, database, and deployment state");
   });
 
-  test("covers CLI, MCP, API, database, worker, and billing acceptance", () => {
+  test("covers CLI, MCP, package, security, and wrapper acceptance", () => {
     for (const section of [
       "## CLI Acceptance",
       "## MCP Acceptance",
-      "## API Acceptance",
-      "## Database Acceptance",
-      "## Worker Acceptance",
-      "## Billing Acceptance",
+      "## Package Acceptance",
+      "## Security Acceptance",
+      "## Hosted Wrapper Acceptance",
     ]) {
       expect(doc).toContain(section);
     }
   });
 
-  test("covers security, web readiness, deployment, and launch gates", () => {
+  test("covers public package gates", () => {
     for (const phrase of [
-      "## Security Acceptance",
-      "## Web-Ready Acceptance",
-      "## Deployment Acceptance",
-      "Stripe sandbox payment tests passing",
-      "PR preview smoke tests passing",
-      "Production deploys are tag-gated",
+      "package.json",
+      "Built entrypoints",
+      "Packed output",
+      "Package-boundary tests",
+      "Hosted wrappers consume public package APIs",
     ]) {
       expect(doc).toContain(phrase);
     }
@@ -43,6 +41,7 @@ describe("v1 acceptance criteria", () => {
     expect(doc).toContain("bun run typecheck");
     expect(doc).toContain("bun test");
     expect(doc).toContain("bun run build");
+    expect(doc).toContain("npm pack --dry-run --json --ignore-scripts");
     expect(doc).toContain("systemd-run --user --scope");
   });
 });

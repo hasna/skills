@@ -18,7 +18,7 @@ import {
   publicDiscoveryDependencies,
   publicDiscoveryDocumentation,
   publicDiscoveryEnvVars,
-} from "../platform/skills/discovery.js";
+} from "../lib/discovery.js";
 import { mcpError, mcpJson } from "./helpers.js";
 
 export function registerResourceMetaTools(server: McpServer): void {

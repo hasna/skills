@@ -79,7 +79,7 @@ describe("CLI run core", () => {
         const data = JSON.parse(stdout);
         expect(stderr).toBe("");
         expect(exitCode).not.toBe(0);
-        expect(data.error).toContain("premium remote skill");
+        expect(data.error).toContain("hosted skill");
         expect(data.error).toContain("skills auth login");
         expect(data.stdout).toBeUndefined();
         expect(data.run.remote).toBe(true);
@@ -114,7 +114,7 @@ describe("CLI run core", () => {
         const data = JSON.parse(stdout);
         expect(stderr).toBe("");
         expect(exitCode).not.toBe(0);
-        expect(data.error).toContain("premium remote skill");
+        expect(data.error).toContain("hosted skill");
         expect(data.error).toContain("skills auth login");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
@@ -215,10 +215,10 @@ describe("CLI run core", () => {
       }
     });
 
-    test("premium skills fail closed when the platform API is unavailable", async () => {
+    test("premium skills fail closed when the skills.md API is unavailable", async () => {
       const { mkdtempSync, rmSync } = require("fs");
       const { tmpdir } = require("os");
-      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-premium-platform-down-"));
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-premium-skillsmd-down-"));
       try {
         const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", "run", "--json", "image", "--help"], {
           stdout: "pipe",
@@ -229,7 +229,7 @@ describe("CLI run core", () => {
             HOME: tmpDir,
             NO_COLOR: "1",
             SKILLS_TEST_MODE: "1",
-            SKILLS_API_KEY: "sk_test_platform_down",
+            SKILLS_API_KEY: "sk_test_skillsmd_down",
             SKILLS_API_URL: "http://127.0.0.1:1",
           },
         });
@@ -241,7 +241,7 @@ describe("CLI run core", () => {
         const data = JSON.parse(stdout);
         expect(stderr).toBe("");
         expect(exitCode).not.toBe(0);
-        expect(data.error).toContain("requires platform access");
+        expect(data.error).toContain("requires skills.md access");
         expect(data.stdout).toBeUndefined();
         expect(data.run.remote).toBe(true);
         expect(data.run.status).toBe("failed");

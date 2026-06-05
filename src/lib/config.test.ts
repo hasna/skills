@@ -80,12 +80,14 @@ describe("config", () => {
         defaultAgent: "gemini",
         defaultScope: "project",
         format: "csv",
+        mode: "skills.md",
         apiUrl: "https://skills.example.com/api/v1/",
       }));
       const config = loadConfig();
       expect(config.defaultAgent).toBe("gemini");
       expect(config.defaultScope).toBe("project");
       expect(config.format).toBe("csv");
+      expect(config.mode).toBe("skills.md");
       expect(config.apiUrl).toBe("https://skills.example.com/api/v1");
     });
 
@@ -131,6 +133,14 @@ describe("config", () => {
 
     test("throws on invalid value", () => {
       expect(() => saveConfig("defaultAgent", "badAgent")).toThrow("Invalid value");
+    });
+
+    test("saves local or skills.md mode", () => {
+      saveConfig("mode", "local", "project");
+      expect(loadConfig().mode).toBe("local");
+      saveConfig("mode", "skills.md", "project");
+      expect(loadConfig().mode).toBe("skills.md");
+      expect(() => saveConfig("mode", "hosted", "project")).toThrow("Invalid value");
     });
 
     test("saves apiUrl after URL validation", () => {

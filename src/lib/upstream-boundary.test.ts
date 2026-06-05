@@ -8,23 +8,23 @@ describe("upstream boundary documentation", () => {
     "utf8",
   );
 
-  test("keeps hasna/skills as upstream and platform-skills as origin", () => {
+  test("keeps hasna/skills as the public origin", () => {
     expect(content).toContain("origin");
-    expect(content).toContain("hasnatools/platform-skills");
-    expect(content).toContain("upstream");
     expect(content).toContain("hasna/skills");
+    expect(content).toContain("canonical open core");
+    expect(content).not.toContain("@hasna/cloud");
   });
 
-  test("separates generic engine changes from private SaaS changes", () => {
-    expect(content).toContain("Upstream-Compatible Changes");
-    expect(content).toContain("Private SaaS Changes");
-    expect(content).toContain("SKILLS_API_URL");
-    expect(content).toContain("Stripe billing");
-    expect(content).toContain("AWS infrastructure");
+  test("separates open-core changes from hosted-wrapper changes", () => {
+    expect(content).toContain("Open-Core Changes");
+    expect(content).toContain("Hosted-Wrapper Changes");
+    expect(content).toContain("optional compatible API endpoints");
+    expect(content).toContain("Billing, credits, ledgers");
+    expect(content).toContain("Deployment infrastructure");
   });
 
   test("preserves local-first upstream behavior", () => {
     expect(content).toContain("Preserve local-first behavior");
-    expect(content).toContain("Remote mode is additive");
+    expect(content).toContain("remote mode additive");
   });
 });

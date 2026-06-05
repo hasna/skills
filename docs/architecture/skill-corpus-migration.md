@@ -1,23 +1,20 @@
 # Skill Corpus Migration And Conflict Policy
 
-This policy covers duplicated, renamed, and conflicting skills between the
-private `hasnatools/platform-skills` repo and upstream `hasna/skills`.
+This policy covers duplicated, renamed, and conflicting skills in the public
+`hasna/skills` corpus and in any hosted wrapper registry that consumes it.
 
 ## Current Audit Result
 
-The current local `skills/` directory set matches `upstream/main`. There are no
-local-only skill directories, no upstream-only skill directories, no duplicated
-registry names, and no local skill directories missing registry entries.
+The current local `skills/` directory set has no local-only skill directories,
+no upstream-only skill directories, no duplicated registry names, and no local
+skill directories missing registry entries.
 
-The current divergence from upstream is metadata/documentation level work, not
-a conflicting second skill corpus. At the time this policy was added, the
-tracked drift against `upstream/main` was limited to several `SKILL.md` files
-and `src/lib/registry.ts`.
+There is no conflicting second skill corpus in the open package.
 
 ## Guard Command
 
-Run the corpus guard before upstream sync work and before SaaS registry import
-work:
+Run the corpus guard before public package work and before hosted registry
+import work:
 
 ```bash
 scripts/check_skill_corpus_drift.sh --base upstream/main
@@ -43,7 +40,7 @@ The guard compares:
 The canonical skill slug is the bare directory name.
 For example, `skills/read-pdf` maps to slug `read-pdf`.
 
-The SaaS database should store:
+Hosted registries that mirror the corpus should preserve:
 
 - Canonical slug.
 - Display name.
@@ -57,11 +54,11 @@ The SaaS database should store:
 
 | Conflict | Example | Resolution |
 | --- | --- | --- |
-| Duplicate registry name | Two registry records use `read-pdf` | Block the sync until one record is removed or renamed. |
+| Duplicate registry name | Two registry records use `read-pdf` | Block sync until one record is removed or renamed. |
 | Directory without registry entry | `skills/x` exists but `SKILLS` lacks `x` | Add registry metadata or remove the directory. |
 | Registry without directory | `SKILLS` contains `x` but `skills/x` is missing | Restore the directory or remove the registry record. |
-| Local-only skill | Private repo has a skill not in upstream | Decide whether it is private SaaS-only or an upstream contribution. |
-| Upstream-only skill | Upstream added a skill not present locally | Pull upstream or document why it is excluded. |
+| Local-only skill | A local branch has a skill not in the public base | Decide whether it is an open contribution or remove it from the public package. |
+| Upstream-only skill | The base added a skill not present locally | Pull the base or document why it is excluded. |
 | Rename | `pdf-read` becomes `read-pdf` | Keep a metadata alias and redirect pins/runs to canonical slug. |
 | Incompatible format | Skill lacks supported docs/package/source shape | Block publish/import until validation passes. |
 
@@ -70,10 +67,10 @@ The SaaS database should store:
 Renames must be explicit:
 
 1. Add the new canonical skill slug.
-2. Keep the old slug as a legacy alias in SaaS state.
+2. Keep the old slug as a legacy alias.
 3. Redirect pins from the old slug to the canonical slug.
 4. Redirect runs from the old slug to the canonical slug while preserving audit
-   records with the requested slug.
+   records with the requested slug where a hosted registry exists.
 5. Keep both slugs searchable for one release cycle.
 6. Document the migration in release notes.
 7. Remove the legacy alias only after usage has fallen to zero and a migration
@@ -81,20 +78,19 @@ Renames must be explicit:
 
 Do not silently delete a skill directory or registry entry to resolve a rename.
 
-## Private SaaS Skills
+## Hosted Skills
 
 Private hosted skills should not be placed in upstream `hasna/skills` unless
-they are useful as open generic skills. The SaaS registry should represent
-private skills with source provenance such as `private-hosted`, tenant/team
-ownership, visibility, moderation state, and execution profile.
+they are useful as open generic skills. A hosted registry should represent
+private skills with source provenance such as `private-hosted`, owner,
+visibility, moderation state, and execution profile.
 
-Private skills can share the same validation pipeline as upstream skills, but
+Hosted skills can share the same validation pipeline as upstream skills, but
 they must not be copied into the public package or downloaded locally with
 source when they are paid or server-executed.
 
-## Upstream Sync Rule
+## Sync Rule
 
-If a conflict is generic, fix it upstream. If it is SaaS-specific, keep it in
-the private registry layer. Do not fork a public skill into a private duplicate
-unless the private version has a different slug, explicit provenance, and a
-documented reason.
+If a conflict is generic, fix it in the public package. If it is hosted-service
+specific, keep it in the hosted registry layer with a different slug, explicit
+provenance, and a documented reason.

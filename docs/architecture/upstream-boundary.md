@@ -1,69 +1,51 @@
-# Upstream Boundary
+# Open Core Boundary
 
-`hasnatools/platform-skills` is a private SaaS product built from `hasna/skills`.
-The repo keeps `hasna/skills` as the `upstream` remote so generic improvements
-can move back to the open package without dragging private SaaS concerns into it.
+`hasna/skills` is the canonical open core. It owns the reusable skill engine,
+bundled corpus, CLI, MCP server, public contracts, and package validation.
+
+Hosted products such as skills.md may wrap this package, but their private
+service code must stay outside the open repository and outside the npm package.
 
 ## Remotes
 
-- `origin`: `hasnatools/platform-skills`
-- `upstream`: `hasna/skills`
+- `origin`: the public `hasna/skills` repository.
+- Optional wrapper remotes: private products may keep their own remotes and
+  cherry-pick generic engine changes back into clean public branches.
 
-Use `origin` for the private SaaS product. Use `upstream` only to pull generic
-engine improvements from `hasna/skills` or to prepare reusable changes that can
-be proposed back to `hasna/skills`.
+## Open-Core Changes
 
-## Upstream-Compatible Changes
+Changes belong in `hasna/skills` when they are useful without a private hosted
+service:
 
-Changes can be prepared for `hasna/skills` when they are useful without the
-private SaaS platform:
+- CLI support for local setup and optional compatible API endpoints.
+- Machine-readable `--json` output for CLI commands.
+- MCP tool schema, registration, and transport improvements.
+- Skill packaging, metadata, validation, and registry improvements.
+- Project `.skills` state for local preferences, pins, schedules, runs,
+  exports, logs, and metadata.
+- Public remote-run, pricing, discovery, and registry contracts.
 
-- CLI support for a configurable remote registry or API endpoint, such as
-  `SKILLS_API_URL`, while keeping the bundled local registry as the default.
-- Consistent machine-readable `--json` output for CLI commands.
-- MCP tool schema, registration, and transport improvements that do not depend
-  on private billing, tenant, or deployment infrastructure.
-- Skill packaging, metadata, and validation improvements.
-- Pinning and runtime-state abstractions that keep project `.skills` as
-  preferences, runs, exports, logs, and metadata only.
-- Tests and documentation for generic skill engine behavior.
+## Hosted-Wrapper Changes
 
-## Private SaaS Changes
+These belong in a hosted wrapper, not the open core:
 
-These belong only in `hasnatools/platform-skills`:
-
-- PostgreSQL schema, migrations, tenants, users, organizations, sessions, API
-  keys, and audit logs.
-- Stripe billing, credits, entitlements, spend limits, invoices, webhooks, and
-  payment approval flows.
-- Private hosted skills, remote execution workers, queues, logs, exports, S3
+- Account state, sessions, organizations, teams, and API key services.
+- Billing, credits, ledgers, invoices, entitlements, and payment approval
+  flows.
+- Private hosted skills, remote execution workers, queues, logs, artifact
   storage, and execution sandboxes.
-- Admin moderation, private dashboards, analytics, support tooling, and
+- Admin dashboards, moderation queues, support tooling, analytics, and
   customer-specific workflows.
-- AWS infrastructure, Terraform, PR previews, production deploys, secrets
-  wiring, observability, alerting, and rollback automation.
+- Deployment infrastructure, secret stores, observability, alerting, and
+  rollback automation.
 
 ## Sync Rules
 
-1. Pull from `upstream/main` intentionally and review conflicts as product
-   decisions.
-2. Keep SaaS-only code behind private modules, packages, or app directories.
-3. When a change improves the skill engine generally, isolate it from SaaS
-   dependencies and cover it with tests.
-4. Do not hard-code `skills.md`, Hasna Tools AWS details, Stripe products, or
-   private API contracts into upstream-compatible modules.
-5. Preserve local-first behavior for the open package. Remote mode is additive.
-
-For the step-by-step upstream PR process and preflight script, see
-`docs/architecture/upstream-sync.md`.
-
-## Current Product Direction
-
-The SaaS product wraps the open skill engine with server-owned state and
-execution:
-
-- Agents keep using CLI and MCP surfaces.
-- The backend owns registry sync, pin tracking, remote execution, billing,
-  auditability, and exports.
-- A future web interface consumes the same API contracts as the CLI and MCP
-  tools.
+1. Preserve local-first behavior for the open package.
+2. Keep remote mode additive and explicit through config and credentials.
+3. Expose reusable contracts from `src/index.ts` before wrappers depend on
+   them.
+4. Do not publish private cloud dependencies, protected source, or hosted
+   infrastructure in the public package.
+5. Use `docs/architecture/upstream-sync.md` and the public-boundary preflight
+   before moving wrapper work into the open repo.

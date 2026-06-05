@@ -42,17 +42,17 @@ describe("hasna/skills module audit", () => {
     }
   });
 
-  test("lists upstream modifications separately from private SaaS work", () => {
+  test("lists upstream modifications separately from hosted-only work", () => {
     for (const phrase of [
       "Upstream Modules To Modify",
       "Remote registry support",
       "Project pinning",
       "CLI JSON output",
       "MCP JSON contracts",
-      "SaaS-Only Modules To Build",
-      "PostgreSQL tenant schema",
+      "Hosted-Only Modules To Build",
+      "Account schema",
       "Billing service",
-      "AWS deployment",
+      "Deployment",
     ]) {
       expect(content).toContain(phrase);
     }
@@ -62,16 +62,16 @@ describe("hasna/skills module audit", () => {
     expect(content).toContain("must not become the hosted execution");
     expect(content).toContain("server-controlled sandbox");
     expect(content).toContain("The local scheduler is file/config oriented");
-    expect(content).toContain("future web interface");
+    expect(content).toContain("future hosted web app");
     expect(content).toContain("first-class API client");
   });
 
   test("keeps private concerns out of upstream and requires verification", () => {
-    expect(content).toContain("Do not add `skills.md`");
+    expect(content).toContain("Do not add private cloud packages");
     expect(content).toContain("Do not install paid or hosted skill source code");
     expect(content).toContain("bun run typecheck");
     expect(content).toContain("bun test");
     expect(content).toContain("bun run build");
-    expect(content).toContain("Stripe sandbox work");
+    expect(content).toContain("Payment sandbox work belongs in the hosted wrapper");
   });
 });

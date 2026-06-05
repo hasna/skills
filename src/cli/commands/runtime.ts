@@ -5,6 +5,7 @@
 import chalk from "chalk";
 import { mkdirSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
+import { createInterface } from "readline";
 import type { Command } from "commander";
 import { getSkill, findSimilarSkills } from "../../lib/registry.js";
 import { runSkill } from "../../lib/skillinfo.js";
@@ -12,8 +13,9 @@ import {
   ARTICLE_GENERATION_SLUG,
   getPublicSkillPricing,
   validateBlogArticleRunOptions,
-} from "../../platform/skills/pricing.js";
-import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../../platform/api/run-contract.js";
+} from "../../lib/pricing.js";
+import { loadConfig, saveConfig, type ConfigScope } from "../../lib/config.js";
+import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../../lib/remote-run-contract.js";
 import {
   completeSkillRun,
   createSkillRun,
@@ -103,7 +105,12 @@ export function registerRuntime(parent: Command) {
 
   const setup = parent
     .command("setup")
-    .description("Set up Skills integrations");
+    .description("Choose local-only mode, skills.md mode, or agent integrations")
+    .option("--mode <mode>", "Runtime mode: local or skills.md")
+    .option("--api-url <url>", "skills.md-compatible API origin for hosted mode")
+    .option("--global", "Save setup choice globally", false)
+    .option("--json", "Output setup result as JSON", false)
+    .action(async (options: SetupCommandOptions) => handleSetup(options));
 
   setup
     .command("agents")
@@ -148,6 +155,72 @@ export function registerRuntime(parent: Command) {
         process.exitCode = 1;
       }
     });
+}
+
+interface SetupCommandOptions {
+  mode?: string;
+  apiUrl?: string;
+  global: boolean;
+  json: boolean;
+}
+
+async function handleSetup(options: SetupCommandOptions) {
+  const scope: ConfigScope = options.global ? "global" : "project";
+  let mode = normalizeSetupMode(options.mode);
+
+  if (!mode && process.stdin.isTTY && process.stdout.isTTY) {
+    mode = normalizeSetupMode(await promptLine("Use Skills locally or with skills.md? [local/skills.md] "));
+  }
+  mode = mode ?? "local";
+
+  saveConfig("mode", mode, scope);
+  if (mode === "skills.md") {
+    saveConfig("apiUrl", options.apiUrl || "https://skills.md", scope);
+  }
+
+  const config = loadConfig();
+  const next = mode === "skills.md"
+    ? ["skills auth login", "skills list --remote"]
+    : ["skills list", "skills run <skill>"];
+  const payload = {
+    mode,
+    scope,
+    config,
+    next,
+  };
+
+  if (options.json) {
+    console.log(JSON.stringify(payload, null, 2));
+    return;
+  }
+
+  console.log(chalk.green(`Set Skills mode to ${mode}`));
+  console.log(chalk.dim(`  Scope: ${scope}`));
+  if (mode === "skills.md") {
+    console.log(chalk.dim(`  API: ${config.apiUrl || "https://skills.md"}`));
+    console.log(chalk.dim("  Next: skills auth login"));
+  } else {
+    console.log(chalk.dim("  Skills will run locally unless a command explicitly uses remote registry access."));
+    console.log(chalk.dim("  Next: skills list"));
+  }
+}
+
+function normalizeSetupMode(value: string | undefined): "local" | "skills.md" | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "local" || normalized === "offline") return "local";
+  if (normalized === "skills.md" || normalized === "skillsmd" || normalized === "remote" || normalized === "hosted") return "skills.md";
+  throw new Error("Invalid setup mode. Use local or skills.md.");
+}
+
+function promptLine(question: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(chalk.bold(question), (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
 }
 
 function handleQuote(name: string, args: string[], options: { json: boolean }) {
@@ -211,7 +284,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
   }
 
   const prompt = extractPrompt(args);
-  const pricing = await import("../../platform/skills/pricing.js");
+  const pricing = await import("../../lib/pricing.js");
   if (skill.name === ARTICLE_GENERATION_SLUG) {
     const validation = pricing.validateBlogArticleRunOptions({}, args, { requireTopic: true });
     if (!validation.ok) {
@@ -234,7 +307,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       const { getApiKey } = await import("../../lib/auth-store.js");
       const apiKey = getApiKey();
       if (!apiKey) {
-        const error = `${skill.name} is a premium remote skill (${pricing.formatCost(costCents ?? 0)}). Run: skills auth login`;
+        const error = `${skill.name} is a hosted skill (${pricing.formatCost(costCents ?? 0)}). Run: skills setup --mode skills.md && skills auth login`;
         writeRunLogs(runContext, "", error + "\n");
         const run = completeSkillRun(runContext, { status: "failed", error, costCents });
         if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, pricing: publicPricing, run }, null, 2));
@@ -244,8 +317,8 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       }
 
       try {
-        const { PlatformClient } = await import("../../platform/api/client.js");
-        const client = new PlatformClient(apiKey);
+        const { RemoteSkillsClient } = await import("../../lib/remote-client.js");
+        const client = new RemoteSkillsClient(apiKey);
         if (!options.json) console.log(`${chalk.dim("Price:")} ${publicPricing.formattedCost}`);
         const run = await client.submitRun(skill.name, {}, args);
         if (run.error) {
@@ -310,7 +383,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
         process.exitCode = exitCode;
         return;
       } catch (err) {
-        const error = `Premium skill ${skill.name} requires platform access: ${(err as Error).message}`;
+        const error = `Hosted skill ${skill.name} requires skills.md access: ${(err as Error).message}`;
         writeRunLogs(runContext, "", error + "\n");
         const run = completeSkillRun(runContext, { status: "failed", error, costCents });
         if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, pricing: publicPricing, run }, null, 2));
@@ -402,7 +475,7 @@ async function handleRunsStatus(runId: string, options: { json: boolean }) {
   const { getApiKey } = await import("../../lib/auth-store.js");
   const apiKey = getApiKey();
   if (!apiKey) {
-    const error = "Remote run status requires platform access. Run: skills auth login";
+    const error = "Remote run status requires skills.md access. Run: skills auth login";
     if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, error }, null, 2));
     else console.error(chalk.red(error));
     process.exitCode = 1;
@@ -420,8 +493,8 @@ async function handleRunsStatus(runId: string, options: { json: boolean }) {
   }
 
   try {
-    const { PlatformClient } = await import("../../platform/api/client.js");
-    const client = new PlatformClient(apiKey);
+    const { RemoteSkillsClient } = await import("../../lib/remote-client.js");
+    const client = new RemoteSkillsClient(apiKey);
     const run = await client.getRun(remoteRunId);
     if (!run) {
       const error = `Remote run '${remoteRunId}' not found`;
@@ -491,7 +564,7 @@ async function handleExportsDownload(runId: string, options: { json: boolean }) 
   const { getApiKey } = await import("../../lib/auth-store.js");
   const apiKey = getApiKey();
   if (!apiKey) {
-    const error = "Remote artifact downloads require platform access. Run: skills auth login";
+    const error = "Remote artifact downloads require skills.md access. Run: skills auth login";
     if (options.json) console.log(JSON.stringify({ error }, null, 2));
     else console.error(chalk.red(error));
     process.exitCode = 1;
@@ -499,8 +572,8 @@ async function handleExportsDownload(runId: string, options: { json: boolean }) 
   }
 
   try {
-    const { PlatformClient } = await import("../../platform/api/client.js");
-    const client = new PlatformClient(apiKey);
+    const { RemoteSkillsClient } = await import("../../lib/remote-client.js");
+    const client = new RemoteSkillsClient(apiKey);
     const remoteRun = await client.getRun(runId);
     if (!remoteRun) {
       const error = `Remote run '${runId}' not found`;

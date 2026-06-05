@@ -2,20 +2,20 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-describe("database schema audit", () => {
+describe("database boundary audit", () => {
   const content = readFileSync(
     join(process.cwd(), "docs/architecture/database-schema-audit.md"),
     "utf8",
   );
 
-  test("documents that no SaaS Drizzle schema exists yet", () => {
-    expect(content).toContain("There is no existing Drizzle ORM SaaS schema");
+  test("documents that no hosted product schema exists in OSS", () => {
+    expect(content).toContain("There is no hosted product database schema");
     expect(content).toContain("@hasna/skills");
     expect(content).toContain("skill implementation details");
-    expect(content).toContain("SaaS\nplatform schema");
+    expect(content).toContain("hosted\nservice schema");
   });
 
-  test("defines required product domains for the new schema", () => {
+  test("defines hosted wrapper state domains", () => {
     for (const phrase of [
       "Tenancy",
       "Identity",
@@ -35,23 +35,22 @@ describe("database schema audit", () => {
 
   test("requires tenant, idempotency, and provenance fields", () => {
     for (const phrase of [
-      "tenantId",
-      "organizationId",
-      "idempotency key",
-      "correlation id",
+      "tenant or organization ids",
+      "idempotency keys",
+      "correlation ids",
       "upstream package version",
       "canonical skill slug",
-      "requested skill slug",
+      "requested\nskill slug",
       "private-hosted",
     ]) {
       expect(content).toContain(phrase);
     }
   });
 
-  test("sets immediate Phase 2 implementation path", () => {
-    expect(content).toContain("Add schema package and Drizzle config");
-    expect(content).toContain("Add skill source and artifact provenance fields");
-    expect(content).toContain("Generate and test migrations");
+  test("keeps hosted database work out of public package exports", () => {
+    expect(content).toContain("Project config");
+    expect(content).toContain("Run metadata");
+    expect(content).toContain("Do not add hosted database requirements");
     expect(content).toContain("Do not use skill-local database helper code");
   });
 });

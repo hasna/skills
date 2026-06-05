@@ -1,4 +1,4 @@
-import type { PublicSkillPricing } from "../skills/pricing";
+import type { PublicSkillPricing } from "./pricing";
 
 export const REMOTE_SKILL_RUN_CONTRACT_VERSION = 1 as const;
 

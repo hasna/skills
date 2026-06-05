@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { getPublicSkillPricing } from "../platform/skills/pricing.js";
+import { getPublicSkillPricing } from "./pricing.js";
 import { getSkill } from "./registry.js";
 import { getSkillRequirements, runSkill } from "./skillinfo.js";
 

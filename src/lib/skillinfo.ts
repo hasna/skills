@@ -7,7 +7,7 @@ import { join } from "path";
 import { getInstalledSkills, getSkillPath } from "./installer.js";
 import { getSkill, loadRegistry, type SkillMeta } from "./registry.js";
 import { normalizeSkillName } from "./utils.js";
-import { isPremiumSkill } from "../platform/skills/pricing.js";
+import { isPremiumSkill } from "./pricing.js";
 
 export interface SkillDocs {
   skillMd: string | null;
@@ -37,7 +37,6 @@ const HOSTED_PROVIDER_ENV_PREFIXES = [
   "EXA_",
   "FIRECRAWL_",
   "AWS_",
-  "STRIPE_",
 ];
 
 /**

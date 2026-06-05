@@ -1,10 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { registerCloudTools } from "@hasna/cloud";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { buildServer } from "./server.js";
 
-export const MCP_HTTP_DEFAULT_PORT = 8879;
+export const MCP_HTTP_DEFAULT_PORT = 8836;
 export const MCP_HTTP_SERVICE_NAME = "skills";
 
 export function isMcpHttpMode(argv: string[] = process.argv.slice(2)): boolean {
@@ -34,7 +33,6 @@ async function connectMcpForNode(): Promise<{
   transport: StreamableHTTPServerTransport;
 }> {
   const server = buildServer();
-  registerCloudTools(server, MCP_HTTP_SERVICE_NAME);
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,

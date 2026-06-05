@@ -8,7 +8,7 @@ import {
   getSkillRunCostCents,
   isPremiumSkill,
   MUSIC_ALBUM_SONG_COUNTS,
-} from "../platform/skills/pricing";
+} from "./pricing";
 
 const NEW_MEDIA_SKILLS = [
   "music-album",

@@ -124,6 +124,44 @@ export {
 } from "./lib/remote-registry.js";
 
 export {
+  ARTICLE_GENERATION_SLUG,
+  getAllPremiumSlugs,
+  getPublicSkillPricing,
+  getSkillCatalogBillingFields,
+  getSkillPricing,
+  getSkillRunCostCents,
+  isPremiumSkill,
+  validateBlogArticleRunOptions,
+  type BlogArticleRunOptions,
+  type BlogArticleValidationResult,
+  type PublicSkillPricing,
+  type SkillPricing,
+} from "./lib/pricing.js";
+
+export {
+  getCompactSkillDiscovery,
+  getPublicSkillDiscovery,
+  publicDiscoveryDependencies,
+  publicDiscoveryDocumentation,
+  publicDiscoveryEnvVars,
+  publicDiscoveryPriceLabel,
+  sanitizePublicDiscoveryText,
+  type CompactSkillDiscovery,
+  type PublicSkillDiscovery,
+} from "./lib/discovery.js";
+
+export {
+  RemoteSkillsClient,
+  createRemoteSkillsClient,
+} from "./lib/remote-client.js";
+
+export {
+  REMOTE_SKILL_RUN_CONTRACT_VERSION,
+  normalizeRemoteSkillRunContract,
+  type RemoteSkillRunContract,
+} from "./lib/remote-run-contract.js";
+
+export {
   addSchedule,
   listSchedules,
   removeSchedule,

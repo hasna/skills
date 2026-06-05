@@ -53,7 +53,7 @@ const PATTERNS = [
   { name: "Eval Usage", regex: /eval\(/, severity: "MEDIUM" },
   {
     name: "Insecure HTTP",
-    regex: /http:\/\/(?!localhost(?:[:/$]|$)|127\.0\.0\.1(?:[:/$]|$)|0\.0\.0\.0(?:[:/$]|$))/,
+    regex: /http:\/\/(?!localhost(?:[:/$]|$)|127\.0\.0\.1(?:[:/$]|$)|0\.0\.0\.0(?:[:/$]|$)|\$\{)/,
     severity: "LOW",
   },
 ];
