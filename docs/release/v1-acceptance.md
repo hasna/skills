@@ -2,7 +2,7 @@
 
 `@hasna/skills` v1 is accepted when an agent can discover, configure, pin, run,
 and validate skills through the CLI and MCP server from the public npm package,
-with optional hosted execution kept behind explicit setup and auth.
+with hosted execution kept behind explicit setup and auth.
 
 ## Product Acceptance
 
@@ -17,7 +17,12 @@ with optional hosted execution kept behind explicit setup and auth.
 ## CLI Acceptance
 
 - User can run `skills setup --mode local` and get local-only config.
-- User can run `skills setup --mode skills.md --api-url <url>` for hosted mode.
+- User can run `skills setup --mode hosted --api-url <url>` for hosted mode.
+- Interactive setup recommends hosted mode; non-interactive setup remains
+  local-safe unless hosted mode is explicit.
+- User can run `skills auth login` for browser/device-code auth.
+- User can inspect hosted account state with `skills billing status` and create
+  hosted checkout/portal URLs with billing or credit commands.
 - User can list, search, inspect, pin, unpin, quote, validate, and run skills.
 - Premium or hosted skills fail closed without hosted credentials.
 - CLI errors are structured and scriptable with `--json`.

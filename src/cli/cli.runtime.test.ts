@@ -8,8 +8,59 @@ import {
   runCli,
   runCliInCwd,
 } from "./cli.test-utils";
+import { getFirstRunOnboardingMessage, shouldShowFirstRunOnboarding } from "./onboarding";
 
 describe("CLI runtime and misc commands", () => {
+  describe("first-run onboarding guard", () => {
+    test("nudges interactive normal commands until a hosted or local mode is configured", () => {
+      expect(
+        shouldShowFirstRunOnboarding({
+          argv: ["list"],
+          commandName: "list",
+          config: {},
+          isInteractive: true,
+        }),
+      ).toBe(true);
+      expect(
+        shouldShowFirstRunOnboarding({
+          argv: ["list"],
+          commandName: "list",
+          config: { mode: "local" },
+          isInteractive: true,
+        }),
+      ).toBe(false);
+      expect(
+        shouldShowFirstRunOnboarding({
+          argv: ["run", "image"],
+          commandName: "run",
+          config: { mode: "hosted" },
+          isInteractive: true,
+        }),
+      ).toBe(false);
+    });
+
+    test("stays quiet for JSON, help, onboarding, and automation", () => {
+      for (const input of [
+        { argv: ["list", "--json"], commandName: "list", isInteractive: true },
+        { argv: ["list", "--help"], commandName: "list", isInteractive: true },
+        { argv: ["setup"], commandName: "setup", isInteractive: true },
+        { argv: ["auth", "login"], commandName: "auth", isInteractive: true },
+        { argv: ["list"], commandName: "list", isInteractive: false },
+        { argv: ["list"], commandName: "list", isInteractive: true, testMode: true },
+      ]) {
+        expect(shouldShowFirstRunOnboarding({ ...input, config: {} })).toBe(false);
+      }
+    });
+
+    test("points to hosted first and local second without naming skills.md as a mode", () => {
+      const message = getFirstRunOnboardingMessage();
+      expect(message).toContain("skills setup --mode hosted");
+      expect(message).toContain("skills auth login");
+      expect(message).toContain("skills setup --mode local");
+      expect(message).not.toContain("--mode skills.md");
+    });
+  });
+
   describe("setup mode", () => {
     test("stores local mode in project config", async () => {
       const { mkdtempSync, rmSync, readFileSync } = require("fs");
@@ -28,11 +79,11 @@ describe("CLI runtime and misc commands", () => {
       }
     });
 
-    test("stores skills.md mode and API URL", async () => {
+    test("stores hosted mode and API URL while accepting legacy skills.md alias", async () => {
       const { mkdtempSync, rmSync, readFileSync } = require("fs");
       const { tmpdir } = require("os");
       const { join } = require("path");
-      const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-skillsmd-"));
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-hosted-"));
       try {
         const { stdout, exitCode } = await runCliInCwd(
           ["setup", "--mode", "skills.md", "--api-url", "https://skills.example.com/api/v1", "--json"],
@@ -41,14 +92,52 @@ describe("CLI runtime and misc commands", () => {
         );
         expect(exitCode).toBe(0);
         const data = JSON.parse(stdout);
-        expect(data).toMatchObject({ mode: "skills.md", scope: "project" });
+        expect(data).toMatchObject({ mode: "hosted", scope: "project" });
         expect(data.next).toContain("skills auth login");
         const config = JSON.parse(readFileSync(join(tmpDir, "skills.config.json"), "utf8"));
-        expect(config.mode).toBe("skills.md");
+        expect(config.mode).toBe("hosted");
         expect(config.apiUrl).toBe("https://skills.example.com/api/v1");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
+    });
+
+    test("stores canonical hosted mode from --mode hosted", async () => {
+      const { mkdtempSync, rmSync, readFileSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-hosted-canonical-"));
+      try {
+        const { stdout, exitCode } = await runCliInCwd(
+          ["setup", "--mode", "hosted", "--api-url", "https://skills.example.com", "--json"],
+          tmpDir,
+          { HOME: tmpDir },
+        );
+        expect(exitCode).toBe(0);
+        expect(JSON.parse(stdout)).toMatchObject({ mode: "hosted", scope: "project" });
+        expect(JSON.parse(readFileSync(join(tmpDir, "skills.config.json"), "utf8"))).toMatchObject({
+          mode: "hosted",
+          apiUrl: "https://skills.example.com",
+        });
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("hosted account command namespaces", () => {
+    test("exposes billing and credits commands outside auth", async () => {
+      const billing = await runCli(["billing", "--help"]);
+      expect(billing.exitCode).toBe(0);
+      expect(billing.stdout).toContain("status");
+      expect(billing.stdout).toContain("checkout");
+      expect(billing.stdout).toContain("portal");
+      expect(billing.stdout).toContain("buy-credits");
+
+      const credits = await runCli(["credits", "--help"]);
+      expect(credits.exitCode).toBe(0);
+      expect(credits.stdout).toContain("buy");
+      expect(credits.stdout).toContain("packs");
     });
   });
 

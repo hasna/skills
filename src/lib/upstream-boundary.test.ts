@@ -18,13 +18,14 @@ describe("upstream boundary documentation", () => {
   test("separates open-core changes from hosted-wrapper changes", () => {
     expect(content).toContain("Open-Core Changes");
     expect(content).toContain("Hosted-Wrapper Changes");
-    expect(content).toContain("optional compatible API endpoints");
+    expect(content).toContain("compatible API");
     expect(content).toContain("Billing, credits, ledgers");
     expect(content).toContain("Deployment infrastructure");
   });
 
-  test("preserves local-first upstream behavior", () => {
-    expect(content).toContain("Preserve local-first behavior");
-    expect(content).toContain("remote mode additive");
+  test("preserves local-capable upstream behavior", () => {
+    expect(content).toContain("Preserve local-capable behavior");
+    expect(content).toContain("Keep hosted mode explicit");
+    expect(content).toContain("local-safe");
   });
 });

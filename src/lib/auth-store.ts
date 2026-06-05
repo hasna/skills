@@ -1,10 +1,11 @@
-import { mkdirSync, readFileSync, writeFileSync, unlinkSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { loadConfig } from "./config.js";
 
-const AUTH_DIR = join(homedir(), ".skills");
+const AUTH_DIR = join(homedir(), ".hasna", "skills");
 const AUTH_FILE = join(AUTH_DIR, "auth.json");
+const LEGACY_AUTH_FILE = join(homedir(), ".skills", "auth.json");
 
 export interface AuthConfig {
   apiKey: string;
@@ -19,7 +20,7 @@ let cachedConfig: AuthConfig | null | undefined;
 export function getAuthConfig(): AuthConfig | null {
   if (cachedConfig !== undefined) return cachedConfig;
   try {
-    const raw = readFileSync(AUTH_FILE, "utf-8");
+    const raw = readFileSync(existsSync(AUTH_FILE) ? AUTH_FILE : LEGACY_AUTH_FILE, "utf-8");
     const config = JSON.parse(raw) as AuthConfig;
     if (!config.apiKey || !config.email) {
       cachedConfig = null;
@@ -34,13 +35,14 @@ export function getAuthConfig(): AuthConfig | null {
 }
 
 export function saveAuthConfig(config: AuthConfig): void {
-  mkdirSync(AUTH_DIR, { recursive: true });
+  mkdirSync(AUTH_DIR, { recursive: true, mode: 0o700 });
   writeFileSync(AUTH_FILE, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
   cachedConfig = config;
 }
 
 export function clearAuthConfig(): void {
   try { unlinkSync(AUTH_FILE); } catch {}
+  try { unlinkSync(LEGACY_AUTH_FILE); } catch {}
   cachedConfig = null;
 }
 

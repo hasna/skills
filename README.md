@@ -19,6 +19,13 @@ Requires [Bun](https://bun.sh/) 1.0+.
 # Browse skills interactively
 skills
 
+# Hosted setup is the recommended interactive path
+skills setup --mode hosted
+skills auth login
+
+# Local-only setup stays available and does not require an account
+skills setup --mode local
+
 # Optionally pin a skill preference in this project
 skills pin image
 
@@ -28,8 +35,7 @@ skills setup agents
 # See what a skill needs
 skills info image
 
-# Premium skills run remotely through skills.md
-skills auth login
+# Premium skills run through the configured hosted API
 skills run image "a cat sitting on a windowsill"
 
 # Free/local skills can still use your own provider keys when documented
@@ -39,21 +45,25 @@ OPENAI_API_KEY=... skills run brand-style-guide ./brand-notes.md
 
 ## Remote-Only Premium Skills
 
-Premium skills are SaaS runs. The CLI and MCP server submit them to the
-skills.md API, create local run metadata, and then expose status and artifact
-commands. They do not fall back to bundled local execution when auth is missing
-or the platform is unavailable.
+Premium skills are hosted SaaS runs. The CLI and MCP server submit them to the
+configured hosted API, create local run metadata, and then expose status and
+artifact commands. They do not fall back to bundled local execution when auth is
+missing or the platform is unavailable.
 
 Use `SKILLS_API_KEY` or `skills auth login` for premium hosted execution:
 
 ```bash
+skills setup --mode hosted
 skills auth login
 skills run image "editorial product photo on a white sweep"
 skills runs status <run-id>
 skills exports download <run-id>
 ```
 
-`SKILLS_API_KEY` is the skills.md account credential. It is not a provider
+`skills auth login` uses browser/device-code auth by default. Email code login
+is still available with `skills auth login --email you@example.com`.
+
+`SKILLS_API_KEY` is the hosted account credential. It is not a provider
 credential. Provider keys such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or
 `GEMINI_API_KEY` remain supported only for free/local OSS skills whose
 requirements explicitly document local provider use.
@@ -67,6 +77,8 @@ requirements explicitly document local provider use.
 | `skills pin --category "Development Tools"` | | Pin all skills in a category |
 | `skills unpin <name>` | | Remove a project pin |
 | `skills pins list` | | List pinned skills |
+| `skills setup --mode hosted` | | Configure hosted mode with a compatible API origin |
+| `skills setup --mode local` | | Configure local-only mode without hosted credentials |
 | `skills setup agents` | | Register the Skills MCP server with all supported agents |
 | `skills list` | `ls` | List available skills (filter with `-c`, `--pinned`, `-t`, `--brief`) |
 | `skills search <query>` | `s` | Search by name, description, or tags |
@@ -84,7 +96,11 @@ requirements explicitly document local provider use.
 | `skills doctor` | | Check env vars, system deps, and pinned skill health |
 | `skills test [name]` | | Test skill readiness (env, system, npm deps) |
 | `skills outdated` | | Compare pinned vs registry versions |
-| `skills auth [name]` | | Show/set auth env vars in `.env` |
+| `skills auth login` | | Sign in to the hosted API with browser/device-code auth or email code |
+| `skills billing status` | | Show hosted account plan and balance |
+| `skills billing checkout` | | Create a hosted subscription checkout session |
+| `skills billing portal` | | Create a hosted customer portal session |
+| `skills credits buy <amount>` | | Create a hosted credit-pack checkout session |
 | `skills setup-info` | | Version, pinned skills, agent configs, paths |
 | `skills export` | | Export pinned skills as JSON |
 | `skills import <file>` | | Pin skills from a JSON export |
@@ -196,13 +212,17 @@ skills mcp --register claude    # Auto-register with Claude Code
 skills mcp --register all       # Register with all supported agents
 ```
 
-## Cloud Sync
+## Hosted Account
 
 ```bash
-cloud setup
-cloud sync push --service skills
-cloud sync pull --service skills
+skills setup --mode hosted
+skills auth login
+skills billing status
 ```
+
+Hosted account, billing, and credit management use the configured hosted API.
+The public package only stores local configuration and CLI credentials; Stripe,
+customer records, and hosted execution remain platform concerns.
 
 ## Dashboard
 
@@ -254,8 +274,8 @@ folders and agent-native skill folders are never used as skill libraries.
 └── tmp/
 ```
 
-Auth stays global in `~/.skills/auth.json`. Registry and doc caches belong in
-`~/.cache/skills` or the remote API, not inside project `.skills`.
+Auth stays global in `~/.hasna/skills/auth.json`. Registry and doc caches
+belong in `~/.cache/skills` or the remote API, not inside project `.skills`.
 
 ## Development
 
@@ -287,7 +307,7 @@ Project `.skills/` is reserved for runtime state and outputs.
 ## Data Directory
 
 Global configuration is stored in `~/.hasna/skills/`. Auth is stored in
-`~/.skills/auth.json`. Project runtime data is stored in `.skills/runs`,
+`~/.hasna/skills/auth.json`. Project runtime data is stored in `.skills/runs`,
 `.skills/exports`, `.skills/tmp`, and optional `.skills/project.json`.
 
 ## License

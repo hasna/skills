@@ -105,9 +105,9 @@ export function registerRuntime(parent: Command) {
 
   const setup = parent
     .command("setup")
-    .description("Choose local-only mode, skills.md mode, or agent integrations")
-    .option("--mode <mode>", "Runtime mode: local or skills.md")
-    .option("--api-url <url>", "skills.md-compatible API origin for hosted mode")
+    .description("Choose hosted mode, local-only mode, or agent integrations")
+    .option("--mode <mode>", "Runtime mode: hosted or local")
+    .option("--api-url <url>", "Hosted API origin")
     .option("--global", "Save setup choice globally", false)
     .option("--json", "Output setup result as JSON", false)
     .action(async (options: SetupCommandOptions) => handleSetup(options));
@@ -169,17 +169,17 @@ async function handleSetup(options: SetupCommandOptions) {
   let mode = normalizeSetupMode(options.mode);
 
   if (!mode && process.stdin.isTTY && process.stdout.isTTY) {
-    mode = normalizeSetupMode(await promptLine("Use Skills locally or with skills.md? [local/skills.md] "));
+    mode = normalizeSetupMode(await promptLine("Use hosted Skills or local-only mode? [hosted/local] ")) ?? "hosted";
   }
   mode = mode ?? "local";
 
   saveConfig("mode", mode, scope);
-  if (mode === "skills.md") {
+  if (mode === "hosted") {
     saveConfig("apiUrl", options.apiUrl || "https://skills.md", scope);
   }
 
   const config = loadConfig();
-  const next = mode === "skills.md"
+  const next = mode === "hosted"
     ? ["skills auth login", "skills list --remote"]
     : ["skills list", "skills run <skill>"];
   const payload = {
@@ -196,7 +196,7 @@ async function handleSetup(options: SetupCommandOptions) {
 
   console.log(chalk.green(`Set Skills mode to ${mode}`));
   console.log(chalk.dim(`  Scope: ${scope}`));
-  if (mode === "skills.md") {
+  if (mode === "hosted") {
     console.log(chalk.dim(`  API: ${config.apiUrl || "https://skills.md"}`));
     console.log(chalk.dim("  Next: skills auth login"));
   } else {
@@ -205,12 +205,12 @@ async function handleSetup(options: SetupCommandOptions) {
   }
 }
 
-function normalizeSetupMode(value: string | undefined): "local" | "skills.md" | undefined {
+function normalizeSetupMode(value: string | undefined): "local" | "hosted" | undefined {
   if (!value) return undefined;
   const normalized = value.trim().toLowerCase();
   if (normalized === "local" || normalized === "offline") return "local";
-  if (normalized === "skills.md" || normalized === "skillsmd" || normalized === "remote" || normalized === "hosted") return "skills.md";
-  throw new Error("Invalid setup mode. Use local or skills.md.");
+  if (normalized === "skills.md" || normalized === "skillsmd" || normalized === "remote" || normalized === "hosted") return "hosted";
+  throw new Error("Invalid setup mode. Use hosted or local.");
 }
 
 function promptLine(question: string): Promise<string> {
@@ -307,7 +307,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       const { getApiKey } = await import("../../lib/auth-store.js");
       const apiKey = getApiKey();
       if (!apiKey) {
-        const error = `${skill.name} is a hosted skill (${pricing.formatCost(costCents ?? 0)}). Run: skills setup --mode skills.md && skills auth login`;
+        const error = `${skill.name} is a hosted skill (${pricing.formatCost(costCents ?? 0)}). Run: skills setup --mode hosted && skills auth login`;
         writeRunLogs(runContext, "", error + "\n");
         const run = completeSkillRun(runContext, { status: "failed", error, costCents });
         if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, pricing: publicPricing, run }, null, 2));
@@ -383,7 +383,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
         process.exitCode = exitCode;
         return;
       } catch (err) {
-        const error = `Hosted skill ${skill.name} requires skills.md access: ${(err as Error).message}`;
+        const error = `Hosted skill ${skill.name} requires hosted access: ${(err as Error).message}`;
         writeRunLogs(runContext, "", error + "\n");
         const run = completeSkillRun(runContext, { status: "failed", error, costCents });
         if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, pricing: publicPricing, run }, null, 2));
@@ -475,7 +475,7 @@ async function handleRunsStatus(runId: string, options: { json: boolean }) {
   const { getApiKey } = await import("../../lib/auth-store.js");
   const apiKey = getApiKey();
   if (!apiKey) {
-    const error = "Remote run status requires skills.md access. Run: skills auth login";
+    const error = "Remote run status requires hosted access. Run: skills auth login";
     if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, error }, null, 2));
     else console.error(chalk.red(error));
     process.exitCode = 1;
@@ -564,7 +564,7 @@ async function handleExportsDownload(runId: string, options: { json: boolean }) 
   const { getApiKey } = await import("../../lib/auth-store.js");
   const apiKey = getApiKey();
   if (!apiKey) {
-    const error = "Remote artifact downloads require skills.md access. Run: skills auth login";
+    const error = "Remote artifact downloads require hosted access. Run: skills auth login";
     if (options.json) console.log(JSON.stringify({ error }, null, 2));
     else console.error(chalk.red(error));
     process.exitCode = 1;

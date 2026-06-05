@@ -71,6 +71,17 @@ model-provider key and must be documented separately from provider keys such as
 `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, or other
 skill-specific local credentials.
 
+The OSS CLI may include hosted client commands such as `skills auth login`,
+`skills billing status`, `skills billing checkout`, `skills billing portal`,
+and `skills credits buy`. Those commands are adapters over hosted HTTP APIs.
+They must not contain Stripe keys, webhook handlers, entitlement ledgers,
+tenant database logic, hosted auth servers, or worker execution logic.
+
+The canonical hosted setup mode is `hosted`, not a website/domain name. Hosted
+wrappers can still set a default API origin such as `https://skills.md`, and
+the CLI may preserve legacy aliases like `skills.md` or `remote` for
+compatibility.
+
 ## Generated Registry Sync
 
 A hosted registry should be populated from upstream through an idempotent sync

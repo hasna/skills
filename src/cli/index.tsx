@@ -7,6 +7,7 @@ import pkg from "../../package.json" with { type: "json" };
 import { App } from "./components/App.js";
 import { loadBasicRegistry } from "../lib/registry.js";
 import { getCompactSkillDiscovery } from "../lib/discovery.js";
+import { maybePrintFirstRunOnboarding } from "./onboarding.js";
 
 const isTTY = (process.stdout.isTTY ?? false) && (process.stdin.isTTY ?? false);
 
@@ -76,5 +77,9 @@ registerAuth(program);
 
 const { registerFeedback } = await import("./commands/feedback.js");
 registerFeedback(program);
+
+program.hook("preAction", (_thisCommand, actionCommand) => {
+  maybePrintFirstRunOnboarding(actionCommand, process.argv.slice(2), isTTY);
+});
 
 await program.parseAsync();

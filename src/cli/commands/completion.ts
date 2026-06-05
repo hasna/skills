@@ -8,7 +8,7 @@ import { SKILLS, CATEGORIES } from "../../lib/registry.js";
 const subcommands = [
   "interactive", "install", "pin", "unpin", "pins", "list", "search", "info", "docs", "requires",
   "run", "init", "remove", "update", "categories", "tags", "mcp", "serve",
-  "self-update", "completion", "export", "import", "doctor", "auth", "env-check",
+  "self-update", "completion", "export", "import", "doctor", "auth", "billing", "credits", "env-check",
   "setup-info", "test", "outdated", "config", "create", "sync", "validate", "diff",
   "schedule", "registry", "feedback", "quote",
 ];

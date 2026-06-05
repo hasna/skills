@@ -205,7 +205,7 @@ describe("MCP Server", () => {
     }
   }, 15000);
 
-  test("run_skill fails closed for premium skills when skills.md access fails", async () => {
+  test("run_skill fails closed for premium skills when hosted access fails", async () => {
     const { mkdtempSync, rmSync } = require("fs");
     const { tmpdir } = require("os");
     const tmpDir = mkdtempSync(join(tmpdir(), "mcp-premium-skillsmd-down-"));
@@ -228,7 +228,7 @@ describe("MCP Server", () => {
       expect(response.result.isError).toBe(true);
       const error = JSON.parse(response.result.content[0].text);
       expect(error).toMatchObject({ code: "PLATFORM_ERROR" });
-      expect(error.message).toContain("requires skills.md access");
+      expect(error.message).toContain("requires hosted access");
       expect(error.message).not.toContain("Skill Image CLI");
     } finally {
       await client.close();

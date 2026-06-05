@@ -14,7 +14,7 @@ import { join, dirname } from "path";
 import { homedir } from "os";
 
 export interface SkillsConfig {
-  mode?: "local" | "skills.md";
+  mode?: "local" | "hosted";
   defaultAgent?: "claude" | "codex" | "gemini" | "pi" | "opencode" | "all";
   defaultScope?: "global" | "project";
   format?: "compact" | "json" | "csv";
@@ -22,22 +22,37 @@ export interface SkillsConfig {
 }
 
 const ENUM_KEYS: Partial<Record<keyof SkillsConfig, string[]>> = {
-  mode: ["local", "skills.md"],
   defaultAgent: ["claude", "codex", "gemini", "pi", "opencode", "all"],
   defaultScope: ["global", "project"],
   format: ["compact", "json", "csv"],
 };
 
 const STRING_KEYS = ["apiUrl"] as const satisfies readonly (keyof SkillsConfig)[];
+const MODE_VALUES = ["local", "hosted"] as const;
+const MODE_ALIASES: Record<string, (typeof MODE_VALUES)[number]> = {
+  local: "local",
+  offline: "local",
+  hosted: "hosted",
+  remote: "hosted",
+  "skills.md": "hosted",
+  skillsmd: "hosted",
+};
 
 function validKeys(): string[] {
-  return [...Object.keys(ENUM_KEYS), ...STRING_KEYS];
+  return ["mode", ...Object.keys(ENUM_KEYS), ...STRING_KEYS];
+}
+
+function allowedValues(key: keyof SkillsConfig): readonly string[] | undefined {
+  if (key === "mode") return MODE_VALUES;
+  return ENUM_KEYS[key];
 }
 
 function normalizeConfigValue(key: keyof SkillsConfig, value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
 
-  const allowed = ENUM_KEYS[key];
+  if (key === "mode") return MODE_ALIASES[value.trim().toLowerCase()];
+
+  const allowed = allowedValues(key);
   if (allowed) return allowed.includes(value) ? value : undefined;
 
   if (key === "apiUrl") {
@@ -128,7 +143,7 @@ export function saveConfig(key: string, value: string, scope: ConfigScope = "pro
 
   const normalized = normalizeConfigValue(key as keyof SkillsConfig, value);
   if (normalized === undefined) {
-    const allowed = ENUM_KEYS[key as keyof SkillsConfig];
+    const allowed = allowedValues(key as keyof SkillsConfig);
     throw new Error(
       allowed
         ? `Invalid value '${value}' for ${key}. Allowed: ${allowed.join(", ")}`

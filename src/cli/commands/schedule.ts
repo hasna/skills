@@ -156,7 +156,7 @@ async function executeScheduledSkill(skillName: string, args: string[]) {
     const { getApiKey } = await import("../../lib/auth-store.js");
     const apiKey = getApiKey();
     if (!apiKey) {
-      throw new Error(`${skill.name} is a hosted skill. Run: skills setup --mode skills.md && skills auth login`);
+      throw new Error(`${skill.name} is a hosted skill. Run: skills setup --mode hosted && skills auth login`);
     }
 
     const { RemoteSkillsClient } = await import("../../lib/remote-client.js");

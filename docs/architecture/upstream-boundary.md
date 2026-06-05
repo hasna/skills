@@ -17,7 +17,8 @@ service code must stay outside the open repository and outside the npm package.
 Changes belong in `hasna/skills` when they are useful without a private hosted
 service:
 
-- CLI support for local setup and optional compatible API endpoints.
+- CLI support for hosted-aware setup, local-only setup, and compatible API
+  endpoints.
 - Machine-readable `--json` output for CLI commands.
 - MCP tool schema, registration, and transport improvements.
 - Skill packaging, metadata, validation, and registry improvements.
@@ -41,8 +42,9 @@ These belong in a hosted wrapper, not the open core:
 
 ## Sync Rules
 
-1. Preserve local-first behavior for the open package.
-2. Keep remote mode additive and explicit through config and credentials.
+1. Preserve local-capable behavior for the open package.
+2. Keep hosted mode explicit through config and credentials, with local-safe
+   behavior for non-interactive environments.
 3. Expose reusable contracts from `src/index.ts` before wrappers depend on
    them.
 4. Do not publish private cloud dependencies, protected source, or hosted

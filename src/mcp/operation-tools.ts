@@ -279,7 +279,7 @@ export function registerOperationTools(server: McpServer): void {
 
     if (isPremiumSkill(skillName) && !apiKey) {
       const cost = formatCost(costCents ?? 0);
-      const error = `${skillName} is a hosted skill (${cost}). Run: skills setup --mode skills.md && skills auth login`;
+      const error = `${skillName} is a hosted skill (${cost}). Run: skills setup --mode hosted && skills auth login`;
       writeRunLogs(runContext, "", error + "\n");
       const run = completeSkillRun(runContext, { status: "failed", error, costCents });
       return mcpError("AUTH_REQUIRED", `${error}. Local run metadata: ${run.paths.runDir}/run.json`, ["skills auth login"]);
@@ -314,9 +314,9 @@ export function registerOperationTools(server: McpServer): void {
           nextActions: remoteRunNextActions(remoteRunId),
         });
       } catch (err) {
-        console.error(`[skills] skills.md API failed for ${skillName}, falling back to local:`, (err as Error).message);
+        console.error(`[skills] hosted API failed for ${skillName}, falling back to local:`, (err as Error).message);
         if (isPremiumSkill(skillName)) {
-          const error = `Hosted skill ${skillName} requires skills.md access: ${(err as Error).message}`;
+          const error = `Hosted skill ${skillName} requires hosted access: ${(err as Error).message}`;
           writeRunLogs(runContext, "", error + "\n");
           const localRun = completeSkillRun(runContext, { status: "failed", error });
           return mcpError("PLATFORM_ERROR", `${error}. Local run metadata: ${localRun.paths.runDir}/run.json`);
@@ -358,7 +358,7 @@ export function registerOperationTools(server: McpServer): void {
     const { getApiKey } = await import("../lib/auth-store.js");
     const apiKey = getApiKey();
     if (!apiKey) {
-      return mcpError("AUTH_REQUIRED", "Remote run status requires skills.md access. Run: skills auth login", ["skills auth login"]);
+      return mcpError("AUTH_REQUIRED", "Remote run status requires hosted access. Run: skills auth login", ["skills auth login"]);
     }
 
     const localRun = findSkillRun(run_id);

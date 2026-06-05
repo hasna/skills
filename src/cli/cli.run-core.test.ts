@@ -215,7 +215,7 @@ describe("CLI run core", () => {
       }
     });
 
-    test("premium skills fail closed when the skills.md API is unavailable", async () => {
+    test("premium skills fail closed when the hosted API is unavailable", async () => {
       const { mkdtempSync, rmSync } = require("fs");
       const { tmpdir } = require("os");
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-premium-skillsmd-down-"));
@@ -241,7 +241,7 @@ describe("CLI run core", () => {
         const data = JSON.parse(stdout);
         expect(stderr).toBe("");
         expect(exitCode).not.toBe(0);
-        expect(data.error).toContain("requires skills.md access");
+        expect(data.error).toContain("requires hosted access");
         expect(data.stdout).toBeUndefined();
         expect(data.run.remote).toBe(true);
         expect(data.run.status).toBe("failed");

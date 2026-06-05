@@ -1,8 +1,9 @@
 # @hasna/skills Product Brief
 
-`@hasna/skills` is a local-first skill library, CLI, and MCP server for AI
-coding agents. It gives agents a reusable catalog of documented skills without
-requiring a hosted account, private infrastructure, or source-copy installs.
+`@hasna/skills` is a hosted-aware, local-capable skill library, CLI, and MCP
+server for AI coding agents. Interactive onboarding can recommend a compatible
+hosted API, while local-only usage remains available without requiring a hosted
+account, private infrastructure, or source-copy installs.
 
 The open package can optionally talk to a compatible hosted API such as
 skills.md for remote-only skills. That remote path is explicit configuration,
@@ -22,7 +23,7 @@ not a dependency of the core package.
 
 - Browse, search, inspect, and pin bundled skills from the CLI or MCP.
 - Run free or explicitly local skills on the user's machine.
-- Configure first-run mode as local-only or a compatible hosted API.
+- Configure first-run mode as hosted or local-only.
 - Submit hosted skills to a remote API when the skill contract says the source
   is server-executed.
 - Export machine-readable registry, MCP, config, quote, run, and validation
@@ -35,8 +36,9 @@ not a dependency of the core package.
 V1 must keep the public package useful on its own:
 
 - `skills` CLI and `skills-mcp` server ship from npm package `@hasna/skills`.
-- Local setup supports local-only mode without API credentials.
-- Optional hosted setup stores a configurable API URL and uses explicit auth.
+- Interactive setup can recommend hosted mode, while non-interactive setup stays
+  safe for local/CI use unless hosted mode is explicit.
+- Hosted setup stores a configurable API URL and uses explicit client auth.
 - Premium or remote-only skills fail closed without hosted credentials and do
   not fall back to bundled local execution.
 - Public package exports expose reusable registry, config, validation,
@@ -80,7 +82,7 @@ server-owned.
 Agent-native means the core workflow works from tools an agent already has:
 
 - Discover: list and search skills through CLI and MCP.
-- Configure: choose local mode or a compatible hosted API.
+- Configure: choose hosted mode or local-only mode.
 - Execute: run local skills directly or submit hosted skills remotely.
 - Inspect: poll remote status, read local logs, and retrieve exports.
 - Validate: expose package and skill checks as scriptable commands.
