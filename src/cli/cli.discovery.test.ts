@@ -253,6 +253,17 @@ describe("CLI discovery", () => {
       expect(data.length).toBe(EXPECTED_ALL_SKILL_COUNT);
     });
 
+    test("outputs complete full JSON when stdout is piped repeatedly", async () => {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const { stdout, exitCode } = await runCli(["list", "--all", "--json"]);
+        expect(exitCode).toBe(0);
+        expect(stdout.length).toBeGreaterThan(65_536);
+        const data = JSON.parse(stdout);
+        expect(Array.isArray(data)).toBe(true);
+        expect(data.length).toBe(EXPECTED_ALL_SKILL_COUNT);
+      }
+    });
+
     test("lists by category with --json", async () => {
       const { stdout } = await runCli(["list", "--category", "Event Management", "--all", "--json"]);
       const data = JSON.parse(stdout);

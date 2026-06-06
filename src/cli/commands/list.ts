@@ -35,7 +35,7 @@ export function registerBrowse(parent: Command) {
     .option("--brief", "One line per skill: name \u2014 description [category]", false)
     .option("--format <format>", "Output format: compact (names only) or csv (name,category,price,description)")
     .action((options) => {
-      void handleList(options).catch(handleBrowseError);
+      return handleList(options).catch(handleBrowseError);
     });
 
   // Search
@@ -52,7 +52,7 @@ export function registerBrowse(parent: Command) {
     .option("--remote", "Use remote registry from SKILLS_API_URL or config apiUrl", false)
     .description("Search for skills")
     .action((query: string, options) => {
-      void handleSearch(query, options).catch(handleBrowseError);
+      return handleSearch(query, options).catch(handleBrowseError);
     });
 
   // Categories
@@ -62,7 +62,7 @@ export function registerBrowse(parent: Command) {
     .option("--remote", "Use remote registry from SKILLS_API_URL or config apiUrl", false)
     .description("List all categories")
     .action((options: { json: boolean; remote: boolean }) => {
-      void handleCategories(options).catch(handleBrowseError);
+      return handleCategories(options).catch(handleBrowseError);
     });
 
   // Tags
@@ -72,7 +72,7 @@ export function registerBrowse(parent: Command) {
     .option("--remote", "Use remote registry from SKILLS_API_URL or config apiUrl", false)
     .description("List all unique tags with counts")
     .action((options: { json: boolean; remote: boolean }) => {
-      void handleTags(options).catch(handleBrowseError);
+      return handleTags(options).catch(handleBrowseError);
     });
 }
 
