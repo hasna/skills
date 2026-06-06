@@ -37,17 +37,6 @@ import {
   requiresAI,
   getFormatCategory,
 } from './types';
-import {
-  convertImage,
-  convertDocument,
-  convertData,
-  convertWithAI,
-  pdfToText,
-  imagesToPdf,
-  getPdfMetadata,
-  getImageMetadata,
-} from './converters';
-
 // Parse command line arguments
 function parseArgs(): {
   command: string;
@@ -285,6 +274,7 @@ async function showInfo(filePath: string): Promise<void> {
   // Format-specific info
   if (category === 'image') {
     try {
+      const { getImageMetadata } = await import('./converters/image');
       const metadata = await getImageMetadata(filePath);
       console.log(`Dimensions: ${metadata.width}x${metadata.height}`);
       console.log(`Channels: ${metadata.channels}`);
@@ -293,6 +283,7 @@ async function showInfo(filePath: string): Promise<void> {
     }
   } else if (format === 'pdf') {
     try {
+      const { getPdfMetadata } = await import('./converters/pdf');
       const metadata = await getPdfMetadata(filePath);
       console.log(`Pages: ${metadata.pageCount}`);
       if (metadata.title) console.log(`Title: ${metadata.title}`);
@@ -335,11 +326,13 @@ async function convert(options: ConvertOptions): Promise<ConvertResult> {
         duration: 0,
       };
     }
+    const { convertWithAI } = await import('./converters/ai');
     return convertWithAI(options);
   }
 
   // Image to image
   if (inputCategory === 'image' && outputCategory === 'image') {
+    const { convertImage } = await import('./converters/image');
     return convertImage(options);
   }
 
@@ -351,21 +344,25 @@ async function convert(options: ConvertOptions): Promise<ConvertResult> {
 
   // PDF to text
   if (inputFormat === 'pdf' && outputFormat === 'txt') {
+    const { pdfToText } = await import('./converters/pdf');
     return pdfToText(options);
   }
 
   // Document conversions
   if (inputCategory === 'document' || outputCategory === 'document') {
+    const { convertDocument } = await import('./converters/document');
     return convertDocument(options);
   }
 
   // Data conversions
   if (inputCategory === 'data' || outputCategory === 'data') {
+    const { convertData } = await import('./converters/data');
     return convertData(options);
   }
 
   // Markup conversions
   if (inputCategory === 'markup' || outputCategory === 'markup') {
+    const { convertDocument } = await import('./converters/document');
     return convertDocument(options);
   }
 
@@ -400,6 +397,7 @@ async function main(): Promise<void> {
 
         // Check if multiple inputs for PDF creation
         if (args.inputs && args.inputs.length > 1 && args.format === 'pdf') {
+          const { imagesToPdf } = await import('./converters/pdf');
           console.log(`\nCombining ${args.inputs.length} images into PDF...`);
           const result = await imagesToPdf(
             args.inputs,
