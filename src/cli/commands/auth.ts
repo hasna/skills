@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import { createInterface } from "readline";
-import { getAuthConfig, saveAuthConfig, clearAuthConfig, getApiUrl } from "../../lib/auth-store.js";
+import { getApiKey, getAuthConfig, saveAuthConfig, clearAuthConfig, getApiUrl } from "../../lib/auth-store.js";
 
 const isTTY = process.stdin.isTTY && process.stdout.isTTY;
 const DEFAULT_DEVICE_POLL_TIMEOUT_MS = 10 * 60 * 1000;
@@ -350,6 +350,8 @@ export function registerAuth(parent: Command) {
 function requireHostedAuth(json?: boolean) {
   const config = getAuthConfig();
   if (config) return config;
+  const apiKey = getApiKey();
+  if (apiKey) return { apiKey };
   const message = "Not signed in. Run: skills auth login";
   if (json) console.log(JSON.stringify({ error: message }));
   else console.log(chalk.dim(message));

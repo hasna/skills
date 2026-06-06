@@ -5,6 +5,55 @@ import { tmpdir } from "os";
 import { runCliInCwd } from "./cli.test-utils";
 
 describe("CLI hosted auth and billing", () => {
+  test("billing commands accept SKILLS_API_KEY without a stored login", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "cli-billing-api-key-"));
+    const seenAuthHeaders: Array<string | null> = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (req) => {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/v1/billing/status" && req.method === "GET") {
+          seenAuthHeaders.push(req.headers.get("authorization"));
+          return Response.json({
+            plan: "pro",
+            balanceCents: 0,
+            balance: "$0.00",
+            subscription: null,
+            hasPaymentMethod: true,
+          });
+        }
+
+        if (url.pathname === "/api/v1/billing/portal" && req.method === "POST") {
+          seenAuthHeaders.push(req.headers.get("authorization"));
+          return Response.json({ url: "https://billing.example/portal" });
+        }
+
+        return Response.json({ error: `missing route ${req.method} ${url.pathname}` }, { status: 404 });
+      },
+    });
+
+    try {
+      const env = {
+        HOME: tmpDir,
+        SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+        SKILLS_API_KEY: "sk_env_billing",
+      };
+
+      const status = await runCliInCwd(["billing", "status", "--json"], tmpDir, env);
+      expect(status.exitCode).toBe(0);
+      expect(JSON.parse(status.stdout)).toMatchObject({ plan: "pro", balance: "$0.00" });
+
+      const portal = await runCliInCwd(["billing", "portal", "--json"], tmpDir, env);
+      expect(portal.exitCode).toBe(0);
+      expect(JSON.parse(portal.stdout)).toMatchObject({ url: "https://billing.example/portal" });
+      expect(seenAuthHeaders).toEqual(["Bearer sk_env_billing", "Bearer sk_env_billing"]);
+      expect(existsSync(join(tmpDir, ".hasna", "skills", "auth.json"))).toBe(false);
+    } finally {
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test("device login stores credentials and billing commands call the hosted API", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-device-auth-"));
     const seenAuthHeaders: Array<string | null> = [];
