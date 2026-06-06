@@ -1,0 +1,11 @@
+{
+  "name": "brand-assets",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hosted premium brand asset discovery package",
+  "type": "module",
+  "skills": {
+    "runtime": "hosted",
+    "source": "remote"
+  }
+}

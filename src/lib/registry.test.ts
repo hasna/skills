@@ -1,4 +1,6 @@
 import { describe, test, expect } from "bun:test";
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import {
   SKILLS,
   CATEGORIES,
@@ -14,6 +16,15 @@ import {
   type SkillMeta,
   type Category,
 } from "./registry";
+
+function bundledSkillPackageNames(): string[] {
+  const skillsDir = join(process.cwd(), "skills");
+  return readdirSync(skillsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((name) => existsSync(join(skillsDir, name, "package.json")))
+    .sort();
+}
 
 describe("registry", () => {
   describe("SKILLS", () => {
@@ -43,6 +54,11 @@ describe("registry", () => {
       for (const skill of SKILLS) {
         expect(categorySet.has(skill.category)).toBe(true);
       }
+    });
+
+    test("matches bundled skill package directories", () => {
+      const registryNames = SKILLS.map((skill) => skill.name).sort();
+      expect(registryNames).toEqual(bundledSkillPackageNames());
     });
   });
 

@@ -2,6 +2,13 @@ import type { SkillMeta } from "../registry-types.js";
 
 export const DESIGN_BRANDING_SKILLS: SkillMeta[] = [
   {
+    name: "brand-assets",
+    displayName: "Brand Assets",
+    description: "Fetch official brand assets from a website or brand name with logos, PNG sizes, palette, typography, source metadata, and manifests",
+    category: "Design & Branding",
+    tags: ["brand", "logo", "assets", "palette", "typography", "premium", "remote"],
+  },
+  {
     name: "icon-pack",
     displayName: "Icon Pack",
     description: "Generate a coordinated set of high-quality icons delivered as SVGs and transparent PNGs",

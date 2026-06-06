@@ -56,6 +56,7 @@ export const MUSIC_ALBUM_SONG_COUNTS = [7, 14, 21] as const;
 const MUSIC_ALBUM_COST_CENTS_PER_SONG = 150;
 
 export const PREMIUM_SKILLS: SkillPricing[] = [
+  { slug: "brand-assets", displayName: "Brand Assets", tier: "premium", costCents: 200, providers: ["hosted"], description: "Hosted brand asset discovery package with logos, PNG sizes, palette, typography, source metadata, and manifest" },
   { slug: "icon-pack", displayName: "Icon Pack", tier: "premium", costCents: 200, providers: ["hosted"], description: "Hosted coordinated icon pack with SVGs, transparent PNGs, size variants, and manifest" },
   { slug: "logo-design", displayName: "Logo Design", tier: "premium", costCents: 50, providers: ["hosted"], description: "Hosted multi-variant logo package with transparent PNGs, vector-style SVGs, usage notes, and manifest" },
   { slug: "deepresearch", displayName: "Deep Research", tier: "premium", costCents: 20, providers: ["exa"], description: "Agentic web research with semantic search and synthesis" },
