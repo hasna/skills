@@ -87,6 +87,13 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     tags: ["diff", "comparison", "files", "code-review"],
   },
   {
+    name: "evm-tx-decoder",
+    displayName: "EVM Transaction Decoder",
+    description: "Decode EVM transaction calldata into function selectors, known ABI signatures, and 32-byte word layout",
+    category: "Development Tools",
+    tags: ["web3", "ethereum", "evm", "blockchain", "calldata", "abi", "solidity"],
+  },
+  {
     name: "generate-api-client",
     displayName: "Generate API Client",
     description: "Generate API client libraries from OpenAPI specs and documentation",
