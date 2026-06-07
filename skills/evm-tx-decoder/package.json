@@ -1,0 +1,38 @@
+{
+  "name": "evm-tx-decoder",
+  "version": "0.1.0",
+  "description": "Decode EVM transaction calldata: function selectors, known ABI signatures, and 32-byte word layout",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "evm-tx-decoder": "src/index.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "SKILL.md"
+  ],
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "keywords": [
+    "web3",
+    "ethereum",
+    "evm",
+    "blockchain",
+    "calldata",
+    "abi",
+    "skill",
+    "claude",
+    "codex"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}
