@@ -1,0 +1,33 @@
+{
+  "name": "onchain-skill-loader",
+  "version": "0.6.0",
+  "description": "Offline EVM reference — function selectors, chain IDs, Web3 hints",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "onchain-skill-loader": "src/index.ts"
+  },
+  "files": [
+    "src",
+    "data",
+    "README.md",
+    "SKILL.md",
+    "CLAUDE.md"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  },
+  "keywords": [
+    "web3",
+    "evm",
+    "reference",
+    "selectors",
+    "smart-contracts"
+  ]
+}

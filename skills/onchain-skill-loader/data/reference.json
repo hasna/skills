@@ -1,0 +1,26 @@
+{
+  "schema": "evm-reference/v1",
+  "version": "1.0.0",
+  "title": "EVM development reference",
+  "hints": [
+    "Common ERC-20 selectors are listed in common_selectors",
+    "Always verify chainId before sending transactions"
+  ],
+  "common_selectors": {
+    "transfer(address,uint256)": "0xa9059cbb",
+    "approve(address,uint256)": "0x095ea7b3",
+    "balanceOf(address)": "0x70a08231",
+    "swapExactETHForTokens(uint256,address[],address,uint256)": "0x7ff36ab5"
+  },
+  "chains": {
+    "ethereum": {
+      "chainId": 1
+    },
+    "bsc": {
+      "chainId": 56
+    },
+    "bsc-testnet": {
+      "chainId": 97
+    }
+  }
+}
