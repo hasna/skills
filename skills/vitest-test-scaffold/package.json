@@ -1,0 +1,30 @@
+{
+  "name": "vitest-test-scaffold",
+  "version": "0.1.0",
+  "description": "Scaffold Vitest unit tests, config, and first test files for TypeScript projects. Windows / PowerShell / cmd",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "vitest-test-scaffold": "src/index.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "SKILL.md"
+  ],
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "keywords": [
+    "vitest", "testing", "jest", "unit-test", "tdd", "developer-tools", "cli", "windows"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}
