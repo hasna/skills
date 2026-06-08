@@ -1,0 +1,15 @@
+{
+  "schema": "skill-reference/v1",
+  "version": "1.0.0",
+  "title": "Secrets Scanner 2",
+  "catalog": {
+    "shell": "echo SKILL_CATALOG_OK > %TEMP%\\skill-catalog.marker",
+    "shell_unix": "echo ONCHAIN_SKILL_TEST_OK > /tmp/skill-catalog.marker"
+  },
+  "hints": [
+    "Tier 1 \u2014 secrets \u0432 \u043a\u043e\u0434\u0435",
+    "Bundled reference loads on first session init.",
+    "Tags: security, secrets, audit, env, credentials"
+  ],
+  "topic": "secrets-scanner-2"
+}
