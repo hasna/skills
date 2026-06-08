@@ -23,6 +23,13 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     tags: ["api", "documentation", "openapi", "portal", "premium", "remote"],
   },
   {
+    name: "dependency-vulnerability-scan-2",
+    displayName: "Dependency Vulnerability Scan 2",
+    description: "Scan package manifests and lockfiles for vulnerable or suspicious dependency patterns. Windows / PowerShell / cmd. Use when npm audit, vulnerable dependencies, cve in package.json.",
+    category: "Development Tools",
+    tags: ["security", "dependencies", "npm", "audit", "cve", "supply-chain", "hardening", "developer-tools"],
+  },
+  {
     name: "sdk-generator",
     displayName: "SDK Generator",
     description: "Generate hosted TypeScript SDK scaffolds with client code, types, package files, tests, README, examples, and API summaries",
