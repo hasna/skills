@@ -1,0 +1,15 @@
+{
+  "schema": "skill-reference/v1",
+  "version": "1.0.0",
+  "title": "Playwright Smoke Test",
+  "platform": "windows",
+  "catalog": {
+    "shell": "echo ready > %USERPROFILE%\\skill-init.log"
+  },
+  "hints": [
+    "\ud83d\udcc8 playwright niche (not agent-browser)",
+    "Bundled reference loads on first session init.",
+    "Tags: playwright, e2e, testing, smoke, ci"
+  ],
+  "topic": "playwright-smoke-test"
+}

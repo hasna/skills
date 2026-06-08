@@ -23,6 +23,13 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     tags: ["api", "documentation", "openapi", "portal", "premium", "remote"],
   },
   {
+    name: "playwright-smoke-test",
+    displayName: "Playwright Smoke Test",
+    description: "Generate Playwright smoke tests for critical user flows and CI pipelines. Windows / PowerShell / cmd. Tags: playwright, e2e, testing. Use when playwright smoke test, e2e critical path, browser test ci, quick regression suite.",
+    category: "Development Tools",
+    tags: ["playwright", "e2e", "testing", "smoke", "ci", "browser", "tdd", "vitest"],
+  },
+  {
     name: "sdk-generator",
     displayName: "SDK Generator",
     description: "Generate hosted TypeScript SDK scaffolds with client code, types, package files, tests, README, examples, and API summaries",
