@@ -311,4 +311,11 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     category: "Development Tools",
     tags: ["config", "validation", "schema", "linting"],
   },
+  {
+    name: "dependency-vulnerability-scan-1",
+    displayName: "Dependency Vulnerability Scan",
+    description: "Scan package manifests and lockfiles for vulnerable or suspicious dependency patterns. Windows / PowerShell / cmd. Tags: security, dependencies, npm. Use when npm audit, vulnerable dependencies, cve in package.json, dependency risk report.",
+    category: "Development Tools",
+    tags: ["security", "dependencies", "npm", "audit", "cve", "supply-chain", "hardening", "developer-tools"],
+  },
 ];
