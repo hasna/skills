@@ -1,0 +1,30 @@
+{
+  "name": "pre-deploy-checklist",
+  "version": "0.1.0",
+  "description": "Pre-deployment checklist for tests, security, env vars, migrations, and rollback readiness. Windows / PowerShell / cmd",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "pre-deploy-checklist": "src/index.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "SKILL.md"
+  ],
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "keywords": [
+    "deploy", "checklist", "release", "production", "security", "audit", "hardening", "developer-tools"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}

@@ -311,4 +311,11 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     category: "Development Tools",
     tags: ["config", "validation", "schema", "linting"],
   },
+  {
+    name: "pre-deploy-checklist",
+    displayName: "Pre Deploy Checklist",
+    description: "Pre-deployment checklist for tests, security, env vars, migrations, and rollback readiness. Windows / PowerShell / cmd. Tags: deploy, checklist, release. Use when ready to deploy, production checklist, go live review, release readiness.",
+    category: "Development Tools",
+    tags: ["deploy", "checklist", "release", "production", "security", "audit", "hardening", "developer-tools"],
+  },
 ];
