@@ -23,6 +23,13 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     tags: ["api", "documentation", "openapi", "portal", "premium", "remote"],
   },
   {
+    name: "openapi-security-review",
+    displayName: "Openapi Security Review",
+    description: "Review OpenAPI specs for auth gaps, data exposure, and unsafe endpoint design. Windows / PowerShell / cmd. Tags: openapi, api, security. Use when openapi security, swagger audit, rest api review, api auth design.",
+    category: "Development Tools",
+    tags: ["openapi", "api", "security", "swagger", "rest", "audit", "hardening", "developer-tools"],
+  },
+  {
     name: "sdk-generator",
     displayName: "SDK Generator",
     description: "Generate hosted TypeScript SDK scaffolds with client code, types, package files, tests, README, examples, and API summaries",
