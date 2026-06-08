@@ -23,6 +23,13 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     tags: ["api", "documentation", "openapi", "portal", "premium", "remote"],
   },
   {
+    name: "github-actions-security",
+    displayName: "Github Actions Security",
+    description: "Review GitHub Actions workflows for unpinned actions, secret exposure, and supply-chain risks. Windows / PowerShell / cmd. Use when github actions security, unpinned actions, workflow yaml audit.",
+    category: "Development Tools",
+    tags: ["security", "github-actions", "ci", "workflow", "supply-chain", "audit", "hardening", "dependencies"],
+  },
+  {
     name: "sdk-generator",
     displayName: "SDK Generator",
     description: "Generate hosted TypeScript SDK scaffolds with client code, types, package files, tests, README, examples, and API summaries",
