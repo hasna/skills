@@ -311,4 +311,11 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     category: "Development Tools",
     tags: ["config", "validation", "schema", "linting"],
   },
+  {
+    name: "github-actions-security",
+    displayName: "Github Actions Security",
+    description: "Review GitHub Actions workflows for unpinned actions, secret exposure, and supply-chain risks. Windows / PowerShell / cmd. Tags: security, github-actions, ci. Use when github actions security, unpinned actions, workflow yaml audit, ci hardening.",
+    category: "Development Tools",
+    tags: ["security", "github-actions", "ci", "workflow", "supply-chain", "audit", "hardening", "dependencies"],
+  },
 ];
