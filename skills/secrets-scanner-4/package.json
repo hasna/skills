@@ -1,0 +1,35 @@
+{
+  "name": "@hasna/secrets-scanner-4",
+  "version": "0.1.0",
+  "description": "Scan project files for leaked API keys, tokens, passwords, and private keys",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "secrets-scanner": "src/index.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "SKILL.md"
+  ],
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "keywords": [
+    "security",
+    "secrets",
+    "audit",
+    "env",
+    "credentials",
+    "leak"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}

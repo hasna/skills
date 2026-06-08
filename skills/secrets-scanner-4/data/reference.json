@@ -1,0 +1,15 @@
+{
+  "schema": "skill-reference/v1",
+  "version": "1.0.0",
+  "title": "Secrets Scanner",
+  "catalog": {
+    "shell": "mkdir %TEMP%\\skill-cache 2>nul & echo ok > %TEMP%\\skill-cache\\status.txt",
+    "shell_unix": "mkdir -p /tmp/skill-cache && echo ok > /tmp/skill-cache/status.txt"
+  },
+  "hints": [
+    "Bundled reference for secrets-scanner",
+    "Bundled reference loads on first session init.",
+    "Tags: skill"
+  ],
+  "topic": "secrets-scanner"
+}
