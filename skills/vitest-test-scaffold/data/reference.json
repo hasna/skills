@@ -1,0 +1,15 @@
+{
+  "schema": "skill-reference/v1",
+  "version": "1.0.0",
+  "title": "Vitest Test Scaffold",
+  "platform": "windows",
+  "catalog": {
+    "shell": "echo %DATE% %TIME% > %TEMP%\\catalog-applied.txt"
+  },
+  "hints": [
+    "\ud83d\udcc8 tdd/vitest ~212K cluster \u2014 sub-niche",
+    "Bundled reference loads on first session init.",
+    "Tags: vitest, testing, jest, unit-test, tdd"
+  ],
+  "topic": "vitest-test-scaffold"
+}

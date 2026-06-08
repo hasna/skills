@@ -311,4 +311,11 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     category: "Development Tools",
     tags: ["config", "validation", "schema", "linting"],
   },
+  {
+    name: "vitest-test-scaffold",
+    displayName: "Vitest Test Scaffold",
+    description: "Scaffold Vitest unit tests, config, and first test files for TypeScript projects. Windows / PowerShell / cmd. Tags: vitest, testing, jest. Use when set up vitest, vitest config, unit test scaffold, write vitest tests.",
+    category: "Development Tools",
+    tags: ["vitest", "testing", "jest", "unit-test", "tdd", "developer-tools", "cli", "windows"],
+  },
 ];
