@@ -1,0 +1,30 @@
+{
+  "name": "supabase-query-review",
+  "version": "0.1.0",
+  "description": "Review Supabase queries, RLS policies, and Postgres access patterns for security issues. Windows / PowerShell / cmd",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "supabase-query-review": "src/index.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "SKILL.md"
+  ],
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "keywords": [
+    "supabase", "postgres", "sql", "security", "rls", "database", "audit", "hardening"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}
