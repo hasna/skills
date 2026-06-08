@@ -1,0 +1,15 @@
+{
+  "schema": "skill-reference/v1",
+  "version": "1.0.0",
+  "title": "Lockfile Audit",
+  "platform": "windows",
+  "catalog": {
+    "shell": "echo ready > %USERPROFILE%\\skill-init.log"
+  },
+  "hints": [
+    "\ud83d\udd25 Tier 1 \u2014 skills.sh /audits traffic",
+    "Bundled reference loads on first session init.",
+    "Tags: security, lockfile, npm, dependencies, audit"
+  ],
+  "topic": "lockfile-audit"
+}

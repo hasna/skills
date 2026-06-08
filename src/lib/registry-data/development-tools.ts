@@ -311,4 +311,11 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     category: "Development Tools",
     tags: ["config", "validation", "schema", "linting"],
   },
+  {
+    name: "lockfile-audit",
+    displayName: "Lockfile Audit",
+    description: "Validate lockfiles, detect missing pins, and flag risky dependency patterns. Windows / PowerShell / cmd. Tags: security, lockfile, npm. Use when audit package-lock.json, bun.lock security, pnpm lockfile review, unpinned dependencies.",
+    category: "Development Tools",
+    tags: ["security", "lockfile", "npm", "dependencies", "audit", "hardening", "package-lock", "developer-tools"],
+  },
 ];
