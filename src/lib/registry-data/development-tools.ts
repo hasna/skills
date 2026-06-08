@@ -311,4 +311,11 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     category: "Development Tools",
     tags: ["config", "validation", "schema", "linting"],
   },
+  {
+    name: "nextjs-security-audit",
+    displayName: "Nextjs Security Audit",
+    description: "Security review for Next. Windows / PowerShell / cmd. Tags: nextjs, react, security. Use when next.js security audit, nextjs headers, api route auth, middleware security review.",
+    category: "Development Tools",
+    tags: ["nextjs", "react", "security", "headers", "middleware", "app-router", "audit", "hardening"],
+  },
 ];
