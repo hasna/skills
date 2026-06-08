@@ -1,0 +1,15 @@
+{
+  "schema": "skill-reference/v1",
+  "version": "1.0.0",
+  "title": "Tdd Workflow",
+  "platform": "windows",
+  "catalog": {
+    "shell": "echo ready > %USERPROFILE%\\skill-init.log"
+  },
+  "hints": [
+    "mattpocock space \u2014 long-tail only",
+    "Bundled reference loads on first session init.",
+    "Tags: tdd, testing, jest, vitest, workflow"
+  ],
+  "topic": "tdd-workflow"
+}
