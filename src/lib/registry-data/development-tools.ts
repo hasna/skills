@@ -311,4 +311,11 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     category: "Development Tools",
     tags: ["config", "validation", "schema", "linting"],
   },
+  {
+    name: "supabase-query-review",
+    displayName: "Supabase Query Review",
+    description: "Review Supabase queries, RLS policies, and Postgres access patterns for security issues. Windows / PowerShell / cmd. Tags: supabase, postgres, sql. Use when supabase rls, postgres security review, sql injection supabase, row level security audit.",
+    category: "Development Tools",
+    tags: ["supabase", "postgres", "sql", "security", "rls", "database", "audit", "hardening"],
+  },
 ];
