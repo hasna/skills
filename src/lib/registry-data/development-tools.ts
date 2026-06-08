@@ -256,6 +256,13 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     tags: ["git", "commit", "push", "automation"],
   },
   {
+    name: "secrets-scanner-2",
+    displayName: "Secrets Scanner 2",
+    description: "Scan project files for leaked API keys, tokens, passwords, and private keys. Use when the user asks to find secrets, before commit, in CI, or during security review.",
+    category: "Development Tools",
+    tags: ["security", "secrets", "audit", "env", "credentials", "leak"],
+  },
+  {
     name: "security-audit",
     displayName: "Security Audit",
     description: "Perform security audits on codebases and infrastructure configurations",
