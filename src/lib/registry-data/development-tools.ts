@@ -23,6 +23,13 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     tags: ["api", "documentation", "openapi", "portal", "premium", "remote"],
   },
   {
+    name: "dockerfile-security-scan",
+    displayName: "Dockerfile Security Scan",
+    description: "Scan Dockerfiles for root user, secrets in layers, and container hardening issues. Windows / PowerShell / cmd. Tags: docker, dockerfile, security. Use when dockerfile security, run as root docker, container hardening, docker best practices.",
+    category: "Development Tools",
+    tags: ["docker", "dockerfile", "security", "container", "devops", "audit", "hardening", "developer-tools"],
+  },
+  {
     name: "sdk-generator",
     displayName: "SDK Generator",
     description: "Generate hosted TypeScript SDK scaffolds with client code, types, package files, tests, README, examples, and API summaries",

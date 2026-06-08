@@ -1,0 +1,30 @@
+{
+  "name": "dockerfile-security-scan",
+  "version": "0.1.0",
+  "description": "Scan Dockerfiles for root user, secrets in layers, and container hardening issues. Windows / PowerShell / cmd. Tags: docker, dockerfile, security",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "dockerfile-security-scan": "src/index.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "SKILL.md"
+  ],
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "keywords": [
+    "docker", "dockerfile", "security", "container", "devops", "audit", "hardening", "developer-tools"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}
