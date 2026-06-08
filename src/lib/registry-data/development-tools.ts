@@ -311,4 +311,11 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     category: "Development Tools",
     tags: ["config", "validation", "schema", "linting"],
   },
+  {
+    name: "secrets-scanner-4",
+    displayName: "Secrets Scanner",
+    description: "Scan project files for leaked API keys, tokens, passwords, and private keys. Windows / PowerShell / cmd. Tags: security, secrets, audit. Use when find secrets in code, leaked api key, scan for credentials, secrets before commit.",
+    category: "Development Tools",
+    tags: ["security", "secrets", "audit", "credentials", "leak", "hardening", "developer-tools", "cli"],
+  },
 ];
