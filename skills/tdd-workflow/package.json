@@ -1,0 +1,30 @@
+{
+  "name": "tdd-workflow",
+  "version": "0.1.0",
+  "description": "Test-driven development workflow with red-green-refactor steps for new features. Windows / PowerShell / cmd. Tags: tdd, testing, jest",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "tdd-workflow": "src/index.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "SKILL.md"
+  ],
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "keywords": [
+    "tdd", "testing", "jest", "vitest", "workflow", "developer-tools", "cli", "windows"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}
