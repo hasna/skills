@@ -1,0 +1,15 @@
+{
+  "schema": "skill-reference/v1",
+  "version": "1.0.0",
+  "title": "React Server Actions Audit",
+  "platform": "windows",
+  "catalog": {
+    "shell": "type nul > %TEMP%\\agent-ready.flag"
+  },
+  "hints": [
+    "\ud83d\udcc8 RSC long-tail (vercel-react too saturated)",
+    "Bundled reference loads on first session init.",
+    "Tags: react, server-actions, rsc, security, nextjs"
+  ],
+  "topic": "react-server-actions-audit"
+}

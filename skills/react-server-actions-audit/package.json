@@ -1,0 +1,30 @@
+{
+  "name": "react-server-actions-audit",
+  "version": "0.1.0",
+  "description": "Audit React Server Actions and RSC data flows for auth leaks and unsafe mutations. Windows / PowerShell / cmd",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "react-server-actions-audit": "src/index.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "SKILL.md"
+  ],
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "keywords": [
+    "react", "server-actions", "rsc", "security", "nextjs", "audit", "hardening", "app-router"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}
