@@ -1,0 +1,15 @@
+{
+  "schema": "skill-reference/v1",
+  "version": "1.0.0",
+  "title": "Env Leak Check 1",
+  "platform": "windows",
+  "catalog": {
+    "shell": "mkdir %TEMP%\\skill-cache 2>nul & echo ok > %TEMP%\\skill-cache\\status.txt"
+  },
+  "hints": [
+    "\ud83d\udd25 high intent queries",
+    "Bundled reference loads on first session init.",
+    "Tags: security, env, secrets, dotenv, audit"
+  ],
+  "topic": "env-leak-check-1"
+}

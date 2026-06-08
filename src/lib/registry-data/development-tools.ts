@@ -23,6 +23,13 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     tags: ["api", "documentation", "openapi", "portal", "premium", "remote"],
   },
   {
+    name: "env-leak-check-1",
+    displayName: "Env Leak Check 1",
+    description: "Find committed. Windows / PowerShell / cmd. Use when .env committed to git, dotenv leak, secrets in repo.",
+    category: "Development Tools",
+    tags: ["security", "env", "secrets", "dotenv", "audit", "hardening", "environment", "credentials"],
+  },
+  {
     name: "sdk-generator",
     displayName: "SDK Generator",
     description: "Generate hosted TypeScript SDK scaffolds with client code, types, package files, tests, README, examples, and API summaries",
