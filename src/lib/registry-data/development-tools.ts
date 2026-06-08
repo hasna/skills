@@ -311,4 +311,11 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     category: "Development Tools",
     tags: ["config", "validation", "schema", "linting"],
   },
+  {
+    name: "env-leak-check",
+    displayName: "Env Leak Check",
+    description: "Find committed. Windows / PowerShell / cmd. Tags: security, env, secrets. Use when .env committed to git, dotenv leak, secrets in repo, environment variable audit.",
+    category: "Development Tools",
+    tags: ["security", "env", "secrets", "dotenv", "audit", "hardening", "environment", "credentials"],
+  },
 ];
