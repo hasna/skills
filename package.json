@@ -1,6 +1,6 @@
 {
   "name": "@hasna/skills",
-  "version": "0.1.42",
+  "version": "0.1.43",
   "description": "Skills library for AI coding agents",
   "type": "module",
   "bin": {
@@ -63,7 +63,7 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@hasna/events": "^0.1.3",
+    "@hasna/events": "^0.1.7",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
