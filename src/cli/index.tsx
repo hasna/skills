@@ -2,6 +2,7 @@
 import React from "react";
 import { render } from "ink";
 import { Command } from "commander";
+import { registerEventsCommands } from "@hasna/events/commander";
 import chalk from "chalk";
 import pkg from "../../package.json" with { type: "json" };
 import { App } from "./components/App.js";
@@ -77,6 +78,8 @@ registerAuth(program);
 
 const { registerFeedback } = await import("./commands/feedback.js");
 registerFeedback(program);
+
+registerEventsCommands(program as any, { source: "skills" });
 
 program.hook("preAction", (_thisCommand, actionCommand) => {
   maybePrintFirstRunOnboarding(actionCommand, process.argv.slice(2), isTTY);

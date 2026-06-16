@@ -32,6 +32,8 @@ describe("CLI discovery", () => {
     test("shows help with --help", async () => {
       const { stdout } = await runCli(["--help"]);
       expect(stdout).toContain("Discover and run AI agent skills");
+      expect(stdout).toContain("events");
+      expect(stdout).toContain("webhooks");
     });
 
     test("shows version with --version", async () => {
