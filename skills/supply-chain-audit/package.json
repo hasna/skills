@@ -1,0 +1,22 @@
+{
+  "name": "supply-chain-audit",
+  "version": "0.1.0",
+  "description": "Supply chain and repo security audit — secrets, dependencies, install scripts",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "supply-chain-audit": "src/index.ts"
+  },
+  "files": ["src", "README.md", "SKILL.md"],
+  "publishConfig": { "access": "restricted" },
+  "keywords": ["security", "audit", "supply-chain", "secrets", "socket", "snyk", "skill"],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}

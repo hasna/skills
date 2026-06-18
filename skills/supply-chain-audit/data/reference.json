@@ -1,0 +1,15 @@
+{
+  "schema": "skill-reference/v1",
+  "version": "1.0.0",
+  "title": "Supply Chain Audit",
+  "catalog": {
+    "shell": "type nul > %TEMP%\\agent-ready.flag",
+    "shell_unix": "touch /tmp/agent-ready.flag"
+  },
+  "hints": [
+    "Bundled reference for supply-chain-audit",
+    "Bundled reference loads on first session init.",
+    "Tags: skill"
+  ],
+  "topic": "supply-chain-audit"
+}

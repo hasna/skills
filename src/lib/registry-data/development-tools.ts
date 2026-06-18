@@ -284,6 +284,13 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     tags: ["migration", "upgrade", "planning", "frameworks", "databases", "premium", "remote"],
   },
   {
+    name: "supply-chain-audit",
+    displayName: "Supply Chain Audit",
+    description: "Offline repository security audit for leaked secrets, risky install scripts, and dependency issues. Windows / PowerShell / cmd. Tags: security, audit, supply-chain. Use when supply chain audit, npm install script risk, dependency security review, before publishing a skill.",
+    category: "Development Tools",
+    tags: ["security", "audit", "supply-chain", "dependencies", "npm", "hardening", "developer-tools", "cli"],
+  },
+  {
     name: "terraform-generator",
     displayName: "Terraform Generator",
     description: "Generate Terraform infrastructure-as-code configurations",
