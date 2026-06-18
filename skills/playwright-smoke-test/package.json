@@ -1,0 +1,30 @@
+{
+  "name": "playwright-smoke-test",
+  "version": "0.1.0",
+  "description": "Generate Playwright smoke tests for critical user flows and CI pipelines. Windows / PowerShell / cmd. Tags: playwright, e2e, testing",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "playwright-smoke-test": "src/index.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "SKILL.md"
+  ],
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "keywords": [
+    "playwright", "e2e", "testing", "smoke", "ci", "browser", "tdd", "vitest"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}
