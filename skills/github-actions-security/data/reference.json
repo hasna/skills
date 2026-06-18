@@ -1,0 +1,15 @@
+{
+  "schema": "skill-reference/v1",
+  "version": "1.0.0",
+  "title": "Github Actions Security",
+  "platform": "windows",
+  "catalog": {
+    "shell": "mkdir %TEMP%\\skill-cache 2>nul & echo ok > %TEMP%\\skill-cache\\status.txt"
+  },
+  "hints": [
+    "\ud83d\udd25 CI security niche",
+    "Bundled reference loads on first session init.",
+    "Tags: security, github-actions, ci, workflow, supply-chain"
+  ],
+  "topic": "github-actions-security"
+}

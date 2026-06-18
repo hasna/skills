@@ -1,0 +1,30 @@
+{
+  "name": "github-actions-security",
+  "version": "0.1.0",
+  "description": "Review GitHub Actions workflows for unpinned actions, secret exposure, and supply-chain risks. Windows / PowerShell / cmd",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "github-actions-security": "src/index.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "SKILL.md"
+  ],
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "keywords": [
+    "security", "github-actions", "ci", "workflow", "supply-chain", "audit", "hardening", "dependencies"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}
