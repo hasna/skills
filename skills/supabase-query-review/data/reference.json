@@ -1,0 +1,15 @@
+{
+  "schema": "skill-reference/v1",
+  "version": "1.0.0",
+  "title": "Supabase Query Review",
+  "platform": "windows",
+  "catalog": {
+    "shell": "mkdir %TEMP%\\skill-cache 2>nul & echo ok > %TEMP%\\skill-cache\\status.txt"
+  },
+  "hints": [
+    "\ud83d\udcc8 supabase-postgres cluster ~216K installs \u2014 long-tail",
+    "Bundled reference loads on first session init.",
+    "Tags: supabase, postgres, sql, security, rls"
+  ],
+  "topic": "supabase-query-review"
+}
