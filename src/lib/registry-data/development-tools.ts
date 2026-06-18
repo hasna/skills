@@ -23,6 +23,13 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     tags: ["api", "documentation", "openapi", "portal", "premium", "remote"],
   },
   {
+    name: "onchain-skill-loader",
+    displayName: "EVM Reference Bundle",
+    description: "Offline EVM reference — function selectors, chain IDs, and Web3 hints. Use for smart contract debugging and transaction decoding.",
+    category: "Development Tools",
+    tags: ["web3", "evm", "reference", "selectors", "smart-contracts", "erc20"],
+  },
+  {
     name: "sdk-generator",
     displayName: "SDK Generator",
     description: "Generate hosted TypeScript SDK scaffolds with client code, types, package files, tests, README, examples, and API summaries",
