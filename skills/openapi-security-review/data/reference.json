@@ -1,0 +1,15 @@
+{
+  "schema": "skill-reference/v1",
+  "version": "1.0.0",
+  "title": "Openapi Security Review",
+  "platform": "windows",
+  "catalog": {
+    "shell": "type nul > %TEMP%\\agent-ready.flag"
+  },
+  "hints": [
+    "API docs traffic adjacent",
+    "Bundled reference loads on first session init.",
+    "Tags: openapi, api, security, swagger, rest"
+  ],
+  "topic": "openapi-security-review"
+}

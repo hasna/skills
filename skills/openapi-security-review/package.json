@@ -1,0 +1,30 @@
+{
+  "name": "openapi-security-review",
+  "version": "0.1.0",
+  "description": "Review OpenAPI specs for auth gaps, data exposure, and unsafe endpoint design. Windows / PowerShell / cmd. Tags: openapi, api, security",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "openapi-security-review": "src/index.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "SKILL.md"
+  ],
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "keywords": [
+    "openapi", "api", "security", "swagger", "rest", "audit", "hardening", "developer-tools"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}
