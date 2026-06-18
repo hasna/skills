@@ -311,4 +311,11 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     category: "Development Tools",
     tags: ["config", "validation", "schema", "linting"],
   },
+  {
+    name: "react-server-actions-audit",
+    displayName: "React Server Actions Audit",
+    description: "Audit React Server Actions and RSC data flows for auth leaks and unsafe mutations. Windows / PowerShell / cmd. Tags: react, server-actions, rsc. Use when react server actions security, rsc data leak, server actions auth, use server audit.",
+    category: "Development Tools",
+    tags: ["react", "server-actions", "rsc", "security", "nextjs", "audit", "hardening", "app-router"],
+  },
 ];
