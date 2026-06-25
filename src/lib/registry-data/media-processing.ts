@@ -67,9 +67,9 @@ export const MEDIA_PROCESSING_SKILLS: SkillMeta[] = [
   {
     name: "transcript",
     displayName: "Transcript",
-    description: "Generate transcripts from audio and video files with timestamps",
+    description: "Transcribe audio, video, and media URLs with OpenAI GPT-4o, ElevenLabs Scribe v2, DeepGram, or hosted runtime",
     category: "Media Processing",
-    tags: ["transcript", "audio", "video", "speech-to-text"],
+    tags: ["transcript", "audio", "video", "speech-to-text", "diarization", "youtube"],
   },
   {
     name: "video-cut-suggester",

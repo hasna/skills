@@ -20,6 +20,17 @@ import {
   publicDiscoveryPriceLabel,
   type PublicSkillDiscovery,
 } from "../../lib/discovery.js";
+import {
+  DEFAULT_LIST_LIMIT,
+  DEFAULT_SEARCH_LIMIT,
+  DEFAULT_TAG_LIMIT,
+  paginate,
+  parsePageLimit,
+  parsePageOffset,
+  showingLabel,
+  truncateText,
+  type Page,
+} from "../../lib/compact-output.js";
 
 export function registerBrowse(parent: Command) {
   // List
@@ -34,6 +45,9 @@ export function registerBrowse(parent: Command) {
     .option("--json", "Output as JSON", false)
     .option("--brief", "One line per skill: name \u2014 description [category]", false)
     .option("--format <format>", "Output format: compact (names only) or csv (name,category,price,description)")
+    .option("--limit <n>", "Maximum rows to print for human output (default: 30, use 0 or all for every row)")
+    .option("--cursor <n>", "Numeric offset for human-output pagination", "0")
+    .option("--verbose", "Show longer descriptions and tags in human output", false)
     .action((options) => {
       return handleList(options).catch(handleBrowseError);
     });
@@ -50,6 +64,9 @@ export function registerBrowse(parent: Command) {
     .option("-t, --tags <tags>", "Filter results by comma-separated tags (OR logic, case-insensitive)")
     .option("--all", "Search the full skill registry instead of the default basic set", false)
     .option("--remote", "Use remote registry from SKILLS_API_URL or config apiUrl", false)
+    .option("--limit <n>", "Maximum rows to print for human output (default: 20, use 0 or all for every row)")
+    .option("--cursor <n>", "Numeric offset for human-output pagination", "0")
+    .option("--verbose", "Show longer descriptions and tags in human output", false)
     .description("Search for skills")
     .action((query: string, options) => {
       return handleSearch(query, options).catch(handleBrowseError);
@@ -70,6 +87,8 @@ export function registerBrowse(parent: Command) {
     .command("tags")
     .option("--json", "Output as JSON", false)
     .option("--remote", "Use remote registry from SKILLS_API_URL or config apiUrl", false)
+    .option("--limit <n>", "Maximum rows to print for human output (default: 80, use 0 or all for every row)")
+    .option("--cursor <n>", "Numeric offset for human-output pagination", "0")
     .description("List all unique tags with counts")
     .action((options: { json: boolean; remote: boolean }) => {
       return handleTags(options).catch(handleBrowseError);
@@ -77,11 +96,13 @@ export function registerBrowse(parent: Command) {
 }
 
 function formatBrief(skill: PublicSkillDiscovery) {
-  return `${skill.name} \u2014 ${skill.description} (${publicDiscoveryPriceLabel(skill)}) [${skill.category}]`;
+  return `${skill.name} \u2014 ${truncateText(skill.description, 110)} (${publicDiscoveryPriceLabel(skill)}) [${skill.category}]`;
 }
 
-function formatSkillLine(skill: PublicSkillDiscovery): string {
-  return `  ${chalk.cyan(skill.name)}${skill.source === "custom" ? chalk.yellow(" [custom]") : ""} ${chalk.dim(`(${publicDiscoveryPriceLabel(skill)})`)} - ${skill.description}`;
+function formatSkillLine(skill: PublicSkillDiscovery, options: { verbose?: boolean } = {}): string {
+  const description = truncateText(skill.description, options.verbose ? 180 : 88);
+  const tags = options.verbose && skill.tags.length ? chalk.dim(` tags: ${skill.tags.join(", ")}`) : "";
+  return `  ${chalk.cyan(skill.name)}${skill.source === "custom" ? chalk.yellow(" [custom]") : ""} ${chalk.dim(`[${skill.category}]`)} ${chalk.dim(`(${publicDiscoveryPriceLabel(skill)})`)} - ${description}${tags}`;
 }
 
 function enrichDiscovery<T extends SkillMeta>(skills: T[]): Array<PublicSkillDiscovery<T>> {
@@ -126,6 +147,8 @@ async function handleList(options: any) {
   const fmt = !options.json ? (options.format as string | undefined) : undefined;
   const profile: SkillRegistryProfile = options.all ? "all" : "basic";
   const registry = await getBrowseRegistry(options);
+  const limit = parsePageLimit(options.limit, DEFAULT_LIST_LIMIT, { allowAll: true });
+  const offset = parsePageOffset(options.cursor);
 
   if (options.pinned) {
     const installed = getInstalledSkills();
@@ -143,12 +166,14 @@ async function handleList(options: any) {
     if (brief) { for (const name of installed) console.log(name); return; }
     const meta = getInstallMeta();
     const registry = loadRegistry();
-    console.log(chalk.bold(`\nPinned skills (${installed.length}):\n`));
-    for (const name of installed) {
+    const page = paginate(installed, { limit, offset });
+    console.log(chalk.bold(`\nPinned skills (${showingLabel(installed.length, page.items.length, page.offset)}):\n`));
+    for (const name of page.items) {
       const m = meta.skills[name];
       const s = registry.find((r) => r.name === name);
       console.log(`  ${chalk.cyan(name)}${s?.source === "custom" ? chalk.yellow(" [custom]") : ""}  ${m?.version ? chalk.dim(`v${m.version}`) : ""}  ${m?.installedAt ? chalk.dim(new Date(m.installedAt).toLocaleDateString()) : ""}`);
     }
+    printPageHint(page, "skills list --pinned");
     return;
   }
 
@@ -162,9 +187,11 @@ async function handleList(options: any) {
     if (tagFilter) skills = skills.filter((s) => s.tags.some((tag) => tagFilter.includes(tag.toLowerCase())));
     const output = enrichDiscovery(skills);
     if (options.json) { await writeJson(output, 2); return; }
-    if (brief) { for (const s of output) console.log(formatBrief(s)); return; }
-    console.log(chalk.bold(`\n${category} (${skills.length}):\n`));
-    for (const s of output) console.log(formatSkillLine(s));
+    const page = paginate(output, { limit, offset });
+    if (brief) { for (const s of page.items) console.log(formatBrief(s)); printPageHint(page, listCommand(options)); return; }
+    console.log(chalk.bold(`\n${category} (${showingLabel(output.length, page.items.length, page.offset)}):\n`));
+    for (const s of page.items) console.log(formatSkillLine(s, { verbose: options.verbose }));
+    printSkillHint(page, listCommand(options));
     return;
   }
 
@@ -172,9 +199,11 @@ async function handleList(options: any) {
     const skills = registry.filter((s) => s.tags.some((tag) => tagFilter.includes(tag.toLowerCase())));
     const output = enrichDiscovery(skills);
     if (options.json) { await writeJson(output, 2); return; }
-    if (brief) { for (const s of output) console.log(formatBrief(s)); return; }
-    console.log(chalk.bold(`\nSkills matching tags [${tagFilter.join(", ")}] (${skills.length}):\n`));
-    for (const s of output) console.log(`  ${chalk.cyan(s.name)}${s.source === "custom" ? chalk.yellow(" [custom]") : ""} ${chalk.dim(`[${s.category}]`)} ${chalk.dim(`(${publicDiscoveryPriceLabel(s)})`)} - ${s.description}`);
+    const page = paginate(output, { limit, offset });
+    if (brief) { for (const s of page.items) console.log(formatBrief(s)); printPageHint(page, listCommand(options)); return; }
+    console.log(chalk.bold(`\nSkills matching tags [${tagFilter.join(", ")}] (${showingLabel(output.length, page.items.length, page.offset)}):\n`));
+    for (const s of page.items) console.log(formatSkillLine(s, { verbose: options.verbose }));
+    printSkillHint(page, listCommand(options));
     return;
   }
 
@@ -187,23 +216,18 @@ async function handleList(options: any) {
     return;
   }
   if (brief) {
-    for (const s of [...allSkills].sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name))) console.log(formatBrief(s));
+    const sorted = [...allSkills].sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
+    const page = paginate(sorted, { limit, offset });
+    for (const s of page.items) console.log(formatBrief(s));
+    printPageHint(page, listCommand(options));
     return;
   }
 
-  console.log(chalk.bold(`\nAvailable ${profile === "basic" ? "default " : ""}skills (${allSkills.length}):\n`));
-  for (const category of registryCategories(allSkills)) {
-    const skills = allSkills.filter((s) => s.category === category);
-    if (skills.length === 0) continue;
-    console.log(chalk.bold(`${category} (${skills.length}):`));
-    for (const s of skills) console.log(formatSkillLine(s));
-    console.log();
-  }
-  const customUncategorized = allSkills.filter((s) => s.source === "custom" && !CATEGORIES.includes(s.category as (typeof CATEGORIES)[number]));
-  if (customUncategorized.length > 0) {
-    console.log(chalk.bold(`Custom (${customUncategorized.length}):`));
-    for (const s of customUncategorized) console.log(`  ${chalk.yellow(s.name)} ${chalk.dim(`(${publicDiscoveryPriceLabel(s)})`)} - ${s.description}`);
-  }
+  const sorted = [...allSkills].sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
+  const page = paginate(sorted, { limit, offset });
+  console.log(chalk.bold(`\nAvailable ${profile === "basic" ? "default " : ""}skills (${showingLabel(allSkills.length, page.items.length, page.offset)}):\n`));
+  for (const s of page.items) console.log(formatSkillLine(s, { verbose: options.verbose }));
+  printSkillHint(page, listCommand(options));
 }
 
 async function handleSearch(query: string, options: any) {
@@ -238,13 +262,15 @@ async function handleSearch(query: string, options: any) {
     for (const s of output) { const desc = s.description.replace(/"/g, '""'); console.log(`${s.name},${s.category},"${publicDiscoveryPriceLabel(s)}","${desc}"`); }
     return;
   }
-  if (brief) { for (const s of output) console.log(formatBrief(s)); return; }
-  console.log(chalk.bold(`\nFound ${output.length} skill(s):\n`));
-  for (const s of output) {
-    console.log(`  ${chalk.cyan(s.name)} ${chalk.dim(`[${s.category}]`)}`);
-    console.log(`    ${chalk.dim("Price:")} ${publicDiscoveryPriceLabel(s)}`);
-    console.log(`    ${s.description}`);
+  const limit = parsePageLimit(options.limit, DEFAULT_SEARCH_LIMIT, { allowAll: true });
+  const offset = parsePageOffset(options.cursor);
+  const page = paginate(output, { limit, offset });
+  if (brief) { for (const s of page.items) console.log(formatBrief(s)); printPageHint(page, searchCommand(query, options)); return; }
+  console.log(chalk.bold(`\nFound ${skillCountLabel(output.length, page.items.length, page.offset)} for "${query}":\n`));
+  for (const s of page.items) {
+    console.log(formatSkillLine(s, { verbose: options.verbose }));
   }
+  printSkillHint(page, searchCommand(query, options));
 }
 
 async function handleCategories(options: { json: boolean; remote: boolean }) {
@@ -258,13 +284,56 @@ async function handleCategories(options: { json: boolean; remote: boolean }) {
   for (const { name, count } of cats) console.log(`  ${name} (${count})`);
 }
 
-async function handleTags(options: { json: boolean; remote: boolean }) {
+async function handleTags(options: { json: boolean; remote: boolean; limit?: string; cursor?: string }) {
   const tagCounts = new Map<string, number>();
   for (const skill of await getBrowseRegistry({ all: true, remote: options.remote })) {
     for (const tag of skill.tags) tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
   }
   const sorted = Array.from(tagCounts.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([name, count]) => ({ name, count }));
   if (options.json) { await writeJson(sorted, 2); return; }
-  console.log(chalk.bold("\nTags:\n"));
-  for (const { name, count } of sorted) console.log(`  ${chalk.cyan(name)} (${count})`);
+  const page = paginate(sorted, {
+    limit: parsePageLimit(options.limit, DEFAULT_TAG_LIMIT, { allowAll: true }),
+    offset: parsePageOffset(options.cursor),
+  });
+  console.log(chalk.bold(`\nTags: ${showingLabel(sorted.length, page.items.length, page.offset)}\n`));
+  for (const { name, count } of page.items) console.log(`  ${chalk.cyan(name)} (${count})`);
+  printPageHint(page, `skills tags${options.remote ? " --remote" : ""}`);
+}
+
+function printSkillHint<T>(page: Page<T>, command: string): void {
+  printPageHint(page, command);
+  console.log(chalk.dim(`Details: skills show <name> or rerun with --verbose. Use --json for the full machine-readable payload.`));
+}
+
+function printPageHint<T>(page: Page<T>, command: string): void {
+  if (!page.hasMore || page.nextOffset === null) return;
+  console.log(chalk.dim(`\nNext: ${command} --cursor ${page.nextOffset} --limit ${page.limit}`));
+}
+
+function listCommand(options: any): string {
+  const parts = ["skills list"];
+  if (options.all) parts.push("--all");
+  if (options.remote) parts.push("--remote");
+  if (options.category) parts.push("--category", quoteArg(options.category));
+  if (options.tags) parts.push("--tags", quoteArg(options.tags));
+  if (options.pinned) parts.push("--pinned");
+  return parts.join(" ");
+}
+
+function searchCommand(query: string, options: any): string {
+  const parts = ["skills search", quoteArg(query)];
+  if (options.all) parts.push("--all");
+  if (options.remote) parts.push("--remote");
+  if (options.category) parts.push("--category", quoteArg(options.category));
+  if (options.tags) parts.push("--tags", quoteArg(options.tags));
+  return parts.join(" ");
+}
+
+function quoteArg(value: string): string {
+  return value.includes(" ") ? JSON.stringify(value) : value;
+}
+
+function skillCountLabel(total: number, shown: number, offset: number): string {
+  if (offset > 0 || shown < total) return `${shown} of ${total} skill(s), cursor ${offset}`;
+  return `${total} skill(s)`;
 }

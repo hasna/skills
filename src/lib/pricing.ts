@@ -70,7 +70,7 @@ export const PREMIUM_SKILLS: SkillPricing[] = [
   { slug: "brand-kit", displayName: "Brand Kit", tier: "premium", costCents: 400, providers: ["hosted"], description: "Hosted brand kit with logo usage, palette, typography, brand voice, sample applications, Markdown guide, PDF guide, and SVG assets" },
   { slug: "generate-book-cover", displayName: "Book Cover", tier: "premium", costCents: 20, providers: ["gpt-image-2"], description: "Professional book cover design from title and genre" },
   { slug: "remove-background", displayName: "Remove Background", tier: "premium", costCents: 10, providers: ["gemini-3-pro"], description: "AI-powered background removal from images" },
-  { slug: "transcript", displayName: "Transcript", tier: "premium", costCents: 10, providers: ["whisper"], description: "Audio/video transcription with timestamps" },
+  { slug: "transcript", displayName: "Transcript", tier: "premium", costCents: 10, providers: ["openai", "elevenlabs", "deepgram", "hosted"], description: "Audio/video transcription with timestamps, diarization, and URL support" },
   { slug: "webcrawling", displayName: "Web Crawling", tier: "premium", costCents: 5, providers: ["firecrawl"], description: "Structured web page crawling and extraction" },
   { slug: "browse", displayName: "Browse", tier: "premium", costCents: 5, providers: ["browser"], description: "Web browsing and page interaction" },
   { slug: "read-pdf", displayName: "Read PDF", tier: "premium", costCents: 5, providers: ["cerebras"], description: "Hosted PDF extraction and structured content analysis" },

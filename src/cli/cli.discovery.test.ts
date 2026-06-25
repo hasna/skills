@@ -207,8 +207,24 @@ describe("CLI discovery", () => {
 
     test("lists all skills with --all", async () => {
       const { stdout } = await runCli(["list", "--all"]);
+      expect(stdout).toContain(`Available skills (showing 30 of ${EXPECTED_ALL_SKILL_COUNT}, cursor 0)`);
+      expect(stdout).toContain("Next: skills list --all --cursor 30 --limit 30");
+      expect(stdout).toContain("Details: skills show <name>");
+      expect(stdout).not.toContain("workout-cycle-planner");
+    });
+
+    test("lists all human rows when explicitly requested", async () => {
+      const { stdout } = await runCli(["list", "--all", "--limit", "all"]);
       expect(stdout).toContain(`Available skills (${EXPECTED_ALL_SKILL_COUNT})`);
       expect(stdout).toContain("Health & Wellness");
+      expect(stdout).toContain("workout-cycle-planner");
+    }, SLOW_TEST_TIMEOUT);
+
+    test("verbose human list discloses extra fields without removing pagination", async () => {
+      const { stdout } = await runCli(["list", "--all", "--limit", "1", "--verbose"]);
+      expect(stdout).toContain("Available skills (showing 1 of");
+      expect(stdout).toContain("tags:");
+      expect(stdout).toContain("Next: skills list --all --cursor 1 --limit 1");
     });
 
     test("lists by category", async () => {
@@ -332,7 +348,8 @@ describe("CLI discovery", () => {
       const { stdout } = await runCli(["search", "pdf"]);
       expect(stdout).toContain("Found");
       expect(stdout).toContain("skill(s)");
-      expect(stdout).toContain("Price:");
+      expect(stdout).toContain("($0.05/run)");
+      expect(stdout).toContain("Details: skills show <name>");
       expect(stdout).toContain("$0.05/run");
     });
 

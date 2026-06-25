@@ -1,100 +1,80 @@
 ---
 name: transcript
-description: Transcribe audio and video files using ElevenLabs Scribe, OpenAI Whisper, or Google Gemini. Supports automatic chunking for large files, speaker diarization, timestamps, and multiple output formats (text, SRT, VTT, JSON).
+description: Transcribe audio, video, YouTube, Vimeo, and generic media URLs with iapp-transcriber or the hosted Skills runtime. Supports OpenAI GPT-4o transcription, OpenAI diarization, ElevenLabs Scribe v2, DeepGram, chunking, source metadata, subtitles, and JSON outputs.
 ---
 
-# Audio Transcription Skill
+# Transcript
 
-This skill provides high-quality speech-to-text transcription using multiple AI providers. It automatically handles large files through compression and chunking.
+Create transcripts from local audio/video files or media URLs. Use this skill when the user asks to transcribe, caption, diarize, summarize, or package spoken audio/video content.
 
-This CLI is API-backed. Set `SKILLS_API_KEY` when routing through the hosted skills/connectors runtime; provider-specific keys are managed by that runtime.
+## Choose The Runtime
 
-## Supported Providers
+- Use the hosted Skills runtime when the user explicitly runs `skills run transcript`, needs remote execution, or has only `SKILLS_API_KEY` configured.
+- Use local `iapp-transcriber` when you are on this machine and need direct access to local files, YouTube/Vimeo/generic `yt-dlp` sources, transcript DB records, MCP tools, comments, exports, or OpenLoops follow-up workflows.
+- The local command is `transcriber` when installed, or `bun run src/cli/index.ts` from `/home/hasna/Workspace/hasnaxyz/internalapp/iapp-transcriber`.
 
-### ElevenLabs Scribe
-- **Accuracy**: 96.7% for English (industry-leading)
-- **Max file size**: 3GB / 10 hours
-- **Features**: Speaker diarization (up to 32 speakers), word-level timestamps
-- **Cost**: $0.40/hour
-- **Best for**: Multi-speaker recordings, highest accuracy needs
-
-### OpenAI Whisper
-- **Accuracy**: Excellent
-- **Max file size**: 25MB (automatic chunking for larger files)
-- **Features**: Segment timestamps, language detection
-- **Cost**: $0.006/min ($0.003/min with GPT-4o Mini)
-- **Best for**: Standard transcription, good balance of cost and quality
-
-### Google Gemini
-- **Accuracy**: Very good
-- **Max file size**: 2GB
-- **Features**: Multimodal analysis, summarization capabilities
-- **Cost**: ~$0.09-0.23/hour (generous free tier available)
-- **Best for**: Cost-sensitive projects, multimodal needs
-
-## Usage
-
-### Basic Transcription
-```bash
-bun run src/index.ts transcribe \
-  --provider openai \
-  --input ./recording.mp3
-```
-
-### With Speaker Diarization
-```bash
-bun run src/index.ts transcribe \
-  --provider elevenlabs \
-  --input ./meeting.mp3 \
-  --diarize \
-  --timestamps \
-  --format srt
-```
-
-### Export to Subtitles
-```bash
-bun run src/index.ts transcribe \
-  --provider gemini \
-  --input ./video.mp4 \
-  --format vtt \
-  --output ./captions.vtt
-```
-
-### View Provider Info
-```bash
-bun run src/index.ts providers
-```
-
-## Output Formats
-
-| Format | Extension | Description |
-|--------|-----------|-------------|
-| text | .txt | Plain text transcript |
-| srt | .srt | SubRip subtitle format |
-| vtt | .vtt | WebVTT subtitle format |
-| json | .json | Full structured data with metadata |
-
-## Large File Handling
-
-The skill automatically handles files larger than provider limits:
-
-- **Compression**: For OpenAI, files are first compressed using Opus codec
-- **Chunking**: Files are split into 10-minute segments with overlap
-- **Merging**: Results are intelligently merged to avoid duplicates
-
-## Configuration
+## Hosted Usage
 
 ```bash
-export SKILLS_API_KEY=your_skill_api_key
+skills run transcript --source ./meeting.mp3 --title "Design review" --provider openai
+skills run transcribe --source https://www.youtube.com/watch?v=... --provider openai --diarize
 ```
 
-## Dependencies
+Poll hosted runs with `skills runs status <run-id>` and download outputs with `skills exports download <run-id>`.
 
-For chunking support (OpenAI with large files):
-- `ffmpeg` - Audio processing
-- `ffprobe` - Duration detection
+## Local Usage
 
-Install on macOS:
 ```bash
-brew install ffmpeg
+transcriber transcribe ./meeting.mp3 --provider openai --json
+transcriber transcribe https://www.youtube.com/watch?v=... --provider openai --model gpt-4o-transcribe --json
+transcriber transcribe ./meeting.mp3 --provider openai --diarize --json
+transcriber export <transcript-id> --format srt --output captions.srt
 ```
+
+Local provider defaults:
+
+- `openai`: default, uses `gpt-4o-transcribe`; `--diarize` uses `gpt-4o-transcribe-diarize`.
+- `elevenlabs`: uses `scribe_v2`, supports diarization and keyterms.
+- `deepgram`: uses Nova-3, supports diarization.
+
+Local requirements:
+
+- A configured provider credential for the selected local provider.
+- `yt-dlp` for remote media URLs. Set `YTDLP_PATH` if needed.
+- `ffmpeg`/`ffprobe`; the local app bundles npm ffmpeg/ffprobe and also respects `FFMPEG_PATH` and `FFPROBE_PATH`.
+
+## Workflow
+
+1. Inspect source metadata first for URLs:
+
+   ```bash
+   transcriber info <url> --json
+   ```
+
+2. Download audio when the user asks to keep media:
+
+   ```bash
+   transcriber download <url> --format mp3 --json
+   ```
+
+3. Transcribe with JSON for automation:
+
+   ```bash
+   transcriber transcribe <path-or-url> --provider openai --json
+   ```
+
+4. Export or post-process:
+
+   ```bash
+   transcriber get <id> --json
+   transcriber export <id> --format txt --output transcript.txt
+   transcriber summarize <id>
+   ```
+
+5. For repeat work, create OpenLoops command loops around JSON-producing commands, for example `transcriber feed check --json --dry-run`.
+
+## Safety
+
+- Only fetch URLs the user is authorized to process.
+- The local app rejects private/local URL hosts by default; set `TRANSCRIBER_ALLOW_PRIVATE_URLS=1` only for trusted internal sources.
+- Prefer `--json` for scripts and OpenLoops so failures include a structured transcript record and nonzero exit code.

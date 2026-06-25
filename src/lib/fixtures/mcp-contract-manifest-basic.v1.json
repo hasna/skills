@@ -35,6 +35,7 @@
       "properties": [
         "approved",
         "args",
+        "detail",
         "input",
         "name"
       ]

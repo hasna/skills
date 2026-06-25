@@ -125,11 +125,34 @@ requirements explicitly document local provider use.
 
 - `--json` — Output as JSON (pipeable)
 - `--brief` — One-line format
+- `--limit <n>` — Cap human rows where supported; use `--limit all` or `--limit 0` for every row
+- `--cursor <n>` — Continue human-output pagination from a numeric offset
 - `--remote` — Read browse/search data from `SKILLS_API_URL` or `config apiUrl`
 - `--dry-run` — Preview without applying changes
-- `--verbose` — Debug logging to stderr
+- `--verbose` — Debug logging globally; richer human discovery rows where supported
 - `--no-color` — Disable ANSI colors
 - `-o, --overwrite` — Refresh existing pin metadata
+
+### Compact Output Defaults
+
+Agent-facing discovery commands are compact by default. `skills list --all`,
+`skills search <query> --all`, `skills tags`, `skills runs list`, and
+`skills schedule list` cap human output and print a next-page command when more
+rows are available.
+
+Use explicit disclosure controls when you need more:
+
+```bash
+skills list --all --limit 50
+skills list --all --cursor 50 --limit 50
+skills list --all --limit all
+skills list --all --verbose
+skills show image
+skills search pdf --json
+```
+
+CLI `--json` output remains the machine-readable full result for browse/search
+commands. Human output is optimized for terminals and agent context.
 
 ### JSON Output Contracts
 
@@ -234,6 +257,14 @@ The MCP server exposes 20+ tools including `list_skills`, `search_skills`,
 `list_pinned_skills`, `get_skill_info`, `get_skill_docs`, `get_requirements`,
 `run_skill`, `get_run_status`, `schedule_skill`, `detect_project_skills`,
 `validate_skill`, and more.
+
+MCP discovery and status tools use compact paged envelopes by default:
+`list_skills` and `search_skills` return `skills` plus `total`, `offset`,
+`limit`, and `nextOffset`; `list_schedules` returns the same metadata with a
+`schedules` array. `run_skill` returns
+stdout/stderr previews and compact run summaries unless the caller passes
+`detail: true`. Use `get_skill_info`, `get_skill_docs`, or `detail: true` for
+full records only when needed.
 
 ### Register with an Agent
 

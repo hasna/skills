@@ -26,6 +26,13 @@ import {
   writeRunLogs,
 } from "../../lib/run-state.js";
 import { handleMcp } from "./runtime-mcp.js";
+import {
+  DEFAULT_LIST_LIMIT,
+  paginate,
+  parsePageLimit,
+  parsePageOffset,
+  showingLabel,
+} from "../../lib/compact-output.js";
 
 export function registerRuntime(parent: Command) {
   parent
@@ -61,8 +68,9 @@ export function registerRuntime(parent: Command) {
     .command("list")
     .option("--json", "Output as JSON", false)
     .option("--limit <n>", "Maximum number of runs", "20")
+    .option("--cursor <n>", "Numeric offset for human-output pagination", "0")
     .description("List recent skill runs")
-    .action((options: { json: boolean; limit: string }) => handleRunsList(options));
+    .action((options: { json: boolean; limit: string; cursor?: string }) => handleRunsList(options));
 
   runs
     .command("show")
@@ -479,21 +487,29 @@ function writeBlogArticleValidationError(errors: string[], json: boolean) {
   process.exitCode = 1;
 }
 
-function handleRunsList(options: { json: boolean; limit: string }) {
-  const limit = Number.parseInt(options.limit, 10);
-  const runs = listSkillRuns(process.cwd(), Number.isFinite(limit) ? limit : 20);
+function handleRunsList(options: { json: boolean; limit: string; cursor?: string }) {
   if (options.json) {
+    const jsonLimit = Number.parseInt(options.limit, 10);
+    const runs = listSkillRuns(process.cwd(), Number.isFinite(jsonLimit) ? jsonLimit : 20);
     console.log(JSON.stringify(runs, null, 2));
     return;
   }
+  const limit = parsePageLimit(options.limit, DEFAULT_LIST_LIMIT, { allowAll: true });
+  const offset = parsePageOffset(options.cursor);
+  const fetchLimit = Number.isFinite(limit) ? limit + offset + 1 : Number.POSITIVE_INFINITY;
+  const runs = listSkillRuns(process.cwd(), Number.isFinite(fetchLimit) ? fetchLimit : 10_000);
   if (!runs.length) {
     console.log(chalk.dim("No skill runs found"));
     return;
   }
-  console.log(chalk.bold(`\nRecent skill runs (${runs.length}):\n`));
-  for (const run of runs) {
-    console.log(`  ${chalk.cyan(run.id)}  ${run.skill}  ${statusColor(run.status)}  ${chalk.dim(run.startedAt)}`);
+  const hasMoreThanFetched = Number.isFinite(limit) && runs.length > offset + limit;
+  const page = paginate(hasMoreThanFetched ? runs.slice(0, offset + limit) : runs, { limit, offset });
+  console.log(chalk.bold(`\nRecent skill runs (${showingLabel(hasMoreThanFetched ? offset + limit + 1 : runs.length, page.items.length, page.offset)}):\n`));
+  for (const run of page.items) {
+    console.log(`  ${chalk.cyan(run.id)}  ${run.skill}  ${statusColor(run.status)}  ${chalk.dim(run.startedAt)}  artifacts:${run.artifacts.length}`);
   }
+  if (hasMoreThanFetched) console.log(chalk.dim(`\nNext: skills runs list --cursor ${offset + page.items.length} --limit ${page.limit}`));
+  console.log(chalk.dim("Details: skills runs show <run-id> or use --json for full run records."));
 }
 
 function handleRunsShow(runId: string, options: { json: boolean }) {

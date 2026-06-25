@@ -2,7 +2,7 @@
   "name": "transcript",
   "version": "1.0.0",
   "private": true,
-  "description": "Audio/video transcription skill supporting ElevenLabs, OpenAI Whisper, and Google Gemini with automatic chunking for large files",
+  "description": "Audio/video transcription skill backed by iapp-transcriber, OpenAI GPT-4o transcription, ElevenLabs Scribe v2, and hosted Skills runtime",
   "type": "module",
   "skills": {
     "runtime": "hosted",

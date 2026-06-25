@@ -200,7 +200,17 @@ describe("MCP Server", () => {
       expect(runResponse).not.toBeNull();
       const run = JSON.parse(runResponse.result.content[0].text);
       expect(run).toMatchObject({ exitCode: 0, skill: "mcp-skill" });
-      expect(run.stdout).toContain("via-mcp");
+      expect(run.stdout).toBeUndefined();
+      expect(run.stdoutPreview.text).toContain("via-mcp");
+      expect(run.detailHint).toContain("detail:true");
+
+      const detailedRunResponse = await client.request("tools/call", {
+        name: "run_skill",
+        arguments: { name: "mcp-skill", args: ["via-mcp"], detail: true },
+      }, 25);
+      expect(detailedRunResponse).not.toBeNull();
+      const detailedRun = JSON.parse(detailedRunResponse.result.content[0].text);
+      expect(detailedRun.stdout).toContain("via-mcp");
 
       const source = join(sourceRoot, "ported-mcp");
       mkdirSync(join(source, "src"), { recursive: true });
@@ -446,6 +456,7 @@ version: 0.3.0
         },
       });
       expect(payload.run.remoteRunId).toBe("run_mcp_contract");
+      expect(payload.detailHint).toContain("detail:true");
     } finally {
       await client.close();
       server.stop(true);
@@ -487,7 +498,8 @@ version: 0.3.0
         exitCode: 0,
         skill: "lorem-generator",
       });
-      expect(payload.stdout).toContain("lorem-generator");
+      expect(payload.stdout).toBeUndefined();
+      expect(payload.stdoutPreview.text).toContain("lorem-generator");
       expect(payload.remote).toBeUndefined();
       expect(remoteCalls).toBe(0);
     } finally {
@@ -548,8 +560,10 @@ version: 0.3.0
       expect(response).not.toBeNull();
       expect(response.result).toBeDefined();
       const results = JSON.parse(response.result.content[0].text);
-      expect(Array.isArray(results)).toBe(true);
-      expect(results.length).toBeGreaterThan(0);
+      expect(Array.isArray(results.skills)).toBe(true);
+      expect(results.skills.length).toBeGreaterThan(0);
+      expect(results.total).toBeGreaterThan(0);
+      expect(results.limit).toBe(25);
     } finally {
       await client.close();
     }
@@ -683,9 +697,12 @@ version: 0.3.0
         arguments: {},
       }, 14);
       expect(response).not.toBeNull();
-      const skills = JSON.parse(response.result.content[0].text);
+      const result = JSON.parse(response.result.content[0].text);
+      const skills = result.skills;
       expect(Array.isArray(skills)).toBe(true);
+      expect(result.total).toBe(EXPECTED_BASIC_SKILL_COUNT);
       expect(skills.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
+      expect(result.hasMore).toBe(false);
       expect(skills.map((s: any) => s.name)).not.toContain("deepresearch");
       expect(skills[0].pricing).toHaveProperty("formattedCost");
     } finally {
@@ -702,15 +719,12 @@ version: 0.3.0
         arguments: { profile: "all" },
       }, 19);
       expect(response).not.toBeNull();
-      const skills = JSON.parse(response.result.content[0].text);
-      expect(Array.isArray(skills)).toBe(true);
-      expect(skills.length).toBe(EXPECTED_ALL_SKILL_COUNT);
-      expect(skills.map((s: any) => s.name)).toContain("deepresearch");
-      const deepresearch = skills.find((s: any) => s.name === "deepresearch");
-      expect(deepresearch.pricing).toMatchObject({
-        tier: "premium",
-        formattedCost: "$0.20/run",
-      });
+      const result = JSON.parse(response.result.content[0].text);
+      expect(Array.isArray(result.skills)).toBe(true);
+      expect(result.skills.length).toBe(25);
+      expect(result.total).toBe(EXPECTED_ALL_SKILL_COUNT);
+      expect(result.hasMore).toBe(true);
+      expect(result.nextArguments).toMatchObject({ profile: "all", limit: 25, offset: 25 });
     } finally {
       await client.close();
     }
@@ -725,9 +739,11 @@ version: 0.3.0
         arguments: { category: "Event Management", profile: "all" },
       }, 15);
       expect(response).not.toBeNull();
-      const skills = JSON.parse(response.result.content[0].text);
+      const result = JSON.parse(response.result.content[0].text);
+      const skills = result.skills;
       expect(Array.isArray(skills)).toBe(true);
       expect(skills.length).toBe(4);
+      expect(result.total).toBe(4);
       for (const s of skills) {
         expect(s.category).toBe("Event Management");
       }
@@ -1163,9 +1179,9 @@ version: 0.3.0
       expect(describeResult.tools[2]).toMatchObject({
         name: "get_run_status",
         known: true,
-        description: "Fetch remote run status and next actions.",
-        params: ["run_id"],
+        params: ["run_id", "detail?"],
       });
+      expect(describeResult.tools[2].description).toContain("compact status summary");
       expect(describeResult.tools[3]).toMatchObject({
         name: "storage_sync_plan",
         known: true,

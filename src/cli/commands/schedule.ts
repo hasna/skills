@@ -8,6 +8,14 @@ import {
   addSchedule, listSchedules, removeSchedule, setScheduleEnabled,
   getDueSchedules, recordScheduleRun, validateCron, getNextRun,
 } from "../../lib/scheduler.js";
+import {
+  DEFAULT_LIST_LIMIT,
+  paginate,
+  parsePageLimit,
+  parsePageOffset,
+  showingLabel,
+  truncateText,
+} from "../../lib/compact-output.js";
 
 export function registerSchedule(parent: Command) {
   const scheduleCmd = parent
@@ -36,18 +44,29 @@ export function registerSchedule(parent: Command) {
   scheduleCmd
     .command("list")
     .option("--json", "Output as JSON", false)
+    .option("--limit <n>", "Maximum rows to print for human output (default: 30, use 0 or all for every row)")
+    .option("--cursor <n>", "Numeric offset for human-output pagination", "0")
     .description("List all scheduled skills")
-    .action((options: { json: boolean }) => {
+    .action((options: { json: boolean; limit?: string; cursor?: string }) => {
       const schedules = listSchedules();
       if (options.json) { console.log(JSON.stringify(schedules)); return; }
       if (!schedules.length) { console.log(chalk.dim("No schedules. Run: skills schedule add <skill> <cron>")); return; }
-      console.log(chalk.bold(`\nScheduled skills (${schedules.length}):\n`));
-      for (const s of schedules) {
+      const page = paginate(schedules, {
+        limit: parsePageLimit(options.limit, DEFAULT_LIST_LIMIT, { allowAll: true }),
+        offset: parsePageOffset(options.cursor),
+      });
+      console.log(chalk.bold(`\nScheduled skills (${showingLabel(schedules.length, page.items.length, page.offset)}):\n`));
+      for (const s of page.items) {
         console.log(`  ${chalk.cyan(s.name)} [${s.enabled ? chalk.green("enabled") : chalk.dim("disabled")}]`);
         const last = s.lastRun ? `last: ${new Date(s.lastRun).toLocaleString()} [${s.lastRunStatus ?? "?"}]` : "never run";
         const next = s.nextRun ? `next: ${new Date(s.nextRun).toLocaleString()}` : "";
-        console.log(chalk.dim(`    skill: ${s.skill}  cron: ${s.cron}  ${last}  ${next}`));
+        const args = s.args?.length ? `  args: ${truncateText(s.args.join(" "), 80)}` : "";
+        console.log(chalk.dim(`    ${s.id}  skill: ${s.skill}  cron: ${s.cron}  ${last}  ${next}${args}`));
       }
+      if (page.hasMore && page.nextOffset !== null) {
+        console.log(chalk.dim(`\nNext: skills schedule list --cursor ${page.nextOffset} --limit ${page.limit}`));
+      }
+      console.log(chalk.dim("Details: use --json for complete schedule records."));
     });
 
   scheduleCmd
