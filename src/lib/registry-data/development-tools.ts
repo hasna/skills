@@ -284,6 +284,13 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     tags: ["migration", "upgrade", "planning", "frameworks", "databases", "premium", "remote"],
   },
   {
+    name: "tdd-workflow",
+    displayName: "Tdd Workflow",
+    description: "Test-driven development workflow with red-green-refactor steps for new features. Windows / PowerShell / cmd. Tags: tdd, testing, jest. Use when test driven development, write tests first, red green refactor, tdd steps.",
+    category: "Development Tools",
+    tags: ["tdd", "testing", "jest", "vitest", "workflow", "developer-tools", "cli", "windows"],
+  },
+  {
     name: "terraform-generator",
     displayName: "Terraform Generator",
     description: "Generate Terraform infrastructure-as-code configurations",
