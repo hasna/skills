@@ -1,11 +1,11 @@
 {
   "name": "@hasna/skills",
-  "version": "0.1.49",
+  "version": "0.1.50",
   "description": "Skills library for AI coding agents",
   "type": "module",
   "bin": {
-    "skills": "./bin/index.js",
-    "skills-mcp": "./bin/mcp.js"
+    "skills": "bin/index.js",
+    "skills-mcp": "bin/mcp.js"
   },
   "exports": {
     ".": {
