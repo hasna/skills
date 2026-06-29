@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.53] - 2026-06-29
+
+### Fixed
+- Tightened the `project-dashboard-reports` CLI checklist so provider-panel
+  examples match the bounded limits and project-scoped knowledge command in the
+  full skill guidance.
+
 ## [0.1.52] - 2026-06-29
 
 ### Added

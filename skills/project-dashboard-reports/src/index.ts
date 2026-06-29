@@ -29,9 +29,9 @@ const sections: GuideSection[] = [
     items: [
       "todos project-panel --project <project> --json --contract",
       "files project-panel --project <project> --json --contract",
-      "mailery status project-panel --project <project> --json --contract",
-      "conversations project-panel --project <project> --json --contract",
-      "knowledge project-panel --project <project> --json --contract",
+      "mailery status project-panel --project <project> --limit 20 --json --contract",
+      "conversations project-panel --project <project> --limit 30 --json --contract",
+      "knowledge project-panel --project <project> --scope project --limit 30 --json --contract",
       "mementos --json project-panel --project <project> --contract",
       "reports project-panel --project <project> --json --contract",
     ],
