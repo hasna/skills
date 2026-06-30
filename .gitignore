@@ -60,6 +60,7 @@ Thumbs.db
 # Claude Code local session data
 .claude/
 .codewith/
+.hasna/
 .takumi/
 
 # Playwright MCP browser data
