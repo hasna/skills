@@ -1,0 +1,30 @@
+{
+  "name": "lockfile-audit",
+  "version": "0.1.0",
+  "description": "Validate lockfiles, detect missing pins, and flag risky dependency patterns. Windows / PowerShell / cmd",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "lockfile-audit": "src/index.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "SKILL.md"
+  ],
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "keywords": [
+    "security", "lockfile", "npm", "dependencies", "audit", "hardening", "package-lock", "developer-tools"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}
