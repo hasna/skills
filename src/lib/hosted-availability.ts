@@ -1,4 +1,5 @@
 import { resolveSkillAlias } from "./skill-aliases.js";
+import type { SkillAvailabilityMetadata } from "./registry-types.js";
 
 export interface HostedRunUnavailable {
   ok: false;
@@ -47,5 +48,16 @@ export function getHostedRunAvailability(slug: string): HostedRunAvailability {
       "This skill requires a platform-managed execution path that is not enabled for live hosted runs yet.",
       "No balance was charged.",
     ],
+  };
+}
+
+export function getHostedAvailabilityMetadata(slug: string): SkillAvailabilityMetadata {
+  const availability = getHostedRunAvailability(slug);
+  if (availability.ok) return { status: "available" };
+  return {
+    status: "unavailable",
+    code: availability.code,
+    message: availability.message,
+    details: availability.details,
   };
 }

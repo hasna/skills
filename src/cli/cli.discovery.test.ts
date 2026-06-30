@@ -267,11 +267,19 @@ describe("CLI discovery", () => {
           return Response.json({
             skills: [
               {
-                name: "remote-demo",
-                displayName: "Remote Demo",
-                description: "Demo from remote registry",
-                category: "Remote Tools",
-                tags: ["remote", "demo"],
+                name: "image",
+                displayName: "Image",
+                description: "Hosted image generation",
+                category: "Media Processing",
+                tags: ["image"],
+              },
+              {
+                name: "logo-design",
+                displayName: "Logo Design",
+                description: "Hosted logo design",
+                category: "Design & Branding",
+                tags: ["logo"],
+                availability: { status: "available" },
               },
             ],
           });
@@ -284,9 +292,21 @@ describe("CLI discovery", () => {
         });
         const data = JSON.parse(stdout);
         expect(exitCode).toBe(0);
-        expect(data).toHaveLength(1);
-        expect(data[0].name).toBe("remote-demo");
-        expect(data[0].source).toBe("remote");
+        expect(data).toHaveLength(2);
+        const image = data.find((skill: any) => skill.name === "image");
+        const logo = data.find((skill: any) => skill.name === "logo-design");
+        expect(image).toMatchObject({
+          source: "remote",
+          availability: {
+            status: "unavailable",
+            code: "HOSTED_PROVIDER_UNAVAILABLE",
+          },
+        });
+        expect(image.availability.details).toContain("No balance was charged.");
+        expect(logo).toMatchObject({
+          source: "remote",
+          availability: { status: "available" },
+        });
       } finally {
         server.stop(true);
       }

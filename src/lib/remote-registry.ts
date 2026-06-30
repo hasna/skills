@@ -9,7 +9,16 @@
 import { z } from "zod";
 import { getApiKey } from "./auth-store.js";
 import { loadConfig, type SkillsConfig } from "./config.js";
+import { sanitizePublicDiscoveryText } from "./discovery.js";
+import { getHostedAvailabilityMetadata } from "./hosted-availability.js";
 import type { SkillMeta } from "./registry.js";
+
+const remoteAvailabilitySchema = z.object({
+  status: z.enum(["available", "unavailable"]),
+  code: z.string().optional(),
+  message: z.string().optional(),
+  details: z.array(z.string()).optional(),
+}).passthrough();
 
 const remotePricingSchema = z.object({
   formattedCost: z.string(),
@@ -34,9 +43,22 @@ const remoteSkillSchema = z.object({
   dependencies: z.array(z.string()).optional(),
   version: z.string().optional(),
   pricing: remotePricingSchema.optional(),
+  availability: remoteAvailabilitySchema.optional(),
 }).passthrough().refine((skill) => skill.name || skill.slug, {
   message: "Remote skill requires name or slug",
 });
+
+const secretValuePatterns: RegExp[] = [
+  /\bsk-[A-Za-z0-9_-]{8,}\b/g,
+  /\bgh[opsur]_[A-Za-z0-9_]{8,}\b/g,
+  /\bgithub_pat_[A-Za-z0-9_]{8,}\b/g,
+  /\bnpm_[A-Za-z0-9_]{8,}\b/g,
+  /\bAKIA[A-Z0-9]{12,}\b/g,
+  /\bAIza[A-Za-z0-9_-]{10,}\b/g,
+  new RegExp("\\bsecret" + "-token:\\s*[A-Za-z0-9._-]+", "gi"),
+  /\bctx7sk\-[A-Za-z0-9_-]{8,}\b/g,
+  /\bxai\-[A-Za-z0-9_-]{8,}\b/g,
+];
 
 const remoteSkillDetailSchema = z.union([
   remoteSkillSchema,
@@ -106,8 +128,38 @@ function normalizeRemoteSkill(skill: z.infer<typeof remoteSkillSchema>): SkillMe
     dependencies: skill.dependencies,
     ...(skill.version ? { version: skill.version } : {}),
     ...(skill.pricing ? { pricing: skill.pricing } : {}),
+    availability: normalizeRemoteAvailability(name, skill.availability),
     source: "remote",
   };
+}
+
+function normalizeRemoteAvailability(
+  name: string,
+  availability?: z.infer<typeof remoteAvailabilitySchema>,
+): NonNullable<SkillMeta["availability"]> {
+  if (!availability) return getHostedAvailabilityMetadata(name);
+  if (availability.status === "available") return { status: "available" };
+  return {
+    status: availability.status,
+    ...(safeAvailabilityCode(availability.code) ? { code: safeAvailabilityCode(availability.code) } : {}),
+    ...(availability.message ? { message: sanitizeAvailabilityText(availability.message) } : {}),
+    ...(availability.details ? { details: availability.details.map(sanitizeAvailabilityText).filter(Boolean) } : {}),
+  };
+}
+
+function safeAvailabilityCode(code: string | undefined): string | undefined {
+  if (!code) return undefined;
+  return /^[A-Z0-9_]+$/.test(code) ? code : undefined;
+}
+
+function sanitizeAvailabilityText(text: string): string {
+  return secretValuePatterns.reduce(
+    (value, pattern) => value.replace(pattern, "credential"),
+    sanitizePublicDiscoveryText(text)
+      .replace(/\b[A-Z0-9_]*(?:API_KEY|SECRET|TOKEN|CREDENTIAL)[A-Z0-9_]*\b/g, "credential"),
+  )
+    .replace(/\s{2,}/g, " ")
+    .trim();
 }
 
 export function parseRemoteRegistryPayload(payload: unknown): SkillMeta[] {

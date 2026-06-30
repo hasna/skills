@@ -53,9 +53,118 @@ describe("remote registry", () => {
         category: "Remote Tools",
         tags: ["remote", "demo"],
         dependencies: undefined,
+        availability: { status: "available" },
         source: "remote",
       },
     ]);
+  });
+
+  test("decorates unavailable hosted skills when remote payload omits availability", () => {
+    const skills = parseRemoteRegistryPayload([
+      {
+        name: "webcrawling",
+        description: "Hosted web crawling",
+        category: "Web & Browser",
+        tags: ["web"],
+      },
+    ]);
+
+    expect(skills[0]).toMatchObject({
+      name: "webcrawling",
+      availability: {
+        status: "unavailable",
+        code: "HOSTED_PROVIDER_UNAVAILABLE",
+      },
+    });
+    expect(skills[0].availability?.details).toContain("No balance was charged.");
+  });
+
+  test("sanitizes remote-provided availability text before exposing it", () => {
+    const skills = parseRemoteRegistryPayload([
+      {
+        name: "image",
+        description: "Hosted image generation",
+        category: "Media Processing",
+        tags: ["image"],
+        availability: {
+          status: "unavailable",
+          code: "HOSTED_PROVIDER_UNAVAILABLE",
+          message: "OpenAI Sora backend is not enabled",
+          details: ["OPENAI_API_KEY is not configured", "No balance was charged."],
+        },
+      },
+    ]);
+
+    const serialized = JSON.stringify(skills[0].availability);
+    expect(skills[0].availability).toMatchObject({
+      status: "unavailable",
+      code: "HOSTED_PROVIDER_UNAVAILABLE",
+      message: "hosted AI backend is not enabled",
+    });
+    expect(serialized).not.toContain("OpenAI");
+    expect(serialized).not.toContain("Sora");
+    expect(serialized).not.toContain("OPENAI_API_KEY");
+    expect(serialized).toContain("No balance was charged.");
+  });
+
+  test("redacts secret-shaped availability values before exposing them", () => {
+    const platformKey = `sk-${"live_abcdefghijklmnopqrstuvwxyz"}`;
+    const githubToken = `gh${"p_"}${"abcdefghijklmnopqrstuvwxyz"}`;
+    const githubPatToken = `github${"_pat_"}${"abcdefghijklmnopqrstuvwxyz"}`;
+    const githubSessionToken = `gh${"s_"}${"abcdefghijklmnopqrstuvwxyz"}`;
+    const githubUserToken = `gh${"u_"}${"abcdefghijklmnopqrstuvwxyz"}`;
+    const githubRefreshToken = `gh${"r_"}${"abcdefghijklmnopqrstuvwxyz"}`;
+    const npmToken = `np${"m_"}${"abcdefghijklmnopqrstuvwxyz"}`;
+    const awsKey = `AKI${"A"}${"ABCDEFGHIJKLMNOP"}`;
+    const aiKey = `AIz${"a"}${"abcdefghijklmnopqrstuvwxyz"}`;
+    const headerToken = `secret${"-token:"} abcdefghijklmnopqrstuvwxyz`;
+    const ctxToken = `ctx7${"sk-"}${"abcdefghijklmnopqrstuvwxyz"}`;
+    const xaiToken = `x${"ai-"}${"abcdefghijklmnopqrstuvwxyz"}`;
+
+    const skills = parseRemoteRegistryPayload([
+      {
+        name: "image",
+        description: "Hosted image generation",
+        category: "Media Processing",
+        tags: ["image"],
+        availability: {
+          status: "unavailable",
+          message: `backend token ${platformKey} is disabled`,
+          details: [
+            `github token ${githubToken}`,
+            `github fine-grained token ${githubPatToken}`,
+            `github session token ${githubSessionToken}`,
+            `github user token ${githubUserToken}`,
+            `github refresh token ${githubRefreshToken}`,
+            `npm token ${npmToken}`,
+            `aws key ${awsKey}`,
+            `ai key ${aiKey}`,
+            `header ${headerToken}`,
+            `context token ${ctxToken}`,
+            `xai token ${xaiToken}`,
+          ],
+        },
+      },
+    ]);
+
+    const serialized = JSON.stringify(skills[0].availability);
+    for (const token of [
+      platformKey,
+      githubToken,
+      githubPatToken,
+      githubSessionToken,
+      githubUserToken,
+      githubRefreshToken,
+      npmToken,
+      awsKey,
+      aiKey,
+      headerToken,
+      ctxToken,
+      xaiToken,
+    ]) {
+      expect(serialized).not.toContain(token);
+    }
+    expect(serialized).toContain("credential");
   });
 
   test("parses versioned remote skill metadata with pricing", () => {

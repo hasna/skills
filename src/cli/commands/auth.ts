@@ -90,6 +90,59 @@ function writeCommandError(err: unknown, fallback: string, json?: boolean): void
   process.exitCode = 1;
 }
 
+function envApiKey(): string | null {
+  const key = process.env.SKILLS_API_KEY || process.env.SKILL_API_KEY;
+  const trimmed = key?.trim();
+  return trimmed || null;
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function recordField(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? value : undefined;
+}
+
+function authIdentityPayload(
+  authSource: "stored" | "env",
+  live: unknown,
+  cached?: ReturnType<typeof getAuthConfig>,
+  offline = false,
+): Record<string, unknown> {
+  const root = recordField(live) ?? {};
+  const data = recordField(root.data);
+  const user = recordField(root.user) ?? recordField(data?.user);
+  const organization = recordField(root.organization) ?? recordField(root.org) ?? recordField(data?.organization);
+  const email = stringField(user?.email) ?? cached?.email;
+  const orgSlug = stringField(organization?.slug) ?? cached?.orgSlug;
+  const orgName = stringField(organization?.name);
+  const userId = stringField(user?.id) ?? cached?.userId;
+  const orgId = stringField(organization?.id) ?? cached?.orgId;
+  const role = stringField(user?.role);
+
+  return {
+    status: "authenticated",
+    authSource,
+    ...(offline ? { offline: true } : {}),
+    ...(email ? { email } : {}),
+    ...(orgSlug ? { organization: orgSlug } : {}),
+    ...(orgName ? { organizationName: orgName } : {}),
+    ...(userId ? { userId } : {}),
+    ...(orgId ? { orgId } : {}),
+    ...(role ? { role } : {}),
+  };
+}
+
+function printWhoami(payload: Record<string, unknown>): void {
+  if (payload.email) console.log(chalk.bold("Email:  ") + payload.email);
+  if (payload.organization) console.log(chalk.bold("Org:    ") + payload.organization);
+  if (payload.role) console.log(chalk.bold("Role:   ") + payload.role);
+  if (payload.organizationName) console.log(chalk.bold("Name:   ") + payload.organizationName);
+  if (payload.authSource === "env") console.log(chalk.dim("Auth:   SKILLS_API_KEY"));
+  if (payload.offline) console.log(chalk.dim("(offline — showing cached info)"));
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -408,28 +461,37 @@ export function registerAuth(parent: Command) {
   auth
     .command("whoami")
     .description("Show current account info")
-    .action(async () => {
+    .option("--json", "Output as JSON", false)
+    .action(async (options: { json?: boolean }) => {
+      const envKey = envApiKey();
       const config = getAuthConfig();
-      if (!config) {
-        console.log(chalk.dim("Not signed in. Run: skills auth login"));
+      const apiKey = envKey ?? config?.apiKey;
+      if (!apiKey) {
+        const payload = { status: "unauthenticated", error: "Not signed in. Run: skills auth login" };
+        if (options.json) console.log(JSON.stringify(payload, null, 2));
+        else console.log(chalk.dim(payload.error));
         return;
       }
 
-      console.log(chalk.bold("Email:  ") + config.email);
-      console.log(chalk.bold("Org:    ") + config.orgSlug);
-
+      const authSource = envKey ? "env" : "stored";
       try {
         const res = await apiRequest("/api/auth/whoami", {
-          headers: { Authorization: `Bearer ${config.apiKey}` },
+          headers: { Authorization: `Bearer ${apiKey}` },
         });
-        if (res.user) {
-          console.log(chalk.bold("Role:   ") + res.user.role);
+        const payload = authIdentityPayload(authSource, res, envKey ? null : config);
+        if (options.json) {
+          console.log(JSON.stringify(payload, null, 2));
+        } else {
+          printWhoami(payload);
         }
-        if (res.organization) {
-          console.log(chalk.bold("Name:   ") + res.organization.name);
+      } catch (err) {
+        if (config && !envKey) {
+          const payload = authIdentityPayload("stored", {}, config, true);
+          if (options.json) console.log(JSON.stringify(payload, null, 2));
+          else printWhoami(payload);
+          return;
         }
-      } catch {
-        console.log(chalk.dim("(offline — showing cached info)"));
+        writeCommandError(err, "Failed to fetch current account", options.json);
       }
     });
 

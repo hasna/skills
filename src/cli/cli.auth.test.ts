@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { runCliInCwd } from "./cli.test-utils";
@@ -48,6 +48,105 @@ describe("CLI hosted auth and billing", () => {
       expect(JSON.parse(portal.stdout)).toMatchObject({ url: "https://billing.example/portal" });
       expect(seenAuthHeaders).toEqual(["Bearer sk_env_billing", "Bearer sk_env_billing"]);
       expect(existsSync(join(tmpDir, ".hasna", "skills", "auth.json"))).toBe(false);
+    } finally {
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("auth whoami accepts SKILLS_API_KEY without storing or exposing the key", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "cli-whoami-api-key-"));
+    const seenAuthHeaders: Array<string | null> = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (req) => {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/auth/whoami" && req.method === "GET") {
+          seenAuthHeaders.push(req.headers.get("authorization"));
+          return Response.json({
+            user: { id: "user_env", email: "env@example.com", role: "owner" },
+            organization: { id: "org_env", slug: "env-org", name: "Env Org" },
+          });
+        }
+
+        return Response.json({ error: `missing route ${req.method} ${url.pathname}` }, { status: 404 });
+      },
+    });
+
+    try {
+      const env = {
+        HOME: tmpDir,
+        SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+        SKILLS_API_KEY: "sk_env_whoami",
+      };
+
+      const result = await runCliInCwd(["auth", "whoami", "--json"], tmpDir, env);
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      const data = JSON.parse(result.stdout);
+      expect(data).toMatchObject({
+        status: "authenticated",
+        authSource: "env",
+        email: "env@example.com",
+        organization: "env-org",
+        organizationName: "Env Org",
+        role: "owner",
+      });
+      expect(result.stdout).not.toContain("sk_env_whoami");
+      expect(seenAuthHeaders).toEqual(["Bearer sk_env_whoami"]);
+      expect(existsSync(join(tmpDir, ".hasna", "skills", "auth.json"))).toBe(false);
+    } finally {
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("auth whoami env auth does not fall back to stale stored identity", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "cli-whoami-env-overrides-store-"));
+    const authDir = join(tmpDir, ".hasna", "skills");
+    mkdirSync(authDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(authDir, "auth.json"), JSON.stringify({
+      apiKey: "stored_fixture_key",
+      email: "stored@example.com",
+      orgId: "org_stored",
+      orgSlug: "stored-org",
+      userId: "user_stored",
+    }));
+
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (req) => {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/auth/whoami" && req.method === "GET") {
+          expect(req.headers.get("authorization")).toBe("Bearer env_fixture_key");
+          return Response.json({
+            user: { role: "member" },
+            organization: { name: "Env Org" },
+          });
+        }
+
+        return Response.json({ error: `missing route ${req.method} ${url.pathname}` }, { status: 404 });
+      },
+    });
+
+    try {
+      const result = await runCliInCwd(["auth", "whoami", "--json"], tmpDir, {
+        HOME: tmpDir,
+        SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+        SKILLS_API_KEY: "env_fixture_key",
+      });
+      expect(result.exitCode).toBe(0);
+      const data = JSON.parse(result.stdout);
+      expect(data).toMatchObject({
+        status: "authenticated",
+        authSource: "env",
+        role: "member",
+        organizationName: "Env Org",
+      });
+      expect(result.stdout).not.toContain("stored@example.com");
+      expect(result.stdout).not.toContain("stored-org");
+      expect(result.stdout).not.toContain("stored_fixture_key");
+      expect(result.stdout).not.toContain("env_fixture_key");
     } finally {
       server.stop(true);
       rmSync(tmpDir, { recursive: true, force: true });
@@ -166,6 +265,7 @@ describe("CLI hosted auth and billing", () => {
         ["billing", "portal", "--json"],
         ["credits", "buy", "5", "--json"],
         ["credits", "packs", "--json"],
+        ["auth", "whoami", "--json"],
         ["auth", "login", "--device", "--json"],
       ]) {
         const result = await runCliInCwd(args, tmpDir, env);

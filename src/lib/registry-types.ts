@@ -7,6 +7,7 @@ export interface SkillMeta {
   dependencies?: string[];
   version?: string;
   pricing?: SkillPricingMetadata;
+  availability?: SkillAvailabilityMetadata;
   source?: "official" | "custom" | "remote";
 }
 
@@ -21,6 +22,13 @@ export interface SkillPricingMetadata {
   quoteDependsOnInput?: boolean;
   quoteRequired?: boolean;
   description?: string;
+}
+
+export interface SkillAvailabilityMetadata {
+  status: "available" | "unavailable";
+  code?: string;
+  message?: string;
+  details?: string[];
 }
 
 export const CATEGORIES = [
