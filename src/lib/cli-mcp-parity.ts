@@ -2,6 +2,7 @@ export type SkillsCliMcpParityDomain =
   | "discovery"
   | "portable-skills"
   | "runtime"
+  | "tool-primitives"
   | "validation";
 
 export interface SkillsCliMcpParityEntry {
@@ -62,6 +63,30 @@ export const SKILLS_CLI_MCP_PARITY: SkillsCliMcpParityEntry[] = [
     cliCommands: ["skills validate"],
     mcpTools: ["validate_skill"],
     jsonContracts: ["skill_validation_result", "structured_error"],
+    status: "matched",
+  },
+  {
+    domain: "tool-primitives",
+    operation: "list",
+    cliCommands: ["skills tools list"],
+    mcpTools: ["list_tool_primitives"],
+    jsonContracts: ["tool_primitive_summary"],
+    status: "matched",
+  },
+  {
+    domain: "tool-primitives",
+    operation: "deps",
+    cliCommands: ["skills tools deps"],
+    mcpTools: ["get_skill_tool_dependencies"],
+    jsonContracts: ["skill_tool_dependencies"],
+    status: "matched",
+  },
+  {
+    domain: "tool-primitives",
+    operation: "validate",
+    cliCommands: ["skills tools validate"],
+    mcpTools: ["validate_tool_primitives"],
+    jsonContracts: ["tool_primitive_coverage_result"],
     status: "matched",
   },
 ];

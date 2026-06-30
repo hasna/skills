@@ -120,6 +120,7 @@ describe("MCP contract manifest", () => {
     expect(getMcpResourceContracts().map((resource) => resource.uri)).toEqual([
       "skills://mcp/contracts",
       "skills://registry",
+      "skills://tool-primitives",
       "skills://{name}",
     ]);
   });

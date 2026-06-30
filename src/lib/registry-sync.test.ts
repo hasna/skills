@@ -3,20 +3,35 @@ import { mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import pkg from "../../package.json" with { type: "json" };
-import { BASIC_SKILL_NAMES, SKILLS } from "./registry.js";
+import { BASIC_SKILL_NAMES, SKILLS, clearRegistryCache } from "./registry.js";
 import {
   createRegistrySyncArtifact,
   writeRegistrySyncArtifact,
 } from "./registry-sync.js";
 
+function withCleanHome<T>(fn: () => T): T {
+  const originalHome = process.env["HOME"];
+  const home = mkdtempSync(join(tmpdir(), "registry-sync-home-"));
+  process.env["HOME"] = home;
+  clearRegistryCache();
+  try {
+    return fn();
+  } finally {
+    if (originalHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = originalHome;
+    clearRegistryCache();
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
 describe("registry sync artifact", () => {
   test("creates a deterministic basic registry artifact", () => {
-    const artifact = createRegistrySyncArtifact({
+    const artifact = withCleanHome(() => createRegistrySyncArtifact({
       profile: "basic",
       includeDocs: false,
       includeRequirements: false,
       includeValidation: false,
-    });
+    }));
 
     expect(artifact.schemaVersion).toBe(1);
     expect(artifact.source).toEqual({
@@ -36,7 +51,7 @@ describe("registry sync artifact", () => {
   });
 
   test("includes docs, requirements, validation, and provenance by default", () => {
-    const artifact = createRegistrySyncArtifact({ profile: "basic" });
+    const artifact = withCleanHome(() => createRegistrySyncArtifact({ profile: "basic" }));
     const image = artifact.skills.find((skill) => skill.name === "image");
 
     expect(image).toBeDefined();
@@ -53,12 +68,12 @@ describe("registry sync artifact", () => {
   });
 
   test("supports the all profile", () => {
-    const artifact = createRegistrySyncArtifact({
+    const artifact = withCleanHome(() => createRegistrySyncArtifact({
       profile: "all",
       includeDocs: false,
       includeRequirements: false,
       includeValidation: false,
-    });
+    }));
 
     expect(artifact.summary.skillCount).toBe(SKILLS.length);
     expect(artifact.skills.length).toBe(SKILLS.length);
@@ -69,12 +84,12 @@ describe("registry sync artifact", () => {
     const dir = mkdtempSync(join(tmpdir(), "registry-sync-"));
     const output = join(dir, "nested", "registry.json");
     try {
-      const artifact = createRegistrySyncArtifact({
+      const artifact = withCleanHome(() => createRegistrySyncArtifact({
         profile: "basic",
         includeDocs: false,
         includeRequirements: false,
         includeValidation: false,
-      });
+      }));
       writeRegistrySyncArtifact(output, artifact);
       expect(JSON.parse(readFileSync(output, "utf8"))).toEqual(artifact);
     } finally {

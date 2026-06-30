@@ -20,6 +20,12 @@ import {
   publicDiscoveryEnvVars,
 } from "../lib/discovery.js";
 import {
+  getSkillToolDependencies,
+  getToolPrimitive,
+  listToolPrimitives,
+  validateToolPrimitiveCoverage,
+} from "../lib/tool-primitives.js";
+import {
   DEFAULT_MCP_LIMIT,
   paginate,
   parsePageLimit,
@@ -155,5 +161,49 @@ export function registerDiscoveryTools(server: McpServer): void {
     }
     return { content: [{ type: "text", text: doc }] };
   });
+
+  server.registerTool("list_tool_primitives", {
+    title: "List Tool Primitives",
+    description: "List primitive tools that skills depend on across CLI, MCP, API, and hosted worker execution.",
+    inputSchema: {
+      query: z.string().optional(),
+    },
+  }, async ({ query }) => mcpJson({
+    schemaVersion: 1,
+    primitives: listToolPrimitives(query),
+    total: listToolPrimitives(query).length,
+  }));
+
+  server.registerTool("get_tool_primitive", {
+    title: "Get Tool Primitive",
+    description: "Get one primitive tool definition by name.",
+    inputSchema: {
+      name: z.string(),
+    },
+  }, async ({ name }) => {
+    const primitive = getToolPrimitive(name);
+    if (!primitive) return mcpError("PRIMITIVE_NOT_FOUND", `Primitive '${name}' not found`);
+    return mcpJson(primitive);
+  });
+
+  server.registerTool("get_skill_tool_dependencies", {
+    title: "Get Skill Tool Dependencies",
+    description: "Get primitive tool dependencies for one skill.",
+    inputSchema: {
+      name: z.string(),
+    },
+  }, async ({ name }) => {
+    const deps = getSkillToolDependencies(name);
+    if (!deps) return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
+    return mcpJson(deps);
+  });
+
+  server.registerTool("validate_tool_primitives", {
+    title: "Validate Tool Primitives",
+    description: "Validate primitive tool coverage for the bundled skill catalog.",
+    inputSchema: {
+      profile: z.enum(["basic", "all"]).optional(),
+    },
+  }, async ({ profile }) => mcpJson(validateToolPrimitiveCoverage(profile || "all")));
 
 }

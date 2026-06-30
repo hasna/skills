@@ -97,14 +97,14 @@ export const DATA_ANALYSIS_SKILLS: SkillMeta[] = [
     displayName: "Read PDF",
     description: "Extract text and structured content from PDF files with chunked Claude document analysis",
     category: "Data & Analysis",
-    tags: ["pdf", "documents", "extraction", "analysis", "remote", "premium", "cerebras"],
+    tags: ["pdf", "documents", "extraction", "analysis", "remote", "premium", "gateway"],
   },
   {
     name: "pdf-read",
     displayName: "PDF Read",
     description: "Read multiple PDFs with page-range selection, chunked reading, and parallel processing",
     category: "Data & Analysis",
-    tags: ["pdf", "reader", "extraction", "parallel", "remote", "premium", "cerebras"],
+    tags: ["pdf", "reader", "extraction", "parallel", "remote", "premium", "gateway"],
   },
   {
     name: "pdf-to-markdown",

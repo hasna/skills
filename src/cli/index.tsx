@@ -52,6 +52,9 @@ registerBrowse(program);
 const { registerIntrospect } = await import("./commands/introspect.js");
 registerIntrospect(program);
 
+const { registerToolPrimitives } = await import("./commands/tool-primitives.js");
+registerToolPrimitives(program);
+
 const { registerSetup } = await import("./commands/init.js");
 registerSetup(program);
 

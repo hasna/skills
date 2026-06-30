@@ -19,6 +19,7 @@ import {
   publicDiscoveryDocumentation,
   publicDiscoveryEnvVars,
 } from "../lib/discovery.js";
+import { getSkillToolDependencies, listToolPrimitives } from "../lib/tool-primitives.js";
 import { mcpError, mcpJson } from "./helpers.js";
 
 export function registerResourceMetaTools(server: McpServer): void {
@@ -40,6 +41,16 @@ export function registerResourceMetaTools(server: McpServer): void {
     contents: [{
       uri: "skills://registry",
       text: JSON.stringify(loadRegistryProfile("basic").map(getCompactSkillDiscovery)),
+      mimeType: "application/json",
+    }],
+  }));
+
+  server.registerResource("Tool Primitives", "skills://tool-primitives", {
+    description: "Primitive tool catalog used by skills across CLI, MCP, API, and hosted workers.",
+  }, async () => ({
+    contents: [{
+      uri: "skills://tool-primitives",
+      text: JSON.stringify(listToolPrimitives(), null, 2),
       mimeType: "application/json",
     }],
   }));
@@ -67,6 +78,7 @@ export function registerResourceMetaTools(server: McpServer): void {
             ...(skill ? getPublicSkillDiscovery(skill) : {}),
             documentation: skill ? publicDiscoveryDocumentation(skill, doc) : doc,
             requirements: publicReqs,
+            toolDependencies: skill ? getSkillToolDependencies(skill.name) : null,
             ...(skill ? { mcp: createSkillMcpMetadata(getPublicSkillDiscovery(skill)) } : {}),
           }, null, 2),
           mimeType: "application/json",

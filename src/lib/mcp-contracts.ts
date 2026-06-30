@@ -174,6 +174,22 @@ const skillSummarySchema = objectSchema({
   pricing: pricingSchema,
 }, ["name", "category"], "Compact skill summary.");
 
+const toolPrimitiveSummarySchema = objectSchema({
+  name: stringSchema("Primitive tool name."),
+  title: stringSchema("Display name."),
+  family: stringSchema("Primitive family."),
+  runtime: stringSchema("Runtime type: local, hosted, gateway, connector, or mixed."),
+  description: stringSchema("Primitive description."),
+}, ["name", "title", "family", "runtime", "description"], "Primitive tool summary.");
+
+const skillToolDependencySchema = objectSchema({
+  skill: stringSchema("Skill slug."),
+  primitive: stringSchema("Primitive tool name."),
+  family: stringSchema("Primitive family."),
+  required: { type: "boolean" },
+  reason: stringSchema("Why this skill depends on the primitive."),
+}, ["skill", "primitive", "family", "required", "reason"], "Primitive dependency for a skill.");
+
 const validationMessageSchema = objectSchema({
   code: stringSchema("Stable validation code."),
   message: stringSchema("Validation message."),
@@ -357,6 +373,74 @@ const toolContracts: McpToolContract[] = [
     stable: true,
     inputSchema: objectSchema({ name: skillNameInput }, ["name"]),
     outputSchema: { type: "string", description: "Best available skill documentation." },
+  },
+  {
+    name: "list_tool_primitives",
+    title: "List Tool Primitives",
+    description: "List primitive tools used by skills across CLI, MCP, API, and hosted worker execution.",
+    params: ["query?"],
+    category: "discovery",
+    sideEffects: "none",
+    stable: true,
+    inputSchema: objectSchema({ query: stringSchema("Optional primitive search query.") }),
+    outputSchema: objectSchema({
+      schemaVersion: { type: "number" },
+      primitives: arraySchema(toolPrimitiveSummarySchema),
+      total: { type: "number" },
+    }, ["schemaVersion", "primitives", "total"]),
+  },
+  {
+    name: "get_tool_primitive",
+    title: "Get Tool Primitive",
+    description: "Get one primitive tool definition by name.",
+    params: ["name"],
+    category: "metadata",
+    sideEffects: "none",
+    stable: true,
+    inputSchema: objectSchema({ name: stringSchema("Primitive tool name.") }, ["name"]),
+    outputSchema: objectSchema({}, [], "Primitive tool definition.", true),
+  },
+  {
+    name: "get_skill_tool_dependencies",
+    title: "Get Skill Tool Dependencies",
+    description: "Get primitive tool dependencies for one skill.",
+    params: ["name"],
+    category: "metadata",
+    sideEffects: "none",
+    stable: true,
+    inputSchema: objectSchema({ name: skillNameInput }, ["name"]),
+    outputSchema: objectSchema({
+      schemaVersion: { type: "number" },
+      skill: skillNameInput,
+      category: stringSchema("Skill category."),
+      source: stringSchema("Skill source."),
+      dependencies: arraySchema(skillToolDependencySchema),
+      gatewayBacked: { type: "boolean" },
+      hostedRuntime: { type: "boolean" },
+    }, ["schemaVersion", "skill", "category", "dependencies", "gatewayBacked", "hostedRuntime"]),
+  },
+  {
+    name: "validate_tool_primitives",
+    title: "Validate Tool Primitives",
+    description: "Validate primitive tool coverage for the bundled skill catalog.",
+    params: ["profile?"],
+    category: "validation",
+    sideEffects: "none",
+    stable: true,
+    inputSchema: objectSchema({
+      profile: { type: "string", enum: ["basic", "all"], default: "all" },
+    }),
+    outputSchema: objectSchema({
+      schemaVersion: { type: "number" },
+      valid: { type: "boolean" },
+      profile: stringSchema("Registry profile."),
+      skillCount: { type: "number" },
+      primitiveCount: { type: "number" },
+      mappedSkillCount: { type: "number" },
+      gatewayBackedSkillCount: { type: "number" },
+      hostedRuntimeSkillCount: { type: "number" },
+      issues: arraySchema(objectSchema({}, [], "Coverage issue.", true)),
+    }, ["schemaVersion", "valid", "profile", "skillCount", "primitiveCount", "mappedSkillCount", "issues"]),
   },
   {
     name: "pin_skill",
@@ -751,6 +835,13 @@ const resourceContracts: McpResourceContract[] = [
     description: "Compact default skill registry.",
     mimeType: "application/json",
     schema: arraySchema(skillSummarySchema),
+  },
+  {
+    uri: "skills://tool-primitives",
+    name: "Tool Primitives",
+    description: "Primitive tool catalog used by skills across CLI, MCP, API, and hosted workers.",
+    mimeType: "application/json",
+    schema: arraySchema(toolPrimitiveSummarySchema),
   },
   {
     uri: "skills://{name}",

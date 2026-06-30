@@ -73,8 +73,8 @@ export const PREMIUM_SKILLS: SkillPricing[] = [
   { slug: "transcript", displayName: "Transcript", tier: "premium", costCents: 10, providers: ["openai", "elevenlabs", "deepgram", "hosted"], description: "Audio/video transcription with timestamps, diarization, and URL support" },
   { slug: "webcrawling", displayName: "Web Crawling", tier: "premium", costCents: 5, providers: ["firecrawl"], description: "Structured web page crawling and extraction" },
   { slug: "browse", displayName: "Browse", tier: "premium", costCents: 5, providers: ["browser"], description: "Web browsing and page interaction" },
-  { slug: "read-pdf", displayName: "Read PDF", tier: "premium", costCents: 5, providers: ["cerebras"], description: "Hosted PDF extraction and structured content analysis" },
-  { slug: "pdf-read", displayName: "PDF Read", tier: "premium", costCents: 5, providers: ["cerebras"], description: "Hosted multi-PDF text extraction with page ranges" },
+  { slug: "read-pdf", displayName: "Read PDF", tier: "premium", costCents: 5, providers: ["openrouter"], description: "Hosted PDF extraction and structured content analysis" },
+  { slug: "pdf-read", displayName: "PDF Read", tier: "premium", costCents: 5, providers: ["openrouter"], description: "Hosted multi-PDF text extraction with page ranges" },
   { slug: "pdf-to-markdown", displayName: "PDF to Markdown", tier: "premium", costCents: 5, providers: ["hosted"], description: "Hosted PDF to markdown conversion and cleanup" },
   { slug: "pdf-to-dataset", displayName: "PDF to Dataset", tier: "premium", costCents: 15, providers: ["hosted"], description: "Hosted PDF table and form extraction into CSV/JSON datasets" },
   { slug: "market-research-report", displayName: "Market Research Report", tier: "premium", costCents: 150, providers: ["hosted"], description: "Hosted market research report with competitor, audience, pricing, and source artifacts" },
@@ -187,9 +187,9 @@ export function getSkillRunPricing(slug: string, input?: unknown, args: string[]
       tier: "premium",
       costCents: ARTICLE_USER_COST_CENTS * count,
       costMicros: ARTICLE_INTERNAL_COST_CENTS * count * 10_000,
-      provider: "cerebras",
-      model: "gpt-oss",
-      providers: ["cerebras"],
+      provider: "openrouter",
+      model: "openai/gpt-4o-mini",
+      providers: ["openrouter"],
       description: `Remote article generation; ${count} article${count === 1 ? "" : "s"}`,
     };
   }

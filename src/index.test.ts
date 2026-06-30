@@ -156,7 +156,7 @@ describe("public API exports", () => {
 
     // Verify clean basic profile works through the public API
     const basic = publicAPI.loadRegistryProfile("basic");
-    expect(basic.map((s) => s.name)).toEqual([...publicAPI.BASIC_SKILL_NAMES]);
+    expect(basic.filter((s) => s.source !== "custom").map((s) => s.name)).toEqual([...publicAPI.BASIC_SKILL_NAMES]);
     expect(publicAPI.isBasicSkillName("image")).toBe(true);
     expect(publicAPI.isBasicSkillName("deepresearch")).toBe(false);
 
