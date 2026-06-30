@@ -32,9 +32,22 @@ with hosted execution kept behind explicit setup and auth.
 - Agent can list/search/pin skills through MCP tools.
 - Agent can inspect docs, requirements, tags, categories, and registry
   resources.
+- Agent can inspect primitive tool dependencies and validate primitive coverage
+  through MCP tools.
 - Agent can request hosted execution and receive structured auth or remote-run
   errors.
 - MCP tests cover success, error, and remote-only fail-closed behavior.
+
+## Primitive Tool Acceptance
+
+- Public exports expose the primitive tool catalog and per-skill primitive
+  dependency APIs.
+- `skills tools list`, `skills tools deps <skill>`, and `skills tools validate`
+  provide JSON output for agents and launch checks.
+- The bundled catalog maps every official skill to at least one primitive tool.
+- Gateway-backed and hosted-runtime skills are marked explicitly so hosted
+  wrappers can route model calls through their configured gateway without
+  leaking provider keys into local OSS usage.
 
 ## Package Acceptance
 
@@ -73,6 +86,7 @@ All gates must pass from a clean checkout:
 bun install --frozen-lockfile
 bun run typecheck
 bun test
+bun run src/cli/index.tsx -- tools validate --json
 bun run build
 npm pack --dry-run --json --ignore-scripts
 ```

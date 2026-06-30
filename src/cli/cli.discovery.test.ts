@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   CLI_PATH,
+  CLEAN_CLI_HOME,
   EXPECTED_ALL_SKILL_COUNT,
   EXPECTED_BASIC_SKILL_COUNT,
   PACKAGE_VERSION,
@@ -130,7 +131,7 @@ describe("CLI discovery", () => {
       const proc = Bun.spawn(["bash", "-lc", command], {
         stdout: "pipe",
         stderr: "pipe",
-        env: { ...process.env, NO_COLOR: "1", SKILLS_TEST_MODE: "1" },
+        env: { ...process.env, HOME: CLEAN_CLI_HOME, NO_COLOR: "1", SKILLS_TEST_MODE: "1" },
       });
       const stdout = await new Response(proc.stdout).text();
       const stderr = await new Response(proc.stderr).text();
@@ -320,7 +321,7 @@ describe("CLI discovery", () => {
       const proc = Bun.spawn(["bash", "-lc", command], {
         stdout: "pipe",
         stderr: "pipe",
-        env: { ...process.env, NO_COLOR: "1", SKILLS_TEST_MODE: "1" },
+        env: { ...process.env, HOME: CLEAN_CLI_HOME, NO_COLOR: "1", SKILLS_TEST_MODE: "1" },
       });
       const stdout = await new Response(proc.stdout).text();
       const stderr = await new Response(proc.stderr).text();

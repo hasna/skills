@@ -10,6 +10,7 @@ const VENDOR_TERMS = [
   "DALL-E 3",
   "GPT-4o Mini",
   "Cerebras",
+  "OpenRouter",
   "Firecrawl",
   "ElevenLabs",
   "Anthropic",
@@ -39,6 +40,7 @@ const VENDOR_TAGS = new Set([
   "google",
   "minimax",
   "openai",
+  "openrouter",
   "seedance",
   "whisper",
   "xai",
@@ -53,6 +55,7 @@ const VENDOR_ENV_PREFIXES = [
   "GOOGLE_",
   "MINIMAX_",
   "OPENAI_",
+  "OPENROUTER_",
   "XAI_",
 ];
 
@@ -64,6 +67,7 @@ const VENDOR_PACKAGE_PATTERNS = [
   /gemini/i,
   /minimax/i,
   /openai/i,
+  /openrouter/i,
   /xai/i,
 ];
 

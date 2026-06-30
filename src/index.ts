@@ -151,6 +151,24 @@ export {
 } from "./lib/discovery.js";
 
 export {
+  TOOL_PRIMITIVE_SCHEMA_VERSION,
+  TOOL_PRIMITIVES,
+  createSkillToolDependencies,
+  getSkillToolDependencies,
+  getToolPrimitive,
+  isGatewayBackedSkill,
+  listToolPrimitives,
+  validateToolPrimitiveCoverage,
+  type SkillToolDependencies,
+  type SkillToolDependency,
+  type ToolPrimitive,
+  type ToolPrimitiveCoverageIssue,
+  type ToolPrimitiveCoverageResult,
+  type ToolPrimitiveRuntime,
+  type ToolPrimitiveSummary,
+} from "./lib/tool-primitives.js";
+
+export {
   RemoteSkillsClient,
   createRemoteSkillsClient,
 } from "./lib/remote-client.js";

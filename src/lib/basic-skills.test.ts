@@ -69,8 +69,9 @@ describe("basic skill profile for Takumi", () => {
     const basic = loadBasicRegistry();
     const names = basic.map((skill) => skill.name);
 
-    expect(names).toEqual(BASIC_SKILLS);
-    expect(names.length).toBeLessThanOrEqual(25);
+    expect(names.slice(0, BASIC_SKILLS.length)).toEqual(BASIC_SKILLS);
+    expect(names.filter((name) => isBasicSkillName(name))).toEqual(BASIC_SKILLS);
+    expect(basic.filter((skill) => skill.source !== "custom").length).toBeLessThanOrEqual(25);
     expect(names).not.toContain("logo-design");
     expect(names).not.toContain("deepresearch");
     expect(loadRegistryProfile("all").some((skill) => skill.name === "deepresearch")).toBe(true);

@@ -1,4 +1,6 @@
 import { describe, test, expect } from "bun:test";
+import { mkdtempSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 import { BASIC_SKILL_NAMES, SKILLS } from "../lib/registry.js";
 
@@ -40,11 +42,12 @@ class McpClient {
   private reader: ReadableStreamDefaultReader<Uint8Array>;
 
   constructor(env: Record<string, string> = {}) {
+    const home = env.HOME ?? mkdtempSync(join(tmpdir(), "skills-mcp-home-"));
     this.proc = Bun.spawn(["bun", "run", MCP_PATH], {
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, ...CLEAN_STORAGE_ENV, ...env, MCP_STDIO: "1", NO_COLOR: "1" },
+      env: { ...process.env, HOME: home, ...CLEAN_STORAGE_ENV, ...env, MCP_STDIO: "1", NO_COLOR: "1" },
     });
     this.reader = (this.proc.stdout as ReadableStream<Uint8Array>).getReader();
     this._readLoop();
@@ -136,6 +139,9 @@ describe("MCP Server", () => {
       expect(toolNames).toContain("search_skills");
       expect(toolNames).toContain("get_skill_info");
       expect(toolNames).toContain("get_skill_docs");
+      expect(toolNames).toContain("list_tool_primitives");
+      expect(toolNames).toContain("get_skill_tool_dependencies");
+      expect(toolNames).toContain("validate_tool_primitives");
       expect(toolNames).toContain("pin_skill");
       expect(toolNames).toContain("unpin_skill");
       expect(toolNames).toContain("list_categories");
@@ -148,6 +154,27 @@ describe("MCP Server", () => {
       expect(toolNames).toContain("port_skill");
       expect(toolNames).toContain("storage_status");
       expect(toolNames).toContain("storage_sync_plan");
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
+  test("reports primitive tool dependencies for a skill", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "get_skill_tool_dependencies",
+        arguments: { name: "image" },
+      }, 14);
+      expect(response).not.toBeNull();
+      const payload = JSON.parse(response.result.content[0].text);
+      expect(payload).toMatchObject({
+        skill: "image",
+        gatewayBacked: true,
+        hostedRuntime: true,
+      });
+      expect(payload.dependencies.map((dependency: { primitive: string }) => dependency.primitive)).toContain("media-image");
     } finally {
       await client.close();
     }

@@ -104,7 +104,8 @@ describe("registry", () => {
     test("returns skills for Development Tools", () => {
       const skills = getSkillsByCategory("Development Tools");
       const expected = SKILLS.filter((skill) => skill.category === "Development Tools");
-      expect(skills.length).toBe(expected.length);
+      const official = skills.filter((skill) => skill.source !== "custom");
+      expect(official.length).toBe(expected.length);
       for (const skill of skills) {
         expect(skill.category).toBe("Development Tools");
       }
@@ -113,7 +114,8 @@ describe("registry", () => {
     test("returns skills for Health & Wellness", () => {
       const skills = getSkillsByCategory("Health & Wellness");
       const expected = SKILLS.filter((skill) => skill.category === "Health & Wellness");
-      expect(skills.length).toBe(expected.length);
+      const official = skills.filter((skill) => skill.source !== "custom");
+      expect(official.length).toBe(expected.length);
     });
 
     test("returns empty array for invalid category", () => {
@@ -124,7 +126,7 @@ describe("registry", () => {
     test("total skills across all categories equals SKILLS length", () => {
       let total = 0;
       for (const category of CATEGORIES) {
-        total += getSkillsByCategory(category).length;
+        total += getSkillsByCategory(category).filter((skill) => skill.source !== "custom").length;
       }
       expect(total).toBe(SKILLS.length);
     });
@@ -257,10 +259,9 @@ describe("registry", () => {
   describe("loadRegistry", () => {
     test("returns official skills by default", () => {
       const reg = loadRegistry();
-      // All skills should have source "official" when no custom skills exist
-      const allOfficial = reg.every((s) => s.source === "official");
       // Some may be custom if custom skills exist on this machine
       expect(reg.length).toBeGreaterThanOrEqual(SKILLS.length);
+      expect(reg.filter((s) => s.source !== "custom").length).toBe(SKILLS.length);
     });
 
     test("caching returns same reference within TTL", () => {
@@ -285,7 +286,7 @@ describe("registry", () => {
   describe("loadBasicRegistry", () => {
     test("returns basic profile subset in correct order", () => {
       const basic = loadBasicRegistry();
-      const names = basic.map((s) => s.name);
+      const names = basic.filter((skill) => skill.source !== "custom").map((s) => s.name);
       expect(names).toEqual([...BASIC_SKILL_NAMES]);
     });
   });

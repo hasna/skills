@@ -71,4 +71,11 @@ export const PROJECT_MANAGEMENT_SKILLS: SkillMeta[] = [
     category: "Project Management",
     tags: ["projects", "dashboard", "reports", "json-render"],
   },
+  {
+    name: "todos-plan",
+    displayName: "Todos Plan",
+    description: "Author, sync, route, and verify Todos plans using Todos CLI plan IDs as source of truth",
+    category: "Project Management",
+    tags: ["todos", "plans", "tasks", "verification", "workflow"],
+  },
 ];

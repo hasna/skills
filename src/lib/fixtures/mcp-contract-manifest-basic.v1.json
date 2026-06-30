@@ -3,17 +3,39 @@
   "toolNames": [
     "describe_tools",
     "get_mcp_contracts",
+    "get_skill_tool_dependencies",
     "list_skills",
+    "list_tool_primitives",
     "pin_skill",
     "run_skill",
-    "validate_skill"
+    "validate_skill",
+    "validate_tool_primitives"
   ],
   "resourceUris": [
     "skills://mcp/contracts",
     "skills://registry",
+    "skills://tool-primitives",
     "skills://{name}"
   ],
   "contracts": {
+    "get_skill_tool_dependencies": {
+      "category": "metadata",
+      "sideEffects": "none",
+      "required": [
+        "name"
+      ],
+      "properties": [
+        "name"
+      ]
+    },
+    "list_tool_primitives": {
+      "category": "discovery",
+      "sideEffects": "none",
+      "required": [],
+      "properties": [
+        "query"
+      ]
+    },
     "pin_skill": {
       "category": "pinning",
       "sideEffects": "filesystem",
@@ -38,6 +60,14 @@
         "detail",
         "input",
         "name"
+      ]
+    },
+    "validate_tool_primitives": {
+      "category": "validation",
+      "sideEffects": "none",
+      "required": [],
+      "properties": [
+        "profile"
       ]
     },
     "validate_skill": {

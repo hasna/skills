@@ -16,6 +16,7 @@ describe("v1 acceptance criteria", () => {
     for (const section of [
       "## CLI Acceptance",
       "## MCP Acceptance",
+      "## Primitive Tool Acceptance",
       "## Package Acceptance",
       "## Security Acceptance",
       "## Hosted Wrapper Acceptance",
@@ -40,6 +41,7 @@ describe("v1 acceptance criteria", () => {
     expect(doc).toContain("bun install --frozen-lockfile");
     expect(doc).toContain("bun run typecheck");
     expect(doc).toContain("bun test");
+    expect(doc).toContain("tools validate --json");
     expect(doc).toContain("bun run build");
     expect(doc).toContain("npm pack --dry-run --json --ignore-scripts");
     expect(doc).toContain("systemd-run --user --scope");
