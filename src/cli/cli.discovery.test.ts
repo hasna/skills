@@ -489,13 +489,35 @@ describe("CLI discovery", () => {
   });
 
   describe("quote", () => {
+    test("fails fast for unavailable hosted provider skills without charging", async () => {
+      const quoted = await runCli(["quote", "image", "--json"]);
+      expect(quoted.exitCode).toBe(1);
+      const data = JSON.parse(quoted.stdout);
+      expect(data).toMatchObject({
+        skill: "image",
+        code: "HOSTED_PROVIDER_UNAVAILABLE",
+        availability: {
+          status: "unavailable",
+          code: "HOSTED_PROVIDER_UNAVAILABLE",
+        },
+      });
+      expect(data.pricing).toMatchObject({
+        tier: "premium",
+        billingUnit: "image",
+      });
+      expect(data.details).toContain("No balance was charged.");
+    });
+
     test("quotes fixed and variable premium skills without provider internals", async () => {
       const fixed = await runCli(["quote", "logo-design", "--json"]);
       expect(fixed.exitCode).toBe(0);
-      expect(JSON.parse(fixed.stdout).pricing).toMatchObject({
-        tier: "premium",
-        formattedCost: "$0.50/run",
-        quoteDependsOnInput: false,
+      expect(JSON.parse(fixed.stdout)).toMatchObject({
+        availability: { status: "available" },
+        pricing: {
+          tier: "premium",
+          formattedCost: "$0.50/run",
+          quoteDependsOnInput: false,
+        },
       });
 
       const dataset = await runCli(["quote", "pdf-to-dataset", "--json"]);

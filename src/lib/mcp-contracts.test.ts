@@ -57,6 +57,23 @@ describe("MCP contract manifest", () => {
       args: { type: "array", items: { type: "string" } },
       approved: { type: "boolean", description: expect.stringContaining("approved") },
     });
+    expect(byName.get("quote_skill")?.outputSchema).toMatchObject({
+      required: ["skill", "pricing", "availability"],
+      properties: {
+        availability: {
+          type: "object",
+          properties: {
+            status: { type: "string", enum: ["available", "unavailable"] },
+            code: { type: "string" },
+            message: { type: "string" },
+            details: { type: "array", items: { type: "string" } },
+          },
+        },
+        error: { type: "string" },
+        code: { type: "string" },
+        details: { type: "array", items: { type: "string" } },
+      },
+    });
     expect(byName.get("validate_skill")?.outputSchema.properties).toHaveProperty("issues");
 
     const serialized = JSON.stringify(contracts);

@@ -96,40 +96,16 @@ describe("CLI run premium media", () => {
       }
     });
 
-    test("transcribe alias submits transcript hosted run", async () => {
+    test("transcribe alias fails closed while transcript hosted provider is unavailable", async () => {
       const { mkdtempSync, rmSync } = require("fs");
       const { tmpdir } = require("os");
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-transcript-alias-async-"));
+      let remoteCalls = 0;
       const server = Bun.serve({
         port: 0,
-        async fetch(req) {
-          const url = new URL(req.url);
-          expect(req.headers.get("authorization")).toBe("Bearer sk_transcript_alias_async");
-          if (url.pathname === "/api/v1/runs/transcript" && req.method === "POST") {
-            const body = await req.json() as { args?: string[] };
-            expect(body.args).toEqual([
-              "--source",
-              "https://www.youtube.com/watch?v=abc123",
-              "--provider",
-              "openai",
-              "--diarize",
-            ]);
-            return Response.json(
-              {
-                id: "run_transcript_alias_async",
-                skill: "transcript",
-                status: "queued",
-                correlationId: "corr_transcript_alias_async",
-                pricing: {
-                  tier: "premium",
-                  billingUnit: "run",
-                  formattedCost: "$0.10/run",
-                },
-              },
-              { status: 202 },
-            );
-          }
-          return Response.json({ error: "not found" }, { status: 404 });
+        fetch() {
+          remoteCalls += 1;
+          return Response.json({ error: "transcript should not call hosted API while unavailable" }, { status: 500 });
         },
       });
       try {
@@ -167,16 +143,19 @@ describe("CLI run premium media", () => {
         ]);
         const data = JSON.parse(stdout);
         expect(stderr).toBe("");
-        expect(exitCode).toBe(0);
+        expect(exitCode).toBe(1);
         expect(data).toMatchObject({
           skill: "transcript",
           remote: true,
-          remoteRun: { id: "run_transcript_alias_async", status: "queued" },
-          nextActions: {
-            poll: "skills runs status run_transcript_alias_async",
-            download: "skills exports download run_transcript_alias_async",
+          code: "HOSTED_PROVIDER_UNAVAILABLE",
+          availability: {
+            status: "unavailable",
+            code: "HOSTED_PROVIDER_UNAVAILABLE",
           },
         });
+        expect(data.details).toContain("No balance was charged.");
+        expect(data.run.status).toBe("failed");
+        expect(remoteCalls).toBe(0);
       } finally {
         server.stop(true);
         rmSync(tmpDir, { recursive: true, force: true });

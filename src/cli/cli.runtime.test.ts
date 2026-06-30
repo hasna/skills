@@ -296,7 +296,7 @@ describe("CLI runtime and misc commands", () => {
       const tmpDir = mkdtempSync(join(tmpdir(), "cli-schedule-premium-remote-"));
       const env = { HOME: tmpDir, SKILLS_API_KEY: "", SKILLS_TEST_MODE: "1" };
       try {
-        const add = await runCliInCwd(["schedule", "add", "image", "*/5 * * * *", "--name", "premium-image", "--json"], tmpDir, env);
+        const add = await runCliInCwd(["schedule", "add", "logo-design", "*/5 * * * *", "--name", "premium-logo", "--json"], tmpDir, env);
         expect(add.exitCode).toBe(0);
 
         const schedulesPath = join(tmpDir, ".skills", "schedules.json");
@@ -313,7 +313,7 @@ describe("CLI runtime and misc commands", () => {
         expect(result.error).toContain("Due paid hosted schedules cost");
         expect(result.error).toContain("--allow-paid");
         expect(result.error).toContain("--max-paid-cents");
-        expect(result.schedules[0]).toMatchObject({ name: "premium-image", skill: "image", paid: true });
+        expect(result.schedules[0]).toMatchObject({ name: "premium-logo", skill: "logo-design", paid: true });
         expect(result.schedules[0].cost).toContain("$");
 
         const afterApprovalData = JSON.parse(readFileSync(schedulesPath, "utf-8"));
@@ -326,6 +326,44 @@ describe("CLI runtime and misc commands", () => {
         expect(approvedResult.results[0].error).toContain("hosted skill");
         expect(approvedResult.results[0].error).toContain("skills auth login");
         expect(approvedResult.results[0].error).not.toContain("Skill Image CLI");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("due unavailable hosted schedules fail before paid approval or remote auth", async () => {
+      const { mkdtempSync, readFileSync, rmSync, writeFileSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-schedule-unavailable-hosted-"));
+      const env = { HOME: tmpDir, SKILLS_API_KEY: "", SKILLS_TEST_MODE: "1" };
+      try {
+        const add = await runCliInCwd(["schedule", "add", "image", "*/5 * * * *", "--name", "premium-image", "--json"], tmpDir, env);
+        expect(add.exitCode).toBe(0);
+
+        const schedulesPath = join(tmpDir, ".skills", "schedules.json");
+        const data = JSON.parse(readFileSync(schedulesPath, "utf-8"));
+        data.schedules[0].nextRun = "2020-01-01T00:00:00.000Z";
+        writeFileSync(schedulesPath, JSON.stringify(data, null, 2));
+
+        const run = await runCliInCwd(["schedule", "run", "--json"], tmpDir, env);
+        expect(run.exitCode).toBe(1);
+        const result = JSON.parse(run.stdout);
+        expect(result).toMatchObject({
+          ran: 0,
+          code: "HOSTED_PROVIDER_UNAVAILABLE",
+        });
+        expect(result.error).toContain("temporarily unavailable");
+        expect(result.error).toContain("No balance was charged.");
+        expect(result.approvalRequired).toBeUndefined();
+        expect(result.unavailable[0]).toMatchObject({
+          name: "premium-image",
+          skill: "image",
+          availability: {
+            status: "unavailable",
+            code: "HOSTED_PROVIDER_UNAVAILABLE",
+          },
+        });
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }

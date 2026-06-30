@@ -168,6 +168,17 @@ const pricingSchema = objectSchema({
   quoteRequired: { type: "boolean", description: "Whether callers should quote before running." },
 }, [], "Public pricing metadata.");
 
+const skillAvailabilitySchema = objectSchema({
+  status: {
+    type: "string",
+    enum: ["available", "unavailable"],
+    description: "Whether hosted execution is currently available for this skill.",
+  },
+  code: stringSchema("Optional stable unavailability code."),
+  message: stringSchema("Optional human-readable availability message."),
+  details: stringArraySchema("Optional availability details."),
+}, ["status"], "Hosted skill availability metadata.");
+
 const skillSummarySchema = objectSchema({
   name: stringSchema("Canonical skill slug."),
   category: stringSchema("Skill category."),
@@ -530,7 +541,14 @@ const toolContracts: McpToolContract[] = [
     sideEffects: "none",
     stable: true,
     inputSchema: objectSchema({ name: skillNameInput, input: runInputSchema, args: runArgsSchema }, ["name"]),
-    outputSchema: objectSchema({ skill: stringSchema("Skill slug."), pricing: pricingSchema }, ["skill", "pricing"]),
+    outputSchema: objectSchema({
+      skill: stringSchema("Skill slug."),
+      pricing: pricingSchema,
+      availability: skillAvailabilitySchema,
+      error: stringSchema("Optional error message when the quote cannot be used to run."),
+      code: stringSchema("Optional stable error code."),
+      details: stringArraySchema("Optional error details."),
+    }, ["skill", "pricing", "availability"]),
   },
   {
     name: "run_skill",

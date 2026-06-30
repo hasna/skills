@@ -296,6 +296,7 @@ version: 0.3.0
       const valid = JSON.parse(validResponse.result.content[0].text);
       expect(valid).toMatchObject({
         skill: "blog-article",
+        availability: { status: "available" },
         pricing: {
           billingUnit: "article",
           unitCount: 8,
@@ -323,6 +324,31 @@ version: 0.3.0
     }
   }, 15000);
 
+  test("quote_skill fails fast for unavailable hosted provider skills", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "quote_skill",
+        arguments: { name: "image" },
+      }, 82);
+      expect(response).not.toBeNull();
+      expect(response.result.isError).toBe(true);
+      const payload = JSON.parse(response.result.content[0].text);
+      expect(payload).toMatchObject({
+        skill: "image",
+        code: "HOSTED_PROVIDER_UNAVAILABLE",
+        availability: {
+          status: "unavailable",
+          code: "HOSTED_PROVIDER_UNAVAILABLE",
+        },
+      });
+      expect(payload.details).toContain("No balance was charged.");
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
   test("run_skill rejects unauthenticated premium skills without local fallback", async () => {
     const { mkdtempSync, rmSync } = require("fs");
     const { tmpdir } = require("os");
@@ -337,10 +363,10 @@ version: 0.3.0
       const response = await client.request("tools/call", {
         name: "run_skill",
         arguments: {
-          name: "image",
+          name: "logo-design",
           args: ["--help"],
         },
-      }, 82);
+      }, 83);
       expect(response).not.toBeNull();
       expect(response.result.isError).toBe(true);
       const error = JSON.parse(response.result.content[0].text);
@@ -368,17 +394,49 @@ version: 0.3.0
       const response = await client.request("tools/call", {
         name: "run_skill",
         arguments: {
-          name: "image",
+          name: "logo-design",
           args: ["--help"],
           approved: true,
         },
-      }, 83);
+      }, 84);
       expect(response).not.toBeNull();
       expect(response.result.isError).toBe(true);
       const error = JSON.parse(response.result.content[0].text);
       expect(error).toMatchObject({ code: "PLATFORM_ERROR" });
       expect(error.message).toContain("requires hosted access");
       expect(error.message).not.toContain("Skill Image CLI");
+    } finally {
+      await client.close();
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  test("run_skill rejects unavailable hosted provider skills before auth or approval", async () => {
+    const { mkdtempSync, rmSync } = require("fs");
+    const { tmpdir } = require("os");
+    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-premium-unavailable-provider-"));
+    const client = new McpClient({
+      HOME: tmpDir,
+      SKILLS_API_KEY: "",
+      SKILLS_TEST_MODE: "1",
+    });
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "run_skill",
+        arguments: {
+          name: "image",
+          args: ["a mountain at sunrise"],
+        },
+      }, 85);
+      expect(response).not.toBeNull();
+      expect(response.result.isError).toBe(true);
+      const error = JSON.parse(response.result.content[0].text);
+      expect(error).toMatchObject({ code: "HOSTED_PROVIDER_UNAVAILABLE" });
+      expect(error.message).toContain("temporarily unavailable");
+      expect(error.message).toContain("No balance was charged.");
+      expect(error.message).not.toContain("skills auth login");
+      expect(error.message).not.toContain("approved: true");
     } finally {
       await client.close();
       rmSync(tmpDir, { recursive: true, force: true });
