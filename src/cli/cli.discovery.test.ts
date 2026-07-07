@@ -25,8 +25,11 @@ describe("CLI discovery", () => {
       expect(data[0]).toHaveProperty("category");
       expect(data[0]).toHaveProperty("pricing");
       expect(data[0].pricing).toHaveProperty("formattedCost");
-      // Compact mode — no description/tags to keep tokens low
-      expect(data[0]).not.toHaveProperty("description");
+      // Compact mode carries a short description so agents can discover without
+      // a per-skill lookup, but still omits tags to keep tokens low.
+      expect(data[0]).toHaveProperty("description");
+      expect(typeof data[0].description).toBe("string");
+      expect(data[0].description.length).toBeGreaterThan(0);
       expect(data[0]).not.toHaveProperty("tags");
     });
 
