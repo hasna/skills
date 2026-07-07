@@ -212,16 +212,22 @@ export {
   listPortableSkills,
   normalizePortableSkillName,
   portPortableSkill,
+  portPortableSkillDirectory,
   readPortableSkillManifest,
   runPortableSkill,
   scaffoldPortableSkill,
   validatePortableSkillDirectory,
+  type BulkPortImportedEntry,
+  type BulkPortPortableSkillOptions,
+  type BulkPortResult,
+  type BulkPortSkippedEntry,
   type PortableSkillCommand,
   type PortableSkillInput,
   type PortableSkillManifest,
   type PortableSkillRunOptions,
   type PortableSkillRunResult,
   type PortableSkillSummary,
+  type SkillKind,
 } from "./lib/portable-skills.js";
 
 export {

@@ -27,7 +27,13 @@ export const PORTABLE_SKILL_STANDARD = "hasna.skill.v1";
 export const PORTABLE_SKILL_SCHEMA = "https://hasna.dev/schemas/skill.v1.json";
 export const PORTABLE_SKILL_DEFAULT_VERSION = "0.1.0";
 
-// Re-export the canonical SkillKind (defined in registry-types) for existing consumers.
+/**
+ * Artifact class of a portable skill.
+ * - `executable`: a runnable skill folder (package.json + bin + src entry).
+ * - `instruction`: a prose-only agent skill (SKILL.md primary, optional skill.json).
+ *
+ * Re-exports the canonical SkillKind (defined in registry-types) for existing consumers.
+ */
 export type { SkillKind };
 
 export interface PortableSkillInput {
@@ -78,6 +84,7 @@ export interface PortableSkillOptions {
 export interface ScaffoldPortableSkillOptions extends PortableSkillOptions {
   description?: string;
   overwrite?: boolean;
+  kind?: SkillKind;
 }
 
 export interface PortPortableSkillOptions extends PortableSkillOptions {
@@ -88,6 +95,33 @@ export interface PortPortableSkillOptions extends PortableSkillOptions {
    * Without this, `port` refuses to silently override the official corpus.
    */
   allowShadow?: boolean;
+}
+
+export interface BulkPortPortableSkillOptions extends PortableSkillOptions {
+  overwrite?: boolean;
+  /** When false, the first failure is rethrown. Defaults to true (skip-on-error). */
+  continueOnError?: boolean;
+}
+
+export interface BulkPortImportedEntry {
+  name: string;
+  path: string;
+  sourcePath: string;
+}
+
+export interface BulkPortSkippedEntry {
+  sourcePath: string;
+  name?: string;
+  reason: string;
+}
+
+export interface BulkPortResult {
+  root: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  imported: BulkPortImportedEntry[];
+  skipped: BulkPortSkippedEntry[];
 }
 
 export interface PortableSkillWriteResult {
@@ -251,10 +285,10 @@ export function readPortableSkillManifest(skillPath: string, fallbackName = base
     ?? frontmatter?.version
     ?? stringValue(pkg?.version)
     ?? PORTABLE_SKILL_DEFAULT_VERSION;
-  const commands = parseManifestCommands(jsonManifest)
-    ?? inferPackageCommands(pkg, name)
-    ?? [];
   const kind = parseSkillKind(stringField(jsonManifest, "kind") ?? frontmatter?.kind);
+  const commands = parseManifestCommands(jsonManifest)
+    ?? (kind === "instruction" ? [] : inferPackageCommands(pkg, name))
+    ?? [];
 
   return {
     $schema: stringField(jsonManifest, "$schema") ?? PORTABLE_SKILL_SCHEMA,
@@ -266,7 +300,7 @@ export function readPortableSkillManifest(skillPath: string, fallbackName = base
     category: stringField(jsonManifest, "category") ?? frontmatter?.category ?? "Development Tools",
     tags: stringArrayField(jsonManifest, "tags") ?? frontmatter?.tags ?? ["custom"],
     ...(kind ? { kind } : {}),
-    inputs: parseManifestInputs(jsonManifest) ?? DEFAULT_INPUTS,
+    inputs: kind === "instruction" ? (parseManifestInputs(jsonManifest) ?? []) : (parseManifestInputs(jsonManifest) ?? DEFAULT_INPUTS),
     commands,
   };
 }
@@ -292,11 +326,82 @@ export function scaffoldPortableSkill(name: string, options: ScaffoldPortableSki
     rmSync(skillPath, { recursive: true, force: true });
   }
 
-  const manifest = createPortableManifest(skillName, {
-    description: options.description ?? `${displayName(skillName)} skill`,
-  });
+  const kind: SkillKind = options.kind ?? "executable";
+  const description = options.description ?? `${displayName(skillName)} skill`;
+
+  if (kind === "instruction") {
+    const manifest = createInstructionManifest(skillName, { description });
+    writeInstructionSkillTemplate(skillPath, manifest);
+    return { name: skillName, path: skillPath, manifest, created: true };
+  }
+
+  const manifest = createPortableManifest(skillName, { description });
   writePortableSkillTemplate(skillPath, manifest);
   return { name: skillName, path: skillPath, manifest, created: true };
+}
+
+/**
+ * Import every immediate subfolder of a directory as a portable skill.
+ * Skip-on-error by default: non-skill folders and per-skill failures are recorded
+ * in the summary instead of aborting the whole run.
+ */
+export function portPortableSkillDirectory(
+  sourceDir: string,
+  options: BulkPortPortableSkillOptions = {},
+): BulkPortResult {
+  const absoluteSource = normalize(sourceDir);
+  if (!existsSync(absoluteSource) || !statSync(absoluteSource).isDirectory()) {
+    throw new Error(`Import directory not found: ${sourceDir}`);
+  }
+
+  const continueOnError = options.continueOnError ?? true;
+  const portOptions: PortPortableSkillOptions = {
+    overwrite: options.overwrite,
+    ...(options.rootDir ? { rootDir: options.rootDir } : {}),
+    ...(options.homeDir ? { homeDir: options.homeDir } : {}),
+  };
+
+  const imported: BulkPortImportedEntry[] = [];
+  const skipped: BulkPortSkippedEntry[] = [];
+
+  const entries = readdirSync(absoluteSource, { withFileTypes: true })
+    .map((entry) => entry.name)
+    .filter((entryName) => !entryName.startsWith("."))
+    .sort();
+
+  for (const entryName of entries) {
+    const childPath = join(absoluteSource, entryName);
+    if (!safeIsDirectory(childPath)) continue;
+    if (!isSkillCandidate(childPath)) {
+      skipped.push({
+        sourcePath: childPath,
+        reason: "Not a skill folder (missing SKILL.md, skill.json, and package.json)",
+      });
+      continue;
+    }
+    try {
+      const result = portPortableSkill(childPath, portOptions);
+      imported.push({ name: result.name, path: result.path, sourcePath: childPath });
+    } catch (error) {
+      if (!continueOnError) throw error;
+      skipped.push({ sourcePath: childPath, reason: (error as Error).message });
+    }
+  }
+
+  return {
+    root: absoluteSource,
+    total: imported.length + skipped.length,
+    succeeded: imported.length,
+    failed: skipped.length,
+    imported,
+    skipped,
+  };
+}
+
+function isSkillCandidate(dir: string): boolean {
+  return existsSync(join(dir, "SKILL.md"))
+    || existsSync(join(dir, "skill.json"))
+    || existsSync(join(dir, "package.json"));
 }
 
 export function portPortableSkill(sourcePath: string, options: PortPortableSkillOptions = {}): PortableSkillWriteResult {
@@ -500,6 +605,35 @@ function summarizePortableSkill(skillPath: string, fallbackName: string): Portab
   };
 }
 
+function createInstructionManifest(name: string, options: { description: string }): PortableSkillManifest {
+  return {
+    $schema: PORTABLE_SKILL_SCHEMA,
+    standard: PORTABLE_SKILL_STANDARD,
+    name,
+    description: options.description,
+    version: PORTABLE_SKILL_DEFAULT_VERSION,
+    displayName: displayName(name),
+    category: "Development Tools",
+    tags: ["custom", name],
+    kind: "instruction",
+    inputs: [],
+    commands: [],
+  };
+}
+
+function writeInstructionSkillTemplate(skillPath: string, manifest: PortableSkillManifest): void {
+  mkdirSync(skillPath, { recursive: true });
+  writeFileSync(join(skillPath, "SKILL.md"), renderInstructionSkillMd(manifest));
+  writeFileSync(join(skillPath, "skill.json"), renderSkillJson(manifest));
+}
+
+function renderInstructionSkillMd(manifest: PortableSkillManifest): string {
+  const tags = manifest.tags?.length
+    ? `tags:\n${manifest.tags.map((tag) => `  - ${tag}`).join("\n")}\n`
+    : "";
+  return `---\nname: ${manifest.name}\ndescription: ${manifest.description}\nkind: instruction\nversion: ${manifest.version}\nsource: custom\ncategory: ${manifest.category ?? "Development Tools"}\n${tags}---\n\n# ${manifest.displayName ?? displayName(manifest.name)}\n\n${manifest.description}\n\n## Instructions\n\nWrite the agent-facing prose for this skill here. Instruction skills are consumed\nby agents through skill renderers and MCP docs; they are not executed locally.\n`;
+}
+
 function createPortableManifest(name: string, options: { description: string }): PortableSkillManifest {
   return {
     $schema: PORTABLE_SKILL_SCHEMA,
@@ -679,6 +813,7 @@ function renderSkillJson(manifest: PortableSkillManifest): string {
     displayName: manifest.displayName ?? displayName(manifest.name),
     category: manifest.category ?? "Development Tools",
     tags: manifest.tags ?? ["custom", manifest.name],
+    ...(manifest.kind ? { kind: manifest.kind } : {}),
     inputs: manifest.inputs,
     commands: manifest.commands,
   }, null, 2)}\n`;

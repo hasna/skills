@@ -29,7 +29,13 @@ describe("CLI portable skills", () => {
       expect(createdData.path).toBe(join(home, ".hasna", "skills", "my-skill"));
       expect(existsSync(join(createdData.path, "AGENTS.md"))).toBe(true);
 
-      const listed = await runCliInCwd(["list", "--json"], cwd, env);
+      // Custom skills are gated out of the default (basic) profile (I5) but remain
+      // discoverable via `list --all`.
+      const basicListed = await runCliInCwd(["list", "--json"], cwd, env);
+      expect(basicListed.exitCode).toBe(0);
+      expect(JSON.parse(basicListed.stdout).find((skill: any) => skill.name === "my-skill")).toBeUndefined();
+
+      const listed = await runCliInCwd(["list", "--all", "--json"], cwd, env);
       expect(listed.exitCode).toBe(0);
       const listData = JSON.parse(listed.stdout);
       const localSkill = listData.find((skill: any) => skill.name === "my-skill");
@@ -112,6 +118,71 @@ version: 0.2.0
       const portedAgain = await runCliInCwd(["port", source, "--json", "--overwrite"], cwd, env);
       expect(portedAgain.exitCode).toBe(0);
       expect(JSON.parse(portedAgain.stdout)).toMatchObject({ name: "source-skill", created: true });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(sourceRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("scaffold --kind instruction writes prose skill without executable stubs", async () => {
+    const home = mkdtempSync(join(tmpdir(), "cli-portable-home-"));
+    const cwd = mkdtempSync(join(tmpdir(), "cli-portable-cwd-"));
+    try {
+      const env = { HOME: home };
+      const created = await runCliInCwd([
+        "scaffold",
+        "prose-skill",
+        "--kind",
+        "instruction",
+        "--description",
+        "A prose instruction skill.",
+        "--json",
+      ], cwd, env);
+      expect(created.exitCode).toBe(0);
+      const data = JSON.parse(created.stdout);
+      expect(data.name).toBe("prose-skill");
+      expect(data.manifest.kind).toBe("instruction");
+      const skillDir = join(home, ".hasna", "skills", "prose-skill");
+      expect(existsSync(join(skillDir, "SKILL.md"))).toBe(true);
+      expect(existsSync(join(skillDir, "skill.json"))).toBe(true);
+      expect(existsSync(join(skillDir, "package.json"))).toBe(false);
+      expect(existsSync(join(skillDir, "src"))).toBe(false);
+
+      const invalidKind = await runCliInCwd(["scaffold", "bad-kind-skill", "--kind", "nonsense", "--json"], cwd, env);
+      expect(invalidKind.exitCode).toBe(1);
+      expect(JSON.parse(invalidKind.stdout).error).toMatch(/Invalid --kind/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test("port --all bulk-imports every subfolder with a summary", async () => {
+    const home = mkdtempSync(join(tmpdir(), "cli-portable-home-"));
+    const cwd = mkdtempSync(join(tmpdir(), "cli-portable-cwd-"));
+    const sourceRoot = mkdtempSync(join(tmpdir(), "cli-portable-bulk-"));
+    try {
+      const env = { HOME: home };
+      for (const name of ["one", "two"]) {
+        const dir = join(sourceRoot, name);
+        mkdirSync(join(dir, "src"), { recursive: true });
+        writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: Skill ${name}.\nversion: 0.1.0\n---\n\n# ${name}\n`);
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ name, version: "0.1.0" }, null, 2));
+        writeFileSync(join(dir, "src", "index.ts"), "#!/usr/bin/env bun\nconsole.log('x');\n");
+      }
+      mkdirSync(join(sourceRoot, "junk"), { recursive: true });
+      writeFileSync(join(sourceRoot, "junk", "readme.txt"), "not a skill");
+
+      const bulk = await runCliInCwd(["port", sourceRoot, "--all", "--json"], cwd, env);
+      const summary = JSON.parse(bulk.stdout);
+      expect(summary.succeeded).toBe(2);
+      expect(summary.imported.map((e: any) => e.name).sort()).toEqual(["one", "two"]);
+      expect(summary.skipped.some((e: any) => e.sourcePath.endsWith("junk"))).toBe(true);
+      // Non-zero exit because there was a skip.
+      expect(bulk.exitCode).toBe(1);
+      expect(existsSync(join(home, ".hasna", "skills", "one", "SKILL.md"))).toBe(true);
+      expect(existsSync(join(home, ".hasna", "skills", "two", "SKILL.md"))).toBe(true);
     } finally {
       rmSync(home, { recursive: true, force: true });
       rmSync(cwd, { recursive: true, force: true });
