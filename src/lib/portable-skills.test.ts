@@ -104,4 +104,61 @@ Use this skill when porting an existing folder.
       rmSync(sourceRoot, { recursive: true, force: true });
     }
   });
+
+  test("validates an instruction skill with only SKILL.md (no commands, inputs, or AGENTS.md)", () => {
+    const home = mkdtempSync(join(tmpdir(), "portable-skill-home-"));
+    try {
+      const root = getPortableSkillsRoot({ homeDir: home });
+      const skillDir = join(root, "skill-project");
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(join(skillDir, "SKILL.md"), `---
+name: skill-project
+description: Open or resume an existing Hasna repo project using the projects CLI.
+kind: instruction
+source: private
+---
+
+# Skill Project
+
+Prose-only instruction skill.
+`);
+
+      const manifest = readPortableSkillManifest(skillDir, "skill-project");
+      expect(manifest.kind).toBe("instruction");
+      expect(manifest.commands).toEqual([]);
+
+      const validation = validatePortableSkillDirectory("skill-project", skillDir);
+      expect(validation.valid).toBe(true);
+      const codes = validation.issues.map((issue) => issue.code);
+      expect(codes).not.toContain("portable.commands_missing");
+      expect(codes).not.toContain("portable.agents_missing");
+      expect(codes).not.toContain("package.missing");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("runPortableSkill returns a not-runnable error for instruction skills", async () => {
+    const home = mkdtempSync(join(tmpdir(), "portable-skill-home-"));
+    try {
+      const root = getPortableSkillsRoot({ homeDir: home });
+      const skillDir = join(root, "skill-project");
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(join(skillDir, "SKILL.md"), `---
+name: skill-project
+description: Prose-only instruction skill.
+kind: instruction
+source: private
+---
+
+# Skill Project
+`);
+
+      const run = await runPortableSkill("skill-project", [], { rootDir: root, stdio: "pipe" });
+      expect(run.exitCode).toBe(1);
+      expect(run.error).toContain("instruction skill");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });

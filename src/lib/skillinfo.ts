@@ -8,6 +8,23 @@ import { getInstalledSkills, getSkillPath } from "./installer.js";
 import { getSkill, loadRegistry, type SkillMeta } from "./registry.js";
 import { normalizeSkillName } from "./utils.js";
 import { isPremiumSkill } from "./pricing.js";
+import { parseSkillFrontmatter } from "./skill-validation.js";
+
+/**
+ * Detect whether a skill directory is an instruction (prose-only) skill.
+ * Instruction skills are declared via `kind: instruction` in SKILL.md
+ * frontmatter and are consumed by agents, not run locally.
+ */
+function isInstructionSkillDir(skillPath: string, meta?: SkillMeta): boolean {
+  if (meta?.kind === "instruction") return true;
+  const skillMdPath = join(skillPath, "SKILL.md");
+  if (!existsSync(skillMdPath)) return false;
+  try {
+    return parseSkillFrontmatter(readFileSync(skillMdPath, "utf-8"))?.kind === "instruction";
+  } catch {
+    return false;
+  }
+}
 
 export interface SkillDocs {
   skillMd: string | null;
@@ -146,11 +163,20 @@ export async function runSkill(
 ): Promise<{ exitCode: number; error?: string; stdout?: string; stderr?: string }> {
   // Skills execute from the bundled package source. Project `.skills/` is only
   // for pins, run metadata, logs, and exports; it is never a source directory.
-  const canonicalName = getSkill(name)?.name ?? name;
+  const meta = getSkill(name);
+  const canonicalName = meta?.name ?? name;
   const skillPath = getSkillPath(canonicalName);
 
   if (!existsSync(skillPath)) {
     return { exitCode: 1, error: `Skill '${name}' not found` };
+  }
+
+  // Instruction skills are prose-only and are consumed by agents, not executed.
+  if (isInstructionSkillDir(skillPath, meta)) {
+    return {
+      exitCode: 1,
+      error: `Skill '${name}' is an instruction skill (kind: instruction) and is not runnable. Instruction skills are consumed by coding agents via SKILL.md, not executed with 'skills run'.`,
+    };
   }
 
   // Read package.json for bin entry
