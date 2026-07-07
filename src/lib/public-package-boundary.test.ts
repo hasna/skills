@@ -2,64 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
-interface PackedFile {
-  path: string;
-}
-
-interface PackManifest {
-  files: PackedFile[];
-}
-
-interface PackCommandResult {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-  missingExecutable: boolean;
-}
+import { getPackedFiles } from "./packlist";
 
 const cloudPackage = "@hasna" + "/cloud";
 const cloudNodeModulesPath = "node_modules/@hasna/" + "cloud";
 
-function runPackCommand(command: string[]): PackCommandResult {
-  try {
-    const result = Bun.spawnSync(command, {
-      cwd: process.cwd(),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    return {
-      exitCode: result.exitCode,
-      stdout: new TextDecoder().decode(result.stdout),
-      stderr: new TextDecoder().decode(result.stderr),
-      missingExecutable: false,
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return {
-      exitCode: 127,
-      stdout: "",
-      stderr: message,
-      missingExecutable: message.includes("Executable not found"),
-    };
-  }
-}
-
+// Single source of truth for the published file list: the packager itself.
 function readPackedFiles(): string[] {
-  const npmResult = runPackCommand(["npm", "pack", "--dry-run", "--json", "--ignore-scripts"]);
-  if (!npmResult.missingExecutable) {
-    expect(npmResult.exitCode, npmResult.stderr).toBe(0);
-    const manifests = JSON.parse(npmResult.stdout) as PackManifest[];
-    return manifests[0].files.map((file) => file.path).sort();
-  }
-
-  const bunResult = runPackCommand(["bun", "pm", "pack", "--dry-run", "--ignore-scripts"]);
-  expect(bunResult.exitCode, bunResult.stderr).toBe(0);
-  const files = bunResult.stdout
-    .split(/\r?\n/)
-    .map((line) => /^packed\s+\S+\s+(.+)$/.exec(line)?.[1])
-    .filter((path): path is string => Boolean(path));
-  return files.sort();
+  return getPackedFiles(process.cwd());
 }
 
 function hostedMetadataSlugs(): string[] {

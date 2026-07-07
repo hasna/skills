@@ -11,8 +11,8 @@ Use this skill when you need to add a window and session to an existing group, o
 ## Workspace Layout
 
 ```text
-~/workspace/          Linux (spark01, spark02) — always lowercase
-~/Workspace/          macOS (apple01) — always capital W
+~/workspace/          Linux hosts — always lowercase
+~/Workspace/          macOS hosts — always capital W
 
 [workspace]/
 └── [division]/
