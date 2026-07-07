@@ -17,6 +17,34 @@ Portable skills live in one folder each:
 `skills port <path>` and `skills add <path>` copy an existing skill folder into
 this layout and add missing standard files.
 
+## Skill Kinds
+
+A skill declares its artifact class with the `kind` frontmatter field:
+
+- `kind: executable` (default when omitted) — a runnable skill folder with
+  `package.json`, a non-empty `bin`, and `src/index.ts`. `skills run` executes it.
+- `kind: instruction` — a `SKILL.md`-primary prose skill for coding agents.
+  `package.json`, `bin`, and `src/` are all optional. Instruction skills may still
+  bundle optional helper scripts (a `bin`/`src` is permitted, not forbidden), but
+  they are consumed by agents via `SKILL.md`, not executed. `skills run` on an
+  instruction skill returns a clear "not runnable — instruction skill" error
+  instead of executing a stub.
+
+Missing `kind` defaults to `executable` so the bundled corpus is unaffected.
+Migrated operational (prose) skills should set `kind: instruction` explicitly.
+
+Minimum `SKILL.md` frontmatter for an instruction skill:
+
+```yaml
+---
+name: skill-project
+description: Open or resume an existing Hasna repo project using the projects CLI.
+kind: instruction
+version: 0.1.0
+source: private
+---
+```
+
 ## Naming
 
 Skill names are lowercase slugs: letters, numbers, dots, underscores, and
@@ -107,10 +135,12 @@ skills validate my-skill --json
 Validation checks:
 
 - folder and name safety;
-- `SKILL.md` frontmatter compatibility;
-- `skill.json` standard, version, inputs, and commands;
-- `AGENTS.md` presence;
-- `package.json` and command entrypoint safety;
+- `SKILL.md` frontmatter compatibility (including a valid `kind`);
+- `skill.json` standard, version, inputs, and commands (relaxed for
+  `kind: instruction`, which needs neither `commands`, `inputs`, nor `AGENTS.md`);
+- `AGENTS.md` presence (executable skills only);
+- `package.json` and command entrypoint safety (`package.json`/`bin`/`src` are
+  optional for `kind: instruction`);
 - no reserved files such as `.env` or symlinks.
 
 ## Porting Existing Skills

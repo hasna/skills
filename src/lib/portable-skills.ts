@@ -13,7 +13,7 @@ import { basename, dirname, isAbsolute, join, normalize, relative } from "path";
 import { homedir } from "os";
 
 import { getDataDir } from "./config.js";
-import type { SkillMeta } from "./registry-types.js";
+import type { SkillKind, SkillMeta } from "./registry-types.js";
 import {
   parseSkillFrontmatter,
   validateSkillDirectory,
@@ -49,6 +49,7 @@ export interface PortableSkillManifest {
   displayName?: string;
   category?: string;
   tags?: string[];
+  kind?: SkillKind;
   inputs: PortableSkillInput[];
   commands: PortableSkillCommand[];
 }
@@ -191,14 +192,17 @@ export function listPortableSkills(options: PortableSkillOptions = {}): Portable
 }
 
 export function listPortableSkillMetas(options: PortableSkillOptions = {}): SkillMeta[] {
-  return listPortableSkills(options).map((skill) => ({
+  return listPortableSkills(options).map((skill) => {
+    const manifest = readPortableSkillManifest(skill.path);
+    return {
     name: skill.name,
     displayName: skill.displayName,
     description: skill.description,
-    category: readPortableSkillManifest(skill.path).category || "Development Tools",
-    tags: readPortableSkillManifest(skill.path).tags || ["custom"],
+    category: manifest.category || "Development Tools",
+    tags: manifest.tags || ["custom"],
     version: skill.version,
-    source: "custom",
+    ...(manifest.kind ? { kind: manifest.kind } : {}),
+    source: "custom" as const,
     pricing: {
       tier: "free",
       billingUnit: "run",
@@ -209,7 +213,8 @@ export function listPortableSkillMetas(options: PortableSkillOptions = {}): Skil
       quoteRequired: false,
       description: "Local portable skill",
     },
-  }));
+    };
+  });
 }
 
 export function readPortableSkillManifest(skillPath: string, fallbackName = basename(skillPath)): PortableSkillManifest {
@@ -238,6 +243,7 @@ export function readPortableSkillManifest(skillPath: string, fallbackName = base
   const commands = parseManifestCommands(jsonManifest)
     ?? inferPackageCommands(pkg, name)
     ?? [];
+  const kind = parseSkillKind(stringField(jsonManifest, "kind") ?? frontmatter?.kind);
 
   return {
     $schema: stringField(jsonManifest, "$schema") ?? PORTABLE_SKILL_SCHEMA,
@@ -248,9 +254,15 @@ export function readPortableSkillManifest(skillPath: string, fallbackName = base
     displayName: stringField(jsonManifest, "displayName") ?? frontmatter?.displayName ?? displayName(name),
     category: stringField(jsonManifest, "category") ?? frontmatter?.category ?? "Development Tools",
     tags: stringArrayField(jsonManifest, "tags") ?? frontmatter?.tags ?? ["custom"],
+    ...(kind ? { kind } : {}),
     inputs: parseManifestInputs(jsonManifest) ?? DEFAULT_INPUTS,
     commands,
   };
+}
+
+function parseSkillKind(value: string | undefined): SkillKind | undefined {
+  if (value === "executable" || value === "instruction") return value;
+  return undefined;
 }
 
 export function scaffoldPortableSkill(name: string, options: ScaffoldPortableSkillOptions = {}): PortableSkillWriteResult {
@@ -309,6 +321,7 @@ export function validatePortableSkillDirectory(name: string, skillPath: string):
     }
     try {
       manifest = readPortableSkillManifest(skillPath, normalizedName);
+      const isInstruction = manifest.kind === "instruction";
       if (manifest.name !== normalizedName) {
         add(issues, "portable.name_mismatch", `Portable manifest name '${manifest.name}' does not match '${normalizedName}'`);
       }
@@ -321,12 +334,13 @@ export function validatePortableSkillDirectory(name: string, skillPath: string):
       if (!manifest.version.trim()) {
         add(issues, "portable.version_missing", "Portable manifest missing version");
       }
-      if (!Array.isArray(manifest.inputs) || manifest.inputs.length === 0) {
+      // Instruction skills are SKILL.md-primary: no inputs, commands, or AGENTS.md required.
+      if (!isInstruction && (!Array.isArray(manifest.inputs) || manifest.inputs.length === 0)) {
         add(issues, "portable.inputs_missing", "Portable manifest must declare inputs");
       }
-      if (!Array.isArray(manifest.commands) || manifest.commands.length === 0) {
+      if (!isInstruction && (!Array.isArray(manifest.commands) || manifest.commands.length === 0)) {
         add(issues, "portable.commands_missing", "Portable manifest must declare at least one command");
-      } else {
+      } else if (Array.isArray(manifest.commands)) {
         for (const command of manifest.commands) {
           if (!/^[a-z0-9][a-z0-9._-]*$/.test(command.name)) {
             add(issues, "portable.command_name_invalid", `Command '${command.name}' must use lowercase letters, numbers, dots, underscores, or hyphens`);
@@ -349,7 +363,8 @@ export function validatePortableSkillDirectory(name: string, skillPath: string):
     } catch (error) {
       add(issues, "portable.manifest_invalid", (error as Error).message);
     }
-    if (!existsSync(join(skillPath, "AGENTS.md"))) {
+    // Instruction skills use SKILL.md as the agent handoff; AGENTS.md is not required.
+    if (manifest?.kind !== "instruction" && !existsSync(join(skillPath, "AGENTS.md"))) {
       add(issues, "portable.agents_missing", "Missing AGENTS.md with build-out instructions for coding agents");
     }
   }
@@ -376,6 +391,12 @@ export async function runPortableSkill(
   const skill = findPortableSkill(name, options);
   if (!skill) return { exitCode: 1, error: `Portable skill '${name}' not found` };
   const manifest = readPortableSkillManifest(skill.path, skill.name);
+  if (manifest.kind === "instruction") {
+    return {
+      exitCode: 1,
+      error: `Portable skill '${name}' is an instruction skill (kind: instruction) and is not runnable. Instruction skills are consumed by coding agents via SKILL.md, not executed with 'skills run'.`,
+    };
+  }
   const command = manifest.commands[0];
   if (!command) return { exitCode: 1, error: `Portable skill '${name}' has no commands` };
   if (!command.entry) return { exitCode: 1, error: `Portable skill '${name}' command '${command.name}' has no entry` };

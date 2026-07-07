@@ -8,6 +8,21 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { normalizeSkillName } from "./utils.js";
+import type { SkillSource } from "./registry-types.js";
+
+/** Valid provenance sources for a project pin: skill sources plus project-local. */
+export type ProjectPinSource = SkillSource | "local";
+
+const VALID_PIN_SOURCES: readonly ProjectPinSource[] = [
+  "official",
+  "custom",
+  "remote",
+  "private",
+  "private-hosted",
+  "upstream",
+  "extension",
+  "local",
+];
 
 export const SKILLS_PROJECT_DIR = ".skills";
 export const PROJECT_CONFIG_FILE = "project.json";
@@ -17,7 +32,7 @@ export interface ProjectSkillPin {
   name: string;
   pinnedAt: string;
   version: string;
-  source: "official" | "custom" | "remote" | "local";
+  source: ProjectPinSource;
 }
 
 export interface SkillsProjectConfig {
@@ -163,5 +178,5 @@ function normalizeProjectConfig(raw: Partial<SkillsProjectConfig>): SkillsProjec
 }
 
 function isPinSource(value: unknown): value is ProjectSkillPin["source"] {
-  return value === "official" || value === "custom" || value === "remote" || value === "local";
+  return typeof value === "string" && (VALID_PIN_SOURCES as readonly string[]).includes(value);
 }

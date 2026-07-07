@@ -41,6 +41,9 @@ function parseSkillMdFrontmatter(content: string): Partial<SkillMeta> | null {
     else if (key === "description") result.description = value;
     else if (key === "displayName" || key === "display_name") result.displayName = value;
     else if (key === "category") result.category = value;
+    else if (key === "kind") {
+      if (value === "executable" || value === "instruction") result.kind = value;
+    }
     else if (key === "tags") {
       result.tags = value.replace(/[\[\]]/g, "").split(",").map((t) => t.trim()).filter(Boolean);
     }
@@ -72,6 +75,7 @@ function discoverSkillsInDir(dir: string): SkillMeta[] {
         description: fm.description || "",
         category: fm.category || "Development Tools",
         tags: fm.tags || [],
+        ...(fm.kind ? { kind: fm.kind } : {}),
         source: "custom",
       });
     }

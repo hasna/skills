@@ -500,6 +500,154 @@ tags:
     }
   });
 
+  test("parses kind: instruction from SKILL.md frontmatter", () => {
+    const parsed = parseSkillFrontmatter(`---
+name: skill-project
+description: Open or resume an existing Hasna repo project using the projects CLI.
+kind: instruction
+version: 0.1.0
+source: private
+---
+
+# Skill Project
+`);
+    expect(parsed?.kind).toBe("instruction");
+    expect(parsed?.name).toBe("skill-project");
+  });
+
+  test("accepts an instruction skill with only SKILL.md", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "skill-validation-"));
+    try {
+      const skillDir = join(tempDir, "skill-project");
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(join(skillDir, "SKILL.md"), `---
+name: skill-project
+description: Open or resume an existing Hasna repo project using the projects CLI.
+kind: instruction
+source: private
+---
+
+# Skill Project
+
+Prose-only instruction skill for coding agents.
+`);
+
+      const result = validateSkillDirectory("skill-project", skillDir);
+      expect(result.valid).toBe(true);
+      expect(result.issues).toEqual([]);
+      expect(result.metadata.kind).toBe("instruction");
+      expect(result.metadata.runtime).toBe("none");
+      expect(result.metadata.binCommands).toEqual([]);
+      const codes = result.issues.map((issue) => issue.code);
+      expect(codes).not.toContain("package.missing");
+      expect(codes).not.toContain("package.bin_missing");
+      expect(codes).not.toContain("skill.src_missing");
+      expect(codes).not.toContain("skill.src_index_missing");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("allows an instruction skill to bundle helper scripts (bin + src not forbidden)", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "skill-validation-"));
+    try {
+      const skillDir = join(tempDir, "feedback-pull");
+      mkdirSync(join(skillDir, "src"), { recursive: true });
+      writeFileSync(join(skillDir, "SKILL.md"), `---
+name: feedback-pull
+description: Instruction skill that also bundles a real helper script.
+kind: instruction
+source: private
+---
+
+# Feedback Pull
+`);
+      writeFileSync(join(skillDir, "package.json"), JSON.stringify({
+        name: "feedback-pull",
+        version: "0.1.0",
+        bin: { "feedback-pull": "src/index.ts" },
+      }, null, 2));
+      writeFileSync(join(skillDir, "src", "index.ts"), "#!/usr/bin/env bun\nconsole.log('helper script bundled with an instruction skill');\n");
+
+      const result = validateSkillDirectory("feedback-pull", skillDir);
+      expect(result.valid).toBe(true);
+      expect(result.issues).toEqual([]);
+      expect(result.metadata.kind).toBe("instruction");
+      expect(result.metadata.binCommands).toEqual(["feedback-pull"]);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects an unknown kind value", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "skill-validation-"));
+    try {
+      const skillDir = join(tempDir, "demo-skill");
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(join(skillDir, "SKILL.md"), `---
+name: demo-skill
+description: Skill with an unknown kind value.
+kind: bogus
+---
+
+# Demo Skill
+`);
+
+      const result = validateSkillDirectory("demo-skill", skillDir);
+      expect(result.valid).toBe(false);
+      expect(result.issues.map((issue) => issue.code)).toContain("skill.kind_invalid");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("executable skills (no kind) still require bin and src", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "skill-validation-"));
+    try {
+      const skillDir = join(tempDir, "demo-skill");
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(join(skillDir, "SKILL.md"), `---
+name: demo-skill
+description: Executable skill missing bin and src.
+---
+
+# Demo Skill
+`);
+
+      const result = validateSkillDirectory("demo-skill", skillDir);
+      expect(result.valid).toBe(false);
+      const codes = result.issues.map((issue) => issue.code);
+      expect(codes).toContain("package.missing");
+      expect(codes).toContain("skill.src_missing");
+      expect(result.metadata.kind).toBe("executable");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("accepts source: extension provenance", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "skill-validation-"));
+    try {
+      const skillDir = join(tempDir, "ext-skill");
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(join(skillDir, "SKILL.md"), `---
+name: ext-skill
+description: Instruction skill sourced from a private extension.
+kind: instruction
+source: extension
+---
+
+# Ext Skill
+`);
+
+      const result = validateSkillDirectory("ext-skill", skillDir);
+      expect(result.valid).toBe(true);
+      expect(result.issues.map((issue) => issue.code)).not.toContain("skill.frontmatter_source_invalid");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("rejects local source and bin declarations for hosted metadata fixtures", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "skill-validation-"));
     try {

@@ -1,3 +1,18 @@
+export type SkillKind = "executable" | "instruction";
+
+/**
+ * Provenance sources for a skill. Kept in sync with VALID_PROVENANCE_SOURCES in
+ * skill-validation.ts (plus "extension" for private extension overlays).
+ */
+export type SkillSource =
+  | "official"
+  | "custom"
+  | "remote"
+  | "private"
+  | "private-hosted"
+  | "upstream"
+  | "extension";
+
 export interface SkillMeta {
   name: string;
   displayName: string;
@@ -6,9 +21,15 @@ export interface SkillMeta {
   tags: string[];
   dependencies?: string[];
   version?: string;
+  /**
+   * Artifact class of the skill. "executable" skills carry a runnable
+   * package.json/bin/src; "instruction" skills are SKILL.md-primary prose for
+   * agents. Missing kind defaults to "executable" during migration.
+   */
+  kind?: SkillKind;
   pricing?: SkillPricingMetadata;
   availability?: SkillAvailabilityMetadata;
-  source?: "official" | "custom" | "remote";
+  source?: SkillSource;
 }
 
 export interface SkillPricingMetadata {
