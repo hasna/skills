@@ -182,8 +182,9 @@ const skillAvailabilitySchema = objectSchema({
 const skillSummarySchema = objectSchema({
   name: stringSchema("Canonical skill slug."),
   category: stringSchema("Skill category."),
+  description: stringSchema("Sanitized public skill description for discovery."),
   pricing: pricingSchema,
-}, ["name", "category"], "Compact skill summary.");
+}, ["name", "category", "description"], "Compact skill summary.");
 
 const toolPrimitiveSummarySchema = objectSchema({
   name: stringSchema("Primitive tool name."),

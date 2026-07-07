@@ -2,7 +2,10 @@ import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "fs";
 import { isAbsolute, join, normalize } from "path";
 import { isPremiumSkill } from "./pricing.js";
 import type { SkillMeta } from "./registry.js";
+import type { SkillKind } from "./registry-types.js";
 import type { PortableSkillManifest } from "./portable-skills.js";
+
+export const VALID_SKILL_KINDS: readonly SkillKind[] = ["executable", "instruction"];
 
 export interface SkillValidationMessage {
   code: string;
@@ -23,7 +26,8 @@ export interface SkillValidationResult {
     skillMdFrontmatter?: SkillFrontmatter;
     portableManifest?: PortableSkillManifest;
     provenance?: SkillValidationProvenance;
-    runtime?: "local" | "hosted";
+    runtime?: "local" | "hosted" | "none";
+    kind?: SkillKind;
   };
 }
 
@@ -42,6 +46,7 @@ export interface SkillFrontmatter {
   tags?: string[];
   version?: string;
   source?: string;
+  kind?: string;
 }
 
 export interface SkillValidationProvenance {
@@ -107,7 +112,7 @@ const KNOWN_TOP_LEVEL_ENTRIES = new Set([
   "tsconfig.json",
   "vision.ts",
 ]);
-const VALID_PROVENANCE_SOURCES = new Set(["official", "custom", "remote", "private", "private-hosted", "upstream"]);
+const VALID_PROVENANCE_SOURCES = new Set(["official", "custom", "remote", "private", "private-hosted", "upstream", "extension"]);
 const VALID_BIN_COMMAND = /^[a-z0-9][a-z0-9._-]*$/;
 
 function add(target: SkillValidationMessage[], code: string, message: string): void {
@@ -189,6 +194,7 @@ export function parseSkillFrontmatter(content: string): SkillFrontmatter | null 
     else if (key === "category") result.category = value;
     else if (key === "version") result.version = value;
     else if (key === "source") result.source = value;
+    else if (key === "kind") result.kind = value;
     else if (key === "tags") {
       result.tags = value.replace(/[\[\]]/g, "").split(",").map((tag) => tag.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
     }
@@ -207,6 +213,7 @@ export function validateSkillDirectory(
   const warnings: SkillValidationMessage[] = [];
   let packageDeclaresHosted = false;
   let packageSkillSource: string | undefined;
+  let resolvedKind: SkillKind = "executable";
   const metadata: SkillValidationResult["metadata"] = {
     binCommands: [],
     docFiles: [],
@@ -268,6 +275,13 @@ export function validateSkillDirectory(
       if (frontmatter.source && !VALID_PROVENANCE_SOURCES.has(frontmatter.source)) {
         add(issues, "skill.frontmatter_source_invalid", `SKILL.md source '${frontmatter.source}' is not one of: ${[...VALID_PROVENANCE_SOURCES].join(", ")}`);
       }
+      if (frontmatter.kind !== undefined) {
+        if ((VALID_SKILL_KINDS as readonly string[]).includes(frontmatter.kind)) {
+          resolvedKind = frontmatter.kind as SkillKind;
+        } else {
+          add(issues, "skill.kind_invalid", `SKILL.md kind '${frontmatter.kind}' is not one of: ${VALID_SKILL_KINDS.join(", ")}`);
+        }
+      }
       if (frontmatter.tags && frontmatter.tags.some((tag) => !tag.trim())) {
         add(issues, "skill.frontmatter_tags_invalid", "SKILL.md tags must be non-empty strings");
       }
@@ -282,9 +296,13 @@ export function validateSkillDirectory(
     add(warnings, "skill.skill_md_missing", "Missing SKILL.md; registry docs may need generated agent-facing instructions");
   }
 
+  metadata.kind = resolvedKind;
+  const isInstruction = resolvedKind === "instruction";
+
   const pkgPath = join(skillPath, "package.json");
   if (!existsSync(pkgPath)) {
-    add(issues, "package.missing", "Missing package.json");
+    // Instruction skills are SKILL.md-primary; package.json is optional.
+    if (!isInstruction) add(issues, "package.missing", "Missing package.json");
   } else {
     try {
       const pkg = readJsonFile(pkgPath) as PackageJson;
@@ -322,11 +340,14 @@ export function validateSkillDirectory(
 
         const binRecord = asRecord(pkg.bin);
         if (!binRecord || Object.keys(binRecord).length === 0) {
-          if (!hostedMetadata) {
+          // Instruction skills may ship without a bin; helper scripts are optional.
+          if (!hostedMetadata && !isInstruction) {
             add(issues, "package.bin_missing", "package.json missing non-empty bin object");
           }
         } else {
-          if (hostedMetadata) {
+          // Instruction skills may legitimately bundle helper scripts, so a bin
+          // is permitted (not forbidden) even though the skill is not runnable.
+          if (hostedMetadata && !isInstruction) {
             add(issues, "package.hosted_bin_forbidden", "Hosted metadata packages must not expose a local bin entry");
           }
           for (const [command, target] of Object.entries(binRecord)) {
@@ -357,20 +378,26 @@ export function validateSkillDirectory(
   }
 
   const hostedMetadata = isHostedMetadataSkill(bareName, metadata.skillMdFrontmatter, registryMeta, packageDeclaresHosted);
-  metadata.runtime = hostedMetadata ? "hosted" : "local";
-  const srcDir = join(skillPath, "src");
-  if (hostedMetadata) {
-    if (existsSync(srcDir)) {
-      add(issues, "skill.hosted_source_forbidden", "Hosted metadata skills must not include local implementation source");
-    }
-  } else if (!existsSync(srcDir)) {
-    add(issues, "skill.src_missing", "Missing src/ directory");
-  } else if (!existsSync(join(srcDir, "index.ts")) && !existsSync(join(srcDir, "index.js"))) {
-    add(issues, "skill.src_index_missing", "Missing src/index.ts or src/index.js");
+  if (isInstruction) {
+    // Instruction skills are not runnable locally; no src/ is required and any
+    // bundled helper source is allowed (not forbidden).
+    metadata.runtime = "none";
   } else {
-    const indexPath = existsSync(join(srcDir, "index.ts")) ? join(srcDir, "index.ts") : join(srcDir, "index.js");
-    const size = statSync(indexPath).size;
-    if (size < 50) add(warnings, "skill.src_index_minimal", `Source entry point is very small (${size}B)`);
+    metadata.runtime = hostedMetadata ? "hosted" : "local";
+    const srcDir = join(skillPath, "src");
+    if (hostedMetadata) {
+      if (existsSync(srcDir)) {
+        add(issues, "skill.hosted_source_forbidden", "Hosted metadata skills must not include local implementation source");
+      }
+    } else if (!existsSync(srcDir)) {
+      add(issues, "skill.src_missing", "Missing src/ directory");
+    } else if (!existsSync(join(srcDir, "index.ts")) && !existsSync(join(srcDir, "index.js"))) {
+      add(issues, "skill.src_index_missing", "Missing src/index.ts or src/index.js");
+    } else {
+      const indexPath = existsSync(join(srcDir, "index.ts")) ? join(srcDir, "index.ts") : join(srcDir, "index.js");
+      const size = statSync(indexPath).size;
+      if (size < 50) add(warnings, "skill.src_index_minimal", `Source entry point is very small (${size}B)`);
+    }
   }
 
   return {

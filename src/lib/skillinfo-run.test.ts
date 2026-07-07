@@ -38,6 +38,31 @@ describe("runSkill", () => {
     expect(result.stdout).not.toContain("from copied project source");
   });
 
+  test("returns a not-runnable error for instruction skills", async () => {
+    const skillsRoot = join(testDir, "instruction-skills");
+    const skillDir = join(skillsRoot, "skill-project");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), `---
+name: skill-project
+description: Prose-only instruction skill.
+kind: instruction
+source: private
+---
+
+# Skill Project
+`);
+    const previous = process.env["HASNA_SKILLS_DIR"];
+    process.env["HASNA_SKILLS_DIR"] = skillsRoot;
+    try {
+      const result = await runSkill("skill-project", [], { stdio: "pipe" });
+      expect(result.exitCode).toBe(1);
+      expect(result.error).toContain("instruction skill");
+    } finally {
+      if (previous === undefined) delete process.env["HASNA_SKILLS_DIR"];
+      else process.env["HASNA_SKILLS_DIR"] = previous;
+    }
+  });
+
   test("passes run metadata environment to bundled skills", async () => {
     const result = await runSkill("lorem-generator", ["--help"], {
       stdio: "pipe",

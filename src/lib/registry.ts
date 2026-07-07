@@ -41,6 +41,9 @@ function parseSkillMdFrontmatter(content: string): Partial<SkillMeta> | null {
     else if (key === "description") result.description = value;
     else if (key === "displayName" || key === "display_name") result.displayName = value;
     else if (key === "category") result.category = value;
+    else if (key === "kind") {
+      if (value === "executable" || value === "instruction") result.kind = value;
+    }
     else if (key === "tags") {
       result.tags = value.replace(/[\[\]]/g, "").split(",").map((t) => t.trim()).filter(Boolean);
     }
@@ -72,6 +75,7 @@ function discoverSkillsInDir(dir: string): SkillMeta[] {
         description: fm.description || "",
         category: fm.category || "Development Tools",
         tags: fm.tags || [],
+        ...(fm.kind ? { kind: fm.kind } : {}),
         source: "custom",
       });
     }
@@ -113,9 +117,10 @@ export function loadRegistry(cwd?: string): SkillMeta[] {
 export function loadBasicRegistry(cwd?: string): SkillMeta[] {
   const registry = loadRegistry(cwd);
   const byName = new Map(registry.map((skill) => [skill.name, skill]));
-  const basic = BASIC_SKILL_NAMES.map((name) => byName.get(name)).filter((skill): skill is SkillMeta => skill !== undefined);
-  const custom = registry.filter((skill) => skill.source === "custom" && !BASIC_SKILL_NAMES.includes(skill.name as (typeof BASIC_SKILL_NAMES)[number]));
-  return [...basic, ...custom];
+  // The basic profile is a curated, compact set. Custom/imported skills are gated
+  // out of the default `list` so bulk imports (e.g. 140 skills) cannot flood it;
+  // they remain discoverable via the "all" profile (`skills list --all`).
+  return BASIC_SKILL_NAMES.map((name) => byName.get(name)).filter((skill): skill is SkillMeta => skill !== undefined);
 }
 
 export function loadRegistryProfile(profile: SkillRegistryProfile = "basic", cwd?: string): SkillMeta[] {

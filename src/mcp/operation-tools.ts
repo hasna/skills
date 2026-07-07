@@ -73,10 +73,11 @@ export function registerOperationTools(server: McpServer): void {
       path: z.string(),
       name: z.string().optional(),
       overwrite: z.boolean().optional(),
+      allowShadow: z.boolean().optional(),
     },
-  }, async ({ path, name, overwrite }) => {
+  }, async ({ path, name, overwrite, allowShadow }) => {
     try {
-      const result = portPortableSkill(path, { name, overwrite });
+      const result = portPortableSkill(path, { name, overwrite, allowShadow });
       const validation = validatePortableSkillDirectory(result.name, result.path);
       clearRegistryCache();
       cacheClear();
