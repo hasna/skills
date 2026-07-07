@@ -790,6 +790,12 @@ version: 0.3.0
       expect(result.hasMore).toBe(false);
       expect(skills.map((s: any) => s.name)).not.toContain("deepresearch");
       expect(skills[0].pricing).toHaveProperty("formattedCost");
+      // Compact list must surface descriptions so agents can discover
+      // without a per-skill get_skill_docs / get_skill_info round-trip.
+      for (const s of skills) {
+        expect(typeof s.description).toBe("string");
+        expect(s.description.length).toBeGreaterThan(0);
+      }
     } finally {
       await client.close();
     }
@@ -966,6 +972,10 @@ version: 0.3.0
       expect(skills.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
       expect(skills.map((s: any) => s.name)).not.toContain("deepresearch");
       expect(skills[0].pricing).toHaveProperty("formattedCost");
+      for (const s of skills) {
+        expect(typeof s.description).toBe("string");
+        expect(s.description.length).toBeGreaterThan(0);
+      }
     } finally {
       await client.close();
     }

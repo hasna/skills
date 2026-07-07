@@ -76,6 +76,7 @@ const vendorPattern = new RegExp(`\\b(${VENDOR_TERMS.map(escapeRegExp).join("|")
 export interface CompactSkillDiscovery {
   name: string;
   category: string;
+  description: string;
   pricing: PublicSkillPricing;
 }
 
@@ -89,6 +90,7 @@ export function getCompactSkillDiscovery(skill: SkillMeta): CompactSkillDiscover
   return {
     name: skill.name,
     category: skill.category,
+    description: sanitizePublicDiscoveryText(skill.description),
     pricing: resolveDiscoveryPricing(skill),
   };
 }

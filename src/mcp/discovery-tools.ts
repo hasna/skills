@@ -36,7 +36,7 @@ import { cacheGet, cacheSet, mcpError, mcpJson, stripNulls } from "./helpers.js"
 export function registerDiscoveryTools(server: McpServer): void {
   server.registerTool("list_skills", {
     title: "List Skills",
-    description: "List skills with public pricing. Defaults to a compact paged response from the basic profile to avoid context overflow. Set profile:'all' for the full registry, detail:true for full public objects, and use limit/offset to page.",
+    description: "List skills with name, category, description, and public pricing. Defaults to a compact paged response from the basic profile to avoid context overflow. Set profile:'all' for the full registry, detail:true for full public objects, and use limit/offset to page.",
     inputSchema: {
       category: z.string().optional(),
       profile: z.enum(["basic", "all"]).optional(),
