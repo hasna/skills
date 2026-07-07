@@ -83,6 +83,10 @@ describe("release-guard end-to-end (S1 + S2)", () => {
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("fleet-hostname");
       expect(result.stderr).toContain("internal-cli");
+      // The failure output goes to (possibly public) CI logs: it must NOT
+      // re-surface the raw hostname or internal CLI verbatim — they are masked.
+      expect(result.stderr).not.toContain("spark03");
+      expect(result.stderr).not.toContain("domains r53");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -160,11 +160,18 @@ const DATA_DIR_NON_SKILL_ENTRIES = new Set([
   "skills.db",
 ]);
 
-const COPY_EXCLUDES = new Set([
+// Structural / junk entries excluded at ANY depth of the source tree: VCS metadata,
+// dependency trees, and macOS/agent sidecar dirs never belong in a portable skill.
+const ANY_SEGMENT_COPY_EXCLUDES = new Set([
   ".git",
   ".DS_Store",
   ".system",
   "node_modules",
+]);
+
+// Build-output directories excluded only at the FIRST path segment (the skill root).
+// A nested `references/build/` or `docs/dist/` is legitimate content and must survive.
+const FIRST_SEGMENT_COPY_EXCLUDES = new Set([
   "dist",
   "build",
   ".turbo",
@@ -778,8 +785,8 @@ function copySkillDirectory(source: string, destination: string): void {
       const rel = relative(resolvedSource, src);
       if (!rel) return true;
       const segments = rel.split(/[\\/]/);
-      for (const segment of segments) {
-        if (isExcludedCopyEntry(segment)) return false;
+      for (let i = 0; i < segments.length; i++) {
+        if (isExcludedCopyEntry(segments[i]!, i === 0)) return false;
       }
       // Skip nested symlinks: agent corpora often symlink shared skills, and a
       // dangling link would break the copy.
@@ -789,9 +796,11 @@ function copySkillDirectory(source: string, destination: string): void {
   });
 }
 
-function isExcludedCopyEntry(name: string): boolean {
-  if (COPY_EXCLUDES.has(name)) return true;
-  // AppleDouble sidecar files (`._SKILL.md`, `._foo`) written by macOS.
+function isExcludedCopyEntry(name: string, isFirstSegment: boolean): boolean {
+  if (ANY_SEGMENT_COPY_EXCLUDES.has(name)) return true;
+  // Build output only counts as junk at the skill root; nested copies are real content.
+  if (isFirstSegment && FIRST_SEGMENT_COPY_EXCLUDES.has(name)) return true;
+  // AppleDouble sidecar files (`._SKILL.md`, `._foo`) written by macOS — any depth.
   if (name.startsWith("._")) return true;
   return false;
 }

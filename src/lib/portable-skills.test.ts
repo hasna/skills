@@ -222,6 +222,43 @@ Use this when you need guidance, not a runnable command.
     });
   });
 
+  // ---- Merge-ordering guarantee: a PORTED prose/instruction skill validates clean ----
+  // Guards the reconciliation of instruction-kind + port-robustness + bulk-authoring:
+  // porting an instruction skill must produce a directory that validatePortableSkillDirectory
+  // accepts (valid === true) with no commands/inputs/executable stubs demanded.
+  test("a ported prose/instruction skill validates as valid", () => {
+    withDirs((home, sourceRoot) => {
+      const source = join(sourceRoot, "guidance-skill");
+      mkdirSync(join(source, "references"), { recursive: true });
+      writeFileSync(
+        join(source, "SKILL.md"),
+        `---
+name: guidance-skill
+description: A prose-only instruction skill for agents.
+kind: instruction
+version: 1.2.0
+tags:
+  - agent
+---
+
+# Guidance Skill
+
+Prose guidance an agent reads; there is nothing to run.
+`,
+      );
+      writeFileSync(join(source, "references", "playbook.md"), "# Playbook\n");
+
+      const result = portPortableSkill(source, {
+        rootDir: getPortableSkillsRoot({ homeDir: home }),
+      });
+      expect(result.manifest.kind).toBe("instruction");
+
+      const validation = validatePortableSkillDirectory(result.name, result.path);
+      expect(validation.valid).toBe(true);
+      expect(validation.issues).toEqual([]);
+    });
+  });
+
   test("still fabricates executable stubs for skills without an instruction kind", () => {
     withDirs((home, sourceRoot) => {
       const source = join(sourceRoot, "exec-skill");
@@ -297,6 +334,49 @@ kind: instruction
       // Legitimate content survives.
       expect(existsSync(join(result.path, "SKILL.md"))).toBe(true);
       expect(existsSync(join(result.path, "references", "guide.md"))).toBe(true);
+    });
+  });
+
+  test("drops build output only at the skill root, keeping nested build/dist content", () => {
+    withDirs((home, sourceRoot) => {
+      const source = join(sourceRoot, "layered-skill");
+      mkdirSync(join(source, "build"), { recursive: true });
+      mkdirSync(join(source, "dist"), { recursive: true });
+      mkdirSync(join(source, "node_modules", "left-pad"), { recursive: true });
+      mkdirSync(join(source, "references", "build"), { recursive: true });
+      mkdirSync(join(source, "docs", "dist"), { recursive: true });
+      mkdirSync(join(source, "references", "node_modules"), { recursive: true });
+      writeFileSync(join(source, "SKILL.md"), `---
+name: layered-skill
+description: Skill with real nested build/dist references.
+kind: instruction
+---
+
+# Layered Skill
+`);
+      // Top-level build output = junk.
+      writeFileSync(join(source, "build", "artifact.js"), "// generated\n");
+      writeFileSync(join(source, "dist", "bundle.js"), "// generated\n");
+      writeFileSync(join(source, "node_modules", "left-pad", "index.js"), "// dep\n");
+      // Nested build/dist = legitimate authored content.
+      writeFileSync(join(source, "references", "build", "howto.md"), "# How to build\n");
+      writeFileSync(join(source, "docs", "dist", "distribution.md"), "# Distribution\n");
+      // node_modules is junk at ANY depth.
+      writeFileSync(join(source, "references", "node_modules", "junk.js"), "// nested dep\n");
+
+      const result = portPortableSkill(source, {
+        rootDir: getPortableSkillsRoot({ homeDir: home }),
+      });
+
+      // Root build output dropped.
+      expect(existsSync(join(result.path, "build"))).toBe(false);
+      expect(existsSync(join(result.path, "dist"))).toBe(false);
+      // node_modules dropped at any depth.
+      expect(existsSync(join(result.path, "node_modules"))).toBe(false);
+      expect(existsSync(join(result.path, "references", "node_modules"))).toBe(false);
+      // Nested build/dist references preserved.
+      expect(existsSync(join(result.path, "references", "build", "howto.md"))).toBe(true);
+      expect(existsSync(join(result.path, "docs", "dist", "distribution.md"))).toBe(true);
     });
   });
 
