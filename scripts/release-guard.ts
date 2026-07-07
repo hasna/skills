@@ -1,6 +1,9 @@
 #!/usr/bin/env bun
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { applyAllowlist, scanFiles, toRedactedJson, type ScanAllowlistEntry } from "../src/lib/content-scan.js";
+import { getPackedFiles } from "../src/lib/packlist.js";
+import { findPrivatePacklistLeaks, listPrivateSkillSlugs } from "../src/lib/public-boundary.js";
 
 type Finding = {
   file: string;
@@ -113,4 +116,63 @@ if (findings.length > 0) {
   process.exit(1);
 }
 
-console.log("Release guard passed: package-visible files are free of retired cloud and secret markers.");
+// ---------------------------------------------------------------------------
+// S1 + S2: derive the REAL package file list and enforce the public/private
+// boundary and body content scan against exactly what would be published.
+// ---------------------------------------------------------------------------
+let packedFiles: string[];
+try {
+  packedFiles = getPackedFiles(repoRoot);
+} catch (error) {
+  console.error("Release guard failed: could not compute the package file list.");
+  console.error(`  ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+}
+
+// S1 — public/private boundary: no private/PII skill may enter the package.
+const privateSlugs = listPrivateSkillSlugs(join(repoRoot, "skills"));
+const boundaryLeaks = findPrivatePacklistLeaks(packedFiles, privateSlugs);
+if (boundaryLeaks.length > 0) {
+  console.error("Release guard failed: private skills leaked into the published package file list:");
+  for (const leaked of boundaryLeaks) {
+    console.error(`  private-boundary: ${leaked}`);
+  }
+  console.error(
+    "  Private skills (visibility team|private|internal, `skills.publish:false`, or a `.private` marker)",
+  );
+  console.error("  must be excluded from the `files` list in package.json.");
+  process.exit(1);
+}
+
+// S2 — content scan of package-visible bodies (skip built artifacts under dist/ and bin/).
+const scannablePacked = packedFiles.filter((path) => !path.startsWith("dist/") && !path.startsWith("bin/"));
+const absoluteScanTargets = scannablePacked
+  .map((path) => join(repoRoot, path))
+  .filter((path) => existsSync(path) && statSync(path).isFile());
+const packRelativeByAbsolute = new Map(
+  scannablePacked.map((path) => [join(repoRoot, path), path] as const),
+);
+const rawScanFindings = scanFiles(absoluteScanTargets, (abs) => packRelativeByAbsolute.get(abs) ?? relative(repoRoot, abs));
+
+// Documented, audited exceptions. Each entry is matched EXACTLY on (file, ruleId);
+// it can never suppress a different file or rule. Keep this list minimal.
+const scanAllowlist: ScanAllowlistEntry[] = [
+  {
+    file: "skills/security-audit/src/index.ts",
+    ruleId: "private-key-block",
+    reason: "Detection regex literal inside the security-audit scanner skill, not a real private key.",
+  },
+];
+
+const scanFindings = applyAllowlist(rawScanFindings, scanAllowlist);
+
+if (scanFindings.length > 0) {
+  console.error("Release guard failed: package-visible content contains secrets, PII, or private context.");
+  console.error(toRedactedJson(scanFindings));
+  process.exit(1);
+}
+
+console.log(
+  `Release guard passed: ${packedFiles.length} package-visible files are free of retired cloud markers, ` +
+    "secrets, PII, private context, and private-skill leaks.",
+);

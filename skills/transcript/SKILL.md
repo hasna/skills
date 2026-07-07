@@ -11,7 +11,7 @@ Create transcripts from local audio/video files or media URLs. Use this skill wh
 
 - Use the hosted Skills runtime when the user explicitly runs `skills run transcript`, needs remote execution, or has only `SKILLS_API_KEY` configured.
 - Use local `iapp-transcriber` when you are on this machine and need direct access to local files, YouTube/Vimeo/generic `yt-dlp` sources, transcript DB records, MCP tools, comments, exports, or OpenLoops follow-up workflows.
-- The local command is `transcriber` when installed, or `bun run src/cli/index.ts` from `/home/hasna/Workspace/hasnaxyz/internalapp/iapp-transcriber`.
+- The local command is `transcriber` when installed, or `bun run src/cli/index.ts` from your `~/Workspace/hasnaxyz/internalapp/iapp-transcriber` checkout.
 
 ## Hosted Usage
 
