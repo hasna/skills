@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -13,6 +14,7 @@ import { basename, dirname, isAbsolute, join, normalize, relative } from "path";
 import { homedir } from "os";
 
 import { getDataDir } from "./config.js";
+import { SKILLS } from "./registry-data/index.js";
 import type { SkillMeta } from "./registry-types.js";
 import {
   parseSkillFrontmatter,
@@ -24,6 +26,8 @@ import {
 export const PORTABLE_SKILL_STANDARD = "hasna.skill.v1";
 export const PORTABLE_SKILL_SCHEMA = "https://hasna.dev/schemas/skill.v1.json";
 export const PORTABLE_SKILL_DEFAULT_VERSION = "0.1.0";
+
+export type SkillKind = "executable" | "instruction";
 
 export interface PortableSkillInput {
   name: string;
@@ -49,6 +53,7 @@ export interface PortableSkillManifest {
   displayName?: string;
   category?: string;
   tags?: string[];
+  kind?: SkillKind;
   inputs: PortableSkillInput[];
   commands: PortableSkillCommand[];
 }
@@ -77,6 +82,11 @@ export interface ScaffoldPortableSkillOptions extends PortableSkillOptions {
 export interface PortPortableSkillOptions extends PortableSkillOptions {
   name?: string;
   overwrite?: boolean;
+  /**
+   * Permit an imported skill name that shadows a bundled official skill.
+   * Without this, `port` refuses to silently override the official corpus.
+   */
+  allowShadow?: boolean;
 }
 
 export interface PortableSkillWriteResult {
@@ -118,6 +128,7 @@ const DATA_DIR_NON_SKILL_ENTRIES = new Set([
 const COPY_EXCLUDES = new Set([
   ".git",
   ".DS_Store",
+  ".system",
   "node_modules",
   "dist",
   "build",
@@ -238,6 +249,7 @@ export function readPortableSkillManifest(skillPath: string, fallbackName = base
   const commands = parseManifestCommands(jsonManifest)
     ?? inferPackageCommands(pkg, name)
     ?? [];
+  const kind = parseSkillKind(stringField(jsonManifest, "kind") ?? frontmatter?.kind);
 
   return {
     $schema: stringField(jsonManifest, "$schema") ?? PORTABLE_SKILL_SCHEMA,
@@ -248,9 +260,23 @@ export function readPortableSkillManifest(skillPath: string, fallbackName = base
     displayName: stringField(jsonManifest, "displayName") ?? frontmatter?.displayName ?? displayName(name),
     category: stringField(jsonManifest, "category") ?? frontmatter?.category ?? "Development Tools",
     tags: stringArrayField(jsonManifest, "tags") ?? frontmatter?.tags ?? ["custom"],
+    ...(kind ? { kind } : {}),
     inputs: parseManifestInputs(jsonManifest) ?? DEFAULT_INPUTS,
     commands,
   };
+}
+
+function parseSkillKind(value: string | undefined): SkillKind | undefined {
+  if (value === "instruction") return "instruction";
+  if (value === "executable") return "executable";
+  return undefined;
+}
+
+/** Bundled official skill slugs, used to guard against silent shadow imports. */
+const OFFICIAL_SKILL_NAMES: ReadonlySet<string> = new Set(SKILLS.map((skill) => skill.name));
+
+export function isOfficialSkillName(name: string): boolean {
+  return OFFICIAL_SKILL_NAMES.has(name);
 }
 
 export function scaffoldPortableSkill(name: string, options: ScaffoldPortableSkillOptions = {}): PortableSkillWriteResult {
@@ -276,7 +302,23 @@ export function portPortableSkill(sourcePath: string, options: PortPortableSkill
   }
 
   const inferred = readPortableSkillManifest(absoluteSource, basename(absoluteSource));
+  const explicitName = options.name != null;
   const skillName = normalizePortableSkillName(options.name ?? inferred.name);
+
+  // Guard: refuse to silently shadow a bundled official skill. An import whose
+  // (possibly inferred) name collides with the official corpus would take
+  // precedence over it in the registry, so require an explicit opt-in.
+  if (isOfficialSkillName(skillName) && !options.allowShadow) {
+    const sourceSlug = safeNormalizeName(basename(absoluteSource));
+    const via = explicitName
+      ? `Name '${skillName}' matches a bundled official skill.`
+      : `Inferred name '${skillName}'${sourceSlug && sourceSlug !== skillName ? ` (from source folder '${basename(absoluteSource)}')` : ""} matches a bundled official skill.`;
+    throw new Error(
+      `${via} Importing it would shadow the official '${skillName}'. `
+        + `Pass --name to choose a different name, or --allow-shadow to override deliberately.`,
+    );
+  }
+
   const root = getPortableSkillsRoot(options);
   const destination = join(root, skillName);
   if (existsSync(destination)) {
@@ -286,12 +328,24 @@ export function portPortableSkill(sourcePath: string, options: PortPortableSkill
 
   mkdirSync(dirname(destination), { recursive: true });
   copySkillDirectory(absoluteSource, destination);
-  const manifest = ensurePortableSkillFiles(destination, {
+
+  const base = {
     ...inferred,
     name: skillName,
     displayName: inferred.displayName ?? displayName(skillName),
-  });
+  };
+  const manifest = inferred.kind === "instruction"
+    ? ensureInstructionSkillFiles(destination, { ...base, kind: "instruction" })
+    : ensurePortableSkillFiles(destination, base);
   return { name: skillName, path: destination, manifest, created: true };
+}
+
+function safeNormalizeName(name: string): string | undefined {
+  try {
+    return normalizePortableSkillName(name);
+  } catch {
+    return undefined;
+  }
 }
 
 export function validatePortableSkillDirectory(name: string, skillPath: string): SkillValidationResult {
@@ -537,19 +591,62 @@ function ensurePackageJson(skillPath: string, manifest: PortableSkillManifest): 
   }, null, 2)}\n`);
 }
 
+/**
+ * Instruction (prose) skills are consumed by agent renderers/MCP docs, not run
+ * locally, so `port` must never fabricate executable stubs (package.json, bin,
+ * src/index.ts, tsconfig.json, AGENTS.md). It keeps the copied SKILL.md verbatim
+ * and writes a minimal skill.json declaring `kind: "instruction"`.
+ */
+function ensureInstructionSkillFiles(skillPath: string, manifest: PortableSkillManifest): PortableSkillManifest {
+  const next: PortableSkillManifest = {
+    ...manifest,
+    kind: "instruction",
+    standard: PORTABLE_SKILL_STANDARD,
+    $schema: manifest.$schema ?? PORTABLE_SKILL_SCHEMA,
+    displayName: manifest.displayName ?? displayName(manifest.name),
+    category: manifest.category ?? "Development Tools",
+    tags: manifest.tags?.length ? manifest.tags : ["custom", manifest.name],
+    inputs: [],
+    commands: [],
+  };
+
+  // SKILL.md is the agent handoff artifact and is kept exactly as copied. Only
+  // synthesize one if the source somehow lacked it.
+  if (!existsSync(join(skillPath, "SKILL.md"))) {
+    writeFileSync(join(skillPath, "SKILL.md"), renderSkillMd(next));
+  }
+  writeFileSync(join(skillPath, "skill.json"), renderInstructionSkillJson(next));
+  return readPortableSkillManifest(skillPath, next.name);
+}
+
 function copySkillDirectory(source: string, destination: string): void {
+  // A source folder can itself be a symlink (e.g. agent skill dirs full of
+  // `impeccable-*` symlinks). cpSync would try to recreate the symlink over the
+  // freshly-created destination directory and crash, so resolve it first.
+  const resolvedSource = lstatSync(source).isSymbolicLink() ? realpathSync(source) : source;
   mkdirSync(destination, { recursive: true });
-  cpSync(source, destination, {
+  cpSync(resolvedSource, destination, {
     recursive: true,
     filter: (src) => {
-      const rel = relative(source, src);
+      const rel = relative(resolvedSource, src);
       if (!rel) return true;
-      const first = rel.split(/[\\/]/)[0];
-      if (COPY_EXCLUDES.has(first)) return false;
+      const segments = rel.split(/[\\/]/);
+      for (const segment of segments) {
+        if (isExcludedCopyEntry(segment)) return false;
+      }
+      // Skip nested symlinks: agent corpora often symlink shared skills, and a
+      // dangling link would break the copy.
       if (lstatSync(src).isSymbolicLink()) return false;
       return true;
     },
   });
+}
+
+function isExcludedCopyEntry(name: string): boolean {
+  if (COPY_EXCLUDES.has(name)) return true;
+  // AppleDouble sidecar files (`._SKILL.md`, `._foo`) written by macOS.
+  if (name.startsWith("._")) return true;
+  return false;
 }
 
 function renderSkillMd(manifest: PortableSkillManifest): string {
@@ -571,6 +668,20 @@ function renderSkillJson(manifest: PortableSkillManifest): string {
     tags: manifest.tags ?? ["custom", manifest.name],
     inputs: manifest.inputs,
     commands: manifest.commands,
+  }, null, 2)}\n`;
+}
+
+function renderInstructionSkillJson(manifest: PortableSkillManifest): string {
+  return `${JSON.stringify({
+    $schema: manifest.$schema ?? PORTABLE_SKILL_SCHEMA,
+    standard: PORTABLE_SKILL_STANDARD,
+    name: manifest.name,
+    description: manifest.description,
+    version: manifest.version,
+    displayName: manifest.displayName ?? displayName(manifest.name),
+    category: manifest.category ?? "Development Tools",
+    tags: manifest.tags ?? ["custom", manifest.name],
+    kind: "instruction",
   }, null, 2)}\n`;
 }
 

@@ -42,6 +42,7 @@ export interface SkillFrontmatter {
   tags?: string[];
   version?: string;
   source?: string;
+  kind?: string;
 }
 
 export interface SkillValidationProvenance {
@@ -189,6 +190,7 @@ export function parseSkillFrontmatter(content: string): SkillFrontmatter | null 
     else if (key === "category") result.category = value;
     else if (key === "version") result.version = value;
     else if (key === "source") result.source = value;
+    else if (key === "kind") result.kind = value;
     else if (key === "tags") {
       result.tags = value.replace(/[\[\]]/g, "").split(",").map((tag) => tag.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
     }

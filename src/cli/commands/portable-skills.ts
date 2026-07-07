@@ -44,13 +44,15 @@ export function registerPortableSkillCommands(parent: Command) {
     .argument("<path>", "Existing skill folder to import")
     .option("--name <name>", "Override the imported skill name")
     .option("-o, --overwrite", "Replace an existing portable skill folder", false)
+    .option("--allow-shadow", "Allow an imported name that shadows a bundled official skill", false)
     .option("--json", "Output result as JSON", false)
     .description("Import an existing skill folder into ~/.hasna/skills/<name>")
-    .action((path: string, options: { name?: string; overwrite: boolean; json: boolean }) => {
+    .action((path: string, options: { name?: string; overwrite: boolean; allowShadow: boolean; json: boolean }) => {
       try {
         const result = portPortableSkill(path, {
           name: options.name,
           overwrite: options.overwrite,
+          allowShadow: options.allowShadow,
         });
         clearRegistryCache();
         const validation = validatePortableSkillDirectory(result.name, result.path);
