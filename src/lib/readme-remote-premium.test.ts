@@ -2,15 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-describe("README remote premium onboarding", () => {
+describe("README self-hosted premium onboarding", () => {
   const readme = readFileSync(join(process.cwd(), "README.md"), "utf8");
 
-  test("documents premium hosted runs as remote-only SaaS execution", () => {
+  test("documents premium self-hosted runs as server-side execution", () => {
     for (const phrase of [
-      "## Remote-Only Premium Skills",
-      "Premium skills are hosted SaaS runs",
+      "## Self-Hosted Runtime Skills",
+      "Premium skills are self-hosted runs",
       "do not fall back to bundled local execution",
-      "skills auth login",
+      "skills auth login --api-key",
       "skills runs status <run-id>",
       "skills exports download <run-id>",
     ]) {
@@ -18,13 +18,13 @@ describe("README remote premium onboarding", () => {
     }
   });
 
-  test("separates hosted auth from local provider keys", () => {
+  test("separates self-hosted auth from local provider keys", () => {
     for (const phrase of [
-      "`SKILLS_API_KEY` is the hosted account credential",
+      "`SKILLS_API_KEY` is the self-hosted API credential",
       "It is not a provider",
       "`OPENAI_API_KEY`",
       "free/local OSS skills",
-      "hosted skills are metadata-only",
+      "self-hosted skills expose metadata/contracts",
     ]) {
       expect(readme).toContain(phrase);
     }

@@ -108,8 +108,8 @@ export function registerSchedule(parent: Command) {
   scheduleCmd
     .command("run")
     .option("--dry-run", "Show which schedules are due without running them", false)
-    .option("--allow-paid", "Allow due paid hosted schedules to spend account balance", false)
-    .option("--max-paid-cents <cents>", "Maximum paid hosted spend approved for this run")
+    .option("--allow-paid", "Allow due paid self-hosted schedules to spend account balance", false)
+    .option("--max-paid-cents <cents>", "Maximum paid self-hosted spend approved for this run")
     .option("--json", "Output as JSON", false)
     .description("Execute all due schedules now")
     .action(async (options: { dryRun: boolean; allowPaid: boolean; maxPaidCents?: string; json: boolean }) => {
@@ -136,7 +136,7 @@ export function registerSchedule(parent: Command) {
       }
       const approvedMaxCents = parseMaxPaidCents(options.maxPaidCents);
       if (paidTotalCents > 0 && (!options.allowPaid || approvedMaxCents === null || approvedMaxCents < paidTotalCents)) {
-        const error = `Due paid hosted schedules cost ${formatCost(paidTotalCents)} total. Review with skills schedule run --dry-run, then rerun with --allow-paid --max-paid-cents ${paidTotalCents}.`;
+        const error = `Due paid self-hosted schedules cost ${formatCost(paidTotalCents)} total. Review with skills schedule run --dry-run, then rerun with --allow-paid --max-paid-cents ${paidTotalCents}.`;
         if (options.json) {
           console.log(JSON.stringify({
             ran: 0,
@@ -214,13 +214,13 @@ async function executeScheduledSkill(skillName: string, args: string[], options:
 
     const publicPricing = pricing.getPublicSkillPricing(skill.name, {}, args);
     if (!options.allowPaid) {
-      throw new Error(`${skill.name} is a paid hosted skill (${publicPricing.formattedCost}). Review with skills schedule run --dry-run, then rerun with --allow-paid --max-paid-cents ${publicPricing.costCents}.`);
+      throw new Error(`${skill.name} is a paid self-hosted skill (${publicPricing.formattedCost}). Review with skills schedule run --dry-run, then rerun with --allow-paid --max-paid-cents ${publicPricing.costCents}.`);
     }
 
     const { getApiKey } = await import("../../lib/auth-store.js");
     const apiKey = getApiKey();
     if (!apiKey) {
-      throw new Error(`${skill.name} is a hosted skill. Run: skills setup --mode hosted && skills auth login`);
+      throw new Error(`${skill.name} is a self-hosted skill. Run: skills setup --mode self-hosted && skills auth login`);
     }
 
     const { RemoteSkillsClient } = await import("../../lib/remote-client.js");

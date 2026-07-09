@@ -21,21 +21,21 @@ describe("@hasna/skills product brief", () => {
     expect(brief).toContain("## Pricing Principles");
     expect(brief).toContain("## Trust Model");
     expect(brief).toContain("Billing, payment methods, credits");
-    expect(brief).toContain("Hosted skills expose public docs");
+    expect(brief).toContain("Self-hosted skills expose public docs");
     expect(brief).toContain("Local skills should remain runnable");
   });
 
   test("keeps agent-native surfaces ahead of future dashboards", () => {
     expect(brief).toContain("CLI and MCP");
-    expect(brief).toContain("Future hosted dashboards");
+    expect(brief).toContain("Future operator dashboards");
     expect(brief).toContain("same API contracts used by CLI and\nMCP");
     expect(brief).toContain("without making the agent workflow dependent on a browser");
   });
 
-  test("anchors product to public package and optional hosted API", () => {
+  test("anchors product to public package and optional self-hosted API", () => {
     expect(brief).toContain("hasna/skills");
     expect(brief).toContain("@hasna/skills");
-    expect(brief).toContain("skills.md");
+    expect(brief).toContain("https://skills.hasna.xyz");
     expect(brief).toContain("local-only");
     expect(brief).not.toContain(cloudPackage);
   });

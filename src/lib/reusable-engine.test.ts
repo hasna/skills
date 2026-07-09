@@ -22,7 +22,7 @@ describe("reusable skills engine contract", () => {
     }
   });
 
-  test("documents public APIs that private SaaS code can wrap", () => {
+  test("documents public APIs that the self-hosted service can wrap", () => {
     for (const api of [
       "loadRemoteRegistry",
       "installSkillSource",
@@ -63,16 +63,16 @@ describe("reusable skills engine contract", () => {
       "createSkillMcpMetadata",
       "install/run schemas",
       "MCP resource contracts",
-      "without SaaS-specific assumptions",
+      "without deployment-specific assumptions",
     ]) {
       expect(content).toContain(phrase);
     }
   });
 
-  test("keeps private SaaS concerns out of the reusable engine", () => {
-    expect(content).toContain("Do not add private SaaS concepts");
-    expect(content).toContain("PostgreSQL");
-    expect(content).toContain("Stripe");
+  test("keeps deployment-only concerns out of the reusable engine", () => {
+    expect(content).toContain("Do not add deployment-only assumptions");
+    expect(content).toContain("Postgres");
+    expect(content).toContain("billing providers");
     expect(content).toContain("AWS infrastructure");
     expect(content).toContain("There is no\n`.skills/skills` directory");
   });

@@ -164,7 +164,7 @@ export function registerDiscoveryTools(server: McpServer): void {
 
   server.registerTool("list_tool_primitives", {
     title: "List Tool Primitives",
-    description: "List primitive tools that skills depend on across CLI, MCP, API, and hosted worker execution.",
+    description: "List primitive tools that skills depend on across CLI, MCP, API, and self-hosted worker execution.",
     inputSchema: {
       query: z.string().optional(),
     },

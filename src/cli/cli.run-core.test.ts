@@ -188,7 +188,7 @@ describe("CLI run core", () => {
         expect(stderr).toBe("");
         expect(exitCode).not.toBe(0);
         expect(data.approvalRequired).toBe(true);
-        expect(data.error).toContain("paid hosted skill");
+        expect(data.error).toContain("paid self-hosted skill");
         expect(data.error).toContain("--yes");
         expect(data.run.remote).toBe(true);
         expect(data.run.status).toBe("failed");
@@ -319,7 +319,7 @@ describe("CLI run core", () => {
         const data = JSON.parse(stdout);
         expect(stderr).toBe("");
         expect(exitCode).not.toBe(0);
-        expect(data.error).toContain("requires hosted access");
+        expect(data.error).toContain("requires self-hosted API access");
         expect(data.stdout).toBeUndefined();
         expect(data.run.remote).toBe(true);
         expect(data.run.status).toBe("failed");

@@ -2,29 +2,32 @@
 
 `@hasna/skills` v1 is accepted when an agent can discover, configure, pin, run,
 and validate skills through the CLI and MCP server from the public npm package,
-with hosted execution kept behind explicit setup and auth.
+with self-hosted execution kept behind explicit setup and auth.
 
 ## Product Acceptance
 
 - `hasna/skills` is the canonical open repository.
 - `@hasna/skills` is the public npm package.
 - Local-only setup works without API credentials.
-- Compatible hosted APIs such as skills.md are optional wrappers over public
-  contracts.
-- Private worker, billing, tenant, database, and deployment state stay outside
-  the OSS package.
+- Compatible self-hosted APIs such as `https://skills.hasna.xyz` are optional
+  API targets over public contracts.
+- Provider secrets, billing, tenant, database, and deployment state stay outside
+  local projects and source packages unless explicitly part of the deployable
+  service.
 
 ## CLI Acceptance
 
 - User can run `skills setup --mode local` and get local-only config.
-- User can run `skills setup --mode hosted --api-url <url>` for hosted mode.
-- Interactive setup recommends hosted mode; non-interactive setup remains
-  local-safe unless hosted mode is explicit.
-- User can run `skills auth login` for browser/device-code auth.
-- User can inspect hosted account state with `skills billing status` and create
-  hosted checkout/portal URLs with billing or credit commands.
+- User can run `skills setup --mode self-hosted --api-url <url>` for
+  self-hosted mode.
+- Interactive setup recommends self-hosted mode; non-interactive setup remains
+  local-safe unless self-hosted mode is explicit.
+- User can run `skills auth login --api-key <key>` to verify and store a
+  provisioned self-hosted API key.
+- User can inspect self-hosted account state with `skills billing status`; when
+  billing is enabled, checkout/portal URLs use the same API.
 - User can list, search, inspect, pin, unpin, quote, validate, and run skills.
-- Premium or hosted skills fail closed without hosted credentials.
+- Premium or self-hosted skills fail closed without self-hosted credentials.
 - CLI errors are structured and scriptable with `--json`.
 
 ## MCP Acceptance
@@ -34,7 +37,7 @@ with hosted execution kept behind explicit setup and auth.
   resources.
 - Agent can inspect primitive tool dependencies and validate primitive coverage
   through MCP tools.
-- Agent can request hosted execution and receive structured auth or remote-run
+- Agent can request self-hosted execution and receive structured auth or run
   errors.
 - MCP tests cover success, error, and remote-only fail-closed behavior.
 
@@ -45,8 +48,8 @@ with hosted execution kept behind explicit setup and auth.
 - `skills tools list`, `skills tools deps <skill>`, and `skills tools validate`
   provide JSON output for agents and launch checks.
 - The bundled catalog maps every official skill to at least one primitive tool.
-- Gateway-backed and hosted-runtime skills are marked explicitly so hosted
-  wrappers can route model calls through their configured gateway without
+- Gateway-backed and self-hosted runtime skills are marked explicitly so the
+  service can route model calls through its configured gateway without
   leaking provider keys into local OSS usage.
 
 ## Package Acceptance
@@ -56,27 +59,27 @@ with hosted execution kept behind explicit setup and auth.
   markers.
 - Packed output includes public docs, schemas, and local skill source where
   allowed.
-- Packed output excludes protected hosted implementation source.
+- Packed output excludes protected implementation source and secrets.
 - Public exports expose reusable registry, config, validation, discovery,
   pricing, feedback, scheduler, and remote-run contract APIs.
 
 ## Security Acceptance
 
-- Hosted skill source is never installed locally unless the public contract
+- Self-hosted skill source is never installed locally unless the public contract
   explicitly allows it.
-- Config validation rejects unknown keys and malformed hosted API URLs.
+- Config validation rejects unknown keys and malformed self-hosted API URLs.
 - Remote-only skills do not use test mode as a local execution bypass.
 - Package-boundary tests scan metadata, lockfile, packed output, and built
   entrypoints.
 
-## Hosted Wrapper Acceptance
+## Self-Hosted Service Acceptance
 
-- Hosted wrappers consume public package APIs rather than importing CLI or MCP
-  internals.
-- Hosted wrappers own account state, billing, approvals, workers, secrets, and
-  deployments.
-- Hosted wrappers can expose compatible API URLs without forcing OSS users onto
-  a single hosted service.
+- The self-hosted service exposes health, auth, registry, quote, run, log, and
+  artifact APIs.
+- The service owns account state, billing integration, approvals, workers,
+  secrets, and deployments.
+- Compatible API URLs remain explicit configuration and do not force local users
+  onto the self-hosted service.
 
 ## Required Gates
 

@@ -158,7 +158,7 @@ export function publicDiscoveryDocumentation(skill: SkillMeta, documentation: st
     `# ${skill.displayName || skill.name}`,
     sanitizePublicDiscoveryText(skill.description),
     `Pricing: ${getPublicSkillPricing(skill.name).formattedCost}.`,
-    "Set `SKILLS_API_KEY` or run `skills auth login` for hosted runtime execution. Runtime routing and model selection are managed by the hosted Skills runtime.",
+    "Set `SKILLS_API_KEY` or run `skills auth login` for self-hosted runtime execution. Runtime routing and model selection are managed by the self-hosted Skills runtime.",
   ].join("\n\n");
 }
 

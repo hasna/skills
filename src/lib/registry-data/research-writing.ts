@@ -18,7 +18,7 @@ export const RESEARCH_WRITING_SKILLS: SkillMeta[] = [
   {
     name: "blog-article",
     displayName: "Blog Article",
-    description: "Create SEO-optimized blog article artifact packages through the hosted runtime",
+    description: "Create SEO-optimized blog article artifact packages through the self-hosted runtime",
     category: "Research & Writing",
     tags: ["blog", "article", "writing", "seo", "premium", "remote"],
   },

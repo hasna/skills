@@ -16,12 +16,12 @@ describe("remote registry", () => {
     else process.env.SKILLS_API_URL = originalSkillsApiUrl;
   });
 
-  test("builds skills endpoint from SaaS origin", () => {
-    expect(buildSkillsApiUrl("https://skills.md")).toBe("https://skills.md/api/v1/skills");
+  test("builds skills endpoint from self-hosted origin", () => {
+    expect(buildSkillsApiUrl("https://skills.hasna.xyz")).toBe("https://skills.hasna.xyz/api/v1/skills");
   });
 
   test("builds skills endpoint from explicit API base", () => {
-    expect(buildSkillsApiUrl("https://skills.md/api/v1/")).toBe("https://skills.md/api/v1/skills");
+    expect(buildSkillsApiUrl("https://skills.hasna.xyz/api/v1/")).toBe("https://skills.hasna.xyz/api/v1/skills");
     expect(buildSkillsApiUrl("http://localhost:3505/api")).toBe("http://localhost:3505/api/skills");
   });
 

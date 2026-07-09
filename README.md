@@ -19,9 +19,9 @@ Requires [Bun](https://bun.sh/) 1.0+.
 # Browse skills interactively
 skills
 
-# Hosted setup is the recommended interactive path
-skills setup --mode hosted
-skills auth login
+# Self-hosted setup points the CLI at the Hasna-owned API
+skills setup --mode self-hosted
+skills auth login --api-key "$SKILLS_API_KEY"
 
 # Local-only setup stays available and does not require an account
 skills setup --mode local
@@ -35,7 +35,7 @@ skills setup agents
 # See what a skill needs
 skills info image
 
-# Premium skills run through the configured hosted API
+# Premium skills run through the configured self-hosted API
 skills run image "a cat sitting on a windowsill"
 
 # Free/local skills can still use your own provider keys when documented
@@ -43,27 +43,29 @@ skills requires brand-style-guide
 OPENAI_API_KEY=... skills run brand-style-guide ./brand-notes.md
 ```
 
-## Remote-Only Premium Skills
+## Self-Hosted Runtime Skills
 
-Premium skills are hosted SaaS runs. The CLI and MCP server submit them to the
-configured hosted API, create local run metadata, and then expose status and
-artifact commands. They do not fall back to bundled local execution when auth is
-missing or the platform is unavailable.
+Premium skills are self-hosted runs. The CLI and MCP server submit them to the
+configured self-hosted API, create local run metadata, and then expose status
+and artifact commands. They do not fall back to bundled local execution when
+auth is missing or the self-hosted runtime is unavailable.
 
-Use `SKILLS_API_KEY` or `skills auth login` for premium hosted execution:
+Use `SKILLS_API_KEY` or `skills auth login --api-key` for premium self-hosted
+execution:
 
 ```bash
-skills setup --mode hosted
-skills auth login
+skills setup --mode self-hosted --api-url https://skills.hasna.xyz
+skills auth login --api-key "$SKILLS_API_KEY"
 skills run image "editorial product photo on a white sweep"
 skills runs status <run-id>
 skills exports download <run-id>
 ```
 
-`skills auth login` uses browser/device-code auth by default. Email code login
-is still available with `skills auth login --email you@example.com`.
+Browser/device-code and email-code login commands are retained for compatible
+deployments. The Hasna self-hosted deployment can bootstrap with a provisioned
+API key via `skills auth login --api-key`.
 
-`SKILLS_API_KEY` is the hosted account credential. It is not a provider
+`SKILLS_API_KEY` is the self-hosted API credential. It is not a provider
 credential. Provider keys such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or
 `GEMINI_API_KEY` remain supported only for free/local OSS skills whose
 requirements explicitly document local provider use.
@@ -77,8 +79,8 @@ requirements explicitly document local provider use.
 | `skills pin --category "Development Tools"` | | Pin all skills in a category |
 | `skills unpin <name>` | | Remove a project pin |
 | `skills pins list` | | List pinned skills |
-| `skills setup --mode hosted` | | Configure hosted mode with a compatible API origin |
-| `skills setup --mode local` | | Configure local-only mode without hosted credentials |
+| `skills setup --mode self-hosted` | | Configure self-hosted mode with a compatible API origin |
+| `skills setup --mode local` | | Configure local-only mode without self-hosted credentials |
 | `skills setup agents` | | Register the Skills MCP server with all supported agents |
 | `skills list` | `ls` | List available skills (filter with `-c`, `--pinned`, `-t`, `--brief`) |
 | `skills search <query>` | `s` | Search by name, description, or tags |
@@ -97,11 +99,12 @@ requirements explicitly document local provider use.
 | `skills doctor` | | Check env vars, system deps, and pinned skill health |
 | `skills test [name]` | | Test skill readiness (env, system, npm deps) |
 | `skills outdated` | | Compare pinned vs registry versions |
-| `skills auth login` | | Sign in to the hosted API with browser/device-code auth or email code |
-| `skills billing status` | | Show hosted account plan and balance |
-| `skills billing checkout` | | Create a hosted subscription checkout session |
-| `skills billing portal` | | Create a hosted customer portal session |
-| `skills credits buy <amount>` | | Create a hosted credit-pack checkout session |
+| `skills auth login --api-key <key>` | | Verify and store a self-hosted API key |
+| `skills auth login` | | Sign in to a compatible API with browser/device-code auth or email code |
+| `skills billing status` | | Show self-hosted account plan and balance |
+| `skills billing checkout` | | Create a checkout session when billing is enabled |
+| `skills billing portal` | | Create a customer portal session when billing is enabled |
+| `skills credits buy <amount>` | | Create a credit-pack checkout session when billing is enabled |
 | `skills setup-info` | | Version, pinned skills, agent configs, paths |
 | `skills export` | | Export pinned skills as JSON |
 | `skills import <file>` | | Pin skills from a JSON export |
@@ -171,7 +174,7 @@ Stable command shapes:
   `{ "dryRun": true, "actions": [...] }` where applicable.
 - Runtime: `run --json <skill> ...` returns
   `{ "skill", "args", "exitCode", "stdout", "stderr", "error", "run" }`.
-  Premium remote runs include `{ "contractVersion": 1, "remote": true,
+  Premium self-hosted runs include `{ "contractVersion": 1, "remote": true,
   "remoteRun", "pricing", "run", "nextActions" }` and return immediately with
   status commands such as `skills runs status <run-id>` and
   `skills exports download <run-id>`.
@@ -183,15 +186,15 @@ Stable command shapes:
 - MCP registration: `mcp --register <agent> --json` returns
   `{ "registered": number, "results": [...] }`.
 
-## Remote Registry Mode
+## Self-Hosted Registry Mode
 
 Local bundled skills remain the default for discovery. To point browse/search
-commands at a compatible hosted registry, set an API base URL:
+commands at a compatible self-hosted registry, set an API base URL:
 
 ```bash
-export SKILLS_API_URL=https://skills.md/api/v1
+export SKILLS_API_URL=https://skills.hasna.xyz
 # or persist it:
-skills config set apiUrl https://skills.md/api/v1
+skills config set apiUrl https://skills.hasna.xyz
 
 skills list --remote --json
 skills search transcribe --remote --json
@@ -199,12 +202,12 @@ skills categories --remote
 skills tags --remote --json
 ```
 
-If the URL is an origin such as `https://skills.md`, the CLI requests
+If the URL is an origin such as `https://skills.hasna.xyz`, the CLI requests
 `/api/v1/skills`. If it already ends in `/api` or `/api/v1`, the CLI appends
 `/skills`.
 
-Authenticated remote listing and hosted premium execution use `SKILLS_API_KEY`
-or the credential saved by `skills auth login`.
+Authenticated registry listing and self-hosted premium execution use
+`SKILLS_API_KEY` or the credential saved by `skills auth login --api-key`.
 
 For the reusable upstream contract, see
 `docs/architecture/reusable-skills-engine.md`.
@@ -273,24 +276,25 @@ skills mcp --register claude    # Auto-register with Claude Code
 skills mcp --register all       # Register with all supported agents
 ```
 
-## Hosted Account
+## Self-Hosted API
 
 ```bash
-skills setup --mode hosted
-skills auth login
+skills setup --mode self-hosted --api-url https://skills.hasna.xyz
+skills auth login --api-key "$SKILLS_API_KEY"
 skills billing status
 ```
 
-Hosted account, billing, and credit management use the configured hosted API.
-The public package only stores local configuration and CLI credentials; Stripe,
-customer records, and hosted execution remain platform concerns.
+Self-hosted account, run, log, artifact, and optional billing commands use the
+configured self-hosted API. The public package stores only local configuration
+and CLI credentials. Runtime state belongs in Postgres and artifacts can be
+stored in S3 when `HASNA_SKILLS_S3_BUCKET` is configured.
 
 ## Storage Boundary
 
 Open Skills is local-first. Project runtime state stays in `.skills/`; global
 config and auth stay under `~/.hasna/skills/`.
 
-Optional repo-native sync can be configured without a hosted SaaS account:
+Optional repo-native sync can be configured without a self-hosted API account:
 
 ```bash
 HASNA_SKILLS_STORAGE_MODE=hybrid # local | remote | hybrid
@@ -310,11 +314,9 @@ import { getStorageStatus, resolveStorageConfig } from "@hasna/skills/storage";
 ```
 
 Plain `SKILLS_DATABASE_URL`, `SKILLS_STORAGE_MODE`, and `SKILLS_S3_BUCKET`
-fallbacks are accepted for local development. Hosted wrappers must keep their
-private SaaS `DATABASE_URL`, tenant tables, billing state, workers, and artifact
-buckets separate; if they expose open-core storage, they should map explicit
-wrapper envs into `HASNA_SKILLS_*` rather than passing the private SaaS database
-implicitly.
+fallbacks are accepted for local development. Self-hosted deployments should map
+runtime database and artifact settings into `HASNA_SKILLS_*` so local CLI state
+cannot accidentally point at production storage.
 
 ## Project Structure
 
@@ -336,13 +338,14 @@ src/
 
 skills/                      # 202+ public skill contracts and local OSS skills
 ├── _common/                 # Shared utilities
-└── */                       # Local skills include src/; hosted skills are metadata-only
+└── */                       # Local skills include src/; self-hosted skills expose metadata/contracts
 ```
 
 ## Project Runtime State
 
-Skills are discovered from the remote registry or bundled OSS registry. Project
-folders and agent-native skill folders are never used as skill libraries.
+Skills are discovered from the configured self-hosted registry or bundled OSS
+registry. Project folders and agent-native skill folders are never used as skill
+libraries.
 
 `.skills/` is runtime/output state only:
 
@@ -355,7 +358,8 @@ folders and agent-native skill folders are never used as skill libraries.
 ```
 
 Auth stays global in `~/.hasna/skills/auth.json`. Registry and doc caches
-belong in `~/.cache/skills` or the remote API, not inside project `.skills`.
+belong in `~/.cache/skills` or the self-hosted API, not inside project
+`.skills`.
 
 ## Development
 
@@ -375,9 +379,8 @@ bun run typecheck          # TypeScript type checking
    manifests, bin entries, docs, and SKILL.md frontmatter
 4. Run `bun test` to verify registry-wide validation passes
 
-Premium hosted skills should add public contracts, pricing, docs, and tests
-without adding private provider routing, hosted worker code, or secrets to the
-OSS package.
+Premium self-hosted skills should add public contracts, pricing, docs, and tests
+without adding provider secrets to the OSS package.
 
 Portable skill directories are auto-discovered from `~/.hasna/skills/<name>/`.
 Legacy custom skill directories are still discovered from

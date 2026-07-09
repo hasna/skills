@@ -1,6 +1,6 @@
 # Premium Media Skill Policy
 
-This policy defines the hosted media skills added for the SaaS catalog:
+This policy defines the self-hosted media skills added for the runtime catalog:
 `music-album`, `photo-album`, `short-video-pack`, `voiceover-jingle-pack`, and
 `brand-photo-shoot`.
 
@@ -16,11 +16,11 @@ This policy defines the hosted media skills added for the SaaS catalog:
 
 ## Approval And Moderation
 
-- Require account authentication before every hosted run.
+- Require account authentication before every self-hosted run.
 - Require human approval for runs estimated above 2,000 credits, requests using
   regulated claims, likeness-sensitive prompts, or brand/legal risk.
 - Run prompt and asset moderation before provider submission.
-- Do not accept provider API keys from the user for these hosted skills.
+- Do not accept provider API keys from the user for these self-hosted skills.
 - Keep provider credentials, routing, prompts, workers, and storage credentials
   server-side.
 

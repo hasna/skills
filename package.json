@@ -5,7 +5,10 @@
   "type": "module",
   "bin": {
     "skills": "bin/index.js",
-    "skills-mcp": "bin/mcp.js"
+    "skills-mcp": "bin/mcp.js",
+    "skills-server": "bin/server.js",
+    "skills-worker": "bin/worker.js",
+    "skills-migrate": "bin/migrate.js"
   },
   "exports": {
     ".": {
@@ -23,6 +26,7 @@
     "!dist/platform",
     "!dist/server",
     "bin/",
+    "migrations/",
     "docs/skill-standard.md",
     "skills/",
     "!skills/**/node_modules",
@@ -35,11 +39,14 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "clean": "rm -rf bin/ dist/",
-    "build": "bun run clean && bun build ./src/cli/index.tsx --outdir ./bin --target bun && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/index.ts ./src/storage.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --declaration --outDir dist",
+    "build": "bun run clean && bun build ./src/cli/index.tsx --outdir ./bin --target bun && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/server/index.ts --outfile ./bin/server.js --target bun && bun build ./src/server/worker.ts --outfile ./bin/worker.js --target bun && bun build ./src/server/migrate.ts --outfile ./bin/migrate.js --target bun && bun build ./src/index.ts ./src/storage.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --declaration --outDir dist",
     "test": "bun test",
     "dev": "bun run ./src/cli/index.tsx",
     "dev:watch": "bun --watch run ./src/cli/index.tsx",
     "dev:mcp": "bun --watch run ./src/mcp/index.ts",
+    "dev:server": "bun --watch run ./src/server/index.ts",
+    "dev:worker": "bun --watch run ./src/server/worker.ts",
+    "migrate": "bun run ./src/server/migrate.ts",
     "typecheck": "tsc --noEmit",
     "verify:release": "bun run scripts/release-guard.ts",
     "prepack": "bun run build && bun run verify:release",

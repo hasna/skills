@@ -10,7 +10,7 @@ import {
 export function registerToolPrimitives(parent: Command) {
   const tools = parent
     .command("tools")
-    .description("Inspect primitive tools used by skills, CLI, MCP, and hosted runtimes");
+    .description("Inspect primitive tools used by skills, CLI, MCP, and self-hosted runtimes");
 
   tools
     .command("list")
@@ -74,7 +74,7 @@ export function registerToolPrimitives(parent: Command) {
       }
       console.log(`${chalk.bold(deps.skill)} ${chalk.dim(`[${deps.category}]`)}`);
       console.log(`${chalk.dim("Gateway backed:")} ${deps.gatewayBacked ? "yes" : "no"}`);
-      console.log(`${chalk.dim("Hosted runtime:")} ${deps.hostedRuntime ? "yes" : "no"}`);
+      console.log(`${chalk.dim("Self-hosted runtime:")} ${deps.hostedRuntime ? "yes" : "no"}`);
       for (const dependency of deps.dependencies) {
         console.log(`  ${chalk.bold(dependency.primitive)} ${chalk.dim(`[${dependency.family}]`)} - ${dependency.reason}`);
       }
@@ -92,7 +92,7 @@ export function registerToolPrimitives(parent: Command) {
         console.log(JSON.stringify(result, null, 2));
       } else if (result.valid) {
         console.log(chalk.green(`Primitive coverage ok: ${result.mappedSkillCount}/${result.skillCount} skills mapped to ${result.primitiveCount} primitives`));
-        console.log(chalk.dim(`Gateway-backed: ${result.gatewayBackedSkillCount}; hosted runtime: ${result.hostedRuntimeSkillCount}`));
+        console.log(chalk.dim(`Gateway-backed: ${result.gatewayBackedSkillCount}; self-hosted runtime: ${result.hostedRuntimeSkillCount}`));
       } else {
         console.log(chalk.red(`Primitive coverage failed: ${result.issues.length} issue(s)`));
         for (const issue of result.issues) console.log(chalk.red(`  ${issue.skill}: ${issue.message}`));

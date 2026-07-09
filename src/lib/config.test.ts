@@ -87,7 +87,7 @@ describe("config", () => {
       expect(config.defaultAgent).toBe("gemini");
       expect(config.defaultScope).toBe("project");
       expect(config.format).toBe("csv");
-      expect(config.mode).toBe("hosted");
+      expect(config.mode).toBe("self-hosted");
       expect(config.apiUrl).toBe("https://skills.example.com/api/v1");
     });
 
@@ -162,15 +162,17 @@ describe("config", () => {
       expect(() => saveConfig("defaultAgent", "badAgent")).toThrow("Invalid value");
     });
 
-    test("saves local or hosted mode and normalizes legacy hosted aliases", () => {
+    test("saves local or self-hosted mode and normalizes legacy hosted aliases", () => {
       saveConfig("mode", "local", "project");
       expect(loadConfig().mode).toBe("local");
       saveConfig("mode", "skills.md", "project");
-      expect(loadConfig().mode).toBe("hosted");
+      expect(loadConfig().mode).toBe("self-hosted");
       saveConfig("mode", "hosted", "project");
-      expect(loadConfig().mode).toBe("hosted");
-      saveConfig("mode", "remote", "project");
-      expect(loadConfig().mode).toBe("hosted");
+      expect(loadConfig().mode).toBe("self-hosted");
+      saveConfig("mode", "self-hosted", "project");
+      expect(loadConfig().mode).toBe("self-hosted");
+      expect(() => saveConfig("mode", "remote", "project")).toThrow("Invalid value");
+      expect(() => saveConfig("mode", "cloud", "project")).toThrow("Invalid value");
     });
 
     test("saves apiUrl after URL validation", () => {
