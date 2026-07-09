@@ -133,12 +133,17 @@ jobs:
             --task-definition "$WEB_ARN" \
             --desired-count 1 >/dev/null
           aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
-          SVC="$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE")"
-          RS="$(jq -r '.services[0].deployments[] | select(.status=="PRIMARY") | .rolloutState' <<<"$SVC")"
-          LIVE_TD="$(jq -r '.services[0].deployments[] | select(.status=="PRIMARY") | .taskDefinition' <<<"$SVC")"
-          if [ "$RS" != "COMPLETED" ] || [ "$LIVE_TD" != "$WEB_ARN" ]; then
-            echo "::error::API deployment did not complete cleanly"; exit 1
-          fi
+          for attempt in {1..24}; do
+            SVC="$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE")"
+            RS="$(jq -r '[.services[0].deployments[] | select(.status=="PRIMARY") | .rolloutState][0] // ""' <<<"$SVC")"
+            LIVE_TD="$(jq -r '[.services[0].deployments[] | select(.status=="PRIMARY") | .taskDefinition][0] // ""' <<<"$SVC")"
+            if [ "$RS" = "COMPLETED" ] && [ "$LIVE_TD" = "$WEB_ARN" ]; then
+              exit 0
+            fi
+            echo "waiting for API primary rollout completion (attempt ${attempt}/24, state=${RS}, taskDefinition=${LIVE_TD})"
+            sleep 5
+          done
+          echo "::error::API deployment did not complete cleanly"; exit 1
 
       - name: Deploy worker service
         env:
@@ -159,12 +164,17 @@ jobs:
             --task-definition "$WORKER_ARN" \
             --desired-count 1 >/dev/null
           aws ecs wait services-stable --cluster "$CLUSTER" --services "$WORKER_SERVICE"
-          SVC="$(aws ecs describe-services --cluster "$CLUSTER" --services "$WORKER_SERVICE")"
-          RS="$(jq -r '.services[0].deployments[] | select(.status=="PRIMARY") | .rolloutState' <<<"$SVC")"
-          LIVE_TD="$(jq -r '.services[0].deployments[] | select(.status=="PRIMARY") | .taskDefinition' <<<"$SVC")"
-          if [ "$RS" != "COMPLETED" ] || [ "$LIVE_TD" != "$WORKER_ARN" ]; then
-            echo "::error::worker deployment did not complete cleanly"; exit 1
-          fi
+          for attempt in {1..24}; do
+            SVC="$(aws ecs describe-services --cluster "$CLUSTER" --services "$WORKER_SERVICE")"
+            RS="$(jq -r '[.services[0].deployments[] | select(.status=="PRIMARY") | .rolloutState][0] // ""' <<<"$SVC")"
+            LIVE_TD="$(jq -r '[.services[0].deployments[] | select(.status=="PRIMARY") | .taskDefinition][0] // ""' <<<"$SVC")"
+            if [ "$RS" = "COMPLETED" ] && [ "$LIVE_TD" = "$WORKER_ARN" ]; then
+              exit 0
+            fi
+            echo "waiting for worker primary rollout completion (attempt ${attempt}/24, state=${RS}, taskDefinition=${LIVE_TD})"
+            sleep 5
+          done
+          echo "::error::worker deployment did not complete cleanly"; exit 1
 
       - name: Smoke health endpoint
         run: |
