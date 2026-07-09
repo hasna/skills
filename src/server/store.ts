@@ -17,6 +17,11 @@ type SqlTag = {
   close?: () => Promise<void>;
 };
 
+function resolvePoolMax(env: Record<string, string | undefined> = process.env): number {
+  const parsed = Number.parseInt(env.HASNA_SKILLS_DATABASE_POOL_MAX || env.SKILLS_DATABASE_POOL_MAX || "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 4;
+}
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -170,8 +175,8 @@ export class PostgresSkillsStore implements SkillsProductStore {
   private sql: SqlTag;
 
   constructor(databaseUrl: string) {
-    const bunWithSql = Bun as unknown as { SQL: new (url: string) => SqlTag };
-    this.sql = new bunWithSql.SQL(databaseUrl);
+    const bunWithSql = Bun as unknown as { SQL: new (url: string, options?: { max?: number }) => SqlTag };
+    this.sql = new bunWithSql.SQL(databaseUrl, { max: resolvePoolMax() });
   }
 
   async ensureBootstrapApiKey(token: string, principal?: Partial<ApiPrincipal>): Promise<void> {
