@@ -1,11 +1,11 @@
 # Package Ownership And Sync Strategy
 
-This strategy defines how hosted wrappers consume `hasna/skills` while
+This strategy defines how self-hosted service wrappers consume `hasna/skills` while
 preserving one canonical owner for the open skill engine.
 
 ## Decision
 
-Use `hasna/skills` as the canonical upstream package and let hosted wrappers
+Use `hasna/skills` as the canonical upstream package and let self-hosted service wrappers
 consume it through released package APIs plus generated registry sync.
 
 Do not use permanent forks, submodules, subtree imports, copied source trees, or
@@ -17,17 +17,17 @@ approaches create duplicate engines that drift.
 | Concern | Owner | Package/Repo | Notes |
 | --- | --- | --- | --- |
 | Skill engine APIs | Open upstream | `hasna/skills`, npm `@hasna/skills` | Registry, pinning, validation, docs, config, scheduler primitives, and API types. |
-| Agent CLI | Open upstream | `@hasna/skills`, command `skills` | Local for free/user-key skills; hosted skills submit to explicit remote APIs. |
+| Agent CLI | Open upstream | `@hasna/skills`, command `skills` | Local for free/user-key skills; server-executed skills submit to explicit self-hosted APIs. |
 | MCP server | Open upstream | `@hasna/skills`, command `skills-mcp` | Agent protocol wrapper over shared engine APIs. |
-| Bundled skill corpus | Open upstream | `hasna/skills/skills/*` | Source corpus for free and explicitly local execution; hosted entries expose contracts, not protected source. |
-| Hosted API | Hosted wrapper | Separate private/service repo | Auth, account state, billing, approvals, registry sync, and runs. |
-| Hosted workers | Hosted wrapper | Separate private/service repo | Queues, sandbox execution, exports, logs, retries, and connector bindings. |
-| Hosted web app | Hosted wrapper | Separate private/service repo | Web UI consuming the same API contracts as CLI and MCP. |
-| Hosted infrastructure | Hosted wrapper | Separate private/service repo | Deployment, secret stores, observability, and rollback automation. |
+| Bundled skill corpus | Open upstream | `hasna/skills/skills/*` | Source corpus for free and explicitly local execution; server-executed entries expose contracts, not protected source. |
+| Self-hosted API | Self-hosted service wrapper | Same open repo or separate service repo | Auth, account state, billing, approvals, registry sync, and runs. |
+| Self-hosted workers | Self-hosted service wrapper | Same open repo or separate service repo | Queues, sandbox execution, exports, logs, retries, and connector bindings. |
+| Self-hosted web app | Self-hosted service wrapper | Same open repo or separate service repo | Web UI consuming the same API contracts as CLI and MCP. |
+| Self-hosted infrastructure | Self-hosted service wrapper | Hasna AWS infrastructure repo | Deployment, secret stores, observability, and rollback automation. |
 
 ## Consumption Model
 
-Hosted wrappers should consume `@hasna/skills` in this order of preference:
+Self-hosted service wrappers should consume `@hasna/skills` in this order of preference:
 
 1. Released npm package pinned by lockfile.
 2. Temporary git SHA dependency only while waiting for a public release.
@@ -43,48 +43,48 @@ Wrappers should use public APIs for:
 - Shared API response types for CLI, MCP, SDK, and web clients.
 
 Wrappers should not import upstream CLI or MCP internals directly. They should
-call library APIs or hosted API endpoints so command and protocol surfaces stay
+call library APIs or self-hosted API endpoints so command and protocol surfaces stay
 thin adapters.
 
 ## Premium Remote-Only Boundary
 
-All hosted premium skills must submit to a compatible hosted API from both CLI
+All server-executed premium skills must submit to a compatible self-hosted API from both CLI
 and MCP, and must not fall back to bundled local execution. A missing, expired,
-or rejected hosted credential is a hard failure for hosted runs, not a reason
+or rejected self-hosted credential is a hard failure for server-executed runs, not a reason
 to run protected source on the user's machine.
 
-The OSS package may expose public contracts for hosted skills:
+The OSS package may expose public contracts for server-executed skills:
 
 - name, display name, category, tags, and descriptions.
 - public usage documentation.
 - input and output schemas.
 - pricing and quote behavior.
 - remote run, status, artifact, and receipt contracts.
-- source-free stubs that explain hosted execution.
+- source-free stubs that explain self-hosted execution.
 
 The OSS package must not expose private provider routing, worker code,
-moderation internals, private prompts, model selection, hosted credentials,
-queues, storage credentials, or protected hosted implementation source.
+moderation internals, private prompts, model selection, self-hosted credentials,
+queues, storage credentials, or protected server-side implementation source.
 
-`SKILLS_API_KEY` authenticates the user to a hosted skills API. It is not a
+`SKILLS_API_KEY` authenticates the user to a self-hosted skills API. It is not a
 model-provider key and must be documented separately from provider keys such as
 `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, or other
 skill-specific local credentials.
 
-The OSS CLI may include hosted client commands such as `skills auth login`,
+The OSS CLI may include self-hosted client commands such as `skills auth login`,
 `skills billing status`, `skills billing checkout`, `skills billing portal`,
-and `skills credits buy`. Those commands are adapters over hosted HTTP APIs.
+and `skills credits buy`. Those commands are adapters over self-hosted HTTP APIs.
 They must not contain Stripe keys, webhook handlers, entitlement ledgers,
-tenant database logic, hosted auth servers, or worker execution logic.
+tenant database logic, self-hosted auth servers, or worker execution logic.
 
-The canonical hosted setup mode is `hosted`, not a website/domain name. Hosted
-wrappers can still set a default API origin such as `https://skills.md`, and
-the CLI may preserve legacy aliases like `skills.md` or `remote` for
-compatibility.
+The canonical remote execution setup mode is `self-hosted`, not `hosted`, `cloud`,
+`remote`, or a website/domain name. Self-hosted service wrappers can still set a
+default API origin such as `https://skills.hasna.xyz`, and the CLI may preserve
+legacy aliases like `hosted`, `skills.md`, or `remote` only for compatibility.
 
 ## Generated Registry Sync
 
-A hosted registry should be populated from upstream through an idempotent sync
+A self-hosted registry should be populated from upstream through an idempotent sync
 command, not by treating upstream files as the live database.
 
 Expected sync behavior:
@@ -93,15 +93,15 @@ Expected sync behavior:
 2. Validate each skill directory or package artifact with upstream validators.
 3. Normalize names, slugs, categories, tags, versions, docs, requirements, and
    source provenance.
-4. Upsert into hosted registry tables with source version and git/npm
+4. Upsert into self-hosted registry tables with source version and git/npm
    provenance.
-5. Preserve hosted-only fields such as moderation state, pricing, visibility,
+5. Preserve self-hosted-only fields such as moderation state, pricing, visibility,
    owner, cost, and execution profile.
 6. Emit a deterministic summary for CI and review.
 
 ## Upstream Contribution Loop
 
-When hosted work needs a generic engine change:
+When self-hosted service work needs a generic engine change:
 
 1. Implement the generic change without private imports or private path names.
 2. Add focused upstream tests.
@@ -109,7 +109,7 @@ When hosted work needs a generic engine change:
 4. Run the public-boundary preflight in strict marker mode.
 5. Commit the generic change separately.
 6. Publish or propose the change to `hasna/skills`.
-7. Update hosted wrappers to the released package version.
+7. Update self-hosted service wrappers to the released package version.
 
 ## Rejected Integration Strategies
 

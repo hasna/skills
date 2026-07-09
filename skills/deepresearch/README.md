@@ -6,7 +6,7 @@ citations, and downloadable artifacts.
 ## Usage
 
 ```bash
-skills setup --mode hosted
+skills setup --mode self-hosted
 skills auth login
 skills mcp --register
 skills run deepresearch "Compare React Server Components with traditional SSR" --depth deep
