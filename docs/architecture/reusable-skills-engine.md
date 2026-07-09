@@ -1,9 +1,9 @@
 # Reusable Skills Engine
 
-This package stays useful as `hasna/skills` without requiring the private
-skills.md SaaS app. Generic engine behavior must remain local-first, tested,
-and documented so private platforms can wrap it without forking the core agent
-contracts.
+This package stays useful as `hasna/skills` without requiring the
+`skills.hasna.xyz` self-hosted API. Generic engine behavior must remain
+local-first, tested, and documented so the deployable service and compatible
+operators can reuse it without forking the core agent contracts.
 
 ## Engine Contracts
 
@@ -100,12 +100,12 @@ The reusable engine exposes machine-readable MCP contracts from
 `src/lib/mcp-contracts.ts`. `createMcpContractManifest` returns the stable tool
 and MCP resource contracts, while `createSkillMcpMetadata` attaches per-skill
 install/run schemas to skill detail resources. These contracts define JSON
-schemas for discovery, pinning, validation, and execution without SaaS-specific
-assumptions such as tenant state, billing providers, hosted domains, or product
-database tables. Contract changes must include compatibility fixtures so agents
-can detect accidental schema drift.
+schemas for discovery, pinning, validation, and execution without
+deployment-specific assumptions such as tenant state, billing providers,
+self-hosted domains, or product database tables. Contract changes must include
+compatibility fixtures so agents can detect accidental schema drift.
 
-The MCP contract manifest must remain without SaaS-specific assumptions.
+The MCP contract manifest must remain without deployment-specific assumptions.
 
 ## Test Requirements
 
@@ -133,6 +133,7 @@ Coverage expectations:
 
 ## Upstream Rule
 
-Do not add private SaaS concepts to this engine contract. Tenant state,
-PostgreSQL, Stripe, hosted execution workers, AWS infrastructure, and skills.md
-deployment configuration belong in the private product layer.
+Do not add deployment-only assumptions to the local engine contract. Tenant
+state, Postgres persistence, billing providers, workers, AWS infrastructure, and
+`skills.hasna.xyz` deployment configuration belong in the self-hosted service
+surface and infrastructure, not in local skill discovery/pinning contracts.

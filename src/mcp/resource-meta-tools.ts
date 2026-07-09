@@ -46,7 +46,7 @@ export function registerResourceMetaTools(server: McpServer): void {
   }));
 
   server.registerResource("Tool Primitives", "skills://tool-primitives", {
-    description: "Primitive tool catalog used by skills across CLI, MCP, API, and hosted workers.",
+    description: "Primitive tool catalog used by skills across CLI, MCP, API, and self-hosted workers.",
   }, async () => ({
     contents: [{
       uri: "skills://tool-primitives",

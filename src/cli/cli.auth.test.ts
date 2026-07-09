@@ -4,7 +4,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { runCliInCwd } from "./cli.test-utils";
 
-describe("CLI hosted auth and billing", () => {
+describe("CLI self-hosted auth and billing", () => {
   test("billing commands accept SKILLS_API_KEY without a stored login", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-billing-api-key-"));
     const seenAuthHeaders: Array<string | null> = [];
@@ -101,6 +101,55 @@ describe("CLI hosted auth and billing", () => {
     }
   });
 
+  test("auth login --api-key verifies and stores a self-hosted key without echoing it", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "cli-api-key-login-"));
+    const seenAuthHeaders: Array<string | null> = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (req) => {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/auth/whoami" && req.method === "GET") {
+          seenAuthHeaders.push(req.headers.get("authorization"));
+          return Response.json({
+            user: { id: "user_key", email: "key@example.com", role: "owner" },
+            organization: { id: "org_key", slug: "key-org", name: "Key Org" },
+          });
+        }
+
+        return Response.json({ error: `missing route ${req.method} ${url.pathname}` }, { status: 404 });
+      },
+    });
+
+    try {
+      const apiKey = "sk_self_hosted_login";
+      const result = await runCliInCwd(["auth", "login", "--api-key", apiKey, "--json"], tmpDir, {
+        HOME: tmpDir,
+        SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        status: "authenticated",
+        authSource: "stored",
+        email: "key@example.com",
+        organization: "key-org",
+      });
+      expect(result.stdout).not.toContain(apiKey);
+      expect(seenAuthHeaders).toEqual([`Bearer ${apiKey}`]);
+
+      const authPath = join(tmpDir, ".hasna", "skills", "auth.json");
+      expect(JSON.parse(readFileSync(authPath, "utf8"))).toMatchObject({
+        apiKey,
+        email: "key@example.com",
+        orgSlug: "key-org",
+      });
+      expect(statSync(authPath).mode & 0o077).toBe(0);
+    } finally {
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test("auth whoami env auth does not fall back to stale stored identity", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-whoami-env-overrides-store-"));
     const authDir = join(tmpDir, ".hasna", "skills");
@@ -153,7 +202,7 @@ describe("CLI hosted auth and billing", () => {
     }
   });
 
-  test("device login stores credentials and billing commands call the hosted API", async () => {
+  test("device login stores credentials and billing commands call the self-hosted API", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-device-auth-"));
     const seenAuthHeaders: Array<string | null> = [];
     const server = Bun.serve({
@@ -246,7 +295,7 @@ describe("CLI hosted auth and billing", () => {
     }
   });
 
-  test("hosted auth and billing failures stay structured with --json", async () => {
+  test("self-hosted auth and billing failures stay structured with --json", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-hosted-json-errors-"));
     const server = Bun.serve({
       port: 0,

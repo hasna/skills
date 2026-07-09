@@ -12,7 +12,7 @@ import { getFirstRunOnboardingMessage, shouldShowFirstRunOnboarding } from "./on
 
 describe("CLI runtime and misc commands", () => {
   describe("first-run onboarding guard", () => {
-    test("nudges interactive normal commands until a hosted or local mode is configured", () => {
+    test("nudges interactive normal commands until a self-hosted or local mode is configured", () => {
       expect(
         shouldShowFirstRunOnboarding({
           argv: ["list"],
@@ -33,7 +33,7 @@ describe("CLI runtime and misc commands", () => {
         shouldShowFirstRunOnboarding({
           argv: ["run", "image"],
           commandName: "run",
-          config: { mode: "hosted" },
+          config: { mode: "self-hosted" },
           isInteractive: true,
         }),
       ).toBe(false);
@@ -52,9 +52,9 @@ describe("CLI runtime and misc commands", () => {
       }
     });
 
-    test("points to hosted first and local second without naming skills.md as a mode", () => {
+    test("points to self-hosted first and local second without naming skills.md as a mode", () => {
       const message = getFirstRunOnboardingMessage();
-      expect(message).toContain("skills setup --mode hosted");
+      expect(message).toContain("skills setup --mode self-hosted");
       expect(message).toContain("skills auth login");
       expect(message).toContain("skills setup --mode local");
       expect(message).not.toContain("--mode skills.md");
@@ -79,7 +79,7 @@ describe("CLI runtime and misc commands", () => {
       }
     });
 
-    test("stores hosted mode and API URL while accepting legacy skills.md alias", async () => {
+    test("stores self-hosted mode and API URL while accepting legacy skills.md alias", async () => {
       const { mkdtempSync, rmSync, readFileSync } = require("fs");
       const { tmpdir } = require("os");
       const { join } = require("path");
@@ -92,33 +92,50 @@ describe("CLI runtime and misc commands", () => {
         );
         expect(exitCode).toBe(0);
         const data = JSON.parse(stdout);
-        expect(data).toMatchObject({ mode: "hosted", scope: "project" });
+        expect(data).toMatchObject({ mode: "self-hosted", scope: "project" });
         expect(data.next).toContain("skills auth login");
         const config = JSON.parse(readFileSync(join(tmpDir, "skills.config.json"), "utf8"));
-        expect(config.mode).toBe("hosted");
+        expect(config.mode).toBe("self-hosted");
         expect(config.apiUrl).toBe("https://skills.example.com/api/v1");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
     });
 
-    test("stores canonical hosted mode from --mode hosted", async () => {
+    test("stores canonical self-hosted mode from --mode self-hosted", async () => {
       const { mkdtempSync, rmSync, readFileSync } = require("fs");
       const { tmpdir } = require("os");
       const { join } = require("path");
       const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-hosted-canonical-"));
       try {
         const { stdout, exitCode } = await runCliInCwd(
-          ["setup", "--mode", "hosted", "--api-url", "https://skills.example.com", "--json"],
+          ["setup", "--mode", "self-hosted", "--api-url", "https://skills.example.com", "--json"],
           tmpDir,
           { HOME: tmpDir },
         );
         expect(exitCode).toBe(0);
-        expect(JSON.parse(stdout)).toMatchObject({ mode: "hosted", scope: "project" });
+        expect(JSON.parse(stdout)).toMatchObject({ mode: "self-hosted", scope: "project" });
         expect(JSON.parse(readFileSync(join(tmpDir, "skills.config.json"), "utf8"))).toMatchObject({
-          mode: "hosted",
+          mode: "self-hosted",
           apiUrl: "https://skills.example.com",
         });
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("rejects cloud and remote as setup modes", async () => {
+      const { mkdtempSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-reject-modes-"));
+      try {
+        const remote = await runCliInCwd(["setup", "--mode", "remote", "--json"], tmpDir, { HOME: tmpDir });
+        expect(remote.exitCode).not.toBe(0);
+        expect(remote.stderr).toContain("Invalid setup mode");
+        const cloud = await runCliInCwd(["setup", "--mode", "cloud", "--json"], tmpDir, { HOME: tmpDir });
+        expect(cloud.exitCode).not.toBe(0);
+        expect(cloud.stderr).toContain("Invalid setup mode");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -310,7 +327,7 @@ describe("CLI runtime and misc commands", () => {
         expect(result.approvalRequired).toBe(true);
         expect(result.ran).toBe(0);
         expect(result.paidTotalCents).toBeGreaterThan(0);
-        expect(result.error).toContain("Due paid hosted schedules cost");
+        expect(result.error).toContain("Due paid self-hosted schedules cost");
         expect(result.error).toContain("--allow-paid");
         expect(result.error).toContain("--max-paid-cents");
         expect(result.schedules[0]).toMatchObject({ name: "premium-logo", skill: "logo-design", paid: true });

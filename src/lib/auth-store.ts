@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "
 import { join } from "path";
 import { homedir } from "os";
 import { loadConfig } from "./config.js";
+import { DEFAULT_SELF_HOSTED_API_URL } from "../server/config.js";
 
 const AUTH_DIR = join(homedir(), ".hasna", "skills");
 const AUTH_FILE = join(AUTH_DIR, "auth.json");
@@ -66,5 +67,5 @@ export function normalizeSkillsApiOrigin(apiUrl: string): string {
 }
 
 export function getApiUrl(): string {
-  return normalizeSkillsApiOrigin(process.env.SKILLS_API_URL || loadConfig().apiUrl || "https://skills.md");
+  return normalizeSkillsApiOrigin(process.env.SKILLS_API_URL || loadConfig().apiUrl || DEFAULT_SELF_HOSTED_API_URL);
 }

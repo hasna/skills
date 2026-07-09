@@ -1,0 +1,172 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  APP: skills
+  AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: "789877399345"
+
+jobs:
+  deploy:
+    name: build + migrate + deploy
+    runs-on: ubuntu-24.04-arm
+    environment: production
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/${{ env.APP }}-prod-gha-deploy
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-deploy-${{ env.APP }}-${{ github.run_id }}
+
+      - name: Load deploy manifest
+        id: m
+        run: |
+          set -euo pipefail
+          M="$(aws ssm get-parameter --name "/hasna/deploy/${APP}" --query Parameter.Value --output text)"
+          get() { jq -er ".$1" <<<"$M"; }
+          {
+            echo "cluster=$(get cluster)"
+            echo "service=$(get service)"
+            echo "web_family=$(get web_task_family)"
+            echo "web_container=$(get web_container)"
+            echo "mig_family=$(get migration_task_family)"
+            echo "mig_container=$(get migration_container)"
+            echo "ecr_url=$(get ecr_repository_url)"
+            echo "assign_public_ip=$(get assign_public_ip)"
+            echo "subnets=$(jq -er '.subnets | join(",")' <<<"$M")"
+            echo "sgs=$(jq -er '.security_groups | join(",")' <<<"$M")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push native arm64 image
+        id: build
+        env:
+          ECR_URL: ${{ steps.m.outputs.ecr_url }}
+        run: |
+          set -euo pipefail
+          IMAGE="${ECR_URL}:${GITHUB_SHA}"
+          docker buildx build \
+            --platform linux/arm64 \
+            --provenance=false \
+            --cache-from "type=gha" \
+            --cache-to "type=gha,mode=max" \
+            --tag "${IMAGE}" \
+            --push \
+            .
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Run database migration
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+          CLUSTER: ${{ steps.m.outputs.cluster }}
+          MIG_FAMILY: ${{ steps.m.outputs.mig_family }}
+          MIG_CONTAINER: ${{ steps.m.outputs.mig_container }}
+          SUBNETS: ${{ steps.m.outputs.subnets }}
+          SGS: ${{ steps.m.outputs.sgs }}
+          ASSIGN: ${{ steps.m.outputs.assign_public_ip }}
+        run: |
+          set -euo pipefail
+          NEW_TD="$(aws ecs describe-task-definition --task-definition "$MIG_FAMILY" \
+            --query taskDefinition | jq --arg img "$IMAGE" --arg c "$MIG_CONTAINER" '
+              .containerDefinitions |= map(if .name==$c then .image=$img else . end)
+              | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)')"
+          MIG_ARN="$(aws ecs register-task-definition --cli-input-json "$NEW_TD" \
+            --query taskDefinition.taskDefinitionArn --output text)"
+          TASK_ARN="$(aws ecs run-task --cluster "$CLUSTER" --task-definition "$MIG_ARN" \
+            --launch-type FARGATE --count 1 \
+            --started-by "gha-migrate-${GITHUB_RUN_ID}" \
+            --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SGS],assignPublicIp=$ASSIGN}" \
+            --query 'tasks[0].taskArn' --output text)"
+          if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
+            echo "::error::migration task failed to start"; exit 1
+          fi
+          aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK_ARN"
+          DESC="$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN")"
+          EXIT="$(jq -r ".tasks[0].containers[] | select(.name==\"$MIG_CONTAINER\") | .exitCode // \"null\"" <<<"$DESC")"
+          REASON="$(jq -r '.tasks[0].stoppedReason // ""' <<<"$DESC")"
+          echo "migration exitCode=$EXIT stoppedReason=$REASON"
+          if [ "$EXIT" != "0" ]; then
+            echo "::error::migration task did not exit 0 (exit=$EXIT, reason=$REASON)"; exit 1
+          fi
+
+      - name: Deploy API service
+        id: deploy_api
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+          CLUSTER: ${{ steps.m.outputs.cluster }}
+          SERVICE: ${{ steps.m.outputs.service }}
+          WEB_FAMILY: ${{ steps.m.outputs.web_family }}
+          WEB_CONTAINER: ${{ steps.m.outputs.web_container }}
+        run: |
+          set -euo pipefail
+          NEW_TD="$(aws ecs describe-task-definition --task-definition "$WEB_FAMILY" \
+            --query taskDefinition | jq --arg img "$IMAGE" --arg c "$WEB_CONTAINER" '
+              .containerDefinitions |= map(if .name==$c then .image=$img else . end)
+              | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)')"
+          WEB_ARN="$(aws ecs register-task-definition --cli-input-json "$NEW_TD" \
+            --query taskDefinition.taskDefinitionArn --output text)"
+          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" \
+            --task-definition "$WEB_ARN" \
+            --desired-count 1 >/dev/null
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
+          SVC="$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE")"
+          RS="$(jq -r '.services[0].deployments[] | select(.status=="PRIMARY") | .rolloutState' <<<"$SVC")"
+          LIVE_TD="$(jq -r '.services[0].deployments[] | select(.status=="PRIMARY") | .taskDefinition' <<<"$SVC")"
+          if [ "$RS" != "COMPLETED" ] || [ "$LIVE_TD" != "$WEB_ARN" ]; then
+            echo "::error::API deployment did not complete cleanly"; exit 1
+          fi
+
+      - name: Deploy worker service
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+          CLUSTER: ${{ steps.m.outputs.cluster }}
+          WORKER_SERVICE: skills-prod-worker
+          WORKER_FAMILY: skills-prod-worker
+          WORKER_CONTAINER: skills-worker
+        run: |
+          set -euo pipefail
+          NEW_TD="$(aws ecs describe-task-definition --task-definition "$WORKER_FAMILY" \
+            --query taskDefinition | jq --arg img "$IMAGE" --arg c "$WORKER_CONTAINER" '
+              .containerDefinitions |= map(if .name==$c then .image=$img else . end)
+              | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)')"
+          WORKER_ARN="$(aws ecs register-task-definition --cli-input-json "$NEW_TD" \
+            --query taskDefinition.taskDefinitionArn --output text)"
+          aws ecs update-service --cluster "$CLUSTER" --service "$WORKER_SERVICE" \
+            --task-definition "$WORKER_ARN" \
+            --desired-count 1 >/dev/null
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$WORKER_SERVICE"
+          SVC="$(aws ecs describe-services --cluster "$CLUSTER" --services "$WORKER_SERVICE")"
+          RS="$(jq -r '.services[0].deployments[] | select(.status=="PRIMARY") | .rolloutState' <<<"$SVC")"
+          LIVE_TD="$(jq -r '.services[0].deployments[] | select(.status=="PRIMARY") | .taskDefinition' <<<"$SVC")"
+          if [ "$RS" != "COMPLETED" ] || [ "$LIVE_TD" != "$WORKER_ARN" ]; then
+            echo "::error::worker deployment did not complete cleanly"; exit 1
+          fi
+
+      - name: Smoke health endpoint
+        run: |
+          set -euo pipefail
+          curl -fsS https://skills.hasna.xyz/health | jq -e '.ok == true and .service == "open-skills" and .mode == "self-hosted"'

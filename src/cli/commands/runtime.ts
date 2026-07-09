@@ -15,6 +15,7 @@ import {
   validateBlogArticleRunOptions,
 } from "../../lib/pricing.js";
 import { loadConfig, saveConfig, type ConfigScope } from "../../lib/config.js";
+import { DEFAULT_SELF_HOSTED_API_URL } from "../../server/config.js";
 import { getHostedRunAvailability } from "../../lib/hosted-availability.js";
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../../lib/remote-run-contract.js";
 import {
@@ -54,7 +55,7 @@ export function registerRuntime(parent: Command) {
     .allowUnknownOption(true)
     .passThroughOptions(true)
     .option("--json", "Output result as JSON", false)
-    .option("-y, --yes", "Approve paid hosted execution without an interactive prompt", false)
+    .option("-y, --yes", "Approve paid self-hosted execution without an interactive prompt", false)
     .option("--wait", "Poll remote runs until a terminal status", false)
     .option("--poll-interval-ms <ms>", "Remote polling interval in milliseconds", "1000")
     .option("--poll-timeout-ms <ms>", "Maximum time to wait for a remote run", "300000")
@@ -115,9 +116,9 @@ export function registerRuntime(parent: Command) {
 
   const setup = parent
     .command("setup")
-    .description("Choose hosted mode, local-only mode, or agent integrations")
-    .option("--mode <mode>", "Runtime mode: hosted or local")
-    .option("--api-url <url>", "Hosted API origin")
+    .description("Choose self-hosted mode, local-only mode, or agent integrations")
+    .option("--mode <mode>", "Runtime mode: self-hosted or local")
+    .option("--api-url <url>", "Self-hosted API origin")
     .option("--global", "Save setup choice globally", false)
     .option("--json", "Output setup result as JSON", false)
     .action(async (options: SetupCommandOptions) => handleSetup(options));
@@ -179,17 +180,17 @@ async function handleSetup(options: SetupCommandOptions) {
   let mode = normalizeSetupMode(options.mode);
 
   if (!mode && process.stdin.isTTY && process.stdout.isTTY) {
-    mode = normalizeSetupMode(await promptLine("Use hosted Skills or local-only mode? [hosted/local] ")) ?? "hosted";
+    mode = normalizeSetupMode(await promptLine("Use self-hosted Skills or local-only mode? [self-hosted/local] ")) ?? "self-hosted";
   }
   mode = mode ?? "local";
 
   saveConfig("mode", mode, scope);
-  if (mode === "hosted") {
-    saveConfig("apiUrl", options.apiUrl || "https://skills.md", scope);
+  if (mode === "self-hosted") {
+    saveConfig("apiUrl", options.apiUrl || DEFAULT_SELF_HOSTED_API_URL, scope);
   }
 
   const config = loadConfig();
-  const next = mode === "hosted"
+  const next = mode === "self-hosted"
     ? ["skills auth login", "skills list --remote"]
     : ["skills list", "skills run <skill>"];
   const payload = {
@@ -206,8 +207,8 @@ async function handleSetup(options: SetupCommandOptions) {
 
   console.log(chalk.green(`Set Skills mode to ${mode}`));
   console.log(chalk.dim(`  Scope: ${scope}`));
-  if (mode === "hosted") {
-    console.log(chalk.dim(`  API: ${config.apiUrl || "https://skills.md"}`));
+  if (mode === "self-hosted") {
+    console.log(chalk.dim(`  API: ${config.apiUrl || DEFAULT_SELF_HOSTED_API_URL}`));
     console.log(chalk.dim("  Next: skills auth login"));
   } else {
     console.log(chalk.dim("  Skills will run locally unless a command explicitly uses remote registry access."));
@@ -215,12 +216,13 @@ async function handleSetup(options: SetupCommandOptions) {
   }
 }
 
-function normalizeSetupMode(value: string | undefined): "local" | "hosted" | undefined {
+function normalizeSetupMode(value: string | undefined): "local" | "self-hosted" | undefined {
   if (!value) return undefined;
   const normalized = value.trim().toLowerCase();
   if (normalized === "local" || normalized === "offline") return "local";
-  if (normalized === "skills.md" || normalized === "skillsmd" || normalized === "remote" || normalized === "hosted") return "hosted";
-  throw new Error("Invalid setup mode. Use hosted or local.");
+  if (["self-hosted", "selfhosted", "self_hosted", "hosted", "skills.md", "skillsmd"].includes(normalized)) return "self-hosted";
+  if (normalized === "cloud" || normalized === "remote") throw new Error("Invalid setup mode. Use self-hosted or local.");
+  throw new Error("Invalid setup mode. Use self-hosted or local.");
 }
 
 function promptLine(question: string): Promise<string> {
@@ -354,7 +356,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       const { getApiKey } = await import("../../lib/auth-store.js");
       const apiKey = getApiKey();
       if (!apiKey) {
-        const error = `${skill.name} is a hosted skill (${pricing.formatCost(costCents ?? 0)}). Run: skills setup --mode hosted && skills auth login`;
+        const error = `${skill.name} is a self-hosted skill (${pricing.formatCost(costCents ?? 0)}). Run: skills setup --mode self-hosted && skills auth login`;
         writeRunLogs(runContext, "", error + "\n");
         const run = completeSkillRun(runContext, { status: "failed", error, costCents });
         if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, pricing: publicPricing, run }, null, 2));
@@ -458,7 +460,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
         process.exitCode = exitCode;
         return;
       } catch (err) {
-        const error = `Hosted skill ${skill.name} requires hosted access: ${(err as Error).message}`;
+        const error = `Self-hosted skill ${skill.name} requires self-hosted API access: ${(err as Error).message}`;
         writeRunLogs(runContext, "", error + "\n");
         const run = completeSkillRun(runContext, { status: "failed", error, costCents });
         if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, pricing: publicPricing, run }, null, 2));
@@ -520,14 +522,14 @@ async function approvePaidHostedRun(params: {
 }): Promise<{ approved: true } | { approved: false; error: string }> {
   if (params.yes) return { approved: true };
 
-  const error = `${params.skill} is a paid hosted skill (${params.formattedCost}). Run skills quote ${params.skill} first, then rerun with --yes to approve the charge.`;
+  const error = `${params.skill} is a paid self-hosted skill (${params.formattedCost}). Run skills quote ${params.skill} first, then rerun with --yes to approve the charge.`;
   if (params.json || !process.stdin.isTTY || !process.stdout.isTTY) {
     return { approved: false, error };
   }
 
-  const answer = await promptLine(`Run paid hosted skill ${params.skill} for ${params.formattedCost}? [y/N] `);
+  const answer = await promptLine(`Run paid self-hosted skill ${params.skill} for ${params.formattedCost}? [y/N] `);
   if (/^(y|yes)$/i.test(answer.trim())) return { approved: true };
-  return { approved: false, error: `Paid hosted run for ${params.skill} was not approved.` };
+  return { approved: false, error: `Paid self-hosted run for ${params.skill} was not approved.` };
 }
 
 function writeBlogArticleValidationError(errors: string[], json: boolean) {
@@ -596,7 +598,7 @@ async function handleRunsStatus(runId: string, options: { json: boolean }) {
   const { getApiKey } = await import("../../lib/auth-store.js");
   const apiKey = getApiKey();
   if (!apiKey) {
-    const error = "Remote run status requires hosted access. Run: skills auth login";
+    const error = "Remote run status requires self-hosted API access. Run: skills auth login";
     if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, error }, null, 2));
     else console.error(chalk.red(error));
     process.exitCode = 1;
@@ -685,7 +687,7 @@ async function handleExportsDownload(runId: string, options: { json: boolean }) 
   const { getApiKey } = await import("../../lib/auth-store.js");
   const apiKey = getApiKey();
   if (!apiKey) {
-    const error = "Remote artifact downloads require hosted access. Run: skills auth login";
+    const error = "Remote artifact downloads require self-hosted API access. Run: skills auth login";
     if (options.json) console.log(JSON.stringify({ error }, null, 2));
     else console.error(chalk.red(error));
     process.exitCode = 1;

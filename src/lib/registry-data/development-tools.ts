@@ -25,14 +25,14 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
   {
     name: "sdk-generator",
     displayName: "SDK Generator",
-    description: "Generate hosted TypeScript SDK scaffolds with client code, types, package files, tests, README, examples, and API summaries",
+    description: "Generate self-hosted TypeScript SDK scaffolds with client code, types, package files, tests, README, examples, and API summaries",
     category: "Development Tools",
     tags: ["sdk", "api", "typescript", "developer-tools", "premium", "remote"],
   },
   {
     name: "repo-onboarding-report",
     displayName: "Repo Onboarding Report",
-    description: "Generate hosted repository onboarding packages with architecture maps, setup guides, risk registers, and first-week plans",
+    description: "Generate self-hosted repository onboarding packages with architecture maps, setup guides, risk registers, and first-week plans",
     category: "Development Tools",
     tags: ["repository", "onboarding", "architecture", "developer-tools", "premium", "remote"],
   },
@@ -265,7 +265,7 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
   {
     name: "security-audit-report",
     displayName: "Security Audit Report",
-    description: "Generate premium SaaS security hardening reports covering auth, secrets, headers, webhooks, RLS, permissions, dependencies, and prioritized fixes",
+    description: "Generate premium application security hardening reports covering auth, secrets, headers, webhooks, RLS, permissions, dependencies, and prioritized fixes",
     category: "Development Tools",
     tags: ["security", "audit", "hardening", "rls", "webhooks", "premium", "remote"],
   },

@@ -5,11 +5,11 @@ import { join } from "node:path";
 describe("v1 acceptance criteria", () => {
   const doc = readFileSync(join(process.cwd(), "docs/release/v1-acceptance.md"), "utf8");
 
-  test("anchors product, package, and hosted-wrapper strategy", () => {
+  test("anchors product, package, and self-hosted service strategy", () => {
     expect(doc).toContain("`hasna/skills` is the canonical open repository");
     expect(doc).toContain("`@hasna/skills` is the public npm package");
     expect(doc).toContain("Local-only setup works without API credentials");
-    expect(doc).toContain("Private worker, billing, tenant, database, and deployment state");
+    expect(doc).toContain("Provider secrets, billing, tenant, database, and deployment state");
   });
 
   test("covers CLI, MCP, package, security, and wrapper acceptance", () => {
@@ -19,7 +19,7 @@ describe("v1 acceptance criteria", () => {
       "## Primitive Tool Acceptance",
       "## Package Acceptance",
       "## Security Acceptance",
-      "## Hosted Wrapper Acceptance",
+      "## Self-Hosted Service Acceptance",
     ]) {
       expect(doc).toContain(section);
     }
@@ -31,7 +31,7 @@ describe("v1 acceptance criteria", () => {
       "Built entrypoints",
       "Packed output",
       "Package-boundary tests",
-      "Hosted wrappers consume public package APIs",
+      "The self-hosted service exposes health",
     ]) {
       expect(doc).toContain(phrase);
     }

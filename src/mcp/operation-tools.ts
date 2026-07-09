@@ -374,7 +374,7 @@ export function registerOperationTools(server: McpServer): void {
 
     if (isPremiumSkill(skillName) && !apiKey) {
       const cost = formatCost(costCents ?? 0);
-      const error = `${skillName} is a hosted skill (${cost}). Run: skills setup --mode hosted && skills auth login`;
+      const error = `${skillName} is a self-hosted skill (${cost}). Run: skills setup --mode self-hosted && skills auth login`;
       writeRunLogs(runContext, "", error + "\n");
       const run = completeSkillRun(runContext, { status: "failed", error, costCents });
       return mcpError("AUTH_REQUIRED", `${error}. Local run metadata: ${run.paths.runDir}/run.json`, ["skills auth login"]);
@@ -382,7 +382,7 @@ export function registerOperationTools(server: McpServer): void {
 
     if (isPremiumSkill(skillName) && apiKey && approved !== true) {
       const cost = formatCost(costCents ?? 0);
-      const error = `${skillName} is a paid hosted skill (${cost}). Call quote_skill first, then call run_skill with approved: true after user approval.`;
+      const error = `${skillName} is a paid self-hosted skill (${cost}). Call quote_skill first, then call run_skill with approved: true after user approval.`;
       writeRunLogs(runContext, "", error + "\n");
       const run = completeSkillRun(runContext, { status: "failed", error, costCents });
       return mcpError("APPROVAL_REQUIRED", `${error}. Local run metadata: ${run.paths.runDir}/run.json`, [
@@ -421,7 +421,7 @@ export function registerOperationTools(server: McpServer): void {
         };
         return mcpJson(detail ? payload : compactRunToolPayload(payload, "Call run_skill again with detail:true for full remote/local run records."));
       } catch (err) {
-        const error = `Hosted skill ${skillName} requires hosted access: ${(err as Error).message}`;
+        const error = `Self-hosted skill ${skillName} requires self-hosted API access: ${(err as Error).message}`;
         writeRunLogs(runContext, "", error + "\n");
         const localRun = completeSkillRun(runContext, { status: "failed", error });
         return mcpError("PLATFORM_ERROR", `${error}. Local run metadata: ${localRun.paths.runDir}/run.json`);
@@ -462,7 +462,7 @@ export function registerOperationTools(server: McpServer): void {
     const { getApiKey } = await import("../lib/auth-store.js");
     const apiKey = getApiKey();
     if (!apiKey) {
-      return mcpError("AUTH_REQUIRED", "Remote run status requires hosted access. Run: skills auth login", ["skills auth login"]);
+      return mcpError("AUTH_REQUIRED", "Remote run status requires self-hosted API access. Run: skills auth login", ["skills auth login"]);
     }
 
     const localRun = findSkillRun(run_id);

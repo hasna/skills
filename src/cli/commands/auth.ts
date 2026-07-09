@@ -39,7 +39,7 @@ async function apiRequest(path: string, options?: RequestInit) {
       headers: { "Content-Type": "application/json", ...options?.headers },
     });
   } catch (err) {
-    throw new HostedApiError(`Unable to reach hosted Skills API: ${(err as Error).message}`);
+    throw new HostedApiError(`Unable to reach self-hosted Skills API: ${(err as Error).message}`);
   }
 
   const text = await res.text();
@@ -271,6 +271,45 @@ async function doLogin(email: string, code?: string, json?: boolean) {
   printLoginSuccess(verifyRes, Boolean(json));
 }
 
+async function doApiKeyLogin(apiKey: string, json?: boolean) {
+  const trimmed = apiKey.trim();
+  if (!trimmed) {
+    writeCommandError(new Error("API key required"), "API key required", json);
+    return;
+  }
+
+  let whoami: any;
+  try {
+    whoami = await apiRequest("/api/auth/whoami", {
+      headers: { Authorization: `Bearer ${trimmed}` },
+    });
+  } catch (err) {
+    writeCommandError(err, "Failed to verify API key", json);
+    return;
+  }
+
+  const identity = authIdentityPayload("stored", whoami);
+  const email = stringField(identity.email);
+  const orgId = stringField(identity.orgId);
+  const orgSlug = stringField(identity.organization);
+  const userId = stringField(identity.userId);
+
+  saveAuthConfig({
+    apiKey: trimmed,
+    email: email ?? "self-hosted-api-key",
+    orgId: orgId ?? "org_self_hosted",
+    orgSlug: orgSlug ?? "self-hosted",
+    userId: userId ?? "user_self_hosted",
+  });
+
+  if (json || !isTTY) {
+    console.log(JSON.stringify({ ...identity, status: "authenticated" }, null, 2));
+    return;
+  }
+
+  printWhoami(identity);
+}
+
 interface DeviceLoginOptions {
   json?: boolean;
   open?: boolean;
@@ -379,19 +418,24 @@ async function doDeviceLogin(options: DeviceLoginOptions) {
 export function registerAuth(parent: Command) {
   const auth = parent
     .command("auth")
-    .description("Manage hosted account authentication");
+    .description("Manage self-hosted account authentication");
 
   auth
     .command("login")
     .description("Sign in with browser/device code or email code")
     .option("--email <email>", "Email address (non-interactive)")
     .option("--code <code>", "Verification code (non-interactive)")
+    .option("--api-key <key>", "Verify and store a self-hosted API key")
     .option("--device", "Use browser/device-code login", false)
     .option("--no-open", "Do not open a browser for device-code login")
     .option("--poll", "Poll until browser authentication completes in non-interactive mode", false)
     .option("--poll-timeout-ms <ms>", "Maximum time to wait for device-code login")
     .option("--json", "Output result as JSON", false)
-    .action(async (options: { email?: string; code?: string; device?: boolean; open?: boolean; poll?: boolean; pollTimeoutMs?: string; json?: boolean }) => {
+    .action(async (options: { email?: string; code?: string; apiKey?: string; device?: boolean; open?: boolean; poll?: boolean; pollTimeoutMs?: string; json?: boolean }) => {
+      if (options.apiKey) {
+        await doApiKeyLogin(options.apiKey, options.json);
+        return;
+      }
       if (options.device || (!options.email && !options.code)) {
         await doDeviceLogin(options);
         return;
@@ -495,7 +539,7 @@ export function registerAuth(parent: Command) {
       }
     });
 
-  auth.command("status").description("Show hosted billing status").option("--json", "Output as JSON", false).action(handleBillingStatus);
+  auth.command("status").description("Show self-hosted billing status").option("--json", "Output as JSON", false).action(handleBillingStatus);
   auth.command("checkout").description("Create a Pro checkout session").option("--json", "Output as JSON", false).action(handleCheckout);
   auth.command("portal").description("Create a customer portal session").option("--json", "Output as JSON", false).action(handlePortal);
   auth.command("buy-credits").description("Create a credit pack checkout session").argument("<amount>", "Credit pack amount: 1, 5, 20, 50, or 100").option("--json", "Output as JSON", false).action(handleBuyCredits);
@@ -630,7 +674,7 @@ async function handleListCreditPacks(options: { json?: boolean } = {}) {
 }
 
 function registerBilling(parent: Command) {
-  const billing = parent.command("billing").description("Manage hosted billing");
+  const billing = parent.command("billing").description("Manage self-hosted billing");
   billing.command("status").description("Show billing status").option("--json", "Output as JSON", false).action(handleBillingStatus);
   billing.command("checkout").description("Create a Pro checkout session").option("--json", "Output as JSON", false).action(handleCheckout);
   billing.command("portal").description("Create a customer portal session").option("--json", "Output as JSON", false).action(handlePortal);
@@ -638,7 +682,7 @@ function registerBilling(parent: Command) {
 }
 
 function registerCredits(parent: Command) {
-  const credits = parent.command("credits").description("Manage hosted credit packs");
+  const credits = parent.command("credits").description("Manage self-hosted credit packs");
   credits.command("buy").description("Create a credit pack checkout session").argument("<amount>", "Credit pack amount: 1, 5, 20, 50, or 100").option("--json", "Output as JSON", false).action(handleBuyCredits);
   credits.command("packs").description("List available credit packs").option("--json", "Output as JSON", false).action(handleListCreditPacks);
 }

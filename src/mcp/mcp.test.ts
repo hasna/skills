@@ -403,7 +403,7 @@ version: 0.3.0
       expect(response.result.isError).toBe(true);
       const error = JSON.parse(response.result.content[0].text);
       expect(error).toMatchObject({ code: "PLATFORM_ERROR" });
-      expect(error.message).toContain("requires hosted access");
+      expect(error.message).toContain("requires self-hosted API access");
       expect(error.message).not.toContain("Skill Image CLI");
     } finally {
       await client.close();
@@ -443,7 +443,7 @@ version: 0.3.0
     }
   }, 15000);
 
-  test("run_skill requires explicit approval before paid hosted submission", async () => {
+  test("run_skill requires explicit approval before paid self-hosted submission", async () => {
     const { mkdtempSync, rmSync } = require("fs");
     const { tmpdir } = require("os");
     const tmpDir = mkdtempSync(join(tmpdir(), "mcp-premium-approval-required-"));
@@ -474,7 +474,7 @@ version: 0.3.0
       expect(response.result.isError).toBe(true);
       const error = JSON.parse(response.result.content[0].text);
       expect(error).toMatchObject({ code: "APPROVAL_REQUIRED" });
-      expect(error.message).toContain("paid hosted skill");
+      expect(error.message).toContain("paid self-hosted skill");
       expect(error.message).toContain("approved: true");
       expect(remoteCalls).toBe(0);
     } finally {

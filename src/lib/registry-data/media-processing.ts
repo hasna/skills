@@ -11,7 +11,7 @@ export const MEDIA_PROCESSING_SKILLS: SkillMeta[] = [
   {
     name: "audio-transcript-pack",
     displayName: "Audio Transcript Pack",
-    description: "Generate hosted transcript packages with timestamps, summaries, show notes, clips, captions, and repurposing copy",
+    description: "Generate self-hosted transcript packages with timestamps, summaries, show notes, clips, captions, and repurposing copy",
     category: "Media Processing",
     tags: ["audio", "transcript", "captions", "show-notes", "premium", "remote"],
   },
@@ -67,7 +67,7 @@ export const MEDIA_PROCESSING_SKILLS: SkillMeta[] = [
   {
     name: "transcript",
     displayName: "Transcript",
-    description: "Transcribe audio, video, and media URLs with OpenAI GPT-4o, ElevenLabs Scribe v2, DeepGram, or hosted runtime",
+    description: "Transcribe audio, video, and media URLs with OpenAI GPT-4o, ElevenLabs Scribe v2, DeepGram, or self-hosted runtime",
     category: "Media Processing",
     tags: ["transcript", "audio", "video", "speech-to-text", "diarization", "youtube"],
   },
@@ -81,7 +81,7 @@ export const MEDIA_PROCESSING_SKILLS: SkillMeta[] = [
   {
     name: "video-highlight-pack",
     displayName: "Video Highlight Pack",
-    description: "Generate hosted video highlight packages with clip plans, captions, thumbnail briefs, chapter markers, social posts, and edit decisions",
+    description: "Generate self-hosted video highlight packages with clip plans, captions, thumbnail briefs, chapter markers, social posts, and edit decisions",
     category: "Media Processing",
     tags: ["video", "highlights", "clips", "captions", "premium", "remote"],
   },

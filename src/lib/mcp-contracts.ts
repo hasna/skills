@@ -149,7 +149,7 @@ const runArgsSchema: JsonSchemaObject = {
 };
 const paidRunApprovalSchema: JsonSchemaObject = {
   type: "boolean",
-  description: "Set true only after the user has approved the quoted cost for a paid hosted run.",
+  description: "Set true only after the user has approved the quoted cost for a paid self-hosted run.",
 };
 
 const errorSchema = objectSchema({
@@ -172,12 +172,12 @@ const skillAvailabilitySchema = objectSchema({
   status: {
     type: "string",
     enum: ["available", "unavailable"],
-    description: "Whether hosted execution is currently available for this skill.",
+    description: "Whether self-hosted execution is currently available for this skill.",
   },
   code: stringSchema("Optional stable unavailability code."),
   message: stringSchema("Optional human-readable availability message."),
   details: stringArraySchema("Optional availability details."),
-}, ["status"], "Hosted skill availability metadata.");
+}, ["status"], "Self-hosted skill availability metadata.");
 
 const skillSummarySchema = objectSchema({
   name: stringSchema("Canonical skill slug."),
@@ -225,10 +225,10 @@ const installOutputSchema = objectSchema({
 }, ["skill", "success"], "Skill pin result.");
 
 const runOutputSchema = objectSchema({
-  contractVersion: { type: "number", description: "Remote run payload contract version for hosted runs." },
+  contractVersion: { type: "number", description: "Remote run payload contract version for self-hosted runs." },
   exitCode: { type: "number", description: "Process exit code for local runs." },
   skill: stringSchema("Canonical skill slug."),
-  remote: { type: "boolean", description: "Whether the skill was submitted to the hosted runtime." },
+  remote: { type: "boolean", description: "Whether the skill was submitted to the self-hosted runtime." },
   stdoutPreview: objectSchema({
     text: stringSchema("Truncated stdout preview."),
     length: { type: "number" },
@@ -245,7 +245,7 @@ const runOutputSchema = objectSchema({
   localRunId: stringSchema("Local run metadata id."),
   status: stringSchema("Run lifecycle status."),
   pricing: pricingSchema,
-  remoteRun: objectSchema({}, [], "Compact hosted remote run summary by default; full contract when detail:true is requested.", true),
+  remoteRun: objectSchema({}, [], "Compact self-hosted run summary by default; full contract when detail:true is requested.", true),
   run: objectSchema({}, [], "Compact local run metadata by default; full metadata when detail:true is requested.", true),
   nextActions: objectSchema({
     poll: stringSchema("Command to poll run status."),
@@ -389,7 +389,7 @@ const toolContracts: McpToolContract[] = [
   {
     name: "list_tool_primitives",
     title: "List Tool Primitives",
-    description: "List primitive tools used by skills across CLI, MCP, API, and hosted worker execution.",
+    description: "List primitive tools used by skills across CLI, MCP, API, and self-hosted worker execution.",
     params: ["query?"],
     category: "discovery",
     sideEffects: "none",
@@ -858,7 +858,7 @@ const resourceContracts: McpResourceContract[] = [
   {
     uri: "skills://tool-primitives",
     name: "Tool Primitives",
-    description: "Primitive tool catalog used by skills across CLI, MCP, API, and hosted workers.",
+    description: "Primitive tool catalog used by skills across CLI, MCP, API, and self-hosted workers.",
     mimeType: "application/json",
     schema: arraySchema(toolPrimitiveSummarySchema),
   },

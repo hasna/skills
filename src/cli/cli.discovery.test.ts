@@ -56,13 +56,13 @@ describe("CLI discovery", () => {
         expect(empty.exitCode).toBe(0);
         expect(JSON.parse(empty.stdout)).toEqual({});
 
-        const set = await runCliInCwd(["config", "set", "apiUrl", "https://skills.md/api/v1/", "--json"], tmpDir, { HOME: tmpDir });
+        const set = await runCliInCwd(["config", "set", "apiUrl", "https://skills.hasna.xyz/api/v1/", "--json"], tmpDir, { HOME: tmpDir });
         expect(set.exitCode).toBe(0);
         const setData = JSON.parse(set.stdout);
-        expect(setData).toMatchObject({ key: "apiUrl", value: "https://skills.md/api/v1", scope: "project" });
+        expect(setData).toMatchObject({ key: "apiUrl", value: "https://skills.hasna.xyz/api/v1", scope: "project" });
 
         const get = await runCliInCwd(["config", "get", "apiUrl", "--json"], tmpDir, { HOME: tmpDir });
-        expect(JSON.parse(get.stdout)).toMatchObject({ key: "apiUrl", value: "https://skills.md/api/v1", set: true });
+        expect(JSON.parse(get.stdout)).toMatchObject({ key: "apiUrl", value: "https://skills.hasna.xyz/api/v1", set: true });
 
         const paths = await runCliInCwd(["config", "path", "--json"], tmpDir, { HOME: tmpDir });
         const pathData = JSON.parse(paths.stdout);

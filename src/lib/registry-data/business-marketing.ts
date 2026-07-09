@@ -193,7 +193,7 @@ export const BUSINESS_MARKETING_SKILLS: SkillMeta[] = [
   {
     name: "one-page-website",
     displayName: "One Page Website",
-    description: "Generate hosted static one-page website bundles with HTML, CSS, JavaScript, copy, section maps, deploy notes, and manifest",
+    description: "Generate self-hosted static one-page website bundles with HTML, CSS, JavaScript, copy, section maps, deploy notes, and manifest",
     category: "Business & Marketing",
     tags: ["website", "landing-page", "static-site", "html", "premium", "remote"],
   },

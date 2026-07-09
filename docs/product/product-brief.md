@@ -1,13 +1,13 @@
 # @hasna/skills Product Brief
 
-`@hasna/skills` is a hosted-aware, local-capable skill library, CLI, and MCP
-server for AI coding agents. Interactive onboarding can recommend a compatible
-hosted API, while local-only usage remains available without requiring a hosted
-account, private infrastructure, or source-copy installs.
+`@hasna/skills` is a local-capable and self-hosted skill library, CLI, MCP
+server, API, and worker runtime for AI coding agents. Interactive onboarding can
+recommend a compatible self-hosted API, while local-only usage remains available
+without requiring an API account or source-copy installs.
 
-The open package can optionally talk to a compatible hosted API such as
-skills.md for remote-only skills. That remote path is explicit configuration,
-not a dependency of the core package.
+The open package can optionally talk to the Hasna self-hosted API at
+`https://skills.hasna.xyz` for server-executed skills. That API path is explicit
+configuration, not a dependency of local-only use.
 
 ## Target Users
 
@@ -16,16 +16,16 @@ not a dependency of the core package.
 - Teams that want a stable open registry they can mirror, audit, or wrap.
 - Skill authors who want reusable docs, metadata, validation, and package
   conventions.
-- Hosted-service builders who need a clean public package to wrap without
-  copying private infrastructure into open source.
+- Operators who need a deployable self-hosted Skills service without copying
+  provider secrets or deployment state into local projects.
 
 ## Core Use Cases
 
 - Browse, search, inspect, and pin bundled skills from the CLI or MCP.
 - Run free or explicitly local skills on the user's machine.
-- Configure first-run mode as hosted or local-only.
-- Submit hosted skills to a remote API when the skill contract says the source
-  is server-executed.
+- Configure first-run mode as self-hosted or local-only.
+- Submit self-hosted skills to the API when the skill contract says execution
+  is server-owned.
 - Export machine-readable registry, MCP, config, quote, run, and validation
   contracts.
 - Keep project `.skills` state limited to preferences, pins, schedules, runs,
@@ -36,56 +36,57 @@ not a dependency of the core package.
 V1 must keep the public package useful on its own:
 
 - `skills` CLI and `skills-mcp` server ship from npm package `@hasna/skills`.
-- Interactive setup can recommend hosted mode, while non-interactive setup stays
-  safe for local/CI use unless hosted mode is explicit.
-- Hosted setup stores a configurable API URL and uses explicit client auth.
-- Premium or remote-only skills fail closed without hosted credentials and do
-  not fall back to bundled local execution.
+- Interactive setup can recommend self-hosted mode, while non-interactive setup
+  stays safe for local/CI use unless self-hosted mode is explicit.
+- Self-hosted setup stores a configurable API URL and uses explicit client auth.
+- Premium or server-executed skills fail closed without self-hosted credentials
+  and do not fall back to bundled local execution.
 - Public package exports expose reusable registry, config, validation,
   discovery, pricing, and remote-run contract APIs.
-- Package output excludes private hosted source and private infrastructure
+- Package output excludes provider secrets and deployment-only infrastructure
   dependencies.
 
 ## Non-Goals
 
-- Depending on private cloud packages or hosted infrastructure to use the CLI.
+- Depending on private service packages or AWS infrastructure to use the local
+  CLI.
 - Publishing private worker, billing, tenant, or deployment code in the open
   npm package.
-- Copying protected hosted skill source into user projects.
+- Copying protected server-executed skill source into user projects.
 - Making a browser dashboard the primary workflow for agents.
 - Becoming a generic workflow automation platform.
 
 ## Pricing Principles
 
-- The open package can describe hosted skill prices and quote contracts.
-- Billing, payment methods, credits, ledgers, and entitlements are hosted API
+- The open package can describe self-hosted skill prices and quote contracts.
+- Billing, payment methods, credits, ledgers, and entitlements are API
   responsibilities, not OSS core dependencies.
-- Agent-visible errors must explain when a skill is hosted and which login or
-  setup command is needed.
-- Local skills should remain runnable without hosted spend or hosted state.
+- Agent-visible errors must explain when a skill requires the self-hosted
+  runtime and which login or setup command is needed.
+- Local skills should remain runnable without self-hosted spend or API state.
 
 ## Trust Model
 
-The open package assumes local execution is user-owned and hosted execution is
-server-owned.
+The open package assumes local execution is user-owned and self-hosted execution
+is server-owned.
 
 - Local projects store only local preferences and run artifacts.
 - Provider keys stay local only for explicitly local skills that document them.
-- Hosted skills expose public docs, schemas, pricing, and remote contracts, not
-  protected implementation source.
-- Remote APIs own account state, approvals, billing, and server-side secrets.
+- Self-hosted skills expose public docs, schemas, pricing, and run contracts,
+  not protected implementation source.
+- APIs own account state, approvals, billing, and server-side secrets.
 - CLI and MCP surfaces return structured errors so agents can handle missing
-  credentials and hosted failures without executing private source locally.
+  credentials and self-hosted failures without executing private source locally.
 
 ## Agent-Native Surfaces
 
 Agent-native means the core workflow works from tools an agent already has:
 
 - Discover: list and search skills through CLI and MCP.
-- Configure: choose hosted mode or local-only mode.
-- Execute: run local skills directly or submit hosted skills remotely.
-- Inspect: poll remote status, read local logs, and retrieve exports.
+- Configure: choose self-hosted mode or local-only mode.
+- Execute: run local skills directly or submit self-hosted skills to the API.
+- Inspect: poll run status, read local logs, and retrieve exports.
 - Validate: expose package and skill checks as scriptable commands.
 
-Future hosted dashboards should consume the same API contracts used by CLI and
+Future operator dashboards should consume the same API contracts used by CLI and
 MCP, without making the agent workflow dependent on a browser.

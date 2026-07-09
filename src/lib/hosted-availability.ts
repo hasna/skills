@@ -43,9 +43,9 @@ export function getHostedRunAvailability(slug: string): HostedRunAvailability {
     ok: false,
     status: 503,
     code: "HOSTED_PROVIDER_UNAVAILABLE",
-    message: "hosted execution is temporarily unavailable for this skill",
+    message: "self-hosted execution is temporarily unavailable for this skill",
     details: [
-      "This skill requires a platform-managed execution path that is not enabled for live hosted runs yet.",
+      "This skill requires a server-managed execution path that is not enabled for live self-hosted runs yet.",
       "No balance was charged.",
     ],
   };
