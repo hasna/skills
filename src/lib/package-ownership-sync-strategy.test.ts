@@ -15,16 +15,16 @@ describe("package ownership and sync strategy", () => {
     expect(content).toContain("Generated Registry Sync");
   });
 
-  test("assigns ownership between upstream and hosted wrappers", () => {
+  test("assigns ownership between upstream and self-hosted wrappers", () => {
     for (const phrase of [
       "`hasna/skills`, npm `@hasna/skills`",
       "Agent CLI",
       "MCP server",
       "Bundled skill corpus",
-      "Hosted API",
-      "Hosted workers",
-      "Hosted web app",
-      "Hosted infrastructure",
+      "Self-hosted API",
+      "Self-hosted workers",
+      "Self-hosted web app",
+      "Self-hosted infrastructure",
     ]) {
       expect(content).toContain(phrase);
     }
@@ -41,8 +41,8 @@ describe("package ownership and sync strategy", () => {
     }
   });
 
-  test("keeps hosted wrappers as package consumers", () => {
-    expect(content).toContain("Hosted wrappers should consume `@hasna/skills`");
+  test("keeps self-hosted wrappers as package consumers", () => {
+    expect(content).toContain("Self-hosted service wrappers should consume `@hasna/skills`");
     expect(content).toContain("Released npm package pinned by lockfile");
     expect(content).toContain("public-boundary preflight");
     expect(content).not.toContain("@hasnatools/platform-skills");
@@ -64,15 +64,15 @@ describe("package ownership and sync strategy", () => {
   test("defines remote-only premium boundary while preserving local user-key skills", () => {
     for (const phrase of [
       "Premium Remote-Only Boundary",
-      "hosted premium skills must submit to a compatible hosted API",
+      "server-executed premium skills must submit to a compatible self-hosted API",
       "must not fall back to bundled local execution",
-      "OSS package may expose public contracts for hosted skills",
+      "OSS package may expose public contracts for server-executed skills",
       "must not expose private provider routing",
-      "`SKILLS_API_KEY` authenticates the user to a hosted skills API",
+      "`SKILLS_API_KEY` authenticates the user to a self-hosted skills API",
       "provider keys such as",
       "`OPENAI_API_KEY`",
       "skill-specific local credentials",
-      "protected hosted implementation source",
+      "protected server-side implementation source",
     ]) {
       expect(content).toContain(phrase);
     }

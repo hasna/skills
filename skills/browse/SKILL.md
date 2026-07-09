@@ -13,7 +13,7 @@ logs stay server-side.
 ## Usage
 
 ```bash
-skills setup --mode hosted
+skills setup --mode self-hosted
 skills auth login
 skills run browse --task "Open example.com and summarize the page"
 skills runs status <run-id>
