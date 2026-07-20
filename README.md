@@ -54,7 +54,7 @@ Use `SKILLS_API_KEY` or `skills auth login --api-key` for premium self-hosted
 execution:
 
 ```bash
-skills setup --mode self-hosted --api-url https://skills.hasna.xyz
+skills setup --mode self-hosted --api-url https://skills.md
 skills auth login --api-key "$SKILLS_API_KEY"
 skills run image "editorial product photo on a white sweep"
 skills runs status <run-id>
@@ -192,9 +192,9 @@ Local bundled skills remain the default for discovery. To point browse/search
 commands at a compatible self-hosted registry, set an API base URL:
 
 ```bash
-export SKILLS_API_URL=https://skills.hasna.xyz
+export SKILLS_API_URL=https://your-server.example
 # or persist it:
-skills config set apiUrl https://skills.hasna.xyz
+skills config set apiUrl https://your-server.example
 
 skills list --remote --json
 skills search transcribe --remote --json
@@ -202,7 +202,7 @@ skills categories --remote
 skills tags --remote --json
 ```
 
-If the URL is an origin such as `https://skills.hasna.xyz`, the CLI requests
+If the URL is an origin such as `https://your-server.example`, the CLI requests
 `/api/v1/skills`. If it already ends in `/api` or `/api/v1`, the CLI appends
 `/skills`.
 
@@ -279,7 +279,7 @@ skills mcp --register all       # Register with all supported agents
 ## Self-Hosted API
 
 ```bash
-skills setup --mode self-hosted --api-url https://skills.hasna.xyz
+skills setup --mode self-hosted --api-url https://skills.md
 skills auth login --api-key "$SKILLS_API_KEY"
 skills billing status
 ```
@@ -291,7 +291,7 @@ stored in S3 when `HASNA_SKILLS_S3_BUCKET` is configured.
 
 ## Storage Boundary
 
-Open Skills is local-first. Project runtime state stays in `.skills/`; global
+Hasna Skills is local-first. Project runtime state stays in `.skills/`; global
 config and auth stay under `~/.hasna/skills/`.
 
 Optional repo-native sync can be configured without a self-hosted API account:

@@ -3,7 +3,7 @@
 `hasna/skills` is the canonical open core. It owns the reusable skill engine,
 bundled corpus, CLI, MCP server, public contracts, and package validation.
 
-Self-hosted services such as skills.hasna.xyz may wrap this package, but their
+Self-hosted services such as your-server.example may wrap this package, but their
 deployment-specific private service code must stay outside the npm package.
 
 ## Remotes

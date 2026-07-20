@@ -1,5 +1,5 @@
 /**
- * Config file support for Open Skills
+ * Config file support for Hasna Skills
  *
  * Loads configuration from:
  *   1. Project-local: ./skills.config.json (highest priority)

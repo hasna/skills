@@ -28,7 +28,7 @@ export function publicPrincipal(partial: Partial<ApiPrincipal> = {}): ApiPrincip
     orgSlug: partial.orgSlug || "dev",
     orgName: partial.orgName || "Development",
     userId: partial.userId || "user_dev",
-    email: partial.email || "dev@skills.hasna.xyz",
+    email: partial.email || "dev@example.com",
     role: partial.role || "owner",
     scopes: partial.scopes || ["skills:read", "runs:write"],
   };

@@ -79,7 +79,7 @@ tenant database logic, self-hosted auth servers, or worker execution logic.
 
 The canonical remote execution setup mode is `self-hosted`, not `hosted`, `cloud`,
 `remote`, or a website/domain name. Self-hosted service wrappers can still set a
-default API origin such as `https://skills.hasna.xyz`, and the CLI may preserve
+default API origin such as `https://your-server.example`, and the CLI may preserve
 legacy aliases like `hosted`, `skills.md`, or `remote` only for compatibility.
 
 ## Generated Registry Sync
