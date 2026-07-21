@@ -5,6 +5,7 @@ import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 
 import {
+  findPortableSkill,
   getPortableSkillsRoot,
   isOfficialSkillName,
   listPortableSkills,
@@ -16,6 +17,28 @@ import {
 } from "./portable-skills";
 
 describe("portable skills", () => {
+  test("direct lookup ignores empty and malformed directories but keeps valid custom skills", () => {
+    const root = mkdtempSync(join(tmpdir(), "portable-skill-lookup-"));
+    try {
+      mkdirSync(join(root, "empty-skill"), { recursive: true });
+      const malformed = join(root, "malformed-skill");
+      mkdirSync(malformed, { recursive: true });
+      writeFileSync(join(malformed, "SKILL.md"), "# Missing portable skill frontmatter\n");
+      const valid = join(root, "valid-skill");
+      mkdirSync(valid, { recursive: true });
+      writeFileSync(
+        join(valid, "SKILL.md"),
+        "---\nname: valid-skill\ndescription: Valid custom instruction skill.\nkind: instruction\n---\n\n# Valid Skill\n",
+      );
+
+      expect(findPortableSkill("empty-skill", { rootDir: root })).toBeNull();
+      expect(findPortableSkill("malformed-skill", { rootDir: root })).toBeNull();
+      expect(findPortableSkill("valid-skill", { rootDir: root })?.name).toBe("valid-skill");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("scaffolds a standard skill folder with agent instructions and a runnable command", async () => {
     const home = mkdtempSync(join(tmpdir(), "portable-skill-home-"));
     try {

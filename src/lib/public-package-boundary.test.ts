@@ -106,6 +106,17 @@ function buildEntryPointsForBoundaryScan(): string[] {
 }
 
 describe("public package boundary", () => {
+  test("excludes CLI test utilities while retaining public declarations", () => {
+    const files = new Set(readPackedFiles());
+
+    expect(files.has("dist/cli/cli.test-utils.d.ts")).toBe(false);
+    expect(files.has("dist/index.d.ts")).toBe(true);
+    expect(files.has("dist/storage.d.ts")).toBe(true);
+    expect(
+      [...files].some((file) => file.startsWith("dist/cli/commands/") && file.endsWith(".d.ts")),
+    ).toBe(true);
+  });
+
   test("keeps private cloud and self-dependencies out of package metadata", () => {
     const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")) as {
       dependencies?: Record<string, string>;

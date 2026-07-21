@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   SKILLS,
@@ -24,6 +25,20 @@ function bundledSkillPackageNames(): string[] {
     .map((entry) => entry.name)
     .filter((name) => existsSync(join(skillsDir, name, "package.json")))
     .sort();
+}
+
+function withIsolatedHome(run: (skillsRoot: string) => void): void {
+  const home = mkdtempSync(join(tmpdir(), "skills-registry-home-"));
+  const previousHome = process.env["HOME"];
+  try {
+    process.env["HOME"] = home;
+    run(join(home, ".hasna", "skills"));
+  } finally {
+    if (previousHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = previousHome;
+    clearRegistryCache();
+    rmSync(home, { recursive: true, force: true });
+  }
 }
 
 describe("registry", () => {
@@ -269,6 +284,47 @@ describe("registry", () => {
       const b = loadRegistry();
       // Same array reference within cache TTL
       expect(a).toBe(b);
+    });
+
+    test("an empty custom directory cannot shadow an official skill", () => {
+      withIsolatedHome((skillsRoot) => {
+        mkdirSync(join(skillsRoot, "deepresearch"), { recursive: true });
+
+        clearRegistryCache();
+        expect(loadRegistry().find((skill) => skill.name === "deepresearch")?.source).toBe("official");
+      });
+    });
+
+    test("a malformed custom marker cannot shadow an official skill", () => {
+      withIsolatedHome((skillsRoot) => {
+        const customDir = join(skillsRoot, "image");
+        mkdirSync(customDir, { recursive: true });
+        writeFileSync(join(customDir, "SKILL.md"), "# Missing portable skill frontmatter\n");
+        const malformedLegacyDir = join(skillsRoot, "custom", "deepresearch");
+        mkdirSync(malformedLegacyDir, { recursive: true });
+        writeFileSync(
+          join(malformedLegacyDir, "SKILL.md"),
+          "---\nname: deepresearch\n---\n\n# Missing description\n",
+        );
+
+        clearRegistryCache();
+        expect(loadRegistry().find((skill) => skill.name === "image")?.source).toBe("official");
+        expect(loadRegistry().find((skill) => skill.name === "deepresearch")?.source).toBe("official");
+      });
+    });
+
+    test("a valid custom skill remains discoverable", () => {
+      withIsolatedHome((skillsRoot) => {
+        const customDir = join(skillsRoot, "valid-custom-skill");
+        mkdirSync(customDir, { recursive: true });
+        writeFileSync(
+          join(customDir, "SKILL.md"),
+          "---\nname: valid-custom-skill\ndescription: Valid portable custom skill.\nkind: instruction\n---\n\n# Valid Custom Skill\n",
+        );
+
+        clearRegistryCache();
+        expect(loadRegistry().find((skill) => skill.name === "valid-custom-skill")?.source).toBe("custom");
+      });
     });
   });
 

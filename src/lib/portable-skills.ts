@@ -219,6 +219,7 @@ export function findPortableSkill(name: string, options: PortableSkillOptions = 
   }
   const path = getPortableSkillPath(normalized, options);
   if (!existsSync(path) || !statSync(path).isDirectory()) return null;
+  if (!hasDiscoverablePortableSkillMarker(path, normalized)) return null;
   try {
     return summarizePortableSkill(path, normalized);
   } catch {
@@ -234,6 +235,7 @@ export function listPortableSkills(options: PortableSkillOptions = {}): Portable
     if (entry.startsWith(".") || DATA_DIR_NON_SKILL_ENTRIES.has(entry)) continue;
     const path = join(root, entry);
     if (!safeIsDirectory(path)) continue;
+    if (!hasDiscoverablePortableSkillMarker(path, entry)) continue;
     try {
       skills.push(summarizePortableSkill(path, entry));
     } catch {
@@ -241,6 +243,62 @@ export function listPortableSkills(options: PortableSkillOptions = {}): Portable
     }
   }
   return skills.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Discovery must not turn an arbitrary data directory into a custom skill.
+ * Keep the accepted marker set intentionally smaller than the importer's
+ * repairable input set: discovery is ambient and may shadow bundled skills,
+ * while `port` is an explicit operation with its own collision policy.
+ */
+function hasDiscoverablePortableSkillMarker(skillPath: string, directoryName: string): boolean {
+  const expectedName = safeNormalizeName(directoryName);
+  if (!expectedName) return false;
+
+  const skillMdPath = join(skillPath, "SKILL.md");
+  if (existsSync(skillMdPath)) {
+    try {
+      const frontmatter = parseSkillFrontmatter(readFileSync(skillMdPath, "utf-8"));
+      if (
+        safeNormalizeName(frontmatter?.name ?? "") === expectedName
+        && Boolean(frontmatter?.description?.trim())
+      ) return true;
+    } catch {
+      // A different valid marker below may still make this a portable skill.
+    }
+  }
+
+  const skillJsonPath = join(skillPath, "skill.json");
+  if (existsSync(skillJsonPath)) {
+    try {
+      const manifest = readJsonObject(skillJsonPath);
+      if (
+        stringField(manifest, "standard") === PORTABLE_SKILL_STANDARD
+        && safeNormalizeName(stringField(manifest, "name") ?? "") === expectedName
+        && Boolean(stringField(manifest, "description"))
+        && Boolean(stringField(manifest, "version"))
+      ) return true;
+    } catch {
+      // A different valid marker below may still make this a portable skill.
+    }
+  }
+
+  const packageJsonPath = join(skillPath, "package.json");
+  if (existsSync(packageJsonPath)) {
+    try {
+      const pkg = readJsonObject(packageJsonPath) as PackageJson;
+      if (
+        safeNormalizeName(stringValue(pkg.name) ?? "") === expectedName
+        && Boolean(stringValue(pkg.description))
+        && Boolean(stringValue(pkg.version))
+        && Boolean(inferPackageCommands(pkg, expectedName)?.length)
+      ) return true;
+    } catch {
+      // Malformed package metadata is not an ambient discovery marker.
+    }
+  }
+
+  return false;
 }
 
 export function listPortableSkillMetas(options: PortableSkillOptions = {}): SkillMeta[] {

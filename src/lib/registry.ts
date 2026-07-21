@@ -67,7 +67,8 @@ function discoverSkillsInDir(dir: string): SkillMeta[] {
       let content: string;
       try { content = readFileSync(skillMdPath, "utf-8"); } catch { continue; }
       const fm = parseSkillMdFrontmatter(content);
-      if (!fm?.name) continue;
+      if (!fm?.name || !fm.description?.trim()) continue;
+      if (normalizeSkillSlug(fm.name) !== normalizeSkillSlug(entry.name)) continue;
       const name = fm.name;
       result.push({
         name,

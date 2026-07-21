@@ -67,7 +67,8 @@ describe("open-core product service pattern", () => {
     expect(contract).toContain("### Storage Selection Precedence");
     expect(contract).toContain("1. `--storage-profile <name>`");
     expect(contract).toContain("2. `HASNA_<APP>_STORAGE_PROFILE`");
-    expect(compactContract).toContain("3. the legacy storage environment bridge");
+    expect(compactContract).toContain("3. `storageProfile` on the selected deployment profile");
+    expect(compactContract).toContain("6. the legacy storage environment bridge, only when no new named storage profile was selected above");
     expect(contract).toContain("7. the built-in `local` storage profile");
     expect(contract).toContain("`HASNA_SKILLS_STORAGE_MODE`");
     expect(compactContract).toContain("ahead of `SKILLS_STORAGE_MODE`");
@@ -84,11 +85,12 @@ describe("open-core product service pattern", () => {
     expect(compactOwnership).toContain("`HASNA_SKILLS_S3_*` does not include `HASNA_SKILLS_AWS_REGION`");
     expect(compactContract).toContain("## Client-Sync And Server Database Authority");
     expect(compactContract).toContain("`HASNA_SKILLS_DATABASE_URL` wins over `SKILLS_DATABASE_URL`");
+    expect(compactContract).toContain("This is a target compatibility contract, not a description of the environment names current source reads");
     expect(compactContract).toContain("their authoritative database URL resolves in this exact order: 1. `HASNA_SKILLS_SERVER_DATABASE_URL` 2. legacy `HASNA_SKILLS_DATABASE_URL` 3. legacy `DATABASE_URL`");
-    expect(compactContract).toContain("The server database pool resolves independently in this exact order: 1. `HASNA_SKILLS_SERVER_DATABASE_POOL_MAX` 2. legacy `HASNA_SKILLS_DATABASE_POOL_MAX` 3. legacy `SKILLS_DATABASE_POOL_MAX` 4. `4`");
+    expect(compactContract).toContain("In that target contract, the server database pool resolves independently in this exact order: 1. `HASNA_SKILLS_SERVER_DATABASE_POOL_MAX` 2. legacy `HASNA_SKILLS_DATABASE_POOL_MAX` 3. legacy `SKILLS_DATABASE_POOL_MAX` 4. `4`");
     expect(compactContract).toContain("`HASNA_SKILLS_SERVER_S3_BUCKET`");
     expect(compactContract).toContain("`HASNA_SKILLS_SERVER_AWS_REGION`");
-    expect(compactContract).toContain("Legacy fallback is a compatibility read, not a shared target namespace");
+    expect(compactContract).toContain("Under that target compatibility contract, legacy fallback is a compatibility read, not a shared target namespace");
     expect(compactContract).toContain("must never copy a client-sync value into the server namespace");
     expect(compactOwnership).toContain("| `HASNA_SKILLS_SERVER_DATABASE_URL` plus legacy `HASNA_SKILLS_DATABASE_URL` / `DATABASE_URL` | Provider-neutral server authoritative database reference |");
     expect(compactOwnership).toContain("`HASNA_SKILLS_SERVER_DATABASE_POOL_MAX` plus legacy");
@@ -104,10 +106,10 @@ describe("open-core product service pattern", () => {
     expect(compactContract).toContain("A bootstrap profile cannot retrieve credentials");
     expect(compactContract).toContain("`cloud` always requires an explicit tenant binding");
     expect(compactContract).toContain("signed single-tenant default");
-    expect(compactContract).toContain("operator-issued opaque tenant selector and a fresh public challenge");
+    expect(compactContract).toContain("selected opaque selector and a fresh public challenge before any product API credential issuance");
     expect(compactContract).toContain("must not disclose a raw tenant id, email, account name, membership, or credential");
     expect(compactContract).toContain("Service identity is pinned before any credential lookup or release");
-    expect(compactContract).toContain("`(product, origin, service identity, tenant)` tuple");
+    expect(compactContract).toContain("`(product, origin, service identity, issuer, audience, subject, tenant)`");
     expect(compactContract).toContain("RFC 8785 canonical JSON serialization");
     for (const envelopeField of ["`alg`", "`kid`", "`issuedAt`", "`expiresAt`"]) {
       expect(contract).toContain(envelopeField);
@@ -126,11 +128,13 @@ describe("open-core product service pattern", () => {
       "unpredictable\n   `state`",
       "OIDC `nonce`",
       "an accepted invitation for an existing member",
-      "verified\n   new-user enrollment",
-      "multi-tenant\n   membership response",
+      "After OIDC authentication, but before any product API credential is issued",
+      "verified new-user\n   enrollment",
+      "multi-tenant membership\n   response",
       "normalized origin, service\n   identity, issuer, audience, authenticated subject",
-      "short expiry, and unique\n   replay identifier",
-      "Tenant selection completes before an API credential is issued or released",
+      "short expiry, and unique replay identifier",
+      "Only after the client verifies and persists that binding",
+      "OIDC authentication may already have completed when tenant selection begins",
       "Lost-device recovery",
     ]) {
       expect(contract).toContain(onboarding);
@@ -174,6 +178,12 @@ describe("open-core product service pattern", () => {
       expect(content).toContain("`.github/workflows/deploy.yml`");
       expect(content).toContain("selfhost");
       expect(content).toContain("not `cloud`");
+    }
+    for (const content of [compactContract, compactReadme]) {
+      expect(content).toContain("Current shared client/server reads are limited to");
+      expect(content).toContain("Database pool configuration is server-only");
+      expect(content).toContain("does not read client S3 endpoint, path-style, or package credential settings");
+      expect(content).toContain("target compatibility design, not current reads");
     }
     expect(compactContract).toContain("This contract change does not edit or delete that workflow");
     expect(compactReadme).toContain("The workflow is intentionally unchanged by this candidate");

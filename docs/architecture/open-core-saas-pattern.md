@@ -59,9 +59,10 @@ belong in the platform composition.
 - Resolve profiles in this order: `--profile`, product profile environment
   variable, project profile, global default, then local.
 - Resolve the independent storage profile in this order: explicit storage
-  selector, storage-profile environment variable, legacy storage environment
-  bridge, selected deployment profile, project storage profile, global storage
-  default, then local storage.
+  selector, storage-profile environment variable, selected deployment profile,
+  project storage profile, global storage default, then the legacy storage
+  environment bridge only when no named profile was selected, and finally local
+  storage.
 - Never silently phone home or fall back between local and remote execution.
 - Never infer selfhost or cloud from an API URL, provider, or hostname.
 - Never infer deployment mode or operation execution policy from storage mode;

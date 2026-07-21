@@ -23,6 +23,7 @@
   "files": [
     "dist/",
     "!dist/**/*.test.d.ts",
+    "!dist/cli/cli.test-utils.d.ts",
     "!dist/platform",
     "!dist/server",
     "bin/",

@@ -262,15 +262,18 @@ must not be flattened into “SaaS absent.”
 
 ## CURRENT IMPLEMENTATION BLOCKERS
 
-- Client sync and the authoritative server currently share
-  `HASNA_SKILLS_DATABASE_URL`, `HASNA_SKILLS_DATABASE_POOL_MAX`, and
-  `HASNA_SKILLS_S3_*`; the server artifact client also reads unscoped
-  `AWS_REGION`. The target contract requires
+- Current shared client/server reads are limited to
+  `HASNA_SKILLS_DATABASE_URL`, `HASNA_SKILLS_S3_BUCKET`, and
+  `HASNA_SKILLS_S3_PREFIX` (plus their documented plain-name fallbacks).
+  Database pool configuration is server-only; current server source does not
+  read client S3 endpoint, path-style, or package credential settings. Its
+  artifact client independently reads unscoped `AWS_REGION`. The proposed
   `HASNA_SKILLS_SERVER_DATABASE_URL`,
   `HASNA_SKILLS_SERVER_DATABASE_POOL_MAX`, `HASNA_SKILLS_SERVER_S3_*`, and
-  `HASNA_SKILLS_SERVER_AWS_REGION`, with explicit legacy precedence and
-  migration. Until that lands, the two storage authorities are not proven
-  isolated and operators must not silently use one configuration for both.
+  `HASNA_SKILLS_SERVER_AWS_REGION` namespace and dual-read migration are target
+  compatibility design, not current reads. Until that lands, operators must not
+  silently use the actually shared database URL and bucket/prefix as independent
+  authorities.
 - The existing `.github/workflows/deploy.yml` contains Hasna-specific AWS
   production configuration and an automatic `main` deploy. That internal AWS
   deployment is `selfhost`, not `cloud`. Target compliance
@@ -403,17 +406,19 @@ namespace migration lands, do not enable client sync against the same values or
 present those shared names as two independent authorities.
 
 These variables configure client-side package storage and sync. Current source
-does not yet give the provider-neutral server a separate environment namespace:
-it also reads `HASNA_SKILLS_DATABASE_URL`, `HASNA_SKILLS_S3_*`, and unscoped
-`AWS_REGION`. The target server namespace is
+does not yet give the provider-neutral server a separate environment namespace.
+Its shared reads are `HASNA_SKILLS_DATABASE_URL`,
+`HASNA_SKILLS_S3_BUCKET`, and `HASNA_SKILLS_S3_PREFIX`; database pool settings
+are server-only, and current server source does not read client S3 endpoint,
+path-style, or package credentials. The artifact client separately reads
+unscoped `AWS_REGION`. The proposed target server namespace is
 `HASNA_SKILLS_SERVER_DATABASE_URL`,
 `HASNA_SKILLS_SERVER_DATABASE_POOL_MAX`, `HASNA_SKILLS_SERVER_S3_*`, and
-`HASNA_SKILLS_SERVER_AWS_REGION`. During a bounded compatibility window, each
-target server name wins over its documented legacy input; conflicts emit a
-redacted diagnostic, migration preview records the selected source, and new
-configuration writes only server-scoped names. Client sync configuration must
-never be copied into or silently treated as the authoritative run, tenant, or
-artifact database and bucket.
+`HASNA_SKILLS_SERVER_AWS_REGION`. Its bounded dual-read window, precedence,
+redacted diagnostics, migration preview, and server-scoped writes are target
+compatibility behavior, not current implementation. Client sync configuration
+must never be copied into or silently treated as the authoritative run, tenant,
+or artifact database and bucket.
 
 ## Project Structure
 
