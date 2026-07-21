@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "
 import { join } from "path";
 import { homedir } from "os";
 import { loadConfig } from "./config.js";
-import { DEFAULT_SELF_HOSTED_API_URL } from "../server/config.js";
+import { DEFAULT_CLOUD_API_URL, DEFAULT_SELF_HOSTED_API_URL } from "../server/config.js";
 
 const AUTH_DIR = join(homedir(), ".hasna", "skills");
 const AUTH_FILE = join(AUTH_DIR, "auth.json");
@@ -14,6 +14,10 @@ export interface AuthConfig {
   orgId: string;
   orgSlug: string;
   userId: string;
+  /** Service origin this credential was issued by. Added in 0.2.0. */
+  serviceUrl?: string;
+  /** Deployment mode active when the credential was saved. */
+  mode?: "local" | "self-hosted" | "cloud";
 }
 
 let cachedConfig: AuthConfig | null | undefined;
@@ -36,9 +40,14 @@ export function getAuthConfig(): AuthConfig | null {
 }
 
 export function saveAuthConfig(config: AuthConfig): void {
+  const boundConfig: AuthConfig = {
+    ...config,
+    serviceUrl: getApiUrl(),
+    ...(loadConfig().mode ? { mode: loadConfig().mode } : {}),
+  };
   mkdirSync(AUTH_DIR, { recursive: true, mode: 0o700 });
-  writeFileSync(AUTH_FILE, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
-  cachedConfig = config;
+  writeFileSync(AUTH_FILE, JSON.stringify(boundConfig, null, 2) + "\n", { mode: 0o600 });
+  cachedConfig = boundConfig;
 }
 
 export function clearAuthConfig(): void {
@@ -50,7 +59,28 @@ export function clearAuthConfig(): void {
 export function getApiKey(): string | null {
   if (process.env.SKILLS_API_KEY) return process.env.SKILLS_API_KEY;
   if (process.env.SKILL_API_KEY) return process.env.SKILL_API_KEY;
-  return getAuthConfig()?.apiKey || null;
+  return getAuthConfigForCurrentService()?.apiKey || null;
+}
+
+/**
+ * Return stored credentials only for the service that issued them.
+ * Legacy unbound credentials remain valid for self-hosted compatibility, but
+ * must be refreshed before cloud use so they can never leak across origins.
+ */
+export function getAuthConfigForCurrentService(): AuthConfig | null {
+  const config = getAuthConfig();
+  if (!config) return null;
+  const currentUrl = getApiUrl();
+  if (config.serviceUrl) {
+    try {
+      return normalizeSkillsApiOrigin(config.serviceUrl) === currentUrl ? config : null;
+    } catch {
+      return null;
+    }
+  }
+  const currentMode = loadConfig().mode;
+  if (currentMode === "cloud" || currentUrl === normalizeSkillsApiOrigin(DEFAULT_CLOUD_API_URL)) return null;
+  return config;
 }
 
 export function normalizeSkillsApiOrigin(apiUrl: string): string {
@@ -67,5 +97,7 @@ export function normalizeSkillsApiOrigin(apiUrl: string): string {
 }
 
 export function getApiUrl(): string {
-  return normalizeSkillsApiOrigin(process.env.SKILLS_API_URL || loadConfig().apiUrl || DEFAULT_SELF_HOSTED_API_URL);
+  const config = loadConfig();
+  const defaultUrl = config.mode === "cloud" ? DEFAULT_CLOUD_API_URL : DEFAULT_SELF_HOSTED_API_URL;
+  return normalizeSkillsApiOrigin(process.env.SKILLS_API_URL || config.apiUrl || defaultUrl);
 }

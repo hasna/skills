@@ -153,7 +153,7 @@ describe("CLI run premium media", () => {
             code: "HOSTED_PROVIDER_UNAVAILABLE",
           },
         });
-        expect(data.details).toContain("No balance was charged.");
+        expect(data.details).toContain("No credits were charged.");
         expect(data.run.status).toBe("failed");
         expect(remoteCalls).toBe(0);
       } finally {

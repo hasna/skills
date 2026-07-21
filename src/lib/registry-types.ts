@@ -36,7 +36,9 @@ export interface SkillPricingMetadata {
   tier?: "free" | "premium" | string;
   billingUnit?: string;
   costCents?: number;
+  credits?: number;
   formattedCost: string;
+  formattedCredits?: string;
   formattedUnitCost?: string;
   unitCount?: number;
   estimated?: boolean;

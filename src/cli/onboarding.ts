@@ -39,8 +39,9 @@ export function shouldShowFirstRunOnboarding(input: FirstRunOnboardingInput): bo
 export function getFirstRunOnboardingMessage(): string {
   return [
     "No Skills setup found.",
-    "  Self-hosted: skills setup --mode self-hosted && skills auth login",
-    "  Local:  skills setup --mode local",
+    "  Cloud:      skills setup --mode cloud && skills auth login",
+    "  Self-hosted: skills setup --mode self-hosted --api-url https://skills.example.com && skills auth login",
+    "  Local:      skills setup --mode local",
   ].join("\n");
 }
 

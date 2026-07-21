@@ -15,66 +15,48 @@ Requires [Bun](https://bun.sh/) 1.0+.
 
 ## Distribution And Service Boundary
 
-`@hasna/skills` is the one public install for local use and remote service use.
-It installs the CLI, SDK, MCP client, and local engine; it does not install the
-Hasna SaaS backend.
+`@hasna/skills` is the universal public package. It installs the CLI, SDK, MCP
+client, and local engine; it can also connect to either the Skills cloud or a
+compatible self-hosted service. It does not install the Skills cloud backend.
 
-| Surface | Meaning | Current verification (2026-07-21) |
+| Mode | Runtime authority | Network/account requirement |
 | --- | --- | --- |
-| `@hasna/skills@0.1.58` on npm | Public universal client | SaaS-capable for supported hosted skills through setup, auth, billing, remote run, status, and export commands. |
-| `@hasna/skills@0.2.0` in this source tree | Unreleased package candidate | `package.json`, the checked-in dependency lock, and source/tests belong to the `0.2.0` candidate. It is not published or tagged. |
-| `skills.md` | Hasna-operated multi-tenant customer SaaS (`cloud`) | Public registry responded successfully. Published package metadata and live API capability state currently disagree for `image`, `video`, and `music`; treat that release drift as a blocker for those skills. |
-| Hasna-internal infrastructure or another operator deployment | Internal or customer-operated service (`selfhost`) | Separate from the customer SaaS, regardless of AWS provider, account, region, or hostname. |
+| `local` | This machine | No Skills account; local skills remain offline-capable unless their own docs explicitly declare an external provider. |
+| `self-hosted` | An operator-owned Skills service | Explicit API URL and credentials issued by that operator. Hasna's internal AWS deployment is self-hosted, not cloud. |
+| `cloud` | The Hasna-operated multi-tenant SaaS at `skills.md` | Skills cloud account. Live cloud capability and credit quotes are authoritative. |
 
-The checked-in source, published npm artifact, and live service can advance at
-different times. Verify all three before claiming a remote capability works end
-to end. `local-first` means the package remains useful without an account; it
-does not mean the installed package is SaaS-disabled. The package/lock/source
-candidate is explicitly `0.2.0` and unreleased; npm remains at `0.1.58`. No
-publish or tag is part of this candidate change.
+The source candidate is `0.2.0`. A package is marketable as the new SaaS client
+only after this version is published and the release smoke test passes against
+the live cloud. Source readiness is not the same as npm availability.
 
 ## Quick Start
 
-npm `@hasna/skills@0.1.58` predates the agent-first bare-command behavior. In
-that published version, bare `skills` still selects the implicit `interactive`
-command: a TTY opens the TUI and a non-TTY invocation prints compact JSON. The
-checked-in source now prints command help instead; npm users need a release
-later than 0.1.58 for that behavior. The checked-in `0.2.0` candidate has that
-behavior but remains unreleased.
-
 ```bash
-# In checked-in source, discover commands without opening the TUI
+# Agent-first command discovery; never opens the TUI
 skills
 
-# Browse skills interactively when you explicitly want the TUI
+# The TUI is explicit
 skills interactive
 
-# The published 0.1.58 client can connect to the Hasna customer SaaS
-skills setup --mode hosted --api-url https://skills.md
+# Skills cloud (https://skills.md is the default)
+skills setup --mode cloud
 skills auth login
 
-# Current source also supports an explicit operator-owned service
+# Operator-owned service
 skills setup --mode self-hosted --api-url https://skills.example.com
 skills auth login --api-key "$SKILLS_API_KEY"
 
-# Local-only setup stays available and does not require an account
+# Local-only setup
 skills setup --mode local
 
-# Optionally pin a skill preference in this project
-skills pin image
+# Connect the MCP server to every supported agent
+skills mcp connect
 
-# Register the Skills MCP server with every supported agent
-skills setup agents
-
-# See what a skill needs
+# Discover, inspect, quote credits, and run
+skills list
 skills info image
-
-# Premium skills run through the explicitly configured remote API
+skills quote image
 skills run image "a cat sitting on a windowsill"
-
-# Free/local skills can still use your own provider keys when documented
-skills requires brand-style-guide
-OPENAI_API_KEY=... skills run brand-style-guide ./brand-notes.md
 ```
 
 ## Remote Runtime Skills
@@ -84,22 +66,23 @@ configured API, create local run metadata, and then expose status and artifact
 commands. They do not fall back to bundled local execution when auth is missing
 or the remote runtime is unavailable.
 
-For the published SaaS client path:
+For Skills cloud:
 
 ```bash
-skills setup --mode hosted --api-url https://skills.md
+skills setup --mode cloud
 skills auth login
 skills run image "editorial product photo on a white sweep"
 skills runs status <run-id>
 skills exports download <run-id>
 ```
 
-An operator-owned service uses an explicit self-hosted origin and its own
-enrollment and authentication policy. Current source retains
-`skills setup --mode self-hosted` and `skills auth login --api-key` as legacy
-compatibility surfaces while the target named-profile contract is implemented.
+An operator-owned service uses explicit self-hosted mode, its own origin, and
+its own enrollment and authentication policy. Switching the configured origin
+never reuses a stored credential issued by another service; sign in after a
+switch. Explicit `SKILLS_API_KEY` environment input remains available for
+automation.
 
-`SKILLS_API_KEY` is a legacy remote API credential. It is not a provider
+`SKILLS_API_KEY` is a remote API credential. It is not a provider
 credential and it does not prove that an origin is `selfhost` or `cloud`.
 Provider keys such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY`
 remain supported only for free/local OSS skills whose requirements explicitly
@@ -115,10 +98,10 @@ document local provider use.
 | `skills pin --category "Development Tools"` | | Pin all skills in a category |
 | `skills unpin <name>` | | Remove a project pin |
 | `skills pins list` | | List pinned skills |
-| `skills setup --mode hosted` | | Published 0.1.58 compatibility path for a configured hosted API; target profiles replace this ambiguous alias |
+| `skills setup --mode cloud` | | Configure the managed Skills cloud; defaults to `https://skills.md` |
 | `skills setup --mode self-hosted` | | Configure self-hosted mode with a compatible API origin |
 | `skills setup --mode local` | | Configure local-only mode without remote credentials |
-| `skills setup agents` | | Register the Skills MCP server with all supported agents |
+| `skills mcp connect [agent]` | | Register the Skills MCP server with one agent or all supported agents by default |
 | `skills list` | `ls` | List available skills (filter with `-c`, `--pinned`, `-t`, `--brief`) |
 | `skills search <query>` | `s` | Search by name, description, or tags |
 | `skills info <name>` | | Show metadata, env vars, and system dependencies |
@@ -138,7 +121,7 @@ document local provider use.
 | `skills outdated` | | Compare pinned vs registry versions |
 | `skills auth login --api-key <key>` | | Verify and store a legacy remote API key |
 | `skills auth login` | | Sign in to a compatible API with browser/device-code auth or email code |
-| `skills billing status` | | Show the selected remote account plan and balance |
+| `skills billing status` | | Show the selected remote account plan and credit balance |
 | `skills billing checkout` | | Create a checkout session when billing is enabled |
 | `skills billing portal` | | Create a customer portal session when billing is enabled |
 | `skills credits buy <amount>` | | Create a credit-pack checkout session when billing is enabled |
@@ -212,7 +195,7 @@ Stable command shapes:
 - Runtime: `run --json <skill> ...` returns
   `{ "skill", "args", "exitCode", "stdout", "stderr", "error", "run" }`.
   Premium remote runs include `{ "contractVersion": 1, "remote": true,
-  "remoteRun", "pricing", "run", "nextActions" }` and return immediately with
+  "remoteRun", "creditQuote", "run", "nextActions" }` and return immediately with
   status commands such as `skills runs status <run-id>` and
   `skills exports download <run-id>`.
 - Config and schedules: `config * --json` and `schedule * --json` return
@@ -220,18 +203,19 @@ Stable command shapes:
 - Storage: `storage status --json` returns local `.skills` paths and optional
   repo-native remote readiness; `storage sync-plan --json` returns a no-network
   snapshot plan.
-- MCP registration: `mcp --register <agent> --json` returns
+- MCP registration: `mcp connect [agent] --json` and the compatibility command
+  `mcp --register <agent> --json` return
   `{ "registered": number, "results": [...] }`.
 
 ## Remote Registry Compatibility
 
-Local bundled skills remain the default for discovery. To point browse/search
-commands at a compatible cloud or selfhost registry, set an API base URL:
+Local bundled skills remain the default for discovery. Cloud mode uses
+`https://skills.md` by default. A self-hosted service uses its explicit API URL:
 
 ```bash
-export SKILLS_API_URL=https://skills.md
-# or persist it:
-skills config set apiUrl https://skills.md
+skills setup --mode cloud
+# or
+skills setup --mode self-hosted --api-url https://skills.example.com
 
 skills list --remote --json
 skills search transcribe --remote --json
@@ -244,7 +228,8 @@ If the URL is an origin such as `https://skills.md`, the CLI requests
 `/skills`.
 
 Authenticated registry listing and remote premium execution use the credential
-saved by `skills auth login` or the legacy `SKILLS_API_KEY` input.
+saved by `skills auth login` for the selected service or an explicit
+`SKILLS_API_KEY` automation input.
 
 For the target cross-product mode and profile contract, see
 [Open Product Three-Mode Contract](docs/architecture/open-product-three-mode-contract.md).
@@ -252,35 +237,11 @@ For current Open Skills engine behavior and ownership boundaries, see
 [Reusable Skills Engine](docs/architecture/reusable-skills-engine.md) and
 [Open-Core Service Pattern](docs/architecture/open-core-saas-pattern.md).
 
-The three-mode profile, adapter, credential-scoping, storage, and trust contract
-is architectural guidance and is not implemented by the current CLI. Bare
-command discovery is agent-first in checked-in source; current source
-`local`/`self-hosted` setup and environment variables remain compatibility
-surfaces. Published 0.1.58 still uses the old implicit `interactive` bare-command
-behavior and the hosted SaaS flow documented above, so source/package/API drift
-must not be flattened into “SaaS absent.”
-
-## CURRENT IMPLEMENTATION BLOCKERS
-
-- Current shared client/server reads are limited to
-  `HASNA_SKILLS_DATABASE_URL`, `HASNA_SKILLS_S3_BUCKET`, and
-  `HASNA_SKILLS_S3_PREFIX`; the bucket and prefix also share the
-  `SKILLS_S3_BUCKET` and `SKILLS_S3_PREFIX` fallbacks. Database pool
-  configuration is server-only; current server source does not read client S3
-  endpoint, path-style, or package credential settings. Its artifact client
-  independently reads unscoped `AWS_REGION`. The proposed
-  `HASNA_SKILLS_SERVER_DATABASE_URL`,
-  `HASNA_SKILLS_SERVER_DATABASE_POOL_MAX`, `HASNA_SKILLS_SERVER_S3_*`, and
-  `HASNA_SKILLS_SERVER_AWS_REGION` namespace and dual-read migration are target
-  compatibility design, not current reads. Until that lands, operators must not
-  silently use the actually shared database URL and bucket/prefix as independent
-  authorities.
-- The existing `.github/workflows/deploy.yml` contains Hasna-specific AWS
-  production configuration and an automatic `main` deploy. That internal AWS
-  deployment is `selfhost`, not `cloud`. Target compliance
-  requires moving it to an internal infrastructure/operator repository or
-  replacing it with a provider-neutral, operator-configured, opt-in selfhost
-  workflow. The workflow is intentionally unchanged by this candidate.
+The CLI now implements the three explicit deployment modes. The architecture
+document also defines the reusable target for future products: adapter
+selection, named profiles, independently scoped storage, service identity, and
+portable data. Named multi-service profiles remain a follow-up; the current CLI
+stores one selected service and binds its stored credential to that origin.
 
 ## Portable Skills
 
@@ -342,14 +303,16 @@ full records only when needed.
 ### Register with an Agent
 
 ```bash
-skills mcp --register claude    # Auto-register with Claude Code
-skills mcp --register all       # Register with all supported agents
+skills mcp connect claude    # Register with Claude Code
+skills mcp connect           # Register with all supported agents
 ```
+
+`skills mcp --register <agent>` remains a compatibility alias.
 
 ## Remote Services
 
 ```bash
-skills setup --mode hosted --api-url https://skills.md
+skills setup --mode cloud
 skills auth login
 
 skills setup --mode self-hosted --api-url https://skills.example.com
@@ -358,20 +321,11 @@ skills billing status
 ```
 
 Account, run, log, artifact, and optional billing commands use the configured
-remote API. The current CLI writes one legacy global credential record
-(`apiKey`) to `~/.hasna/skills/auth.json`; credential lookup does not bind that
-credential to the configured remote origin. Although API-key login calls the
-configured API to check the key, the current implementation does not perform
-the target operator identity and capability enrollment handshake. It therefore
-does not establish a verified operator identity, credential audience, or tenant
-binding.
-
-Origin-, service-, and tenant-scoped credentials, externally anchored operator
-verification, and service identity binding belong to the target architecture.
-They are not current-state properties of `skills setup` or `skills auth login`.
-The public package does not contain the SaaS backend; server runtime state and
-artifact storage remain under the authority of whichever remote service is
-configured.
+remote API. Stored credentials include their issuing service origin and are not
+sent after switching to a different origin; sign in to the newly selected
+service. A future named-profile layer can retain several enrolled services at
+once. The public package does not contain the SaaS backend; server runtime state
+and artifact storage remain under the authority of the selected service.
 
 ## Storage Boundary
 
@@ -460,8 +414,8 @@ libraries.
 └── tmp/
 ```
 
-Auth currently stays in one legacy global record at
-`~/.hasna/skills/auth.json`, independent of the configured remote origin.
+Auth stays in one global record at `~/.hasna/skills/auth.json` and is bound to
+the configured remote origin.
 Registry and doc caches belong in `~/.cache/skills` or the selected remote API,
 not inside project `.skills`.
 
@@ -483,7 +437,7 @@ bun run typecheck          # TypeScript type checking
    manifests, bin entries, docs, and SKILL.md frontmatter
 4. Run `bun test` to verify registry-wide validation passes
 
-Premium remote-only skills should add public contracts, pricing, docs, and tests
+Premium remote-only skills should add public contracts, credit quotes, docs, and tests
 without adding provider secrets to the OSS package.
 
 Portable skill directories are auto-discovered from `~/.hasna/skills/<name>/`.

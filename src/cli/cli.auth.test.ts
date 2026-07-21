@@ -16,8 +16,7 @@ describe("CLI self-hosted auth and billing", () => {
           seenAuthHeaders.push(req.headers.get("authorization"));
           return Response.json({
             plan: "pro",
-            balanceCents: 0,
-            balance: "$0.00",
+            creditBalance: 0,
             subscription: null,
             hasPaymentMethod: true,
           });
@@ -41,7 +40,7 @@ describe("CLI self-hosted auth and billing", () => {
 
       const status = await runCliInCwd(["billing", "status", "--json"], tmpDir, env);
       expect(status.exitCode).toBe(0);
-      expect(JSON.parse(status.stdout)).toMatchObject({ plan: "pro", balance: "$0.00" });
+      expect(JSON.parse(status.stdout)).toMatchObject({ plan: "pro", creditBalance: 0 });
 
       const portal = await runCliInCwd(["billing", "portal", "--json"], tmpDir, env);
       expect(portal.exitCode).toBe(0);
@@ -202,6 +201,61 @@ describe("CLI self-hosted auth and billing", () => {
     }
   });
 
+  test("stored credentials are not sent after switching service origins", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "cli-auth-origin-binding-"));
+    let cloudCalls = 0;
+    const selfHosted = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/auth/whoami") {
+          expect(req.headers.get("authorization")).toBe("Bearer sk_test_origin_bound");
+          return Response.json({
+            user: { id: "user_bound", email: "bound@example.com", role: "owner" },
+            organization: { id: "org_bound", slug: "bound-org", name: "Bound Org" },
+          });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const cloud = Bun.serve({
+      port: 0,
+      fetch() {
+        cloudCalls += 1;
+        return Response.json({ error: "stored self-hosted credential must not reach cloud" }, { status: 500 });
+      },
+    });
+
+    try {
+      const login = await runCliInCwd(["auth", "login", "--api-key", "sk_test_origin_bound", "--json"], tmpDir, {
+        HOME: tmpDir,
+        SKILLS_API_URL: `http://127.0.0.1:${selfHosted.port}`,
+      });
+      expect(login.exitCode).toBe(0);
+      const stored = JSON.parse(readFileSync(join(tmpDir, ".hasna", "skills", "auth.json"), "utf8"));
+      expect(stored.serviceUrl).toBe(`http://127.0.0.1:${selfHosted.port}`);
+
+      const setup = await runCliInCwd([
+        "setup",
+        "--mode",
+        "cloud",
+        "--api-url",
+        `http://127.0.0.1:${cloud.port}`,
+        "--json",
+      ], tmpDir, { HOME: tmpDir });
+      expect(setup.exitCode).toBe(0);
+
+      const status = await runCliInCwd(["billing", "status", "--json"], tmpDir, { HOME: tmpDir });
+      expect(status.exitCode).toBe(1);
+      expect(JSON.parse(status.stdout)).toMatchObject({ error: "Not signed in. Run: skills auth login" });
+      expect(cloudCalls).toBe(0);
+    } finally {
+      selfHosted.stop(true);
+      cloud.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test("device login stores credentials and billing commands call the self-hosted API", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-device-auth-"));
     const seenAuthHeaders: Array<string | null> = [];
@@ -234,8 +288,7 @@ describe("CLI self-hosted auth and billing", () => {
           seenAuthHeaders.push(req.headers.get("authorization"));
           return Response.json({
             plan: "free",
-            balanceCents: 500,
-            balance: "$5.00",
+            creditBalance: 500,
             subscription: null,
             hasPaymentMethod: false,
           });
@@ -243,7 +296,7 @@ describe("CLI self-hosted auth and billing", () => {
 
         if (url.pathname === "/api/v1/billing/credits" && req.method === "POST") {
           seenAuthHeaders.push(req.headers.get("authorization"));
-          return Response.json({ url: "https://billing.example/credits", pack: "$5" });
+          return Response.json({ url: "https://billing.example/credits", credits: 500 });
         }
 
         return Response.json({ error: `missing route ${req.method} ${url.pathname}` }, { status: 404 });
@@ -283,11 +336,11 @@ describe("CLI self-hosted auth and billing", () => {
 
       const status = await runCliInCwd(["billing", "status", "--json"], tmpDir, env);
       expect(status.exitCode).toBe(0);
-      expect(JSON.parse(status.stdout)).toMatchObject({ plan: "free", balance: "$5.00" });
+      expect(JSON.parse(status.stdout)).toMatchObject({ plan: "free", creditBalance: 500 });
 
       const credits = await runCliInCwd(["credits", "buy", "5", "--json"], tmpDir, env);
       expect(credits.exitCode).toBe(0);
-      expect(JSON.parse(credits.stdout)).toMatchObject({ url: "https://billing.example/credits", pack: "$5" });
+      expect(JSON.parse(credits.stdout)).toMatchObject({ url: "https://billing.example/credits", credits: 500 });
       expect(seenAuthHeaders).toEqual(["Bearer sk_device_login", "Bearer sk_device_login"]);
     } finally {
       server.stop(true);

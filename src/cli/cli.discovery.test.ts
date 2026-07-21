@@ -273,7 +273,7 @@ describe("CLI discovery", () => {
       const { stdout } = await runCli(["list"]);
       expect(stdout).toContain(`Available default skills (${EXPECTED_BASIC_SKILL_COUNT})`);
       expect(stdout).toContain("image");
-      expect(stdout).toContain("$0.04 estimated");
+      expect(stdout).toContain("4 credits estimated");
       expect(stdout).not.toContain("workout-cycle-planner");
       expect(stdout.toLowerCase()).not.toContain("openai");
       expect(stdout.toLowerCase()).not.toContain("gemini");
@@ -326,11 +326,11 @@ describe("CLI discovery", () => {
       expect(Array.isArray(data)).toBe(true);
       expect(data.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
       const image = data.find((skill: any) => skill.name === "image");
-      expect(image.pricing).toMatchObject({
+      expect(image.creditQuote).toMatchObject({
         tier: "premium",
         quoteDependsOnInput: true,
       });
-      expect(JSON.stringify(image.pricing)).not.toContain("openai");
+      expect(JSON.stringify(image.creditQuote)).not.toContain("openai");
     });
 
     test("lists remote registry with --remote --json", async () => {
@@ -373,10 +373,10 @@ describe("CLI discovery", () => {
           source: "remote",
           availability: {
             status: "unavailable",
-            code: "HOSTED_PROVIDER_UNAVAILABLE",
+            code: "REMOTE_AVAILABILITY_MISSING",
           },
         });
-        expect(image.availability.details).toContain("No balance was charged.");
+        expect(image.availability.details).toContain("No credits were charged.");
         expect(logo).toMatchObject({
           source: "remote",
           availability: { status: "available" },
@@ -443,9 +443,9 @@ describe("CLI discovery", () => {
       const { stdout } = await runCli(["search", "pdf"]);
       expect(stdout).toContain("Found");
       expect(stdout).toContain("skill(s)");
-      expect(stdout).toContain("($0.05/run)");
+      expect(stdout).toContain("(5 credits/run)");
       expect(stdout).toContain("Details: skills show <name>");
-      expect(stdout).toContain("$0.05/run");
+      expect(stdout).toContain("5 credits/run");
     });
 
     test("shows message for no results", async () => {
@@ -459,7 +459,7 @@ describe("CLI discovery", () => {
       expect(Array.isArray(data)).toBe(true);
       expect(data.length).toBeGreaterThan(0);
       expect(data[0]).toHaveProperty("name");
-      expect(data[0]).toHaveProperty("pricing");
+      expect(data[0]).toHaveProperty("creditQuote");
     });
 
     test("searches remote registry with --remote --json", async () => {
@@ -501,7 +501,7 @@ describe("CLI discovery", () => {
       const { stdout } = await runCli(["info", "deepresearch"]);
       expect(stdout).toContain("Deep Research (Agentic)");
       expect(stdout).toContain("Research & Writing");
-      expect(stdout).toContain("Pricing: $0.20/run");
+      expect(stdout).toContain("Credits: 20 credits/run");
       expect(stdout.toLowerCase()).not.toContain("exa");
       expect(stdout.toLowerCase()).not.toContain("openai");
       expect(stdout.toLowerCase()).not.toContain("claude");
@@ -520,9 +520,9 @@ describe("CLI discovery", () => {
       expect(data.displayName).toBe("Deep Research (Agentic)");
       expect(data.category).toBe("Research & Writing");
       expect(Array.isArray(data.tags)).toBe(true);
-      expect(data.pricing).toMatchObject({
+      expect(data.creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$0.20/run",
+        formattedCredits: "20 credits/run",
       });
       expect(JSON.stringify(data).toLowerCase()).not.toContain("exa");
       expect(JSON.stringify(data).toLowerCase()).not.toContain("openai");
@@ -543,15 +543,15 @@ describe("CLI discovery", () => {
             category: "Remote Tools",
             tags: ["remote", "demo"],
             version: "0.2.0",
-            pricing: {
-              tier: "premium",
-              billingUnit: "run",
-              costCents: 75,
-              formattedCost: "$0.75/run",
+          creditQuote: {
+            tier: "premium",
+            billingUnit: "run",
+            credits: 75,
+            formattedCredits: "75 credits/run",
               estimated: false,
               quoteDependsOnInput: false,
               quoteRequired: false,
-              description: "Fixed remote price.",
+            description: "Fixed remote credit amount.",
             },
           });
         },
@@ -571,8 +571,8 @@ describe("CLI discovery", () => {
           category: "Remote Tools",
           source: "remote",
           version: "0.2.0",
-          pricing: {
-            formattedCost: "$0.75/run",
+          creditQuote: {
+            formattedCredits: "75 credits/run",
             estimated: false,
           },
         });
@@ -595,11 +595,11 @@ describe("CLI discovery", () => {
           code: "HOSTED_PROVIDER_UNAVAILABLE",
         },
       });
-      expect(data.pricing).toMatchObject({
+      expect(data.creditQuote).toMatchObject({
         tier: "premium",
         billingUnit: "image",
       });
-      expect(data.details).toContain("No balance was charged.");
+      expect(data.details).toContain("No credits were charged.");
     });
 
     test("quotes fixed and variable premium skills without provider internals", async () => {
@@ -607,226 +607,226 @@ describe("CLI discovery", () => {
       expect(fixed.exitCode).toBe(0);
       expect(JSON.parse(fixed.stdout)).toMatchObject({
         availability: { status: "available" },
-        pricing: {
+        creditQuote: {
           tier: "premium",
-          formattedCost: "$0.50/run",
+          formattedCredits: "50 credits/run",
           quoteDependsOnInput: false,
         },
       });
 
       const dataset = await runCli(["quote", "pdf-to-dataset", "--json"]);
       expect(dataset.exitCode).toBe(0);
-      expect(JSON.parse(dataset.stdout).pricing).toMatchObject({
+      expect(JSON.parse(dataset.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$0.15/run",
+        formattedCredits: "15 credits/run",
         quoteDependsOnInput: false,
       });
 
       const markdown = await runCli(["quote", "pdf-to-markdown", "--json"]);
       expect(markdown.exitCode).toBe(0);
-      expect(JSON.parse(markdown.stdout).pricing).toMatchObject({
+      expect(JSON.parse(markdown.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$0.05/run",
+        formattedCredits: "5 credits/run",
         quoteDependsOnInput: false,
       });
 
       const report = await runCli(["quote", "market-research-report", "--json"]);
       expect(report.exitCode).toBe(0);
-      expect(JSON.parse(report.stdout).pricing).toMatchObject({
+      expect(JSON.parse(report.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$1.50/run",
+        formattedCredits: "150 credits/run",
         quoteDependsOnInput: false,
       });
 
       const customerFeedbackReport = await runCli(["quote", "customer-feedback-report", "--json"]);
       expect(customerFeedbackReport.exitCode).toBe(0);
-      expect(JSON.parse(customerFeedbackReport.stdout).pricing).toMatchObject({
+      expect(JSON.parse(customerFeedbackReport.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$2.00/run",
+        formattedCredits: "200 credits/run",
         quoteDependsOnInput: false,
       });
 
       const proposal = await runCli(["quote", "proposal-pack", "--json"]);
       expect(proposal.exitCode).toBe(0);
-      expect(JSON.parse(proposal.stdout).pricing).toMatchObject({
+      expect(JSON.parse(proposal.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$2.00/run",
+        formattedCredits: "200 credits/run",
         quoteDependsOnInput: false,
       });
 
       const pitchDeck = await runCli(["quote", "pitch-deck", "--json"]);
       expect(pitchDeck.exitCode).toBe(0);
-      expect(JSON.parse(pitchDeck.stdout).pricing).toMatchObject({
+      expect(JSON.parse(pitchDeck.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$3.00/run",
+        formattedCredits: "300 credits/run",
         quoteDependsOnInput: false,
       });
 
       const securityReport = await runCli(["quote", "security-audit-report", "--json"]);
       expect(securityReport.exitCode).toBe(0);
-      expect(JSON.parse(securityReport.stdout).pricing).toMatchObject({
+      expect(JSON.parse(securityReport.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$3.00/run",
+        formattedCredits: "300 credits/run",
         quoteDependsOnInput: false,
       });
 
       const brandKit = await runCli(["quote", "brand-kit", "--json"]);
       expect(brandKit.exitCode).toBe(0);
-      expect(JSON.parse(brandKit.stdout).pricing).toMatchObject({
+      expect(JSON.parse(brandKit.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$4.00/run",
+        formattedCredits: "400 credits/run",
         quoteDependsOnInput: false,
       });
 
       const productMockup = await runCli(["quote", "product-mockup", "--json"]);
       expect(productMockup.exitCode).toBe(0);
-      expect(JSON.parse(productMockup.stdout).pricing).toMatchObject({
+      expect(JSON.parse(productMockup.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$2.00/run",
+        formattedCredits: "200 credits/run",
         quoteDependsOnInput: false,
       });
 
       const seoContentPack = await runCli(["quote", "seo-content-pack", "--json"]);
       expect(seoContentPack.exitCode).toBe(0);
-      expect(JSON.parse(seoContentPack.stdout).pricing).toMatchObject({
+      expect(JSON.parse(seoContentPack.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$4.00/run",
+        formattedCredits: "400 credits/run",
         quoteDependsOnInput: false,
       });
 
       const landingPagePack = await runCli(["quote", "landing-page-pack", "--json"]);
       expect(landingPagePack.exitCode).toBe(0);
-      expect(JSON.parse(landingPagePack.stdout).pricing).toMatchObject({
+      expect(JSON.parse(landingPagePack.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$2.50/run",
+        formattedCredits: "250 credits/run",
         quoteDependsOnInput: false,
       });
 
       const onePageWebsite = await runCli(["quote", "one-page-website", "--json"]);
       expect(onePageWebsite.exitCode).toBe(0);
-      expect(JSON.parse(onePageWebsite.stdout).pricing).toMatchObject({
+      expect(JSON.parse(onePageWebsite.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$5.00/run",
+        formattedCredits: "500 credits/run",
         quoteDependsOnInput: false,
       });
 
       const adCreativePack = await runCli(["quote", "ad-creative-pack", "--json"]);
       expect(adCreativePack.exitCode).toBe(0);
-      expect(JSON.parse(adCreativePack.stdout).pricing).toMatchObject({
+      expect(JSON.parse(adCreativePack.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$3.00/run",
+        formattedCredits: "300 credits/run",
         quoteDependsOnInput: false,
       });
 
       const emailSequence = await runCli(["quote", "email-sequence", "--json"]);
       expect(emailSequence.exitCode).toBe(0);
-      expect(JSON.parse(emailSequence.stdout).pricing).toMatchObject({
+      expect(JSON.parse(emailSequence.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$2.50/run",
+        formattedCredits: "250 credits/run",
         quoteDependsOnInput: false,
       });
 
       const socialCalendar = await runCli(["quote", "social-content-calendar", "--json"]);
       expect(socialCalendar.exitCode).toBe(0);
-      expect(JSON.parse(socialCalendar.stdout).pricing).toMatchObject({
+      expect(JSON.parse(socialCalendar.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$3.00/run",
+        formattedCredits: "300 credits/run",
         quoteDependsOnInput: false,
       });
 
       const testSuite = await runCli(["quote", "test-suite-generator", "--json"]);
       expect(testSuite.exitCode).toBe(0);
-      expect(JSON.parse(testSuite.stdout).pricing).toMatchObject({
+      expect(JSON.parse(testSuite.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$2.50/run",
+        formattedCredits: "250 credits/run",
         quoteDependsOnInput: false,
       });
 
       const apiDocsPortal = await runCli(["quote", "api-docs-portal", "--json"]);
       expect(apiDocsPortal.exitCode).toBe(0);
-      expect(JSON.parse(apiDocsPortal.stdout).pricing).toMatchObject({
+      expect(JSON.parse(apiDocsPortal.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$2.50/run",
+        formattedCredits: "250 credits/run",
         quoteDependsOnInput: false,
       });
 
       const sdkGenerator = await runCli(["quote", "sdk-generator", "--json"]);
       expect(sdkGenerator.exitCode).toBe(0);
-      expect(JSON.parse(sdkGenerator.stdout).pricing).toMatchObject({
+      expect(JSON.parse(sdkGenerator.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$6.00/run",
+        formattedCredits: "600 credits/run",
         quoteDependsOnInput: false,
       });
 
       const repoOnboardingReport = await runCli(["quote", "repo-onboarding-report", "--json"]);
       expect(repoOnboardingReport.exitCode).toBe(0);
-      expect(JSON.parse(repoOnboardingReport.stdout).pricing).toMatchObject({
+      expect(JSON.parse(repoOnboardingReport.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$2.00/run",
+        formattedCredits: "200 credits/run",
         quoteDependsOnInput: false,
       });
 
       const audioTranscriptPack = await runCli(["quote", "audio-transcript-pack", "--json"]);
       expect(audioTranscriptPack.exitCode).toBe(0);
-      expect(JSON.parse(audioTranscriptPack.stdout).pricing).toMatchObject({
+      expect(JSON.parse(audioTranscriptPack.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$1.50/run",
+        formattedCredits: "150 credits/run",
         quoteDependsOnInput: false,
       });
 
       const videoHighlightPack = await runCli(["quote", "video-highlight-pack", "--json"]);
       expect(videoHighlightPack.exitCode).toBe(0);
-      expect(JSON.parse(videoHighlightPack.stdout).pricing).toMatchObject({
+      expect(JSON.parse(videoHighlightPack.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$3.00/run",
+        formattedCredits: "300 credits/run",
         quoteDependsOnInput: false,
       });
 
       const slideDeckGenerator = await runCli(["quote", "slide-deck-generator", "--json"]);
       expect(slideDeckGenerator.exitCode).toBe(0);
-      expect(JSON.parse(slideDeckGenerator.stdout).pricing).toMatchObject({
+      expect(JSON.parse(slideDeckGenerator.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$3.00/run",
+        formattedCredits: "300 credits/run",
         quoteDependsOnInput: false,
       });
 
       const meetingPack = await runCli(["quote", "meeting-pack", "--json"]);
       expect(meetingPack.exitCode).toBe(0);
-      expect(JSON.parse(meetingPack.stdout).pricing).toMatchObject({
+      expect(JSON.parse(meetingPack.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$1.50/run",
+        formattedCredits: "150 credits/run",
         quoteDependsOnInput: false,
       });
 
       const invoiceReconciliation = await runCli(["quote", "invoice-reconciliation", "--json"]);
       expect(invoiceReconciliation.exitCode).toBe(0);
-      expect(JSON.parse(invoiceReconciliation.stdout).pricing).toMatchObject({
+      expect(JSON.parse(invoiceReconciliation.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$2.00/run",
+        formattedCredits: "200 credits/run",
         quoteDependsOnInput: false,
       });
 
       const contractReviewReport = await runCli(["quote", "contract-review-report", "--json"]);
       expect(contractReviewReport.exitCode).toBe(0);
-      expect(JSON.parse(contractReviewReport.stdout).pricing).toMatchObject({
+      expect(JSON.parse(contractReviewReport.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$3.00/run",
+        formattedCredits: "300 credits/run",
         quoteDependsOnInput: false,
       });
 
       const performanceAuditReport = await runCli(["quote", "performance-audit-report", "--json"]);
       expect(performanceAuditReport.exitCode).toBe(0);
-      expect(JSON.parse(performanceAuditReport.stdout).pricing).toMatchObject({
+      expect(JSON.parse(performanceAuditReport.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$3.00/run",
+        formattedCredits: "300 credits/run",
         quoteDependsOnInput: false,
       });
 
       const migrationPlanPack = await runCli(["quote", "migration-plan-pack", "--json"]);
       expect(migrationPlanPack.exitCode).toBe(0);
-      expect(JSON.parse(migrationPlanPack.stdout).pricing).toMatchObject({
+      expect(JSON.parse(migrationPlanPack.stdout).creditQuote).toMatchObject({
         tier: "premium",
-        formattedCost: "$3.00/run",
+        formattedCredits: "300 credits/run",
         quoteDependsOnInput: false,
       });
 
@@ -834,11 +834,11 @@ describe("CLI discovery", () => {
       expect(batch.exitCode).toBe(0);
       const data = JSON.parse(batch.stdout);
       expect(data.skill).toBe("blog-article");
-      expect(data.pricing).toMatchObject({
+      expect(data.creditQuote).toMatchObject({
         billingUnit: "article",
         unitCount: 8,
-        costCents: 200,
-        formattedCost: "$2.00 total",
+        credits: 200,
+        formattedCredits: "200 credits total",
       });
       expect(markdown.stdout.toLowerCase()).not.toContain("cerebras");
       expect(markdown.stdout.toLowerCase()).not.toContain("gpt-oss");

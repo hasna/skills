@@ -310,7 +310,7 @@ export function getPublicSkillPricing(slug: string, input?: unknown, args: strin
       estimated: false,
       quoteDependsOnInput: true,
       quoteRequired: true,
-      description: "Priced per generated article. Batch total depends on article count.",
+      description: "Credits per generated article. Batch total depends on article count.",
     };
   }
 
@@ -328,7 +328,7 @@ export function getPublicSkillPricing(slug: string, input?: unknown, args: strin
       estimated: true,
       quoteDependsOnInput: true,
       quoteRequired: true,
-      description: "Estimated album package price. Final price depends on song count and generated media options.",
+      description: "Estimated album credit quote. Final credits depend on song count and generated media options.",
     };
   }
 
@@ -342,7 +342,7 @@ export function getPublicSkillPricing(slug: string, input?: unknown, args: strin
       estimated: false,
       quoteDependsOnInput: false,
       quoteRequired: false,
-      description: "Fixed price per run.",
+      description: "Fixed credits per run.",
     };
   }
 
@@ -363,7 +363,7 @@ export function getPublicSkillPricing(slug: string, input?: unknown, args: strin
       estimated: true,
       quoteDependsOnInput: true,
       quoteRequired: true,
-      description: "Estimated price. Final price depends on request options.",
+      description: "Estimated credits. Final credits depend on request options.",
     };
   }
 
@@ -371,7 +371,7 @@ export function getPublicSkillPricing(slug: string, input?: unknown, args: strin
     tier: "free",
     billingUnit: "run",
     costCents: 0,
-    formattedCost: "Free",
+    formattedCost: "0 credits",
     estimated: false,
     quoteDependsOnInput: false,
     quoteRequired: false,
@@ -555,7 +555,7 @@ function resolvePricingSlug(slug: string): string {
 }
 
 export function formatCost(cents: number): string {
-  return `$${(cents / 100).toFixed(2)}`;
+  return `${Number.isInteger(cents) ? cents : Number(cents.toFixed(4))} credits`;
 }
 
 export function getAllPremiumSlugs(): string[] {

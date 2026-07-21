@@ -14,7 +14,7 @@ import { join, dirname } from "path";
 import { homedir } from "os";
 
 export interface SkillsConfig {
-  mode?: "local" | "self-hosted";
+  mode?: "local" | "self-hosted" | "cloud";
   defaultAgent?: "claude" | "codex" | "gemini" | "pi" | "opencode" | "all";
   defaultScope?: "global" | "project";
   format?: "compact" | "json" | "csv";
@@ -28,16 +28,18 @@ const ENUM_KEYS: Partial<Record<keyof SkillsConfig, string[]>> = {
 };
 
 const STRING_KEYS = ["apiUrl"] as const satisfies readonly (keyof SkillsConfig)[];
-const MODE_VALUES = ["local", "self-hosted"] as const;
+const MODE_VALUES = ["local", "self-hosted", "cloud"] as const;
 const MODE_ALIASES: Record<string, (typeof MODE_VALUES)[number]> = {
   local: "local",
   offline: "local",
   "self-hosted": "self-hosted",
   selfhosted: "self-hosted",
   self_hosted: "self-hosted",
-  hosted: "self-hosted",
-  "skills.md": "self-hosted",
-  skillsmd: "self-hosted",
+  cloud: "cloud",
+  hosted: "cloud",
+  remote: "cloud",
+  "skills.md": "cloud",
+  skillsmd: "cloud",
 };
 
 function validKeys(): string[] {

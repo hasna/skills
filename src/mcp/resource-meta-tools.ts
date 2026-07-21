@@ -36,7 +36,7 @@ export function registerResourceMetaTools(server: McpServer): void {
   }));
 
   server.registerResource("Skills Registry", "skills://registry", {
-    description: "Compact default basic skill list [{name,category,description,pricing}]. Use list_skills with profile:'all' for the full registry, and skills://{name} for detail.",
+    description: "Compact default basic skill list [{name,category,description,creditQuote}]. Use list_skills with profile:'all' for the full registry, and skills://{name} for detail.",
   }, async () => ({
     contents: [{
       uri: "skills://registry",

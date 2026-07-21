@@ -58,7 +58,7 @@ describe("MCP contract manifest", () => {
       approved: { type: "boolean", description: expect.stringContaining("approved") },
     });
     expect(byName.get("quote_skill")?.outputSchema).toMatchObject({
-      required: ["skill", "pricing", "availability"],
+      required: ["skill", "creditQuote", "availability"],
       properties: {
         availability: {
           type: "object",

@@ -149,7 +149,7 @@ async function handleApiV1(
 
   if (resource === "billing") {
     if (request.method === "GET" && id === "status") {
-      return json({ plan: "self-hosted", balanceCents: 0, balance: "$0.00", subscription: null, hasPaymentMethod: false });
+      return json({ plan: "self-hosted", creditBalance: 0, subscription: null, hasPaymentMethod: false });
     }
     if (request.method === "GET" && id === "credits") {
       return json({ packs: [], mode: "self-hosted" });
@@ -177,7 +177,7 @@ function runPayload(run: ServerRunRecord): Record<string, unknown> {
     requestedSlug: run.requestedSlug,
     status: run.status,
     correlationId: run.correlationId,
-    costCents: run.costCents,
+    credits: run.costCents,
     createdAt: run.createdAt,
     ...(run.startedAt ? { startedAt: run.startedAt } : {}),
     ...(run.completedAt ? { completedAt: run.completedAt } : {}),

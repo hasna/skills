@@ -10,8 +10,9 @@
 import { z } from "zod";
 import { getApiKey } from "./auth-store.js";
 import { loadConfig, type SkillsConfig } from "./config.js";
+import { DEFAULT_CLOUD_API_URL } from "../server/config.js";
 import { sanitizePublicDiscoveryText } from "./discovery.js";
-import { getHostedAvailabilityMetadata } from "./hosted-availability.js";
+import { isPremiumSkill } from "./pricing.js";
 import type { SkillMeta } from "./registry.js";
 
 const remoteAvailabilitySchema = z.object({
@@ -22,17 +23,21 @@ const remoteAvailabilitySchema = z.object({
 }).passthrough();
 
 const remotePricingSchema = z.object({
-  formattedCost: z.string(),
+  formattedCost: z.string().optional(),
+  formattedCredits: z.string().optional(),
   tier: z.string().optional(),
   billingUnit: z.string().optional(),
   costCents: z.number().optional(),
+  credits: z.number().optional(),
   formattedUnitCost: z.string().optional(),
   unitCount: z.number().optional(),
   estimated: z.boolean().optional(),
   quoteDependsOnInput: z.boolean().optional(),
   quoteRequired: z.boolean().optional(),
   description: z.string().optional(),
-}).passthrough();
+}).passthrough().refine((quote) => quote.formattedCost || quote.formattedCredits || quote.costCents !== undefined || quote.credits !== undefined, {
+  message: "Remote credit quote requires a credit amount",
+});
 
 const remoteSkillSchema = z.object({
   name: z.string().min(1).optional(),
@@ -44,6 +49,7 @@ const remoteSkillSchema = z.object({
   dependencies: z.array(z.string()).optional(),
   version: z.string().optional(),
   pricing: remotePricingSchema.optional(),
+  creditQuote: remotePricingSchema.optional(),
   availability: remoteAvailabilitySchema.optional(),
 }).passthrough().refine((skill) => skill.name || skill.slug, {
   message: "Remote skill requires name or slug",
@@ -87,7 +93,7 @@ export function getConfiguredApiUrl(
 ): string | undefined {
   const raw = env["SKILLS_API_URL"] || config.apiUrl;
   const trimmed = raw?.trim().replace(/\/+$/, "");
-  return trimmed || undefined;
+  return trimmed || (config.mode === "cloud" ? DEFAULT_CLOUD_API_URL : undefined);
 }
 
 export function buildSkillsApiUrl(apiUrl: string, endpoint = "/skills"): string {
@@ -128,7 +134,7 @@ function normalizeRemoteSkill(skill: z.infer<typeof remoteSkillSchema>): SkillMe
     tags: skill.tags || ["remote"],
     dependencies: skill.dependencies,
     ...(skill.version ? { version: skill.version } : {}),
-    ...(skill.pricing ? { pricing: skill.pricing } : {}),
+    ...(skill.creditQuote || skill.pricing ? { pricing: (skill.creditQuote ?? skill.pricing) as SkillMeta["pricing"] } : {}),
     availability: normalizeRemoteAvailability(name, skill.availability),
     source: "remote",
   };
@@ -138,7 +144,16 @@ function normalizeRemoteAvailability(
   name: string,
   availability?: z.infer<typeof remoteAvailabilitySchema>,
 ): NonNullable<SkillMeta["availability"]> {
-  if (!availability) return getHostedAvailabilityMetadata(name);
+  if (!availability) {
+    return isPremiumSkill(name)
+      ? {
+          status: "unavailable",
+          code: "REMOTE_AVAILABILITY_MISSING",
+          message: "The remote service did not publish run availability for this skill.",
+          details: ["No credits were charged."],
+        }
+      : { status: "available" };
+  }
   if (availability.status === "available") return { status: "available" };
   return {
     status: availability.status,

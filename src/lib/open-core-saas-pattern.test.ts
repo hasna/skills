@@ -23,7 +23,7 @@ describe("open-core product service pattern", () => {
   const compactReadme = compact(readme);
 
   test("keeps the universal client and provider-neutral server in OSS while cloud composition stays in platform", () => {
-    expect(pattern).toContain("The public npm package is the install surface for both local and hosted users");
+    expect(pattern).toContain("The public npm package is the install surface for local, self-hosted, and cloud users");
     expect(compactPattern).toContain("provider-neutral self-hosted server and OCI");
     expect(pattern).toContain("Hasna platform repository");
     expect(pattern).toContain("owns only the cloud");
@@ -154,57 +154,40 @@ describe("open-core product service pattern", () => {
 
   test("records current SaaS client status without conflating internal selfhost", () => {
     expect(contract).toContain("## Three Surfaces And Current Terminology");
-    expect(contract).toContain("`@hasna/skills@0.1.58` artifact is SaaS-capable");
-    expect(compactContract).toContain("package, source, and API compatibility must be reconciled");
-    expect(compactReadme).toContain("`local-first` means the package remains useful without an account");
-    expect(readme).toContain("Hasna-internal infrastructure or another operator deployment");
+    expect(compactContract).toContain("live `skills.md` capability and credit-quote responses as authoritative");
+    expect(compactReadme).toContain("Hasna's internal AWS deployment is self-hosted, not cloud");
+    expect(readme).toContain("Skills cloud");
     expect(readme).not.toContain("This PR");
     expect(contract).not.toContain("The PR that introduced");
   });
 
-  test("pins the unreleased source candidate separately from published provenance", () => {
+  test("pins the source candidate separately from published provenance", () => {
     expect(packageJson.version).toBe("0.2.0");
-    expect(compactContract).toContain("The candidate is `@hasna/skills@0.2.0` and is explicitly unreleased");
-    expect(compactContract).toContain("It has not been published or tagged; npm remains at `0.1.58`");
-    expect(compactReadme).toContain("The package/lock/source candidate is explicitly `0.2.0` and unreleased; npm remains at `0.1.58`");
-    expect(compactReadme).toContain("No publish or tag is part of this candidate change");
+    expect(compactContract).toContain("`@hasna/skills@0.2.0` implements the quick launch slice");
+    expect(compactReadme).toContain("A package is marketable as the new SaaS client only after this version is published");
+    expect(compactReadme).toContain("Source readiness is not the same as npm availability");
   });
 
-  test("records current namespace and deployment blockers without claiming target compliance", () => {
-    for (const content of [contract, readme]) {
-      expect(content).toContain("## CURRENT IMPLEMENTATION BLOCKERS");
-      expect(content).toContain("`HASNA_SKILLS_SERVER_DATABASE_URL`");
-      expect(content).toContain("`HASNA_SKILLS_SERVER_S3_*`");
-      expect(content).toContain("`.github/workflows/deploy.yml`");
-      expect(content).toContain("selfhost");
-      expect(content).toContain("not `cloud`");
-    }
-    for (const content of [compactContract, compactReadme]) {
-      expect(content).toContain("Current shared client/server reads are limited to");
-      expect(content).toContain("Database pool configuration is server-only");
-      expect(content).toContain("does not read client S3 endpoint, path-style, or package credential settings");
-      expect(content).toContain("target compatibility design, not current reads");
-    }
-    expect(compactContract).toContain("This contract change does not edit or delete that workflow");
-    expect(compactReadme).toContain("The workflow is intentionally unchanged by this candidate");
+  test("records the implemented launch slice and remaining architecture work", () => {
+    expect(compactContract).toContain("explicit `local | self-hosted | cloud` routing");
+    expect(compactContract).toContain("service-origin-bound stored credentials");
+    expect(compactContract).toContain("Named profiles, the common adapter refactor, storage-profile resolver, and the full trust handshake remain target contracts");
+    expect(compactReadme).toContain("Named multi-service profiles remain a follow-up");
+    expect(compactReadme).toContain("binds its stored credential to that origin");
   });
 
-  test("distinguishes current legacy auth and npm behavior from the target architecture", () => {
+  test("distinguishes the current one-service selection from the target profile architecture", () => {
     for (const phrase of [
-      "npm `@hasna/skills@0.1.58` predates the agent-first bare-command behavior",
-      "bare `skills` still selects the implicit `interactive` command",
-      "a release later than 0.1.58",
-      "one legacy global credential record",
-      "does not bind that credential to the configured remote origin",
-      "does not perform the target operator identity and capability enrollment handshake",
-      "Origin-, service-, and tenant-scoped credentials",
-      "configured remote registry",
+      "Agent-first command discovery; never opens the TUI",
+      "skills setup --mode cloud",
+      "skills setup --mode self-hosted",
+      "skills setup --mode local",
+      "Stored credentials include their issuing service origin",
+      "A future named-profile layer can retain several enrolled services at once",
     ]) {
       expect(compactReadme).toContain(phrase);
     }
-    expect(compactReadme).not.toContain("stores local configuration and scoped client credentials");
-    expect(compactReadme).not.toContain("selected verified service operator");
-    expect(compactReadme).not.toContain("configured self-hosted registry");
+    expect(compactReadme).toContain("one selected service");
   });
 
   test("ships every canonical architecture document linked by the package", () => {

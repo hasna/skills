@@ -89,7 +89,7 @@ export function compactRunRecord(run: any): Record<string, unknown> {
     startedAt: run.startedAt,
     ...(run.completedAt ? { completedAt: run.completedAt } : {}),
     ...(run.remoteRunId ? { remoteRunId: run.remoteRunId } : {}),
-    ...(run.costCents !== undefined ? { costCents: run.costCents } : {}),
+    ...(run.costCents !== undefined ? { credits: run.costCents } : {}),
     ...(run.error ? { error: truncateText(run.error, 240) } : {}),
     artifactCount: Array.isArray(run.artifacts) ? run.artifacts.length : 0,
     paths: run.paths,

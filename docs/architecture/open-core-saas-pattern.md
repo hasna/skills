@@ -17,18 +17,18 @@ They do not describe a provider, account, region, hostname, or domain:
 - `cloud` is the Hasna-operated multi-tenant customer SaaS, when that product
   exists.
 
-Open products always support local and self-hosted operation. Cloud is an
-optional composition, not a requirement of the OSS core. Existing Open Skills
-`self-hosted` setup flags are legacy compatibility behavior while the profile
-contract is being implemented.
+Every Open product is designed for three directions: local, self-hosted, and a
+Hasna-operated cloud SaaS. A particular cloud may launch later than its OSS
+client, but the public package and shared contracts must not make cloud a
+separate install or a fork. Open Skills implements all three explicit mode
+selectors; named multi-service profiles remain the next portability layer.
 
-The public npm package is the install surface for both local and hosted users.
-Installing `@hasna/skills` gives the client, not a SaaS backend. Published
-`@hasna/skills@0.1.58` is SaaS-capable for supported skills, while
+The public npm package is the install surface for local, self-hosted, and cloud users.
+Installing `@hasna/skills` gives the universal client, not a SaaS backend.
 Hasna-internal infrastructure is a self-hosted deployment. Source, package, and
 live API capability state can drift and must be verified separately. The
-checked-in package/lock/source candidate is `0.2.0` and remains unreleased;
-npm remains at `0.1.58` until a separate publish and tag.
+checked-in package/lock/source release candidate is `0.2.0`; publishing and a
+live-client smoke test are separate release gates.
 
 ## Package And Server Shape
 
@@ -54,8 +54,8 @@ belong in the platform composition.
 - Do not prompt during package install.
 - The bare CLI command prints discovery help and exits; interactive UI requires
   an explicit subcommand.
-- Default to the built-in local profile. Select a remote authority through an
-  explicit named profile.
+- Select `local`, `self-hosted`, or `cloud` explicitly. Named profiles are the
+  reusable target for retaining several enrolled services at once.
 - Resolve profiles in this order: `--profile`, product profile environment
   variable, project profile, global default, then local.
 - Resolve the independent storage profile in this order: explicit storage
@@ -79,8 +79,12 @@ adapter selected by a profile. Appropriate OSS commands include:
 - `credits buy`
 - registry, quote, run status, logs, artifact, export, import, and sync commands
 
-Commands return stable JSON and store only scoped credential references in
-configuration. The HTTP adapter discovers capabilities without credentials,
+Commands return stable JSON and present credits rather than currency or
+provider economics. Paid cloud execution uses a short-lived signed quote token:
+the client quotes first, obtains approval, then submits the unchanged request
+with that token and `approved: true`; the service validates the binding before
+debit. Stored credentials are origin-bound today and evolve to
+fully scoped credential references with named profiles. The HTTP adapter discovers capabilities without credentials,
 then verifies the signed response against an externally enrolled cloud identity
 or selfhost fingerprint. Discovery is not a trust root. Product, operator,
 service identity, mode, issuer, audience, tenant, features, and billing

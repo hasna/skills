@@ -1,5 +1,6 @@
 import type { SkillMeta } from "./registry-types.js";
 import { getPublicSkillPricing, isPremiumSkill, type PublicSkillPricing } from "./pricing.js";
+import { toPublicCreditQuote, type PublicCreditQuote } from "./public-credits.js";
 
 const VENDOR_TERMS = [
   "Google Gemini",
@@ -77,13 +78,13 @@ export interface CompactSkillDiscovery {
   name: string;
   category: string;
   description: string;
-  pricing: PublicSkillPricing;
+  creditQuote: PublicCreditQuote;
 }
 
-export type PublicSkillDiscovery<T extends SkillMeta = SkillMeta> = Omit<T, "description" | "tags"> & {
+export type PublicSkillDiscovery<T extends SkillMeta = SkillMeta> = Omit<T, "description" | "tags" | "pricing"> & {
   description: string;
   tags: string[];
-  pricing: PublicSkillPricing;
+  creditQuote: PublicCreditQuote;
 };
 
 export function getCompactSkillDiscovery(skill: SkillMeta): CompactSkillDiscovery {
@@ -91,22 +92,26 @@ export function getCompactSkillDiscovery(skill: SkillMeta): CompactSkillDiscover
     name: skill.name,
     category: skill.category,
     description: sanitizePublicDiscoveryText(skill.description),
-    pricing: resolveDiscoveryPricing(skill),
+    creditQuote: toPublicCreditQuote(resolveDiscoveryPricing(skill)),
   };
 }
 
 export function getPublicSkillDiscovery<T extends SkillMeta>(skill: T): PublicSkillDiscovery<T> {
+  const { pricing: _internalPricing, ...publicSkill } = skill;
   return {
-    ...skill,
+    ...publicSkill,
     description: sanitizePublicDiscoveryText(skill.description),
     tags: publicDiscoveryTags(skill.tags),
-    pricing: resolveDiscoveryPricing(skill),
-  };
+    creditQuote: toPublicCreditQuote(resolveDiscoveryPricing(skill)),
+  } as PublicSkillDiscovery<T>;
 }
 
-export function publicDiscoveryPriceLabel(skill: { name: string; pricing?: PublicSkillPricing }): string {
-  return (skill.pricing ?? getPublicSkillPricing(skill.name)).formattedCost;
+export function publicDiscoveryCreditsLabel(skill: { name: string; creditQuote?: PublicCreditQuote; pricing?: PublicSkillPricing }): string {
+  return (skill.creditQuote ?? toPublicCreditQuote(skill.pricing ?? getPublicSkillPricing(skill.name))).formattedCredits;
 }
+
+/** @deprecated Use publicDiscoveryCreditsLabel. */
+export const publicDiscoveryPriceLabel = publicDiscoveryCreditsLabel;
 
 export function publicDiscoveryTags(tags: string[]): string[] {
   return tags.filter((tag) => !VENDOR_TAGS.has(tag.toLowerCase()));
@@ -157,8 +162,8 @@ export function publicDiscoveryDocumentation(skill: SkillMeta, documentation: st
   return [
     `# ${skill.displayName || skill.name}`,
     sanitizePublicDiscoveryText(skill.description),
-    `Pricing: ${getPublicSkillPricing(skill.name).formattedCost}.`,
-    "Set `SKILLS_API_KEY` or run `skills auth login` for self-hosted runtime execution. Runtime routing and model selection are managed by the self-hosted Skills runtime.",
+    `Credits: ${toPublicCreditQuote(getPublicSkillPricing(skill.name)).formattedCredits}.`,
+    "Choose `cloud` or `self-hosted`, then run `skills auth login` for remote execution. Runtime routing and model selection are managed by the selected service.",
   ].join("\n\n");
 }
 
@@ -167,7 +172,11 @@ function escapeRegExp(value: string): string {
 }
 
 function resolveDiscoveryPricing(skill: SkillMeta): PublicSkillPricing {
-  return skill.pricing && typeof skill.pricing.formattedCost === "string"
+  return skill.pricing && (
+    typeof skill.pricing.formattedCost === "string"
+    || typeof skill.pricing.formattedCredits === "string"
+    || typeof skill.pricing.credits === "number"
+  )
     ? skill.pricing as PublicSkillPricing
     : getPublicSkillPricing(skill.name);
 }

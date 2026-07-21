@@ -1,13 +1,13 @@
 # @hasna/skills Product Brief
 
-`@hasna/skills` is a local-capable and self-hosted skill library, CLI, MCP
-server, API, and worker runtime for AI coding agents. Interactive onboarding can
-recommend a compatible self-hosted API, while local-only usage remains available
-without requiring an API account or source-copy installs.
+`@hasna/skills` is the universal local, self-hosted, and cloud skill library,
+CLI, MCP server, API client, and worker runtime for AI coding agents. The bare
+command is agent-first and prints commands; the TUI is explicitly opt-in.
 
-The open package can optionally talk to the Hasna self-hosted API at
-`https://skills.hasna.xyz` for server-executed skills. That API path is explicit
-configuration, not a dependency of local-only use.
+The package can talk to the Hasna customer SaaS at `https://skills.md` in
+`cloud` mode or to an operator URL in `self-hosted` mode. Hasna internal AWS
+infrastructure is self-hosted, not cloud. Neither remote path is a dependency
+of local-only use.
 
 ## Target Users
 
@@ -23,8 +23,8 @@ configuration, not a dependency of local-only use.
 
 - Browse, search, inspect, and pin bundled skills from the CLI or MCP.
 - Run free or explicitly local skills on the user's machine.
-- Configure first-run mode as self-hosted or local-only.
-- Submit self-hosted skills to the API when the skill contract says execution
+- Configure first-run mode as cloud, self-hosted, or local-only.
+- Submit remote skills to the selected API when the skill contract says execution
   is server-owned.
 - Export machine-readable registry, MCP, config, quote, run, and validation
   contracts.
@@ -36,13 +36,14 @@ configuration, not a dependency of local-only use.
 V1 must keep the public package useful on its own:
 
 - `skills` CLI and `skills-mcp` server ship from npm package `@hasna/skills`.
-- Interactive setup can recommend self-hosted mode, while non-interactive setup
-  stays safe for local/CI use unless self-hosted mode is explicit.
-- Self-hosted setup stores a configurable API URL and uses explicit client auth.
-- Premium or server-executed skills fail closed without self-hosted credentials
+- Setup explicitly selects cloud, self-hosted, or local mode; package install
+  and the bare command remain non-interactive.
+- Cloud defaults to `https://skills.md`; self-hosted stores an explicit API URL.
+  Stored credentials are bound to the service origin that issued them.
+- Premium or server-executed skills fail closed without remote credentials
   and do not fall back to bundled local execution.
 - Public package exports expose reusable registry, config, validation,
-  discovery, pricing, and remote-run contract APIs.
+  discovery, credit-quote, and remote-run contract APIs.
 - Package output excludes provider secrets and deployment-only infrastructure
   dependencies.
 
@@ -56,23 +57,24 @@ V1 must keep the public package useful on its own:
 - Making a browser dashboard the primary workflow for agents.
 - Becoming a generic workflow automation platform.
 
-## Pricing Principles
+## Credit Principles
 
-- The open package can describe self-hosted skill prices and quote contracts.
+- Customer-facing CLI, MCP, docs, and API contracts show credits and credit
+  quotes, never currency, cents, provider cost, or margin.
 - Billing, payment methods, credits, ledgers, and entitlements are API
   responsibilities, not OSS core dependencies.
-- Agent-visible errors must explain when a skill requires the self-hosted
+- Agent-visible errors must explain when a skill requires a remote
   runtime and which login or setup command is needed.
-- Local skills should remain runnable without self-hosted spend or API state.
+- Local skills should remain runnable without remote credits or API state.
 
 ## Trust Model
 
-The open package assumes local execution is user-owned and self-hosted execution
-is server-owned.
+The open package assumes local execution is user-owned and remote execution is
+owned by the selected self-hosted or cloud service.
 
 - Local projects store only local preferences and run artifacts.
 - Provider keys stay local only for explicitly local skills that document them.
-- Self-hosted skills expose public docs, schemas, pricing, and run contracts,
+- Remote skills expose public docs, schemas, credit quotes, and run contracts,
   not protected implementation source.
 - APIs own account state, approvals, billing, and server-side secrets.
 - CLI and MCP surfaces return structured errors so agents can handle missing
@@ -83,8 +85,8 @@ is server-owned.
 Agent-native means the core workflow works from tools an agent already has:
 
 - Discover: list and search skills through CLI and MCP.
-- Configure: choose self-hosted mode or local-only mode.
-- Execute: run local skills directly or submit self-hosted skills to the API.
+- Configure: choose cloud, self-hosted, or local mode.
+- Execute: run local skills directly or submit remote skills to the selected API.
 - Inspect: poll run status, read local logs, and retrieve exports.
 - Validate: expose package and skill checks as scriptable commands.
 

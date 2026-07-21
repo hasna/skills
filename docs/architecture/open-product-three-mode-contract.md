@@ -7,12 +7,14 @@ must not redefine the mode names or infer a mode from infrastructure.
 
 ## Status
 
-This is a target architecture, not a claim about the current implementation.
-Open Skills currently makes the bare `skills` command non-interactive and
-agent-first, but the three-mode routing, profile-aware authentication, common
-adapter boundary, storage-profile resolver, and trust handshake described below
-remain target contracts. Existing source behavior and published package
-behavior are recorded separately in [Current Open Skills Status](#current-open-skills-status).
+This is the reusable architecture for Open Hasna products. Open Skills now
+implements the first adoption slice: agent-first bare command behavior,
+explicit `local | self-hosted | cloud` routing, service-origin-bound stored
+credentials, live cloud capability and credit-quote authority, and fail-closed
+remote execution. Paid cloud runs also use short-lived signed quote tokens that
+bind the approved credits to the exact tenant, skill, input, arguments, and
+expiry before submission. Named profiles, the common adapter refactor, storage-profile
+resolver, and the full trust handshake remain target contracts.
 
 ## Three Surfaces And Current Terminology
 
@@ -20,22 +22,30 @@ These surfaces are related, but they are not interchangeable:
 
 | Surface | Meaning | Current status verified 2026-07-21 |
 | --- | --- | --- |
-| Public npm client | `@hasna/skills` is the universal CLI, SDK, MCP client, and local engine installed by users. It may call either a compatible self-hosted service or the Hasna SaaS. It does not install the Hasna SaaS backend. | The published `@hasna/skills@0.1.58` artifact is SaaS-capable for supported hosted skills: it includes hosted setup, authentication, billing, remote run, status, and export clients. |
-| Current source candidate | The checked-in package metadata, dependency lock, source, docs, and tests are one candidate provenance set. | The candidate is `@hasna/skills@0.2.0` and is explicitly unreleased. It has not been published or tagged; npm remains at `0.1.58`. |
+| Public npm client | `@hasna/skills` is the universal CLI, SDK, MCP client, and local engine installed by users. It may call either a compatible self-hosted service or the Hasna SaaS. It does not install the Hasna SaaS backend. | Source candidate `0.2.0` carries the explicit three-mode client. npm publication and live smoke are separate release evidence. |
+| Current source candidate | The checked-in package metadata, dependency lock, source, docs, and tests are one candidate provenance set. | `@hasna/skills@0.2.0` implements the quick launch slice and must not be called shipped until publishing succeeds. |
 | Hasna cloud | `skills.md` is the Hasna-operated, multi-tenant customer SaaS. This is what `cloud` means for Open Skills. | The public registry endpoint responded successfully during verification. Package metadata, source, and live API capability state can ship at different times and must be checked independently. |
 | Internal self-hosted infrastructure | An operator-owned deployment is `selfhost` even when it runs in AWS or is operated by Hasna for internal use. | It is not the customer SaaS and must not be used as proof that the `cloud` product is available or ready. |
 
-Current verification also found a release-synchronization blocker: the
-`@hasna/skills@0.1.58` client reports `image`, `video`, and `music` as hosted
-provider unavailable while the live `skills.md` registry reports those skills
-available with different pricing metadata. The install is still a SaaS-capable
-client; the disagreement means package, source, and API compatibility must be
-reconciled before those skills are claimed to work end to end.
+The cloud client treats the live `skills.md` capability and credit-quote
+responses as authoritative. It does not apply a self-hosted provider blocklist
+to cloud. An unavailable or unverifiable cloud capability fails before the run
+submission, so no credits are charged.
+
+For a paid cloud operation, the authenticated quote response includes an opaque,
+short-lived `quoteToken` and `expiresAt`. The client obtains the quote before
+approval and submits the exact token with the unchanged input and arguments plus
+`approved: true`. The service verifies tenant, canonical operation, request
+digest, credits, uniqueness, and expiry before any debit. A missing, expired, or
+mismatched token fails before charging. Known zero-credit operations may remain
+token-free; unknown credit metadata fails closed. The same contract applies to
+CLI, SDK, MCP, and scheduled execution and is reusable across Open products.
 
 ## Canonical Modes
 
-Every open product has `local` and `selfhost` modes. `cloud` is optional and is
-defined only when Hasna operates a multi-tenant SaaS for customers.
+Every open product supports three potential directions: `local`, `selfhost`,
+and `cloud`. A cloud composition may launch later, but its universal client and
+shared contracts use the same architecture from the start.
 
 | Mode | Deployment authority | Operator |
 | --- | --- | --- |
@@ -697,15 +707,18 @@ the desired end state:
 
 Open Skills source has the universal npm package, local engine, CLI/MCP
 surfaces, remote registry/run clients, provider-neutral server binaries, and
-explicit local/self-hosted setup. Bare `skills` prints discovery help and exits
-instead of entering an interactive UI.
+explicit local, self-hosted, and cloud setup. Bare `skills` prints discovery
+help and exits instead of entering an interactive UI. The cloud client uses
+live capability and credit-quote responses before submitting a run, while the
+self-hosted compatibility guard stays limited to self-hosted mode.
 
 The target architecture is not yet fully implemented:
 
-- configuration has a single `mode` and `apiUrl`, not named versioned profiles;
-- setup accepts `local` and `self-hosted` and rejects `cloud`;
-- `SKILLS_API_URL` and `SKILLS_API_KEY` are global rather than profile-,
-  service-, origin-, and tenant-scoped references;
+- configuration has a single selected `mode` and `apiUrl`, not named versioned profiles;
+- stored credentials are bound to their service origin, but the single record
+  cannot retain several service logins at once;
+- explicit `SKILLS_API_URL` and `SKILLS_API_KEY` automation inputs are global
+  rather than profile-, tenant-, issuer-, and audience-scoped references;
 - local and remote behavior do not yet share the adapter boundary specified
   here;
 - there is no service identity/capabilities handshake;

@@ -17,7 +17,7 @@ import {
   getPublicSkillDiscovery,
   publicDiscoveryDependencies,
   publicDiscoveryEnvVars,
-  publicDiscoveryPriceLabel,
+  publicDiscoveryCreditsLabel,
 } from "../../lib/discovery.js";
 
 export function registerIntrospect(parent: Command) {
@@ -102,16 +102,16 @@ async function handleInfo(name: string, options: { json: boolean; brief: boolean
   }
   const reqs = options.remote ? null : getSkillRequirements(name);
   const discovery = getPublicSkillDiscovery(skill);
-  const pricing = discovery.pricing;
+  const creditQuote = discovery.creditQuote;
   const publicReqs = reqs ? {
     ...reqs,
     envVars: publicDiscoveryEnvVars(skill.name, reqs.envVars),
     dependencies: publicDiscoveryDependencies(skill.name, reqs.dependencies),
   } : reqs;
-  if (options.json) { console.log(JSON.stringify({ ...discovery, ...publicReqs, pricing }, null, 2)); return; }
+  if (options.json) { console.log(JSON.stringify({ ...discovery, ...publicReqs, creditQuote }, null, 2)); return; }
   if (options.brief) {
     const tags = discovery.tags.length ? discovery.tags.join(", ") : "none";
-    console.log(`${discovery.name} \u2014 ${discovery.description} (${publicDiscoveryPriceLabel(discovery)}) [${discovery.category}] (tags: ${tags})`);
+    console.log(`${discovery.name} \u2014 ${discovery.description} (${publicDiscoveryCreditsLabel(discovery)}) [${discovery.category}] (tags: ${tags})`);
     return;
   }
 
@@ -121,7 +121,7 @@ async function handleInfo(name: string, options: { json: boolean; brief: boolean
   console.log(discovery.description);
   console.log(`${chalk.dim("Category:")} ${discovery.category}`);
   if (discovery.tags.length) console.log(`${chalk.dim("Tags:")} ${discovery.tags.join(", ")}`);
-  console.log(`${chalk.dim("Pricing:")} ${pricing.formattedCost}`);
+  console.log(`${chalk.dim("Credits:")} ${creditQuote.formattedCredits}`);
   if (publicReqs?.cliCommand) console.log(`${chalk.dim("CLI:")} ${publicReqs.cliCommand}`);
   if (publicReqs?.envVars.length) {
     console.log(chalk.dim("Env vars:"));

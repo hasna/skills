@@ -297,11 +297,11 @@ version: 0.3.0
       expect(valid).toMatchObject({
         skill: "blog-article",
         availability: { status: "available" },
-        pricing: {
+        creditQuote: {
           billingUnit: "article",
           unitCount: 8,
-          costCents: 200,
-          formattedCost: "$2.00 total",
+          credits: 200,
+          formattedCredits: "200 credits total",
         },
       });
 
@@ -324,6 +324,80 @@ version: 0.3.0
     }
   }, 15000);
 
+  test("quote_skill uses the authenticated live cloud quote after capability discovery", async () => {
+    const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require("fs");
+    const { tmpdir } = require("os");
+    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-cloud-quote-"));
+    const calls: string[] = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        calls.push(`${req.method} ${url.pathname}`);
+        expect(req.headers.get("authorization")).toBe("Bearer sk_test_mcp_cloud_quote");
+        if (url.pathname === "/api/v1/skills/image" && req.method === "GET") {
+          return Response.json({
+            slug: "image",
+            availability: { status: "available" },
+            creditQuote: {
+              tier: "premium",
+              billingUnit: "image",
+              credits: 9,
+              formattedCredits: "9 credits/image",
+            },
+          });
+        }
+        if (url.pathname === "/api/v1/skills/image/quote" && req.method === "POST") {
+          return Response.json({
+            availability: { status: "available" },
+            quoteToken: "quote_mcp_cloud_image_11",
+            expiresAt: "2026-07-21T16:00:00.000Z",
+            creditQuote: {
+              tier: "premium",
+              billingUnit: "image",
+              credits: 11,
+              formattedCredits: "11 credits/image",
+            },
+          });
+        }
+        return Response.json({ error: "unexpected request" }, { status: 500 });
+      },
+    });
+
+    mkdirSync(join(tmpDir, ".hasna", "skills"), { recursive: true });
+    writeFileSync(join(tmpDir, ".hasna", "skills", "config.json"), JSON.stringify({
+      mode: "cloud",
+      apiUrl: `http://127.0.0.1:${server.port}`,
+    }));
+    const client = new McpClient({
+      HOME: tmpDir,
+      SKILLS_API_KEY: "sk_test_mcp_cloud_quote",
+    });
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "quote_skill",
+        arguments: { name: "image", args: ["a bright forest"] },
+      }, 82);
+      expect(response).not.toBeNull();
+      expect(response.result.isError).not.toBe(true);
+      const payload = JSON.parse(response.result.content[0].text);
+      expect(payload.creditQuote).toMatchObject({ credits: 11, formattedCredits: "11 credits/image" });
+      expect(payload.quoteToken).toBe("quote_mcp_cloud_image_11");
+      expect(payload.expiresAt).toBe("2026-07-21T16:00:00.000Z");
+      expect(JSON.stringify(payload)).not.toContain("pricing");
+      expect(JSON.stringify(payload)).not.toContain("costCents");
+      expect(calls).toEqual([
+        "GET /api/v1/skills/image",
+        "POST /api/v1/skills/image/quote",
+      ]);
+    } finally {
+      await client.close();
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
   test("quote_skill fails fast for unavailable hosted provider skills", async () => {
     const client = new McpClient();
     try {
@@ -343,7 +417,7 @@ version: 0.3.0
           code: "HOSTED_PROVIDER_UNAVAILABLE",
         },
       });
-      expect(payload.details).toContain("No balance was charged.");
+      expect(payload.details).toContain("No credits were charged.");
     } finally {
       await client.close();
     }
@@ -403,7 +477,7 @@ version: 0.3.0
       expect(response.result.isError).toBe(true);
       const error = JSON.parse(response.result.content[0].text);
       expect(error).toMatchObject({ code: "PLATFORM_ERROR" });
-      expect(error.message).toContain("requires self-hosted API access");
+      expect(error.message).toContain("requires access to the selected self-hosted service");
       expect(error.message).not.toContain("Skill Image CLI");
     } finally {
       await client.close();
@@ -434,7 +508,7 @@ version: 0.3.0
       const error = JSON.parse(response.result.content[0].text);
       expect(error).toMatchObject({ code: "HOSTED_PROVIDER_UNAVAILABLE" });
       expect(error.message).toContain("temporarily unavailable");
-      expect(error.message).toContain("No balance was charged.");
+      expect(error.message).toContain("No credits were charged.");
       expect(error.message).not.toContain("skills auth login");
       expect(error.message).not.toContain("approved: true");
     } finally {
@@ -474,7 +548,7 @@ version: 0.3.0
       expect(response.result.isError).toBe(true);
       const error = JSON.parse(response.result.content[0].text);
       expect(error).toMatchObject({ code: "APPROVAL_REQUIRED" });
-      expect(error.message).toContain("paid self-hosted skill");
+      expect(error.message).toContain("requires 50 credits/run");
       expect(error.message).toContain("approved: true");
       expect(remoteCalls).toBe(0);
     } finally {
@@ -668,7 +742,7 @@ version: 0.3.0
       expect(info.name).toBe("image");
       expect(info.displayName).toBeDefined();
       expect(info.category).toBeDefined();
-      expect(info.pricing).toMatchObject({
+      expect(info.creditQuote).toMatchObject({
         tier: "premium",
         quoteDependsOnInput: true,
       });
@@ -789,7 +863,7 @@ version: 0.3.0
       expect(skills.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
       expect(result.hasMore).toBe(false);
       expect(skills.map((s: any) => s.name)).not.toContain("deepresearch");
-      expect(skills[0].pricing).toHaveProperty("formattedCost");
+      expect(skills[0].creditQuote).toHaveProperty("formattedCredits");
       // Compact list must surface descriptions so agents can discover
       // without a per-skill get_skill_docs / get_skill_info round-trip.
       for (const s of skills) {
@@ -971,7 +1045,7 @@ version: 0.3.0
       expect(Array.isArray(skills)).toBe(true);
       expect(skills.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
       expect(skills.map((s: any) => s.name)).not.toContain("deepresearch");
-      expect(skills[0].pricing).toHaveProperty("formattedCost");
+      expect(skills[0].creditQuote).toHaveProperty("formattedCredits");
       for (const s of skills) {
         expect(typeof s.description).toBe("string");
         expect(s.description.length).toBeGreaterThan(0);
@@ -1001,7 +1075,7 @@ version: 0.3.0
     }
   }, 15000);
 
-  test("reads public skill resource with pricing and sanitized premium metadata", async () => {
+  test("reads public skill resource with a credit quote and sanitized premium metadata", async () => {
     const client = new McpClient();
     try {
       await client.initialize();
@@ -1012,11 +1086,11 @@ version: 0.3.0
       expect(response.result).toBeDefined();
       const info = JSON.parse(response.result.contents[0].text);
       expect(info.name).toBe("image");
-      expect(info.pricing).toMatchObject({
+      expect(info.creditQuote).toMatchObject({
         tier: "premium",
         quoteDependsOnInput: true,
       });
-      expect(info.documentation).toContain("SKILLS_API_KEY");
+      expect(info.documentation).toContain("skills auth login");
       expect(info.requirements.envVars).toContain("SKILLS_API_KEY");
       expect(info.requirements.envVars).not.toContain("SKILL_API_KEY");
       expect(info.requirements.envVars).not.toContain("OPENAI_API_KEY");

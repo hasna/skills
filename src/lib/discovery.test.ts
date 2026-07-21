@@ -22,7 +22,7 @@ describe("getCompactSkillDiscovery", () => {
       category: "Development Tools",
       description: "Does a useful thing.",
     });
-    expect(compact.pricing).toHaveProperty("formattedCost");
+    expect(compact.creditQuote).toHaveProperty("formattedCredits");
   });
 
   test("sanitizes vendor terms out of the compact description", () => {

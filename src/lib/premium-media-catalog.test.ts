@@ -71,7 +71,7 @@ describe("premium media catalog", () => {
       tier: "premium",
       billingUnit: "song",
       unitCount: 14,
-      formattedUnitCost: "$1.50/song",
+      formattedUnitCost: "150 credits/song",
       quoteDependsOnInput: true,
       quoteRequired: true,
     });

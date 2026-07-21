@@ -103,10 +103,10 @@ describe("CLI run premium branding", () => {
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({
           skill: "blog-article",
-          pricing: {
+          creditQuote: {
             billingUnit: "article",
-            costCents: 200,
-            formattedCost: "$2.00 total",
+            credits: 200,
+            formattedCredits: "200 credits total",
             unitCount: 8,
           },
           remote: true,
@@ -124,7 +124,7 @@ describe("CLI run premium branding", () => {
       }
     });
 
-    test("create-blog-article human output shows the total price before remote run details", async () => {
+    test("create-blog-article human output shows total credits before remote run details", async () => {
       const { mkdtempSync, rmSync } = require("fs");
       const { tmpdir } = require("os");
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-blog-price-"));
@@ -181,8 +181,8 @@ describe("CLI run premium branding", () => {
 
         expect(stderr).toBe("");
         expect(exitCode).toBe(0);
-        expect(stdout).toContain("Price: $2.00 total");
-        expect(stdout.indexOf("Price: $2.00 total")).toBeLessThan(stdout.indexOf("Submitted remote run for blog-article"));
+        expect(stdout).toContain("Credits: 200 credits total");
+        expect(stdout.indexOf("Credits: 200 credits total")).toBeLessThan(stdout.indexOf("Submitted remote run for blog-article"));
         expect(stdout).toContain("skills exports download run_blog_price");
       } finally {
         server.stop(true);

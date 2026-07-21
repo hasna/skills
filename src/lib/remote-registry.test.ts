@@ -59,7 +59,7 @@ describe("remote registry", () => {
     ]);
   });
 
-  test("decorates unavailable hosted skills when remote payload omits availability", () => {
+  test("fails closed for premium remote skills when availability is omitted", () => {
     const skills = parseRemoteRegistryPayload([
       {
         name: "webcrawling",
@@ -73,10 +73,10 @@ describe("remote registry", () => {
       name: "webcrawling",
       availability: {
         status: "unavailable",
-        code: "HOSTED_PROVIDER_UNAVAILABLE",
+        code: "REMOTE_AVAILABILITY_MISSING",
       },
     });
-    expect(skills[0].availability?.details).toContain("No balance was charged.");
+    expect(skills[0].availability?.details).toContain("No credits were charged.");
   });
 
   test("sanitizes remote-provided availability text before exposing it", () => {

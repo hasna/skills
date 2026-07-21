@@ -112,7 +112,7 @@ describe("CLI run core", () => {
         const data = JSON.parse(stdout);
         expect(stderr).toBe("");
         expect(exitCode).not.toBe(0);
-        expect(data.error).toContain("hosted skill");
+        expect(data.error).toContain("remote skill");
         expect(data.error).toContain("skills auth login");
         expect(data.stdout).toBeUndefined();
         expect(data.run.remote).toBe(true);
@@ -147,7 +147,7 @@ describe("CLI run core", () => {
         const data = JSON.parse(stdout);
         expect(stderr).toBe("");
         expect(exitCode).not.toBe(0);
-        expect(data.error).toContain("hosted skill");
+        expect(data.error).toContain("remote skill");
         expect(data.error).toContain("skills auth login");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
@@ -188,7 +188,7 @@ describe("CLI run core", () => {
         expect(stderr).toBe("");
         expect(exitCode).not.toBe(0);
         expect(data.approvalRequired).toBe(true);
-        expect(data.error).toContain("paid self-hosted skill");
+        expect(data.error).toContain("requires 50 credits/run");
         expect(data.error).toContain("--yes");
         expect(data.run.remote).toBe(true);
         expect(data.run.status).toBe("failed");
@@ -293,6 +293,205 @@ describe("CLI run core", () => {
       }
     });
 
+    test("cloud mode uses live capability and credit quotes before submitting", async () => {
+      const { mkdtempSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-cloud-authority-"));
+      const calls: string[] = [];
+      const server = Bun.serve({
+        port: 0,
+        async fetch(req) {
+          const url = new URL(req.url);
+          calls.push(`${req.method} ${url.pathname}`);
+          expect(req.headers.get("authorization")).toBe("Bearer sk_test_cloud_authority");
+          if (url.pathname === "/api/v1/skills/image" && req.method === "GET") {
+            return Response.json({
+              slug: "image",
+              displayName: "Image",
+              description: "Cloud image generation",
+              category: "Media Processing",
+              tags: ["image"],
+              availability: { status: "available" },
+              creditQuote: {
+                tier: "premium",
+                billingUnit: "image",
+                credits: 9,
+                formattedCredits: "9 credits/image",
+                estimated: false,
+                quoteDependsOnInput: false,
+                quoteRequired: true,
+              },
+            });
+          }
+          if (url.pathname === "/api/v1/skills/image/quote" && req.method === "POST") {
+            return Response.json({
+              availability: { status: "available" },
+              quoteToken: "quote_cloud_image_11",
+              expiresAt: "2026-07-21T16:00:00.000Z",
+              creditQuote: {
+                tier: "premium",
+                billingUnit: "image",
+                credits: 11,
+                formattedCredits: "11 credits/image",
+                estimated: false,
+                quoteDependsOnInput: false,
+                quoteRequired: true,
+              },
+            });
+          }
+          if (url.pathname === "/api/v1/runs/image" && req.method === "POST") {
+            expect(await req.json()).toEqual({
+              input: {},
+              args: ["a bright forest"],
+              quoteToken: "quote_cloud_image_11",
+              approved: true,
+            });
+            return Response.json({ id: "run_cloud_image", skill: "image", status: "queued" }, { status: 202 });
+          }
+          return Response.json({ error: "not found" }, { status: 404 });
+        },
+      });
+
+      try {
+        const apiUrl = `http://127.0.0.1:${server.port}`;
+        const setup = await runCliInCwd(["setup", "--mode", "cloud", "--api-url", apiUrl, "--json"], tmpDir, { HOME: tmpDir });
+        expect(setup.exitCode).toBe(0);
+        const run = await runCliInCwd(["run", "--yes", "--json", "image", "a bright forest"], tmpDir, {
+          HOME: tmpDir,
+          SKILLS_API_KEY: "sk_test_cloud_authority",
+        });
+        expect(run.exitCode).toBe(0);
+        const payload = JSON.parse(run.stdout);
+        expect(payload.creditQuote).toMatchObject({ credits: 11, formattedCredits: "11 credits/image" });
+        expect(payload.remoteRun).toMatchObject({ id: "run_cloud_image", status: "queued" });
+        expect(JSON.stringify(payload)).not.toContain("pricing");
+        expect(JSON.stringify(payload)).not.toContain("costCents");
+        expect(JSON.stringify(payload)).not.toContain("$");
+        expect(calls).toEqual([
+          "GET /api/v1/skills/image",
+          "POST /api/v1/skills/image/quote",
+          "POST /api/v1/runs/image",
+          "GET /api/v1/runs/run_cloud_image/logs",
+        ]);
+      } finally {
+        server.stop(true);
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("cloud mode rejects unavailable skills before quote or charge", async () => {
+      const { mkdtempSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-cloud-unavailable-"));
+      const calls: string[] = [];
+      const server = Bun.serve({
+        port: 0,
+        fetch(req) {
+          const url = new URL(req.url);
+          calls.push(`${req.method} ${url.pathname}`);
+          return Response.json({
+            slug: "image",
+            displayName: "Image",
+            description: "Cloud image generation",
+            category: "Media Processing",
+            tags: ["image"],
+            availability: {
+              status: "unavailable",
+              code: "CAPACITY_UNAVAILABLE",
+              message: "Image generation is temporarily unavailable.",
+              details: ["No credits were charged."],
+            },
+            creditQuote: { credits: 9, formattedCredits: "9 credits/image" },
+          });
+        },
+      });
+
+      try {
+        const apiUrl = `http://127.0.0.1:${server.port}`;
+        await runCliInCwd(["setup", "--mode", "cloud", "--api-url", apiUrl, "--json"], tmpDir, { HOME: tmpDir });
+        const run = await runCliInCwd(["run", "--yes", "--json", "image", "a bright forest"], tmpDir, {
+          HOME: tmpDir,
+          SKILLS_API_KEY: "sk_test_cloud_unavailable",
+        });
+        expect(run.exitCode).toBe(1);
+        expect(JSON.parse(run.stdout)).toMatchObject({ code: "CAPACITY_UNAVAILABLE" });
+        expect(JSON.parse(run.stdout).details).toContain("No credits were charged.");
+        expect(calls).toEqual(["GET /api/v1/skills/image"]);
+      } finally {
+        server.stop(true);
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("cloud mode rejects a paid quote without a signed quote token before submission", async () => {
+      const { mkdtempSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-cloud-missing-token-"));
+      const calls: string[] = [];
+      const server = Bun.serve({
+        port: 0,
+        fetch(req) {
+          const url = new URL(req.url);
+          calls.push(`${req.method} ${url.pathname}`);
+          if (url.pathname === "/api/v1/skills/image") {
+            return Response.json({
+              slug: "image",
+              availability: { status: "available" },
+              creditQuote: { tier: "premium", billingUnit: "image", credits: 9, formattedCredits: "9 credits/image" },
+            });
+          }
+          if (url.pathname === "/api/v1/skills/image/quote") {
+            return Response.json({
+              availability: { status: "available" },
+              creditQuote: { tier: "premium", billingUnit: "image", credits: 11, formattedCredits: "11 credits/image" },
+            });
+          }
+          return Response.json({ error: "run must not be submitted" }, { status: 500 });
+        },
+      });
+
+      try {
+        const apiUrl = `http://127.0.0.1:${server.port}`;
+        await runCliInCwd(["setup", "--mode", "cloud", "--api-url", apiUrl, "--json"], tmpDir, { HOME: tmpDir });
+        const run = await runCliInCwd(["run", "--yes", "--json", "image", "a bright forest"], tmpDir, {
+          HOME: tmpDir,
+          SKILLS_API_KEY: "sk_test_cloud_missing_token",
+        });
+        expect(run.exitCode).toBe(1);
+        expect(JSON.parse(run.stdout).error).toContain("required quote token");
+        expect(JSON.parse(run.stdout).error).toContain("No credits were charged");
+        expect(calls).toEqual([
+          "GET /api/v1/skills/image",
+          "POST /api/v1/skills/image/quote",
+        ]);
+      } finally {
+        server.stop(true);
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("local mode rejects premium remote execution without network calls", async () => {
+      const { mkdtempSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-local-premium-"));
+      let calls = 0;
+      const server = Bun.serve({ port: 0, fetch() { calls += 1; return Response.json({ error: "unexpected" }); } });
+      try {
+        await runCliInCwd(["setup", "--mode", "local", "--json"], tmpDir, { HOME: tmpDir });
+        const run = await runCliInCwd(["run", "--yes", "--json", "image", "a bright forest"], tmpDir, {
+          HOME: tmpDir,
+          SKILLS_API_KEY: "sk_test_local_premium",
+          SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+        });
+        expect(run.exitCode).toBe(1);
+        expect(JSON.parse(run.stdout)).toMatchObject({ code: "REMOTE_MODE_REQUIRED", remote: false });
+        expect(calls).toBe(0);
+      } finally {
+        server.stop(true);
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
     test("premium skills fail closed when the hosted API is unavailable", async () => {
       const { mkdtempSync, rmSync } = require("fs");
       const { tmpdir } = require("os");
@@ -319,7 +518,7 @@ describe("CLI run core", () => {
         const data = JSON.parse(stdout);
         expect(stderr).toBe("");
         expect(exitCode).not.toBe(0);
-        expect(data.error).toContain("requires self-hosted API access");
+        expect(data.error).toContain("requires access to the selected self-hosted service");
         expect(data.stdout).toBeUndefined();
         expect(data.run.remote).toBe(true);
         expect(data.run.status).toBe("failed");
@@ -367,7 +566,7 @@ describe("CLI run core", () => {
           status: "unavailable",
           code: "HOSTED_PROVIDER_UNAVAILABLE",
         });
-        expect(data.details).toContain("No balance was charged.");
+        expect(data.details).toContain("No credits were charged.");
         expect(data.error).not.toContain("skills auth login");
         expect(data.approvalRequired).toBeUndefined();
         expect(data.run.remote).toBe(true);

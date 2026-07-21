@@ -4,9 +4,9 @@ This policy defines the self-hosted media skills added for the runtime catalog:
 `music-album`, `photo-album`, `short-video-pack`, `voiceover-jingle-pack`, and
 `brand-photo-shoot`.
 
-## Pricing
+## Credits
 
-| Skill | Billing mode | Starting price | Quote behavior |
+| Skill | Credit mode | Starting credits | Quote behavior |
 | --- | --- | --- | --- |
 | `music-album` | Metered per song | 150 credits per song | Quote required; allowed album sizes are 7, 14, and 21 songs. |
 | `photo-album` | Fixed package | 300 credits per run | Quote optional unless custom volume or provider options are added. |

@@ -144,11 +144,19 @@ export {
   publicDiscoveryDependencies,
   publicDiscoveryDocumentation,
   publicDiscoveryEnvVars,
+  publicDiscoveryCreditsLabel,
   publicDiscoveryPriceLabel,
   sanitizePublicDiscoveryText,
   type CompactSkillDiscovery,
   type PublicSkillDiscovery,
 } from "./lib/discovery.js";
+
+export {
+  formatCredits,
+  toCustomerCreditPayload,
+  toPublicCreditQuote,
+  type PublicCreditQuote,
+} from "./lib/public-credits.js";
 
 export {
   TOOL_PRIMITIVE_SCHEMA_VERSION,

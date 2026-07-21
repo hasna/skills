@@ -149,7 +149,7 @@ const runArgsSchema: JsonSchemaObject = {
 };
 const paidRunApprovalSchema: JsonSchemaObject = {
   type: "boolean",
-  description: "Set true only after the user has approved the quoted cost for a paid self-hosted run.",
+  description: "Set true only after the user has approved the quoted credits for a remote run.",
 };
 
 const errorSchema = objectSchema({
@@ -158,32 +158,32 @@ const errorSchema = objectSchema({
   suggestions: stringArraySchema("Suggested next actions."),
 }, ["code", "message"], "Structured MCP error payload.");
 
-const pricingSchema = objectSchema({
-  tier: stringSchema("Pricing tier."),
+const creditQuoteSchema = objectSchema({
+  tier: stringSchema("Credit tier."),
   billingUnit: stringSchema("Billing unit."),
-  costCents: { type: "number", description: "Estimated or fixed cost in cents." },
-  formattedCost: stringSchema("Display-ready cost."),
-  estimated: { type: "boolean", description: "Whether the final cost can vary by input." },
+  credits: { type: "number", description: "Estimated or fixed credits." },
+  formattedCredits: stringSchema("Display-ready credits."),
+  estimated: { type: "boolean", description: "Whether the final credits can vary by input." },
   quoteDependsOnInput: { type: "boolean", description: "Whether input affects the quote." },
   quoteRequired: { type: "boolean", description: "Whether callers should quote before running." },
-}, [], "Public pricing metadata.");
+}, [], "Public credit quote metadata.");
 
 const skillAvailabilitySchema = objectSchema({
   status: {
     type: "string",
     enum: ["available", "unavailable"],
-    description: "Whether self-hosted execution is currently available for this skill.",
+    description: "Whether execution is currently available through the selected remote service.",
   },
   code: stringSchema("Optional stable unavailability code."),
   message: stringSchema("Optional human-readable availability message."),
   details: stringArraySchema("Optional availability details."),
-}, ["status"], "Self-hosted skill availability metadata.");
+}, ["status"], "Remote skill availability metadata.");
 
 const skillSummarySchema = objectSchema({
   name: stringSchema("Canonical skill slug."),
   category: stringSchema("Skill category."),
   description: stringSchema("Sanitized public skill description for discovery."),
-  pricing: pricingSchema,
+  creditQuote: creditQuoteSchema,
 }, ["name", "category", "description"], "Compact skill summary.");
 
 const toolPrimitiveSummarySchema = objectSchema({
@@ -225,10 +225,10 @@ const installOutputSchema = objectSchema({
 }, ["skill", "success"], "Skill pin result.");
 
 const runOutputSchema = objectSchema({
-  contractVersion: { type: "number", description: "Remote run payload contract version for self-hosted runs." },
+  contractVersion: { type: "number", description: "Remote run payload contract version." },
   exitCode: { type: "number", description: "Process exit code for local runs." },
   skill: stringSchema("Canonical skill slug."),
-  remote: { type: "boolean", description: "Whether the skill was submitted to the self-hosted runtime." },
+  remote: { type: "boolean", description: "Whether the skill was submitted to the selected remote runtime." },
   stdoutPreview: objectSchema({
     text: stringSchema("Truncated stdout preview."),
     length: { type: "number" },
@@ -244,8 +244,8 @@ const runOutputSchema = objectSchema({
   id: stringSchema("Remote run id when submitted remotely."),
   localRunId: stringSchema("Local run metadata id."),
   status: stringSchema("Run lifecycle status."),
-  pricing: pricingSchema,
-  remoteRun: objectSchema({}, [], "Compact self-hosted run summary by default; full contract when detail:true is requested.", true),
+  creditQuote: creditQuoteSchema,
+  remoteRun: objectSchema({}, [], "Compact remote run summary by default; full contract when detail:true is requested.", true),
   run: objectSchema({}, [], "Compact local run metadata by default; full metadata when detail:true is requested.", true),
   nextActions: objectSchema({
     poll: stringSchema("Command to poll run status."),
@@ -544,12 +544,12 @@ const toolContracts: McpToolContract[] = [
     inputSchema: objectSchema({ name: skillNameInput, input: runInputSchema, args: runArgsSchema }, ["name"]),
     outputSchema: objectSchema({
       skill: stringSchema("Skill slug."),
-      pricing: pricingSchema,
+      creditQuote: creditQuoteSchema,
       availability: skillAvailabilitySchema,
       error: stringSchema("Optional error message when the quote cannot be used to run."),
       code: stringSchema("Optional stable error code."),
       details: stringArraySchema("Optional error details."),
-    }, ["skill", "pricing", "availability"]),
+    }, ["skill", "creditQuote", "availability"]),
   },
   {
     name: "run_skill",

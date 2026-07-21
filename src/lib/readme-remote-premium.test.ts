@@ -19,7 +19,7 @@ describe("README remote premium onboarding", () => {
 
   test("documents both SaaS and self-hosted onboarding", () => {
     for (const phrase of [
-      "skills setup --mode hosted --api-url https://skills.md",
+      "skills setup --mode cloud",
       "skills auth login",
       "skills setup --mode self-hosted --api-url https://skills.example.com",
       "skills auth login --api-key",
@@ -30,7 +30,7 @@ describe("README remote premium onboarding", () => {
 
   test("separates remote auth from local provider keys", () => {
     for (const phrase of [
-      "`SKILLS_API_KEY` is a legacy remote API credential",
+      "`SKILLS_API_KEY` is a remote API credential",
       "It is not a provider",
       "`OPENAI_API_KEY`",
       "free/local OSS skills",
@@ -44,6 +44,7 @@ describe("README remote premium onboarding", () => {
     expect(readme).toContain('"contractVersion": 1');
     expect(readme).toContain('"remote": true');
     expect(readme).toContain('"remoteRun"');
+    expect(readme).toContain('"creditQuote"');
     expect(readme).toContain('"nextActions"');
   });
 });

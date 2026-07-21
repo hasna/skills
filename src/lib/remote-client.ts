@@ -1,6 +1,11 @@
 import { getApiKey as getStoredApiKey, getApiUrl } from "./auth-store.js";
 import { normalizeRemoteSkillRunContract, type RemoteSkillRunContract } from "./remote-run-contract.js";
 
+export interface RemoteRunAuthorization {
+  quoteToken?: string;
+  approved?: boolean;
+}
+
 export class RemoteSkillsClient {
   private apiUrl: string;
   private apiKey: string;
@@ -46,10 +51,15 @@ export class RemoteSkillsClient {
     return res.json();
   }
 
-  async submitRun(slug: string, input?: Record<string, unknown>, args?: string[]): Promise<RemoteSkillRunContract> {
+  async submitRun(
+    slug: string,
+    input?: Record<string, unknown>,
+    args?: string[],
+    authorization: RemoteRunAuthorization = {},
+  ): Promise<RemoteSkillRunContract> {
     const res = await this.request(`/api/v1/runs/${slug}`, {
       method: "POST",
-      body: JSON.stringify({ input, args }),
+      body: JSON.stringify({ input, args, ...authorization }),
     });
     return normalizeRemoteSkillRunContract(await res.json(), slug);
   }

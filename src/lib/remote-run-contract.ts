@@ -13,6 +13,7 @@ export interface RemoteSkillRunContract {
   costCents?: number;
   cost?: string;
   pricing?: PublicSkillPricing;
+  creditQuote?: unknown;
   createdAt?: string;
   startedAt?: string;
   completedAt?: string;
@@ -22,6 +23,7 @@ export interface RemoteSkillRunContract {
   errorCode?: string;
   errorMessage?: string;
   creditsUsed?: number;
+  credits?: number;
   error?: string;
   code?: string;
   details?: unknown;
@@ -44,7 +46,7 @@ export function normalizeRemoteSkillRunContract(
     ...pickString(record, "correlationId"),
     ...pickNumber(record, "costCents"),
     ...pickString(record, "cost"),
-    ...pickPricing(record),
+    ...pickCreditQuote(record),
     ...pickString(record, "createdAt"),
     ...pickString(record, "startedAt"),
     ...pickString(record, "completedAt"),
@@ -54,6 +56,7 @@ export function normalizeRemoteSkillRunContract(
     ...pickString(record, "errorCode"),
     ...pickString(record, "errorMessage"),
     ...pickNumber(record, "creditsUsed"),
+    ...pickNumber(record, "credits"),
     ...pickString(record, "error"),
     ...pickString(record, "code"),
     ...(hasOwn(record, "details") ? { details: record.details } : {}),
@@ -85,6 +88,7 @@ function pickNumber(record: Record<string, unknown>, key: string): Record<string
   return typeof value === "number" && Number.isFinite(value) ? { [key]: value } : {};
 }
 
-function pickPricing(record: Record<string, unknown>): { pricing?: PublicSkillPricing } {
+function pickCreditQuote(record: Record<string, unknown>): { pricing?: PublicSkillPricing; creditQuote?: unknown } {
+  if (isRecord(record.creditQuote)) return { creditQuote: record.creditQuote };
   return isRecord(record.pricing) ? { pricing: record.pricing as unknown as PublicSkillPricing } : {};
 }

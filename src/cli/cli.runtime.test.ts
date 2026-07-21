@@ -52,8 +52,9 @@ describe("CLI runtime and misc commands", () => {
       }
     });
 
-    test("points to self-hosted first and local second without naming skills.md as a mode", () => {
+    test("offers cloud, self-hosted, and local as explicit first-run modes", () => {
       const message = getFirstRunOnboardingMessage();
+      expect(message).toContain("skills setup --mode cloud");
       expect(message).toContain("skills setup --mode self-hosted");
       expect(message).toContain("skills auth login");
       expect(message).toContain("skills setup --mode local");
@@ -79,7 +80,7 @@ describe("CLI runtime and misc commands", () => {
       }
     });
 
-    test("stores self-hosted mode and API URL while accepting legacy skills.md alias", async () => {
+    test("stores cloud mode and API URL while accepting the skills.md alias", async () => {
       const { mkdtempSync, rmSync, readFileSync } = require("fs");
       const { tmpdir } = require("os");
       const { join } = require("path");
@@ -92,10 +93,10 @@ describe("CLI runtime and misc commands", () => {
         );
         expect(exitCode).toBe(0);
         const data = JSON.parse(stdout);
-        expect(data).toMatchObject({ mode: "self-hosted", scope: "project" });
+        expect(data).toMatchObject({ mode: "cloud", scope: "project" });
         expect(data.next).toContain("skills auth login");
         const config = JSON.parse(readFileSync(join(tmpDir, "skills.config.json"), "utf8"));
-        expect(config.mode).toBe("self-hosted");
+        expect(config.mode).toBe("cloud");
         expect(config.apiUrl).toBe("https://skills.example.com/api/v1");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
@@ -124,18 +125,18 @@ describe("CLI runtime and misc commands", () => {
       }
     });
 
-    test("rejects cloud and remote as setup modes", async () => {
+    test("accepts cloud and remote as cloud setup aliases", async () => {
       const { mkdtempSync, rmSync } = require("fs");
       const { tmpdir } = require("os");
       const { join } = require("path");
       const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-reject-modes-"));
       try {
         const remote = await runCliInCwd(["setup", "--mode", "remote", "--json"], tmpDir, { HOME: tmpDir });
-        expect(remote.exitCode).not.toBe(0);
-        expect(remote.stderr).toContain("Invalid setup mode");
+        expect(remote.exitCode).toBe(0);
+        expect(JSON.parse(remote.stdout)).toMatchObject({ mode: "cloud" });
         const cloud = await runCliInCwd(["setup", "--mode", "cloud", "--json"], tmpDir, { HOME: tmpDir });
-        expect(cloud.exitCode).not.toBe(0);
-        expect(cloud.stderr).toContain("Invalid setup mode");
+        expect(cloud.exitCode).toBe(0);
+        expect(JSON.parse(cloud.stdout)).toMatchObject({ mode: "cloud" });
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -326,21 +327,21 @@ describe("CLI runtime and misc commands", () => {
         const result = JSON.parse(run.stdout);
         expect(result.approvalRequired).toBe(true);
         expect(result.ran).toBe(0);
-        expect(result.paidTotalCents).toBeGreaterThan(0);
-        expect(result.error).toContain("Due paid self-hosted schedules cost");
+        expect(result.totalCredits).toBeGreaterThan(0);
+        expect(result.error).toContain("Due remote schedules require");
         expect(result.error).toContain("--allow-paid");
-        expect(result.error).toContain("--max-paid-cents");
+        expect(result.error).toContain("--max-credits");
         expect(result.schedules[0]).toMatchObject({ name: "premium-logo", skill: "logo-design", paid: true });
-        expect(result.schedules[0].cost).toContain("$");
+        expect(result.schedules[0].creditQuote.formattedCredits).toContain("credits");
 
         const afterApprovalData = JSON.parse(readFileSync(schedulesPath, "utf-8"));
         afterApprovalData.schedules[0].nextRun = "2020-01-01T00:00:00.000Z";
         writeFileSync(schedulesPath, JSON.stringify(afterApprovalData, null, 2));
 
-        const approvedRun = await runCliInCwd(["schedule", "run", "--allow-paid", "--max-paid-cents", String(result.paidTotalCents), "--json"], tmpDir, env);
+        const approvedRun = await runCliInCwd(["schedule", "run", "--allow-paid", "--max-credits", String(result.totalCredits), "--json"], tmpDir, env);
         expect(approvedRun.exitCode).toBe(0);
         const approvedResult = JSON.parse(approvedRun.stdout);
-        expect(approvedResult.results[0].error).toContain("hosted skill");
+        expect(approvedResult.results[0].error).toContain("remote skill");
         expect(approvedResult.results[0].error).toContain("skills auth login");
         expect(approvedResult.results[0].error).not.toContain("Skill Image CLI");
       } finally {
@@ -371,7 +372,7 @@ describe("CLI runtime and misc commands", () => {
           code: "HOSTED_PROVIDER_UNAVAILABLE",
         });
         expect(result.error).toContain("temporarily unavailable");
-        expect(result.error).toContain("No balance was charged.");
+        expect(result.error).toContain("No credits were charged.");
         expect(result.approvalRequired).toBeUndefined();
         expect(result.unavailable[0]).toMatchObject({
           name: "premium-image",
@@ -421,6 +422,11 @@ describe("CLI runtime and misc commands", () => {
         expect(codexConfig).toContain("skills-mcp");
         expect(codexConfig).not.toContain("old-skills-mcp");
         expect(codexConfig).not.toContain("args = [\"old\"]");
+
+        const connect = await runCliInCwd(["mcp", "connect", "codex", "--json"], tmpDir, { HOME: tmpDir });
+        expect(connect.stderr).toBe("");
+        expect(connect.exitCode).toBe(0);
+        expect(JSON.parse(connect.stdout)).toMatchObject({ registered: 1 });
 
         mkdirSync(join(tmpDir, ".gemini"), { recursive: true });
         writeFileSync(join(tmpDir, ".gemini", "settings.json"), JSON.stringify({

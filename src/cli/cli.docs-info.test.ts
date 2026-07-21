@@ -128,14 +128,14 @@ describe("CLI docs and validation", () => {
       expect(data.envVars).not.toContain("OPENAI_API_KEY");
       expect(data.envVars).not.toContain("GEMINI_API_KEY");
       expect(data.cliCommand).toBe("skills run image");
-      expect(data.pricing.formattedCost).toBe("$0.04 estimated");
+      expect(data.creditQuote.formattedCredits).toBe("4 credits estimated");
     });
 
     test("human-readable shows env vars", async () => {
       const { stdout } = await runCli(["info", "image"]);
       expect(stdout).toContain("Env vars:");
       expect(stdout).toContain("SKILLS_API_KEY");
-      expect(stdout).toContain("Pricing: $0.04 estimated");
+      expect(stdout).toContain("Credits: 4 credits estimated");
       expect(stdout.toLowerCase()).not.toContain("openai");
       expect(stdout.toLowerCase()).not.toContain("gemini");
       expect(stdout.toLowerCase()).not.toContain("minimax");

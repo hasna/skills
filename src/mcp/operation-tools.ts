@@ -45,6 +45,9 @@ import {
 import { cacheClear, mcpError, mcpJson, remoteRunNextActions } from "./helpers.js";
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../lib/remote-run-contract.js";
 import { getHostedRunAvailability } from "../lib/hosted-availability.js";
+import { loadConfig } from "../lib/config.js";
+import { loadRemoteSkill } from "../lib/remote-registry.js";
+import { toCustomerCreditPayload, toPublicCreditQuote } from "../lib/public-credits.js";
 
 export function registerOperationTools(server: McpServer): void {
   server.registerTool("scaffold_skill", {
@@ -285,23 +288,72 @@ export function registerOperationTools(server: McpServer): void {
       }
     }
 
-    const pricing = getPublicSkillPricing(skill.name, runInput, runArgs);
-    const hostedAvailability = getHostedRunAvailability(skill.name);
-    if (!hostedAvailability.ok) {
+    const mode = resolveDeploymentMode();
+    let creditQuote = toPublicCreditQuote(getPublicSkillPricing(skill.name, runInput, runArgs));
+    let quoteToken: string | undefined;
+    let quoteExpiresAt: string | undefined;
+    let availability: { status: "available" | "unavailable"; code?: string; message?: string; details?: string[] } = { status: "available" };
+    if (mode === "local" && creditQuote.tier === "premium") {
+      return mcpError("REMOTE_MODE_REQUIRED", `${skill.name} requires cloud or self-hosted mode.`, ["skills setup --mode cloud"]);
+    }
+    if (mode === "cloud") {
+      try {
+        const remoteSkill = await loadRemoteSkill(skill.name);
+        if (remoteSkill.pricing) creditQuote = toPublicCreditQuote(remoteSkill.pricing);
+        availability = remoteSkill.availability ?? {
+          status: "unavailable",
+          code: "REMOTE_AVAILABILITY_MISSING",
+          message: "The cloud service did not publish run availability for this skill.",
+        };
+        const { getApiKey } = await import("../lib/auth-store.js");
+        const apiKey = getApiKey();
+        if (apiKey && availability.status === "available") {
+          const { RemoteSkillsClient } = await import("../lib/remote-client.js");
+          const liveQuote = await new RemoteSkillsClient(apiKey).quoteSkill(skill.name, runInput, runArgs);
+          if (liveQuote?.error || liveQuote?.availability?.status === "unavailable") {
+            availability = {
+              status: "unavailable",
+              code: String(liveQuote?.availability?.code || liveQuote?.code || "CLOUD_QUOTE_UNAVAILABLE"),
+              message: String(liveQuote?.availability?.message || liveQuote?.detail || liveQuote?.error || "Cloud execution is unavailable"),
+              details: Array.isArray(liveQuote?.availability?.details)
+                ? liveQuote.availability.details.map(String)
+                : ["No credits were charged."],
+            };
+          } else if (liveQuote?.creditQuote || liveQuote?.pricing) {
+            creditQuote = toPublicCreditQuote(liveQuote.creditQuote ?? liveQuote.pricing);
+          }
+          quoteToken = typeof liveQuote?.quoteToken === "string" ? liveQuote.quoteToken : undefined;
+          quoteExpiresAt = typeof liveQuote?.expiresAt === "string" ? liveQuote.expiresAt : undefined;
+        }
+      } catch (error) {
+        return mcpError("CLOUD_CAPABILITY_CHECK_FAILED", `Unable to verify cloud availability: ${(error as Error).message}`);
+      }
+    } else {
+      const hostedAvailability = getHostedRunAvailability(skill.name);
+      if (!hostedAvailability.ok) {
+        availability = {
+          status: "unavailable",
+          code: hostedAvailability.code,
+          message: hostedAvailability.message,
+          details: hostedAvailability.details,
+        };
+      }
+    }
+    if (availability.status === "unavailable") {
       return {
         content: [{
           type: "text",
           text: JSON.stringify({
             skill: skill.name,
-            pricing,
-            error: hostedAvailability.message,
-            code: hostedAvailability.code,
-            details: hostedAvailability.details,
+            creditQuote,
+            error: availability.message || "remote execution is unavailable",
+            code: availability.code || "REMOTE_UNAVAILABLE",
+            details: availability.details || ["No credits were charged."],
             availability: {
               status: "unavailable",
-              code: hostedAvailability.code,
-              message: hostedAvailability.message,
-              details: hostedAvailability.details,
+              code: availability.code || "REMOTE_UNAVAILABLE",
+              message: availability.message || "remote execution is unavailable",
+              details: availability.details || ["No credits were charged."],
             },
           }),
         }],
@@ -311,8 +363,10 @@ export function registerOperationTools(server: McpServer): void {
 
     return mcpJson({
       skill: skill.name,
-      pricing,
+      creditQuote,
       availability: { status: "available" },
+      ...(quoteToken ? { quoteToken } : {}),
+      ...(quoteExpiresAt ? { expiresAt: quoteExpiresAt } : {}),
     });
   });
 
@@ -324,9 +378,10 @@ export function registerOperationTools(server: McpServer): void {
       input: z.record(z.string(), z.unknown()).optional(),
       args: z.array(z.string()).optional(),
       approved: z.boolean().optional(),
+      quoteToken: z.string().optional(),
       detail: z.boolean().optional(),
     },
-  }, async ({ name, input, args, approved, detail }) => {
+  }, async ({ name, input, args, approved, quoteToken, detail }) => {
     const skill = getSkill(name);
     if (!skill) {
       return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
@@ -337,7 +392,7 @@ export function registerOperationTools(server: McpServer): void {
       ARTICLE_GENERATION_SLUG,
       isPremiumSkill,
       getSkillRunCostCents,
-      formatCost,
+      getPublicSkillPricing,
       validateBlogArticleRunOptions,
     } = await import("../lib/pricing.js");
     const skillName = skill.name;
@@ -351,7 +406,14 @@ export function registerOperationTools(server: McpServer): void {
     }
 
     const apiKey = getApiKey();
-    const costCents = isPremiumSkill(skillName) ? getSkillRunCostCents(skillName, runInput, runArgs) : undefined;
+    const mode = resolveDeploymentMode();
+    let costCents = isPremiumSkill(skillName) ? getSkillRunCostCents(skillName, runInput, runArgs) : undefined;
+    let creditQuote = toPublicCreditQuote(getPublicSkillPricing(skillName, runInput, runArgs));
+
+    if (isPremiumSkill(skillName) && mode === "local") {
+      return mcpError("REMOTE_MODE_REQUIRED", `${skillName} requires cloud or self-hosted mode.`, ["skills setup --mode cloud"]);
+    }
+
     const runContext = createSkillRun({
       skill: skillName,
       args: runArgs,
@@ -360,29 +422,77 @@ export function registerOperationTools(server: McpServer): void {
     });
 
     if (isPremiumSkill(skillName)) {
-      const hostedAvailability = getHostedRunAvailability(skillName);
-      if (!hostedAvailability.ok) {
-        const error = `${hostedAvailability.code}: ${hostedAvailability.message}`;
-        writeRunLogs(runContext, "", `${error}\n${hostedAvailability.details.join("\n")}\n`);
+      let availability: { status: "available" | "unavailable"; code?: string; message?: string; details?: string[] } = { status: "available" };
+      if (mode === "cloud") {
+        try {
+          const remoteSkill = await loadRemoteSkill(skillName);
+          if (remoteSkill.pricing) {
+            creditQuote = toPublicCreditQuote(remoteSkill.pricing);
+            costCents = creditQuote.credits;
+          }
+          availability = remoteSkill.availability ?? {
+            status: "unavailable",
+            code: "REMOTE_AVAILABILITY_MISSING",
+            message: "The cloud service did not publish run availability for this skill.",
+          };
+        } catch (error) {
+          return mcpError("CLOUD_CAPABILITY_CHECK_FAILED", `Unable to verify cloud availability: ${(error as Error).message}`);
+        }
+      } else {
+        const hostedAvailability = getHostedRunAvailability(skillName);
+        if (!hostedAvailability.ok) {
+          availability = {
+            status: "unavailable",
+            code: hostedAvailability.code,
+            message: hostedAvailability.message,
+            details: hostedAvailability.details,
+          };
+        }
+      }
+      if (availability.status === "unavailable") {
+        const error = `${availability.code || "REMOTE_UNAVAILABLE"}: ${availability.message || "remote execution is unavailable"}`;
+        writeRunLogs(runContext, "", `${error}\n${(availability.details || []).join("\n")}\n`);
         const run = completeSkillRun(runContext, { status: "failed", error, costCents });
         return mcpError(
-          hostedAvailability.code,
-          `${hostedAvailability.message}. ${hostedAvailability.details.join(" ")} Local run metadata: ${run.paths.runDir}/run.json`,
+          availability.code || "REMOTE_UNAVAILABLE",
+          `${availability.message || "remote execution is unavailable"}. ${(availability.details || ["No credits were charged."]).join(" ")} Local run metadata: ${run.paths.runDir}/run.json`,
         );
       }
     }
 
     if (isPremiumSkill(skillName) && !apiKey) {
-      const cost = formatCost(costCents ?? 0);
-      const error = `${skillName} is a self-hosted skill (${cost}). Run: skills setup --mode self-hosted && skills auth login`;
+      const error = `${skillName} is a remote skill (${creditQuote.formattedCredits}). Run: skills setup --mode ${mode === "cloud" ? "cloud" : "self-hosted"} && skills auth login`;
       writeRunLogs(runContext, "", error + "\n");
       const run = completeSkillRun(runContext, { status: "failed", error, costCents });
       return mcpError("AUTH_REQUIRED", `${error}. Local run metadata: ${run.paths.runDir}/run.json`, ["skills auth login"]);
     }
 
+    let remoteClient: import("../lib/remote-client.js").RemoteSkillsClient | undefined;
+    let cloudQuoteToken = quoteToken;
+    if (isPremiumSkill(skillName) && apiKey && mode === "cloud") {
+      try {
+        const { RemoteSkillsClient } = await import("../lib/remote-client.js");
+        remoteClient = new RemoteSkillsClient(apiKey);
+        const liveQuote = await remoteClient.quoteSkill(skillName, runInput, runArgs);
+        if (liveQuote?.error || liveQuote?.availability?.status === "unavailable") {
+          const message = String(liveQuote?.availability?.message || liveQuote?.detail || liveQuote?.error || "Cloud execution is unavailable");
+          return mcpError(String(liveQuote?.availability?.code || liveQuote?.code || "CLOUD_QUOTE_UNAVAILABLE"), `${message}. No credits were charged.`);
+        }
+        if (liveQuote?.creditQuote || liveQuote?.pricing) {
+          creditQuote = toPublicCreditQuote(liveQuote.creditQuote ?? liveQuote.pricing);
+          costCents = creditQuote.credits;
+        }
+        cloudQuoteToken = typeof liveQuote?.quoteToken === "string" ? liveQuote.quoteToken : cloudQuoteToken;
+        if (creditQuote.credits > 0 && !cloudQuoteToken) {
+          return mcpError("CLOUD_QUOTE_TOKEN_MISSING", "The cloud quote did not include the required quote token. No credits were charged.");
+        }
+      } catch (error) {
+        return mcpError("CLOUD_QUOTE_FAILED", `Unable to obtain a cloud credit quote: ${(error as Error).message}`);
+      }
+    }
+
     if (isPremiumSkill(skillName) && apiKey && approved !== true) {
-      const cost = formatCost(costCents ?? 0);
-      const error = `${skillName} is a paid self-hosted skill (${cost}). Call quote_skill first, then call run_skill with approved: true after user approval.`;
+      const error = `${skillName} requires ${creditQuote.formattedCredits}. Call quote_skill first, then call run_skill with approved: true after user approval.`;
       writeRunLogs(runContext, "", error + "\n");
       const run = completeSkillRun(runContext, { status: "failed", error, costCents });
       return mcpError("APPROVAL_REQUIRED", `${error}. Local run metadata: ${run.paths.runDir}/run.json`, [
@@ -394,8 +504,13 @@ export function registerOperationTools(server: McpServer): void {
     if (isPremiumSkill(skillName) && apiKey) {
       try {
         const { RemoteSkillsClient } = await import("../lib/remote-client.js");
-        const client = new RemoteSkillsClient(apiKey);
-        const run = await client.submitRun(skillName, runInput, runArgs);
+        const client = remoteClient ?? new RemoteSkillsClient(apiKey);
+        const run = await client.submitRun(
+          skillName,
+          runInput,
+          runArgs,
+          mode === "cloud" ? { quoteToken: cloudQuoteToken, approved: true } : {},
+        );
         if (run.error) {
           writeRunLogs(runContext, "", String(run.error) + "\n");
           const localRun = completeSkillRun(runContext, { status: "failed", error: String(run.error) });
@@ -415,13 +530,14 @@ export function registerOperationTools(server: McpServer): void {
           status: run.status,
           correlationId: run.correlationId,
           remote: true,
+          creditQuote,
           remoteRun: run,
           run: localRun,
           nextActions: remoteRunNextActions(remoteRunId),
         };
-        return mcpJson(detail ? payload : compactRunToolPayload(payload, "Call run_skill again with detail:true for full remote/local run records."));
+        return mcpJson(toCustomerCreditPayload(detail ? payload : compactRunToolPayload(payload, "Call run_skill again with detail:true for full remote/local run records.")));
       } catch (err) {
-        const error = `Self-hosted skill ${skillName} requires self-hosted API access: ${(err as Error).message}`;
+        const error = `Remote skill ${skillName} requires access to the selected ${mode} service: ${(err as Error).message}`;
         writeRunLogs(runContext, "", error + "\n");
         const localRun = completeSkillRun(runContext, { status: "failed", error });
         return mcpError("PLATFORM_ERROR", `${error}. Local run metadata: ${localRun.paths.runDir}/run.json`);
@@ -448,7 +564,7 @@ export function registerOperationTools(server: McpServer): void {
         isError: true,
       };
     }
-    return mcpJson(detail ? payload : compactRunToolPayload(payload, "Call run_skill again with detail:true for full stdout/stderr and run metadata."));
+    return mcpJson(toCustomerCreditPayload(detail ? payload : compactRunToolPayload(payload, "Call run_skill again with detail:true for full stdout/stderr and run metadata.")));
   });
 
   server.registerTool("get_run_status", {
@@ -483,14 +599,14 @@ export function registerOperationTools(server: McpServer): void {
         run,
         nextActions: remoteRunNextActions(remoteRunId),
       };
-      return mcpJson(detail ? payload : {
+      return mcpJson(toCustomerCreditPayload(detail ? payload : {
         contractVersion: payload.contractVersion,
         runId: payload.runId,
         ...(localRun ? { localRunId: localRun.id } : {}),
         run: compactRemoteRun(run),
         nextActions: payload.nextActions,
         detailHint: "Call get_run_status with detail:true for the complete remote run payload.",
-      });
+      }));
     } catch (err) {
       return mcpError("SKILLS_MD_ERROR", (err as Error).message);
     }
@@ -608,7 +724,7 @@ function compactRunToolPayload(payload: Record<string, any>, detailHint: string)
     ...(payload.status !== undefined ? { status: payload.status } : {}),
     ...(payload.remote !== undefined ? { remote: payload.remote } : {}),
     ...(payload.correlationId !== undefined ? { correlationId: payload.correlationId } : {}),
-    ...(payload.pricing !== undefined ? { pricing: payload.pricing } : {}),
+    ...(payload.creditQuote !== undefined ? { creditQuote: payload.creditQuote } : {}),
     ...(payload.error !== undefined ? { error: payload.error } : {}),
     ...(payload.remoteRun !== undefined ? { remoteRun: compactRemoteRun(payload.remoteRun) } : {}),
     run: compactRunRecord(payload.run),
@@ -621,4 +737,13 @@ function compactRunToolPayload(payload: Record<string, any>, detailHint: string)
     ...(payload.nextActions !== undefined ? { nextActions: payload.nextActions } : {}),
     detailHint,
   };
+}
+
+function resolveDeploymentMode(): "local" | "self-hosted" | "cloud" {
+  const config = loadConfig();
+  if (config.mode) return config.mode;
+  const apiUrl = (process.env.SKILLS_API_URL || config.apiUrl || "").toLowerCase();
+  if (apiUrl.includes("skills.md")) return "cloud";
+  if (apiUrl || process.env.SKILLS_API_KEY || process.env.SKILL_API_KEY) return "self-hosted";
+  return "self-hosted";
 }

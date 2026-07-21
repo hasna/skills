@@ -17,11 +17,11 @@ describe("@hasna/skills product brief", () => {
     }
   });
 
-  test("defines pricing principles and trust model", () => {
-    expect(brief).toContain("## Pricing Principles");
+  test("defines credit principles and trust model", () => {
+    expect(brief).toContain("## Credit Principles");
     expect(brief).toContain("## Trust Model");
     expect(brief).toContain("Billing, payment methods, credits");
-    expect(brief).toContain("Self-hosted skills expose public docs");
+    expect(brief).toContain("Remote skills expose public docs");
     expect(brief).toContain("Local skills should remain runnable");
   });
 
@@ -32,10 +32,12 @@ describe("@hasna/skills product brief", () => {
     expect(brief).toContain("without making the agent workflow dependent on a browser");
   });
 
-  test("anchors product to public package and optional self-hosted API", () => {
+  test("anchors product to the public package and three modes", () => {
     expect(brief).toContain("hasna/skills");
     expect(brief).toContain("@hasna/skills");
-    expect(brief).toContain("https://skills.hasna.xyz");
+    expect(brief).toContain("https://skills.md");
+    expect(brief).toContain("cloud");
+    expect(brief).toContain("self-hosted");
     expect(brief).toContain("local-only");
     expect(brief).not.toContain(cloudPackage);
   });
