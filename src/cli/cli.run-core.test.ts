@@ -399,7 +399,7 @@ describe("CLI run core", () => {
               status: "unavailable",
               code: "CAPACITY_UNAVAILABLE",
               message: "Image generation is temporarily unavailable.",
-              details: ["No credits were charged."],
+              details: ["No balance was charged."],
             },
             creditQuote: { credits: 9, formattedCredits: "9 credits/image" },
           });
@@ -416,6 +416,7 @@ describe("CLI run core", () => {
         expect(run.exitCode).toBe(1);
         expect(JSON.parse(run.stdout)).toMatchObject({ code: "CAPACITY_UNAVAILABLE" });
         expect(JSON.parse(run.stdout).details).toContain("No credits were charged.");
+        expect(JSON.stringify(JSON.parse(run.stdout))).not.toContain("balance was charged");
         expect(calls).toEqual(["GET /api/v1/skills/image"]);
       } finally {
         server.stop(true);

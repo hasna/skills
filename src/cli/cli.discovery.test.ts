@@ -34,6 +34,8 @@ describe("CLI discovery", () => {
         expect(result.stdout, surface).toContain("list|ls");
         expect(result.stdout, surface).toContain("run");
         expect(result.stdout, surface).toContain("setup");
+        expect(result.stdout, surface).toContain("Quote a skill run in credits before approving credit use");
+        expect(result.stdout, surface).not.toContain("account balance");
       }
     });
 

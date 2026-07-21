@@ -266,7 +266,7 @@ export function registerOperationTools(server: McpServer): void {
 
   server.registerTool("quote_skill", {
     title: "Quote Skill",
-    description: "Quote a skill run before spending account balance.",
+    description: "Quote a skill run in credits before approval.",
     inputSchema: {
       name: z.string(),
       input: z.record(z.string(), z.unknown()).optional(),
@@ -341,22 +341,19 @@ export function registerOperationTools(server: McpServer): void {
     }
     if (availability.status === "unavailable") {
       return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            skill: skill.name,
-            creditQuote,
-            error: availability.message || "remote execution is unavailable",
+        ...mcpJson(toCustomerCreditPayload({
+          skill: skill.name,
+          creditQuote,
+          error: availability.message || "remote execution is unavailable",
+          code: availability.code || "REMOTE_UNAVAILABLE",
+          details: availability.details || ["No credits were charged."],
+          availability: {
+            status: "unavailable",
             code: availability.code || "REMOTE_UNAVAILABLE",
+            message: availability.message || "remote execution is unavailable",
             details: availability.details || ["No credits were charged."],
-            availability: {
-              status: "unavailable",
-              code: availability.code || "REMOTE_UNAVAILABLE",
-              message: availability.message || "remote execution is unavailable",
-              details: availability.details || ["No credits were charged."],
-            },
-          }),
-        }],
+          },
+        })),
         isError: true,
       };
     }
@@ -468,23 +465,29 @@ export function registerOperationTools(server: McpServer): void {
     }
 
     let remoteClient: import("../lib/remote-client.js").RemoteSkillsClient | undefined;
-    let cloudQuoteToken = quoteToken;
+    const cloudQuoteToken = quoteToken;
     if (isPremiumSkill(skillName) && apiKey && mode === "cloud") {
       try {
         const { RemoteSkillsClient } = await import("../lib/remote-client.js");
         remoteClient = new RemoteSkillsClient(apiKey);
-        const liveQuote = await remoteClient.quoteSkill(skillName, runInput, runArgs);
-        if (liveQuote?.error || liveQuote?.availability?.status === "unavailable") {
-          const message = String(liveQuote?.availability?.message || liveQuote?.detail || liveQuote?.error || "Cloud execution is unavailable");
-          return mcpError(String(liveQuote?.availability?.code || liveQuote?.code || "CLOUD_QUOTE_UNAVAILABLE"), `${message}. No credits were charged.`);
-        }
-        if (liveQuote?.creditQuote || liveQuote?.pricing) {
-          creditQuote = toPublicCreditQuote(liveQuote.creditQuote ?? liveQuote.pricing);
-          costCents = creditQuote.credits;
-        }
-        cloudQuoteToken = typeof liveQuote?.quoteToken === "string" ? liveQuote.quoteToken : cloudQuoteToken;
-        if (creditQuote.credits > 0 && !cloudQuoteToken) {
-          return mcpError("CLOUD_QUOTE_TOKEN_MISSING", "The cloud quote did not include the required quote token. No credits were charged.");
+        if (approved === true) {
+          if (!cloudQuoteToken) {
+            return mcpError(
+              "CLOUD_QUOTE_TOKEN_REQUIRED",
+              "The approved cloud run is missing the previously quoted token. Call quote_skill with the exact input and args, obtain user approval, then retry run_skill with that quoteToken.",
+              ["quote_skill", "run_skill approved=true quoteToken=<approved token>"],
+            );
+          }
+        } else {
+          const liveQuote = await remoteClient.quoteSkill(skillName, runInput, runArgs);
+          if (liveQuote?.error || liveQuote?.availability?.status === "unavailable") {
+            const message = String(liveQuote?.availability?.message || liveQuote?.detail || liveQuote?.error || "Cloud execution is unavailable");
+            return mcpError(String(liveQuote?.availability?.code || liveQuote?.code || "CLOUD_QUOTE_UNAVAILABLE"), `${message}. No credits were charged.`);
+          }
+          if (liveQuote?.creditQuote || liveQuote?.pricing) {
+            creditQuote = toPublicCreditQuote(liveQuote.creditQuote ?? liveQuote.pricing);
+            costCents = creditQuote.credits;
+          }
         }
       } catch (error) {
         return mcpError("CLOUD_QUOTE_FAILED", `Unable to obtain a cloud credit quote: ${(error as Error).message}`);

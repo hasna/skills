@@ -139,7 +139,7 @@ export function registerSchedule(parent: Command) {
         return;
       }
       const approvedCredits = parseMaxCredits(options.maxCredits ?? options.maxPaidCents);
-      if (totalCredits > 0 && (!options.allowPaid || approvedCredits === null || approvedCredits < totalCredits)) {
+      if (totalCredits > 0 && (!options.allowPaid || approvedCredits === null)) {
         const error = `Due remote schedules require ${formatCredits(totalCredits)} total. Review with skills schedule run --dry-run, then rerun with --allow-paid --max-credits ${totalCredits}.`;
         if (options.json) {
           console.log(JSON.stringify({
@@ -155,10 +155,55 @@ export function registerSchedule(parent: Command) {
         process.exitCode = 1;
         return;
       }
-      const results = [];
-      for (const s of due) {
+      const prepared = await Promise.all(due.map(async (schedule) => {
         try {
-          const execution = await executeScheduledSkill(s.skill, s.args ?? [], { allowPaid: options.allowPaid });
+          return { schedule, execution: await prepareScheduledSkill(schedule.skill, schedule.args ?? []) };
+        } catch (error) {
+          return { schedule, error: (error as Error).message };
+        }
+      }));
+      const authoritativeTotalCredits = prepared.reduce(
+        (total, item) => total + (item.execution?.credits ?? 0),
+        0,
+      );
+      if (authoritativeTotalCredits > 0 && (
+        !options.allowPaid
+        || approvedCredits === null
+        || authoritativeTotalCredits > approvedCredits
+      )) {
+        const suggestedCredits = authoritativeTotalCredits;
+        const error = `Authoritative live quotes require ${formatCredits(authoritativeTotalCredits)} total, above the approved maximum of ${approvedCredits ?? 0} credits. Review and rerun with --allow-paid --max-credits ${suggestedCredits}.`;
+        if (options.json) {
+          console.log(JSON.stringify({
+            ran: 0,
+            approvalRequired: true,
+            error,
+            totalCredits: authoritativeTotalCredits,
+            maxCredits: approvedCredits,
+            schedules: prepared.filter((item) => item.execution?.paid).map((item) => ({
+              name: item.schedule.name,
+              skill: item.schedule.skill,
+              paid: true,
+              credits: item.execution?.credits,
+              creditQuote: item.execution?.creditQuote,
+            })),
+          }));
+        } else {
+          console.error(chalk.red(`✗ ${error}`));
+        }
+        process.exitCode = 1;
+        return;
+      }
+      const results = [];
+      for (const item of prepared) {
+        const s = item.schedule;
+        if (!item.execution) {
+          recordScheduleRun(s.id, "error");
+          results.push({ name: s.name, skill: s.skill, status: "error", error: item.error || "Unable to prepare scheduled skill" });
+          continue;
+        }
+        try {
+          const execution = await item.execution.execute();
           recordScheduleRun(s.id, "success");
           results.push({ name: s.name, skill: s.skill, status: "success", ...execution });
         } catch (err) {
@@ -202,7 +247,14 @@ export function registerSchedule(parent: Command) {
     });
 }
 
-async function executeScheduledSkill(skillName: string, args: string[], options: { allowPaid: boolean }) {
+interface PreparedScheduledSkill {
+  paid: boolean;
+  credits: number;
+  creditQuote?: ReturnType<typeof toPublicCreditQuote>;
+  execute: () => Promise<{ paid: boolean; credits?: number; creditQuote?: ReturnType<typeof toPublicCreditQuote> }>;
+}
+
+async function prepareScheduledSkill(skillName: string, args: string[]): Promise<PreparedScheduledSkill> {
   const { getSkill } = await import("../../lib/registry.js");
   const skill = getSkill(skillName);
   if (!skill) throw new Error(`Skill '${skillName}' not found`);
@@ -244,25 +296,35 @@ async function executeScheduledSkill(skillName: string, args: string[], options:
         throw new Error("The cloud quote did not include the required quote token. No credits were charged.");
       }
     }
-    if (!options.allowPaid) {
-      throw new Error(`${skill.name} requires ${creditQuote.formattedCredits}. Review with skills schedule run --dry-run, then rerun with --allow-paid --max-credits ${creditQuote.credits}.`);
-    }
-    const run = await client.submitRun(
-      skill.name,
-      {},
-      args,
-      mode === "cloud" ? { quoteToken, approved: true } : {},
-    );
-    if (run.error) throw new Error(String(run.error));
-    return { paid: true, credits: creditQuote.credits, creditQuote };
+    return {
+      paid: true,
+      credits: creditQuote.credits,
+      creditQuote,
+      execute: async () => {
+        const run = await client.submitRun(
+          skill.name,
+          {},
+          args,
+          mode === "cloud" ? { quoteToken, approved: true } : {},
+        );
+        if (run.error) throw new Error(String(run.error));
+        return { paid: true, credits: creditQuote.credits, creditQuote };
+      },
+    };
   }
 
-  const { runSkill } = await import("../../lib/skillinfo.js");
-  const result = await runSkill(skill.name, args);
-  if (result.exitCode !== 0) {
-    throw new Error(result.error || result.stderr || `Skill '${skill.name}' exited with ${result.exitCode}`);
-  }
-  return { paid: false };
+  return {
+    paid: false,
+    credits: 0,
+    execute: async () => {
+      const { runSkill } = await import("../../lib/skillinfo.js");
+      const result = await runSkill(skill.name, args);
+      if (result.exitCode !== 0) {
+        throw new Error(result.error || result.stderr || `Skill '${skill.name}' exited with ${result.exitCode}`);
+      }
+      return { paid: false };
+    },
+  };
 }
 
 async function describeDueSchedule(schedule: { name: string; skill: string; cron: string; args?: string[] }) {

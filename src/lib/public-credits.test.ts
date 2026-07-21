@@ -42,6 +42,30 @@ describe("public credit presentation", () => {
     expect(serialized.toLowerCase()).not.toContain("usd");
   });
 
+  test("normalizes known nested API message fields without mutating opaque values", () => {
+    const payload = toCustomerCreditPayload({
+      id: "run_balance_unchanged",
+      artifactUrl: "https://example.test/artifacts/no-balance-was-charged.json",
+      message: "No balance was charged.",
+      nested: {
+        error: "Insufficient account balance.",
+        details: ["Your balance was not charged.", "Retry later."],
+        opaque: "balance_was_charged_identifier",
+      },
+    });
+
+    expect(payload).toEqual({
+      id: "run_balance_unchanged",
+      artifactUrl: "https://example.test/artifacts/no-balance-was-charged.json",
+      message: "No credits were charged.",
+      nested: {
+        error: "Insufficient account credits.",
+        details: ["Your credits were not charged.", "Retry later."],
+        opaque: "balance_was_charged_identifier",
+      },
+    });
+  });
+
   test("formats free, fixed, and estimated credits", () => {
     expect(formatCredits(0, { tier: "free" })).toBe("0 credits");
     expect(formatCredits(8, { billingUnit: "run" })).toBe("8 credits/run");

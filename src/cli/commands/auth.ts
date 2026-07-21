@@ -85,7 +85,7 @@ function commandErrorPayload(err: unknown, fallback: string): Record<string, unk
 }
 
 function writeCommandError(err: unknown, fallback: string, json?: boolean): void {
-  const payload = commandErrorPayload(err, fallback);
+  const payload = toCustomerCreditPayload(commandErrorPayload(err, fallback)) as Record<string, unknown>;
   if (json) console.log(JSON.stringify(payload, null, 2));
   else console.error(chalk.red(String(payload.detail || payload.error || fallback)));
   process.exitCode = 1;

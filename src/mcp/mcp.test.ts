@@ -398,6 +398,63 @@ version: 0.3.0
     }
   }, 15000);
 
+  test("quote_skill normalizes nested cloud unavailability messages to credits", async () => {
+    const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require("fs");
+    const { tmpdir } = require("os");
+    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-cloud-unavailable-credits-"));
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/v1/skills/image" && req.method === "GET") {
+          return Response.json({
+            slug: "image",
+            availability: { status: "available" },
+            creditQuote: { tier: "premium", billingUnit: "image", credits: 9, formattedCredits: "9 credits/image" },
+          });
+        }
+        if (url.pathname === "/api/v1/skills/image/quote" && req.method === "POST") {
+          return Response.json({
+            availability: {
+              status: "unavailable",
+              code: "CAPACITY_UNAVAILABLE",
+              message: "Image generation is temporarily unavailable.",
+              details: ["No balance was charged."],
+            },
+          });
+        }
+        return Response.json({ error: `unexpected ${req.method} ${url.pathname}` }, { status: 500 });
+      },
+    });
+    mkdirSync(join(tmpDir, ".hasna", "skills"), { recursive: true });
+    writeFileSync(join(tmpDir, ".hasna", "skills", "config.json"), JSON.stringify({
+      mode: "cloud",
+      apiUrl: `http://127.0.0.1:${server.port}`,
+    }));
+    const client = new McpClient({ HOME: tmpDir, SKILLS_API_KEY: "sk_test_cloud_unavailable_credits" });
+
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "quote_skill",
+        arguments: { name: "image", args: ["a forest"] },
+      }, 83);
+      expect(response).not.toBeNull();
+      expect(response.result.isError).toBe(true);
+      const payload = JSON.parse(response.result.content[0].text);
+      expect(payload).toMatchObject({
+        code: "CAPACITY_UNAVAILABLE",
+        details: ["No credits were charged."],
+        availability: { details: ["No credits were charged."] },
+      });
+      expect(JSON.stringify(payload)).not.toContain("balance was charged");
+    } finally {
+      await client.close();
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
   test("quote_skill fails fast for unavailable hosted provider skills", async () => {
     const client = new McpClient();
     try {
@@ -551,6 +608,122 @@ version: 0.3.0
       expect(error.message).toContain("requires 50 credits/run");
       expect(error.message).toContain("approved: true");
       expect(remoteCalls).toBe(0);
+    } finally {
+      await client.close();
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  test("run_skill forwards the exact approved cloud quote token and input without re-quoting", async () => {
+    const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require("fs");
+    const { tmpdir } = require("os");
+    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-approved-cloud-quote-"));
+    let quoteCalls = 0;
+    let submittedBody: unknown;
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/v1/skills/image" && req.method === "GET") {
+          return Response.json({
+            slug: "image",
+            availability: { status: "available" },
+            creditQuote: { tier: "premium", billingUnit: "image", credits: 9, formattedCredits: "9 credits/image" },
+          });
+        }
+        if (url.pathname === "/api/v1/skills/image/quote" && req.method === "POST") {
+          quoteCalls += 1;
+          return Response.json({
+            quoteToken: "quote_replacement_higher",
+            availability: { status: "available" },
+            creditQuote: { tier: "premium", billingUnit: "image", credits: 99, formattedCredits: "99 credits/image" },
+          });
+        }
+        if (url.pathname === "/api/v1/runs/image" && req.method === "POST") {
+          submittedBody = await req.json();
+          return Response.json({ id: "run_exact_approved_quote", skill: "image", status: "queued" });
+        }
+        return Response.json({ error: `unexpected ${req.method} ${url.pathname}` }, { status: 500 });
+      },
+    });
+    mkdirSync(join(tmpDir, ".hasna", "skills"), { recursive: true });
+    writeFileSync(join(tmpDir, ".hasna", "skills", "config.json"), JSON.stringify({
+      mode: "cloud",
+      apiUrl: `http://127.0.0.1:${server.port}`,
+    }));
+    const client = new McpClient({ HOME: tmpDir, SKILLS_API_KEY: "sk_test_exact_approved_quote" });
+
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "run_skill",
+        arguments: {
+          name: "image",
+          input: { prompt: "approved forest" },
+          args: ["--count", "1"],
+          approved: true,
+          quoteToken: "quote_user_approved_9",
+        },
+      }, 86);
+      expect(response).not.toBeNull();
+      expect(response.result.isError).not.toBe(true);
+      expect(quoteCalls).toBe(0);
+      expect(submittedBody).toEqual({
+        input: { prompt: "approved forest" },
+        args: ["--count", "1"],
+        approved: true,
+        quoteToken: "quote_user_approved_9",
+      });
+    } finally {
+      await client.close();
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  test("run_skill rejects approved paid cloud calls without the previously quoted token", async () => {
+    const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require("fs");
+    const { tmpdir } = require("os");
+    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-approved-cloud-missing-token-"));
+    let quoteCalls = 0;
+    let runCalls = 0;
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/v1/skills/image" && req.method === "GET") {
+          return Response.json({
+            slug: "image",
+            availability: { status: "available" },
+            creditQuote: { tier: "premium", billingUnit: "image", credits: 9, formattedCredits: "9 credits/image" },
+          });
+        }
+        if (url.pathname.endsWith("/quote")) quoteCalls += 1;
+        if (url.pathname.startsWith("/api/v1/runs/")) runCalls += 1;
+        return Response.json({ error: "no quote or run request expected" }, { status: 500 });
+      },
+    });
+    mkdirSync(join(tmpDir, ".hasna", "skills"), { recursive: true });
+    writeFileSync(join(tmpDir, ".hasna", "skills", "config.json"), JSON.stringify({
+      mode: "cloud",
+      apiUrl: `http://127.0.0.1:${server.port}`,
+    }));
+    const client = new McpClient({ HOME: tmpDir, SKILLS_API_KEY: "sk_test_missing_approved_quote" });
+
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "run_skill",
+        arguments: { name: "image", args: ["a forest"], approved: true },
+      }, 87);
+      expect(response).not.toBeNull();
+      expect(response.result.isError).toBe(true);
+      const payload = JSON.parse(response.result.content[0].text);
+      expect(payload).toMatchObject({ code: "CLOUD_QUOTE_TOKEN_REQUIRED" });
+      expect(payload.message).toContain("quote_skill");
+      expect(quoteCalls).toBe(0);
+      expect(runCalls).toBe(0);
     } finally {
       await client.close();
       server.stop(true);

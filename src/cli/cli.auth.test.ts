@@ -256,6 +256,81 @@ describe("CLI self-hosted auth and billing", () => {
     }
   });
 
+  test("legacy unbound credentials are never sent to a selected remote origin", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "cli-auth-legacy-unbound-"));
+    const authDir = join(tmpDir, ".hasna", "skills");
+    mkdirSync(authDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(authDir, "auth.json"), JSON.stringify({
+      apiKey: "sk_legacy_unbound",
+      email: "legacy@example.com",
+      orgId: "org_legacy",
+      orgSlug: "legacy-org",
+      userId: "user_legacy",
+    }));
+
+    let selfHostedCalls = 0;
+    let cloudCalls = 0;
+    const selfHosted = Bun.serve({
+      port: 0,
+      fetch() {
+        selfHostedCalls += 1;
+        return Response.json({ error: "legacy credential must not reach a newly selected self-hosted origin" }, { status: 500 });
+      },
+    });
+    const cloud = Bun.serve({
+      port: 0,
+      fetch() {
+        cloudCalls += 1;
+        return Response.json({ error: "legacy credential must not reach a newly selected cloud origin" }, { status: 500 });
+      },
+    });
+
+    try {
+      const selfHostedSetup = await runCliInCwd([
+        "setup",
+        "--mode",
+        "self-hosted",
+        "--api-url",
+        `http://127.0.0.1:${selfHosted.port}`,
+        "--json",
+      ], tmpDir, { HOME: tmpDir });
+      expect(selfHostedSetup.exitCode).toBe(0);
+
+      const selfHostedStatus = await runCliInCwd(["billing", "status", "--json"], tmpDir, { HOME: tmpDir });
+      expect(selfHostedStatus.exitCode).toBe(1);
+      expect(JSON.parse(selfHostedStatus.stdout)).toMatchObject({ error: "Not signed in. Run: skills auth login" });
+      expect(selfHostedCalls).toBe(0);
+
+      const cloudSetup = await runCliInCwd([
+        "setup",
+        "--mode",
+        "cloud",
+        "--api-url",
+        `http://127.0.0.1:${cloud.port}`,
+        "--json",
+      ], tmpDir, { HOME: tmpDir });
+      expect(cloudSetup.exitCode).toBe(0);
+
+      const cloudStatus = await runCliInCwd(["billing", "status", "--json"], tmpDir, { HOME: tmpDir });
+      expect(cloudStatus.exitCode).toBe(1);
+      expect(JSON.parse(cloudStatus.stdout)).toMatchObject({ error: "Not signed in. Run: skills auth login" });
+      expect(cloudCalls).toBe(0);
+
+      writeFileSync(join(tmpDir, "skills.config.json"), JSON.stringify({
+        mode: "local",
+        apiUrl: `http://127.0.0.1:${selfHosted.port}`,
+      }));
+      const localStatus = await runCliInCwd(["billing", "status", "--json"], tmpDir, { HOME: tmpDir });
+      expect(localStatus.exitCode).toBe(1);
+      expect(JSON.parse(localStatus.stdout)).toMatchObject({ error: "Not signed in. Run: skills auth login" });
+      expect(selfHostedCalls).toBe(0);
+    } finally {
+      selfHosted.stop(true);
+      cloud.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test("device login stores credentials and billing commands call the self-hosted API", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-device-auth-"));
     const seenAuthHeaders: Array<string | null> = [];

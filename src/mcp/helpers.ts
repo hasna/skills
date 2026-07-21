@@ -1,4 +1,5 @@
 import { getMcpToolDescriptions } from "../lib/mcp-contracts.js";
+import { toCustomerCreditPayload } from "../lib/public-credits.js";
 
 export function stripNulls(obj: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(
@@ -26,7 +27,7 @@ export function mcpError(code: string, message: string, suggestions?: string[]) 
   const obj: { code: string; message: string; suggestions?: string[] } = { code, message };
   if (suggestions && suggestions.length > 0) obj.suggestions = suggestions;
   return {
-    content: [{ type: "text" as const, text: JSON.stringify(obj) }],
+    content: [{ type: "text" as const, text: JSON.stringify(toCustomerCreditPayload(obj)) }],
     isError: true,
   };
 }

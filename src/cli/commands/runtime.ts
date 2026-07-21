@@ -50,7 +50,7 @@ export function registerRuntime(parent: Command) {
     .allowUnknownOption(true)
     .passThroughOptions(true)
     .option("--json", "Output quote as JSON", false)
-    .description("Quote a skill run in credits before spending account balance")
+    .description("Quote a skill run in credits before approving credit use")
     .action(async (name: string, args: string[], options: { json: boolean }) => handleQuote(name, args, options));
 
   // Run

@@ -64,8 +64,9 @@ export function getApiKey(): string | null {
 
 /**
  * Return stored credentials only for the service that issued them.
- * Legacy unbound credentials remain valid for self-hosted compatibility, but
- * must be refreshed before cloud use so they can never leak across origins.
+ * Legacy unbound credentials remain readable through getAuthConfig() for local
+ * metadata and migration UX, but are never returned by this network-auth
+ * selector. Re-authentication verifies and binds them before remote reuse.
  */
 export function getAuthConfigForCurrentService(): AuthConfig | null {
   const config = getAuthConfig();
@@ -78,9 +79,7 @@ export function getAuthConfigForCurrentService(): AuthConfig | null {
       return null;
     }
   }
-  const currentMode = loadConfig().mode;
-  if (currentMode === "cloud" || currentUrl === normalizeSkillsApiOrigin(DEFAULT_CLOUD_API_URL)) return null;
-  return config;
+  return null;
 }
 
 export function normalizeSkillsApiOrigin(apiUrl: string): string {

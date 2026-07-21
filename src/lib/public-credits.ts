@@ -91,9 +91,36 @@ export function toCustomerCreditPayload(value: unknown): unknown {
     if (key === "price" || key === "cost") continue;
     if ((key === "pack" || key === "label") && typeof nested === "string" && /\$|usd|eur|gbp/i.test(nested)) continue;
     if (key === "balance" && typeof nested === "string" && !/credits?/i.test(nested)) continue;
-    output[key] = toCustomerCreditPayload(nested);
+    output[key] = isCustomerMessageField(key)
+      ? sanitizeCustomerMessageValue(nested)
+      : toCustomerCreditPayload(nested);
   }
   return output;
+}
+
+const CUSTOMER_MESSAGE_FIELDS = new Set(["message", "error", "detail", "details", "reason"]);
+
+function isCustomerMessageField(key: string): boolean {
+  return CUSTOMER_MESSAGE_FIELDS.has(key);
+}
+
+function sanitizeCustomerMessageValue(value: unknown): unknown {
+  if (typeof value === "string") return sanitizeCustomerCreditText(value);
+  if (Array.isArray(value)) return value.map(sanitizeCustomerMessageValue);
+  if (isRecord(value)) return toCustomerCreditPayload(value);
+  return value;
+}
+
+export function sanitizeCustomerCreditText(value: string): string {
+  return value
+    .replace(/\bno balance was charged\b/gi, "No credits were charged")
+    .replace(/\b(?:your|the) balance was not charged\b/gi, (match) => `${match.split(" ")[0]} credits were not charged`)
+    .replace(/\binsufficient account balance\b/gi, "Insufficient account credits")
+    .replace(/\binsufficient balance\b/gi, "Insufficient credits")
+    .replace(/\baccount balance\b/gi, "account credits")
+    .replace(/\bfinal price\b/gi, "final credit amount")
+    .replace(/\bpricing\b/gi, "credit quote")
+    .replace(/\bprice\b/gi, "credit amount");
 }
 
 function creditDescription(

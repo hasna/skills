@@ -386,6 +386,84 @@ describe("CLI runtime and misc commands", () => {
         rmSync(tmpDir, { recursive: true, force: true });
       }
     });
+
+    test("due cloud schedules enforce the max credits cap against all live quotes before submission", async () => {
+      const { mkdtempSync, readFileSync, rmSync, writeFileSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-schedule-live-credit-cap-"));
+      let quoteCalls = 0;
+      let runCalls = 0;
+      const server = Bun.serve({
+        port: 0,
+        async fetch(req) {
+          const url = new URL(req.url);
+          if (url.pathname === "/api/v1/skills/image" && req.method === "GET") {
+            return Response.json({
+              slug: "image",
+              availability: { status: "available" },
+              creditQuote: { tier: "premium", billingUnit: "image", credits: 4, formattedCredits: "4 credits/image" },
+            });
+          }
+          if (url.pathname === "/api/v1/skills/image/quote" && req.method === "POST") {
+            quoteCalls += 1;
+            return Response.json({
+              availability: { status: "available" },
+              quoteToken: `quote_schedule_${quoteCalls}`,
+              creditQuote: { tier: "premium", billingUnit: "image", credits: 6, formattedCredits: "6 credits/image" },
+            });
+          }
+          if (url.pathname === "/api/v1/runs/image" && req.method === "POST") {
+            runCalls += 1;
+            return Response.json({ id: `run_schedule_${runCalls}`, skill: "image", status: "queued" });
+          }
+          return Response.json({ error: `unexpected ${req.method} ${url.pathname}` }, { status: 500 });
+        },
+      });
+      const env = { HOME: tmpDir, SKILLS_API_KEY: "sk_test_schedule_live_cap" };
+
+      try {
+        const setup = await runCliInCwd([
+          "setup",
+          "--mode",
+          "cloud",
+          "--api-url",
+          `http://127.0.0.1:${server.port}`,
+          "--json",
+        ], tmpDir, { HOME: tmpDir });
+        expect(setup.exitCode).toBe(0);
+
+        for (const name of ["image-one", "image-two"]) {
+          const add = await runCliInCwd(["schedule", "add", "image", "*/5 * * * *", "--name", name, "--json"], tmpDir, env);
+          expect(add.exitCode).toBe(0);
+        }
+        const schedulesPath = join(tmpDir, ".skills", "schedules.json");
+        const data = JSON.parse(readFileSync(schedulesPath, "utf-8"));
+        for (const schedule of data.schedules) schedule.nextRun = "2020-01-01T00:00:00.000Z";
+        writeFileSync(schedulesPath, JSON.stringify(data, null, 2));
+
+        const run = await runCliInCwd([
+          "schedule",
+          "run",
+          "--allow-paid",
+          "--max-credits",
+          "8",
+          "--json",
+        ], tmpDir, env);
+        expect(run.exitCode).toBe(1);
+        expect(JSON.parse(run.stdout)).toMatchObject({
+          ran: 0,
+          approvalRequired: true,
+          totalCredits: 12,
+          maxCredits: 8,
+        });
+        expect(quoteCalls).toBe(2);
+        expect(runCalls).toBe(0);
+      } finally {
+        server.stop(true);
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("runtime --json", () => {
