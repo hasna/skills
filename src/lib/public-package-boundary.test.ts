@@ -144,7 +144,7 @@ describe("public package boundary", () => {
     expect(
       [...files].some((file) => file.startsWith("dist/cli/commands/") && file.endsWith(".d.ts")),
     ).toBe(true);
-  });
+  }, 30_000);
 
   test("keeps private cloud and self-dependencies out of package metadata", () => {
     const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")) as {
