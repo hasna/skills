@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getPackedFiles } from "./packlist";
@@ -10,6 +10,35 @@ const cloudNodeModulesPath = "node_modules/@hasna/" + "cloud";
 // Single source of truth for the published file list: the packager itself.
 function readPackedFiles(): string[] {
   return getPackedFiles(process.cwd());
+}
+
+function readPackedFilesWithBuiltDeclarations(): string[] {
+  const packageDir = mkdtempSync(join(tmpdir(), "hasna-skills-pack-boundary-"));
+
+  try {
+    copyFileSync(join(process.cwd(), "package.json"), join(packageDir, "package.json"));
+    const result = Bun.spawnSync(
+      [
+        "bun",
+        "run",
+        "tsc",
+        "--emitDeclarationOnly",
+        "--declaration",
+        "--outDir",
+        join(packageDir, "dist"),
+      ],
+      {
+        cwd: process.cwd(),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
+
+    return getPackedFiles(packageDir);
+  } finally {
+    rmSync(packageDir, { recursive: true, force: true });
+  }
 }
 
 function hostedMetadataSlugs(): string[] {
@@ -106,8 +135,8 @@ function buildEntryPointsForBoundaryScan(): string[] {
 }
 
 describe("public package boundary", () => {
-  test("excludes CLI test utilities while retaining public declarations", () => {
-    const files = new Set(readPackedFiles());
+  test("excludes CLI test utilities while retaining built public declarations", () => {
+    const files = new Set(readPackedFilesWithBuiltDeclarations());
 
     expect(files.has("dist/cli/cli.test-utils.d.ts")).toBe(false);
     expect(files.has("dist/index.d.ts")).toBe(true);

@@ -9,7 +9,7 @@ Preflight a commit range before merging or publishing public hasna/skills work.
 
 Arguments:
   range                         Git revision range to inspect.
-                                Default: upstream/main..HEAD
+                                Default: main..HEAD
 
 Options:
   --strict-private-markers      Fail on private SaaS marker strings.

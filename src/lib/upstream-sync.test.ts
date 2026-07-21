@@ -57,6 +57,14 @@ describe("upstream sync workflow", () => {
     expect(script).toContain("src/platform");
     expect((statSync(scriptPath).mode & 0o111) > 0).toBe(true);
   });
+
+  test("preflight help reports the implemented default range", () => {
+    const result = spawnSync("bash", [scriptPath, "--help"], { encoding: "utf8" });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Default: main..HEAD");
+    expect(result.stdout).not.toContain("upstream/main..HEAD");
+  });
 });
 
 describe("strict upstream marker regression", () => {
