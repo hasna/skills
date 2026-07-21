@@ -16,21 +16,16 @@ function shellQuote(value: string): string {
 
 describe("CLI discovery", () => {
   describe("help", () => {
-    test("outputs compact JSON skills list in non-TTY mode (no arguments)", async () => {
-      const { stdout } = await runCli([]);
-      const data = JSON.parse(stdout);
-      expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
-      expect(data[0]).toHaveProperty("name");
-      expect(data[0]).toHaveProperty("category");
-      expect(data[0]).toHaveProperty("pricing");
-      expect(data[0].pricing).toHaveProperty("formattedCost");
-      // Compact mode carries a short description so agents can discover without
-      // a per-skill lookup, but still omits tags to keep tokens low.
-      expect(data[0]).toHaveProperty("description");
-      expect(typeof data[0].description).toBe("string");
-      expect(data[0].description.length).toBeGreaterThan(0);
-      expect(data[0]).not.toHaveProperty("tags");
+    test("shows command discovery and exits without starting an interactive default", async () => {
+      const { stdout, stderr, exitCode } = await runCli([]);
+      expect(exitCode).toBe(0);
+      expect(stderr).toBe("");
+      expect(stdout).toContain("Usage: skills [options] [command]");
+      expect(stdout).toContain("Commands:");
+      expect(stdout).toContain("interactive|i");
+      expect(stdout).toContain("list|ls");
+      expect(stdout).toContain("run");
+      expect(stdout).toContain("setup");
     });
 
     test("shows help with --help", async () => {

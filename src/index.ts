@@ -4,8 +4,8 @@
  * Pin AI agent skills with a single command:
  *   skills pin image deepresearch
  *
- * Or use the interactive CLI:
- *   skills
+ * Or explicitly open the interactive CLI:
+ *   skills interactive
  */
 
 export {

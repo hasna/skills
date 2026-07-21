@@ -16,8 +16,11 @@ Requires [Bun](https://bun.sh/) 1.0+.
 ## Quick Start
 
 ```bash
-# Browse skills interactively
+# Discover available commands (non-interactive and agent-friendly)
 skills
+
+# Browse skills interactively when you explicitly want the TUI
+skills interactive
 
 # Self-hosted setup points the CLI at the Hasna-owned API
 skills setup --mode self-hosted
@@ -74,7 +77,8 @@ requirements explicitly document local provider use.
 
 | Command | Alias | Description |
 |---------|-------|-------------|
-| `skills` | | Interactive TUI to browse, search, and pin skills |
+| `skills` | | Show command discovery help and exit |
+| `skills interactive` | `i` | Open the interactive TUI to browse, search, and pin skills |
 | `skills pin <name>` | | Pin one or more skills in `.skills/project.json`; no source is copied |
 | `skills pin --category "Development Tools"` | | Pin all skills in a category |
 | `skills unpin <name>` | | Remove a project pin |

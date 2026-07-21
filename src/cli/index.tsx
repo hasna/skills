@@ -27,11 +27,12 @@ program
   .version(pkg.version)
   .option("--verbose", "Enable verbose logging", false)
   .option("--no-color", "Disable colored output (also respects NO_COLOR env var)")
-  .enablePositionalOptions();
+  .enablePositionalOptions()
+  .allowExcessArguments(false);
 
-// ── Interactive TUI (default) ──
+// ── Interactive TUI (explicit opt-in) ──
 program
-  .command("interactive", { isDefault: true })
+  .command("interactive")
   .alias("i")
   .description("Interactive skill browser (TUI)")
   .action(() => {
@@ -92,6 +93,10 @@ registerEventsCommands(program as any, { source: "skills" });
 
 program.hook("preAction", (_thisCommand, actionCommand) => {
   maybePrintFirstRunOnboarding(actionCommand, process.argv.slice(2), isTTY);
+});
+
+program.action(() => {
+  program.outputHelp();
 });
 
 await program.parseAsync();
