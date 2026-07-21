@@ -151,7 +151,7 @@ describe("CLI import export and env checks", () => {
       const { existsSync, mkdtempSync, readFileSync, rmSync } = require("fs");
       const { tmpdir } = require("os");
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-exports-download-"));
-      const artifactId = "artifact-1";
+      const artifactId = "art_00000000000000000021";
       const server = Bun.serve({
         port: 0,
         fetch(req) {
@@ -163,6 +163,7 @@ describe("CLI import export and env checks", () => {
             return Response.json([
               {
                 id: artifactId,
+                type: "generated_output",
                 fileName: "report.md",
                 relativePath: "nested/report.md",
                 contentType: "text/markdown",
@@ -209,7 +210,7 @@ describe("CLI import export and env checks", () => {
       const { tmpdir } = require("os");
       const path = require("path");
       const tmpDir = mkdtempSync(path.join(tmpdir(), "cli-blog-exports-download-"));
-      const artifactId = "artifact-blog-manifest";
+      const artifactId = "art_00000000000000000022";
       const server = Bun.serve({
         port: 0,
         fetch(req) {
@@ -226,6 +227,7 @@ describe("CLI import export and env checks", () => {
             return Response.json([
               {
                 id: artifactId,
+                type: "generated_output",
                 fileName: "manifest.json",
                 relativePath: "manifest.json",
                 contentType: "application/json",
@@ -274,7 +276,7 @@ describe("CLI import export and env checks", () => {
       const { tmpdir } = require("os");
       const path = require("path");
       const tmpDir = mkdtempSync(path.join(tmpdir(), "cli-execution-log-export-"));
-      const artifactId = "artifact-execution-log";
+      const artifactId = "art_00000000000000000023";
       const server = Bun.serve({
         port: 0,
         fetch(req) {

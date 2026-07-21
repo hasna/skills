@@ -121,7 +121,10 @@ async function handleApiV1(
       const run = await store.getRun(principal, id);
       if (!run) return json({ error: "run not found", code: "RUN_NOT_FOUND" }, { status: 404 });
       const artifacts = await store.listArtifacts(principal, id);
-      return json(artifacts.map(({ bodyText, ...artifact }) => artifact));
+      return json(artifacts.map(({ bodyText, ...artifact }) => ({
+        ...artifact,
+        type: "generated_output",
+      })));
     }
 
     if (request.method === "GET" && id && subresource === "artifacts" && childId) {
@@ -135,6 +138,7 @@ async function handleApiV1(
         headers: {
           "Content-Type": artifact.contentType,
           "Content-Disposition": `attachment; filename="${artifact.fileName.replace(/"/g, "")}"`,
+          "X-Skills-Artifact-Type": "generated_output",
         },
       });
     }

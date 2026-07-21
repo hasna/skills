@@ -816,7 +816,8 @@ describe("CLI run core", () => {
         expect(data.polling).toMatchObject({ waited: true, attempts: 2 });
         expect(existsSync(runJsonPath)).toBe(true);
         expect(JSON.parse(readFileSync(runJsonPath, "utf-8")).status).toBe("completed");
-        expect(readFileSync(stdoutLogPath, "utf-8")).toContain("logo package ready");
+        expect(readFileSync(stdoutLogPath, "utf-8")).toContain("[redacted]");
+        expect(readFileSync(stdoutLogPath, "utf-8")).not.toContain("logo package ready");
         expect(existsSync(path.join(tmpDir, ".skills", "skills"))).toBe(false);
       } finally {
         server.stop(true);
@@ -889,7 +890,8 @@ describe("CLI run core", () => {
         expect(data.run).toMatchObject({ status: "failed", remoteRunId: "run_failed", error: "remote renderer failed" });
         expect(existsSync(runJsonPath)).toBe(true);
         expect(JSON.parse(readFileSync(runJsonPath, "utf-8")).status).toBe("failed");
-        expect(readFileSync(stderrLogPath, "utf-8")).toContain("remote renderer failed");
+        expect(readFileSync(stderrLogPath, "utf-8")).toContain("[redacted]");
+        expect(readFileSync(stderrLogPath, "utf-8")).not.toContain("remote renderer failed");
       } finally {
         server.stop(true);
         rmSync(tmpDir, { recursive: true, force: true });

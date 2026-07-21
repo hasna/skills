@@ -16,6 +16,8 @@ export interface RemoteRunAuthorization {
 export class RemoteSkillsClient {
   private apiUrl: string;
   private apiKey: string;
+  private artifactDescriptors = new Map<string, Readonly<Record<string, unknown>>>();
+  private artifactListEpochs = new Map<string, number>();
 
   constructor(apiKey: string, apiUrl = getApiUrl()) {
     this.apiKey = apiKey;
@@ -92,21 +94,65 @@ export class RemoteSkillsClient {
   }
 
   async getRunArtifacts(runId: string): Promise<any[]> {
+    const prefix = `${runId}\u0000`;
+    const epoch = (this.artifactListEpochs.get(runId) ?? 0) + 1;
+    this.artifactListEpochs.set(runId, epoch);
+    for (const key of this.artifactDescriptors.keys()) {
+      if (key.startsWith(prefix)) this.artifactDescriptors.delete(key);
+    }
+
     const res = await this.request(`/api/v1/runs/${runId}/artifacts`);
-    return sanitizeCustomerArtifactList(await res.json());
+    if (!res.ok) return [];
+
+    let payload: unknown;
+    try {
+      payload = await res.json();
+    } catch {
+      return [];
+    }
+    const artifacts = sanitizeCustomerArtifactList(payload);
+    if (this.artifactListEpochs.get(runId) !== epoch) return [];
+    for (const artifact of artifacts) {
+      if (artifact && typeof artifact === "object" && typeof (artifact as Record<string, unknown>).id === "string") {
+        const descriptor = immutableArtifactDescriptor(artifact as Record<string, unknown>);
+        this.artifactDescriptors.set(`${prefix}${descriptor.id}`, descriptor);
+      }
+    }
+    return structuredClone(artifacts);
   }
 
-  async downloadRunArtifact(runId: string, artifactId: string, artifact?: unknown): Promise<Response> {
+  async downloadRunArtifact(runId: string, artifactId: string, _artifact?: unknown): Promise<Response> {
+    const descriptorKey = `${runId}\u0000${artifactId}`;
+    const descriptorEpoch = this.artifactListEpochs.get(runId);
+    const descriptor = this.artifactDescriptors.get(descriptorKey);
     const response = await this.request(`/api/v1/runs/${runId}/artifacts/${artifactId}/download`, {
       method: "GET",
     });
-    return sanitizeCustomerArtifactDownload(response, artifact);
+    const descriptorIsCurrent = this.artifactListEpochs.get(runId) === descriptorEpoch
+      && this.artifactDescriptors.get(descriptorKey) === descriptor;
+    return sanitizeCustomerArtifactDownload(
+      response,
+      descriptorIsCurrent ? descriptor : undefined,
+      { runId, artifactId },
+    );
   }
 
   private async customerJson<T = any>(response: Response): Promise<T> {
     return toCustomerCreditPayload(await response.json()) as T;
   }
 
+}
+
+function immutableArtifactDescriptor(
+  value: Record<string, unknown>,
+): Readonly<Record<string, unknown>> {
+  return deepFreeze(structuredClone(value));
+}
+
+function deepFreeze<T>(value: T): T {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const nested of Object.values(value)) deepFreeze(nested);
+  return Object.freeze(value);
 }
 
 export function createRemoteSkillsClient(): RemoteSkillsClient | null {
