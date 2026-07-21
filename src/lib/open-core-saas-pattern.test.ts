@@ -80,6 +80,24 @@ describe("open-core product service pattern", () => {
     expect(contract).not.toContain("The PR that introduced");
   });
 
+  test("distinguishes current legacy auth and npm behavior from the target architecture", () => {
+    for (const phrase of [
+      "npm `@hasna/skills@0.1.58` predates the agent-first bare-command behavior",
+      "bare `skills` still selects the implicit `interactive` command",
+      "a release later than 0.1.58",
+      "one legacy global credential record",
+      "does not bind that credential to the configured remote origin",
+      "does not perform the target operator identity and capability enrollment handshake",
+      "Origin-, service-, and tenant-scoped credentials",
+      "configured remote registry",
+    ]) {
+      expect(compactReadme).toContain(phrase);
+    }
+    expect(compactReadme).not.toContain("stores local configuration and scoped client credentials");
+    expect(compactReadme).not.toContain("selected verified service operator");
+    expect(compactReadme).not.toContain("configured self-hosted registry");
+  });
+
   test("ships every canonical architecture document linked by the package", () => {
     const files = packageJson.files ?? [];
     expect(files).toContain("docs/architecture/open-core-saas-pattern.md");

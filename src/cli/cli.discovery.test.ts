@@ -6,8 +6,10 @@ import {
   EXPECTED_BASIC_SKILL_COUNT,
   PACKAGE_VERSION,
   SLOW_TEST_TIMEOUT,
+  runBuiltCli,
   runCli,
   runCliInCwd,
+  runCliWithTtyOverride,
 } from "./cli.test-utils";
 
 function shellQuote(value: string): string {
@@ -16,16 +18,48 @@ function shellQuote(value: string): string {
 
 describe("CLI discovery", () => {
   describe("help", () => {
-    test("shows command discovery and exits without starting an interactive default", async () => {
-      const { stdout, stderr, exitCode } = await runCli([]);
+    test("source and built package bin show command discovery for a bare non-TTY invocation", async () => {
+      for (const [surface, result] of [
+        ["source", await runCli([])],
+        ["built package bin", await runBuiltCli([])],
+      ] as const) {
+        expect(result.exitCode, surface).toBe(0);
+        expect(result.stderr, surface).toBe("");
+        expect(result.stdout, surface).toContain("Usage: skills [options] [command]");
+        expect(result.stdout, surface).toContain("Commands:");
+        expect(result.stdout, surface).toContain("interactive|i");
+        expect(result.stdout, surface).toContain("list|ls");
+        expect(result.stdout, surface).toContain("run");
+        expect(result.stdout, surface).toContain("setup");
+      }
+    });
+
+    test("bare TTY invocation shows help and exits without opening the TUI", async () => {
+      const { stdout, stderr, exitCode, timedOut } = await runCliWithTtyOverride([]);
+      expect(timedOut).toBe(false);
       expect(exitCode).toBe(0);
       expect(stderr).toBe("");
       expect(stdout).toContain("Usage: skills [options] [command]");
-      expect(stdout).toContain("Commands:");
       expect(stdout).toContain("interactive|i");
-      expect(stdout).toContain("list|ls");
-      expect(stdout).toContain("run");
-      expect(stdout).toContain("setup");
+    });
+
+    test("interactive and i remain explicit, runnable commands", async () => {
+      for (const command of ["interactive", "i"]) {
+        const { stdout, stderr, exitCode } = await runCli([command]);
+        expect(exitCode, command).toBe(0);
+        expect(stderr, command).toBe("");
+        const discovery = JSON.parse(stdout);
+        expect(Array.isArray(discovery), command).toBe(true);
+        expect(discovery.length, command).toBe(EXPECTED_BASIC_SKILL_COUNT);
+      }
+    });
+
+    test("invalid commands and excess arguments exit nonzero", async () => {
+      for (const args of [["not-a-command"], ["interactive", "unexpected"]]) {
+        const { stderr, exitCode } = await runCli(args);
+        expect(exitCode, args.join(" ")).not.toBe(0);
+        expect(stderr, args.join(" ")).toContain("error:");
+      }
     });
 
     test("shows help with --help", async () => {

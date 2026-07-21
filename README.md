@@ -32,8 +32,14 @@ does not mean the installed package is SaaS-disabled.
 
 ## Quick Start
 
+npm `@hasna/skills@0.1.58` predates the agent-first bare-command behavior. In
+that published version, bare `skills` still selects the implicit `interactive`
+command: a TTY opens the TUI and a non-TTY invocation prints compact JSON. The
+checked-in source now prints command help instead; npm users need a release
+later than 0.1.58 for that behavior.
+
 ```bash
-# Discover available commands (non-interactive and agent-friendly)
+# In checked-in source, discover commands without opening the TUI
 skills
 
 # Browse skills interactively when you explicitly want the TUI
@@ -244,10 +250,11 @@ For current Open Skills engine behavior and ownership boundaries, see
 
 The three-mode profile, adapter, credential-scoping, storage, and trust contract
 is architectural guidance and is not implemented by the current CLI. Bare
-command discovery is agent-first; current source `local`/`self-hosted` setup and
-environment variables remain compatibility surfaces. Published 0.1.58 still
-uses the hosted SaaS flow documented above, so source/package/API drift must not
-be flattened into “SaaS absent.”
+command discovery is agent-first in checked-in source; current source
+`local`/`self-hosted` setup and environment variables remain compatibility
+surfaces. Published 0.1.58 still uses the old implicit `interactive` bare-command
+behavior and the hosted SaaS flow documented above, so source/package/API drift
+must not be flattened into “SaaS absent.”
 
 ## Portable Skills
 
@@ -325,9 +332,20 @@ skills billing status
 ```
 
 Account, run, log, artifact, and optional billing commands use the configured
-remote API. The public package stores local configuration and scoped client
-credentials; it does not contain the SaaS backend. Server runtime state and
-artifact storage belong to the selected verified service operator.
+remote API. The current CLI writes one legacy global credential record
+(`apiKey`) to `~/.hasna/skills/auth.json`; credential lookup does not bind that
+credential to the configured remote origin. Although API-key login calls the
+configured API to check the key, the current implementation does not perform
+the target operator identity and capability enrollment handshake. It therefore
+does not establish a verified operator identity, credential audience, or tenant
+binding.
+
+Origin-, service-, and tenant-scoped credentials, externally anchored operator
+verification, and service identity binding belong to the target architecture.
+They are not current-state properties of `skills setup` or `skills auth login`.
+The public package does not contain the SaaS backend; server runtime state and
+artifact storage remain under the authority of whichever remote service is
+configured.
 
 ## Storage Boundary
 
@@ -385,7 +403,7 @@ skills/                      # 202+ public skill contracts and local OSS skills
 
 ## Project Runtime State
 
-Skills are discovered from the configured self-hosted registry or bundled OSS
+Skills are discovered from the configured remote registry or bundled OSS
 registry. Project folders and agent-native skill folders are never used as skill
 libraries.
 
@@ -399,9 +417,10 @@ libraries.
 └── tmp/
 ```
 
-Auth stays global in `~/.hasna/skills/auth.json`. Registry and doc caches
-belong in `~/.cache/skills` or the selected remote API, not inside project
-`.skills`.
+Auth currently stays in one legacy global record at
+`~/.hasna/skills/auth.json`, independent of the configured remote origin.
+Registry and doc caches belong in `~/.cache/skills` or the selected remote API,
+not inside project `.skills`.
 
 ## Development
 
