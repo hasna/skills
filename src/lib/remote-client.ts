@@ -2,7 +2,11 @@ import { getApiKey as getStoredApiKey, getApiUrl } from "./auth-store.js";
 import { normalizeRemoteSkillRunContract, type RemoteSkillRunContract } from "./remote-run-contract.js";
 import { toAuthoritativePublicCreditQuote, toCustomerCreditPayload } from "./public-credits.js";
 import { addSkillsProtocolHeaders } from "./remote-protocol.js";
-import { sanitizeCustomerArtifactDownload, sanitizeCustomerArtifactList } from "./customer-artifacts.js";
+import {
+  sanitizeCustomerArtifactDownload,
+  sanitizeCustomerArtifactList,
+  sanitizeCustomerExecutionLogs,
+} from "./customer-artifacts.js";
 
 export interface RemoteRunAuthorization {
   quoteToken?: string;
@@ -79,8 +83,7 @@ export class RemoteSkillsClient {
   async getRunLogs(runId: string): Promise<any[]> {
     const res = await this.request(`/api/v1/runs/${runId}/logs`);
     if (!res.ok) return [];
-    const payload = await this.customerJson(res);
-    return Array.isArray(payload) ? payload : [];
+    return sanitizeCustomerExecutionLogs(await res.json());
   }
 
   async listRuns(limit = 20): Promise<any[]> {
@@ -90,7 +93,7 @@ export class RemoteSkillsClient {
 
   async getRunArtifacts(runId: string): Promise<any[]> {
     const res = await this.request(`/api/v1/runs/${runId}/artifacts`);
-    return sanitizeCustomerArtifactList(await this.customerJson(res));
+    return sanitizeCustomerArtifactList(await res.json());
   }
 
   async downloadRunArtifact(runId: string, artifactId: string, artifact?: unknown): Promise<Response> {

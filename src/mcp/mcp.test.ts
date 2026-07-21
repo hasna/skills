@@ -430,6 +430,61 @@ version: 0.3.0
     }
   }, 15000);
 
+  test("quote_skill fails closed when authenticated cloud authority omits creditQuote despite registry metadata and a token", async () => {
+    const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require("fs");
+    const { tmpdir } = require("os");
+    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-cloud-missing-live-quote-"));
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/v1/skills/image" && req.method === "GET") {
+          return Response.json({
+            slug: "image",
+            availability: { status: "available" },
+            creditQuote: {
+              ...AUTHORITATIVE_TEST_QUOTE,
+              tier: "premium",
+              creditUnit: "image",
+              credits: 9,
+              formattedCredits: "9 credits/image",
+            },
+          });
+        }
+        if (url.pathname === "/api/v1/skills/image/quote" && req.method === "POST") {
+          return Response.json({
+            availability: { status: "available" },
+            quoteToken: "quote_without_authoritative_credits",
+            expiresAt: "2026-07-21T16:00:00.000Z",
+          });
+        }
+        return Response.json({ error: "unexpected request" }, { status: 500 });
+      },
+    });
+    mkdirSync(join(tmpDir, ".hasna", "skills"), { recursive: true });
+    writeFileSync(join(tmpDir, ".hasna", "skills", "config.json"), JSON.stringify({
+      mode: "cloud",
+      apiUrl: `http://127.0.0.1:${server.port}`,
+    }));
+    const client = new McpClient({ HOME: tmpDir, SKILLS_API_KEY: "sk_test_mcp_cloud_missing_quote" });
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "quote_skill",
+        arguments: { name: "image" },
+      }, 82);
+      expect(response).not.toBeNull();
+      expect(response.result.isError).toBe(true);
+      const payload = JSON.parse(response.result.content[0].text);
+      expect(payload).toMatchObject({ code: "CLOUD_QUOTE_INVALID" });
+      expect(payload.message).toContain("did not return a creditQuote");
+    } finally {
+      await client.close();
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
   test("quote_skill uses the authenticated selected self-hosted quote", async () => {
     const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require("fs");
     const { tmpdir } = require("os");

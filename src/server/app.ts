@@ -177,7 +177,6 @@ function runPayload(run: ServerRunRecord): Record<string, unknown> {
     requestedSlug: run.requestedSlug,
     status: run.status,
     correlationId: run.correlationId,
-    credits: run.costCents,
     createdAt: run.createdAt,
     ...(run.startedAt ? { startedAt: run.startedAt } : {}),
     ...(run.completedAt ? { completedAt: run.completedAt } : {}),

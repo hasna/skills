@@ -17,6 +17,13 @@ describe("tool primitives", () => {
       runtime: "gateway",
       stable: true,
     });
+
+    const customerCatalog = JSON.stringify(primitives);
+    expect(customerCatalog).not.toMatch(/getSkillPricing|getSkillRunCostCents|pricing-approval/i);
+    expect(getToolPrimitive("safety-approval")).toMatchObject({
+      apiSurfaces: expect.arrayContaining(["getSkillCreditQuote"]),
+      capabilities: expect.arrayContaining(["credit-approval"]),
+    });
   });
 
   test("maps representative skills to primitive dependencies", () => {

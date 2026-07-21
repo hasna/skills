@@ -313,6 +313,8 @@ async function handleQuote(name: string, args: string[], options: { json: boolea
           };
         } else if (liveQuote?.creditQuote) {
           creditQuote = toPublicCreditQuote(liveQuote.creditQuote);
+        } else {
+          throw new Error("The selected cloud service did not return a creditQuote. No credits were charged.");
         }
         quoteToken = typeof liveQuote?.quoteToken === "string" ? liveQuote.quoteToken : undefined;
         quoteExpiresAt = typeof liveQuote?.expiresAt === "string" ? liveQuote.expiresAt : undefined;
@@ -434,8 +436,8 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
   }
   const isPremium = pricing.isPremiumSkill(skill.name);
   const deploymentMode = resolveCurrentDeploymentMode();
-  let credits = isPremium ? pricing.getSkillRunCostCents(skill.name, {}, args) : undefined;
   let creditQuote = pricing.getSkillCreditQuote(skill.name, {}, args);
+  let credits = isPremium ? creditQuote.credits : undefined;
   let quoteToken: string | undefined;
   let remoteAvailability: { status: "available" | "unavailable"; code?: string; message?: string; details?: string[] } = { status: "available" };
 

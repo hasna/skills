@@ -41,6 +41,7 @@ describe("self-hosted skills API", () => {
       const submitted = await client.submitRun("audio-transcript-pack", { transcript: "Hello world from self hosted skills." }, ["--title", "Demo"]);
       expect(submitted.status).toBe("queued");
       expect(submitted.id).toBeTruthy();
+      expect(submitted.credits).toBeUndefined();
 
       expect(await runWorkerOnce(store, "worker_test")).toBe(true);
       const run = await client.getRun(submitted.id!);

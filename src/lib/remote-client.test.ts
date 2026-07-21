@@ -24,7 +24,7 @@ describe("remote skills client public contract", () => {
     expect(requests[0]?.headers.get("x-skills-run-authorization")).toBe("signed-quote-v1");
   });
 
-  test("normalizes legacy response aliases before returning SDK data", async () => {
+  test("drops legacy fiat aliases instead of returning invented SDK credits", async () => {
     globalThis.fetch = (async () => Response.json({
       contractVersion: 1,
       pricing: {
@@ -46,13 +46,7 @@ describe("remote skills client public contract", () => {
     const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
     const quote = await client.quoteSkill("demo");
 
-    expect(quote).toMatchObject({
-      creditQuote: { creditUnit: "run", credits: 8, formattedCredits: "8 credits/run" },
-      creditBalance: 400,
-      formattedCreditBalance: "400 credits",
-      amountCredits: -8,
-      recentNetAmountCredits: -16,
-    });
+    expect(quote).toEqual({ contractVersion: 1 });
     expect(JSON.stringify(quote)).not.toMatch(/pricing|Cents|billingUnit|formattedCost/);
   });
 
@@ -77,6 +71,11 @@ describe("remote skills client public contract", () => {
         provider: "private-provider",
         model: "private-model",
         costCents: 7,
+        userPayload: {
+          provider: "user-selected-provider",
+          model: "user-selected-model",
+          costCents: "user-authored field",
+        },
         userMessage: "Keep this user-authored model comparison",
       }, { headers: { "content-type": "application/json" } });
     }) as unknown as typeof fetch;
@@ -94,8 +93,53 @@ describe("remote skills client public contract", () => {
     const payload = await download.json();
     expect(payload).toEqual({
       event: "completed",
+      userPayload: {
+        provider: "user-selected-provider",
+        model: "user-selected-model",
+        costCents: "user-authored field",
+      },
       userMessage: "Keep this user-authored model comparison",
     });
-    expect(JSON.stringify(payload)).not.toMatch(/private-provider|private-model|costCents/);
+    expect(JSON.stringify(payload)).not.toMatch(/private-provider|private-model/);
+    expect(payload).not.toHaveProperty("costCents");
+  });
+
+  test("sanitizes SDK run logs while preserving nested user-authored fields", async () => {
+    globalThis.fetch = (async () => Response.json([{
+      level: "info",
+      provider: "private-provider",
+      model: "private-model",
+      costCents: 7,
+      metadata: {
+        providerCostCents: 7,
+        route: "private-route",
+        userLabel: "keep",
+      },
+      userPayload: {
+        provider: "user-provider",
+        model: "user-model",
+      },
+    }])) as unknown as typeof fetch;
+
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+    expect(await client.getRunLogs("run_123")).toEqual([{
+      level: "info",
+      metadata: { userLabel: "keep" },
+      userPayload: { provider: "user-provider", model: "user-model" },
+    }]);
+  });
+
+  test("fails closed for direct artifact downloads without trusted type metadata", async () => {
+    globalThis.fetch = (async () => Response.json({
+      provider: "private-provider",
+      model: "private-model",
+      costCents: 7,
+    }, { headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+    const response = await client.downloadRunArtifact("run_123", "artifact-direct");
+    expect(response.ok).toBe(false);
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ code: "ARTIFACT_TYPE_UNVERIFIED" });
   });
 });

@@ -5,7 +5,7 @@ import {
 } from "./remote-run-contract";
 
 describe("remote skill run contract", () => {
-  test("normalizes submitted run payloads for CLI, MCP, and web clients", () => {
+  test("does not derive submitted-run credits from legacy fiat fields", () => {
     const run = normalizeRemoteSkillRunContract({
       contractVersion: 1,
       id: "run_123",
@@ -34,12 +34,6 @@ describe("remote skill run contract", () => {
       status: "queued",
       exitCode: 0,
       correlationId: "corr_123",
-      credits: 4,
-      creditQuote: {
-        tier: "premium",
-        creditUnit: "image",
-        quoteDependsOnInput: true,
-      },
     });
     expect(JSON.stringify(run)).not.toMatch(/pricing|Cents|billingUnit|formattedCost/);
   });
@@ -58,11 +52,9 @@ describe("remote skill run contract", () => {
     expect(run).toEqual({
       contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION,
       skill: "music",
-      credits: 150,
       error: "Insufficient credits",
       code: "INSUFFICIENT_BALANCE",
       details: ["buy credits"],
-      creditBalance: 0,
     });
     expect(JSON.stringify(run).toLowerCase()).not.toContain("openai");
     expect(JSON.stringify(run).toLowerCase()).not.toContain("minimax");

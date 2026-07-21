@@ -9,8 +9,25 @@ import {
 } from "./public-credits";
 
 describe("public credit presentation", () => {
-  test("normalizes legacy internal accounting to a credit-only quote", () => {
+  test("accepts only explicit credit-native package pricing", () => {
     expect(internalPricingToCreditQuote({
+      tier: "premium",
+      creditUnit: "image",
+      credits: 12,
+      formattedCredits: "12 credits estimated",
+      estimated: true,
+      quoteDependsOnInput: true,
+      quoteRequired: true,
+      description: "Estimated credits. The final credit amount depends on run options.",
+    } as any)).toMatchObject({
+      tier: "premium",
+      creditUnit: "image",
+      credits: 12,
+      formattedCredits: "12 credits estimated",
+      description: "Estimated credits. The final credit amount depends on run options.",
+    });
+
+    expect(() => internalPricingToCreditQuote({
       tier: "premium",
       billingUnit: "image",
       costCents: 12,
@@ -18,14 +35,8 @@ describe("public credit presentation", () => {
       estimated: true,
       quoteDependsOnInput: true,
       quoteRequired: true,
-      description: "Final price depends on options.",
-    })).toMatchObject({
-      tier: "premium",
-      creditUnit: "image",
-      credits: 12,
-      formattedCredits: "12 credits estimated",
-      description: "Final credit amount depends on options.",
-    });
+      description: "Provider cost is $0.12.",
+    } as any)).toThrow("explicit credits");
   });
 
   test("fails closed when a canonical quote has no explicit credit amount", () => {
@@ -33,9 +44,14 @@ describe("public credit presentation", () => {
     expect(() => toPublicCreditQuote({ tier: "premium", creditUnit: "run" })).toThrow("explicit credits");
     expect(() => toPublicCreditQuote({ tier: "free" })).toThrow("explicit credits");
     expect(toPublicCreditQuote({ credits: 0, creditUnit: "run" })).toMatchObject({ tier: "free", credits: 0 });
+    expect(toPublicCreditQuote({
+      credits: 8,
+      creditUnit: "run",
+      formattedCost: "999 credits/run",
+    }).formattedCredits).toBe("8 credits/run");
   });
 
-  test("accepts legacy cents only through a validated versioned adapter", () => {
+  test("rejects legacy cents even at the versioned compatibility boundary", () => {
     const legacy = {
       tier: "premium" as const,
       billingUnit: "run",
@@ -46,11 +62,7 @@ describe("public credit presentation", () => {
       description: "Known v1 quote",
     };
     expect(() => versionedLegacyCreditQuote(legacy, 2)).toThrow("version");
-    expect(versionedLegacyCreditQuote(legacy, 1)).toMatchObject({
-      tier: "premium",
-      creditUnit: "run",
-      credits: 8,
-    });
+    expect(() => versionedLegacyCreditQuote(legacy, 1)).toThrow("explicit creditQuote");
   });
 
   test("requires complete authoritative remote quote metadata", () => {
@@ -108,16 +120,11 @@ describe("public credit presentation", () => {
       },
     });
 
-    expect(payload).toEqual({
-      formattedCreditBalance: "500 credits",
-      formattedCredits: "9 credits/run",
-      creditUnit: "run",
-      nested: {},
-    });
+    expect(payload).toEqual({ nested: {} });
     expect(JSON.stringify(payload)).not.toMatch(/pricing|Cents|billingUnit|formattedCost/);
   });
 
-  test("maps known v1 legacy response aliases at the versioned contract boundary", () => {
+  test("drops known v1 fiat aliases instead of inventing credit values", () => {
     expect(toCustomerCreditPayload({
       contractVersion: 1,
       costCents: 9,
@@ -134,14 +141,7 @@ describe("public credit presentation", () => {
         quoteRequired: false,
         description: "Known v1 quote",
       },
-    })).toMatchObject({
-      contractVersion: 1,
-      credits: 9,
-      creditBalance: 500,
-      amountCredits: -9,
-      recentNetAmountCredits: -18,
-      creditQuote: { creditUnit: "run", credits: 9 },
-    });
+    })).toEqual({ contractVersion: 1 });
   });
 
   test("preserves canonical fields when legacy aliases are also present", () => {
@@ -195,6 +195,22 @@ describe("public credit presentation", () => {
       error: "Final credit amount is credit amount (25 credits).",
       details: ["This credit amount is credit amount."],
     });
+  });
+
+  test("replaces provider-cost quote descriptions with canonical credit prose", () => {
+    const quote = toPublicCreditQuote({
+      tier: "premium",
+      creditUnit: "run",
+      credits: 8,
+      formattedCredits: "8 credits/run",
+      estimated: false,
+      quoteDependsOnInput: false,
+      quoteRequired: false,
+      description: "OpenAI provider cost is USD 0.08 with a private margin.",
+    });
+
+    expect(quote.description).toBe("Fixed credits per run.");
+    expect(JSON.stringify(quote)).not.toMatch(/openai|provider|usd|cost|margin/i);
   });
 
   test("formats free, fixed, and estimated credits", () => {

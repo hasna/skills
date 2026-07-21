@@ -59,7 +59,8 @@
         "args",
         "detail",
         "input",
-        "name"
+        "name",
+        "quoteToken"
       ]
     },
     "validate_tool_primitives": {

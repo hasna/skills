@@ -21,17 +21,43 @@ const INTERNAL_ARTIFACT_KEYS = new Set([
   "margin",
   "margincents",
   "settlement",
+  "route",
+  "routeid",
+  "routing",
 ]);
+
+const SYSTEM_ENVELOPE_KEYS = new Set([
+  "metadata",
+  "executionmetadata",
+  "routemetadata",
+  "providermetadata",
+  "billingmetadata",
+  "accountingmetadata",
+]);
+
+const SYSTEM_MESSAGE_KEYS = new Set(["message", "error", "detail", "details", "reason"]);
 
 export function sanitizeCustomerArtifactList(value: unknown): unknown[] {
   if (!Array.isArray(value)) return [];
-  return value.map((artifact) => sanitizeArtifactRecord(artifact));
+  return value.map((artifact) => sanitizeSystemOwnedRecord(artifact));
+}
+
+export function sanitizeCustomerExecutionLogs(value: unknown): unknown[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((entry) => sanitizeSystemOwnedRecord(entry));
 }
 
 export async function sanitizeCustomerArtifactDownload(
   response: Response,
   artifact?: unknown,
 ): Promise<Response> {
+  if (!response.ok) return response;
+  if (!hasTrustedArtifactMetadata(artifact, response.headers)) {
+    return Response.json({
+      error: "Artifact type could not be verified for a direct download.",
+      code: "ARTIFACT_TYPE_UNVERIFIED",
+    }, { status: 422 });
+  }
   if (!isExecutionLogArtifact(artifact, response.headers)) return response;
 
   const headers = new Headers(response.headers);
@@ -42,7 +68,7 @@ export async function sanitizeCustomerArtifactDownload(
 
   if (contentType.includes("json") || looksLikeJson(text)) {
     try {
-      sanitized = `${JSON.stringify(sanitizeArtifactRecord(JSON.parse(text)), null, 2)}\n`;
+      sanitized = `${JSON.stringify(sanitizeSystemOwnedRecord(JSON.parse(text)), null, 2)}\n`;
       headers.set("content-type", "application/json; charset=utf-8");
     } catch {
       sanitized = sanitizeExecutionLogText(text);
@@ -58,15 +84,41 @@ export async function sanitizeCustomerArtifactDownload(
   });
 }
 
-function sanitizeArtifactRecord(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sanitizeArtifactRecord);
+function sanitizeSystemOwnedRecord(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sanitizeSystemOwnedRecord);
   if (!isRecord(value)) return value;
   const output: Record<string, unknown> = {};
   for (const [key, nested] of Object.entries(value)) {
     if (INTERNAL_ARTIFACT_KEYS.has(normalizeKey(key))) continue;
-    output[key] = sanitizeArtifactRecord(nested);
+    if (SYSTEM_MESSAGE_KEYS.has(key)) {
+      output[key] = sanitizeSystemMessage(nested);
+      continue;
+    }
+    output[key] = SYSTEM_ENVELOPE_KEYS.has(normalizeKey(key))
+      ? sanitizeSystemOwnedRecord(nested)
+      : nested;
   }
   return output;
+}
+
+function sanitizeSystemMessage(value: unknown): unknown {
+  if (typeof value === "string") return sanitizeCustomerCreditText(value);
+  if (Array.isArray(value)) return value.map(sanitizeSystemMessage);
+  if (isRecord(value)) return sanitizeSystemOwnedRecord(value);
+  return value;
+}
+
+function hasTrustedArtifactMetadata(value: unknown, headers: Headers): boolean {
+  if (isRecord(value)) {
+    const id = typeof value.id === "string" && value.id.trim();
+    const marker = ["type", "kind", "artifactType", "category", "fileName", "relativePath", "contentType"]
+      .some((key) => typeof value[key] === "string" && String(value[key]).trim());
+    if (id && marker) return true;
+  }
+  return Boolean(
+    headers.get("x-skills-artifact-type")?.trim()
+    || headers.get("content-disposition")?.trim(),
+  );
 }
 
 function isExecutionLogArtifact(value: unknown, headers?: Headers): boolean {
@@ -84,10 +136,10 @@ function isExecutionLogArtifact(value: unknown, headers?: Headers): boolean {
 }
 
 function sanitizeExecutionLogText(value: string): string {
-  return sanitizeCustomerCreditText(value)
-    .replace(/\b(provider|model)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1=[redacted]")
-    .replace(/\b(provider|model)\s+(?:is\s+)?(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1 [redacted]")
-    .replace(/\b(currency|margin|settlement)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1=[redacted]");
+  return value.split(/(\r?\n)/).map((line) => {
+    const match = line.match(/^(\s*)(provider|providerId|model|modelId|route|routeId|cost|costCents|costMicros|providerCost|providerCostCents|providerCostMicros|price|currency|margin|marginCents|settlement)\s*[:=]/i);
+    return match ? `${match[1]}${match[2]}=[redacted]` : line;
+  }).join("");
 }
 
 function normalizeKey(value: string): string {

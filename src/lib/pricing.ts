@@ -17,10 +17,10 @@ export interface SkillPricing {
 
 interface InternalPublicSkillPricing {
   tier: BillingTier;
-  billingUnit: "run" | "image" | "second" | "character" | "song" | "thousand_tokens" | "article";
-  costCents: number;
-  formattedCost: string;
-  formattedUnitCost?: string;
+  creditUnit: "run" | "image" | "second" | "character" | "song" | "thousand_tokens" | "article";
+  credits: number;
+  formattedCredits: string;
+  formattedUnitCredits?: string;
   unitCount?: number;
   estimated: boolean;
   quoteDependsOnInput: boolean;
@@ -55,6 +55,7 @@ interface MediaPrice {
 export const MUSIC_ALBUM_SLUG = "music-album";
 export const MUSIC_ALBUM_SONG_COUNTS = [7, 14, 21] as const;
 const MUSIC_ALBUM_COST_CENTS_PER_SONG = 150;
+const MUSIC_ALBUM_CREDITS_PER_SONG = 150;
 
 export const PREMIUM_SKILLS: SkillPricing[] = [
   { slug: "brand-assets", displayName: "Brand Assets", tier: "premium", costCents: 200, providers: ["self-hosted"], description: "Self-hosted brand asset discovery package with logos, PNG sizes, palette, typography, source metadata, and manifest" },
@@ -109,6 +110,7 @@ export const ARTICLE_COUNT_ERROR = `Count must be an integer between 1 and ${ART
 const ARTICLE_INTERNAL_COST_CENTS = 5;
 const ARTICLE_MARKUP_MULTIPLIER = 5;
 const ARTICLE_USER_COST_CENTS = ARTICLE_INTERNAL_COST_CENTS * ARTICLE_MARKUP_MULTIPLIER;
+const ARTICLE_CREDITS_PER_ARTICLE = 25;
 const ARTICLE_TONES = ["professional", "casual", "technical", "friendly"] as const;
 const ARTICLE_LENGTHS = ["short", "medium", "long"] as const;
 
@@ -162,6 +164,80 @@ export const MEDIA_GENERATION_PRICES: MediaPrice[] = [
 
 const premiumIndex = new Map(PREMIUM_SKILLS.map((s) => [s.slug, s]));
 const mediaSlugs = new Set<MediaModality>(["image", "video", "audio", "music"]);
+
+const FIXED_SKILL_CREDITS: Readonly<Record<string, number>> = {
+  "brand-assets": 200,
+  "icon-pack": 200,
+  "logo-design": 50,
+  deepresearch: 20,
+  "playlist-maker": 30,
+  "photo-album": 300,
+  "short-video-pack": 500,
+  "voiceover-jingle-pack": 250,
+  "brand-photo-shoot": 600,
+  "product-mockup": 200,
+  "brand-kit": 400,
+  "generate-book-cover": 20,
+  "remove-background": 10,
+  transcript: 10,
+  webcrawling: 5,
+  browse: 5,
+  "read-pdf": 5,
+  "pdf-read": 5,
+  "pdf-to-markdown": 5,
+  "pdf-to-dataset": 15,
+  "market-research-report": 150,
+  "customer-feedback-report": 200,
+  "proposal-pack": 200,
+  "pitch-deck": 300,
+  "security-audit-report": 300,
+  "seo-content-pack": 400,
+  "landing-page-pack": 250,
+  "one-page-website": 500,
+  "ad-creative-pack": 300,
+  "email-sequence": 250,
+  "social-content-calendar": 300,
+  "test-suite-generator": 250,
+  "api-docs-portal": 250,
+  "sdk-generator": 600,
+  "repo-onboarding-report": 200,
+  "audio-transcript-pack": 150,
+  "video-highlight-pack": 300,
+  "slide-deck-generator": 300,
+  "meeting-pack": 150,
+  "invoice-reconciliation": 200,
+  "contract-review-report": 300,
+  "performance-audit-report": 300,
+  "migration-plan-pack": 300,
+};
+
+const MEDIA_CREDITS_PER_UNIT: Readonly<Record<string, number>> = {
+  "image:openai:gpt-image-1.5": 3.4,
+  "image:openai:dall-e-3": 4,
+  "image:minimax:image-01": 0.35,
+  "image:gemini:imagen-4.0-generate-001": 4,
+  "image:gemini:imagen-4.0-fast-generate-001": 2,
+  "image:gemini:imagen-4.0-ultra-generate-001": 6,
+  "image:gemini:gemini-2.5-flash-image": 3.9,
+  "video:openai:sora-2": 10,
+  "video:openai:sora-2-pro": 30,
+  "video:minimax:MiniMax-Hailuo-2.3-Fast": 3.1667,
+  "video:minimax:MiniMax-Hailuo-2.3": 4.6667,
+  "video:gemini:veo-3.1-fast-generate-preview": 10,
+  "video:gemini:veo-3.1-generate-preview": 40,
+  "video:seedance:dreamina-seedance-2.0": 0.7,
+  "video:seedance:dreamina-seedance-2.0-fast": 0.56,
+  "audio:openai:tts-1": 0.0015,
+  "audio:openai:tts-1-hd": 0.003,
+  "audio:minimax:speech-2.8-turbo": 0.006,
+  "audio:minimax:speech-2.8-hd": 0.01,
+  "audio:gemini:gemini-2.5-flash-preview-tts": 0.001,
+  "audio:gemini:gemini-2.5-pro-preview-tts": 0.002,
+  "music:minimax:Music-2.6": 15,
+  "music:minimax:Music-2.0": 3,
+  "music:gemini:lyria-3-clip-preview": 4,
+  "music:gemini:lyria-3-pro-preview": 8,
+};
 
 export function getSkillPricing(slug: string): SkillPricing | null {
   const canonicalSlug = resolvePricingSlug(slug);
@@ -300,13 +376,13 @@ function getInternalSkillPricing(slug: string, input?: unknown, args: string[] =
   if (canonicalSlug === ARTICLE_GENERATION_SLUG) {
     const options = collectRunOptions(input, args);
     const count = resolveArticleCount(options);
-    const total = ARTICLE_USER_COST_CENTS * count;
+    const total = ARTICLE_CREDITS_PER_ARTICLE * count;
     return {
       tier: "premium",
-      billingUnit: "article",
-      costCents: total,
-      formattedCost: count === 1 ? `${formatCost(ARTICLE_USER_COST_CENTS)}/article` : `${formatCost(total)} total`,
-      formattedUnitCost: `${formatCost(ARTICLE_USER_COST_CENTS)}/article`,
+      creditUnit: "article",
+      credits: total,
+      formattedCredits: count === 1 ? `${formatCredits(ARTICLE_CREDITS_PER_ARTICLE)}/article` : `${formatCredits(total)} total`,
+      formattedUnitCredits: `${formatCredits(ARTICLE_CREDITS_PER_ARTICLE)}/article`,
       unitCount: count,
       estimated: false,
       quoteDependsOnInput: true,
@@ -318,13 +394,13 @@ function getInternalSkillPricing(slug: string, input?: unknown, args: string[] =
   if (canonicalSlug === MUSIC_ALBUM_SLUG) {
     const options = collectRunOptions(input, args);
     const songCount = resolveMusicAlbumSongCount(options);
-    const total = MUSIC_ALBUM_COST_CENTS_PER_SONG * songCount;
+    const total = MUSIC_ALBUM_CREDITS_PER_SONG * songCount;
     return {
       tier: "premium",
-      billingUnit: "song",
-      costCents: total,
-      formattedCost: `${formatCost(total)} total`,
-      formattedUnitCost: `${formatCost(MUSIC_ALBUM_COST_CENTS_PER_SONG)}/song`,
+      creditUnit: "song",
+      credits: total,
+      formattedCredits: `${formatCredits(total)} total`,
+      formattedUnitCredits: `${formatCredits(MUSIC_ALBUM_CREDITS_PER_SONG)}/song`,
       unitCount: songCount,
       estimated: true,
       quoteDependsOnInput: true,
@@ -335,11 +411,13 @@ function getInternalSkillPricing(slug: string, input?: unknown, args: string[] =
 
   const fixed = premiumIndex.get(canonicalSlug);
   if (fixed) {
+    const credits = FIXED_SKILL_CREDITS[canonicalSlug];
+    if (credits === undefined) throw new Error(`No authoritative credit allocation is configured for ${canonicalSlug}.`);
     return {
       tier: "premium",
-      billingUnit: "run",
-      costCents: fixed.costCents,
-      formattedCost: `${formatCost(fixed.costCents)}/run`,
+      creditUnit: "run",
+      credits,
+      formattedCredits: `${formatCredits(credits)}/run`,
       estimated: false,
       quoteDependsOnInput: false,
       quoteRequired: false,
@@ -353,13 +431,17 @@ function getInternalSkillPricing(slug: string, input?: unknown, args: string[] =
     const provider = normalizeProvider(options.provider) || defaultProvider(mediaSlug);
     const model = typeof options.model === "string" ? options.model : undefined;
     const price = selectMediaPrice(mediaSlug, provider, model);
-    const internal = getSkillRunPricing(canonicalSlug, input, args);
     const unitCount = price ? resolveUnits(price, options) : undefined;
+    const unitCredits = price ? MEDIA_CREDITS_PER_UNIT[mediaCreditKey(price)] : undefined;
+    if (!price || unitCount === undefined || unitCredits === undefined) {
+      throw new Error(`No authoritative credit allocation is configured for ${canonicalSlug}.`);
+    }
+    const credits = Math.max(1, Math.ceil(unitCredits * unitCount));
     return {
       tier: "premium",
-      billingUnit: price?.unit ?? "run",
-      costCents: internal?.costCents ?? 0,
-      formattedCost: `${formatCost(internal?.costCents ?? 0)} estimated`,
+      creditUnit: price.unit,
+      credits,
+      formattedCredits: `${formatCredits(credits)} estimated`,
       ...(unitCount !== undefined ? { unitCount } : {}),
       estimated: true,
       quoteDependsOnInput: true,
@@ -370,9 +452,9 @@ function getInternalSkillPricing(slug: string, input?: unknown, args: string[] =
 
   return {
     tier: "free",
-    billingUnit: "run",
-    costCents: 0,
-    formattedCost: "0 credits",
+    creditUnit: "run",
+    credits: 0,
+    formattedCredits: "0 credits",
     estimated: false,
     quoteDependsOnInput: false,
     quoteRequired: false,
@@ -419,6 +501,10 @@ function selectMediaPrice(slug: MediaModality, provider: MediaProvider, model?: 
     if (exact) return exact;
   }
   return candidates.find((p) => p.default) || candidates[0] || null;
+}
+
+function mediaCreditKey(price: MediaPrice): string {
+  return `${price.slug}:${price.provider}:${price.model}`;
 }
 
 function defaultProvider(slug: MediaModality): MediaProvider {
@@ -561,6 +647,10 @@ function resolvePricingSlug(slug: string): string {
 
 export function formatCost(cents: number): string {
   return `${Number.isInteger(cents) ? cents : Number(cents.toFixed(4))} credits`;
+}
+
+function formatCredits(credits: number): string {
+  return `${Number.isInteger(credits) ? credits : Number(credits.toFixed(4))} credits`;
 }
 
 export function getAllPremiumSlugs(): string[] {

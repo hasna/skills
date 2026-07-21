@@ -13,7 +13,7 @@ import { loadConfig, type SkillsConfig } from "./config.js";
 import { DEFAULT_CLOUD_API_URL } from "../server/config.js";
 import { sanitizePublicDiscoveryText } from "./discovery.js";
 import { isPremiumSkill } from "./pricing.js";
-import { toPublicCreditQuote, versionedLegacyCreditQuote } from "./public-credits.js";
+import { toPublicCreditQuote } from "./public-credits.js";
 import { addSkillsProtocolHeaders } from "./remote-protocol.js";
 import type { SkillMeta } from "./registry.js";
 
@@ -170,7 +170,7 @@ function normalizeRemoteSkill(skill: z.infer<typeof remoteSkillSchema>): SkillMe
 
 function normalizeRemoteCreditQuote(value: z.infer<typeof remoteCreditQuoteInputSchema>) {
   return "contractVersion" in value
-    ? versionedLegacyCreditQuote(value, value.contractVersion)
+    ? undefined
     : toPublicCreditQuote(value);
 }
 

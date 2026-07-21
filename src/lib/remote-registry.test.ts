@@ -172,7 +172,7 @@ describe("remote registry", () => {
     expect(serialized).toContain("credential");
   });
 
-  test("parses legacy remote pricing only as inbound compatibility and emits a credit quote", () => {
+  test("fails closed for legacy remote pricing without explicit credit metadata", () => {
     const skills = parseRemoteRegistryPayload({
       data: [
         {
@@ -204,11 +204,9 @@ describe("remote registry", () => {
       category: "Media Processing",
       tags: ["video", "remote"],
       version: "1.2.3",
-      creditQuote: {
-        creditUnit: "second",
-        credits: 120,
-        formattedCredits: "120 credits estimated",
-        estimated: true,
+      availability: {
+        status: "unavailable",
+        code: "REMOTE_CREDIT_QUOTE_MISSING",
       },
       source: "remote",
     });

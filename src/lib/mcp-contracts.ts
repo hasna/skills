@@ -151,6 +151,10 @@ const paidRunApprovalSchema: JsonSchemaObject = {
   type: "boolean",
   description: "Set true only after the user has approved the quoted credits for a remote run.",
 };
+const quoteTokenSchema: JsonSchemaObject = {
+  type: "string",
+  description: "Opaque quote token returned by quote_skill for the exact approved input and arguments.",
+};
 
 const errorSchema = objectSchema({
   code: stringSchema("Stable error code."),
@@ -546,6 +550,8 @@ const toolContracts: McpToolContract[] = [
       skill: stringSchema("Skill slug."),
       creditQuote: creditQuoteSchema,
       availability: skillAvailabilitySchema,
+      quoteToken: quoteTokenSchema,
+      expiresAt: { type: "string", format: "date-time", description: "Quote token expiration timestamp." },
       error: stringSchema("Optional error message when the quote cannot be used to run."),
       code: stringSchema("Optional stable error code."),
       details: stringArraySchema("Optional error details."),
@@ -555,7 +561,7 @@ const toolContracts: McpToolContract[] = [
     name: "run_skill",
     title: "Run Skill",
     description: "Run a skill locally or through a configured remote runner. Returns compact stdout/stderr previews and run summaries by default; pass detail:true for full records.",
-    params: ["name", "input?", "args?", "approved?", "detail?"],
+    params: ["name", "input?", "args?", "approved?", "quoteToken?", "detail?"],
     category: "execution",
     sideEffects: "local-process-or-remote-run",
     stable: true,
@@ -564,6 +570,7 @@ const toolContracts: McpToolContract[] = [
       input: runInputSchema,
       args: runArgsSchema,
       approved: paidRunApprovalSchema,
+      quoteToken: quoteTokenSchema,
       detail: { type: "boolean", default: false, description: "Return full stdout/stderr, remote run, and local run metadata." },
     }, ["name"]),
     outputSchema: runOutputSchema,

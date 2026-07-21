@@ -234,10 +234,10 @@ export const TOOL_PRIMITIVES: ToolPrimitive[] = [
     stable: true,
     cliCommands: ["skills quote <skill>", "skills tools deps <skill>"],
     mcpTools: ["quote_skill", "get_skill_tool_dependencies"],
-    apiSurfaces: ["getSkillPricing", "getSkillRunCostCents", "validateSkillDirectory"],
+    apiSurfaces: ["getSkillCreditQuote", "validateSkillDirectory"],
     envVars: [],
     outputTypes: ["json", "markdown"],
-    capabilities: ["pricing-approval", "risk-review", "policy-evidence", "validation"],
+    capabilities: ["credit-approval", "risk-review", "policy-evidence", "validation"],
   },
   {
     name: "hosted-auth",

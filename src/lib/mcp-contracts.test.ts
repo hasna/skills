@@ -56,6 +56,7 @@ describe("MCP contract manifest", () => {
       input: { type: "object", additionalProperties: true },
       args: { type: "array", items: { type: "string" } },
       approved: { type: "boolean", description: expect.stringContaining("approved") },
+      quoteToken: { type: "string", description: expect.stringContaining("quote") },
     });
     expect(byName.get("quote_skill")?.outputSchema).toMatchObject({
       required: ["skill", "creditQuote", "availability"],
@@ -77,6 +78,8 @@ describe("MCP contract manifest", () => {
             details: { type: "array", items: { type: "string" } },
           },
         },
+        quoteToken: { type: "string" },
+        expiresAt: { type: "string", format: "date-time" },
         error: { type: "string" },
         code: { type: "string" },
         details: { type: "array", items: { type: "string" } },
@@ -140,6 +143,9 @@ describe("MCP contract manifest", () => {
       default: [],
       description: "CLI-style string arguments passed to the skill.",
     });
+    expect(metadata.schemas.run.inputSchema.properties?.quoteToken).toEqual(
+      listMcpToolContracts().find((tool) => tool.name === "quote_skill")?.outputSchema.properties?.quoteToken,
+    );
   });
 
   test("resource contracts include the registry, contract manifest, and skill detail template", () => {

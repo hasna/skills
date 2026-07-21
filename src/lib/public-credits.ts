@@ -2,10 +2,10 @@ export type CreditUnit = "run" | "image" | "second" | "character" | "song" | "th
 
 export interface InternalCreditPricing {
   tier: "free" | "premium";
-  billingUnit: CreditUnit;
-  costCents: number;
-  formattedCost: string;
-  formattedUnitCost?: string;
+  creditUnit: CreditUnit;
+  credits: number;
+  formattedCredits: string;
+  formattedUnitCredits?: string;
   unitCount?: number;
   estimated: boolean;
   quoteDependsOnInput: boolean;
@@ -54,7 +54,6 @@ export function toPublicCreditQuote(value: unknown): PublicCreditQuote {
     creditUnit,
     credits,
     formattedCredits: creditOnlyText(record.formattedCredits)
-      ?? creditOnlyText(record.formattedCost)
       ?? formatCredits(credits, { creditUnit, estimated, tier }),
     ...(finiteNumber(record.unitCredits) !== undefined
       ? { formattedUnitCredits: formatCredits(finiteNumber(record.unitCredits)!, { creditUnit, tier }) }
@@ -88,11 +87,11 @@ export function toAuthoritativePublicCreditQuote(value: unknown): PublicCreditQu
 export function internalPricingToCreditQuote(value: InternalCreditPricing): PublicCreditQuote {
   return toPublicCreditQuote({
     tier: value.tier,
-    creditUnit: value.billingUnit,
-    credits: value.costCents,
-    formattedCredits: creditOnlyText(value.formattedCost),
-    ...(value.formattedUnitCost && creditOnlyText(value.formattedUnitCost)
-      ? { formattedUnitCredits: creditOnlyText(value.formattedUnitCost) }
+    creditUnit: value.creditUnit,
+    credits: value.credits,
+    formattedCredits: creditOnlyText(value.formattedCredits),
+    ...(value.formattedUnitCredits && creditOnlyText(value.formattedUnitCredits)
+      ? { formattedUnitCredits: creditOnlyText(value.formattedUnitCredits) }
       : {}),
     ...(value.unitCount !== undefined ? { unitCount: value.unitCount } : {}),
     estimated: value.estimated,
@@ -106,29 +105,7 @@ export function internalPricingToCreditQuote(value: InternalCreditPricing): Publ
 export function versionedLegacyCreditQuote(value: unknown, contractVersion: unknown): PublicCreditQuote {
   if (contractVersion !== 1) throw new Error("Unsupported legacy credit contract version.");
   if (!isRecord(value)) throw new Error("Legacy credit quote must be an object.");
-  const credits = finiteNumber(value.costCents);
-  if (credits === undefined) throw new Error("Legacy credit quote requires a valid costCents amount.");
-  const creditUnit = isCreditUnit(value.billingUnit) ? value.billingUnit : undefined;
-  if (!creditUnit) throw new Error("Legacy credit quote requires a valid billingUnit.");
-  if (value.tier !== "free" && value.tier !== "premium") throw new Error("Legacy credit quote requires tier.");
-  for (const flag of ["estimated", "quoteDependsOnInput", "quoteRequired"] as const) {
-    if (typeof value[flag] !== "boolean") throw new Error(`Legacy credit quote requires ${flag}.`);
-  }
-  if (typeof value.description !== "string" || !value.description.trim()) {
-    throw new Error("Legacy credit quote requires description.");
-  }
-  return toPublicCreditQuote({
-    tier: value.tier,
-    creditUnit,
-    credits,
-    ...(creditOnlyText(value.formattedCredits) ? { formattedCredits: value.formattedCredits } : {}),
-    ...(creditOnlyText(value.formattedUnitCredits) ? { formattedUnitCredits: value.formattedUnitCredits } : {}),
-    ...(finiteNumber(value.unitCount) !== undefined ? { unitCount: value.unitCount } : {}),
-    estimated: value.estimated === true,
-    quoteDependsOnInput: value.quoteDependsOnInput === true,
-    quoteRequired: value.quoteRequired === true,
-    description: value.description,
-  });
+  throw new Error("Legacy credit contract v1 requires an explicit creditQuote; fiat fields cannot define credits.");
 }
 
 export function formatCredits(
@@ -150,7 +127,6 @@ export function toCustomerCreditPayload(value: unknown): unknown {
   if (!isRecord(value)) return value;
 
   const output: Record<string, unknown> = {};
-  const legacyV1 = value.contractVersion === 1;
   for (const [key, nested] of Object.entries(value)) {
     if (key === "creditQuote") {
       output.creditQuote = isCreditQuoteCandidate(nested)
@@ -159,59 +135,21 @@ export function toCustomerCreditPayload(value: unknown): unknown {
       continue;
     }
     if (key === "pricing") {
-      if (!hasOwn(value, "creditQuote") && legacyV1) output.creditQuote = versionedLegacyCreditQuote(nested, 1);
       continue;
     }
-    if (key === "costCents") {
-      if (legacyV1 && !hasOwn(value, "credits") && finiteNumber(nested) !== undefined) output.credits = nested;
-      continue;
-    }
-    if (key === "amountCents") {
-      if (legacyV1 && !hasOwn(value, "amountCredits") && typeof nested === "number" && Number.isFinite(nested)) output.amountCredits = nested;
-      continue;
-    }
-    if (key === "recentNetAmountCents") {
-      if (legacyV1 && !hasOwn(value, "recentNetAmountCredits") && typeof nested === "number" && Number.isFinite(nested)) output.recentNetAmountCredits = nested;
-      continue;
-    }
-    if (key === "balanceCents") {
-      if (legacyV1 && !hasOwn(value, "creditBalance") && finiteNumber(nested) !== undefined) output.creditBalance = nested;
-      continue;
-    }
-    if (key === "billingUnit") {
-      if (!hasOwn(value, "creditUnit")) output.creditUnit = nested;
-      continue;
-    }
-    if (key === "formattedBalance") {
-      if (!hasOwn(value, "formattedCreditBalance")) {
-        const formatted = creditOnlyText(nested);
-        if (formatted) output.formattedCreditBalance = formatted;
-      }
-      continue;
-    }
-    if (key === "formattedCost") {
-      if (!hasOwn(value, "formattedCredits")) {
-        const formatted = creditOnlyText(nested);
-        if (formatted) output.formattedCredits = formatted;
-      }
-      continue;
-    }
-    if (key === "formattedUnitCost") {
-      if (!hasOwn(value, "formattedUnitCredits")) {
-        const formatted = creditOnlyText(nested);
-        if (formatted) output.formattedUnitCredits = formatted;
-      }
-      continue;
-    }
+    if ([
+      "costCents",
+      "amountCents",
+      "recentNetAmountCents",
+      "balanceCents",
+      "billingUnit",
+      "formattedBalance",
+      "formattedCost",
+      "formattedUnitCost",
+    ].includes(key)) continue;
     if (key === "price" || key === "cost") continue;
     if ((key === "pack" || key === "label") && typeof nested === "string" && /\$|usd|eur|gbp/i.test(nested)) continue;
-    if (key === "balance") {
-      if (!hasOwn(value, "formattedCreditBalance")) {
-        const formatted = creditOnlyText(nested);
-        if (formatted) output.formattedCreditBalance = formatted;
-      }
-      continue;
-    }
+    if (key === "balance") continue;
     if (key === "formattedCredits" || key === "formattedUnitCredits" || key === "formattedCreditBalance") {
       const formatted = creditOnlyText(nested);
       if (formatted) output[key] = formatted;
@@ -257,15 +195,7 @@ function creditDescription(
   options: { estimated: boolean; quoteDependsOnInput: boolean; tier: "free" | "premium" },
 ): string {
   if (options.tier === "free") return "No credits required.";
-  if (typeof value === "string" && value.trim()) {
-    return sanitizeCustomerCreditText(value)
-      .replace(/\bFinal price\b/g, "Final credit amount")
-      .replace(/\bfinal price\b/gi, "final credit amount")
-      .replace(/\bprice\b/gi, "credit amount")
-      .replace(/\bpricing\b/gi, "credit quote")
-      .replace(/\bpriced\b/gi, "quoted")
-      .trim();
-  }
+  void value;
   return options.estimated || options.quoteDependsOnInput
     ? "Estimated credits. The final credit amount depends on run options."
     : "Fixed credits per run.";

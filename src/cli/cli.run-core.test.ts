@@ -402,6 +402,56 @@ describe("CLI run core", () => {
       }
     });
 
+    test("cloud quote fails closed when the authenticated response omits creditQuote despite registry metadata and a token", async () => {
+      const { mkdtempSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-cloud-missing-live-quote-"));
+      const server = Bun.serve({
+        port: 0,
+        fetch(req) {
+          const url = new URL(req.url);
+          if (url.pathname === "/api/v1/skills/image" && req.method === "GET") {
+            return Response.json({
+              slug: "image",
+              availability: { status: "available" },
+              creditQuote: {
+                ...AUTHORITATIVE_TEST_QUOTE,
+                tier: "premium",
+                creditUnit: "image",
+                credits: 9,
+                formattedCredits: "9 credits/image",
+              },
+            });
+          }
+          if (url.pathname === "/api/v1/skills/image/quote" && req.method === "POST") {
+            return Response.json({
+              availability: { status: "available" },
+              quoteToken: "quote_without_authoritative_credits",
+              expiresAt: "2026-07-21T16:00:00.000Z",
+            });
+          }
+          return Response.json({ error: "unexpected request" }, { status: 500 });
+        },
+      });
+
+      try {
+        const apiUrl = `http://127.0.0.1:${server.port}`;
+        await runCliInCwd(["setup", "--mode", "cloud", "--api-url", apiUrl, "--json"], tmpDir, { HOME: tmpDir });
+        const quoted = await runCliInCwd(["quote", "image", "--json"], tmpDir, {
+          HOME: tmpDir,
+          SKILLS_API_KEY: "sk_test_cloud_missing_live_quote",
+        });
+        expect(quoted.exitCode).toBe(1);
+        const payload = JSON.parse(quoted.stdout);
+        expect(payload).toMatchObject({ code: "CLOUD_CAPABILITY_CHECK_FAILED" });
+        expect(payload.error).toContain("did not return a creditQuote");
+        expect(payload.availability).toBeUndefined();
+      } finally {
+        server.stop(true);
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
     test("self-hosted quote and run use the selected service zero-credit authority without paid approval", async () => {
       const { mkdtempSync, rmSync } = require("fs");
       const { tmpdir } = require("os");

@@ -321,6 +321,8 @@ export function registerOperationTools(server: McpServer): void {
             };
           } else if (liveQuote?.creditQuote) {
             creditQuote = toPublicCreditQuote(liveQuote.creditQuote);
+          } else {
+            return mcpError("CLOUD_QUOTE_INVALID", "The selected cloud service did not return a creditQuote. No credits were charged.");
           }
           quoteToken = typeof liveQuote?.quoteToken === "string" ? liveQuote.quoteToken : undefined;
           quoteExpiresAt = typeof liveQuote?.expiresAt === "string" ? liveQuote.expiresAt : undefined;
@@ -409,7 +411,6 @@ export function registerOperationTools(server: McpServer): void {
     const {
       ARTICLE_GENERATION_SLUG,
       isPremiumSkill,
-      getSkillRunCostCents,
       getSkillCreditQuote,
       validateBlogArticleRunOptions,
     } = await import("../lib/pricing.js");
@@ -425,8 +426,8 @@ export function registerOperationTools(server: McpServer): void {
 
     const apiKey = getApiKey();
     const mode = resolveCurrentDeploymentMode();
-    let credits = isPremiumSkill(skillName) ? getSkillRunCostCents(skillName, runInput, runArgs) : undefined;
     let creditQuote = getSkillCreditQuote(skillName, runInput, runArgs);
+    let credits = isPremiumSkill(skillName) ? creditQuote.credits : undefined;
 
     if (isPremiumSkill(skillName) && mode === "local") {
       return mcpError("REMOTE_MODE_REQUIRED", `${skillName} requires cloud or self-hosted mode.`, ["skills setup --mode cloud"]);
