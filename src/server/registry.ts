@@ -4,8 +4,7 @@ import { getSkill, loadRegistry } from "../lib/registry.js";
 import { getSkillDocs } from "../lib/skillinfo.js";
 import { getHostedAvailabilityMetadata } from "../lib/hosted-availability.js";
 import { getPublicSkillDiscovery } from "../lib/discovery.js";
-import { getPublicSkillPricing } from "../lib/pricing.js";
-import { toPublicCreditQuote } from "../lib/public-credits.js";
+import { getSkillCreditQuote } from "../lib/pricing.js";
 
 export function listServerSkills() {
   return loadRegistry().map((skill) => getPublicSkillDiscovery({
@@ -33,7 +32,7 @@ export function quoteServerSkill(slug: string): Record<string, unknown> {
   if (!skill) return { error: "skill not found", code: "SKILL_NOT_FOUND" };
   return {
     skill: skill.name,
-    creditQuote: toPublicCreditQuote(skill.pricing ?? getPublicSkillPricing(skill.name)),
+    creditQuote: getSkillCreditQuote(skill.name),
     availability: skill.availability ?? { status: "available" },
   };
 }

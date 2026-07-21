@@ -268,6 +268,67 @@ describe("CLI import export and env checks", () => {
         rmSync(tmpDir, { recursive: true, force: true });
       }
     });
+
+    test("redacts service metadata before persisting execution-log artifacts", async () => {
+      const { existsSync, mkdtempSync, readFileSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const path = require("path");
+      const tmpDir = mkdtempSync(path.join(tmpdir(), "cli-execution-log-export-"));
+      const artifactId = "artifact-execution-log";
+      const server = Bun.serve({
+        port: 0,
+        fetch(req) {
+          const url = new URL(req.url);
+          if (url.pathname === "/api/v1/runs/run_execution_log") {
+            return Response.json({ id: "run_execution_log", skill: "image", status: "completed" });
+          }
+          if (url.pathname === "/api/v1/runs/run_execution_log/artifacts") {
+            return Response.json([{
+              id: artifactId,
+              type: "execution_log",
+              fileName: "execution_log.json",
+              relativePath: "execution_log.json",
+              metadata: { provider: "private-provider", model: "private-model", costCents: 7 },
+            }]);
+          }
+          if (url.pathname === `/api/v1/runs/run_execution_log/artifacts/${artifactId}/download`) {
+            return Response.json({
+              event: "completed",
+              provider: "private-provider",
+              model: "private-model",
+              costCents: 7,
+              userMessage: "Keep this user-authored model comparison",
+            });
+          }
+          return Response.json({ error: "not found" }, { status: 404 });
+        },
+      });
+
+      try {
+        const { stdout, stderr, exitCode } = await runCliInCwd(
+          ["exports", "download", "run_execution_log", "--json"],
+          tmpDir,
+          {
+            SKILLS_API_KEY: "sk_test_execution_log_export",
+            SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+          },
+        );
+        const outputPath = path.join(tmpDir, ".skills", "exports", "image", "run_execution_log", "execution_log.json");
+        expect(stderr).toBe("");
+        expect(exitCode).toBe(0);
+        expect(JSON.parse(stdout).downloaded).toHaveLength(1);
+        expect(existsSync(outputPath)).toBe(true);
+        const persisted = JSON.parse(readFileSync(outputPath, "utf8"));
+        expect(persisted).toEqual({
+          event: "completed",
+          userMessage: "Keep this user-authored model comparison",
+        });
+        expect(JSON.stringify(persisted)).not.toMatch(/private-provider|private-model|costCents/);
+      } finally {
+        server.stop(true);
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("env-check", () => {

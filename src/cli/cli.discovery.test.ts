@@ -13,6 +13,7 @@ import {
   runCliInCwd,
   runCliInRealPty,
   runCliWithTtyOverride,
+  testRemoteCreditQuoteResponse,
 } from "./cli.test-utils";
 
 function shellQuote(value: string): string {
@@ -356,6 +357,16 @@ describe("CLI discovery", () => {
                 category: "Design & Branding",
                 tags: ["logo"],
                 availability: { status: "available" },
+                creditQuote: {
+                  tier: "free",
+                  creditUnit: "run",
+                  credits: 0,
+                  formattedCredits: "0 credits",
+                  estimated: false,
+                  quoteDependsOnInput: false,
+                  quoteRequired: false,
+                  description: "No credits required.",
+                },
               },
             ],
           });
@@ -547,7 +558,7 @@ describe("CLI discovery", () => {
             version: "0.2.0",
           creditQuote: {
             tier: "premium",
-            billingUnit: "run",
+            creditUnit: "run",
             credits: 75,
             formattedCredits: "75 credits/run",
               estimated: false,
@@ -585,27 +596,32 @@ describe("CLI discovery", () => {
   });
 
   describe("quote", () => {
-    test("fails fast for unavailable hosted provider skills without charging", async () => {
-      const quoted = await runCli(["quote", "image", "--json"]);
+    test("requires an authenticated selected-service quote without exposing bundled metadata", async () => {
+      const quoted = await runCli(["quote", "image", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(quoted.exitCode).toBe(1);
       const data = JSON.parse(quoted.stdout);
       expect(data).toMatchObject({
         skill: "image",
-        code: "HOSTED_PROVIDER_UNAVAILABLE",
-        availability: {
-          status: "unavailable",
-          code: "HOSTED_PROVIDER_UNAVAILABLE",
-        },
+        code: "AUTH_REQUIRED",
       });
-      expect(data.creditQuote).toMatchObject({
-        tier: "premium",
-        billingUnit: "image",
-      });
-      expect(data.details).toContain("No credits were charged.");
+      expect(data).not.toHaveProperty("creditQuote");
+      expect(JSON.stringify(data)).not.toContain("HOSTED_PROVIDER_UNAVAILABLE");
     });
 
-    test("quotes fixed and variable premium skills without provider internals", async () => {
-      const fixed = await runCli(["quote", "logo-design", "--json"]);
+    test("quotes fixed and variable premium skills from the authenticated selected service", async () => {
+      const server = Bun.serve({
+        port: 0,
+        async fetch(req) {
+          return await testRemoteCreditQuoteResponse(req)
+            ?? Response.json({ error: "unexpected request" }, { status: 404 });
+        },
+      });
+      const previousApiUrl = process.env.SKILLS_API_URL;
+      const previousApiKey = process.env.SKILLS_API_KEY;
+      process.env.SKILLS_API_URL = `http://127.0.0.1:${server.port}`;
+      process.env.SKILLS_API_KEY = "fixture-selected-service-quote";
+      try {
+      const fixed = await runCli(["quote", "logo-design", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(fixed.exitCode).toBe(0);
       expect(JSON.parse(fixed.stdout)).toMatchObject({
         availability: { status: "available" },
@@ -616,7 +632,7 @@ describe("CLI discovery", () => {
         },
       });
 
-      const dataset = await runCli(["quote", "pdf-to-dataset", "--json"]);
+      const dataset = await runCli(["quote", "pdf-to-dataset", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(dataset.exitCode).toBe(0);
       expect(JSON.parse(dataset.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -624,7 +640,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const markdown = await runCli(["quote", "pdf-to-markdown", "--json"]);
+      const markdown = await runCli(["quote", "pdf-to-markdown", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(markdown.exitCode).toBe(0);
       expect(JSON.parse(markdown.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -632,7 +648,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const report = await runCli(["quote", "market-research-report", "--json"]);
+      const report = await runCli(["quote", "market-research-report", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(report.exitCode).toBe(0);
       expect(JSON.parse(report.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -640,7 +656,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const customerFeedbackReport = await runCli(["quote", "customer-feedback-report", "--json"]);
+      const customerFeedbackReport = await runCli(["quote", "customer-feedback-report", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(customerFeedbackReport.exitCode).toBe(0);
       expect(JSON.parse(customerFeedbackReport.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -648,7 +664,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const proposal = await runCli(["quote", "proposal-pack", "--json"]);
+      const proposal = await runCli(["quote", "proposal-pack", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(proposal.exitCode).toBe(0);
       expect(JSON.parse(proposal.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -656,7 +672,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const pitchDeck = await runCli(["quote", "pitch-deck", "--json"]);
+      const pitchDeck = await runCli(["quote", "pitch-deck", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(pitchDeck.exitCode).toBe(0);
       expect(JSON.parse(pitchDeck.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -664,7 +680,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const securityReport = await runCli(["quote", "security-audit-report", "--json"]);
+      const securityReport = await runCli(["quote", "security-audit-report", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(securityReport.exitCode).toBe(0);
       expect(JSON.parse(securityReport.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -672,7 +688,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const brandKit = await runCli(["quote", "brand-kit", "--json"]);
+      const brandKit = await runCli(["quote", "brand-kit", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(brandKit.exitCode).toBe(0);
       expect(JSON.parse(brandKit.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -680,7 +696,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const productMockup = await runCli(["quote", "product-mockup", "--json"]);
+      const productMockup = await runCli(["quote", "product-mockup", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(productMockup.exitCode).toBe(0);
       expect(JSON.parse(productMockup.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -688,7 +704,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const seoContentPack = await runCli(["quote", "seo-content-pack", "--json"]);
+      const seoContentPack = await runCli(["quote", "seo-content-pack", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(seoContentPack.exitCode).toBe(0);
       expect(JSON.parse(seoContentPack.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -696,7 +712,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const landingPagePack = await runCli(["quote", "landing-page-pack", "--json"]);
+      const landingPagePack = await runCli(["quote", "landing-page-pack", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(landingPagePack.exitCode).toBe(0);
       expect(JSON.parse(landingPagePack.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -704,7 +720,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const onePageWebsite = await runCli(["quote", "one-page-website", "--json"]);
+      const onePageWebsite = await runCli(["quote", "one-page-website", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(onePageWebsite.exitCode).toBe(0);
       expect(JSON.parse(onePageWebsite.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -712,7 +728,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const adCreativePack = await runCli(["quote", "ad-creative-pack", "--json"]);
+      const adCreativePack = await runCli(["quote", "ad-creative-pack", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(adCreativePack.exitCode).toBe(0);
       expect(JSON.parse(adCreativePack.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -720,7 +736,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const emailSequence = await runCli(["quote", "email-sequence", "--json"]);
+      const emailSequence = await runCli(["quote", "email-sequence", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(emailSequence.exitCode).toBe(0);
       expect(JSON.parse(emailSequence.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -728,7 +744,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const socialCalendar = await runCli(["quote", "social-content-calendar", "--json"]);
+      const socialCalendar = await runCli(["quote", "social-content-calendar", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(socialCalendar.exitCode).toBe(0);
       expect(JSON.parse(socialCalendar.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -736,7 +752,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const testSuite = await runCli(["quote", "test-suite-generator", "--json"]);
+      const testSuite = await runCli(["quote", "test-suite-generator", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(testSuite.exitCode).toBe(0);
       expect(JSON.parse(testSuite.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -744,7 +760,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const apiDocsPortal = await runCli(["quote", "api-docs-portal", "--json"]);
+      const apiDocsPortal = await runCli(["quote", "api-docs-portal", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(apiDocsPortal.exitCode).toBe(0);
       expect(JSON.parse(apiDocsPortal.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -752,7 +768,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const sdkGenerator = await runCli(["quote", "sdk-generator", "--json"]);
+      const sdkGenerator = await runCli(["quote", "sdk-generator", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(sdkGenerator.exitCode).toBe(0);
       expect(JSON.parse(sdkGenerator.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -760,7 +776,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const repoOnboardingReport = await runCli(["quote", "repo-onboarding-report", "--json"]);
+      const repoOnboardingReport = await runCli(["quote", "repo-onboarding-report", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(repoOnboardingReport.exitCode).toBe(0);
       expect(JSON.parse(repoOnboardingReport.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -768,7 +784,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const audioTranscriptPack = await runCli(["quote", "audio-transcript-pack", "--json"]);
+      const audioTranscriptPack = await runCli(["quote", "audio-transcript-pack", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(audioTranscriptPack.exitCode).toBe(0);
       expect(JSON.parse(audioTranscriptPack.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -776,7 +792,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const videoHighlightPack = await runCli(["quote", "video-highlight-pack", "--json"]);
+      const videoHighlightPack = await runCli(["quote", "video-highlight-pack", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(videoHighlightPack.exitCode).toBe(0);
       expect(JSON.parse(videoHighlightPack.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -784,7 +800,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const slideDeckGenerator = await runCli(["quote", "slide-deck-generator", "--json"]);
+      const slideDeckGenerator = await runCli(["quote", "slide-deck-generator", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(slideDeckGenerator.exitCode).toBe(0);
       expect(JSON.parse(slideDeckGenerator.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -792,7 +808,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const meetingPack = await runCli(["quote", "meeting-pack", "--json"]);
+      const meetingPack = await runCli(["quote", "meeting-pack", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(meetingPack.exitCode).toBe(0);
       expect(JSON.parse(meetingPack.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -800,7 +816,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const invoiceReconciliation = await runCli(["quote", "invoice-reconciliation", "--json"]);
+      const invoiceReconciliation = await runCli(["quote", "invoice-reconciliation", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(invoiceReconciliation.exitCode).toBe(0);
       expect(JSON.parse(invoiceReconciliation.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -808,7 +824,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const contractReviewReport = await runCli(["quote", "contract-review-report", "--json"]);
+      const contractReviewReport = await runCli(["quote", "contract-review-report", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(contractReviewReport.exitCode).toBe(0);
       expect(JSON.parse(contractReviewReport.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -816,7 +832,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const performanceAuditReport = await runCli(["quote", "performance-audit-report", "--json"]);
+      const performanceAuditReport = await runCli(["quote", "performance-audit-report", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(performanceAuditReport.exitCode).toBe(0);
       expect(JSON.parse(performanceAuditReport.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -824,7 +840,7 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const migrationPlanPack = await runCli(["quote", "migration-plan-pack", "--json"]);
+      const migrationPlanPack = await runCli(["quote", "migration-plan-pack", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(migrationPlanPack.exitCode).toBe(0);
       expect(JSON.parse(migrationPlanPack.stdout).creditQuote).toMatchObject({
         tier: "premium",
@@ -832,12 +848,12 @@ describe("CLI discovery", () => {
         quoteDependsOnInput: false,
       });
 
-      const batch = await runCli(["quote", "create-blog-article", "--count", "8", "--topic", "SaaS onboarding", "--json"]);
+      const batch = await runCli(["quote", "create-blog-article", "--count", "8", "--topic", "SaaS onboarding", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(batch.exitCode).toBe(0);
       const data = JSON.parse(batch.stdout);
       expect(data.skill).toBe("blog-article");
       expect(data.creditQuote).toMatchObject({
-        billingUnit: "article",
+        creditUnit: "article",
         unitCount: 8,
         credits: 200,
         formattedCredits: "200 credits total",
@@ -879,12 +895,19 @@ describe("CLI discovery", () => {
       expect(batch.stdout).not.toContain("cerebras");
       expect(batch.stdout).not.toContain("gpt-oss");
 
-      const invalidBatch = await runCli(["quote", "create-blog-article", "--count", "13", "--topic", "SaaS onboarding", "--json"]);
+      const invalidBatch = await runCli(["quote", "create-blog-article", "--count", "13", "--topic", "SaaS onboarding", "--json"], { SKILLS_MODE: "self-hosted" });
       expect(invalidBatch.exitCode).toBe(1);
       expect(JSON.parse(invalidBatch.stdout)).toMatchObject({
         code: "INVALID_BLOG_ARTICLE_OPTIONS",
         details: ["Count must be an integer between 1 and 12."],
       });
+      } finally {
+        server.stop(true);
+        if (previousApiUrl === undefined) delete process.env.SKILLS_API_URL;
+        else process.env.SKILLS_API_URL = previousApiUrl;
+        if (previousApiKey === undefined) delete process.env.SKILLS_API_KEY;
+        else process.env.SKILLS_API_KEY = previousApiKey;
+      }
     }, SLOW_TEST_TIMEOUT);
   });
 

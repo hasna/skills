@@ -11,10 +11,11 @@ import { getSkill, findSimilarSkills } from "../../lib/registry.js";
 import { runSkill } from "../../lib/skillinfo.js";
 import {
   ARTICLE_GENERATION_SLUG,
-  getPublicSkillPricing,
+  getSkillCreditQuote,
   validateBlogArticleRunOptions,
 } from "../../lib/pricing.js";
 import { loadConfig, saveConfig, type ConfigScope } from "../../lib/config.js";
+import { resolveCurrentDeploymentMode } from "../../lib/deployment-mode.js";
 import { DEFAULT_CLOUD_API_URL, DEFAULT_SELF_HOSTED_API_URL } from "../../server/config.js";
 import { getHostedRunAvailability } from "../../lib/hosted-availability.js";
 import { loadRemoteSkill } from "../../lib/remote-registry.js";
@@ -233,9 +234,9 @@ async function handleSetup(options: SetupCommandOptions) {
 function normalizeSetupMode(value: string | undefined): "local" | "self-hosted" | "cloud" | undefined {
   if (!value) return undefined;
   const normalized = value.trim().toLowerCase();
-  if (normalized === "local" || normalized === "offline") return "local";
-  if (["self-hosted", "selfhosted", "self_hosted"].includes(normalized)) return "self-hosted";
-  if (["cloud", "hosted", "remote", "skills.md", "skillsmd"].includes(normalized)) return "cloud";
+  if (normalized === "local") return "local";
+  if (normalized === "self-hosted") return "self-hosted";
+  if (normalized === "cloud") return "cloud";
   throw new Error("Invalid setup mode. Use cloud, self-hosted, or local.");
 }
 
@@ -273,8 +274,8 @@ async function handleQuote(name: string, args: string[], options: { json: boolea
     }
   }
 
-  const deploymentMode = resolveDeploymentMode();
-  if (deploymentMode === "local" && getPublicSkillPricing(skill.name, {}, quoteArgs).tier === "premium") {
+  const deploymentMode = resolveCurrentDeploymentMode();
+  if (deploymentMode === "local" && getSkillCreditQuote(skill.name, {}, quoteArgs).tier === "premium") {
     const error = `${skill.name} requires cloud or self-hosted mode. Run: skills setup --mode cloud`;
     if (json) console.log(JSON.stringify({ skill: skill.name, error, code: "REMOTE_MODE_REQUIRED" }, null, 2));
     else console.error(chalk.red(error));
@@ -282,7 +283,7 @@ async function handleQuote(name: string, args: string[], options: { json: boolea
     return;
   }
 
-  let creditQuote = toPublicCreditQuote(getPublicSkillPricing(skill.name, {}, quoteArgs));
+  let creditQuote = getSkillCreditQuote(skill.name, {}, quoteArgs);
   let quoteToken: string | undefined;
   let quoteExpiresAt: string | undefined;
   let availability: { status: "available" | "unavailable"; code?: string; message?: string; details?: string[] } = { status: "available" };
@@ -290,7 +291,7 @@ async function handleQuote(name: string, args: string[], options: { json: boolea
   if (deploymentMode === "cloud") {
     try {
       const remoteSkill = await loadRemoteSkill(skill.name);
-      if (remoteSkill.pricing) creditQuote = toPublicCreditQuote(remoteSkill.pricing);
+      if (remoteSkill.creditQuote) creditQuote = remoteSkill.creditQuote;
       availability = remoteSkill.availability ?? {
         status: "unavailable",
         code: "REMOTE_AVAILABILITY_MISSING",
@@ -310,11 +311,17 @@ async function handleQuote(name: string, args: string[], options: { json: boolea
               ? liveQuote.availability.details.map(String)
               : ["No credits were charged."],
           };
-        } else if (liveQuote?.creditQuote || liveQuote?.pricing) {
-          creditQuote = toPublicCreditQuote(liveQuote.creditQuote ?? liveQuote.pricing);
+        } else if (liveQuote?.creditQuote) {
+          creditQuote = toPublicCreditQuote(liveQuote.creditQuote);
         }
         quoteToken = typeof liveQuote?.quoteToken === "string" ? liveQuote.quoteToken : undefined;
         quoteExpiresAt = typeof liveQuote?.expiresAt === "string" ? liveQuote.expiresAt : undefined;
+      } else if (!apiKey && availability.status === "available" && creditQuote.credits > 0) {
+        const error = `An authenticated signed quote is required for ${skill.name}. Run: skills auth login`;
+        if (json) console.log(JSON.stringify({ skill: skill.name, error, code: "AUTH_REQUIRED" }, null, 2));
+        else console.error(chalk.red(error));
+        process.exitCode = 1;
+        return;
       }
     } catch (error) {
       const message = `Unable to verify cloud availability: ${(error as Error).message}`;
@@ -323,15 +330,42 @@ async function handleQuote(name: string, args: string[], options: { json: boolea
       process.exitCode = 1;
       return;
     }
-  } else {
-    const hostedAvailability = getHostedRunAvailability(skill.name);
-    if (!hostedAvailability.ok) {
-      availability = {
-        status: "unavailable",
-        code: hostedAvailability.code,
-        message: hostedAvailability.message,
-        details: hostedAvailability.details,
-      };
+  } else if (deploymentMode === "self-hosted") {
+    const { getApiKey } = await import("../../lib/auth-store.js");
+    const apiKey = getApiKey();
+    if (apiKey) {
+      try {
+        const { RemoteSkillsClient } = await import("../../lib/remote-client.js");
+        const liveQuote = await new RemoteSkillsClient(apiKey).quoteSkill(skill.name, {}, quoteArgs);
+        if (liveQuote?.error || liveQuote?.availability?.status === "unavailable") {
+          availability = {
+            status: "unavailable",
+            code: String(liveQuote?.availability?.code || liveQuote?.code || "SELF_HOSTED_QUOTE_UNAVAILABLE"),
+            message: String(liveQuote?.availability?.message || liveQuote?.detail || liveQuote?.error || "Self-hosted execution is unavailable"),
+            details: Array.isArray(liveQuote?.availability?.details)
+              ? liveQuote.availability.details.map(String)
+              : ["No credits were charged."],
+          };
+        } else if (liveQuote?.creditQuote) {
+          creditQuote = toPublicCreditQuote(liveQuote.creditQuote);
+          quoteToken = typeof liveQuote?.quoteToken === "string" ? liveQuote.quoteToken : undefined;
+          quoteExpiresAt = typeof liveQuote?.expiresAt === "string" ? liveQuote.expiresAt : undefined;
+        } else {
+          throw new Error("The selected self-hosted service did not return a creditQuote.");
+        }
+      } catch (error) {
+        const message = `Unable to obtain the selected self-hosted credit quote: ${(error as Error).message}`;
+        if (json) console.log(JSON.stringify({ skill: skill.name, error: message, code: "SELF_HOSTED_QUOTE_FAILED" }, null, 2));
+        else console.error(chalk.red(message));
+        process.exitCode = 1;
+        return;
+      }
+    } else {
+      const error = `An authenticated quote from the selected self-hosted service is required for ${skill.name}. Run: skills auth login`;
+      if (json) console.log(JSON.stringify({ skill: skill.name, error, code: "AUTH_REQUIRED" }, null, 2));
+      else console.error(chalk.red(error));
+      process.exitCode = 1;
+      return;
     }
   }
 
@@ -399,9 +433,9 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
     }
   }
   const isPremium = pricing.isPremiumSkill(skill.name);
-  const deploymentMode = resolveDeploymentMode();
-  let costCents = isPremium ? pricing.getSkillRunCostCents(skill.name, {}, args) : undefined;
-  let creditQuote = toPublicCreditQuote(pricing.getPublicSkillPricing(skill.name, {}, args));
+  const deploymentMode = resolveCurrentDeploymentMode();
+  let credits = isPremium ? pricing.getSkillRunCostCents(skill.name, {}, args) : undefined;
+  let creditQuote = pricing.getSkillCreditQuote(skill.name, {}, args);
   let quoteToken: string | undefined;
   let remoteAvailability: { status: "available" | "unavailable"; code?: string; message?: string; details?: string[] } = { status: "available" };
 
@@ -417,9 +451,9 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
   if (isPremium && deploymentMode === "cloud") {
     try {
       const remoteSkill = await loadRemoteSkill(skill.name);
-      if (remoteSkill.pricing) {
-        creditQuote = toPublicCreditQuote(remoteSkill.pricing);
-        costCents = creditQuote.credits;
+      if (remoteSkill.creditQuote) {
+        creditQuote = remoteSkill.creditQuote;
+        credits = creditQuote.credits;
       }
       remoteAvailability = remoteSkill.availability ?? {
         status: "unavailable",
@@ -434,6 +468,11 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       return;
     }
   } else if (isPremium) {
+    const { getApiKey } = await import("../../lib/auth-store.js");
+    const apiKey = getApiKey();
+    if (apiKey) {
+      remoteAvailability = { status: "available" };
+    } else {
     const hostedAvailability = getHostedRunAvailability(skill.name);
     if (!hostedAvailability.ok) {
       remoteAvailability = {
@@ -443,6 +482,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
         details: hostedAvailability.details,
       };
     }
+    }
   }
 
   const runContext = createSkillRun({
@@ -450,7 +490,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
     args,
     prompt,
     remote: isPremium,
-    costCents,
+    credits,
   });
 
   if (isPremium) {
@@ -458,7 +498,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       const payload = unavailableRemotePayload(skill.name, creditQuote, remoteAvailability);
       const error = `${remoteAvailability.code || "REMOTE_UNAVAILABLE"}: ${remoteAvailability.message || "remote execution is unavailable"}`;
       writeRunLogs(runContext, "", `${error}\n${(remoteAvailability.details || []).join("\n")}\n`);
-      const run = completeSkillRun(runContext, { status: "failed", error, costCents });
+      const run = completeSkillRun(runContext, { status: "failed", error, credits });
       if (options.json) {
         console.log(JSON.stringify(toCustomerCreditPayload({
           contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION,
@@ -481,7 +521,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       if (!apiKey) {
         const error = `${skill.name} is a remote skill (${creditQuote.formattedCredits}). Run: skills setup --mode ${deploymentMode === "cloud" ? "cloud" : "self-hosted"} && skills auth login`;
         writeRunLogs(runContext, "", error + "\n");
-        const run = completeSkillRun(runContext, { status: "failed", error, costCents });
+        const run = completeSkillRun(runContext, { status: "failed", error, credits });
         if (options.json) console.log(JSON.stringify(toCustomerCreditPayload({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, creditQuote, run }), null, 2));
         else console.error(chalk.red(error));
         process.exitCode = 1;
@@ -492,51 +532,57 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       try {
         const { RemoteSkillsClient } = await import("../../lib/remote-client.js");
         client = new RemoteSkillsClient(apiKey);
-        if (deploymentMode === "cloud") {
+        {
           const liveQuote = await client.quoteSkill(skill.name, {}, args);
           const liveAvailability = liveQuote?.availability;
           if (liveQuote?.error || liveAvailability?.status === "unavailable") {
             const message = String(liveAvailability?.message || liveQuote?.detail || liveQuote?.error || "Cloud execution is unavailable");
-            const code = String(liveAvailability?.code || liveQuote?.code || "CLOUD_QUOTE_UNAVAILABLE");
+            const code = String(liveAvailability?.code || liveQuote?.code || (deploymentMode === "cloud" ? "CLOUD_QUOTE_UNAVAILABLE" : "SELF_HOSTED_QUOTE_UNAVAILABLE"));
             const details = Array.isArray(liveAvailability?.details) ? liveAvailability.details.map(String) : ["No credits were charged."];
             const unavailable = unavailableRemotePayload(skill.name, creditQuote, { status: "unavailable", code, message, details });
             const error = `${code}: ${message}`;
             writeRunLogs(runContext, "", `${error}\n${details.join("\n")}\n`);
-            const run = completeSkillRun(runContext, { status: "failed", error, costCents });
+            const run = completeSkillRun(runContext, { status: "failed", error, credits });
             if (options.json) console.log(JSON.stringify(toCustomerCreditPayload({ ...unavailable, contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, args, exitCode: 1, remote: true, run }), null, 2));
             else console.error(chalk.red(`${skill.name}: ${message}`));
             process.exitCode = 1;
             return;
           }
-          const liveCreditSource = liveQuote?.creditQuote ?? liveQuote?.pricing;
+          const liveCreditSource = liveQuote?.creditQuote;
           if (liveCreditSource) {
             creditQuote = toPublicCreditQuote(liveCreditSource);
-            costCents = creditQuote.credits;
+            credits = creditQuote.credits;
+          } else {
+            throw new Error("The selected remote service did not return a creditQuote. No credits were charged.");
           }
           quoteToken = typeof liveQuote?.quoteToken === "string" ? liveQuote.quoteToken : undefined;
-          if (creditQuote.credits > 0 && !quoteToken) {
+          if (deploymentMode === "cloud" && creditQuote.credits > 0 && !quoteToken) {
             throw new Error("The cloud quote did not include the required quote token. No credits were charged.");
           }
         }
       } catch (err) {
-        const error = `Unable to obtain a remote credit quote: ${(err as Error).message}`;
+        const error = deploymentMode === "self-hosted"
+          ? `Remote skill ${skill.name} requires access to the selected self-hosted service: ${(err as Error).message}`
+          : `Unable to obtain the selected cloud credit quote: ${(err as Error).message}`;
         writeRunLogs(runContext, "", error + "\n");
-        const run = completeSkillRun(runContext, { status: "failed", error, costCents });
+        const run = completeSkillRun(runContext, { status: "failed", error, credits });
         if (options.json) console.log(JSON.stringify(toCustomerCreditPayload({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, creditQuote, run }), null, 2));
         else console.error(chalk.red(error));
         process.exitCode = 1;
         return;
       }
 
-      const approval = await approvePaidHostedRun({
-        skill: skill.name,
-        formattedCredits: creditQuote.formattedCredits,
-        json: options.json,
-        yes: Boolean(options.yes),
-      });
+      const approval = creditQuote.credits === 0
+        ? { approved: true as const }
+        : await approvePaidHostedRun({
+            skill: skill.name,
+            formattedCredits: creditQuote.formattedCredits,
+            json: options.json,
+            yes: Boolean(options.yes),
+          });
       if (!approval.approved) {
         writeRunLogs(runContext, "", approval.error + "\n");
-        const run = completeSkillRun(runContext, { status: "failed", error: approval.error, costCents });
+        const run = completeSkillRun(runContext, { status: "failed", error: approval.error, credits });
         if (options.json) {
           console.log(JSON.stringify(toCustomerCreditPayload({
             contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION,
@@ -562,11 +608,11 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
           skill.name,
           {},
           args,
-          deploymentMode === "cloud" ? { quoteToken, approved: true } : {},
+          deploymentMode === "cloud" || quoteToken ? { quoteToken, approved: true } : {},
         );
         if (run.error) {
           writeRunLogs(runContext, "", String(run.error) + "\n");
-          const localRun = completeSkillRun(runContext, { status: "failed", error: String(run.error), costCents });
+          const localRun = completeSkillRun(runContext, { status: "failed", error: String(run.error), credits });
           if (options.json) console.log(JSON.stringify(toCustomerCreditPayload({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error: run.error, creditQuote, remoteRun: run, run: localRun }), null, 2));
           else console.error(chalk.red(run.error));
           process.exitCode = 1;
@@ -590,7 +636,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
           context: runContext,
           remoteRun,
           remoteRunId,
-          costCents,
+          credits,
           fallbackError: error,
         });
         if (options.json) {
@@ -628,7 +674,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       } catch (err) {
         const error = `Remote skill ${skill.name} requires access to the selected ${deploymentMode} service: ${(err as Error).message}`;
         writeRunLogs(runContext, "", error + "\n");
-        const run = completeSkillRun(runContext, { status: "failed", error, costCents });
+        const run = completeSkillRun(runContext, { status: "failed", error, credits });
         if (options.json) console.log(JSON.stringify(toCustomerCreditPayload({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, creditQuote, run }), null, 2));
         else console.error(chalk.red(error));
         process.exitCode = 1;
@@ -696,15 +742,6 @@ async function approvePaidHostedRun(params: {
   const answer = await promptLine(`Run remote skill ${params.skill} for ${params.formattedCredits}? [y/N] `);
   if (/^(y|yes)$/i.test(answer.trim())) return { approved: true };
   return { approved: false, error: `The credit use for ${params.skill} was not approved.` };
-}
-
-function resolveDeploymentMode(): "local" | "self-hosted" | "cloud" {
-  const config = loadConfig();
-  if (config.mode) return config.mode;
-  const apiUrl = (process.env.SKILLS_API_URL || config.apiUrl || "").toLowerCase();
-  if (apiUrl.includes("skills.md")) return "cloud";
-  if (apiUrl || process.env.SKILLS_API_KEY || process.env.SKILL_API_KEY) return "self-hosted";
-  return "self-hosted";
 }
 
 function writeBlogArticleValidationError(errors: string[], json: boolean) {
@@ -893,7 +930,7 @@ async function handleExportsDownload(runId: string, options: { json: boolean }) 
     for (const artifact of artifacts) {
       const artifactId = String(artifact.id || "");
       if (!artifactId) continue;
-      const response = await client.downloadRunArtifact(runId, artifactId);
+      const response = await client.downloadRunArtifact(runId, artifactId, artifact);
       if (!response.ok) throw new Error(`download failed for artifact ${artifactId}: ${response.status}`);
       const relativePath = safeArtifactRelativePath(
         typeof artifact.relativePath === "string" ? artifact.relativePath : artifact.fileName,
@@ -996,7 +1033,7 @@ async function persistRemoteRun(params: {
   context: ReturnType<typeof createSkillRun>;
   remoteRun: any;
   remoteRunId?: string;
-  costCents?: number;
+  credits?: number;
   fallbackError?: string;
 }) {
   const status = normalizeRemoteStatus(params.remoteRun.status);
@@ -1005,7 +1042,7 @@ async function persistRemoteRun(params: {
     return completeSkillRun(params.context, {
       status,
       remoteRunId: params.remoteRunId,
-      costCents: params.costCents,
+      credits: params.credits,
       ...(status === "failed" ? { error: params.fallbackError ?? "Remote run failed" } : {}),
     });
   }
@@ -1013,7 +1050,7 @@ async function persistRemoteRun(params: {
   return updateSkillRun(params.context, {
     status,
     remoteRunId: params.remoteRunId,
-    costCents: params.costCents,
+    credits: params.credits,
   });
 }
 

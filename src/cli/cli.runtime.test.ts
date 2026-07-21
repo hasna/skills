@@ -8,6 +8,13 @@ import {
   runCli,
   runCliInCwd,
 } from "./cli.test-utils";
+
+const AUTHORITATIVE_TEST_QUOTE = {
+  estimated: false,
+  quoteDependsOnInput: false,
+  quoteRequired: false,
+  description: "Authoritative test credit quote.",
+};
 import { getFirstRunOnboardingMessage, shouldShowFirstRunOnboarding } from "./onboarding";
 
 describe("CLI runtime and misc commands", () => {
@@ -80,14 +87,14 @@ describe("CLI runtime and misc commands", () => {
       }
     });
 
-    test("stores cloud mode and API URL while accepting the skills.md alias", async () => {
+    test("stores canonical cloud mode and API URL", async () => {
       const { mkdtempSync, rmSync, readFileSync } = require("fs");
       const { tmpdir } = require("os");
       const { join } = require("path");
       const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-hosted-"));
       try {
         const { stdout, exitCode } = await runCliInCwd(
-          ["setup", "--mode", "skills.md", "--api-url", "https://skills.example.com/api/v1", "--json"],
+          ["setup", "--mode", "cloud", "--api-url", "https://skills.example.com/api/v1", "--json"],
           tmpDir,
           { HOME: tmpDir },
         );
@@ -125,15 +132,15 @@ describe("CLI runtime and misc commands", () => {
       }
     });
 
-    test("accepts cloud and remote as cloud setup aliases", async () => {
+    test("accepts cloud and rejects ambiguous setup aliases", async () => {
       const { mkdtempSync, rmSync } = require("fs");
       const { tmpdir } = require("os");
       const { join } = require("path");
       const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-reject-modes-"));
       try {
         const remote = await runCliInCwd(["setup", "--mode", "remote", "--json"], tmpDir, { HOME: tmpDir });
-        expect(remote.exitCode).toBe(0);
-        expect(JSON.parse(remote.stdout)).toMatchObject({ mode: "cloud" });
+        expect(remote.exitCode).toBe(1);
+        expect(`${remote.stdout}\n${remote.stderr}`).toContain("Invalid setup mode");
         const cloud = await runCliInCwd(["setup", "--mode", "cloud", "--json"], tmpDir, { HOME: tmpDir });
         expect(cloud.exitCode).toBe(0);
         expect(JSON.parse(cloud.stdout)).toMatchObject({ mode: "cloud" });
@@ -307,13 +314,14 @@ describe("CLI runtime and misc commands", () => {
       }
     });
 
-    test("due premium schedules require paid approval and remote auth without local fallback", async () => {
+    test("due self-hosted schedules require authenticated service quotes without local fallback", async () => {
       const { mkdtempSync, readFileSync, rmSync, writeFileSync } = require("fs");
       const { tmpdir } = require("os");
       const { join } = require("path");
       const tmpDir = mkdtempSync(join(tmpdir(), "cli-schedule-premium-remote-"));
       const env = { HOME: tmpDir, SKILLS_API_KEY: "", SKILLS_TEST_MODE: "1" };
       try {
+        writeFileSync(join(tmpDir, "skills.config.json"), JSON.stringify({ mode: "self-hosted" }));
         const add = await runCliInCwd(["schedule", "add", "logo-design", "*/5 * * * *", "--name", "premium-logo", "--json"], tmpDir, env);
         expect(add.exitCode).toBe(0);
 
@@ -325,37 +333,24 @@ describe("CLI runtime and misc commands", () => {
         const run = await runCliInCwd(["schedule", "run", "--json"], tmpDir, env);
         expect(run.exitCode).toBe(1);
         const result = JSON.parse(run.stdout);
-        expect(result.approvalRequired).toBe(true);
         expect(result.ran).toBe(0);
-        expect(result.totalCredits).toBeGreaterThan(0);
-        expect(result.error).toContain("Due remote schedules require");
-        expect(result.error).toContain("--allow-paid");
-        expect(result.error).toContain("--max-credits");
-        expect(result.schedules[0]).toMatchObject({ name: "premium-logo", skill: "logo-design", paid: true });
-        expect(result.schedules[0].creditQuote.formattedCredits).toContain("credits");
-
-        const afterApprovalData = JSON.parse(readFileSync(schedulesPath, "utf-8"));
-        afterApprovalData.schedules[0].nextRun = "2020-01-01T00:00:00.000Z";
-        writeFileSync(schedulesPath, JSON.stringify(afterApprovalData, null, 2));
-
-        const approvedRun = await runCliInCwd(["schedule", "run", "--allow-paid", "--max-credits", String(result.totalCredits), "--json"], tmpDir, env);
-        expect(approvedRun.exitCode).toBe(0);
-        const approvedResult = JSON.parse(approvedRun.stdout);
-        expect(approvedResult.results[0].error).toContain("remote skill");
-        expect(approvedResult.results[0].error).toContain("skills auth login");
-        expect(approvedResult.results[0].error).not.toContain("Skill Image CLI");
+        expect(result.code).toBe("AUTH_REQUIRED");
+        expect(result.schedules[0]).toMatchObject({ name: "premium-logo", skill: "logo-design", creditBacked: true });
+        expect(result.schedules[0]).not.toHaveProperty("creditQuote");
+        expect(JSON.stringify(result)).not.toContain("paid");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
     });
 
-    test("due unavailable hosted schedules fail before paid approval or remote auth", async () => {
+    test("due self-hosted schedules do not use bundled provider availability without auth", async () => {
       const { mkdtempSync, readFileSync, rmSync, writeFileSync } = require("fs");
       const { tmpdir } = require("os");
       const { join } = require("path");
       const tmpDir = mkdtempSync(join(tmpdir(), "cli-schedule-unavailable-hosted-"));
       const env = { HOME: tmpDir, SKILLS_API_KEY: "", SKILLS_TEST_MODE: "1" };
       try {
+        writeFileSync(join(tmpDir, "skills.config.json"), JSON.stringify({ mode: "self-hosted" }));
         const add = await runCliInCwd(["schedule", "add", "image", "*/5 * * * *", "--name", "premium-image", "--json"], tmpDir, env);
         expect(add.exitCode).toBe(0);
 
@@ -369,9 +364,9 @@ describe("CLI runtime and misc commands", () => {
         const result = JSON.parse(run.stdout);
         expect(result).toMatchObject({
           ran: 0,
-          code: "HOSTED_PROVIDER_UNAVAILABLE",
+          code: "AUTH_REQUIRED",
         });
-        expect(result.error).toContain("temporarily unavailable");
+        expect(result.error).toContain("Remote execution is temporarily unavailable");
         expect(result.error).toContain("No credits were charged.");
         expect(result.approvalRequired).toBeUndefined();
         expect(result.unavailable[0]).toMatchObject({
@@ -379,9 +374,10 @@ describe("CLI runtime and misc commands", () => {
           skill: "image",
           availability: {
             status: "unavailable",
-            code: "HOSTED_PROVIDER_UNAVAILABLE",
+            code: "AUTH_REQUIRED",
           },
         });
+        expect(JSON.stringify(result)).not.toContain("HOSTED_PROVIDER_UNAVAILABLE");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -402,7 +398,7 @@ describe("CLI runtime and misc commands", () => {
             return Response.json({
               slug: "image",
               availability: { status: "available" },
-              creditQuote: { tier: "premium", billingUnit: "image", credits: 4, formattedCredits: "4 credits/image" },
+              creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "image", credits: 4, formattedCredits: "4 credits/image" },
             });
           }
           if (url.pathname === "/api/v1/skills/image/quote" && req.method === "POST") {
@@ -410,7 +406,7 @@ describe("CLI runtime and misc commands", () => {
             return Response.json({
               availability: { status: "available" },
               quoteToken: `quote_schedule_${quoteCalls}`,
-              creditQuote: { tier: "premium", billingUnit: "image", credits: 6, formattedCredits: "6 credits/image" },
+              creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "image", credits: 6, formattedCredits: "6 credits/image" },
             });
           }
           if (url.pathname === "/api/v1/runs/image" && req.method === "POST") {
@@ -445,7 +441,7 @@ describe("CLI runtime and misc commands", () => {
         const run = await runCliInCwd([
           "schedule",
           "run",
-          "--allow-paid",
+          "--approve-credits",
           "--max-credits",
           "8",
           "--json",
@@ -459,6 +455,50 @@ describe("CLI runtime and misc commands", () => {
         });
         expect(quoteCalls).toBe(2);
         expect(runCalls).toBe(0);
+      } finally {
+        server.stop(true);
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("self-hosted schedule dry-runs use the selected service quote", async () => {
+      const { mkdtempSync, readFileSync, rmSync, writeFileSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-schedule-selfhost-quote-"));
+      const calls: string[] = [];
+      const server = Bun.serve({
+        port: 0,
+        fetch(req) {
+          const url = new URL(req.url);
+          calls.push(`${req.method} ${url.pathname}`);
+          if (url.pathname === "/api/v1/skills/logo-design/quote" && req.method === "POST") {
+            return Response.json({
+              availability: { status: "available" },
+              creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "free", creditUnit: "run", credits: 0, formattedCredits: "0 credits" },
+            });
+          }
+          return Response.json({ error: `unexpected ${req.method} ${url.pathname}` }, { status: 500 });
+        },
+      });
+
+      try {
+        const apiUrl = `http://127.0.0.1:${server.port}`;
+        await runCliInCwd(["setup", "--mode", "self-hosted", "--api-url", apiUrl, "--json"], tmpDir, { HOME: tmpDir });
+        const env = { HOME: tmpDir, SKILLS_API_KEY: "sk_test_schedule_selfhost_quote" };
+        await runCliInCwd(["schedule", "add", "logo-design", "*/5 * * * *", "--name", "selfhost-logo", "--json"], tmpDir, env);
+        const schedulesPath = join(tmpDir, ".skills", "schedules.json");
+        const data = JSON.parse(readFileSync(schedulesPath, "utf-8"));
+        data.schedules[0].nextRun = "2020-01-01T00:00:00.000Z";
+        writeFileSync(schedulesPath, JSON.stringify(data, null, 2));
+
+        const dryRun = await runCliInCwd(["schedule", "run", "--dry-run", "--json"], tmpDir, env);
+        expect(dryRun.exitCode).toBe(0);
+        expect(JSON.parse(dryRun.stdout)).toMatchObject({
+          totalCredits: 0,
+          due: [{ skill: "logo-design", creditQuote: { credits: 0, formattedCredits: "0 credits" } }],
+        });
+        expect(calls).toEqual(["POST /api/v1/skills/logo-design/quote"]);
       } finally {
         server.stop(true);
         rmSync(tmpDir, { recursive: true, force: true });

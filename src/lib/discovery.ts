@@ -1,6 +1,6 @@
 import type { SkillMeta } from "./registry-types.js";
-import { getPublicSkillPricing, isPremiumSkill, type PublicSkillPricing } from "./pricing.js";
-import { toPublicCreditQuote, type PublicCreditQuote } from "./public-credits.js";
+import { getSkillCreditQuote, isPremiumSkill } from "./pricing.js";
+import type { PublicCreditQuote } from "./public-credits.js";
 
 const VENDOR_TERMS = [
   "Google Gemini",
@@ -78,40 +78,41 @@ export interface CompactSkillDiscovery {
   name: string;
   category: string;
   description: string;
-  creditQuote: PublicCreditQuote;
+  creditQuote?: PublicCreditQuote;
 }
 
-export type PublicSkillDiscovery<T extends SkillMeta = SkillMeta> = Omit<T, "description" | "tags" | "pricing"> & {
+export type PublicSkillDiscovery<T extends SkillMeta = SkillMeta> = Omit<T, "description" | "tags" | "creditQuote"> & {
   description: string;
   tags: string[];
-  creditQuote: PublicCreditQuote;
+  creditQuote?: PublicCreditQuote;
 };
 
 export function getCompactSkillDiscovery(skill: SkillMeta): CompactSkillDiscovery {
+  const creditQuote = resolveDiscoveryCreditQuote(skill);
   return {
     name: skill.name,
     category: skill.category,
     description: sanitizePublicDiscoveryText(skill.description),
-    creditQuote: toPublicCreditQuote(resolveDiscoveryPricing(skill)),
+    ...(creditQuote ? { creditQuote } : {}),
   };
 }
 
 export function getPublicSkillDiscovery<T extends SkillMeta>(skill: T): PublicSkillDiscovery<T> {
-  const { pricing: _internalPricing, ...publicSkill } = skill;
+  const { creditQuote: _providedCreditQuote, ...publicSkill } = skill;
+  const creditQuote = resolveDiscoveryCreditQuote(skill);
   return {
     ...publicSkill,
     description: sanitizePublicDiscoveryText(skill.description),
     tags: publicDiscoveryTags(skill.tags),
-    creditQuote: toPublicCreditQuote(resolveDiscoveryPricing(skill)),
+    ...(creditQuote ? { creditQuote } : {}),
   } as PublicSkillDiscovery<T>;
 }
 
-export function publicDiscoveryCreditsLabel(skill: { name: string; creditQuote?: PublicCreditQuote; pricing?: PublicSkillPricing }): string {
-  return (skill.creditQuote ?? toPublicCreditQuote(skill.pricing ?? getPublicSkillPricing(skill.name))).formattedCredits;
+export function publicDiscoveryCreditsLabel(skill: { name: string; source?: string; creditQuote?: PublicCreditQuote }): string {
+  if (skill.creditQuote) return skill.creditQuote.formattedCredits;
+  if (skill.source === "remote") return "Credit quote unavailable";
+  return getSkillCreditQuote(skill.name).formattedCredits;
 }
-
-/** @deprecated Use publicDiscoveryCreditsLabel. */
-export const publicDiscoveryPriceLabel = publicDiscoveryCreditsLabel;
 
 export function publicDiscoveryTags(tags: string[]): string[] {
   return tags.filter((tag) => !VENDOR_TAGS.has(tag.toLowerCase()));
@@ -162,7 +163,7 @@ export function publicDiscoveryDocumentation(skill: SkillMeta, documentation: st
   return [
     `# ${skill.displayName || skill.name}`,
     sanitizePublicDiscoveryText(skill.description),
-    `Credits: ${toPublicCreditQuote(getPublicSkillPricing(skill.name)).formattedCredits}.`,
+    `Credits: ${getSkillCreditQuote(skill.name).formattedCredits}.`,
     "Choose `cloud` or `self-hosted`, then run `skills auth login` for remote execution. Runtime routing and model selection are managed by the selected service.",
   ].join("\n\n");
 }
@@ -171,12 +172,8 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function resolveDiscoveryPricing(skill: SkillMeta): PublicSkillPricing {
-  return skill.pricing && (
-    typeof skill.pricing.formattedCost === "string"
-    || typeof skill.pricing.formattedCredits === "string"
-    || typeof skill.pricing.credits === "number"
-  )
-    ? skill.pricing as PublicSkillPricing
-    : getPublicSkillPricing(skill.name);
+function resolveDiscoveryCreditQuote(skill: SkillMeta): PublicCreditQuote | undefined {
+  if (skill.creditQuote) return skill.creditQuote;
+  if (skill.source === "remote") return undefined;
+  return getSkillCreditQuote(skill.name);
 }

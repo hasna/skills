@@ -1,4 +1,5 @@
 import { resolveSkillAlias } from "./skill-aliases.js";
+import { internalPricingToCreditQuote, type PublicCreditQuote } from "./public-credits.js";
 
 export type BillingTier = "free" | "premium";
 
@@ -14,7 +15,7 @@ export interface SkillPricing {
   costMicros?: number;
 }
 
-export interface PublicSkillPricing {
+interface InternalPublicSkillPricing {
   tier: BillingTier;
   billingUnit: "run" | "image" | "second" | "character" | "song" | "thousand_tokens" | "article";
   costCents: number;
@@ -294,7 +295,7 @@ export function getSkillRunCostCents(slug: string, input?: unknown, args: string
   return getSkillRunPricing(slug, input, args)?.costCents || 0;
 }
 
-export function getPublicSkillPricing(slug: string, input?: unknown, args: string[] = []): PublicSkillPricing {
+function getInternalSkillPricing(slug: string, input?: unknown, args: string[] = []): InternalPublicSkillPricing {
   const canonicalSlug = resolvePricingSlug(slug);
   if (canonicalSlug === ARTICLE_GENERATION_SLUG) {
     const options = collectRunOptions(input, args);
@@ -379,8 +380,12 @@ export function getPublicSkillPricing(slug: string, input?: unknown, args: strin
   };
 }
 
+export function getSkillCreditQuote(slug: string, input?: unknown, args: string[] = []): PublicCreditQuote {
+  return internalPricingToCreditQuote(getInternalSkillPricing(slug, input, args));
+}
+
 export function getSkillCatalogBillingFields(slug: string, input?: unknown, args: string[] = []): SkillCatalogBillingFields {
-  const pricing = getPublicSkillPricing(slug, input, args);
+  const pricing = getSkillCreditQuote(slug, input, args);
   if (pricing.tier === "free") {
     return { billingMode: "free", creditsPerExecution: 0 };
   }
@@ -391,12 +396,12 @@ export function getSkillCatalogBillingFields(slug: string, input?: unknown, args
 
   return {
     billingMode: "credits",
-    creditsPerExecution: pricing.costCents,
+    creditsPerExecution: pricing.credits,
   };
 }
 
 export function formatPublicPricing(slug: string, input?: unknown, args: string[] = []): string {
-  return getPublicSkillPricing(slug, input, args).formattedCost;
+  return getSkillCreditQuote(slug, input, args).formattedCredits;
 }
 
 export function isMediaGenerationSkill(slug: string): boolean {

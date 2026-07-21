@@ -316,11 +316,11 @@ export function listPortableSkillMetas(options: PortableSkillOptions = {}): Skil
     version: skill.version,
     ...(manifest.kind ? { kind: manifest.kind } : {}),
     source: "custom" as const,
-    pricing: {
+    creditQuote: {
       tier: "free",
-      billingUnit: "run",
-      costCents: 0,
-      formattedCost: "free",
+      creditUnit: "run",
+      credits: 0,
+      formattedCredits: "0 credits",
       estimated: false,
       quoteDependsOnInput: false,
       quoteRequired: false,

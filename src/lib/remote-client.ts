@@ -1,5 +1,8 @@
 import { getApiKey as getStoredApiKey, getApiUrl } from "./auth-store.js";
 import { normalizeRemoteSkillRunContract, type RemoteSkillRunContract } from "./remote-run-contract.js";
+import { toAuthoritativePublicCreditQuote, toCustomerCreditPayload } from "./public-credits.js";
+import { addSkillsProtocolHeaders } from "./remote-protocol.js";
+import { sanitizeCustomerArtifactDownload, sanitizeCustomerArtifactList } from "./customer-artifacts.js";
 
 export interface RemoteRunAuthorization {
   quoteToken?: string;
@@ -16,19 +19,18 @@ export class RemoteSkillsClient {
   }
 
   private async request(path: string, options?: RequestInit): Promise<Response> {
+    const headers = new Headers(options?.headers);
+    headers.set("Authorization", `Bearer ${this.apiKey}`);
+    headers.set("Content-Type", "application/json");
     return fetch(`${this.apiUrl}${path}`, {
       ...options,
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-        ...options?.headers,
-      },
+      headers: addSkillsProtocolHeaders(headers),
     });
   }
 
   async listSkills(): Promise<any[]> {
     const res = await this.request("/api/v1/skills");
-    return res.json();
+    return this.customerJson<any[]>(res);
   }
 
   async getSkillMd(slug: string): Promise<string | null> {
@@ -40,7 +42,7 @@ export class RemoteSkillsClient {
   async getSkill(slug: string): Promise<any | null> {
     const res = await this.request(`/api/v1/skills/${slug}`);
     if (!res.ok) return null;
-    return res.json();
+    return this.customerJson(res);
   }
 
   async quoteSkill(slug: string, input?: Record<string, unknown>, args?: string[]): Promise<any> {
@@ -48,7 +50,11 @@ export class RemoteSkillsClient {
       method: "POST",
       body: JSON.stringify({ input, args }),
     });
-    return res.json();
+    const payload = await this.customerJson<Record<string, unknown>>(res);
+    if (payload.creditQuote !== undefined) {
+      payload.creditQuote = toAuthoritativePublicCreditQuote(payload.creditQuote);
+    }
+    return payload;
   }
 
   async submitRun(
@@ -73,24 +79,29 @@ export class RemoteSkillsClient {
   async getRunLogs(runId: string): Promise<any[]> {
     const res = await this.request(`/api/v1/runs/${runId}/logs`);
     if (!res.ok) return [];
-    const payload = await res.json();
+    const payload = await this.customerJson(res);
     return Array.isArray(payload) ? payload : [];
   }
 
   async listRuns(limit = 20): Promise<any[]> {
     const res = await this.request(`/api/v1/runs?limit=${limit}`);
-    return res.json();
+    return this.customerJson<any[]>(res);
   }
 
   async getRunArtifacts(runId: string): Promise<any[]> {
     const res = await this.request(`/api/v1/runs/${runId}/artifacts`);
-    return res.json();
+    return sanitizeCustomerArtifactList(await this.customerJson(res));
   }
 
-  async downloadRunArtifact(runId: string, artifactId: string): Promise<Response> {
-    return this.request(`/api/v1/runs/${runId}/artifacts/${artifactId}/download`, {
+  async downloadRunArtifact(runId: string, artifactId: string, artifact?: unknown): Promise<Response> {
+    const response = await this.request(`/api/v1/runs/${runId}/artifacts/${artifactId}/download`, {
       method: "GET",
     });
+    return sanitizeCustomerArtifactDownload(response, artifact);
+  }
+
+  private async customerJson<T = any>(response: Response): Promise<T> {
+    return toCustomerCreditPayload(await response.json()) as T;
   }
 
 }

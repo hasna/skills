@@ -121,7 +121,7 @@ async function handleInfo(name: string, options: { json: boolean; brief: boolean
   console.log(discovery.description);
   console.log(`${chalk.dim("Category:")} ${discovery.category}`);
   if (discovery.tags.length) console.log(`${chalk.dim("Tags:")} ${discovery.tags.join(", ")}`);
-  console.log(`${chalk.dim("Credits:")} ${creditQuote.formattedCredits}`);
+  console.log(`${chalk.dim("Credits:")} ${creditQuote?.formattedCredits ?? "Credit quote unavailable"}`);
   if (publicReqs?.cliCommand) console.log(`${chalk.dim("CLI:")} ${publicReqs.cliCommand}`);
   if (publicReqs?.envVars.length) {
     console.log(chalk.dim("Env vars:"));

@@ -3,8 +3,8 @@
  */
 
 import chalk from "chalk";
-import { Option, type Command } from "commander";
-import { loadConfig } from "../../lib/config.js";
+import type { Command } from "commander";
+import { resolveCurrentDeploymentMode } from "../../lib/deployment-mode.js";
 import { loadRemoteSkill } from "../../lib/remote-registry.js";
 import { formatCredits, toCustomerCreditPayload, toPublicCreditQuote } from "../../lib/public-credits.js";
 import {
@@ -111,12 +111,11 @@ export function registerSchedule(parent: Command) {
   scheduleCmd
     .command("run")
     .option("--dry-run", "Show which schedules are due without running them", false)
-    .option("--allow-paid", "Allow due remote schedules to use account credits", false)
+    .option("--approve-credits", "Approve due remote schedules to use account credits", false)
     .option("--max-credits <credits>", "Maximum credits approved for this run")
-    .addOption(new Option("--max-paid-cents <credits>").hideHelp())
     .option("--json", "Output as JSON", false)
     .description("Execute all due schedules now")
-    .action(async (options: { dryRun: boolean; allowPaid: boolean; maxCredits?: string; maxPaidCents?: string; json: boolean }) => {
+    .action(async (options: { dryRun: boolean; approveCredits: boolean; maxCredits?: string; json: boolean }) => {
       const due = getDueSchedules();
       if (!due.length) { console.log(options.json ? JSON.stringify({ ran: 0, schedules: [] }) : chalk.dim("No schedules are due.")); return; }
       const dueDetails = await Promise.all(due.map((schedule) => describeDueSchedule(schedule)));
@@ -138,16 +137,16 @@ export function registerSchedule(parent: Command) {
         if (!options.json) for (const s of dueDetails) console.log(`  ${chalk.cyan(s.name)} — ${s.skill} (${s.cron})${s.creditQuote ? ` — ${s.creditQuote.formattedCredits}` : ""}`);
         return;
       }
-      const approvedCredits = parseMaxCredits(options.maxCredits ?? options.maxPaidCents);
-      if (totalCredits > 0 && (!options.allowPaid || approvedCredits === null)) {
-        const error = `Due remote schedules require ${formatCredits(totalCredits)} total. Review with skills schedule run --dry-run, then rerun with --allow-paid --max-credits ${totalCredits}.`;
+      const approvedCredits = parseMaxCredits(options.maxCredits);
+      if (totalCredits > 0 && (!options.approveCredits || approvedCredits === null)) {
+        const error = `Due remote schedules require ${formatCredits(totalCredits)} total. Review with skills schedule run --dry-run, then rerun with --approve-credits --max-credits ${totalCredits}.`;
         if (options.json) {
           console.log(JSON.stringify({
             ran: 0,
             approvalRequired: true,
             error,
             totalCredits,
-            schedules: dueDetails.filter((schedule) => schedule.paid),
+            schedules: dueDetails.filter((schedule) => schedule.creditBacked),
           }));
         } else {
           console.error(chalk.red(`✗ ${error}`));
@@ -167,12 +166,12 @@ export function registerSchedule(parent: Command) {
         0,
       );
       if (authoritativeTotalCredits > 0 && (
-        !options.allowPaid
+        !options.approveCredits
         || approvedCredits === null
         || authoritativeTotalCredits > approvedCredits
       )) {
         const suggestedCredits = authoritativeTotalCredits;
-        const error = `Authoritative live quotes require ${formatCredits(authoritativeTotalCredits)} total, above the approved maximum of ${approvedCredits ?? 0} credits. Review and rerun with --allow-paid --max-credits ${suggestedCredits}.`;
+        const error = `Authoritative live quotes require ${formatCredits(authoritativeTotalCredits)} total, above the approved maximum of ${approvedCredits ?? 0} credits. Review and rerun with --approve-credits --max-credits ${suggestedCredits}.`;
         if (options.json) {
           console.log(JSON.stringify({
             ran: 0,
@@ -180,10 +179,10 @@ export function registerSchedule(parent: Command) {
             error,
             totalCredits: authoritativeTotalCredits,
             maxCredits: approvedCredits,
-            schedules: prepared.filter((item) => item.execution?.paid).map((item) => ({
+            schedules: prepared.filter((item) => item.execution?.creditBacked).map((item) => ({
               name: item.schedule.name,
               skill: item.schedule.skill,
-              paid: true,
+              creditBacked: true,
               credits: item.execution?.credits,
               creditQuote: item.execution?.creditQuote,
             })),
@@ -248,10 +247,10 @@ export function registerSchedule(parent: Command) {
 }
 
 interface PreparedScheduledSkill {
-  paid: boolean;
+  creditBacked: boolean;
   credits: number;
   creditQuote?: ReturnType<typeof toPublicCreditQuote>;
-  execute: () => Promise<{ paid: boolean; credits?: number; creditQuote?: ReturnType<typeof toPublicCreditQuote> }>;
+  execute: () => Promise<{ creditBacked: boolean; credits?: number; creditQuote?: ReturnType<typeof toPublicCreditQuote> }>;
 }
 
 async function prepareScheduledSkill(skillName: string, args: string[]): Promise<PreparedScheduledSkill> {
@@ -261,23 +260,19 @@ async function prepareScheduledSkill(skillName: string, args: string[]): Promise
 
   const pricing = await import("../../lib/pricing.js");
   if (pricing.isPremiumSkill(skill.name)) {
-    const mode = resolveDeploymentMode();
+    const mode = resolveCurrentDeploymentMode();
     if (mode === "local") throw new Error(`${skill.name} requires cloud or self-hosted mode.`);
-    let creditQuote = toPublicCreditQuote(pricing.getPublicSkillPricing(skill.name, {}, args));
+    let creditQuote = pricing.getSkillCreditQuote(skill.name, {}, args);
+    const { getApiKey } = await import("../../lib/auth-store.js");
+    const apiKey = getApiKey();
     if (mode === "cloud") {
       const remoteSkill = await loadRemoteSkill(skill.name);
       if (remoteSkill.availability?.status !== "available") {
         throw new Error(`${remoteSkill.availability?.code || "REMOTE_UNAVAILABLE"}: ${remoteSkill.availability?.message || "remote execution is unavailable"}. No credits were charged.`);
       }
-      if (remoteSkill.pricing) creditQuote = toPublicCreditQuote(remoteSkill.pricing);
-    } else {
-      const { getHostedRunAvailability } = await import("../../lib/hosted-availability.js");
-      const hostedAvailability = getHostedRunAvailability(skill.name);
-      if (!hostedAvailability.ok) throw new Error(`${hostedAvailability.code}: ${hostedAvailability.message}. ${hostedAvailability.details.join(" ")}`);
+      if (remoteSkill.creditQuote) creditQuote = remoteSkill.creditQuote;
     }
 
-    const { getApiKey } = await import("../../lib/auth-store.js");
-    const apiKey = getApiKey();
     if (!apiKey) {
       throw new Error(`${skill.name} is a remote skill. Run: skills setup --mode ${mode} && skills auth login`);
     }
@@ -285,19 +280,20 @@ async function prepareScheduledSkill(skillName: string, args: string[]): Promise
     const { RemoteSkillsClient } = await import("../../lib/remote-client.js");
     const client = new RemoteSkillsClient(apiKey);
     let quoteToken: string | undefined;
-    if (mode === "cloud") {
+    {
       const liveQuote = await client.quoteSkill(skill.name, {}, args);
       if (liveQuote?.error || liveQuote?.availability?.status === "unavailable") {
         throw new Error(`${liveQuote?.availability?.code || liveQuote?.code || "CLOUD_QUOTE_UNAVAILABLE"}: ${liveQuote?.availability?.message || liveQuote?.detail || liveQuote?.error || "remote execution is unavailable"}. No credits were charged.`);
       }
-      if (liveQuote?.creditQuote || liveQuote?.pricing) creditQuote = toPublicCreditQuote(liveQuote.creditQuote ?? liveQuote.pricing);
+      if (liveQuote?.creditQuote) creditQuote = toPublicCreditQuote(liveQuote.creditQuote);
+      else throw new Error("The selected remote service did not return a creditQuote. No credits were charged.");
       quoteToken = typeof liveQuote?.quoteToken === "string" ? liveQuote.quoteToken : undefined;
-      if (creditQuote.credits > 0 && !quoteToken) {
+      if (mode === "cloud" && creditQuote.credits > 0 && !quoteToken) {
         throw new Error("The cloud quote did not include the required quote token. No credits were charged.");
       }
     }
     return {
-      paid: true,
+      creditBacked: true,
       credits: creditQuote.credits,
       creditQuote,
       execute: async () => {
@@ -305,16 +301,16 @@ async function prepareScheduledSkill(skillName: string, args: string[]): Promise
           skill.name,
           {},
           args,
-          mode === "cloud" ? { quoteToken, approved: true } : {},
+          mode === "cloud" || quoteToken ? { quoteToken, approved: true } : {},
         );
         if (run.error) throw new Error(String(run.error));
-        return { paid: true, credits: creditQuote.credits, creditQuote };
+        return { creditBacked: true, credits: creditQuote.credits, creditQuote };
       },
     };
   }
 
   return {
-    paid: false,
+    creditBacked: false,
     credits: 0,
     execute: async () => {
       const { runSkill } = await import("../../lib/skillinfo.js");
@@ -322,7 +318,7 @@ async function prepareScheduledSkill(skillName: string, args: string[]): Promise
       if (result.exitCode !== 0) {
         throw new Error(result.error || result.stderr || `Skill '${skill.name}' exited with ${result.exitCode}`);
       }
-      return { paid: false };
+      return { creditBacked: false };
     },
   };
 }
@@ -330,30 +326,55 @@ async function prepareScheduledSkill(skillName: string, args: string[]): Promise
 async function describeDueSchedule(schedule: { name: string; skill: string; cron: string; args?: string[] }) {
   const { getSkill } = await import("../../lib/registry.js");
   const pricing = await import("../../lib/pricing.js");
-  const { getHostedRunAvailability } = await import("../../lib/hosted-availability.js");
   const skill = getSkill(schedule.skill);
-  const paid = Boolean(skill && pricing.isPremiumSkill(skill.name));
-  const publicPricing = paid && skill ? pricing.getPublicSkillPricing(skill.name, {}, schedule.args ?? []) : null;
-  let creditQuote = publicPricing ? toPublicCreditQuote(publicPricing) : undefined;
-  const mode = resolveDeploymentMode();
+  const creditBacked = Boolean(skill && pricing.isPremiumSkill(skill.name));
+  let creditQuote = creditBacked ? undefined : skill ? pricing.getSkillCreditQuote(skill.name, {}, schedule.args ?? []) : undefined;
+  const mode = resolveCurrentDeploymentMode();
   let availability: { status: "available" | "unavailable"; code?: string; message?: string; details?: string[] } = { status: "available" };
-  if (paid && skill && mode === "cloud") {
+  if (creditBacked && skill && mode === "cloud") {
     try {
       const remoteSkill = await loadRemoteSkill(skill.name);
-      if (remoteSkill.pricing) creditQuote = toPublicCreditQuote(remoteSkill.pricing);
+      if (remoteSkill.creditQuote) creditQuote = remoteSkill.creditQuote;
       availability = remoteSkill.availability ?? { status: "unavailable", code: "REMOTE_AVAILABILITY_MISSING", message: "The cloud service did not publish run availability for this skill." };
     } catch (error) {
       availability = { status: "unavailable", code: "CLOUD_CAPABILITY_CHECK_FAILED", message: (error as Error).message };
     }
-  } else if (paid && skill) {
-    const hostedAvailability = getHostedRunAvailability(skill.name);
-    if (!hostedAvailability.ok) availability = { status: "unavailable", code: hostedAvailability.code, message: hostedAvailability.message, details: hostedAvailability.details };
+  } else if (creditBacked && skill && mode === "self-hosted") {
+    const { getApiKey } = await import("../../lib/auth-store.js");
+    const apiKey = getApiKey();
+    if (apiKey) {
+      try {
+        const { RemoteSkillsClient } = await import("../../lib/remote-client.js");
+        const liveQuote = await new RemoteSkillsClient(apiKey).quoteSkill(skill.name, {}, schedule.args ?? []);
+        if (liveQuote?.error || liveQuote?.availability?.status === "unavailable") {
+          availability = {
+            status: "unavailable",
+            code: String(liveQuote?.availability?.code || liveQuote?.code || "SELF_HOSTED_QUOTE_UNAVAILABLE"),
+            message: String(liveQuote?.availability?.message || liveQuote?.detail || liveQuote?.error || "Self-hosted execution is unavailable"),
+            details: Array.isArray(liveQuote?.availability?.details) ? liveQuote.availability.details.map(String) : ["No credits were charged."],
+          };
+        } else if (liveQuote?.creditQuote) {
+          creditQuote = toPublicCreditQuote(liveQuote.creditQuote);
+        } else {
+          availability = { status: "unavailable", code: "SELF_HOSTED_QUOTE_INVALID", message: "The selected self-hosted service did not return a creditQuote." };
+        }
+      } catch (error) {
+        availability = { status: "unavailable", code: "SELF_HOSTED_QUOTE_FAILED", message: (error as Error).message };
+      }
+    } else {
+      availability = {
+        status: "unavailable",
+        code: "AUTH_REQUIRED",
+        message: "An authenticated quote from the selected self-hosted service is required.",
+        details: ["Run skills auth login. No credits were charged."],
+      };
+    }
   }
   return {
     name: schedule.name,
     skill: schedule.skill,
     cron: schedule.cron,
-    paid,
+    creditBacked,
     credits: creditQuote?.credits,
     creditQuote,
     availability,
@@ -365,13 +386,4 @@ function parseMaxCredits(value: string | undefined): number | null {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0) return null;
   return parsed;
-}
-
-function resolveDeploymentMode(): "local" | "self-hosted" | "cloud" {
-  const config = loadConfig();
-  if (config.mode) return config.mode;
-  const apiUrl = (process.env.SKILLS_API_URL || config.apiUrl || "").toLowerCase();
-  if (apiUrl.includes("skills.md")) return "cloud";
-  if (apiUrl || process.env.SKILLS_API_KEY || process.env.SKILL_API_KEY) return "self-hosted";
-  return "self-hosted";
 }

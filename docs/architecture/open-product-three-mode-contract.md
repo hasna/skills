@@ -11,7 +11,7 @@ This is the reusable architecture for Open Hasna products. Open Skills now
 implements the first adoption slice: agent-first bare command behavior,
 explicit `local | self-hosted | cloud` routing, service-origin-bound stored
 credentials, live cloud capability and credit-quote authority, and fail-closed
-remote execution. Paid cloud runs also use short-lived signed quote tokens that
+remote execution. Credit-backed cloud runs also use short-lived signed quote tokens that
 bind the approved credits to the exact tenant, skill, input, arguments, and
 expiry before submission. Named profiles, the common adapter refactor, storage-profile
 resolver, and the full trust handshake remain target contracts.
@@ -25,14 +25,14 @@ These surfaces are related, but they are not interchangeable:
 | Public npm client | `@hasna/skills` is the universal CLI, SDK, MCP client, and local engine installed by users. It may call either a compatible self-hosted service or the Hasna SaaS. It does not install the Hasna SaaS backend. | Source candidate `0.2.0` carries the explicit three-mode client. npm publication and live smoke are separate release evidence. |
 | Current source candidate | The checked-in package metadata, dependency lock, source, docs, and tests are one candidate provenance set. | `@hasna/skills@0.2.0` implements the quick launch slice and must not be called shipped until publishing succeeds. |
 | Hasna cloud | `skills.md` is the Hasna-operated, multi-tenant customer SaaS. This is what `cloud` means for Open Skills. | The public registry endpoint responded successfully during verification. Package metadata, source, and live API capability state can ship at different times and must be checked independently. |
-| Internal self-hosted infrastructure | An operator-owned deployment is `selfhost` even when it runs in AWS or is operated by Hasna for internal use. | It is not the customer SaaS and must not be used as proof that the `cloud` product is available or ready. |
+| Internal self-hosted infrastructure | An operator-owned deployment is `self-hosted` even when it runs in AWS or is operated by Hasna for internal use. | It is not the customer SaaS and must not be used as proof that the `cloud` product is available or ready. |
 
 The cloud client treats the live `skills.md` capability and credit-quote
 responses as authoritative. It does not apply a self-hosted provider blocklist
 to cloud. An unavailable or unverifiable cloud capability fails before the run
 submission, so no credits are charged.
 
-For a paid cloud operation, the authenticated quote response includes an opaque,
+For a credit-backed cloud operation, the authenticated quote response includes an opaque,
 short-lived `quoteToken` and `expiresAt`. The client obtains the quote before
 approval and submits the exact token with the unchanged input and arguments plus
 `approved: true`. The service verifies tenant, canonical operation, request
@@ -41,21 +41,52 @@ mismatched token fails before charging. Known zero-credit operations may remain
 token-free; unknown credit metadata fails closed. The same contract applies to
 CLI, SDK, MCP, and scheduled execution and is reusable across Open products.
 
+## Protocol Negotiation And Run Authorization
+
+Remote clients advertise their client version and supported run-authorization
+capabilities on every request. The current client sends
+`X-Skills-Client-Version` with the package version and
+`X-Skills-Run-Authorization: signed-quote-v1`. A participating server
+advertises its supported capabilities and minimum client version in its
+capabilities document or response headers.
+
+Adoption is deliberately two-phase. During **Phase A**, clients send the
+headers, participating servers advertise and observe them, and compatible
+generic self-hosted endpoints continue working even when they do not yet
+advertise negotiation metadata. A client must not fail a generic self-hosted
+request merely because the response omits these optional advertisements.
+During **Phase B**, after supported clients and server telemetry prove the
+migration window is complete, an opted-in server may return
+`426 Upgrade Required` for an incompatible client. That rejection happens
+before quote, reservation, debit, or run creation and includes the minimum
+client version and supported authorization capabilities.
+
+Protocol negotiation does not authorize a run. It only establishes which wire
+protocols the peers can use. Authentication, tenant entitlement, the exact
+signed `quoteToken`, unchanged input and arguments, explicit approval, replay
+protection, and server-side authorization remain separate mandatory checks.
+
 ## Canonical Modes
 
-Every open product supports three potential directions: `local`, `selfhost`,
+Every open product supports three potential directions: `local`, `self-hosted`,
 and `cloud`. A cloud composition may launch later, but its universal client and
 shared contracts use the same architecture from the start.
 
 | Mode | Deployment authority | Operator |
 | --- | --- | --- |
 | `local` | Embedded in the CLI, SDK, or MCP process | The user or calling process |
-| `selfhost` | A provider-neutral server deployed on infrastructure chosen by the operator | The customer, team, or another operator |
+| `self-hosted` | A provider-neutral server deployed on infrastructure chosen by the operator | The customer, team, or another operator |
 | `cloud` | The Hasna-operated, multi-tenant customer SaaS | Hasna |
 
-`selfhost` describes ownership, not geography. An operator-owned deployment on
+The runtime accepts only these canonical mode values from saved configuration
+or `SKILLS_MODE`. With no explicit mode and no legacy remote URL or credential
+signals, it defaults to `local`. A legacy URL or credential without an explicit
+mode is rejected as ambiguous; aliases such as `hosted`, `remote`, and
+`skills.md` are not mode values.
+
+`self-hosted` describes ownership, not geography. An operator-owned deployment on
 a laptop, another cloud, or Hasna-internal infrastructure in AWS is still
-`selfhost`. A Hasna-operated customer SaaS is `cloud` even if it happens to use
+`self-hosted`. A Hasna-operated customer SaaS is `cloud` even if it happens to use
 the same infrastructure provider as a self-hosted installation.
 
 A provider, account, region, cluster, origin, domain, or hostname never
@@ -73,7 +104,7 @@ product. One installation provides:
 - the typed SDK;
 - the MCP server and schemas;
 - the embedded local engine;
-- the client for compatible `selfhost` and `cloud` services.
+- the client for compatible `self-hosted` and `cloud` services.
 
 The commands and JSON contracts stay the same across profiles. A user can work
 locally immediately, then select a profile to run the same operation against a
@@ -105,7 +136,7 @@ selects exactly one adapter after resolving a profile:
 
 1. The local adapter calls the embedded engine directly and returns the shared
    response and error schemas.
-2. The common HTTP adapter calls either a `selfhost` or `cloud` service. The
+2. The common HTTP adapter calls either a `self-hosted` or `cloud` service. The
    profile changes origin, identity, tenant, and credentials; it does not select
    a different command implementation.
 
@@ -118,7 +149,7 @@ shared schemas, JSON output, and conformance fixtures are defined.
 
 Clients resolve three independent decisions. None may silently set another:
 
-1. **Deployment authority:** the selected profile declares `local`, `selfhost`,
+1. **Deployment authority:** the selected profile declares `local`, `self-hosted`,
    or `cloud` and identifies who operates the service.
 2. **Operation execution:** each operation contract declares `local-only`,
    `remote-only`, or `either`; the selected deployment profile chooses the
@@ -141,7 +172,7 @@ the following logical fields:
 {
   "version": 1,
   "name": "team",
-  "mode": "selfhost",
+  "mode": "self-hosted",
   "origin": "https://product.example.com",
   "tenant": "team-a",
   "credentialRef": "credential-store-reference",
@@ -163,14 +194,14 @@ Rules:
 - `name`, `version`, and `mode` are required.
 - `origin`, `tenant`, and `credentialRef` are invalid for a purely local
   profile unless a product explicitly defines a local peer service.
-- `origin` is required for `selfhost` and `cloud`; only secure transport is
+- `origin` is required for `self-hosted` and `cloud`; only secure transport is
   accepted outside an explicit loopback development profile.
 - A remote profile may be saved in `bootstrap` state with a normalized origin
   and non-secret enrollment material, but it is not an enrolled profile. A
   bootstrap profile cannot retrieve credentials, call authenticated APIs, or
   execute operations until the service identity and tenant binding below have
   been verified and the profile is atomically promoted to `enrolled`.
-- `cloud` always requires an explicit tenant binding. `selfhost` also requires
+- `cloud` always requires an explicit tenant binding. `self-hosted` also requires
   an explicit tenant unless its signed operator metadata declares a
   single-tenant service and names a stable default tenant; the client persists
   that declared default rather than treating a missing tenant as a wildcard.
@@ -316,7 +347,7 @@ server authority from a selected deployment or storage mode.
 Every operation declares one execution policy:
 
 - `local-only`: reject non-local profiles.
-- `remote-only`: require a verified `selfhost` or `cloud` profile.
+- `remote-only`: require a verified `self-hosted` or `cloud` profile.
 - `either`: execute through the adapter selected by the resolved profile.
 
 There is no silent fallback. A remote failure never causes local execution, and
@@ -366,7 +397,7 @@ it, the user or administrator enrolls an external trust anchor:
   release key already trusted by the installed client. The signed record binds
   expected product, operator, origins, issuer, audience, tenant model, and
   service key or fingerprint.
-- A `selfhost` profile is enrolled with an operator-supplied bundle or service
+- A `self-hosted` profile is enrolled with an operator-supplied bundle or service
   fingerprint obtained through a separate authenticated channel. Copying a
   fingerprint from the discovery response itself is not enrollment.
 
@@ -422,10 +453,10 @@ First-time cloud onboarding preserves that trust-first order:
 
 OIDC authentication may already have completed when tenant selection begins,
 but no tenant-scoped product API credential exists yet. For `cloud`, the client
-must select a tenant. For `selfhost`, it selects a tenant or accepts only the
+must select a tenant. For `self-hosted`, it selects a tenant or accepts only the
 signed single-tenant default described above. A credential from any earlier or
 partial binding is never reused. A `cloud` profile must identify the
-Hasna-operated multi-tenant SaaS. A `selfhost` service must not claim cloud-only
+Hasna-operated multi-tenant SaaS. A `self-hosted` service must not claim cloud-only
 identity or Hasna-managed billing. Capability absence is authoritative for
 feature use, but capability presence never establishes identity or trust.
 
@@ -472,7 +503,7 @@ The selected deployment profile owns product-operation side effects:
 | Mode | Authoritative data |
 | --- | --- |
 | `local` | The profile's embedded local store |
-| `selfhost` | The selected operator-owned service and tenant |
+| `self-hosted` | The selected operator-owned service and tenant |
 | `cloud` | The selected tenant in the Hasna SaaS |
 
 Changing profiles changes authority; it does not merge state. Caches are
@@ -516,7 +547,7 @@ implicit side effect of selecting a profile.
   encrypted at rest, redacted from logs, and released only after identity
   verification.
 - The server re-authorizes every operation from authenticated tenant state; it
-  never trusts client-supplied tenant, role, price, entitlement, or approval.
+  never trusts client-supplied tenant, role, credit amount, entitlement, or approval.
 - Exports are integrity-protected and exclude secrets by default. Imports
   validate schema, provenance, path safety, size limits, and tenant scope.
 - `cloud` adds multi-tenant isolation, Hasna operational policy, billing, and
@@ -580,7 +611,7 @@ algorithm:
 2. Resolve legacy deployment inputs in their current precedence. Map explicit
    `local` to the built-in local deployment profile. Treat `self-hosted`,
    `hosted`, `remote`, `skills.md`, an API URL, or an API key as evidence of a
-   legacy remote configuration only; they do not prove `selfhost` or `cloud`.
+   legacy remote configuration only; they do not prove `self-hosted` or `cloud`.
 3. Require the user or administrator to choose and enroll the remote authority.
    Cloud enrollment must match the pinned Hasna cloud identity. Selfhost
    enrollment must match the operator's external bundle or fingerprint.
@@ -698,7 +729,7 @@ the desired end state:
   authorities.
 - The existing `.github/workflows/deploy.yml` contains Hasna-specific AWS
   production configuration and deploys automatically from `main`. That AWS
-  deployment is internal `selfhost`, not `cloud`. Before target compliance, the
+  deployment is internal `self-hosted`, not `cloud`. Before target compliance, the
   workflow must move to an internal infrastructure/operator repository or be
   replaced by a provider-neutral, operator-configured, explicitly opted-in
   selfhost workflow. This contract change does not edit or delete that workflow.

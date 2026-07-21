@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CLI_PATH } from "./cli.test-utils";
+import { CLI_PATH, testRemoteCreditQuoteResponse } from "./cli.test-utils";
 
 describe("CLI run premium media", () => {
   describe("run", () => {
@@ -11,6 +11,8 @@ describe("CLI run premium media", () => {
         port: 0,
         async fetch(req) {
           const url = new URL(req.url);
+          const quoteResponse = await testRemoteCreditQuoteResponse(req);
+          if (quoteResponse) return quoteResponse;
           expect(req.headers.get("authorization")).toBe("Bearer sk_audio_transcript_async");
           if (url.pathname === "/api/v1/runs/audio-transcript-pack" && req.method === "POST") {
             const body = await req.json() as { args?: string[] };
@@ -65,6 +67,7 @@ describe("CLI run premium media", () => {
             HOME: tmpDir,
             NO_COLOR: "1",
             SKILLS_TEST_MODE: "",
+            SKILLS_MODE: "self-hosted",
             SKILLS_API_KEY: "sk_audio_transcript_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
           },
@@ -103,9 +106,20 @@ describe("CLI run premium media", () => {
       let remoteCalls = 0;
       const server = Bun.serve({
         port: 0,
-        fetch() {
+        fetch(req) {
           remoteCalls += 1;
-          return Response.json({ error: "transcript should not call hosted API while unavailable" }, { status: 500 });
+          const url = new URL(req.url);
+          if (url.pathname === "/api/v1/skills/transcript/quote") {
+            return Response.json({
+              availability: {
+                status: "unavailable",
+                code: "SELF_HOSTED_PROVIDER_UNAVAILABLE",
+                message: "Transcript is unavailable on the selected self-hosted service.",
+                details: ["No credits were charged."],
+              },
+            });
+          }
+          return Response.json({ error: "unexpected request" }, { status: 500 });
         },
       });
       try {
@@ -132,6 +146,7 @@ describe("CLI run premium media", () => {
             HOME: tmpDir,
             NO_COLOR: "1",
             SKILLS_TEST_MODE: "",
+            SKILLS_MODE: "self-hosted",
             SKILLS_API_KEY: "sk_transcript_alias_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
           },
@@ -147,15 +162,15 @@ describe("CLI run premium media", () => {
         expect(data).toMatchObject({
           skill: "transcript",
           remote: true,
-          code: "HOSTED_PROVIDER_UNAVAILABLE",
+          code: "SELF_HOSTED_PROVIDER_UNAVAILABLE",
           availability: {
             status: "unavailable",
-            code: "HOSTED_PROVIDER_UNAVAILABLE",
+            code: "SELF_HOSTED_PROVIDER_UNAVAILABLE",
           },
         });
         expect(data.details).toContain("No credits were charged.");
         expect(data.run.status).toBe("failed");
-        expect(remoteCalls).toBe(0);
+        expect(remoteCalls).toBe(1);
       } finally {
         server.stop(true);
         rmSync(tmpDir, { recursive: true, force: true });
@@ -170,6 +185,8 @@ describe("CLI run premium media", () => {
         port: 0,
         async fetch(req) {
           const url = new URL(req.url);
+          const quoteResponse = await testRemoteCreditQuoteResponse(req);
+          if (quoteResponse) return quoteResponse;
           expect(req.headers.get("authorization")).toBe("Bearer sk_video_highlight_async");
           if (url.pathname === "/api/v1/runs/video-highlight-pack" && req.method === "POST") {
             const body = await req.json() as { args?: string[] };
@@ -224,6 +241,7 @@ describe("CLI run premium media", () => {
             HOME: tmpDir,
             NO_COLOR: "1",
             SKILLS_TEST_MODE: "",
+            SKILLS_MODE: "self-hosted",
             SKILLS_API_KEY: "sk_video_highlight_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
           },

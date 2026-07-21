@@ -229,7 +229,7 @@ export const TOOL_PRIMITIVES: ToolPrimitive[] = [
     name: "safety-approval",
     title: "Safety And Approval",
     family: "safety",
-    description: "Gate risky, paid, security-sensitive, or compliance-sensitive skill actions behind explicit approval and structured evidence.",
+    description: "Gate risky, credit-backed, security-sensitive, or compliance-sensitive skill actions behind explicit approval and structured evidence.",
     runtime: "mixed",
     stable: true,
     cliCommands: ["skills quote <skill>", "skills tools deps <skill>"],
@@ -449,8 +449,7 @@ function isHostedRuntimeSkill(skill: SkillMeta): boolean {
     || HOSTED_RUNTIME_SKILL_NAMES.has(skill.name)
     || tags.has("premium")
     || tags.has("remote")
-    || tags.has("hosted")
-    || skill.pricing?.tier === "premium";
+    || tags.has("hosted");
 }
 
 function dedupeDependencies(dependencies: SkillToolDependency[]): SkillToolDependency[] {

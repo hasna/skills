@@ -160,7 +160,7 @@ const errorSchema = objectSchema({
 
 const creditQuoteSchema = objectSchema({
   tier: stringSchema("Credit tier."),
-  billingUnit: stringSchema("Billing unit."),
+  creditUnit: stringSchema("Credit unit."),
   credits: { type: "number", description: "Estimated or fixed credits." },
   formattedCredits: stringSchema("Display-ready credits."),
   estimated: { type: "boolean", description: "Whether the final credits can vary by input." },

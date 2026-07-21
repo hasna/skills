@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CLI_PATH } from "./cli.test-utils";
+import { CLI_PATH, testRemoteCreditQuoteResponse } from "./cli.test-utils";
 
 describe("CLI run premium business", () => {
   describe("run", () => {
@@ -11,6 +11,8 @@ describe("CLI run premium business", () => {
         port: 0,
         async fetch(req) {
           const url = new URL(req.url);
+          const quoteResponse = await testRemoteCreditQuoteResponse(req);
+          if (quoteResponse) return quoteResponse;
           expect(req.headers.get("authorization")).toBe("Bearer sk_customer_feedback_async");
           if (url.pathname === "/api/v1/runs/customer-feedback-report" && req.method === "POST") {
             const body = await req.json() as { args?: string[] };
@@ -65,6 +67,7 @@ describe("CLI run premium business", () => {
             HOME: tmpDir,
             NO_COLOR: "1",
             SKILLS_TEST_MODE: "",
+            SKILLS_MODE: "self-hosted",
             SKILLS_API_KEY: "sk_customer_feedback_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
           },
@@ -102,6 +105,8 @@ describe("CLI run premium business", () => {
         port: 0,
         async fetch(req) {
           const url = new URL(req.url);
+          const quoteResponse = await testRemoteCreditQuoteResponse(req);
+          if (quoteResponse) return quoteResponse;
           expect(req.headers.get("authorization")).toBe("Bearer sk_meeting_pack_async");
           if (url.pathname === "/api/v1/runs/meeting-pack" && req.method === "POST") {
             const body = await req.json() as { args?: string[] };
@@ -156,6 +161,7 @@ describe("CLI run premium business", () => {
             HOME: tmpDir,
             NO_COLOR: "1",
             SKILLS_TEST_MODE: "",
+            SKILLS_MODE: "self-hosted",
             SKILLS_API_KEY: "sk_meeting_pack_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
           },
@@ -193,6 +199,8 @@ describe("CLI run premium business", () => {
         port: 0,
         async fetch(req) {
           const url = new URL(req.url);
+          const quoteResponse = await testRemoteCreditQuoteResponse(req);
+          if (quoteResponse) return quoteResponse;
           expect(req.headers.get("authorization")).toBe("Bearer sk_invoice_reconciliation_async");
           if (url.pathname === "/api/v1/runs/invoice-reconciliation" && req.method === "POST") {
             const body = await req.json() as { args?: string[] };
@@ -247,6 +255,7 @@ describe("CLI run premium business", () => {
             HOME: tmpDir,
             NO_COLOR: "1",
             SKILLS_TEST_MODE: "",
+            SKILLS_MODE: "self-hosted",
             SKILLS_API_KEY: "sk_invoice_reconciliation_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
           },
@@ -284,6 +293,8 @@ describe("CLI run premium business", () => {
         port: 0,
         async fetch(req) {
           const url = new URL(req.url);
+          const quoteResponse = await testRemoteCreditQuoteResponse(req);
+          if (quoteResponse) return quoteResponse;
           expect(req.headers.get("authorization")).toBe("Bearer sk_contract_review_async");
           if (url.pathname === "/api/v1/runs/contract-review-report" && req.method === "POST") {
             const body = await req.json() as { args?: string[] };
@@ -338,6 +349,7 @@ describe("CLI run premium business", () => {
             HOME: tmpDir,
             NO_COLOR: "1",
             SKILLS_TEST_MODE: "",
+            SKILLS_MODE: "self-hosted",
             SKILLS_API_KEY: "sk_contract_review_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
           },

@@ -31,16 +31,18 @@ const STRING_KEYS = ["apiUrl"] as const satisfies readonly (keyof SkillsConfig)[
 const MODE_VALUES = ["local", "self-hosted", "cloud"] as const;
 const MODE_ALIASES: Record<string, (typeof MODE_VALUES)[number]> = {
   local: "local",
-  offline: "local",
   "self-hosted": "self-hosted",
-  selfhosted: "self-hosted",
-  self_hosted: "self-hosted",
   cloud: "cloud",
-  hosted: "cloud",
-  remote: "cloud",
-  "skills.md": "cloud",
-  skillsmd: "cloud",
 };
+
+export class SkillsConfigMigrationError extends Error {
+  readonly code = "SKILLS_CONFIG_MODE_MIGRATION_REQUIRED";
+
+  constructor() {
+    super("Configured Skills mode is not canonical. Run skills setup --mode local, skills setup --mode self-hosted, or skills setup --mode cloud.");
+    this.name = "SkillsConfigMigrationError";
+  }
+}
 
 function validKeys(): string[] {
   return ["mode", ...Object.keys(ENUM_KEYS), ...STRING_KEYS];
@@ -145,13 +147,17 @@ function readConfigFile(path: string): Partial<SkillsConfig> {
     const raw = readFileSync(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+    if (Object.prototype.hasOwnProperty.call(parsed, "mode") && normalizeConfigValue("mode", parsed.mode) === undefined) {
+      throw new SkillsConfigMigrationError();
+    }
     const config: Partial<SkillsConfig> = {};
     for (const key of validKeys() as (keyof SkillsConfig)[]) {
       const value = normalizeConfigValue(key, parsed[key]);
       if (value !== undefined) (config as Record<string, string>)[key] = value;
     }
     return config;
-  } catch {
+  } catch (error) {
+    if (error instanceof SkillsConfigMigrationError) throw error;
     return {};
   }
 }

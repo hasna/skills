@@ -5,7 +5,7 @@ import { getSkill, loadRegistry } from "./registry";
 import { getSkillPath } from "./installer";
 import { getSkillRequirements } from "./skillinfo";
 import {
-  getPublicSkillPricing,
+  getSkillCreditQuote,
   getSkillRunCostCents,
   isPremiumSkill,
   MUSIC_ALBUM_SONG_COUNTS,
@@ -31,7 +31,7 @@ describe("premium media catalog", () => {
     for (const skill of loadRegistry()) {
       if (!isHostedMetadataSkill(skill.name)) continue;
       expect(isPremiumSkill(skill.name), `${skill.name} hosted metadata should be premium`).toBe(true);
-      expect(getPublicSkillPricing(skill.name).tier, `${skill.name} public pricing should be premium`).toBe("premium");
+      expect(getSkillCreditQuote(skill.name).tier, `${skill.name} credit quote should be premium`).toBe("premium");
     }
   });
 
@@ -67,11 +67,11 @@ describe("premium media catalog", () => {
     expect(getSkillRunCostCents("music-album", {}, ["--songs", "14"])).toBe(2100);
     expect(getSkillRunCostCents("music-album", {}, ["--songs", "21"])).toBe(3150);
 
-    expect(getPublicSkillPricing("music-album", {}, ["--songs", "14"])).toMatchObject({
+    expect(getSkillCreditQuote("music-album", {}, ["--songs", "14"])).toMatchObject({
       tier: "premium",
-      billingUnit: "song",
+      creditUnit: "song",
       unitCount: 14,
-      formattedUnitCost: "150 credits/song",
+      formattedUnitCredits: "150 credits/song",
       quoteDependsOnInput: true,
       quoteRequired: true,
     });

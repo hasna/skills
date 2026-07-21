@@ -53,7 +53,12 @@ describe("remote registry", () => {
         category: "Remote Tools",
         tags: ["remote", "demo"],
         dependencies: undefined,
-        availability: { status: "available" },
+        availability: {
+          status: "unavailable",
+          code: "REMOTE_CREDIT_QUOTE_MISSING",
+          message: "The remote service did not publish an authoritative credit quote for this skill.",
+          details: ["The run is blocked until a credit quote is available. No credits were charged."],
+        },
         source: "remote",
       },
     ]);
@@ -167,7 +172,7 @@ describe("remote registry", () => {
     expect(serialized).toContain("credential");
   });
 
-  test("parses versioned remote skill metadata with pricing", () => {
+  test("parses legacy remote pricing only as inbound compatibility and emits a credit quote", () => {
     const skills = parseRemoteRegistryPayload({
       data: [
         {
@@ -178,6 +183,7 @@ describe("remote registry", () => {
           tags: ["video", "remote"],
           version: "1.2.3",
           pricing: {
+            contractVersion: 1,
             tier: "premium",
             billingUnit: "second",
             costCents: 120,
@@ -198,19 +204,25 @@ describe("remote registry", () => {
       category: "Media Processing",
       tags: ["video", "remote"],
       version: "1.2.3",
-      pricing: {
-        formattedCost: "$1.20 estimated",
+      creditQuote: {
+        creditUnit: "second",
+        credits: 120,
+        formattedCredits: "120 credits estimated",
         estimated: true,
       },
       source: "remote",
     });
+    expect(JSON.stringify(skills[0])).not.toMatch(/pricing|Cents|billingUnit|formattedCost/);
   });
 
   test("loads remote registry with injected fetch implementation", async () => {
     const skills = await loadRemoteRegistry({
       apiUrl: "https://skills.example.com",
-      fetchImpl: async (input) => {
+      fetchImpl: async (input, init) => {
         expect(String(input)).toBe("https://skills.example.com/api/v1/skills");
+        const headers = new Headers(init?.headers);
+        expect(headers.get("x-skills-client-version")).toBe("0.2.0");
+        expect(headers.get("x-skills-run-authorization")).toBe("signed-quote-v1");
         return Response.json({
           skills: [
             {
@@ -239,6 +251,8 @@ describe("remote registry", () => {
           const headers = new Headers(init?.headers);
           expect(headers.get("accept")).toBe("application/json");
           expect(headers.get("authorization")).toBe("Bearer fixture-registry");
+          expect(headers.get("x-skills-client-version")).toBe("0.2.0");
+          expect(headers.get("x-skills-run-authorization")).toBe("signed-quote-v1");
           return Response.json([]);
         },
       });
@@ -285,5 +299,11 @@ describe("remote registry", () => {
       .toThrow("Remote registry payload did not match the expected skills contract");
     expect(() => parseRemoteSkillPayload({ skill: { displayName: "Missing slug" } }))
       .toThrow("Remote skill payload did not match the expected skills contract");
+    expect(() => parseRemoteSkillPayload({
+      skill: {
+        slug: "incomplete-quote",
+        creditQuote: { tier: "premium", creditUnit: "run", credits: 4, formattedCredits: "4 credits/run" },
+      },
+    })).toThrow("Remote skill payload did not match the expected skills contract");
   });
 });

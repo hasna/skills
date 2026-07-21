@@ -7,6 +7,7 @@ import {
 describe("remote skill run contract", () => {
   test("normalizes submitted run payloads for CLI, MCP, and web clients", () => {
     const run = normalizeRemoteSkillRunContract({
+      contractVersion: 1,
       id: "run_123",
       skill: "image",
       status: "queued",
@@ -33,16 +34,19 @@ describe("remote skill run contract", () => {
       status: "queued",
       exitCode: 0,
       correlationId: "corr_123",
-      costCents: 4,
-      pricing: {
+      credits: 4,
+      creditQuote: {
         tier: "premium",
+        creditUnit: "image",
         quoteDependsOnInput: true,
       },
     });
+    expect(JSON.stringify(run)).not.toMatch(/pricing|Cents|billingUnit|formattedCost/);
   });
 
   test("normalizes error payloads without exposing provider internals", () => {
     const run = normalizeRemoteSkillRunContract({
+      contractVersion: 1,
       error: "insufficient balance",
       code: "INSUFFICIENT_BALANCE",
       skill: "music",
@@ -54,14 +58,61 @@ describe("remote skill run contract", () => {
     expect(run).toEqual({
       contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION,
       skill: "music",
-      costCents: 150,
-      error: "insufficient balance",
+      credits: 150,
+      error: "Insufficient credits",
       code: "INSUFFICIENT_BALANCE",
       details: ["buy credits"],
-      balanceCents: 0,
+      creditBalance: 0,
     });
     expect(JSON.stringify(run).toLowerCase()).not.toContain("openai");
     expect(JSON.stringify(run).toLowerCase()).not.toContain("minimax");
     expect(JSON.stringify(run).toLowerCase()).not.toContain("gemini");
+    expect(JSON.stringify(run)).not.toMatch(/pricing|Cents|billingUnit|formattedCost/);
+  });
+
+  test("preserves canonical run accounting fields and contextual ledger names", () => {
+    const run = normalizeRemoteSkillRunContract({
+      id: "run_credit_native",
+      credits: 12,
+      formattedCredits: "12 credits/run",
+      creditsReserved: 12,
+      creditsUsed: 10,
+      creditBalance: 490,
+      formattedCreditBalance: "490 credits",
+      amountCredits: -10,
+      recentNetAmountCredits: -30,
+      creditQuote: {
+        tier: "premium",
+        creditUnit: "run",
+        credits: 12,
+        formattedCredits: "12 credits/run",
+        estimated: false,
+        quoteDependsOnInput: false,
+        quoteRequired: false,
+        description: "Fixed credits per run.",
+      },
+    });
+
+    expect(run).toMatchObject({
+      credits: 12,
+      formattedCredits: "12 credits/run",
+      creditsReserved: 12,
+      creditsUsed: 10,
+      creditBalance: 490,
+      formattedCreditBalance: "490 credits",
+      amountCredits: -10,
+      recentNetAmountCredits: -30,
+      creditQuote: { creditUnit: "run", credits: 12 },
+    });
+  });
+
+  test("rejects unsupported versions and incomplete canonical credit quotes", () => {
+    expect(() => normalizeRemoteSkillRunContract({
+      contractVersion: 2,
+      pricing: { tier: "free", costCents: 0 },
+    })).toThrow("Unsupported remote skill run contract version");
+    expect(() => normalizeRemoteSkillRunContract({
+      creditQuote: { tier: "free" },
+    })).toThrow("credits");
   });
 });

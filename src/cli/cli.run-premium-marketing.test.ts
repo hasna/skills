@@ -5,6 +5,7 @@ import {
   EXPECTED_BASIC_SKILL_COUNT,
   PACKAGE_VERSION,
   SLOW_TEST_TIMEOUT,
+  testRemoteCreditQuoteResponse,
   runCli,
   runCliInCwd,
 } from "./cli.test-utils";
@@ -19,6 +20,8 @@ describe("CLI run premium marketing", () => {
         port: 0,
         async fetch(req) {
           const url = new URL(req.url);
+          const quoteResponse = await testRemoteCreditQuoteResponse(req);
+          if (quoteResponse) return quoteResponse;
           expect(req.headers.get("authorization")).toBe("Bearer sk_test_security_report_async");
           if (url.pathname === "/api/v1/runs/security-audit-report" && req.method === "POST") {
             const body = await req.json() as { args?: string[] };
@@ -69,6 +72,7 @@ describe("CLI run premium marketing", () => {
             HOME: tmpDir,
             NO_COLOR: "1",
             SKILLS_TEST_MODE: "",
+            SKILLS_MODE: "self-hosted",
             SKILLS_API_KEY: "sk_test_security_report_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
           },
@@ -106,6 +110,8 @@ describe("CLI run premium marketing", () => {
         port: 0,
         async fetch(req) {
           const url = new URL(req.url);
+          const quoteResponse = await testRemoteCreditQuoteResponse(req);
+          if (quoteResponse) return quoteResponse;
           expect(req.headers.get("authorization")).toBe("Bearer sk_seo_content_pack_async");
           if (url.pathname === "/api/v1/runs/seo-content-pack" && req.method === "POST") {
             const body = await req.json() as { args?: string[] };
@@ -160,6 +166,7 @@ describe("CLI run premium marketing", () => {
             HOME: tmpDir,
             NO_COLOR: "1",
             SKILLS_TEST_MODE: "",
+            SKILLS_MODE: "self-hosted",
             SKILLS_API_KEY: "sk_seo_content_pack_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
           },
@@ -197,6 +204,8 @@ describe("CLI run premium marketing", () => {
         port: 0,
         async fetch(req) {
           const url = new URL(req.url);
+          const quoteResponse = await testRemoteCreditQuoteResponse(req);
+          if (quoteResponse) return quoteResponse;
           expect(req.headers.get("authorization")).toBe("Bearer sk_landing_page_pack_async");
           if (url.pathname === "/api/v1/runs/landing-page-pack" && req.method === "POST") {
             const body = await req.json() as { args?: string[] };
@@ -251,6 +260,7 @@ describe("CLI run premium marketing", () => {
             HOME: tmpDir,
             NO_COLOR: "1",
             SKILLS_TEST_MODE: "",
+            SKILLS_MODE: "self-hosted",
             SKILLS_API_KEY: "sk_landing_page_pack_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
           },
@@ -288,6 +298,8 @@ describe("CLI run premium marketing", () => {
         port: 0,
         async fetch(req) {
           const url = new URL(req.url);
+          const quoteResponse = await testRemoteCreditQuoteResponse(req);
+          if (quoteResponse) return quoteResponse;
           expect(req.headers.get("authorization")).toBe("Bearer sk_one_page_website_async");
           if (url.pathname === "/api/v1/runs/one-page-website" && req.method === "POST") {
             const body = await req.json() as { args?: string[] };
@@ -342,6 +354,7 @@ describe("CLI run premium marketing", () => {
             HOME: tmpDir,
             NO_COLOR: "1",
             SKILLS_TEST_MODE: "",
+            SKILLS_MODE: "self-hosted",
             SKILLS_API_KEY: "sk_one_page_website_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
           },
@@ -381,6 +394,8 @@ describe("CLI run premium marketing", () => {
         port: 0,
         async fetch(req) {
           const url = new URL(req.url);
+          const quoteResponse = await testRemoteCreditQuoteResponse(req);
+          if (quoteResponse) return quoteResponse;
           expect(req.headers.get("authorization")).toBe("Bearer sk_ad_creative_pack_async");
           if (url.pathname === "/api/v1/runs/ad-creative-pack" && req.method === "POST") {
             const body = await req.json() as { args?: string[] };
@@ -435,6 +450,7 @@ describe("CLI run premium marketing", () => {
             HOME: tmpDir,
             NO_COLOR: "1",
             SKILLS_TEST_MODE: "",
+            SKILLS_MODE: "self-hosted",
             SKILLS_API_KEY: "sk_ad_creative_pack_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
           },
@@ -472,6 +488,8 @@ describe("CLI run premium marketing", () => {
         port: 0,
         async fetch(req) {
           const url = new URL(req.url);
+          const quoteResponse = await testRemoteCreditQuoteResponse(req);
+          if (quoteResponse) return quoteResponse;
           expect(req.headers.get("authorization")).toBe("Bearer sk_email_sequence_async");
           if (url.pathname === "/api/v1/runs/email-sequence" && req.method === "POST") {
             const body = await req.json() as { args?: string[] };
@@ -526,6 +544,7 @@ describe("CLI run premium marketing", () => {
             HOME: tmpDir,
             NO_COLOR: "1",
             SKILLS_TEST_MODE: "",
+            SKILLS_MODE: "self-hosted",
             SKILLS_API_KEY: "sk_email_sequence_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
           },
@@ -563,6 +582,8 @@ describe("CLI run premium marketing", () => {
         port: 0,
         async fetch(req) {
           const url = new URL(req.url);
+          const quoteResponse = await testRemoteCreditQuoteResponse(req);
+          if (quoteResponse) return quoteResponse;
           expect(req.headers.get("authorization")).toBe("Bearer sk_social_content_calendar_async");
           if (url.pathname === "/api/v1/runs/social-content-calendar" && req.method === "POST") {
             const body = await req.json() as { args?: string[] };
@@ -617,6 +638,7 @@ describe("CLI run premium marketing", () => {
             HOME: tmpDir,
             NO_COLOR: "1",
             SKILLS_TEST_MODE: "",
+            SKILLS_MODE: "self-hosted",
             SKILLS_API_KEY: "sk_social_content_calendar_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
           },

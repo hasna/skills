@@ -15,6 +15,7 @@ describe("open-core product service pattern", () => {
   const skillProductModel = readFileSync(join(root, "docs/architecture/skill-product-model.md"), "utf8");
   const upstreamSync = readFileSync(join(root, "docs/architecture/upstream-sync.md"), "utf8");
   const readme = readFileSync(join(root, "README.md"), "utf8");
+  const publishWorkflow = readFileSync(join(root, ".github/workflows/publish.yml"), "utf8");
   const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version: string; files?: string[] };
   const compact = (value: string) => value.replace(/\s+/g, " ");
   const compactPattern = compact(pattern);
@@ -166,6 +167,35 @@ describe("open-core product service pattern", () => {
     expect(compactContract).toContain("`@hasna/skills@0.2.0` implements the quick launch slice");
     expect(compactReadme).toContain("A package is marketable as the new SaaS client only after this version is published");
     expect(compactReadme).toContain("Source readiness is not the same as npm availability");
+  });
+
+  test("defines phased protocol negotiation separately from run authorization", () => {
+    expect(contract).toContain("## Protocol Negotiation And Run Authorization");
+    expect(compactContract).toContain("client version and supported run-authorization capabilities");
+    expect(contract).toContain("`X-Skills-Client-Version`");
+    expect(contract).toContain("`X-Skills-Run-Authorization: signed-quote-v1`");
+    expect(compactContract).toContain("server advertises its supported capabilities and minimum client version");
+    expect(compactContract).toContain("Phase A");
+    expect(compactContract).toContain("Phase B");
+    expect(compactContract).toContain("`426 Upgrade Required`");
+    expect(compactContract).toContain("before quote, reservation, debit, or run creation");
+    expect(compactContract.toLowerCase()).toContain("protocol negotiation does not authorize a run");
+  });
+
+  test("uses npm trusted publishing with the supported Node runtime", () => {
+    expect(publishWorkflow).toContain("actions/setup-node@v6");
+    expect(publishWorkflow).toMatch(/node-version:\s*["']?24["']?/);
+    expect(publishWorkflow).toContain("registry-url: https://registry.npmjs.org");
+    expect(publishWorkflow).toContain("id-token: write");
+    expect(publishWorkflow).toContain("npm publish --provenance --access public");
+    expect(publishWorkflow).not.toContain("NODE_AUTH_TOKEN");
+    expect(publishWorkflow).not.toContain("NPM_TOKEN");
+  });
+
+  test("keeps scheduled credit approval free of legacy cents flags", () => {
+    const schedule = readFileSync(join(root, "src/cli/commands/schedule.ts"), "utf8");
+    expect(schedule).toContain("--max-credits <credits>");
+    expect(schedule).not.toMatch(/max-paid-cents|paidTotalCents|maxPaidCents/);
   });
 
   test("records the implemented launch slice and remaining architecture work", () => {

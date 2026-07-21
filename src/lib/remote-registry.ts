@@ -13,6 +13,8 @@ import { loadConfig, type SkillsConfig } from "./config.js";
 import { DEFAULT_CLOUD_API_URL } from "../server/config.js";
 import { sanitizePublicDiscoveryText } from "./discovery.js";
 import { isPremiumSkill } from "./pricing.js";
+import { toPublicCreditQuote, versionedLegacyCreditQuote } from "./public-credits.js";
+import { addSkillsProtocolHeaders } from "./remote-protocol.js";
 import type { SkillMeta } from "./registry.js";
 
 const remoteAvailabilitySchema = z.object({
@@ -22,22 +24,37 @@ const remoteAvailabilitySchema = z.object({
   details: z.array(z.string()).optional(),
 }).passthrough();
 
-const remotePricingSchema = z.object({
+const remoteCanonicalCreditQuoteSchema = z.object({
+  formattedCredits: z.string().min(1),
+  tier: z.enum(["free", "premium"]),
+  creditUnit: z.enum(["run", "image", "second", "character", "song", "thousand_tokens", "article"]),
+  credits: z.number().finite().nonnegative(),
+  formattedUnitCredits: z.string().optional(),
+  unitCount: z.number().optional(),
+  estimated: z.boolean(),
+  quoteDependsOnInput: z.boolean(),
+  quoteRequired: z.boolean(),
+  description: z.string().min(1),
+}).passthrough();
+
+const remoteLegacyCreditQuoteSchema = z.object({
+  contractVersion: z.literal(1),
+  tier: z.enum(["free", "premium"]),
+  billingUnit: z.string(),
+  costCents: z.number(),
   formattedCost: z.string().optional(),
-  formattedCredits: z.string().optional(),
-  tier: z.string().optional(),
-  billingUnit: z.string().optional(),
-  costCents: z.number().optional(),
-  credits: z.number().optional(),
   formattedUnitCost: z.string().optional(),
   unitCount: z.number().optional(),
-  estimated: z.boolean().optional(),
-  quoteDependsOnInput: z.boolean().optional(),
-  quoteRequired: z.boolean().optional(),
-  description: z.string().optional(),
-}).passthrough().refine((quote) => quote.formattedCost || quote.formattedCredits || quote.costCents !== undefined || quote.credits !== undefined, {
-  message: "Remote credit quote requires a credit amount",
-});
+  estimated: z.boolean(),
+  quoteDependsOnInput: z.boolean(),
+  quoteRequired: z.boolean(),
+  description: z.string().min(1),
+}).passthrough();
+
+const remoteCreditQuoteInputSchema = z.union([
+  remoteCanonicalCreditQuoteSchema,
+  remoteLegacyCreditQuoteSchema,
+]);
 
 const remoteSkillSchema = z.object({
   name: z.string().min(1).optional(),
@@ -48,8 +65,8 @@ const remoteSkillSchema = z.object({
   tags: z.array(z.string()).optional(),
   dependencies: z.array(z.string()).optional(),
   version: z.string().optional(),
-  pricing: remotePricingSchema.optional(),
-  creditQuote: remotePricingSchema.optional(),
+  pricing: remoteCreditQuoteInputSchema.optional(),
+  creditQuote: remoteCreditQuoteInputSchema.optional(),
   availability: remoteAvailabilitySchema.optional(),
 }).passthrough().refine((skill) => skill.name || skill.slug, {
   message: "Remote skill requires name or slug",
@@ -126,6 +143,10 @@ function titleize(name: string): string {
 function normalizeRemoteSkill(skill: z.infer<typeof remoteSkillSchema>): SkillMeta {
   const name = skill.name || skill.slug;
   if (!name) throw new Error("Remote skill requires name or slug");
+  const creditQuote = skill.creditQuote || skill.pricing
+    ? normalizeRemoteCreditQuote((skill.creditQuote ?? skill.pricing)!)
+    : undefined;
+  const availability = normalizeRemoteAvailability(name, skill.availability);
   return {
     name,
     displayName: skill.displayName || titleize(name),
@@ -134,10 +155,23 @@ function normalizeRemoteSkill(skill: z.infer<typeof remoteSkillSchema>): SkillMe
     tags: skill.tags || ["remote"],
     dependencies: skill.dependencies,
     ...(skill.version ? { version: skill.version } : {}),
-    ...(skill.creditQuote || skill.pricing ? { pricing: (skill.creditQuote ?? skill.pricing) as SkillMeta["pricing"] } : {}),
-    availability: normalizeRemoteAvailability(name, skill.availability),
+    ...(creditQuote ? { creditQuote } : {}),
+    availability: !creditQuote && availability.status === "available"
+      ? {
+          status: "unavailable",
+          code: "REMOTE_CREDIT_QUOTE_MISSING",
+          message: "The remote service did not publish an authoritative credit quote for this skill.",
+          details: ["The run is blocked until a credit quote is available. No credits were charged."],
+        }
+      : availability,
     source: "remote",
   };
+}
+
+function normalizeRemoteCreditQuote(value: z.infer<typeof remoteCreditQuoteInputSchema>) {
+  return "contractVersion" in value
+    ? versionedLegacyCreditQuote(value, value.contractVersion)
+    : toPublicCreditQuote(value);
 }
 
 function normalizeRemoteAvailability(
@@ -209,7 +243,7 @@ function parseRemoteContract<T>(schema: z.ZodType<T>, payload: unknown, message:
 }
 
 function remoteRequestHeaders(options: RemoteRegistryOptions): Headers {
-  const headers = new Headers({ Accept: "application/json" });
+  const headers = addSkillsProtocolHeaders(new Headers({ Accept: "application/json" }));
   const token = options.authToken !== undefined ? options.authToken : getApiKey();
   const trimmed = token?.trim();
   if (trimmed) headers.set("Authorization", `Bearer ${trimmed}`);

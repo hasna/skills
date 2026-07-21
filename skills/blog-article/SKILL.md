@@ -40,6 +40,6 @@ skills run create-blog-article -- --topic "Product-led growth" --articles 12
 - For a single article: `article.md`, `article.html`, `article.json`
 - For batch runs: `article-XX-<slug>/article.md`, `article.html`, `article.json`
 
-`manifest.json` includes the run id, prompt, sanitized input options, requested tone/length/SEO settings, receipt cost, and an `articles` array. Each article entry includes `title`, `slug`, `summary`, `keywords`, optional `featuredImage`, word count, reading time, and relative file paths.
+`manifest.json` includes the run id, prompt, sanitized input options, requested tone/length/SEO settings, receipt credits, and an `articles` array. Each article entry includes `title`, `slug`, `summary`, `keywords`, optional `featuredImage`, word count, reading time, and relative file paths.
 
 After submitting a hosted run, poll with `skills runs status <run-id>` and download outputs with `skills exports download <run-id>`.

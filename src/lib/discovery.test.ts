@@ -5,6 +5,19 @@ import { loadBasicRegistry, loadRegistryProfile } from "./registry.js";
 import type { SkillMeta } from "./registry-types.js";
 
 describe("getCompactSkillDiscovery", () => {
+  test("never infers a missing remote quote as free", () => {
+    const compact = getCompactSkillDiscovery({
+      name: "remote-unknown",
+      displayName: "Remote Unknown",
+      description: "Remote skill without a quote",
+      category: "Remote",
+      tags: ["remote"],
+      source: "remote",
+      availability: { status: "unavailable" },
+    });
+    expect(compact.creditQuote).toBeUndefined();
+  });
+
   test("includes name, category, pricing, and a description", () => {
     const skill: SkillMeta = {
       name: "sample-skill",

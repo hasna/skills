@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CLI_PATH } from "./cli.test-utils";
+import { CLI_PATH, testRemoteCreditQuoteResponse } from "./cli.test-utils";
 
 describe("CLI run premium documents", () => {
   describe("run", () => {
@@ -11,6 +11,8 @@ describe("CLI run premium documents", () => {
         port: 0,
         async fetch(req) {
           const url = new URL(req.url);
+          const quoteResponse = await testRemoteCreditQuoteResponse(req);
+          if (quoteResponse) return quoteResponse;
           expect(req.headers.get("authorization")).toBe("Bearer sk_slide_deck_async");
           if (url.pathname === "/api/v1/runs/slide-deck-generator" && req.method === "POST") {
             const body = await req.json() as { args?: string[] };
@@ -65,6 +67,7 @@ describe("CLI run premium documents", () => {
             HOME: tmpDir,
             NO_COLOR: "1",
             SKILLS_TEST_MODE: "",
+            SKILLS_MODE: "self-hosted",
             SKILLS_API_KEY: "sk_slide_deck_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
           },

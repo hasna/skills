@@ -80,7 +80,7 @@ describe("config", () => {
         defaultAgent: "gemini",
         defaultScope: "project",
         format: "csv",
-        mode: "skills.md",
+        mode: "cloud",
         apiUrl: "https://skills.example.com/api/v1/",
       }));
       const config = loadConfig();
@@ -162,19 +162,21 @@ describe("config", () => {
       expect(() => saveConfig("defaultAgent", "badAgent")).toThrow("Invalid value");
     });
 
-    test("saves local, self-hosted, or cloud mode and normalizes cloud aliases", () => {
+    test("saves only canonical local, self-hosted, or cloud modes", () => {
       saveConfig("mode", "local", "project");
       expect(loadConfig().mode).toBe("local");
-      saveConfig("mode", "skills.md", "project");
-      expect(loadConfig().mode).toBe("cloud");
-      saveConfig("mode", "hosted", "project");
-      expect(loadConfig().mode).toBe("cloud");
       saveConfig("mode", "self-hosted", "project");
       expect(loadConfig().mode).toBe("self-hosted");
-      saveConfig("mode", "remote", "project");
-      expect(loadConfig().mode).toBe("cloud");
       saveConfig("mode", "cloud", "project");
       expect(loadConfig().mode).toBe("cloud");
+      for (const alias of ["skills.md", "hosted", "remote", "offline", "selfhosted"]) {
+        expect(() => saveConfig("mode", alias, "project")).toThrow("Invalid value");
+      }
+    });
+
+    test("requires migration for an ambiguous persisted mode", () => {
+      writeFileSync(join(tmpDir, "skills.config.json"), JSON.stringify({ mode: "remote" }));
+      expect(() => loadConfig()).toThrow("not canonical");
     });
 
     test("saves apiUrl after URL validation", () => {

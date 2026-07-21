@@ -4,6 +4,7 @@ import { tmpdir } from "os";
 import { pathToFileURL } from "url";
 import pkg from "../../package.json" with { type: "json" };
 import { BASIC_SKILL_NAMES, SKILLS } from "../lib/registry.js";
+import { getSkillCreditQuote } from "../lib/pricing.js";
 
 export const CLI_PATH = join(import.meta.dir, "index.tsx");
 export const EXPECTED_ALL_SKILL_COUNT = SKILLS.length;
@@ -11,6 +12,14 @@ export const EXPECTED_BASIC_SKILL_COUNT = BASIC_SKILL_NAMES.length;
 export const PACKAGE_VERSION = pkg.version;
 export const SLOW_TEST_TIMEOUT = 15000;
 export const CLEAN_CLI_HOME = mkdtempSync(join(tmpdir(), "skills-cli-home-"));
+
+export async function testRemoteCreditQuoteResponse(req: Request): Promise<Response | undefined> {
+  if (req.method !== "POST") return undefined;
+  const match = new URL(req.url).pathname.match(/\/api\/v1\/skills\/([^/]+)\/quote$/);
+  if (!match?.[1]) return undefined;
+  const body = await req.json().catch(() => ({})) as { input?: unknown; args?: string[] };
+  return Response.json({ creditQuote: getSkillCreditQuote(decodeURIComponent(match[1]), body.input, body.args ?? []) });
+}
 
 function testEnv(env: Record<string, string>): Record<string, string> {
   return { ...process.env, HOME: CLEAN_CLI_HOME, ...env, NO_COLOR: "1", SKILLS_TEST_MODE: "1" };

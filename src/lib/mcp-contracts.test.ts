@@ -60,6 +60,14 @@ describe("MCP contract manifest", () => {
     expect(byName.get("quote_skill")?.outputSchema).toMatchObject({
       required: ["skill", "creditQuote", "availability"],
       properties: {
+        creditQuote: {
+          type: "object",
+          properties: {
+            creditUnit: { type: "string" },
+            credits: { type: "number" },
+            formattedCredits: { type: "string" },
+          },
+        },
         availability: {
           type: "object",
           properties: {
@@ -80,6 +88,7 @@ describe("MCP contract manifest", () => {
     expect(serialized).not.toContain("Stripe");
     expect(serialized).not.toContain("tenant");
     expect(serialized).not.toContain("skills.md");
+    expect(serialized).not.toMatch(/pricing|Cents|billingUnit|formattedCost/);
   });
 
   test("describes known and unknown tools deterministically", () => {

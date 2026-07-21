@@ -9,6 +9,17 @@ import {
   runCliInCwd,
 } from "./cli.test-utils";
 
+const AUTHORITATIVE_TEST_QUOTE = {
+  estimated: false,
+  quoteDependsOnInput: false,
+  quoteRequired: false,
+  description: "Authoritative test credit quote.",
+};
+
+function writeModeConfig(cwd: string, mode: "local" | "self-hosted" | "cloud", apiUrl?: string): void {
+  require("fs").writeFileSync(require("path").join(cwd, "skills.config.json"), JSON.stringify({ mode, ...(apiUrl ? { apiUrl } : {}) }));
+}
+
 describe("CLI run core", () => {
   describe("run", () => {
     test("fails for nonexistent skill", async () => {
@@ -67,6 +78,7 @@ describe("CLI run core", () => {
         },
       });
       try {
+        writeModeConfig(tmpDir, "local");
         const { stdout, stderr, exitCode } = await runCliInCwd(["run", "--json", "lorem-generator", "--help"], tmpDir, {
           HOME: tmpDir,
           NO_COLOR: "1",
@@ -92,6 +104,7 @@ describe("CLI run core", () => {
       const { tmpdir } = require("os");
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-premium-no-test-bypass-"));
       try {
+        writeModeConfig(tmpDir, "self-hosted");
         const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", "run", "--json", "logo-design", "--help"], {
           stdout: "pipe",
           stderr: "pipe",
@@ -127,6 +140,7 @@ describe("CLI run core", () => {
       const { tmpdir } = require("os");
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-premium-auth-"));
       try {
+        writeModeConfig(tmpDir, "self-hosted");
         const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", "run", "--json", "logo-design", "prompt"], {
           stdout: "pipe",
           stderr: "pipe",
@@ -161,12 +175,17 @@ describe("CLI run core", () => {
       let remoteCalls = 0;
       const server = Bun.serve({
         port: 0,
-        fetch() {
+        fetch(req) {
           remoteCalls += 1;
+          const url = new URL(req.url);
+          if (url.pathname === "/api/v1/skills/logo-design/quote") {
+            return Response.json({ creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 50, formattedCredits: "50 credits/run" } });
+          }
           return Response.json({ error: "run should be blocked before remote submission" }, { status: 500 });
         },
       });
       try {
+        writeModeConfig(tmpDir, "self-hosted", `http://127.0.0.1:${server.port}`);
         const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", "run", "--json", "logo-design", "make a mark"], {
           stdout: "pipe",
           stderr: "pipe",
@@ -192,7 +211,7 @@ describe("CLI run core", () => {
         expect(data.error).toContain("--yes");
         expect(data.run.remote).toBe(true);
         expect(data.run.status).toBe("failed");
-        expect(remoteCalls).toBe(0);
+        expect(remoteCalls).toBe(1);
       } finally {
         server.stop(true);
         rmSync(tmpDir, { recursive: true, force: true });
@@ -208,6 +227,9 @@ describe("CLI run core", () => {
         fetch(req) {
           const url = new URL(req.url);
           expect(req.headers.get("authorization")).toBe("Bearer sk_test_async");
+          if (url.pathname === "/api/v1/skills/logo-design/quote" && req.method === "POST") {
+            return Response.json({ creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 50, formattedCredits: "50 credits/run" } });
+          }
           if (url.pathname === "/api/v1/runs/logo-design" && req.method === "POST") {
             return Response.json(
               {
@@ -240,6 +262,7 @@ describe("CLI run core", () => {
         SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
       };
       try {
+        writeModeConfig(tmpDir, "self-hosted", `http://127.0.0.1:${server.port}`);
         const runProc = Bun.spawn(["bun", "run", CLI_PATH, "--", "run", "--yes", "--json", "logo-design", "make a mark"], {
           stdout: "pipe",
           stderr: "pipe",
@@ -312,9 +335,9 @@ describe("CLI run core", () => {
               category: "Media Processing",
               tags: ["image"],
               availability: { status: "available" },
-              creditQuote: {
+              creditQuote: { ...AUTHORITATIVE_TEST_QUOTE,
                 tier: "premium",
-                billingUnit: "image",
+                creditUnit: "image",
                 credits: 9,
                 formattedCredits: "9 credits/image",
                 estimated: false,
@@ -328,9 +351,9 @@ describe("CLI run core", () => {
               availability: { status: "available" },
               quoteToken: "quote_cloud_image_11",
               expiresAt: "2026-07-21T16:00:00.000Z",
-              creditQuote: {
+              creditQuote: { ...AUTHORITATIVE_TEST_QUOTE,
                 tier: "premium",
-                billingUnit: "image",
+                creditUnit: "image",
                 credits: 11,
                 formattedCredits: "11 credits/image",
                 estimated: false,
@@ -379,6 +402,68 @@ describe("CLI run core", () => {
       }
     });
 
+    test("self-hosted quote and run use the selected service zero-credit authority without paid approval", async () => {
+      const { mkdtempSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-selfhost-quote-authority-"));
+      const calls: string[] = [];
+      const server = Bun.serve({
+        port: 0,
+        async fetch(req) {
+          const url = new URL(req.url);
+          calls.push(`${req.method} ${url.pathname}`);
+          if (url.pathname === "/api/v1/skills/logo-design/quote" && req.method === "POST") {
+            return Response.json({
+              availability: { status: "available" },
+              creditQuote: { ...AUTHORITATIVE_TEST_QUOTE,
+                tier: "free",
+                creditUnit: "run",
+                credits: 0,
+                formattedCredits: "0 credits",
+              },
+            });
+          }
+          if (url.pathname === "/api/v1/runs/logo-design" && req.method === "POST") {
+            expect(await req.json()).toEqual({ input: {}, args: ["minimal mark"] });
+            return Response.json({ id: "run_selfhost_logo", skill: "logo-design", status: "queued", credits: 0 });
+          }
+          if (url.pathname === "/api/v1/runs/run_selfhost_logo/logs" && req.method === "GET") {
+            return Response.json([]);
+          }
+          return Response.json({ error: `unexpected ${req.method} ${url.pathname}` }, { status: 500 });
+        },
+      });
+
+      try {
+        const apiUrl = `http://127.0.0.1:${server.port}`;
+        const setup = await runCliInCwd(["setup", "--mode", "self-hosted", "--api-url", apiUrl, "--json"], tmpDir, { HOME: tmpDir });
+        expect(setup.exitCode).toBe(0);
+        const quote = await runCliInCwd(["quote", "logo-design", "minimal mark", "--json"], tmpDir, {
+          HOME: tmpDir,
+          SKILLS_API_KEY: "sk_test_selfhost_quote_authority",
+        });
+        expect(quote.exitCode).toBe(0);
+        expect(JSON.parse(quote.stdout).creditQuote).toMatchObject({ tier: "free", creditUnit: "run", credits: 0 });
+        const run = await runCliInCwd(["run", "--json", "logo-design", "minimal mark"], tmpDir, {
+          HOME: tmpDir,
+          SKILLS_API_KEY: "sk_test_selfhost_quote_authority",
+        });
+        expect(run.exitCode).toBe(0);
+        const payload = JSON.parse(run.stdout);
+        expect(payload.creditQuote).toMatchObject({ tier: "free", creditUnit: "run", credits: 0, formattedCredits: "0 credits" });
+        expect(payload.approvalRequired).toBeUndefined();
+        expect(calls).toEqual([
+          "POST /api/v1/skills/logo-design/quote",
+          "POST /api/v1/skills/logo-design/quote",
+          "POST /api/v1/runs/logo-design",
+          "GET /api/v1/runs/run_selfhost_logo/logs",
+        ]);
+      } finally {
+        server.stop(true);
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
     test("cloud mode rejects unavailable skills before quote or charge", async () => {
       const { mkdtempSync, rmSync } = require("fs");
       const { tmpdir } = require("os");
@@ -401,7 +486,13 @@ describe("CLI run core", () => {
               message: "Image generation is temporarily unavailable.",
               details: ["No balance was charged."],
             },
-            creditQuote: { credits: 9, formattedCredits: "9 credits/image" },
+            creditQuote: {
+              ...AUTHORITATIVE_TEST_QUOTE,
+              tier: "premium",
+              creditUnit: "image",
+              credits: 9,
+              formattedCredits: "9 credits/image",
+            },
           });
         },
       });
@@ -438,13 +529,13 @@ describe("CLI run core", () => {
             return Response.json({
               slug: "image",
               availability: { status: "available" },
-              creditQuote: { tier: "premium", billingUnit: "image", credits: 9, formattedCredits: "9 credits/image" },
+              creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "image", credits: 9, formattedCredits: "9 credits/image" },
             });
           }
           if (url.pathname === "/api/v1/skills/image/quote") {
             return Response.json({
               availability: { status: "available" },
-              creditQuote: { tier: "premium", billingUnit: "image", credits: 11, formattedCredits: "11 credits/image" },
+              creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "image", credits: 11, formattedCredits: "11 credits/image" },
             });
           }
           return Response.json({ error: "run must not be submitted" }, { status: 500 });
@@ -498,6 +589,7 @@ describe("CLI run core", () => {
       const { tmpdir } = require("os");
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-premium-skillsmd-down-"));
       try {
+        writeModeConfig(tmpDir, "self-hosted", "http://127.0.0.1:1");
         const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", "run", "--yes", "--json", "logo-design", "--help"], {
           stdout: "pipe",
           stderr: "pipe",
@@ -541,6 +633,7 @@ describe("CLI run core", () => {
         },
       });
       try {
+        writeModeConfig(tmpDir, "self-hosted", `http://127.0.0.1:${server.port}`);
         const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", "run", "--json", "image", "a mountain at sunrise"], {
           stdout: "pipe",
           stderr: "pipe",
@@ -590,6 +683,9 @@ describe("CLI run core", () => {
         async fetch(req) {
           const url = new URL(req.url);
           expect(req.headers.get("authorization")).toBe("Bearer sk_test_wait");
+          if (url.pathname === "/api/v1/skills/logo-design/quote" && req.method === "POST") {
+            return Response.json({ creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 50, formattedCredits: "50 credits/run" } });
+          }
           if (url.pathname === "/api/v1/runs/logo-design" && req.method === "POST") {
             return Response.json(
               {
@@ -632,6 +728,7 @@ describe("CLI run core", () => {
         SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
       };
       try {
+        writeModeConfig(tmpDir, "self-hosted", `http://127.0.0.1:${server.port}`);
         const proc = Bun.spawn([
           "bun",
           "run",
@@ -687,6 +784,9 @@ describe("CLI run core", () => {
         async fetch(req) {
           const url = new URL(req.url);
           expect(req.headers.get("authorization")).toBe("Bearer sk_test_failed");
+          if (url.pathname === "/api/v1/skills/logo-design/quote" && req.method === "POST") {
+            return Response.json({ creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 50, formattedCredits: "50 credits/run" } });
+          }
           if (url.pathname === "/api/v1/runs/logo-design" && req.method === "POST") {
             return Response.json(
               {
@@ -708,6 +808,7 @@ describe("CLI run core", () => {
         },
       });
       try {
+        writeModeConfig(tmpDir, "self-hosted", `http://127.0.0.1:${server.port}`);
         const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", "run", "--yes", "--json", "logo-design", "bad prompt"], {
           stdout: "pipe",
           stderr: "pipe",

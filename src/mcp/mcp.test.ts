@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { mkdtempSync } from "fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { BASIC_SKILL_NAMES, SKILLS } from "../lib/registry.js";
@@ -7,6 +7,12 @@ import { BASIC_SKILL_NAMES, SKILLS } from "../lib/registry.js";
 const MCP_PATH = join(import.meta.dir, "index.ts");
 const EXPECTED_ALL_SKILL_COUNT = SKILLS.length;
 const EXPECTED_BASIC_SKILL_COUNT = BASIC_SKILL_NAMES.length;
+const AUTHORITATIVE_TEST_QUOTE = {
+  estimated: false,
+  quoteDependsOnInput: false,
+  quoteRequired: false,
+  description: "Authoritative test credit quote.",
+};
 const CLEAN_STORAGE_ENV = {
   HASNA_SKILLS_STORAGE_MODE: "",
   HASNA_SKILLS_DATABASE_URL: "",
@@ -31,6 +37,11 @@ const CLEAN_STORAGE_ENV = {
   SKILLS_SYNC_BATCH_SIZE: "",
   SKILLS_SYNC_DRY_RUN: "",
 };
+
+function writeMcpModeConfig(home: string, mode: "local" | "self-hosted" | "cloud", apiUrl?: string): void {
+  mkdirSync(join(home, ".hasna", "skills"), { recursive: true });
+  writeFileSync(join(home, ".hasna", "skills", "config.json"), JSON.stringify({ mode, ...(apiUrl ? { apiUrl } : {}) }));
+}
 
 /**
  * Helper class to communicate with the MCP server over stdio.
@@ -274,7 +285,26 @@ version: 0.3.0
   }, 15000);
 
   test("quote_skill validates create-blog-article options", async () => {
-    const client = new McpClient();
+    const home = mkdtempSync(join(tmpdir(), "mcp-quote-article-"));
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const body = await req.json() as { input?: { count?: number } };
+        const count = body.input?.count ?? 1;
+        return Response.json({
+          creditQuote: {
+            ...AUTHORITATIVE_TEST_QUOTE,
+            tier: "premium",
+            creditUnit: "article",
+            unitCount: count,
+            credits: count * 25,
+            formattedCredits: `${count * 25} credits total`,
+          },
+        });
+      },
+    });
+    writeMcpModeConfig(home, "self-hosted", `http://127.0.0.1:${server.port}`);
+    const client = new McpClient({ HOME: home, SKILLS_API_KEY: "fixture-article-quote" });
     try {
       await client.initialize();
       const validResponse = await client.request("tools/call", {
@@ -298,7 +328,7 @@ version: 0.3.0
         skill: "blog-article",
         availability: { status: "available" },
         creditQuote: {
-          billingUnit: "article",
+          creditUnit: "article",
           unitCount: 8,
           credits: 200,
           formattedCredits: "200 credits total",
@@ -321,6 +351,8 @@ version: 0.3.0
       });
     } finally {
       await client.close();
+      server.stop(true);
+      require("fs").rmSync(home, { recursive: true, force: true });
     }
   }, 15000);
 
@@ -339,9 +371,9 @@ version: 0.3.0
           return Response.json({
             slug: "image",
             availability: { status: "available" },
-            creditQuote: {
+            creditQuote: { ...AUTHORITATIVE_TEST_QUOTE,
               tier: "premium",
-              billingUnit: "image",
+              creditUnit: "image",
               credits: 9,
               formattedCredits: "9 credits/image",
             },
@@ -352,9 +384,9 @@ version: 0.3.0
             availability: { status: "available" },
             quoteToken: "quote_mcp_cloud_image_11",
             expiresAt: "2026-07-21T16:00:00.000Z",
-            creditQuote: {
+            creditQuote: { ...AUTHORITATIVE_TEST_QUOTE,
               tier: "premium",
-              billingUnit: "image",
+              creditUnit: "image",
               credits: 11,
               formattedCredits: "11 credits/image",
             },
@@ -398,6 +430,54 @@ version: 0.3.0
     }
   }, 15000);
 
+  test("quote_skill uses the authenticated selected self-hosted quote", async () => {
+    const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require("fs");
+    const { tmpdir } = require("os");
+    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-selfhost-quote-"));
+    const calls: string[] = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        calls.push(`${req.method} ${url.pathname}`);
+        if (url.pathname === "/api/v1/skills/logo-design/quote" && req.method === "POST") {
+          return Response.json({
+            availability: { status: "available" },
+            creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "free", creditUnit: "run", credits: 0, formattedCredits: "0 credits" },
+          });
+        }
+        return Response.json({ error: `unexpected ${req.method} ${url.pathname}` }, { status: 500 });
+      },
+    });
+
+    mkdirSync(join(tmpDir, ".hasna", "skills"), { recursive: true });
+    writeFileSync(join(tmpDir, ".hasna", "skills", "config.json"), JSON.stringify({
+      mode: "self-hosted",
+      apiUrl: `http://127.0.0.1:${server.port}`,
+    }));
+    const client = new McpClient({ HOME: tmpDir, SKILLS_API_KEY: "sk_test_mcp_selfhost_quote" });
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "quote_skill",
+        arguments: { name: "logo-design", args: ["minimal mark"] },
+      }, 821);
+      expect(response).not.toBeNull();
+      expect(response.result.isError).not.toBe(true);
+      expect(JSON.parse(response.result.content[0].text).creditQuote).toMatchObject({
+        tier: "free",
+        creditUnit: "run",
+        credits: 0,
+        formattedCredits: "0 credits",
+      });
+      expect(calls).toEqual(["POST /api/v1/skills/logo-design/quote"]);
+    } finally {
+      await client.close();
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
   test("quote_skill normalizes nested cloud unavailability messages to credits", async () => {
     const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require("fs");
     const { tmpdir } = require("os");
@@ -410,7 +490,7 @@ version: 0.3.0
           return Response.json({
             slug: "image",
             availability: { status: "available" },
-            creditQuote: { tier: "premium", billingUnit: "image", credits: 9, formattedCredits: "9 credits/image" },
+            creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "image", credits: 9, formattedCredits: "9 credits/image" },
           });
         }
         if (url.pathname === "/api/v1/skills/image/quote" && req.method === "POST") {
@@ -455,8 +535,10 @@ version: 0.3.0
     }
   }, 15000);
 
-  test("quote_skill fails fast for unavailable hosted provider skills", async () => {
-    const client = new McpClient();
+  test("quote_skill requires selected self-hosted authority instead of bundled metadata", async () => {
+    const home = mkdtempSync(join(tmpdir(), "mcp-quote-unavailable-"));
+    writeMcpModeConfig(home, "self-hosted");
+    const client = new McpClient({ HOME: home });
     try {
       await client.initialize();
       const response = await client.request("tools/call", {
@@ -467,16 +549,13 @@ version: 0.3.0
       expect(response.result.isError).toBe(true);
       const payload = JSON.parse(response.result.content[0].text);
       expect(payload).toMatchObject({
-        skill: "image",
-        code: "HOSTED_PROVIDER_UNAVAILABLE",
-        availability: {
-          status: "unavailable",
-          code: "HOSTED_PROVIDER_UNAVAILABLE",
-        },
+        code: "AUTH_REQUIRED",
       });
-      expect(payload.details).toContain("No credits were charged.");
+      expect(payload).not.toHaveProperty("creditQuote");
+      expect(JSON.stringify(payload)).not.toContain("HOSTED_PROVIDER_UNAVAILABLE");
     } finally {
       await client.close();
+      require("fs").rmSync(home, { recursive: true, force: true });
     }
   }, 15000);
 
@@ -484,6 +563,7 @@ version: 0.3.0
     const { mkdtempSync, rmSync } = require("fs");
     const { tmpdir } = require("os");
     const tmpDir = mkdtempSync(join(tmpdir(), "mcp-premium-no-auth-"));
+    writeMcpModeConfig(tmpDir, "self-hosted");
     const client = new McpClient({
       HOME: tmpDir,
       SKILLS_API_KEY: "",
@@ -514,6 +594,7 @@ version: 0.3.0
     const { mkdtempSync, rmSync } = require("fs");
     const { tmpdir } = require("os");
     const tmpDir = mkdtempSync(join(tmpdir(), "mcp-premium-skillsmd-down-"));
+    writeMcpModeConfig(tmpDir, "self-hosted", "http://127.0.0.1:1");
     const client = new McpClient({
       HOME: tmpDir,
       SKILLS_API_KEY: "sk_test_skillsmd_down",
@@ -533,8 +614,8 @@ version: 0.3.0
       expect(response).not.toBeNull();
       expect(response.result.isError).toBe(true);
       const error = JSON.parse(response.result.content[0].text);
-      expect(error).toMatchObject({ code: "PLATFORM_ERROR" });
-      expect(error.message).toContain("requires access to the selected self-hosted service");
+      expect(error).toMatchObject({ code: "SELF_HOSTED_QUOTE_FAILED" });
+      expect(error.message).toContain("selected self-hosted credit quote");
       expect(error.message).not.toContain("Skill Image CLI");
     } finally {
       await client.close();
@@ -546,6 +627,7 @@ version: 0.3.0
     const { mkdtempSync, rmSync } = require("fs");
     const { tmpdir } = require("os");
     const tmpDir = mkdtempSync(join(tmpdir(), "mcp-premium-unavailable-provider-"));
+    writeMcpModeConfig(tmpDir, "self-hosted");
     const client = new McpClient({
       HOME: tmpDir,
       SKILLS_API_KEY: "",
@@ -581,11 +663,16 @@ version: 0.3.0
     let remoteCalls = 0;
     const server = Bun.serve({
       port: 0,
-      fetch() {
+      fetch(req) {
         remoteCalls += 1;
+        const url = new URL(req.url);
+        if (url.pathname === "/api/v1/skills/logo-design/quote") {
+          return Response.json({ creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 50, formattedCredits: "50 credits/run" } });
+        }
         return Response.json({ error: "run should be blocked before remote submission" }, { status: 500 });
       },
     });
+    writeMcpModeConfig(tmpDir, "self-hosted", `http://127.0.0.1:${server.port}`);
     const client = new McpClient({
       HOME: tmpDir,
       SKILLS_API_KEY: "sk_test_mcp_approval_required",
@@ -607,7 +694,7 @@ version: 0.3.0
       expect(error).toMatchObject({ code: "APPROVAL_REQUIRED" });
       expect(error.message).toContain("requires 50 credits/run");
       expect(error.message).toContain("approved: true");
-      expect(remoteCalls).toBe(0);
+      expect(remoteCalls).toBe(1);
     } finally {
       await client.close();
       server.stop(true);
@@ -629,7 +716,7 @@ version: 0.3.0
           return Response.json({
             slug: "image",
             availability: { status: "available" },
-            creditQuote: { tier: "premium", billingUnit: "image", credits: 9, formattedCredits: "9 credits/image" },
+            creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "image", credits: 9, formattedCredits: "9 credits/image" },
           });
         }
         if (url.pathname === "/api/v1/skills/image/quote" && req.method === "POST") {
@@ -637,7 +724,7 @@ version: 0.3.0
           return Response.json({
             quoteToken: "quote_replacement_higher",
             availability: { status: "available" },
-            creditQuote: { tier: "premium", billingUnit: "image", credits: 99, formattedCredits: "99 credits/image" },
+            creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "image", credits: 99, formattedCredits: "99 credits/image" },
           });
         }
         if (url.pathname === "/api/v1/runs/image" && req.method === "POST") {
@@ -696,7 +783,7 @@ version: 0.3.0
           return Response.json({
             slug: "image",
             availability: { status: "available" },
-            creditQuote: { tier: "premium", billingUnit: "image", credits: 9, formattedCredits: "9 credits/image" },
+            creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "image", credits: 9, formattedCredits: "9 credits/image" },
           });
         }
         if (url.pathname.endsWith("/quote")) quoteCalls += 1;
@@ -740,6 +827,9 @@ version: 0.3.0
       fetch(req) {
         const url = new URL(req.url);
         expect(req.headers.get("authorization")).toBe("Bearer sk_test_contract");
+        if (url.pathname === "/api/v1/skills/logo-design/quote" && req.method === "POST") {
+          return Response.json({ creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 50, formattedCredits: "50 credits/run" } });
+        }
         if (url.pathname === "/api/v1/runs/logo-design" && req.method === "POST") {
           return Response.json({
             id: "run_mcp_contract",
@@ -751,6 +841,7 @@ version: 0.3.0
         return Response.json({ error: "not found" }, { status: 404 });
       },
     });
+    writeMcpModeConfig(tmpDir, "self-hosted", `http://127.0.0.1:${server.port}`);
     const client = new McpClient({
       HOME: tmpDir,
       SKILLS_API_KEY: "sk_test_contract",
@@ -808,6 +899,7 @@ version: 0.3.0
         return Response.json({ error: "local skills should not use hosted API" }, { status: 500 });
       },
     });
+    writeMcpModeConfig(tmpDir, "local");
     const client = new McpClient({
       HOME: tmpDir,
       SKILLS_API_KEY: "sk_test_local_should_stay_local",

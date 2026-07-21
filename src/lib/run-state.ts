@@ -30,7 +30,7 @@ export interface SkillRunRecord {
   completedAt?: string;
   remote: boolean;
   remoteRunId?: string;
-  costCents?: number;
+  credits?: number;
   error?: string;
   artifacts: SkillRunArtifact[];
   paths: {
@@ -55,7 +55,7 @@ export function createSkillRun(
     prompt?: string;
     remote?: boolean;
     remoteRunId?: string;
-    costCents?: number;
+    credits?: number;
     status?: SkillRunStatus;
   },
   targetDir: string = process.cwd(),
@@ -81,7 +81,7 @@ export function createSkillRun(
     startedAt: now.toISOString(),
     remote: params.remote ?? false,
     ...(params.remoteRunId ? { remoteRunId: params.remoteRunId } : {}),
-    ...(params.costCents !== undefined ? { costCents: params.costCents } : {}),
+    ...(params.credits !== undefined ? { credits: params.credits } : {}),
     artifacts: [],
     paths: {
       runDir: toProjectRelative(targetDir, runDir),
@@ -99,7 +99,7 @@ export function createSkillRun(
 
 export function completeSkillRun(
   context: SkillRunContext,
-  patch: { status: SkillRunStatus; error?: string; remoteRunId?: string; costCents?: number },
+  patch: { status: SkillRunStatus; error?: string; remoteRunId?: string; credits?: number },
 ): SkillRunRecord {
   const artifacts = collectRunArtifacts(context);
   context.record = {
@@ -108,7 +108,7 @@ export function completeSkillRun(
     completedAt: new Date().toISOString(),
     ...(patch.error ? { error: patch.error } : {}),
     ...(patch.remoteRunId ? { remoteRunId: patch.remoteRunId } : {}),
-    ...(patch.costCents !== undefined ? { costCents: patch.costCents } : {}),
+    ...(patch.credits !== undefined ? { credits: patch.credits } : {}),
     artifacts,
   };
   writeArtifactsManifest(context, artifacts);

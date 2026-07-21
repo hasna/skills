@@ -34,7 +34,7 @@ export function mcpError(code: string, message: string, suggestions?: string[]) 
 
 export function mcpJson(payload: unknown, pretty = false) {
   return {
-    content: [{ type: "text" as const, text: JSON.stringify(payload, null, pretty ? 2 : 0) }],
+    content: [{ type: "text" as const, text: JSON.stringify(toCustomerCreditPayload(payload), null, pretty ? 2 : 0) }],
   };
 }
 

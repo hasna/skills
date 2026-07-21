@@ -1,4 +1,4 @@
-import type { PublicSkillPricing } from "./pricing";
+import { toCustomerCreditPayload, toPublicCreditQuote, type PublicCreditQuote } from "./public-credits.js";
 
 export const REMOTE_SKILL_RUN_CONTRACT_VERSION = 1 as const;
 
@@ -10,10 +10,9 @@ export interface RemoteSkillRunContract {
   status?: string;
   exitCode?: number;
   correlationId?: string;
-  costCents?: number;
-  cost?: string;
-  pricing?: PublicSkillPricing;
-  creditQuote?: unknown;
+  credits?: number;
+  formattedCredits?: string;
+  creditQuote?: PublicCreditQuote;
   createdAt?: string;
   startedAt?: string;
   completedAt?: string;
@@ -22,30 +21,37 @@ export interface RemoteSkillRunContract {
   outputPreview?: unknown;
   errorCode?: string;
   errorMessage?: string;
+  creditsReserved?: number;
   creditsUsed?: number;
-  credits?: number;
+  creditBalance?: number;
+  formattedCreditBalance?: string;
+  amountCredits?: number;
+  recentNetAmountCredits?: number;
   error?: string;
   code?: string;
   details?: unknown;
-  balance?: string;
-  balanceCents?: number;
 }
 
 export function normalizeRemoteSkillRunContract(
   payload: unknown,
   fallbackSkill?: string,
 ): RemoteSkillRunContract {
-  const record = isRecord(payload) ? payload : {};
+  if (isRecord(payload) && hasOwn(payload, "contractVersion") && payload.contractVersion !== REMOTE_SKILL_RUN_CONTRACT_VERSION) {
+    throw new Error(`Unsupported remote skill run contract version: ${String(payload.contractVersion)}`);
+  }
+  const normalized = toCustomerCreditPayload(payload);
+  const record = isRecord(normalized) ? normalized : {};
+  const skill = pickStringValue(record, "skill") ?? fallbackSkill;
   return {
     contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION,
     ...pickString(record, "id"),
-    skill: pickStringValue(record, "skill") ?? fallbackSkill,
+    ...(skill ? { skill } : {}),
     ...pickString(record, "requestedSlug"),
     ...pickString(record, "status"),
     ...pickNumber(record, "exitCode"),
     ...pickString(record, "correlationId"),
-    ...pickNumber(record, "costCents"),
-    ...pickString(record, "cost"),
+    ...pickNumber(record, "credits"),
+    ...pickString(record, "formattedCredits"),
     ...pickCreditQuote(record),
     ...pickString(record, "createdAt"),
     ...pickString(record, "startedAt"),
@@ -55,13 +61,15 @@ export function normalizeRemoteSkillRunContract(
     ...(hasOwn(record, "outputPreview") ? { outputPreview: record.outputPreview } : {}),
     ...pickString(record, "errorCode"),
     ...pickString(record, "errorMessage"),
+    ...pickNumber(record, "creditsReserved"),
     ...pickNumber(record, "creditsUsed"),
-    ...pickNumber(record, "credits"),
+    ...pickNumber(record, "creditBalance"),
+    ...pickString(record, "formattedCreditBalance"),
+    ...pickNumber(record, "amountCredits"),
+    ...pickNumber(record, "recentNetAmountCredits"),
     ...pickString(record, "error"),
     ...pickString(record, "code"),
     ...(hasOwn(record, "details") ? { details: record.details } : {}),
-    ...pickString(record, "balance"),
-    ...pickNumber(record, "balanceCents"),
   };
 }
 
@@ -88,7 +96,6 @@ function pickNumber(record: Record<string, unknown>, key: string): Record<string
   return typeof value === "number" && Number.isFinite(value) ? { [key]: value } : {};
 }
 
-function pickCreditQuote(record: Record<string, unknown>): { pricing?: PublicSkillPricing; creditQuote?: unknown } {
-  if (isRecord(record.creditQuote)) return { creditQuote: record.creditQuote };
-  return isRecord(record.pricing) ? { pricing: record.pricing as unknown as PublicSkillPricing } : {};
+function pickCreditQuote(record: Record<string, unknown>): { creditQuote?: PublicCreditQuote } {
+  return isRecord(record.creditQuote) ? { creditQuote: toPublicCreditQuote(record.creditQuote) } : {};
 }

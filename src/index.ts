@@ -126,16 +126,12 @@ export {
 export {
   ARTICLE_GENERATION_SLUG,
   getAllPremiumSlugs,
-  getPublicSkillPricing,
+  getSkillCreditQuote,
   getSkillCatalogBillingFields,
-  getSkillPricing,
-  getSkillRunCostCents,
   isPremiumSkill,
   validateBlogArticleRunOptions,
   type BlogArticleRunOptions,
   type BlogArticleValidationResult,
-  type PublicSkillPricing,
-  type SkillPricing,
 } from "./lib/pricing.js";
 
 export {
@@ -145,7 +141,6 @@ export {
   publicDiscoveryDocumentation,
   publicDiscoveryEnvVars,
   publicDiscoveryCreditsLabel,
-  publicDiscoveryPriceLabel,
   sanitizePublicDiscoveryText,
   type CompactSkillDiscovery,
   type PublicSkillDiscovery,
@@ -180,6 +175,11 @@ export {
   RemoteSkillsClient,
   createRemoteSkillsClient,
 } from "./lib/remote-client.js";
+
+export {
+  SKILLS_CLIENT_VERSION,
+  SKILLS_RUN_AUTHORIZATION_CAPABILITY,
+} from "./lib/remote-protocol.js";
 
 export {
   REMOTE_SKILL_RUN_CONTRACT_VERSION,

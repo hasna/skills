@@ -18,6 +18,8 @@ import {
   getPublicSkillDiscovery,
   publicDiscoveryDependencies,
   publicDiscoveryEnvVars,
+  type CompactSkillDiscovery,
+  type PublicSkillDiscovery,
 } from "../lib/discovery.js";
 import {
   getSkillToolDependencies,
@@ -54,7 +56,7 @@ export function registerDiscoveryTools(server: McpServer): void {
       ? skills.map(getPublicSkillDiscovery)
       : skills.map(getCompactSkillDiscovery);
 
-    const page = paginate(mapped, {
+    const page = paginate<PublicSkillDiscovery | CompactSkillDiscovery>(mapped, {
       limit: parsePageLimit(limit, DEFAULT_MCP_LIMIT, { max: 100 }),
       offset: parsePageOffset(offset),
     });
@@ -104,7 +106,7 @@ export function registerDiscoveryTools(server: McpServer): void {
       ? results.map(getPublicSkillDiscovery)
       : results.map(getCompactSkillDiscovery);
 
-    const page = paginate(out, {
+    const page = paginate<PublicSkillDiscovery | CompactSkillDiscovery>(out, {
       limit: parsePageLimit(limit, DEFAULT_MCP_LIMIT, { max: 100 }),
       offset: parsePageOffset(offset),
     });

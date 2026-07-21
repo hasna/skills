@@ -27,24 +27,9 @@ export interface SkillMeta {
    * agents. Missing kind defaults to "executable" during migration.
    */
   kind?: SkillKind;
-  pricing?: SkillPricingMetadata;
+  creditQuote?: import("./public-credits.js").PublicCreditQuote;
   availability?: SkillAvailabilityMetadata;
   source?: SkillSource;
-}
-
-export interface SkillPricingMetadata {
-  tier?: "free" | "premium" | string;
-  billingUnit?: string;
-  costCents?: number;
-  credits?: number;
-  formattedCost: string;
-  formattedCredits?: string;
-  formattedUnitCost?: string;
-  unitCount?: number;
-  estimated?: boolean;
-  quoteDependsOnInput?: boolean;
-  quoteRequired?: boolean;
-  description?: string;
 }
 
 export interface SkillAvailabilityMetadata {
