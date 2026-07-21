@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -343,6 +343,43 @@ description: Legacy override whose executable is missing.
         clearRegistryCache();
         expect(loadRegistry().find((skill) => skill.name === "image")?.source).toBe("official");
         expect(loadRegistry().find((skill) => skill.name === "deepresearch")?.source).toBe("official");
+      });
+    });
+
+    test("symlinked direct and legacy skill roots cannot shadow regular skills", () => {
+      withIsolatedHome((skillsRoot) => {
+        const outside = mkdtempSync(join(tmpdir(), "skills-registry-outside-"));
+        try {
+          const writeInstruction = (directory: string, name: string): void => {
+            mkdirSync(directory, { recursive: true });
+            writeFileSync(
+              join(directory, "SKILL.md"),
+              `---\nname: ${name}\ndescription: Valid regular instruction fixture.\nkind: instruction\n---\n\n# ${name}\n`,
+            );
+          };
+
+          const directTarget = join(outside, "image");
+          const legacyTarget = join(outside, "deepresearch");
+          writeInstruction(directTarget, "image");
+          writeInstruction(legacyTarget, "deepresearch");
+          mkdirSync(join(skillsRoot, "custom"), { recursive: true });
+          symlinkSync(directTarget, join(skillsRoot, "image"), "dir");
+          symlinkSync(legacyTarget, join(skillsRoot, "custom", "deepresearch"), "dir");
+
+          const regularDirect = join(skillsRoot, "regular-direct");
+          const regularLegacy = join(skillsRoot, "custom", "regular-legacy");
+          writeInstruction(regularDirect, "regular-direct");
+          writeInstruction(regularLegacy, "regular-legacy");
+
+          clearRegistryCache();
+          const registry = loadRegistry();
+          expect(registry.find((skill) => skill.name === "image")?.source).toBe("official");
+          expect(registry.find((skill) => skill.name === "deepresearch")?.source).toBe("official");
+          expect(registry.find((skill) => skill.name === "regular-direct")?.source).toBe("custom");
+          expect(registry.find((skill) => skill.name === "regular-legacy")?.source).toBe("custom");
+        } finally {
+          rmSync(outside, { recursive: true, force: true });
+        }
       });
     });
 

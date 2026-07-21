@@ -124,6 +124,221 @@ Follow these agent instructions.
     }
   });
 
+  test("rejects symlinked skill roots and nested executable targets without rejecting regular skills", () => {
+    const root = mkdtempSync(join(tmpdir(), "portable-skill-symlinks-"));
+    const outside = mkdtempSync(join(tmpdir(), "portable-skill-outside-"));
+    try {
+      const linkedRootTarget = join(outside, "linked-root");
+      mkdirSync(linkedRootTarget, { recursive: true });
+      writeFileSync(
+        join(linkedRootTarget, "SKILL.md"),
+        "---\nname: linked-root\ndescription: Instruction skill reached through a symlink.\nkind: instruction\n---\n\n# Linked Root\n",
+      );
+      const linkedRoot = join(root, "linked-root");
+      symlinkSync(linkedRootTarget, linkedRoot, "dir");
+
+      const outsideBin = join(outside, "bin");
+      mkdirSync(outsideBin, { recursive: true });
+      writeFileSync(join(outsideBin, "run.ts"), "console.log('escaped executable');\n");
+      const nestedLink = join(root, "nested-link");
+      mkdirSync(join(nestedLink, "scripts"), { recursive: true });
+      symlinkSync(outsideBin, join(nestedLink, "scripts", "runtime"), "dir");
+      writeFileSync(join(nestedLink, "SKILL.md"), `---
+name: nested-link
+description: Executable skill whose nested target escapes through a symlink.
+---
+
+# Nested Link
+`);
+      writeFileSync(join(nestedLink, "skill.json"), JSON.stringify({
+        standard: "hasna.skill.v1",
+        name: "nested-link",
+        description: "Executable skill whose nested target escapes through a symlink.",
+        version: "1.0.0",
+        commands: [{ name: "nested-link", entry: "scripts/runtime/run.ts" }],
+      }));
+      writeFileSync(join(nestedLink, "package.json"), JSON.stringify({
+        name: "nested-link",
+        description: "Executable skill whose nested target escapes through a symlink.",
+        version: "1.0.0",
+        bin: { "nested-link": "scripts/runtime/run.ts" },
+      }));
+      writeFileSync(join(nestedLink, "AGENTS.md"), "# Agent instructions\n");
+      mkdirSync(join(nestedLink, "src"), { recursive: true });
+      writeFileSync(join(nestedLink, "src", "index.ts"), "#!/usr/bin/env bun\nconsole.log('local source entry remains regular');\n");
+
+      const linkedBin = join(root, "linked-bin");
+      mkdirSync(join(linkedBin, "src"), { recursive: true });
+      const outsideEntry = join(outside, "linked-bin.ts");
+      writeFileSync(outsideEntry, "#!/usr/bin/env bun\nconsole.log('escaped linked bin target');\n");
+      symlinkSync(outsideEntry, join(linkedBin, "src", "index.ts"), "file");
+      writeFileSync(join(linkedBin, "SKILL.md"), `---
+name: linked-bin
+description: Executable skill whose bin target is a symlink.
+---
+
+# Linked Bin
+`);
+      writeFileSync(join(linkedBin, "skill.json"), JSON.stringify({
+        standard: "hasna.skill.v1",
+        name: "linked-bin",
+        description: "Executable skill whose bin target is a symlink.",
+        version: "1.0.0",
+        commands: [{ name: "linked-bin", entry: "src/index.ts" }],
+      }));
+      writeFileSync(join(linkedBin, "package.json"), JSON.stringify({
+        name: "linked-bin",
+        description: "Executable skill whose bin target is a symlink.",
+        version: "1.0.0",
+        bin: { "linked-bin": "src/index.ts" },
+      }));
+      writeFileSync(join(linkedBin, "AGENTS.md"), "# Agent instructions\n");
+
+      const internalLink = join(root, "internal-link");
+      mkdirSync(join(internalLink, "scripts", "real-runtime"), { recursive: true });
+      mkdirSync(join(internalLink, "src"), { recursive: true });
+      writeFileSync(join(internalLink, "scripts", "real-runtime", "run.ts"), "console.log('internal linked target');\n");
+      symlinkSync(join(internalLink, "scripts", "real-runtime"), join(internalLink, "scripts", "runtime"), "dir");
+      writeFileSync(join(internalLink, "src", "index.ts"), "#!/usr/bin/env bun\nconsole.log('regular local source entry');\n");
+      writeFileSync(join(internalLink, "SKILL.md"), `---
+name: internal-link
+description: Executable skill whose target uses an internal symlink.
+---
+
+# Internal Link
+`);
+      writeFileSync(join(internalLink, "skill.json"), JSON.stringify({
+        standard: "hasna.skill.v1",
+        name: "internal-link",
+        description: "Executable skill whose target uses an internal symlink.",
+        version: "1.0.0",
+        commands: [{ name: "internal-link", entry: "scripts/runtime/run.ts" }],
+      }));
+      writeFileSync(join(internalLink, "package.json"), JSON.stringify({
+        name: "internal-link",
+        description: "Executable skill whose target uses an internal symlink.",
+        version: "1.0.0",
+        bin: { "internal-link": "scripts/runtime/run.ts" },
+      }));
+      writeFileSync(join(internalLink, "AGENTS.md"), "# Agent instructions\n");
+
+      const regularInstruction = join(root, "regular-instruction");
+      mkdirSync(regularInstruction, { recursive: true });
+      writeFileSync(
+        join(regularInstruction, "SKILL.md"),
+        "---\nname: regular-instruction\ndescription: Regular instruction skill control.\nkind: instruction\n---\n\n# Regular Instruction\n",
+      );
+
+      const regularExecutable = join(root, "regular-executable");
+      mkdirSync(join(regularExecutable, "scripts", "runtime"), { recursive: true });
+      mkdirSync(join(regularExecutable, "src"), { recursive: true });
+      writeFileSync(join(regularExecutable, "scripts", "runtime", "run.ts"), "console.log('regular executable');\n");
+      writeFileSync(join(regularExecutable, "src", "index.ts"), "#!/usr/bin/env bun\nconsole.log('regular local source entry');\n");
+      writeFileSync(join(regularExecutable, "SKILL.md"), `---
+name: regular-executable
+description: Regular executable skill control.
+---
+
+# Regular Executable
+`);
+      writeFileSync(join(regularExecutable, "skill.json"), JSON.stringify({
+        standard: "hasna.skill.v1",
+        name: "regular-executable",
+        description: "Regular executable skill control.",
+        version: "1.0.0",
+        commands: [{ name: "regular-executable", entry: "scripts/runtime/run.ts" }],
+      }));
+      writeFileSync(join(regularExecutable, "package.json"), JSON.stringify({
+        name: "regular-executable",
+        description: "Regular executable skill control.",
+        version: "1.0.0",
+        bin: { "regular-executable": "scripts/runtime/run.ts" },
+      }));
+      writeFileSync(join(regularExecutable, "AGENTS.md"), "# Agent instructions\n");
+
+      expect(findPortableSkill("linked-root", { rootDir: root })).toBeNull();
+      expect(findPortableSkill("nested-link", { rootDir: root })).toBeNull();
+      expect(findPortableSkill("linked-bin", { rootDir: root })).toBeNull();
+      expect(findPortableSkill("internal-link", { rootDir: root })).toBeNull();
+      expect(findPortableSkill("regular-instruction", { rootDir: root })?.name).toBe("regular-instruction");
+      expect(findPortableSkill("regular-executable", { rootDir: root })?.name).toBe("regular-executable");
+      expect(listPortableSkills({ rootDir: root }).map((skill) => skill.name)).toEqual([
+        "regular-executable",
+        "regular-instruction",
+      ]);
+
+      const linkedRootValidation = validatePortableSkillDirectory("linked-root", linkedRoot);
+      expect(linkedRootValidation.valid).toBe(false);
+      expect(linkedRootValidation.issues.map((issue) => issue.code)).toContain("skill.symlink_forbidden");
+
+      const nestedLinkValidation = validatePortableSkillDirectory("nested-link", nestedLink);
+      expect(nestedLinkValidation.valid).toBe(false);
+      expect(nestedLinkValidation.issues.map((issue) => issue.code)).toContain("portable.command_entry_unsafe");
+
+      const linkedBinValidation = validatePortableSkillDirectory("linked-bin", linkedBin);
+      expect(linkedBinValidation.valid).toBe(false);
+      expect(linkedBinValidation.issues.map((issue) => issue.code)).toContain("portable.command_entry_unsafe");
+
+      const internalLinkValidation = validatePortableSkillDirectory("internal-link", internalLink);
+      expect(internalLinkValidation.valid).toBe(false);
+      expect(internalLinkValidation.issues.map((issue) => issue.code)).toContain("portable.command_entry_unsafe");
+
+      expect(validatePortableSkillDirectory("regular-instruction", regularInstruction).valid).toBe(true);
+      expect(validatePortableSkillDirectory("regular-executable", regularExecutable).valid).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("revalidates an executable target after dependency installation and before execution", async () => {
+    const root = mkdtempSync(join(tmpdir(), "portable-skill-replacement-"));
+    const outside = mkdtempSync(join(tmpdir(), "portable-skill-replacement-outside-"));
+    const originalSpawn = Bun.spawn;
+    try {
+      const skillDir = join(root, "replacement-skill");
+      mkdirSync(join(skillDir, "src"), { recursive: true });
+      const entry = join(skillDir, "src", "index.ts");
+      const executionMarker = join(outside, "executed.txt");
+      const escapedEntry = join(outside, "escaped.ts");
+      writeFileSync(entry, "console.log('original executable');\n");
+      writeFileSync(escapedEntry, `await Bun.write(${JSON.stringify(executionMarker)}, "executed");\n`);
+      writeFileSync(join(skillDir, "skill.json"), JSON.stringify({
+        standard: "hasna.skill.v1",
+        name: "replacement-skill",
+        description: "Executable replaced after discovery.",
+        version: "1.0.0",
+        commands: [{ name: "replacement-skill", entry: "src/index.ts" }],
+      }));
+      writeFileSync(join(skillDir, "package.json"), JSON.stringify({
+        name: "replacement-skill",
+        description: "Executable replaced after discovery.",
+        version: "1.0.0",
+        bin: { "replacement-skill": "src/index.ts" },
+        dependencies: { "replacement-trigger": "1.0.0" },
+      }));
+
+      Bun.spawn = ((...spawnArgs: any[]) => {
+        const command = spawnArgs[0];
+        if (Array.isArray(command) && command[0] === "bun" && command[1] === "install") {
+          rmSync(entry, { force: true });
+          symlinkSync(escapedEntry, entry, "file");
+          return { exited: Promise.resolve(0) };
+        }
+        return Reflect.apply(originalSpawn, Bun, spawnArgs);
+      }) as typeof Bun.spawn;
+
+      const run = await runPortableSkill("replacement-skill", [], { rootDir: root, stdio: "pipe" });
+      expect(run.exitCode).toBe(1);
+      expect(run.error).toContain("unsafe");
+      expect(existsSync(executionMarker)).toBe(false);
+    } finally {
+      Bun.spawn = originalSpawn;
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   test("scaffolds a standard skill folder with agent instructions and a runnable command", async () => {
     const home = mkdtempSync(join(tmpdir(), "portable-skill-home-"));
     try {

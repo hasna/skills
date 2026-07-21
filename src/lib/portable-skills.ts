@@ -20,6 +20,7 @@ import {
   parseSkillFrontmatter,
   validateSkillFileTarget,
   validateSkillDirectory,
+  validateSkillRootPath,
   type SkillValidationMessage,
   type SkillValidationResult,
 } from "./skill-validation.js";
@@ -219,7 +220,7 @@ export function findPortableSkill(name: string, options: PortableSkillOptions = 
     return null;
   }
   const path = getPortableSkillPath(normalized, options);
-  if (!existsSync(path) || !statSync(path).isDirectory()) return null;
+  if (!validateSkillRootPath(path).valid) return null;
   if (!hasDiscoverablePortableSkillMarker(path, normalized)) return null;
   try {
     return summarizePortableSkill(path, normalized);
@@ -235,7 +236,7 @@ export function listPortableSkills(options: PortableSkillOptions = {}): Portable
   for (const entry of readdirSync(root).sort()) {
     if (entry.startsWith(".") || DATA_DIR_NON_SKILL_ENTRIES.has(entry)) continue;
     const path = join(root, entry);
-    if (!safeIsDirectory(path)) continue;
+    if (!validateSkillRootPath(path).valid) continue;
     if (!hasDiscoverablePortableSkillMarker(path, entry)) continue;
     try {
       skills.push(summarizePortableSkill(path, entry));
@@ -254,7 +255,7 @@ export function listPortableSkills(options: PortableSkillOptions = {}): Portable
  */
 function hasDiscoverablePortableSkillMarker(skillPath: string, directoryName: string): boolean {
   const expectedName = safeNormalizeName(directoryName);
-  if (!expectedName) return false;
+  if (!expectedName || !validateSkillRootPath(skillPath).valid) return false;
 
   const skillMdPath = join(skillPath, "SKILL.md");
   const skillJsonPath = join(skillPath, "skill.json");
@@ -276,7 +277,8 @@ function hasDiscoverablePortableSkillMarker(skillPath: string, directoryName: st
         || safeNormalizeName(frontmatter.name ?? "") !== expectedName
         || !frontmatter.description?.trim()
       ) return false;
-      return validatePortableSkillDirectory(expectedName, skillPath).valid;
+      return validateSkillFileTarget(skillPath, "SKILL.md").valid
+        && validatePortableSkillDirectory(expectedName, skillPath).valid;
     }
 
     const validFrontmatterMarker = safeNormalizeName(frontmatter?.name ?? "") === expectedName
@@ -640,7 +642,21 @@ export async function runPortableSkill(
     await install.exited;
   }
 
-  const proc = Bun.spawn(["bun", "run", command.entry, ...args], {
+  // Dependency installation may run lifecycle scripts and mutate the skill
+  // directory. Re-establish the same canonical target invariant immediately
+  // before execution to narrow the discovery-to-run replacement window.
+  const executionTargetValidation = validateSkillFileTarget(skill.path, command.entry);
+  if (!executionTargetValidation.valid && executionTargetValidation.problem === "unsafe") {
+    return { exitCode: 1, error: `Portable skill '${name}' command entry is unsafe` };
+  }
+  if (!executionTargetValidation.valid && executionTargetValidation.problem === "missing") {
+    return { exitCode: 1, error: `Entry point '${command.entry}' not found in portable skill '${name}'` };
+  }
+  if (!executionTargetValidation.valid) {
+    return { exitCode: 1, error: `Entry point '${command.entry}' is not a file in portable skill '${name}'` };
+  }
+
+  const proc = Bun.spawn(["bun", "run", executionTargetValidation.path, ...args], {
     cwd: skill.path,
     stdout: options.stdio === "pipe" ? "pipe" : "inherit",
     stderr: options.stdio === "pipe" ? "pipe" : "inherit",

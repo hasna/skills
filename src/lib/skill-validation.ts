@@ -1,5 +1,5 @@
-import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "fs";
-import { isAbsolute, join, normalize } from "path";
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "fs";
+import { isAbsolute, join, normalize, relative, sep } from "path";
 import { isPremiumSkill } from "./pricing.js";
 import type { SkillMeta } from "./registry.js";
 import type { SkillKind } from "./registry-types.js";
@@ -133,7 +133,33 @@ function sortMessages(messages: SkillValidationMessage[]): SkillValidationMessag
   return [...messages].sort((a, b) => a.code.localeCompare(b.code) || a.message.localeCompare(b.message));
 }
 
+export type SkillRootProblem = "missing" | "not-directory" | "symlink";
+
+/**
+ * Resolve a skill root without following a symlink at the skill-directory boundary.
+ * Parent directories may be platform-managed links; the skill entry itself must be
+ * a real directory so ambient discovery cannot escape through a linked override.
+ */
+export function validateSkillRootPath(
+  skillPath: string,
+): { valid: true; path: string } | { valid: false; problem: SkillRootProblem; path: string } {
+  try {
+    const rootStat = lstatSync(skillPath);
+    if (rootStat.isSymbolicLink()) return { valid: false, problem: "symlink", path: skillPath };
+    if (!rootStat.isDirectory()) return { valid: false, problem: "not-directory", path: skillPath };
+    return { valid: true, path: realpathSync(skillPath) };
+  } catch {
+    return { valid: false, problem: "missing", path: skillPath };
+  }
+}
+
 export type SkillFileTargetProblem = "unsafe" | "missing" | "not-file";
+
+function isPathContained(rootPath: string, targetPath: string): boolean {
+  const fromRoot = relative(rootPath, targetPath);
+  return fromRoot === ""
+    || (!isAbsolute(fromRoot) && fromRoot !== ".." && !fromRoot.startsWith(`..${sep}`));
+}
 
 /**
  * Validate a local executable target using the canonical portable-skill path rules.
@@ -149,14 +175,38 @@ export function validateSkillFileTarget(
   if (normalized === ".." || normalized.startsWith("../") || normalized.includes("/../")) {
     return { valid: false, problem: "unsafe" };
   }
-  const targetPath = join(skillPath, target);
-  if (!existsSync(targetPath)) return { valid: false, problem: "missing", path: targetPath };
+
+  const rootValidation = validateSkillRootPath(skillPath);
+  if (!rootValidation.valid) {
+    return {
+      valid: false,
+      problem: rootValidation.problem === "missing" ? "missing" : "unsafe",
+      path: skillPath,
+    };
+  }
+
+  const segments = normalized.split("/").filter((segment) => segment && segment !== ".");
+  let targetPath = rootValidation.path;
   try {
-    if (!statSync(targetPath).isFile()) return { valid: false, problem: "not-file", path: targetPath };
+    for (const segment of segments) {
+      targetPath = join(targetPath, segment);
+      const componentStat = lstatSync(targetPath);
+      if (componentStat.isSymbolicLink()) {
+        return { valid: false, problem: "unsafe", path: targetPath };
+      }
+    }
+
+    const targetStat = lstatSync(targetPath);
+    if (!targetStat.isFile()) return { valid: false, problem: "not-file", path: targetPath };
+
+    const canonicalTarget = realpathSync(targetPath);
+    if (!isPathContained(rootValidation.path, canonicalTarget)) {
+      return { valid: false, problem: "unsafe", path: canonicalTarget };
+    }
+    return { valid: true, path: canonicalTarget };
   } catch {
     return { valid: false, problem: "missing", path: targetPath };
   }
-  return { valid: true, path: targetPath };
 }
 
 function isHostedPackageMetadata(pkg: PackageJson): boolean {
@@ -239,8 +289,15 @@ export function validateSkillDirectory(
     docFiles: [],
   };
 
-  if (!existsSync(skillPath)) {
-    add(issues, "skill.dir_missing", `Skill directory not found: ${skillPath}`);
+  const rootValidation = validateSkillRootPath(skillPath);
+  if (!rootValidation.valid) {
+    if (rootValidation.problem === "missing") {
+      add(issues, "skill.dir_missing", `Skill directory not found: ${skillPath}`);
+    } else if (rootValidation.problem === "symlink") {
+      add(issues, "skill.symlink_forbidden", `Symlinked skill root is not allowed: ${skillPath}`);
+    } else {
+      add(issues, "skill.dir_invalid", `Skill path is not a directory: ${skillPath}`);
+    }
     return {
       name: bareName,
       path: skillPath,
