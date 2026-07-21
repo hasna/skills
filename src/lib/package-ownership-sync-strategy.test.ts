@@ -70,7 +70,7 @@ describe("package ownership and sync strategy", () => {
       "must not fall back to bundled local execution",
       "OSS package may expose public contracts for server-executed skills",
       "must not expose private provider routing",
-      "`SKILLS_API_KEY` is the current legacy remote credential input",
+      "`SKILLS_API_KEY` is the current cloud-only automation credential input",
       "provider keys such as",
       "`OPENAI_API_KEY`",
       "skill-specific local credentials",

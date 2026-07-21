@@ -130,13 +130,13 @@ describe("CLI discovery", () => {
         expect(empty.exitCode).toBe(0);
         expect(JSON.parse(empty.stdout)).toEqual({});
 
-        const set = await runCliInCwd(["config", "set", "apiUrl", "https://skills.hasna.xyz/api/v1/", "--json"], tmpDir, { HOME: tmpDir });
+        const set = await runCliInCwd(["config", "set", "defaultAgent", "cursor", "--json"], tmpDir, { HOME: tmpDir });
         expect(set.exitCode).toBe(0);
         const setData = JSON.parse(set.stdout);
-        expect(setData).toMatchObject({ key: "apiUrl", value: "https://skills.hasna.xyz/api/v1", scope: "project" });
+        expect(setData).toMatchObject({ key: "defaultAgent", value: "cursor", scope: "project" });
 
-        const get = await runCliInCwd(["config", "get", "apiUrl", "--json"], tmpDir, { HOME: tmpDir });
-        expect(JSON.parse(get.stdout)).toMatchObject({ key: "apiUrl", value: "https://skills.hasna.xyz/api/v1", set: true });
+        const get = await runCliInCwd(["config", "get", "defaultAgent", "--json"], tmpDir, { HOME: tmpDir });
+        expect(JSON.parse(get.stdout)).toMatchObject({ key: "defaultAgent", value: "cursor", set: true });
 
         const paths = await runCliInCwd(["config", "path", "--json"], tmpDir, { HOME: tmpDir });
         const pathData = JSON.parse(paths.stdout);
@@ -597,7 +597,10 @@ describe("CLI discovery", () => {
 
   describe("quote", () => {
     test("requires an authenticated selected-service quote without exposing bundled metadata", async () => {
-      const quoted = await runCli(["quote", "image", "--json"], { SKILLS_MODE: "self-hosted" });
+      const quoted = await runCli(["quote", "image", "--json"], {
+        SKILLS_MODE: "self-hosted",
+        SKILLS_API_URL: "https://operator.example",
+      });
       expect(quoted.exitCode).toBe(1);
       const data = JSON.parse(quoted.stdout);
       expect(data).toMatchObject({

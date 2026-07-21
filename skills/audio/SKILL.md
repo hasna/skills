@@ -1,11 +1,11 @@
 ---
 name: audio
-description: Generate speech and audio using OpenAI, Minimax, or Gemini through the hosted Skills runtime with provider-cost pricing.
+description: Generate speech and audio using OpenAI, Minimax, or Gemini through the hosted Skills runtime with an approved credit quote.
 ---
 
 # Audio Generation Skill
 
-Generate speech or short audio from text using provider-backed audio models. This skill routes through the hosted Skills runtime so billing can reserve the selected provider/model cost before execution.
+Generate speech or short audio from text using provider-backed audio models. This skill routes through the hosted Skills runtime so it can reserve the approved credits before execution.
 
 ## Supported Providers
 

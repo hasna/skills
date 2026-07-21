@@ -79,10 +79,11 @@ skills exports download <run-id>
 An operator-owned service uses explicit self-hosted mode, its own origin, and
 its own enrollment and authentication policy. Switching the configured origin
 never reuses a stored credential issued by another service; sign in after a
-switch. Explicit `SKILLS_API_KEY` environment input remains available for
-automation.
+switch. For non-interactive automation, cloud accepts `SKILLS_API_KEY` while a
+self-hosted service requires the origin-bound pair
+`SKILLS_SELF_HOSTED_API_URL` and `SKILLS_SELF_HOSTED_API_KEY`.
 
-`SKILLS_API_KEY` is a remote API credential. It is not a provider
+`SKILLS_API_KEY` is a Skills cloud API credential. It is not a provider
 credential and it does not prove that an origin is `selfhost` or `cloud`.
 Provider keys such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY`
 remain supported only for free/local OSS skills whose requirements explicitly
@@ -99,7 +100,7 @@ document local provider use.
 | `skills unpin <name>` | | Remove a project pin |
 | `skills pins list` | | List pinned skills |
 | `skills setup --mode cloud` | | Configure the managed Skills cloud; defaults to `https://skills.md` |
-| `skills setup --mode self-hosted` | | Configure self-hosted mode with a compatible API origin |
+| `skills setup --mode self-hosted --api-url https://operator.example` | | Configure self-hosted mode with a compatible API origin |
 | `skills setup --mode local` | | Configure local-only mode without remote credentials |
 | `skills mcp connect [agent]` | | Register the Skills MCP server with one agent or all supported agents by default |
 | `skills list` | `ls` | List available skills (filter with `-c`, `--pinned`, `-t`, `--brief`) |
@@ -228,8 +229,11 @@ If the URL is an origin such as `https://skills.md`, the CLI requests
 `/skills`.
 
 Authenticated registry listing and remote premium execution use the credential
-saved by `skills auth login` for the selected service or an explicit
-`SKILLS_API_KEY` automation input.
+saved by `skills auth login` for the selected service. Automation uses
+`SKILLS_API_KEY` for cloud or the matching `SKILLS_SELF_HOSTED_API_URL` and
+`SKILLS_SELF_HOSTED_API_KEY` pair for self-hosted mode. Plain HTTP is rejected;
+loopback HTTP requires explicit test/preview mode and matching test-only URL and
+credential variables.
 
 For the target cross-product mode and profile contract, see
 [Open Product Three-Mode Contract](docs/architecture/open-product-three-mode-contract.md).

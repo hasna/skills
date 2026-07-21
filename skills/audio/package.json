@@ -2,7 +2,7 @@
   "name": "audio",
   "version": "1.0.0",
   "private": true,
-  "description": "Generate speech and audio using provider-cost AI backends",
+  "description": "Generate speech and audio through credit-quoted hosted AI backends",
   "type": "module",
   "skills": {
     "runtime": "hosted",

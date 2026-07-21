@@ -12,7 +12,7 @@ historical context. The current canonical ownership rules are
 Those documents supersede any older wording that treats the entire remote
 runtime as private wrapper code.
 
-Self-hosted services such as skills.hasna.xyz may wrap this package, but their
+Self-hosted services such as operator.example may wrap this package, but their
 deployment-specific private service code must stay outside the npm package.
 
 ## Remotes

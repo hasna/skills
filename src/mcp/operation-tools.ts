@@ -45,7 +45,7 @@ import {
 import { cacheClear, mcpError, mcpJson, remoteRunNextActions } from "./helpers.js";
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../lib/remote-run-contract.js";
 import { getHostedRunAvailability } from "../lib/hosted-availability.js";
-import { resolveCurrentDeploymentMode } from "../lib/deployment-mode.js";
+import { getDeploymentSetupCommand, resolveCurrentDeploymentMode } from "../lib/deployment-mode.js";
 import { loadRemoteSkill } from "../lib/remote-registry.js";
 import { toCustomerCreditPayload, toPublicCreditQuote } from "../lib/public-credits.js";
 
@@ -399,9 +399,10 @@ export function registerOperationTools(server: McpServer): void {
       args: z.array(z.string()).optional(),
       approved: z.boolean().optional(),
       quoteToken: z.string().optional(),
+      allowUnsignedPhaseA: z.boolean().optional(),
       detail: z.boolean().optional(),
     },
-  }, async ({ name, input, args, approved, quoteToken, detail }) => {
+  }, async ({ name, input, args, approved, quoteToken, allowUnsignedPhaseA, detail }) => {
     const skill = getSkill(name);
     if (!skill) {
       return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
@@ -424,8 +425,8 @@ export function registerOperationTools(server: McpServer): void {
       }
     }
 
-    const apiKey = getApiKey();
     const mode = resolveCurrentDeploymentMode();
+    const apiKey = mode === "local" ? null : getApiKey();
     let creditQuote = getSkillCreditQuote(skillName, runInput, runArgs);
     let credits = isPremiumSkill(skillName) ? creditQuote.credits : undefined;
 
@@ -482,7 +483,7 @@ export function registerOperationTools(server: McpServer): void {
     }
 
     if (isPremiumSkill(skillName) && !apiKey) {
-      const error = `${skillName} is a remote skill (${creditQuote.formattedCredits}). Run: skills setup --mode ${mode === "cloud" ? "cloud" : "self-hosted"} && skills auth login`;
+      const error = `${skillName} is a remote skill (${creditQuote.formattedCredits}). Run: ${getDeploymentSetupCommand(mode)} && skills auth login`;
       writeRunLogs(runContext, "", error + "\n");
       const run = completeSkillRun(runContext, { status: "failed", error, credits });
       return mcpError("AUTH_REQUIRED", `${error}. Local run metadata: ${run.paths.runDir}/run.json`, ["skills auth login"]);
@@ -494,13 +495,41 @@ export function registerOperationTools(server: McpServer): void {
       try {
         const { RemoteSkillsClient } = await import("../lib/remote-client.js");
         remoteClient = new RemoteSkillsClient(apiKey);
-        if (mode === "cloud" && approved === true) {
-          if (!runQuoteToken) {
+        if (approved === true) {
+          if (runQuoteToken) {
+            // The caller approved this exact token. Forward it unchanged and
+            // let the selected service verify its input/args binding. Never
+            // replace an approved token with a fresh quote.
+          } else if (mode === "cloud") {
             return mcpError(
               "CLOUD_QUOTE_TOKEN_REQUIRED",
               "The approved cloud run is missing the previously quoted token. Call quote_skill with the exact input and args, obtain user approval, then retry run_skill with that quoteToken.",
               ["quote_skill", "run_skill approved=true quoteToken=<approved token>"],
             );
+          } else if (allowUnsignedPhaseA !== true) {
+            return mcpError(
+              "SELF_HOSTED_QUOTE_TOKEN_REQUIRED",
+              "The approved self-hosted run is missing the previously quoted token. Signed-quote services require the exact token; an older unsigned Phase-A service must be selected explicitly with allowUnsignedPhaseA: true.",
+              ["quote_skill", "run_skill approved=true quoteToken=<approved token>"],
+            );
+          } else {
+            const liveQuote = await remoteClient.quoteSkill(skillName, runInput, runArgs);
+            if (liveQuote?.error || liveQuote?.availability?.status === "unavailable") {
+              const message = String(liveQuote?.availability?.message || liveQuote?.detail || liveQuote?.error || "Self-hosted execution is unavailable");
+              return mcpError(String(liveQuote?.availability?.code || liveQuote?.code || "SELF_HOSTED_QUOTE_UNAVAILABLE"), `${message}. No credits were charged.`);
+            }
+            if (!liveQuote?.creditQuote) {
+              return mcpError("REMOTE_QUOTE_INVALID", "The selected remote service did not return a creditQuote. No credits were charged.");
+            }
+            creditQuote = toPublicCreditQuote(liveQuote.creditQuote);
+            credits = creditQuote.credits;
+            if (typeof liveQuote.quoteToken === "string" && liveQuote.quoteToken.length > 0) {
+              return mcpError(
+                "SELF_HOSTED_SIGNED_QUOTE_REQUIRES_TOKEN",
+                "The selected self-hosted service returned a signed quote. Call quote_skill, approve that exact quote, and retry with its quoteToken; unsigned Phase-A permission cannot bypass a signed quote.",
+                ["quote_skill", "run_skill approved=true quoteToken=<approved token>"],
+              );
+            }
           }
         } else {
           const liveQuote = await remoteClient.quoteSkill(skillName, runInput, runArgs);
@@ -540,11 +569,16 @@ export function registerOperationTools(server: McpServer): void {
       try {
         const { RemoteSkillsClient } = await import("../lib/remote-client.js");
         const client = remoteClient ?? new RemoteSkillsClient(apiKey);
+        const runAuthorization = runQuoteToken
+          ? { quoteToken: runQuoteToken, approved: true }
+          : mode === "self-hosted" && approved === true && allowUnsignedPhaseA === true
+            ? { approved: true }
+            : {};
         const run = await client.submitRun(
           skillName,
           runInput,
           runArgs,
-          mode === "cloud" || runQuoteToken ? { quoteToken: runQuoteToken, approved: true } : {},
+          runAuthorization,
         );
         if (run.error) {
           writeRunLogs(runContext, "", String(run.error) + "\n");

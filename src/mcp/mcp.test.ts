@@ -54,11 +54,37 @@ class McpClient {
 
   constructor(env: Record<string, string> = {}) {
     const home = env.HOME ?? mkdtempSync(join(tmpdir(), "skills-mcp-home-"));
+    let saved: { mode?: string; apiUrl?: string } = {};
+    try {
+      saved = JSON.parse(require("fs").readFileSync(join(home, ".hasna", "skills", "config.json"), "utf8"));
+    } catch {}
+    const processEnv: Record<string, string> = {
+      ...process.env,
+      HOME: home,
+      ...CLEAN_STORAGE_ENV,
+      ...env,
+      MCP_STDIO: "1",
+      NO_COLOR: "1",
+      SKILLS_TEST_MODE: "1",
+      SKILLS_ALLOW_INSECURE_LOOPBACK: "1",
+    };
+    const selectedMode = processEnv.SKILLS_MODE || saved.mode || (processEnv.SKILLS_API_URL ? "self-hosted" : undefined);
+    const selectedUrl = processEnv.SKILLS_API_URL || saved.apiUrl;
+    if (processEnv.SKILLS_API_URL && !processEnv.SKILLS_MODE) processEnv.SKILLS_MODE = selectedMode || "self-hosted";
+    if (processEnv.SKILLS_API_KEY && selectedUrl && /^http:\/\/(?:127(?:\.\d{1,3}){3}|localhost|\[::1\])(?::|\/|$)/i.test(selectedUrl)) {
+      processEnv.SKILLS_TEST_API_KEY = processEnv.SKILLS_API_KEY;
+      processEnv.SKILLS_TEST_API_URL = selectedUrl;
+      delete processEnv.SKILLS_API_KEY;
+    } else if (processEnv.SKILLS_API_KEY && selectedMode === "self-hosted" && selectedUrl) {
+      processEnv.SKILLS_SELF_HOSTED_API_KEY = processEnv.SKILLS_API_KEY;
+      processEnv.SKILLS_SELF_HOSTED_API_URL = selectedUrl;
+      delete processEnv.SKILLS_API_KEY;
+    }
     this.proc = Bun.spawn(["bun", "run", MCP_PATH], {
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, HOME: home, ...CLEAN_STORAGE_ENV, ...env, MCP_STDIO: "1", NO_COLOR: "1" },
+      env: processEnv,
     });
     this.reader = (this.proc.stdout as ReadableStream<Uint8Array>).getReader();
     this._readLoop();
@@ -592,7 +618,7 @@ version: 0.3.0
 
   test("quote_skill requires selected self-hosted authority instead of bundled metadata", async () => {
     const home = mkdtempSync(join(tmpdir(), "mcp-quote-unavailable-"));
-    writeMcpModeConfig(home, "self-hosted");
+    writeMcpModeConfig(home, "self-hosted", "https://operator.example");
     const client = new McpClient({ HOME: home });
     try {
       await client.initialize();
@@ -618,7 +644,7 @@ version: 0.3.0
     const { mkdtempSync, rmSync } = require("fs");
     const { tmpdir } = require("os");
     const tmpDir = mkdtempSync(join(tmpdir(), "mcp-premium-no-auth-"));
-    writeMcpModeConfig(tmpDir, "self-hosted");
+    writeMcpModeConfig(tmpDir, "self-hosted", "https://operator.example");
     const client = new McpClient({
       HOME: tmpDir,
       SKILLS_API_KEY: "",
@@ -637,6 +663,7 @@ version: 0.3.0
       expect(response.result.isError).toBe(true);
       const error = JSON.parse(response.result.content[0].text);
       expect(error).toMatchObject({ code: "AUTH_REQUIRED" });
+      expect(error.message).toContain("skills setup --mode self-hosted --api-url https://operator.example");
       expect(error.message).toContain("skills auth login");
       expect(error.message).not.toContain("Skill Image CLI");
     } finally {
@@ -663,7 +690,6 @@ version: 0.3.0
         arguments: {
           name: "logo-design",
           args: ["--help"],
-          approved: true,
         },
       }, 84);
       expect(response).not.toBeNull();
@@ -682,7 +708,7 @@ version: 0.3.0
     const { mkdtempSync, rmSync } = require("fs");
     const { tmpdir } = require("os");
     const tmpDir = mkdtempSync(join(tmpdir(), "mcp-premium-unavailable-provider-"));
-    writeMcpModeConfig(tmpDir, "self-hosted");
+    writeMcpModeConfig(tmpDir, "self-hosted", "https://operator.example");
     const client = new McpClient({
       HOME: tmpDir,
       SKILLS_API_KEY: "",
@@ -824,6 +850,176 @@ version: 0.3.0
     }
   }, 15000);
 
+  test("run_skill forwards the exact approved self-hosted quote token without re-quoting", async () => {
+    const { mkdtempSync, rmSync } = require("fs");
+    const { tmpdir } = require("os");
+    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-approved-selfhost-quote-"));
+    let quoteCalls = 0;
+    let submittedBody: unknown;
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname.endsWith("/quote")) {
+          quoteCalls += 1;
+          return Response.json({ error: "approved token must not be replaced" }, { status: 500 });
+        }
+        if (url.pathname === "/api/v1/runs/logo-design" && req.method === "POST") {
+          submittedBody = await req.json();
+          return Response.json({ id: "run_selfhost_exact", skill: "logo-design", status: "queued" });
+        }
+        return Response.json({ error: `unexpected ${req.method} ${url.pathname}` }, { status: 500 });
+      },
+    });
+    writeMcpModeConfig(tmpDir, "self-hosted", `http://127.0.0.1:${server.port}`);
+    const client = new McpClient({ HOME: tmpDir, SKILLS_API_KEY: "selfhost-exact-fixture" });
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "run_skill",
+        arguments: {
+          name: "logo-design",
+          input: { brief: "approved exact mark" },
+          args: ["--format", "svg"],
+          approved: true,
+          quoteToken: "quote_selfhost_approved_exact",
+        },
+      }, 861);
+      expect(response.result.isError).not.toBe(true);
+      expect(quoteCalls).toBe(0);
+      expect(submittedBody).toEqual({
+        input: { brief: "approved exact mark" },
+        args: ["--format", "svg"],
+        approved: true,
+        quoteToken: "quote_selfhost_approved_exact",
+      });
+    } finally {
+      await client.close();
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  test("run_skill rejects an approved self-hosted run without a quote token by default", async () => {
+    const { mkdtempSync, rmSync } = require("fs");
+    const { tmpdir } = require("os");
+    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-selfhost-missing-token-"));
+    let remoteCalls = 0;
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        remoteCalls += 1;
+        return Response.json({ error: "no remote call expected" }, { status: 500 });
+      },
+    });
+    writeMcpModeConfig(tmpDir, "self-hosted", `http://127.0.0.1:${server.port}`);
+    const client = new McpClient({ HOME: tmpDir, SKILLS_API_KEY: "selfhost-missing-fixture" });
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "run_skill",
+        arguments: { name: "logo-design", approved: true },
+      }, 862);
+      expect(response.result.isError).toBe(true);
+      expect(JSON.parse(response.result.content[0].text)).toMatchObject({ code: "SELF_HOSTED_QUOTE_TOKEN_REQUIRED" });
+      expect(remoteCalls).toBe(0);
+    } finally {
+      await client.close();
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  test("unsigned Phase-A opt-in never bypasses a signed self-hosted quote", async () => {
+    const { mkdtempSync, rmSync } = require("fs");
+    const { tmpdir } = require("os");
+    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-selfhost-signed-phase-a-"));
+    let quoteCalls = 0;
+    let runCalls = 0;
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname.endsWith("/quote")) {
+          quoteCalls += 1;
+          return Response.json({
+            quoteToken: "signed_quote_must_be_approved",
+            creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 12, formattedCredits: "12 credits/run" },
+          });
+        }
+        if (url.pathname.startsWith("/api/v1/runs/")) runCalls += 1;
+        return Response.json({ error: "run must be blocked" }, { status: 500 });
+      },
+    });
+    writeMcpModeConfig(tmpDir, "self-hosted", `http://127.0.0.1:${server.port}`);
+    const client = new McpClient({ HOME: tmpDir, SKILLS_API_KEY: "selfhost-signed-fixture" });
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "run_skill",
+        arguments: { name: "logo-design", approved: true, allowUnsignedPhaseA: true },
+      }, 863);
+      expect(response.result.isError).toBe(true);
+      expect(JSON.parse(response.result.content[0].text)).toMatchObject({ code: "SELF_HOSTED_SIGNED_QUOTE_REQUIRES_TOKEN" });
+      expect(quoteCalls).toBe(1);
+      expect(runCalls).toBe(0);
+    } finally {
+      await client.close();
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  test("unsigned Phase-A self-hosted submission requires explicit opt-in", async () => {
+    const { mkdtempSync, rmSync } = require("fs");
+    const { tmpdir } = require("os");
+    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-selfhost-unsigned-phase-a-"));
+    let quoteCalls = 0;
+    let submittedBody: unknown;
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname.endsWith("/quote")) {
+          quoteCalls += 1;
+          return Response.json({
+            creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 12, formattedCredits: "12 credits/run" },
+          });
+        }
+        if (url.pathname === "/api/v1/runs/logo-design" && req.method === "POST") {
+          submittedBody = await req.json();
+          return Response.json({ id: "run_unsigned_phase_a", skill: "logo-design", status: "queued" });
+        }
+        return Response.json({ error: `unexpected ${req.method} ${url.pathname}` }, { status: 500 });
+      },
+    });
+    writeMcpModeConfig(tmpDir, "self-hosted", `http://127.0.0.1:${server.port}`);
+    const client = new McpClient({ HOME: tmpDir, SKILLS_API_KEY: "selfhost-unsigned-fixture" });
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "run_skill",
+        arguments: {
+          name: "logo-design",
+          input: { brief: "legacy operator mark" },
+          approved: true,
+          allowUnsignedPhaseA: true,
+        },
+      }, 864);
+      expect(response.result.isError).not.toBe(true);
+      expect(quoteCalls).toBe(1);
+      expect(submittedBody).toEqual({
+        input: { brief: "legacy operator mark" },
+        args: [],
+        approved: true,
+      });
+    } finally {
+      await client.close();
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
   test("run_skill rejects approved paid cloud calls without the previously quoted token", async () => {
     const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require("fs");
     const { tmpdir } = require("os");
@@ -911,6 +1107,7 @@ version: 0.3.0
           name: "logo-design",
           args: ["make a mark"],
           approved: true,
+          allowUnsignedPhaseA: true,
         },
       }, 85);
       expect(response).not.toBeNull();
@@ -942,7 +1139,7 @@ version: 0.3.0
     }
   }, 15000);
 
-  test("run_skill keeps free local skills local even when hosted auth is configured", async () => {
+  test("run_skill keeps free local skills local without selecting a remote authority", async () => {
     const { mkdtempSync, rmSync } = require("fs");
     const { tmpdir } = require("os");
     const tmpDir = mkdtempSync(join(tmpdir(), "mcp-local-with-auth-"));
@@ -957,8 +1154,6 @@ version: 0.3.0
     writeMcpModeConfig(tmpDir, "local");
     const client = new McpClient({
       HOME: tmpDir,
-      SKILLS_API_KEY: "sk_test_local_should_stay_local",
-      SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
       SKILLS_TEST_MODE: "1",
     });
     try {

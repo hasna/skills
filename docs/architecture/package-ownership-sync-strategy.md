@@ -75,12 +75,14 @@ runtime extensions, or protected server-side implementation source for a
 skill. This boundary does not privatize the generic provider-neutral server,
 workers, queues, shared contracts, or migrations owned by the open package.
 
-`SKILLS_API_KEY` is the current legacy remote credential input. It is not a
-model-provider key and must be documented separately from provider keys such as
-`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, or other skill-specific
-local credentials. The target profile contract replaces a global key with a
-credential reference scoped to enrolled product, origin, service fingerprint,
-operator, issuer, audience, and tenant.
+`SKILLS_API_KEY` is the current cloud-only automation credential input. A
+self-hosted service instead requires the matching
+`SKILLS_SELF_HOSTED_API_URL` and `SKILLS_SELF_HOSTED_API_KEY` pair. Neither is a
+model-provider key, and both must be documented separately from provider keys
+such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, or other
+skill-specific local credentials. The target named-profile contract replaces
+these one-service inputs with a credential reference scoped to enrolled
+product, origin, service fingerprint, operator, issuer, audience, and tenant.
 
 The OSS CLI may include remote client commands such as `skills auth login`,
 `skills billing status`, `skills billing checkout`, `skills billing portal`,
@@ -103,7 +105,7 @@ as independent axes:
 | `mode=local` or `skills setup --mode local` | Built-in `local` deployment profile | Deterministic; no remote enrollment or credential. |
 | `mode=self-hosted`, `hosted`, `remote`, or `skills.md` | Pending remote deployment profile | Ambiguous until enrollment proves `selfhost` or `cloud`; the legacy spelling and origin do not decide. |
 | `SKILLS_API_URL` or configured `apiUrl` | Deployment profile `origin` candidate | Normalize, then verify against enrolled product/operator/service identity before use. |
-| `SKILLS_API_KEY` or saved legacy API key | `credentialReenrollmentRequired` plus a future credential reference | Never copy into a new scope. Re-enroll after product, fingerprint, operator, issuer, audience, and tenant verification. |
+| Cloud `SKILLS_API_KEY`, matching self-hosted URL/key pair, or saved legacy API key | `credentialReenrollmentRequired` plus a future credential reference | Never copy into a new scope. Re-enroll after product, fingerprint, operator, issuer, audience, and tenant verification. |
 | `HASNA_SKILLS_STORAGE_MODE` / `SKILLS_STORAGE_MODE` | Storage profile `mode` (`local`, `remote`, or `hybrid`) | Keep independent from deployment mode and operation execution. Package-owned name wins. |
 | `HASNA_SKILLS_DATABASE_*` / `SKILLS_DATABASE_*` | Client-sync storage database fields or environment-backed references | Preserve names, selected precedence, SSL/schema settings, and secret references without printing values. For the client-sync URL, `HASNA_SKILLS_DATABASE_URL` wins over `SKILLS_DATABASE_URL`. |
 | `HASNA_SKILLS_SERVER_DATABASE_URL` plus legacy `HASNA_SKILLS_DATABASE_URL` / `DATABASE_URL` | Provider-neutral server authoritative database reference | The target server-scoped name wins. Legacy inputs are bounded compatibility reads with redacted conflict diagnostics; they are never copied from client sync. |

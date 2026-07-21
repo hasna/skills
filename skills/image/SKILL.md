@@ -1,13 +1,13 @@
 ---
 name: image
-description: Generate images using OpenAI, Minimax, or Gemini through the hosted Skills runtime with provider-cost pricing.
+description: Generate images using OpenAI, Minimax, or Gemini through the hosted Skills runtime with an approved credit quote.
 ---
 
 # Image Generation Skill
 
 Generate high-quality images from text prompts using provider-backed image models.
 
-This CLI is API-backed. Set `SKILLS_API_KEY` when routing through the hosted Skills runtime; provider-specific keys are managed by that runtime and billed at the selected provider/model cost.
+This CLI is API-backed. Set `SKILLS_API_KEY` when routing through the Skills cloud runtime; provider-specific keys stay server-side, and execution uses an approved credit quote.
 
 ## Supported Providers
 

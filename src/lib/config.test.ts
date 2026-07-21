@@ -6,21 +6,36 @@ import { tmpdir } from "os";
 // We test the module functions by importing them and overriding cwd/homedir behavior
 // via temp directories and direct file manipulation.
 
-import { loadConfig, saveConfig, getConfigPath, getDataDir, type SkillsConfig, type ConfigScope } from "./config";
+import { loadConfig, saveConfig, saveDeploymentConfig, getConfigPath, getDataDir } from "./config";
 
 describe("config", () => {
   let tmpDir: string;
   let origCwd: typeof process.cwd;
+  let originalHome: string | undefined;
+  let originalTestMode: string | undefined;
+  let originalAllowInsecureLoopback: string | undefined;
 
   beforeEach(() => {
     tmpDir = join(tmpdir(), `skills-config-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     mkdirSync(tmpDir, { recursive: true });
     origCwd = process.cwd;
+    originalHome = process.env.HOME;
+    originalTestMode = process.env.SKILLS_TEST_MODE;
+    originalAllowInsecureLoopback = process.env.SKILLS_ALLOW_INSECURE_LOOPBACK;
     process.cwd = () => tmpDir;
+    process.env.HOME = tmpDir;
+    process.env.SKILLS_TEST_MODE = "1";
+    process.env.SKILLS_ALLOW_INSECURE_LOOPBACK = "1";
   });
 
   afterEach(() => {
     process.cwd = origCwd;
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalTestMode === undefined) delete process.env.SKILLS_TEST_MODE;
+    else process.env.SKILLS_TEST_MODE = originalTestMode;
+    if (originalAllowInsecureLoopback === undefined) delete process.env.SKILLS_ALLOW_INSECURE_LOOPBACK;
+    else process.env.SKILLS_ALLOW_INSECURE_LOOPBACK = originalAllowInsecureLoopback;
     if (existsSync(tmpDir)) {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -88,7 +103,7 @@ describe("config", () => {
       expect(config.defaultScope).toBe("project");
       expect(config.format).toBe("csv");
       expect(config.mode).toBe("cloud");
-      expect(config.apiUrl).toBe("https://skills.example.com/api/v1");
+      expect(config.apiUrl).toBe("https://skills.example.com");
     });
 
     test("ignores invalid apiUrl values", () => {
@@ -162,16 +177,50 @@ describe("config", () => {
       expect(() => saveConfig("defaultAgent", "badAgent")).toThrow("Invalid value");
     });
 
-    test("saves only canonical local, self-hosted, or cloud modes", () => {
-      saveConfig("mode", "local", "project");
+    test("saves only canonical local, self-hosted, or cloud deployment tuples", () => {
+      saveDeploymentConfig("local", undefined, "project");
       expect(loadConfig().mode).toBe("local");
-      saveConfig("mode", "self-hosted", "project");
+      saveDeploymentConfig("self-hosted", "https://operator.example/api/v1", "project");
       expect(loadConfig().mode).toBe("self-hosted");
-      saveConfig("mode", "cloud", "project");
+      expect(loadConfig().apiUrl).toBe("https://operator.example");
+      saveDeploymentConfig("cloud", undefined, "project");
       expect(loadConfig().mode).toBe("cloud");
+      expect(loadConfig().apiUrl).toBe("https://skills.md");
       for (const alias of ["skills.md", "hosted", "remote", "offline", "selfhosted"]) {
-        expect(() => saveConfig("mode", alias, "project")).toThrow("Invalid value");
+        expect(() => saveDeploymentConfig(alias as any, undefined, "project")).toThrow();
       }
+    });
+
+    test("requires atomic deployment writes instead of separate mode/apiUrl keys", () => {
+      expect(() => saveConfig("mode", "cloud", "project")).toThrow("one atomic selection");
+      expect(() => saveConfig("apiUrl", "https://operator.example", "project")).toThrow("one atomic selection");
+      expect(() => saveDeploymentConfig("self-hosted", undefined, "project")).toThrow("requires --api-url");
+      expect(() => saveDeploymentConfig("local", "https://operator.example", "project")).toThrow("cannot be combined");
+    });
+
+    test("takes mode and origin from one config layer without cross-product merging", () => {
+      mkdirSync(join(tmpDir, ".hasna", "skills"), { recursive: true });
+      writeFileSync(join(tmpDir, ".hasna", "skills", "config.json"), JSON.stringify({
+        mode: "self-hosted",
+        apiUrl: "https://global.example",
+        defaultAgent: "claude",
+      }));
+      writeFileSync(join(tmpDir, "skills.config.json"), JSON.stringify({
+        mode: "cloud",
+        defaultAgent: "cursor",
+      }));
+      expect(loadConfig()).toMatchObject({
+        mode: "cloud",
+        defaultAgent: "cursor",
+      });
+      expect(loadConfig().apiUrl).toBeUndefined();
+    });
+
+    test("accepts Cursor and Windsurf as default agent choices", () => {
+      saveConfig("defaultAgent", "cursor", "project");
+      expect(loadConfig().defaultAgent).toBe("cursor");
+      saveConfig("defaultAgent", "windsurf", "project");
+      expect(loadConfig().defaultAgent).toBe("windsurf");
     });
 
     test("requires migration for an ambiguous persisted mode", () => {
@@ -179,14 +228,10 @@ describe("config", () => {
       expect(() => loadConfig()).toThrow("not canonical");
     });
 
-    test("saves apiUrl after URL validation", () => {
-      saveConfig("apiUrl", "https://skills.example.com/api/v1/", "project");
-      const content = JSON.parse(readFileSync(join(tmpDir, "skills.config.json"), "utf-8"));
-      expect(content.apiUrl).toBe("https://skills.example.com/api/v1");
-    });
-
-    test("throws on invalid apiUrl", () => {
-      expect(() => saveConfig("apiUrl", "file:///tmp/skills")).toThrow("Expected an http(s) URL");
+    test("validates URL hygiene while saving the deployment tuple", () => {
+      expect(() => saveDeploymentConfig("self-hosted", "file:///tmp/skills")).toThrow("HTTPS");
+      expect(() => saveDeploymentConfig("self-hosted", "https://user:pass@operator.example")).toThrow("user information");
+      expect(() => saveDeploymentConfig("cloud", "https://operator.example")).toThrow("fixed service origin");
     });
 
     test("overwrites existing malformed file", () => {

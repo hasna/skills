@@ -318,7 +318,6 @@ describe("CLI self-hosted auth and billing", () => {
 
       writeFileSync(join(tmpDir, "skills.config.json"), JSON.stringify({
         mode: "local",
-        apiUrl: `http://127.0.0.1:${selfHosted.port}`,
       }));
       const localStatus = await runCliInCwd(["billing", "status", "--json"], tmpDir, { HOME: tmpDir });
       expect(localStatus.exitCode).toBe(1);

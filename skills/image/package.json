@@ -2,7 +2,7 @@
   "name": "image",
   "version": "1.0.0",
   "private": true,
-  "description": "Generate images using provider-cost AI backends",
+  "description": "Generate images through credit-quoted hosted AI backends",
   "type": "module",
   "skills": {
     "runtime": "hosted",

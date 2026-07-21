@@ -1,4 +1,4 @@
-name: Publish
+name: Publish npm prerelease (next)
 
 on:
   push:
@@ -36,4 +36,4 @@ jobs:
       - name: Build
         run: bun run build
       - name: Publish to npm
-        run: npm publish --provenance --access public
+        run: npm publish --tag next --provenance --access public

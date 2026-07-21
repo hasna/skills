@@ -1,13 +1,10 @@
-name: deploy
+name: Internal self-hosted deployment (non-cloud)
 
 on:
-  push:
-    branches: [main]
-    tags: ["v*"]
   workflow_dispatch: {}
 
 concurrency:
-  group: deploy-production
+  group: internal-self-hosted-deploy
   cancel-in-progress: false
 
 permissions:
@@ -21,7 +18,7 @@ env:
 
 jobs:
   deploy:
-    name: build + migrate + deploy
+    name: build + migrate + deploy internal self-hosted service
     runs-on: ubuntu-24.04-arm
     environment: production
     timeout-minutes: 45

@@ -1,11 +1,11 @@
 ---
 name: music
-description: Generate music using Minimax or Gemini Lyria through the hosted Skills runtime with provider-cost pricing.
+description: Generate music using Minimax or Gemini Lyria through the hosted Skills runtime with an approved credit quote.
 ---
 
 # Music Generation Skill
 
-Generate songs, stems, or short music clips from prompts and lyrics using provider-backed music models. This skill routes through the hosted Skills runtime so billing can reserve the selected provider/model cost before execution.
+Generate songs, stems, or short music clips from prompts and lyrics using provider-backed music models. This skill routes through the hosted Skills runtime so it can reserve the approved credits before execution.
 
 ## Supported Providers
 

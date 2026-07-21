@@ -14,9 +14,9 @@ import {
   getSkillCreditQuote,
   validateBlogArticleRunOptions,
 } from "../../lib/pricing.js";
-import { loadConfig, saveConfig, type ConfigScope } from "../../lib/config.js";
-import { resolveCurrentDeploymentMode } from "../../lib/deployment-mode.js";
-import { DEFAULT_CLOUD_API_URL, DEFAULT_SELF_HOSTED_API_URL } from "../../server/config.js";
+import { loadConfig, saveDeploymentConfig, type ConfigScope } from "../../lib/config.js";
+import { getDeploymentSetupCommand, resolveCurrentDeploymentMode } from "../../lib/deployment-mode.js";
+import { CLOUD_API_ORIGIN } from "../../lib/service-origin.js";
 import { getHostedRunAvailability } from "../../lib/hosted-availability.js";
 import { loadRemoteSkill } from "../../lib/remote-registry.js";
 import {
@@ -132,7 +132,7 @@ export function registerRuntime(parent: Command) {
     .command("setup")
     .description("Choose cloud, self-hosted, local-only mode, or agent integrations")
     .option("--mode <mode>", "Runtime mode: cloud, self-hosted, or local")
-    .option("--api-url <url>", "Remote API origin (cloud defaults to https://skills.md)")
+    .option("--api-url <url>", "Required self-hosted API origin; cloud is fixed to https://skills.md")
     .option("--global", "Save setup choice globally", false)
     .option("--json", "Output setup result as JSON", false)
     .action(async (options: SetupCommandOptions) => handleSetup(options));
@@ -197,11 +197,7 @@ async function handleSetup(options: SetupCommandOptions) {
     mode = normalizeSetupMode(await promptLine("Use Skills cloud, self-hosted, or local-only mode? [cloud/self-hosted/local] ")) ?? "cloud";
   }
   mode = mode ?? "local";
-
-  saveConfig("mode", mode, scope);
-  if (mode === "self-hosted" || mode === "cloud") {
-    saveConfig("apiUrl", options.apiUrl || (mode === "cloud" ? DEFAULT_CLOUD_API_URL : DEFAULT_SELF_HOSTED_API_URL), scope);
-  }
+  saveDeploymentConfig(mode, options.apiUrl, scope, process.env);
 
   const config = loadConfig();
   const next = mode === "self-hosted" || mode === "cloud"
@@ -222,8 +218,7 @@ async function handleSetup(options: SetupCommandOptions) {
   console.log(chalk.green(`Set Skills mode to ${mode}`));
   console.log(chalk.dim(`  Scope: ${scope}`));
   if (mode === "self-hosted" || mode === "cloud") {
-    const defaultApiUrl = mode === "cloud" ? DEFAULT_CLOUD_API_URL : DEFAULT_SELF_HOSTED_API_URL;
-    console.log(chalk.dim(`  API: ${config.apiUrl || defaultApiUrl}`));
+    console.log(chalk.dim(`  API: ${config.apiUrl || CLOUD_API_ORIGIN}`));
     console.log(chalk.dim("  Next: skills auth login"));
   } else {
     console.log(chalk.dim("  Skills will run locally unless a command explicitly uses remote registry access."));
@@ -521,7 +516,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       const { getApiKey } = await import("../../lib/auth-store.js");
       const apiKey = getApiKey();
       if (!apiKey) {
-        const error = `${skill.name} is a remote skill (${creditQuote.formattedCredits}). Run: skills setup --mode ${deploymentMode === "cloud" ? "cloud" : "self-hosted"} && skills auth login`;
+        const error = `${skill.name} is a remote skill (${creditQuote.formattedCredits}). Run: ${getDeploymentSetupCommand(deploymentMode)} && skills auth login`;
         writeRunLogs(runContext, "", error + "\n");
         const run = completeSkillRun(runContext, { status: "failed", error, credits });
         if (options.json) console.log(JSON.stringify(toCustomerCreditPayload({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, creditQuote, run }), null, 2));

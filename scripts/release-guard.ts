@@ -8,7 +8,7 @@ import { findPrivatePacklistLeaks, listPrivateSkillSlugs } from "../src/lib/publ
 type Finding = {
   file: string;
   marker: string;
-  kind: "retired-cloud" | "secret-pattern";
+  kind: "retired-cloud" | "secret-pattern" | "internal-boundary" | "invalid-example";
 };
 
 type PatternCheck = {
@@ -84,6 +84,20 @@ const retiredCloudMarkers = [
   ["Cloud", "Sync"].join(" "),
   ["HASNA", "RDS", "PASSWORD"].join("_"),
 ];
+
+// Exact organization-owned deployment markers must never enter the final npm
+// tarball. This scan intentionally runs against the resolved packlist after the
+// build, including generated JS and declarations that the broader content scan
+// skips to avoid duplicate source findings.
+const internalBoundaryMarkers: Array<{ label: string; value: string }> = [
+  { label: "internal-service-origin", value: "skills.hasna.xyz" },
+  { label: "internal-account-id", value: "789877399345" },
+  { label: "internal-deploy-parameter", value: "/hasna/deploy/" },
+  { label: "internal-infrastructure-name", value: "hasna-xyz-infra" },
+  { label: "internal-worker-name", value: "skills-prod-worker" },
+];
+
+const incompleteSelfHostedSetup = /skills setup --mode self-hosted(?![^\r\n]*--api-url)/;
 
 const secretPatterns: PatternCheck[] = [
   { label: ["sk", "ant", ""].join("-"), pattern: new RegExp(["sk", "ant", ""].join("-")) },
@@ -177,6 +191,37 @@ if (boundaryLeaks.length > 0) {
   process.exit(1);
 }
 
+// S1.5 — final artifact boundary: scan every text file in the actual tarball,
+// including bin/*.js, dist/*.js, dist/*.d.ts, and packed contract documents.
+const packedBoundaryFindings: Finding[] = [];
+for (const packedFile of packedFiles) {
+  const absolute = join(repoRoot, packedFile);
+  if (!existsSync(absolute) || !statSync(absolute).isFile()) continue;
+  const buffer = readFileSync(absolute);
+  if (!isText(buffer)) continue;
+  const content = buffer.toString("utf8");
+  for (const marker of internalBoundaryMarkers) {
+    if (content.includes(marker.value)) {
+      packedBoundaryFindings.push({ file: packedFile, marker: marker.label, kind: "internal-boundary" });
+    }
+  }
+  if (incompleteSelfHostedSetup.test(content)) {
+    packedBoundaryFindings.push({
+      file: packedFile,
+      marker: "self-hosted-setup-missing-api-url",
+      kind: "invalid-example",
+    });
+  }
+}
+
+if (packedBoundaryFindings.length > 0) {
+  console.error("Release guard failed: final package artifacts contain internal deployment markers or invalid setup examples:");
+  for (const finding of packedBoundaryFindings) {
+    console.error(sanitizeForPublicLog(`  ${finding.kind}: ${finding.file}: ${finding.marker}`));
+  }
+  process.exit(1);
+}
+
 // S2 — content scan of package-visible bodies (skip built artifacts under dist/ and bin/).
 const scannablePacked = packedFiles.filter((path) => !path.startsWith("dist/") && !path.startsWith("bin/"));
 const absoluteScanTargets = scannablePacked
@@ -207,5 +252,5 @@ if (scanFindings.length > 0) {
 
 console.log(
   `Release guard passed: ${packedFiles.length} package-visible files are free of retired cloud markers, ` +
-    "secrets, PII, private context, and private-skill leaks.",
+    "internal deployment markers, secrets, PII, private context, and private-skill leaks.",
 );

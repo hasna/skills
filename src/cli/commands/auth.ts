@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import { createInterface } from "readline";
-import { getApiKey, getAuthConfig, getAuthConfigForCurrentService, saveAuthConfig, clearAuthConfig, getApiUrl } from "../../lib/auth-store.js";
+import { getApiKey, getEnvironmentApiKey, getAuthConfig, getAuthConfigForCurrentService, saveAuthConfig, clearAuthConfig, getApiUrl } from "../../lib/auth-store.js";
 import { toCustomerCreditPayload } from "../../lib/public-credits.js";
 
 const isTTY = process.stdin.isTTY && process.stdout.isTTY;
@@ -92,9 +92,7 @@ function writeCommandError(err: unknown, fallback: string, json?: boolean): void
 }
 
 function envApiKey(): string | null {
-  const key = process.env.SKILLS_API_KEY || process.env.SKILL_API_KEY;
-  const trimmed = key?.trim();
-  return trimmed || null;
+  return getEnvironmentApiKey();
 }
 
 function stringField(value: unknown): string | undefined {

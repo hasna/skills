@@ -83,7 +83,6 @@ describe("CLI run core", () => {
           HOME: tmpDir,
           NO_COLOR: "1",
           SKILLS_API_KEY: "sk_test_local_stays_local",
-          SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
         });
         const data = JSON.parse(stdout);
         expect(stderr).toBe("");
@@ -104,7 +103,7 @@ describe("CLI run core", () => {
       const { tmpdir } = require("os");
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-premium-no-test-bypass-"));
       try {
-        writeModeConfig(tmpDir, "self-hosted");
+        writeModeConfig(tmpDir, "self-hosted", "https://operator.example");
         const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", "run", "--json", "logo-design", "--help"], {
           stdout: "pipe",
           stderr: "pipe",
@@ -126,6 +125,7 @@ describe("CLI run core", () => {
         expect(stderr).toBe("");
         expect(exitCode).not.toBe(0);
         expect(data.error).toContain("remote skill");
+        expect(data.error).toContain("skills setup --mode self-hosted --api-url https://operator.example");
         expect(data.error).toContain("skills auth login");
         expect(data.stdout).toBeUndefined();
         expect(data.run.remote).toBe(true);
@@ -140,7 +140,7 @@ describe("CLI run core", () => {
       const { tmpdir } = require("os");
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-premium-auth-"));
       try {
-        writeModeConfig(tmpDir, "self-hosted");
+        writeModeConfig(tmpDir, "self-hosted", "https://operator.example");
         const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", "run", "--json", "logo-design", "prompt"], {
           stdout: "pipe",
           stderr: "pipe",
@@ -162,6 +162,7 @@ describe("CLI run core", () => {
         expect(stderr).toBe("");
         expect(exitCode).not.toBe(0);
         expect(data.error).toContain("remote skill");
+        expect(data.error).toContain("skills setup --mode self-hosted --api-url https://operator.example");
         expect(data.error).toContain("skills auth login");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
@@ -194,8 +195,12 @@ describe("CLI run core", () => {
             ...process.env,
             HOME: tmpDir,
             NO_COLOR: "1",
-            SKILLS_API_KEY: "sk_test_approval_required",
+            SKILLS_TEST_MODE: "1",
+            SKILLS_ALLOW_INSECURE_LOOPBACK: "1",
+            SKILLS_MODE: "self-hosted",
+            SKILLS_TEST_API_KEY: "sk_test_approval_required",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+            SKILLS_TEST_API_URL: `http://127.0.0.1:${server.port}`,
           },
         });
         const [stdout, stderr, exitCode] = await Promise.all([
@@ -257,9 +262,12 @@ describe("CLI run core", () => {
         ...process.env,
         HOME: tmpDir,
         NO_COLOR: "1",
-        SKILLS_TEST_MODE: "",
-        SKILLS_API_KEY: "sk_test_async",
+        SKILLS_TEST_MODE: "1",
+        SKILLS_ALLOW_INSECURE_LOOPBACK: "1",
+        SKILLS_MODE: "self-hosted",
+        SKILLS_TEST_API_KEY: "sk_test_async",
         SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+        SKILLS_TEST_API_URL: `http://127.0.0.1:${server.port}`,
       };
       try {
         writeModeConfig(tmpDir, "self-hosted", `http://127.0.0.1:${server.port}`);
@@ -623,7 +631,6 @@ describe("CLI run core", () => {
         const run = await runCliInCwd(["run", "--yes", "--json", "image", "a bright forest"], tmpDir, {
           HOME: tmpDir,
           SKILLS_API_KEY: "sk_test_local_premium",
-          SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
         });
         expect(run.exitCode).toBe(1);
         expect(JSON.parse(run.stdout)).toMatchObject({ code: "REMOTE_MODE_REQUIRED", remote: false });
@@ -649,8 +656,11 @@ describe("CLI run core", () => {
             HOME: tmpDir,
             NO_COLOR: "1",
             SKILLS_TEST_MODE: "1",
-            SKILLS_API_KEY: "sk_test_skillsmd_down",
+            SKILLS_ALLOW_INSECURE_LOOPBACK: "1",
+            SKILLS_MODE: "self-hosted",
+            SKILLS_TEST_API_KEY: "sk_test_skillsmd_down",
             SKILLS_API_URL: "http://127.0.0.1:1",
+            SKILLS_TEST_API_URL: "http://127.0.0.1:1",
           },
         });
         const [stdout, stderr, exitCode] = await Promise.all([
@@ -692,7 +702,9 @@ describe("CLI run core", () => {
             ...process.env,
             HOME: tmpDir,
             NO_COLOR: "1",
-            SKILLS_TEST_MODE: "",
+            SKILLS_TEST_MODE: "1",
+            SKILLS_ALLOW_INSECURE_LOOPBACK: "1",
+            SKILLS_MODE: "self-hosted",
             SKILLS_API_KEY: "",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
           },
@@ -773,9 +785,12 @@ describe("CLI run core", () => {
         ...process.env,
         HOME: tmpDir,
         NO_COLOR: "1",
-        SKILLS_TEST_MODE: "",
-        SKILLS_API_KEY: "sk_test_wait",
+        SKILLS_TEST_MODE: "1",
+        SKILLS_ALLOW_INSECURE_LOOPBACK: "1",
+        SKILLS_MODE: "self-hosted",
+        SKILLS_TEST_API_KEY: "sk_test_wait",
         SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+        SKILLS_TEST_API_URL: `http://127.0.0.1:${server.port}`,
       };
       try {
         writeModeConfig(tmpDir, "self-hosted", `http://127.0.0.1:${server.port}`);
@@ -868,9 +883,12 @@ describe("CLI run core", () => {
             ...process.env,
             HOME: tmpDir,
             NO_COLOR: "1",
-            SKILLS_TEST_MODE: "",
-            SKILLS_API_KEY: "sk_test_failed",
+            SKILLS_TEST_MODE: "1",
+            SKILLS_ALLOW_INSECURE_LOOPBACK: "1",
+            SKILLS_MODE: "self-hosted",
+            SKILLS_TEST_API_KEY: "sk_test_failed",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+            SKILLS_TEST_API_URL: `http://127.0.0.1:${server.port}`,
           },
         });
         const [stdout, stderr, exitCode] = await Promise.all([

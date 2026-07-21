@@ -727,12 +727,11 @@ the desired end state:
   compatibility design, not current reads. Until that design lands, operators
   must not claim the actually shared database URL and bucket/prefix are isolated
   authorities.
-- The existing `.github/workflows/deploy.yml` contains Hasna-specific AWS
-  production configuration and deploys automatically from `main`. That AWS
-  deployment is internal `self-hosted`, not `cloud`. Before target compliance, the
-  workflow must move to an internal infrastructure/operator repository or be
-  replaced by a provider-neutral, operator-configured, explicitly opted-in
-  selfhost workflow. This contract change does not edit or delete that workflow.
+- `.github/workflows/deploy.yml` is explicitly named as an internal
+  self-hosted, non-cloud deployment and can run only through
+  `workflow_dispatch`. It is not the `skills.md` SaaS deploy path. Moving that
+  operator-specific workflow to its owning infrastructure repository remains a
+  cleanup, but npm releases and changes to `main` cannot trigger it.
 
 ## Current Open Skills Status
 
@@ -748,8 +747,12 @@ The target architecture is not yet fully implemented:
 - configuration has a single selected `mode` and `apiUrl`, not named versioned profiles;
 - stored credentials are bound to their service origin, but the single record
   cannot retain several service logins at once;
-- explicit `SKILLS_API_URL` and `SKILLS_API_KEY` automation inputs are global
-  rather than profile-, tenant-, issuer-, and audience-scoped references;
+- automation credentials are origin-bound at the current one-service boundary:
+  cloud alone accepts `SKILLS_API_KEY`; self-hosted mode requires matching
+  `SKILLS_SELF_HOSTED_API_URL` and `SKILLS_SELF_HOSTED_API_KEY`; loopback HTTP is
+  restricted to explicit test/preview mode and matching test-only variables.
+  These are not yet named profile-, tenant-, issuer-, and audience-scoped
+  credential references;
 - local and remote behavior do not yet share the adapter boundary specified
   here;
 - there is no service identity/capabilities handshake;
@@ -760,12 +763,13 @@ The target architecture is not yet fully implemented:
 - data/cache/storage namespaces are not fully deployment- and storage-profile
   isolated;
 - explicit cross-authority sync/export/import contracts are incomplete;
-- some documentation calls the Hasna-operated endpoint “self-hosted”, which is
-  legacy wording rather than the ownership definition in this contract.
+- the internal operator deployment remains a self-hosted deployment and is not
+  the Hasna-operated customer cloud at `skills.md`.
 
-Until those gaps close, operators and agents must treat current flags and
-environment variables as legacy compatibility behavior and must not infer that
-the three-mode safety guarantees already exist. They must also verify the exact
-source commit, npm artifact, and live service capabilities independently; the
-2026-07-21 package/API availability mismatch above is an active blocker, not
-evidence that the npm package lacks a SaaS client.
+The current client provides atomic `local | self-hosted | cloud` mode and origin
+selection, strict origin hygiene, and origin-bound credentials. The remaining
+gaps above concern named multi-service profiles, deeper service identity and
+tenant enrollment, storage isolation, and portable sync. Operators and agents
+must still verify the exact source commit, npm artifact, and live service
+capabilities independently; source readiness alone is not publication or live
+SaaS evidence.

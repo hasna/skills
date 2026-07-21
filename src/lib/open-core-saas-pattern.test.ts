@@ -16,6 +16,7 @@ describe("open-core product service pattern", () => {
   const upstreamSync = readFileSync(join(root, "docs/architecture/upstream-sync.md"), "utf8");
   const readme = readFileSync(join(root, "README.md"), "utf8");
   const publishWorkflow = readFileSync(join(root, ".github/workflows/publish.yml"), "utf8");
+  const deployWorkflow = readFileSync(join(root, ".github/workflows/deploy.yml"), "utf8");
   const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version: string; files?: string[] };
   const compact = (value: string) => value.replace(/\s+/g, " ");
   const compactPattern = compact(pattern);
@@ -187,9 +188,18 @@ describe("open-core product service pattern", () => {
     expect(publishWorkflow).toMatch(/node-version:\s*["']?24["']?/);
     expect(publishWorkflow).toContain("registry-url: https://registry.npmjs.org");
     expect(publishWorkflow).toContain("id-token: write");
-    expect(publishWorkflow).toContain("npm publish --provenance --access public");
+    expect(publishWorkflow).toContain("npm publish --tag next --provenance --access public");
     expect(publishWorkflow).not.toContain("NODE_AUTH_TOKEN");
     expect(publishWorkflow).not.toContain("NPM_TOKEN");
+  });
+
+  test("keeps npm 0.2.0 on next and the internal self-hosted deployment manual-only", () => {
+    expect(packageJson.version).toBe("0.2.0");
+    expect(publishWorkflow).toContain("Publish npm prerelease (next)");
+    expect(publishWorkflow).toContain("--tag next");
+    expect(deployWorkflow).toContain("Internal self-hosted deployment (non-cloud)");
+    expect(deployWorkflow).toContain("workflow_dispatch");
+    expect(deployWorkflow).not.toMatch(/\npush:\s*\n/);
   });
 
   test("keeps scheduled credit approval free of legacy cents flags", () => {
@@ -201,6 +211,7 @@ describe("open-core product service pattern", () => {
   test("records the implemented launch slice and remaining architecture work", () => {
     expect(compactContract).toContain("explicit `local | self-hosted | cloud` routing");
     expect(compactContract).toContain("service-origin-bound stored credentials");
+    expect(compactContract).toContain("cloud alone accepts `SKILLS_API_KEY`");
     expect(compactContract).toContain("Named profiles, the common adapter refactor, storage-profile resolver, and the full trust handshake remain target contracts");
     expect(compactReadme).toContain("Named multi-service profiles remain a follow-up");
     expect(compactReadme).toContain("binds its stored credential to that origin");

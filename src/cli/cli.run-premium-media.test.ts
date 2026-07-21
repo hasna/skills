@@ -66,10 +66,12 @@ describe("CLI run premium media", () => {
             ...process.env,
             HOME: tmpDir,
             NO_COLOR: "1",
-            SKILLS_TEST_MODE: "",
+            SKILLS_TEST_MODE: "1",
+            SKILLS_ALLOW_INSECURE_LOOPBACK: "1",
             SKILLS_MODE: "self-hosted",
-            SKILLS_API_KEY: "sk_audio_transcript_async",
+            SKILLS_TEST_API_KEY: "sk_audio_transcript_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+            SKILLS_TEST_API_URL: `http://127.0.0.1:${server.port}`,
           },
         });
         const [stdout, stderr, exitCode] = await Promise.all([
@@ -145,10 +147,12 @@ describe("CLI run premium media", () => {
             ...process.env,
             HOME: tmpDir,
             NO_COLOR: "1",
-            SKILLS_TEST_MODE: "",
+            SKILLS_TEST_MODE: "1",
+            SKILLS_ALLOW_INSECURE_LOOPBACK: "1",
             SKILLS_MODE: "self-hosted",
-            SKILLS_API_KEY: "sk_transcript_alias_async",
+            SKILLS_TEST_API_KEY: "sk_transcript_alias_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+            SKILLS_TEST_API_URL: `http://127.0.0.1:${server.port}`,
           },
         });
         const [stdout, stderr, exitCode] = await Promise.all([
@@ -240,10 +244,12 @@ describe("CLI run premium media", () => {
             ...process.env,
             HOME: tmpDir,
             NO_COLOR: "1",
-            SKILLS_TEST_MODE: "",
+            SKILLS_TEST_MODE: "1",
+            SKILLS_ALLOW_INSECURE_LOOPBACK: "1",
             SKILLS_MODE: "self-hosted",
-            SKILLS_API_KEY: "sk_video_highlight_async",
+            SKILLS_TEST_API_KEY: "sk_video_highlight_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+            SKILLS_TEST_API_URL: `http://127.0.0.1:${server.port}`,
           },
         });
         const [stdout, stderr, exitCode] = await Promise.all([

@@ -10,29 +10,36 @@ import {
 
 describe("remote registry", () => {
   const originalSkillsApiUrl = process.env.SKILLS_API_URL;
+  const originalSkillsMode = process.env.SKILLS_MODE;
+  const originalSkillsApiKey = process.env.SKILLS_API_KEY;
 
   afterEach(() => {
     if (originalSkillsApiUrl === undefined) delete process.env.SKILLS_API_URL;
     else process.env.SKILLS_API_URL = originalSkillsApiUrl;
+    if (originalSkillsMode === undefined) delete process.env.SKILLS_MODE;
+    else process.env.SKILLS_MODE = originalSkillsMode;
+    if (originalSkillsApiKey === undefined) delete process.env.SKILLS_API_KEY;
+    else process.env.SKILLS_API_KEY = originalSkillsApiKey;
   });
 
   test("builds skills endpoint from self-hosted origin", () => {
-    expect(buildSkillsApiUrl("https://skills.hasna.xyz")).toBe("https://skills.hasna.xyz/api/v1/skills");
+    expect(buildSkillsApiUrl("https://operator.example")).toBe("https://operator.example/api/v1/skills");
   });
 
   test("builds skills endpoint from explicit API base", () => {
-    expect(buildSkillsApiUrl("https://skills.hasna.xyz/api/v1/")).toBe("https://skills.hasna.xyz/api/v1/skills");
-    expect(buildSkillsApiUrl("http://localhost:3505/api")).toBe("http://localhost:3505/api/skills");
+    expect(buildSkillsApiUrl("https://operator.example/api/v1/")).toBe("https://operator.example/api/v1/skills");
+    expect(buildSkillsApiUrl("https://operator.example/api")).toBe("https://operator.example/api/v1/skills");
   });
 
-  test("uses SKILLS_API_URL before config apiUrl", () => {
-    process.env.SKILLS_API_URL = "https://env.example.com/api/v1";
-    expect(getConfiguredApiUrl({ apiUrl: "https://config.example.com/api/v1" })).toBe("https://env.example.com/api/v1");
+  test("accepts an identical complete environment tuple", () => {
+    process.env.SKILLS_MODE = "self-hosted";
+    process.env.SKILLS_API_URL = "https://operator.example/api/v1";
+    expect(getConfiguredApiUrl({ mode: "self-hosted", apiUrl: "https://operator.example" })).toBe("https://operator.example");
   });
 
-  test("falls back to config apiUrl", () => {
+  test("uses the complete config tuple", () => {
     delete process.env.SKILLS_API_URL;
-    expect(getConfiguredApiUrl({ apiUrl: "https://config.example.com/api/v1/" })).toBe("https://config.example.com/api/v1");
+    expect(getConfiguredApiUrl({ mode: "self-hosted", apiUrl: "https://config.example.com/api/v1/" })).toBe("https://config.example.com");
   });
 
   test("parses remote array payload", () => {
@@ -241,7 +248,7 @@ describe("remote registry", () => {
   });
 
   test("sends bearer auth when SKILLS_API_KEY is configured", async () => {
-    process.env.SKILLS_API_URL = "https://skills.example.com/api/v1";
+    process.env.SKILLS_MODE = "cloud";
     process.env.SKILLS_API_KEY = "fixture-registry";
     try {
       await loadRemoteRegistry({
@@ -256,6 +263,7 @@ describe("remote registry", () => {
       });
     } finally {
       delete process.env.SKILLS_API_KEY;
+      delete process.env.SKILLS_MODE;
     }
   });
 

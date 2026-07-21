@@ -10,7 +10,8 @@
 import { z } from "zod";
 import { getApiKey } from "./auth-store.js";
 import { loadConfig, type SkillsConfig } from "./config.js";
-import { DEFAULT_CLOUD_API_URL } from "../server/config.js";
+import { resolveDeploymentTarget } from "./deployment-mode.js";
+import { normalizeSkillsApiOrigin } from "./service-origin.js";
 import { sanitizePublicDiscoveryText } from "./discovery.js";
 import { isPremiumSkill } from "./pricing.js";
 import { toPublicCreditQuote } from "./public-credits.js";
@@ -108,13 +109,12 @@ export function getConfiguredApiUrl(
   config: SkillsConfig = loadConfig(),
   env: Record<string, string | undefined> = process.env,
 ): string | undefined {
-  const raw = env["SKILLS_API_URL"] || config.apiUrl;
-  const trimmed = raw?.trim().replace(/\/+$/, "");
-  return trimmed || (config.mode === "cloud" ? DEFAULT_CLOUD_API_URL : undefined);
+  const target = resolveDeploymentTarget(config, env);
+  return target.mode === "local" ? undefined : target.apiUrl;
 }
 
 export function buildSkillsApiUrl(apiUrl: string, endpoint = "/skills"): string {
-  const url = new URL(apiUrl);
+  const url = new URL(normalizeSkillsApiOrigin(apiUrl, process.env));
   const cleanEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
   const pathname = url.pathname.replace(/\/+$/, "");
 
@@ -272,7 +272,7 @@ async function fetchRemoteJson(url: string, options: RemoteRegistryOptions): Pro
 }
 
 export async function loadRemoteRegistry(options: RemoteRegistryOptions = {}): Promise<SkillMeta[]> {
-  const apiUrl = options.apiUrl || getConfiguredApiUrl();
+  const apiUrl = options.apiUrl ? normalizeSkillsApiOrigin(options.apiUrl, process.env) : getConfiguredApiUrl();
   if (!apiUrl) {
     throw new Error("Remote registry requires SKILLS_API_URL or config apiUrl");
   }
@@ -282,7 +282,7 @@ export async function loadRemoteRegistry(options: RemoteRegistryOptions = {}): P
 }
 
 export async function loadRemoteSkill(name: string, options: RemoteRegistryOptions = {}): Promise<SkillMeta> {
-  const apiUrl = options.apiUrl || getConfiguredApiUrl();
+  const apiUrl = options.apiUrl ? normalizeSkillsApiOrigin(options.apiUrl, process.env) : getConfiguredApiUrl();
   if (!apiUrl) {
     throw new Error("Remote registry requires SKILLS_API_URL or config apiUrl");
   }

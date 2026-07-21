@@ -2,7 +2,7 @@
   "name": "video",
   "version": "1.0.0",
   "private": true,
-  "description": "Generate videos using provider-cost AI backends",
+  "description": "Generate videos through credit-quoted hosted AI backends",
   "type": "module",
   "skills": {
     "runtime": "hosted",

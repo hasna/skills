@@ -4,7 +4,7 @@
 
 import chalk from "chalk";
 import type { Command } from "commander";
-import { resolveCurrentDeploymentMode } from "../../lib/deployment-mode.js";
+import { getDeploymentSetupCommand, resolveCurrentDeploymentMode } from "../../lib/deployment-mode.js";
 import { loadRemoteSkill } from "../../lib/remote-registry.js";
 import { formatCredits, toCustomerCreditPayload, toPublicCreditQuote } from "../../lib/public-credits.js";
 import {
@@ -274,7 +274,7 @@ async function prepareScheduledSkill(skillName: string, args: string[]): Promise
     }
 
     if (!apiKey) {
-      throw new Error(`${skill.name} is a remote skill. Run: skills setup --mode ${mode} && skills auth login`);
+      throw new Error(`${skill.name} is a remote skill. Run: ${getDeploymentSetupCommand(mode)} && skills auth login`);
     }
 
     const { RemoteSkillsClient } = await import("../../lib/remote-client.js");

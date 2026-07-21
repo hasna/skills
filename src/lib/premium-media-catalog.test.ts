@@ -19,6 +19,8 @@ const NEW_MEDIA_SKILLS = [
   "brand-photo-shoot",
 ] as const;
 
+const BASE_MEDIA_SKILLS = ["image", "audio", "music", "video"] as const;
+
 function isHostedMetadataSkill(slug: string): boolean {
   const pkgPath = join(getSkillPath(slug), "package.json");
   if (!existsSync(pkgPath)) return false;
@@ -59,6 +61,18 @@ describe("premium media catalog", () => {
       expect(docs).not.toContain("MINIMAX_API_KEY");
       expect(docs).not.toContain("GEMINI_API_KEY");
     }
+  });
+
+  test("describes base hosted media execution in credits only", () => {
+    for (const slug of BASE_MEDIA_SKILLS) {
+      const pkg = readFileSync(join(process.cwd(), "skills", slug, "package.json"), "utf8");
+      const docs = readFileSync(join(process.cwd(), "skills", slug, "SKILL.md"), "utf8");
+      const customerCopy = `${pkg}\n${docs}`;
+      expect(customerCopy, `${slug} should describe credit quotes`).toMatch(/credit/i);
+      expect(customerCopy, `${slug} should not expose provider-cost copy`).not.toMatch(/provider[- ]cost|pricing/i);
+    }
+    const imageReadme = readFileSync(join(process.cwd(), "skills", "image", "README.md"), "utf8");
+    expect(imageReadme).toContain("skills setup --mode self-hosted --api-url https://operator.example");
   });
 
   test("prices music albums by allowed song count", () => {

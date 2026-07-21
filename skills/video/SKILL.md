@@ -1,11 +1,11 @@
 ---
 name: video
-description: Generate videos using OpenAI Sora, Minimax Hailuo, Gemini Veo, or Seedance through the hosted Skills runtime with provider-cost pricing.
+description: Generate videos using OpenAI Sora, Minimax Hailuo, Gemini Veo, or Seedance through the hosted Skills runtime with an approved credit quote.
 ---
 
 # Video Generation Skill
 
-Generate short videos from text prompts or image references using provider-backed video models. This skill routes through the hosted Skills runtime so billing can reserve the selected provider/model cost before execution.
+Generate short videos from text prompts or image references using provider-backed video models. This skill routes through the hosted Skills runtime so it can reserve the approved credits before execution.
 
 ## Supported Providers
 

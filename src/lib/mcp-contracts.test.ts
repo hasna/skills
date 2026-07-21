@@ -57,6 +57,7 @@ describe("MCP contract manifest", () => {
       args: { type: "array", items: { type: "string" } },
       approved: { type: "boolean", description: expect.stringContaining("approved") },
       quoteToken: { type: "string", description: expect.stringContaining("quote") },
+      allowUnsignedPhaseA: { type: "boolean", description: expect.stringContaining("self-hosted") },
     });
     expect(byName.get("quote_skill")?.outputSchema).toMatchObject({
       required: ["skill", "creditQuote", "availability"],

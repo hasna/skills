@@ -30,7 +30,7 @@ describe("README remote premium onboarding", () => {
 
   test("separates remote auth from local provider keys", () => {
     for (const phrase of [
-      "`SKILLS_API_KEY` is a remote API credential",
+      "`SKILLS_API_KEY` is a Skills cloud API credential",
       "It is not a provider",
       "`OPENAI_API_KEY`",
       "free/local OSS skills",

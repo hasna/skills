@@ -155,6 +155,11 @@ const quoteTokenSchema: JsonSchemaObject = {
   type: "string",
   description: "Opaque quote token returned by quote_skill for the exact approved input and arguments.",
 };
+const allowUnsignedPhaseASchema: JsonSchemaObject = {
+  type: "boolean",
+  default: false,
+  description: "Explicit compatibility opt-in for a selected older self-hosted service that returns no signed quote token. Never bypasses a signed quote and is invalid for cloud.",
+};
 
 const errorSchema = objectSchema({
   code: stringSchema("Stable error code."),
@@ -561,7 +566,7 @@ const toolContracts: McpToolContract[] = [
     name: "run_skill",
     title: "Run Skill",
     description: "Run a skill locally or through a configured remote runner. Returns compact stdout/stderr previews and run summaries by default; pass detail:true for full records.",
-    params: ["name", "input?", "args?", "approved?", "quoteToken?", "detail?"],
+    params: ["name", "input?", "args?", "approved?", "quoteToken?", "allowUnsignedPhaseA?", "detail?"],
     category: "execution",
     sideEffects: "local-process-or-remote-run",
     stable: true,
@@ -571,6 +576,7 @@ const toolContracts: McpToolContract[] = [
       args: runArgsSchema,
       approved: paidRunApprovalSchema,
       quoteToken: quoteTokenSchema,
+      allowUnsignedPhaseA: allowUnsignedPhaseASchema,
       detail: { type: "boolean", default: false, description: "Return full stdout/stderr, remote run, and local run metadata." },
     }, ["name"]),
     outputSchema: runOutputSchema,

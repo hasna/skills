@@ -8,6 +8,10 @@ import { MemorySkillsStore } from "./store.js";
 import { runWorkerOnce } from "./worker.js";
 
 const FULL_SCOPES = ["skills:read", "runs:read", "runs:write", "artifacts:read"];
+const LOOPBACK_TEST_ENV = {
+  SKILLS_TEST_MODE: "1",
+  SKILLS_ALLOW_INSECURE_LOOPBACK: "1",
+};
 
 async function testServer() {
   const store = new MemorySkillsStore([
@@ -189,7 +193,7 @@ describe("self-hosted skills API", () => {
   test("lists skills, runs a deterministic worker path, and downloads authorized artifacts", async () => {
     const { server, store, baseUrl } = await testServer();
     try {
-      const client = new RemoteSkillsClient("sk_test_org_a", baseUrl);
+      const client = new RemoteSkillsClient("sk_test_org_a", baseUrl, LOOPBACK_TEST_ENV);
       const skills = await client.listSkills();
       expect(Array.isArray(skills)).toBe(true);
       expect(skills.some((skill) => skill.name === "audio-transcript-pack")).toBe(true);
@@ -452,8 +456,8 @@ describe("self-hosted skills API", () => {
   test("enforces organization ownership on run and artifact routes", async () => {
     const { server, store, baseUrl } = await testServer();
     try {
-      const orgA = new RemoteSkillsClient("sk_test_org_a", baseUrl);
-      const orgB = new RemoteSkillsClient("sk_test_org_b", baseUrl);
+      const orgA = new RemoteSkillsClient("sk_test_org_a", baseUrl, LOOPBACK_TEST_ENV);
+      const orgB = new RemoteSkillsClient("sk_test_org_b", baseUrl, LOOPBACK_TEST_ENV);
       const submitted = await orgA.submitRun("audio-transcript-pack", { text: "secret run text" }, []);
       expect(await runWorkerOnce(store, "worker_test")).toBe(true);
 

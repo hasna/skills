@@ -55,6 +55,7 @@
         "name"
       ],
       "properties": [
+        "allowUnsignedPhaseA",
         "approved",
         "args",
         "detail",

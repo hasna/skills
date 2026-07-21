@@ -2,6 +2,7 @@ import { getApiKey as getStoredApiKey, getApiUrl } from "./auth-store.js";
 import { normalizeRemoteSkillRunContract, type RemoteSkillRunContract } from "./remote-run-contract.js";
 import { toAuthoritativePublicCreditQuote, toCustomerCreditPayload } from "./public-credits.js";
 import { addSkillsProtocolHeaders } from "./remote-protocol.js";
+import { normalizeSkillsApiOrigin } from "./service-origin.js";
 import {
   sanitizeCustomerArtifactDownload,
   sanitizeCustomerArtifactList,
@@ -19,9 +20,13 @@ export class RemoteSkillsClient {
   private artifactDescriptors = new Map<string, Readonly<Record<string, unknown>>>();
   private artifactListEpochs = new Map<string, number>();
 
-  constructor(apiKey: string, apiUrl = getApiUrl()) {
+  constructor(
+    apiKey: string,
+    apiUrl = getApiUrl(),
+    env: Record<string, string | undefined> = process.env,
+  ) {
     this.apiKey = apiKey;
-    this.apiUrl = apiUrl.replace(/\/$/, "");
+    this.apiUrl = normalizeSkillsApiOrigin(apiUrl, env);
   }
 
   private async request(path: string, options?: RequestInit): Promise<Response> {

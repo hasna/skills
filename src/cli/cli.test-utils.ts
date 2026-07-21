@@ -1,5 +1,5 @@
 import { join } from "path";
-import { mkdtempSync, rmSync } from "fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { pathToFileURL } from "url";
 import pkg from "../../package.json" with { type: "json" };
@@ -21,8 +21,44 @@ export async function testRemoteCreditQuoteResponse(req: Request): Promise<Respo
   return Response.json({ creditQuote: getSkillCreditQuote(decodeURIComponent(match[1]), body.input, body.args ?? []) });
 }
 
-function testEnv(env: Record<string, string>): Record<string, string> {
-  return { ...process.env, HOME: CLEAN_CLI_HOME, ...env, NO_COLOR: "1", SKILLS_TEST_MODE: "1" };
+function savedTestDeployment(cwd: string | undefined, home: string): { mode?: string; apiUrl?: string } {
+  for (const path of [
+    cwd ? join(cwd, "skills.config.json") : "",
+    join(home, ".hasna", "skills", "config.json"),
+  ]) {
+    if (!path || !existsSync(path)) continue;
+    try {
+      const value = JSON.parse(readFileSync(path, "utf8"));
+      if (value && typeof value === "object") return value;
+    } catch {}
+  }
+  return {};
+}
+
+function testEnv(env: Record<string, string>, cwd?: string): Record<string, string> {
+  const home = env.HOME || CLEAN_CLI_HOME;
+  const result: Record<string, string> = {
+    ...process.env,
+    HOME: home,
+    ...env,
+    NO_COLOR: "1",
+    SKILLS_TEST_MODE: "1",
+    SKILLS_ALLOW_INSECURE_LOOPBACK: "1",
+  };
+  const saved = savedTestDeployment(cwd, home);
+  const selectedMode = result.SKILLS_MODE || saved.mode || (result.SKILLS_API_URL ? "self-hosted" : undefined);
+  const selectedUrl = result.SKILLS_API_URL || saved.apiUrl;
+  if (result.SKILLS_API_URL && !result.SKILLS_MODE) result.SKILLS_MODE = selectedMode || "self-hosted";
+  if (result.SKILLS_API_KEY && selectedUrl && /^http:\/\/(?:127(?:\.\d{1,3}){3}|localhost|\[::1\])(?::|\/|$)/i.test(selectedUrl)) {
+    result.SKILLS_TEST_API_KEY = result.SKILLS_API_KEY;
+    result.SKILLS_TEST_API_URL = selectedUrl;
+    delete result.SKILLS_API_KEY;
+  } else if (result.SKILLS_API_KEY && selectedMode === "self-hosted" && selectedUrl) {
+    result.SKILLS_SELF_HOSTED_API_KEY = result.SKILLS_API_KEY;
+    result.SKILLS_SELF_HOSTED_API_URL = selectedUrl;
+    delete result.SKILLS_API_KEY;
+  }
+  return result;
 }
 
 function shellQuote(value: string): string {
@@ -162,7 +198,7 @@ export async function runCliInCwd(
     stdout: "pipe",
     stderr: "pipe",
     cwd,
-    env: testEnv(env),
+    env: testEnv(env, cwd),
   });
   const stdout = await new Response(proc.stdout).text();
   const stderr = await new Response(proc.stderr).text();

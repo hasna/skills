@@ -71,10 +71,12 @@ describe("CLI run premium marketing", () => {
             ...process.env,
             HOME: tmpDir,
             NO_COLOR: "1",
-            SKILLS_TEST_MODE: "",
+            SKILLS_TEST_MODE: "1",
+            SKILLS_ALLOW_INSECURE_LOOPBACK: "1",
             SKILLS_MODE: "self-hosted",
-            SKILLS_API_KEY: "sk_test_security_report_async",
+            SKILLS_TEST_API_KEY: "sk_test_security_report_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+            SKILLS_TEST_API_URL: `http://127.0.0.1:${server.port}`,
           },
         });
         const [stdout, stderr, exitCode] = await Promise.all([
@@ -165,10 +167,12 @@ describe("CLI run premium marketing", () => {
             ...process.env,
             HOME: tmpDir,
             NO_COLOR: "1",
-            SKILLS_TEST_MODE: "",
+            SKILLS_TEST_MODE: "1",
+            SKILLS_ALLOW_INSECURE_LOOPBACK: "1",
             SKILLS_MODE: "self-hosted",
-            SKILLS_API_KEY: "sk_seo_content_pack_async",
+            SKILLS_TEST_API_KEY: "sk_seo_content_pack_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+            SKILLS_TEST_API_URL: `http://127.0.0.1:${server.port}`,
           },
         });
         const [stdout, stderr, exitCode] = await Promise.all([
@@ -259,10 +263,12 @@ describe("CLI run premium marketing", () => {
             ...process.env,
             HOME: tmpDir,
             NO_COLOR: "1",
-            SKILLS_TEST_MODE: "",
+            SKILLS_TEST_MODE: "1",
+            SKILLS_ALLOW_INSECURE_LOOPBACK: "1",
             SKILLS_MODE: "self-hosted",
-            SKILLS_API_KEY: "sk_landing_page_pack_async",
+            SKILLS_TEST_API_KEY: "sk_landing_page_pack_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+            SKILLS_TEST_API_URL: `http://127.0.0.1:${server.port}`,
           },
         });
         const [stdout, stderr, exitCode] = await Promise.all([
@@ -353,10 +359,12 @@ describe("CLI run premium marketing", () => {
             ...process.env,
             HOME: tmpDir,
             NO_COLOR: "1",
-            SKILLS_TEST_MODE: "",
+            SKILLS_TEST_MODE: "1",
+            SKILLS_ALLOW_INSECURE_LOOPBACK: "1",
             SKILLS_MODE: "self-hosted",
-            SKILLS_API_KEY: "sk_one_page_website_async",
+            SKILLS_TEST_API_KEY: "sk_one_page_website_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+            SKILLS_TEST_API_URL: `http://127.0.0.1:${server.port}`,
           },
         });
         const [stdout, stderr, exitCode] = await Promise.all([
@@ -449,10 +457,12 @@ describe("CLI run premium marketing", () => {
             ...process.env,
             HOME: tmpDir,
             NO_COLOR: "1",
-            SKILLS_TEST_MODE: "",
+            SKILLS_TEST_MODE: "1",
+            SKILLS_ALLOW_INSECURE_LOOPBACK: "1",
             SKILLS_MODE: "self-hosted",
-            SKILLS_API_KEY: "sk_ad_creative_pack_async",
+            SKILLS_TEST_API_KEY: "sk_ad_creative_pack_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+            SKILLS_TEST_API_URL: `http://127.0.0.1:${server.port}`,
           },
         });
         const [stdout, stderr, exitCode] = await Promise.all([
@@ -543,10 +553,12 @@ describe("CLI run premium marketing", () => {
             ...process.env,
             HOME: tmpDir,
             NO_COLOR: "1",
-            SKILLS_TEST_MODE: "",
+            SKILLS_TEST_MODE: "1",
+            SKILLS_ALLOW_INSECURE_LOOPBACK: "1",
             SKILLS_MODE: "self-hosted",
-            SKILLS_API_KEY: "sk_email_sequence_async",
+            SKILLS_TEST_API_KEY: "sk_email_sequence_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+            SKILLS_TEST_API_URL: `http://127.0.0.1:${server.port}`,
           },
         });
         const [stdout, stderr, exitCode] = await Promise.all([
@@ -637,10 +649,12 @@ describe("CLI run premium marketing", () => {
             ...process.env,
             HOME: tmpDir,
             NO_COLOR: "1",
-            SKILLS_TEST_MODE: "",
+            SKILLS_TEST_MODE: "1",
+            SKILLS_ALLOW_INSECURE_LOOPBACK: "1",
             SKILLS_MODE: "self-hosted",
-            SKILLS_API_KEY: "sk_social_content_calendar_async",
+            SKILLS_TEST_API_KEY: "sk_social_content_calendar_async",
             SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+            SKILLS_TEST_API_URL: `http://127.0.0.1:${server.port}`,
           },
         });
         const [stdout, stderr, exitCode] = await Promise.all([

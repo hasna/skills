@@ -87,14 +87,14 @@ describe("CLI runtime and misc commands", () => {
       }
     });
 
-    test("stores canonical cloud mode and API URL", async () => {
+    test("stores canonical cloud mode and its fixed API origin", async () => {
       const { mkdtempSync, rmSync, readFileSync } = require("fs");
       const { tmpdir } = require("os");
       const { join } = require("path");
       const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-hosted-"));
       try {
         const { stdout, exitCode } = await runCliInCwd(
-          ["setup", "--mode", "cloud", "--api-url", "https://skills.example.com/api/v1", "--json"],
+          ["setup", "--mode", "cloud", "--json"],
           tmpDir,
           { HOME: tmpDir },
         );
@@ -104,7 +104,28 @@ describe("CLI runtime and misc commands", () => {
         expect(data.next).toContain("skills auth login");
         const config = JSON.parse(readFileSync(join(tmpDir, "skills.config.json"), "utf8"));
         expect(config.mode).toBe("cloud");
-        expect(config.apiUrl).toBe("https://skills.example.com/api/v1");
+        expect(config.apiUrl).toBe("https://skills.md");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("rejects a cloud origin override and self-hosted mode without an origin", async () => {
+      const { mkdtempSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-origin-guard-"));
+      try {
+        const cloud = await runCliInCwd(
+          ["setup", "--mode", "cloud", "--api-url", "https://operator.example", "--json"],
+          tmpDir,
+          { HOME: tmpDir },
+        );
+        expect(cloud.exitCode).toBe(1);
+        expect(`${cloud.stdout}\n${cloud.stderr}`).toContain("fixed service origin");
+        const selfHosted = await runCliInCwd(["setup", "--mode", "self-hosted", "--json"], tmpDir, { HOME: tmpDir });
+        expect(selfHosted.exitCode).toBe(1);
+        expect(`${selfHosted.stdout}\n${selfHosted.stderr}`).toContain("requires --api-url");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -321,7 +342,7 @@ describe("CLI runtime and misc commands", () => {
       const tmpDir = mkdtempSync(join(tmpdir(), "cli-schedule-premium-remote-"));
       const env = { HOME: tmpDir, SKILLS_API_KEY: "", SKILLS_TEST_MODE: "1" };
       try {
-        writeFileSync(join(tmpDir, "skills.config.json"), JSON.stringify({ mode: "self-hosted" }));
+        writeFileSync(join(tmpDir, "skills.config.json"), JSON.stringify({ mode: "self-hosted", apiUrl: "https://operator.example" }));
         const add = await runCliInCwd(["schedule", "add", "logo-design", "*/5 * * * *", "--name", "premium-logo", "--json"], tmpDir, env);
         expect(add.exitCode).toBe(0);
 
@@ -350,7 +371,7 @@ describe("CLI runtime and misc commands", () => {
       const tmpDir = mkdtempSync(join(tmpdir(), "cli-schedule-unavailable-hosted-"));
       const env = { HOME: tmpDir, SKILLS_API_KEY: "", SKILLS_TEST_MODE: "1" };
       try {
-        writeFileSync(join(tmpDir, "skills.config.json"), JSON.stringify({ mode: "self-hosted" }));
+        writeFileSync(join(tmpDir, "skills.config.json"), JSON.stringify({ mode: "self-hosted", apiUrl: "https://operator.example" }));
         const add = await runCliInCwd(["schedule", "add", "image", "*/5 * * * *", "--name", "premium-image", "--json"], tmpDir, env);
         expect(add.exitCode).toBe(0);
 

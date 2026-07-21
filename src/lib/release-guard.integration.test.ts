@@ -124,4 +124,45 @@ describe("release-guard end-to-end (S1 + S2)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("S1.5: blocks an internal service origin in final built JavaScript", () => {
+    const dir = makePkg(["dist/", "README.md"]);
+    try {
+      mkdirSync(join(dir, "dist"), { recursive: true });
+      writeFileSync(join(dir, "dist", "index.js"), 'export const origin = "https://skills.hasna.xyz";\n');
+      const result = runGuard(dir);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("final package artifacts contain internal deployment markers");
+      expect(result.stderr).toContain("dist/index.js");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("S1.5: blocks an internal infrastructure marker in final declarations", () => {
+    const dir = makePkg(["dist/", "README.md"]);
+    try {
+      mkdirSync(join(dir, "dist"), { recursive: true });
+      writeFileSync(join(dir, "dist", "index.d.ts"), 'export type Infra = "hasna-xyz-infra";\n');
+      const result = runGuard(dir);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("dist/index.d.ts");
+      expect(result.stderr).toContain("internal-boundary");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("S1.5: blocks packed self-hosted setup examples without an explicit API origin", () => {
+    const dir = makePkg(["README.md"]);
+    try {
+      writeFileSync(join(dir, "README.md"), "```bash\nskills setup --mode self-hosted\n```\n");
+      const result = runGuard(dir);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("invalid setup examples");
+      expect(result.stderr).toContain("self-hosted-setup-missing-api-url");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

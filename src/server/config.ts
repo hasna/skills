@@ -1,6 +1,3 @@
-export const DEFAULT_SELF_HOSTED_API_URL = "https://skills.hasna.xyz";
-export const DEFAULT_CLOUD_API_URL = "https://skills.md";
-
 export interface SkillsServerConfig {
   host: string;
   port: number;
@@ -16,16 +13,17 @@ export interface SkillsServerConfig {
 
 export function resolveServerConfig(env: Record<string, string | undefined> = process.env): SkillsServerConfig {
   const nodeEnv = env.NODE_ENV || "development";
+  const port = parsePositiveInt(env.PORT || env.SKILLS_PORT, 8787);
   return {
     host: env.HOST || env.SKILLS_HOST || "0.0.0.0",
-    port: parsePositiveInt(env.PORT || env.SKILLS_PORT, 8787),
+    port,
     databaseUrl: env.HASNA_SKILLS_DATABASE_URL || env.DATABASE_URL || undefined,
     bootstrapApiKey: env.HASNA_SKILLS_BOOTSTRAP_API_KEY || undefined,
     artifactBucket: env.HASNA_SKILLS_S3_BUCKET || env.SKILLS_S3_BUCKET || undefined,
     artifactPrefix: normalizePrefix(env.HASNA_SKILLS_S3_PREFIX || env.SKILLS_S3_PREFIX || "skills/artifacts"),
     inlineWorker: env.HASNA_SKILLS_INLINE_WORKER === "1",
     requestBodyLimitBytes: parsePositiveInt(env.HASNA_SKILLS_REQUEST_BODY_LIMIT_BYTES, 1_000_000),
-    publicBaseUrl: (env.SKILLS_PUBLIC_BASE_URL || DEFAULT_SELF_HOSTED_API_URL).replace(/\/+$/, ""),
+    publicBaseUrl: (env.SKILLS_PUBLIC_BASE_URL || `http://127.0.0.1:${port}`).replace(/\/+$/, ""),
     nodeEnv,
   };
 }
