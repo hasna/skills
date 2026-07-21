@@ -69,11 +69,15 @@ describe("reusable skills engine contract", () => {
     }
   });
 
-  test("keeps deployment-only concerns out of the reusable engine", () => {
+  test("separates the embedded engine from provider-neutral server and composition concerns", () => {
     expect(content).toContain("Do not add deployment-only assumptions");
-    expect(content).toContain("Postgres");
+    expect(content).toContain("open-product-three-mode-contract.md");
+    expect(content).toContain("package-ownership-sync-strategy.md");
+    expect(content).toContain("Generic provider-neutral server persistence");
+    expect(content).toContain("remain OSS-owned surfaces");
     expect(content).toContain("billing providers");
-    expect(content).toContain("AWS infrastructure");
+    expect(content).toContain("managed\ninfrastructure");
+    expect(content).toContain("belong in the Hasna cloud composition");
     expect(content).toContain("There is no\n`.skills/skills` directory");
   });
 

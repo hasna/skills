@@ -1,7 +1,10 @@
 # Package Naming And Publishing Policy
 
 This policy keeps the open `hasna/skills` package, the `skills` CLI, and MCP
-setup from colliding with hosted wrappers.
+setup from colliding with remote operators. Canonical deployment ownership and
+mode semantics are defined in
+[Open Product Three-Mode Contract](open-product-three-mode-contract.md) and
+[Package Ownership And Sync Strategy](package-ownership-sync-strategy.md).
 
 ## Canonical Names
 
@@ -11,11 +14,14 @@ setup from colliding with hosted wrappers.
 | Open package | `@hasna/skills` | `hasna/skills` | Public npm package |
 | Main CLI | `skills` | `@hasna/skills` | `bin/index.js` |
 | MCP CLI | `skills-mcp` | `@hasna/skills` | `bin/mcp.js` |
-| Optional hosted API | `skills.md` or compatible URL | Hosted wrapper | Explicit config |
+| Hasna cloud SaaS | `skills.md` | Hasna cloud composition | Explicit enrolled `cloud` profile |
+| Compatible operator API | Operator-chosen URL | Operator selfhost composition | Explicit enrolled `selfhost` profile |
 
-No hosted wrapper or private module should publish to npm as `@hasna/skills`.
-Wrappers consume `@hasna/skills` as a normal dependency and keep their service
-identity separate.
+No cloud or selfhost composition should publish to npm as `@hasna/skills`.
+Compositions consume `@hasna/skills` as a normal dependency and keep their
+service identity separate. `skills.md` always names the Hasna-operated
+multi-tenant customer SaaS (`cloud`); a compatible operator URL is `selfhost`,
+even when Hasna operates it internally or it runs in a public cloud.
 
 ## Versioning Rules
 

@@ -22,13 +22,16 @@ Hasna SaaS backend.
 | Surface | Meaning | Current verification (2026-07-21) |
 | --- | --- | --- |
 | `@hasna/skills@0.1.58` on npm | Public universal client | SaaS-capable for supported hosted skills through setup, auth, billing, remote run, status, and export commands. |
+| `@hasna/skills@0.1.59` in this source tree | Unreleased package candidate | `package.json`, the checked-in dependency lock, and source/tests belong to the `0.1.59` candidate. It is not published or tagged. |
 | `skills.md` | Hasna-operated multi-tenant customer SaaS (`cloud`) | Public registry responded successfully. Published package metadata and live API capability state currently disagree for `image`, `video`, and `music`; treat that release drift as a blocker for those skills. |
 | Hasna-internal infrastructure or another operator deployment | Internal or customer-operated service (`selfhost`) | Separate from the customer SaaS, regardless of AWS provider, account, region, or hostname. |
 
 The checked-in source, published npm artifact, and live service can advance at
 different times. Verify all three before claiming a remote capability works end
 to end. `local-first` means the package remains useful without an account; it
-does not mean the installed package is SaaS-disabled.
+does not mean the installed package is SaaS-disabled. The package/lock/source
+candidate is explicitly `0.1.59` and unreleased; npm remains at `0.1.58`. No
+publish or tag is part of this candidate change.
 
 ## Quick Start
 
@@ -36,7 +39,8 @@ npm `@hasna/skills@0.1.58` predates the agent-first bare-command behavior. In
 that published version, bare `skills` still selects the implicit `interactive`
 command: a TTY opens the TUI and a non-TTY invocation prints compact JSON. The
 checked-in source now prints command help instead; npm users need a release
-later than 0.1.58 for that behavior.
+later than 0.1.58 for that behavior. The checked-in `0.1.59` candidate has that
+behavior but remains unreleased.
 
 ```bash
 # In checked-in source, discover commands without opening the TUI
@@ -377,6 +381,13 @@ Plain `SKILLS_DATABASE_URL`, `SKILLS_STORAGE_MODE`, and `SKILLS_S3_BUCKET`
 fallbacks are accepted for local development. Self-hosted deployments should map
 runtime database and artifact settings into `HASNA_SKILLS_*` so local CLI state
 cannot accidentally point at production storage.
+
+These variables configure client-side package storage and sync. The
+provider-neutral server has a separate authoritative database input:
+`HASNA_SKILLS_DATABASE_URL` wins over `DATABASE_URL`. Its pool size resolves as
+`HASNA_SKILLS_DATABASE_POOL_MAX`, then `SKILLS_DATABASE_POOL_MAX`, then `4`.
+Client sync configuration never selects or migrates the server's authoritative
+run, tenant, or artifact database implicitly.
 
 ## Project Structure
 

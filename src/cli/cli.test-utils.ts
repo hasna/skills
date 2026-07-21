@@ -16,6 +16,10 @@ function testEnv(env: Record<string, string>): Record<string, string> {
   return { ...process.env, HOME: CLEAN_CLI_HOME, ...env, NO_COLOR: "1", SKILLS_TEST_MODE: "1" };
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
 async function runCliAtPath(
   path: string,
   args: string[],
@@ -62,6 +66,27 @@ async function runCliAtPathWithTtyOverride(
   return { stdout, stderr, exitCode, timedOut };
 }
 
+async function runCliAtPathInRealPty(
+  path: string,
+  args: string[],
+  timeoutSeconds = 8,
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const cliCommand = [process.execPath, "run", path, "--", ...args]
+    .map(shellQuote)
+    .join(" ");
+  const delayedQuit = `{ sleep 1; printf q; } | timeout ${timeoutSeconds}s script -qefc ${shellQuote(cliCommand)} /dev/null`;
+  const proc = Bun.spawn(["bash", "-lc", delayedQuit], {
+    cwd: join(import.meta.dir, "..", ".."),
+    stdout: "pipe",
+    stderr: "pipe",
+    env: testEnv({ TERM: "xterm-256color" }),
+  });
+  const stdout = await new Response(proc.stdout).text();
+  const stderr = await new Response(proc.stderr).text();
+  const exitCode = await proc.exited;
+  return { stdout, stderr, exitCode };
+}
+
 async function withBuiltCli<T>(run: (path: string) => Promise<T>): Promise<T> {
   const buildDir = mkdtempSync(join(tmpdir(), "skills-cli-build-"));
   try {
@@ -105,6 +130,18 @@ export async function runBuiltCliWithTtyOverride(
   timeoutMs = 3_000,
 ): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut: boolean }> {
   return withBuiltCli((path) => runCliAtPathWithTtyOverride(path, args, timeoutMs));
+}
+
+export async function runCliInRealPty(
+  args: string[],
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return runCliAtPathInRealPty(CLI_PATH, args);
+}
+
+export async function runBuiltCliInRealPty(
+  args: string[],
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return withBuiltCli((path) => runCliAtPathInRealPty(path, args));
 }
 
 export async function runCliInCwd(

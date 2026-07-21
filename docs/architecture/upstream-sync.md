@@ -6,10 +6,21 @@ generic engine change that should land in `hasna/skills`.
 ## Principles
 
 - Do not use git worktrees.
-- Move only reusable skill engine changes into the public repo.
-- Keep private product code, deployment config, billing, database, account
-  state, and hosted execution code out of public commits.
+- Move reusable client, embedded-engine, and provider-neutral server changes
+  into the public repo. The generic server, workers, queues, persistence
+  adapters, migrations, shared contracts, and selfhost deployment artifacts
+  are OSS-owned surfaces.
+- Keep only Hasna SaaS-specific code and configuration out of public commits:
+  customer tenant topology, Hasna billing and entitlements, private provider
+  routing, managed production infrastructure, credentials, support tooling,
+  and cloud-only operational policy.
 - Treat the public package as local-first; remote mode remains optional.
+
+The canonical ownership and mode semantics are defined in
+[Open Product Three-Mode Contract](open-product-three-mode-contract.md) and
+[Package Ownership And Sync Strategy](package-ownership-sync-strategy.md).
+This workflow must not be interpreted as moving generic server execution or
+database code into the platform repository.
 
 ## Preflight
 
@@ -26,8 +37,10 @@ scripts/check_upstream_sync.sh --strict-private-markers main..HEAD
 ```
 
 The preflight checks for private product paths and warns about private marker
-strings such as private package dependencies, protected hosted paths, deployment
-commands, payment env names, tenants, billing, and production deploy wording.
+strings such as private package dependencies, protected cloud paths, Hasna
+payment env names, customer tenancy, and production SaaS deploy wording. A
+generic server, worker, queue, persistence adapter, migration, or selfhost
+deployment contract is not private merely because it runs remotely.
 
 ## Prepare A Branch
 
@@ -64,4 +77,4 @@ The public PR description must include:
 - The public package APIs or CLI/MCP contracts changed.
 - The tests and build commands that passed.
 - Confirmation that private product paths, private dependencies, protected
-  source, and deployment secrets are not included.
+  source, SaaS-specific configuration, and deployment secrets are not included.

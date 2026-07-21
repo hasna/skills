@@ -21,6 +21,7 @@ These surfaces are related, but they are not interchangeable:
 | Surface | Meaning | Current status verified 2026-07-21 |
 | --- | --- | --- |
 | Public npm client | `@hasna/skills` is the universal CLI, SDK, MCP client, and local engine installed by users. It may call either a compatible self-hosted service or the Hasna SaaS. It does not install the Hasna SaaS backend. | The published `@hasna/skills@0.1.58` artifact is SaaS-capable for supported hosted skills: it includes hosted setup, authentication, billing, remote run, status, and export clients. |
+| Current source candidate | The checked-in package metadata, dependency lock, source, docs, and tests are one candidate provenance set. | The candidate is `@hasna/skills@0.1.59` and is explicitly unreleased. It has not been published or tagged; npm remains at `0.1.58`. |
 | Hasna cloud | `skills.md` is the Hasna-operated, multi-tenant customer SaaS. This is what `cloud` means for Open Skills. | The public registry endpoint responded successfully during verification. Package metadata, source, and live API capability state can ship at different times and must be checked independently. |
 | Internal self-hosted infrastructure | An operator-owned deployment is `selfhost` even when it runs in AWS or is operated by Hasna for internal use. | It is not the customer SaaS and must not be used as proof that the `cloud` product is available or ready. |
 
@@ -154,6 +155,15 @@ Rules:
   profile unless a product explicitly defines a local peer service.
 - `origin` is required for `selfhost` and `cloud`; only secure transport is
   accepted outside an explicit loopback development profile.
+- A remote profile may be saved in `bootstrap` state with a normalized origin
+  and non-secret enrollment material, but it is not an enrolled profile. A
+  bootstrap profile cannot retrieve credentials, call authenticated APIs, or
+  execute operations until the service identity and tenant binding below have
+  been verified and the profile is atomically promoted to `enrolled`.
+- `cloud` always requires an explicit tenant binding. `selfhost` also requires
+  an explicit tenant unless its signed operator metadata declares a
+  single-tenant service and names a stable default tenant; the client persists
+  that declared default rather than treating a missing tenant as a wildcard.
 - A project config may contain a profile name and non-secret preferences. It
   must never contain a token, password, private key, session, or raw credential.
 - Credentials live in an OS or package-owned credential store. A reference is
@@ -236,7 +246,8 @@ The storage profile is resolved independently in this exact order:
 Within the legacy bridge, package-owned `HASNA_<APP>_*` variables win over
 plain `<APP>_*` fallbacks. For Open Skills this preserves
 `HASNA_SKILLS_STORAGE_MODE` ahead of `SKILLS_STORAGE_MODE`,
-`HASNA_SKILLS_DATABASE_*` ahead of `SKILLS_DATABASE_*`, and
+the client-sync database variables `HASNA_SKILLS_DATABASE_*` ahead of
+`SKILLS_DATABASE_*`, and
 `HASNA_SKILLS_S3_*` ahead of `SKILLS_S3_*`. It also
 preserves `HASNA_SKILLS_AWS_REGION` over `SKILLS_AWS_REGION`,
 `HASNA_SKILLS_SYNC_BATCH_SIZE` over `SKILLS_SYNC_BATCH_SIZE`, and
@@ -244,6 +255,30 @@ preserves `HASNA_SKILLS_AWS_REGION` over `SKILLS_AWS_REGION`,
 legacy field: `HASNA_SKILLS_S3_*` does not include
 `HASNA_SKILLS_AWS_REGION`. `SKILLS_API_URL`, `SKILLS_API_KEY`, deployment mode,
 and the selected operation never select storage mode.
+
+### Client-Sync And Server Database Authority
+
+The legacy storage bridge above configures client-side package state and sync;
+for its database URL, `HASNA_SKILLS_DATABASE_URL` wins over
+`SKILLS_DATABASE_URL`. It is not the provider-neutral server's authoritative
+database selector.
+
+The provider-neutral server and migration binary resolve their authoritative
+database URL in this exact order:
+
+1. `HASNA_SKILLS_DATABASE_URL`
+2. `DATABASE_URL`
+
+The server database pool resolves independently in this exact order:
+
+1. `HASNA_SKILLS_DATABASE_POOL_MAX`
+2. `SKILLS_DATABASE_POOL_MAX`
+3. `4`
+
+Migration preserves these as two different namespaces. It must never convert a
+client-sync `SKILLS_DATABASE_URL` into the server's `DATABASE_URL`, point client
+sync at the authoritative server database, or infer server authority from a
+selected deployment or storage mode.
 
 ## Execution Policy
 
@@ -264,11 +299,12 @@ and write authority in machine-readable metadata, without credential material.
 
 ## Enrollment, Capabilities, And Service Identity
 
-Capabilities discovery is credential-free. Before sending an API key, token,
-cookie, tenant identifier, or product data, the HTTP adapter may fetch a
-versioned public discovery document over TLS. The request sends no
-`Authorization` header or ambient credentials. A compatible service reports at
-least:
+Capabilities discovery is credential-free. A new remote profile starts in
+`bootstrap` state. Before sending an API key, token, cookie, raw tenant
+identifier, account identifier, email address, or product data, the HTTP
+adapter may fetch a versioned public discovery document over TLS. The request
+sends no `Authorization` header or ambient credentials. A compatible service
+reports at least:
 
 - product and API contract identifiers plus supported version ranges;
 - deployment mode and a stable service-instance identity;
@@ -279,6 +315,18 @@ least:
 - billing capability and whether it is absent, operator-managed, or
   Hasna-managed;
 - server version, compatibility status, and request-correlation support.
+
+Discovery uses a signed envelope, not an unsigned JSON object. The envelope
+contains a schema identifier, the discovery payload, `alg`, `kid`, `issuedAt`,
+`expiresAt`, and either a client-supplied one-time nonce echoed in the signed
+payload or a strictly monotonic service-identity version. The signature covers
+the UTF-8 bytes of the RFC 8785 canonical JSON serialization of every signed
+field except the signature value. Unknown or forbidden algorithms, an
+unrecognized `kid`, a nonce mismatch, a non-increasing version, a timestamp
+outside the allowed clock-skew window, an envelope older than the configured
+maximum age, or an expired envelope fails closed. The client stores the last
+accepted nonce/version per enrolled service and rejects replayed or stale
+envelopes.
 
 The discovery document is untrusted input, not a trust root. Before accepting
 it, the user or administrator enrolls an external trust anchor:
@@ -292,16 +340,34 @@ it, the user or administrator enrolls an external trust anchor:
   fingerprint from the discovery response itself is not enrollment.
 
 The client verifies the discovery signature and chain against that enrolled
-anchor, then compares normalized origin, service fingerprint, expected product,
-operator, deployment mode, authentication issuer, credential audience, and
-tenant binding with the profile. Only after every comparison succeeds may it
-retrieve or transmit a credential. A `cloud` profile must identify the
+anchor, applies the signed-envelope freshness and replay checks, then compares
+normalized origin, service fingerprint, expected product, operator, deployment
+mode, authentication issuer, and credential audience with the bootstrap
+profile. Service identity is pinned before any credential lookup or release.
+
+Tenant selection is the next credential-free step. For `cloud`, the client
+must select a tenant. For `selfhost`, it selects a tenant or accepts only the
+signed single-tenant default described above. The client may send only an
+operator-issued opaque tenant selector and a fresh public challenge; the
+selector must be unlinkable outside that operator and must not disclose a raw
+tenant id, email, account name, membership, or credential. The signed response
+binds the challenge, service identity, normalized origin, and resolved tenant
+identifier or privacy-safe digest. The client verifies that binding against the
+profile, persists it, and only then may retrieve or transmit a credential
+scoped to the complete `(product, origin, service identity, tenant)` tuple. A
+credential from any earlier or partial binding is never reused. A `cloud`
+profile must identify the
 Hasna-operated multi-tenant SaaS. A `selfhost` service must not claim cloud-only
 identity or Hasna-managed billing. Capability absence is authoritative for
 feature use, but capability presence never establishes identity or trust.
 
-Trust rotation requires continuity proof signed by the previously enrolled key
-and the replacement key, or a new externally verified enrollment bundle. A
+Trust rotation requires continuity proof in a signed rotation record that names
+the old and new `kid`, algorithm, service identity, activation window, and
+monotonically newer identity version, with continuity proof signed by both the
+previously enrolled key and the replacement key, or a new externally verified
+enrollment bundle.
+The client pins the accepted replacement and retirement boundary and rejects
+discovery signed by an unpinned, prematurely active, or retired key. A
 changed origin, operator, issuer, audience, tenant, service fingerprint, or
 unverified rotation fails closed with stable JSON diagnostics. The client never
 auto-accepts a new identity from discovery; legitimate discontinuities require
@@ -465,6 +531,12 @@ algorithm:
    covers bucket, prefix, endpoint, path-style, and credential references; it
    does not cover `AWS_REGION`. Preserve the existing package-owned-over-plain
    precedence and never reinterpret storage `remote` as deployment `cloud`.
+   Keep client-sync and server authority distinct: client sync resolves
+   `HASNA_SKILLS_DATABASE_URL` over `SKILLS_DATABASE_URL`; the provider-neutral
+   server and migration binary resolve `HASNA_SKILLS_DATABASE_URL` over
+   `DATABASE_URL`; and server pool size resolves
+   `HASNA_SKILLS_DATABASE_POOL_MAX` over `SKILLS_DATABASE_POOL_MAX` over `4`.
+   Never migrate a client-sync fallback into the server namespace or vice versa.
 6. Emit a stable plan containing proposed deployment profiles, storage profiles,
    unresolved enrollments, preserved variables, namespaces, conflicts, backup
    path, and rollback eligibility. The same inputs must produce the same plan.

@@ -1,9 +1,18 @@
 # Reusable Skills Engine
 
-This package stays useful as `hasna/skills` without requiring the
-`skills.hasna.xyz` self-hosted API. Generic engine behavior must remain
-local-first, tested, and documented so the deployable service and compatible
-operators can reuse it without forking the core agent contracts.
+## Status And Canonical References
+
+This is the current contract for the embedded reusable-engine subset of
+`hasna/skills`; it is not the ownership boundary for the whole repository.
+Canonical deployment, server ownership, and mode semantics are defined by
+[Open Product Three-Mode Contract](open-product-three-mode-contract.md) and
+[Package Ownership And Sync Strategy](package-ownership-sync-strategy.md).
+Those documents supersede conflicting legacy terminology in older audits.
+
+This package stays useful without requiring a remote API. Generic engine
+behavior remains local-first, tested, and documented so the provider-neutral
+server, the Hasna `skills.md` cloud SaaS, and compatible selfhost operators can
+reuse it without forking the core agent contracts.
 
 ## Engine Contracts
 
@@ -133,7 +142,10 @@ Coverage expectations:
 
 ## Upstream Rule
 
-Do not add deployment-only assumptions to the local engine contract. Tenant
-state, Postgres persistence, billing providers, workers, AWS infrastructure, and
-`skills.hasna.xyz` deployment configuration belong in the self-hosted service
-surface and infrastructure, not in local skill discovery/pinning contracts.
+Do not add deployment-only assumptions to the embedded local engine contract.
+Generic provider-neutral server persistence, workers, queues, and migrations
+remain OSS-owned surfaces, but they stay outside local skill discovery and
+pinning contracts. Operator tenant policy and selfhost infrastructure belong in
+the operator composition. Hasna customer tenancy, billing providers, managed
+infrastructure, support tooling, and `skills.md` production configuration
+belong in the Hasna cloud composition.

@@ -4,18 +4,22 @@ import { join } from "node:path";
 
 describe("skill product model", () => {
   const doc = readFileSync(join(process.cwd(), "docs/architecture/skill-product-model.md"), "utf8");
+  const compact = doc.replace(/\s+/g, " ");
 
   test("defines skill identity, visibility, execution, and source policy", () => {
     for (const section of [
       "## Core Identity",
       "## Visibility",
-      "## Execution Mode",
+      "## Operation Execution Policy",
       "## Source Policy",
     ]) {
       expect(doc).toContain(section);
     }
     expect(doc).toContain("open `hasna/skills` package remains the upstream registry source");
-    expect(doc).toContain("server executes source");
+    expect(doc).toContain("the selected server executes the operation");
+    expect(doc).toContain("deployment authority is `local | selfhost | cloud`");
+    expect(compact).toContain("operation execution policy is `local-only | remote-only | either`");
+    expect(compact).toContain("package storage authority is `local | remote | hybrid`");
   });
 
   test("covers pricing, moderation, versioning, and schemas", () => {
@@ -38,7 +42,7 @@ describe("skill product model", () => {
   });
 
   test("protects paid and hosted skill source", () => {
-    expect(doc).toContain("Paid or untrusted hosted skills should default to `remote`");
+    expect(doc).toContain("Paid or untrusted hosted skills should default to `remote-only`");
     expect(doc).toMatch(/not\s+protected source code/);
     expect(doc).toContain("Billing checks happen server-side");
   });

@@ -95,6 +95,16 @@ program.hook("preAction", (_thisCommand, actionCommand) => {
   maybePrintFirstRunOnboarding(actionCommand, process.argv.slice(2), isTTY);
 });
 
+const firstCommandCandidate = process.argv
+  .slice(2)
+  .find((arg) => arg !== "--" && !arg.startsWith("-"));
+const knownCommands = new Set(
+  program.commands.flatMap((command) => [command.name(), ...command.aliases()]),
+);
+if (firstCommandCandidate && !knownCommands.has(firstCommandCandidate)) {
+  program.error(`error: unknown command '${firstCommandCandidate}'`);
+}
+
 program.action(() => {
   program.outputHelp();
 });

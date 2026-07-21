@@ -7,9 +7,11 @@ import {
   PACKAGE_VERSION,
   SLOW_TEST_TIMEOUT,
   runBuiltCli,
+  runBuiltCliInRealPty,
   runBuiltCliWithTtyOverride,
   runCli,
   runCliInCwd,
+  runCliInRealPty,
   runCliWithTtyOverride,
 } from "./cli.test-utils";
 
@@ -64,16 +66,41 @@ describe("CLI discovery", () => {
       }
     });
 
-    test("source and built CLI reject invalid commands and excess arguments", async () => {
-      for (const args of [["not-a-command"], ["interactive", "unexpected"]]) {
+    test("source and isolated built CLI open interactive and i in a real PTY", async () => {
+      for (const command of ["interactive", "i"]) {
         for (const [surface, result] of [
-          ["source", await runCli(args)],
-          ["built CLI bundle", await runBuiltCli(args)],
+          ["source", await runCliInRealPty([command])],
+          ["isolated built CLI bundle", await runBuiltCliInRealPty([command])],
         ] as const) {
-          const label = `${surface}: ${args.join(" ")}`;
-          expect(result.exitCode, label).not.toBe(0);
-          expect(result.stderr, label).toContain("error:");
+          const label = `${surface}: ${command}`;
+          expect(result.exitCode, label).toBe(0);
+          expect(result.stderr, label).toBe("");
+          expect(result.stdout, label).toContain("What would you like to do?");
+          expect(result.stdout, label).toContain("Press q to quit");
+          expect(result.stdout, label).not.toContain('"displayName"');
         }
+      }
+    }, SLOW_TEST_TIMEOUT);
+
+    test("source and built CLI report semantic unknown-command errors", async () => {
+      for (const [surface, result] of [
+        ["source", await runCli(["not-a-command"])],
+        ["built CLI bundle", await runBuiltCli(["not-a-command"])],
+      ] as const) {
+        expect(result.exitCode, surface).not.toBe(0);
+        expect(result.stderr, surface).toContain("error: unknown command 'not-a-command'");
+        expect(result.stderr, surface).not.toContain("too many arguments");
+      }
+    });
+
+    test("source and built CLI distinguish subcommand excess arguments", async () => {
+      for (const [surface, result] of [
+        ["source", await runCli(["interactive", "unexpected"])],
+        ["built CLI bundle", await runBuiltCli(["interactive", "unexpected"])],
+      ] as const) {
+        expect(result.exitCode, surface).not.toBe(0);
+        expect(result.stderr, surface).toContain("too many arguments for 'interactive'");
+        expect(result.stderr, surface).not.toContain("unknown command");
       }
     });
 

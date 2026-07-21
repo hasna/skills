@@ -4,6 +4,14 @@ skills.md treats a skill as a productized capability exposed through MCP,
 versioned metadata, optional hosted source, execution policy, pricing,
 moderation, and artifacts.
 
+This document applies the canonical independent-axis vocabulary from
+[Open Product Three-Mode Contract](open-product-three-mode-contract.md) and the
+ownership boundary in
+[Package Ownership And Sync Strategy](package-ownership-sync-strategy.md):
+deployment authority is `local | selfhost | cloud`, operation execution policy
+is `local-only | remote-only | either`, and package storage authority is
+`local | remote | hybrid`. These axes must never be inferred from each other.
+
 ## Core Identity
 
 Every skill needs stable identity fields:
@@ -35,17 +43,28 @@ Visibility controls who can discover and run a skill:
 Visibility never grants execution by itself. Execution still checks tenant
 membership, entitlement, approval policy, connector state, and spend limits.
 
-## Execution Mode
+## Operation Execution Policy
 
-Execution mode defines where code runs:
+Every operation declares exactly one execution policy:
 
-- `local`: bundled or explicitly owned source can run on the user's machine.
-- `remote`: the Skills MCP exposes metadata and docs; server executes source.
-- `hybrid`: local wrapper calls hosted APIs or workers.
-- `connector_only`: no source execution; skill orchestrates connector actions.
+- `local-only`: bundled or explicitly owned source runs on the user's machine
+  and a remote profile is rejected.
+- `remote-only`: the client requires an enrolled `selfhost` or `cloud` profile
+  and the selected server executes the operation.
+- `either`: the explicitly selected deployment profile chooses the local or
+  common HTTP adapter; failure never causes cross-authority fallback.
 
-Paid or untrusted hosted skills should default to `remote`. Local projects store
-only pins, run records, exports, and logs. They do not receive remote
+`connector-only` may be a skill capability or implementation kind indicating
+that the operation orchestrates connector actions without executing source. It
+is not a deployment mode, operation execution policy, or storage mode.
+
+Package-owned runtime records, caches, snapshots, and artifacts separately use
+the `local | remote | hybrid` storage axis. `hybrid` is storage synchronization
+with one declared write authority; it never means a local wrapper calling a
+remote worker and never authorizes remote execution.
+
+Paid or untrusted hosted skills should default to `remote-only`. Local projects
+store only pins, run records, exports, and logs. They do not receive remote
 `SKILL.md`, manifests, scripts, or runtime folders. They receive outputs, not
 protected source code.
 
