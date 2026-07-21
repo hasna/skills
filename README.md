@@ -264,10 +264,11 @@ must not be flattened into “SaaS absent.”
 
 - Current shared client/server reads are limited to
   `HASNA_SKILLS_DATABASE_URL`, `HASNA_SKILLS_S3_BUCKET`, and
-  `HASNA_SKILLS_S3_PREFIX` (plus their documented plain-name fallbacks).
-  Database pool configuration is server-only; current server source does not
-  read client S3 endpoint, path-style, or package credential settings. Its
-  artifact client independently reads unscoped `AWS_REGION`. The proposed
+  `HASNA_SKILLS_S3_PREFIX`; the bucket and prefix also share the
+  `SKILLS_S3_BUCKET` and `SKILLS_S3_PREFIX` fallbacks. Database pool
+  configuration is server-only; current server source does not read client S3
+  endpoint, path-style, or package credential settings. Its artifact client
+  independently reads unscoped `AWS_REGION`. The proposed
   `HASNA_SKILLS_SERVER_DATABASE_URL`,
   `HASNA_SKILLS_SERVER_DATABASE_POOL_MAX`, `HASNA_SKILLS_SERVER_S3_*`, and
   `HASNA_SKILLS_SERVER_AWS_REGION` namespace and dual-read migration are target

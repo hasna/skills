@@ -675,10 +675,11 @@ the desired end state:
 
 - Current shared client/server reads are limited to
   `HASNA_SKILLS_DATABASE_URL` plus the `HASNA_SKILLS_S3_BUCKET` and
-  `HASNA_SKILLS_S3_PREFIX` object-store fields (with the documented plain-name
-  fallbacks). Database pool configuration is server-only. The current server
-  does not read client S3 endpoint, path-style, or package credential settings;
-  its artifact client independently reads unscoped `AWS_REGION`. The proposed
+  `HASNA_SKILLS_S3_PREFIX` object-store fields; the bucket and prefix also share
+  the `SKILLS_S3_BUCKET` and `SKILLS_S3_PREFIX` fallbacks. Database pool
+  configuration is server-only. The current server does not read client S3
+  endpoint, path-style, or package credential settings; its artifact client
+  independently reads unscoped `AWS_REGION`. The proposed
   `HASNA_SKILLS_SERVER_DATABASE_URL`,
   `HASNA_SKILLS_SERVER_DATABASE_POOL_MAX`, `HASNA_SKILLS_SERVER_S3_*`, and
   `HASNA_SKILLS_SERVER_AWS_REGION` names and their dual-read rules are the target
