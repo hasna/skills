@@ -213,8 +213,16 @@ If the URL is an origin such as `https://skills.hasna.xyz`, the CLI requests
 Authenticated registry listing and self-hosted premium execution use
 `SKILLS_API_KEY` or the credential saved by `skills auth login --api-key`.
 
-For the reusable upstream contract, see
-`docs/architecture/reusable-skills-engine.md`.
+For the target cross-product mode and profile contract, see
+[Open Product Three-Mode Contract](docs/architecture/open-product-three-mode-contract.md).
+For current Open Skills engine behavior and ownership boundaries, see
+[Reusable Skills Engine](docs/architecture/reusable-skills-engine.md) and
+[Open-Core Service Pattern](docs/architecture/open-core-saas-pattern.md).
+
+The three-mode profile, adapter, credential-scoping, and capabilities contract
+is architectural guidance and is not implemented by the current CLI. This PR
+fixes bare-command discovery only; current `local`/`self-hosted` setup and
+environment variables remain the compatibility surface.
 
 ## Portable Skills
 
