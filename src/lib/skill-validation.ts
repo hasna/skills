@@ -133,10 +133,30 @@ function sortMessages(messages: SkillValidationMessage[]): SkillValidationMessag
   return [...messages].sort((a, b) => a.code.localeCompare(b.code) || a.message.localeCompare(b.message));
 }
 
-function isSafeRelativePath(value: string): boolean {
-  if (!value.trim() || isAbsolute(value)) return false;
-  const normalized = normalize(value).replace(/\\/g, "/");
-  return normalized !== ".." && !normalized.startsWith("../") && !normalized.includes("/../");
+export type SkillFileTargetProblem = "unsafe" | "missing" | "not-file";
+
+/**
+ * Validate a local executable target using the canonical portable-skill path rules.
+ * Callers may choose whether a missing pre-build target is an issue or warning,
+ * but ambient discovery requires this result to be fully valid before shadowing.
+ */
+export function validateSkillFileTarget(
+  skillPath: string,
+  target: string,
+): { valid: true; path: string } | { valid: false; problem: SkillFileTargetProblem; path?: string } {
+  if (!target.trim() || isAbsolute(target)) return { valid: false, problem: "unsafe" };
+  const normalized = normalize(target).replace(/\\/g, "/");
+  if (normalized === ".." || normalized.startsWith("../") || normalized.includes("/../")) {
+    return { valid: false, problem: "unsafe" };
+  }
+  const targetPath = join(skillPath, target);
+  if (!existsSync(targetPath)) return { valid: false, problem: "missing", path: targetPath };
+  try {
+    if (!statSync(targetPath).isFile()) return { valid: false, problem: "not-file", path: targetPath };
+  } catch {
+    return { valid: false, problem: "missing", path: targetPath };
+  }
+  return { valid: true, path: targetPath };
 }
 
 function isHostedPackageMetadata(pkg: PackageJson): boolean {
@@ -359,14 +379,14 @@ export function validateSkillDirectory(
               continue;
             }
             metadata.binCommands.push(command);
-            if (!isSafeRelativePath(target)) {
+            const targetValidation = validateSkillFileTarget(skillPath, target);
+            if (!targetValidation.valid && targetValidation.problem === "unsafe") {
               add(issues, "package.bin_target_unsafe", `package.json bin '${command}' target '${target}' must stay inside the skill directory`);
               continue;
             }
-            const targetPath = join(skillPath, target);
-            if (!existsSync(targetPath)) {
+            if (!targetValidation.valid && targetValidation.problem === "missing") {
               add(warnings, "package.bin_target_missing", `package.json bin '${command}' target '${target}' is not present before build`);
-            } else if (statSync(targetPath).isDirectory()) {
+            } else if (!targetValidation.valid) {
               add(issues, "package.bin_target_directory", `package.json bin '${command}' target '${target}' must point to a file, not a directory`);
             }
           }

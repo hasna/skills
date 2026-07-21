@@ -164,7 +164,7 @@ describe("I5: custom skills gated out of the basic profile", () => {
       mkdirSync(customDir, { recursive: true });
       writeFileSync(
         join(customDir, "SKILL.md"),
-        `---\nname: my-custom-skill\ndescription: A custom imported skill.\nversion: 0.1.0\n---\n\n# My Custom Skill\n`,
+        `---\nname: my-custom-skill\ndescription: A custom imported skill.\nversion: 0.1.0\nkind: instruction\n---\n\n# My Custom Skill\n`,
       );
 
       clearRegistryCache();

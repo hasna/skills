@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, existsSync, readFileSync, writeFileSync } from "fs";
+import { mkdtempSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import {
@@ -23,6 +23,7 @@ import {
   AGENT_TARGETS,
   resolveAgents,
 } from "./installer";
+import { clearRegistryCache } from "./registry";
 
 let testDir: string;
 
@@ -45,6 +46,64 @@ describe("installer", () => {
     test("does not rewrite legacy skill-prefixed names", () => {
       const path = getSkillPath("skill-deepresearch");
       expect(path).toContain("skill-deepresearch");
+    });
+
+    test("ignores invalid direct and legacy overrides while keeping valid legacy instructions", () => {
+      const home = mkdtempSync(join(tmpdir(), "skills-path-home-"));
+      const previousHome = process.env["HOME"];
+      try {
+        process.env["HOME"] = home;
+        const root = join(home, ".hasna", "skills");
+
+        const incompleteDirect = join(root, "image");
+        mkdirSync(incompleteDirect, { recursive: true });
+        writeFileSync(join(incompleteDirect, "skill.json"), JSON.stringify({
+          standard: "hasna.skill.v1",
+          name: "image",
+          description: "Incomplete direct override.",
+          version: "1.0.0",
+        }));
+
+        const unsafeLegacy = join(root, "custom", "deepresearch");
+        mkdirSync(unsafeLegacy, { recursive: true });
+        writeFileSync(join(root, "custom", "outside.ts"), "console.log('outside');\n");
+        writeFileSync(join(unsafeLegacy, "SKILL.md"), `---
+name: deepresearch
+description: Unsafe legacy override.
+---
+
+# Unsafe Legacy Override
+`);
+        writeFileSync(join(unsafeLegacy, "package.json"), JSON.stringify({
+          name: "deepresearch",
+          description: "Unsafe legacy override.",
+          version: "1.0.0",
+          bin: { deepresearch: "../outside.ts" },
+        }));
+
+        const validLegacy = join(root, "custom", "valid-legacy-instruction");
+        mkdirSync(validLegacy, { recursive: true });
+        writeFileSync(join(validLegacy, "SKILL.md"), `---
+name: valid-legacy-instruction
+description: Valid legacy agent instructions.
+kind: instruction
+---
+
+# Valid Legacy Instruction
+
+Use these instructions.
+`);
+
+        clearRegistryCache();
+        expect(getSkillPath("image")).not.toBe(incompleteDirect);
+        expect(getSkillPath("deepresearch")).not.toBe(unsafeLegacy);
+        expect(getSkillPath("valid-legacy-instruction")).toBe(validLegacy);
+      } finally {
+        if (previousHome === undefined) delete process.env["HOME"];
+        else process.env["HOME"] = previousHome;
+        clearRegistryCache();
+        rmSync(home, { recursive: true, force: true });
+      }
     });
   });
 

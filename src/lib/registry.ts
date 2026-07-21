@@ -2,7 +2,6 @@
  * Skill registry - metadata about all available skills
  */
 
-import { existsSync, readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import { getDataDir } from "./config.js";
 import { listPortableSkillMetas } from "./portable-skills.js";
@@ -21,67 +20,6 @@ export type { Category, SkillMeta, SkillRegistryProfile };
 
 export function isBasicSkillName(name: string): boolean {
   return (BASIC_SKILL_NAMES as readonly string[]).includes(name);
-}
-
-/**
- * Parse frontmatter from a SKILL.md file.
- * Supports: name, description, displayName/display_name, category, tags
- */
-function parseSkillMdFrontmatter(content: string): Partial<SkillMeta> | null {
-  const match = content.match(/^---\n([\s\S]*?)\n---/);
-  if (!match) return null;
-  const result: Partial<SkillMeta> = {};
-  for (const line of match[1].split("\n")) {
-    const colon = line.indexOf(":");
-    if (colon === -1) continue;
-    const key = line.slice(0, colon).trim();
-    const value = line.slice(colon + 1).trim();
-    if (!key || !value) continue;
-    if (key === "name") result.name = value;
-    else if (key === "description") result.description = value;
-    else if (key === "displayName" || key === "display_name") result.displayName = value;
-    else if (key === "category") result.category = value;
-    else if (key === "kind") {
-      if (value === "executable" || value === "instruction") result.kind = value;
-    }
-    else if (key === "tags") {
-      result.tags = value.replace(/[\[\]]/g, "").split(",").map((t) => t.trim()).filter(Boolean);
-    }
-  }
-  return Object.keys(result).length > 0 ? result : null;
-}
-
-/**
- * Discover skills from a directory. Each subdirectory is expected to be a skill
- * with a SKILL.md file containing frontmatter metadata.
- */
-function discoverSkillsInDir(dir: string): SkillMeta[] {
-  if (!existsSync(dir)) return [];
-  const result: SkillMeta[] = [];
-  try {
-    const entries = readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const skillMdPath = join(dir, entry.name, "SKILL.md");
-      if (!existsSync(skillMdPath)) continue;
-      let content: string;
-      try { content = readFileSync(skillMdPath, "utf-8"); } catch { continue; }
-      const fm = parseSkillMdFrontmatter(content);
-      if (!fm?.name || !fm.description?.trim()) continue;
-      if (normalizeSkillSlug(fm.name) !== normalizeSkillSlug(entry.name)) continue;
-      const name = fm.name;
-      result.push({
-        name,
-        displayName: fm.displayName || name.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-        description: fm.description || "",
-        category: fm.category || "Development Tools",
-        tags: fm.tags || [],
-        ...(fm.kind ? { kind: fm.kind } : {}),
-        source: "custom",
-      });
-    }
-  } catch {}
-  return result;
 }
 
 let registryCache: SkillMeta[] | null = null;
@@ -104,7 +42,7 @@ export function loadRegistry(cwd?: string): SkillMeta[] {
   const official = SKILLS.map((s) => ({ ...s, source: "official" as const }));
   const dataDir = getDataDir();
   const portableCustom = listPortableSkillMetas({ rootDir: dataDir });
-  const legacyCustom = discoverSkillsInDir(join(dataDir, "custom"));
+  const legacyCustom = listPortableSkillMetas({ rootDir: join(dataDir, "custom") });
   const globalCustom = mergeCustomSkills([...legacyCustom, ...portableCustom]);
 
   const customNames = new Set(globalCustom.map((s) => s.name));

@@ -313,6 +313,39 @@ describe("registry", () => {
       });
     });
 
+    test("incomplete or non-runnable custom markers cannot shadow official skills", () => {
+      withIsolatedHome((skillsRoot) => {
+        const incompletePortable = join(skillsRoot, "image");
+        mkdirSync(incompletePortable, { recursive: true });
+        writeFileSync(join(incompletePortable, "skill.json"), JSON.stringify({
+          standard: "hasna.skill.v1",
+          name: "image",
+          description: "Incomplete override without commands.",
+          version: "1.0.0",
+        }));
+
+        const missingLegacyBin = join(skillsRoot, "custom", "deepresearch");
+        mkdirSync(missingLegacyBin, { recursive: true });
+        writeFileSync(join(missingLegacyBin, "SKILL.md"), `---
+name: deepresearch
+description: Legacy override whose executable is missing.
+---
+
+# Deep Research Override
+`);
+        writeFileSync(join(missingLegacyBin, "package.json"), JSON.stringify({
+          name: "deepresearch",
+          description: "Legacy override whose executable is missing.",
+          version: "1.0.0",
+          bin: { deepresearch: "src/missing.ts" },
+        }));
+
+        clearRegistryCache();
+        expect(loadRegistry().find((skill) => skill.name === "image")?.source).toBe("official");
+        expect(loadRegistry().find((skill) => skill.name === "deepresearch")?.source).toBe("official");
+      });
+    });
+
     test("a valid custom skill remains discoverable", () => {
       withIsolatedHome((skillsRoot) => {
         const customDir = join(skillsRoot, "valid-custom-skill");

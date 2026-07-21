@@ -39,6 +39,91 @@ describe("portable skills", () => {
     }
   });
 
+  test("ambient discovery requires agent instructions or an existing safe executable target", async () => {
+    const root = mkdtempSync(join(tmpdir(), "portable-skill-markers-"));
+    try {
+      const incompleteManifest = join(root, "incomplete-manifest");
+      mkdirSync(incompleteManifest, { recursive: true });
+      writeFileSync(join(incompleteManifest, "skill.json"), JSON.stringify({
+        standard: "hasna.skill.v1",
+        name: "incomplete-manifest",
+        description: "Metadata without a runnable command.",
+        version: "1.0.0",
+      }));
+
+      const missingBin = join(root, "missing-bin");
+      mkdirSync(missingBin, { recursive: true });
+      writeFileSync(join(missingBin, "package.json"), JSON.stringify({
+        name: "missing-bin",
+        description: "Package with a missing bin target.",
+        version: "1.0.0",
+        bin: { "missing-bin": "src/missing.ts" },
+      }));
+
+      const unsafeBin = join(root, "unsafe-bin");
+      mkdirSync(unsafeBin, { recursive: true });
+      writeFileSync(join(root, "outside.ts"), "console.log('outside');\n");
+      writeFileSync(join(unsafeBin, "package.json"), JSON.stringify({
+        name: "unsafe-bin",
+        description: "Package with an unsafe bin target.",
+        version: "1.0.0",
+        bin: { "unsafe-bin": "../outside.ts" },
+      }));
+
+      const validInstruction = join(root, "valid-instruction");
+      mkdirSync(validInstruction, { recursive: true });
+      writeFileSync(join(validInstruction, "SKILL.md"), `---
+name: valid-instruction
+description: Agent instructions that are safe to discover.
+kind: instruction
+---
+
+# Valid Instruction
+
+Follow these agent instructions.
+`);
+
+      const validCommand = join(root, "valid-command");
+      mkdirSync(validCommand, { recursive: true });
+      writeFileSync(join(validCommand, "run.ts"), "console.log('valid command');\n");
+      writeFileSync(join(validCommand, "skill.json"), JSON.stringify({
+        standard: "hasna.skill.v1",
+        name: "valid-command",
+        description: "Manifest with a safe runnable command.",
+        version: "1.0.0",
+        commands: [{ name: "valid-command", entry: "run.ts" }],
+      }));
+
+      const validBin = join(root, "valid-bin");
+      mkdirSync(join(validBin, "src"), { recursive: true });
+      writeFileSync(join(validBin, "src", "index.ts"), "console.log('valid bin');\n");
+      writeFileSync(join(validBin, "package.json"), JSON.stringify({
+        name: "valid-bin",
+        description: "Package with a safe runnable bin target.",
+        version: "1.0.0",
+        bin: { "valid-bin": "src/index.ts" },
+      }));
+
+      expect(findPortableSkill("incomplete-manifest", { rootDir: root })).toBeNull();
+      expect(findPortableSkill("missing-bin", { rootDir: root })).toBeNull();
+      expect(findPortableSkill("unsafe-bin", { rootDir: root })).toBeNull();
+      expect(findPortableSkill("valid-instruction", { rootDir: root })?.name).toBe("valid-instruction");
+      expect(findPortableSkill("valid-command", { rootDir: root })?.name).toBe("valid-command");
+      expect(findPortableSkill("valid-bin", { rootDir: root })?.name).toBe("valid-bin");
+      expect(listPortableSkills({ rootDir: root }).map((skill) => skill.name)).toEqual([
+        "valid-bin",
+        "valid-command",
+        "valid-instruction",
+      ]);
+
+      const run = await runPortableSkill("valid-command", [], { rootDir: root, stdio: "pipe" });
+      expect(run.exitCode).toBe(0);
+      expect(run.stdout).toContain("valid command");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("scaffolds a standard skill folder with agent instructions and a runnable command", async () => {
     const home = mkdtempSync(join(tmpdir(), "portable-skill-home-"));
     try {
@@ -471,6 +556,7 @@ kind: instruction
         allowShadow: true,
       });
       expect(result.name).toBe("image");
+      expect(findPortableSkill("image", { rootDir: getPortableSkillsRoot({ homeDir: home }) })?.name).toBe("image");
     });
   });
 

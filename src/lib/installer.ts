@@ -13,7 +13,7 @@ import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { normalizeSkillName } from "./utils.js";
 import { getDataDir } from "./config.js";
-import { findPortableSkill } from "./portable-skills.js";
+import { findPortableSkill, getPortableSkillsRoot } from "./portable-skills.js";
 import { getSkill, type SkillMeta } from "./registry.js";
 import { normalizeSkillSlug, resolveSkillAlias } from "./skill-aliases.js";
 import {
@@ -93,8 +93,8 @@ export function getSkillPath(name: string): string {
   const skillName = normalizeSkillName(getCanonicalSkillName(name));
   const portable = findPortableSkill(skillName);
   if (portable) return portable.path;
-  const legacyCustomPath = join(getDataDir(), "custom", skillName);
-  if (existsSync(legacyCustomPath)) return legacyCustomPath;
+  const legacyPortable = findPortableSkill(skillName, { rootDir: join(getPortableSkillsRoot(), "custom") });
+  if (legacyPortable) return legacyPortable.path;
   return join(SKILLS_DIR, skillName);
 }
 

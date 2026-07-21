@@ -18,6 +18,7 @@ import { SKILLS } from "./registry-data/index.js";
 import type { SkillKind, SkillMeta } from "./registry-types.js";
 import {
   parseSkillFrontmatter,
+  validateSkillFileTarget,
   validateSkillDirectory,
   type SkillValidationMessage,
   type SkillValidationResult,
@@ -256,49 +257,49 @@ function hasDiscoverablePortableSkillMarker(skillPath: string, directoryName: st
   if (!expectedName) return false;
 
   const skillMdPath = join(skillPath, "SKILL.md");
-  if (existsSync(skillMdPath)) {
-    try {
-      const frontmatter = parseSkillFrontmatter(readFileSync(skillMdPath, "utf-8"));
-      if (
-        safeNormalizeName(frontmatter?.name ?? "") === expectedName
-        && Boolean(frontmatter?.description?.trim())
-      ) return true;
-    } catch {
-      // A different valid marker below may still make this a portable skill.
-    }
-  }
-
   const skillJsonPath = join(skillPath, "skill.json");
-  if (existsSync(skillJsonPath)) {
-    try {
-      const manifest = readJsonObject(skillJsonPath);
-      if (
-        stringField(manifest, "standard") === PORTABLE_SKILL_STANDARD
-        && safeNormalizeName(stringField(manifest, "name") ?? "") === expectedName
-        && Boolean(stringField(manifest, "description"))
-        && Boolean(stringField(manifest, "version"))
-      ) return true;
-    } catch {
-      // A different valid marker below may still make this a portable skill.
-    }
-  }
-
   const packageJsonPath = join(skillPath, "package.json");
-  if (existsSync(packageJsonPath)) {
-    try {
-      const pkg = readJsonObject(packageJsonPath) as PackageJson;
-      if (
-        safeNormalizeName(stringValue(pkg.name) ?? "") === expectedName
-        && Boolean(stringValue(pkg.description))
-        && Boolean(stringValue(pkg.version))
-        && Boolean(inferPackageCommands(pkg, expectedName)?.length)
-      ) return true;
-    } catch {
-      // Malformed package metadata is not an ambient discovery marker.
-    }
-  }
+  try {
+    const frontmatter = existsSync(skillMdPath)
+      ? parseSkillFrontmatter(readFileSync(skillMdPath, "utf-8")) ?? undefined
+      : undefined;
+    const jsonManifest = existsSync(skillJsonPath) ? readJsonObject(skillJsonPath) : undefined;
+    const pkg = existsSync(packageJsonPath) ? readJsonObject(packageJsonPath) as PackageJson : undefined;
+    const manifest = readPortableSkillManifest(skillPath, expectedName);
+    if (manifest.name !== expectedName || manifest.standard !== PORTABLE_SKILL_STANDARD) return false;
 
-  return false;
+    if (manifest.kind === "instruction") {
+      // Instruction skills are SKILL.md-primary. Reuse the full portable
+      // validator so the marker, instructions/docs, and optional helpers agree.
+      if (
+        frontmatter?.kind !== "instruction"
+        || safeNormalizeName(frontmatter.name ?? "") !== expectedName
+        || !frontmatter.description?.trim()
+      ) return false;
+      return validatePortableSkillDirectory(expectedName, skillPath).valid;
+    }
+
+    const validFrontmatterMarker = safeNormalizeName(frontmatter?.name ?? "") === expectedName
+      && Boolean(frontmatter?.description?.trim());
+    const validJsonMarker = stringField(jsonManifest, "standard") === PORTABLE_SKILL_STANDARD
+      && safeNormalizeName(stringField(jsonManifest, "name") ?? "") === expectedName
+      && Boolean(stringField(jsonManifest, "description"))
+      && Boolean(stringField(jsonManifest, "version"));
+    const validPackageMarker = safeNormalizeName(stringValue(pkg?.name) ?? "") === expectedName
+      && Boolean(stringValue(pkg?.description))
+      && Boolean(stringValue(pkg?.version));
+    if (!validFrontmatterMarker && !validJsonMarker && !validPackageMarker) return false;
+
+    // Only explicit manifest commands or package bins count as ambient runnable
+    // markers. Repairable importer inputs (such as scripts.dev) remain accepted
+    // by `port`, but cannot silently shadow a bundled skill before import.
+    const commands = parseManifestCommands(jsonManifest) ?? inferPackageBinCommands(pkg, expectedName);
+    return Boolean(commands?.length)
+      && commands!.every((command) => Boolean(command.entry)
+        && validateSkillFileTarget(skillPath, command.entry!).valid);
+  } catch {
+    return false;
+  }
 }
 
 export function listPortableSkillMetas(options: PortableSkillOptions = {}): SkillMeta[] {
@@ -566,13 +567,16 @@ export function validatePortableSkillDirectory(name: string, skillPath: string):
             continue;
           }
           if (command.entry) {
-            if (!isSafeRelativePath(command.entry)) {
+            const targetValidation = validateSkillFileTarget(skillPath, command.entry);
+            if (!targetValidation.valid && targetValidation.problem === "unsafe") {
               add(issues, "portable.command_entry_unsafe", `Command '${command.name}' entry '${command.entry}' must stay inside the skill directory`);
               continue;
             }
-            const entryPath = join(skillPath, command.entry);
-            if (!existsSync(entryPath)) add(issues, "portable.command_entry_missing", `Command '${command.name}' entry '${command.entry}' is missing`);
-            else if (statSync(entryPath).isDirectory()) add(issues, "portable.command_entry_directory", `Command '${command.name}' entry '${command.entry}' must be a file`);
+            if (!targetValidation.valid && targetValidation.problem === "missing") {
+              add(issues, "portable.command_entry_missing", `Command '${command.name}' entry '${command.entry}' is missing`);
+            } else if (!targetValidation.valid) {
+              add(issues, "portable.command_entry_directory", `Command '${command.name}' entry '${command.entry}' must be a file`);
+            }
           }
         }
       }
@@ -616,14 +620,14 @@ export async function runPortableSkill(
   const command = manifest.commands[0];
   if (!command) return { exitCode: 1, error: `Portable skill '${name}' has no commands` };
   if (!command.entry) return { exitCode: 1, error: `Portable skill '${name}' command '${command.name}' has no entry` };
-  if (!isSafeRelativePath(command.entry)) {
+  const targetValidation = validateSkillFileTarget(skill.path, command.entry);
+  if (!targetValidation.valid && targetValidation.problem === "unsafe") {
     return { exitCode: 1, error: `Portable skill '${name}' command entry is unsafe` };
   }
-
-  const entryPath = join(skill.path, command.entry);
-  if (!existsSync(entryPath)) {
+  if (!targetValidation.valid && targetValidation.problem === "missing") {
     return { exitCode: 1, error: `Entry point '${command.entry}' not found in portable skill '${name}'` };
   }
+  if (!targetValidation.valid) return { exitCode: 1, error: `Entry point '${command.entry}' is not a file in portable skill '${name}'` };
 
   const pkgPath = join(skill.path, "package.json");
   const nodeModules = join(skill.path, "node_modules");
@@ -985,6 +989,19 @@ function parseManifestInputs(value: Record<string, unknown> | undefined): Portab
 
 function inferPackageCommands(pkg: PackageJson | undefined, fallbackName: string): PortableSkillCommand[] | undefined {
   if (!pkg) return undefined;
+  const binCommands = inferPackageBinCommands(pkg, fallbackName);
+  if (binCommands) return binCommands;
+  const scripts = isRecord(pkg.scripts) ? pkg.scripts : undefined;
+  const dev = stringValue(scripts?.dev);
+  const match = dev?.match(/(?:bun\s+run\s+|bun\s+)([^ ]+)/);
+  if (match?.[1]) {
+    return [{ name: fallbackName, entry: match[1].replace(/^\.\//, ""), description: `Run ${displayName(fallbackName)}.` }];
+  }
+  return undefined;
+}
+
+function inferPackageBinCommands(pkg: PackageJson | undefined, fallbackName: string): PortableSkillCommand[] | undefined {
+  if (!pkg) return undefined;
   if (isRecord(pkg.bin)) {
     const commands = Object.entries(pkg.bin)
       .filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].trim().length > 0)
@@ -994,12 +1011,6 @@ function inferPackageCommands(pkg: PackageJson | undefined, fallbackName: string
         description: `Run ${displayName(fallbackName)}.`,
       }));
     if (commands.length) return commands;
-  }
-  const scripts = isRecord(pkg.scripts) ? pkg.scripts : undefined;
-  const dev = stringValue(scripts?.dev);
-  const match = dev?.match(/(?:bun\s+run\s+|bun\s+)([^ ]+)/);
-  if (match?.[1]) {
-    return [{ name: fallbackName, entry: match[1].replace(/^\.\//, ""), description: `Run ${displayName(fallbackName)}.` }];
   }
   return undefined;
 }
@@ -1049,12 +1060,6 @@ function safeIsDirectory(path: string): boolean {
   } catch {
     return false;
   }
-}
-
-function isSafeRelativePath(value: string): boolean {
-  if (!value.trim() || isAbsolute(value)) return false;
-  const normalized = normalize(value).replace(/\\/g, "/");
-  return normalized !== ".." && !normalized.startsWith("../") && !normalized.includes("/../");
 }
 
 function add(target: SkillValidationMessage[], code: string, message: string): void {
