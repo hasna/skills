@@ -2,15 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-describe("README self-hosted premium onboarding", () => {
+describe("README remote premium onboarding", () => {
   const readme = readFileSync(join(process.cwd(), "README.md"), "utf8");
 
-  test("documents premium self-hosted runs as server-side execution", () => {
+  test("documents premium runs as remote-only execution", () => {
     for (const phrase of [
-      "## Self-Hosted Runtime Skills",
-      "Premium skills are self-hosted runs",
+      "## Remote Runtime Skills",
+      "Premium skills are remote-only runs",
       "do not fall back to bundled local execution",
-      "skills auth login --api-key",
       "skills runs status <run-id>",
       "skills exports download <run-id>",
     ]) {
@@ -18,13 +17,24 @@ describe("README self-hosted premium onboarding", () => {
     }
   });
 
-  test("separates self-hosted auth from local provider keys", () => {
+  test("documents both SaaS and self-hosted onboarding", () => {
     for (const phrase of [
-      "`SKILLS_API_KEY` is the self-hosted API credential",
+      "skills setup --mode hosted --api-url https://skills.md",
+      "skills auth login",
+      "skills setup --mode self-hosted --api-url https://skills.example.com",
+      "skills auth login --api-key",
+    ]) {
+      expect(readme).toContain(phrase);
+    }
+  });
+
+  test("separates remote auth from local provider keys", () => {
+    for (const phrase of [
+      "`SKILLS_API_KEY` is a legacy remote API credential",
       "It is not a provider",
       "`OPENAI_API_KEY`",
       "free/local OSS skills",
-      "self-hosted skills expose metadata/contracts",
+      "does not prove that an origin is `selfhost` or `cloud`",
     ]) {
       expect(readme).toContain(phrase);
     }

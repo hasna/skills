@@ -12,8 +12,8 @@ identity, data, and portability rules are in the
 They do not describe a provider, account, region, hostname, or domain:
 
 - `local` is the embedded engine.
-- `selfhost` is an operator-owned deployment anywhere, including a deployment
-  on `hasna-xyz-infra` in AWS.
+- `selfhost` is an operator-owned deployment anywhere, including
+  Hasna-internal infrastructure running in AWS.
 - `cloud` is the Hasna-operated multi-tenant customer SaaS, when that product
   exists.
 
@@ -21,6 +21,12 @@ Open products always support local and self-hosted operation. Cloud is an
 optional composition, not a requirement of the OSS core. Existing Open Skills
 `self-hosted` setup flags are legacy compatibility behavior while the profile
 contract is being implemented.
+
+The public npm package is the install surface for both local and hosted users.
+Installing `@hasna/skills` gives the client, not a SaaS backend. Published
+`@hasna/skills@0.1.58` is SaaS-capable for supported skills, while
+Hasna-internal infrastructure is a self-hosted deployment. Source, package, and
+live API capability state can drift and must be verified separately.
 
 ## Package And Server Shape
 
@@ -50,8 +56,14 @@ belong in the platform composition.
   explicit named profile.
 - Resolve profiles in this order: `--profile`, product profile environment
   variable, project profile, global default, then local.
+- Resolve the independent storage profile in this order: explicit storage
+  selector, storage-profile environment variable, legacy storage environment
+  bridge, selected deployment profile, project storage profile, global storage
+  default, then local storage.
 - Never silently phone home or fall back between local and remote execution.
 - Never infer selfhost or cloud from an API URL, provider, or hostname.
+- Never infer deployment mode or operation execution policy from storage mode;
+  `local | remote | hybrid` is a separate package-storage axis.
 
 ## Universal Client Surface
 
@@ -65,8 +77,11 @@ adapter selected by a profile. Appropriate OSS commands include:
 - registry, quote, run status, logs, artifact, export, import, and sync commands
 
 Commands return stable JSON and store only scoped credential references in
-configuration. The HTTP adapter verifies product, service identity, mode, auth,
-tenant, features, and billing capabilities before releasing credentials.
+configuration. The HTTP adapter discovers capabilities without credentials,
+then verifies the signed response against an externally enrolled cloud identity
+or selfhost fingerprint. Discovery is not a trust root. Product, operator,
+service identity, mode, issuer, audience, tenant, features, and billing
+capabilities must match before the client releases credentials.
 
 Do not put these Hasna SaaS concerns in OSS:
 

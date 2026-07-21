@@ -7,26 +7,28 @@ describe("package ownership and sync strategy", () => {
     join(process.cwd(), "docs/architecture/package-ownership-sync-strategy.md"),
     "utf8",
   );
+  const compactContent = content.replace(/\s+/g, " ");
 
   test("chooses package dependency plus generated registry sync", () => {
     expect(content).toContain("canonical upstream package");
-    expect(content).toContain("released package APIs plus generated registry sync");
+    expect(content).toContain("imports released public");
     expect(content).toContain("Released npm package pinned by lockfile");
     expect(content).toContain("Generated Registry Sync");
   });
 
-  test("assigns ownership between upstream and self-hosted wrappers", () => {
+  test("assigns ownership across OSS, operator selfhost, and Hasna cloud", () => {
     for (const phrase of [
       "`hasna/skills`, npm `@hasna/skills`",
       "Agent CLI",
       "MCP server",
       "Bundled skill corpus",
-      "Self-hosted API",
-      "Self-hosted workers",
-      "Self-hosted web app",
-      "Self-hosted infrastructure",
+      "Provider-neutral server",
+      "Operator selfhost composition",
+      "Hasna cloud composition",
+      "Hasna cloud infrastructure",
+      "Hasna-internal infrastructure belongs in this row",
     ]) {
-      expect(content).toContain(phrase);
+      expect(compactContent).toContain(phrase);
     }
   });
 
@@ -37,44 +39,57 @@ describe("package ownership and sync strategy", () => {
       "Generated Source Copy",
       "Monorepo Package Ownership Transfer",
     ]) {
-      expect(content).toContain(phrase);
+      expect(compactContent).toContain(phrase);
     }
   });
 
-  test("keeps self-hosted wrappers as package consumers", () => {
-    expect(content).toContain("Self-hosted service wrappers should consume `@hasna/skills`");
+  test("keeps selfhost and cloud compositions as package consumers", () => {
+    expect(content).toContain("External selfhost compositions and the Hasna cloud platform should consume");
     expect(content).toContain("Released npm package pinned by lockfile");
     expect(content).toContain("public-boundary preflight");
     expect(content).not.toContain("@hasnatools/platform-skills");
     expect(content).not.toContain("src/platform");
   });
 
-  test("keeps hosted wrapper concerns out of upstream", () => {
+  test("keeps private composition concerns out of upstream", () => {
     for (const phrase of [
-      "No private or hosted wrapper module should publish as `@hasna/skills`",
-      "No upstream module should require hosted account state",
-      "billing",
-      "tenants",
-      "No hosted or paid skill should download protected source code",
+      "No private composition module should publish as `@hasna/skills`",
+      "No upstream client or embedded-engine module should require cloud account",
+      "Hasna billing",
+      "customer tenancy",
+      "No remote or paid skill should download protected source code",
     ]) {
-      expect(content).toContain(phrase);
+      expect(compactContent).toContain(phrase);
     }
   });
 
   test("defines remote-only premium boundary while preserving local user-key skills", () => {
     for (const phrase of [
       "Premium Remote-Only Boundary",
-      "server-executed premium skills must submit to a compatible self-hosted API",
+      "selected, enrolled `selfhost` or `cloud` profile",
       "must not fall back to bundled local execution",
       "OSS package may expose public contracts for server-executed skills",
       "must not expose private provider routing",
-      "`SKILLS_API_KEY` authenticates the user to a self-hosted skills API",
+      "`SKILLS_API_KEY` is the current legacy remote credential input",
       "provider keys such as",
       "`OPENAI_API_KEY`",
       "skill-specific local credentials",
       "protected server-side implementation source",
     ]) {
-      expect(content).toContain(phrase);
+      expect(compactContent).toContain(phrase);
+    }
+  });
+
+  test("maps legacy deployment, storage, and credentials independently", () => {
+    for (const phrase of [
+      "Legacy-To-Target Mapping",
+      "`HASNA_SKILLS_STORAGE_MODE` / `SKILLS_STORAGE_MODE`",
+      "Storage profile `mode` (`local`, `remote`, or `hybrid`)",
+      "`credentialReenrollmentRequired`",
+      "deployment authority, operation execution, and storage authority",
+      "never determine target mode without trust enrollment",
+    ]) {
+      expect(compactContent).toContain(phrase);
     }
   });
 });
