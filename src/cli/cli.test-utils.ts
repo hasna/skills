@@ -1,12 +1,11 @@
 import { join } from "path";
-import { mkdtempSync } from "fs";
+import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { pathToFileURL } from "url";
 import pkg from "../../package.json" with { type: "json" };
 import { BASIC_SKILL_NAMES, SKILLS } from "../lib/registry.js";
 
 export const CLI_PATH = join(import.meta.dir, "index.tsx");
-export const BUILT_CLI_PATH = join(import.meta.dir, "..", "..", "bin", "index.js");
 export const EXPECTED_ALL_SKILL_COUNT = SKILLS.length;
 export const EXPECTED_BASIC_SKILL_COUNT = BASIC_SKILL_NAMES.length;
 export const PACKAGE_VERSION = pkg.version;
@@ -44,7 +43,20 @@ export async function runBuiltCli(
   args: string[],
   env: Record<string, string> = {},
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  return runCliAtPath(BUILT_CLI_PATH, args, env);
+  const buildDir = mkdtempSync(join(tmpdir(), "skills-cli-build-"));
+  try {
+    const build = await Bun.build({
+      entrypoints: [CLI_PATH],
+      outdir: buildDir,
+      target: "bun",
+    });
+    if (!build.success) {
+      throw new AggregateError(build.logs, "Failed to build the CLI test bundle");
+    }
+    return await runCliAtPath(join(buildDir, "index.js"), args, env);
+  } finally {
+    rmSync(buildDir, { recursive: true, force: true });
+  }
 }
 
 export async function runCliWithTtyOverride(

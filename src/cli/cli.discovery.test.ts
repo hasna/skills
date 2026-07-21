@@ -18,10 +18,10 @@ function shellQuote(value: string): string {
 
 describe("CLI discovery", () => {
   describe("help", () => {
-    test("source and built package bin show command discovery for a bare non-TTY invocation", async () => {
+    test("source and built CLI bundle show command discovery for a bare non-TTY invocation", async () => {
       for (const [surface, result] of [
         ["source", await runCli([])],
-        ["built package bin", await runBuiltCli([])],
+        ["built CLI bundle", await runBuiltCli([])],
       ] as const) {
         expect(result.exitCode, surface).toBe(0);
         expect(result.stderr, surface).toBe("");
