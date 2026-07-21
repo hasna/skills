@@ -74,7 +74,11 @@ skills/                           # 202 self-contained skill directories
 
 **MCP Server (`src/mcp/index.ts`)** -- Model Context Protocol server over stdio. 9 tools (`list_skills`, `search_skills`, `get_skill_info`, `get_skill_docs`, `install_skill`, `remove_skill`, `list_categories`, `get_requirements`, `run_skill`) and 2 resources (`skills://registry`, `skills://{name}`).
 
-**HTTP Server** — not shipped in OSS. The SaaS dashboard and `/api/v1/*` endpoints live in the private `platform-skills` repo.
+**HTTP Server (`src/server/`)** -- shipped as the provider-neutral self-hosted
+server. Its executable handler registry is authoritative: unsupported skills
+are unavailable and rejected before queue creation. Current provider-free
+handlers quote 0 credits. Billing, credit-ledger, commercial approval, and SaaS
+composition remain operator/platform extensions.
 
 **Library (`src/index.ts`)** -- npm package `@hasna/skills` re-exporting registry, installer, and skillinfo modules.
 

@@ -37,6 +37,16 @@ describe("v1 acceptance criteria", () => {
     }
   });
 
+  test("keeps bundled self-host acceptance limited to implemented capabilities", () => {
+    expect(doc).toContain("executable handler registry");
+    expect(doc).toContain("quote `0 credits`");
+    expect(doc).toContain("rejected before queue creation");
+    expect(doc).toContain("`skills:read`, `runs:read`, `runs:write`, and");
+    expect(doc).toContain("`artifacts:read`");
+    expect(doc).toContain("Credit ledgers, commercial billing, and approval policy");
+    expect(doc).toContain("explicit operator extension");
+  });
+
   test("requires local verification commands", () => {
     expect(doc).toContain("bun install --frozen-lockfile");
     expect(doc).toContain("bun run typecheck");

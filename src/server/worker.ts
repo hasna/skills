@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { ArtifactStorage } from "./artifact-storage.js";
 import { resolveServerConfig } from "./config.js";
-import { executeRun } from "./handlers.js";
+import { executeClaimedRun } from "./handlers.js";
 import { createStore } from "./store.js";
 import type { SkillsProductStore } from "./types.js";
 
@@ -11,13 +11,9 @@ export async function runWorkerOnce(
   workerId = `worker_${randomUUID().slice(0, 8)}`,
   storage = new ArtifactStorage(),
 ): Promise<boolean> {
-  const run = await store.claimNextRun({ workerId });
-  if (!run) return false;
-  if (run.status === "cancel_requested") {
-    await store.updateRun(run.id, { status: "cancelled", completedAt: new Date().toISOString() });
-    return true;
-  }
-  await executeRun(store, run, storage);
+  const claim = await store.claimNextRun({ workerId });
+  if (!claim) return false;
+  await executeClaimedRun(store, claim, storage);
   return true;
 }
 

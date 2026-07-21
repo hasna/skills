@@ -24,8 +24,9 @@ with self-hosted execution kept behind explicit setup and auth.
   local-safe unless self-hosted mode is explicit.
 - User can run `skills auth login --api-key <key>` to verify and store a
   provisioned self-hosted API key.
-- User can inspect self-hosted account state with `skills billing status`; when
-  billing is enabled, checkout/portal URLs use the same API.
+- User can inspect the bundled self-hosted service status with
+  `skills billing status`; commercial billing and checkout/portal behavior are
+  operator extensions, not bundled acceptance claims.
 - User can list, search, inspect, pin, unpin, quote, validate, and run skills.
 - Premium or self-hosted skills fail closed without self-hosted credentials.
 - CLI errors are structured and scriptable with `--json`.
@@ -76,8 +77,17 @@ with self-hosted execution kept behind explicit setup and auth.
 
 - The self-hosted service exposes health, auth, registry, quote, run, log, and
   artifact APIs.
-- The service owns account state, billing integration, approvals, workers,
-  secrets, and deployments.
+- Registry availability and quotes come from the executable handler registry,
+  not from package catalog metadata.
+- The bundled provider-free handlers quote `0 credits`; unsupported handlers
+  are unavailable and rejected before queue creation.
+- API keys enforce `skills:read`, `runs:read`, `runs:write`, and
+  `artifacts:read` at their respective routes.
+- Queued and retrying cancellation is terminal, while running cancellation is
+  observed atomically before a worker can commit a terminal result.
+- The service owns generic account, worker, queue, artifact, secret-reference,
+  and deployment state. Credit ledgers, commercial billing, and approval policy
+  require an explicit operator extension and are not bundled V1 capabilities.
 - Compatible API URLs remain explicit configuration and do not force local users
   onto the self-hosted service.
 

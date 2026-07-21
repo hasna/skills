@@ -3,13 +3,17 @@ import type {
   ApiPrincipal,
   ClaimRunInput,
   CreateRunInput,
+  CreateRunResult,
+  RunExecutionClaim,
+  RunStartResult,
   ServerArtifact,
   ServerRunLog,
   ServerRunRecord,
   ServerRunStatus,
+  RunOutcomePatch,
   SkillsProductStore,
 } from "./types.js";
-import { hashApiKey, publicPrincipal } from "./auth.js";
+import { hashApiKey, selfHostedPrincipal } from "./auth.js";
 
 type SqlTag = {
   (strings: TemplateStringsArray, ...values: unknown[]): Promise<Record<string, unknown>[]>;
@@ -65,7 +69,7 @@ export class MemorySkillsStore implements SkillsProductStore {
   }
 
   addApiKey(token: string, principal?: Partial<ApiPrincipal>): ApiPrincipal {
-    const resolved = publicPrincipal(principal);
+    const resolved = selfHostedPrincipal(token, principal);
     this.apiKeys.set(hashApiKey(token), resolved);
     return resolved;
   }
@@ -78,12 +82,12 @@ export class MemorySkillsStore implements SkillsProductStore {
     return this.apiKeys.get(hash) ?? null;
   }
 
-  async createRun(input: CreateRunInput): Promise<ServerRunRecord> {
+  async createRun(input: CreateRunInput): Promise<CreateRunResult> {
     const idemKey = input.idempotencyKey?.trim();
     const idemMapKey = idemKey ? `${input.principal.orgId}:${idemKey}` : undefined;
     if (idemMapKey) {
       const existing = this.idempotency.get(idemMapKey);
-      if (existing) return this.runs.get(existing)!;
+      if (existing) return { run: this.runs.get(existing)!, created: false };
     }
     const now = nowIso();
     const run: ServerRunRecord = {
@@ -104,7 +108,7 @@ export class MemorySkillsStore implements SkillsProductStore {
     this.logs.set(run.id, []);
     this.artifacts.set(run.id, []);
     if (idemMapKey) this.idempotency.set(idemMapKey, run.id);
-    return run;
+    return { run, created: true };
   }
 
   async listRuns(principal: ApiPrincipal, limit: number): Promise<ServerRunRecord[]> {
@@ -119,15 +123,44 @@ export class MemorySkillsStore implements SkillsProductStore {
     return run && run.orgId === principal.orgId ? run : null;
   }
 
-  async claimNextRun(input: ClaimRunInput): Promise<ServerRunRecord | null> {
+  async claimNextRun(input: ClaimRunInput): Promise<RunExecutionClaim | null> {
     const run = Array.from(this.runs.values())
       .filter((candidate) => candidate.status === "queued" || candidate.status === "retrying")
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
     if (!run) return null;
-    return this.patchRun(run.id, { status: "running", startedAt: nowIso() });
+    const claimed = this.patchRun(run.id, { status: "running", startedAt: nowIso() });
+    return claimed ? { run: claimed, claimed: true } : null;
   }
 
-  async updateRun(runId: string, patch: Partial<Pick<ServerRunRecord, "status" | "outputType" | "outputPreview" | "errorCode" | "errorMessage" | "startedAt" | "completedAt">>): Promise<ServerRunRecord | null> {
+  async startRun(runId: string): Promise<RunStartResult | null> {
+    const run = this.runs.get(runId);
+    if (!run) return null;
+    if (run.status === "queued" || run.status === "retrying") {
+      const claimed = this.patchRun(runId, { status: "running", startedAt: run.startedAt ?? nowIso() });
+      return claimed ? { run: claimed, claimed: true } : null;
+    }
+    return { run, claimed: false };
+  }
+
+  async requestCancellation(principal: ApiPrincipal, runId: string): Promise<ServerRunRecord | null> {
+    const run = this.runs.get(runId);
+    if (!run || run.orgId !== principal.orgId) return null;
+    if (run.status === "queued" || run.status === "retrying") {
+      return this.patchRun(runId, { status: "cancelled", completedAt: nowIso() });
+    }
+    if (run.status === "running") {
+      return this.patchRun(runId, { status: "cancel_requested" });
+    }
+    return run;
+  }
+
+  async finishRun(runId: string, patch: RunOutcomePatch): Promise<ServerRunRecord | null> {
+    const run = this.runs.get(runId);
+    if (!run) return null;
+    if (run.status === "cancel_requested") {
+      return this.patchRun(runId, { status: "cancelled", completedAt: patch.completedAt ?? nowIso() });
+    }
+    if (run.status !== "running") return run;
     return this.patchRun(runId, patch);
   }
 
@@ -180,7 +213,7 @@ export class PostgresSkillsStore implements SkillsProductStore {
   }
 
   async ensureBootstrapApiKey(token: string, principal?: Partial<ApiPrincipal>): Promise<void> {
-    const resolved = publicPrincipal(principal);
+    const resolved = selfHostedPrincipal(token, principal);
     await this.sql`
       INSERT INTO organizations (id, slug, name)
       VALUES (${resolved.orgId}, ${resolved.orgSlug}, ${resolved.orgName})
@@ -229,22 +262,27 @@ export class PostgresSkillsStore implements SkillsProductStore {
     };
   }
 
-  async createRun(input: CreateRunInput): Promise<ServerRunRecord> {
-    if (input.idempotencyKey) {
-      const existing = await this.sql`
-        SELECT * FROM skills_runs
-        WHERE org_id = ${input.principal.orgId} AND idempotency_key = ${input.idempotencyKey}
-        LIMIT 1
-      `;
-      if (existing[0]) return rowToRun(existing[0]);
-    }
+  async createRun(input: CreateRunInput): Promise<CreateRunResult> {
+    const idempotencyKey = input.idempotencyKey?.trim() || null;
     const id = runId();
     const rows = await this.sql`
       INSERT INTO skills_runs (id, org_id, user_id, skill_slug, requested_slug, status, input_json, args_json, idempotency_key, correlation_id)
-      VALUES (${id}, ${input.principal.orgId}, ${input.principal.userId}, ${input.slug}, ${input.slug}, ${"queued"}, ${JSON.stringify(input.input)}::jsonb, ${JSON.stringify(input.args)}::jsonb, ${input.idempotencyKey ?? null}, ${randomUUID()})
+      VALUES (${id}, ${input.principal.orgId}, ${input.principal.userId}, ${input.slug}, ${input.slug}, ${"queued"}, ${JSON.stringify(input.input)}::jsonb, ${JSON.stringify(input.args)}::jsonb, ${idempotencyKey}, ${randomUUID()})
+      ON CONFLICT (org_id, idempotency_key)
+      WHERE idempotency_key IS NOT NULL
+      DO NOTHING
       RETURNING *
     `;
-    return rowToRun(rows[0]);
+    if (rows[0]) return { run: rowToRun(rows[0]), created: true };
+    if (!idempotencyKey) throw new Error("run insert returned no row");
+
+    const existing = await this.sql`
+      SELECT * FROM skills_runs
+      WHERE org_id = ${input.principal.orgId} AND idempotency_key = ${idempotencyKey}
+      LIMIT 1
+    `;
+    if (!existing[0]) throw new Error("idempotent run insert conflicted without an existing run");
+    return { run: rowToRun(existing[0]), created: false };
   }
 
   async listRuns(principal: ApiPrincipal, limit: number): Promise<ServerRunRecord[]> {
@@ -262,7 +300,7 @@ export class PostgresSkillsStore implements SkillsProductStore {
     return rows[0] ? rowToRun(rows[0]) : null;
   }
 
-  async claimNextRun(input: ClaimRunInput): Promise<ServerRunRecord | null> {
+  async claimNextRun(input: ClaimRunInput): Promise<RunExecutionClaim | null> {
     const rows = await this.sql`
       UPDATE skills_runs
       SET status = ${"running"}, started_at = COALESCE(started_at, now()), locked_by = ${input.workerId}, locked_at = now()
@@ -275,26 +313,52 @@ export class PostgresSkillsStore implements SkillsProductStore {
       )
       RETURNING *
     `;
-    return rows[0] ? rowToRun(rows[0]) : null;
+    return rows[0] ? { run: rowToRun(rows[0]), claimed: true } : null;
   }
 
-  async updateRun(runId: string, patch: Partial<Pick<ServerRunRecord, "status" | "outputType" | "outputPreview" | "errorCode" | "errorMessage" | "startedAt" | "completedAt">>): Promise<ServerRunRecord | null> {
-    const current = await this.sql`SELECT * FROM skills_runs WHERE id = ${runId} LIMIT 1`;
-    if (!current[0]) return null;
-    const run = { ...rowToRun(current[0]), ...patch };
+  async startRun(runId: string): Promise<RunStartResult | null> {
     const rows = await this.sql`
       UPDATE skills_runs
-      SET status = ${run.status},
-          output_type = ${run.outputType ?? null},
-          output_preview = ${run.outputPreview ?? null},
-          error_code = ${run.errorCode ?? null},
-          error_message = ${run.errorMessage ?? null},
-          started_at = ${run.startedAt ?? null},
-          completed_at = ${run.completedAt ?? null}
-      WHERE id = ${runId}
+      SET status = ${"running"},
+          started_at = COALESCE(started_at, now())
+      WHERE id = ${runId} AND status IN (${"queued"}, ${"retrying"})
+      RETURNING *
+    `;
+    if (rows[0]) return { run: rowToRun(rows[0]), claimed: true };
+    const current = await this.sql`SELECT * FROM skills_runs WHERE id = ${runId} LIMIT 1`;
+    return current[0] ? { run: rowToRun(current[0]), claimed: false } : null;
+  }
+
+  async requestCancellation(principal: ApiPrincipal, runId: string): Promise<ServerRunRecord | null> {
+    const rows = await this.sql`
+      UPDATE skills_runs
+      SET status = CASE
+            WHEN status IN (${"queued"}, ${"retrying"}) THEN ${"cancelled"}
+            WHEN status = ${"running"} THEN ${"cancel_requested"}
+            ELSE status
+          END,
+          completed_at = CASE WHEN status IN (${"queued"}, ${"retrying"}) THEN now() ELSE completed_at END
+      WHERE id = ${runId} AND org_id = ${principal.orgId}
       RETURNING *
     `;
     return rows[0] ? rowToRun(rows[0]) : null;
+  }
+
+  async finishRun(runId: string, patch: RunOutcomePatch): Promise<ServerRunRecord | null> {
+    const rows = await this.sql`
+      UPDATE skills_runs
+      SET status = CASE WHEN status = ${"cancel_requested"} THEN ${"cancelled"} ELSE ${patch.status} END,
+          output_type = CASE WHEN status = ${"running"} THEN ${patch.outputType ?? null} ELSE output_type END,
+          output_preview = CASE WHEN status = ${"running"} THEN ${patch.outputPreview ?? null} ELSE output_preview END,
+          error_code = CASE WHEN status = ${"running"} THEN ${patch.errorCode ?? null} ELSE error_code END,
+          error_message = CASE WHEN status = ${"running"} THEN ${patch.errorMessage ?? null} ELSE error_message END,
+          completed_at = ${patch.completedAt ?? nowIso()}
+      WHERE id = ${runId} AND status IN (${"running"}, ${"cancel_requested"})
+      RETURNING *
+    `;
+    if (rows[0]) return rowToRun(rows[0]);
+    const current = await this.sql`SELECT * FROM skills_runs WHERE id = ${runId} LIMIT 1`;
+    return current[0] ? rowToRun(current[0]) : null;
   }
 
   async appendLog(runId: string, orgId: string, level: ServerRunLog["level"], message: string): Promise<ServerRunLog> {

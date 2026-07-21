@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
   user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name text NOT NULL,
   key_hash text NOT NULL UNIQUE,
-  scopes_json jsonb NOT NULL DEFAULT '["skills:read","runs:write"]'::jsonb,
+  scopes_json jsonb NOT NULL DEFAULT '["skills:read","runs:read","runs:write","artifacts:read"]'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now(),
   last_used_at timestamptz,
   revoked_at timestamptz

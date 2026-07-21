@@ -52,6 +52,7 @@
     "dev:server": "bun --watch run ./src/server/index.ts",
     "dev:worker": "bun --watch run ./src/server/worker.ts",
     "migrate": "bun run ./src/server/migrate.ts",
+    "test:migration:postgres": "PGDATABASE=${PGDATABASE:-postgres} psql -X -q -v ON_ERROR_STOP=1 -f tests/postgres/0002_api_key_read_scopes.fixture.sql",
     "typecheck": "tsc --noEmit",
     "verify:release": "bun run scripts/release-guard.ts",
     "prepack": "bun run build && bun run verify:release",

@@ -1,6 +1,8 @@
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../lib/remote-run-contract.js";
+import { getSelfHostedExecutionCapability } from "../lib/self-hosted-capabilities.js";
+import type { ApiKeyScope } from "../lib/api-key-scopes.js";
 import { ArtifactStorage } from "./artifact-storage.js";
-import { authenticateRequest } from "./auth.js";
+import { authenticateRequest, principalHasScope } from "./auth.js";
 import { resolveServerConfig, type SkillsServerConfig } from "./config.js";
 import { executeRun } from "./handlers.js";
 import { quoteServerSkill, getServerSkill, getServerSkillMd, listServerSkills } from "./registry.js";
@@ -70,54 +72,76 @@ async function handleApiV1(
   config: SkillsServerConfig,
   artifactStorage: ArtifactStorage,
 ): Promise<Response> {
-  const [resource, id, subresource, childId] = parts;
+  const [resource, id, subresource, childId, action] = parts;
 
   if (resource === "skills") {
-    if (request.method === "GET" && !id) return json(listServerSkills());
-    if (request.method === "GET" && id && subresource === "skill.md") {
+    const denied = requireScope(principal, "skills:read");
+    if (denied) return denied;
+    if (request.method === "GET" && parts.length === 1) return json(listServerSkills());
+    if (request.method === "GET" && parts.length === 3 && id && subresource === "skill.md") {
       const docs = getServerSkillMd(id);
       return docs ? new Response(docs, { headers: { "Content-Type": "text/markdown; charset=utf-8" } }) : json({ error: "skill not found" }, { status: 404 });
     }
-    if (request.method === "GET" && id && !subresource) {
+    if (request.method === "GET" && parts.length === 2 && id) {
       const skill = getServerSkill(id);
       return skill ? json(skill) : json({ error: "skill not found", code: "SKILL_NOT_FOUND" }, { status: 404 });
     }
-    if (request.method === "POST" && id && subresource === "quote") return json(quoteServerSkill(id));
+    if (request.method === "POST" && parts.length === 3 && id && subresource === "quote") return json(quoteServerSkill(id));
   }
 
   if (resource === "runs") {
-    if (request.method === "GET" && !id) {
+    const requiredScope: ApiKeyScope | null = request.method === "POST"
+      ? "runs:write"
+      : request.method === "GET" && subresource === "artifacts"
+        ? "artifacts:read"
+        : request.method === "GET"
+          ? "runs:read"
+          : null;
+    if (requiredScope) {
+      const denied = requireScope(principal, requiredScope);
+      if (denied) return denied;
+    }
+
+    if (request.method === "GET" && parts.length === 1) {
       const limit = clampInt(new URL(request.url).searchParams.get("limit"), 20, 100);
       return json((await store.listRuns(principal, limit)).map(runPayload));
     }
 
-    if (request.method === "POST" && id && !subresource) {
+    if (request.method === "POST" && parts.length === 2 && id) {
+      const skill = getServerSkill(id);
+      if (!skill) return json({ error: "skill not found", code: "SKILL_NOT_FOUND" }, { status: 404 });
+      if (!getSelfHostedExecutionCapability(id)) {
+        return json({
+          error: "This self-hosted deployment has no executable handler for that skill.",
+          code: "HANDLER_UNAVAILABLE",
+        }, { status: 503 });
+      }
       const body = await readJson(request, config.requestBodyLimitBytes);
       const input = isRecord(body.input) ? body.input : {};
       const args = Array.isArray(body.args) ? body.args.map(String) : [];
-      const run = await store.createRun({
+      const { run, created } = await store.createRun({
         principal,
         slug: id,
         input,
         args,
         idempotencyKey: request.headers.get("idempotency-key") || stringField(body.idempotencyKey),
       });
-      if (config.inlineWorker) void executeRun(store, run, artifactStorage);
+      if (config.inlineWorker && created) void executeRun(store, run, artifactStorage);
       return json(runPayload(run), { status: 202 });
     }
 
-    if (request.method === "GET" && id && !subresource) {
+    if (request.method === "GET" && parts.length === 2 && id) {
       const run = await store.getRun(principal, id);
       return run ? json(runPayload(run)) : json({ error: "run not found", code: "RUN_NOT_FOUND" }, { status: 404 });
     }
 
-    if (request.method === "GET" && id && subresource === "logs") {
+    if (request.method === "GET" && parts.length === 3 && id && subresource === "logs") {
       const run = await store.getRun(principal, id);
       if (!run) return json({ error: "run not found", code: "RUN_NOT_FOUND" }, { status: 404 });
       return json(await store.listLogs(principal, id));
     }
 
-    if (request.method === "GET" && id && subresource === "artifacts" && !childId) {
+    if (request.method === "GET" && parts.length === 3 && id && subresource === "artifacts") {
       const run = await store.getRun(principal, id);
       if (!run) return json({ error: "run not found", code: "RUN_NOT_FOUND" }, { status: 404 });
       const artifacts = await store.listArtifacts(principal, id);
@@ -127,7 +151,7 @@ async function handleApiV1(
       })));
     }
 
-    if (request.method === "GET" && id && subresource === "artifacts" && childId) {
+    if (request.method === "GET" && parts.length === 5 && id && subresource === "artifacts" && childId && action === "download") {
       const artifact = await store.getArtifact(principal, id, childId);
       if (!artifact) return json({ error: "artifact not found", code: "ARTIFACT_NOT_FOUND" }, { status: 404 });
       const body = await artifactStorage.readText(artifact);
@@ -143,22 +167,26 @@ async function handleApiV1(
       });
     }
 
-    if (request.method === "POST" && id && subresource === "cancel") {
-      const run = await store.getRun(principal, id);
-      if (!run) return json({ error: "run not found", code: "RUN_NOT_FOUND" }, { status: 404 });
-      const next = await store.updateRun(id, { status: "cancel_requested" });
-      return json(runPayload(next ?? run));
+    if (request.method === "POST" && parts.length === 3 && id && subresource === "cancel") {
+      const next = await store.requestCancellation(principal, id);
+      return next
+        ? json(runPayload(next))
+        : json({ error: "run not found", code: "RUN_NOT_FOUND" }, { status: 404 });
     }
   }
 
   if (resource === "billing") {
-    if (request.method === "GET" && id === "status") {
+    if (request.method === "GET" && parts.length === 2 && id === "status") {
       return json({ plan: "self-hosted", creditBalance: 0, subscription: null, hasPaymentMethod: false });
     }
-    if (request.method === "GET" && id === "credits") {
+    if (request.method === "GET" && parts.length === 2 && id === "credits") {
       return json({ packs: [], mode: "self-hosted" });
     }
-    if (request.method === "POST") {
+    if (
+      request.method === "POST"
+      && parts.length === 2
+      && (id === "checkout" || id === "portal" || id === "credits")
+    ) {
       return json({ error: "billing is not configured for this self-hosted deployment", code: "BILLING_NOT_CONFIGURED" }, { status: 501 });
     }
   }
@@ -171,6 +199,15 @@ function identityPayload(principal: ApiPrincipal): Record<string, unknown> {
     user: { id: principal.userId, email: principal.email, role: principal.role },
     organization: { id: principal.orgId, slug: principal.orgSlug, name: principal.orgName },
   };
+}
+
+function requireScope(principal: ApiPrincipal, requiredScope: ApiKeyScope): Response | null {
+  if (principalHasScope(principal, requiredScope)) return null;
+  return json({
+    error: `API key requires the ${requiredScope} scope`,
+    code: "INSUFFICIENT_SCOPE",
+    requiredScope,
+  }, { status: 403 });
 }
 
 function runPayload(run: ServerRunRecord): Record<string, unknown> {

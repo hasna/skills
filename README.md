@@ -327,6 +327,29 @@ service. A future named-profile layer can retain several enrolled services at
 once. The public package does not contain the SaaS backend; server runtime state
 and artifact storage remain under the authority of the selected service.
 
+The bundled provider-neutral self-hosted server advertises execution from its
+actual handler registry. Its current provider-free handlers are
+`audio-transcript-pack`, `transcript`, and `video-highlight-pack`; they quote
+`0 credits`. Other catalog entries are returned as unavailable and run submit is
+rejected before queue creation. The bundled server has no credit ledger,
+reservation, debit, refund, commercial billing, or approval-policy engine.
+Those remain explicit operator extensions until configured implementations and
+their enforcement tests exist; package catalog credits are not self-hosted
+server quotes.
+
+Self-hosted API keys are scoped. Registry, run inspection, run mutation, and
+artifact reads require `skills:read`, `runs:read`, `runs:write`, and
+`artifacts:read` respectively. Fresh bootstrap keys receive those four scopes;
+before restarting an existing server, run the bundled migrations. The upgrade
+fingerprints the complete legacy internal bootstrap key, organization, and user
+identity, then preserves its tenant data while moving it to the self-hosted
+operator identity and four-scope contract. A matching name or legacy scope set
+alone is never enough to select a key. Other previously provisioned keys remain
+least-privilege and require an explicit operator scope update. Queued
+cancellation is terminal immediately. A running worker observes
+`cancel_requested`, and its terminal commit cannot overwrite the resulting
+cancellation.
+
 ## Storage Boundary
 
 Open Skills is local-first. Project runtime state stays in `.skills/`; global

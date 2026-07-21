@@ -76,18 +76,36 @@ export interface CreateRunInput {
   idempotencyKey?: string;
 }
 
+export interface CreateRunResult {
+  run: ServerRunRecord;
+  created: boolean;
+}
+
 export interface ClaimRunInput {
   workerId: string;
 }
 
+export interface RunExecutionClaim {
+  run: ServerRunRecord;
+  claimed: true;
+}
+
+export type RunStartResult = RunExecutionClaim | { run: ServerRunRecord; claimed: false };
+
+export type RunOutcomePatch = {
+  status: Extract<ServerRunStatus, "succeeded" | "failed">;
+} & Partial<Pick<ServerRunRecord, "outputType" | "outputPreview" | "errorCode" | "errorMessage" | "completedAt">>;
+
 export interface SkillsProductStore {
   authenticateApiKeyHash(hash: string): Promise<ApiPrincipal | null>;
   ensureBootstrapApiKey?(token: string, principal?: Partial<ApiPrincipal>): Promise<void>;
-  createRun(input: CreateRunInput): Promise<ServerRunRecord>;
+  createRun(input: CreateRunInput): Promise<CreateRunResult>;
   listRuns(principal: ApiPrincipal, limit: number): Promise<ServerRunRecord[]>;
   getRun(principal: ApiPrincipal, runId: string): Promise<ServerRunRecord | null>;
-  claimNextRun(input: ClaimRunInput): Promise<ServerRunRecord | null>;
-  updateRun(runId: string, patch: Partial<Pick<ServerRunRecord, "status" | "outputType" | "outputPreview" | "errorCode" | "errorMessage" | "startedAt" | "completedAt">>): Promise<ServerRunRecord | null>;
+  claimNextRun(input: ClaimRunInput): Promise<RunExecutionClaim | null>;
+  startRun(runId: string): Promise<RunStartResult | null>;
+  requestCancellation(principal: ApiPrincipal, runId: string): Promise<ServerRunRecord | null>;
+  finishRun(runId: string, patch: RunOutcomePatch): Promise<ServerRunRecord | null>;
   appendLog(runId: string, orgId: string, level: ServerRunLog["level"], message: string): Promise<ServerRunLog>;
   listLogs(principal: ApiPrincipal, runId: string): Promise<ServerRunLog[]>;
   addArtifact(artifact: Omit<ServerArtifact, "createdAt">): Promise<ServerArtifact>;

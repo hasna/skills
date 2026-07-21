@@ -122,6 +122,17 @@ describe("public API exports", () => {
     expect(typeof publicAPI.getMcpResourceContracts).toBe("function");
   });
 
+  test("self-hosted executable capability is exported from the package", () => {
+    expect(publicAPI.API_KEY_SCOPES).toEqual(["skills:read", "runs:read", "runs:write", "artifacts:read"]);
+    expect(publicAPI.SELF_HOSTED_EXECUTION_CAPABILITIES.map((capability) => capability.slug)).toEqual([
+      "audio-transcript-pack",
+      "transcript",
+      "video-highlight-pack",
+    ]);
+    expect(publicAPI.getSelfHostedExecutionCapability("transcribe")).toMatchObject({ slug: "transcript", providerFree: true });
+    expect(publicAPI.getSelfHostedExecutionCapability("logo-design")).toBeNull();
+  });
+
   test("native storage helpers are exported for wrappers", () => {
     expect(publicAPI.STORAGE_TABLES).toEqual(["skills_sync_records", "skills_sync_cursors"]);
     expect(publicAPI.SKILLS_STORAGE_ENV.databaseUrl).toBe("HASNA_SKILLS_DATABASE_URL");

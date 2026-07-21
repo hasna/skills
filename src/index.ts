@@ -338,6 +338,19 @@ export {
   type SkillAlias,
 } from "./lib/skill-aliases.js";
 
+export {
+  SELF_HOSTED_EXECUTION_CAPABILITIES,
+  getProviderFreeSelfHostedCreditQuote,
+  getSelfHostedAvailability,
+  getSelfHostedExecutionCapability,
+  type SelfHostedExecutionCapability,
+} from "./lib/self-hosted-capabilities.js";
+
+export {
+  API_KEY_SCOPES,
+  type ApiKeyScope,
+} from "./lib/api-key-scopes.js";
+
 export type {
   SkillResponse,
   SkillDetailResponse,

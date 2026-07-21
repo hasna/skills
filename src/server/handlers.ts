@@ -1,19 +1,22 @@
 import { createHash } from "node:crypto";
+import { getSelfHostedExecutionCapability } from "../lib/self-hosted-capabilities.js";
 import { ArtifactStorage } from "./artifact-storage.js";
 import { createArtifactId } from "./store.js";
 import { redactForClient } from "./redaction.js";
-import type { ServerArtifact, ServerRunRecord, SkillsProductStore } from "./types.js";
-
-const DETERMINISTIC_TEXT_HANDLERS = new Set([
-  "audio-transcript-pack",
-  "transcript",
-  "video-highlight-pack",
-]);
+import type { RunExecutionClaim, ServerArtifact, ServerRunRecord, SkillsProductStore } from "./types.js";
 
 export async function executeRun(store: SkillsProductStore, run: ServerRunRecord, storage = new ArtifactStorage()): Promise<ServerRunRecord> {
+  const start = await store.startRun(run.id);
+  if (!start?.claimed) return start?.run ?? run;
+  return executeClaimedRun(store, start, storage);
+}
+
+export async function executeClaimedRun(store: SkillsProductStore, claim: RunExecutionClaim, storage = new ArtifactStorage()): Promise<ServerRunRecord> {
+  const run = claim.run;
+
   try {
     await store.appendLog(run.id, run.orgId, "info", redactForClient(`starting self-hosted run ${run.skill}`));
-    if (!DETERMINISTIC_TEXT_HANDLERS.has(run.skill)) {
+    if (!getSelfHostedExecutionCapability(run.skill)) {
       await store.appendLog(run.id, run.orgId, "warn", `${run.skill} has no self-hosted provider-free handler yet`);
       return await failRun(store, run, "HANDLER_UNAVAILABLE", "This self-hosted deployment has no safe provider-free handler for that skill yet.");
     }
@@ -75,7 +78,7 @@ function textArtifact(
 }
 
 async function completeRun(store: SkillsProductStore, run: ServerRunRecord, preview: string): Promise<ServerRunRecord> {
-  const next = await store.updateRun(run.id, {
+  const next = await store.finishRun(run.id, {
     status: "succeeded",
     outputType: "artifact_bundle",
     outputPreview: preview,
@@ -91,7 +94,7 @@ async function failRun(
   message: string,
 ): Promise<ServerRunRecord> {
   await store.appendLog(run.id, run.orgId, "error", message);
-  const next = await store.updateRun(run.id, {
+  const next = await store.finishRun(run.id, {
     status: "failed",
     errorCode: code,
     errorMessage: message,
