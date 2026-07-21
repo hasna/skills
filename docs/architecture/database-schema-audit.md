@@ -2,13 +2,28 @@
 
 This audit documents the public package database boundary.
 
+## Historical status
+
+This audit predates the portable-server contract and is retained as historical
+context. The current canonical ownership rules are
+[Open Product Three-Mode Contract](open-product-three-mode-contract.md) and
+[Package Ownership And Sync Strategy](package-ownership-sync-strategy.md).
+Those documents supersede any broader historical statement that assigns generic
+server persistence to a private wrapper.
+
 ## Result
 
-There is no hosted product database schema in this repo.
+The historical statement “There is no hosted product database schema in this
+repo” refers specifically to the Hasna cloud customer schema. The open package
+does own the generic provider-neutral server schema and migrations required by
+its public server, workers, queues, run records, artifacts, and conformance
+contracts.
 
-The current repo is the `@hasna/skills` package shape: CLI, MCP, local server
-helpers, skill corpus, and reusable engine modules. Searches for hosted schema
-ownership must not treat skill implementation details as product state.
+The current repo is the `@hasna/skills` package shape: CLI, MCP, generic
+provider-neutral server and worker runtime, public migrations, skill corpus,
+and reusable engine modules. Searches for SaaS schema ownership must not treat
+generic public runtime tables or skill implementation details as Hasna customer
+product state.
 
 Database-related files that do exist are inside individual skills or examples,
 such as:
@@ -21,7 +36,8 @@ such as:
 - `skills/database-explorer` skill runtime code.
 
 Those are skill implementation details and must not be treated as hosted
-service schema.
+service schema. This historical phrase also does not classify the generic
+provider-neutral server schema as a Hasna SaaS schema.
 
 ## Open Package State
 
@@ -39,31 +55,43 @@ The open package may store local user state in files:
 These local files are not account state and should not become a hosted database
 model.
 
-## Hosted Wrapper State
+The public provider-neutral server may also persist generic registry, run,
+queue, artifact, migration, capability, and idempotency state. These schemas
+must remain deployable without Hasna identity, billing, domains, tenancy, or
+infrastructure.
 
-Hosted wrappers, if built, own their own schema for:
+## Hasna Cloud Composition State
+
+The Hasna platform composition owns only its SaaS-specific schema and
+extensions for:
 
 - Tenancy.
-- Identity.
-- API access.
-- Skill registry sync.
-- Pins.
-- Execution.
-- Async jobs.
-- Approvals.
-- Billing.
-- Connectors.
-- Audit.
+- Hasna customer identity and API access.
+- Billing, credits, entitlements, and commercial approvals.
+- Moderation, support, and SaaS-specific registry policy.
+- Private provider routing and SaaS-only runtime extensions.
+- Platform operations and customer audit policy.
 
-Hosted wrappers should preserve tenant or organization ids, idempotency keys,
-correlation ids, upstream package version, canonical skill slug, requested
-skill slug, and source type such as upstream, private-hosted, uploaded, or
-generated.
+The older domain taxonomy called these areas Identity, API access, Skill registry,
+Pins, Execution, Async jobs, Approvals, Billing, Connectors, and Audit. Under
+the canonical contract, only their Hasna customer, commercial, or SaaS-specific
+extensions are platform-owned; generic registry, execution, queue, and
+connector contracts remain upstream.
+
+The platform must import the generic server contracts and migrations rather
+than duplicating their queues, workers, run state, or artifact protocol.
+Composition-owned extensions should preserve tenant or organization ids,
+idempotency keys, correlation ids, upstream package version, canonical skill slug, requested
+skill slug, and source type such as upstream, private-hosted,
+uploaded, or generated.
 
 ## Non-Goals
 
-- Do not add hosted database requirements to the open package.
+- Do not add hosted database requirements that are Hasna cloud-specific to the
+  open package.
+- Do not move generic provider-neutral server schema, queues, workers, shared
+  contracts, or migrations into a platform-only wrapper.
 - Do not use skill-local database helper code as hosted product state.
 - Do not store hosted account state in local CLI config.
-- Do not let hosted workers, billing, or web routes leak into public package
-  exports.
+- Do not let Hasna billing, customer tenancy, private operations, or SaaS web
+  routes leak into public package exports.

@@ -3,6 +3,15 @@
 `hasna/skills` is the canonical open core. It owns the reusable skill engine,
 bundled corpus, CLI, MCP server, public contracts, and package validation.
 
+## Historical status
+
+This boundary note predates the portable-server decision and is retained as
+historical context. The current canonical ownership rules are
+[Open Product Three-Mode Contract](open-product-three-mode-contract.md) and
+[Package Ownership And Sync Strategy](package-ownership-sync-strategy.md).
+Those documents supersede any older wording that treats the entire remote
+runtime as private wrapper code.
+
 Self-hosted services such as skills.hasna.xyz may wrap this package, but their
 deployment-specific private service code must stay outside the npm package.
 
@@ -27,16 +36,21 @@ service:
 - Repo-native optional storage helpers for syncing `.skills` state through
   explicit `HASNA_SKILLS_*` database and object-storage envs.
 - Public remote-run, pricing, discovery, and registry contracts.
+- Generic provider-neutral server, worker, queue, contract, and migration code,
+  including the public OCI runtime and conformance behavior.
 
-## Self-Hosted Service Changes
+## Self-Hosted Service Changes (historical label)
 
-These belong in a self-hosted service wrapper, not the open core:
+These belong in an operator selfhost or Hasna cloud composition, not the open
+core:
 
 - Account state, sessions, organizations, teams, and API key services.
 - Billing, credits, ledgers, invoices, entitlements, and payment approval
   flows.
-- Private server-executed skills, remote execution workers, queues, logs, artifact
-  storage, and execution sandboxes.
+- Protected skill implementations, private prompts and provider routing,
+  operator credentials, composition-owned storage credentials, and
+  SaaS-specific worker or sandbox extensions. Generic workers, queues, shared
+  run/log/artifact contracts, and migrations remain in the open core.
 - Admin dashboards, moderation queues, support tooling, analytics, and
   customer-specific workflows.
 - Deployment infrastructure, secret stores, observability, alerting, and

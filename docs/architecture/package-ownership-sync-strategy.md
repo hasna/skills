@@ -24,9 +24,9 @@ approaches create duplicate engines that drift.
 | Agent CLI | Open upstream | `@hasna/skills`, command `skills` | Universal client: local execution plus remote submission to an explicitly selected and verified selfhost or cloud profile. |
 | MCP server | Open upstream | `@hasna/skills`, command `skills-mcp` | Agent protocol wrapper over shared engine APIs. |
 | Bundled skill corpus | Open upstream | `hasna/skills/skills/*` | Source corpus for free and explicitly local execution; server-executed entries expose contracts, not protected source. |
-| Provider-neutral server | Open upstream | `@hasna/skills` server, worker, and migration binaries plus public OCI image | Generic auth interfaces, account policy hooks, registry, runs, queues, artifacts, migrations, capabilities, and conformance. |
+| Provider-neutral server | Open upstream | `@hasna/skills` server, worker, queue, contract, and migration binaries plus public OCI image | The generic server, workers, queues, shared contracts, and migrations: generic auth interfaces, account policy hooks, registry, runs, artifacts, capabilities, and conformance. |
 | Operator selfhost composition | The deploying operator | Operator manifests or wrapper | Operator identity, tenant policy, enabled auth/billing integrations, infrastructure, secrets, observability, and rollback. Hasna-internal infrastructure belongs in this row. |
-| Hasna cloud composition | Hasna platform | Matching `platform-*` product | Multi-tenant customer identity, Hasna billing and entitlements, managed operations, support, and cloud-specific policy. |
+| Hasna cloud composition | Hasna platform | Matching `platform-*` product | Hasna multi-tenant SaaS composition, commercial policy, private operations, and SaaS-specific runtime extensions: customer identity, billing, entitlements, managed operations, support, and cloud policy. |
 | Hasna cloud infrastructure | Hasna platform | Private platform deployment configuration | Production topology, provider credentials, tenant isolation, observability, release, and rollback for the customer SaaS only. |
 
 ## Consumption Model
@@ -68,9 +68,12 @@ The OSS package may expose public contracts for server-executed skills:
 - remote run, status, artifact, and receipt contracts.
 - source-free stubs that explain remote execution.
 
-The OSS package must not expose private provider routing, worker code,
-moderation internals, private prompts, model selection, remote credentials,
-queues, storage credentials, or protected server-side implementation source.
+The OSS package must not expose private provider routing,
+moderation or commercial policy, private prompts or model-selection policy,
+remote credentials, composition-owned storage credentials, SaaS-specific
+runtime extensions, or protected server-side implementation source for a
+skill. This boundary does not privatize the generic provider-neutral server,
+workers, queues, shared contracts, or migrations owned by the open package.
 
 `SKILLS_API_KEY` is the current legacy remote credential input. It is not a
 model-provider key and must be documented separately from provider keys such as
@@ -103,7 +106,10 @@ as independent axes:
 | `SKILLS_API_KEY` or saved legacy API key | `credentialReenrollmentRequired` plus a future credential reference | Never copy into a new scope. Re-enroll after product, fingerprint, operator, issuer, audience, and tenant verification. |
 | `HASNA_SKILLS_STORAGE_MODE` / `SKILLS_STORAGE_MODE` | Storage profile `mode` (`local`, `remote`, or `hybrid`) | Keep independent from deployment mode and operation execution. Package-owned name wins. |
 | `HASNA_SKILLS_DATABASE_*` / `SKILLS_DATABASE_*` | Storage database fields or environment-backed references | Preserve names, selected precedence, SSL/schema settings, and secret references without printing values. |
-| `HASNA_SKILLS_S3_*` / `SKILLS_S3_*` | Storage object-store fields or environment-backed references | Preserve bucket/prefix/region/endpoint/path-style and credential references. Package-owned name wins. |
+| `HASNA_SKILLS_S3_*` / `SKILLS_S3_*` | Storage object-store fields or environment-backed references | Preserve bucket, prefix, endpoint, path-style, and credential references. Package-owned name wins. `HASNA_SKILLS_S3_*` does not include `HASNA_SKILLS_AWS_REGION`. |
+| `HASNA_SKILLS_AWS_REGION` / `SKILLS_AWS_REGION` | Storage object-store region | Preserve `HASNA_SKILLS_AWS_REGION` over `SKILLS_AWS_REGION`. |
+| `HASNA_SKILLS_SYNC_BATCH_SIZE` / `SKILLS_SYNC_BATCH_SIZE` | Storage sync batch size | Preserve `HASNA_SKILLS_SYNC_BATCH_SIZE` over `SKILLS_SYNC_BATCH_SIZE`. |
+| `HASNA_SKILLS_SYNC_DRY_RUN` / `SKILLS_SYNC_DRY_RUN` | Storage sync dry-run default | Preserve `HASNA_SKILLS_SYNC_DRY_RUN` over `SKILLS_SYNC_DRY_RUN`. |
 | Premium run behavior | Operation policy `remote-only` | Use the selected verified remote deployment profile; never infer storage or silently fall back. |
 
 The canonical deterministic algorithm, two-minor-release dual-read window,

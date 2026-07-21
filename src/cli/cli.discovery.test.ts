@@ -7,6 +7,7 @@ import {
   PACKAGE_VERSION,
   SLOW_TEST_TIMEOUT,
   runBuiltCli,
+  runBuiltCliWithTtyOverride,
   runCli,
   runCliInCwd,
   runCliWithTtyOverride,
@@ -35,30 +36,44 @@ describe("CLI discovery", () => {
     });
 
     test("bare TTY invocation shows help and exits without opening the TUI", async () => {
-      const { stdout, stderr, exitCode, timedOut } = await runCliWithTtyOverride([]);
-      expect(timedOut).toBe(false);
-      expect(exitCode).toBe(0);
-      expect(stderr).toBe("");
-      expect(stdout).toContain("Usage: skills [options] [command]");
-      expect(stdout).toContain("interactive|i");
-    });
-
-    test("interactive and i remain explicit, runnable commands", async () => {
-      for (const command of ["interactive", "i"]) {
-        const { stdout, stderr, exitCode } = await runCli([command]);
-        expect(exitCode, command).toBe(0);
-        expect(stderr, command).toBe("");
-        const discovery = JSON.parse(stdout);
-        expect(Array.isArray(discovery), command).toBe(true);
-        expect(discovery.length, command).toBe(EXPECTED_BASIC_SKILL_COUNT);
+      for (const [surface, result] of [
+        ["source", await runCliWithTtyOverride([])],
+        ["built CLI bundle", await runBuiltCliWithTtyOverride([])],
+      ] as const) {
+        expect(result.timedOut, surface).toBe(false);
+        expect(result.exitCode, surface).toBe(0);
+        expect(result.stderr, surface).toBe("");
+        expect(result.stdout, surface).toContain("Usage: skills [options] [command]");
+        expect(result.stdout, surface).toContain("interactive|i");
       }
     });
 
-    test("invalid commands and excess arguments exit nonzero", async () => {
+    test("source and built CLI keep interactive and i explicit and runnable", async () => {
+      for (const command of ["interactive", "i"]) {
+        for (const [surface, result] of [
+          ["source", await runCli([command])],
+          ["built CLI bundle", await runBuiltCli([command])],
+        ] as const) {
+          const label = `${surface}: ${command}`;
+          expect(result.exitCode, label).toBe(0);
+          expect(result.stderr, label).toBe("");
+          const discovery = JSON.parse(result.stdout);
+          expect(Array.isArray(discovery), label).toBe(true);
+          expect(discovery.length, label).toBe(EXPECTED_BASIC_SKILL_COUNT);
+        }
+      }
+    });
+
+    test("source and built CLI reject invalid commands and excess arguments", async () => {
       for (const args of [["not-a-command"], ["interactive", "unexpected"]]) {
-        const { stderr, exitCode } = await runCli(args);
-        expect(exitCode, args.join(" ")).not.toBe(0);
-        expect(stderr, args.join(" ")).toContain("error:");
+        for (const [surface, result] of [
+          ["source", await runCli(args)],
+          ["built CLI bundle", await runBuiltCli(args)],
+        ] as const) {
+          const label = `${surface}: ${args.join(" ")}`;
+          expect(result.exitCode, label).not.toBe(0);
+          expect(result.stderr, label).toContain("error:");
+        }
       }
     });
 

@@ -7,6 +7,9 @@ describe("open-core product service pattern", () => {
   const pattern = readFileSync(join(root, "docs/architecture/open-core-saas-pattern.md"), "utf8");
   const contract = readFileSync(join(root, "docs/architecture/open-product-three-mode-contract.md"), "utf8");
   const ownership = readFileSync(join(root, "docs/architecture/package-ownership-sync-strategy.md"), "utf8");
+  const databaseAudit = readFileSync(join(root, "docs/architecture/database-schema-audit.md"), "utf8");
+  const moduleAudit = readFileSync(join(root, "docs/architecture/hasna-skills-module-audit.md"), "utf8");
+  const upstreamBoundary = readFileSync(join(root, "docs/architecture/upstream-boundary.md"), "utf8");
   const readme = readFileSync(join(root, "README.md"), "utf8");
   const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { files?: string[] };
   const compact = (value: string) => value.replace(/\s+/g, " ");
@@ -24,6 +27,25 @@ describe("open-core product service pattern", () => {
     expect(pattern).toContain("Stripe webhook handlers");
     expect(ownership).toContain("| Provider-neutral server | Open upstream |");
     expect(ownership).toContain("Hasna-internal infrastructure belongs in this row");
+    expect(compactOwnership).toContain("generic server, workers, queues, shared contracts, and migrations");
+    expect(compactOwnership).toContain("Hasna multi-tenant SaaS composition, commercial policy, private operations, and SaaS-specific runtime extensions");
+    expect(compactOwnership).not.toContain("must not expose private provider routing, worker code");
+  });
+
+  test("marks older audits as historical and defers conflicting ownership text to the canonical contract", () => {
+    for (const historicalDoc of [databaseAudit, moduleAudit, upstreamBoundary]) {
+      expect(historicalDoc).toContain("Historical status");
+      expect(historicalDoc).toContain("open-product-three-mode-contract.md");
+      expect(historicalDoc).toContain("package-ownership-sync-strategy.md");
+    }
+
+    expect(compact(databaseAudit)).toContain("generic provider-neutral server schema and migrations");
+    const compactModuleAudit = compact(moduleAudit);
+    expect(compactModuleAudit.toLowerCase()).toContain("generic server, worker, queue, contract, and migration code remains upstream");
+    expect(compactModuleAudit).toContain("Generic run, log, export, artifact, REST, and MCP contracts remain upstream");
+    expect(compactModuleAudit).not.toContain("These must live in the private product layer, not upstream");
+    expect(compactModuleAudit).not.toContain("Agent API: versioned REST endpoints");
+    expect(compact(upstreamBoundary).toLowerCase()).toContain("generic provider-neutral server, worker, queue, contract, and migration code");
   });
 
   test("defines deployment, execution, and storage as independent axes", () => {
@@ -47,6 +69,15 @@ describe("open-core product service pattern", () => {
     expect(compactContract).toContain("ahead of `SKILLS_STORAGE_MODE`");
     expect(compactOwnership).toContain("| `HASNA_SKILLS_DATABASE_*` / `SKILLS_DATABASE_*` |");
     expect(compactOwnership).toContain("| `HASNA_SKILLS_S3_*` / `SKILLS_S3_*` |");
+    for (const precedence of [
+      "`HASNA_SKILLS_AWS_REGION` over `SKILLS_AWS_REGION`",
+      "`HASNA_SKILLS_SYNC_BATCH_SIZE` over `SKILLS_SYNC_BATCH_SIZE`",
+      "`HASNA_SKILLS_SYNC_DRY_RUN` over `SKILLS_SYNC_DRY_RUN`",
+    ]) {
+      expect(compactContract).toContain(precedence);
+      expect(compactOwnership).toContain(precedence);
+    }
+    expect(compactOwnership).toContain("`HASNA_SKILLS_S3_*` does not include `HASNA_SKILLS_AWS_REGION`");
   });
 
   test("makes capabilities credential-free and externally anchored rather than a trust root", () => {

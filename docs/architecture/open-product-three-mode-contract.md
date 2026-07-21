@@ -235,10 +235,15 @@ The storage profile is resolved independently in this exact order:
 
 Within the legacy bridge, package-owned `HASNA_<APP>_*` variables win over
 plain `<APP>_*` fallbacks. For Open Skills this preserves
-`HASNA_SKILLS_STORAGE_MODE`, `HASNA_SKILLS_DATABASE_URL`, and
-`HASNA_SKILLS_S3_*` ahead of `SKILLS_STORAGE_MODE`, `SKILLS_DATABASE_URL`, and
-`SKILLS_S3_*`. `SKILLS_API_URL`, `SKILLS_API_KEY`, deployment mode, and the
-selected operation never select storage mode.
+`HASNA_SKILLS_STORAGE_MODE` ahead of `SKILLS_STORAGE_MODE`,
+`HASNA_SKILLS_DATABASE_*` ahead of `SKILLS_DATABASE_*`, and
+`HASNA_SKILLS_S3_*` ahead of `SKILLS_S3_*`. It also
+preserves `HASNA_SKILLS_AWS_REGION` over `SKILLS_AWS_REGION`,
+`HASNA_SKILLS_SYNC_BATCH_SIZE` over `SKILLS_SYNC_BATCH_SIZE`, and
+`HASNA_SKILLS_SYNC_DRY_RUN` over `SKILLS_SYNC_DRY_RUN`. Region is a separate
+legacy field: `HASNA_SKILLS_S3_*` does not include
+`HASNA_SKILLS_AWS_REGION`. `SKILLS_API_URL`, `SKILLS_API_KEY`, deployment mode,
+and the selected operation never select storage mode.
 
 ## Execution Policy
 
@@ -453,8 +458,13 @@ algorithm:
    `HASNA_SKILLS_STORAGE_*`, `HASNA_SKILLS_DATABASE_*`, and
    `HASNA_SKILLS_S3_*` variable, plus its plain `SKILLS_*` fallback, as an
    environment-backed reference or non-secret storage field. Preserve the
-   existing package-owned-over-plain precedence and never reinterpret storage
-   `remote` as deployment `cloud`.
+   separate legacy region and sync controls with exact precedence:
+   `HASNA_SKILLS_AWS_REGION` over `SKILLS_AWS_REGION`,
+   `HASNA_SKILLS_SYNC_BATCH_SIZE` over `SKILLS_SYNC_BATCH_SIZE`, and
+   `HASNA_SKILLS_SYNC_DRY_RUN` over `SKILLS_SYNC_DRY_RUN`. The `S3_*` family
+   covers bucket, prefix, endpoint, path-style, and credential references; it
+   does not cover `AWS_REGION`. Preserve the existing package-owned-over-plain
+   precedence and never reinterpret storage `remote` as deployment `cloud`.
 6. Emit a stable plan containing proposed deployment profiles, storage profiles,
    unresolved enrollments, preserved variables, namespaces, conflicts, backup
    path, and rollback eligibility. The same inputs must produce the same plan.

@@ -32,34 +32,8 @@ async function runCliAtPath(
   return { stdout, stderr, exitCode };
 }
 
-export async function runCli(
-  args: string[],
-  env: Record<string, string> = {},
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  return runCliAtPath(CLI_PATH, args, env);
-}
-
-export async function runBuiltCli(
-  args: string[],
-  env: Record<string, string> = {},
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const buildDir = mkdtempSync(join(tmpdir(), "skills-cli-build-"));
-  try {
-    const build = await Bun.build({
-      entrypoints: [CLI_PATH],
-      outdir: buildDir,
-      target: "bun",
-    });
-    if (!build.success) {
-      throw new AggregateError(build.logs, "Failed to build the CLI test bundle");
-    }
-    return await runCliAtPath(join(buildDir, "index.js"), args, env);
-  } finally {
-    rmSync(buildDir, { recursive: true, force: true });
-  }
-}
-
-export async function runCliWithTtyOverride(
+async function runCliAtPathWithTtyOverride(
+  path: string,
   args: string[],
   timeoutMs = 3_000,
 ): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut: boolean }> {
@@ -67,7 +41,7 @@ export async function runCliWithTtyOverride(
     'Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });',
     'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });',
     `process.argv = ${JSON.stringify(["bun", ...args])};`,
-    `await import(${JSON.stringify(pathToFileURL(CLI_PATH).href)});`,
+    `await import(${JSON.stringify(pathToFileURL(path).href)});`,
   ].join("\n");
   const proc = Bun.spawn(["bun", "--eval", wrapper], {
     cwd: join(import.meta.dir, "..", ".."),
@@ -86,6 +60,51 @@ export async function runCliWithTtyOverride(
   clearTimeout(timeout);
   const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
   return { stdout, stderr, exitCode, timedOut };
+}
+
+async function withBuiltCli<T>(run: (path: string) => Promise<T>): Promise<T> {
+  const buildDir = mkdtempSync(join(tmpdir(), "skills-cli-build-"));
+  try {
+    const build = await Bun.build({
+      entrypoints: [CLI_PATH],
+      outdir: buildDir,
+      target: "bun",
+    });
+    if (!build.success) {
+      throw new AggregateError(build.logs, "Failed to build the CLI test bundle");
+    }
+    return await run(join(buildDir, "index.js"));
+  } finally {
+    rmSync(buildDir, { recursive: true, force: true });
+  }
+}
+
+export async function runCli(
+  args: string[],
+  env: Record<string, string> = {},
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return runCliAtPath(CLI_PATH, args, env);
+}
+
+export async function runBuiltCli(
+  args: string[],
+  env: Record<string, string> = {},
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return withBuiltCli((path) => runCliAtPath(path, args, env));
+}
+
+export async function runCliWithTtyOverride(
+  args: string[],
+  timeoutMs = 3_000,
+): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut: boolean }> {
+  return runCliAtPathWithTtyOverride(CLI_PATH, args, timeoutMs);
+}
+
+export async function runBuiltCliWithTtyOverride(
+  args: string[],
+  timeoutMs = 3_000,
+): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut: boolean }> {
+  return withBuiltCli((path) => runCliAtPathWithTtyOverride(path, args, timeoutMs));
 }
 
 export async function runCliInCwd(
