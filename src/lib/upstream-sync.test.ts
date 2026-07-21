@@ -65,6 +65,14 @@ describe("upstream sync workflow", () => {
     expect(result.stdout).toContain("Default: main..HEAD");
     expect(result.stdout).not.toContain("upstream/main..HEAD");
   });
+
+  test("preflight reports portable fetch guidance for a missing range base", () => {
+    const result = spawnSync("bash", [scriptPath, "missing-base..HEAD"], { encoding: "utf8" });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("git fetch <remote> <branch>");
+    expect(result.stderr).not.toContain("git fetch upstream origin");
+  });
 });
 
 describe("strict upstream marker regression", () => {

@@ -51,7 +51,8 @@ fi
 
 if ! git rev-parse --verify --quiet "${range%%..*}" >/dev/null; then
   echo "range base is not available locally: ${range%%..*}" >&2
-  echo "Run: git fetch upstream origin" >&2
+  echo "Fetch the missing base from a configured remote, then retry." >&2
+  echo "Example: git fetch <remote> <branch>" >&2
   exit 1
 fi
 
