@@ -8,6 +8,7 @@ describe("upstream boundary documentation", () => {
     join(process.cwd(), "docs/architecture/upstream-boundary.md"),
     "utf8",
   );
+  const compactContent = content.replace(/\s+/g, " ");
 
   test("keeps hasna/skills as the public origin", () => {
     expect(content).toContain("origin");
@@ -20,8 +21,23 @@ describe("upstream boundary documentation", () => {
     expect(content).toContain("Open-Core Changes");
     expect(content).toContain("Self-Hosted Service Changes");
     expect(content).toContain("compatible API");
-    expect(content).toContain("Billing, credits, ledgers");
-    expect(content).toContain("Deployment infrastructure");
+    expect(content).toContain("Hasna billing, credits, ledgers");
+    expect(content).toContain("Hasna-managed production infrastructure");
+  });
+
+  test("keeps generic security and operations contracts upstream", () => {
+    for (const phrase of [
+      "Generic authentication interfaces and implementations",
+      "API-key issuance and verification",
+      "provider-neutral tenant isolation",
+      "Provider-neutral health, readiness, metrics, tracing, logging, backup",
+      "opt-in selfhost deployment contracts",
+      "Generic account, organization, session, auth, and API-key contracts remain upstream",
+    ]) {
+      expect(compactContent).toContain(phrase);
+    }
+    expect(content).toContain("Hasna customer-account records");
+    expect(content).toContain("private operational configuration");
   });
 
   test("preserves local-capable upstream behavior", () => {
@@ -32,7 +48,7 @@ describe("upstream boundary documentation", () => {
 
   test("separates native storage from self-hosted service databases", () => {
     expect(content).toContain("HASNA_SKILLS_*");
-    expect(content).toContain("self-hosted service");
-    expect(content).toContain("must not pass");
+    expect(content).toContain("provider-neutral server's");
+    expect(content).toContain("must not silently point client");
   });
 });

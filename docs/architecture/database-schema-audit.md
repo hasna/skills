@@ -55,19 +55,28 @@ The open package may store local user state in files:
 These local files are not account state and should not become a hosted database
 model.
 
-The public provider-neutral server may also persist generic registry, run,
-queue, artifact, migration, capability, and idempotency state. These schemas
-must remain deployable without Hasna identity, billing, domains, tenancy, or
-infrastructure.
+The public provider-neutral server may also persist generic account,
+organization, session, API-key, registry, run, queue, artifact, migration,
+capability, audit, and idempotency state. A provider-neutral schema may and, for
+multi-user deployments, must support tenant isolation and authorization. It
+must remain deployable without Hasna customer identity, commercial tenancy,
+billing providers, domains, managed operations, or private infrastructure.
+
+Tenant columns, scoped unique constraints, row-level access rules, membership
+edges, and audit provenance are generic security primitives when they are
+defined by public contracts and conformance tests. They become platform-owned
+only when they encode Hasna customer topology, commercial entitlements, private
+provider routing, or SaaS-specific operational policy.
 
 ## Hasna Cloud Composition State
 
 The Hasna platform composition owns only its SaaS-specific schema and
 extensions for:
 
-- Tenancy.
-- Hasna customer identity and API access.
-- Billing, credits, entitlements, and commercial approvals.
+- Hasna customer and commercial tenancy topology.
+- Hasna-specific customer identity, invitation policy, organization rules, and
+  API-access policy.
+- Hasna billing, credits, entitlements, and commercial approvals.
 - Moderation, support, and SaaS-specific registry policy.
 - Private provider routing and SaaS-only runtime extensions.
 - Platform operations and customer audit policy.
@@ -92,6 +101,6 @@ uploaded, or generated.
 - Do not move generic provider-neutral server schema, queues, workers, shared
   contracts, or migrations into a platform-only wrapper.
 - Do not use skill-local database helper code as hosted product state.
-- Do not store hosted account state in local CLI config.
+- Do not store remote account state in local CLI config.
 - Do not let Hasna billing, customer tenancy, private operations, or SaaS web
   routes leak into public package exports.

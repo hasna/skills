@@ -38,25 +38,38 @@ service:
 - Public remote-run, pricing, discovery, and registry contracts.
 - Generic provider-neutral server, worker, queue, contract, and migration code,
   including the public OCI runtime and conformance behavior.
+- Generic authentication interfaces and implementations, API-key issuance and
+  verification, account and organization primitives, provider-neutral tenant
+  isolation, authorization hooks, and audit contracts needed by a compatible
+  selfhost operator.
+- Provider-neutral health, readiness, metrics, tracing, logging, backup,
+  rollback, and opt-in selfhost deployment contracts. An operator can adopt or
+  replace these without depending on Hasna infrastructure.
 
 ## Self-Hosted Service Changes (historical label)
 
-These belong in an operator selfhost or Hasna cloud composition, not the open
-core:
+These belong in the Hasna cloud composition, or in an operator composition when
+an operator deliberately supplies its own non-portable policy; they are not OSS
+core requirements:
 
-- Account state, sessions, organizations, teams, and API key services.
-- Billing, credits, ledgers, invoices, entitlements, and payment approval
-  flows.
+- Hasna customer-account records, organization topology, tenant assignments,
+  identity-provider configuration, and commercial API-key policy. Generic
+  account, organization, session, auth, and API-key contracts remain upstream.
+- Hasna billing, credits, ledgers, invoices, entitlements, payment approvals,
+  price enforcement, and provider configuration. Generic optional billing
+  interfaces and operator-supplied integrations may remain upstream.
 - Protected skill implementations, private prompts and provider routing,
   operator credentials, composition-owned storage credentials, and
   SaaS-specific worker or sandbox extensions. Generic workers, queues, shared
   run/log/artifact contracts, and migrations remain in the open core.
-- Admin dashboards, moderation queues, support tooling, analytics, and
-  customer-specific workflows.
-- Deployment infrastructure, secret stores, observability, alerting, and
-  rollback automation.
-- Production SaaS databases and artifact buckets, unless passed explicitly into
-  open-core storage envs for a documented sync operation.
+- Hasna admin dashboards, moderation queues, support tooling, customer
+  analytics, and customer-specific workflows.
+- Hasna-managed production infrastructure, secret-store bindings,
+  observability destinations, alert routing, rollback automation, and other
+  private operational configuration. Provider-neutral contracts and opt-in
+  selfhost examples remain upstream.
+- Hasna production SaaS databases and artifact buckets. The generic server
+  schema, tenant-isolation model, and storage adapters remain upstream.
 
 ## Sync Rules
 
@@ -65,10 +78,11 @@ core:
    behavior for non-interactive environments.
 3. Expose reusable contracts from `src/index.ts` before wrappers depend on
    them.
-4. Do not publish private service dependencies, protected source, or self-hosted
-   infrastructure in the public package.
+4. Do not publish private service dependencies, protected source, Hasna-managed
+   production configuration, or provider credentials in the public package.
 5. Use `docs/architecture/upstream-sync.md` and the public-boundary preflight
    before moving wrapper work into the open repo.
-6. Keep open-core storage envs (`HASNA_SKILLS_*`) separate from self-hosted service
-   `DATABASE_URL`; wrappers may map explicit storage envs, but must not pass
-   their private SaaS database implicitly.
+6. Keep client-sync storage envs separate from the provider-neutral server's
+   authoritative database and object-store namespace. A migration may read
+   legacy names with explicit precedence, but it must not silently point client
+   sync at an authoritative tenant/run/artifact database.

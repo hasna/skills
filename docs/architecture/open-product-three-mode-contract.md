@@ -21,7 +21,7 @@ These surfaces are related, but they are not interchangeable:
 | Surface | Meaning | Current status verified 2026-07-21 |
 | --- | --- | --- |
 | Public npm client | `@hasna/skills` is the universal CLI, SDK, MCP client, and local engine installed by users. It may call either a compatible self-hosted service or the Hasna SaaS. It does not install the Hasna SaaS backend. | The published `@hasna/skills@0.1.58` artifact is SaaS-capable for supported hosted skills: it includes hosted setup, authentication, billing, remote run, status, and export clients. |
-| Current source candidate | The checked-in package metadata, dependency lock, source, docs, and tests are one candidate provenance set. | The candidate is `@hasna/skills@0.1.59` and is explicitly unreleased. It has not been published or tagged; npm remains at `0.1.58`. |
+| Current source candidate | The checked-in package metadata, dependency lock, source, docs, and tests are one candidate provenance set. | The candidate is `@hasna/skills@0.2.0` and is explicitly unreleased. It has not been published or tagged; npm remains at `0.1.58`. |
 | Hasna cloud | `skills.md` is the Hasna-operated, multi-tenant customer SaaS. This is what `cloud` means for Open Skills. | The public registry endpoint responded successfully during verification. Package metadata, source, and live API capability state can ship at different times and must be checked independently. |
 | Internal self-hosted infrastructure | An operator-owned deployment is `selfhost` even when it runs in AWS or is operated by Hasna for internal use. | It is not the customer SaaS and must not be used as proof that the `cloud` product is available or ready. |
 
@@ -263,22 +263,40 @@ for its database URL, `HASNA_SKILLS_DATABASE_URL` wins over
 `SKILLS_DATABASE_URL`. It is not the provider-neutral server's authoritative
 database selector.
 
-The provider-neutral server and migration binary resolve their authoritative
-database URL in this exact order:
+The target provider-neutral server and migration binary use a separate server
+namespace. During the bounded migration window, their authoritative database
+URL resolves in this exact order:
 
-1. `HASNA_SKILLS_DATABASE_URL`
-2. `DATABASE_URL`
+1. `HASNA_SKILLS_SERVER_DATABASE_URL`
+2. legacy `HASNA_SKILLS_DATABASE_URL`
+3. legacy `DATABASE_URL`
 
 The server database pool resolves independently in this exact order:
 
-1. `HASNA_SKILLS_DATABASE_POOL_MAX`
-2. `SKILLS_DATABASE_POOL_MAX`
-3. `4`
+1. `HASNA_SKILLS_SERVER_DATABASE_POOL_MAX`
+2. legacy `HASNA_SKILLS_DATABASE_POOL_MAX`
+3. legacy `SKILLS_DATABASE_POOL_MAX`
+4. `4`
 
-Migration preserves these as two different namespaces. It must never convert a
-client-sync `SKILLS_DATABASE_URL` into the server's `DATABASE_URL`, point client
-sync at the authoritative server database, or infer server authority from a
-selected deployment or storage mode.
+The target authoritative object-store namespace is
+`HASNA_SKILLS_SERVER_S3_BUCKET`, `HASNA_SKILLS_SERVER_S3_PREFIX`,
+`HASNA_SKILLS_SERVER_S3_ENDPOINT`,
+`HASNA_SKILLS_SERVER_S3_FORCE_PATH_STYLE`, and server-scoped credential
+references under `HASNA_SKILLS_SERVER_S3_*`. The server region is
+`HASNA_SKILLS_SERVER_AWS_REGION`. During migration only, each server-scoped S3
+field may fall back to its current `HASNA_SKILLS_S3_*` and then `SKILLS_S3_*`
+name; server region may fall back to the current `AWS_REGION` input. It must not
+fall back to the client-sync `HASNA_SKILLS_AWS_REGION` or
+`SKILLS_AWS_REGION`, because those names select the client storage profile.
+
+Legacy fallback is a compatibility read, not a shared target namespace. When a
+target and legacy name are both set, the server-scoped target wins and a stable
+redacted conflict/deprecation diagnostic identifies both sources. Migration
+preview records the selected source without printing values, new configuration
+writes only server-scoped names, and legacy names are removed only after the
+dual-read exit criteria pass. Migration must never copy a client-sync value into
+the server namespace, point client sync at the authoritative server database or
+bucket, or infer server authority from a selected deployment or storage mode.
 
 ## Execution Policy
 
@@ -344,6 +362,43 @@ anchor, applies the signed-envelope freshness and replay checks, then compares
 normalized origin, service fingerprint, expected product, operator, deployment
 mode, authentication issuer, and credential audience with the bootstrap
 profile. Service identity is pinned before any credential lookup or release.
+
+### First-Time Cloud Authentication And Tenant Selection
+
+First-time cloud onboarding preserves that trust-first order:
+
+1. The client verifies the signed product and service metadata against the
+   built-in Hasna trust anchor, pins normalized origin and service identity, and
+   accepts only the advertised issuer, authorization endpoint, device endpoint,
+   token audience, and supported authentication methods. Discovery alone never
+   authorizes sign-in.
+2. The client starts an authorization-code browser flow or device flow only at
+   those signed endpoints. Browser authorization requires PKCE, unpredictable
+   `state`, and an OIDC `nonce`; device authorization binds the device code to
+   the same nonce, client instance, origin, service identity, issuer, and
+   audience. Redirect, token, and ID-token validation fails closed on any
+   mismatch.
+3. After authentication, the service can issue tenant selectors through three
+   explicit paths: an accepted invitation for an existing member, verified
+   new-user enrollment and tenant creation/join policy, or a multi-tenant
+   membership response that requires the user to choose one selector. A login
+   session is not itself a tenant credential.
+4. Every opaque selector is signed and bound to normalized origin, service
+   identity, issuer, audience, authenticated subject, and the eligible tenant
+   or privacy-safe digest. It has an issued time, short expiry, and unique
+   replay identifier. Clients reject expired, replayed, cross-subject,
+   cross-origin, cross-service, and invitation-mismatched selectors.
+5. Tenant selection completes before an API credential is issued or released.
+   The selected selector and a fresh challenge produce a credential bound to
+   `(product, origin, service identity, issuer, audience, subject, tenant)`.
+   Switching tenants always obtains a separately bound credential; it never
+   retargets an existing key or token.
+6. Lost-device recovery, expired or revoked invitations, removed membership,
+   subject changes, trust-anchor discontinuity, and service-identity changes
+   require recovery through the signed issuer and then re-enrollment. Recovery
+   does not reveal, copy, or silently rebind the old credential. The client
+   revokes or quarantines stale references and repeats trust verification,
+   authentication, selector issuance, and tenant binding.
 
 Tenant selection is the next credential-free step. For `cloud`, the client
 must select a tenant. For `selfhost`, it selects a tenant or accepts only the
@@ -533,10 +588,13 @@ algorithm:
    precedence and never reinterpret storage `remote` as deployment `cloud`.
    Keep client-sync and server authority distinct: client sync resolves
    `HASNA_SKILLS_DATABASE_URL` over `SKILLS_DATABASE_URL`; the provider-neutral
-   server and migration binary resolve `HASNA_SKILLS_DATABASE_URL` over
-   `DATABASE_URL`; and server pool size resolves
-   `HASNA_SKILLS_DATABASE_POOL_MAX` over `SKILLS_DATABASE_POOL_MAX` over `4`.
-   Never migrate a client-sync fallback into the server namespace or vice versa.
+   server and migration binary resolve `HASNA_SKILLS_SERVER_DATABASE_URL` before
+   legacy `HASNA_SKILLS_DATABASE_URL` and `DATABASE_URL`; and server pool size
+   resolves `HASNA_SKILLS_SERVER_DATABASE_POOL_MAX` before legacy
+   `HASNA_SKILLS_DATABASE_POOL_MAX`, `SKILLS_DATABASE_POOL_MAX`, and `4`.
+   Server object storage similarly uses `HASNA_SKILLS_SERVER_S3_*` and
+   `HASNA_SKILLS_SERVER_AWS_REGION` before bounded legacy fallbacks. Never
+   migrate a client-sync fallback into the server namespace or vice versa.
 6. Emit a stable plan containing proposed deployment profiles, storage profiles,
    unresolved enrollments, preserved variables, namespaces, conflicts, backup
    path, and rollback eligibility. The same inputs must produce the same plan.
@@ -579,7 +637,11 @@ storage authority, or redirects operations to another deployment.
 | No silent cross-mode fallback | Required | Required | Required |
 | Local/common-HTTP adapter fixtures | Local adapter | HTTP adapter | HTTP adapter |
 | Credential-free discovery plus externally anchored service identity | Not applicable | Required | Required |
+| Signed OIDC/browser/device authentication with PKCE, state, and nonce | Not applicable | Required when advertised | Required |
+| Invitation, new-user, and multi-tenant selector issuance | Not applicable | Required when tenant-aware | Required |
+| Selector origin/service/subject binding, expiry, and replay rejection | Not applicable | Required when tenant-aware | Required |
 | Tenant-scoped credential reference | Not applicable | Required when tenant-aware | Required |
+| Recovery and re-enrollment without credential rebinding | Not applicable | Required | Required |
 | Independent `local | remote | hybrid` storage resolution | Required | Required | Required |
 | Legacy storage variables preserved during migration | Required | Required | Required |
 | Explicit export/import with provenance | Required | Required | Required |
@@ -600,6 +662,28 @@ release. Self-hosted operators retain the same ability with the public image.
 Rollback never changes a profile's declared mode, reuses a credential with a
 different service identity, or silently redirects operations to another
 authority.
+
+## CURRENT IMPLEMENTATION BLOCKERS
+
+These are current-source blockers to the target contract, not descriptions of
+the desired end state:
+
+- Client sync and the authoritative server currently share
+  `HASNA_SKILLS_DATABASE_URL`, `HASNA_SKILLS_DATABASE_POOL_MAX`, and
+  `HASNA_SKILLS_S3_*`. The server artifact client also reads unscoped
+  `AWS_REGION`. Target compliance requires the separate
+  `HASNA_SKILLS_SERVER_DATABASE_URL`,
+  `HASNA_SKILLS_SERVER_DATABASE_POOL_MAX`, `HASNA_SKILLS_SERVER_S3_*`, and
+  `HASNA_SKILLS_SERVER_AWS_REGION` namespace plus the explicit precedence,
+  diagnostics, migration preview, and dual-read retirement rules above. Until
+  then, operators must not claim client-sync and authoritative server storage
+  are isolated.
+- The existing `.github/workflows/deploy.yml` contains Hasna-specific AWS
+  production configuration and deploys automatically from `main`. That AWS
+  deployment is internal `selfhost`, not `cloud`. Before target compliance, the
+  workflow must move to an internal infrastructure/operator repository or be
+  replaced by a provider-neutral, operator-configured, explicitly opted-in
+  selfhost workflow. This contract change does not edit or delete that workflow.
 
 ## Current Open Skills Status
 

@@ -88,6 +88,10 @@ describe("package ownership and sync strategy", () => {
       "`credentialReenrollmentRequired`",
       "deployment authority, operation execution, and storage authority",
       "never determine target mode without trust enrollment",
+      "`HASNA_SKILLS_SERVER_DATABASE_URL` plus legacy",
+      "`HASNA_SKILLS_SERVER_S3_*` plus legacy",
+      "`HASNA_SKILLS_SERVER_AWS_REGION` plus legacy `AWS_REGION`",
+      "must not be conflated with client sync",
     ]) {
       expect(compactContent).toContain(phrase);
     }

@@ -15,9 +15,14 @@ describe("database boundary audit", () => {
     expect(content).toContain("hosted\nservice schema");
   });
 
-  test("defines hosted wrapper state domains", () => {
+  test("separates generic schema primitives from Hasna composition domains", () => {
     for (const phrase of [
-      "Tenancy",
+      "generic account",
+      "organization",
+      "API-key",
+      "tenant isolation",
+      "row-level access rules",
+      "Hasna customer and commercial tenancy topology",
       "Identity",
       "API access",
       "Skill registry",
@@ -31,6 +36,8 @@ describe("database boundary audit", () => {
     ]) {
       expect(content).toContain(phrase);
     }
+    expect(content).toContain("must remain deployable without Hasna customer identity");
+    expect(content).toContain("must support tenant isolation and authorization");
   });
 
   test("requires tenant, idempotency, and provenance fields", () => {

@@ -27,7 +27,7 @@ Installing `@hasna/skills` gives the client, not a SaaS backend. Published
 `@hasna/skills@0.1.58` is SaaS-capable for supported skills, while
 Hasna-internal infrastructure is a self-hosted deployment. Source, package, and
 live API capability state can drift and must be verified separately. The
-checked-in package/lock/source candidate is `0.1.59` and remains unreleased;
+checked-in package/lock/source candidate is `0.2.0` and remains unreleased;
 npm remains at `0.1.58` until a separate publish and tag.
 
 ## Package And Server Shape

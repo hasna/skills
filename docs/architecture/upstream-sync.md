@@ -5,7 +5,8 @@ generic engine change that should land in `hasna/skills`.
 
 ## Principles
 
-- Do not use git worktrees.
+- Perform public-repo mutation only in a task-specific worktree under the
+  canonical worktree root. Never switch or edit the shared checkout.
 - Move reusable client, embedded-engine, and provider-neutral server changes
   into the public repo. The generic server, workers, queues, persistence
   adapters, migrations, shared contracts, and selfhost deployment artifacts
@@ -36,24 +37,29 @@ Use strict marker mode before opening a public PR or publishing:
 scripts/check_upstream_sync.sh --strict-private-markers main..HEAD
 ```
 
-The preflight checks for private product paths and warns about private marker
-strings such as private package dependencies, protected cloud paths, Hasna
-payment env names, customer tenancy, and production SaaS deploy wording. A
-generic server, worker, queue, persistence adapter, migration, or selfhost
-deployment contract is not private merely because it runs remotely.
+The preflight always rejects private product paths. Its strict marker scan
+examines implementation and configuration surfaces for private dependencies,
+protected cloud paths, Hasna payment env names, customer-tenancy configuration,
+and managed production deploy markers. Architecture and policy documents may
+name those concepts to define the boundary. A generic auth or API-key service,
+tenant-isolation primitive, server, worker, queue, persistence adapter,
+migration, observability contract, or opt-in selfhost deployment contract is not
+private merely because it runs remotely.
 
 ## Prepare A Branch
 
-Create a clean public branch from the current public base:
+Create a clean task worktree and public branch from the current public base:
 
 ```bash
 git fetch origin
-git switch -c public/<topic> origin/main
+git worktree add "$HOME/.hasna/repos/worktrees/open-skills/<topic>" \
+  -b public/<topic> origin/main
+cd "$HOME/.hasna/repos/worktrees/open-skills/<topic>"
 git cherry-pick <generic-commit-sha>
 ```
 
-Cherry-pick one logical generic commit at a time. Resolve conflicts as public
-package decisions, not hosted product decisions.
+Cherry-pick one logical generic commit at a time inside that task worktree.
+Resolve conflicts as public package decisions, not hosted product decisions.
 
 ## Required Gates
 

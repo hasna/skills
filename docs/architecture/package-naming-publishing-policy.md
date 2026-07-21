@@ -29,10 +29,11 @@ Use semver for the public package:
 
 - Patch: bug fixes, validation hardening, docs, tests, and non-breaking
   internal refactors.
-- Minor: new non-breaking CLI commands, MCP tools, public API exports, or
-  registry capabilities.
-- Major: breaking CLI/MCP/API behavior, package export removals, or install
-  path changes.
+- Minor before `1.0.0`: new non-breaking CLI commands, MCP tools, public API
+  exports, or registry capabilities, and any breaking CLI/MCP/API behavior,
+  package export removal, or install-path change.
+- Major at `1.0.0` and later: breaking CLI/MCP/API behavior, package export
+  removals, or install-path changes.
 
 If publishing manually, inspect `npm view @hasna/skills version` first and use
 the smallest correct bump.
@@ -56,9 +57,13 @@ Only publish from a clean public-package branch:
 13. Verify `skills --version`, `skills --help`, `skills setup --mode local
     --json`, and `skills-mcp --help`.
 
-Do not publish private cloud dependencies, protected hosted source, account
-state, billing logic, tenant logic, or deployment assumptions in the public npm
-package.
+Do not publish private cloud dependencies, protected hosted source, Hasna
+customer-account or organization topology, Hasna billing implementation,
+commercial tenancy policy, managed production operations, provider credentials,
+or private deployment configuration in the public npm package. Generic auth,
+API-key, tenant-isolation, observability, and provider-neutral opt-in selfhost
+contracts belong in the open package when they are reusable and independently
+deployable.
 
 ## Local Install Refresh
 

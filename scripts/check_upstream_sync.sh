@@ -15,7 +15,7 @@ Options:
   --strict-private-markers      Fail on private SaaS marker strings.
   -h, --help                    Show this help.
 
-This script does not create branches and never uses git worktrees.
+This script does not create worktrees, switch branches, or modify files.
 EOF
 }
 
@@ -78,18 +78,21 @@ if ((${#private_paths[@]} > 0)); then
 fi
 
 cloud_package='@hasna'/'cloud'
-marker_pattern="(${cloud_package}|@hasnatools/|src/platform|aws:bootstrap|preview-stripe|production-stripe|STRIPE_|tenant|billing|private cloud|preview deploy|production deploy)"
+marker_pattern="(${cloud_package}|@hasnatools/|src/platform|preview-stripe|production-stripe|STRIPE_[A-Z0-9_]+|HASNA_(CLOUD|BILLING|CUSTOMER|TENANT)_[A-Z0-9_]+|skills\.hasna\.xyz|/hasna/deploy/|customer tenant topology|Hasna billing|private provider routing|managed production infrastructure|cloud-only operational policy|AWS_ACCOUNT_ID|role-to-assume|environment:[[:space:]]*production|branches:[[:space:]]*\[main\])"
 marker_hits=()
 
 for file in "${changed_files[@]}"; do
   [[ -f "$file" ]] || continue
-  if grep -EIn "$marker_pattern" "$file" >/tmp/upstream_sync_hits.$$ 2>/dev/null; then
-    while IFS= read -r line; do
-      marker_hits+=("$file:$line")
-    done </tmp/upstream_sync_hits.$$
-  fi
+  case "$file" in
+    README.md|CHANGELOG.md|SECURITY.md|CODE_OF_CONDUCT.md|GOAL.md|docs/*.md|docs/**/*.md|scripts/check_upstream_sync.sh|*.test.*|*.spec.*)
+      continue
+      ;;
+  esac
+
+  while IFS= read -r line; do
+    marker_hits+=("$file:$line")
+  done < <(grep -EIn "$marker_pattern" "$file" 2>/dev/null || true)
 done
-rm -f /tmp/upstream_sync_hits.$$
 
 if ((${#marker_hits[@]} > 0)); then
   if ((strict_private_markers == 1)); then

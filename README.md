@@ -22,7 +22,7 @@ Hasna SaaS backend.
 | Surface | Meaning | Current verification (2026-07-21) |
 | --- | --- | --- |
 | `@hasna/skills@0.1.58` on npm | Public universal client | SaaS-capable for supported hosted skills through setup, auth, billing, remote run, status, and export commands. |
-| `@hasna/skills@0.1.59` in this source tree | Unreleased package candidate | `package.json`, the checked-in dependency lock, and source/tests belong to the `0.1.59` candidate. It is not published or tagged. |
+| `@hasna/skills@0.2.0` in this source tree | Unreleased package candidate | `package.json`, the checked-in dependency lock, and source/tests belong to the `0.2.0` candidate. It is not published or tagged. |
 | `skills.md` | Hasna-operated multi-tenant customer SaaS (`cloud`) | Public registry responded successfully. Published package metadata and live API capability state currently disagree for `image`, `video`, and `music`; treat that release drift as a blocker for those skills. |
 | Hasna-internal infrastructure or another operator deployment | Internal or customer-operated service (`selfhost`) | Separate from the customer SaaS, regardless of AWS provider, account, region, or hostname. |
 
@@ -30,7 +30,7 @@ The checked-in source, published npm artifact, and live service can advance at
 different times. Verify all three before claiming a remote capability works end
 to end. `local-first` means the package remains useful without an account; it
 does not mean the installed package is SaaS-disabled. The package/lock/source
-candidate is explicitly `0.1.59` and unreleased; npm remains at `0.1.58`. No
+candidate is explicitly `0.2.0` and unreleased; npm remains at `0.1.58`. No
 publish or tag is part of this candidate change.
 
 ## Quick Start
@@ -39,7 +39,7 @@ npm `@hasna/skills@0.1.58` predates the agent-first bare-command behavior. In
 that published version, bare `skills` still selects the implicit `interactive`
 command: a TTY opens the TUI and a non-TTY invocation prints compact JSON. The
 checked-in source now prints command help instead; npm users need a release
-later than 0.1.58 for that behavior. The checked-in `0.1.59` candidate has that
+later than 0.1.58 for that behavior. The checked-in `0.2.0` candidate has that
 behavior but remains unreleased.
 
 ```bash
@@ -260,6 +260,24 @@ surfaces. Published 0.1.58 still uses the old implicit `interactive` bare-comman
 behavior and the hosted SaaS flow documented above, so source/package/API drift
 must not be flattened into “SaaS absent.”
 
+## CURRENT IMPLEMENTATION BLOCKERS
+
+- Client sync and the authoritative server currently share
+  `HASNA_SKILLS_DATABASE_URL`, `HASNA_SKILLS_DATABASE_POOL_MAX`, and
+  `HASNA_SKILLS_S3_*`; the server artifact client also reads unscoped
+  `AWS_REGION`. The target contract requires
+  `HASNA_SKILLS_SERVER_DATABASE_URL`,
+  `HASNA_SKILLS_SERVER_DATABASE_POOL_MAX`, `HASNA_SKILLS_SERVER_S3_*`, and
+  `HASNA_SKILLS_SERVER_AWS_REGION`, with explicit legacy precedence and
+  migration. Until that lands, the two storage authorities are not proven
+  isolated and operators must not silently use one configuration for both.
+- The existing `.github/workflows/deploy.yml` contains Hasna-specific AWS
+  production configuration and an automatic `main` deploy. That internal AWS
+  deployment is `selfhost`, not `cloud`. Target compliance
+  requires moving it to an internal infrastructure/operator repository or
+  replacing it with a provider-neutral, operator-configured, opt-in selfhost
+  workflow. The workflow is intentionally unchanged by this candidate.
+
 ## Portable Skills
 
 Portable skills live directly under `~/.hasna/skills/<name>/` and follow the
@@ -378,16 +396,24 @@ import { getStorageStatus, resolveStorageConfig } from "@hasna/skills/storage";
 ```
 
 Plain `SKILLS_DATABASE_URL`, `SKILLS_STORAGE_MODE`, and `SKILLS_S3_BUCKET`
-fallbacks are accepted for local development. Self-hosted deployments should map
-runtime database and artifact settings into `HASNA_SKILLS_*` so local CLI state
-cannot accidentally point at production storage.
+fallbacks are accepted for local development. Legacy selfhost deployments
+currently map server database and artifact settings into `HASNA_SKILLS_*`; that
+is compatibility behavior, not proof of target isolation. Until the server
+namespace migration lands, do not enable client sync against the same values or
+present those shared names as two independent authorities.
 
-These variables configure client-side package storage and sync. The
-provider-neutral server has a separate authoritative database input:
-`HASNA_SKILLS_DATABASE_URL` wins over `DATABASE_URL`. Its pool size resolves as
-`HASNA_SKILLS_DATABASE_POOL_MAX`, then `SKILLS_DATABASE_POOL_MAX`, then `4`.
-Client sync configuration never selects or migrates the server's authoritative
-run, tenant, or artifact database implicitly.
+These variables configure client-side package storage and sync. Current source
+does not yet give the provider-neutral server a separate environment namespace:
+it also reads `HASNA_SKILLS_DATABASE_URL`, `HASNA_SKILLS_S3_*`, and unscoped
+`AWS_REGION`. The target server namespace is
+`HASNA_SKILLS_SERVER_DATABASE_URL`,
+`HASNA_SKILLS_SERVER_DATABASE_POOL_MAX`, `HASNA_SKILLS_SERVER_S3_*`, and
+`HASNA_SKILLS_SERVER_AWS_REGION`. During a bounded compatibility window, each
+target server name wins over its documented legacy input; conflicts emit a
+redacted diagnostic, migration preview records the selected source, and new
+configuration writes only server-scoped names. Client sync configuration must
+never be copied into or silently treated as the authoritative run, tenant, or
+artifact database and bucket.
 
 ## Project Structure
 

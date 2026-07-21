@@ -84,11 +84,15 @@ describe("open-core product service pattern", () => {
     expect(compactOwnership).toContain("`HASNA_SKILLS_S3_*` does not include `HASNA_SKILLS_AWS_REGION`");
     expect(compactContract).toContain("## Client-Sync And Server Database Authority");
     expect(compactContract).toContain("`HASNA_SKILLS_DATABASE_URL` wins over `SKILLS_DATABASE_URL`");
-    expect(compactContract).toContain("The provider-neutral server and migration binary resolve their authoritative database URL in this exact order: 1. `HASNA_SKILLS_DATABASE_URL` 2. `DATABASE_URL`");
-    expect(compactContract).toContain("The server database pool resolves independently in this exact order: 1. `HASNA_SKILLS_DATABASE_POOL_MAX` 2. `SKILLS_DATABASE_POOL_MAX` 3. `4`");
-    expect(compactContract).toContain("Never migrate a client-sync fallback into the server namespace or vice versa");
-    expect(compactOwnership).toContain("| `HASNA_SKILLS_DATABASE_URL` / `DATABASE_URL` | Provider-neutral server authoritative database reference |");
-    expect(compactOwnership).toContain("`HASNA_SKILLS_DATABASE_POOL_MAX` over `SKILLS_DATABASE_POOL_MAX` over the default `4`");
+    expect(compactContract).toContain("their authoritative database URL resolves in this exact order: 1. `HASNA_SKILLS_SERVER_DATABASE_URL` 2. legacy `HASNA_SKILLS_DATABASE_URL` 3. legacy `DATABASE_URL`");
+    expect(compactContract).toContain("The server database pool resolves independently in this exact order: 1. `HASNA_SKILLS_SERVER_DATABASE_POOL_MAX` 2. legacy `HASNA_SKILLS_DATABASE_POOL_MAX` 3. legacy `SKILLS_DATABASE_POOL_MAX` 4. `4`");
+    expect(compactContract).toContain("`HASNA_SKILLS_SERVER_S3_BUCKET`");
+    expect(compactContract).toContain("`HASNA_SKILLS_SERVER_AWS_REGION`");
+    expect(compactContract).toContain("Legacy fallback is a compatibility read, not a shared target namespace");
+    expect(compactContract).toContain("must never copy a client-sync value into the server namespace");
+    expect(compactOwnership).toContain("| `HASNA_SKILLS_SERVER_DATABASE_URL` plus legacy `HASNA_SKILLS_DATABASE_URL` / `DATABASE_URL` | Provider-neutral server authoritative database reference |");
+    expect(compactOwnership).toContain("`HASNA_SKILLS_SERVER_DATABASE_POOL_MAX` plus legacy");
+    expect(compactOwnership).toContain("`HASNA_SKILLS_SERVER_S3_*` plus legacy");
   });
 
   test("makes capabilities credential-free and externally anchored rather than a trust root", () => {
@@ -115,6 +119,22 @@ describe("open-core product service pattern", () => {
     expect(compactContract).toContain("rejects discovery signed by an unpinned, prematurely active, or retired key");
     expect(contract).toContain("Trust rotation requires continuity proof");
     expect(contract).toContain("explicit re-enrollment");
+    expect(contract).toContain("### First-Time Cloud Authentication And Tenant Selection");
+    for (const onboarding of [
+      "authorization-code browser flow or device flow",
+      "PKCE",
+      "unpredictable\n   `state`",
+      "OIDC `nonce`",
+      "an accepted invitation for an existing member",
+      "verified\n   new-user enrollment",
+      "multi-tenant\n   membership response",
+      "normalized origin, service\n   identity, issuer, audience, authenticated subject",
+      "short expiry, and unique\n   replay identifier",
+      "Tenant selection completes before an API credential is issued or released",
+      "Lost-device recovery",
+    ]) {
+      expect(contract).toContain(onboarding);
+    }
   });
 
   test("defines deterministic legacy migration, dual-read exit, downgrade, and rollback", () => {
@@ -139,11 +159,24 @@ describe("open-core product service pattern", () => {
   });
 
   test("pins the unreleased source candidate separately from published provenance", () => {
-    expect(packageJson.version).toBe("0.1.59");
-    expect(compactContract).toContain("The candidate is `@hasna/skills@0.1.59` and is explicitly unreleased");
+    expect(packageJson.version).toBe("0.2.0");
+    expect(compactContract).toContain("The candidate is `@hasna/skills@0.2.0` and is explicitly unreleased");
     expect(compactContract).toContain("It has not been published or tagged; npm remains at `0.1.58`");
-    expect(compactReadme).toContain("The package/lock/source candidate is explicitly `0.1.59` and unreleased; npm remains at `0.1.58`");
+    expect(compactReadme).toContain("The package/lock/source candidate is explicitly `0.2.0` and unreleased; npm remains at `0.1.58`");
     expect(compactReadme).toContain("No publish or tag is part of this candidate change");
+  });
+
+  test("records current namespace and deployment blockers without claiming target compliance", () => {
+    for (const content of [contract, readme]) {
+      expect(content).toContain("## CURRENT IMPLEMENTATION BLOCKERS");
+      expect(content).toContain("`HASNA_SKILLS_SERVER_DATABASE_URL`");
+      expect(content).toContain("`HASNA_SKILLS_SERVER_S3_*`");
+      expect(content).toContain("`.github/workflows/deploy.yml`");
+      expect(content).toContain("selfhost");
+      expect(content).toContain("not `cloud`");
+    }
+    expect(compactContract).toContain("This contract change does not edit or delete that workflow");
+    expect(compactReadme).toContain("The workflow is intentionally unchanged by this candidate");
   });
 
   test("distinguishes current legacy auth and npm behavior from the target architecture", () => {
@@ -181,6 +214,10 @@ describe("open-core product service pattern", () => {
     const compactNaming = compact(packageNaming);
     expect(compactNaming).toContain("`skills.md` always names the Hasna-operated multi-tenant customer SaaS (`cloud`)");
     expect(compactNaming).toContain("a compatible operator URL is `selfhost`");
+    expect(compactNaming).toContain("Minor before `1.0.0`");
+    expect(compactNaming).toContain("breaking CLI/MCP/API behavior");
+    expect(compactNaming).toContain("Major at `1.0.0` and later");
+    expect(compactNaming).toContain("Generic auth, API-key, tenant-isolation, observability, and provider-neutral opt-in selfhost contracts belong in the open package");
 
     const compactReusable = compact(reusableEngine);
     expect(compactReusable).toContain("Generic provider-neutral server persistence, workers, queues, and migrations remain OSS-owned surfaces");
