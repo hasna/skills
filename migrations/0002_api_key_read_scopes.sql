@@ -22,7 +22,9 @@ WHERE k.id = 'key_dev'
   AND k.scopes_json = '["skills:read","runs:write"]'::jsonb
   AND o.slug = 'dev'
   AND o.name = 'Development'
-  AND u.email = 'dev@skills.hasna.xyz';
+  -- Match the exact historical bootstrap address without shipping the retired
+  -- internal service origin in the public package.
+  AND md5(u.email) = 'bd437459aededa5b92dd7459452f7b50';
 
 -- Fail closed if a canonical target identifier already belongs to a different
 -- record. This migration must never merge the legacy tenant into an arbitrary

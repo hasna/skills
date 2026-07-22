@@ -224,7 +224,7 @@ describe("self-hosted skills API", () => {
   test("advertises and quotes only executable self-hosted handlers truthfully", async () => {
     const { server, baseUrl } = await testServer();
     try {
-      const client = new RemoteSkillsClient("sk_test_org_a", baseUrl);
+      const client = new RemoteSkillsClient("sk_test_org_a", baseUrl, LOOPBACK_TEST_ENV);
       const skills = await client.listSkills();
       const supported = skills.find((skill) => skill.name === "audio-transcript-pack");
       const unsupported = skills.find((skill) => skill.name === "logo-design");
@@ -270,7 +270,7 @@ describe("self-hosted skills API", () => {
       expect(denied.status).toBe(503);
       expect(await denied.json()).toMatchObject({ code: "HANDLER_UNAVAILABLE" });
 
-      const runs = await new RemoteSkillsClient("sk_test_org_a", baseUrl).listRuns();
+      const runs = await new RemoteSkillsClient("sk_test_org_a", baseUrl, LOOPBACK_TEST_ENV).listRuns();
       expect(runs).toEqual([]);
     } finally {
       server.stop(true);
@@ -298,7 +298,7 @@ describe("self-hosted skills API", () => {
         expect(await response.json()).toMatchObject({ code: "NOT_FOUND" });
       }
 
-      const client = new RemoteSkillsClient("sk_test_org_a", baseUrl);
+      const client = new RemoteSkillsClient("sk_test_org_a", baseUrl, LOOPBACK_TEST_ENV);
       const submitted = await client.submitRun("audio-transcript-pack", { text: "do not cancel" }, []);
       const cancel = await fetch(`${baseUrl}/api/v1/runs/${submitted.id}/cancel/extra`, {
         method: "POST",
@@ -369,7 +369,7 @@ describe("self-hosted skills API", () => {
   test("cancels queued work terminally so a worker cannot claim it", async () => {
     const { server, store, baseUrl } = await testServer();
     try {
-      const client = new RemoteSkillsClient("sk_test_org_a", baseUrl);
+      const client = new RemoteSkillsClient("sk_test_org_a", baseUrl, LOOPBACK_TEST_ENV);
       const submitted = await client.submitRun("audio-transcript-pack", { text: "cancel before claim" }, []);
       const cancelled = await fetch(`${baseUrl}/api/v1/runs/${submitted.id}/cancel`, {
         method: "POST",
@@ -387,7 +387,7 @@ describe("self-hosted skills API", () => {
   test("preserves running cancellation when a worker races to commit success", async () => {
     const { server, store, baseUrl } = await testServer();
     try {
-      const client = new RemoteSkillsClient("sk_test_org_a", baseUrl);
+      const client = new RemoteSkillsClient("sk_test_org_a", baseUrl, LOOPBACK_TEST_ENV);
       const submitted = await client.submitRun("audio-transcript-pack", { text: "cancel during execution" }, []);
       const claimed = await store.claimNextRun({ workerId: "worker_race" });
       expect(claimed).toMatchObject({ claimed: true, run: { id: submitted.id, status: "running" } });

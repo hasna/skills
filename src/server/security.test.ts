@@ -38,7 +38,7 @@ describe("self-hosted security helpers", () => {
     expect(migration).toContain("k.user_id = 'user_dev'");
     expect(migration).toContain("k.name = 'bootstrap'");
     expect(migration).toContain("o.slug = 'dev'");
-    expect(migration).toContain("u.email = 'dev@skills.hasna.xyz'");
+    expect(migration).toContain("md5(u.email) = 'bd437459aededa5b92dd7459452f7b50'");
     expect(migration).toContain('k.scopes_json = \'["skills:read","runs:write"]\'::jsonb');
     expect(migration).toContain("'org_self_hosted'");
     expect(migration).toContain("'user_operator'");
