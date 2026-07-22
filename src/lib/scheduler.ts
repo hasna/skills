@@ -177,22 +177,29 @@ export function getNextRun(cron: string, from: Date = new Date()): Date | null {
   const [minuteF, hourF, domF, monthF, dowF] = cron.trim().split(/\s+/);
 
   function parseField(f: string, min: number, max: number): number[] {
-    if (f === "*") return Array.from({ length: max - min + 1 }, (_, i) => i + min);
-    if (f.startsWith("*/")) {
-      const step = parseInt(f.slice(2));
-      if (isNaN(step)) return [];
-      const vals: number[] = [];
-      for (let i = min; i <= max; i += step) vals.push(i);
-      return vals;
-    }
-    return f.split(",").flatMap((part) => {
-      if (part.includes("-")) {
-        const [lo, hi] = part.split("-").map(Number);
-        return Array.from({ length: hi - lo + 1 }, (_, i) => i + lo);
+    const values = new Set<number>();
+
+    for (const part of f.split(",")) {
+      const [valuePart, stepPart] = part.split("/");
+      const step = stepPart === undefined ? 1 : Number(stepPart);
+      let start: number;
+      let end: number;
+
+      if (valuePart === "*") {
+        start = min;
+        end = max;
+      } else if (valuePart.includes("-")) {
+        [start, end] = valuePart.split("-").map(Number);
+      } else {
+        start = Number(valuePart);
+        // N/S means every S values beginning at N through the field maximum.
+        end = stepPart === undefined ? start : max;
       }
-      const n = parseInt(part);
-      return isNaN(n) ? [] : [n];
-    });
+
+      for (let value = start; value <= end; value += step) values.add(value);
+    }
+
+    return [...values].sort((a, b) => a - b);
   }
 
   const minutes = parseField(minuteF, 0, 59);
@@ -221,7 +228,17 @@ export function getNextRun(cron: string, from: Date = new Date()): Date | null {
       candidate.setHours(0, 0, 0, 0);
       continue;
     }
-    if (!doms.includes(dom) || !dows.includes(dow)) {
+    const domMatches = doms.includes(dom);
+    const dowMatches = dows.includes(dow);
+    // Standard cron treats day-of-month and day-of-week as alternatives when
+    // both fields are restricted. An exact wildcard leaves the other field in
+    // control.
+    const dayMatches = domF === "*"
+      ? dowMatches
+      : dowF === "*"
+        ? domMatches
+        : domMatches || dowMatches;
+    if (!dayMatches) {
       candidate.setDate(candidate.getDate() + 1);
       candidate.setHours(0, 0, 0, 0);
       continue;

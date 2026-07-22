@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { BASIC_SKILL_NAMES, SKILLS } from "../lib/registry.js";
@@ -52,7 +52,7 @@ class McpClient {
   private messages: any[] = [];
   private reader: ReadableStreamDefaultReader<Uint8Array>;
 
-  constructor(env: Record<string, string> = {}) {
+  constructor(env: Record<string, string> = {}, cwd: string = process.cwd()) {
     const home = env.HOME ?? mkdtempSync(join(tmpdir(), "skills-mcp-home-"));
     let saved: { mode?: string; apiUrl?: string } = {};
     try {
@@ -85,6 +85,7 @@ class McpClient {
       stdout: "pipe",
       stderr: "pipe",
       env: processEnv,
+      cwd,
     });
     this.reader = (this.proc.stdout as ReadableStream<Uint8Array>).getReader();
     this._readLoop();
@@ -874,6 +875,65 @@ version: 0.3.0
         quoteToken: "quote_user_approved_9",
       });
       expect(submittedIdempotencyKey).toMatch(/^skills-run-[a-f0-9]{48}$/);
+    } finally {
+      await client.close();
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  test("run_skill preflight rejections do not create phantom local runs", async () => {
+    const { rmSync } = require("fs");
+    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-preflight-no-run-"));
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/v1/skills/image" && req.method === "GET") {
+          return Response.json({
+            slug: "image",
+            availability: { status: "available" },
+            creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "image", credits: 9, formattedCredits: "9 credits/image" },
+          });
+        }
+        if (url.pathname === "/api/v1/skills/image/quote" && req.method === "POST") {
+          return Response.json({
+            quoteToken: "quote_preflight",
+            availability: { status: "available" },
+            creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "image", credits: 9, formattedCredits: "9 credits/image" },
+          });
+        }
+        return Response.json({ error: "run submission must not be reached" }, { status: 500 });
+      },
+    });
+    writeMcpModeConfig(tmpDir, "cloud", `http://127.0.0.1:${server.port}`);
+    const client = new McpClient({ HOME: tmpDir, SKILLS_API_KEY: "sk_test_preflight_no_run" }, tmpDir);
+    const cases = [
+      {
+        code: "APPROVED_CREDIT_QUOTE_REQUIRED",
+        arguments: { name: "image", approved: true, quoteToken: "quote_approved" },
+      },
+      {
+        code: "CLOUD_QUOTE_TOKEN_REQUIRED",
+        arguments: { name: "image", approved: true },
+      },
+      {
+        code: "APPROVAL_REQUIRED",
+        arguments: { name: "image" },
+      },
+    ];
+
+    try {
+      await client.initialize();
+      for (const [index, testCase] of cases.entries()) {
+        const response = await client.request("tools/call", {
+          name: "run_skill",
+          arguments: testCase.arguments,
+        }, 870 + index);
+        expect(response.result.isError).toBe(true);
+        expect(JSON.parse(response.result.content[0].text)).toMatchObject({ code: testCase.code });
+        expect(existsSync(join(tmpDir, ".skills", "runs"))).toBe(false);
+      }
     } finally {
       await client.close();
       server.stop(true);

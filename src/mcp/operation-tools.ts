@@ -479,30 +479,24 @@ export function registerOperationTools(server: McpServer): void {
       return mcpError("REMOTE_MODE_REQUIRED", `${skillName} requires cloud or self-hosted mode.`, ["skills setup --mode cloud"]);
     }
 
-    let runContext: ReturnType<typeof createSkillRun>;
-    try {
-      if (localRunId && idempotencyKey) {
-        const persisted = findSkillRun(localRunId);
-        if (persisted?.idempotencyKey !== idempotencyKey) {
-          return mcpError("RETRY_ATTEMPT_MISMATCH", "The supplied idempotencyKey does not match the persisted localRunId logical attempt.");
+    let runContext: ReturnType<typeof createSkillRun> | undefined;
+    if (localRunId) {
+      try {
+        if (idempotencyKey) {
+          const persisted = findSkillRun(localRunId);
+          if (persisted?.idempotencyKey !== idempotencyKey) {
+            return mcpError("RETRY_ATTEMPT_MISMATCH", "The supplied idempotencyKey does not match the persisted localRunId logical attempt.");
+          }
         }
+        runContext = resumeSkillRunAttempt(localRunId, { skill: skillName, args: runArgs });
+      } catch (error) {
+        return mcpError("RETRY_ATTEMPT_INVALID", (error as Error).message);
       }
-      runContext = localRunId
-        ? resumeSkillRunAttempt(localRunId, { skill: skillName, args: runArgs })
-        : createSkillRun({
-            skill: skillName,
-            args: runArgs,
-            remote: isPremiumSkill(skillName),
-            credits,
-            ...(idempotencyKey ? { idempotencyKey } : {}),
-          });
-    } catch (error) {
-      return mcpError("RETRY_ATTEMPT_INVALID", (error as Error).message);
     }
     let retrySubmission: ReturnType<typeof loadRemoteSubmission> | undefined;
     if (localRunId) {
       try {
-        retrySubmission = loadRemoteSubmission(runContext);
+        retrySubmission = loadRemoteSubmission(runContext!);
         if (retrySubmission.skill !== skillName
           || JSON.stringify(retrySubmission.args) !== JSON.stringify(runArgs)
           || JSON.stringify(retrySubmission.input) !== JSON.stringify(runInput)
@@ -557,21 +551,16 @@ export function registerOperationTools(server: McpServer): void {
         }
       }
       if (availability.status === "unavailable") {
-        const error = `${availability.code || "REMOTE_UNAVAILABLE"}: ${availability.message || "remote execution is unavailable"}`;
-        writeRunLogs(runContext, "", `${error}\n${(availability.details || []).join("\n")}\n`);
-        const run = completeSkillRun(runContext, { status: "failed", error, credits });
         return mcpError(
           availability.code || "REMOTE_UNAVAILABLE",
-          `${availability.message || "remote execution is unavailable"}. ${(availability.details || ["No credits were charged."]).join(" ")} Local run metadata: ${run.paths.runDir}/run.json`,
+          `${availability.message || "remote execution is unavailable"}. ${(availability.details || ["No credits were charged."]).join(" ")}`,
         );
       }
     }
 
     if (isPremiumSkill(skillName) && !apiKey) {
       const error = `${skillName} is a remote skill (${creditQuote.formattedCredits}). Run: ${getDeploymentSetupCommand(mode)} && skills auth login`;
-      writeRunLogs(runContext, "", error + "\n");
-      const run = completeSkillRun(runContext, { status: "failed", error, credits });
-      return mcpError("AUTH_REQUIRED", `${error}. Local run metadata: ${run.paths.runDir}/run.json`, ["skills auth login"]);
+      return mcpError("AUTH_REQUIRED", error, ["skills auth login"]);
     }
 
     let remoteClient: import("../lib/remote-client.js").RemoteSkillsClient | undefined;
@@ -675,15 +664,26 @@ export function registerOperationTools(server: McpServer): void {
 
     if (isPremiumSkill(skillName) && apiKey && creditQuote.credits > 0 && approved !== true && !retrySubmission) {
       const error = `${skillName} requires ${creditQuote.formattedCredits}. Call quote_skill first, then call run_skill with approved: true after user approval.`;
-      writeRunLogs(runContext, "", error + "\n");
-      const run = completeSkillRun(runContext, { status: "failed", error, credits });
-      return mcpError("APPROVAL_REQUIRED", `${error}. Local run metadata: ${run.paths.runDir}/run.json`, [
+      return mcpError("APPROVAL_REQUIRED", error, [
         "quote_skill",
         "run_skill approved=true",
       ]);
     }
 
     if (isPremiumSkill(skillName) && apiKey) {
+      if (!runContext) {
+        try {
+          runContext = createSkillRun({
+            skill: skillName,
+            args: runArgs,
+            remote: true,
+            creditQuote,
+            ...(idempotencyKey ? { idempotencyKey } : {}),
+          });
+        } catch (error) {
+          return mcpError("LOCAL_RUN_STATE_FAILED", `Unable to create local run state: ${(error as Error).message}`);
+        }
+      }
       try {
         const { RemoteSkillsClient } = await import("../lib/remote-client.js");
         const client = remoteClient ?? new RemoteSkillsClient(apiKey);
@@ -758,14 +758,33 @@ export function registerOperationTools(server: McpServer): void {
       }
     }
 
-    const result = await runSkill(skillName, runArgs, {
-      stdio: "pipe",
-      env: {
-        SKILLS_RUN_ID: runContext.record.id,
-        SKILLS_RUN_DIR: runContext.runDir,
-        SKILLS_EXPORT_DIR: runContext.exportDir,
-      },
-    });
+    if (!runContext) {
+      try {
+        runContext = createSkillRun({
+          skill: skillName,
+          args: runArgs,
+          remote: false,
+        });
+      } catch (error) {
+        return mcpError("LOCAL_RUN_STATE_FAILED", `Unable to create local run state: ${(error as Error).message}`);
+      }
+    }
+    let result: Awaited<ReturnType<typeof runSkill>>;
+    try {
+      result = await runSkill(skillName, runArgs, {
+        stdio: "pipe",
+        env: {
+          SKILLS_RUN_ID: runContext.record.id,
+          SKILLS_RUN_DIR: runContext.runDir,
+          SKILLS_EXPORT_DIR: runContext.exportDir,
+        },
+      });
+    } catch (error) {
+      const message = `Local skill ${skillName} failed before returning a result: ${(error as Error).message}`;
+      writeRunLogs(runContext, "", `${message}\n`);
+      const localRun = completeSkillRun(runContext, { status: "failed", error: message });
+      return mcpError("LOCAL_RUN_FAILED", `${message}. Local run metadata: ${localRun.paths.runDir}/run.json`);
+    }
     writeRunLogs(runContext, result.stdout ?? "", result.stderr ?? result.error ?? "");
     const localRun = completeSkillRun(runContext, {
       status: result.exitCode === 0 ? "completed" : "failed",

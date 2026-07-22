@@ -93,11 +93,37 @@ describe("getNextRun", () => {
     expect(next!.getUTCMinutes()).toBe(5);
   });
 
+  test("range step schedules", () => {
+    const from = new Date(2026, 3, 5, 10, 0, 0);
+    const next = getNextRun("0 9-17/2 * * *", from);
+    expect(next).not.toBeNull();
+    expect(next!.getDate()).toBe(5);
+    expect(next!.getHours()).toBe(11);
+    expect(next!.getMinutes()).toBe(0);
+  });
+
+  test("number step schedules", () => {
+    const from = new Date(2026, 3, 5, 10, 6, 0);
+    const next = getNextRun("5/20 * * * *", from);
+    expect(next).not.toBeNull();
+    expect(next!.getHours()).toBe(10);
+    expect(next!.getMinutes()).toBe(25);
+  });
+
   test("weekday-only schedule", () => {
     const from = new Date("2026-04-04T10:00:00Z"); // Saturday
     const next = getNextRun("0 9 * * 1-5", from);
     expect(next).not.toBeNull();
     expect(next!.getUTCDay()).toBe(1); // Monday
+  });
+
+  test("restricted day-of-month and day-of-week use standard OR semantics", () => {
+    const from = new Date(2026, 3, 7, 8, 0, 0); // Tuesday
+    const next = getNextRun("0 9 15 * 1", from);
+    expect(next).not.toBeNull();
+    expect(next!.getDate()).toBe(13);
+    expect(next!.getDay()).toBe(1); // Monday matches before the 15th
+    expect(next!.getHours()).toBe(9);
   });
 });
 
