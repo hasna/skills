@@ -28,6 +28,7 @@ import { getSkillRequirements, runSkill } from "../lib/skillinfo.js";
 import {
   completeSkillRun,
   beginSkillRunAttempt,
+  assertRemoteSubmissionTarget,
   clearRemoteSubmission,
   createSkillRun,
   findSkillRun,
@@ -52,9 +53,9 @@ import {
 import { cacheClear, mcpError, mcpJson, remoteRunNextActions } from "./helpers.js";
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../lib/remote-run-contract.js";
 import { getHostedRunAvailability } from "../lib/hosted-availability.js";
-import { getDeploymentSetupCommand, resolveCurrentDeploymentMode } from "../lib/deployment-mode.js";
+import { getDeploymentSetupCommand, resolveCurrentDeploymentMode, resolveCurrentDeploymentTarget } from "../lib/deployment-mode.js";
 import { loadRemoteSkill } from "../lib/remote-registry.js";
-import { toCustomerCreditPayload, toPublicCreditQuote } from "../lib/public-credits.js";
+import { toAuthoritativePublicCreditQuote, toCustomerCreditPayload, toPublicCreditQuote } from "../lib/public-credits.js";
 import {
   createUnsignedQuoteApprovalFingerprint,
   isUnsignedQuoteApprovalFingerprint,
@@ -421,13 +422,25 @@ export function registerOperationTools(server: McpServer): void {
       args: z.array(z.string()).optional(),
       approved: z.boolean().optional(),
       quoteToken: z.string().optional(),
+      approvedCreditQuote: z.object({
+        tier: z.enum(["free", "premium"]),
+        creditUnit: z.enum(["run", "image", "second", "character", "song", "thousand_tokens", "article"]),
+        credits: z.number(),
+        formattedCredits: z.string(),
+        formattedUnitCredits: z.string().optional(),
+        unitCount: z.number().optional(),
+        estimated: z.boolean(),
+        quoteDependsOnInput: z.boolean(),
+        quoteRequired: z.boolean(),
+        description: z.string(),
+      }).strict().optional(),
       allowUnsignedPhaseA: z.boolean().optional(),
       approvedQuoteFingerprint: z.string().regex(/^uqaf_v1_[a-f0-9]{64}$/).optional(),
       localRunId: z.string().optional(),
       idempotencyKey: z.string().optional(),
       detail: z.boolean().optional(),
     },
-  }, async ({ name, input, args, approved, quoteToken, allowUnsignedPhaseA, approvedQuoteFingerprint, localRunId, idempotencyKey, detail }) => {
+  }, async ({ name, input, args, approved, quoteToken, approvedCreditQuote, allowUnsignedPhaseA, approvedQuoteFingerprint, localRunId, idempotencyKey, detail }) => {
     const skill = getSkill(name);
     if (!skill) {
       return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
@@ -450,7 +463,8 @@ export function registerOperationTools(server: McpServer): void {
       }
     }
 
-    const mode = resolveCurrentDeploymentMode();
+    const deploymentTarget = resolveCurrentDeploymentTarget();
+    const mode = deploymentTarget.mode;
     if (allowUnsignedPhaseA === true && mode !== "self-hosted") {
       return mcpError(
         "UNSIGNED_PHASE_A_SELF_HOSTED_ONLY",
@@ -461,7 +475,7 @@ export function registerOperationTools(server: McpServer): void {
     let creditQuote = getSkillCreditQuote(skillName, runInput, runArgs);
     let credits = isPremiumSkill(skillName) ? creditQuote.credits : undefined;
 
-    if (isPremiumSkill(skillName) && mode === "local") {
+    if (isPremiumSkill(skillName) && mode === "local" && !localRunId) {
       return mcpError("REMOTE_MODE_REQUIRED", `${skillName} requires cloud or self-hosted mode.`, ["skills setup --mode cloud"]);
     }
 
@@ -493,15 +507,26 @@ export function registerOperationTools(server: McpServer): void {
           || JSON.stringify(retrySubmission.args) !== JSON.stringify(runArgs)
           || JSON.stringify(retrySubmission.input) !== JSON.stringify(runInput)
           || (quoteToken !== undefined && retrySubmission.authorization.quoteToken !== quoteToken)
-          || (approved !== undefined && retrySubmission.authorization.approved !== approved)) {
+          || (approved !== undefined && retrySubmission.authorization.approved !== approved)
+          || (approvedCreditQuote !== undefined
+            && JSON.stringify(toAuthoritativePublicCreditQuote(approvedCreditQuote)) !== JSON.stringify(retrySubmission.creditQuote))) {
           return mcpError("RETRY_ATTEMPT_MISMATCH", "The retry request does not match the persisted input, arguments, or authorization.");
         }
+        if (mode === "local" || !deploymentTarget.apiUrl) {
+          return mcpError("RETRY_ATTEMPT_INVALID", "The persisted remote logical attempt requires its original remote deployment target.");
+        }
+        assertRemoteSubmissionTarget(retrySubmission, {
+          mode,
+          apiUrl: deploymentTarget.apiUrl,
+        });
+        creditQuote = retrySubmission.creditQuote;
+        credits = retrySubmission.creditQuote.credits;
       } catch (error) {
         return mcpError("RETRY_ATTEMPT_INVALID", (error as Error).message);
       }
     }
 
-    if (isPremiumSkill(skillName)) {
+    if (isPremiumSkill(skillName) && !retrySubmission) {
       let availability: { status: "available" | "unavailable"; code?: string; message?: string; details?: string[] } = { status: "available" };
       if (mode === "cloud") {
         try {
@@ -556,12 +581,22 @@ export function registerOperationTools(server: McpServer): void {
         const { RemoteSkillsClient } = await import("../lib/remote-client.js");
         remoteClient = new RemoteSkillsClient(apiKey);
         if (retrySubmission) {
-          if (runContext.record.credits !== undefined) credits = runContext.record.credits;
+          creditQuote = retrySubmission.creditQuote;
+          credits = retrySubmission.creditQuote.credits;
         } else if (approved === true) {
           if (runQuoteToken) {
             // The caller approved this exact token. Forward it unchanged and
             // let the selected service verify its input/args binding. Never
             // replace an approved token with a fresh quote.
+            if (!approvedCreditQuote) {
+              return mcpError(
+                "APPROVED_CREDIT_QUOTE_REQUIRED",
+                "The approved signed run is missing the exact creditQuote returned with quoteToken. Call quote_skill with the exact input and args, obtain user approval, then pass both quoteToken and approvedCreditQuote. No credits were charged.",
+                ["quote_skill", "run_skill approved=true quoteToken=<approved token> approvedCreditQuote=<approved creditQuote>"],
+              );
+            }
+            creditQuote = toAuthoritativePublicCreditQuote(approvedCreditQuote);
+            credits = creditQuote.credits;
           } else if (mode === "cloud") {
             return mcpError(
               "CLOUD_QUOTE_TOKEN_REQUIRED",
@@ -638,7 +673,7 @@ export function registerOperationTools(server: McpServer): void {
       }
     }
 
-    if (isPremiumSkill(skillName) && apiKey && creditQuote.credits > 0 && approved !== true) {
+    if (isPremiumSkill(skillName) && apiKey && creditQuote.credits > 0 && approved !== true && !retrySubmission) {
       const error = `${skillName} requires ${creditQuote.formattedCredits}. Call quote_skill first, then call run_skill with approved: true after user approval.`;
       writeRunLogs(runContext, "", error + "\n");
       const run = completeSkillRun(runContext, { status: "failed", error, credits });
@@ -659,10 +694,16 @@ export function registerOperationTools(server: McpServer): void {
             ? { approved: true, idempotencyKey: stableIdempotencyKey }
             : { idempotencyKey: stableIdempotencyKey };
         const submission = retrySubmission ?? persistRemoteSubmission(runContext, {
+          deployment: {
+            mode: mode as "cloud" | "self-hosted",
+            apiUrl: deploymentTarget.apiUrl!,
+          },
           skill: skillName,
           input: runInput,
           args: runArgs,
           authorization: runAuthorization,
+          creditQuote,
+          ...(approvedQuoteFingerprint ? { approvedQuoteFingerprint } : {}),
         });
         beginSkillRunAttempt(runContext);
         const run = await client.submitRun(

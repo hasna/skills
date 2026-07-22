@@ -830,6 +830,23 @@ version: 0.3.0
 
     try {
       await client.initialize();
+      const missingQuote = await client.request("tools/call", {
+        name: "run_skill",
+        arguments: {
+          name: "image",
+          input: { prompt: "approved forest" },
+          args: ["--count", "1"],
+          approved: true,
+          quoteToken: "quote_user_approved_9",
+        },
+      }, 85);
+      expect(missingQuote.result.isError).toBe(true);
+      expect(JSON.parse(missingQuote.result.content[0].text)).toMatchObject({
+        code: "APPROVED_CREDIT_QUOTE_REQUIRED",
+      });
+      expect(quoteCalls).toBe(0);
+      expect(submittedBody).toBeUndefined();
+
       const response = await client.request("tools/call", {
         name: "run_skill",
         arguments: {
@@ -838,6 +855,13 @@ version: 0.3.0
           args: ["--count", "1"],
           approved: true,
           quoteToken: "quote_user_approved_9",
+          approvedCreditQuote: {
+            ...AUTHORITATIVE_TEST_QUOTE,
+            tier: "premium",
+            creditUnit: "image",
+            credits: 9,
+            formattedCredits: "9 credits/image",
+          },
         },
       }, 86);
       expect(response).not.toBeNull();
@@ -890,9 +914,21 @@ version: 0.3.0
           args: ["--format", "svg"],
           approved: true,
           quoteToken: "quote_selfhost_approved_exact",
+          approvedCreditQuote: {
+            ...AUTHORITATIVE_TEST_QUOTE,
+            tier: "premium",
+            creditUnit: "run",
+            credits: 7,
+            formattedCredits: "7 credits/run",
+          },
+          detail: true,
         },
       }, 861);
       expect(response.result.isError).not.toBe(true);
+      expect(JSON.parse(response.result.content[0].text)).toMatchObject({
+        creditQuote: { credits: 7, formattedCredits: "7 credits/run" },
+        run: { credits: 7, creditQuote: { credits: 7 } },
+      });
       expect(quoteCalls).toBe(0);
       expect(submittedBody).toEqual({
         input: { brief: "approved exact mark" },
@@ -1214,6 +1250,22 @@ version: 0.3.0
       }, 868);
       expect(changedInput.result.isError).toBe(true);
       expect(JSON.parse(changedInput.result.content[0].text)).toMatchObject({ code: "RETRY_ATTEMPT_MISMATCH" });
+
+      writeMcpModeConfig(tmpDir, "local");
+      const targetDrift = await client.request("tools/call", {
+        name: "run_skill",
+        arguments: {
+          name: "logo-design",
+          args: ["make a mark"],
+          localRunId,
+          idempotencyKey: "mcp-stable-logical-attempt",
+        },
+      }, 869);
+      expect(targetDrift.result.isError).toBe(true);
+      expect(JSON.parse(targetDrift.result.content[0].text)).toMatchObject({ code: "RETRY_ATTEMPT_INVALID" });
+      expect(submitCalls).toBe(1);
+      expect(quoteCalls).toBe(2);
+      writeMcpModeConfig(tmpDir, "self-hosted", `http://127.0.0.1:${server.port}`);
 
       const retry = await client.request("tools/call", {
         name: "run_skill",

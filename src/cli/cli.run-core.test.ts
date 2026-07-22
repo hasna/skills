@@ -398,7 +398,24 @@ describe("CLI run core", () => {
           run: { status: "unknown" },
         });
         const stored = JSON.parse(readFileSync(join(tmpDir, unknown.run.paths.runDir, "run.json"), "utf8"));
-        expect(stored).toMatchObject({ id: unknown.localRunId, status: "unknown", idempotencyKey: unknown.idempotencyKey });
+        expect(stored).toMatchObject({
+          id: unknown.localRunId,
+          status: "unknown",
+          idempotencyKey: unknown.idempotencyKey,
+          credits: 50,
+          creditQuote: { credits: 50, formattedCredits: "50 credits/run" },
+        });
+
+        const driftOrigin = "http://127.0.0.1:9";
+        writeModeConfig(tmpDir, "self-hosted", driftOrigin);
+        const drifted = await runCliInCwd([
+          "run", "--retry", unknown.localRunId, "--yes", "--json", "logo-design", "make a mark",
+        ], tmpDir, { ...env, SKILLS_API_URL: driftOrigin });
+        expect(drifted.exitCode).toBe(1);
+        expect(JSON.parse(drifted.stdout)).toMatchObject({ code: "RETRY_ATTEMPT_INVALID" });
+        expect(submitCalls).toBe(1);
+        expect(quoteCalls).toBe(1);
+        writeModeConfig(tmpDir, "self-hosted", `http://127.0.0.1:${server.port}`);
 
         const retry = await runCliInCwd([
           "run", "--retry", unknown.localRunId, "--yes", "--json", "logo-design", "make a mark",

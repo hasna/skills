@@ -202,13 +202,14 @@ describe("recordScheduleRun", () => {
     const scheduledFor = before.nextRun!;
     const key = createScheduleIdempotencyKey(before);
     const submission = {
+      deployment: { mode: "cloud" as const, apiUrl: "https://skills.md" },
       skill: before.skill,
       input: {},
       args: [],
       authorization: { idempotencyKey: key, quoteToken: "quote_exact", approved: true },
       creditQuote: {
         tier: "premium" as const,
-        creditUnit: "image",
+        creditUnit: "image" as const,
         credits: 4,
         formattedCredits: "4 credits/image",
         estimated: false,

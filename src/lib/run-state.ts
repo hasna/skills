@@ -10,6 +10,9 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, 
 import { extname, join, relative } from "path";
 import { normalizeSkillName } from "./utils.js";
 import { getProjectStateDir } from "./project-state.js";
+import { toAuthoritativePublicCreditQuote, type PublicCreditQuote } from "./public-credits.js";
+import { normalizeSkillsApiOrigin } from "./service-origin.js";
+import { isUnsignedQuoteApprovalFingerprint } from "./unsigned-quote-approval.js";
 
 export type SkillRunStatus = "queued" | "running" | "unknown" | "completed" | "failed";
 
@@ -33,6 +36,7 @@ export interface SkillRunRecord {
   retryCount?: number;
   remoteRunId?: string;
   credits?: number;
+  creditQuote?: PublicCreditQuote;
   error?: string;
   artifacts: SkillRunArtifact[];
   paths: {
@@ -52,6 +56,10 @@ export interface SkillRunContext {
 
 export interface PersistedRemoteSubmission {
   fingerprint: string;
+  deployment: {
+    mode: "cloud" | "self-hosted";
+    apiUrl: string;
+  };
   skill: string;
   input: Record<string, unknown>;
   args: string[];
@@ -60,6 +68,8 @@ export interface PersistedRemoteSubmission {
     quoteToken?: string;
     approved?: boolean;
   };
+  creditQuote: PublicCreditQuote;
+  approvedQuoteFingerprint?: string;
 }
 
 export function createSkillRun(
@@ -70,6 +80,7 @@ export function createSkillRun(
     remote?: boolean;
     remoteRunId?: string;
     credits?: number;
+    creditQuote?: PublicCreditQuote;
     status?: SkillRunStatus;
     idempotencyKey?: string;
   },
@@ -79,6 +90,12 @@ export function createSkillRun(
   const id = createRunId(now);
   const day = now.toISOString().slice(0, 10);
   const skillName = normalizeSkillName(params.skill);
+  const creditQuote = params.creditQuote
+    ? toAuthoritativePublicCreditQuote(params.creditQuote)
+    : undefined;
+  if (creditQuote && params.credits !== undefined && params.credits !== creditQuote.credits) {
+    throw new Error("Local run credits must match the authoritative credit quote.");
+  }
   const root = getProjectStateDir(targetDir);
   const runDir = join(root, "runs", day, id);
   const logsDir = join(runDir, "logs");
@@ -99,7 +116,7 @@ export function createSkillRun(
       ? { idempotencyKey: requireValidIdempotencyKey(params.idempotencyKey ?? createRunIdempotencyKey(id)) }
       : {}),
     ...(params.remoteRunId ? { remoteRunId: params.remoteRunId } : {}),
-    ...(params.credits !== undefined ? { credits: params.credits } : {}),
+    ...(creditQuote ? { creditQuote, credits: creditQuote.credits } : params.credits !== undefined ? { credits: params.credits } : {}),
     artifacts: [],
     paths: {
       runDir: toProjectRelative(targetDir, runDir),
@@ -120,6 +137,9 @@ export function completeSkillRun(
   patch: { status: SkillRunStatus; error?: string; remoteRunId?: string; credits?: number },
 ): SkillRunRecord {
   if (context.record.status === "unknown") return context.record;
+  if (context.record.creditQuote && patch.credits !== undefined && patch.credits !== context.record.creditQuote.credits) {
+    throw new Error("Completed run credits must match the authoritative credit quote.");
+  }
   const artifacts = collectRunArtifacts(context);
   context.record = {
     ...context.record,
@@ -227,9 +247,20 @@ export function persistRemoteSubmission(
   if (existing && existing.fingerprint !== normalized.fingerprint) {
     throw new Error("Remote retry request does not match the persisted logical attempt.");
   }
-  writeFileSync(remoteSubmissionPath(context), `${JSON.stringify(existing ?? normalized, null, 2)}\n`, { mode: 0o600 });
+  const persisted = existing ?? normalized;
+  context.record = {
+    ...context.record,
+    credits: persisted.creditQuote.credits,
+    creditQuote: persisted.creditQuote,
+  };
+  writeRunRecord(context);
+  appendRunEvent(context, "remote_submission_persisted", {
+    status: context.record.status,
+    deploymentMode: persisted.deployment.mode,
+  });
+  writeFileSync(remoteSubmissionPath(context), `${JSON.stringify(persisted, null, 2)}\n`, { mode: 0o600 });
   chmodSync(remoteSubmissionPath(context), 0o600);
-  return existing ?? normalized;
+  return persisted;
 }
 
 /** Load the immutable request used by an unknown mutation; never reconstruct it from a fresh quote. */
@@ -239,7 +270,22 @@ export function loadRemoteSubmission(context: SkillRunContext): PersistedRemoteS
   if (submission.authorization.idempotencyKey !== getRunIdempotencyKey(context.record)) {
     throw new Error("The persisted remote submission does not match the local idempotency key.");
   }
+  if (!context.record.creditQuote
+    || canonicalJson(toAuthoritativePublicCreditQuote(context.record.creditQuote)) !== canonicalJson(submission.creditQuote)
+    || context.record.credits !== submission.creditQuote.credits) {
+    throw new Error("The persisted local run does not match its authoritative remote credit quote.");
+  }
   return submission;
+}
+
+export function assertRemoteSubmissionTarget(
+  submission: Pick<PersistedRemoteSubmission, "deployment">,
+  target: { mode: "cloud" | "self-hosted"; apiUrl: string },
+): void {
+  const apiUrl = normalizeSkillsApiOrigin(target.apiUrl, process.env);
+  if (submission.deployment.mode !== target.mode || submission.deployment.apiUrl !== apiUrl) {
+    throw new Error("The persisted remote logical attempt belongs to a different deployment mode or service origin.");
+  }
 }
 
 export function clearRemoteSubmission(context: SkillRunContext): void {
@@ -357,16 +403,31 @@ function normalizeRemoteSubmission(
   submission: Omit<PersistedRemoteSubmission, "fingerprint">,
 ): PersistedRemoteSubmission {
   const skill = normalizeSkillName(submission.skill);
+  const deployment = {
+    mode: submission.deployment.mode,
+    apiUrl: normalizeSkillsApiOrigin(submission.deployment.apiUrl, process.env),
+  };
+  if (deployment.mode !== "cloud" && deployment.mode !== "self-hosted") {
+    throw new Error("Remote submission requires cloud or self-hosted deployment mode.");
+  }
+  const creditQuote = toAuthoritativePublicCreditQuote(submission.creditQuote);
+  const approvedQuoteFingerprint = submission.approvedQuoteFingerprint;
+  if (approvedQuoteFingerprint !== undefined && !isUnsignedQuoteApprovalFingerprint(approvedQuoteFingerprint)) {
+    throw new Error("Remote submission contains an invalid approved quote fingerprint.");
+  }
   const authorization = {
     idempotencyKey: requireValidIdempotencyKey(submission.authorization.idempotencyKey),
     ...(submission.authorization.quoteToken ? { quoteToken: submission.authorization.quoteToken } : {}),
     ...(submission.authorization.approved !== undefined ? { approved: submission.authorization.approved } : {}),
   };
   const body = {
+    deployment,
     skill,
     input: structuredClone(submission.input),
     args: [...submission.args],
     authorization,
+    creditQuote,
+    ...(approvedQuoteFingerprint ? { approvedQuoteFingerprint } : {}),
   };
   return {
     ...body,

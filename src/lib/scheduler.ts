@@ -11,6 +11,7 @@
 import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { createHash } from "crypto";
+import type { PublicCreditQuote } from "./public-credits.js";
 
 export interface SkillSchedule {
   id: string;
@@ -36,6 +37,10 @@ export interface SkillSchedule {
 }
 
 export interface ScheduleRemoteSubmission {
+  deployment: {
+    mode: "cloud" | "self-hosted";
+    apiUrl: string;
+  };
   skill: string;
   input: Record<string, unknown>;
   args: string[];
@@ -44,16 +49,8 @@ export interface ScheduleRemoteSubmission {
     quoteToken?: string;
     approved?: boolean;
   };
-  creditQuote: {
-    tier: "free" | "premium";
-    creditUnit: string;
-    credits: number;
-    formattedCredits: string;
-    estimated: boolean;
-    quoteDependsOnInput: boolean;
-    quoteRequired: boolean;
-    description: string;
-  };
+  creditQuote: PublicCreditQuote;
+  approvedQuoteFingerprint?: string;
 }
 
 export const MAX_UNKNOWN_OCCURRENCE_ATTEMPTS = 3;

@@ -4,7 +4,7 @@
 
 import chalk from "chalk";
 import type { Command } from "commander";
-import { getDeploymentSetupCommand, resolveCurrentDeploymentMode } from "../../lib/deployment-mode.js";
+import { getDeploymentSetupCommand, resolveCurrentDeploymentMode, resolveCurrentDeploymentTarget } from "../../lib/deployment-mode.js";
 import { loadRemoteSkill } from "../../lib/remote-registry.js";
 import { formatCredits, toCustomerCreditPayload, toPublicCreditQuote } from "../../lib/public-credits.js";
 import { createUnsignedQuoteApprovalFingerprint } from "../../lib/unsigned-quote-approval.js";
@@ -15,6 +15,7 @@ import {
   type SkillSchedule,
   type ScheduleRemoteSubmission,
 } from "../../lib/scheduler.js";
+import { assertRemoteSubmissionTarget } from "../../lib/run-state.js";
 import {
   DEFAULT_LIST_LIMIT,
   paginate,
@@ -328,7 +329,8 @@ async function prepareScheduledSkill(
 
   const creditCatalog = await import("../../lib/credit-catalog.js");
   if (creditCatalog.isPremiumSkill(skill.name)) {
-    const mode = resolveCurrentDeploymentMode();
+    const deploymentTarget = resolveCurrentDeploymentTarget();
+    const mode = deploymentTarget.mode;
     if (mode === "local") throw new Error(`${skill.name} requires cloud or self-hosted mode.`);
     let creditQuote = creditCatalog.getSkillCreditQuote(skill.name, {}, args);
     const { getApiKey } = await import("../../lib/auth-store.js");
@@ -344,6 +346,13 @@ async function prepareScheduledSkill(
       ? pending.submission
       : undefined;
     if (pendingSubmission) {
+      if (!deploymentTarget.apiUrl) {
+        throw new Error("The pending remote schedule occurrence requires its original remote deployment target.");
+      }
+      assertRemoteSubmissionTarget(pendingSubmission, {
+        mode,
+        apiUrl: deploymentTarget.apiUrl,
+      });
       creditQuote = toPublicCreditQuote(pendingSubmission.creditQuote);
       return preparedRemoteSchedule(schedule, client, pendingSubmission, creditQuote);
     }
@@ -416,9 +425,14 @@ async function prepareScheduledSkill(
       if (!unsignedQuoteFingerprint || reverifiedFingerprint !== unsignedQuoteFingerprint) {
         throw new Error(`SELF_HOSTED_UNSIGNED_QUOTE_CHANGED: The self-hosted quote changed after approval (${creditQuote.formattedCredits} to ${reverifiedQuote.formattedCredits}). Review and approve the new skill, operation, constraints, and credit quote before running. No credits were charged.`);
       }
+      creditQuote = reverifiedQuote;
       runAuthorization = { approved: true };
     }
     const submission: ScheduleRemoteSubmission = {
+      deployment: {
+        mode: mode as "cloud" | "self-hosted",
+        apiUrl: deploymentTarget.apiUrl!,
+      },
       skill: skill.name,
       input: {},
       args,
@@ -427,6 +441,7 @@ async function prepareScheduledSkill(
         idempotencyKey: createScheduleIdempotencyKey(schedule),
       },
       creditQuote,
+      ...(unsignedQuoteFingerprint ? { approvedQuoteFingerprint: unsignedQuoteFingerprint } : {}),
     };
     return preparedRemoteSchedule(schedule, client, submission, creditQuote);
   }
@@ -469,15 +484,39 @@ function preparedRemoteSchedule(
   };
 }
 
-async function describeDueSchedule(schedule: { name: string; skill: string; cron: string; args?: string[] }) {
+async function describeDueSchedule(schedule: SkillSchedule) {
   const { getSkill } = await import("../../lib/registry.js");
   const creditCatalog = await import("../../lib/credit-catalog.js");
   const skill = getSkill(schedule.skill);
   const creditBacked = Boolean(skill && creditCatalog.isPremiumSkill(skill.name));
   let creditQuote = creditBacked ? undefined : skill ? creditCatalog.getSkillCreditQuote(skill.name, {}, schedule.args ?? []) : undefined;
-  const mode = resolveCurrentDeploymentMode();
+  const deploymentTarget = resolveCurrentDeploymentTarget();
+  const mode = deploymentTarget.mode;
   let availability: { status: "available" | "unavailable"; code?: string; message?: string; details?: string[] } = { status: "available" };
-  if (creditBacked && skill && mode === "cloud") {
+  const pending = schedule.pendingOccurrence;
+  const pendingSubmission = pending && pending.scheduledFor === schedule.nextRun
+    && pending.idempotencyKey === createScheduleIdempotencyKey(schedule)
+    ? pending.submission
+    : undefined;
+  if (creditBacked && pendingSubmission) {
+    try {
+      if (mode === "local" || !deploymentTarget.apiUrl) {
+        throw new Error("The pending remote schedule occurrence requires its original remote deployment target.");
+      }
+      assertRemoteSubmissionTarget(pendingSubmission, {
+        mode,
+        apiUrl: deploymentTarget.apiUrl,
+      });
+      creditQuote = toPublicCreditQuote(pendingSubmission.creditQuote);
+    } catch (error) {
+      availability = {
+        status: "unavailable",
+        code: "SCHEDULE_RETRY_TARGET_MISMATCH",
+        message: (error as Error).message,
+        details: ["Restore the original deployment mode and service origin before retrying. No credits were charged."],
+      };
+    }
+  } else if (creditBacked && skill && mode === "cloud") {
     try {
       const remoteSkill = await loadRemoteSkill(skill.name);
       if (remoteSkill.creditQuote) creditQuote = remoteSkill.creditQuote;

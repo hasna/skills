@@ -15,7 +15,7 @@ import {
   validateBlogArticleRunOptions,
 } from "../../lib/credit-catalog.js";
 import { loadConfig, saveDeploymentConfig, type ConfigScope } from "../../lib/config.js";
-import { getDeploymentSetupCommand, resolveCurrentDeploymentMode } from "../../lib/deployment-mode.js";
+import { getDeploymentSetupCommand, resolveCurrentDeploymentMode, resolveCurrentDeploymentTarget } from "../../lib/deployment-mode.js";
 import { CLOUD_API_ORIGIN } from "../../lib/service-origin.js";
 import { getHostedRunAvailability } from "../../lib/hosted-availability.js";
 import { loadRemoteSkill } from "../../lib/remote-registry.js";
@@ -29,6 +29,7 @@ import { createUnsignedQuoteApprovalFingerprint } from "../../lib/unsigned-quote
 import {
   completeSkillRun,
   beginSkillRunAttempt,
+  assertRemoteSubmissionTarget,
   clearRemoteSubmission,
   createSkillRun,
   findSkillRun,
@@ -448,7 +449,16 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
     }
   }
   const isPremium = creditCatalog.isPremiumSkill(skill.name);
-  const deploymentMode = resolveCurrentDeploymentMode();
+  if (options.retry && options.localRunId && options.retry !== options.localRunId) {
+    const error = "--retry and --local-run-id must identify the same logical attempt.";
+    if (options.json) console.log(JSON.stringify({ skill: skill.name, args, exitCode: 1, error, code: "RETRY_ATTEMPT_MISMATCH" }));
+    else console.error(chalk.red(error));
+    process.exitCode = 1;
+    return;
+  }
+  const retryRunId = options.retry ?? options.localRunId;
+  const deploymentTarget = resolveCurrentDeploymentTarget();
+  const deploymentMode = deploymentTarget.mode;
   if (options.allowUnsignedPhaseA && deploymentMode !== "self-hosted") {
     const error = "--allow-unsigned-phase-a is valid only for an explicitly selected self-hosted service.";
     const payload = {
@@ -470,7 +480,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
   let unsignedQuoteFingerprint: string | undefined;
   let remoteAvailability: { status: "available" | "unavailable"; code?: string; message?: string; details?: string[] } = { status: "available" };
 
-  if (isPremium && deploymentMode === "local") {
+  if (isPremium && deploymentMode === "local" && !retryRunId) {
     const error = `${skill.name} requires cloud or self-hosted mode. Run: skills setup --mode cloud`;
     const payload = { skill: skill.name, args, exitCode: 1, remote: false, error, code: "REMOTE_MODE_REQUIRED" };
     if (options.json) console.log(JSON.stringify(payload, null, 2));
@@ -479,7 +489,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
     return;
   }
 
-  if (isPremium && deploymentMode === "cloud") {
+  if (isPremium && !retryRunId && deploymentMode === "cloud") {
     try {
       const remoteSkill = await loadRemoteSkill(skill.name);
       if (remoteSkill.creditQuote) {
@@ -498,7 +508,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       process.exitCode = 1;
       return;
     }
-  } else if (isPremium) {
+  } else if (isPremium && !retryRunId) {
     const { getApiKey } = await import("../../lib/auth-store.js");
     const apiKey = getApiKey();
     if (apiKey) {
@@ -516,14 +526,6 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
     }
   }
 
-  if (options.retry && options.localRunId && options.retry !== options.localRunId) {
-    const error = "--retry and --local-run-id must identify the same logical attempt.";
-    if (options.json) console.log(JSON.stringify({ skill: skill.name, args, exitCode: 1, error, code: "RETRY_ATTEMPT_MISMATCH" }));
-    else console.error(chalk.red(error));
-    process.exitCode = 1;
-    return;
-  }
-  const retryRunId = options.retry ?? options.localRunId;
   let runContext: ReturnType<typeof createSkillRun>;
   try {
     runContext = retryRunId
@@ -551,6 +553,17 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
         || JSON.stringify(retrySubmission.input) !== "{}") {
         throw new Error("The retry request does not match the persisted logical attempt.");
       }
+      if (deploymentMode === "local" || !deploymentTarget.apiUrl) {
+        throw new Error("The persisted remote logical attempt requires its original remote deployment target.");
+      }
+      assertRemoteSubmissionTarget(retrySubmission, {
+        mode: deploymentMode,
+        apiUrl: deploymentTarget.apiUrl,
+      });
+      creditQuote = retrySubmission.creditQuote;
+      credits = retrySubmission.creditQuote.credits;
+      quoteToken = retrySubmission.authorization.quoteToken;
+      unsignedQuoteFingerprint = retrySubmission.approvedQuoteFingerprint;
     } catch (error) {
       const message = (error as Error).message;
       if (options.json) console.log(JSON.stringify({ skill: skill.name, args, exitCode: 1, error: message, code: "RETRY_ATTEMPT_INVALID" }));
@@ -619,10 +632,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       try {
         const { RemoteSkillsClient } = await import("../../lib/remote-client.js");
         client = new RemoteSkillsClient(apiKey);
-        if (retrySubmission) {
-          quoteToken = retrySubmission.authorization.quoteToken;
-          if (runContext.record.credits !== undefined) credits = runContext.record.credits;
-        } else {
+        if (!retrySubmission) {
           const liveQuote = await client.quoteSkill(skill.name, {}, args);
           const liveAvailability = liveQuote?.availability;
           if (liveQuote?.error || liveAvailability?.status === "unavailable") {
@@ -672,6 +682,8 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       }
 
       if (
+        !retrySubmission
+        &&
         deploymentMode === "self-hosted"
         && creditQuote.credits > 0
         && !quoteToken
@@ -684,7 +696,9 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
         return;
       }
 
-      const approval = creditQuote.credits === 0
+      const approval = retrySubmission
+        ? { approved: true as const }
+        : creditQuote.credits === 0
         ? { approved: true as const }
         : await approvePaidHostedRun({
             skill: skill.name,
@@ -715,6 +729,8 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       }
 
       if (
+        !retrySubmission
+        &&
         deploymentMode === "self-hosted"
         && creditQuote.credits > 0
         && !quoteToken
@@ -784,6 +800,10 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
           ? JSON.stringify(attemptReceipt)
           : chalk.dim(`Remote attempt: localRunId=${attemptReceipt.localRunId} idempotencyKey=${attemptReceipt.idempotencyKey}`));
         const submission = retrySubmission ?? persistRemoteSubmission(runContext, {
+          deployment: {
+            mode: deploymentMode as "cloud" | "self-hosted",
+            apiUrl: deploymentTarget.apiUrl!,
+          },
           skill: skill.name,
           input: {},
           args,
@@ -791,6 +811,8 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
             ...runAuthorization,
             idempotencyKey,
           },
+          creditQuote,
+          ...(unsignedQuoteFingerprint ? { approvedQuoteFingerprint: unsignedQuoteFingerprint } : {}),
         });
         beginSkillRunAttempt(runContext);
         const run = await client.submitRun(

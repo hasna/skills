@@ -182,10 +182,13 @@ const creditQuoteSchema = objectSchema({
   creditUnit: stringSchema("Credit unit."),
   credits: { type: "number", description: "Estimated or fixed credits." },
   formattedCredits: stringSchema("Display-ready credits."),
+  formattedUnitCredits: stringSchema("Optional display-ready credits per unit."),
+  unitCount: { type: "number", description: "Optional number of quoted units." },
   estimated: { type: "boolean", description: "Whether the final credits can vary by input." },
   quoteDependsOnInput: { type: "boolean", description: "Whether input affects the quote." },
   quoteRequired: { type: "boolean", description: "Whether callers should quote before running." },
-}, [], "Public credit quote metadata.");
+  description: stringSchema("Credits-only description of the quoted execution."),
+}, ["tier", "creditUnit", "credits", "formattedCredits", "estimated", "quoteDependsOnInput", "quoteRequired", "description"], "Public credit quote metadata.");
 
 const skillAvailabilitySchema = objectSchema({
   status: {
@@ -577,7 +580,7 @@ const toolContracts: McpToolContract[] = [
     name: "run_skill",
     title: "Run Skill",
     description: "Run a skill locally or through a configured remote runner. Returns compact stdout/stderr previews and run summaries by default; pass detail:true for full records.",
-    params: ["name", "input?", "args?", "approved?", "quoteToken?", "allowUnsignedPhaseA?", "approvedQuoteFingerprint?", "localRunId?", "idempotencyKey?", "detail?"],
+    params: ["name", "input?", "args?", "approved?", "quoteToken?", "approvedCreditQuote?", "allowUnsignedPhaseA?", "approvedQuoteFingerprint?", "localRunId?", "idempotencyKey?", "detail?"],
     category: "execution",
     sideEffects: "local-process-or-remote-run",
     stable: true,
@@ -587,6 +590,10 @@ const toolContracts: McpToolContract[] = [
       args: runArgsSchema,
       approved: paidRunApprovalSchema,
       quoteToken: quoteTokenSchema,
+      approvedCreditQuote: {
+        ...creditQuoteSchema,
+        description: "Exact credits-only creditQuote returned with quoteToken and approved by the user. Required when submitting an approved signed quote.",
+      },
       allowUnsignedPhaseA: allowUnsignedPhaseASchema,
       approvedQuoteFingerprint: approvedQuoteFingerprintSchema,
       localRunId: stringSchema("Persisted local run id for retrying the same ambiguous logical attempt."),

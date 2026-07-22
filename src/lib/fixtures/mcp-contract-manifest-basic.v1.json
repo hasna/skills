@@ -57,6 +57,7 @@
       "properties": [
         "allowUnsignedPhaseA",
         "approved",
+        "approvedCreditQuote",
         "approvedQuoteFingerprint",
         "args",
         "detail",

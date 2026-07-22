@@ -748,6 +748,16 @@ describe("CLI runtime and misc commands", () => {
         pending.schedules[0].pendingOccurrence.retryAfter = "2020-01-01T00:00:00.000Z";
         writeFileSync(schedulesPath, JSON.stringify(pending, null, 2));
 
+        await runCliInCwd(["setup", "--mode", "local", "--json"], tmpDir, { HOME: tmpDir });
+        const targetDrift = await runCliInCwd([
+          "schedule", "run", "--approve-credits", "--max-credits", "4", "--json",
+        ], tmpDir, env);
+        expect(targetDrift.exitCode).toBe(1);
+        expect(JSON.parse(targetDrift.stdout)).toMatchObject({ code: "SCHEDULE_RETRY_TARGET_MISMATCH" });
+        expect(submitCalls).toBe(1);
+        expect(quoteCalls).toBe(1);
+        await runCliInCwd(["setup", "--mode", "cloud", "--api-url", `http://127.0.0.1:${server.port}`, "--json"], tmpDir, { HOME: tmpDir });
+
         const retry = await runCliInCwd([
           "schedule", "run", "--approve-credits", "--max-credits", "4", "--json",
         ], tmpDir, env);

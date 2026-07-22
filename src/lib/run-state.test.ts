@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   completeSkillRun,
   beginSkillRunAttempt,
+  assertRemoteSubmissionTarget,
   createSkillRun,
   markSkillRunOutcomeUnknown,
   clearRemoteSubmission,
@@ -12,6 +13,17 @@ import {
   persistRemoteSubmission,
   resumeSkillRunAttempt,
 } from "./run-state";
+
+const authoritativeQuote = {
+  tier: "premium" as const,
+  creditUnit: "run" as const,
+  credits: 7,
+  formattedCredits: "7 credits/run",
+  estimated: false,
+  quoteDependsOnInput: false,
+  quoteRequired: true,
+  description: "Remote image execution",
+};
 
 describe("public run metadata", () => {
   test("persists credits without fiat-shaped accounting aliases", () => {
@@ -39,6 +51,7 @@ describe("public run metadata", () => {
         idempotencyKey: "stable-logical-attempt",
       }, target);
       const submission = persistRemoteSubmission(first, {
+        deployment: { mode: "cloud", apiUrl: "https://skills.md/" },
         skill: "image",
         input: { brief: "forest" },
         args: ["forest"],
@@ -47,6 +60,7 @@ describe("public run metadata", () => {
           quoteToken: "quote_exact_attempt",
           approved: true,
         },
+        creditQuote: authoritativeQuote,
       });
       expect(submission.fingerprint).toMatch(/^[a-f0-9]{64}$/);
       expect(statSync(join(first.runDir, "remote-submission.json")).mode & 0o777).toBe(0o600);
@@ -59,8 +73,15 @@ describe("public run metadata", () => {
       expect(resumed.record.id).toBe(first.record.id);
       expect(resumed.record.idempotencyKey).toBe("stable-logical-attempt");
       expect(resumed.record.status).toBe("unknown");
+      expect(resumed.record.credits).toBe(7);
+      expect(resumed.record.creditQuote).toEqual(submission.creditQuote);
       expect(loadRemoteSubmission(resumed)).toEqual(submission);
+      expect(() => assertRemoteSubmissionTarget(submission, {
+        mode: "self-hosted",
+        apiUrl: "https://skills.md",
+      })).toThrow("different deployment mode or service origin");
       expect(() => persistRemoteSubmission(resumed, {
+        deployment: { mode: "cloud", apiUrl: "https://skills.md" },
         skill: "image",
         input: { brief: "different" },
         args: ["forest"],
@@ -69,6 +90,7 @@ describe("public run metadata", () => {
           quoteToken: "quote_exact_attempt",
           approved: true,
         },
+        creditQuote: authoritativeQuote,
       })).toThrow("does not match");
 
       beginSkillRunAttempt(resumed);
