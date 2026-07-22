@@ -83,7 +83,7 @@ describe("CLI run premium developer", () => {
           proc.exited,
         ]);
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderr).toMatch(/remote_mutation_attempt|Remote attempt:/);
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({
           skill: "test-suite-generator",
@@ -175,7 +175,7 @@ describe("CLI run premium developer", () => {
           proc.exited,
         ]);
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderr).toMatch(/remote_mutation_attempt|Remote attempt:/);
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({
           skill: "api-docs-portal",
@@ -271,7 +271,7 @@ describe("CLI run premium developer", () => {
           proc.exited,
         ]);
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderr).toMatch(/remote_mutation_attempt|Remote attempt:/);
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({
           skill: "sdk-generator",
@@ -369,7 +369,7 @@ describe("CLI run premium developer", () => {
           proc.exited,
         ]);
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderr).toMatch(/remote_mutation_attempt|Remote attempt:/);
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({
           skill: "repo-onboarding-report",
@@ -467,7 +467,7 @@ describe("CLI run premium developer", () => {
           proc.exited,
         ]);
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderr).toMatch(/remote_mutation_attempt|Remote attempt:/);
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({
           skill: "performance-audit-report",
@@ -563,7 +563,7 @@ describe("CLI run premium developer", () => {
           proc.exited,
         ]);
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderr).toMatch(/remote_mutation_attempt|Remote attempt:/);
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({
           skill: "migration-plan-pack",

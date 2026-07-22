@@ -1,30 +1,46 @@
 name: Publish npm prerelease (next)
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Exact package version to publish to next"
+        required: true
+        type: string
+      confirmation:
+        description: "Type publish-0.2.0-to-next"
+        required: true
+        type: string
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment: production
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "24"
           registry-url: https://registry.npmjs.org
-      - name: Verify release tag and default branch provenance
+      - name: Verify protected main release provenance
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
         run: |
-          test "${GITHUB_REF_NAME}" = "v$(node -p "require('./package.json').version")"
-          git fetch origin "${{ github.event.repository.default_branch }}:refs/remotes/origin/${{ github.event.repository.default_branch }}"
-          git merge-base --is-ancestor "${GITHUB_SHA}" "origin/${{ github.event.repository.default_branch }}"
-      - uses: oven-sh/setup-bun@v2
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "hasna/skills"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
+          test "$RELEASE_VERSION" = "0.2.0"
+          test "$RELEASE_CONFIRMATION" = "publish-0.2.0-to-next"
+          test "$(node -p "require('./package.json').version")" = "$RELEASE_VERSION"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: latest
       - name: Install dependencies
@@ -36,4 +52,6 @@ jobs:
       - name: Build
         run: bun run build
       - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --tag next --provenance --access public

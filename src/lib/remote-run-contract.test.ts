@@ -52,9 +52,9 @@ describe("remote skill run contract", () => {
     expect(run).toEqual({
       contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION,
       skill: "music",
-      error: "Insufficient credits",
+      error: "Insufficient credits.",
       code: "INSUFFICIENT_BALANCE",
-      details: ["buy credits"],
+      details: ["No credits were charged."],
     });
     expect(JSON.stringify(run).toLowerCase()).not.toContain("openai");
     expect(JSON.stringify(run).toLowerCase()).not.toContain("minimax");
@@ -106,5 +106,128 @@ describe("remote skill run contract", () => {
     expect(() => normalizeRemoteSkillRunContract({
       creditQuote: { tier: "free" },
     })).toThrow("credits");
+  });
+
+  test("drops invalid run statuses and hostile identifier values", () => {
+    const run = normalizeRemoteSkillRunContract({
+      id: "provider-route",
+      skill: "image",
+      requestedSlug: "Provider Model",
+      status: "provider_running",
+      correlationId: "model:private",
+      createdAt: "not-a-date",
+    });
+
+    expect(run).toEqual({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: "image" });
+    expect(JSON.stringify(run)).not.toMatch(/provider|model|routing|route/i);
+  });
+
+  test("drops separator-obfuscated internal error codes", () => {
+    const run = normalizeRemoteSkillRunContract({
+      id: "run_123",
+      skill: "image",
+      status: "failed",
+      errorCode: "PROVIDER_DOWN",
+      code: "OPENAI_FAILURE",
+      error: "The run could not be completed.",
+    });
+
+    expect(run).toMatchObject({
+      contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION,
+      id: "run_123",
+      skill: "image",
+      status: "failed",
+      error: "The Skills run could not be completed.",
+    });
+    expect(run).not.toHaveProperty("errorCode");
+    expect(run).not.toHaveProperty("code");
+    expect(JSON.stringify(run)).not.toMatch(/openai|provider/i);
+  });
+
+  test("synthesizes run errors from public status and code instead of trusting remote prose", () => {
+    const normalized = normalizeRemoteSkillRunContract({
+      contractVersion: 1,
+      id: "run_123",
+      status: "failed",
+      errorCode: "CAPACITY_UNAVAILABLE",
+      errorMessage: "GPT4o route failed in providerName",
+      details: ["Claude3Opus retry target"],
+    });
+
+    expect(normalized).toEqual({
+      contractVersion: 1,
+      id: "run_123",
+      status: "failed",
+      errorCode: "CAPACITY_UNAVAILABLE",
+      errorMessage: "The Skills service is temporarily busy.",
+    });
+    expect(JSON.stringify(normalized)).not.toMatch(/GPT4o|Claude3Opus|providerName/);
+  });
+
+  test("drops vendor and routing terms encoded in otherwise valid run slugs", () => {
+    const normalized = normalizeRemoteSkillRunContract({
+      contractVersion: 1,
+      skill: "openai-renderer",
+      requestedSlug: "provider-route",
+      status: "queued",
+    });
+
+    expect(normalized.skill).toBeUndefined();
+    expect(normalized.requestedSlug).toBeUndefined();
+    expect(normalized.status).toBe("queued");
+  });
+
+  test("uses the strict artifact contract instead of copying remote descriptors", () => {
+    const run = normalizeRemoteSkillRunContract({
+      id: "run_123",
+      artifacts: [
+        {
+          id: "art_0123456789abcdefabcd",
+          type: "generated_output",
+          fileName: "result.png",
+          contentType: "image/png",
+          provider: "openai",
+          routingId: "private-route",
+        },
+        {
+          id: "provider-route-artifact",
+          type: "private_model_trace",
+          relativePath: "../provider-route.json",
+          contentType: "application/json",
+        },
+      ],
+    });
+
+    expect(run.artifacts).toEqual([{
+      id: "art_0123456789abcdefabcd",
+      type: "generated_output",
+      fileName: "generated-output-art_0123456789abcdefabcd.png",
+      relativePath: "generated-output-art_0123456789abcdefabcd.png",
+      name: "generated-output-art_0123456789abcdefabcd.png",
+      contentType: "image/png",
+    }]);
+    expect(JSON.stringify(run)).not.toMatch(/openai|provider|routing|route|model/i);
+  });
+
+  test("synthesizes public artifact names instead of trusting obfuscated service metadata", () => {
+    const run = normalizeRemoteSkillRunContract({
+      id: "run_123",
+      artifacts: [{
+        id: "art_0123456789abcdefabcd",
+        type: "generated_output",
+        fileName: "open_ai-providerName-routeId.png",
+        contentType: "image/png",
+      }],
+    });
+
+    expect(run.artifacts).toEqual([{
+      id: "art_0123456789abcdefabcd",
+      type: "generated_output",
+      fileName: "generated-output-art_0123456789abcdefabcd.png",
+      relativePath: "generated-output-art_0123456789abcdefabcd.png",
+      name: "generated-output-art_0123456789abcdefabcd.png",
+      contentType: "image/png",
+    }]);
+    expect(JSON.stringify(run)).not.toMatch(/open.ai|providerName|routeId/i);
   });
 });

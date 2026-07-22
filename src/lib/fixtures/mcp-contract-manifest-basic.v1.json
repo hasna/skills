@@ -60,7 +60,9 @@
         "approvedQuoteFingerprint",
         "args",
         "detail",
+        "idempotencyKey",
         "input",
+        "localRunId",
         "name",
         "quoteToken"
       ]

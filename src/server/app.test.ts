@@ -198,7 +198,7 @@ describe("self-hosted skills API", () => {
       expect(Array.isArray(skills)).toBe(true);
       expect(skills.some((skill) => skill.name === "audio-transcript-pack")).toBe(true);
 
-      const submitted = await client.submitRun("audio-transcript-pack", { transcript: "Hello world from self hosted skills." }, ["--title", "Demo"]);
+      const submitted = await client.submitRun("audio-transcript-pack", { transcript: "Hello world from self hosted skills." }, ["--title", "Demo"], { idempotencyKey: "app-artifact-run" });
       expect(submitted.status).toBe("queued");
       expect(submitted.id).toBeTruthy();
       expect(submitted.credits).toBeUndefined();
@@ -211,8 +211,9 @@ describe("self-hosted skills API", () => {
       expect(logs.map((log) => log.message).join("\n")).toContain("generated");
 
       const artifacts = await client.getRunArtifacts(submitted.id!);
-      expect(artifacts.map((artifact) => artifact.relativePath)).toContain("transcript.md");
-      const transcript = artifacts.find((artifact) => artifact.relativePath === "transcript.md");
+      expect(artifacts.some((artifact) => artifact.contentType === "text/markdown; charset=utf-8")).toBe(true);
+      expect(artifacts.every((artifact) => artifact.relativePath?.startsWith("generated-output-"))).toBe(true);
+      const transcript = artifacts.find((artifact) => artifact.contentType === "text/markdown; charset=utf-8");
       const downloaded = await client.downloadRunArtifact(submitted.id!, transcript!.id);
       expect(downloaded.status).toBe(200);
       expect(await downloaded.text()).toContain("Hello world");
@@ -253,7 +254,8 @@ describe("self-hosted skills API", () => {
         code: "HANDLER_UNAVAILABLE",
       });
       expect(unsupportedQuote.creditQuote).toBeUndefined();
-      expect(JSON.stringify(unsupportedQuote)).not.toMatch(/debit|charged/i);
+      expect(JSON.stringify(unsupportedQuote)).not.toMatch(/debit/i);
+      expect(unsupportedQuote.availability?.details).toContain("No credits were charged.");
     } finally {
       server.stop(true);
     }
@@ -299,7 +301,7 @@ describe("self-hosted skills API", () => {
       }
 
       const client = new RemoteSkillsClient("sk_test_org_a", baseUrl, LOOPBACK_TEST_ENV);
-      const submitted = await client.submitRun("audio-transcript-pack", { text: "do not cancel" }, []);
+      const submitted = await client.submitRun("audio-transcript-pack", { text: "do not cancel" }, [], { idempotencyKey: "app-route-run" });
       const cancel = await fetch(`${baseUrl}/api/v1/runs/${submitted.id}/cancel/extra`, {
         method: "POST",
         headers: { Authorization: "Bearer sk_test_org_a" },
@@ -370,7 +372,7 @@ describe("self-hosted skills API", () => {
     const { server, store, baseUrl } = await testServer();
     try {
       const client = new RemoteSkillsClient("sk_test_org_a", baseUrl, LOOPBACK_TEST_ENV);
-      const submitted = await client.submitRun("audio-transcript-pack", { text: "cancel before claim" }, []);
+      const submitted = await client.submitRun("audio-transcript-pack", { text: "cancel before claim" }, [], { idempotencyKey: "app-cancel-before-claim" });
       const cancelled = await fetch(`${baseUrl}/api/v1/runs/${submitted.id}/cancel`, {
         method: "POST",
         headers: { Authorization: "Bearer sk_test_org_a" },
@@ -388,7 +390,7 @@ describe("self-hosted skills API", () => {
     const { server, store, baseUrl } = await testServer();
     try {
       const client = new RemoteSkillsClient("sk_test_org_a", baseUrl, LOOPBACK_TEST_ENV);
-      const submitted = await client.submitRun("audio-transcript-pack", { text: "cancel during execution" }, []);
+      const submitted = await client.submitRun("audio-transcript-pack", { text: "cancel during execution" }, [], { idempotencyKey: "app-cancel-during-run" });
       const claimed = await store.claimNextRun({ workerId: "worker_race" });
       expect(claimed).toMatchObject({ claimed: true, run: { id: submitted.id, status: "running" } });
 
@@ -458,7 +460,7 @@ describe("self-hosted skills API", () => {
     try {
       const orgA = new RemoteSkillsClient("sk_test_org_a", baseUrl, LOOPBACK_TEST_ENV);
       const orgB = new RemoteSkillsClient("sk_test_org_b", baseUrl, LOOPBACK_TEST_ENV);
-      const submitted = await orgA.submitRun("audio-transcript-pack", { text: "secret run text" }, []);
+      const submitted = await orgA.submitRun("audio-transcript-pack", { text: "secret run text" }, [], { idempotencyKey: "app-ownership-run" });
       expect(await runWorkerOnce(store, "worker_test")).toBe(true);
 
       const crossRun = await orgB.getRun(submitted.id!);

@@ -105,7 +105,7 @@ describe("CLI run premium branding", () => {
           proc.exited,
         ]);
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderr).toMatch(/remote_mutation_attempt|Remote attempt:/);
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({
           skill: "blog-article",
@@ -190,7 +190,7 @@ describe("CLI run premium branding", () => {
           proc.exited,
         ]);
 
-        expect(stderr).toBe("");
+        expect(stderr).toMatch(/remote_mutation_attempt|Remote attempt:/);
         expect(exitCode).toBe(0);
         expect(stdout).toContain("Credits: 200 credits total");
         expect(stdout.indexOf("Credits: 200 credits total")).toBeLessThan(stdout.indexOf("Submitted remote run for blog-article"));
@@ -278,7 +278,7 @@ describe("CLI run premium branding", () => {
           proc.exited,
         ]);
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderr).toMatch(/remote_mutation_attempt|Remote attempt:/);
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({
           skill: "brand-kit",
@@ -374,7 +374,7 @@ describe("CLI run premium branding", () => {
           proc.exited,
         ]);
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderr).toMatch(/remote_mutation_attempt|Remote attempt:/);
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({
           skill: "product-mockup",
@@ -472,7 +472,7 @@ describe("CLI run premium branding", () => {
           proc.exited,
         ]);
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderr).toMatch(/remote_mutation_attempt|Remote attempt:/);
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({
           skill: "proposal-pack",
@@ -568,7 +568,7 @@ describe("CLI run premium branding", () => {
           proc.exited,
         ]);
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderr).toMatch(/remote_mutation_attempt|Remote attempt:/);
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({
           skill: "pitch-deck",

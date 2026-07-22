@@ -1,52 +1,7 @@
 import type { SkillMeta } from "./registry-types.js";
 import { getSkillCreditQuote, isPremiumSkill } from "./credit-catalog.js";
+import { containsProhibitedPublicMetadata } from "./public-metadata.js";
 import type { PublicCreditQuote } from "./public-credits.js";
-
-const VENDOR_TERMS = [
-  "Google Gemini",
-  "OpenAI Sora",
-  "MiniMax Hailuo",
-  "Claude Code",
-  "Claude Vision",
-  "DALL-E 3",
-  "GPT-4o Mini",
-  "Cerebras",
-  "OpenRouter",
-  "Firecrawl",
-  "ElevenLabs",
-  "Anthropic",
-  "OpenAI",
-  "Minimax",
-  "MiniMax",
-  "Gemini",
-  "Claude",
-  "Whisper",
-  "Seedance",
-  "Lyria",
-  "Sora",
-  "Veo",
-  "Exa.ai",
-  "Exa",
-  "XAI",
-  "xAI",
-];
-
-const VENDOR_TAGS = new Set([
-  "anthropic",
-  "cerebras",
-  "claude",
-  "exa",
-  "firecrawl",
-  "gemini",
-  "google",
-  "minimax",
-  "openai",
-  "openrouter",
-  "seedance",
-  "whisper",
-  "xai",
-  "provider-cost",
-]);
 
 const VENDOR_ENV_PREFIXES = [
   "ANTHROPIC_",
@@ -72,8 +27,6 @@ const VENDOR_PACKAGE_PATTERNS = [
   /openrouter/i,
   /xai/i,
 ];
-
-const vendorPattern = new RegExp(`\\b(${VENDOR_TERMS.map(escapeRegExp).join("|")})\\b`, "gi");
 
 export interface CompactSkillDiscovery {
   name: string;
@@ -116,27 +69,15 @@ export function publicDiscoveryCreditsLabel(skill: { name: string; source?: stri
 }
 
 export function publicDiscoveryTags(tags: string[]): string[] {
-  return tags.filter((tag) => !VENDOR_TAGS.has(tag.toLowerCase()));
+  return tags.filter((tag) => {
+    const normalized = tag.trim().toLowerCase();
+    return Boolean(normalized) && !containsProhibitedPublicMetadata(tag);
+  });
 }
 
 export function sanitizePublicDiscoveryText(text: string): string {
-  let sanitized = text
-    .replace(/\bprovider[- ]cost\b/gi, "Credit-backed")
-    .replace(vendorPattern, "hosted AI")
-    .replace(/\bLLM\b/g, "AI")
-    .replace(/\s{2,}/g, " ");
-
-  let previous: string;
-  do {
-    previous = sanitized;
-    sanitized = sanitized
-      .replace(/\bhosted AI(?: providers)?\s*,\s*hosted AI(?: providers)?\b/gi, "hosted AI providers")
-      .replace(/\bhosted AI(?: providers)?\s+or\s+hosted AI(?: providers)?\b/gi, "hosted AI providers")
-      .replace(/\bhosted AI providers\s+hosted AI\b/gi, "hosted AI providers")
-      .replace(/\bhosted AI providers\s+providers\b/gi, "hosted AI providers");
-  } while (sanitized !== previous);
-
-  return sanitized.trim();
+  const trimmed = text.replace(/\s{2,}/g, " ").trim();
+  return containsProhibitedPublicMetadata(trimmed) ? "Credit-backed skill execution." : trimmed;
 }
 
 export function publicDiscoveryEnvVars(skillName: string, envVars: string[]): string[] {
@@ -165,12 +106,8 @@ export function publicDiscoveryDocumentation(skill: SkillMeta, documentation: st
     `# ${skill.displayName || skill.name}`,
     sanitizePublicDiscoveryText(skill.description),
     `Credits: ${getSkillCreditQuote(skill.name).formattedCredits}.`,
-    "Choose `cloud` or `self-hosted`, then run `skills auth login` for remote execution. Runtime routing and model selection are managed by the selected service.",
+    "Choose `cloud` or `self-hosted`, then run `skills auth login` for remote execution. Execution details are managed by the selected service.",
   ].join("\n\n");
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function resolveDiscoveryCreditQuote(skill: SkillMeta): PublicCreditQuote | undefined {

@@ -80,7 +80,7 @@ describe("CLI run premium documents", () => {
           proc.exited,
         ]);
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderr).toMatch(/remote_mutation_attempt|Remote attempt:/);
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({
           skill: "slide-deck-generator",

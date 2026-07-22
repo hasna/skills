@@ -85,7 +85,7 @@ describe("CLI run premium marketing", () => {
           proc.exited,
         ]);
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderr).toMatch(/remote_mutation_attempt|Remote attempt:/);
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({
           skill: "security-audit-report",
@@ -181,7 +181,7 @@ describe("CLI run premium marketing", () => {
           proc.exited,
         ]);
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderr).toMatch(/remote_mutation_attempt|Remote attempt:/);
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({
           skill: "seo-content-pack",
@@ -277,7 +277,7 @@ describe("CLI run premium marketing", () => {
           proc.exited,
         ]);
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderr).toMatch(/remote_mutation_attempt|Remote attempt:/);
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({
           skill: "landing-page-pack",
@@ -373,7 +373,7 @@ describe("CLI run premium marketing", () => {
           proc.exited,
         ]);
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderr).toMatch(/remote_mutation_attempt|Remote attempt:/);
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({
           skill: "one-page-website",
@@ -471,7 +471,7 @@ describe("CLI run premium marketing", () => {
           proc.exited,
         ]);
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderr).toMatch(/remote_mutation_attempt|Remote attempt:/);
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({
           skill: "ad-creative-pack",
@@ -567,7 +567,7 @@ describe("CLI run premium marketing", () => {
           proc.exited,
         ]);
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderr).toMatch(/remote_mutation_attempt|Remote attempt:/);
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({
           skill: "email-sequence",
@@ -663,7 +663,7 @@ describe("CLI run premium marketing", () => {
           proc.exited,
         ]);
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderr).toMatch(/remote_mutation_attempt|Remote attempt:/);
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({
           skill: "social-content-calendar",

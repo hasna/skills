@@ -6,12 +6,12 @@
  */
 
 import { createHash, randomBytes } from "crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { extname, join, relative } from "path";
 import { normalizeSkillName } from "./utils.js";
 import { getProjectStateDir } from "./project-state.js";
 
-export type SkillRunStatus = "queued" | "running" | "completed" | "failed";
+export type SkillRunStatus = "queued" | "running" | "unknown" | "completed" | "failed";
 
 export interface SkillRunArtifact {
   path: string;
@@ -30,6 +30,7 @@ export interface SkillRunRecord {
   completedAt?: string;
   remote: boolean;
   idempotencyKey?: string;
+  retryCount?: number;
   remoteRunId?: string;
   credits?: number;
   error?: string;
@@ -49,6 +50,18 @@ export interface SkillRunContext {
   record: SkillRunRecord;
 }
 
+export interface PersistedRemoteSubmission {
+  fingerprint: string;
+  skill: string;
+  input: Record<string, unknown>;
+  args: string[];
+  authorization: {
+    idempotencyKey: string;
+    quoteToken?: string;
+    approved?: boolean;
+  };
+}
+
 export function createSkillRun(
   params: {
     skill: string;
@@ -58,6 +71,7 @@ export function createSkillRun(
     remoteRunId?: string;
     credits?: number;
     status?: SkillRunStatus;
+    idempotencyKey?: string;
   },
   targetDir: string = process.cwd(),
 ): SkillRunContext {
@@ -81,7 +95,9 @@ export function createSkillRun(
     args: params.args ?? [],
     startedAt: now.toISOString(),
     remote: params.remote ?? false,
-    ...(params.remote ? { idempotencyKey: createRunIdempotencyKey(id) } : {}),
+    ...(params.remote
+      ? { idempotencyKey: requireValidIdempotencyKey(params.idempotencyKey ?? createRunIdempotencyKey(id)) }
+      : {}),
     ...(params.remoteRunId ? { remoteRunId: params.remoteRunId } : {}),
     ...(params.credits !== undefined ? { credits: params.credits } : {}),
     artifacts: [],
@@ -103,6 +119,7 @@ export function completeSkillRun(
   context: SkillRunContext,
   patch: { status: SkillRunStatus; error?: string; remoteRunId?: string; credits?: number },
 ): SkillRunRecord {
+  if (context.record.status === "unknown") return context.record;
   const artifacts = collectRunArtifacts(context);
   context.record = {
     ...context.record,
@@ -124,6 +141,110 @@ export function updateSkillRun(context: SkillRunContext, patch: Partial<SkillRun
   writeRunRecord(context);
   appendRunEvent(context, "updated", { status: context.record.status });
   return context.record;
+}
+
+/**
+ * Record that a mutation may have reached the service but its response was not
+ * received. The record intentionally remains incomplete so a caller can retry
+ * the same logical attempt with the same idempotency key.
+ */
+export function markSkillRunOutcomeUnknown(context: SkillRunContext, error: string): SkillRunRecord {
+  context.record = {
+    ...context.record,
+    status: "unknown",
+    error,
+  };
+  writeRunRecord(context);
+  appendRunEvent(context, "outcome_unknown", {
+    status: context.record.status,
+    retryCount: context.record.retryCount ?? 0,
+  });
+  return context.record;
+}
+
+/** Resume a persisted ambiguous remote mutation without creating a new key. */
+export function resumeSkillRunAttempt(
+  runId: string,
+  expected: { skill: string; args?: string[] },
+  targetDir: string = process.cwd(),
+): SkillRunContext {
+  const record = findSkillRun(runId, targetDir);
+  if (!record) throw new Error(`Local run '${runId}' was not found.`);
+  const expectedSkill = normalizeSkillName(expected.skill);
+  const expectedArgs = expected.args ?? [];
+  if (record.skill !== expectedSkill || JSON.stringify(record.args) !== JSON.stringify(expectedArgs)) {
+    throw new Error(`Local run '${runId}' does not match the requested skill and arguments.`);
+  }
+  if (!record.remote || record.status !== "unknown") {
+    throw new Error(`Local run '${runId}' is not an unknown remote mutation and cannot be retried.`);
+  }
+  const idempotencyKey = requireValidIdempotencyKey(record.idempotencyKey);
+  return {
+    targetDir,
+    runDir: join(targetDir, record.paths.runDir),
+    exportDir: join(targetDir, record.paths.exportDir),
+    logsDir: join(targetDir, record.paths.logsDir),
+    record: { ...record, idempotencyKey },
+  };
+}
+
+/** Mark a validated retry as in flight immediately before the mutation request. */
+export function beginSkillRunAttempt(context: SkillRunContext): SkillRunRecord {
+  if (!context.record.remote || context.record.status !== "unknown") return context.record;
+  const idempotencyKey = requireValidIdempotencyKey(context.record.idempotencyKey);
+  const { error: _previousError, completedAt: _completedAt, ...persisted } = context.record;
+  context.record = {
+    ...persisted,
+    status: "running",
+    idempotencyKey,
+    retryCount: (context.record.retryCount ?? 0) + 1,
+  };
+  writeRunRecord(context);
+  appendRunEvent(context, "retry_started", {
+    status: context.record.status,
+    retryCount: context.record.retryCount,
+  });
+  return context.record;
+}
+
+export function getRunIdempotencyKey(record: Pick<SkillRunRecord, "idempotencyKey">): string {
+  return requireValidIdempotencyKey(record.idempotencyKey);
+}
+
+/** Persist the exact mutation body before network I/O so response loss is replayable. */
+export function persistRemoteSubmission(
+  context: SkillRunContext,
+  submission: Omit<PersistedRemoteSubmission, "fingerprint">,
+): PersistedRemoteSubmission {
+  const normalized = normalizeRemoteSubmission(submission);
+  if (normalized.skill !== context.record.skill) {
+    throw new Error("Remote submission skill does not match the local logical attempt.");
+  }
+  if (normalized.authorization.idempotencyKey !== getRunIdempotencyKey(context.record)) {
+    throw new Error("Remote submission idempotency key does not match the local logical attempt.");
+  }
+  const existing = readPersistedRemoteSubmission(context);
+  if (existing && existing.fingerprint !== normalized.fingerprint) {
+    throw new Error("Remote retry request does not match the persisted logical attempt.");
+  }
+  writeFileSync(remoteSubmissionPath(context), `${JSON.stringify(existing ?? normalized, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(remoteSubmissionPath(context), 0o600);
+  return existing ?? normalized;
+}
+
+/** Load the immutable request used by an unknown mutation; never reconstruct it from a fresh quote. */
+export function loadRemoteSubmission(context: SkillRunContext): PersistedRemoteSubmission {
+  const submission = readPersistedRemoteSubmission(context);
+  if (!submission) throw new Error("The persisted remote logical attempt is missing its immutable submission request.");
+  if (submission.authorization.idempotencyKey !== getRunIdempotencyKey(context.record)) {
+    throw new Error("The persisted remote submission does not match the local idempotency key.");
+  }
+  return submission;
+}
+
+export function clearRemoteSubmission(context: SkillRunContext): void {
+  const path = remoteSubmissionPath(context);
+  if (existsSync(path)) unlinkSync(path);
 }
 
 export function writeRunLogs(context: SkillRunContext, stdout = "", stderr = ""): void {
@@ -169,7 +290,8 @@ export function getRunExportDir(runId: string, skill: string, targetDir: string 
 }
 
 function writeRunRecord(context: SkillRunContext): void {
-  writeFileSync(join(context.runDir, "run.json"), JSON.stringify(context.record, null, 2) + "\n");
+  writeFileSync(join(context.runDir, "run.json"), JSON.stringify(context.record, null, 2) + "\n", { mode: 0o600 });
+  chmodSync(join(context.runDir, "run.json"), 0o600);
 }
 
 function writeArtifactsManifest(context: SkillRunContext, artifacts: SkillRunArtifact[]): void {
@@ -218,6 +340,62 @@ function createRunId(now: Date): string {
 
 export function createRunIdempotencyKey(runId: string): string {
   return `skills-run-${createHash("sha256").update(runId).digest("hex").slice(0, 48)}`;
+}
+
+export function requireValidIdempotencyKey(value: string | undefined): string {
+  if (!value || value.length > 200 || !/^[\x21-\x7E]+$/.test(value)) {
+    throw new Error("Idempotency key must contain 1-200 visible ASCII characters.");
+  }
+  return value;
+}
+
+function remoteSubmissionPath(context: SkillRunContext): string {
+  return join(context.runDir, "remote-submission.json");
+}
+
+function normalizeRemoteSubmission(
+  submission: Omit<PersistedRemoteSubmission, "fingerprint">,
+): PersistedRemoteSubmission {
+  const skill = normalizeSkillName(submission.skill);
+  const authorization = {
+    idempotencyKey: requireValidIdempotencyKey(submission.authorization.idempotencyKey),
+    ...(submission.authorization.quoteToken ? { quoteToken: submission.authorization.quoteToken } : {}),
+    ...(submission.authorization.approved !== undefined ? { approved: submission.authorization.approved } : {}),
+  };
+  const body = {
+    skill,
+    input: structuredClone(submission.input),
+    args: [...submission.args],
+    authorization,
+  };
+  return {
+    ...body,
+    fingerprint: createHash("sha256").update(canonicalJson(body)).digest("hex"),
+  };
+}
+
+function readPersistedRemoteSubmission(context: SkillRunContext): PersistedRemoteSubmission | undefined {
+  const path = remoteSubmissionPath(context);
+  if (!existsSync(path)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as PersistedRemoteSubmission;
+    const normalized = normalizeRemoteSubmission(parsed);
+    return parsed.fingerprint === normalized.fingerprint ? normalized : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, nested]) => nested !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nested]) => `${JSON.stringify(key)}:${canonicalJson(nested)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function toProjectRelative(targetDir: string, path: string): string {

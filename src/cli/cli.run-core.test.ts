@@ -297,7 +297,12 @@ describe("CLI run core", () => {
           runProc.exited,
         ]);
         const runData = JSON.parse(runStdout);
-        expect(runStderr).toBe("");
+        const attemptReceipt = JSON.parse(runStderr);
+        expect(attemptReceipt).toMatchObject({
+          event: "remote_mutation_attempt",
+          localRunId: runData.run.id,
+          idempotencyKey: runData.run.idempotencyKey,
+        });
         expect(runExitCode).toBe(0);
         expect(runData.contractVersion).toBe(1);
         expect(runData.remote).toBe(true);
@@ -334,6 +339,81 @@ describe("CLI run core", () => {
             download: "skills exports download run_async",
           },
         });
+      } finally {
+        server.stop(true);
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("response loss persists an unknown logical attempt and retry reuses its idempotency key", async () => {
+      const { mkdtempSync, readFileSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-response-loss-"));
+      const submittedKeys: Array<string | null> = [];
+      const submittedBodies: unknown[] = [];
+      let quoteCalls = 0;
+      let submitCalls = 0;
+      const server = Bun.serve({
+        port: 0,
+        fetch(req) {
+          const url = new URL(req.url);
+          if (url.pathname === "/api/v1/skills/logo-design/quote" && req.method === "POST") {
+            quoteCalls += 1;
+            return Response.json({ quoteToken: "quote_immutable_cli", creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 50, formattedCredits: "50 credits/run" } });
+          }
+          if (url.pathname === "/api/v1/runs/logo-design" && req.method === "POST") {
+            submitCalls += 1;
+            submittedKeys.push(req.headers.get("idempotency-key"));
+            return req.json().then((body) => {
+              submittedBodies.push(body);
+              if (submitCalls === 1) return Response.json({ code: "UPSTREAM_RESPONSE_LOST" }, { status: 503 });
+              return Response.json({ id: "run_recovered", skill: "logo-design", status: "queued" });
+            });
+          }
+          return Response.json({ code: "NOT_FOUND" }, { status: 404 });
+        },
+      });
+      const env = {
+        HOME: tmpDir,
+        NO_COLOR: "1",
+        SKILLS_TEST_MODE: "1",
+        SKILLS_ALLOW_INSECURE_LOOPBACK: "1",
+        SKILLS_MODE: "self-hosted",
+        SKILLS_API_KEY: "sk_test_response_loss",
+        SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+      };
+
+      try {
+        writeModeConfig(tmpDir, "self-hosted", `http://127.0.0.1:${server.port}`);
+        const first = await runCliInCwd(["run", "--yes", "--json", "logo-design", "make a mark"], tmpDir, env);
+        const unknown = JSON.parse(first.stdout);
+        const firstReceipt = JSON.parse(first.stderr);
+        expect(first.exitCode).toBe(75);
+        expect(unknown).toMatchObject({
+          code: "REMOTE_MUTATION_OUTCOME_UNKNOWN",
+          outcome: "unknown",
+          localRunId: firstReceipt.localRunId,
+          idempotencyKey: firstReceipt.idempotencyKey,
+          run: { status: "unknown" },
+        });
+        const stored = JSON.parse(readFileSync(join(tmpDir, unknown.run.paths.runDir, "run.json"), "utf8"));
+        expect(stored).toMatchObject({ id: unknown.localRunId, status: "unknown", idempotencyKey: unknown.idempotencyKey });
+
+        const retry = await runCliInCwd([
+          "run", "--retry", unknown.localRunId, "--yes", "--json", "logo-design", "make a mark",
+        ], tmpDir, env);
+        const recovered = JSON.parse(retry.stdout);
+        const retryReceipt = JSON.parse(retry.stderr);
+        expect(retry.exitCode).toBe(0);
+        expect(recovered).toMatchObject({ remoteRun: { id: "run_recovered" }, run: { id: unknown.localRunId } });
+        expect(retryReceipt).toMatchObject({ localRunId: unknown.localRunId, idempotencyKey: unknown.idempotencyKey });
+        expect(submittedKeys).toEqual([unknown.idempotencyKey, unknown.idempotencyKey]);
+        expect(quoteCalls).toBe(1);
+        expect(submittedBodies).toEqual([
+          { input: {}, args: ["make a mark"], quoteToken: "quote_immutable_cli", approved: true },
+          { input: {}, args: ["make a mark"], quoteToken: "quote_immutable_cli", approved: true },
+        ]);
       } finally {
         server.stop(true);
         rmSync(tmpDir, { recursive: true, force: true });
@@ -440,7 +520,7 @@ describe("CLI run core", () => {
       }
     });
 
-    test("cloud quote fails closed when the authenticated response omits creditQuote despite registry metadata and a token", async () => {
+    test("cloud quote rejects an authenticated response that carries a token without a creditQuote", async () => {
       const { mkdtempSync, rmSync } = require("fs");
       const { tmpdir } = require("os");
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-cloud-missing-live-quote-"));
@@ -482,8 +562,9 @@ describe("CLI run core", () => {
         expect(quoted.exitCode).toBe(1);
         const payload = JSON.parse(quoted.stdout);
         expect(payload).toMatchObject({ code: "CLOUD_CAPABILITY_CHECK_FAILED" });
-        expect(payload.error).toContain("did not return a creditQuote");
+        expect(payload.error).toContain("quote failure must not include quoteToken or expiresAt");
         expect(payload.availability).toBeUndefined();
+        expect(JSON.stringify(payload)).not.toContain("quote_without_authoritative_credits");
       } finally {
         server.stop(true);
         rmSync(tmpDir, { recursive: true, force: true });
@@ -903,10 +984,10 @@ describe("CLI run core", () => {
         const data = JSON.parse(stdout);
         expect(stderr).toBe("");
         expect(exitCode).not.toBe(0);
-        expect(data.code).toBe("HOSTED_PROVIDER_UNAVAILABLE");
+        expect(data.code).toBe("HOSTED_SERVICE_UNAVAILABLE");
         expect(data.availability).toMatchObject({
           status: "unavailable",
-          code: "HOSTED_PROVIDER_UNAVAILABLE",
+          code: "HOSTED_SERVICE_UNAVAILABLE",
         });
         expect(data.details).toContain("No credits were charged.");
         expect(data.error).not.toContain("skills auth login");
@@ -1011,7 +1092,11 @@ describe("CLI run core", () => {
         const runJsonPath = path.join(tmpDir, data.run.paths.runDir, "run.json");
         const stdoutLogPath = path.join(tmpDir, data.run.paths.logsDir, "stdout.log");
 
-        expect(stderr).toBe("");
+        expect(JSON.parse(stderr)).toMatchObject({
+          event: "remote_mutation_attempt",
+          localRunId: data.run.id,
+          idempotencyKey: data.run.idempotencyKey,
+        });
         expect(exitCode).toBe(0);
         expect(statusCalls).toBe(2);
         expect(data.exitCode).toBe(0);
@@ -1092,12 +1177,20 @@ describe("CLI run core", () => {
         const runJsonPath = path.join(tmpDir, data.run.paths.runDir, "run.json");
         const stderrLogPath = path.join(tmpDir, data.run.paths.logsDir, "stderr.log");
 
-        expect(stderr).toBe("");
+        expect(JSON.parse(stderr)).toMatchObject({
+          event: "remote_mutation_attempt",
+          localRunId: data.run.id,
+          idempotencyKey: data.run.idempotencyKey,
+        });
         expect(exitCode).toBe(7);
         expect(data.exitCode).toBe(7);
-        expect(data.error).toBe("remote renderer failed");
+        expect(data.error).toBe("The Skills run could not be completed.");
         expect(data.remoteRun).toMatchObject({ id: "run_failed", status: "failed" });
-        expect(data.run).toMatchObject({ status: "failed", remoteRunId: "run_failed", error: "remote renderer failed" });
+        expect(data.run).toMatchObject({
+          status: "failed",
+          remoteRunId: "run_failed",
+          error: "The Skills run could not be completed.",
+        });
         expect(existsSync(runJsonPath)).toBe(true);
         expect(JSON.parse(readFileSync(runJsonPath, "utf-8")).status).toBe("failed");
         expect(readFileSync(stderrLogPath, "utf-8")).toContain("[redacted]");

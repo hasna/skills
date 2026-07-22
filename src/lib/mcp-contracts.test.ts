@@ -63,6 +63,8 @@ describe("MCP contract manifest", () => {
         pattern: "^uqaf_v1_[a-f0-9]{64}$",
         description: expect.stringContaining("quoteFingerprint"),
       },
+      localRunId: { type: "string", description: expect.stringContaining("logical attempt") },
+      idempotencyKey: { type: "string", description: expect.stringContaining("stable") },
     });
     expect(byName.get("quote_skill")?.outputSchema).toMatchObject({
       required: ["skill", "creditQuote", "availability"],

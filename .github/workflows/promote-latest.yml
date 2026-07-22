@@ -7,6 +7,18 @@ on:
         description: "Type promote-0.2.0-after-live-proof"
         required: true
         type: string
+      platform_sha:
+        description: "Exact 40-character platform commit SHA reported by the live service"
+        required: true
+        type: string
+      platform_version:
+        description: "Exact live @hasnatools/platform-skills version"
+        required: true
+        type: string
+      client_pin:
+        description: "Exact @hasna/skills version exposed by the live cloud catalog"
+        required: true
+        type: string
 
 concurrency:
   group: npm-promote-hasna-skills
@@ -15,21 +27,63 @@ concurrency:
 jobs:
   promote:
     runs-on: ubuntu-latest
-    environment: npm-production
+    environment: production
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "24"
           registry-url: https://registry.npmjs.org
-      - name: Verify manual gate and exact prerelease
+      - name: Verify immutable live deployment identity and client contract
+        shell: bash
+        env:
+          SKILLS_PROMOTION_API_KEY: ${{ secrets.SKILLS_PROMOTION_API_KEY }}
+          PLATFORM_SHA: ${{ inputs.platform_sha }}
+          PLATFORM_VERSION: ${{ inputs.platform_version }}
+          CLIENT_PIN: ${{ inputs.client_pin }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "hasna/skills"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
+          test "$CONFIRMATION" = "promote-0.2.0-after-live-proof"
+          test "$(node -p "require('./package.json').version")" = "0.2.0"
+          test "$CLIENT_PIN" = "0.2.0"
+          printf '%s' "$PLATFORM_SHA" | grep -Eq '^[a-f0-9]{40}$'
+          printf '%s' "$PLATFORM_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$'
+          test -n "$SKILLS_PROMOTION_API_KEY"
+
+          proof_dir="$(mktemp -d)"
+          trap 'rm -rf "$proof_dir"' EXIT
+          curl --fail --silent --show-error --retry 3 https://skills.md/api/version >"$proof_dir/version.json"
+          curl --fail --silent --show-error --retry 3 https://skills.md/api/health >"$proof_dir/health.json"
+          curl --fail --silent --show-error --retry 3 https://skills.md/api/v1/skills >"$proof_dir/catalog.json"
+          curl --fail --silent --show-error --retry 3 https://skills.md/api/v1/skills/image >"$proof_dir/skill.json"
+          curl --fail --silent --show-error --retry 3 \
+            --header "Authorization: Bearer $SKILLS_PROMOTION_API_KEY" \
+            --header "Content-Type: application/json" \
+            --data '{"input":{},"args":[]}' \
+            https://skills.md/api/v1/skills/image/quote >"$proof_dir/quote.json"
+          curl --fail --silent --show-error --retry 3 \
+            --header "Authorization: Bearer $SKILLS_PROMOTION_API_KEY" \
+            'https://skills.md/api/v1/runs?limit=10' >"$proof_dir/runs.json"
+          curl --fail --silent --show-error --retry 3 \
+            --header "Authorization: Bearer $SKILLS_PROMOTION_API_KEY" \
+            'https://skills.md/api/v1/billing/usage' >"$proof_dir/usage.json"
+
+          bun run scripts/validate-live-public-contract.ts \
+            "$proof_dir" "$PLATFORM_SHA" "$PLATFORM_VERSION" "$CLIENT_PIN"
+      - name: Verify exact prerelease artifact integrity
         shell: bash
         run: |
           set -euo pipefail
-          test "${{ inputs.confirmation }}" = "promote-0.2.0-after-live-proof"
-          test "$(node -p "require('./package.json').version")" = "0.2.0"
           test "$(npm view @hasna/skills@next version)" = "0.2.0"
           next_integrity="$(npm view @hasna/skills@next dist.integrity)"
           exact_integrity="$(npm view @hasna/skills@0.2.0 dist.integrity)"

@@ -27,8 +27,15 @@ import {
 import { getSkillRequirements, runSkill } from "../lib/skillinfo.js";
 import {
   completeSkillRun,
+  beginSkillRunAttempt,
+  clearRemoteSubmission,
   createSkillRun,
   findSkillRun,
+  getRunIdempotencyKey,
+  markSkillRunOutcomeUnknown,
+  loadRemoteSubmission,
+  persistRemoteSubmission,
+  resumeSkillRunAttempt,
   updateSkillRun,
   writeRunLogs,
 } from "../lib/run-state.js";
@@ -416,9 +423,11 @@ export function registerOperationTools(server: McpServer): void {
       quoteToken: z.string().optional(),
       allowUnsignedPhaseA: z.boolean().optional(),
       approvedQuoteFingerprint: z.string().regex(/^uqaf_v1_[a-f0-9]{64}$/).optional(),
+      localRunId: z.string().optional(),
+      idempotencyKey: z.string().optional(),
       detail: z.boolean().optional(),
     },
-  }, async ({ name, input, args, approved, quoteToken, allowUnsignedPhaseA, approvedQuoteFingerprint, detail }) => {
+  }, async ({ name, input, args, approved, quoteToken, allowUnsignedPhaseA, approvedQuoteFingerprint, localRunId, idempotencyKey, detail }) => {
     const skill = getSkill(name);
     if (!skill) {
       return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
@@ -456,12 +465,41 @@ export function registerOperationTools(server: McpServer): void {
       return mcpError("REMOTE_MODE_REQUIRED", `${skillName} requires cloud or self-hosted mode.`, ["skills setup --mode cloud"]);
     }
 
-    const runContext = createSkillRun({
-      skill: skillName,
-      args: runArgs,
-      remote: isPremiumSkill(skillName),
-      credits,
-    });
+    let runContext: ReturnType<typeof createSkillRun>;
+    try {
+      if (localRunId && idempotencyKey) {
+        const persisted = findSkillRun(localRunId);
+        if (persisted?.idempotencyKey !== idempotencyKey) {
+          return mcpError("RETRY_ATTEMPT_MISMATCH", "The supplied idempotencyKey does not match the persisted localRunId logical attempt.");
+        }
+      }
+      runContext = localRunId
+        ? resumeSkillRunAttempt(localRunId, { skill: skillName, args: runArgs })
+        : createSkillRun({
+            skill: skillName,
+            args: runArgs,
+            remote: isPremiumSkill(skillName),
+            credits,
+            ...(idempotencyKey ? { idempotencyKey } : {}),
+          });
+    } catch (error) {
+      return mcpError("RETRY_ATTEMPT_INVALID", (error as Error).message);
+    }
+    let retrySubmission: ReturnType<typeof loadRemoteSubmission> | undefined;
+    if (localRunId) {
+      try {
+        retrySubmission = loadRemoteSubmission(runContext);
+        if (retrySubmission.skill !== skillName
+          || JSON.stringify(retrySubmission.args) !== JSON.stringify(runArgs)
+          || JSON.stringify(retrySubmission.input) !== JSON.stringify(runInput)
+          || (quoteToken !== undefined && retrySubmission.authorization.quoteToken !== quoteToken)
+          || (approved !== undefined && retrySubmission.authorization.approved !== approved)) {
+          return mcpError("RETRY_ATTEMPT_MISMATCH", "The retry request does not match the persisted input, arguments, or authorization.");
+        }
+      } catch (error) {
+        return mcpError("RETRY_ATTEMPT_INVALID", (error as Error).message);
+      }
+    }
 
     if (isPremiumSkill(skillName)) {
       let availability: { status: "available" | "unavailable"; code?: string; message?: string; details?: string[] } = { status: "available" };
@@ -512,12 +550,14 @@ export function registerOperationTools(server: McpServer): void {
     }
 
     let remoteClient: import("../lib/remote-client.js").RemoteSkillsClient | undefined;
-    let runQuoteToken = quoteToken;
+    let runQuoteToken = retrySubmission?.authorization.quoteToken ?? quoteToken;
     if (isPremiumSkill(skillName) && apiKey) {
       try {
         const { RemoteSkillsClient } = await import("../lib/remote-client.js");
         remoteClient = new RemoteSkillsClient(apiKey);
-        if (approved === true) {
+        if (retrySubmission) {
+          if (runContext.record.credits !== undefined) credits = runContext.record.credits;
+        } else if (approved === true) {
           if (runQuoteToken) {
             // The caller approved this exact token. Forward it unchanged and
             // let the selected service verify its input/args binding. Never
@@ -612,26 +652,36 @@ export function registerOperationTools(server: McpServer): void {
       try {
         const { RemoteSkillsClient } = await import("../lib/remote-client.js");
         const client = remoteClient ?? new RemoteSkillsClient(apiKey);
+        const stableIdempotencyKey = getRunIdempotencyKey(runContext.record);
         const runAuthorization = runQuoteToken
-          ? { quoteToken: runQuoteToken, approved: true, idempotencyKey: runContext.record.idempotencyKey }
+          ? { quoteToken: runQuoteToken, approved: true, idempotencyKey: stableIdempotencyKey }
           : mode === "self-hosted" && approved === true && allowUnsignedPhaseA === true
-            ? { approved: true, idempotencyKey: runContext.record.idempotencyKey }
-            : { idempotencyKey: runContext.record.idempotencyKey };
+            ? { approved: true, idempotencyKey: stableIdempotencyKey }
+            : { idempotencyKey: stableIdempotencyKey };
+        const submission = retrySubmission ?? persistRemoteSubmission(runContext, {
+          skill: skillName,
+          input: runInput,
+          args: runArgs,
+          authorization: runAuthorization,
+        });
+        beginSkillRunAttempt(runContext);
         const run = await client.submitRun(
-          skillName,
-          runInput,
-          runArgs,
-          runAuthorization,
+          submission.skill,
+          submission.input,
+          submission.args,
+          submission.authorization,
         );
         if (run.error) {
           writeRunLogs(runContext, "", String(run.error) + "\n");
           const localRun = completeSkillRun(runContext, { status: "failed", error: String(run.error) });
+          clearRemoteSubmission(runContext);
           return mcpError("RUN_FAILED", `${run.error}. Local run metadata: ${localRun.paths.runDir}/run.json`);
         }
         const localRun = updateSkillRun(runContext, {
           status: run.status === "running" || run.status === "completed" || run.status === "failed" ? run.status : "queued",
           remoteRunId: typeof run.id === "string" ? run.id : undefined,
         });
+        clearRemoteSubmission(runContext);
         writeRunLogs(runContext, "", "");
         const remoteRunId = typeof run.id === "string" ? run.id : undefined;
         const payload = {
@@ -649,7 +699,18 @@ export function registerOperationTools(server: McpServer): void {
         };
         return mcpJson(toCustomerCreditPayload(detail ? payload : compactRunToolPayload(payload, "Call run_skill again with detail:true for full remote/local run records.")));
       } catch (err) {
+        if ((err as { code?: string }).code === "REMOTE_MUTATION_OUTCOME_UNKNOWN") {
+          const error = (err as Error).message;
+          writeRunLogs(runContext, "", error + "\n");
+          const localRun = markSkillRunOutcomeUnknown(runContext, error);
+          return mcpError(
+            "REMOTE_MUTATION_OUTCOME_UNKNOWN",
+            `${error} Retry run_skill with localRunId '${localRun.id}' and idempotencyKey '${getRunIdempotencyKey(localRun)}'.`,
+            [`run_skill localRunId=${localRun.id} idempotencyKey=${getRunIdempotencyKey(localRun)}`],
+          );
+        }
         const error = `Remote skill ${skillName} requires access to the selected ${mode} service: ${(err as Error).message}`;
+        clearRemoteSubmission(runContext);
         writeRunLogs(runContext, "", error + "\n");
         const localRun = completeSkillRun(runContext, { status: "failed", error });
         return mcpError("PLATFORM_ERROR", `${error}. Local run metadata: ${localRun.paths.runDir}/run.json`);

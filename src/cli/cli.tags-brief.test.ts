@@ -59,7 +59,6 @@ describe("CLI tags and brief output", () => {
         });
         expect(exitCode).toBe(0);
         expect(JSON.parse(stdout)).toEqual([
-          { name: "audio", count: 1 },
           { name: "remote", count: 2 },
         ]);
       } finally {

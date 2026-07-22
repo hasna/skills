@@ -1,5 +1,28 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { RemoteSkillsClient, SkillsApiError } from "./remote-client";
+import {
+  RemoteSkillsClient,
+  SkillsApiError,
+  SkillsMutationOutcomeUnknownError,
+  type PublicSkillQuote,
+} from "./remote-client";
+import { getSkillToolDependencies } from "./tool-primitives";
+
+type AssertType<T extends true> = T;
+type QuoteCodeMismatchIsRejected = {
+  code: "AUTH_REQUIRED";
+  error: "Authentication is required.";
+  detail: "Sign in to request a credit quote.";
+  availability: { status: "unavailable"; code: "CAPACITY_UNAVAILABLE" };
+} extends PublicSkillQuote ? false : true;
+type QuoteSuccessWithFailureIsRejected = {
+  creditQuote: { credits: 1 };
+  code: "REMOTE_UNAVAILABLE";
+  error: "This skill is temporarily unavailable.";
+  detail: "No credits were charged.";
+} extends PublicSkillQuote ? false : true;
+type _QuoteUnionRejectsContradictions = AssertType<
+  QuoteCodeMismatchIsRejected & QuoteSuccessWithFailureIsRejected
+>;
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -80,18 +103,443 @@ describe("remote skills client public contract", () => {
       slug: "image",
       name: "image",
       displayName: "Image",
-      description: "Credit-backed generation with hosted AI and hosted AI models.",
+      description: "Credit-backed image generation with a live credit quote before execution",
       category: "Content Generation",
-      tags: ["image"],
+      tags: ["image", "generation", "ai", "credits"],
       visibility: "public",
       currentVersion: "1.2.3",
       billingMode: "credits",
       creditsPerExecution: 4,
       sourceType: "hosted",
-      creditQuote: expect.objectContaining({ credits: 4, formattedCredits: "4 credits/image" }),
+      creditQuote: {
+        tier: "premium",
+        creditUnit: "image",
+        credits: 4,
+        formattedCredits: "4 credits/image",
+        estimated: false,
+        quoteDependsOnInput: false,
+        quoteRequired: true,
+        description: "Fixed credits per run.",
+      },
       availability: { status: "available" },
     });
     expect(JSON.stringify([listed, detail])).not.toMatch(/private-provider|private-model|providerCostCents|margin|private-route/i);
+  });
+
+  test("normalizes live-shaped tool and connector metadata while synthesizing all customer prose", async () => {
+    const toolDependencies = getSkillToolDependencies("action-item-router");
+    expect(toolDependencies).not.toBeNull();
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      const payload = {
+        slug: "action-item-router",
+        displayName: "GPT4o Action Router",
+        description: "Route lists through Claude3Opus and Gemini2.5.",
+        category: "Project Management",
+        tags: ["routing", "GPT4o", "action-items"],
+        visibility: "public",
+        currentVersion: "0.2.0",
+        billingMode: "credits",
+        creditsPerExecution: 2,
+        sourceType: "upstream",
+        availability: {
+          status: "unavailable",
+          code: "HOSTED_SERVICE_UNAVAILABLE",
+          message: "Sora2 route failed on Veo3",
+          details: ["Whisper1 and Anthropic2 are unavailable"],
+        },
+        toolDependencies,
+        connectorRequirements: [{
+          connector: "linear",
+          scopes: ["issues:read"],
+          operations: ["issues.list", "issues.update"],
+          authType: "oauth",
+          required: true,
+          destructive: false,
+          setupLabel: "Claude3Opus Linear route",
+        }],
+        connectorPreflight: [{
+          connector: "linear",
+          required: true,
+          status: "missing",
+          connected: false,
+          scopes: ["issues:read"],
+          missingScopes: ["issues:read"],
+          operations: ["issues.list", "issues.update"],
+          authType: "oauth",
+          setupLabel: "GPT4o Linear",
+          requiresAuth: true,
+          accountId: null,
+          profileName: null,
+          reason: "Gemini2.5 route is unavailable",
+        }],
+      };
+      return Response.json(calls === 1 ? [payload] : payload);
+    }) as unknown as typeof fetch;
+
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+    const listed = await client.listSkills();
+    const detail = await client.getSkill("action-item-router");
+
+    expect(listed).toEqual([detail!]);
+    expect(detail).toMatchObject({
+      slug: "action-item-router",
+      name: "action-item-router",
+      displayName: "Action Item Router",
+      category: "Project Management",
+      tags: ["action-items", "routing", "delegation", "tasks"],
+      availability: {
+        status: "unavailable",
+        code: "HOSTED_SERVICE_UNAVAILABLE",
+        message: "This skill is temporarily unavailable.",
+        details: ["No credits were charged."],
+      },
+      toolDependencies,
+      connectorRequirements: [{
+        connector: "linear",
+        scopes: ["issues:read"],
+        operations: ["issues.list", "issues.update"],
+        authType: "oauth",
+        required: true,
+        destructive: false,
+        setupLabel: "Connect Linear",
+      }],
+      connectorPreflight: [{
+        connector: "linear",
+        required: true,
+        status: "missing",
+        connected: false,
+        scopes: ["issues:read"],
+        missingScopes: ["issues:read"],
+        operations: ["issues.list", "issues.update"],
+        authType: "oauth",
+        setupLabel: "Connect Linear",
+        requiresAuth: true,
+        accountId: null,
+        profileName: null,
+        reason: "Connector account is not connected.",
+      }],
+    });
+    expect(JSON.stringify({ listed, detail })).not.toMatch(
+      /GPT4o|Claude3Opus|Gemini2\.5|Sora2|Veo3|Whisper1|Anthropic2/i,
+    );
+  });
+
+  test("keeps legitimate router and modeling slugs while ignoring arbitrary remote catalog prose", async () => {
+    globalThis.fetch = (async () => Response.json([{
+      slug: "financial-modeling",
+      displayName: "Financial Modeling",
+      description: "Build route lists and compare the financial model.",
+      category: "Finance & Compliance",
+      tags: ["finance", "route", "modeling"],
+      availability: { status: "available" },
+    }])) as unknown as typeof fetch;
+
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+    expect(await client.listSkills()).toEqual([expect.objectContaining({
+      slug: "financial-modeling",
+      name: "financial-modeling",
+      displayName: "Financial Modeling",
+      description: "Financial Modeling is available through the selected service.",
+      category: "Finance & Compliance",
+      tags: ["remote"],
+    })]);
+  });
+
+  test("validates hostile endpoint values and derives catalog identity from the canonical slug", async () => {
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/billing/status")) {
+        return Response.json({ plan: "provider-enterprise-route", creditBalance: 7 });
+      }
+      if (path.endsWith("/billing/usage")) {
+        return Response.json([{ transactionType: "provider_debit_margin", amountCredits: -2 }]);
+      }
+      if (path.endsWith("/status")) {
+        return Response.json({
+          deployment: { status: "provider-route-green", version: "0.1.46" },
+          worker: { mode: "private-model-runner", healthSource: "provider route" },
+          connectors: { status: "openai-ready", readinessEndpoint: "/api/v1/connectors/readiness" },
+        });
+      }
+      return Response.json({
+        slug: "image",
+        name: "image",
+        displayName: "Claude Code OpenAI Provider Model",
+        category: "Provider Routing Costs",
+        description: "OpenAI provider model routing costs USD $4 with margin settlement.",
+        tags: ["image", "claude-code", "openai-sora", "provider-routing"],
+        sourceType: "private_hosted",
+        visibility: "provider-public",
+        billingMode: "provider-cost",
+        availability: { status: "provider-ready" },
+      });
+    }) as unknown as typeof fetch;
+
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+    const skill = await client.getSkill("image");
+    const billing = await client.getBillingStatus();
+    const usage = await client.getUsage();
+    const status = await client.getStatus();
+
+    expect(skill).toMatchObject({
+      slug: "image",
+      name: "image",
+      displayName: "Image",
+      category: "Content Generation",
+      tags: ["image", "generation", "ai", "credits"],
+      sourceType: "hosted",
+      availability: {
+        status: "unavailable",
+        code: "REMOTE_STATUS_INVALID",
+        message: "This skill is temporarily unavailable.",
+        details: ["No credits were charged."],
+      },
+    });
+    expect(skill).not.toHaveProperty("visibility");
+    expect(skill).not.toHaveProperty("billingMode");
+    expect(billing).toEqual({ creditBalance: 7 });
+    expect(usage).toEqual([{ amountCredits: -2 }]);
+    expect(status).toEqual({
+      deployment: { version: "0.1.46" },
+      worker: {},
+      connectors: { readinessEndpoint: "/api/v1/connectors/readiness" },
+    });
+    expect(JSON.stringify({ skill, billing, usage, status })).not.toMatch(
+      /openai|claude|provider|model|routing|route|cost|margin|settlement|usd|\$/i,
+    );
+  });
+
+  test("fails closed on incomplete connectors and contradictory availability outside promotion", async () => {
+    globalThis.fetch = (async () => Response.json({
+      slug: "image",
+      availability: { status: "available" },
+      connectorRequirements: [{ connector: "linear" }],
+      connectorPreflight: [{ connector: "linear", status: "ready", connected: false }],
+    })) as unknown as typeof fetch;
+
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+    expect(await client.getSkill("image")).toBeNull();
+  });
+
+  test("fails closed instead of synthesizing malformed package-owned tool dependencies", async () => {
+    globalThis.fetch = (async () => Response.json({
+      slug: "action-item-router",
+      availability: { status: "available" },
+      toolDependencies: {},
+    })) as unknown as typeof fetch;
+
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+    const skill = await client.getSkill("action-item-router");
+    expect(skill).toBeNull();
+  });
+
+  test("fails closed on a quote failure code paired with available status", async () => {
+    globalThis.fetch = (async () => Response.json({
+      skill: "image",
+      code: "AUTH_REQUIRED",
+      availability: { status: "available" },
+    })) as unknown as typeof fetch;
+
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+    await expect(client.quoteSkill("image")).rejects.toThrow(
+      "quote.code is inconsistent with available status",
+    );
+  });
+
+  test("rejects every contradictory quote success and failure shape", async () => {
+    const successQuote = {
+      skill: "image",
+      creditQuote: {
+        tier: "premium",
+        creditUnit: "image",
+        credits: 4,
+        formattedCredits: "4 credits/image",
+        estimated: false,
+        quoteDependsOnInput: false,
+        quoteRequired: true,
+        description: "Fixed credits per run.",
+      },
+      availability: { status: "available" },
+    };
+    const failureQuote = {
+      skill: "image",
+      code: "AUTH_REQUIRED",
+      error: "Authentication is required.",
+      detail: "Sign in to request a credit quote.",
+      availability: {
+        status: "unavailable",
+        code: "AUTH_REQUIRED",
+        message: "Authentication is required.",
+        details: ["No credits were charged."],
+      },
+    };
+    const contradictions = [
+      { ...successQuote, code: "AUTH_REQUIRED" },
+      { ...successQuote, error: "Authentication is required." },
+      { ...successQuote, detail: "Sign in to request a credit quote." },
+      { ...successQuote, availability: failureQuote.availability },
+      { ...failureQuote, creditQuote: successQuote.creditQuote },
+      { ...failureQuote, quoteToken: "quote_must_not_exist" },
+      { ...failureQuote, error: "This request succeeded." },
+      { ...failureQuote, detail: "Credits were charged." },
+      {
+        ...failureQuote,
+        availability: { ...failureQuote.availability, code: "REMOTE_UNAVAILABLE" },
+      },
+      { skill: "image", availability: { status: "available" } },
+    ];
+    let index = 0;
+    globalThis.fetch = (async () => Response.json(contradictions[index++]!)) as unknown as typeof fetch;
+
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+    for (const _contradiction of contradictions) {
+      await expect(client.quoteSkill("image")).rejects.toThrow();
+    }
+  });
+
+  test("rejects connector requirement and preflight set or capability mismatches", async () => {
+    const requirement = {
+      connector: "linear",
+      scopes: ["issues:read"],
+      operations: ["issues.list", "issues.update"],
+      authType: "oauth",
+      required: true,
+      destructive: false,
+      setupLabel: "Connect Linear",
+    };
+    const preflight = {
+      connector: "linear",
+      required: true,
+      status: "ready",
+      connected: true,
+      scopes: ["issues:read"],
+      missingScopes: [],
+      operations: ["issues.list", "issues.update"],
+      authType: "oauth",
+      setupLabel: "Connect Linear",
+      requiresAuth: false,
+      accountId: "acct_1",
+      profileName: "default",
+      reason: null,
+    };
+    const contradictions = [
+      { connectorRequirements: [requirement], connectorPreflight: [] },
+      { connectorRequirements: [], connectorPreflight: [preflight] },
+      { connectorRequirements: [requirement], connectorPreflight: [{ ...preflight, connector: "github", setupLabel: "Connect Github" }] },
+      { connectorRequirements: [requirement], connectorPreflight: [{ ...preflight, required: false }] },
+      { connectorRequirements: [requirement], connectorPreflight: [{ ...preflight, authType: "api_key" }] },
+      { connectorRequirements: [requirement], connectorPreflight: [{ ...preflight, scopes: ["issues:write"] }] },
+      { connectorRequirements: [requirement], connectorPreflight: [{ ...preflight, operations: ["issues.list"] }] },
+      { connectorRequirements: [requirement], connectorPreflight: [{ ...preflight, missingScopes: ["issues:read"] }] },
+    ];
+    let index = 0;
+    globalThis.fetch = (async () => Response.json({
+      slug: "action-item-router",
+      availability: { status: "available" },
+      ...contradictions[index++]!,
+    })) as unknown as typeof fetch;
+
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+    for (const _contradiction of contradictions) {
+      expect(await client.getSkill("action-item-router")).toBeNull();
+    }
+  });
+
+  test("drops remote catalog entries whose identity itself leaks vendor routing metadata", async () => {
+    globalThis.fetch = (async () => Response.json([{
+      slug: "claude-code-provider-route",
+      displayName: "Claude Code Provider Route",
+      category: "Content Generation",
+      availability: { status: "available" },
+    }])) as unknown as typeof fetch;
+
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+    expect(await client.listSkills()).toEqual([]);
+  });
+
+  test("drops separator-obfuscated internal codes from public availability and quote errors", async () => {
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/quote")) {
+        return Response.json({
+          skill: "image",
+          code: "PROVIDER_DOWN",
+          availability: { status: "unavailable", code: "PROVIDER_DOWN" },
+        });
+      }
+      return Response.json({
+        slug: "image",
+        availability: { status: "unavailable", code: "VENDOR_ROUTE_DOWN" },
+      });
+    }) as unknown as typeof fetch;
+
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+    const skill = await client.getSkill("image");
+    const quote = await client.quoteSkill("image");
+
+    expect(skill?.availability).toEqual({
+      status: "unavailable",
+      message: "This skill is temporarily unavailable.",
+      details: ["No credits were charged."],
+    });
+    expect(quote.availability).toEqual({
+      status: "unavailable",
+      code: "REMOTE_UNAVAILABLE",
+      message: "This skill is temporarily unavailable.",
+      details: ["No credits were charged."],
+    });
+    expect(quote).toMatchObject({
+      code: "REMOTE_UNAVAILABLE",
+      error: "This skill is temporarily unavailable.",
+      detail: "No credits were charged.",
+    });
+    expect(JSON.stringify({ skill, quote })).not.toMatch(/openai|provider|vendor|route/i);
+  });
+
+  test("drops camel-case and split-name metadata evasions from public endpoint text", async () => {
+    globalThis.fetch = (async () => Response.json({
+      slug: "image",
+      description: "Open-AI providerName routeId",
+      availability: {
+        status: "unavailable",
+        code: "ROUTE_ID_FAILURE",
+        message: "open_ai modelType failed",
+        details: ["providerName unavailable"],
+      },
+    })) as unknown as typeof fetch;
+
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+    const skill = await client.getSkill("image");
+    expect(skill).toMatchObject({
+      slug: "image",
+      description: "Credit-backed image generation with a live credit quote before execution",
+      availability: {
+        status: "unavailable",
+        message: "This skill is temporarily unavailable.",
+        details: ["No credits were charged."],
+      },
+    });
+    expect(skill?.availability).not.toHaveProperty("code");
+    expect(JSON.stringify(skill)).not.toMatch(/open.ai|providername|routeid|modeltype/i);
+  });
+
+  test("synthesizes skill markdown from the strict public detail contract", async () => {
+    globalThis.fetch = (async () => Response.json({
+      slug: "image",
+      displayName: "OpenAI Provider Image",
+      description: "Claude Code routing costs $4.",
+      availability: { status: "available" },
+      internalInstructions: "Use private-model-7 through provider-route-4",
+    })) as unknown as typeof fetch;
+
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+    const markdown = await client.getSkillMd("image");
+
+    expect(markdown).toContain("# Image");
+    expect(markdown).toContain("Availability: available.");
+    expect(markdown).not.toMatch(/openai|claude|provider|model|routing|route|cost|\$/i);
   });
 
   test("allowlists quote, billing, usage, and status endpoint contracts", async () => {
@@ -201,6 +649,39 @@ describe("remote skills client public contract", () => {
     expect(JSON.stringify({ quote, billing, usage, status })).not.toMatch(/private-provider|private-model|costCents|margin|private-route/i);
   });
 
+  test("synthesizes usage descriptions from typed credit activity instead of remote prose", async () => {
+    const descriptions = [
+      "Rendered with Replicate",
+      "Generated through Stability",
+      "Transcribed using Deepgram",
+      "Dispatched to FAL",
+      "Completed on Mistral",
+      "Completed on Groq",
+      "Completed on Cohere",
+      "Completed on DeepSeek",
+      "Build route lists for financial modeling",
+    ];
+    globalThis.fetch = (async () => Response.json(descriptions.map((description, index) => ({
+      id: `txn_${index}`,
+      runId: `run_${index}`,
+      transactionType: "debit",
+      amountCredits: -1,
+      description,
+      createdAt: "2026-07-22T11:00:00.000Z",
+    })))) as unknown as typeof fetch;
+
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+    const usage = await client.getUsage();
+
+    expect(usage).toHaveLength(descriptions.length);
+    expect(usage.map((entry) => entry.description)).toEqual(
+      descriptions.map(() => "Skill run credits"),
+    );
+    expect(JSON.stringify(usage)).not.toMatch(
+      /replicate|stability|deepgram|\bfal\b|mistral|groq|cohere|deepseek|financial modeling/i,
+    );
+  });
+
   test("allowlists list/get run fields and rejects internal response prose from errors", async () => {
     let call = 0;
     globalThis.fetch = (async () => {
@@ -289,7 +770,46 @@ describe("remote skills client public contract", () => {
     }]);
   });
 
-  test("drops legacy fiat aliases instead of returning invented SDK credits", async () => {
+  test("rejects mutation calls without a caller-owned idempotency key at runtime", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return Response.json({ id: "unexpected" });
+    }) as unknown as typeof fetch;
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+
+    await expect((client.submitRun as any)("image", {}, [], {})).rejects.toThrow(
+      "Idempotency key must contain 1-200 visible ASCII characters.",
+    );
+    await expect((client.cancelRun as any)("run_1", {})).rejects.toThrow(
+      "Idempotency key must contain 1-200 visible ASCII characters.",
+    );
+    expect(calls).toBe(0);
+  });
+
+  test("supports response-loss retry only by reusing the same logical mutation key", async () => {
+    const keys: Array<string | null> = [];
+    let calls = 0;
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      calls += 1;
+      keys.push(new Headers(init?.headers).get("idempotency-key"));
+      if (calls === 1) throw new TypeError("simulated response loss");
+      return Response.json({ id: "run_replayed", skill: "image", status: "queued" });
+    }) as unknown as typeof fetch;
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+    const authorization = { idempotencyKey: "logical-response-loss-attempt", approved: true };
+
+    await expect(client.submitRun("image", {}, [], authorization)).rejects.toBeInstanceOf(
+      SkillsMutationOutcomeUnknownError,
+    );
+    await expect(client.submitRun("image", {}, [], authorization)).resolves.toMatchObject({
+      id: "run_replayed",
+      status: "queued",
+    });
+    expect(keys).toEqual(["logical-response-loss-attempt", "logical-response-loss-attempt"]);
+  });
+
+  test("rejects legacy fiat aliases instead of accepting a quote without explicit credits", async () => {
     globalThis.fetch = (async () => Response.json({
       contractVersion: 1,
       pricing: {
@@ -309,10 +829,7 @@ describe("remote skills client public contract", () => {
     })) as unknown as typeof fetch;
 
     const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
-    const quote = await client.quoteSkill("demo");
-
-    expect(quote).toEqual({ contractVersion: 1 });
-    expect(JSON.stringify(quote)).not.toMatch(/pricing|Cents|billingUnit|formattedCost/);
+    await expect(client.quoteSkill("demo")).rejects.toThrow("quote success requires creditQuote");
   });
 
   test("redacts service execution metadata from artifact lists and execution-log downloads", async () => {
@@ -752,7 +1269,7 @@ describe("remote skills client public contract", () => {
     const valid = {
       id: "123e4567-e89b-42d3-a456-426614174000",
       runId: "run_mabc123_1234abcd",
-      type: "generated_output",
+      type: "generated_output" as const,
       fileName: "report.md",
       relativePath: "reports/report.md",
       name: "report.md",
@@ -761,12 +1278,16 @@ describe("remote skills client public contract", () => {
       sha256,
       createdAt: "2026-07-21T16:00:00.000Z",
     };
+    const arbitraryRemoteName = {
+      ...valid,
+      id: "art_00000000000000000019",
+      fileName: "GPT4o-provider-route.md",
+      relativePath: "Claude3Opus/Gemini2.5.md",
+      name: "Sora2-Veo3.md",
+    };
     const invalidDescriptors = [
       { ...valid, id: "sk_live_descriptor_secret" },
       { ...valid, id: "art_00000000000000000018", runId: "token-secret-run" },
-      { ...valid, id: "art_00000000000000000019", fileName: "../private.txt" },
-      { ...valid, id: "art_0000000000000000001a", relativePath: "../../private.txt" },
-      { ...valid, id: "art_0000000000000000001b", name: "private/name.txt" },
       { ...valid, id: "art_0000000000000000001c", contentType: "text/plain\r\nx-private-route: secret" },
       { ...valid, id: "art_0000000000000000001d", byteSize: -1 },
       { ...valid, id: "art_0000000000000000001e", sha256: "not-a-sha" },
@@ -776,10 +1297,22 @@ describe("remote skills client public contract", () => {
       42,
       null,
     ];
-    globalThis.fetch = (async () => Response.json([valid, ...invalidDescriptors])) as unknown as typeof fetch;
+    globalThis.fetch = (async () => Response.json([valid, arbitraryRemoteName, ...invalidDescriptors])) as unknown as typeof fetch;
 
     const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
-    expect(await client.getRunArtifacts("run_123")).toEqual([valid]);
+    const artifacts = await client.getRunArtifacts("run_123");
+    expect(artifacts).toEqual([{
+      ...valid,
+      fileName: "generated-output-123e4567-e89b-42d3-a456-426614174000.md",
+      relativePath: "generated-output-123e4567-e89b-42d3-a456-426614174000.md",
+      name: "generated-output-123e4567-e89b-42d3-a456-426614174000.md",
+    }, {
+      ...arbitraryRemoteName,
+      fileName: "generated-output-art_00000000000000000019.md",
+      relativePath: "generated-output-art_00000000000000000019.md",
+      name: "generated-output-art_00000000000000000019.md",
+    }]);
+    expect(JSON.stringify(artifacts)).not.toMatch(/GPT4o|Claude3Opus|Gemini2\.5|Sora2|Veo3/i);
   });
 
   test("requires a prior cached generated-output descriptor and reconstructs a safe response envelope", async () => {
@@ -817,7 +1350,9 @@ describe("remote skills client public contract", () => {
     const generated = await client.downloadRunArtifact("run_123", "art_00000000000000000008");
     expect(generated.status).toBe(200);
     expect(generated.headers.get("content-type")).toBe("text/markdown; charset=utf-8");
-    expect(generated.headers.get("content-disposition")).toBe('attachment; filename="report.md"');
+    expect(generated.headers.get("content-disposition")).toBe(
+      'attachment; filename="generated-output-art_00000000000000000008.md"',
+    );
     expect(generated.headers.get("x-private-route")).toBeNull();
     expect(await generated.text()).toBe("# Customer report\n");
   });
@@ -888,12 +1423,16 @@ describe("remote skills client public contract", () => {
     expect(await client.getRunArtifacts("run_123")).toEqual([{
       id: "art_00000000000000000009",
       type: "generated_output",
-      fileName: "report.md",
+      fileName: "generated-output-art_00000000000000000009.md",
+      relativePath: "generated-output-art_00000000000000000009.md",
+      name: "generated-output-art_00000000000000000009.md",
       contentType: "text/markdown; charset=utf-8",
     }, {
       id: "art_0000000000000000000a",
       type: "generated_output",
-      fileName: "report.pdf",
+      fileName: "generated-output-art_0000000000000000000a.pdf",
+      relativePath: "generated-output-art_0000000000000000000a.pdf",
+      name: "generated-output-art_0000000000000000000a.pdf",
       contentType: "application/pdf",
     }]);
     expect(listRequested).toBe(true);
@@ -901,13 +1440,17 @@ describe("remote skills client public contract", () => {
     const markdown = await client.downloadRunArtifact("run_123", "art_00000000000000000009");
     expect(markdown.status).toBe(200);
     expect(markdown.headers.get("content-type")).toBe("text/markdown; charset=utf-8");
-    expect(markdown.headers.get("content-disposition")).toBe('attachment; filename="report.md"');
+    expect(markdown.headers.get("content-disposition")).toBe(
+      'attachment; filename="generated-output-art_00000000000000000009.md"',
+    );
     expect([...markdown.headers].join(" ")).not.toMatch(/private-route|route-secret|private-provider/i);
 
     const pdf = await client.downloadRunArtifact("run_123", "art_0000000000000000000a");
     expect(pdf.status).toBe(200);
     expect(pdf.headers.get("content-type")).toBe("application/pdf");
-    expect(pdf.headers.get("content-disposition")).toBe('attachment; filename="report.pdf"');
+    expect(pdf.headers.get("content-disposition")).toBe(
+      'attachment; filename="generated-output-art_0000000000000000000a.pdf"',
+    );
     expect([...pdf.headers].join(" ")).not.toMatch(/private-route|route-secret|private-provider/i);
   });
 
@@ -1191,7 +1734,9 @@ describe("remote skills client public contract", () => {
     const response = await client.downloadRunArtifact("run_123", "art_00000000000000000013");
 
     expect(response.status).toBe(200);
-    expect(response.headers.get("content-disposition")).toBe('attachment; filename="report.md"');
+    expect(response.headers.get("content-disposition")).toBe(
+      'attachment; filename="generated-output-art_00000000000000000013.md"',
+    );
     expect(await response.text()).toBe("# Customer report\n");
   });
 

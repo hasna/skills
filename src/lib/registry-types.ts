@@ -29,6 +29,9 @@ export interface SkillMeta {
   kind?: SkillKind;
   creditQuote?: import("./public-credits.js").PublicCreditQuote;
   availability?: SkillAvailabilityMetadata;
+  toolDependencies?: import("./tool-primitives.js").SkillToolDependencies;
+  connectorRequirements?: import("./public-endpoint-contract.js").PublicConnectorRequirement[];
+  connectorPreflight?: import("./public-endpoint-contract.js").PublicConnectorPreflight[];
   source?: SkillSource;
 }
 

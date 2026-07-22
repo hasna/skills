@@ -8,7 +8,7 @@
  * e.g. "0 9 * * *" = every day at 9am
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { createHash } from "crypto";
 
@@ -21,9 +21,43 @@ export interface SkillSchedule {
   enabled: boolean;
   createdAt: string;
   lastRun?: string;
-  lastRunStatus?: "success" | "error";
+  lastRunStatus?: "success" | "error" | "unknown";
   nextRun?: string;
+  pendingOccurrence?: {
+    scheduledFor: string;
+    idempotencyKey: string;
+    state: "unknown";
+    attempts: number;
+    lastAttemptAt: string;
+    retryAfter: string | null;
+    requestFingerprint: string;
+    submission: ScheduleRemoteSubmission;
+  };
 }
+
+export interface ScheduleRemoteSubmission {
+  skill: string;
+  input: Record<string, unknown>;
+  args: string[];
+  authorization: {
+    idempotencyKey: string;
+    quoteToken?: string;
+    approved?: boolean;
+  };
+  creditQuote: {
+    tier: "free" | "premium";
+    creditUnit: string;
+    credits: number;
+    formattedCredits: string;
+    estimated: boolean;
+    quoteDependsOnInput: boolean;
+    quoteRequired: boolean;
+    description: string;
+  };
+}
+
+export const MAX_UNKNOWN_OCCURRENCE_ATTEMPTS = 3;
+const UNKNOWN_RETRY_BASE_DELAY_MS = 1_000;
 
 /** Stable for one persisted schedule occurrence and different for the next occurrence. */
 export function createScheduleIdempotencyKey(schedule: Pick<SkillSchedule, "id" | "nextRun">): string {
@@ -58,7 +92,8 @@ function saveSchedules(data: SchedulesFile, targetDir: string = process.cwd()): 
   const path = getSchedulesPath(targetDir);
   const dir = join(targetDir, ".skills");
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(path, JSON.stringify(data, null, 2));
+  writeFileSync(path, JSON.stringify(data, null, 2), { mode: 0o600 });
+  chmodSync(path, 0o600);
 }
 
 /** Validate a single number or list/range/step value within bounds */
@@ -252,7 +287,16 @@ export function setScheduleEnabled(idOrName: string, enabled: boolean, targetDir
   if (!schedule) return false;
   schedule.enabled = enabled;
   if (enabled) {
-    schedule.nextRun = getNextRun(schedule.cron)?.toISOString();
+    const pending = schedule.pendingOccurrence;
+    if (pending) {
+      const expectedKey = createScheduleIdempotencyKey({ id: schedule.id, nextRun: pending.scheduledFor });
+      if (pending.idempotencyKey !== expectedKey) {
+        throw new Error("Cannot enable a schedule with inconsistent pending occurrence provenance.");
+      }
+      schedule.nextRun = pending.scheduledFor;
+    } else {
+      schedule.nextRun = getNextRun(schedule.cron)?.toISOString();
+    }
   }
   saveSchedules(data, targetDir);
   return true;
@@ -262,14 +306,23 @@ export function setScheduleEnabled(idOrName: string, enabled: boolean, targetDir
 export function getDueSchedules(targetDir?: string): SkillSchedule[] {
   const now = new Date();
   return listSchedules(targetDir).filter(
-    (s) => s.enabled && s.nextRun && new Date(s.nextRun) <= now
+    (s) => {
+      if (!s.enabled || !s.nextRun || new Date(s.nextRun) > now) return false;
+      const pending = s.pendingOccurrence;
+      if (!pending) return true;
+      if (pending.scheduledFor !== s.nextRun || pending.idempotencyKey !== createScheduleIdempotencyKey(s)) {
+        return false;
+      }
+      if (pending.attempts >= MAX_UNKNOWN_OCCURRENCE_ATTEMPTS) return false;
+      return !pending.retryAfter || new Date(pending.retryAfter) <= now;
+    }
   );
 }
 
 /** Mark a schedule as having just run. Updates lastRun and nextRun. */
 export function recordScheduleRun(
   id: string,
-  status: "success" | "error",
+  status: "success" | "error" | "unknown",
   targetDir?: string
 ): void {
   const data = loadSchedules(targetDir);
@@ -278,6 +331,75 @@ export function recordScheduleRun(
   const now = new Date();
   schedule.lastRun = now.toISOString();
   schedule.lastRunStatus = status;
+  if (status === "unknown") {
+    const pending = schedule.pendingOccurrence;
+    if (!pending || pending.scheduledFor !== schedule.nextRun) {
+      throw new Error("Cannot mark an unpersisted schedule mutation as unknown.");
+    }
+    const attempts = pending.attempts;
+    const retryAfter = attempts >= MAX_UNKNOWN_OCCURRENCE_ATTEMPTS
+      ? null
+      : new Date(now.getTime() + UNKNOWN_RETRY_BASE_DELAY_MS * (2 ** (attempts - 1))).toISOString();
+    schedule.pendingOccurrence = {
+      ...pending,
+      state: "unknown",
+      lastAttemptAt: now.toISOString(),
+      retryAfter,
+    };
+    saveSchedules(data, targetDir);
+    return;
+  }
+  delete schedule.pendingOccurrence;
   schedule.nextRun = getNextRun(schedule.cron, now)?.toISOString();
   saveSchedules(data, targetDir);
+}
+
+/** Persist the exact scheduled mutation before sending it to the service. */
+export function beginScheduleRunAttempt(
+  id: string,
+  submission: ScheduleRemoteSubmission,
+  targetDir?: string,
+): SkillSchedule["pendingOccurrence"] {
+  const data = loadSchedules(targetDir);
+  const schedule = data.schedules.find((candidate) => candidate.id === id);
+  if (!schedule?.nextRun) throw new Error("A due persisted schedule occurrence is required before execution.");
+  const idempotencyKey = createScheduleIdempotencyKey(schedule);
+  if (submission.skill !== schedule.skill || submission.authorization.idempotencyKey !== idempotencyKey) {
+    throw new Error("The scheduled submission does not match the persisted occurrence.");
+  }
+  const requestFingerprint = createHash("sha256").update(canonicalJson(submission)).digest("hex");
+  const prior = schedule.pendingOccurrence;
+  if (prior && (prior.scheduledFor !== schedule.nextRun
+    || prior.idempotencyKey !== idempotencyKey
+    || prior.requestFingerprint !== requestFingerprint)) {
+    throw new Error("The scheduled retry request does not match the persisted logical occurrence.");
+  }
+  const attempts = (prior?.attempts ?? 0) + 1;
+  if (attempts > MAX_UNKNOWN_OCCURRENCE_ATTEMPTS) {
+    throw new Error("The scheduled occurrence exhausted its bounded retry attempts.");
+  }
+  schedule.pendingOccurrence = {
+    scheduledFor: schedule.nextRun,
+    idempotencyKey,
+    state: "unknown",
+    attempts,
+    lastAttemptAt: new Date().toISOString(),
+    retryAfter: null,
+    requestFingerprint,
+    submission: structuredClone(submission),
+  };
+  saveSchedules(data, targetDir);
+  return schedule.pendingOccurrence;
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, nested]) => nested !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nested]) => `${JSON.stringify(key)}:${canonicalJson(nested)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
 }

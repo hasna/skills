@@ -173,7 +173,20 @@ export {
 
 export {
   RemoteSkillsClient,
+  SkillsApiError,
+  SkillsMutationOutcomeUnknownError,
   createRemoteSkillsClient,
+  type RemoteRunAuthorization,
+  type PublicConnectorPreflight,
+  type PublicConnectorRequirement,
+  type PublicRemoteAvailability,
+  type PublicRemoteSkill,
+  type PublicServiceCode,
+  type PublicSkillQuote,
+  type PublicSkillQuoteAuthRequired,
+  type PublicSkillQuoteError,
+  type PublicSkillQuoteSuccess,
+  type PublicSkillQuoteUnavailable,
 } from "./lib/remote-client.js";
 
 export {
@@ -183,8 +196,10 @@ export {
 
 export {
   REMOTE_SKILL_RUN_CONTRACT_VERSION,
+  REMOTE_SKILL_RUN_STATUSES,
   normalizeRemoteSkillRunContract,
   type RemoteSkillRunContract,
+  type RemoteSkillRunStatus,
 } from "./lib/remote-run-contract.js";
 
 export {

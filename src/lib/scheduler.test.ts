@@ -15,7 +15,9 @@ import {
   setScheduleEnabled,
   getDueSchedules,
   recordScheduleRun,
+  beginScheduleRunAttempt,
   createScheduleIdempotencyKey,
+  MAX_UNKNOWN_OCCURRENCE_ATTEMPTS,
 } from "./scheduler.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -191,6 +193,54 @@ describe("recordScheduleRun", () => {
     expect(after[0].lastRunStatus).toBe("success");
     expect(after[0].nextRun).toBeDefined();
     expect(new Date(after[0].nextRun!).getTime()).toBeGreaterThan(new Date(after[0].lastRun!).getTime());
+  });
+
+  test("keeps an ambiguous occurrence and its deterministic key bounded for retry", () => {
+    dir = makeTmpDir();
+    addSchedule("image", "0 9 * * *", { targetDir: dir });
+    const before = listSchedules(dir)[0];
+    const scheduledFor = before.nextRun!;
+    const key = createScheduleIdempotencyKey(before);
+    const submission = {
+      skill: before.skill,
+      input: {},
+      args: [],
+      authorization: { idempotencyKey: key, quoteToken: "quote_exact", approved: true },
+      creditQuote: {
+        tier: "premium" as const,
+        creditUnit: "image",
+        credits: 4,
+        formattedCredits: "4 credits/image",
+        estimated: false,
+        quoteDependsOnInput: false,
+        quoteRequired: true,
+        description: "Fixed credits per run.",
+      },
+    };
+
+    for (let attempt = 1; attempt <= MAX_UNKNOWN_OCCURRENCE_ATTEMPTS; attempt++) {
+      beginScheduleRunAttempt(before.id, submission, dir);
+      recordScheduleRun(before.id, "unknown", dir);
+      const current = listSchedules(dir)[0];
+      expect(current.nextRun).toBe(scheduledFor);
+      expect(createScheduleIdempotencyKey(current)).toBe(key);
+      expect(current.pendingOccurrence).toMatchObject({
+        scheduledFor,
+        idempotencyKey: key,
+        state: "unknown",
+        attempts: attempt,
+      });
+      if (attempt === 1) {
+        expect(setScheduleEnabled(before.id, false, dir)).toBe(true);
+        expect(setScheduleEnabled(before.id, true, dir)).toBe(true);
+        const reenabled = listSchedules(dir)[0];
+        expect(reenabled.nextRun).toBe(scheduledFor);
+        expect(reenabled.pendingOccurrence).toEqual(current.pendingOccurrence);
+        expect(createScheduleIdempotencyKey(reenabled)).toBe(key);
+      }
+    }
+
+    expect(getDueSchedules(dir)).toEqual([]);
   });
 });
 

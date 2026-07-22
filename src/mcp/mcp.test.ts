@@ -456,7 +456,7 @@ version: 0.3.0
     }
   }, 15000);
 
-  test("quote_skill fails closed when authenticated cloud authority omits creditQuote despite registry metadata and a token", async () => {
+  test("quote_skill rejects an authenticated cloud response that carries a token without a creditQuote", async () => {
     const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require("fs");
     const { tmpdir } = require("os");
     const tmpDir = mkdtempSync(join(tmpdir(), "mcp-cloud-missing-live-quote-"));
@@ -502,8 +502,9 @@ version: 0.3.0
       expect(response).not.toBeNull();
       expect(response.result.isError).toBe(true);
       const payload = JSON.parse(response.result.content[0].text);
-      expect(payload).toMatchObject({ code: "CLOUD_QUOTE_INVALID" });
-      expect(payload.message).toContain("did not return a creditQuote");
+      expect(payload).toMatchObject({ code: "CLOUD_CAPABILITY_CHECK_FAILED" });
+      expect(payload.message).toContain("quote failure must not include quoteToken or expiresAt");
+      expect(JSON.stringify(payload)).not.toContain("quote_without_authoritative_credits");
     } finally {
       await client.close();
       server.stop(true);
@@ -559,7 +560,7 @@ version: 0.3.0
     }
   }, 15000);
 
-  test("quote_skill normalizes nested cloud unavailability messages to credits", async () => {
+  test("quote_skill accepts only canonical cloud unavailability messages", async () => {
     const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require("fs");
     const { tmpdir } = require("os");
     const tmpDir = mkdtempSync(join(tmpdir(), "mcp-cloud-unavailable-credits-"));
@@ -576,11 +577,14 @@ version: 0.3.0
         }
         if (url.pathname === "/api/v1/skills/image/quote" && req.method === "POST") {
           return Response.json({
+            code: "CAPACITY_UNAVAILABLE",
+            error: "This skill is temporarily unavailable.",
+            detail: "No credits were charged.",
             availability: {
               status: "unavailable",
               code: "CAPACITY_UNAVAILABLE",
-              message: "Image generation is temporarily unavailable.",
-              details: ["No balance was charged."],
+              message: "This skill is temporarily unavailable.",
+              details: ["No credits were charged."],
             },
           });
         }
@@ -608,7 +612,7 @@ version: 0.3.0
         details: ["No credits were charged."],
         availability: { details: ["No credits were charged."] },
       });
-      expect(JSON.stringify(payload)).not.toContain("balance was charged");
+      expect(JSON.stringify(payload)).not.toContain("Image generation");
     } finally {
       await client.close();
       server.stop(true);
@@ -633,7 +637,7 @@ version: 0.3.0
         code: "AUTH_REQUIRED",
       });
       expect(payload).not.toHaveProperty("creditQuote");
-      expect(JSON.stringify(payload)).not.toContain("HOSTED_PROVIDER_UNAVAILABLE");
+      expect(JSON.stringify(payload)).not.toContain("HOSTED_SERVICE_UNAVAILABLE");
     } finally {
       await client.close();
       require("fs").rmSync(home, { recursive: true, force: true });
@@ -726,7 +730,7 @@ version: 0.3.0
       expect(response).not.toBeNull();
       expect(response.result.isError).toBe(true);
       const error = JSON.parse(response.result.content[0].text);
-      expect(error).toMatchObject({ code: "HOSTED_PROVIDER_UNAVAILABLE" });
+      expect(error).toMatchObject({ code: "HOSTED_SERVICE_UNAVAILABLE" });
       expect(error.message).toContain("temporarily unavailable");
       expect(error.message).toContain("No credits were charged.");
       expect(error.message).not.toContain("skills auth login");
@@ -1121,6 +1125,118 @@ version: 0.3.0
       });
       expect(quoteCalls).toBe(2);
       expect(runCalls).toBe(0);
+    } finally {
+      await client.close();
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  test("run_skill retries an ambiguous MCP logical attempt with the caller-owned idempotency key", async () => {
+    const { mkdtempSync, rmSync } = require("fs");
+    const { tmpdir } = require("os");
+    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-response-loss-"));
+    const submittedKeys: Array<string | null> = [];
+    const submittedBodies: unknown[] = [];
+    let quoteCalls = 0;
+    let submitCalls = 0;
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname.endsWith("/quote")) {
+          quoteCalls += 1;
+          return Response.json({
+            creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 12, formattedCredits: "12 credits/run" },
+          });
+        }
+        if (url.pathname === "/api/v1/runs/logo-design" && req.method === "POST") {
+          submitCalls += 1;
+          submittedKeys.push(req.headers.get("idempotency-key"));
+          submittedBodies.push(await req.json());
+          if (submitCalls === 1) return Response.json({ code: "RESPONSE_LOST" }, { status: 503 });
+          return Response.json({ id: "run_mcp_recovered", skill: "logo-design", status: "queued" });
+        }
+        return Response.json({ code: "NOT_FOUND" }, { status: 404 });
+      },
+    });
+    writeMcpModeConfig(tmpDir, "self-hosted", `http://127.0.0.1:${server.port}`);
+    const client = new McpClient({ HOME: tmpDir, SKILLS_API_KEY: "selfhost-response-loss-fixture" });
+    try {
+      await client.initialize();
+      const quoteResponse = await client.request("tools/call", {
+        name: "quote_skill",
+        arguments: { name: "logo-design", args: ["make a mark"] },
+      }, 8649);
+      const quoted = JSON.parse(quoteResponse.result.content[0].text);
+      const first = await client.request("tools/call", {
+        name: "run_skill",
+        arguments: {
+          name: "logo-design",
+          args: ["make a mark"],
+          approved: true,
+          allowUnsignedPhaseA: true,
+          approvedQuoteFingerprint: quoted.quoteFingerprint,
+          idempotencyKey: "mcp-stable-logical-attempt",
+        },
+      }, 865);
+      expect(first.result.isError).toBe(true);
+      const unknown = JSON.parse(first.result.content[0].text);
+      expect(unknown).toMatchObject({ code: "REMOTE_MUTATION_OUTCOME_UNKNOWN" });
+      const localRunId = String(unknown.message).match(/localRunId '([^']+)'/)?.[1];
+      expect(localRunId).toMatch(/^run_/);
+
+      const mismatch = await client.request("tools/call", {
+        name: "run_skill",
+        arguments: {
+          name: "logo-design",
+          args: ["make a mark"],
+          approved: true,
+          allowUnsignedPhaseA: true,
+          localRunId,
+          idempotencyKey: "different-logical-attempt",
+        },
+      }, 867);
+      expect(mismatch.result.isError).toBe(true);
+      expect(JSON.parse(mismatch.result.content[0].text)).toMatchObject({ code: "RETRY_ATTEMPT_MISMATCH" });
+
+      const changedInput = await client.request("tools/call", {
+        name: "run_skill",
+        arguments: {
+          name: "logo-design",
+          input: { brief: "different" },
+          args: ["make a mark"],
+          approved: true,
+          allowUnsignedPhaseA: true,
+          localRunId,
+          idempotencyKey: "mcp-stable-logical-attempt",
+        },
+      }, 868);
+      expect(changedInput.result.isError).toBe(true);
+      expect(JSON.parse(changedInput.result.content[0].text)).toMatchObject({ code: "RETRY_ATTEMPT_MISMATCH" });
+
+      const retry = await client.request("tools/call", {
+        name: "run_skill",
+        arguments: {
+          name: "logo-design",
+          args: ["make a mark"],
+          approved: true,
+          allowUnsignedPhaseA: true,
+          localRunId,
+          idempotencyKey: "mcp-stable-logical-attempt",
+        },
+      }, 866);
+      expect(retry.result.isError).not.toBe(true);
+      expect(JSON.parse(retry.result.content[0].text)).toMatchObject({
+        id: "run_mcp_recovered",
+        localRunId,
+      });
+      expect(submittedKeys).toEqual(["mcp-stable-logical-attempt", "mcp-stable-logical-attempt"]);
+      expect(quoteCalls).toBe(2);
+      expect(submittedBodies).toEqual([
+        { input: {}, args: ["make a mark"], approved: true },
+        { input: {}, args: ["make a mark"], approved: true },
+      ]);
     } finally {
       await client.close();
       server.stop(true);

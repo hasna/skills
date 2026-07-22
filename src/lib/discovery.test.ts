@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { getCompactSkillDiscovery, getPublicSkillDiscovery, sanitizePublicDiscoveryText } from "./discovery.js";
+import { getCompactSkillDiscovery, getPublicSkillDiscovery, publicDiscoveryTags, sanitizePublicDiscoveryText } from "./discovery.js";
 import { getSkill, loadBasicRegistry, loadRegistryProfile } from "./registry.js";
 import type { SkillMeta } from "./registry-types.js";
 
@@ -53,7 +53,7 @@ describe("getCompactSkillDiscovery", () => {
     expect(compact.description).toBe(sanitizePublicDiscoveryText(skill.description));
     expect(compact.description).not.toContain("OpenAI");
     expect(compact.description).not.toContain("Gemini");
-    expect(compact.description).toContain("hosted AI");
+    expect(compact.description).toBe("Credit-backed skill execution.");
   });
 
   test("sanitizes the full public catalog contract, including source descriptions and tags", () => {
@@ -68,14 +68,55 @@ describe("getCompactSkillDiscovery", () => {
 
     expect(getPublicSkillDiscovery(raw)).toEqual({
       ...raw,
-      description: "Credit-backed generation through hosted AI and hosted AI models.",
+      description: "Credit-backed skill execution.",
       tags: ["image"],
-      creditQuote: expect.any(Object),
+      creditQuote: {
+        tier: "free",
+        creditUnit: "run",
+        credits: 0,
+        formattedCredits: "0 credits",
+        estimated: false,
+        quoteDependsOnInput: false,
+        quoteRequired: false,
+        description: "No credits required.",
+      },
     });
 
     const image = getSkill("image");
     expect(image).toBeDefined();
-    expect(JSON.stringify(image)).not.toMatch(/openai|gemini|minimax|seedance|provider[- ]cost/i);
+    expect(JSON.stringify(image)).not.toMatch(/openai|gemini|minimax|seedance|claude-code|provider[- ]cost/i);
+  });
+
+  test("removes compound vendor and execution-routing tags", () => {
+    const publicSkill = getPublicSkillDiscovery({
+      name: "catalog-probe",
+      displayName: "Catalog Probe",
+      description: "A safe customer-facing description.",
+      category: "Development Tools",
+      tags: ["safe", "claude-code", "openai-sora", "provider-routing", "model-routing", "margin"],
+      source: "official" as const,
+    });
+
+    expect(publicSkill.tags).toEqual(["safe", "margin"]);
+  });
+
+  test("removes separator and camel-case metadata evasions", () => {
+    expect(publicDiscoveryTags([
+      "open_ai",
+      "Open-AI",
+      "providerName",
+      "routeId",
+      "safe-image",
+    ])).toEqual(["safe-image"]);
+    expect(sanitizePublicDiscoveryText("Open-AI providerName routeId image generation"))
+      .toBe("Credit-backed skill execution.");
+  });
+
+  test("preserves legitimate route and model language in prose and tags", () => {
+    const description = "Build route lists and compare the financial model.";
+    expect(sanitizePublicDiscoveryText(description)).toBe(description);
+    expect(publicDiscoveryTags(["route", "financial-modeling", "action-item-router"]))
+      .toEqual(["route", "financial-modeling", "action-item-router"]);
   });
 
   test("every basic-profile skill exposes a non-empty compact description", () => {

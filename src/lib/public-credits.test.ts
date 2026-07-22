@@ -213,6 +213,21 @@ describe("public credit presentation", () => {
     expect(JSON.stringify(quote)).not.toMatch(/openai|provider|usd|cost|margin/i);
   });
 
+  test("does not expose obfuscated execution metadata in formatted credits", () => {
+    const quote = toPublicCreditQuote({
+      tier: "premium",
+      creditUnit: "run",
+      credits: 8,
+      formattedCredits: "8 credits/open_ai-providerName-routeId",
+      estimated: false,
+      quoteDependsOnInput: false,
+      quoteRequired: false,
+      description: "Fixed credits per run.",
+    });
+
+    expect(quote.formattedCredits).toBe("8 credits/run");
+  });
+
   test("formats free, fixed, and estimated credits", () => {
     expect(formatCredits(0, { tier: "free" })).toBe("0 credits");
     expect(formatCredits(8, { creditUnit: "run" })).toBe("8 credits/run");

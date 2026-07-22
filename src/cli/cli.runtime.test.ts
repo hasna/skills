@@ -398,7 +398,7 @@ describe("CLI runtime and misc commands", () => {
             code: "AUTH_REQUIRED",
           },
         });
-        expect(JSON.stringify(result)).not.toContain("HOSTED_PROVIDER_UNAVAILABLE");
+        expect(JSON.stringify(result)).not.toContain("HOSTED_SERVICE_UNAVAILABLE");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -673,6 +673,95 @@ describe("CLI runtime and misc commands", () => {
         });
         expect(quoteCalls).toBe(2);
         expect(runCalls).toBe(0);
+      } finally {
+        server.stop(true);
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("ambiguous scheduled transport outcomes retry the same occurrence key before advancing", async () => {
+      const { mkdtempSync, readFileSync, rmSync, writeFileSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-schedule-response-loss-"));
+      const submittedKeys: Array<string | null> = [];
+      let submitCalls = 0;
+      let quoteCalls = 0;
+      const submittedBodies: unknown[] = [];
+      const server = Bun.serve({
+        port: 0,
+        async fetch(req) {
+          const url = new URL(req.url);
+          if (url.pathname === "/api/v1/skills/image" && req.method === "GET") {
+            return Response.json({
+              slug: "image",
+              availability: { status: "available" },
+              creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "image", credits: 4, formattedCredits: "4 credits/image" },
+            });
+          }
+          if (url.pathname === "/api/v1/skills/image/quote" && req.method === "POST") {
+            quoteCalls += 1;
+            return Response.json({
+              availability: { status: "available" },
+              quoteToken: "quote_schedule_retry",
+              creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "image", credits: 4, formattedCredits: "4 credits/image" },
+            });
+          }
+          if (url.pathname === "/api/v1/runs/image" && req.method === "POST") {
+            submitCalls += 1;
+            submittedKeys.push(req.headers.get("idempotency-key"));
+            submittedBodies.push(await req.json());
+            if (submitCalls === 1) return Response.json({ code: "RESPONSE_LOST" }, { status: 503 });
+            return Response.json({ id: "run_schedule_recovered", skill: "image", status: "queued" });
+          }
+          return Response.json({ code: "NOT_FOUND" }, { status: 404 });
+        },
+      });
+      const env = {
+        HOME: tmpDir,
+        SKILLS_API_KEY: "sk_test_schedule_response_loss",
+        SKILLS_ALLOW_INSECURE_LOOPBACK: "1",
+        SKILLS_TEST_API_URL: `http://127.0.0.1:${server.port}`,
+      };
+
+      try {
+        await runCliInCwd(["setup", "--mode", "cloud", "--api-url", `http://127.0.0.1:${server.port}`, "--json"], tmpDir, { HOME: tmpDir });
+        await runCliInCwd(["schedule", "add", "image", "*/5 * * * *", "--name", "retry-image", "--json"], tmpDir, env);
+        const schedulesPath = join(tmpDir, ".skills", "schedules.json");
+        const schedules = JSON.parse(readFileSync(schedulesPath, "utf8"));
+        schedules.schedules[0].nextRun = "2020-01-01T00:00:00.000Z";
+        writeFileSync(schedulesPath, JSON.stringify(schedules, null, 2));
+
+        const first = await runCliInCwd([
+          "schedule", "run", "--approve-credits", "--max-credits", "4", "--json",
+        ], tmpDir, env);
+        expect(first.exitCode).toBe(75);
+        expect(JSON.parse(first.stdout)).toMatchObject({
+          results: [{ status: "unknown", code: "REMOTE_MUTATION_OUTCOME_UNKNOWN" }],
+        });
+        expect(first.stdout).not.toContain("quote_schedule_retry");
+        const pending = JSON.parse(readFileSync(schedulesPath, "utf8"));
+        expect(pending.schedules[0]).toMatchObject({
+          nextRun: "2020-01-01T00:00:00.000Z",
+          pendingOccurrence: { attempts: 1, idempotencyKey: submittedKeys[0] },
+        });
+        pending.schedules[0].pendingOccurrence.retryAfter = "2020-01-01T00:00:00.000Z";
+        writeFileSync(schedulesPath, JSON.stringify(pending, null, 2));
+
+        const retry = await runCliInCwd([
+          "schedule", "run", "--approve-credits", "--max-credits", "4", "--json",
+        ], tmpDir, env);
+        expect(retry.exitCode).toBe(0);
+        expect(JSON.parse(retry.stdout)).toMatchObject({ results: [{ status: "success" }] });
+        const completed = JSON.parse(readFileSync(schedulesPath, "utf8"));
+        expect(completed.schedules[0].nextRun).not.toBe("2020-01-01T00:00:00.000Z");
+        expect(completed.schedules[0].pendingOccurrence).toBeUndefined();
+        expect(submittedKeys).toEqual([submittedKeys[0], submittedKeys[0]]);
+        expect(quoteCalls).toBe(1);
+        expect(submittedBodies).toEqual([
+          { input: {}, args: [], quoteToken: "quote_schedule_retry", approved: true },
+          { input: {}, args: [], quoteToken: "quote_schedule_retry", approved: true },
+        ]);
       } finally {
         server.stop(true);
         rmSync(tmpDir, { recursive: true, force: true });

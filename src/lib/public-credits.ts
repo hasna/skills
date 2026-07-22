@@ -1,3 +1,5 @@
+import { containsProhibitedPublicMetadata } from "./public-metadata.js";
+
 export type CreditUnit = "run" | "image" | "second" | "character" | "song" | "thousand_tokens" | "article";
 
 export interface InternalCreditConfiguration {
@@ -202,7 +204,9 @@ function creditDescription(
 }
 
 function creditOnlyText(value: unknown): string | undefined {
-  return typeof value === "string" && /credits?/i.test(value) && !/\$|usd|eur|gbp|cents?/i.test(value)
+  return typeof value === "string"
+    && /credits?/i.test(value)
+    && !containsProhibitedPublicMetadata(value)
     ? value
     : undefined;
 }

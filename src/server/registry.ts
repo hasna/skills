@@ -29,8 +29,14 @@ export function quoteServerSkill(slug: string): Record<string, unknown> {
   if (!getSelfHostedExecutionCapability(skill.name)) {
     return {
       skill: skill.name,
-      availability,
-      error: availability.message,
+      availability: {
+        status: "unavailable",
+        code: availability.code,
+        message: "This skill is temporarily unavailable.",
+        details: ["No credits were charged."],
+      },
+      error: "This skill is temporarily unavailable.",
+      detail: "No credits were charged.",
       code: availability.code,
     };
   }

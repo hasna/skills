@@ -80,7 +80,7 @@ describe("CLI run premium media", () => {
           proc.exited,
         ]);
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderr).toMatch(/remote_mutation_attempt|Remote attempt:/);
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({
           skill: "audio-transcript-pack",
@@ -101,7 +101,7 @@ describe("CLI run premium media", () => {
       }
     });
 
-    test("transcribe alias fails closed while transcript hosted provider is unavailable", async () => {
+    test("transcribe alias fails closed while the selected transcript service is unavailable", async () => {
       const { mkdtempSync, rmSync } = require("fs");
       const { tmpdir } = require("os");
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-transcript-alias-async-"));
@@ -113,10 +113,13 @@ describe("CLI run premium media", () => {
           const url = new URL(req.url);
           if (url.pathname === "/api/v1/skills/transcript/quote") {
             return Response.json({
+              code: "SELF_HOSTED_QUOTE_UNAVAILABLE",
+              error: "This skill is temporarily unavailable.",
+              detail: "No credits were charged.",
               availability: {
                 status: "unavailable",
-                code: "SELF_HOSTED_PROVIDER_UNAVAILABLE",
-                message: "Transcript is unavailable on the selected self-hosted service.",
+                code: "SELF_HOSTED_QUOTE_UNAVAILABLE",
+                message: "This skill is temporarily unavailable.",
                 details: ["No credits were charged."],
               },
             });
@@ -166,10 +169,10 @@ describe("CLI run premium media", () => {
         expect(data).toMatchObject({
           skill: "transcript",
           remote: true,
-          code: "SELF_HOSTED_PROVIDER_UNAVAILABLE",
+          code: "SELF_HOSTED_QUOTE_UNAVAILABLE",
           availability: {
             status: "unavailable",
-            code: "SELF_HOSTED_PROVIDER_UNAVAILABLE",
+            code: "SELF_HOSTED_QUOTE_UNAVAILABLE",
           },
         });
         expect(data.details).toContain("No credits were charged.");
@@ -258,7 +261,7 @@ describe("CLI run premium media", () => {
           proc.exited,
         ]);
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderr).toMatch(/remote_mutation_attempt|Remote attempt:/);
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({
           skill: "video-highlight-pack",

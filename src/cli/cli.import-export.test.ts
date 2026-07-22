@@ -190,7 +190,14 @@ describe("CLI import export and env checks", () => {
           },
         );
         const data = JSON.parse(stdout);
-        const outputPath = require("path").join(tmpDir, ".skills", "exports", "image", "run_remote", "nested", "report.md");
+        const outputPath = require("path").join(
+          tmpDir,
+          ".skills",
+          "exports",
+          "image",
+          "run_remote",
+          `generated-output-${artifactId}.md`,
+        );
 
         expect(stderr).toBe("");
         expect(exitCode).toBe(0);
@@ -254,7 +261,14 @@ describe("CLI import export and env checks", () => {
           },
         );
         const data = JSON.parse(stdout);
-        const outputPath = path.join(tmpDir, ".skills", "exports", "create-blog-article", "run_blog_remote", "manifest.json");
+        const outputPath = path.join(
+          tmpDir,
+          ".skills",
+          "exports",
+          "create-blog-article",
+          "run_blog_remote",
+          `generated-output-${artifactId}.json`,
+        );
 
         expect(stderr).toBe("");
         expect(exitCode).toBe(0);

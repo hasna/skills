@@ -17,6 +17,7 @@ describe("open-core product service pattern", () => {
   const readme = readFileSync(join(root, "README.md"), "utf8");
   const publishWorkflow = readFileSync(join(root, ".github/workflows/publish.yml"), "utf8");
   const promotionWorkflow = readFileSync(join(root, ".github/workflows/promote-latest.yml"), "utf8");
+  const promotionValidator = readFileSync(join(root, "src/lib/live-public-contract.ts"), "utf8");
   const deployWorkflow = readFileSync(join(root, ".github/workflows/deploy.yml"), "utf8");
   const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version: string; files?: string[] };
   const compact = (value: string) => value.replace(/\s+/g, " ");
@@ -24,6 +25,17 @@ describe("open-core product service pattern", () => {
   const compactContract = compact(contract);
   const compactOwnership = compact(ownership);
   const compactReadme = compact(readme);
+
+  function mutableExternalActionReferences(workflow: string): string[] {
+    return workflow.split("\n").flatMap((line) => {
+      const match = line.match(/\buses:\s*([^@\s]+)@([^\s#]+)(?:\s+#\s*(\S+))?/);
+      if (!match || match[1]?.startsWith("./")) return [];
+      const [, action, reference, versionComment] = match;
+      return /^[a-f0-9]{40}$/.test(reference ?? "") && /^v\d/.test(versionComment ?? "")
+        ? []
+        : [`${action}@${reference}`];
+    });
+  }
 
   test("keeps the universal client and provider-neutral server in OSS while cloud composition stays in platform", () => {
     expect(pattern).toContain("The public npm package is the install surface for local, self-hosted, and cloud users");
@@ -189,20 +201,38 @@ describe("open-core product service pattern", () => {
     expect(compactContract).toContain("any changed approval field");
   });
 
-  test("uses npm trusted publishing with the supported Node runtime", () => {
-    expect(publishWorkflow).toContain("actions/setup-node@v6");
+  test("uses the protected production token and supported Node runtime for manual next publishing", () => {
+    expect(publishWorkflow).toContain("actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6");
     expect(publishWorkflow).toMatch(/node-version:\s*["']?24["']?/);
     expect(publishWorkflow).toContain("registry-url: https://registry.npmjs.org");
     expect(publishWorkflow).toContain("id-token: write");
     expect(publishWorkflow).toContain("npm publish --tag next --provenance --access public");
-    expect(publishWorkflow).not.toContain("NODE_AUTH_TOKEN");
-    expect(publishWorkflow).not.toContain("NPM_TOKEN");
+    expect(publishWorkflow).toContain("workflow_dispatch:");
+    expect(publishWorkflow).toContain('test "$(git rev-parse origin/main)" = "$GITHUB_SHA"');
+    expect(publishWorkflow).toMatch(/environment:\s*production/);
+    expect(publishWorkflow).toContain('GITHUB_REF" = "refs/heads/main');
+    expect(publishWorkflow).toContain('RELEASE_VERSION" = "0.2.0');
+    expect(publishWorkflow).toContain('RELEASE_CONFIRMATION" = "publish-0.2.0-to-next');
+    expect(publishWorkflow).toContain("NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}");
+    expect(publishWorkflow).not.toMatch(/\npush:\s*\n/);
+  });
+
+  test("pins every external action in secret-bearing release workflows", () => {
+    expect(mutableExternalActionReferences(publishWorkflow)).toEqual([]);
+    expect(mutableExternalActionReferences(promotionWorkflow)).toEqual([]);
+    expect(mutableExternalActionReferences("- uses: actions/checkout@v6")).toEqual([
+      "actions/checkout@v6",
+    ]);
+    expect(mutableExternalActionReferences(
+      "- uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
+    )).toEqual(["actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"]);
   });
 
   test("keeps npm 0.2.0 on next and the internal self-hosted deployment manual-only", () => {
     expect(packageJson.version).toBe("0.2.0");
     expect(publishWorkflow).toContain("Publish npm prerelease (next)");
     expect(publishWorkflow).toContain("--tag next");
+    expect(publishWorkflow).toContain("workflow_dispatch:");
     expect(deployWorkflow).toContain("Internal self-hosted deployment (non-cloud)");
     expect(deployWorkflow).toContain("workflow_dispatch");
     expect(deployWorkflow).not.toMatch(/\npush:\s*\n/);
@@ -210,10 +240,38 @@ describe("open-core product service pattern", () => {
 
   test("promotes the exact tested prerelease artifact to latest only through a manual gate", () => {
     expect(promotionWorkflow).toContain("workflow_dispatch:");
-    expect(promotionWorkflow).toContain("npm-production");
+    expect(promotionWorkflow).toMatch(/environment:\s*production/);
+    expect(promotionWorkflow).toContain('GITHUB_REPOSITORY" = "hasna/skills');
+    expect(promotionWorkflow).toContain('GITHUB_REF" = "refs/heads/main');
+    expect(promotionWorkflow).toContain('test "$(git rev-parse origin/main)" = "$GITHUB_SHA"');
+    expect(promotionWorkflow).not.toContain("npm-production");
+    expect(promotionWorkflow).not.toContain("platform_deploy_run_id");
+    expect(promotionWorkflow).not.toContain("PLATFORM_RELEASE_READ_TOKEN");
+    expect(promotionWorkflow).toContain("platform_sha");
+    expect(promotionWorkflow).toContain("platform_version");
+    expect(promotionWorkflow).toContain("client_pin");
+    expect(promotionWorkflow).not.toContain("repos/hasnatools/platform-skills/actions/runs/");
+    expect(promotionWorkflow).toContain("validate-live-public-contract.ts");
+    expect(promotionValidator).toContain("live version commit SHA mismatch");
+    expect(promotionValidator).toContain("live health commit SHA mismatch");
+    expect(promotionWorkflow).toContain("https://skills.md/api/version");
+    expect(promotionWorkflow).toContain("https://skills.md/api/health");
+    expect(promotionWorkflow).toContain("https://skills.md/api/v1/skills/image");
+    expect(promotionWorkflow).toContain("https://skills.md/api/v1/skills/image/quote");
+    expect(promotionWorkflow).toContain("https://skills.md/api/v1/runs?limit=10");
+    expect(promotionWorkflow).toContain("https://skills.md/api/v1/billing/usage");
+    expect(promotionWorkflow).not.toContain("https://skills.md/api/v1/billing/usage?");
+    expect(promotionWorkflow).toContain("SKILLS_PROMOTION_API_KEY");
+    expect(promotionValidator).toContain("currentVersion");
     expect(promotionWorkflow).toContain("@hasna/skills@0.2.0");
     expect(promotionWorkflow).toContain("@hasna/skills@next");
     expect(promotionWorkflow).toContain("dist.integrity");
+    expect(promotionValidator).toContain("parsePublicSkillEndpoint");
+    expect(promotionValidator).toContain("parsePublicQuoteEndpoint");
+    expect(promotionValidator).toContain('const PROMOTION_PROOF_SKILL = "logo-design"');
+    expect(promotionValidator).toContain("entry.runId === promotionRun.id");
+    expect(promotionValidator).toContain("entry.amountCredits === -promotionRun.creditsUsed");
+    expect(promotionValidator).toContain("assertOnlyKeys");
     expect(promotionWorkflow).toContain("mktemp -d");
     expect(promotionWorkflow).toContain("skills --version");
     expect(promotionWorkflow).toContain("npm dist-tag add @hasna/skills@0.2.0 latest");

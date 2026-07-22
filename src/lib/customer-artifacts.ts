@@ -120,12 +120,26 @@ const GENERATED_BINARY_MEDIA_TYPES = new Set([
 ]);
 
 type ArtifactClassification = "execution-log" | "generated-artifact" | "untrusted";
-type CanonicalArtifactType = "execution_log" | "generated_output";
+export type CanonicalArtifactType = "execution_log" | "generated_output";
 
-interface SanitizedArtifactDescriptor extends Record<string, unknown> {
+export interface PublicRunArtifact extends Record<string, unknown> {
   id: string;
   type: CanonicalArtifactType;
+  runId?: string;
+  byteSize?: number;
+  sha256?: string;
+  createdAt?: string;
+  fileName?: string;
+  relativePath?: string;
+  name?: string;
+  contentType?: string;
+  userPayload?: unknown;
+  userInput?: unknown;
+  userMessage?: unknown;
+  userContent?: unknown;
 }
+
+type SanitizedArtifactDescriptor = PublicRunArtifact;
 
 interface ExpectedArtifactIdentity {
   artifactId?: string;
@@ -134,7 +148,7 @@ interface ExpectedArtifactIdentity {
 
 const INVALID = Symbol("invalid-artifact-field");
 
-export function sanitizeCustomerArtifactList(value: unknown): unknown[] {
+export function sanitizeCustomerArtifactList(value: unknown): PublicRunArtifact[] {
   if (!Array.isArray(value)) return [];
   const idCounts = new Map<string, number>();
   for (const artifact of value) {
@@ -207,10 +221,10 @@ function sanitizeArtifactDescriptor(value: Record<string, unknown>): SanitizedAr
   }
 
   const output: SanitizedArtifactDescriptor = { id, type: explicitType };
-  if (runId !== undefined) output.runId = runId;
-  if (byteSize !== undefined) output.byteSize = byteSize;
-  if (sha256 !== undefined) output.sha256 = sha256;
-  if (createdAt !== undefined) output.createdAt = createdAt;
+  if (typeof runId === "string") output.runId = runId;
+  if (typeof byteSize === "number") output.byteSize = byteSize;
+  if (typeof sha256 === "string") output.sha256 = sha256;
+  if (typeof createdAt === "string") output.createdAt = createdAt;
 
   if (explicitType === "execution_log") {
     output.fileName = EXECUTION_LOG_FILE_NAME;
@@ -218,15 +232,12 @@ function sanitizeArtifactDescriptor(value: Record<string, unknown>): SanitizedAr
     output.name = EXECUTION_LOG_FILE_NAME;
     output.contentType = canonicalExecutionLogContentType(value.contentType);
   } else {
-    const fileName = optionalValidated(value, "fileName", validFileName);
-    const relativePath = optionalValidated(value, "relativePath", validRelativePath);
-    const name = optionalValidated(value, "name", validFileName);
     const contentType = optionalValidated(value, "contentType", canonicalGeneratedContentType);
-    if ([fileName, relativePath, name, contentType].includes(INVALID)) return undefined;
-    if (!contentType || (!fileName && !relativePath && !name)) return undefined;
-    if (fileName !== undefined) output.fileName = fileName;
-    if (relativePath !== undefined) output.relativePath = relativePath;
-    if (name !== undefined) output.name = name;
+    if (contentType === INVALID || typeof contentType !== "string") return undefined;
+    const generatedName = generatedArtifactFileName(id, contentType);
+    output.fileName = generatedName;
+    output.relativePath = generatedName;
+    output.name = generatedName;
     output.contentType = contentType;
   }
 
@@ -377,6 +388,47 @@ function descriptorFileName(descriptor?: SanitizedArtifactDescriptor): string | 
   if (relativePath) return relativePath.split("/").at(-1);
   return validFileName(descriptor.name);
 }
+
+function generatedArtifactFileName(id: string, contentType: string): string {
+  const mediaType = contentType.split(";", 1)[0]!.trim().toLowerCase();
+  const extension = GENERATED_FILE_EXTENSIONS.get(mediaType) ?? "bin";
+  return `generated-output-${id}.${extension}`;
+}
+
+const GENERATED_FILE_EXTENSIONS = new Map<string, string>([
+  ["application/gzip", "gz"],
+  ["application/json", "json"],
+  ["application/pdf", "pdf"],
+  ["application/rtf", "rtf"],
+  ["application/vnd.ms-excel", "xls"],
+  ["application/vnd.ms-powerpoint", "ppt"],
+  ["application/vnd.openxmlformats-officedocument.presentationml.presentation", "pptx"],
+  ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"],
+  ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx"],
+  ["application/xml", "xml"],
+  ["application/zip", "zip"],
+  ["audio/mpeg", "mp3"],
+  ["audio/mp4", "m4a"],
+  ["audio/ogg", "ogg"],
+  ["audio/wav", "wav"],
+  ["audio/webm", "webm"],
+  ["image/gif", "gif"],
+  ["image/jpeg", "jpg"],
+  ["image/png", "png"],
+  ["image/svg+xml", "svg"],
+  ["image/webp", "webp"],
+  ["text/csv", "csv"],
+  ["text/css", "css"],
+  ["text/html", "html"],
+  ["text/markdown", "md"],
+  ["text/plain", "txt"],
+  ["text/xml", "xml"],
+  ["video/mp4", "mp4"],
+  ["video/mpeg", "mpeg"],
+  ["video/ogg", "ogv"],
+  ["video/quicktime", "mov"],
+  ["video/webm", "webm"],
+]);
 
 function explicitArtifactType(
   value: Record<string, unknown>,

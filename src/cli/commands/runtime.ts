@@ -28,10 +28,17 @@ import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../../lib/remote-run-contract
 import { createUnsignedQuoteApprovalFingerprint } from "../../lib/unsigned-quote-approval.js";
 import {
   completeSkillRun,
+  beginSkillRunAttempt,
+  clearRemoteSubmission,
   createSkillRun,
   findSkillRun,
+  getRunIdempotencyKey,
   getRunExportDir,
   listSkillRuns,
+  markSkillRunOutcomeUnknown,
+  loadRemoteSubmission,
+  persistRemoteSubmission,
+  resumeSkillRunAttempt,
   updateSkillRun,
   writeRunLogs,
 } from "../../lib/run-state.js";
@@ -72,6 +79,8 @@ export function registerRuntime(parent: Command) {
     .option("--wait", "Poll remote runs until a terminal status", false)
     .option("--poll-interval-ms <ms>", "Remote polling interval in milliseconds", "1000")
     .option("--poll-timeout-ms <ms>", "Maximum time to wait for a remote run", "300000")
+    .option("--retry <local-run-id>", "Retry an ambiguous remote mutation with its persisted idempotency key")
+    .option("--local-run-id <local-run-id>", "Resume the same ambiguous remote logical attempt")
     .description("Run a skill directly")
     .action(async (name: string, args: string[], options: RunCommandOptions) => handleRun(name, args, options));
 
@@ -412,6 +421,8 @@ interface RunCommandOptions {
   wait?: boolean;
   pollIntervalMs?: string;
   pollTimeoutMs?: string;
+  retry?: string;
+  localRunId?: string;
 }
 
 async function handleRun(name: string, args: string[], options: RunCommandOptions) {
@@ -505,13 +516,49 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
     }
   }
 
-  const runContext = createSkillRun({
-    skill: skill.name,
-    args,
-    prompt,
-    remote: isPremium,
-    credits,
-  });
+  if (options.retry && options.localRunId && options.retry !== options.localRunId) {
+    const error = "--retry and --local-run-id must identify the same logical attempt.";
+    if (options.json) console.log(JSON.stringify({ skill: skill.name, args, exitCode: 1, error, code: "RETRY_ATTEMPT_MISMATCH" }));
+    else console.error(chalk.red(error));
+    process.exitCode = 1;
+    return;
+  }
+  const retryRunId = options.retry ?? options.localRunId;
+  let runContext: ReturnType<typeof createSkillRun>;
+  try {
+    runContext = retryRunId
+      ? resumeSkillRunAttempt(retryRunId, { skill: skill.name, args })
+      : createSkillRun({
+          skill: skill.name,
+          args,
+          prompt,
+          remote: isPremium,
+          credits,
+        });
+  } catch (error) {
+    const message = (error as Error).message;
+    if (options.json) console.log(JSON.stringify({ skill: skill.name, args, exitCode: 1, error: message, code: "RETRY_ATTEMPT_INVALID" }));
+    else console.error(chalk.red(message));
+    process.exitCode = 1;
+    return;
+  }
+  let retrySubmission: ReturnType<typeof loadRemoteSubmission> | undefined;
+  if (retryRunId) {
+    try {
+      retrySubmission = loadRemoteSubmission(runContext);
+      if (retrySubmission.skill !== skill.name
+        || JSON.stringify(retrySubmission.args) !== JSON.stringify(args)
+        || JSON.stringify(retrySubmission.input) !== "{}") {
+        throw new Error("The retry request does not match the persisted logical attempt.");
+      }
+    } catch (error) {
+      const message = (error as Error).message;
+      if (options.json) console.log(JSON.stringify({ skill: skill.name, args, exitCode: 1, error: message, code: "RETRY_ATTEMPT_INVALID" }));
+      else console.error(chalk.red(message));
+      process.exitCode = 1;
+      return;
+    }
+  }
   const failRemoteAuthorization = (code: string, error: string) => {
     writeRunLogs(runContext, "", error + "\n");
     const run = completeSkillRun(runContext, { status: "failed", error, credits });
@@ -572,7 +619,10 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       try {
         const { RemoteSkillsClient } = await import("../../lib/remote-client.js");
         client = new RemoteSkillsClient(apiKey);
-        {
+        if (retrySubmission) {
+          quoteToken = retrySubmission.authorization.quoteToken;
+          if (runContext.record.credits !== undefined) credits = runContext.record.credits;
+        } else {
           const liveQuote = await client.quoteSkill(skill.name, {}, args);
           const liveAvailability = liveQuote?.availability;
           if (liveQuote?.error || liveAvailability?.status === "unavailable") {
@@ -723,24 +773,47 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
           : deploymentMode === "self-hosted" && creditQuote.credits > 0 && options.allowUnsignedPhaseA === true
             ? { approved: true }
             : {};
-        const run = await client.submitRun(
-          skill.name,
-          {},
+        const idempotencyKey = getRunIdempotencyKey(runContext.record);
+        const attemptReceipt = {
+          event: "remote_mutation_attempt",
+          localRunId: runContext.record.id,
+          idempotencyKey,
+          retryCommand: `skills run --retry ${runContext.record.id} --yes ${skill.name}`,
+        };
+        console.error(options.json
+          ? JSON.stringify(attemptReceipt)
+          : chalk.dim(`Remote attempt: localRunId=${attemptReceipt.localRunId} idempotencyKey=${attemptReceipt.idempotencyKey}`));
+        const submission = retrySubmission ?? persistRemoteSubmission(runContext, {
+          skill: skill.name,
+          input: {},
           args,
-          {
+          authorization: {
             ...runAuthorization,
-            idempotencyKey: runContext.record.idempotencyKey,
+            idempotencyKey,
           },
+        });
+        beginSkillRunAttempt(runContext);
+        const run = await client.submitRun(
+          submission.skill,
+          submission.input,
+          submission.args,
+          submission.authorization,
         );
         if (run.error) {
           writeRunLogs(runContext, "", String(run.error) + "\n");
           const localRun = completeSkillRun(runContext, { status: "failed", error: String(run.error), credits });
+          clearRemoteSubmission(runContext);
           if (options.json) console.log(JSON.stringify(toCustomerCreditPayload({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error: run.error, creditQuote, remoteRun: run, run: localRun }), null, 2));
           else console.error(chalk.red(run.error));
           process.exitCode = 1;
           return;
         }
         const remoteRunId = typeof run.id === "string" ? run.id : undefined;
+        updateSkillRun(runContext, {
+          status: run.status === "running" || run.status === "completed" || run.status === "failed" ? run.status : "queued",
+          remoteRunId,
+        });
+        clearRemoteSubmission(runContext);
         const nextActions = remoteRunNextActions(remoteRunId);
         const polling = parsePollingOptions(options);
         const polled: PollRemoteRunResult = options.wait && remoteRunId && !isTerminalRemoteStatus(run.status)
@@ -794,7 +867,37 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
         process.exitCode = exitCode;
         return;
       } catch (err) {
+        if ((err as { code?: string }).code === "REMOTE_MUTATION_OUTCOME_UNKNOWN") {
+          const error = (err as Error).message;
+          writeRunLogs(runContext, "", error + "\n");
+          const run = markSkillRunOutcomeUnknown(runContext, error);
+          const idempotencyKey = getRunIdempotencyKey(run);
+          const retryCommand = `skills run --retry ${run.id} --yes ${skill.name}`;
+          if (options.json) {
+            console.log(JSON.stringify(toCustomerCreditPayload({
+              contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION,
+              skill: skill.name,
+              args,
+              exitCode: 75,
+              remote: true,
+              error,
+              code: "REMOTE_MUTATION_OUTCOME_UNKNOWN",
+              outcome: "unknown",
+              localRunId: run.id,
+              idempotencyKey,
+              retryCommand,
+              creditQuote,
+              run,
+            }), null, 2));
+          } else {
+            console.error(chalk.yellow(error));
+            console.error(chalk.dim(`Retry: ${retryCommand}`));
+          }
+          process.exitCode = 75;
+          return;
+        }
         const error = `Remote skill ${skill.name} requires access to the selected ${deploymentMode} service: ${(err as Error).message}`;
+        clearRemoteSubmission(runContext);
         writeRunLogs(runContext, "", error + "\n");
         const run = completeSkillRun(runContext, { status: "failed", error, credits });
         if (options.json) console.log(JSON.stringify(toCustomerCreditPayload({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, creditQuote, run }), null, 2));

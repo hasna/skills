@@ -264,7 +264,7 @@ describe("CLI discovery", () => {
           SKILLS_API_URL: `http://localhost:${server.port}`,
         });
         expect(exitCode).toBe(0);
-        expect(JSON.parse(stdout)).toEqual([{ name: "Remote Tools", count: 2 }]);
+        expect(JSON.parse(stdout)).toEqual([{ name: "Remote", count: 2 }]);
       } finally {
         server.stop(true);
       }
@@ -581,7 +581,7 @@ describe("CLI discovery", () => {
         expect(data).toMatchObject({
           name: "remote-demo",
           displayName: "Remote Demo",
-          category: "Remote Tools",
+          category: "Remote",
           source: "remote",
           version: "0.2.0",
           creditQuote: {
@@ -608,7 +608,7 @@ describe("CLI discovery", () => {
         code: "AUTH_REQUIRED",
       });
       expect(data).not.toHaveProperty("creditQuote");
-      expect(JSON.stringify(data)).not.toContain("HOSTED_PROVIDER_UNAVAILABLE");
+      expect(JSON.stringify(data)).not.toContain("HOSTED_SERVICE_UNAVAILABLE");
     });
 
     test("quotes fixed and variable premium skills from the authenticated selected service", async () => {

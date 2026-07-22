@@ -1,13 +1,8 @@
 import { getApiKey as getStoredApiKey, getApiUrl } from "./auth-store.js";
-import {
-  sanitizePublicDiscoveryText,
-  publicDiscoveryTags,
-} from "./discovery.js";
+import { sanitizePublicDiscoveryText } from "./discovery.js";
 import { normalizeRemoteSkillRunContract, type RemoteSkillRunContract } from "./remote-run-contract.js";
 import {
   sanitizeCustomerCreditText,
-  toAuthoritativePublicCreditQuote,
-  type PublicCreditQuote,
 } from "./public-credits.js";
 import { addSkillsProtocolHeaders } from "./remote-protocol.js";
 import { normalizeSkillsApiOrigin } from "./service-origin.js";
@@ -15,72 +10,58 @@ import {
   sanitizeCustomerArtifactDownload,
   sanitizeCustomerArtifactList,
   sanitizeCustomerExecutionLogs,
+  type PublicRunArtifact,
 } from "./customer-artifacts.js";
+import { containsProhibitedPublicIdentity, containsProhibitedPublicMetadata } from "./public-metadata.js";
+import {
+  parsePublicQuoteEndpoint,
+  parsePublicCreditUsageEndpoint,
+  parsePublicSkillEndpoint,
+  isPublicServiceCode,
+  type PublicRemoteAvailability,
+  type PublicRemoteAvailabilityStatus,
+  type PublicRemoteBillingMode,
+  type PublicRemoteSkill,
+  type PublicRemoteSourceType,
+  type PublicRemoteVisibility,
+  type PublicSkillQuote,
+  type PublicCreditUsage,
+} from "./public-endpoint-contract.js";
+
+export type {
+  PublicConnectorPreflight,
+  PublicConnectorRequirement,
+  PublicRemoteAvailability,
+  PublicRemoteAvailabilityStatus,
+  PublicRemoteBillingMode,
+  PublicRemoteSkill,
+  PublicRemoteSourceType,
+  PublicRemoteVisibility,
+  PublicSkillQuote,
+  PublicSkillQuoteAuthRequired,
+  PublicSkillQuoteError,
+  PublicSkillQuoteSuccess,
+  PublicSkillQuoteUnavailable,
+  PublicServiceCode,
+  PublicCreditTransactionType,
+  PublicCreditUsage,
+} from "./public-endpoint-contract.js";
 
 export interface RemoteRunAuthorization {
+  idempotencyKey: string;
   quoteToken?: string;
   approved?: boolean;
-  idempotencyKey?: string;
 }
 
-export interface PublicRemoteSkill {
-  id?: string;
-  slug?: string;
-  name?: string;
-  displayName?: string;
-  description?: string;
-  category?: string;
-  tags?: string[];
-  visibility?: string;
-  currentVersion?: string;
-  billingMode?: string;
-  creditsPerExecution?: number;
-  sourceType?: string;
-  creditQuote?: PublicCreditQuote;
-  availability?: PublicRemoteAvailability;
-}
-
-export interface PublicRemoteAvailability {
-  status: string;
-  code?: string;
-  message?: string;
-  details?: string[];
-}
-
-export interface PublicSkillQuote {
-  contractVersion?: number;
-  skill?: string;
-  quoteToken?: string;
-  expiresAt?: string;
-  creditQuote?: PublicCreditQuote;
-  availability?: PublicRemoteAvailability;
-  code?: string;
-  error?: string;
-  detail?: string;
-}
-
+export type PublicBillingPlan = "free" | "credits" | "pro";
 export interface PublicBillingStatus {
-  plan?: string;
+  plan?: PublicBillingPlan;
   creditBalance?: number;
   formattedCreditBalance?: string;
   hasPaymentMethod?: boolean;
 }
 
-export interface PublicCreditUsage {
-  id?: string;
-  runId?: string;
-  transactionType?: string;
-  amountCredits?: number;
-  balanceAfterAvailable?: number;
-  balanceAfterReserved?: number;
-  description?: string;
-  createdAt?: string;
-}
-
-export interface PublicRunArtifact extends Record<string, unknown> {
-  id: string;
-  relativePath?: string;
-}
+export type { PublicRunArtifact } from "./customer-artifacts.js";
 
 export class SkillsApiError extends Error {
   readonly status: number;
@@ -91,6 +72,15 @@ export class SkillsApiError extends Error {
     this.name = "SkillsApiError";
     this.status = status;
     if (code) this.code = code;
+  }
+}
+
+export class SkillsMutationOutcomeUnknownError extends Error {
+  readonly code = "REMOTE_MUTATION_OUTCOME_UNKNOWN";
+
+  constructor() {
+    super("The remote mutation outcome is unknown. Retry the same logical attempt with the same idempotency key.");
+    this.name = "SkillsMutationOutcomeUnknownError";
   }
 }
 
@@ -129,14 +119,23 @@ export class RemoteSkillsClient {
         : isRecord(payload) && Array.isArray(payload.data)
           ? payload.data
           : [];
-    return skills.flatMap((skill) => isRecord(skill) ? [parsePublicSkill(skill)] : []);
+    return skills.flatMap((skill) => {
+      if (!isRecord(skill)) return [];
+      const parsed = parsePublicSkill(skill);
+      return parsed ? [parsed] : [];
+    });
   }
 
   async getSkillMd(slug: string): Promise<string | null> {
-    const response = await this.request(`/api/v1/skills/${encodeURIComponent(slug)}/skill.md`);
-    if (response.status === 404) return null;
-    if (!response.ok) throw await publicApiError(response);
-    return response.text();
+    const skill = await this.getSkill(slug);
+    if (!skill) return null;
+    const title = skill.displayName || skill.name || skill.slug || "Skill";
+    const lines = [`# ${title}`];
+    if (skill.description) lines.push(skill.description);
+    if (skill.creditQuote) lines.push(`Credits: ${skill.creditQuote.formattedCredits}.`);
+    if (skill.availability) lines.push(`Availability: ${skill.availability.status}.`);
+    lines.push("Choose `cloud` or `self-hosted`, authenticate, then request execution from the selected service.");
+    return lines.join("\n\n");
   }
 
   async getSkill(slug: string): Promise<PublicRemoteSkill | null> {
@@ -157,28 +156,38 @@ export class RemoteSkillsClient {
 
   async submitRun(
     slug: string,
-    input?: Record<string, unknown>,
-    args?: string[],
-    authorization: RemoteRunAuthorization = {},
+    input: Record<string, unknown> | undefined,
+    args: string[] | undefined,
+    authorization: RemoteRunAuthorization,
   ): Promise<RemoteSkillRunContract> {
     const { idempotencyKey, ...bodyAuthorization } = authorization;
-    const response = await this.request(`/api/v1/runs/${encodeURIComponent(slug)}`, {
-      method: "POST",
-      headers: idempotencyHeaders(idempotencyKey),
-      body: JSON.stringify({ input, args, ...bodyAuthorization }),
-    });
-    return normalizeRemoteSkillRunContract(await readPublicJson(response), slug);
+    const headers = idempotencyHeaders(idempotencyKey);
+    try {
+      const response = await this.request(`/api/v1/runs/${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ input, args, ...bodyAuthorization }),
+      });
+      return normalizeRemoteSkillRunContract(await readPublicJson(response), slug);
+    } catch (error) {
+      throw mutationError(error);
+    }
   }
 
   async cancelRun(
     runId: string,
-    options: { idempotencyKey?: string } = {},
+    options: { idempotencyKey: string },
   ): Promise<RemoteSkillRunContract> {
-    const response = await this.request(`/api/v1/runs/${encodeURIComponent(runId)}/cancel`, {
-      method: "POST",
-      headers: idempotencyHeaders(options.idempotencyKey),
-    });
-    return normalizeRemoteSkillRunContract(await readPublicJson(response));
+    const headers = idempotencyHeaders(options.idempotencyKey);
+    try {
+      const response = await this.request(`/api/v1/runs/${encodeURIComponent(runId)}/cancel`, {
+        method: "POST",
+        headers,
+      });
+      return normalizeRemoteSkillRunContract(await readPublicJson(response));
+    } catch (error) {
+      throw mutationError(error);
+    }
   }
 
   async getRun(runId: string): Promise<RemoteSkillRunContract | null> {
@@ -220,7 +229,7 @@ export class RemoteSkillsClient {
         : isRecord(payload) && Array.isArray(payload.data)
           ? payload.data
           : [];
-    return usage.flatMap((entry) => isRecord(entry) ? [parseCreditUsage(entry)] : []);
+    return usage.flatMap((entry) => isRecord(entry) ? [parsePublicCreditUsageEndpoint(entry)] : []);
   }
 
   async getStatus(): Promise<Record<string, unknown>> {
@@ -237,7 +246,7 @@ export class RemoteSkillsClient {
 
     const response = await this.request(`/api/v1/runs/${encodeURIComponent(runId)}/artifacts`);
     if (!response.ok) return [];
-    const artifacts = sanitizeCustomerArtifactList(await readPublicJson(response)) as PublicRunArtifact[];
+    const artifacts = sanitizeCustomerArtifactList(await readPublicJson(response));
     if (this.artifactListEpochs.get(runId) !== epoch) return [];
     for (const artifact of artifacts) {
       if (artifact && typeof artifact === "object" && typeof (artifact as Record<string, unknown>).id === "string") {
@@ -279,87 +288,50 @@ async function publicApiError(response: Response): Promise<SkillsApiError> {
   let code: string | undefined;
   try {
     const payload = await response.json();
-    if (isRecord(payload) && typeof payload.code === "string" && /^[A-Z0-9_]+$/.test(payload.code)) {
-      code = payload.code;
-    }
+    if (isRecord(payload)) code = safePublicCode(payload.code);
   } catch {
     // The public error intentionally omits service response prose.
   }
   return new SkillsApiError(response.status, code);
 }
 
-function idempotencyHeaders(key: string | undefined): Headers | undefined {
-  if (key === undefined) return undefined;
+function idempotencyHeaders(key: string): Headers {
   if (!key || key.length > 200 || !/^[\x21-\x7E]+$/.test(key)) {
     throw new Error("Idempotency key must contain 1-200 visible ASCII characters.");
   }
   return new Headers({ "Idempotency-Key": key });
 }
 
-function parsePublicSkill(record: Record<string, unknown>): PublicRemoteSkill {
-  return {
-    ...pickStringFields(record, [
-      "id", "slug", "name", "displayName", "category", "visibility", "currentVersion", "billingMode", "sourceType",
-    ]),
-    ...(typeof record.description === "string"
-      ? { description: sanitizePublicDiscoveryText(record.description) }
-      : {}),
-    ...(Array.isArray(record.tags)
-      ? { tags: publicDiscoveryTags(record.tags.filter((tag): tag is string => typeof tag === "string")) }
-      : {}),
-    ...pickFiniteNumber(record, "creditsPerExecution"),
-    ...(isRecord(record.creditQuote)
-      ? { creditQuote: toAuthoritativePublicCreditQuote(record.creditQuote) }
-      : {}),
-    ...(isRecord(record.availability)
-      ? { availability: parseAvailability(record.availability) }
-      : {}),
-  };
+function mutationError(error: unknown): Error {
+  if (
+    error instanceof SkillsApiError
+    && error.status >= 400
+    && error.status < 500
+    && ![408, 425, 429].includes(error.status)
+  ) {
+    return error;
+  }
+  return new SkillsMutationOutcomeUnknownError();
+}
+
+function parsePublicSkill(record: Record<string, unknown>): PublicRemoteSkill | null {
+  return parsePublicSkillEndpoint(record);
 }
 
 function parsePublicQuote(payload: unknown): PublicSkillQuote {
-  if (!isRecord(payload)) return {};
-  return {
-    ...pickFiniteNumber(payload, "contractVersion"),
-    ...pickStringFields(payload, ["skill", "quoteToken", "expiresAt"]),
-    ...(isRecord(payload.creditQuote)
-      ? { creditQuote: toAuthoritativePublicCreditQuote(payload.creditQuote) }
-      : {}),
-    ...(isRecord(payload.availability)
-      ? { availability: parseAvailability(payload.availability) }
-      : {}),
-    ...(typeof payload.code === "string" && /^[A-Z0-9_]+$/.test(payload.code)
-      ? { code: payload.code }
-      : {}),
-    ...(typeof payload.error === "string"
-      ? { error: safeExecutionText(payload.error, "The Skills service could not provide a quote.") }
-      : {}),
-    ...(typeof payload.detail === "string"
-      ? { detail: safeExecutionText(payload.detail, "Quote detail is unavailable.") }
-      : {}),
-  };
+  return parsePublicQuoteEndpoint(payload);
 }
 
 function parseBillingStatus(payload: unknown): PublicBillingStatus {
   if (!isRecord(payload)) return {};
   const formatted = safeFormattedCredits(payload.formattedCreditBalance);
   return {
-    ...pickStringFields(payload, ["plan"]),
-    ...pickFiniteNumber(payload, "creditBalance"),
+    ...(enumValue(payload.plan, ["free", "credits", "pro"] as const)
+      ? { plan: enumValue(payload.plan, ["free", "credits", "pro"] as const) }
+      : {}),
+    ...pickSafeCreditNumber(payload, "creditBalance"),
     ...(formatted ? { formattedCreditBalance: formatted } : {}),
     ...(typeof payload.hasPaymentMethod === "boolean" ? { hasPaymentMethod: payload.hasPaymentMethod } : {}),
-  };
-}
-
-function parseCreditUsage(record: Record<string, unknown>): PublicCreditUsage {
-  return {
-    ...pickStringFields(record, ["id", "runId", "transactionType", "createdAt"]),
-    ...pickFiniteNumber(record, "amountCredits", true),
-    ...pickFiniteNumber(record, "balanceAfterAvailable", true),
-    ...pickFiniteNumber(record, "balanceAfterReserved", true),
-    ...(typeof record.description === "string"
-      ? { description: safeExecutionText(record.description, "Skill credit activity") }
-      : {}),
   };
 }
 
@@ -369,81 +341,195 @@ function parsePublicStatus(payload: unknown): Record<string, unknown> {
   if (isRecord(payload.queue)) {
     const queue: Record<string, unknown> = {};
     if (isRecord(payload.queue.counts)) {
-      queue.counts = pickFiniteNumberFields(payload.queue.counts, ["queued", "running", "pendingApproval", "failed24h"]);
+      queue.counts = pickSafeIntegerFields(payload.queue.counts, ["queued", "running", "pendingApproval", "failed24h"]);
     }
-    Object.assign(queue, pickStringFields(payload.queue, ["oldestQueuedAt", "lastCompletedAt", "lastFailedAt"]));
+    for (const key of ["oldestQueuedAt", "lastCompletedAt", "lastFailedAt"] as const) {
+      const timestamp = safeTimestamp(payload.queue[key]);
+      if (timestamp) queue[key] = timestamp;
+    }
     output.queue = queue;
   }
   if (isRecord(payload.usage)) {
     const usage: Record<string, unknown> = {
-      ...pickFiniteNumberFields(payload.usage, ["recentCount", "recentNetAmountCredits"], true),
+      ...pickSafeInteger(payload.usage, "recentCount"),
+      ...pickSafeCreditNumber(payload.usage, "recentNetAmountCredits", true),
     };
     if (Array.isArray(payload.usage.recentTransactions)) {
       usage.recentTransactions = payload.usage.recentTransactions
         .filter(isRecord)
-        .map(parseCreditUsage);
+        .map((entry) => parsePublicCreditUsageEndpoint(entry));
     }
     output.usage = usage;
   }
   if (isRecord(payload.deployment)) {
-    output.deployment = pickStringFields(payload.deployment, ["status", "version", "commitSha", "generatedAt"]);
+    output.deployment = {
+      ...(enumValue(payload.deployment.status, ["ok", "degraded", "unavailable"] as const)
+        ? { status: enumValue(payload.deployment.status, ["ok", "degraded", "unavailable"] as const) }
+        : {}),
+      ...(safeVersion(payload.deployment.version) ? { version: safeVersion(payload.deployment.version) } : {}),
+      ...(safeCommitSha(payload.deployment.commitSha) ? { commitSha: safeCommitSha(payload.deployment.commitSha) } : {}),
+      ...(safeTimestamp(payload.deployment.generatedAt) ? { generatedAt: safeTimestamp(payload.deployment.generatedAt) } : {}),
+    };
   }
   if (isRecord(payload.account)) {
-    const account: Record<string, unknown> = pickStringFields(payload.account, ["authMethod"]);
-    if (isRecord(payload.account.user)) account.user = pickStringFields(payload.account.user, ["email", "role"]);
+    const account: Record<string, unknown> = {};
+    const authMethod = enumValue(payload.account.authMethod, ["api_key", "jwt"] as const);
+    if (authMethod) account.authMethod = authMethod;
+    if (isRecord(payload.account.user)) {
+      const user: Record<string, unknown> = {};
+      const email = safeEmail(payload.account.user.email);
+      const role = enumValue(payload.account.user.role, ["owner", "admin", "member", "viewer"] as const);
+      if (email) user.email = email;
+      if (role) user.role = role;
+      account.user = user;
+    }
     if (isRecord(payload.account.organization)) {
-      account.organization = pickStringFields(payload.account.organization, ["slug", "name"]);
+      const organization: Record<string, unknown> = {};
+      const slug = safeSkillSlug(payload.account.organization.slug);
+      const name = safeCustomerLabel(payload.account.organization.name);
+      if (slug) organization.slug = slug;
+      if (name) organization.name = name;
+      account.organization = organization;
     }
     output.account = account;
   }
   if (isRecord(payload.worker)) {
     output.worker = {
-      ...pickStringFields(payload.worker, ["mode"]),
+      ...(enumValue(payload.worker.mode, ["in-process", "separate-service"] as const)
+        ? { mode: enumValue(payload.worker.mode, ["in-process", "separate-service"] as const) }
+        : {}),
       ...(typeof payload.worker.runnerEnabledInProcess === "boolean"
         ? { runnerEnabledInProcess: payload.worker.runnerEnabledInProcess }
         : {}),
-      ...(typeof payload.worker.healthSource === "string"
-        ? { healthSource: safeExecutionText(payload.worker.healthSource, "Service health") }
+      ...(safeOptionalExecutionText(payload.worker.healthSource)
+        ? { healthSource: safeOptionalExecutionText(payload.worker.healthSource) }
         : {}),
     };
   }
   if (isRecord(payload.connectors)) {
-    output.connectors = pickStringFields(payload.connectors, ["status", "readinessEndpoint"]);
+    output.connectors = {
+      ...(enumValue(payload.connectors.status, ["configured", "unconfigured", "degraded", "unavailable"] as const)
+        ? { status: enumValue(payload.connectors.status, ["configured", "unconfigured", "degraded", "unavailable"] as const) }
+        : {}),
+      ...(safeApiPath(payload.connectors.readinessEndpoint)
+        ? { readinessEndpoint: safeApiPath(payload.connectors.readinessEndpoint) }
+        : {}),
+    };
   }
   return output;
 }
 
-function parseAvailability(record: Record<string, unknown>): PublicRemoteAvailability {
-  const status = typeof record.status === "string" ? record.status : "unavailable";
-  const code = typeof record.code === "string" && /^[A-Z0-9_]+$/.test(record.code) ? record.code : undefined;
-  const message = typeof record.message === "string"
-    ? safeExecutionText(record.message, "Skill is currently unavailable.")
-    : undefined;
-  const details = Array.isArray(record.details)
-    ? record.details
-      .filter((detail): detail is string => typeof detail === "string")
-      .map((detail) => safeExecutionText(detail, "Additional service detail is unavailable."))
-    : undefined;
-  return {
-    status,
-    ...(code ? { code } : {}),
-    ...(message ? { message } : {}),
-    ...(details && details.length > 0 ? { details } : {}),
-  };
+function safeExecutionText(value: string, fallback: string): string {
+  if (value.length > 2_000 || containsInternalExecutionText(value)) return fallback;
+  const sanitized = sanitizePublicDiscoveryText(value);
+  return containsInternalExecutionText(sanitized) ? fallback : sanitizeCustomerCreditText(sanitized);
 }
 
-function safeExecutionText(value: string, fallback: string): string {
-  return containsInternalExecutionText(value) ? fallback : sanitizeCustomerCreditText(value);
+function safeOptionalExecutionText(value: unknown): string | undefined {
+  if (typeof value !== "string" || containsInternalExecutionText(value)) return undefined;
+  const sanitized = sanitizeCustomerCreditText(value).trim();
+  return sanitized || undefined;
 }
 
 function containsInternalExecutionText(value: string): boolean {
-  return /\b(?:provider|model|margin|routing|route|settlement|fiat|cost(?:s|ed|ing)?|usd|eur|gbp)\b|\$/i.test(value);
+  return containsProhibitedPublicMetadata(value);
+}
+
+function safePublicCode(value: unknown): string | undefined {
+  return isPublicServiceCode(value) ? value : undefined;
 }
 
 function safeFormattedCredits(value: unknown): string | undefined {
-  return typeof value === "string" && /credits?/i.test(value) && !/\$|\b(?:usd|eur|gbp|cents?)\b/i.test(value)
+  return typeof value === "string"
+    && /credits?/i.test(value)
+    && !containsInternalExecutionText(value)
     ? value
     : undefined;
+}
+
+const SKILL_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const SEMVER_PATTERN = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+function enumValue<const T extends readonly string[]>(value: unknown, allowed: T): T[number] | undefined {
+  return typeof value === "string" && (allowed as readonly string[]).includes(value)
+    ? value as T[number]
+    : undefined;
+}
+
+function safeSkillSlug(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const slug = value.trim();
+  return slug.length <= 128
+    && SKILL_SLUG_PATTERN.test(slug)
+    && !containsProhibitedPublicIdentity(slug)
+    ? slug
+    : undefined;
+}
+
+function safeIdentifier(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const identifier = value.trim();
+  return identifier.length <= 200 && IDENTIFIER_PATTERN.test(identifier) && !containsProhibitedPublicIdentity(identifier)
+    ? identifier
+    : undefined;
+}
+
+function safeVersion(value: unknown): string | undefined {
+  return typeof value === "string" && value.length <= 128 && SEMVER_PATTERN.test(value)
+    ? value
+    : undefined;
+}
+
+function safeTimestamp(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length > 64 || !/^\d{4}-\d{2}-\d{2}T/.test(value)) return undefined;
+  return Number.isFinite(Date.parse(value)) ? value : undefined;
+}
+
+function safeCommitSha(value: unknown): string | undefined {
+  return typeof value === "string" && /^[a-f0-9]{7,40}$/i.test(value) ? value : undefined;
+}
+
+function safeApiPath(value: unknown): string | undefined {
+  return typeof value === "string" && /^\/api\/v1\/[A-Za-z0-9/_-]+$/.test(value) ? value : undefined;
+}
+
+function safeEmail(value: unknown): string | undefined {
+  return typeof value === "string"
+    && value.length <= 254
+    && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+    ? value
+    : undefined;
+}
+
+function safeCustomerLabel(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const label = value.trim();
+  return label.length > 0 && label.length <= 200 && !/[\u0000-\u001F\u007F]/.test(label)
+    ? label
+    : undefined;
+}
+
+function pickSafeInteger(record: Record<string, unknown>, key: string): Record<string, number> {
+  const value = record[key];
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? { [key]: value } : {};
+}
+
+function pickSafeIntegerFields(record: Record<string, unknown>, keys: readonly string[]): Record<string, number> {
+  return Object.assign({}, ...keys.map((key) => pickSafeInteger(record, key)));
+}
+
+function pickSafeCreditNumber(
+  record: Record<string, unknown>,
+  key: string,
+  allowNegative = false,
+): Record<string, number> {
+  const value = record[key];
+  return typeof value === "number"
+    && Number.isSafeInteger(value)
+    && (allowNegative || value >= 0)
+    ? { [key]: value }
+    : {};
 }
 
 function unwrapRecord(payload: unknown, wrappers: string[]): Record<string, unknown> | undefined {
@@ -452,31 +538,6 @@ function unwrapRecord(payload: unknown, wrappers: string[]): Record<string, unkn
     if (isRecord(payload[wrapper])) return payload[wrapper] as Record<string, unknown>;
   }
   return payload;
-}
-
-function pickStringFields<T extends string>(record: Record<string, unknown>, keys: readonly T[]): Partial<Record<T, string>> {
-  const output: Partial<Record<T, string>> = {};
-  for (const key of keys) {
-    if (typeof record[key] === "string") output[key] = record[key] as string;
-  }
-  return output;
-}
-
-function pickFiniteNumber(
-  record: Record<string, unknown>,
-  key: string,
-  allowNegative = false,
-): Record<string, number> {
-  const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) && (allowNegative || value >= 0) ? { [key]: value } : {};
-}
-
-function pickFiniteNumberFields(
-  record: Record<string, unknown>,
-  keys: readonly string[],
-  allowNegative = false,
-): Record<string, number> {
-  return Object.assign({}, ...keys.map((key) => pickFiniteNumber(record, key, allowNegative)));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -4,7 +4,7 @@ import type { SkillAvailabilityMetadata } from "./registry-types.js";
 export interface HostedRunUnavailable {
   ok: false;
   status: 503;
-  code: "HOSTED_PROVIDER_UNAVAILABLE";
+  code: "HOSTED_SERVICE_UNAVAILABLE";
   message: string;
   details: string[];
 }
@@ -42,7 +42,7 @@ export function getHostedRunAvailability(slug: string): HostedRunAvailability {
   return {
     ok: false,
     status: 503,
-    code: "HOSTED_PROVIDER_UNAVAILABLE",
+    code: "HOSTED_SERVICE_UNAVAILABLE",
     message: "self-hosted execution is temporarily unavailable for this skill",
     details: [
       "This skill requires a server-managed execution path that is not enabled for live self-hosted runs yet.",

@@ -17,8 +17,8 @@ export async function executeClaimedRun(store: SkillsProductStore, claim: RunExe
   try {
     await store.appendLog(run.id, run.orgId, "info", redactForClient(`starting self-hosted run ${run.skill}`));
     if (!getSelfHostedExecutionCapability(run.skill)) {
-      await store.appendLog(run.id, run.orgId, "warn", `${run.skill} has no self-hosted provider-free handler yet`);
-      return await failRun(store, run, "HANDLER_UNAVAILABLE", "This self-hosted deployment has no safe provider-free handler for that skill yet.");
+      await store.appendLog(run.id, run.orgId, "warn", `${run.skill} has no self-hosted generic handler yet`);
+      return await failRun(store, run, "HANDLER_UNAVAILABLE", "This self-hosted deployment has no safe handler for that skill yet.");
     }
 
     const text = extractText(run);

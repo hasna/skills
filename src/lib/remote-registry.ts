@@ -12,18 +12,24 @@ import { getApiKey } from "./auth-store.js";
 import { loadConfig, type SkillsConfig } from "./config.js";
 import { resolveDeploymentTarget } from "./deployment-mode.js";
 import { normalizeSkillsApiOrigin } from "./service-origin.js";
-import { publicDiscoveryTags, sanitizePublicDiscoveryText } from "./discovery.js";
+import { containsProhibitedPublicIdentity, containsProhibitedPublicMetadata } from "./public-metadata.js";
 import { isPremiumSkill } from "./credit-catalog.js";
-import { toPublicCreditQuote } from "./public-credits.js";
 import { addSkillsProtocolHeaders } from "./remote-protocol.js";
-import type { SkillMeta } from "./registry.js";
+import { type SkillMeta } from "./registry.js";
+import {
+  parsePublicAvailability,
+  parsePublicSkillEndpoint,
+} from "./public-endpoint-contract.js";
+
+const remoteSlugSchema = z.string().min(1).max(128).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+const remoteTextSchema = z.string().max(2_000);
 
 const remoteAvailabilitySchema = z.object({
   status: z.enum(["available", "unavailable"]),
-  code: z.string().optional(),
-  message: z.string().optional(),
-  details: z.array(z.string()).optional(),
-}).passthrough();
+  code: z.string().max(128).regex(/^[A-Z0-9_]+$/).optional(),
+  message: remoteTextSchema.optional(),
+  details: z.array(remoteTextSchema).max(20).optional(),
+});
 
 const remoteCanonicalCreditQuoteSchema = z.object({
   formattedCredits: z.string().min(1),
@@ -36,34 +42,25 @@ const remoteCanonicalCreditQuoteSchema = z.object({
   quoteDependsOnInput: z.boolean(),
   quoteRequired: z.boolean(),
   description: z.string().min(1),
-}).passthrough();
-
-const remoteSkillSchema = z.object({
-  name: z.string().min(1).optional(),
-  slug: z.string().min(1).optional(),
-  displayName: z.string().optional(),
-  description: z.string().optional(),
-  category: z.string().optional(),
-  tags: z.array(z.string()).optional(),
-  dependencies: z.array(z.string()).optional(),
-  version: z.string().optional(),
-  creditQuote: remoteCanonicalCreditQuoteSchema.optional(),
-  availability: remoteAvailabilitySchema.optional(),
-}).passthrough().refine((skill) => skill.name || skill.slug, {
-  message: "Remote skill requires name or slug",
 });
 
-const secretValuePatterns: RegExp[] = [
-  /\bsk-[A-Za-z0-9_-]{8,}\b/g,
-  /\bgh[opsur]_[A-Za-z0-9_]{8,}\b/g,
-  /\bgithub_pat_[A-Za-z0-9_]{8,}\b/g,
-  /\bnpm_[A-Za-z0-9_]{8,}\b/g,
-  /\bAKIA[A-Z0-9]{12,}\b/g,
-  /\bAIza[A-Za-z0-9_-]{10,}\b/g,
-  new RegExp("\\bsecret" + "-token:\\s*[A-Za-z0-9._-]+", "gi"),
-  /\bctx7sk\-[A-Za-z0-9_-]{8,}\b/g,
-  /\bxai\-[A-Za-z0-9_-]{8,}\b/g,
-];
+const remoteSkillSchema = z.object({
+  name: remoteSlugSchema.optional(),
+  slug: remoteSlugSchema.optional(),
+  displayName: remoteTextSchema.optional(),
+  description: remoteTextSchema.optional(),
+  category: z.string().max(128).optional(),
+  tags: z.array(z.string().max(128)).max(100).optional(),
+  dependencies: z.array(z.string().max(214)).max(100).optional(),
+  version: z.string().max(128).regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/).optional(),
+  creditQuote: remoteCanonicalCreditQuoteSchema.optional(),
+  availability: remoteAvailabilitySchema.optional(),
+  toolDependencies: z.unknown().optional(),
+  connectorRequirements: z.unknown().optional(),
+  connectorPreflight: z.unknown().optional(),
+}).refine((skill) => skill.name || skill.slug, {
+  message: "Remote skill requires name or slug",
+});
 
 const remoteSkillDetailSchema = z.union([
   remoteSkillSchema,
@@ -116,73 +113,54 @@ export function buildSkillsApiUrl(apiUrl: string, endpoint = "/skills"): string 
   return url.toString();
 }
 
-function titleize(name: string): string {
-  return name.replace(/-/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
 function normalizeRemoteSkill(skill: z.infer<typeof remoteSkillSchema>): SkillMeta {
-  const name = skill.name || skill.slug;
-  if (!name) throw new Error("Remote skill requires name or slug");
-  const creditQuote = skill.creditQuote ? toPublicCreditQuote(skill.creditQuote) : undefined;
-  const availability = normalizeRemoteAvailability(name, skill.availability);
+  const requestedName = skill.slug || skill.name;
+  if (!requestedName) throw new Error("Remote skill requires name or slug");
+  if (containsProhibitedPublicIdentity(requestedName)) {
+    throw new Error("Remote skill slug contains prohibited execution metadata");
+  }
+  const parsed = parsePublicSkillEndpoint({
+    ...skill,
+    currentVersion: skill.version,
+  });
+  if (!parsed?.name || !parsed.displayName || !parsed.description || !parsed.category || !parsed.tags) {
+    throw new Error("Remote skill payload did not produce a public catalog entry");
+  }
+  const availability = parsed.availability ?? (isPremiumSkill(parsed.name)
+    ? parsePublicAvailability({ status: "unavailable", code: "REMOTE_AVAILABILITY_MISSING" })
+    : { status: "available" as const });
+  const finalAvailability = !parsed.creditQuote && availability.status === "available"
+    ? parsePublicAvailability({ status: "unavailable", code: "REMOTE_CREDIT_QUOTE_MISSING" })
+    : availability;
   return {
-    name,
-    displayName: skill.displayName || titleize(name),
-    description: sanitizePublicDiscoveryText(skill.description || ""),
-    category: skill.category || "Remote",
-    tags: publicDiscoveryTags(skill.tags || ["remote"]),
-    dependencies: skill.dependencies,
+    name: parsed.name,
+    displayName: parsed.displayName,
+    description: parsed.description,
+    category: parsed.category,
+    tags: parsed.tags,
+    ...(skill.dependencies ? { dependencies: safeRemoteDependencies(skill.dependencies) } : {}),
     ...(skill.version ? { version: skill.version } : {}),
-    ...(creditQuote ? { creditQuote } : {}),
-    availability: !creditQuote && availability.status === "available"
-      ? {
-          status: "unavailable",
-          code: "REMOTE_CREDIT_QUOTE_MISSING",
-          message: "The remote service did not publish an authoritative credit quote for this skill.",
-          details: ["The run is blocked until a credit quote is available. No credits were charged."],
-        }
-      : availability,
+    ...(parsed.creditQuote ? { creditQuote: parsed.creditQuote } : {}),
+    availability: finalAvailability,
+    ...(parsed.toolDependencies ? { toolDependencies: parsed.toolDependencies } : {}),
+    ...(parsed.connectorRequirements ? { connectorRequirements: parsed.connectorRequirements } : {}),
+    ...(parsed.connectorPreflight ? { connectorPreflight: parsed.connectorPreflight } : {}),
     source: "remote",
   };
 }
 
-function normalizeRemoteAvailability(
-  name: string,
-  availability?: z.infer<typeof remoteAvailabilitySchema>,
-): NonNullable<SkillMeta["availability"]> {
-  if (!availability) {
-    return isPremiumSkill(name)
-      ? {
-          status: "unavailable",
-          code: "REMOTE_AVAILABILITY_MISSING",
-          message: "The remote service did not publish run availability for this skill.",
-          details: ["No credits were charged."],
-        }
-      : { status: "available" };
-  }
-  if (availability.status === "available") return { status: "available" };
-  return {
-    status: availability.status,
-    ...(safeAvailabilityCode(availability.code) ? { code: safeAvailabilityCode(availability.code) } : {}),
-    ...(availability.message ? { message: sanitizeAvailabilityText(availability.message) } : {}),
-    ...(availability.details ? { details: availability.details.map(sanitizeAvailabilityText).filter(Boolean) } : {}),
-  };
+function safeRemoteDependencies(dependencies: string[]): string[] {
+  return dependencies.filter((dependency) =>
+    /^@?[a-z0-9][a-z0-9._/-]*$/i.test(dependency)
+    && !containsProhibitedPublicIdentity(dependency)
+    && !containsProhibitedCatalogText(dependency)
+  );
 }
 
-function safeAvailabilityCode(code: string | undefined): string | undefined {
-  if (!code) return undefined;
-  return /^[A-Z0-9_]+$/.test(code) ? code : undefined;
+function containsProhibitedCatalogText(value: string): boolean {
+  return containsProhibitedPublicMetadata(value);
 }
 
-function sanitizeAvailabilityText(text: string): string {
-  return secretValuePatterns.reduce(
-    (value, pattern) => value.replace(pattern, "credential"),
-    sanitizePublicDiscoveryText(text)
-      .replace(/\b[A-Z0-9_]*(?:API_KEY|SECRET|TOKEN|CREDENTIAL)[A-Z0-9_]*\b/g, "credential"),
-  )
-    .replace(/\s{2,}/g, " ")
-    .trim();
-}
 
 export function parseRemoteRegistryPayload(payload: unknown): SkillMeta[] {
   const parsed = parseRemoteContract(

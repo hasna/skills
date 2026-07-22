@@ -1,0 +1,292 @@
+{
+  "version": {
+    "name": "@hasnatools/platform-skills",
+    "version": "0.1.46",
+    "commitSha": "0123456789abcdef0123456789abcdef01234567"
+  },
+  "health": {
+    "status": "ok",
+    "version": "0.1.46",
+    "commitSha": "0123456789abcdef0123456789abcdef01234567",
+    "uptime": 120,
+    "skillCount": 510
+  },
+  "catalog": [
+    {
+      "id": "skill_image",
+      "slug": "image",
+      "name": "image",
+      "displayName": "Image",
+      "description": "Credit-backed image generation with a live credit quote before execution",
+      "category": "Content Generation",
+      "tags": ["image", "generation", "ai", "credits"],
+      "visibility": "public",
+      "currentVersion": "0.2.0",
+      "billingMode": "credits",
+      "creditsPerExecution": 4,
+      "sourceType": "upstream",
+      "creditQuote": {
+        "tier": "premium",
+        "creditUnit": "image",
+        "credits": 4,
+        "formattedCredits": "4 credits/image",
+        "estimated": false,
+        "quoteDependsOnInput": false,
+        "quoteRequired": true,
+        "description": "Fixed credits per run."
+      },
+      "availability": { "status": "available" },
+      "toolDependencies": {
+        "schemaVersion": 1,
+        "skill": "image",
+        "category": "Content Generation",
+        "source": "official",
+        "dependencies": [
+          {
+            "skill": "image",
+            "primitive": "ai-gateway",
+            "family": "ai",
+            "required": true,
+            "reason": "Category is primarily AI-assisted generation, analysis, or planning."
+          },
+          {
+            "skill": "image",
+            "primitive": "hosted-auth",
+            "family": "hosted",
+            "required": true,
+            "reason": "Skill is premium, remote, or hosted and must use Skills account authentication."
+          },
+          {
+            "skill": "image",
+            "primitive": "media-image",
+            "family": "media",
+            "required": true,
+            "reason": "Skill works directly with image or visual asset primitives. Skill metadata references image or visual assets."
+          }
+        ],
+        "gatewayBacked": true,
+        "hostedRuntime": true
+      },
+      "connectorRequirements": [
+        {
+          "connector": "linear",
+          "scopes": ["issues:read"],
+          "operations": ["issues.list", "issues.update"],
+          "authType": "oauth",
+          "required": true,
+          "destructive": false,
+          "setupLabel": "Connect Linear"
+        }
+      ],
+      "connectorPreflight": [
+        {
+          "connector": "linear",
+          "required": true,
+          "status": "missing",
+          "connected": false,
+          "scopes": ["issues:read"],
+          "missingScopes": ["issues:read"],
+          "operations": ["issues.list", "issues.update"],
+          "authType": "oauth",
+          "setupLabel": "Connect Linear",
+          "requiresAuth": true,
+          "accountId": null,
+          "profileName": null,
+          "reason": "Connector account is not connected."
+        }
+      ]
+    }
+  ],
+  "skill": {
+    "skill": {
+      "id": "skill_image",
+      "slug": "image",
+      "name": "image",
+      "displayName": "Image",
+      "description": "Credit-backed image generation with a live credit quote before execution",
+      "category": "Content Generation",
+      "tags": ["image", "generation", "ai", "credits"],
+      "visibility": "public",
+      "currentVersion": "0.2.0",
+      "billingMode": "credits",
+      "creditsPerExecution": 4,
+      "sourceType": "upstream",
+      "creditQuote": {
+        "tier": "premium",
+        "creditUnit": "image",
+        "credits": 4,
+        "formattedCredits": "4 credits/image",
+        "estimated": false,
+        "quoteDependsOnInput": false,
+        "quoteRequired": true,
+        "description": "Fixed credits per run."
+      },
+      "availability": { "status": "available" },
+      "toolDependencies": {
+        "schemaVersion": 1,
+        "skill": "image",
+        "category": "Content Generation",
+        "source": "official",
+        "dependencies": [
+          {
+            "skill": "image",
+            "primitive": "ai-gateway",
+            "family": "ai",
+            "required": true,
+            "reason": "Category is primarily AI-assisted generation, analysis, or planning."
+          },
+          {
+            "skill": "image",
+            "primitive": "hosted-auth",
+            "family": "hosted",
+            "required": true,
+            "reason": "Skill is premium, remote, or hosted and must use Skills account authentication."
+          },
+          {
+            "skill": "image",
+            "primitive": "media-image",
+            "family": "media",
+            "required": true,
+            "reason": "Skill works directly with image or visual asset primitives. Skill metadata references image or visual assets."
+          }
+        ],
+        "gatewayBacked": true,
+        "hostedRuntime": true
+      },
+      "connectorRequirements": [
+        {
+          "connector": "linear",
+          "scopes": ["issues:read"],
+          "operations": ["issues.list", "issues.update"],
+          "authType": "oauth",
+          "required": true,
+          "destructive": false,
+          "setupLabel": "Connect Linear"
+        }
+      ],
+      "connectorPreflight": [
+        {
+          "connector": "linear",
+          "required": true,
+          "status": "missing",
+          "connected": false,
+          "scopes": ["issues:read"],
+          "missingScopes": ["issues:read"],
+          "operations": ["issues.list", "issues.update"],
+          "authType": "oauth",
+          "setupLabel": "Connect Linear",
+          "requiresAuth": true,
+          "accountId": null,
+          "profileName": null,
+          "reason": "Connector account is not connected."
+        }
+      ]
+    }
+  },
+  "quote": {
+    "quote": {
+      "contractVersion": 1,
+      "skill": "image",
+      "quoteToken": "quote_fixture_signed",
+      "expiresAt": "2026-07-22T12:00:00.000Z",
+      "creditQuote": {
+        "tier": "premium",
+        "creditUnit": "image",
+        "credits": 4,
+        "formattedCredits": "4 credits/image",
+        "estimated": false,
+        "quoteDependsOnInput": false,
+        "quoteRequired": true,
+        "description": "Fixed credits per run."
+      },
+      "availability": { "status": "available" },
+      "toolDependencies": {
+        "schemaVersion": 1,
+        "skill": "image",
+        "category": "Content Generation",
+        "source": "official",
+        "dependencies": [
+          {
+            "skill": "image",
+            "primitive": "ai-gateway",
+            "family": "ai",
+            "required": true,
+            "reason": "Category is primarily AI-assisted generation, analysis, or planning."
+          },
+          {
+            "skill": "image",
+            "primitive": "hosted-auth",
+            "family": "hosted",
+            "required": true,
+            "reason": "Skill is premium, remote, or hosted and must use Skills account authentication."
+          },
+          {
+            "skill": "image",
+            "primitive": "media-image",
+            "family": "media",
+            "required": true,
+            "reason": "Skill works directly with image or visual asset primitives. Skill metadata references image or visual assets."
+          }
+        ],
+        "gatewayBacked": true,
+        "hostedRuntime": true
+      },
+      "connectorRequirements": [
+        {
+          "connector": "linear",
+          "scopes": ["issues:read"],
+          "operations": ["issues.list", "issues.update"],
+          "authType": "oauth",
+          "required": true,
+          "destructive": false,
+          "setupLabel": "Connect Linear"
+        }
+      ],
+      "connectorPreflight": [
+        {
+          "connector": "linear",
+          "required": true,
+          "status": "missing",
+          "connected": false,
+          "scopes": ["issues:read"],
+          "missingScopes": ["issues:read"],
+          "operations": ["issues.list", "issues.update"],
+          "authType": "oauth",
+          "setupLabel": "Connect Linear",
+          "requiresAuth": true,
+          "accountId": null,
+          "profileName": null,
+          "reason": "Connector account is not connected."
+        }
+      ]
+    }
+  },
+  "runs": {
+    "runs": [
+      {
+        "id": "run_promotion_provider_free",
+        "skill": "logo-design",
+        "status": "completed",
+        "creditsUsed": 1,
+        "startedAt": "2026-07-22T11:00:00.000Z",
+        "completedAt": "2026-07-22T11:00:00.000Z",
+        "durationMs": 0,
+        "createdAt": "2026-07-22T11:00:00.000Z"
+      }
+    ]
+  },
+  "usage": {
+    "transactions": [
+      {
+        "id": "txn_1",
+        "runId": "run_promotion_provider_free",
+        "transactionType": "debit",
+        "amountCredits": -1,
+        "balanceAfterAvailable": 99,
+        "balanceAfterReserved": 0,
+        "description": "Skill run credits",
+        "createdAt": "2026-07-22T11:00:00.000Z"
+      }
+    ]
+  }
+}

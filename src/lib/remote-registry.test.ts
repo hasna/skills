@@ -7,8 +7,111 @@ import {
   parseRemoteRegistryPayload,
   parseRemoteSkillPayload,
 } from "./remote-registry.js";
+import { getSkillToolDependencies } from "./tool-primitives.js";
 
 describe("remote registry", () => {
+  test("derives public identity and strips service-only prose and metadata", () => {
+    const [skill] = parseRemoteRegistryPayload([{
+      slug: "image",
+      displayName: "Claude Code Provider Model",
+      description: "OpenAI provider model routing cost USD $4 with margin settlement.",
+      category: "Provider Routing Costs",
+      tags: ["image", "claude-code", "provider-routing"],
+      dependencies: ["safe-package", "openai-provider-runtime"],
+      availability: { status: "available" },
+      creditQuote: {
+        tier: "premium",
+        creditUnit: "image",
+        credits: 4,
+        formattedCredits: "4 credits/image",
+        estimated: false,
+        quoteDependsOnInput: false,
+        quoteRequired: true,
+        description: "Fixed credits per image.",
+        provider: "private-provider",
+      },
+      provider: "private-provider",
+      model: "private-model",
+      routing: { id: "private-route" },
+    }]);
+
+    expect(skill).toMatchObject({
+      name: "image",
+      displayName: "Image",
+      category: "Content Generation",
+      tags: ["image", "generation", "ai", "credits"],
+      dependencies: ["safe-package"],
+      source: "remote",
+    });
+    expect(JSON.stringify(skill)).not.toMatch(
+      /openai|claude|provider|model|routing|route|cost|margin|settlement|usd|\$/i,
+    );
+  });
+
+  test("rejects remote catalog slugs that encode vendor or routing metadata", () => {
+    expect(() => parseRemoteRegistryPayload([{
+      name: "claude-code-provider-route",
+      description: "hosted utility",
+    }])).toThrow("prohibited execution metadata");
+  });
+
+  test("accepts legitimate router and modeling identities and canonicalizes nested service metadata", () => {
+    const toolDependencies = getSkillToolDependencies("action-item-router");
+    const [router, modeling] = parseRemoteRegistryPayload([{
+      name: "action-item-router",
+      description: "Claude3Opus routes action items.",
+      category: "Project Management",
+      tags: ["GPT4o"],
+      availability: { status: "unavailable", code: "HOSTED_SERVICE_UNAVAILABLE", message: "Gemini2.5 failed" },
+      toolDependencies,
+      connectorRequirements: [{
+        connector: "linear",
+        scopes: ["issues:read"],
+        operations: ["issues.list"],
+        authType: "oauth",
+        required: true,
+        destructive: false,
+        setupLabel: "Claude3Opus Linear route",
+      }],
+      connectorPreflight: [{
+        connector: "linear",
+        required: true,
+        status: "missing",
+        connected: false,
+        scopes: ["issues:read"],
+        missingScopes: ["issues:read"],
+        operations: ["issues.list"],
+        authType: "oauth",
+        setupLabel: "Sora2 route",
+        requiresAuth: true,
+        accountId: null,
+        profileName: null,
+        reason: "Veo3 failed",
+      }],
+    }, {
+      name: "financial-modeling",
+      description: "Build route lists and compare a financial model.",
+      category: "Finance & Compliance",
+      tags: ["finance", "modeling"],
+      availability: { status: "available" },
+    }]);
+
+    expect(router).toMatchObject({
+      name: "action-item-router",
+      displayName: "Action Item Router",
+      toolDependencies,
+      connectorRequirements: [{ setupLabel: "Connect Linear" }],
+      connectorPreflight: [{ reason: "Connector account is not connected." }],
+    });
+    expect(modeling).toMatchObject({
+      name: "financial-modeling",
+      displayName: "Financial Modeling",
+      description: "Financial Modeling is available through the selected service.",
+      category: "Finance & Compliance",
+      tags: ["remote"],
+    });
+    expect(JSON.stringify([router, modeling])).not.toMatch(/GPT4o|Claude3Opus|Gemini2\.5|Sora2|Veo3/i);
+  });
   const originalSkillsApiUrl = process.env.SKILLS_API_URL;
   const originalSkillsMode = process.env.SKILLS_MODE;
   const originalSkillsApiKey = process.env.SKILLS_API_KEY;
@@ -56,15 +159,14 @@ describe("remote registry", () => {
       {
         name: "remote-demo",
         displayName: "Remote Demo",
-        description: "Remote demo",
-        category: "Remote Tools",
-        tags: ["remote", "demo"],
-        dependencies: undefined,
+        description: "Remote Demo is available through the selected service.",
+        category: "Remote",
+        tags: ["remote"],
         availability: {
           status: "unavailable",
           code: "REMOTE_CREDIT_QUOTE_MISSING",
-          message: "The remote service did not publish an authoritative credit quote for this skill.",
-          details: ["The run is blocked until a credit quote is available. No credits were charged."],
+          message: "Credit information is temporarily unavailable.",
+          details: ["No credits were charged."],
         },
         source: "remote",
       },
@@ -110,13 +212,14 @@ describe("remote registry", () => {
     const serialized = JSON.stringify(skills[0].availability);
     expect(skills[0].availability).toMatchObject({
       status: "unavailable",
-      code: "HOSTED_PROVIDER_UNAVAILABLE",
-      message: "hosted AI backend is not enabled",
+      message: "This skill is temporarily unavailable.",
     });
+    expect(skills[0].availability).not.toHaveProperty("code");
     expect(serialized).not.toContain("OpenAI");
     expect(serialized).not.toContain("Sora");
     expect(serialized).not.toContain("OPENAI_API_KEY");
-    expect(serialized).toContain("No balance was charged.");
+    expect(serialized).not.toContain("PROVIDER");
+    expect(serialized).toContain("No credits were charged.");
   });
 
   test("redacts secret-shaped availability values before exposing them", () => {
@@ -176,7 +279,7 @@ describe("remote registry", () => {
     ]) {
       expect(serialized).not.toContain(token);
     }
-    expect(serialized).toContain("credential");
+    expect(serialized).toContain("This skill is temporarily unavailable.");
   });
 
   test("fails closed for legacy remote pricing without explicit credit metadata", () => {
@@ -207,9 +310,9 @@ describe("remote registry", () => {
     expect(skills[0]).toMatchObject({
       name: "remote-video",
       displayName: "Remote Video",
-      description: "Generate remote videos",
+      description: "Remote Video is available through the selected service.",
       category: "Media Processing",
-      tags: ["video", "remote"],
+      tags: ["remote"],
       version: "1.2.3",
       availability: {
         status: "unavailable",
