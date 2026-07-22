@@ -67,7 +67,13 @@ describe("unsigned quote approval fingerprint", () => {
       { ...base, args: ["--format", "png"] },
       { ...base, remoteQuote: { ...base.remoteQuote, constraints: { maxOutputs: 2 } } },
       { ...base, remoteQuote: { ...base.remoteQuote, expiresAt: "2026-07-22T13:00:00.000Z" } },
-      { ...base, remoteQuote: { ...base.remoteQuote, creditQuote: { ...creditQuote, creditUnit: "image" } } },
+      {
+        ...base,
+        remoteQuote: {
+          ...base.remoteQuote,
+          creditQuote: { ...creditQuote, creditUnit: "image", formattedCredits: "7 credits/image" },
+        },
+      },
     ];
 
     for (const mutation of mutations) {
