@@ -1,0 +1,60 @@
+name: Promote npm prerelease to latest
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type promote-0.2.0-after-live-proof"
+        required: true
+        type: string
+
+concurrency:
+  group: npm-promote-hasna-skills
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    environment: npm-production
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+      - name: Verify manual gate and exact prerelease
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirmation }}" = "promote-0.2.0-after-live-proof"
+          test "$(node -p "require('./package.json').version")" = "0.2.0"
+          test "$(npm view @hasna/skills@next version)" = "0.2.0"
+          next_integrity="$(npm view @hasna/skills@next dist.integrity)"
+          exact_integrity="$(npm view @hasna/skills@0.2.0 dist.integrity)"
+          test -n "$next_integrity"
+          test "$next_integrity" = "$exact_integrity"
+      - name: Smoke exact npm artifact in isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          smoke_dir="$(mktemp -d)"
+          trap 'rm -rf "$smoke_dir"' EXIT
+          cd "$smoke_dir"
+          npm init -y >/dev/null
+          npm install --ignore-scripts --no-save @hasna/skills@0.2.0
+          npx --no-install skills --version
+          CI=1 npx --no-install skills >bare-skills.txt
+          grep -q "skills" bare-skills.txt
+          npx --no-install skills setup --mode local --json
+      - name: Promote the tested artifact without rebuilding
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          before_integrity="$(npm view @hasna/skills@0.2.0 dist.integrity)"
+          npm dist-tag add @hasna/skills@0.2.0 latest
+          test "$(npm view @hasna/skills@latest version)" = "0.2.0"
+          test "$(npm view @hasna/skills@latest dist.integrity)" = "$before_integrity"

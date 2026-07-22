@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { getCompactSkillDiscovery, sanitizePublicDiscoveryText } from "./discovery.js";
-import { loadBasicRegistry, loadRegistryProfile } from "./registry.js";
+import { getCompactSkillDiscovery, getPublicSkillDiscovery, sanitizePublicDiscoveryText } from "./discovery.js";
+import { getSkill, loadBasicRegistry, loadRegistryProfile } from "./registry.js";
 import type { SkillMeta } from "./registry-types.js";
 
 describe("getCompactSkillDiscovery", () => {
@@ -18,7 +18,7 @@ describe("getCompactSkillDiscovery", () => {
     expect(compact.creditQuote).toBeUndefined();
   });
 
-  test("includes name, category, pricing, and a description", () => {
+  test("includes name, category, credits, and a description", () => {
     const skill: SkillMeta = {
       name: "sample-skill",
       displayName: "Sample Skill",
@@ -54,6 +54,28 @@ describe("getCompactSkillDiscovery", () => {
     expect(compact.description).not.toContain("OpenAI");
     expect(compact.description).not.toContain("Gemini");
     expect(compact.description).toContain("hosted AI");
+  });
+
+  test("sanitizes the full public catalog contract, including source descriptions and tags", () => {
+    const raw = {
+      name: "vendor-skill",
+      displayName: "Vendor Skill",
+      description: "Provider-cost generation through OpenAI and Gemini models.",
+      category: "Content Generation",
+      tags: ["image", "openai", "gemini", "provider-cost"],
+      source: "official" as const,
+    };
+
+    expect(getPublicSkillDiscovery(raw)).toEqual({
+      ...raw,
+      description: "Credit-backed generation through hosted AI and hosted AI models.",
+      tags: ["image"],
+      creditQuote: expect.any(Object),
+    });
+
+    const image = getSkill("image");
+    expect(image).toBeDefined();
+    expect(JSON.stringify(image)).not.toMatch(/openai|gemini|minimax|seedance|provider[- ]cost/i);
   });
 
   test("every basic-profile skill exposes a non-empty compact description", () => {

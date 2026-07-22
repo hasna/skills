@@ -10,6 +10,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
+import { createHash } from "crypto";
 
 export interface SkillSchedule {
   id: string;
@@ -22,6 +23,16 @@ export interface SkillSchedule {
   lastRun?: string;
   lastRunStatus?: "success" | "error";
   nextRun?: string;
+}
+
+/** Stable for one persisted schedule occurrence and different for the next occurrence. */
+export function createScheduleIdempotencyKey(schedule: Pick<SkillSchedule, "id" | "nextRun">): string {
+  if (!schedule.nextRun) throw new Error("A persisted nextRun is required to identify a schedule occurrence.");
+  const digest = createHash("sha256")
+    .update(`${schedule.id}\u0000${schedule.nextRun}`)
+    .digest("hex")
+    .slice(0, 48);
+  return `skills-schedule-${digest}`;
 }
 
 interface SchedulesFile {

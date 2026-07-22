@@ -25,7 +25,7 @@ export const WEB_BROWSER_SKILLS: SkillMeta[] = [
   {
     name: "webcrawling",
     displayName: "Web Crawling",
-    description: "Web crawling service using Firecrawl API for content extraction",
+    description: "Web crawling service for structured content extraction",
     category: "Web & Browser",
     tags: ["crawling", "web", "firecrawl", "extraction"],
   },

@@ -1,5 +1,5 @@
 import type { SkillMeta } from "./registry-types.js";
-import { getSkillCreditQuote, isPremiumSkill } from "./pricing.js";
+import { getSkillCreditQuote, isPremiumSkill } from "./credit-catalog.js";
 import type { PublicCreditQuote } from "./public-credits.js";
 
 const VENDOR_TERMS = [
@@ -45,6 +45,7 @@ const VENDOR_TAGS = new Set([
   "seedance",
   "whisper",
   "xai",
+  "provider-cost",
 ]);
 
 const VENDOR_ENV_PREFIXES = [
@@ -120,6 +121,7 @@ export function publicDiscoveryTags(tags: string[]): string[] {
 
 export function sanitizePublicDiscoveryText(text: string): string {
   let sanitized = text
+    .replace(/\bprovider[- ]cost\b/gi, "Credit-backed")
     .replace(vendorPattern, "hosted AI")
     .replace(/\bLLM\b/g, "AI")
     .replace(/\s{2,}/g, " ");
@@ -129,7 +131,6 @@ export function sanitizePublicDiscoveryText(text: string): string {
     previous = sanitized;
     sanitized = sanitized
       .replace(/\bhosted AI(?: providers)?\s*,\s*hosted AI(?: providers)?\b/gi, "hosted AI providers")
-      .replace(/\bhosted AI(?: providers)?\s*,?\s*and\s*hosted AI(?: providers)?\b/gi, "hosted AI providers")
       .replace(/\bhosted AI(?: providers)?\s+or\s+hosted AI(?: providers)?\b/gi, "hosted AI providers")
       .replace(/\bhosted AI providers\s+hosted AI\b/gi, "hosted AI providers")
       .replace(/\bhosted AI providers\s+providers\b/gi, "hosted AI providers");

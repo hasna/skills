@@ -160,6 +160,7 @@ describe("public API exports", () => {
     const skill = publicAPI.getSkill("image");
     expect(skill).toBeDefined();
     expect(skill!.name).toBe("image");
+    expect(JSON.stringify(skill)).not.toMatch(/openai|gemini|minimax|seedance|provider[- ]cost/i);
 
     // Verify searchSkills works through the public API
     const results = publicAPI.searchSkills("image");

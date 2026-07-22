@@ -29,6 +29,7 @@ export interface SkillRunRecord {
   startedAt: string;
   completedAt?: string;
   remote: boolean;
+  idempotencyKey?: string;
   remoteRunId?: string;
   credits?: number;
   error?: string;
@@ -80,6 +81,7 @@ export function createSkillRun(
     args: params.args ?? [],
     startedAt: now.toISOString(),
     remote: params.remote ?? false,
+    ...(params.remote ? { idempotencyKey: createRunIdempotencyKey(id) } : {}),
     ...(params.remoteRunId ? { remoteRunId: params.remoteRunId } : {}),
     ...(params.credits !== undefined ? { credits: params.credits } : {}),
     artifacts: [],
@@ -212,6 +214,10 @@ function walkFiles(dir: string): string[] {
 
 function createRunId(now: Date): string {
   return `run_${now.getTime().toString(36)}_${randomBytes(4).toString("hex")}`;
+}
+
+export function createRunIdempotencyKey(runId: string): string {
+  return `skills-run-${createHash("sha256").update(runId).digest("hex").slice(0, 48)}`;
 }
 
 function toProjectRelative(targetDir: string, path: string): string {

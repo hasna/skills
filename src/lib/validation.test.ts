@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { fileURLToPath } from "url";
 import { SKILLS } from "./registry";
-import { getAllPremiumSlugs } from "./pricing";
+import { getAllPremiumSlugs } from "./credit-catalog";
 import { generateSkillMd } from "./skillinfo";
 import {
   parseSkillFrontmatter,

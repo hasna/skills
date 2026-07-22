@@ -132,7 +132,7 @@ export {
   validateBlogArticleRunOptions,
   type BlogArticleRunOptions,
   type BlogArticleValidationResult,
-} from "./lib/pricing.js";
+} from "./lib/credit-catalog.js";
 
 export {
   getCompactSkillDiscovery,

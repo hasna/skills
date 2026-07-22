@@ -230,6 +230,7 @@ describe("CLI run core", () => {
       const { mkdtempSync, rmSync } = require("fs");
       const { tmpdir } = require("os");
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-premium-async-"));
+      let submittedIdempotencyKey: string | null = null;
       const server = Bun.serve({
         port: 0,
         async fetch(req) {
@@ -248,6 +249,7 @@ describe("CLI run core", () => {
               quoteToken: "quote_async_exact",
               approved: true,
             });
+            submittedIdempotencyKey = req.headers.get("idempotency-key");
             return Response.json(
               {
                 id: "run_async",
@@ -301,6 +303,8 @@ describe("CLI run core", () => {
         expect(runData.remote).toBe(true);
         expect(runData.remoteRun).toMatchObject({ contractVersion: 1, id: "run_async", status: "queued" });
         expect(runData.run.remoteRunId).toBe("run_async");
+        expect(runData.run.idempotencyKey).toMatch(/^skills-run-[a-f0-9]{48}$/);
+        expect(submittedIdempotencyKey).toBe(runData.run.idempotencyKey);
         expect(runData.nextActions).toEqual({
           poll: "skills runs status run_async",
           download: "skills exports download run_async",

@@ -7,7 +7,7 @@ import { join } from "path";
 import { getInstalledSkills, getSkillPath } from "./installer.js";
 import { getSkill, loadRegistry, type SkillMeta } from "./registry.js";
 import { normalizeSkillName } from "./utils.js";
-import { isPremiumSkill } from "./pricing.js";
+import { isPremiumSkill } from "./credit-catalog.js";
 import { parseSkillFrontmatter } from "./skill-validation.js";
 
 /**

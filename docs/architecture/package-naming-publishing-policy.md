@@ -40,6 +40,14 @@ the smallest correct bump.
 
 ## Publishing Workflow For `@hasna/skills`
 
+The release channel is deliberately staged: **next -> platform live proof -> latest**.
+The tag workflow publishes version `0.2.0` to `next`; it never updates `latest`.
+After the platform proves the exact `next` artifact against the live Skills SaaS,
+an operator may run the manual `Promote npm prerelease to latest` workflow. That
+workflow compares npm integrity metadata, installs the exact artifact into an
+isolated directory, runs CLI smoke checks, and moves only the dist-tag. It does
+not rebuild or republish the package.
+
 Only publish from a clean public-package branch:
 
 1. Confirm the branch contains only reusable package changes.
@@ -52,9 +60,12 @@ Only publish from a clean public-package branch:
 8. Check the current published version with `npm view @hasna/skills version`.
 9. Bump the smallest correct semver version.
 10. Run the gates again after the version bump.
-11. Publish with `npm publish`.
-12. Refresh the local global install with `bun install -g @hasna/skills`.
-13. Verify `skills --version`, `skills --help`, `skills setup --mode local
+11. Publish with `npm publish --tag next`.
+12. Complete platform live proof against that exact npm artifact.
+13. Use the protected manual promotion workflow to move that same artifact to
+    `latest`; never rebuild between proof and promotion.
+14. Refresh the local global install with `bun install -g @hasna/skills`.
+15. Verify `skills --version`, `skills --help`, `skills setup --mode local
     --json`, and `skills-mcp --help`.
 
 Do not publish private cloud dependencies, protected hosted source, Hasna
@@ -64,6 +75,12 @@ or private deployment configuration in the public npm package. Generic auth,
 API-key, tenant-isolation, observability, and provider-neutral opt-in selfhost
 contracts belong in the open package when they are reusable and independently
 deployable.
+
+Customer catalog, quote, run, usage, and receipt surfaces describe execution in
+credits only. They never expose fiat amounts, provider economics, margins, or
+execution-vendor routing. Currency belongs only on the checkout and legal
+receipt for purchasing credits; market-research skills may still analyze the
+domain concept of competitor pricing.
 
 ## Local Install Refresh
 

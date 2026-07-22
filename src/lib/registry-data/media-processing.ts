@@ -60,14 +60,14 @@ export const MEDIA_PROCESSING_SKILLS: SkillMeta[] = [
   {
     name: "subtitle",
     displayName: "Subtitle",
-    description: "Generate styled subtitles from audio using OpenAI Whisper",
+    description: "Generate styled subtitles from audio with managed transcription",
     category: "Media Processing",
     tags: ["subtitles", "transcription", "whisper", "video"],
   },
   {
     name: "transcript",
     displayName: "Transcript",
-    description: "Transcribe audio, video, and media URLs with OpenAI GPT-4o, ElevenLabs Scribe v2, DeepGram, or self-hosted runtime",
+    description: "Transcribe audio, video, and media URLs with managed or self-hosted execution",
     category: "Media Processing",
     tags: ["transcript", "audio", "video", "speech-to-text", "diarization", "youtube"],
   },

@@ -35,7 +35,6 @@ export interface ServerRunRecord {
   args: string[];
   idempotencyKey?: string;
   correlationId: string;
-  costCents: number;
   outputType?: string;
   outputPreview?: string;
   errorCode?: string;

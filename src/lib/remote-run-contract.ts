@@ -1,4 +1,4 @@
-import { toCustomerCreditPayload, toPublicCreditQuote, type PublicCreditQuote } from "./public-credits.js";
+import { sanitizeCustomerCreditText, toPublicCreditQuote, type PublicCreditQuote } from "./public-credits.js";
 
 export const REMOTE_SKILL_RUN_CONTRACT_VERSION = 1 as const;
 
@@ -18,7 +18,6 @@ export interface RemoteSkillRunContract {
   completedAt?: string;
   durationMs?: number;
   outputType?: string;
-  outputPreview?: unknown;
   errorCode?: string;
   errorMessage?: string;
   creditsReserved?: number;
@@ -29,7 +28,8 @@ export interface RemoteSkillRunContract {
   recentNetAmountCredits?: number;
   error?: string;
   code?: string;
-  details?: unknown;
+  details?: string[];
+  artifacts?: Array<Record<string, string>>;
 }
 
 export function normalizeRemoteSkillRunContract(
@@ -39,8 +39,7 @@ export function normalizeRemoteSkillRunContract(
   if (isRecord(payload) && hasOwn(payload, "contractVersion") && payload.contractVersion !== REMOTE_SKILL_RUN_CONTRACT_VERSION) {
     throw new Error(`Unsupported remote skill run contract version: ${String(payload.contractVersion)}`);
   }
-  const normalized = toCustomerCreditPayload(payload);
-  const record = isRecord(normalized) ? normalized : {};
+  const record = isRecord(payload) ? payload : {};
   const skill = pickStringValue(record, "skill") ?? fallbackSkill;
   return {
     contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION,
@@ -58,18 +57,18 @@ export function normalizeRemoteSkillRunContract(
     ...pickString(record, "completedAt"),
     ...pickNumber(record, "durationMs"),
     ...pickString(record, "outputType"),
-    ...(hasOwn(record, "outputPreview") ? { outputPreview: record.outputPreview } : {}),
-    ...pickString(record, "errorCode"),
-    ...pickString(record, "errorMessage"),
+    ...pickCode(record, "errorCode"),
+    ...pickCustomerError(record, "errorMessage"),
     ...pickNumber(record, "creditsReserved"),
     ...pickNumber(record, "creditsUsed"),
     ...pickNumber(record, "creditBalance"),
     ...pickString(record, "formattedCreditBalance"),
     ...pickNumber(record, "amountCredits"),
     ...pickNumber(record, "recentNetAmountCredits"),
-    ...pickString(record, "error"),
-    ...pickString(record, "code"),
-    ...(hasOwn(record, "details") ? { details: record.details } : {}),
+    ...pickCustomerError(record, "error"),
+    ...pickCode(record, "code"),
+    ...pickCustomerDetails(record),
+    ...pickArtifacts(record),
   };
 }
 
@@ -98,4 +97,44 @@ function pickNumber(record: Record<string, unknown>, key: string): Record<string
 
 function pickCreditQuote(record: Record<string, unknown>): { creditQuote?: PublicCreditQuote } {
   return isRecord(record.creditQuote) ? { creditQuote: toPublicCreditQuote(record.creditQuote) } : {};
+}
+
+function pickCode(record: Record<string, unknown>, key: string): Record<string, string> {
+  const value = pickStringValue(record, key);
+  return value && /^[A-Z0-9_]+$/.test(value) ? { [key]: value } : {};
+}
+
+function pickCustomerError(record: Record<string, unknown>, key: string): Record<string, string> {
+  const value = pickStringValue(record, key);
+  if (!value) return {};
+  return { [key]: containsInternalExecutionText(value)
+    ? "The Skills run could not be completed."
+    : sanitizeCustomerCreditText(value) };
+}
+
+function pickCustomerDetails(record: Record<string, unknown>): { details?: string[] } {
+  if (!Array.isArray(record.details)) return {};
+  const details = record.details
+    .filter((value): value is string => typeof value === "string")
+    .filter((value) => !containsInternalExecutionText(value))
+    .map(sanitizeCustomerCreditText);
+  return details.length > 0 ? { details } : {};
+}
+
+function pickArtifacts(record: Record<string, unknown>): { artifacts?: Array<Record<string, string>> } {
+  if (!Array.isArray(record.artifacts)) return {};
+  const artifacts = record.artifacts.flatMap((value) => {
+    if (!isRecord(value)) return [];
+    const artifact: Record<string, string> = {};
+    for (const key of ["id", "type", "fileName", "relativePath", "name", "contentType"] as const) {
+      const nested = value[key];
+      if (typeof nested === "string") artifact[key] = nested;
+    }
+    return Object.keys(artifact).length > 0 ? [artifact] : [];
+  });
+  return artifacts.length > 0 ? { artifacts } : {};
+}
+
+function containsInternalExecutionText(value: string): boolean {
+  return /\b(?:provider|model|margin|routing|route|settlement|fiat|cost(?:s|ed|ing)?|usd|eur|gbp)\b|\$/i.test(value);
 }

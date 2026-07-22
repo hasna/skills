@@ -25,7 +25,7 @@
     "!dist/**/*.test.d.ts",
     "!dist/cli/cli.test-utils.d.ts",
     "!dist/platform",
-    "!dist/server",
+    "!dist/server/**",
     "bin/",
     "migrations/",
     "docs/skill-standard.md",

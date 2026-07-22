@@ -10,7 +10,8 @@ import { formatCredits, toCustomerCreditPayload, toPublicCreditQuote } from "../
 import { createUnsignedQuoteApprovalFingerprint } from "../../lib/unsigned-quote-approval.js";
 import {
   addSchedule, listSchedules, removeSchedule, setScheduleEnabled,
-  getDueSchedules, recordScheduleRun, validateCron, getNextRun,
+  getDueSchedules, recordScheduleRun, validateCron, getNextRun, createScheduleIdempotencyKey,
+  type SkillSchedule,
 } from "../../lib/scheduler.js";
 import {
   DEFAULT_LIST_LIMIT,
@@ -178,7 +179,7 @@ export function registerSchedule(parent: Command) {
         try {
           return {
             schedule,
-            execution: await prepareScheduledSkill(schedule.skill, schedule.args ?? [], {
+            execution: await prepareScheduledSkill(schedule, {
               allowUnsignedPhaseA: options.allowUnsignedPhaseA,
             }),
           };
@@ -280,19 +281,20 @@ interface PreparedScheduledSkill {
 }
 
 async function prepareScheduledSkill(
-  skillName: string,
-  args: string[],
+  schedule: SkillSchedule,
   options: { allowUnsignedPhaseA?: boolean } = {},
 ): Promise<PreparedScheduledSkill> {
+  const skillName = schedule.skill;
+  const args = schedule.args ?? [];
   const { getSkill } = await import("../../lib/registry.js");
   const skill = getSkill(skillName);
   if (!skill) throw new Error(`Skill '${skillName}' not found`);
 
-  const pricing = await import("../../lib/pricing.js");
-  if (pricing.isPremiumSkill(skill.name)) {
+  const creditCatalog = await import("../../lib/credit-catalog.js");
+  if (creditCatalog.isPremiumSkill(skill.name)) {
     const mode = resolveCurrentDeploymentMode();
     if (mode === "local") throw new Error(`${skill.name} requires cloud or self-hosted mode.`);
-    let creditQuote = pricing.getSkillCreditQuote(skill.name, {}, args);
+    let creditQuote = creditCatalog.getSkillCreditQuote(skill.name, {}, args);
     const { getApiKey } = await import("../../lib/auth-store.js");
     const apiKey = getApiKey();
     if (mode === "cloud") {
@@ -381,7 +383,10 @@ async function prepareScheduledSkill(
           skill.name,
           {},
           args,
-          runAuthorization,
+          {
+            ...runAuthorization,
+            idempotencyKey: createScheduleIdempotencyKey(schedule),
+          },
         );
         if (run.error) throw new Error(String(run.error));
         return { creditBacked: true, credits: creditQuote.credits, creditQuote };
@@ -405,10 +410,10 @@ async function prepareScheduledSkill(
 
 async function describeDueSchedule(schedule: { name: string; skill: string; cron: string; args?: string[] }) {
   const { getSkill } = await import("../../lib/registry.js");
-  const pricing = await import("../../lib/pricing.js");
+  const creditCatalog = await import("../../lib/credit-catalog.js");
   const skill = getSkill(schedule.skill);
-  const creditBacked = Boolean(skill && pricing.isPremiumSkill(skill.name));
-  let creditQuote = creditBacked ? undefined : skill ? pricing.getSkillCreditQuote(skill.name, {}, schedule.args ?? []) : undefined;
+  const creditBacked = Boolean(skill && creditCatalog.isPremiumSkill(skill.name));
+  let creditQuote = creditBacked ? undefined : skill ? creditCatalog.getSkillCreditQuote(skill.name, {}, schedule.args ?? []) : undefined;
   const mode = resolveCurrentDeploymentMode();
   let availability: { status: "available" | "unavailable"; code?: string; message?: string; details?: string[] } = { status: "available" };
   if (creditBacked && skill && mode === "cloud") {

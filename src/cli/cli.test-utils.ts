@@ -4,7 +4,7 @@ import { tmpdir } from "os";
 import { pathToFileURL } from "url";
 import pkg from "../../package.json" with { type: "json" };
 import { BASIC_SKILL_NAMES, SKILLS } from "../lib/registry.js";
-import { getSkillCreditQuote } from "../lib/pricing.js";
+import { getSkillCreditQuote } from "../lib/credit-catalog.js";
 
 export const CLI_PATH = join(import.meta.dir, "index.tsx");
 export const EXPECTED_ALL_SKILL_COUNT = SKILLS.length;

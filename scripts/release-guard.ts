@@ -8,7 +8,7 @@ import { findPrivatePacklistLeaks, listPrivateSkillSlugs } from "../src/lib/publ
 type Finding = {
   file: string;
   marker: string;
-  kind: "retired-cloud" | "secret-pattern" | "internal-boundary" | "invalid-example";
+  kind: "retired-cloud" | "secret-pattern" | "internal-boundary" | "invalid-example" | "legacy-economic" | "customer-copy";
 };
 
 type PatternCheck = {
@@ -98,6 +98,8 @@ const internalBoundaryMarkers: Array<{ label: string; value: string }> = [
 ];
 
 const incompleteSelfHostedSetup = /skills setup --mode self-hosted(?![^\r\n]*--api-url)/;
+const legacyEconomicDeclaration = /\b(?:costCents|costMicros|SkillPricing|MediaPrice|MediaProvider|MEDIA_GENERATION_PRICES)\b/;
+const customerExecutionBillingCopy = /\bprovider[- ]cost\b|\b(?:provider|model)\b[^\r\n]{0,80}\b(?:pricing|price|cost)\b|\b(?:pricing|price|cost)\b[^\r\n]{0,80}\b(?:provider|model)\b/i;
 
 const secretPatterns: PatternCheck[] = [
   { label: ["sk", "ant", ""].join("-"), pattern: new RegExp(["sk", "ant", ""].join("-")) },
@@ -212,10 +214,27 @@ for (const packedFile of packedFiles) {
       kind: "invalid-example",
     });
   }
+  if (
+    /(?:^|\/)pricing\.d\.ts$/.test(packedFile)
+    || legacyEconomicDeclaration.test(content)
+  ) {
+    packedBoundaryFindings.push({
+      file: packedFile,
+      marker: "legacy economic contract",
+      kind: "legacy-economic",
+    });
+  }
+  if (packedFile.startsWith("skills/") && customerExecutionBillingCopy.test(content)) {
+    packedBoundaryFindings.push({
+      file: packedFile,
+      marker: "customer-execution-billing-copy",
+      kind: "customer-copy",
+    });
+  }
 }
 
 if (packedBoundaryFindings.length > 0) {
-  console.error("Release guard failed: final package artifacts contain internal deployment markers or invalid setup examples:");
+  console.error("Release guard failed: final package artifacts contain internal deployment markers, invalid setup examples, or a legacy economic contract:");
   for (const finding of packedBoundaryFindings) {
     console.error(sanitizeForPublicLog(`  ${finding.kind}: ${finding.file}: ${finding.marker}`));
   }

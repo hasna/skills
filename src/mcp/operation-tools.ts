@@ -282,7 +282,7 @@ export function registerOperationTools(server: McpServer): void {
       return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
     }
 
-    const { ARTICLE_GENERATION_SLUG, getSkillCreditQuote, validateBlogArticleRunOptions } = await import("../lib/pricing.js");
+    const { ARTICLE_GENERATION_SLUG, getSkillCreditQuote, validateBlogArticleRunOptions } = await import("../lib/credit-catalog.js");
     const runInput = input || {};
     const runArgs = args || [];
     if (skill.name === ARTICLE_GENERATION_SLUG) {
@@ -430,7 +430,7 @@ export function registerOperationTools(server: McpServer): void {
       isPremiumSkill,
       getSkillCreditQuote,
       validateBlogArticleRunOptions,
-    } = await import("../lib/pricing.js");
+    } = await import("../lib/credit-catalog.js");
     const skillName = skill.name;
     const runInput = input || {};
     const runArgs = args || [];
@@ -613,10 +613,10 @@ export function registerOperationTools(server: McpServer): void {
         const { RemoteSkillsClient } = await import("../lib/remote-client.js");
         const client = remoteClient ?? new RemoteSkillsClient(apiKey);
         const runAuthorization = runQuoteToken
-          ? { quoteToken: runQuoteToken, approved: true }
+          ? { quoteToken: runQuoteToken, approved: true, idempotencyKey: runContext.record.idempotencyKey }
           : mode === "self-hosted" && approved === true && allowUnsignedPhaseA === true
-            ? { approved: true }
-            : {};
+            ? { approved: true, idempotencyKey: runContext.record.idempotencyKey }
+            : { idempotencyKey: runContext.record.idempotencyKey };
         const run = await client.submitRun(
           skillName,
           runInput,

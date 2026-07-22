@@ -12,8 +12,8 @@ import { getApiKey } from "./auth-store.js";
 import { loadConfig, type SkillsConfig } from "./config.js";
 import { resolveDeploymentTarget } from "./deployment-mode.js";
 import { normalizeSkillsApiOrigin } from "./service-origin.js";
-import { sanitizePublicDiscoveryText } from "./discovery.js";
-import { isPremiumSkill } from "./pricing.js";
+import { publicDiscoveryTags, sanitizePublicDiscoveryText } from "./discovery.js";
+import { isPremiumSkill } from "./credit-catalog.js";
 import { toPublicCreditQuote } from "./public-credits.js";
 import { addSkillsProtocolHeaders } from "./remote-protocol.js";
 import type { SkillMeta } from "./registry.js";
@@ -38,25 +38,6 @@ const remoteCanonicalCreditQuoteSchema = z.object({
   description: z.string().min(1),
 }).passthrough();
 
-const remoteLegacyCreditQuoteSchema = z.object({
-  contractVersion: z.literal(1),
-  tier: z.enum(["free", "premium"]),
-  billingUnit: z.string(),
-  costCents: z.number(),
-  formattedCost: z.string().optional(),
-  formattedUnitCost: z.string().optional(),
-  unitCount: z.number().optional(),
-  estimated: z.boolean(),
-  quoteDependsOnInput: z.boolean(),
-  quoteRequired: z.boolean(),
-  description: z.string().min(1),
-}).passthrough();
-
-const remoteCreditQuoteInputSchema = z.union([
-  remoteCanonicalCreditQuoteSchema,
-  remoteLegacyCreditQuoteSchema,
-]);
-
 const remoteSkillSchema = z.object({
   name: z.string().min(1).optional(),
   slug: z.string().min(1).optional(),
@@ -66,8 +47,7 @@ const remoteSkillSchema = z.object({
   tags: z.array(z.string()).optional(),
   dependencies: z.array(z.string()).optional(),
   version: z.string().optional(),
-  pricing: remoteCreditQuoteInputSchema.optional(),
-  creditQuote: remoteCreditQuoteInputSchema.optional(),
+  creditQuote: remoteCanonicalCreditQuoteSchema.optional(),
   availability: remoteAvailabilitySchema.optional(),
 }).passthrough().refine((skill) => skill.name || skill.slug, {
   message: "Remote skill requires name or slug",
@@ -143,16 +123,14 @@ function titleize(name: string): string {
 function normalizeRemoteSkill(skill: z.infer<typeof remoteSkillSchema>): SkillMeta {
   const name = skill.name || skill.slug;
   if (!name) throw new Error("Remote skill requires name or slug");
-  const creditQuote = skill.creditQuote || skill.pricing
-    ? normalizeRemoteCreditQuote((skill.creditQuote ?? skill.pricing)!)
-    : undefined;
+  const creditQuote = skill.creditQuote ? toPublicCreditQuote(skill.creditQuote) : undefined;
   const availability = normalizeRemoteAvailability(name, skill.availability);
   return {
     name,
     displayName: skill.displayName || titleize(name),
-    description: skill.description || "",
+    description: sanitizePublicDiscoveryText(skill.description || ""),
     category: skill.category || "Remote",
-    tags: skill.tags || ["remote"],
+    tags: publicDiscoveryTags(skill.tags || ["remote"]),
     dependencies: skill.dependencies,
     ...(skill.version ? { version: skill.version } : {}),
     ...(creditQuote ? { creditQuote } : {}),
@@ -166,12 +144,6 @@ function normalizeRemoteSkill(skill: z.infer<typeof remoteSkillSchema>): SkillMe
       : availability,
     source: "remote",
   };
-}
-
-function normalizeRemoteCreditQuote(value: z.infer<typeof remoteCreditQuoteInputSchema>) {
-  return "contractVersion" in value
-    ? undefined
-    : toPublicCreditQuote(value);
 }
 
 function normalizeRemoteAvailability(

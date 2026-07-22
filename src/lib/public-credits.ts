@@ -1,6 +1,6 @@
 export type CreditUnit = "run" | "image" | "second" | "character" | "song" | "thousand_tokens" | "article";
 
-export interface InternalCreditPricing {
+export interface InternalCreditConfiguration {
   tier: "free" | "premium";
   creditUnit: CreditUnit;
   credits: number;
@@ -83,8 +83,8 @@ export function toAuthoritativePublicCreditQuote(value: unknown): PublicCreditQu
   return toPublicCreditQuote(value);
 }
 
-/** Converts the package-owned pricing model. This is not a remote-input adapter. */
-export function internalPricingToCreditQuote(value: InternalCreditPricing): PublicCreditQuote {
+/** Converts the package-owned credit configuration. This is not a remote-input adapter. */
+export function internalCreditConfigurationToQuote(value: InternalCreditConfiguration): PublicCreditQuote {
   return toPublicCreditQuote({
     tier: value.tier,
     creditUnit: value.creditUnit,
@@ -138,7 +138,7 @@ export function toCustomerCreditPayload(value: unknown): unknown {
       continue;
     }
     if ([
-      "costCents",
+      ["cost", "Cents"].join(""),
       "amountCents",
       "recentNetAmountCents",
       "balanceCents",

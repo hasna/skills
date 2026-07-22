@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   formatCredits,
-  internalPricingToCreditQuote,
+  internalCreditConfigurationToQuote,
   toCustomerCreditPayload,
   toAuthoritativePublicCreditQuote,
   toPublicCreditQuote,
@@ -10,7 +10,7 @@ import {
 
 describe("public credit presentation", () => {
   test("accepts only explicit credit-native package pricing", () => {
-    expect(internalPricingToCreditQuote({
+    expect(internalCreditConfigurationToQuote({
       tier: "premium",
       creditUnit: "image",
       credits: 12,
@@ -27,7 +27,7 @@ describe("public credit presentation", () => {
       description: "Estimated credits. The final credit amount depends on run options.",
     });
 
-    expect(() => internalPricingToCreditQuote({
+    expect(() => internalCreditConfigurationToQuote({
       tier: "premium",
       billingUnit: "image",
       costCents: 12,

@@ -13,7 +13,7 @@ import {
   ARTICLE_GENERATION_SLUG,
   getSkillCreditQuote,
   validateBlogArticleRunOptions,
-} from "../../lib/pricing.js";
+} from "../../lib/credit-catalog.js";
 import { loadConfig, saveDeploymentConfig, type ConfigScope } from "../../lib/config.js";
 import { getDeploymentSetupCommand, resolveCurrentDeploymentMode } from "../../lib/deployment-mode.js";
 import { CLOUD_API_ORIGIN } from "../../lib/service-origin.js";
@@ -428,15 +428,15 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
   }
 
   const prompt = extractPrompt(args);
-  const pricing = await import("../../lib/pricing.js");
+  const creditCatalog = await import("../../lib/credit-catalog.js");
   if (skill.name === ARTICLE_GENERATION_SLUG) {
-    const validation = pricing.validateBlogArticleRunOptions({}, args, { requireTopic: true });
+    const validation = creditCatalog.validateBlogArticleRunOptions({}, args, { requireTopic: true });
     if (!validation.ok) {
       writeBlogArticleValidationError(validation.errors, options.json);
       return;
     }
   }
-  const isPremium = pricing.isPremiumSkill(skill.name);
+  const isPremium = creditCatalog.isPremiumSkill(skill.name);
   const deploymentMode = resolveCurrentDeploymentMode();
   if (options.allowUnsignedPhaseA && deploymentMode !== "self-hosted") {
     const error = "--allow-unsigned-phase-a is valid only for an explicitly selected self-hosted service.";
@@ -453,7 +453,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
     process.exitCode = 1;
     return;
   }
-  let creditQuote = pricing.getSkillCreditQuote(skill.name, {}, args);
+  let creditQuote = creditCatalog.getSkillCreditQuote(skill.name, {}, args);
   let credits = isPremium ? creditQuote.credits : undefined;
   let quoteToken: string | undefined;
   let unsignedQuoteFingerprint: string | undefined;
@@ -727,7 +727,10 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
           skill.name,
           {},
           args,
-          runAuthorization,
+          {
+            ...runAuthorization,
+            idempotencyKey: runContext.record.idempotencyKey,
+          },
         );
         if (run.error) {
           writeRunLogs(runContext, "", String(run.error) + "\n");

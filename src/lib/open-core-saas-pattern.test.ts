@@ -16,6 +16,7 @@ describe("open-core product service pattern", () => {
   const upstreamSync = readFileSync(join(root, "docs/architecture/upstream-sync.md"), "utf8");
   const readme = readFileSync(join(root, "README.md"), "utf8");
   const publishWorkflow = readFileSync(join(root, ".github/workflows/publish.yml"), "utf8");
+  const promotionWorkflow = readFileSync(join(root, ".github/workflows/promote-latest.yml"), "utf8");
   const deployWorkflow = readFileSync(join(root, ".github/workflows/deploy.yml"), "utf8");
   const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version: string; files?: string[] };
   const compact = (value: string) => value.replace(/\s+/g, " ");
@@ -205,6 +206,18 @@ describe("open-core product service pattern", () => {
     expect(deployWorkflow).toContain("Internal self-hosted deployment (non-cloud)");
     expect(deployWorkflow).toContain("workflow_dispatch");
     expect(deployWorkflow).not.toMatch(/\npush:\s*\n/);
+  });
+
+  test("promotes the exact tested prerelease artifact to latest only through a manual gate", () => {
+    expect(promotionWorkflow).toContain("workflow_dispatch:");
+    expect(promotionWorkflow).toContain("npm-production");
+    expect(promotionWorkflow).toContain("@hasna/skills@0.2.0");
+    expect(promotionWorkflow).toContain("@hasna/skills@next");
+    expect(promotionWorkflow).toContain("dist.integrity");
+    expect(promotionWorkflow).toContain("mktemp -d");
+    expect(promotionWorkflow).toContain("skills --version");
+    expect(promotionWorkflow).toContain("npm dist-tag add @hasna/skills@0.2.0 latest");
+    expect(packageNaming).toContain("next -> platform live proof -> latest");
   });
 
   test("keeps scheduled credit approval free of legacy cents flags", () => {

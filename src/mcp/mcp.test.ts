@@ -789,6 +789,7 @@ version: 0.3.0
     const tmpDir = mkdtempSync(join(tmpdir(), "mcp-approved-cloud-quote-"));
     let quoteCalls = 0;
     let submittedBody: unknown;
+    let submittedIdempotencyKey: string | null = null;
     const server = Bun.serve({
       port: 0,
       async fetch(req) {
@@ -810,6 +811,7 @@ version: 0.3.0
         }
         if (url.pathname === "/api/v1/runs/image" && req.method === "POST") {
           submittedBody = await req.json();
+          submittedIdempotencyKey = req.headers.get("idempotency-key");
           return Response.json({ id: "run_exact_approved_quote", skill: "image", status: "queued" });
         }
         return Response.json({ error: `unexpected ${req.method} ${url.pathname}` }, { status: 500 });
@@ -843,6 +845,7 @@ version: 0.3.0
         approved: true,
         quoteToken: "quote_user_approved_9",
       });
+      expect(submittedIdempotencyKey).toMatch(/^skills-run-[a-f0-9]{48}$/);
     } finally {
       await client.close();
       server.stop(true);

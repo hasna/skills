@@ -213,7 +213,7 @@ describe("self-hosted skills API", () => {
       const artifacts = await client.getRunArtifacts(submitted.id!);
       expect(artifacts.map((artifact) => artifact.relativePath)).toContain("transcript.md");
       const transcript = artifacts.find((artifact) => artifact.relativePath === "transcript.md");
-      const downloaded = await client.downloadRunArtifact(submitted.id!, transcript.id);
+      const downloaded = await client.downloadRunArtifact(submitted.id!, transcript!.id);
       expect(downloaded.status).toBe(200);
       expect(await downloaded.text()).toContain("Hello world");
     } finally {
@@ -241,7 +241,7 @@ describe("self-hosted skills API", () => {
       expect(unsupported).toMatchObject({
         availability: { status: "unavailable", code: "HANDLER_UNAVAILABLE" },
       });
-      expect(unsupported.creditQuote).toBeUndefined();
+      expect(unsupported!.creditQuote).toBeUndefined();
 
       expect(await client.quoteSkill("audio-transcript-pack")).toMatchObject({
         availability: { status: "available" },
@@ -465,7 +465,7 @@ describe("self-hosted skills API", () => {
       expect(crossRun).toBeNull();
 
       const artifacts = await orgA.getRunArtifacts(submitted.id!);
-      const denied = await orgB.downloadRunArtifact(submitted.id!, artifacts[0].id);
+      const denied = await orgB.downloadRunArtifact(submitted.id!, artifacts[0]!.id);
       expect(denied.status).toBe(404);
     } finally {
       server.stop(true);

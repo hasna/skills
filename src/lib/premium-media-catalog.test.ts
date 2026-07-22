@@ -6,10 +6,9 @@ import { getSkillPath } from "./installer";
 import { getSkillRequirements } from "./skillinfo";
 import {
   getSkillCreditQuote,
-  getSkillRunCostCents,
   isPremiumSkill,
   MUSIC_ALBUM_SONG_COUNTS,
-} from "./pricing";
+} from "./credit-catalog";
 
 const NEW_MEDIA_SKILLS = [
   "music-album",
@@ -75,11 +74,11 @@ describe("premium media catalog", () => {
     expect(imageReadme).toContain("skills setup --mode self-hosted --api-url https://operator.example");
   });
 
-  test("prices music albums by allowed song count", () => {
+  test("quotes music albums in credits by allowed song count", () => {
     expect(MUSIC_ALBUM_SONG_COUNTS).toEqual([7, 14, 21]);
-    expect(getSkillRunCostCents("music-album", {}, ["--songs", "7"])).toBe(1050);
-    expect(getSkillRunCostCents("music-album", {}, ["--songs", "14"])).toBe(2100);
-    expect(getSkillRunCostCents("music-album", {}, ["--songs", "21"])).toBe(3150);
+    expect(getSkillCreditQuote("music-album", {}, ["--songs", "7"]).credits).toBe(1050);
+    expect(getSkillCreditQuote("music-album", {}, ["--songs", "14"]).credits).toBe(2100);
+    expect(getSkillCreditQuote("music-album", {}, ["--songs", "21"]).credits).toBe(3150);
 
     expect(getSkillCreditQuote("music-album", {}, ["--songs", "14"])).toMatchObject({
       tier: "premium",

@@ -165,4 +165,49 @@ describe("release-guard end-to-end (S1 + S2)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("S1.5: blocks legacy packed pricing declarations and provider economic tables", () => {
+    const fixtures = [
+      ["dist/lib/pricing.d.ts", "export interface SkillPricing { costCents: number; providers: string[] }\n"],
+      ["dist/lib/credit-catalog.d.ts", "export declare const MEDIA_GENERATION_PRICES: Array<{ provider: string; costMicros: number }>;\n"],
+    ] as const;
+
+    for (const [path, body] of fixtures) {
+      const dir = makePkg(["dist/", "README.md"]);
+      try {
+        mkdirSync(join(dir, path, ".."), { recursive: true });
+        writeFileSync(join(dir, path), body);
+        const result = runGuard(dir);
+        expect(result.exitCode, `${path}: ${result.stderr}`).toBe(1);
+        expect(result.stderr).toContain("legacy economic contract");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("S1.5: blocks execution billing copy but preserves legitimate research pricing language", () => {
+    const blocked = makePkg(["skills/", "README.md"]);
+    try {
+      addSkill(blocked, "image", {
+        "SKILL.md": "---\nname: image\n---\n\nProvider-cost pricing varies by model.\n",
+      });
+      const result = runGuard(blocked);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("customer-execution-billing-copy");
+    } finally {
+      rmSync(blocked, { recursive: true, force: true });
+    }
+
+    const allowed = makePkg(["skills/", "README.md"]);
+    try {
+      addSkill(allowed, "market-research", {
+        "SKILL.md": "---\nname: market-research\n---\n\nCompare competitor pricing, positioning, and packaging.\n",
+      });
+      const result = runGuard(allowed);
+      expect(result.exitCode, result.stderr).toBe(0);
+    } finally {
+      rmSync(allowed, { recursive: true, force: true });
+    }
+  });
 });

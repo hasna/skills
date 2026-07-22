@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { RemoteSkillsClient } from "./remote-client";
+import { RemoteSkillsClient, SkillsApiError } from "./remote-client";
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -30,6 +30,263 @@ describe("remote skills client public contract", () => {
     expect(requests[0]?.headers.get("authorization")).toBe("Bearer fixture-key");
     expect(requests[0]?.headers.get("x-skills-client-version")).toBe("0.2.0");
     expect(requests[0]?.headers.get("x-skills-run-authorization")).toBe("signed-quote-v1");
+  });
+
+  test("uses endpoint-specific skill schemas instead of forwarding service metadata", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      const skill = {
+        id: "skill_image",
+        slug: "image",
+        name: "image",
+        displayName: "Image",
+        description: "Provider-cost generation with OpenAI and Gemini models.",
+        category: "Content Generation",
+        tags: ["image", "openai", "gemini", "provider-cost"],
+        visibility: "public",
+        currentVersion: "1.2.3",
+        billingMode: "credits",
+        creditsPerExecution: 4,
+        sourceType: "hosted",
+        creditQuote: {
+          tier: "premium",
+          creditUnit: "image",
+          credits: 4,
+          formattedCredits: "4 credits/image",
+          estimated: false,
+          quoteDependsOnInput: false,
+          quoteRequired: true,
+          description: "Fixed credits per run.",
+        },
+        availability: { status: "available" },
+        provider: "private-provider",
+        model: "private-model",
+        providerCostCents: 3,
+        margin: 1,
+        routing: { id: "private-route" },
+      };
+      return Response.json(calls === 1 ? [skill] : skill);
+    }) as unknown as typeof fetch;
+
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+    const listed = await client.listSkills();
+    const detail = await client.getSkill("image");
+
+    expect(detail).not.toBeNull();
+    expect(listed).toEqual([detail!]);
+    expect(detail).toEqual({
+      id: "skill_image",
+      slug: "image",
+      name: "image",
+      displayName: "Image",
+      description: "Credit-backed generation with hosted AI and hosted AI models.",
+      category: "Content Generation",
+      tags: ["image"],
+      visibility: "public",
+      currentVersion: "1.2.3",
+      billingMode: "credits",
+      creditsPerExecution: 4,
+      sourceType: "hosted",
+      creditQuote: expect.objectContaining({ credits: 4, formattedCredits: "4 credits/image" }),
+      availability: { status: "available" },
+    });
+    expect(JSON.stringify([listed, detail])).not.toMatch(/private-provider|private-model|providerCostCents|margin|private-route/i);
+  });
+
+  test("allowlists quote, billing, usage, and status endpoint contracts", async () => {
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      const privateFields = {
+        provider: "private-provider",
+        model: "private-model",
+        costCents: 7,
+        margin: 3,
+        routing: { id: "private-route" },
+      };
+      if (path.endsWith("/quote")) {
+        return Response.json({
+          skill: "image",
+          quoteToken: "quote_exact_123",
+          expiresAt: "2026-07-22T12:00:00.000Z",
+          creditQuote: {
+            tier: "premium",
+            creditUnit: "image",
+            credits: 4,
+            formattedCredits: "4 credits/image",
+            estimated: false,
+            quoteDependsOnInput: false,
+            quoteRequired: true,
+            description: "Fixed credits per run.",
+          },
+          availability: { status: "available" },
+          ...privateFields,
+        });
+      }
+      if (path.endsWith("/billing/status")) {
+        return Response.json({
+          plan: "credits",
+          creditBalance: 125,
+          formattedCreditBalance: "125 credits",
+          hasPaymentMethod: true,
+          subscription: { status: "active", provider: "private-provider" },
+          ...privateFields,
+        });
+      }
+      if (path.endsWith("/billing/usage")) {
+        return Response.json([{
+          id: "txn_1",
+          runId: "run_1",
+          transactionType: "debit",
+          amountCredits: -4,
+          balanceAfterAvailable: 121,
+          balanceAfterReserved: 0,
+          description: "Skill run credits",
+          createdAt: "2026-07-22T11:00:00.000Z",
+          ...privateFields,
+        }]);
+      }
+      if (path.endsWith("/status")) {
+        return Response.json({
+          queue: { counts: { queued: 1, running: 2, pendingApproval: 3, failed24h: 4 } },
+          usage: {
+            recentCount: 1,
+            recentNetAmountCredits: -4,
+            recentTransactions: [{
+              transactionType: "debit",
+              amountCredits: -4,
+              description: "Skill run credits",
+              createdAt: "2026-07-22T11:00:00.000Z",
+              ...privateFields,
+            }],
+          },
+          deployment: { status: "ok", version: "0.1.46", generatedAt: "2026-07-22T11:01:00.000Z" },
+          account: { user: { email: "customer@example.com", role: "owner" }, organization: { slug: "acme", name: "Acme" }, authMethod: "api_key" },
+          worker: { mode: "separate-service", runnerEnabledInProcess: false, healthSource: "tenant queue state" },
+          connectors: { status: "configured", readinessEndpoint: "/api/v1/connectors/readiness" },
+          ...privateFields,
+        });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    }) as unknown as typeof fetch;
+
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+    const quote = await client.quoteSkill("image");
+    const billing = await client.getBillingStatus();
+    const usage = await client.getUsage();
+    const status = await client.getStatus();
+
+    expect(quote).toMatchObject({ quoteToken: "quote_exact_123", creditQuote: { credits: 4 } });
+    expect(billing).toEqual({
+      plan: "credits",
+      creditBalance: 125,
+      formattedCreditBalance: "125 credits",
+      hasPaymentMethod: true,
+    });
+    expect(usage).toEqual([{
+      id: "txn_1",
+      runId: "run_1",
+      transactionType: "debit",
+      amountCredits: -4,
+      balanceAfterAvailable: 121,
+      balanceAfterReserved: 0,
+      description: "Skill run credits",
+      createdAt: "2026-07-22T11:00:00.000Z",
+    }]);
+    expect(status).toMatchObject({
+      queue: { counts: { queued: 1, running: 2, pendingApproval: 3, failed24h: 4 } },
+      usage: { recentCount: 1, recentNetAmountCredits: -4 },
+      deployment: { status: "ok", version: "0.1.46" },
+    });
+    expect(JSON.stringify({ quote, billing, usage, status })).not.toMatch(/private-provider|private-model|costCents|margin|private-route/i);
+  });
+
+  test("allowlists list/get run fields and rejects internal response prose from errors", async () => {
+    let call = 0;
+    globalThis.fetch = (async () => {
+      call += 1;
+      const run = {
+        contractVersion: 1,
+        id: "run_public",
+        skill: "image",
+        status: "running",
+        credits: 4,
+        formattedCredits: "4 credits/image",
+        createdAt: "2026-07-22T11:00:00.000Z",
+        provider: "private-provider",
+        model: "private-model",
+        costCents: 3,
+        margin: 1,
+        routing: { id: "private-route" },
+        outputPreview: { provider: "private-provider" },
+        details: { model: "private-model" },
+      };
+      if (call === 1) return Response.json([run]);
+      if (call === 2) return Response.json(run);
+      return Response.json({
+        code: "RUN_REJECTED",
+        error: "Private provider private-model routing failed at cost $0.07 with margin 4",
+        details: { route: "private-route", provider: "private-provider" },
+      }, { status: 409 });
+    }) as unknown as typeof fetch;
+
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+    const runs = await client.listRuns();
+    const run = await client.getRun("run_public");
+    expect(run).not.toBeNull();
+    expect(runs).toEqual([run!]);
+    expect(run).toEqual({
+      contractVersion: 1,
+      id: "run_public",
+      skill: "image",
+      status: "running",
+      credits: 4,
+      formattedCredits: "4 credits/image",
+      createdAt: "2026-07-22T11:00:00.000Z",
+    });
+
+    try {
+      await client.cancelRun("run_public", { idempotencyKey: "cancel-logical-attempt" });
+      throw new Error("expected cancel to fail");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SkillsApiError);
+      expect(error).toMatchObject({ status: 409, code: "RUN_REJECTED" });
+      expect((error as Error).message).toBe("The Skills service rejected the request.");
+      expect(JSON.stringify(error)).not.toMatch(/private-provider|private-model|private-route|cost|margin|routing/i);
+    }
+  });
+
+  test("sends an explicit stable idempotency key for run submission and cancellation", async () => {
+    const requests: Array<{ path: string; method: string; idempotencyKey: string | null; body: unknown }> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      requests.push({
+        path: new URL(String(input)).pathname,
+        method: init?.method ?? "GET",
+        idempotencyKey: new Headers(init?.headers).get("idempotency-key"),
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      });
+      return Response.json({ contractVersion: 1, id: "run_idempotent", skill: "image", status: "queued" });
+    }) as unknown as typeof fetch;
+
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+    await client.submitRun("image", { prompt: "forest" }, [], {
+      approved: true,
+      quoteToken: "quote_exact",
+      idempotencyKey: "logical-run-attempt",
+    });
+    await client.cancelRun("run_idempotent", { idempotencyKey: "logical-cancel-attempt" });
+
+    expect(requests).toEqual([{
+      path: "/api/v1/runs/image",
+      method: "POST",
+      idempotencyKey: "logical-run-attempt",
+      body: { input: { prompt: "forest" }, args: [], approved: true, quoteToken: "quote_exact" },
+    }, {
+      path: "/api/v1/runs/run_idempotent/cancel",
+      method: "POST",
+      idempotencyKey: "logical-cancel-attempt",
+      body: undefined,
+    }]);
   });
 
   test("drops legacy fiat aliases instead of returning invented SDK credits", async () => {

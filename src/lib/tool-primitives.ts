@@ -4,7 +4,7 @@ import {
   type SkillMeta,
   type SkillRegistryProfile,
 } from "./registry.js";
-import { isPremiumSkill } from "./pricing.js";
+import { isPremiumSkill } from "./credit-catalog.js";
 
 export const TOOL_PRIMITIVE_SCHEMA_VERSION = 1 as const;
 

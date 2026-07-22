@@ -15,6 +15,7 @@ import {
   setScheduleEnabled,
   getDueSchedules,
   recordScheduleRun,
+  createScheduleIdempotencyKey,
 } from "./scheduler.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -190,5 +191,23 @@ describe("recordScheduleRun", () => {
     expect(after[0].lastRunStatus).toBe("success");
     expect(after[0].nextRun).toBeDefined();
     expect(new Date(after[0].nextRun!).getTime()).toBeGreaterThan(new Date(after[0].lastRun!).getTime());
+  });
+});
+
+describe("schedule run idempotency", () => {
+  test("derives one stable key from the persisted schedule occurrence", () => {
+    const schedule = {
+      id: "image-1720000000000",
+      name: "daily image",
+      skill: "image",
+      cron: "0 9 * * *",
+      enabled: true,
+      createdAt: "2026-07-01T00:00:00.000Z",
+      nextRun: "2026-07-22T09:00:00.000Z",
+    };
+    const first = createScheduleIdempotencyKey(schedule);
+    expect(first).toBe(createScheduleIdempotencyKey(structuredClone(schedule)));
+    expect(first).toMatch(/^skills-schedule-[a-f0-9]{48}$/);
+    expect(createScheduleIdempotencyKey({ ...schedule, nextRun: "2026-07-23T09:00:00.000Z" })).not.toBe(first);
   });
 });

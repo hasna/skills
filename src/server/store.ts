@@ -101,7 +101,6 @@ export class MemorySkillsStore implements SkillsProductStore {
       args: input.args,
       ...(idemKey ? { idempotencyKey: idemKey } : {}),
       correlationId: randomUUID(),
-      costCents: 0,
       createdAt: now,
     };
     this.runs.set(run.id, run);
@@ -424,7 +423,6 @@ function rowToRun(row: Record<string, unknown>): ServerRunRecord {
     args: parseJsonArray(row.args_json),
     ...(typeof row.idempotency_key === "string" ? { idempotencyKey: row.idempotency_key } : {}),
     correlationId: String(row.correlation_id),
-    costCents: Number(row.cost_cents ?? 0),
     ...(typeof row.output_type === "string" ? { outputType: row.output_type } : {}),
     ...(typeof row.output_preview === "string" ? { outputPreview: row.output_preview } : {}),
     ...(typeof row.error_code === "string" ? { errorCode: row.error_code } : {}),

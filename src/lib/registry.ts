@@ -6,7 +6,8 @@ import { join } from "path";
 import { getDataDir } from "./config.js";
 import { listPortableSkillMetas } from "./portable-skills.js";
 import { normalizeSkillSlug, resolveSkillAlias } from "./skill-aliases.js";
-import { SKILLS } from "./registry-data/index.js";
+import { getPublicSkillDiscovery } from "./discovery.js";
+import { SKILLS as REGISTRY_SKILLS } from "./registry-data/index.js";
 import {
   BASIC_SKILL_NAMES,
   CATEGORIES,
@@ -15,7 +16,8 @@ import {
   type SkillRegistryProfile,
 } from "./registry-types.js";
 
-export { BASIC_SKILL_NAMES, CATEGORIES, SKILLS };
+export const SKILLS: SkillMeta[] = REGISTRY_SKILLS.map((skill) => getPublicSkillDiscovery(skill));
+export { BASIC_SKILL_NAMES, CATEGORIES };
 export type { Category, SkillMeta, SkillRegistryProfile };
 
 export function isBasicSkillName(name: string): boolean {
@@ -43,7 +45,7 @@ export function loadRegistry(cwd?: string): SkillMeta[] {
   const dataDir = getDataDir();
   const portableCustom = listPortableSkillMetas({ rootDir: dataDir });
   const legacyCustom = listPortableSkillMetas({ rootDir: join(dataDir, "custom") });
-  const globalCustom = mergeCustomSkills([...legacyCustom, ...portableCustom]);
+  const globalCustom = mergeCustomSkills([...legacyCustom, ...portableCustom].map((skill) => getPublicSkillDiscovery(skill)));
 
   const customNames = new Set(globalCustom.map((s) => s.name));
   const filtered = official.filter((s) => !customNames.has(s.name));

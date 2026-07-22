@@ -39,7 +39,7 @@ export const RESEARCH_WRITING_SKILLS: SkillMeta[] = [
   {
     name: "deepresearch",
     displayName: "Deep Research (Agentic)",
-    description: "Agentic deep research using Exa.ai for parallel semantic search and LLM synthesis",
+    description: "Agentic deep research with parallel semantic search and AI synthesis",
     category: "Research & Writing",
     tags: ["research", "exa", "semantic-search", "synthesis"],
   },

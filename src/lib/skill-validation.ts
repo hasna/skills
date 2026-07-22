@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "fs";
 import { isAbsolute, join, normalize, relative, sep } from "path";
-import { isPremiumSkill } from "./pricing.js";
+import { isPremiumSkill } from "./credit-catalog.js";
 import type { SkillMeta } from "./registry.js";
 import type { SkillKind } from "./registry-types.js";
 import type { PortableSkillManifest } from "./portable-skills.js";
