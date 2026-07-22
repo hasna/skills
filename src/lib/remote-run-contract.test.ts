@@ -106,6 +106,21 @@ describe("remote skill run contract", () => {
     expect(() => normalizeRemoteSkillRunContract({
       creditQuote: { tier: "free" },
     })).toThrow("credits");
+    expect(() => normalizeRemoteSkillRunContract({
+      creditQuote: {
+        tier: "premium",
+        creditUnit: "image",
+        credits: 4,
+        unitCount: 2,
+        unitCredits: 1,
+        formattedCredits: "4 credits total",
+        formattedUnitCredits: "1 credits/image",
+        estimated: false,
+        quoteDependsOnInput: true,
+        quoteRequired: true,
+        description: "Fixed credits per run.",
+      },
+    })).toThrow("formattedUnitCredits does not match");
   });
 
   test("drops invalid run statuses and hostile identifier values", () => {

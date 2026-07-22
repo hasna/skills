@@ -50,18 +50,18 @@ export function toPublicCreditQuote(value: unknown): PublicCreditQuote {
   const unitCount = finiteNumber(record.unitCount);
   const quoteDependsOnInput = record.quoteDependsOnInput === true;
   const quoteRequired = record.quoteRequired === true;
+  const formattedCredits = formatCredits(credits, { creditUnit, estimated, tier, unitCount });
+  if (record.formattedCredits !== undefined && record.formattedCredits !== formattedCredits) {
+    throw new Error("Credit quote formattedCredits does not match its numeric credits and unit metadata.");
+  }
+  const formattedUnitCredits = canonicalFormattedUnitCredits(record, { creditUnit, unitCount });
 
   return {
     tier,
     creditUnit,
     credits,
-    formattedCredits: creditOnlyText(record.formattedCredits)
-      ?? formatCredits(credits, { creditUnit, estimated, tier }),
-    ...(finiteNumber(record.unitCredits) !== undefined
-      ? { formattedUnitCredits: formatCredits(finiteNumber(record.unitCredits)!, { creditUnit, tier }) }
-      : creditOnlyText(record.formattedUnitCredits)
-        ? { formattedUnitCredits: creditOnlyText(record.formattedUnitCredits)! }
-      : {}),
+    formattedCredits,
+    ...(formattedUnitCredits ? { formattedUnitCredits } : {}),
     ...(unitCount !== undefined ? { unitCount } : {}),
     estimated,
     quoteDependsOnInput,
@@ -112,12 +112,36 @@ export function versionedLegacyCreditQuote(value: unknown, contractVersion: unkn
 
 export function formatCredits(
   credits: number,
-  options: { creditUnit?: string; estimated?: boolean; tier?: "free" | "premium" } = {},
+  options: {
+    creditUnit?: string;
+    estimated?: boolean;
+    tier?: "free" | "premium";
+    unitCount?: number;
+  } = {},
 ): string {
   if (options.tier === "free" || credits === 0) return "0 credits";
   const amount = Number.isInteger(credits) ? String(credits) : String(Number(credits.toFixed(4)));
   if (options.estimated) return `${amount} credits estimated`;
+  if (options.unitCount !== undefined && options.unitCount > 1) return `${amount} credits total`;
   return `${amount} credits/${options.creditUnit || "run"}`;
+}
+
+function canonicalFormattedUnitCredits(
+  record: Record<string, unknown>,
+  options: { creditUnit: CreditUnit; unitCount: number | undefined },
+): string | undefined {
+  const derivedUnitCredits = options.unitCount !== undefined && options.unitCount > 0
+    ? finiteNumber(finiteNumber(record.credits)! / options.unitCount)
+    : undefined;
+  if (record.formattedUnitCredits === undefined) return undefined;
+  if (derivedUnitCredits === undefined) {
+    throw new Error("Credit quote formattedUnitCredits requires numeric unit credit metadata.");
+  }
+  const formattedUnitCredits = formatCredits(derivedUnitCredits, { creditUnit: options.creditUnit });
+  if (record.formattedUnitCredits !== undefined && record.formattedUnitCredits !== formattedUnitCredits) {
+    throw new Error("Credit quote formattedUnitCredits does not match its numeric credits and unit metadata.");
+  }
+  return formattedUnitCredits;
 }
 
 /**

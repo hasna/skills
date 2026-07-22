@@ -713,6 +713,12 @@ export function parsePublicConnectorPreflight(
         "connector", "required", "status", "connected", "scopes", "missingScopes", "operations",
         "authType", "setupLabel", "requiresAuth", "accountId", "profileName", "reason",
       ], label);
+      if (candidate.status === "ready" && Array.isArray(candidate.missingScopes) && candidate.missingScopes.length !== 0) {
+        throw new Error(`${label}.missingScopes must be empty when status is ready`);
+      }
+      if (candidate.status === "insufficient_scope" && Array.isArray(candidate.missingScopes) && candidate.missingScopes.length === 0) {
+        throw new Error(`${label}.missingScopes must identify at least one required scope`);
+      }
     }
     if (!isCompleteConnectorPreflight(candidate)) {
       if (options.strict) throw new Error(`${label} is incomplete or invalid`);
@@ -748,7 +754,7 @@ export function parsePublicConnectorPreflight(
       operations: safeConnectorValues(candidate.operations),
       authType,
       setupLabel: `Connect ${titleize(connector)}`,
-      requiresAuth: status !== "ready",
+      requiresAuth: status !== "ready" && status !== "unavailable",
       accountId: safeIdentifier(candidate.accountId) ?? null,
       profileName: safeProfileName(candidate.profileName) ?? null,
       reason: connectorReason(status),
@@ -765,6 +771,12 @@ export function parsePublicConnectorPreflight(
       }
       if (candidate.requiresAuth !== preflight.requiresAuth) {
         throw new Error(`${label}.requiresAuth must match status`);
+      }
+      if (status === "ready" && preflight.missingScopes.length !== 0) {
+        throw new Error(`${label}.missingScopes must be empty when status is ready`);
+      }
+      if (status === "insufficient_scope" && preflight.missingScopes.length === 0) {
+        throw new Error(`${label}.missingScopes must identify at least one required scope`);
       }
     }
     return [preflight];
@@ -960,12 +972,17 @@ function connectorContractsMatch(
   for (const [connector, requirement] of requirementMap) {
     const readiness = preflightMap.get(connector);
     if (!readiness) return false;
+    const allRequiredScopesMustBeMissing = readiness.status === "missing"
+      || readiness.status === "expired"
+      || readiness.status === "unavailable";
     if (
       requirement.required !== readiness.required
       || requirement.authType !== readiness.authType
       || !sameStringSet(requirement.scopes, readiness.scopes)
       || !sameStringSet(requirement.operations, readiness.operations)
       || (readiness.status === "ready" && (!readiness.connected || readiness.missingScopes.length !== 0))
+      || (readiness.status === "insufficient_scope" && readiness.missingScopes.length === 0)
+      || (allRequiredScopesMustBeMissing && !sameStringSet(requirement.scopes, readiness.missingScopes))
       || readiness.missingScopes.some((scope) => !requirement.scopes.includes(scope))
     ) {
       return false;
@@ -1225,13 +1242,15 @@ function isCompleteConnectorPreflight(record: Record<string, unknown>): boolean 
     && typeof record.connected === "boolean"
     && record.connected === (status === "ready")
     && typeof record.requiresAuth === "boolean"
-    && record.requiresAuth === (status !== "ready")
+    && record.requiresAuth === (status !== "ready" && status !== "unavailable")
     && typeof record.setupLabel === "string"
     && (record.accountId === null || safeIdentifier(record.accountId) !== undefined)
     && (record.profileName === null || safeProfileName(record.profileName) !== undefined)
     && (record.reason === null || typeof record.reason === "string")
     && areCompleteConnectorValues(record.scopes)
     && areCompleteConnectorValues(record.missingScopes)
+    && (status !== "ready" || safeConnectorValues(record.missingScopes).length === 0)
+    && (status !== "insufficient_scope" || safeConnectorValues(record.missingScopes).length > 0)
     && areCompleteConnectorValues(record.operations);
 }
 

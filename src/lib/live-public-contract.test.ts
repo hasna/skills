@@ -93,7 +93,7 @@ describe("live public contract promotion proof", () => {
     preflight.requiresAuth = false;
     preflight.reason = null;
     expect(() => validateLivePublicContract(contradictoryPreflight, expectation)).toThrow(
-      "quote.connectorPreflight[0] is incomplete or invalid",
+      "quote.connectorPreflight[0].missingScopes must be empty when status is ready",
     );
 
     const contradictoryAvailability = fixture();
@@ -123,6 +123,23 @@ describe("live public contract promotion proof", () => {
     mismatchedPreflight.operations = ["issues.list"];
     expect(() => validateLivePublicContract(quoteWithMismatchedConnectors, expectation)).toThrow(
       "quote connector requirements and preflight do not match",
+    );
+
+    const quoteWithContradictoryCredits = fixture();
+    const contradictoryCredits = (quoteWithContradictoryCredits.quote as { quote: Record<string, unknown> }).quote;
+    (contradictoryCredits.creditQuote as Record<string, unknown>).formattedCredits = "1 credit/image";
+    expect(() => validateLivePublicContract(quoteWithContradictoryCredits, expectation)).toThrow(
+      "formattedCredits does not match",
+    );
+
+    const quoteWithEmptyMissingScopes = fixture();
+    const emptyScopesQuote = (quoteWithEmptyMissingScopes.quote as { quote: Record<string, unknown> }).quote;
+    const emptyScopesPreflight = (emptyScopesQuote.connectorPreflight as Array<Record<string, unknown>>)[0]!;
+    emptyScopesPreflight.status = "insufficient_scope";
+    emptyScopesPreflight.missingScopes = [];
+    emptyScopesPreflight.reason = "Connector account is missing required scopes.";
+    expect(() => validateLivePublicContract(quoteWithEmptyMissingScopes, expectation)).toThrow(
+      "missingScopes must identify at least one required scope",
     );
 
     const malformedToolDependencies = fixture();

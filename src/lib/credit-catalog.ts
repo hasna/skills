@@ -183,7 +183,7 @@ function getInternalCreditConfiguration(slug: string, input?: unknown, args: str
       tier: "premium",
       creditUnit: "song",
       credits,
-      formattedCredits: `${formatCreditAmount(credits)} total`,
+      formattedCredits: `${formatCreditAmount(credits)} estimated`,
       formattedUnitCredits: `${formatCreditAmount(MUSIC_ALBUM_CREDITS_PER_SONG)}/song`,
       unitCount: songCount,
       estimated: true,

@@ -399,6 +399,26 @@ describe("remote skills client public contract", () => {
     }
   });
 
+  test("rejects a quote whose formatted credits contradict the numeric amount", async () => {
+    globalThis.fetch = (async () => Response.json({
+      skill: "image",
+      creditQuote: {
+        tier: "premium",
+        creditUnit: "run",
+        credits: 4,
+        formattedCredits: "1 credit/run",
+        estimated: false,
+        quoteDependsOnInput: false,
+        quoteRequired: true,
+        description: "Fixed credits per run.",
+      },
+      availability: { status: "available" },
+    })) as unknown as typeof fetch;
+
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+    await expect(client.quoteSkill("image")).rejects.toThrow("formattedCredits does not match");
+  });
+
   test("rejects connector requirement and preflight set or capability mismatches", async () => {
     const requirement = {
       connector: "linear",
@@ -433,6 +453,16 @@ describe("remote skills client public contract", () => {
       { connectorRequirements: [requirement], connectorPreflight: [{ ...preflight, scopes: ["issues:write"] }] },
       { connectorRequirements: [requirement], connectorPreflight: [{ ...preflight, operations: ["issues.list"] }] },
       { connectorRequirements: [requirement], connectorPreflight: [{ ...preflight, missingScopes: ["issues:read"] }] },
+      {
+        connectorRequirements: [requirement],
+        connectorPreflight: [{
+          ...preflight,
+          status: "insufficient_scope",
+          connected: false,
+          requiresAuth: true,
+          reason: "Connector account is missing required scopes.",
+        }],
+      },
     ];
     let index = 0;
     globalThis.fetch = (async () => Response.json({

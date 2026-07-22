@@ -86,6 +86,31 @@ describe("public credit presentation", () => {
     });
   });
 
+  test("treats numeric credits as authoritative and rejects contradictory display text", () => {
+    expect(() => toPublicCreditQuote({
+      tier: "premium",
+      creditUnit: "run",
+      credits: 4,
+      formattedCredits: "1 credit/run",
+    })).toThrow("formattedCredits does not match");
+
+    expect(toPublicCreditQuote({
+      tier: "premium",
+      creditUnit: "run",
+      credits: 4,
+    }).formattedCredits).toBe("4 credits/run");
+
+    expect(() => toPublicCreditQuote({
+      tier: "premium",
+      creditUnit: "image",
+      credits: 4,
+      unitCount: 2,
+      unitCredits: 1,
+      formattedCredits: "4 credits total",
+      formattedUnitCredits: "1 credits/image",
+    })).toThrow("formattedUnitCredits does not match");
+  });
+
   test("removes customer-visible monetary labels and field names recursively", () => {
     const payload = toCustomerCreditPayload({
       pricing: { tier: "premium", costCents: 25, formattedCost: "$0.25/run" },
@@ -213,8 +238,8 @@ describe("public credit presentation", () => {
     expect(JSON.stringify(quote)).not.toMatch(/openai|provider|usd|cost|margin/i);
   });
 
-  test("does not expose obfuscated execution metadata in formatted credits", () => {
-    const quote = toPublicCreditQuote({
+  test("rejects obfuscated execution metadata in formatted credits", () => {
+    expect(() => toPublicCreditQuote({
       tier: "premium",
       creditUnit: "run",
       credits: 8,
@@ -223,9 +248,7 @@ describe("public credit presentation", () => {
       quoteDependsOnInput: false,
       quoteRequired: false,
       description: "Fixed credits per run.",
-    });
-
-    expect(quote.formattedCredits).toBe("8 credits/run");
+    })).toThrow("formattedCredits does not match");
   });
 
   test("formats free, fixed, and estimated credits", () => {
