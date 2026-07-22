@@ -65,6 +65,25 @@ Protocol negotiation does not authorize a run. It only establishes which wire
 protocols the peers can use. Authentication, tenant entitlement, the exact
 signed `quoteToken`, unchanged input and arguments, explicit approval, replay
 protection, and server-side authorization remain separate mandatory checks.
+For an older self-hosted service that returns a paid quote without a token, the
+CLI and scheduler fail closed by default. A user may opt into the temporary
+Phase-A compatibility path with `--allow-unsigned-phase-a`; the client then
+computes a canonical `uqaf_v1_` approval fingerprint over the exact skill, run
+operation, input, arguments, credit quote, expiration, and execution
+`constraints`. It re-quotes the identical request after approval, rejects a
+newly signed quote or any changed approval field (even when the credit number is
+unchanged), and submits `approved: true` only when the quote remains unsigned
+and the fingerprints match. The flag is invalid in `local` and `cloud` modes,
+including no-op schedule and free or signed-token paths.
+
+MCP exposes the same boundary as `allowUnsignedPhaseA: true`. `quote_skill`
+returns `quoteFingerprint` for a paid unsigned self-hosted quote. After the user
+approves that exact quote, the caller supplies it as
+`approvedQuoteFingerprint` to `run_skill`. `approved: true` by itself never
+authorizes the unsigned compatibility path; `run_skill` re-quotes and requires
+an exact fingerprint match before submission. The fingerprint is a client-side
+comparison mechanism, not a server signature or a replacement for signed quote
+tokens.
 
 ## Canonical Modes
 

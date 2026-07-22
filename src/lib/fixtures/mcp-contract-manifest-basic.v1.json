@@ -57,6 +57,7 @@
       "properties": [
         "allowUnsignedPhaseA",
         "approved",
+        "approvedQuoteFingerprint",
         "args",
         "detail",
         "input",

@@ -10,6 +10,7 @@ export interface JsonSchemaObject {
   const?: unknown;
   default?: unknown;
   format?: string;
+  pattern?: string;
   minimum?: number;
   items?: JsonSchemaObject;
   properties?: Record<string, JsonSchemaObject>;
@@ -154,6 +155,15 @@ const paidRunApprovalSchema: JsonSchemaObject = {
 const quoteTokenSchema: JsonSchemaObject = {
   type: "string",
   description: "Opaque quote token returned by quote_skill for the exact approved input and arguments.",
+};
+const quoteFingerprintSchema: JsonSchemaObject = {
+  type: "string",
+  pattern: "^uqaf_v1_[a-f0-9]{64}$",
+  description: "Client-computed fingerprint returned by quote_skill for an unsigned Phase-A self-hosted quote. It binds the exact skill, run operation, input, arguments, constraints, expiration, and credit quote.",
+};
+const approvedQuoteFingerprintSchema: JsonSchemaObject = {
+  ...quoteFingerprintSchema,
+  description: "Exact quoteFingerprint that the caller received from quote_skill and the user approved. Required with allowUnsignedPhaseA for a paid unsigned self-hosted run.",
 };
 const allowUnsignedPhaseASchema: JsonSchemaObject = {
   type: "boolean",
@@ -556,6 +566,7 @@ const toolContracts: McpToolContract[] = [
       creditQuote: creditQuoteSchema,
       availability: skillAvailabilitySchema,
       quoteToken: quoteTokenSchema,
+      quoteFingerprint: quoteFingerprintSchema,
       expiresAt: { type: "string", format: "date-time", description: "Quote token expiration timestamp." },
       error: stringSchema("Optional error message when the quote cannot be used to run."),
       code: stringSchema("Optional stable error code."),
@@ -566,7 +577,7 @@ const toolContracts: McpToolContract[] = [
     name: "run_skill",
     title: "Run Skill",
     description: "Run a skill locally or through a configured remote runner. Returns compact stdout/stderr previews and run summaries by default; pass detail:true for full records.",
-    params: ["name", "input?", "args?", "approved?", "quoteToken?", "allowUnsignedPhaseA?", "detail?"],
+    params: ["name", "input?", "args?", "approved?", "quoteToken?", "allowUnsignedPhaseA?", "approvedQuoteFingerprint?", "detail?"],
     category: "execution",
     sideEffects: "local-process-or-remote-run",
     stable: true,
@@ -577,6 +588,7 @@ const toolContracts: McpToolContract[] = [
       approved: paidRunApprovalSchema,
       quoteToken: quoteTokenSchema,
       allowUnsignedPhaseA: allowUnsignedPhaseASchema,
+      approvedQuoteFingerprint: approvedQuoteFingerprintSchema,
       detail: { type: "boolean", default: false, description: "Return full stdout/stderr, remote run, and local run metadata." },
     }, ["name"]),
     outputSchema: runOutputSchema,

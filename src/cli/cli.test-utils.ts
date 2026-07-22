@@ -17,8 +17,12 @@ export async function testRemoteCreditQuoteResponse(req: Request): Promise<Respo
   if (req.method !== "POST") return undefined;
   const match = new URL(req.url).pathname.match(/\/api\/v1\/skills\/([^/]+)\/quote$/);
   if (!match?.[1]) return undefined;
+  const skillName = decodeURIComponent(match[1]);
   const body = await req.json().catch(() => ({})) as { input?: unknown; args?: string[] };
-  return Response.json({ creditQuote: getSkillCreditQuote(decodeURIComponent(match[1]), body.input, body.args ?? []) });
+  return Response.json({
+    quoteToken: `quote_test_${skillName}`,
+    creditQuote: getSkillCreditQuote(skillName, body.input, body.args ?? []),
+  });
 }
 
 function savedTestDeployment(cwd: string | undefined, home: string): { mode?: string; apiUrl?: string } {

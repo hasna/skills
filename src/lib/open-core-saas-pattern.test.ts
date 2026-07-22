@@ -181,6 +181,11 @@ describe("open-core product service pattern", () => {
     expect(compactContract).toContain("`426 Upgrade Required`");
     expect(compactContract).toContain("before quote, reservation, debit, or run creation");
     expect(compactContract.toLowerCase()).toContain("protocol negotiation does not authorize a run");
+    expect(compactContract).toContain("--allow-unsigned-phase-a");
+    expect(compactContract).toContain("allowUnsignedPhaseA: true");
+    expect(compactContract).toContain("quoteFingerprint");
+    expect(compactContract).toContain("approvedQuoteFingerprint");
+    expect(compactContract).toContain("any changed approval field");
   });
 
   test("uses npm trusted publishing with the supported Node runtime", () => {
@@ -205,6 +210,7 @@ describe("open-core product service pattern", () => {
   test("keeps scheduled credit approval free of legacy cents flags", () => {
     const schedule = readFileSync(join(root, "src/cli/commands/schedule.ts"), "utf8");
     expect(schedule).toContain("--max-credits <credits>");
+    expect(schedule).toContain("--allow-unsigned-phase-a");
     expect(schedule).not.toMatch(/max-paid-cents|paidTotalCents|maxPaidCents/);
   });
 

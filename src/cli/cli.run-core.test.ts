@@ -180,7 +180,10 @@ describe("CLI run core", () => {
           remoteCalls += 1;
           const url = new URL(req.url);
           if (url.pathname === "/api/v1/skills/logo-design/quote") {
-            return Response.json({ creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 50, formattedCredits: "50 credits/run" } });
+            return Response.json({
+              quoteToken: "quote_approval_required",
+              creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 50, formattedCredits: "50 credits/run" },
+            });
           }
           return Response.json({ error: "run should be blocked before remote submission" }, { status: 500 });
         },
@@ -229,13 +232,22 @@ describe("CLI run core", () => {
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-premium-async-"));
       const server = Bun.serve({
         port: 0,
-        fetch(req) {
+        async fetch(req) {
           const url = new URL(req.url);
           expect(req.headers.get("authorization")).toBe("Bearer sk_test_async");
           if (url.pathname === "/api/v1/skills/logo-design/quote" && req.method === "POST") {
-            return Response.json({ creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 50, formattedCredits: "50 credits/run" } });
+            return Response.json({
+              quoteToken: "quote_async_exact",
+              creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 50, formattedCredits: "50 credits/run" },
+            });
           }
           if (url.pathname === "/api/v1/runs/logo-design" && req.method === "POST") {
+            expect(await req.json()).toEqual({
+              input: {},
+              args: ["make a mark"],
+              quoteToken: "quote_async_exact",
+              approved: true,
+            });
             return Response.json(
               {
                 id: "run_async",
@@ -387,6 +399,20 @@ describe("CLI run core", () => {
         const apiUrl = `http://127.0.0.1:${server.port}`;
         const setup = await runCliInCwd(["setup", "--mode", "cloud", "--api-url", apiUrl, "--json"], tmpDir, { HOME: tmpDir });
         expect(setup.exitCode).toBe(0);
+        const invalidCompatibility = await runCliInCwd([
+          "run",
+          "--yes",
+          "--allow-unsigned-phase-a",
+          "--json",
+          "image",
+          "a bright forest",
+        ], tmpDir, {
+          HOME: tmpDir,
+          SKILLS_API_KEY: "sk_test_cloud_authority",
+        });
+        expect(invalidCompatibility.exitCode).toBe(1);
+        expect(JSON.parse(invalidCompatibility.stdout)).toMatchObject({ code: "UNSIGNED_PHASE_A_SELF_HOSTED_ONLY" });
+        expect(calls).toEqual([]);
         const run = await runCliInCwd(["run", "--yes", "--json", "image", "a bright forest"], tmpDir, {
           HOME: tmpDir,
           SKILLS_API_KEY: "sk_test_cloud_authority",
@@ -521,6 +547,162 @@ describe("CLI run core", () => {
         rmSync(tmpDir, { recursive: true, force: true });
       }
     });
+
+    test("paid unsigned self-hosted runs require explicit Phase-A opt-in and re-verification", async () => {
+      const { mkdtempSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-selfhost-unsigned-phase-a-"));
+      let quoteCalls = 0;
+      const runBodies: unknown[] = [];
+      const server = Bun.serve({
+        port: 0,
+        async fetch(req) {
+          const url = new URL(req.url);
+          if (url.pathname === "/api/v1/skills/logo-design/quote" && req.method === "POST") {
+            quoteCalls += 1;
+            return Response.json({
+              availability: { status: "available" },
+              creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 7, formattedCredits: "7 credits/run" },
+            });
+          }
+          if (url.pathname === "/api/v1/runs/logo-design" && req.method === "POST") {
+            runBodies.push(await req.json());
+            return Response.json({ id: "run_unsigned_phase_a", skill: "logo-design", status: "queued" }, { status: 202 });
+          }
+          if (url.pathname === "/api/v1/runs/run_unsigned_phase_a/logs" && req.method === "GET") {
+            return Response.json([]);
+          }
+          return Response.json({ error: `unexpected ${req.method} ${url.pathname}` }, { status: 500 });
+        },
+      });
+
+      try {
+        const apiUrl = `http://127.0.0.1:${server.port}`;
+        await runCliInCwd(["setup", "--mode", "self-hosted", "--api-url", apiUrl, "--json"], tmpDir, { HOME: tmpDir });
+        const env = { HOME: tmpDir, SKILLS_API_KEY: "sk_test_selfhost_unsigned_phase_a" };
+
+        const denied = await runCliInCwd(["run", "--yes", "--json", "logo-design", "legacy mark"], tmpDir, env);
+        expect(denied.exitCode).toBe(1);
+        expect(JSON.parse(denied.stdout)).toMatchObject({ code: "SELF_HOSTED_QUOTE_TOKEN_REQUIRED" });
+        expect(quoteCalls).toBe(1);
+        expect(runBodies).toEqual([]);
+
+        const allowed = await runCliInCwd([
+          "run",
+          "--yes",
+          "--allow-unsigned-phase-a",
+          "--json",
+          "logo-design",
+          "legacy mark",
+        ], tmpDir, env);
+        expect(allowed.exitCode).toBe(0);
+        expect(JSON.parse(allowed.stdout).remoteRun).toMatchObject({ id: "run_unsigned_phase_a" });
+        expect(quoteCalls).toBe(3);
+        expect(runBodies).toEqual([{ input: {}, args: ["legacy mark"], approved: true }]);
+      } finally {
+        server.stop(true);
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("unsigned Phase-A permission cannot bypass a newly signed self-hosted quote", async () => {
+      const { mkdtempSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-selfhost-unsigned-signed-race-"));
+      let quoteCalls = 0;
+      let runCalls = 0;
+      const server = Bun.serve({
+        port: 0,
+        fetch(req) {
+          const url = new URL(req.url);
+          if (url.pathname === "/api/v1/skills/logo-design/quote" && req.method === "POST") {
+            quoteCalls += 1;
+            return Response.json({
+              availability: { status: "available" },
+              ...(quoteCalls === 2 ? { quoteToken: "quote_became_signed" } : {}),
+              creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 7, formattedCredits: "7 credits/run" },
+            });
+          }
+          if (url.pathname === "/api/v1/runs/logo-design") runCalls += 1;
+          return Response.json({ error: "run must not be submitted" }, { status: 500 });
+        },
+      });
+
+      try {
+        const apiUrl = `http://127.0.0.1:${server.port}`;
+        await runCliInCwd(["setup", "--mode", "self-hosted", "--api-url", apiUrl, "--json"], tmpDir, { HOME: tmpDir });
+        const run = await runCliInCwd([
+          "run",
+          "--yes",
+          "--allow-unsigned-phase-a",
+          "--json",
+          "logo-design",
+          "raced mark",
+        ], tmpDir, { HOME: tmpDir, SKILLS_API_KEY: "sk_test_selfhost_signed_race" });
+        expect(run.exitCode).toBe(1);
+        expect(JSON.parse(run.stdout)).toMatchObject({ code: "SELF_HOSTED_SIGNED_QUOTE_REQUIRES_TOKEN" });
+        expect(quoteCalls).toBe(2);
+        expect(runCalls).toBe(0);
+      } finally {
+        server.stop(true);
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    for (const mutation of ["creditUnit", "skill", "operation", "constraints"] as const) {
+      test(`unsigned Phase-A rejects a same-credit ${mutation} quote mutation`, async () => {
+        const { mkdtempSync, rmSync } = require("fs");
+        const { tmpdir } = require("os");
+        const tmpDir = mkdtempSync(require("path").join(tmpdir(), `cli-selfhost-unsigned-${mutation}-`));
+        let quoteCalls = 0;
+        let runCalls = 0;
+        const server = Bun.serve({
+          port: 0,
+          fetch(req) {
+            const url = new URL(req.url);
+            if (url.pathname === "/api/v1/skills/logo-design/quote" && req.method === "POST") {
+              quoteCalls += 1;
+              const changed = quoteCalls === 2;
+              return Response.json({
+                skill: mutation === "skill" && changed ? "image" : "logo-design",
+                operation: mutation === "operation" && changed ? "batch" : "run",
+                constraints: { maxOutputs: mutation === "constraints" && changed ? 2 : 1 },
+                availability: { status: "available" },
+                creditQuote: {
+                  ...AUTHORITATIVE_TEST_QUOTE,
+                  tier: "premium",
+                  creditUnit: mutation === "creditUnit" && changed ? "image" : "run",
+                  credits: 7,
+                  formattedCredits: mutation === "creditUnit" && changed ? "7 credits/image" : "7 credits/run",
+                },
+              });
+            }
+            if (url.pathname === "/api/v1/runs/logo-design") runCalls += 1;
+            return Response.json({ error: "run must not be submitted" }, { status: 500 });
+          },
+        });
+
+        try {
+          const apiUrl = `http://127.0.0.1:${server.port}`;
+          await runCliInCwd(["setup", "--mode", "self-hosted", "--api-url", apiUrl, "--json"], tmpDir, { HOME: tmpDir });
+          const run = await runCliInCwd([
+            "run",
+            "--yes",
+            "--allow-unsigned-phase-a",
+            "--json",
+            "logo-design",
+            "mutated mark",
+          ], tmpDir, { HOME: tmpDir, SKILLS_API_KEY: `sk_test_selfhost_${mutation}_mutation` });
+          expect(run.exitCode).toBe(1);
+          expect(JSON.parse(run.stdout).code).toMatch(/^SELF_HOSTED_UNSIGNED_(QUOTE_CHANGED|REQUote_FAILED)$/i);
+          expect(quoteCalls).toBe(2);
+          expect(runCalls).toBe(0);
+        } finally {
+          server.stop(true);
+          rmSync(tmpDir, { recursive: true, force: true });
+        }
+      });
+    }
 
     test("cloud mode rejects unavailable skills before quote or charge", async () => {
       const { mkdtempSync, rmSync } = require("fs");
@@ -746,7 +928,10 @@ describe("CLI run core", () => {
           const url = new URL(req.url);
           expect(req.headers.get("authorization")).toBe("Bearer sk_test_wait");
           if (url.pathname === "/api/v1/skills/logo-design/quote" && req.method === "POST") {
-            return Response.json({ creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 50, formattedCredits: "50 credits/run" } });
+            return Response.json({
+              quoteToken: "quote_wait_exact",
+              creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 50, formattedCredits: "50 credits/run" },
+            });
           }
           if (url.pathname === "/api/v1/runs/logo-design" && req.method === "POST") {
             return Response.json(
@@ -851,7 +1036,10 @@ describe("CLI run core", () => {
           const url = new URL(req.url);
           expect(req.headers.get("authorization")).toBe("Bearer sk_test_failed");
           if (url.pathname === "/api/v1/skills/logo-design/quote" && req.method === "POST") {
-            return Response.json({ creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 50, formattedCredits: "50 credits/run" } });
+            return Response.json({
+              quoteToken: "quote_failed_exact",
+              creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 50, formattedCredits: "50 credits/run" },
+            });
           }
           if (url.pathname === "/api/v1/runs/logo-design" && req.method === "POST") {
             return Response.json(

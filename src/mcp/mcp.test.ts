@@ -957,7 +957,12 @@ version: 0.3.0
       await client.initialize();
       const response = await client.request("tools/call", {
         name: "run_skill",
-        arguments: { name: "logo-design", approved: true, allowUnsignedPhaseA: true },
+        arguments: {
+          name: "logo-design",
+          approved: true,
+          allowUnsignedPhaseA: true,
+          approvedQuoteFingerprint: `uqaf_v1_${"a".repeat(64)}`,
+        },
       }, 863);
       expect(response.result.isError).toBe(true);
       expect(JSON.parse(response.result.content[0].text)).toMatchObject({ code: "SELF_HOSTED_SIGNED_QUOTE_REQUIRES_TOKEN" });
@@ -997,6 +1002,15 @@ version: 0.3.0
     const client = new McpClient({ HOME: tmpDir, SKILLS_API_KEY: "selfhost-unsigned-fixture" });
     try {
       await client.initialize();
+      const quoteResponse = await client.request("tools/call", {
+        name: "quote_skill",
+        arguments: {
+          name: "logo-design",
+          input: { brief: "legacy operator mark" },
+        },
+      }, 8640);
+      const quoted = JSON.parse(quoteResponse.result.content[0].text);
+      expect(quoted.quoteFingerprint).toMatch(/^uqaf_v1_[a-f0-9]{64}$/);
       const response = await client.request("tools/call", {
         name: "run_skill",
         arguments: {
@@ -1004,10 +1018,11 @@ version: 0.3.0
           input: { brief: "legacy operator mark" },
           approved: true,
           allowUnsignedPhaseA: true,
+          approvedQuoteFingerprint: quoted.quoteFingerprint,
         },
       }, 864);
       expect(response.result.isError).not.toBe(true);
-      expect(quoteCalls).toBe(1);
+      expect(quoteCalls).toBe(2);
       expect(submittedBody).toEqual({
         input: { brief: "legacy operator mark" },
         args: [],
@@ -1019,6 +1034,125 @@ version: 0.3.0
       rmSync(tmpDir, { recursive: true, force: true });
     }
   }, 15000);
+
+  test("unsigned Phase-A MCP runs require the approved quote fingerprint", async () => {
+    const { mkdtempSync, rmSync } = require("fs");
+    const { tmpdir } = require("os");
+    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-selfhost-missing-approved-fingerprint-"));
+    let remoteCalls = 0;
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        remoteCalls += 1;
+        return Response.json({ error: "no remote call expected" }, { status: 500 });
+      },
+    });
+    writeMcpModeConfig(tmpDir, "self-hosted", `http://127.0.0.1:${server.port}`);
+    const client = new McpClient({ HOME: tmpDir, SKILLS_API_KEY: "selfhost-missing-approved-fingerprint" });
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "run_skill",
+        arguments: {
+          name: "logo-design",
+          approved: true,
+          allowUnsignedPhaseA: true,
+        },
+      }, 8641);
+      expect(response.result.isError).toBe(true);
+      expect(JSON.parse(response.result.content[0].text)).toMatchObject({
+        code: "SELF_HOSTED_UNSIGNED_APPROVED_FINGERPRINT_REQUIRED",
+      });
+      expect(remoteCalls).toBe(0);
+    } finally {
+      await client.close();
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  test("unsigned Phase-A MCP runs reject a changed same-credit quote fingerprint", async () => {
+    const { mkdtempSync, rmSync } = require("fs");
+    const { tmpdir } = require("os");
+    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-selfhost-changed-approved-fingerprint-"));
+    let quoteCalls = 0;
+    let runCalls = 0;
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname.endsWith("/quote")) {
+          quoteCalls += 1;
+          return Response.json({
+            skill: "logo-design",
+            operation: "run",
+            constraints: { maxOutputs: quoteCalls === 2 ? 2 : 1 },
+            creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 12, formattedCredits: "12 credits/run" },
+          });
+        }
+        if (url.pathname.startsWith("/api/v1/runs/")) runCalls += 1;
+        return Response.json({ error: "run must not be submitted" }, { status: 500 });
+      },
+    });
+    writeMcpModeConfig(tmpDir, "self-hosted", `http://127.0.0.1:${server.port}`);
+    const client = new McpClient({ HOME: tmpDir, SKILLS_API_KEY: "selfhost-changed-approved-fingerprint" });
+    try {
+      await client.initialize();
+      const quoteResponse = await client.request("tools/call", {
+        name: "quote_skill",
+        arguments: { name: "logo-design" },
+      }, 8642);
+      const quoted = JSON.parse(quoteResponse.result.content[0].text);
+      const response = await client.request("tools/call", {
+        name: "run_skill",
+        arguments: {
+          name: "logo-design",
+          approved: true,
+          allowUnsignedPhaseA: true,
+          approvedQuoteFingerprint: quoted.quoteFingerprint,
+        },
+      }, 8643);
+      expect(response.result.isError).toBe(true);
+      expect(JSON.parse(response.result.content[0].text)).toMatchObject({
+        code: "SELF_HOSTED_UNSIGNED_QUOTE_CHANGED",
+      });
+      expect(quoteCalls).toBe(2);
+      expect(runCalls).toBe(0);
+    } finally {
+      await client.close();
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  test("allowUnsignedPhaseA is rejected outside self-hosted mode before free, token, or approval paths", async () => {
+    const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require("fs");
+    const { tmpdir } = require("os");
+    for (const mode of ["local", "cloud"] as const) {
+      const tmpDir = mkdtempSync(join(tmpdir(), `mcp-invalid-unsigned-${mode}-`));
+      writeMcpModeConfig(tmpDir, mode);
+      const client = new McpClient({ HOME: tmpDir });
+      try {
+        await client.initialize();
+        const response = await client.request("tools/call", {
+          name: "run_skill",
+          arguments: {
+            name: "markdown-validator",
+            approved: true,
+            quoteToken: "signed_but_invalid_mode",
+            allowUnsignedPhaseA: true,
+          },
+        }, mode === "local" ? 8644 : 8645);
+        expect(response.result.isError).toBe(true);
+        expect(JSON.parse(response.result.content[0].text)).toMatchObject({
+          code: "UNSIGNED_PHASE_A_SELF_HOSTED_ONLY",
+        });
+      } finally {
+        await client.close();
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    }
+  }, 30000);
 
   test("run_skill rejects approved paid cloud calls without the previously quoted token", async () => {
     const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require("fs");
@@ -1101,6 +1235,15 @@ version: 0.3.0
     });
     try {
       await client.initialize();
+      const quoteResponse = await client.request("tools/call", {
+        name: "quote_skill",
+        arguments: {
+          name: "logo-design",
+          args: ["make a mark"],
+        },
+      }, 850);
+      const quoted = JSON.parse(quoteResponse.result.content[0].text);
+      expect(quoted.quoteFingerprint).toMatch(/^uqaf_v1_[a-f0-9]{64}$/);
       const response = await client.request("tools/call", {
         name: "run_skill",
         arguments: {
@@ -1108,6 +1251,7 @@ version: 0.3.0
           args: ["make a mark"],
           approved: true,
           allowUnsignedPhaseA: true,
+          approvedQuoteFingerprint: quoted.quoteFingerprint,
         },
       }, 85);
       expect(response).not.toBeNull();

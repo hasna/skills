@@ -7,6 +7,7 @@ import type { Command } from "commander";
 import { getDeploymentSetupCommand, resolveCurrentDeploymentMode } from "../../lib/deployment-mode.js";
 import { loadRemoteSkill } from "../../lib/remote-registry.js";
 import { formatCredits, toCustomerCreditPayload, toPublicCreditQuote } from "../../lib/public-credits.js";
+import { createUnsignedQuoteApprovalFingerprint } from "../../lib/unsigned-quote-approval.js";
 import {
   addSchedule, listSchedules, removeSchedule, setScheduleEnabled,
   getDueSchedules, recordScheduleRun, validateCron, getNextRun,
@@ -113,9 +114,28 @@ export function registerSchedule(parent: Command) {
     .option("--dry-run", "Show which schedules are due without running them", false)
     .option("--approve-credits", "Approve due remote schedules to use account credits", false)
     .option("--max-credits <credits>", "Maximum credits approved for this run")
+    .option(
+      "--allow-unsigned-phase-a",
+      "Explicitly allow paid runs on an older self-hosted service without signed quote tokens",
+      false,
+    )
     .option("--json", "Output as JSON", false)
     .description("Execute all due schedules now")
-    .action(async (options: { dryRun: boolean; approveCredits: boolean; maxCredits?: string; json: boolean }) => {
+    .action(async (options: {
+      dryRun: boolean;
+      approveCredits: boolean;
+      maxCredits?: string;
+      allowUnsignedPhaseA: boolean;
+      json: boolean;
+    }) => {
+      const mode = resolveCurrentDeploymentMode();
+      if (options.allowUnsignedPhaseA && mode !== "self-hosted") {
+        const error = "--allow-unsigned-phase-a is valid only for an explicitly selected self-hosted service.";
+        if (options.json) console.log(JSON.stringify({ ran: 0, error, code: "UNSIGNED_PHASE_A_SELF_HOSTED_ONLY" }));
+        else console.error(chalk.red(`✗ ${error}`));
+        process.exitCode = 1;
+        return;
+      }
       const due = getDueSchedules();
       if (!due.length) { console.log(options.json ? JSON.stringify({ ran: 0, schedules: [] }) : chalk.dim("No schedules are due.")); return; }
       const dueDetails = await Promise.all(due.map((schedule) => describeDueSchedule(schedule)));
@@ -156,7 +176,12 @@ export function registerSchedule(parent: Command) {
       }
       const prepared = await Promise.all(due.map(async (schedule) => {
         try {
-          return { schedule, execution: await prepareScheduledSkill(schedule.skill, schedule.args ?? []) };
+          return {
+            schedule,
+            execution: await prepareScheduledSkill(schedule.skill, schedule.args ?? [], {
+              allowUnsignedPhaseA: options.allowUnsignedPhaseA,
+            }),
+          };
         } catch (error) {
           return { schedule, error: (error as Error).message };
         }
@@ -210,6 +235,7 @@ export function registerSchedule(parent: Command) {
           results.push({ name: s.name, skill: s.skill, status: "error", error: (err as Error).message });
         }
       }
+      if (results.some((result) => result.status === "error")) process.exitCode = 1;
       if (options.json) console.log(JSON.stringify(toCustomerCreditPayload({ ran: results.length, results })));
       else {
         for (const r of results) {
@@ -253,7 +279,11 @@ interface PreparedScheduledSkill {
   execute: () => Promise<{ creditBacked: boolean; credits?: number; creditQuote?: ReturnType<typeof toPublicCreditQuote> }>;
 }
 
-async function prepareScheduledSkill(skillName: string, args: string[]): Promise<PreparedScheduledSkill> {
+async function prepareScheduledSkill(
+  skillName: string,
+  args: string[],
+  options: { allowUnsignedPhaseA?: boolean } = {},
+): Promise<PreparedScheduledSkill> {
   const { getSkill } = await import("../../lib/registry.js");
   const skill = getSkill(skillName);
   if (!skill) throw new Error(`Skill '${skillName}' not found`);
@@ -280,6 +310,7 @@ async function prepareScheduledSkill(skillName: string, args: string[]): Promise
     const { RemoteSkillsClient } = await import("../../lib/remote-client.js");
     const client = new RemoteSkillsClient(apiKey);
     let quoteToken: string | undefined;
+    let unsignedQuoteFingerprint: string | undefined;
     {
       const liveQuote = await client.quoteSkill(skill.name, {}, args);
       if (liveQuote?.error || liveQuote?.availability?.status === "unavailable") {
@@ -291,17 +322,66 @@ async function prepareScheduledSkill(skillName: string, args: string[]): Promise
       if (mode === "cloud" && creditQuote.credits > 0 && !quoteToken) {
         throw new Error("The cloud quote did not include the required quote token. No credits were charged.");
       }
+      if (mode === "self-hosted" && creditQuote.credits > 0 && !quoteToken) {
+        unsignedQuoteFingerprint = createUnsignedQuoteApprovalFingerprint({
+          skill: skill.name,
+          operation: "run",
+          input: {},
+          args,
+          remoteQuote: liveQuote,
+        });
+      }
+      if (
+        mode === "self-hosted"
+        && creditQuote.credits > 0
+        && !quoteToken
+        && options.allowUnsignedPhaseA !== true
+      ) {
+        throw new Error("SELF_HOSTED_QUOTE_TOKEN_REQUIRED: The selected self-hosted service returned a paid quote without a signed quote token. Retry only with --allow-unsigned-phase-a after reviewing the quote, or upgrade the service. No credits were charged.");
+      }
     }
     return {
       creditBacked: true,
       credits: creditQuote.credits,
       creditQuote,
       execute: async () => {
+        let runAuthorization: import("../../lib/remote-client.js").RemoteRunAuthorization = quoteToken
+          ? { quoteToken, approved: true }
+          : {};
+        if (
+          mode === "self-hosted"
+          && creditQuote.credits > 0
+          && !quoteToken
+          && options.allowUnsignedPhaseA === true
+        ) {
+          const liveQuote = await client.quoteSkill(skill.name, {}, args);
+          if (liveQuote?.error || liveQuote?.availability?.status === "unavailable") {
+            throw new Error(`${liveQuote?.availability?.code || liveQuote?.code || "SELF_HOSTED_QUOTE_UNAVAILABLE"}: ${liveQuote?.availability?.message || liveQuote?.detail || liveQuote?.error || "Self-hosted execution is unavailable"}. No credits were charged.`);
+          }
+          if (!liveQuote?.creditQuote) {
+            throw new Error("The selected self-hosted service did not return a creditQuote. No credits were charged.");
+          }
+          const reverifiedQuote = toPublicCreditQuote(liveQuote.creditQuote);
+          if (typeof liveQuote.quoteToken === "string" && liveQuote.quoteToken.length > 0) {
+            throw new Error("SELF_HOSTED_SIGNED_QUOTE_REQUIRES_TOKEN: The selected self-hosted service now returns a signed quote. Review a new schedule run so its exact token can be forwarded; unsigned Phase-A permission cannot bypass it. No credits were charged.");
+          }
+          const reverifiedFingerprint = createUnsignedQuoteApprovalFingerprint({
+            skill: skill.name,
+            operation: "run",
+            input: {},
+            args,
+            remoteQuote: liveQuote,
+          });
+          if (!unsignedQuoteFingerprint || reverifiedFingerprint !== unsignedQuoteFingerprint) {
+            throw new Error(`SELF_HOSTED_UNSIGNED_QUOTE_CHANGED: The self-hosted quote changed after approval (${creditQuote.formattedCredits} to ${reverifiedQuote.formattedCredits}). Review and approve the new skill, operation, constraints, and credit quote before running. No credits were charged.`);
+          }
+          runAuthorization = { approved: true };
+        }
         const run = await client.submitRun(
           skill.name,
           {},
           args,
-          mode === "cloud" || quoteToken ? { quoteToken, approved: true } : {},
+          runAuthorization,
         );
         if (run.error) throw new Error(String(run.error));
         return { creditBacked: true, credits: creditQuote.credits, creditQuote };

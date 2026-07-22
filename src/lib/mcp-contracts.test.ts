@@ -58,6 +58,11 @@ describe("MCP contract manifest", () => {
       approved: { type: "boolean", description: expect.stringContaining("approved") },
       quoteToken: { type: "string", description: expect.stringContaining("quote") },
       allowUnsignedPhaseA: { type: "boolean", description: expect.stringContaining("self-hosted") },
+      approvedQuoteFingerprint: {
+        type: "string",
+        pattern: "^uqaf_v1_[a-f0-9]{64}$",
+        description: expect.stringContaining("quoteFingerprint"),
+      },
     });
     expect(byName.get("quote_skill")?.outputSchema).toMatchObject({
       required: ["skill", "creditQuote", "availability"],
@@ -80,6 +85,7 @@ describe("MCP contract manifest", () => {
           },
         },
         quoteToken: { type: "string" },
+        quoteFingerprint: { type: "string", pattern: "^uqaf_v1_[a-f0-9]{64}$" },
         expiresAt: { type: "string", format: "date-time" },
         error: { type: "string" },
         code: { type: "string" },

@@ -48,6 +48,10 @@ import { getHostedRunAvailability } from "../lib/hosted-availability.js";
 import { getDeploymentSetupCommand, resolveCurrentDeploymentMode } from "../lib/deployment-mode.js";
 import { loadRemoteSkill } from "../lib/remote-registry.js";
 import { toCustomerCreditPayload, toPublicCreditQuote } from "../lib/public-credits.js";
+import {
+  createUnsignedQuoteApprovalFingerprint,
+  isUnsignedQuoteApprovalFingerprint,
+} from "../lib/unsigned-quote-approval.js";
 
 export function registerOperationTools(server: McpServer): void {
   server.registerTool("scaffold_skill", {
@@ -292,6 +296,7 @@ export function registerOperationTools(server: McpServer): void {
     let creditQuote = getSkillCreditQuote(skill.name, runInput, runArgs);
     let quoteToken: string | undefined;
     let quoteExpiresAt: string | undefined;
+    let quoteFingerprint: string | undefined;
     let availability: { status: "available" | "unavailable"; code?: string; message?: string; details?: string[] } = { status: "available" };
     if (mode === "local" && creditQuote.tier === "premium") {
       return mcpError("REMOTE_MODE_REQUIRED", `${skill.name} requires cloud or self-hosted mode.`, ["skills setup --mode cloud"]);
@@ -352,6 +357,15 @@ export function registerOperationTools(server: McpServer): void {
             creditQuote = toPublicCreditQuote(liveQuote.creditQuote);
             quoteToken = typeof liveQuote?.quoteToken === "string" ? liveQuote.quoteToken : undefined;
             quoteExpiresAt = typeof liveQuote?.expiresAt === "string" ? liveQuote.expiresAt : undefined;
+            if (creditQuote.credits > 0 && !quoteToken) {
+              quoteFingerprint = createUnsignedQuoteApprovalFingerprint({
+                skill: skill.name,
+                operation: "run",
+                input: runInput,
+                args: runArgs,
+                remoteQuote: liveQuote,
+              });
+            }
           } else {
             return mcpError("SELF_HOSTED_QUOTE_INVALID", "The selected self-hosted service did not return a creditQuote. No credits were charged.");
           }
@@ -387,6 +401,7 @@ export function registerOperationTools(server: McpServer): void {
       availability: { status: "available" },
       ...(quoteToken ? { quoteToken } : {}),
       ...(quoteExpiresAt ? { expiresAt: quoteExpiresAt } : {}),
+      ...(quoteFingerprint ? { quoteFingerprint } : {}),
     });
   });
 
@@ -400,9 +415,10 @@ export function registerOperationTools(server: McpServer): void {
       approved: z.boolean().optional(),
       quoteToken: z.string().optional(),
       allowUnsignedPhaseA: z.boolean().optional(),
+      approvedQuoteFingerprint: z.string().regex(/^uqaf_v1_[a-f0-9]{64}$/).optional(),
       detail: z.boolean().optional(),
     },
-  }, async ({ name, input, args, approved, quoteToken, allowUnsignedPhaseA, detail }) => {
+  }, async ({ name, input, args, approved, quoteToken, allowUnsignedPhaseA, approvedQuoteFingerprint, detail }) => {
     const skill = getSkill(name);
     if (!skill) {
       return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
@@ -426,6 +442,12 @@ export function registerOperationTools(server: McpServer): void {
     }
 
     const mode = resolveCurrentDeploymentMode();
+    if (allowUnsignedPhaseA === true && mode !== "self-hosted") {
+      return mcpError(
+        "UNSIGNED_PHASE_A_SELF_HOSTED_ONLY",
+        "allowUnsignedPhaseA is valid only for an explicitly selected self-hosted service.",
+      );
+    }
     const apiKey = mode === "local" ? null : getApiKey();
     let creditQuote = getSkillCreditQuote(skillName, runInput, runArgs);
     let credits = isPremiumSkill(skillName) ? creditQuote.credits : undefined;
@@ -513,6 +535,13 @@ export function registerOperationTools(server: McpServer): void {
               ["quote_skill", "run_skill approved=true quoteToken=<approved token>"],
             );
           } else {
+            if (!isUnsignedQuoteApprovalFingerprint(approvedQuoteFingerprint)) {
+              return mcpError(
+                "SELF_HOSTED_UNSIGNED_APPROVED_FINGERPRINT_REQUIRED",
+                "The approved unsigned self-hosted run is missing the exact quoteFingerprint returned by quote_skill. Call quote_skill with the same input and args, obtain user approval, then retry with approvedQuoteFingerprint and allowUnsignedPhaseA: true. No credits were charged.",
+                ["quote_skill", "run_skill approved=true allowUnsignedPhaseA=true approvedQuoteFingerprint=<approved fingerprint>"],
+              );
+            }
             const liveQuote = await remoteClient.quoteSkill(skillName, runInput, runArgs);
             if (liveQuote?.error || liveQuote?.availability?.status === "unavailable") {
               const message = String(liveQuote?.availability?.message || liveQuote?.detail || liveQuote?.error || "Self-hosted execution is unavailable");
@@ -528,6 +557,20 @@ export function registerOperationTools(server: McpServer): void {
                 "SELF_HOSTED_SIGNED_QUOTE_REQUIRES_TOKEN",
                 "The selected self-hosted service returned a signed quote. Call quote_skill, approve that exact quote, and retry with its quoteToken; unsigned Phase-A permission cannot bypass a signed quote.",
                 ["quote_skill", "run_skill approved=true quoteToken=<approved token>"],
+              );
+            }
+            const reverifiedFingerprint = createUnsignedQuoteApprovalFingerprint({
+              skill: skillName,
+              operation: "run",
+              input: runInput,
+              args: runArgs,
+              remoteQuote: liveQuote,
+            });
+            if (reverifiedFingerprint !== approvedQuoteFingerprint) {
+              return mcpError(
+                "SELF_HOSTED_UNSIGNED_QUOTE_CHANGED",
+                "The unsigned self-hosted quote no longer matches the user-approved quote fingerprint. Call quote_skill again and approve the new skill, operation, constraints, and credit quote. No credits were charged.",
+                ["quote_skill", "run_skill approved=true allowUnsignedPhaseA=true approvedQuoteFingerprint=<approved fingerprint>"],
               );
             }
           }

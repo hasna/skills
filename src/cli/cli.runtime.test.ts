@@ -404,6 +404,203 @@ describe("CLI runtime and misc commands", () => {
       }
     });
 
+    test("paid self-hosted schedules gate unsigned Phase-A and preserve exact signed tokens", async () => {
+      const { mkdtempSync, readFileSync, rmSync, writeFileSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-schedule-unsigned-phase-a-"));
+      type Phase = "default" | "explicit" | "transition" | "signed";
+      let phase: Phase = "default";
+      let phaseQuoteCalls = 0;
+      const runBodies: Array<{ phase: Phase; body: unknown }> = [];
+      const server = Bun.serve({
+        port: 0,
+        async fetch(req) {
+          const url = new URL(req.url);
+          if (url.pathname === "/api/v1/skills/logo-design/quote" && req.method === "POST") {
+            phaseQuoteCalls += 1;
+            const quoteToken = phase === "signed"
+              ? `signed-${phaseQuoteCalls}`
+              : phase === "transition" && phaseQuoteCalls === 3
+                ? "quote_transition_signed"
+                : undefined;
+            return Response.json({
+              availability: { status: "available" },
+              ...(quoteToken ? { quoteToken } : {}),
+              creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 6, formattedCredits: "6 credits/run" },
+            });
+          }
+          if (url.pathname === "/api/v1/runs/logo-design" && req.method === "POST") {
+            runBodies.push({ phase, body: await req.json() });
+            return Response.json({ id: `run_schedule_${phase}`, skill: "logo-design", status: "queued" }, { status: 202 });
+          }
+          return Response.json({ error: `unexpected ${req.method} ${url.pathname}` }, { status: 500 });
+        },
+      });
+
+      try {
+        const apiUrl = `http://127.0.0.1:${server.port}`;
+        await runCliInCwd(["setup", "--mode", "self-hosted", "--api-url", apiUrl, "--json"], tmpDir, { HOME: tmpDir });
+        const env = { HOME: tmpDir, SKILLS_API_KEY: "sk_test_schedule_unsigned_phase_a" };
+        await runCliInCwd(["schedule", "add", "logo-design", "*/5 * * * *", "--name", "legacy-logo", "--json"], tmpDir, env);
+        const schedulesPath = join(tmpDir, ".skills", "schedules.json");
+        const makeDue = () => {
+          const data = JSON.parse(readFileSync(schedulesPath, "utf-8"));
+          data.schedules[0].nextRun = "2020-01-01T00:00:00.000Z";
+          writeFileSync(schedulesPath, JSON.stringify(data, null, 2));
+        };
+        const approvedArgs = ["schedule", "run", "--approve-credits", "--max-credits", "10", "--json"];
+
+        makeDue();
+        const denied = await runCliInCwd(approvedArgs, tmpDir, env);
+        expect(denied.exitCode).toBe(1);
+        expect(JSON.parse(denied.stdout).results[0]).toMatchObject({ status: "error" });
+        expect(JSON.parse(denied.stdout).results[0].error).toContain("SELF_HOSTED_QUOTE_TOKEN_REQUIRED");
+        expect(phaseQuoteCalls).toBe(2);
+        expect(runBodies).toEqual([]);
+
+        phase = "explicit";
+        phaseQuoteCalls = 0;
+        makeDue();
+        const explicit = await runCliInCwd([
+          ...approvedArgs.slice(0, -1),
+          "--allow-unsigned-phase-a",
+          "--json",
+        ], tmpDir, env);
+        expect(explicit.exitCode).toBe(0);
+        expect(JSON.parse(explicit.stdout).results[0]).toMatchObject({ status: "success" });
+        expect(phaseQuoteCalls).toBe(3);
+        expect(runBodies).toEqual([{
+          phase: "explicit",
+          body: { input: {}, args: [], approved: true },
+        }]);
+
+        phase = "transition";
+        phaseQuoteCalls = 0;
+        makeDue();
+        const transition = await runCliInCwd([
+          ...approvedArgs.slice(0, -1),
+          "--allow-unsigned-phase-a",
+          "--json",
+        ], tmpDir, env);
+        expect(transition.exitCode).toBe(1);
+        expect(JSON.parse(transition.stdout).results[0].error).toContain("SELF_HOSTED_SIGNED_QUOTE_REQUIRES_TOKEN");
+        expect(phaseQuoteCalls).toBe(3);
+        expect(runBodies).toHaveLength(1);
+
+        phase = "signed";
+        phaseQuoteCalls = 0;
+        makeDue();
+        const signed = await runCliInCwd(approvedArgs, tmpDir, env);
+        expect(signed.exitCode).toBe(0);
+        expect(phaseQuoteCalls).toBe(2);
+        expect(runBodies[1]).toEqual({
+          phase: "signed",
+          body: { input: {}, args: [], quoteToken: "signed-2", approved: true },
+        });
+
+        phaseQuoteCalls = 0;
+        makeDue();
+        await runCliInCwd(["setup", "--mode", "cloud", "--api-url", apiUrl, "--json"], tmpDir, { HOME: tmpDir });
+        const invalidCloud = await runCliInCwd([
+          "schedule",
+          "run",
+          "--approve-credits",
+          "--max-credits",
+          "10",
+          "--allow-unsigned-phase-a",
+          "--json",
+        ], tmpDir, { HOME: tmpDir, SKILLS_API_KEY: "sk_test_schedule_cloud_phase_a" });
+        expect(invalidCloud.exitCode).toBe(1);
+        expect(JSON.parse(invalidCloud.stdout)).toMatchObject({ code: "UNSIGNED_PHASE_A_SELF_HOSTED_ONLY" });
+        expect(phaseQuoteCalls).toBe(0);
+      } finally {
+        server.stop(true);
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("schedule run rejects unsigned Phase-A outside self-hosted mode even when nothing is due", async () => {
+      const { mkdtempSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+
+      for (const mode of ["local", "cloud"] as const) {
+        const tmpDir = mkdtempSync(join(tmpdir(), `cli-schedule-noop-${mode}-`));
+        try {
+          const args = mode === "cloud"
+            ? ["setup", "--mode", mode, "--api-url", "https://example.test", "--json"]
+            : ["setup", "--mode", mode, "--json"];
+          await runCliInCwd(args, tmpDir, { HOME: tmpDir });
+          const run = await runCliInCwd([
+            "schedule",
+            "run",
+            "--allow-unsigned-phase-a",
+            "--json",
+          ], tmpDir, { HOME: tmpDir });
+          expect(run.exitCode).toBe(1);
+          expect(JSON.parse(run.stdout)).toMatchObject({
+            ran: 0,
+            code: "UNSIGNED_PHASE_A_SELF_HOSTED_ONLY",
+          });
+        } finally {
+          rmSync(tmpDir, { recursive: true, force: true });
+        }
+      }
+    });
+
+    test("unsigned Phase-A schedules reject same-credit constraint mutations", async () => {
+      const { mkdtempSync, readFileSync, rmSync, writeFileSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-schedule-unsigned-constraint-mutation-"));
+      let quoteCalls = 0;
+      let runCalls = 0;
+      const server = Bun.serve({
+        port: 0,
+        fetch(req) {
+          const url = new URL(req.url);
+          if (url.pathname === "/api/v1/skills/logo-design/quote" && req.method === "POST") {
+            quoteCalls += 1;
+            return Response.json({
+              skill: "logo-design",
+              operation: "run",
+              constraints: { maxOutputs: quoteCalls === 3 ? 2 : 1 },
+              availability: { status: "available" },
+              creditQuote: { ...AUTHORITATIVE_TEST_QUOTE, tier: "premium", creditUnit: "run", credits: 6, formattedCredits: "6 credits/run" },
+            });
+          }
+          if (url.pathname === "/api/v1/runs/logo-design") runCalls += 1;
+          return Response.json({ error: "run must not be submitted" }, { status: 500 });
+        },
+      });
+
+      try {
+        const apiUrl = `http://127.0.0.1:${server.port}`;
+        await runCliInCwd(["setup", "--mode", "self-hosted", "--api-url", apiUrl, "--json"], tmpDir, { HOME: tmpDir });
+        const env = { HOME: tmpDir, SKILLS_API_KEY: "sk_test_schedule_constraint_mutation" };
+        await runCliInCwd(["schedule", "add", "logo-design", "*/5 * * * *", "--name", "mutated-logo", "--json"], tmpDir, env);
+        const schedulesPath = join(tmpDir, ".skills", "schedules.json");
+        const data = JSON.parse(readFileSync(schedulesPath, "utf-8"));
+        data.schedules[0].nextRun = "2020-01-01T00:00:00.000Z";
+        writeFileSync(schedulesPath, JSON.stringify(data, null, 2));
+
+        const run = await runCliInCwd([
+          "schedule", "run",
+          "--approve-credits", "--max-credits", "10",
+          "--allow-unsigned-phase-a",
+          "--json",
+        ], tmpDir, env);
+        expect(run.exitCode).toBe(1);
+        expect(JSON.parse(run.stdout).results[0].error).toContain("SELF_HOSTED_UNSIGNED_QUOTE_CHANGED");
+        expect(quoteCalls).toBe(3);
+        expect(runCalls).toBe(0);
+      } finally {
+        server.stop(true);
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
     test("due cloud schedules enforce the max credits cap against all live quotes before submission", async () => {
       const { mkdtempSync, readFileSync, rmSync, writeFileSync } = require("fs");
       const { tmpdir } = require("os");

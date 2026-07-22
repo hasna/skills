@@ -25,6 +25,7 @@ import {
   type PublicCreditQuote,
 } from "../../lib/public-credits.js";
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../../lib/remote-run-contract.js";
+import { createUnsignedQuoteApprovalFingerprint } from "../../lib/unsigned-quote-approval.js";
 import {
   completeSkillRun,
   createSkillRun,
@@ -63,6 +64,11 @@ export function registerRuntime(parent: Command) {
     .passThroughOptions(true)
     .option("--json", "Output result as JSON", false)
     .option("-y, --yes", "Approve the quoted credits without an interactive prompt", false)
+    .option(
+      "--allow-unsigned-phase-a",
+      "Explicitly allow a paid run on an older self-hosted service without signed quote tokens",
+      false,
+    )
     .option("--wait", "Poll remote runs until a terminal status", false)
     .option("--poll-interval-ms <ms>", "Remote polling interval in milliseconds", "1000")
     .option("--poll-timeout-ms <ms>", "Maximum time to wait for a remote run", "300000")
@@ -402,6 +408,7 @@ async function handleQuote(name: string, args: string[], options: { json: boolea
 interface RunCommandOptions {
   json: boolean;
   yes?: boolean;
+  allowUnsignedPhaseA?: boolean;
   wait?: boolean;
   pollIntervalMs?: string;
   pollTimeoutMs?: string;
@@ -431,9 +438,25 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
   }
   const isPremium = pricing.isPremiumSkill(skill.name);
   const deploymentMode = resolveCurrentDeploymentMode();
+  if (options.allowUnsignedPhaseA && deploymentMode !== "self-hosted") {
+    const error = "--allow-unsigned-phase-a is valid only for an explicitly selected self-hosted service.";
+    const payload = {
+      skill: skill.name,
+      args,
+      exitCode: 1,
+      remote: false,
+      error,
+      code: "UNSIGNED_PHASE_A_SELF_HOSTED_ONLY",
+    };
+    if (options.json) console.log(JSON.stringify(payload, null, 2));
+    else console.error(chalk.red(error));
+    process.exitCode = 1;
+    return;
+  }
   let creditQuote = pricing.getSkillCreditQuote(skill.name, {}, args);
   let credits = isPremium ? creditQuote.credits : undefined;
   let quoteToken: string | undefined;
+  let unsignedQuoteFingerprint: string | undefined;
   let remoteAvailability: { status: "available" | "unavailable"; code?: string; message?: string; details?: string[] } = { status: "available" };
 
   if (isPremium && deploymentMode === "local") {
@@ -489,6 +512,26 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
     remote: isPremium,
     credits,
   });
+  const failRemoteAuthorization = (code: string, error: string) => {
+    writeRunLogs(runContext, "", error + "\n");
+    const run = completeSkillRun(runContext, { status: "failed", error, credits });
+    if (options.json) {
+      console.log(JSON.stringify(toCustomerCreditPayload({
+        contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION,
+        skill: skill.name,
+        args,
+        exitCode: 1,
+        remote: true,
+        code,
+        error,
+        creditQuote,
+        run,
+      }), null, 2));
+    } else {
+      console.error(chalk.red(error));
+    }
+    process.exitCode = 1;
+  };
 
   if (isPremium) {
     if (remoteAvailability.status === "unavailable") {
@@ -556,6 +599,15 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
           if (deploymentMode === "cloud" && creditQuote.credits > 0 && !quoteToken) {
             throw new Error("The cloud quote did not include the required quote token. No credits were charged.");
           }
+          if (deploymentMode === "self-hosted" && creditQuote.credits > 0 && !quoteToken) {
+            unsignedQuoteFingerprint = createUnsignedQuoteApprovalFingerprint({
+              skill: skill.name,
+              operation: "run",
+              input: {},
+              args,
+              remoteQuote: liveQuote,
+            });
+          }
         }
       } catch (err) {
         const error = deploymentMode === "self-hosted"
@@ -566,6 +618,19 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
         if (options.json) console.log(JSON.stringify(toCustomerCreditPayload({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, creditQuote, run }), null, 2));
         else console.error(chalk.red(error));
         process.exitCode = 1;
+        return;
+      }
+
+      if (
+        deploymentMode === "self-hosted"
+        && creditQuote.credits > 0
+        && !quoteToken
+        && options.allowUnsignedPhaseA !== true
+      ) {
+        failRemoteAuthorization(
+          "SELF_HOSTED_QUOTE_TOKEN_REQUIRED",
+          "The selected self-hosted service returned a paid quote without a signed quote token. Retry only after reviewing the quote with --allow-unsigned-phase-a, or upgrade the service. No credits were charged.",
+        );
         return;
       }
 
@@ -599,13 +664,70 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
         return;
       }
 
+      if (
+        deploymentMode === "self-hosted"
+        && creditQuote.credits > 0
+        && !quoteToken
+        && options.allowUnsignedPhaseA === true
+      ) {
+        try {
+          const liveQuote = await client.quoteSkill(skill.name, {}, args);
+          if (liveQuote?.error || liveQuote?.availability?.status === "unavailable") {
+            throw new Error(String(
+              liveQuote?.availability?.message
+              || liveQuote?.detail
+              || liveQuote?.error
+              || "Self-hosted execution is unavailable",
+            ));
+          }
+          if (!liveQuote?.creditQuote) {
+            throw new Error("The selected self-hosted service did not return a creditQuote.");
+          }
+          const reverifiedQuote = toPublicCreditQuote(liveQuote.creditQuote);
+          if (typeof liveQuote.quoteToken === "string" && liveQuote.quoteToken.length > 0) {
+            failRemoteAuthorization(
+              "SELF_HOSTED_SIGNED_QUOTE_REQUIRES_TOKEN",
+              "The selected self-hosted service now returns a signed quote. Quote and approve a new run so its exact token can be forwarded; unsigned Phase-A permission cannot bypass it. No credits were charged.",
+            );
+            return;
+          }
+          const reverifiedFingerprint = createUnsignedQuoteApprovalFingerprint({
+            skill: skill.name,
+            operation: "run",
+            input: {},
+            args,
+            remoteQuote: liveQuote,
+          });
+          if (!unsignedQuoteFingerprint || reverifiedFingerprint !== unsignedQuoteFingerprint) {
+            failRemoteAuthorization(
+              "SELF_HOSTED_UNSIGNED_QUOTE_CHANGED",
+              `The self-hosted quote changed after approval (${creditQuote.formattedCredits} to ${reverifiedQuote.formattedCredits}). Review and approve the new skill, operation, constraints, and credit quote before running. No credits were charged.`,
+            );
+            return;
+          }
+          creditQuote = reverifiedQuote;
+          credits = reverifiedQuote.credits;
+        } catch (error) {
+          failRemoteAuthorization(
+            "SELF_HOSTED_UNSIGNED_REQUOTE_FAILED",
+            `Unable to re-verify the unsigned self-hosted quote: ${(error as Error).message} No credits were charged.`,
+          );
+          return;
+        }
+      }
+
       try {
         if (!options.json) console.log(`${chalk.dim("Credits:")} ${creditQuote.formattedCredits}`);
+        const runAuthorization = quoteToken
+          ? { quoteToken, approved: true }
+          : deploymentMode === "self-hosted" && creditQuote.credits > 0 && options.allowUnsignedPhaseA === true
+            ? { approved: true }
+            : {};
         const run = await client.submitRun(
           skill.name,
           {},
           args,
-          deploymentMode === "cloud" || quoteToken ? { quoteToken, approved: true } : {},
+          runAuthorization,
         );
         if (run.error) {
           writeRunLogs(runContext, "", String(run.error) + "\n");
