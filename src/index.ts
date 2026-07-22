@@ -198,6 +198,8 @@ export {
   REMOTE_SKILL_RUN_CONTRACT_VERSION,
   REMOTE_SKILL_RUN_STATUSES,
   normalizeRemoteSkillRunContract,
+  normalizeRemoteSkillRunMutationContract,
+  type PublicRunReleaseIdentity,
   type RemoteSkillRunContract,
   type RemoteSkillRunStatus,
 } from "./lib/remote-run-contract.js";

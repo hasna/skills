@@ -258,7 +258,9 @@ describe("open-core product service pattern", () => {
     expect(promotionWorkflow).toContain("https://skills.md/api/health");
     expect(promotionWorkflow).toContain("https://skills.md/api/v1/skills/image");
     expect(promotionWorkflow).toContain("https://skills.md/api/v1/skills/image/quote");
-    expect(promotionWorkflow).toContain("https://skills.md/api/v1/runs?limit=10");
+    expect(promotionWorkflow).toContain("https://skills.md/api/v1/skills/skills-release-proof/quote");
+    expect(promotionWorkflow).toContain("https://skills.md/api/v1/runs/skills-release-proof");
+    expect(promotionWorkflow).toContain("DEPLOYMENT_ID");
     expect(promotionWorkflow).toContain("https://skills.md/api/v1/billing/usage");
     expect(promotionWorkflow).not.toContain("https://skills.md/api/v1/billing/usage?");
     expect(promotionWorkflow).toContain("SKILLS_PROMOTION_API_KEY");
@@ -268,7 +270,8 @@ describe("open-core product service pattern", () => {
     expect(promotionWorkflow).toContain("dist.integrity");
     expect(promotionValidator).toContain("parsePublicSkillEndpoint");
     expect(promotionValidator).toContain("parsePublicQuoteEndpoint");
-    expect(promotionValidator).toContain('const PROMOTION_PROOF_SKILL = "logo-design"');
+    expect(promotionValidator).toContain('const PROMOTION_PROOF_SKILL = "skills-release-proof"');
+    expect(promotionValidator).toContain('run.proofKind === "release-promotion"');
     expect(promotionValidator).toContain("entry.runId === promotionRun.id");
     expect(promotionValidator).toContain("entry.amountCredits === -promotionRun.creditsUsed");
     expect(promotionValidator).toContain("assertOnlyKeys");

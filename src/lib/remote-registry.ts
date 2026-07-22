@@ -192,22 +192,33 @@ function parseRemoteContract<T>(schema: z.ZodType<T>, payload: unknown, message:
   }
 }
 
-function remoteRequestHeaders(options: RemoteRegistryOptions): Headers {
+function remoteRequestHeaders(
+  options: RemoteRegistryOptions,
+  inheritConfiguredCredential: boolean,
+): Headers {
   const headers = addSkillsProtocolHeaders(new Headers({ Accept: "application/json" }));
-  const token = options.authToken !== undefined ? options.authToken : getApiKey();
+  const token = options.authToken !== undefined
+    ? options.authToken
+    : inheritConfiguredCredential
+      ? getApiKey()
+      : undefined;
   const trimmed = token?.trim();
   if (trimmed) headers.set("Authorization", `Bearer ${trimmed}`);
   return headers;
 }
 
-async function fetchRemoteJson(url: string, options: RemoteRegistryOptions): Promise<unknown> {
+async function fetchRemoteJson(
+  url: string,
+  options: RemoteRegistryOptions,
+  inheritConfiguredCredential: boolean,
+): Promise<unknown> {
   const fetchImpl = options.fetchImpl || fetch;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 10_000);
 
   try {
     const response = await fetchImpl(url, {
-      headers: remoteRequestHeaders(options),
+      headers: remoteRequestHeaders(options, inheritConfiguredCredential),
       signal: controller.signal,
     });
 
@@ -222,22 +233,28 @@ async function fetchRemoteJson(url: string, options: RemoteRegistryOptions): Pro
 }
 
 export async function loadRemoteRegistry(options: RemoteRegistryOptions = {}): Promise<SkillMeta[]> {
-  const apiUrl = options.apiUrl ? normalizeSkillsApiOrigin(options.apiUrl, process.env) : getConfiguredApiUrl();
+  const hasExplicitOrigin = options.apiUrl !== undefined;
+  const apiUrl = hasExplicitOrigin
+    ? normalizeSkillsApiOrigin(options.apiUrl!, process.env)
+    : getConfiguredApiUrl();
   if (!apiUrl) {
     throw new Error("Remote registry requires SKILLS_API_URL or config apiUrl");
   }
 
   const url = buildSkillsApiUrl(apiUrl, options.endpoint);
-  return parseRemoteRegistryPayload(await fetchRemoteJson(url, options));
+  return parseRemoteRegistryPayload(await fetchRemoteJson(url, options, !hasExplicitOrigin));
 }
 
 export async function loadRemoteSkill(name: string, options: RemoteRegistryOptions = {}): Promise<SkillMeta> {
-  const apiUrl = options.apiUrl ? normalizeSkillsApiOrigin(options.apiUrl, process.env) : getConfiguredApiUrl();
+  const hasExplicitOrigin = options.apiUrl !== undefined;
+  const apiUrl = hasExplicitOrigin
+    ? normalizeSkillsApiOrigin(options.apiUrl!, process.env)
+    : getConfiguredApiUrl();
   if (!apiUrl) {
     throw new Error("Remote registry requires SKILLS_API_URL or config apiUrl");
   }
 
   const slug = encodeURIComponent(name);
   const url = buildSkillsApiUrl(apiUrl, options.endpoint ?? `/skills/${slug}`);
-  return parseRemoteSkillPayload(await fetchRemoteJson(url, options));
+  return parseRemoteSkillPayload(await fetchRemoteJson(url, options, !hasExplicitOrigin));
 }

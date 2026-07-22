@@ -3,7 +3,7 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { existsSync, rmSync, mkdirSync } from "fs";
+import { existsSync, rmSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import {
@@ -59,6 +59,9 @@ describe("validateCron", () => {
 
   test("rejects invalid step expressions", () => {
     expect(validateCron("*/0 * * * *").valid).toBe(false);  // step 0
+    for (const hostile of ["0foo", "*/2x", "1-2x", "1/2x"]) {
+      expect(validateCron(`${hostile} * * * *`).valid).toBe(false);
+    }
   });
 
   test("rejects invalid ranges", () => {
@@ -151,6 +154,31 @@ describe("listSchedules / removeSchedule / setScheduleEnabled", () => {
 
     setScheduleEnabled(schedules[0].id, false, dir);
     expect(listSchedules(dir)[0].enabled).toBe(false);
+  });
+
+  test("fails closed on malformed or unsupported persisted schedule state", () => {
+    const stateDir = join(dir, ".skills");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "schedules.json"), "{not-json");
+    expect(() => listSchedules(dir)).toThrow();
+
+    writeFileSync(join(stateDir, "schedules.json"), JSON.stringify({ version: 2, schedules: [] }));
+    expect(() => listSchedules(dir)).toThrow("unsupported or malformed schema");
+
+    writeFileSync(join(stateDir, "schedules.json"), JSON.stringify({
+      version: 1,
+      schedules: [{ id: "image-1720000000000", name: "bad", skill: "image", cron: "0 9 * * *", enabled: true }],
+    }));
+    expect(() => listSchedules(dir)).toThrow("createdAt");
+  });
+
+  test("writes schedules through a private atomic replacement without temp leftovers", () => {
+    addSchedule("image", "0 9 * * *", { targetDir: dir });
+    const stateDir = join(dir, ".skills");
+    const path = join(stateDir, "schedules.json");
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ version: 1 });
+    expect(readdirSync(stateDir).filter((entry) => entry.includes(".tmp"))).toEqual([]);
   });
 });
 

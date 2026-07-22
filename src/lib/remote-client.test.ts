@@ -6,6 +6,7 @@ import {
   type PublicSkillQuote,
 } from "./remote-client";
 import { getSkillToolDependencies } from "./tool-primitives";
+import { createUnsignedQuoteApprovalFingerprint } from "./unsigned-quote-approval";
 
 type AssertType<T extends true> = T;
 type QuoteCodeMismatchIsRejected = {
@@ -585,6 +586,8 @@ describe("remote skills client public contract", () => {
       if (path.endsWith("/quote")) {
         return Response.json({
           skill: "image",
+          operation: "run",
+          constraints: { providerRoute: "private-route", maxOutputs: 1 },
           quoteToken: "quote_exact_123",
           expiresAt: "2026-07-22T12:00:00.000Z",
           creditQuote: {
@@ -655,6 +658,8 @@ describe("remote skills client public contract", () => {
     const status = await client.getStatus();
 
     expect(quote).toMatchObject({ quoteToken: "quote_exact_123", creditQuote: { credits: 4 } });
+    expect(quote).not.toHaveProperty("operation");
+    expect(quote).not.toHaveProperty("constraints");
     expect(billing).toEqual({
       plan: "credits",
       creditBalance: 125,
@@ -676,7 +681,50 @@ describe("remote skills client public contract", () => {
       usage: { recentCount: 1, recentNetAmountCredits: -4 },
       deployment: { status: "ok", version: "0.1.46" },
     });
-    expect(JSON.stringify({ quote, billing, usage, status })).not.toMatch(/private-provider|private-model|costCents|margin|private-route/i);
+    expect(JSON.stringify({ quote, billing, usage, status })).not.toMatch(/private-provider|private-model|costCents|margin|private-route|constraints|operation/i);
+  });
+
+  test("keeps unsigned approval metadata private while binding it into the fingerprint", async () => {
+    let maxOutputs = 1;
+    globalThis.fetch = (async () => Response.json({
+      skill: "logo-design",
+      operation: "run",
+      constraints: { maxOutputs, provider: "private-provider" },
+      creditQuote: {
+        tier: "premium",
+        creditUnit: "run",
+        credits: 7,
+        formattedCredits: "7 credits/run",
+        estimated: false,
+        quoteDependsOnInput: false,
+        quoteRequired: true,
+        description: "Fixed credits per run.",
+      },
+    })) as unknown as typeof fetch;
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+    const first = await client.quoteSkill("logo-design", {}, []);
+    const firstFingerprint = createUnsignedQuoteApprovalFingerprint({
+      skill: "logo-design",
+      operation: "run",
+      input: {},
+      args: [],
+      remoteQuote: first,
+    });
+    maxOutputs = 2;
+    const second = await client.quoteSkill("logo-design", {}, []);
+    const secondFingerprint = createUnsignedQuoteApprovalFingerprint({
+      skill: "logo-design",
+      operation: "run",
+      input: {},
+      args: [],
+      remoteQuote: second,
+    });
+
+    expect(firstFingerprint).not.toBe(secondFingerprint);
+    expect(Object.keys(first)).not.toContain("operation");
+    expect(Object.keys(first)).not.toContain("constraints");
+    expect(Reflect.ownKeys(first).filter((key) => typeof key === "symbol")).toEqual([]);
+    expect(JSON.stringify(first)).not.toMatch(/private-provider|constraints|operation|provider/i);
   });
 
   test("synthesizes usage descriptions from typed credit activity instead of remote prose", async () => {
@@ -837,6 +885,19 @@ describe("remote skills client public contract", () => {
       status: "queued",
     });
     expect(keys).toEqual(["logical-response-loss-attempt", "logical-response-loss-attempt"]);
+  });
+
+  test("treats a 2xx mutation without a valid run id and status as outcome unknown", async () => {
+    globalThis.fetch = (async () => Response.json({})) as unknown as typeof fetch;
+    const client = new RemoteSkillsClient("fixture-key", "https://operator.example");
+
+    await expect(client.submitRun("image", {}, [], {
+      idempotencyKey: "logical-malformed-success-attempt",
+      approved: true,
+    })).rejects.toBeInstanceOf(SkillsMutationOutcomeUnknownError);
+    await expect(client.cancelRun("run_existing", {
+      idempotencyKey: "logical-malformed-cancel-attempt",
+    })).rejects.toBeInstanceOf(SkillsMutationOutcomeUnknownError);
   });
 
   test("rejects legacy fiat aliases instead of accepting a quote without explicit credits", async () => {

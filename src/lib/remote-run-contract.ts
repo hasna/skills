@@ -19,14 +19,21 @@ export const REMOTE_SKILL_RUN_STATUSES = [
 ] as const;
 export type RemoteSkillRunStatus = (typeof REMOTE_SKILL_RUN_STATUSES)[number];
 
+export interface PublicRunReleaseIdentity {
+  commitSha: string;
+  deploymentId: string;
+}
+
 export interface RemoteSkillRunContract {
   contractVersion: typeof REMOTE_SKILL_RUN_CONTRACT_VERSION;
   id?: string;
   skill?: string;
   requestedSlug?: string;
+  proofKind?: "release-promotion";
   status?: RemoteSkillRunStatus;
   exitCode?: number;
   correlationId?: string;
+  releaseIdentity?: PublicRunReleaseIdentity;
   credits?: number;
   formattedCredits?: string;
   creditQuote?: PublicCreditQuote;
@@ -68,9 +75,11 @@ export function normalizeRemoteSkillRunContract(
     ...pickIdentifier(record, "id"),
     ...(safeSlug(skill) ? { skill: safeSlug(skill) } : {}),
     ...(safeSlug(record.requestedSlug) ? { requestedSlug: safeSlug(record.requestedSlug) } : {}),
+    ...pickEnum(record, "proofKind", ["release-promotion"] as const),
     ...(status ? { status } : {}),
     ...pickInteger(record, "exitCode", true),
     ...pickIdentifier(record, "correlationId"),
+    ...pickReleaseIdentity(record),
     ...pickInteger(record, "credits"),
     ...pickFormattedCredits(record, "formattedCredits"),
     ...pickCreditQuote(record),
@@ -92,6 +101,22 @@ export function normalizeRemoteSkillRunContract(
     ...pickCustomerDetails(record, failureText.details),
     ...pickArtifacts(record),
   };
+}
+
+/**
+ * A successful mutation response must identify the accepted run and its state.
+ * Without both fields the caller cannot distinguish acceptance from a malformed
+ * or truncated response, so the mutation outcome must remain replayable.
+ */
+export function normalizeRemoteSkillRunMutationContract(
+  payload: unknown,
+  fallbackSkill?: string,
+): RemoteSkillRunContract {
+  const run = normalizeRemoteSkillRunContract(payload, fallbackSkill);
+  if (!run.id || !run.status) {
+    throw new Error("Remote run mutation response requires a valid id and status.");
+  }
+  return run;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -132,6 +157,17 @@ function pickIdentifier(record: Record<string, unknown>, key: string): Record<st
     && !containsProhibitedPublicIdentity(value)
     ? { [key]: value }
     : {};
+}
+
+function pickReleaseIdentity(record: Record<string, unknown>): { releaseIdentity?: PublicRunReleaseIdentity } {
+  if (!isRecord(record.releaseIdentity)) return {};
+  const commitSha = record.releaseIdentity.commitSha;
+  const deploymentId = record.releaseIdentity.deploymentId;
+  if (typeof commitSha !== "string" || !/^[a-f0-9]{40}$/.test(commitSha)) return {};
+  if (typeof deploymentId !== "string" || deploymentId.length > 200
+    || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(deploymentId)
+    || containsProhibitedPublicIdentity(deploymentId)) return {};
+  return { releaseIdentity: { commitSha, deploymentId } };
 }
 
 function safeSlug(value: unknown): string | undefined {

@@ -7,6 +7,15 @@ import {
 export const UNSIGNED_QUOTE_APPROVAL_FINGERPRINT_PREFIX = "uqaf_v1_";
 export const UNSIGNED_QUOTE_APPROVAL_FINGERPRINT_PATTERN = /^uqaf_v1_[a-f0-9]{64}$/;
 
+interface UnsignedQuoteApprovalMetadata {
+  skill?: unknown;
+  operation?: unknown;
+  constraints?: unknown;
+  expiresAt?: unknown;
+}
+
+const unsignedQuoteApprovalMetadata = new WeakMap<object, UnsignedQuoteApprovalMetadata>();
+
 export interface UnsignedQuoteApprovalBinding {
   schemaVersion: 1;
   skill: string;
@@ -27,6 +36,25 @@ export interface UnsignedQuoteApprovalFingerprintInput {
 }
 
 /**
+ * Preserve approval-only service metadata without adding it to the public quote
+ * contract or any JSON/customer serialization.
+ */
+export function attachUnsignedQuoteApprovalMetadata<T extends object>(
+  publicQuote: T,
+  remoteQuote: unknown,
+): T {
+  if (!isRecord(remoteQuote)) return publicQuote;
+  const metadata: UnsignedQuoteApprovalMetadata = {
+    ...(remoteQuote.skill !== undefined ? { skill: toJsonValue(remoteQuote.skill, "skill") } : {}),
+    ...(remoteQuote.operation !== undefined ? { operation: toJsonValue(remoteQuote.operation, "operation") } : {}),
+    ...(remoteQuote.constraints !== undefined ? { constraints: toJsonValue(remoteQuote.constraints, "constraints") } : {}),
+    ...(remoteQuote.expiresAt !== undefined ? { expiresAt: toJsonValue(remoteQuote.expiresAt, "expiresAt") } : {}),
+  };
+  unsignedQuoteApprovalMetadata.set(publicQuote, deepFreeze(metadata));
+  return publicQuote;
+}
+
+/**
  * Builds the exact client-side approval envelope for the temporary unsigned
  * Phase-A protocol. This is not a service signature. It only lets the client
  * prove that the quote shown to a human is byte-stably equivalent to the quote
@@ -38,11 +66,13 @@ export function createUnsignedQuoteApprovalBinding(
   if (!value.skill.trim()) throw new Error("Unsigned quote approval requires a skill.");
   if (!isRecord(value.remoteQuote)) throw new Error("Unsigned quote approval requires a quote object.");
 
-  const quotedSkill = optionalNonEmptyString(value.remoteQuote.skill);
+  const metadata = approvalMetadata(value.remoteQuote);
+
+  const quotedSkill = optionalNonEmptyString(metadata.skill);
   if (quotedSkill !== undefined && quotedSkill !== value.skill) {
     throw new Error(`Unsigned quote skill '${quotedSkill}' does not match requested skill '${value.skill}'.`);
   }
-  const quotedOperation = optionalNonEmptyString(value.remoteQuote.operation);
+  const quotedOperation = optionalNonEmptyString(metadata.operation);
   if (quotedOperation !== undefined && quotedOperation !== value.operation) {
     throw new Error(`Unsigned quote operation '${quotedOperation}' does not match requested operation '${value.operation}'.`);
   }
@@ -57,12 +87,12 @@ export function createUnsignedQuoteApprovalBinding(
     input: toJsonValue(value.input, "input") as Record<string, unknown>,
     args: [...value.args],
     creditQuote: toAuthoritativePublicCreditQuote(value.remoteQuote.creditQuote),
-    constraints: value.remoteQuote.constraints === undefined
+    constraints: metadata.constraints === undefined
       ? null
-      : toJsonValue(value.remoteQuote.constraints, "constraints"),
-    expiresAt: value.remoteQuote.expiresAt === undefined
+      : toJsonValue(metadata.constraints, "constraints"),
+    expiresAt: metadata.expiresAt === undefined
       ? null
-      : requiredNonEmptyString(value.remoteQuote.expiresAt, "expiresAt"),
+      : requiredNonEmptyString(metadata.expiresAt, "expiresAt"),
   };
 }
 
@@ -117,4 +147,14 @@ function requiredNonEmptyString(value: unknown, field: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function approvalMetadata(remoteQuote: Record<string, unknown>): UnsignedQuoteApprovalMetadata {
+  return unsignedQuoteApprovalMetadata.get(remoteQuote) ?? remoteQuote;
+}
+
+function deepFreeze<T>(value: T): T {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const nested of Object.values(value as Record<string, unknown>)) deepFreeze(nested);
+  return Object.freeze(value);
 }

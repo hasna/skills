@@ -2,9 +2,20 @@ import { describe, expect, test } from "bun:test";
 import {
   REMOTE_SKILL_RUN_CONTRACT_VERSION,
   normalizeRemoteSkillRunContract,
+  normalizeRemoteSkillRunMutationContract,
 } from "./remote-run-contract";
 
 describe("remote skill run contract", () => {
+  test("requires successful mutation responses to identify the run and status", () => {
+    expect(() => normalizeRemoteSkillRunMutationContract({})).toThrow("valid id and status");
+    expect(() => normalizeRemoteSkillRunMutationContract({ id: "run_123" })).toThrow("valid id and status");
+    expect(() => normalizeRemoteSkillRunMutationContract({ status: "queued" })).toThrow("valid id and status");
+    expect(normalizeRemoteSkillRunMutationContract({ id: "run_123", status: "queued" })).toMatchObject({
+      id: "run_123",
+      status: "queued",
+    });
+  });
+
   test("does not derive submitted-run credits from legacy fiat fields", () => {
     const run = normalizeRemoteSkillRunContract({
       contractVersion: 1,

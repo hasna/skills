@@ -1,6 +1,10 @@
 import { getApiKey as getStoredApiKey, getApiUrl } from "./auth-store.js";
 import { sanitizePublicDiscoveryText } from "./discovery.js";
-import { normalizeRemoteSkillRunContract, type RemoteSkillRunContract } from "./remote-run-contract.js";
+import {
+  normalizeRemoteSkillRunContract,
+  normalizeRemoteSkillRunMutationContract,
+  type RemoteSkillRunContract,
+} from "./remote-run-contract.js";
 import {
   sanitizeCustomerCreditText,
 } from "./public-credits.js";
@@ -13,6 +17,7 @@ import {
   type PublicRunArtifact,
 } from "./customer-artifacts.js";
 import { containsProhibitedPublicIdentity, containsProhibitedPublicMetadata } from "./public-metadata.js";
+import { attachUnsignedQuoteApprovalMetadata } from "./unsigned-quote-approval.js";
 import {
   parsePublicQuoteEndpoint,
   parsePublicCreditUsageEndpoint,
@@ -168,7 +173,7 @@ export class RemoteSkillsClient {
         headers,
         body: JSON.stringify({ input, args, ...bodyAuthorization }),
       });
-      return normalizeRemoteSkillRunContract(await readPublicJson(response), slug);
+      return normalizeRemoteSkillRunMutationContract(await readPublicJson(response), slug);
     } catch (error) {
       throw mutationError(error);
     }
@@ -184,7 +189,7 @@ export class RemoteSkillsClient {
         method: "POST",
         headers,
       });
-      return normalizeRemoteSkillRunContract(await readPublicJson(response));
+      return normalizeRemoteSkillRunMutationContract(await readPublicJson(response));
     } catch (error) {
       throw mutationError(error);
     }
@@ -319,7 +324,7 @@ function parsePublicSkill(record: Record<string, unknown>): PublicRemoteSkill | 
 }
 
 function parsePublicQuote(payload: unknown): PublicSkillQuote {
-  return parsePublicQuoteEndpoint(payload);
+  return attachUnsignedQuoteApprovalMetadata(parsePublicQuoteEndpoint(payload), payload);
 }
 
 function parseBillingStatus(payload: unknown): PublicBillingStatus {

@@ -2,12 +2,14 @@
   "version": {
     "name": "@hasnatools/platform-skills",
     "version": "0.1.46",
-    "commitSha": "0123456789abcdef0123456789abcdef01234567"
+    "commitSha": "0123456789abcdef0123456789abcdef01234567",
+    "deploymentId": "deploy_fixture_20260722_001"
   },
   "health": {
     "status": "ok",
     "version": "0.1.46",
     "commitSha": "0123456789abcdef0123456789abcdef01234567",
+    "deploymentId": "deploy_fixture_20260722_001",
     "uptime": 120,
     "skillCount": 510
   },
@@ -261,13 +263,44 @@
       ]
     }
   },
+  "releaseQuote": {
+    "skill": "skills-release-proof",
+    "quoteToken": "quote_fixture_release_proof_signed",
+    "expiresAt": "2026-07-22T12:00:00.000Z",
+    "creditQuote": {
+      "tier": "premium",
+      "creditUnit": "run",
+      "credits": 1,
+      "formattedCredits": "1 credits/run",
+      "estimated": false,
+      "quoteDependsOnInput": false,
+      "quoteRequired": true,
+      "description": "Fixed credits per run."
+    },
+    "availability": { "status": "available" }
+  },
   "runs": {
     "runs": [
       {
         "id": "run_promotion_provider_free",
-        "skill": "logo-design",
+        "skill": "skills-release-proof",
+        "proofKind": "release-promotion",
         "status": "completed",
         "creditsUsed": 1,
+        "creditQuote": {
+          "tier": "premium",
+          "creditUnit": "run",
+          "credits": 1,
+          "formattedCredits": "1 credits/run",
+          "estimated": false,
+          "quoteDependsOnInput": false,
+          "quoteRequired": true,
+          "description": "Fixed credits per run."
+        },
+        "releaseIdentity": {
+          "commitSha": "0123456789abcdef0123456789abcdef01234567",
+          "deploymentId": "deploy_fixture_20260722_001"
+        },
         "startedAt": "2026-07-22T11:00:00.000Z",
         "completedAt": "2026-07-22T11:00:00.000Z",
         "durationMs": 0,

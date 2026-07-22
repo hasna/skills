@@ -15,6 +15,10 @@ on:
         description: "Exact live @hasnatools/platform-skills version"
         required: true
         type: string
+      deployment_id:
+        description: "Exact immutable deployment ID reported by the live cloud service"
+        required: true
+        type: string
       client_pin:
         description: "Exact @hasna/skills version exposed by the live cloud catalog"
         required: true
@@ -45,6 +49,7 @@ jobs:
           SKILLS_PROMOTION_API_KEY: ${{ secrets.SKILLS_PROMOTION_API_KEY }}
           PLATFORM_SHA: ${{ inputs.platform_sha }}
           PLATFORM_VERSION: ${{ inputs.platform_version }}
+          DEPLOYMENT_ID: ${{ inputs.deployment_id }}
           CLIENT_PIN: ${{ inputs.client_pin }}
           CONFIRMATION: ${{ inputs.confirmation }}
         run: |
@@ -58,6 +63,7 @@ jobs:
           test "$CLIENT_PIN" = "0.2.0"
           printf '%s' "$PLATFORM_SHA" | grep -Eq '^[a-f0-9]{40}$'
           printf '%s' "$PLATFORM_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$'
+          printf '%s' "$DEPLOYMENT_ID" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$'
           test -n "$SKILLS_PROMOTION_API_KEY"
 
           proof_dir="$(mktemp -d)"
@@ -71,15 +77,40 @@ jobs:
             --header "Content-Type: application/json" \
             --data '{"input":{},"args":[]}' \
             https://skills.md/api/v1/skills/image/quote >"$proof_dir/quote.json"
+
           curl --fail --silent --show-error --retry 3 \
             --header "Authorization: Bearer $SKILLS_PROMOTION_API_KEY" \
-            'https://skills.md/api/v1/runs?limit=10' >"$proof_dir/runs.json"
+            --header "Content-Type: application/json" \
+            --data '{"input":{},"args":[]}' \
+            https://skills.md/api/v1/skills/skills-release-proof/quote >"$proof_dir/release-quote.json"
+          release_quote_token="$(jq -er '.quoteToken // .quote.quoteToken // .data.quoteToken' "$proof_dir/release-quote.json")"
+          release_attempt="skills-release-proof-${DEPLOYMENT_ID}-${GITHUB_RUN_ID}"
+          curl --fail --silent --show-error --retry 3 \
+            --header "Authorization: Bearer $SKILLS_PROMOTION_API_KEY" \
+            --header "Content-Type: application/json" \
+            --header "Idempotency-Key: $release_attempt" \
+            --data "$(jq -cn --arg token "$release_quote_token" '{input:{},args:[],quoteToken:$token,approved:true}')" \
+            https://skills.md/api/v1/runs/skills-release-proof >"$proof_dir/release-run.json"
+          release_run_id="$(jq -er '.id // .run.id // .data.id' "$proof_dir/release-run.json")"
+          for attempt in {1..30}; do
+            curl --fail --silent --show-error --retry 3 \
+              --header "Authorization: Bearer $SKILLS_PROMOTION_API_KEY" \
+              "https://skills.md/api/v1/runs/${release_run_id}" >"$proof_dir/release-run.json"
+            release_status="$(jq -er '.status // .run.status // .data.status' "$proof_dir/release-run.json")"
+            if [ "$release_status" = "completed" ]; then break; fi
+            if [ "$release_status" = "failed" ] || [ "$release_status" = "cancelled" ] || [ "$release_status" = "expired" ]; then
+              echo "::error::release proof run ended in ${release_status}"; exit 1
+            fi
+            sleep 2
+          done
+          test "$(jq -er '.status // .run.status // .data.status' "$proof_dir/release-run.json")" = "completed"
+          jq -e '{runs: [(.run // .data // .)]}' "$proof_dir/release-run.json" >"$proof_dir/runs.json"
           curl --fail --silent --show-error --retry 3 \
             --header "Authorization: Bearer $SKILLS_PROMOTION_API_KEY" \
             'https://skills.md/api/v1/billing/usage' >"$proof_dir/usage.json"
 
           bun run scripts/validate-live-public-contract.ts \
-            "$proof_dir" "$PLATFORM_SHA" "$PLATFORM_VERSION" "$CLIENT_PIN"
+            "$proof_dir" "$PLATFORM_SHA" "$PLATFORM_VERSION" "$DEPLOYMENT_ID" "$CLIENT_PIN"
       - name: Verify exact prerelease artifact integrity
         shell: bash
         run: |

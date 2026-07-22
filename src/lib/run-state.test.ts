@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,6 +12,8 @@ import {
   loadRemoteSubmission,
   persistRemoteSubmission,
   resumeSkillRunAttempt,
+  findSkillRun,
+  getRunExportDir,
 } from "./run-state";
 
 const authoritativeQuote = {
@@ -102,6 +104,74 @@ describe("public run metadata", () => {
         skill: "image",
         args: ["different"],
       }, target)).toThrow("does not match");
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects hostile local run ids before searching or deriving export paths", () => {
+    const target = mkdtempSync(join(tmpdir(), "skills-run-id-path-"));
+    try {
+      expect(() => findSkillRun("../../outside", target)).toThrow("invalid format");
+      expect(() => resumeSkillRunAttempt("../run_escape", { skill: "image" }, target)).toThrow("invalid format");
+      expect(() => getRunExportDir("../outside", "image", target)).toThrow("invalid format");
+      expect(() => getRunExportDir("run_safe", "../image", target)).toThrow("invalid path format");
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses persisted run paths that do not match the expected run, export, and log roots", () => {
+    const target = mkdtempSync(join(tmpdir(), "skills-run-contained-"));
+    try {
+      const context = createSkillRun({ skill: "image", args: [], remote: true }, target);
+      markSkillRunOutcomeUnknown(context, "response lost");
+      const recordPath = join(context.runDir, "run.json");
+      const record = JSON.parse(readFileSync(recordPath, "utf8"));
+      record.paths.logsDir = "../../outside-logs";
+      writeFileSync(recordPath, JSON.stringify(record));
+
+      expect(findSkillRun(context.record.id, target)).toBeNull();
+      expect(() => resumeSkillRunAttempt(context.record.id, { skill: "image", args: [] }, target)).toThrow("was not found");
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects symlinked state roots before creating or writing a run", () => {
+    const target = mkdtempSync(join(tmpdir(), "skills-run-symlink-root-"));
+    const outside = mkdtempSync(join(tmpdir(), "skills-run-symlink-outside-"));
+    try {
+      mkdirSync(join(target, ".skills"), { recursive: true });
+      symlinkSync(outside, join(target, ".skills", "runs"), "dir");
+      expect(() => createSkillRun({ skill: "image", remote: true }, target)).toThrow("symbolic link");
+      expect(require("node:fs").readdirSync(outside)).toEqual([]);
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("does not follow a symlinked remote-submission leaf", () => {
+    const target = mkdtempSync(join(tmpdir(), "skills-run-symlink-leaf-"));
+    const outside = join(target, "outside.json");
+    try {
+      const context = createSkillRun({
+        skill: "image",
+        remote: true,
+        idempotencyKey: "stable-symlink-attempt",
+      }, target);
+      writeFileSync(outside, "unchanged");
+      symlinkSync(outside, join(context.runDir, "remote-submission.json"));
+      expect(() => persistRemoteSubmission(context, {
+        deployment: { mode: "self-hosted", apiUrl: "https://operator.example" },
+        skill: "image",
+        input: {},
+        args: [],
+        authorization: { idempotencyKey: "stable-symlink-attempt", approved: true },
+        creditQuote: authoritativeQuote,
+      })).toThrow();
+      expect(readFileSync(outside, "utf8")).toBe("unchanged");
     } finally {
       rmSync(target, { recursive: true, force: true });
     }

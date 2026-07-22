@@ -10,6 +10,7 @@ const fixturePath = join(import.meta.dir, "fixtures/live-public-contract-proof.v
 const expectation = {
   platformSha: "0123456789abcdef0123456789abcdef01234567",
   platformVersion: "0.1.46",
+  deploymentId: "deploy_fixture_20260722_001",
   clientPin: "0.2.0",
 };
 
@@ -178,6 +179,24 @@ describe("live public contract promotion proof", () => {
     const wrongSha = fixture();
     (wrongSha.health as Record<string, unknown>).commitSha = "f".repeat(40);
     expect(() => validateLivePublicContract(wrongSha, expectation)).toThrow("live health commit SHA mismatch");
+
+    const wrongDeployment = fixture();
+    (wrongDeployment.health as Record<string, unknown>).deploymentId = "deploy_other_20260722_002";
+    expect(() => validateLivePublicContract(wrongDeployment, expectation)).toThrow("live health deployment ID mismatch");
+
+    const wrongRunDeployment = fixture();
+    const proofRun = (wrongRunDeployment.runs as { runs: Array<Record<string, unknown>> }).runs[0]!;
+    (proofRun.releaseIdentity as Record<string, unknown>).deploymentId = "deploy_other_20260722_002";
+    expect(() => validateLivePublicContract(wrongRunDeployment, expectation)).toThrow(
+      "live provider-free promotion run proof is missing",
+    );
+
+    const providerMetadata = fixture();
+    const providerProofRun = (providerMetadata.runs as { runs: Array<Record<string, unknown>> }).runs[0]!;
+    (providerProofRun.releaseIdentity as Record<string, unknown>).providerDeploymentArn = "private-provider-arn";
+    expect(() => validateLivePublicContract(providerMetadata, expectation)).toThrow(
+      "runs[0].releaseIdentity exposes an unsupported key",
+    );
 
     const wrongPin = fixture();
     const detail = (wrongPin.skill as { skill: Record<string, unknown> }).skill;

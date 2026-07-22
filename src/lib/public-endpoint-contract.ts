@@ -79,8 +79,6 @@ export interface PublicRemoteSkill {
 interface PublicSkillQuoteBase {
   contractVersion?: number;
   skill?: string;
-  operation?: "run";
-  constraints?: unknown;
   toolDependencies?: SkillToolDependencies;
   connectorRequirements?: PublicConnectorRequirement[];
   connectorPreflight?: PublicConnectorPreflight[];
@@ -183,8 +181,6 @@ export const PUBLIC_SKILL_KEYS = new Set([
 export const PUBLIC_QUOTE_KEYS = new Set([
   "contractVersion",
   "skill",
-  "operation",
-  "constraints",
   "quoteToken",
   "expiresAt",
   "creditQuote",
@@ -391,7 +387,6 @@ export function parsePublicQuoteEndpoint(
   if (options.strict) {
     assertOptionalValid(payload, "contractVersion", safeNonNegativeInteger, label);
     assertOptionalValid(payload, "skill", safeSkillSlug, label);
-    assertOptionalValid(payload, "operation", safeRunOperation, label);
     assertOptionalValid(payload, "quoteToken", safeOpaqueToken, label);
     assertOptionalValid(payload, "expiresAt", safeTimestamp, label);
     assertOptionalRecord(payload, "creditQuote", label);
@@ -400,12 +395,6 @@ export function parsePublicQuoteEndpoint(
     assertOptionalArray(payload, "connectorRequirements", label);
     assertOptionalArray(payload, "connectorPreflight", label);
     assertOptionalValid(payload, "code", safePublicCode, label);
-  }
-  if (payload.operation !== undefined && safeRunOperation(payload.operation) === undefined) {
-    throw new Error(`${label}.operation must be run`);
-  }
-  if (payload.constraints !== undefined && !isJsonValue(payload.constraints)) {
-    throw new Error(`${label}.constraints must be JSON-compatible`);
   }
   if (
     isRecord(payload.availability)
@@ -452,8 +441,6 @@ export function parsePublicQuoteEndpoint(
   const common = {
     ...pickSafeInteger(payload, "contractVersion"),
     ...(skill ? { skill } : {}),
-    ...(safeRunOperation(payload.operation) ? { operation: "run" as const } : {}),
-    ...(payload.constraints !== undefined ? { constraints: structuredClone(payload.constraints) } : {}),
     ...(toolDependencies ? { toolDependencies } : {}),
     ...(connectorRequirements ? { connectorRequirements } : {}),
     ...(connectorPreflight ? { connectorPreflight } : {}),
@@ -552,18 +539,6 @@ export function parsePublicQuoteEndpoint(
       error: failureText.error,
       detail: failureText.detail,
     };
-}
-
-function safeRunOperation(value: unknown): "run" | undefined {
-  return value === "run" ? "run" : undefined;
-}
-
-function isJsonValue(value: unknown): boolean {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
-  if (typeof value === "number") return Number.isFinite(value);
-  if (Array.isArray(value)) return value.every(isJsonValue);
-  if (isRecord(value)) return Object.values(value).every(isJsonValue);
-  return false;
 }
 
 export function parsePublicCreditUsageEndpoint(

@@ -15,6 +15,7 @@ export interface LivePublicContractProof {
   catalog: unknown;
   skill: unknown;
   quote: unknown;
+  releaseQuote: unknown;
   runs: unknown;
   usage: unknown;
 }
@@ -22,14 +23,16 @@ export interface LivePublicContractProof {
 export interface LivePublicContractExpectation {
   platformSha: string;
   platformVersion: string;
+  deploymentId: string;
   clientPin: string;
   probeSkill?: string;
 }
 
-const VERSION_KEYS = new Set(["name", "version", "commitSha"]);
-const HEALTH_KEYS = new Set(["status", "version", "commitSha", "uptime", "skillCount"]);
+const VERSION_KEYS = new Set(["name", "version", "commitSha", "deploymentId"]);
+const HEALTH_KEYS = new Set(["status", "version", "commitSha", "deploymentId", "uptime", "skillCount"]);
 const RUN_KEYS = new Set([
-  "contractVersion", "id", "skill", "requestedSlug", "status", "exitCode", "correlationId", "credits",
+  "contractVersion", "id", "skill", "requestedSlug", "proofKind", "status", "exitCode", "correlationId", "credits",
+  "releaseIdentity",
   "formattedCredits", "creditQuote", "createdAt", "startedAt", "completedAt", "durationMs", "outputType",
   "errorCode", "errorMessage", "creditsReserved", "creditsUsed", "creditBalance", "formattedCreditBalance",
   "amountCredits", "recentNetAmountCredits", "error", "code", "details", "artifacts",
@@ -37,7 +40,8 @@ const RUN_KEYS = new Set([
 const ARTIFACT_KEYS = new Set([
   "id", "type", "runId", "byteSize", "sha256", "createdAt", "fileName", "relativePath", "name", "contentType",
 ]);
-const PROMOTION_PROOF_SKILL = "logo-design";
+const RELEASE_IDENTITY_KEYS = new Set(["commitSha", "deploymentId"]);
+const PROMOTION_PROOF_SKILL = "skills-release-proof";
 
 export function validateLivePublicContract(
   proof: LivePublicContractProof,
@@ -46,17 +50,20 @@ export function validateLivePublicContract(
   const probeSkill = expectation.probeSkill ?? "image";
   assertFullSha(expectation.platformSha);
   assertSemver(expectation.platformVersion, "expected platform version");
+  assertDeploymentId(expectation.deploymentId, "expected deployment id");
   assertSemver(expectation.clientPin, "expected client pin");
 
   const version = strictRecord(proof.version, VERSION_KEYS, "version");
   assert(version.name === "@hasnatools/platform-skills", "live package identity mismatch");
   assert(version.version === expectation.platformVersion, "live platform version mismatch");
   assert(version.commitSha === expectation.platformSha, "live version commit SHA mismatch");
+  assert(version.deploymentId === expectation.deploymentId, "live version deployment ID mismatch");
 
   const health = strictRecord(proof.health, HEALTH_KEYS, "health");
   assert(health.status === "ok", "live health is not ok");
   assert(health.version === expectation.platformVersion, "live health version mismatch");
   assert(health.commitSha === expectation.platformSha, "live health commit SHA mismatch");
+  assert(health.deploymentId === expectation.deploymentId, "live health deployment ID mismatch");
   assertSafeInteger(health.uptime, "health.uptime");
   assertSafeInteger(health.skillCount, "health.skillCount");
 
@@ -81,10 +88,20 @@ export function validateLivePublicContract(
   assert(typeof quote.quoteToken === "string" && quote.quoteToken.length > 0, "live quote lacks a signed token");
   assert(quote.creditQuote && Number.isSafeInteger(quote.creditQuote.credits), "live quote lacks authoritative credits");
 
+  const releaseQuoteRaw = unwrapRecord(proof.releaseQuote, ["quote", "data"], "release quote");
+  const releaseQuote = parsePublicQuoteEndpoint(releaseQuoteRaw, { strict: true, label: "release quote" });
+  assert(releaseQuote.skill === PROMOTION_PROOF_SKILL, "live release proof quote skill mismatch");
+  assert(typeof releaseQuote.quoteToken === "string" && releaseQuote.quoteToken.length > 0, "live release proof quote lacks a signed token");
+  assert(releaseQuote.creditQuote?.credits === 1, "live release proof quote must authorize exactly 1 credit");
+  assert(releaseQuote.creditQuote.creditUnit === "run", "live release proof quote must use run credits");
+
   const rawRuns = unwrapArray(proof.runs, ["runs", "data", "items"], "runs");
   assert(rawRuns.length > 0, "live promotion run proof is missing");
   const runs = rawRuns.map((raw, index) => {
     const record = strictRecord(raw, RUN_KEYS, `runs[${index}]`);
+    if (record.releaseIdentity !== undefined) {
+      strictRecord(record.releaseIdentity, RELEASE_IDENTITY_KEYS, `runs[${index}].releaseIdentity`);
+    }
     const normalized = normalizeRemoteSkillRunContract(record);
     const canonicalRecord = record.contractVersion === undefined
       ? { ...record, contractVersion: 1 }
@@ -107,7 +124,11 @@ export function validateLivePublicContract(
   });
   const promotionRun = runs.find((run) => run.skill === PROMOTION_PROOF_SKILL
     && run.status === "completed"
-    && run.creditsUsed === 1
+    && run.proofKind === "release-promotion"
+    && run.creditsUsed === releaseQuote.creditQuote.credits
+    && canonicalJson(run.creditQuote) === canonicalJson(releaseQuote.creditQuote)
+    && run.releaseIdentity?.commitSha === expectation.platformSha
+    && run.releaseIdentity?.deploymentId === expectation.deploymentId
     && typeof run.id === "string");
   assert(promotionRun, "live provider-free promotion run proof is missing");
 
@@ -166,6 +187,13 @@ function assertFullSha(value: string): void {
 
 function assertSemver(value: string, label: string): void {
   assert(/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(value), `${label} is invalid`);
+}
+
+function assertDeploymentId(value: string, label: string): void {
+  assert(
+    value.length <= 200 && /^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value),
+    `${label} is invalid`,
+  );
 }
 
 function assertSafeInteger(value: unknown, label: string): void {

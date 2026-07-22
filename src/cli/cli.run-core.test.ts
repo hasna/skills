@@ -345,7 +345,7 @@ describe("CLI run core", () => {
       }
     });
 
-    test("response loss persists an unknown logical attempt and retry reuses its idempotency key", async () => {
+    test("malformed 2xx response preserves replay evidence and retry reuses its idempotency key", async () => {
       const { mkdtempSync, readFileSync, rmSync } = require("fs");
       const { tmpdir } = require("os");
       const { join } = require("path");
@@ -367,7 +367,7 @@ describe("CLI run core", () => {
             submittedKeys.push(req.headers.get("idempotency-key"));
             return req.json().then((body) => {
               submittedBodies.push(body);
-              if (submitCalls === 1) return Response.json({ code: "UPSTREAM_RESPONSE_LOST" }, { status: 503 });
+              if (submitCalls === 1) return Response.json({});
               return Response.json({ id: "run_recovered", skill: "logo-design", status: "queued" });
             });
           }

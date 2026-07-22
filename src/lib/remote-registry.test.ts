@@ -370,6 +370,31 @@ describe("remote registry", () => {
     }
   });
 
+  test("does not send the configured service credential to an explicit API origin", async () => {
+    process.env.SKILLS_MODE = "cloud";
+    process.env.SKILLS_API_KEY = "fixture-must-stay-on-configured-origin";
+    await loadRemoteRegistry({
+      apiUrl: "https://different-operator.example",
+      fetchImpl: async (_input, init) => {
+        expect(new Headers(init?.headers).get("authorization")).toBeNull();
+        return Response.json([]);
+      },
+    });
+  });
+
+  test("uses only an explicit auth token with an explicit API origin", async () => {
+    process.env.SKILLS_MODE = "cloud";
+    process.env.SKILLS_API_KEY = "fixture-configured-origin-only";
+    await loadRemoteSkill("remote-demo", {
+      apiUrl: "https://different-operator.example",
+      authToken: "fixture-explicit-operator-token",
+      fetchImpl: async (_input, init) => {
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fixture-explicit-operator-token");
+        return Response.json({ slug: "remote-demo" });
+      },
+    });
+  });
+
   test("loads a single remote skill from the versioned detail endpoint", async () => {
     const skill = await loadRemoteSkill("remote-demo", {
       apiUrl: "https://skills.example.com/api/v1",

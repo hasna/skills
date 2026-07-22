@@ -8,10 +8,13 @@
  * e.g. "0 9 * * *" = every day at 9am
  */
 
-import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync } from "fs";
 import { join } from "path";
-import { createHash } from "crypto";
-import type { PublicCreditQuote } from "./public-credits.js";
+import { createHash, randomBytes } from "crypto";
+import { toAuthoritativePublicCreditQuote, type PublicCreditQuote } from "./public-credits.js";
+import { normalizeSkillsApiOrigin } from "./service-origin.js";
+import { isUnsignedQuoteApprovalFingerprint } from "./unsigned-quote-approval.js";
+import { normalizeSkillName } from "./utils.js";
 
 export interface SkillSchedule {
   id: string;
@@ -77,11 +80,7 @@ function getSchedulesPath(targetDir: string = process.cwd()): string {
 
 function loadSchedules(targetDir: string = process.cwd()): SchedulesFile {
   const path = getSchedulesPath(targetDir);
-  if (existsSync(path)) {
-    try {
-      return JSON.parse(readFileSync(path, "utf-8"));
-    } catch {}
-  }
+  if (existsSync(path)) return normalizeSchedulesFile(JSON.parse(readFileSync(path, "utf-8")));
   return { version: 1, schedules: [] };
 }
 
@@ -89,8 +88,16 @@ function saveSchedules(data: SchedulesFile, targetDir: string = process.cwd()): 
   const path = getSchedulesPath(targetDir);
   const dir = join(targetDir, ".skills");
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(path, JSON.stringify(data, null, 2), { mode: 0o600 });
-  chmodSync(path, 0o600);
+  const normalized = normalizeSchedulesFile(data);
+  const temporaryPath = `${path}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  try {
+    writeFileSync(temporaryPath, `${JSON.stringify(normalized, null, 2)}\n`, { mode: 0o600 });
+    chmodSync(temporaryPath, 0o600);
+    renameSync(temporaryPath, path);
+    chmodSync(path, 0o600);
+  } finally {
+    if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
+  }
 }
 
 /** Validate a single number or list/range/step value within bounds */
@@ -106,6 +113,7 @@ function validateCronField(expr: string, min: number, max: number, label: string
       const slashIdx = part.indexOf("/");
       valuePart = part.slice(0, slashIdx);
       const stepStr = part.slice(slashIdx + 1);
+      if (!/^\d+$/.test(stepStr)) return { valid: false, error: `Invalid step value in "${part}" in ${label}` };
       const step = parseInt(stepStr);
       if (isNaN(step) || step < 1) return { valid: false, error: `Invalid step value in "${part}" in ${label}` };
     }
@@ -115,6 +123,7 @@ function validateCronField(expr: string, min: number, max: number, label: string
 
     // Range: N-M
     if (valuePart.includes("-")) {
+      if (!/^\d+-\d+$/.test(valuePart)) return { valid: false, error: `Invalid range "${valuePart}" in ${label}` };
       const rangeParts = valuePart.split("-");
       if (rangeParts.length !== 2) return { valid: false, error: `Invalid range expression "${valuePart}" in ${label}` };
       const lo = parseInt(rangeParts[0]);
@@ -127,6 +136,7 @@ function validateCronField(expr: string, min: number, max: number, label: string
     }
 
     // Single number
+    if (!/^\d+$/.test(valuePart)) return { valid: false, error: `Invalid value "${valuePart}" in ${label}` };
     const n = parseInt(valuePart);
     if (isNaN(n)) return { valid: false, error: `Invalid value "${valuePart}" in ${label}` };
     if (n < min || n > max) {
@@ -240,14 +250,15 @@ export function addSchedule(
   if (!valid) return { schedule: null, error };
 
   const data = loadSchedules(options.targetDir);
-  const id = `${skill}-${Date.now()}`;
+  const normalizedSkill = requireScheduleSkill(skill);
+  const id = `${normalizedSkill}-${Date.now()}`;
   const now = new Date();
   const nextRun = getNextRun(cron, now);
 
   const schedule: SkillSchedule = {
     id,
     name: options.name || `${skill} (${cron})`,
-    skill,
+    skill: normalizedSkill,
     cron,
     args: options.args,
     enabled: true,
@@ -399,4 +410,198 @@ function canonicalJson(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value) ?? "null";
+}
+
+function normalizeSchedulesFile(value: unknown): SchedulesFile {
+  if (!isRecord(value)) throw new Error("Schedules state must be an object.");
+  assertOnlyKeys(value, ["version", "schedules"], "schedules state");
+  if (value.version !== 1 || !Array.isArray(value.schedules)) {
+    throw new Error("Schedules state has an unsupported or malformed schema.");
+  }
+  return {
+    version: 1,
+    schedules: value.schedules.map((schedule, index) => normalizeSchedule(schedule, index)),
+  };
+}
+
+function normalizeSchedule(value: unknown, index: number): SkillSchedule {
+  const label = `schedule[${index}]`;
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertOnlyKeys(value, [
+    "id", "name", "skill", "cron", "args", "enabled", "createdAt", "lastRun",
+    "lastRunStatus", "nextRun", "pendingOccurrence",
+  ], label);
+  const skill = requireScheduleSkill(value.skill);
+  const id = requiredString(value.id, `${label}.id`, 200);
+  if (!/^[a-z0-9][a-z0-9._:-]*-\d{10,}$/.test(id)) throw new Error(`${label}.id is invalid.`);
+  const name = requiredString(value.name, `${label}.name`, 200);
+  const cron = requiredString(value.cron, `${label}.cron`, 200);
+  const cronValidation = validateCron(cron);
+  if (!cronValidation.valid) throw new Error(`${label}.cron is invalid: ${cronValidation.error}`);
+  if (typeof value.enabled !== "boolean") throw new Error(`${label}.enabled must be a boolean.`);
+  const createdAt = requiredTimestamp(value.createdAt, `${label}.createdAt`);
+  const args = value.args === undefined ? undefined : stringArray(value.args, `${label}.args`);
+  const lastRun = value.lastRun === undefined ? undefined : requiredTimestamp(value.lastRun, `${label}.lastRun`);
+  const nextRun = value.nextRun === undefined ? undefined : requiredTimestamp(value.nextRun, `${label}.nextRun`);
+  const lastRunStatus = value.lastRunStatus;
+  if (lastRunStatus !== undefined && !["success", "error", "unknown"].includes(String(lastRunStatus))) {
+    throw new Error(`${label}.lastRunStatus is invalid.`);
+  }
+  const schedule: SkillSchedule = {
+    id,
+    name,
+    skill,
+    cron,
+    ...(args ? { args } : {}),
+    enabled: value.enabled,
+    createdAt,
+    ...(lastRun ? { lastRun } : {}),
+    ...(lastRunStatus ? { lastRunStatus: lastRunStatus as SkillSchedule["lastRunStatus"] } : {}),
+    ...(nextRun ? { nextRun } : {}),
+  };
+  if (value.pendingOccurrence !== undefined) {
+    schedule.pendingOccurrence = normalizePendingOccurrence(value.pendingOccurrence, schedule, label);
+  }
+  return schedule;
+}
+
+function normalizePendingOccurrence(
+  value: unknown,
+  schedule: SkillSchedule,
+  scheduleLabel: string,
+): NonNullable<SkillSchedule["pendingOccurrence"]> {
+  const label = `${scheduleLabel}.pendingOccurrence`;
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertOnlyKeys(value, [
+    "scheduledFor", "idempotencyKey", "state", "attempts", "lastAttemptAt",
+    "retryAfter", "requestFingerprint", "submission",
+  ], label);
+  const scheduledFor = requiredTimestamp(value.scheduledFor, `${label}.scheduledFor`);
+  const idempotencyKey = requiredString(value.idempotencyKey, `${label}.idempotencyKey`, 200);
+  const expectedKey = createScheduleIdempotencyKey({ id: schedule.id, nextRun: scheduledFor });
+  if (idempotencyKey !== expectedKey || schedule.nextRun !== scheduledFor) {
+    throw new Error(`${label} does not match the persisted schedule occurrence.`);
+  }
+  if (value.state !== "unknown") throw new Error(`${label}.state must be unknown.`);
+  if (!Number.isSafeInteger(value.attempts) || Number(value.attempts) < 1
+    || Number(value.attempts) > MAX_UNKNOWN_OCCURRENCE_ATTEMPTS) {
+    throw new Error(`${label}.attempts is invalid.`);
+  }
+  const lastAttemptAt = requiredTimestamp(value.lastAttemptAt, `${label}.lastAttemptAt`);
+  const retryAfter = value.retryAfter === null
+    ? null
+    : requiredTimestamp(value.retryAfter, `${label}.retryAfter`);
+  const requestFingerprint = requiredString(value.requestFingerprint, `${label}.requestFingerprint`, 64);
+  if (!/^[a-f0-9]{64}$/.test(requestFingerprint)) throw new Error(`${label}.requestFingerprint is invalid.`);
+  const submission = normalizeScheduleSubmission(value.submission, `${label}.submission`);
+  if (submission.skill !== schedule.skill || submission.authorization.idempotencyKey !== idempotencyKey) {
+    throw new Error(`${label}.submission does not match the schedule occurrence.`);
+  }
+  const expectedFingerprint = createHash("sha256").update(canonicalJson(submission)).digest("hex");
+  if (requestFingerprint !== expectedFingerprint) throw new Error(`${label}.requestFingerprint does not match its submission.`);
+  return {
+    scheduledFor,
+    idempotencyKey,
+    state: "unknown",
+    attempts: Number(value.attempts),
+    lastAttemptAt,
+    retryAfter,
+    requestFingerprint,
+    submission,
+  };
+}
+
+function normalizeScheduleSubmission(value: unknown, label: string): ScheduleRemoteSubmission {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertOnlyKeys(value, [
+    "deployment", "skill", "input", "args", "authorization", "creditQuote", "approvedQuoteFingerprint",
+  ], label);
+  if (!isRecord(value.deployment)) throw new Error(`${label}.deployment must be an object.`);
+  assertOnlyKeys(value.deployment, ["mode", "apiUrl"], `${label}.deployment`);
+  if (value.deployment.mode !== "cloud" && value.deployment.mode !== "self-hosted") {
+    throw new Error(`${label}.deployment.mode must be cloud or self-hosted.`);
+  }
+  const deployment = {
+    mode: value.deployment.mode as "cloud" | "self-hosted",
+    apiUrl: normalizeSkillsApiOrigin(
+      requiredString(value.deployment.apiUrl, `${label}.deployment.apiUrl`, 2_048),
+      process.env,
+    ),
+  };
+  const skill = requireScheduleSkill(value.skill);
+  if (!isRecord(value.input) || !isJsonValue(value.input)) throw new Error(`${label}.input must be a JSON object.`);
+  const args = stringArray(value.args, `${label}.args`);
+  if (!isRecord(value.authorization)) throw new Error(`${label}.authorization must be an object.`);
+  assertOnlyKeys(value.authorization, ["idempotencyKey", "quoteToken", "approved"], `${label}.authorization`);
+  const idempotencyKey = requiredString(value.authorization.idempotencyKey, `${label}.authorization.idempotencyKey`, 200);
+  if (!/^[\x21-\x7E]+$/.test(idempotencyKey)) throw new Error(`${label}.authorization.idempotencyKey is invalid.`);
+  const quoteToken = value.authorization.quoteToken === undefined
+    ? undefined
+    : requiredString(value.authorization.quoteToken, `${label}.authorization.quoteToken`, 8_192);
+  if (value.authorization.approved !== undefined && typeof value.authorization.approved !== "boolean") {
+    throw new Error(`${label}.authorization.approved must be a boolean.`);
+  }
+  const approvedQuoteFingerprint = value.approvedQuoteFingerprint;
+  if (approvedQuoteFingerprint !== undefined && !isUnsignedQuoteApprovalFingerprint(approvedQuoteFingerprint)) {
+    throw new Error(`${label}.approvedQuoteFingerprint is invalid.`);
+  }
+  return {
+    deployment,
+    skill,
+    input: structuredClone(value.input),
+    args,
+    authorization: {
+      idempotencyKey,
+      ...(quoteToken ? { quoteToken } : {}),
+      ...(value.authorization.approved !== undefined ? { approved: value.authorization.approved } : {}),
+    },
+    creditQuote: toAuthoritativePublicCreditQuote(value.creditQuote),
+    ...(approvedQuoteFingerprint ? { approvedQuoteFingerprint } : {}),
+  };
+}
+
+function requireScheduleSkill(value: unknown): string {
+  const skill = typeof value === "string" ? normalizeSkillName(value) : "";
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(skill)) throw new Error("Schedule skill is invalid.");
+  return skill;
+}
+
+function requiredString(value: unknown, label: string, maxLength: number): string {
+  if (typeof value !== "string" || value.length < 1 || value.length > maxLength || /[\u0000-\u001F\u007F]/.test(value)) {
+    throw new Error(`${label} must be a non-empty safe string.`);
+  }
+  return value;
+}
+
+function requiredTimestamp(value: unknown, label: string): string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T/.test(value) || !Number.isFinite(Date.parse(value))) {
+    throw new Error(`${label} must be a valid timestamp.`);
+  }
+  return value;
+}
+
+function stringArray(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.length > 100
+    || value.some((item) => typeof item !== "string" || item.length > 4_096 || /\u0000/.test(item))) {
+    throw new Error(`${label} must be an array of safe strings.`);
+  }
+  return [...value];
+}
+
+function assertOnlyKeys(value: Record<string, unknown>, allowed: readonly string[], label: string): void {
+  const allowedSet = new Set(allowed);
+  const unsupported = Object.keys(value).find((key) => !allowedSet.has(key));
+  if (unsupported) throw new Error(`${label} contains unsupported field '${unsupported}'.`);
+}
+
+function isJsonValue(value: unknown): boolean {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  if (isRecord(value)) return Object.values(value).every(isJsonValue);
+  return false;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
