@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   ApiPrincipal,
   ClaimRunInput,
@@ -13,9 +13,10 @@ import type {
   RunOutcomePatch,
   SkillsProductStore,
 } from "./types.js";
+import { IdempotencyKeyReuseError } from "./types.js";
 import { hashApiKey, selfHostedPrincipal } from "./auth.js";
 
-type SqlTag = {
+export type SkillsSqlTag = {
   (strings: TemplateStringsArray, ...values: unknown[]): Promise<Record<string, unknown>[]>;
   unsafe(query: string): Promise<Record<string, unknown>[]>;
   close?: () => Promise<void>;
@@ -42,6 +43,23 @@ export function createArtifactId(): string {
   return artifactId();
 }
 
+export function createRunRequestFingerprint(
+  input: Pick<CreateRunInput, "slug" | "requestedSlug" | "input" | "args" | "quoteToken" | "approved">,
+): string {
+  const authorization: Record<string, unknown> = {};
+  if (typeof input.quoteToken === "string") authorization.quoteToken = input.quoteToken;
+  if (typeof input.approved === "boolean") authorization.approved = input.approved;
+  const canonical = canonicalJson({
+    version: "skills-run-request-v1",
+    skill: input.slug,
+    requestedSlug: input.requestedSlug ?? input.slug,
+    input: input.input,
+    args: input.args,
+    authorization,
+  });
+  return `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
+}
+
 export interface StoreOptions {
   databaseUrl?: string;
   bootstrapApiKey?: string;
@@ -62,7 +80,7 @@ export class MemorySkillsStore implements SkillsProductStore {
   private runs = new Map<string, ServerRunRecord>();
   private logs = new Map<string, ServerRunLog[]>();
   private artifacts = new Map<string, ServerArtifact[]>();
-  private idempotency = new Map<string, string>();
+  private idempotency = new Map<string, Map<string, { runId: string; requestFingerprint: string }>>();
 
   constructor(apiKeys: Array<{ token: string; principal?: Partial<ApiPrincipal> }> = []) {
     for (const key of apiKeys) this.addApiKey(key.token, key.principal);
@@ -84,10 +102,14 @@ export class MemorySkillsStore implements SkillsProductStore {
 
   async createRun(input: CreateRunInput): Promise<CreateRunResult> {
     const idemKey = input.idempotencyKey?.trim();
-    const idemMapKey = idemKey ? `${input.principal.orgId}:${idemKey}` : undefined;
-    if (idemMapKey) {
-      const existing = this.idempotency.get(idemMapKey);
-      if (existing) return { run: this.runs.get(existing)!, created: false };
+    const orgIdempotency = idemKey ? this.idempotency.get(input.principal.orgId) : undefined;
+    const requestFingerprint = idemKey ? createRunRequestFingerprint(input) : undefined;
+    if (idemKey) {
+      const existing = orgIdempotency?.get(idemKey);
+      if (existing) {
+        if (existing.requestFingerprint !== requestFingerprint) throw new IdempotencyKeyReuseError();
+        return { run: this.runs.get(existing.runId)!, created: false };
+      }
     }
     const now = nowIso();
     const run: ServerRunRecord = {
@@ -95,18 +117,23 @@ export class MemorySkillsStore implements SkillsProductStore {
       orgId: input.principal.orgId,
       userId: input.principal.userId,
       skill: input.slug,
-      requestedSlug: input.slug,
+      requestedSlug: input.requestedSlug ?? input.slug,
       status: "queued",
       input: input.input,
       args: input.args,
       ...(idemKey ? { idempotencyKey: idemKey } : {}),
+      ...(requestFingerprint ? { requestFingerprint } : {}),
       correlationId: randomUUID(),
       createdAt: now,
     };
     this.runs.set(run.id, run);
     this.logs.set(run.id, []);
     this.artifacts.set(run.id, []);
-    if (idemMapKey) this.idempotency.set(idemMapKey, run.id);
+    if (idemKey && requestFingerprint) {
+      const scoped = orgIdempotency ?? new Map<string, { runId: string; requestFingerprint: string }>();
+      scoped.set(idemKey, { runId: run.id, requestFingerprint });
+      if (!orgIdempotency) this.idempotency.set(input.principal.orgId, scoped);
+    }
     return { run, created: true };
   }
 
@@ -204,11 +231,11 @@ export class MemorySkillsStore implements SkillsProductStore {
 }
 
 export class PostgresSkillsStore implements SkillsProductStore {
-  private sql: SqlTag;
+  private sql: SkillsSqlTag;
 
-  constructor(databaseUrl: string) {
-    const bunWithSql = Bun as unknown as { SQL: new (url: string, options?: { max?: number }) => SqlTag };
-    this.sql = new bunWithSql.SQL(databaseUrl, { max: resolvePoolMax() });
+  constructor(databaseUrl: string, sql?: SkillsSqlTag) {
+    const bunWithSql = Bun as unknown as { SQL: new (url: string, options?: { max?: number }) => SkillsSqlTag };
+    this.sql = sql ?? new bunWithSql.SQL(databaseUrl, { max: resolvePoolMax() });
   }
 
   async ensureBootstrapApiKey(token: string, principal?: Partial<ApiPrincipal>): Promise<void> {
@@ -263,10 +290,11 @@ export class PostgresSkillsStore implements SkillsProductStore {
 
   async createRun(input: CreateRunInput): Promise<CreateRunResult> {
     const idempotencyKey = input.idempotencyKey?.trim() || null;
+    const requestFingerprint = idempotencyKey ? createRunRequestFingerprint(input) : null;
     const id = runId();
     const rows = await this.sql`
-      INSERT INTO skills_runs (id, org_id, user_id, skill_slug, requested_slug, status, input_json, args_json, idempotency_key, correlation_id)
-      VALUES (${id}, ${input.principal.orgId}, ${input.principal.userId}, ${input.slug}, ${input.slug}, ${"queued"}, ${JSON.stringify(input.input)}::jsonb, ${JSON.stringify(input.args)}::jsonb, ${idempotencyKey}, ${randomUUID()})
+      INSERT INTO skills_runs (id, org_id, user_id, skill_slug, requested_slug, status, input_json, args_json, idempotency_key, request_fingerprint, correlation_id)
+      VALUES (${id}, ${input.principal.orgId}, ${input.principal.userId}, ${input.slug}, ${input.requestedSlug ?? input.slug}, ${"queued"}, ${JSON.stringify(input.input)}::jsonb, ${JSON.stringify(input.args)}::jsonb, ${idempotencyKey}, ${requestFingerprint}, ${randomUUID()})
       ON CONFLICT (org_id, idempotency_key)
       WHERE idempotency_key IS NOT NULL
       DO NOTHING
@@ -281,7 +309,29 @@ export class PostgresSkillsStore implements SkillsProductStore {
       LIMIT 1
     `;
     if (!existing[0]) throw new Error("idempotent run insert conflicted without an existing run");
-    return { run: rowToRun(existing[0]), created: false };
+    const existingRun = rowToRun(existing[0]);
+    if (existingRun.requestFingerprint === requestFingerprint) return { run: existingRun, created: false };
+
+    if (isCompatibleLegacyReplay(existingRun, input)) {
+      const upgraded = await this.sql`
+        UPDATE skills_runs
+        SET request_fingerprint = ${requestFingerprint}
+        WHERE id = ${existingRun.id}
+          AND org_id = ${input.principal.orgId}
+          AND request_fingerprint = ${existingRun.requestFingerprint}
+        RETURNING *
+      `;
+      if (upgraded[0]) return { run: rowToRun(upgraded[0]), created: false };
+      const current = await this.sql`
+        SELECT * FROM skills_runs
+        WHERE id = ${existingRun.id} AND org_id = ${input.principal.orgId}
+        LIMIT 1
+      `;
+      if (current[0] && rowToRun(current[0]).requestFingerprint === requestFingerprint) {
+        return { run: rowToRun(current[0]), created: false };
+      }
+    }
+    throw new IdempotencyKeyReuseError();
   }
 
   async listRuns(principal: ApiPrincipal, limit: number): Promise<ServerRunRecord[]> {
@@ -422,6 +472,7 @@ function rowToRun(row: Record<string, unknown>): ServerRunRecord {
     input: parseJsonObject(row.input_json),
     args: parseJsonArray(row.args_json),
     ...(typeof row.idempotency_key === "string" ? { idempotencyKey: row.idempotency_key } : {}),
+    ...(typeof row.request_fingerprint === "string" ? { requestFingerprint: row.request_fingerprint } : {}),
     correlationId: String(row.correlation_id),
     ...(typeof row.output_type === "string" ? { outputType: row.output_type } : {}),
     ...(typeof row.output_preview === "string" ? { outputPreview: row.output_preview } : {}),
@@ -431,6 +482,36 @@ function rowToRun(row: Record<string, unknown>): ServerRunRecord {
     ...(row.started_at ? { startedAt: dateString(row.started_at) } : {}),
     ...(row.completed_at ? { completedAt: dateString(row.completed_at) } : {}),
   };
+}
+
+function isCompatibleLegacyReplay(existing: ServerRunRecord, input: CreateRunInput): boolean {
+  if (!existing.requestFingerprint?.startsWith("legacy:")) return false;
+  if (input.quoteToken !== undefined || input.approved !== undefined) return false;
+  return existing.skill === input.slug
+    && existing.requestedSlug === (input.requestedSlug ?? input.slug)
+    && canonicalJson(existing.input) === canonicalJson(input.input)
+    && canonicalJson(existing.args) === canonicalJson(input.args);
+}
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(canonicalJsonValue(value));
+}
+
+function canonicalJsonValue(value: unknown): unknown {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (Array.isArray(value)) {
+    return value.map((entry) => canonicalJsonValue(entry) ?? null);
+  }
+  if (typeof value === "object") {
+    const normalized: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      const entry = canonicalJsonValue((value as Record<string, unknown>)[key]);
+      if (entry !== undefined) normalized[key] = entry;
+    }
+    return normalized;
+  }
+  return undefined;
 }
 
 function rowToLog(row: Record<string, unknown>): ServerRunLog {

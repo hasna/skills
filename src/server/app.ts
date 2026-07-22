@@ -7,7 +7,7 @@ import { resolveServerConfig, type SkillsServerConfig } from "./config.js";
 import { executeRun } from "./handlers.js";
 import { quoteServerSkill, getServerSkill, getServerSkillMd, listServerSkills } from "./registry.js";
 import { createStore, type MemorySkillsStore } from "./store.js";
-import type { ApiPrincipal, ServerRunRecord, SkillsProductStore } from "./types.js";
+import { IdempotencyKeyReuseError, type ApiPrincipal, type ServerRunRecord, type SkillsProductStore } from "./types.js";
 
 export interface SkillsServerOptions {
   config?: Partial<SkillsServerConfig>;
@@ -53,6 +53,9 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
 
       return json({ error: "not found", code: "NOT_FOUND" }, { status: 404 });
     } catch (error) {
+      if (error instanceof IdempotencyKeyReuseError) {
+        return json({ error: error.message, code: error.code }, { status: 409 });
+      }
       return json({ error: "internal server error", detail: (error as Error).message }, { status: 500 });
     }
   };
@@ -110,7 +113,8 @@ async function handleApiV1(
     if (request.method === "POST" && parts.length === 2 && id) {
       const skill = getServerSkill(id);
       if (!skill) return json({ error: "skill not found", code: "SKILL_NOT_FOUND" }, { status: 404 });
-      if (!getSelfHostedExecutionCapability(id)) {
+      const executionCapability = getSelfHostedExecutionCapability(id);
+      if (!executionCapability) {
         return json({
           error: "This self-hosted deployment has no executable handler for that skill.",
           code: "HANDLER_UNAVAILABLE",
@@ -121,10 +125,13 @@ async function handleApiV1(
       const args = Array.isArray(body.args) ? body.args.map(String) : [];
       const { run, created } = await store.createRun({
         principal,
-        slug: id,
+        slug: executionCapability.slug,
+        requestedSlug: id,
         input,
         args,
         idempotencyKey: request.headers.get("idempotency-key") || stringField(body.idempotencyKey),
+        ...(stringField(body.quoteToken) ? { quoteToken: stringField(body.quoteToken) } : {}),
+        ...(typeof body.approved === "boolean" ? { approved: body.approved } : {}),
       });
       if (config.inlineWorker && created) void executeRun(store, run, artifactStorage);
       return json(runPayload(run), { status: 202 });

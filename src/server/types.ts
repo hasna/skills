@@ -34,6 +34,7 @@ export interface ServerRunRecord {
   input: Record<string, unknown>;
   args: string[];
   idempotencyKey?: string;
+  requestFingerprint?: string;
   correlationId: string;
   outputType?: string;
   outputPreview?: string;
@@ -70,9 +71,21 @@ export interface ServerArtifact {
 export interface CreateRunInput {
   principal: ApiPrincipal;
   slug: string;
+  requestedSlug?: string;
   input: Record<string, unknown>;
   args: string[];
   idempotencyKey?: string;
+  quoteToken?: string;
+  approved?: boolean;
+}
+
+export class IdempotencyKeyReuseError extends Error {
+  readonly code = "IDEMPOTENCY_KEY_REUSED";
+
+  constructor() {
+    super("This idempotency key was already used for a different run request.");
+    this.name = "IdempotencyKeyReuseError";
+  }
 }
 
 export interface CreateRunResult {

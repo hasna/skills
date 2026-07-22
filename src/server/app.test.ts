@@ -175,6 +175,84 @@ describe("self-hosted skills API", () => {
     }
   });
 
+  test("binds an idempotency key to the exact canonical run request within one organization", async () => {
+    const { server, store, baseUrl } = await testServer();
+    const submit = async (
+      token: string,
+      slug: string,
+      idempotencyKey: string,
+      body: Record<string, unknown>,
+    ) => {
+      const response = await fetch(`${baseUrl}/api/v1/runs/${slug}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyKey,
+        },
+        body: JSON.stringify(body),
+      });
+      return { response, payload: await response.json() as Record<string, unknown> };
+    };
+
+    try {
+      const original = await submit("sk_test_org_a", "audio-transcript-pack", "request-bound-key", {
+        input: { alpha: 1, nested: { z: 2, a: 3 } },
+        args: ["--title", "Exact"],
+        approved: true,
+        quoteToken: "quote_exact",
+      });
+      expect(original.response.status).toBe(202);
+
+      const replay = await submit("sk_test_org_a", "audio-transcript-pack", "request-bound-key", {
+        input: { nested: { a: 3, z: 2 }, alpha: 1 },
+        args: ["--title", "Exact"],
+        quoteToken: "quote_exact",
+        approved: true,
+      });
+      expect(replay.response.status).toBe(202);
+      expect(replay.payload.id).toBe(original.payload.id);
+
+      const conflictingBodies = [
+        { input: { alpha: 2, nested: { a: 3, z: 2 } }, args: ["--title", "Exact"], approved: true, quoteToken: "quote_exact" },
+        { input: { alpha: 1, nested: { a: 3, z: 2 } }, args: ["--title", "Changed"], approved: true, quoteToken: "quote_exact" },
+        { input: { alpha: 1, nested: { a: 3, z: 2 } }, args: ["--title", "Exact"], approved: false, quoteToken: "quote_exact" },
+        { input: { alpha: 1, nested: { a: 3, z: 2 } }, args: ["--title", "Exact"], approved: true, quoteToken: "quote_changed" },
+      ];
+      for (const body of conflictingBodies) {
+        const conflict = await submit("sk_test_org_a", "audio-transcript-pack", "request-bound-key", body);
+        expect(conflict.response.status).toBe(409);
+        expect(conflict.payload).toEqual({
+          error: "This idempotency key was already used for a different run request.",
+          code: "IDEMPOTENCY_KEY_REUSED",
+        });
+      }
+
+      const slugConflict = await submit("sk_test_org_a", "transcript", "request-bound-key", {
+        input: { alpha: 1, nested: { a: 3, z: 2 } },
+        args: ["--title", "Exact"],
+        approved: true,
+        quoteToken: "quote_exact",
+      });
+      expect(slugConflict.response.status).toBe(409);
+      expect(slugConflict.payload).toMatchObject({ code: "IDEMPOTENCY_KEY_REUSED" });
+
+      const otherTenant = await submit("sk_test_org_b", "transcript", "request-bound-key", {
+        input: { tenant: "org-b" },
+        args: [],
+      });
+      expect(otherTenant.response.status).toBe(202);
+      expect(otherTenant.payload.id).not.toBe(original.payload.id);
+
+      const orgA = await store.authenticateApiKeyHash(hashApiKey("sk_test_org_a"));
+      const orgB = await store.authenticateApiKeyHash(hashApiKey("sk_test_org_b"));
+      expect(await store.listRuns(orgA!, 100)).toHaveLength(1);
+      expect(await store.listRuns(orgB!, 100)).toHaveLength(1);
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("serves unauthenticated health and requires auth for API routes", async () => {
     const { server, baseUrl } = await testServer();
     try {
