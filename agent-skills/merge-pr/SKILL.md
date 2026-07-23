@@ -33,8 +33,10 @@ For an actual merge:
    draft/conflict state, base/protection policy, and queue behavior. Do not use
    stale preflight as merge authority.
 5. Generate the command with
-   `scripts/merge_pr_guard.py build --preflight <fresh.json> ...`. Never hand
-   compose a squash command.
+   `scripts/merge_pr_guard.py build --preflight <fresh.json>
+   --task-id <todo-id> --acceptance-scope <frozen-scope>
+   --repair-cycle-count <cumulative-count> ...`. Never hand compose a squash
+   command.
 6. Execute the returned argv exactly once. It always includes
    `--match-head-commit`; it never includes admin, force, direct-main push, or
    branch deletion. Use auto mode only with explicit delayed intent.
@@ -52,17 +54,29 @@ merge; never strip and continue.
 ```bash
 python3 agent-skills/merge-pr/scripts/merge_pr_guard.py build \
   --preflight /path/to/fresh-preflight.json \
+  --task-id "00000000-0000-4000-8000-000000000000" \
+  --acceptance-scope "task-owned-frozen-scope" \
+  --repair-cycle-count 0 \
   --strategy squash \
   --subject "fix: preserve merge provenance" \
   --body ""
 ```
+
+This guard authorizes explicit squash merges and policy-owned merge queues.
+Merge and rebase strategies need a different guard that verifies every
+resulting commit, so this workflow rejects them.
 
 ## Postverify
 
 Postverify must query the actual provider merge commit, not source commits or a
 locally predicted message. It writes a durable `clean` or `failed` receipt,
 including message digest and forbidden-trailer line numbers without echoing the
-message. A synthesized trailer is a failed result.
+message. Here `clean` means trailer-clean, not byte-for-byte equality with the
+requested message. A synthesized trailer is a failed result. Fixture mode is
+test-only, marks receipts non-authoritative, and can never complete a live
+merge. Pass the build result's task, mode, scope, cycle count, base, exact head,
+and preflight digest to postverify so the receipt is correlated to the frozen
+decision.
 
 Never rewrite protected-main history, revert, force push, or delete the branch
 in response. Record the failure and escalate through the owning task.

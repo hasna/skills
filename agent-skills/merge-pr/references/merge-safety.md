@@ -37,7 +37,11 @@ Use the guard's argv output. For squash it always supplies `--subject`,
 `--body`, and `--match-head-commit`. The guard rejects a
 `Co-Authored-By` trailer rather than deleting it. It has no interface for
 `--admin`, force, direct pushes, or branch deletion. Auto mode additionally
-requires the explicit `--delayed-intent` acknowledgement.
+requires the explicit `--delayed-intent` acknowledgement. The executor must
+pass the Todo ID, task-owned frozen scope, and cumulative repair-cycle count
+separately; all must match the fresh snapshot. This guard permits squash and
+policy-owned queues only. It rejects merge and rebase strategies because their
+multi-commit results require a wider provenance check.
 
 ## Provider postverify
 
@@ -48,9 +52,16 @@ After provider mutation:
 3. Resolve the provider merge-commit SHA.
 4. Fetch that commit's actual message.
 5. Scan it for forbidden trailers.
-6. Persist the receipt before interpreting success.
+6. Bind the receipt to the task, mode, scope, cycle count, preflight digest,
+   provider URL, base, source head, and merge commit.
+7. Persist the receipt before interpreting success.
 
 A forbidden trailer or provider mismatch produces a durable failed receipt and
 nonzero exit. Do not claim a clean merge, rewrite protected main, revert, force
 push, or delete the branch. Postverify is evidence-only and cannot reopen the
 review budget.
+
+`clean` is scoped to the forbidden-trailer policy; it is not a byte-for-byte
+message assertion. `--fixture` exists only for inert tests. Fixture receipts
+name their source, set `authoritative: false`, bind their target to the supplied
+repository and PR, and cannot satisfy live postverify.

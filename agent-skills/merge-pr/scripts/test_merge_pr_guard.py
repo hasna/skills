@@ -14,6 +14,7 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("merge_pr_guard.py")
 FIXTURES = Path(__file__).parents[1] / "tests" / "fixtures"
+sys.dont_write_bytecode = True
 SPEC = importlib.util.spec_from_file_location("merge_pr_guard", SCRIPT)
 assert SPEC and SPEC.loader
 GUARD = importlib.util.module_from_spec(SPEC)
@@ -22,6 +23,9 @@ SPEC.loader.exec_module(GUARD)
 REPO = "hasna/tai"
 PR_NUMBER = 4
 HEAD_SHA = "2797e3264c416018c06608434c0c57340f647330"
+ACCEPTANCE_SCOPE = "skills-merge-trailer-hardening-v1"
+TASK_ID = "fae9ac3b-5af9-4f15-aaca-748e2a5da394"
+PREFLIGHT_SHA256 = "0" * 64
 
 
 def artifact(identity: str) -> dict[str, object]:
@@ -29,7 +33,7 @@ def artifact(identity: str) -> dict[str, object]:
         "repository": REPO,
         "pr_number": PR_NUMBER,
         "head_sha": HEAD_SHA,
-        "acceptance_scope": "skills-merge-trailer-hardening-v1",
+        "acceptance_scope": ACCEPTANCE_SCOPE,
         "reviewer_identity": identity,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "verdict": "approved",
@@ -40,14 +44,18 @@ def artifact(identity: str) -> dict[str, object]:
 
 def preflight(mode: str = "immediate-merge", verdict: str = "mergeable") -> dict[str, object]:
     snapshot: dict[str, object] = {
+        "task_id": TASK_ID,
         "mode": mode,
         "risk_tier": {"declared": "elevated", "effective": "elevated", "source": "explicit"},
-        "acceptance_scope": "skills-merge-trailer-hardening-v1",
+        "acceptance_scope": ACCEPTANCE_SCOPE,
         "required_reviewer_artifacts": 2,
         "repair_cycles": {"count": 0, "cap": 2},
         "verdict": verdict,
         "repo": REPO,
         "pr_number": PR_NUMBER,
+        "pr_url": "https://github.com/hasna/tai/pull/4",
+        "base": "main",
+        "head": "hasna:ci/provider-native-validation",
         "head_sha": HEAD_SHA,
         "merge_state": {
             "state": "OPEN",
@@ -57,10 +65,13 @@ def preflight(mode: str = "immediate-merge", verdict: str = "mergeable") -> dict
             "review_decision": "APPROVED",
         },
         "checks": [{"name": "ci", "bucket": "pass", "state": "SUCCESS"}],
+        "reviews": [{"author": {"login": "reviewer-a"}, "state": "APPROVED"}],
         "reviewer_artifacts": [artifact("reviewer-a"), artifact("reviewer-b")],
         "worker_identity": "worker",
         "executor_identity": "executor",
+        "branch_policy": {"protected": True, "queue_required": mode == "merge-queue"},
         "blocking_reasons": [],
+        "warnings": [],
         "observed_at": datetime.now(timezone.utc).isoformat(),
     }
     if verdict == "pending":
@@ -79,10 +90,28 @@ class GuardCliTests(unittest.TestCase):
             stderr=subprocess.PIPE,
         )
 
-    def build(self, directory: Path, *args: str, snapshot: dict[str, object] | None = None):
+    def build(
+        self,
+        directory: Path,
+        *args: str,
+        snapshot: dict[str, object] | None = None,
+        expected_scope: str = ACCEPTANCE_SCOPE,
+        expected_repair_cycle_count: int = 0,
+    ):
         snapshot_path = directory / "preflight.json"
         snapshot_path.write_text(json.dumps(snapshot or preflight()), encoding="utf-8")
-        result = self.run_cli("build", "--preflight", str(snapshot_path), *args)
+        result = self.run_cli(
+            "build",
+            "--preflight",
+            str(snapshot_path),
+            "--task-id",
+            TASK_ID,
+            "--acceptance-scope",
+            expected_scope,
+            "--repair-cycle-count",
+            str(expected_repair_cycle_count),
+            *args,
+        )
         return result, json.loads(result.stdout) if result.stdout else None
 
     def test_multi_commit_squash_builds_explicit_message_and_exact_head_cas(self) -> None:
@@ -206,6 +235,130 @@ class GuardCliTests(unittest.TestCase):
                 )
             self.assertEqual(result.returncode, 2)
 
+    def test_missing_worker_or_branch_policy_evidence_fails_closed(self) -> None:
+        missing_worker = preflight()
+        del missing_worker["worker_identity"]
+        missing_policy = preflight()
+        del missing_policy["branch_policy"]
+        for snapshot in (missing_worker, missing_policy):
+            with tempfile.TemporaryDirectory() as temporary:
+                result, _ = self.build(
+                    Path(temporary),
+                    "--strategy",
+                    "squash",
+                    "--subject",
+                    "fix: safe",
+                    snapshot=snapshot,
+                )
+            self.assertEqual(result.returncode, 2)
+
+    def test_missing_review_decision_and_stateless_check_fail_closed(self) -> None:
+        missing_decision = preflight()
+        del missing_decision["merge_state"]["review_decision"]
+        stateless_check = preflight()
+        stateless_check["checks"] = [{}]
+        for snapshot in (missing_decision, stateless_check):
+            with tempfile.TemporaryDirectory() as temporary:
+                result, _ = self.build(
+                    Path(temporary),
+                    "--strategy",
+                    "squash",
+                    "--subject",
+                    "fix: safe",
+                    snapshot=snapshot,
+                )
+            self.assertEqual(result.returncode, 2)
+
+    def test_empty_or_conflicting_check_and_review_evidence_fails_closed(self) -> None:
+        empty_checks = preflight()
+        empty_checks["checks"] = []
+        conflicting_check = preflight()
+        conflicting_check["checks"] = [{"bucket": "pass", "state": "invented"}]
+        empty_reviews = preflight()
+        empty_reviews["reviews"] = []
+        malformed_review = preflight()
+        malformed_review["reviews"] = [{"state": "APPROVED"}]
+        blocking_review = preflight()
+        blocking_review["reviews"] = [
+            {"author": {"login": "reviewer-a"}, "state": "CHANGES_REQUESTED"}
+        ]
+        for snapshot in (
+            empty_checks,
+            conflicting_check,
+            empty_reviews,
+            malformed_review,
+            blocking_review,
+        ):
+            with tempfile.TemporaryDirectory() as temporary:
+                result, _ = self.build(
+                    Path(temporary),
+                    "--strategy",
+                    "squash",
+                    "--subject",
+                    "fix: safe",
+                    snapshot=snapshot,
+                )
+            self.assertEqual(result.returncode, 2)
+
+    def test_merge_and_rebase_strategies_have_no_bypass(self) -> None:
+        for strategy in ("merge", "rebase"):
+            with self.subTest(strategy=strategy), tempfile.TemporaryDirectory() as temporary:
+                result, _ = self.build(
+                    Path(temporary),
+                    "--strategy",
+                    strategy,
+                    "--subject",
+                    "fix: safe",
+                )
+            self.assertEqual(result.returncode, 2)
+
+    def test_scope_cycle_and_freshness_are_executor_bound(self) -> None:
+        changed_scope = preflight()
+        changed_scope["acceptance_scope"] = "changed-scope"
+        changed_scope["reviewer_artifacts"][0]["acceptance_scope"] = "changed-scope"
+        changed_scope["reviewer_artifacts"][1]["acceptance_scope"] = "changed-scope"
+        changed_cycle = preflight()
+        changed_cycle["repair_cycles"]["count"] = 1
+        stale = preflight()
+        stale["observed_at"] = "2020-01-01T00:00:00Z"
+        for snapshot in (changed_scope, changed_cycle, stale):
+            with tempfile.TemporaryDirectory() as temporary:
+                result, _ = self.build(
+                    Path(temporary),
+                    "--strategy",
+                    "squash",
+                    "--subject",
+                    "fix: safe",
+                    snapshot=snapshot,
+                )
+            self.assertEqual(result.returncode, 2)
+
+    def test_boolean_counts_and_unicode_equivalent_reviewers_fail_closed(self) -> None:
+        boolean_count = preflight()
+        boolean_count["risk_tier"] = {"declared": "routine", "effective": "routine", "source": "explicit"}
+        boolean_count["required_reviewer_artifacts"] = True
+        boolean_count["repair_cycles"]["cap"] = 1
+        boolean_count["reviewer_artifacts"] = boolean_count["reviewer_artifacts"][:1]
+        boolean_cap = preflight()
+        boolean_cap["risk_tier"] = {"declared": "routine", "effective": "routine", "source": "explicit"}
+        boolean_cap["required_reviewer_artifacts"] = 1
+        boolean_cap["repair_cycles"]["cap"] = True
+        boolean_cap["reviewer_artifacts"] = boolean_cap["reviewer_artifacts"][:1]
+        duplicate_reviewer = preflight()
+        duplicate_reviewer["reviewer_artifacts"][0]["reviewer_identity"] = "reviewer-\u212a"
+        duplicate_reviewer["reviewer_artifacts"][1]["reviewer_identity"] = "reviewer-K"
+        for snapshot in (boolean_count, boolean_cap, duplicate_reviewer):
+            with tempfile.TemporaryDirectory() as temporary:
+                result, _ = self.build(
+                    Path(temporary),
+                    "--strategy",
+                    "squash",
+                    "--subject",
+                    "fix: safe",
+                    snapshot=snapshot,
+                )
+            self.assertEqual(result.returncode, 2)
+
     def test_stale_artifact_and_failed_check_fail_closed(self) -> None:
         stale = preflight()
         stale["reviewer_artifacts"][0]["timestamp"] = "2020-01-01T00:00:00Z"
@@ -253,8 +406,20 @@ class GuardCliTests(unittest.TestCase):
                 REPO,
                 "--pr",
                 str(PR_NUMBER),
+                "--task-id",
+                TASK_ID,
+                "--mode",
+                "immediate-merge",
+                "--acceptance-scope",
+                ACCEPTANCE_SCOPE,
+                "--repair-cycle-count",
+                "0",
+                "--expected-base",
+                "main",
                 "--expected-head-sha",
                 HEAD_SHA,
+                "--preflight-sha256",
+                PREFLIGHT_SHA256,
                 "--fixture",
                 str(FIXTURES / "multi-commit-synthesized.json"),
                 "--receipt",
@@ -266,8 +431,10 @@ class GuardCliTests(unittest.TestCase):
         self.assertIn("forbidden_co_authored_by_trailer", durable["failure_reasons"])
         self.assertTrue(durable["forbidden_trailer_line_numbers"])
         self.assertNotIn("message", durable)
+        self.assertEqual(durable["evidence_source"], "fixture")
+        self.assertIs(durable["authoritative"], False)
 
-    def test_trailer_free_provider_result_passes(self) -> None:
+    def test_trailer_free_fixture_is_clean_but_cannot_complete_live_postverify(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             receipt = Path(temporary) / "postverify.json"
             result = self.run_cli(
@@ -276,17 +443,72 @@ class GuardCliTests(unittest.TestCase):
                 REPO,
                 "--pr",
                 str(PR_NUMBER),
+                "--task-id",
+                TASK_ID,
+                "--mode",
+                "immediate-merge",
+                "--acceptance-scope",
+                ACCEPTANCE_SCOPE,
+                "--repair-cycle-count",
+                "0",
+                "--expected-base",
+                "main",
                 "--expected-head-sha",
                 HEAD_SHA,
+                "--preflight-sha256",
+                PREFLIGHT_SHA256,
                 "--fixture",
                 str(FIXTURES / "trailer-free-provider.json"),
                 "--receipt",
                 str(receipt),
             )
             durable = json.loads(receipt.read_text(encoding="utf-8"))
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(durable["outcome"], "clean")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(durable["outcome"], "fixture_clean")
         self.assertEqual(durable["forbidden_trailer_line_numbers"], [])
+        self.assertEqual(durable["message_policy"], "forbidden_co_authored_by_trailer_absent")
+        self.assertEqual(durable["task_id"], TASK_ID)
+        self.assertEqual(durable["mode"], "immediate-merge")
+        self.assertEqual(durable["acceptance_scope"], ACCEPTANCE_SCOPE)
+        self.assertEqual(durable["repair_cycle_count"], 0)
+        self.assertEqual(durable["preflight_sha256"], PREFLIGHT_SHA256)
+        self.assertEqual(durable["provider_url"], "https://github.com/hasna/tai/pull/4")
+        self.assertEqual(durable["provider_base"], "main")
+        self.assertEqual(durable["evidence_source"], "fixture")
+        self.assertIs(durable["authoritative"], False)
+
+    def test_fixture_target_mismatch_writes_failed_non_authoritative_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = Path(temporary) / "postverify.json"
+            result = self.run_cli(
+                "postverify",
+                "--repo",
+                "hasna/not-tai",
+                "--pr",
+                "999",
+                "--task-id",
+                TASK_ID,
+                "--mode",
+                "immediate-merge",
+                "--acceptance-scope",
+                ACCEPTANCE_SCOPE,
+                "--repair-cycle-count",
+                "0",
+                "--expected-base",
+                "main",
+                "--expected-head-sha",
+                HEAD_SHA,
+                "--preflight-sha256",
+                PREFLIGHT_SHA256,
+                "--fixture",
+                str(FIXTURES / "trailer-free-provider.json"),
+                "--receipt",
+                str(receipt),
+            )
+            durable = json.loads(receipt.read_text(encoding="utf-8"))
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(durable["outcome"], "failed")
+        self.assertNotEqual(durable.get("authoritative"), True)
 
 
 if __name__ == "__main__":
