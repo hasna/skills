@@ -78,6 +78,18 @@ const contradictionFixtures = [
     sentence: "Unconditional restore is permitted.",
     pattern: /\bunconditional restore is permitted\b/i,
   },
+  {
+    sentence:
+      "A child mutation may proceed through the retained root handle after the lexical root entry is displaced.",
+    pattern:
+      /\bchild mutation may proceed through the retained root handle after the lexical root entry is displaced\b/i,
+  },
+  {
+    sentence:
+      "Child operations may continue through a retained pre-existing selected-directory handle after the lexical directory entry is displaced.",
+    pattern:
+      /\bchild operations may continue through a retained pre-existing selected-directory handle after the lexical directory entry is displaced\b/i,
+  },
 ] as const;
 
 const requiredStructures = [
@@ -101,6 +113,18 @@ const requiredStructures = [
   },
   {
     section: "Canonical Path Admission",
+    label: "atomic root and directory operation binding",
+    pattern:
+      /Every child operation[\s\S]*one fail-closed guarded operation[\s\S]*admission and execution are one indivisible atomic transaction[\s\S]*exact normalized lexical root entry[\s\S]*retained no-follow root handle[\s\S]*device, inode, mount ID,[\s\S]*exact normalized selected-directory lexical entry[\s\S]*retained no-follow selected-directory handle[\s\S]*same guarded operation that performs the child mutation[\s\S]*fail closed before mutation[\s\S]*closure is insufficient/,
+  },
+  {
+    section: "Canonical Path Admission",
+    label: "pre-existing and run-created directory rebinding",
+    pattern:
+      /every selected skill directory, whether pre-existing or run-created[\s\S]*Before every child operation and at closure[\s\S]*exact selected-directory lexical entry names its retained handle[\s\S]*canonical path, inode, device, mount ID, and directory type[\s\S]*rename, replacement, or mount substitution[\s\S]*fail before any child read, write, removal, rollback, or receipt operation/,
+  },
+  {
+    section: "Canonical Path Admission",
     label: "repeated retained-handle single-link checks",
     pattern:
       /Immediately after creation, before and after[\s\S]*each read, write, hash, exchange, install, restore, or removal use[\s\S]*same regular file with link count one[\s\S]*hard-link race cannot alias a write/,
@@ -121,7 +145,7 @@ const requiredStructures = [
     section: "Guarded Forward Mutation",
     label: "missing directory create",
     pattern:
-      /guarded no-follow[\s\S]*atomic create-directory-if-absent[\s\S]*device, inode, mount ID,[\s\S]*append its actual canonical path to the touched-path ledger/,
+      /guarded no-follow[\s\S]*atomic create-directory-if-absent[\s\S]*device, inode, mount ID,[\s\S]*Append its actual canonical path to the touched-path ledger/,
   },
   {
     section: "Guarded Rollback",
@@ -238,7 +262,11 @@ describe("fleet-skill-normalization tracked contract", () => {
       "Open the final lexical root anchor first",
       "canonical path from that retained handle",
       "exact lexical/canonical path agreement",
-      "re-stat both the handle and the lexical root",
+      "admission and execution are one indivisible atomic",
+      "exact normalized lexical root entry",
+      "exact normalized selected-directory lexical entry",
+      "same guarded operation",
+      "fail closed before mutation",
       "latest expected-state ledger",
       "Reject every other",
       "drift",
@@ -256,7 +284,7 @@ describe("fleet-skill-normalization tracked contract", () => {
       /any canonical path not strictly inside the exact canonical[\s\S]*root and its exact selected skill directory/,
     );
     expect(admission).toMatch(
-      /Resolving a lexical symlink and then opening its canonical destination[\s\S]*is forbidden/,
+      /Resolving a lexical symlink and then opening its[\s\S]*canonical destination is forbidden/,
     );
   });
 
@@ -279,10 +307,31 @@ describe("fleet-skill-normalization tracked contract", () => {
       /same regular file with link count one[\s\S]*bind the single-link\/type[\s\S]*hard-link race cannot alias a write/,
     );
     expect(admission).toMatch(
-      /Apply the equivalent retained-handle identity proof to a run-created selected[\s\S]*directory/,
+      /Apply the complete repeated lexical-entry and retained-handle identity proof to[\s\S]*every selected skill directory, whether pre-existing or run-created/,
     );
     expect(admission).toMatch(
-      /Only a guarded creation or removal of[\s\S]*an exact allowlisted child may atomically return and advance that snapshot/,
+      /Only a guarded[\s\S]*creation or removal of an exact allowlisted child may atomically return and[\s\S]*advance that snapshot/,
+    );
+  });
+
+  test("atomically binds root and selected-directory identity to every child operation", () => {
+    const admission = section("Canonical Path Admission");
+
+    expectOrdered(admission, [
+      "Every child operation",
+      "one fail-closed guarded operation",
+      "admission and execution are one indivisible atomic",
+      "exact normalized lexical root entry",
+      "retained no-follow root",
+      "exact normalized selected-directory lexical entry",
+      "retained no-follow selected-directory",
+      "same guarded operation that performs the child mutation",
+      "pre-check or re-stat followed by mutation",
+      "fail closed before mutation",
+      "Detecting displacement at closure is insufficient",
+    ]);
+    expect(admission).toMatch(
+      /whether pre-existing or run-created[\s\S]*Before[\s\S]*every child operation and at closure[\s\S]*must[\s\S]*fail before any child[\s\S]*receipt[\s\S]*operation/,
     );
   });
 
@@ -354,10 +403,10 @@ describe("fleet-skill-normalization tracked contract", () => {
       /A separate[\s\S]*compare-then-rename sequence, an unconditional rename[\s\S]*is forbidden/,
     );
     expect(forward).toMatch(
-      /missing target uses one atomic create-if-absent[\s\S]*fail if any object appeared after inventory/,
+      /missing target uses one atomic create-if-absent[\s\S]*fail if either lexical entry was displaced or any object appeared[\s\S]*after inventory/,
     );
     expect(forward).toMatch(
-      /guarded no-follow[\s\S]*atomic create-directory-if-absent[\s\S]*run-created directory/,
+      /guarded no-follow[\s\S]*atomic create-directory-if-absent[\s\S]*run-created selected directory/,
     );
   });
 
@@ -367,12 +416,12 @@ describe("fleet-skill-normalization tracked contract", () => {
     expectOrdered(rollback, [
       "compare the current no-follow target",
       "exact installed inode/metadata and target hash",
-      "Only an exact match",
-      "restores the admitted preimage",
-      "preserves the displaced failed target",
+      "restore the admitted preimage only on an exact",
+      "match",
+      "preserve the displaced failed target",
     ]);
     expect(rollback).toMatch(
-      /If the current target[\s\S]*drifted, preserve it and report a rollback conflict/,
+      /If either lexical entry or[\s\S]*the current target drifted, preserve it and report a rollback conflict/,
     );
     expect(rollback).toMatch(
       /absent target pre-state[\s\S]*one fail-closed atomic compare-and-remove[\s\S]*compare-then-unlink sequence is forbidden/,
@@ -394,6 +443,18 @@ describe("fleet-skill-normalization tracked contract", () => {
         `validator accepted unsafe contradiction: ${fixture.sentence}`,
       ).toContain(`unsafe contradiction: ${fixture.sentence}`);
     }
+  });
+
+  test("rejects nearby pre-check wording without indivisible operation binding", () => {
+    const candidate = skill.replace(
+      "admission and execution are one indivisible atomic\ntransaction",
+      "admission is a separate pre-check before the later\ntransaction",
+    );
+
+    expect(candidate).not.toBe(skill);
+    expect(contractViolations(candidate)).toContain(
+      "missing structure: atomic root and directory operation binding",
+    );
   });
 
   test("output proves canonical scope and forbids out-of-tree or coordinator mutation", () => {

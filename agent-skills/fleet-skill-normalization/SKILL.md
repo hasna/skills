@@ -118,15 +118,40 @@ non-canonical.
 Open the final lexical root anchor first with no-follow semantics, then derive
 its canonical path from that retained handle. Record the root's lexical path,
 canonical path, device, inode, mount ID, type, and link count. Admission
-requires exact lexical/canonical path agreement. Bind every subsequent child
-admission and operation to that same retained handle, and before each mutation
-and at closure re-stat both the handle and the lexical root with no-follow
-semantics. Require its path, inode, device, mount, and directory type to remain
-fixed. Metadata and link count must equal the latest expected-state ledger
-snapshot; only a guarded creation or removal of an exact allowlisted selected
-directory may atomically return and advance that snapshot. Reject every other
-drift. Resolving a lexical symlink and then opening its canonical destination
-is forbidden.
+requires exact lexical/canonical path agreement.
+
+Every child operation—read, write, hash, exclusive create, exchange, install,
+restore, removal, or receipt creation—uses one fail-closed guarded operation.
+For a child mutation, admission and execution are one indivisible atomic
+transaction. In that same primitive or transaction, before altering state, it
+must bind all of these facts together:
+
+1. the exact normalized lexical root entry, resolved with no-follow semantics
+   from its retained parent anchor, still names the retained no-follow root
+   handle and its admitted canonical path, device, inode, mount ID, and
+   directory type;
+2. the exact normalized selected-directory lexical entry beneath that root
+   still names the retained no-follow selected-directory handle and its admitted
+   canonical path, device, inode, mount ID, and directory type; and
+3. the exact allowlisted child lexical/canonical entry and its latest expected
+   file identity, metadata, type, link count, and hash or admitted absence are
+   the object on which the operation executes.
+
+The transaction must resolve both lexical entries from their no-follow parent
+anchors and validate both retained handles inside the same guarded operation
+that performs the child mutation. A pre-check or re-stat followed by mutation
+through a retained or displaced handle is forbidden. If the platform cannot
+provide one primitive or transaction with this complete root-and-directory
+binding, fail closed before mutation. Detecting displacement at closure is
+insufficient and does not authorize a mutation.
+
+As additional closure evidence, re-stat the root handle and lexical root with
+no-follow semantics and require its path, inode, device, mount, and directory
+type to remain fixed. Metadata and link count must equal the latest
+expected-state ledger snapshot; only a guarded creation or removal of an exact
+allowlisted selected directory may atomically return and advance that snapshot.
+Reject every other drift. Resolving a lexical symlink and then opening its
+canonical destination is forbidden.
 
 Derive each selected skill directory, target `SKILL.md`, run-owned temporary
 file, preimage, and rollback receipt from the admitted root and a single
@@ -181,21 +206,27 @@ Retain a no-follow handle and initial device, inode, mount ID, metadata, file
 type, and link count for every created temporary, returned preimage, rollback
 receipt, and installed target. Immediately after creation, before and after
 each read, write, hash, exchange, install, restore, or removal use, and at
-closure, a guarded handle-bound primitive must prove that the handle and exact
-path still identify that same regular file with link count one. A before/after
-path check alone is insufficient. The primitive must bind the single-link/type
-check to the operation so a same-filesystem hard-link race cannot alias a write
-outside the allowlist. Metadata and content must match the latest
-expected-state ledger snapshot; an allowlisted guarded write may atomically
-return and advance that snapshot. If that binding is unavailable or any
-identity, type, link, metadata, or content invariant drifts, stop without
-another mutation and preserve the object.
+closure, the complete atomic root-and-directory operation binding above must
+also prove that the file handle and exact lexical/canonical path still identify
+that same regular file with link count one. A before/after path check alone is
+insufficient. The primitive must bind the single-link/type check to the
+operation so a same-filesystem hard-link race cannot alias a write outside the
+allowlist. Metadata and content must match the latest expected-state ledger
+snapshot; an allowlisted guarded write may atomically return and advance that
+snapshot. If that binding is unavailable or any identity, type, link, metadata,
+or content invariant drifts, stop without another mutation and preserve the
+object.
 
-Apply the equivalent retained-handle identity proof to a run-created selected
-skill directory: its path, inode, device, mount, and directory type remain
-fixed; its metadata and link count equal the latest expected-state ledger
-snapshot before every use and at closure. Only a guarded creation or removal of
-an exact allowlisted child may atomically return and advance that snapshot.
+Apply the complete repeated lexical-entry and retained-handle identity proof to
+every selected skill directory, whether pre-existing or run-created. Before
+every child operation and at closure, the same guarded operation must prove that
+the exact selected-directory lexical entry names its retained handle and fixed
+canonical path, inode, device, mount ID, and directory type; its metadata and
+link count must equal the latest expected-state ledger snapshot. Only a guarded
+creation or removal of an exact allowlisted child may atomically return and
+advance that snapshot. A rename, replacement, or mount substitution after
+admission must fail before any child read, write, removal, rollback, or receipt
+operation and must never redirect that operation through the displaced handle.
 
 ## Inventory and Exact-Path Allowlist
 
@@ -243,20 +274,24 @@ absent target or directory, record the absent pre-state.
 ## Guarded Forward Mutation
 
 Use only the admitted exclusive temporary path, write the deterministic bytes
-through its retained no-follow handle, fsync as required by the runtime, and
+through its retained no-follow handle inside the complete atomic
+root-and-directory operation binding, fsync as required by the runtime, and
 verify its target hash before installation.
 
 When the selected skill directory is absent, first use one guarded no-follow
-atomic create-directory-if-absent operation through the retained root handle,
-bound to the exact admitted lexical/canonical directory entry. It must fail if
-any object appeared after inventory. Open the created directory immediately
-with no-follow semantics; record and prove its exact device, inode, mount ID,
-metadata, directory type, and link count, append its actual canonical path to
-the touched-path ledger, and retain that handle for every child operation.
+atomic create-directory-if-absent transaction. In one indivisible operation it
+must apply the root lexical-entry/retained-handle binding, prove the exact
+admitted selected-directory lexical/canonical entry absent, create only that
+directory, and return its retained no-follow handle plus exact canonical path,
+device, inode, mount ID, metadata, directory type, and link count. It must fail
+if the root was displaced or any object appeared after inventory. Append its
+actual canonical path to the touched-path ledger and admit no child operation
+until the returned identity is installed in the complete atomic binding above.
 Never create or alter an unselected or remote-only directory.
 
 An existing target may be replaced only by one fail-closed atomic
-compare-and-replace primitive that:
+compare-and-replace primitive inside the complete root-and-directory operation
+binding that:
 
 1. binds the expected existing inode/metadata and
    `sha256:<inventoried-preimage-hash>`;
@@ -268,42 +303,49 @@ inventoried bytes, inode identity, metadata, and hash. A separate
 compare-then-rename sequence, an unconditional rename, or a primitive that
 cannot prove and return the exact displaced preimage is forbidden.
 
-A missing target uses one atomic create-if-absent primitive bound to the exact
-admitted canonical path. It must fail if any object appeared after inventory.
+A missing target uses one atomic create-if-absent primitive inside the complete
+root-and-directory operation binding and bound to the exact admitted canonical
+path. It must fail if either lexical entry was displaced or any object appeared
+after inventory.
 After either operation, reparse frontmatter, rerun the non-printing secret scan,
 verify the final target hash plus regular single-link identity through the
 retained no-follow handle, and append the actual canonical target to the
-authoritative touched-path ledger. Recheck every run-owned path and any
-run-created directory under the repeated identity rules before closure.
+authoritative touched-path ledger. Recheck every run-owned path and every
+pre-existing or run-created selected directory under the complete repeated
+identity rules before closure.
 
 ## Guarded Rollback
 
 On any write or verification failure, stop further forward writes and consider
 only targets already changed by this run.
 
-Before restoring an existing target, compare the current no-follow target
-against this run's exact installed inode/metadata and target hash. Only an
-exact match may use an atomic compare-and-replace that restores the admitted
-preimage and preserves the displaced failed target in a distinct admitted
-receipt path. Verify the restored bytes and preimage hash. If the current target
-drifted, preserve it and report a rollback conflict.
+Restore an existing target only with one atomic compare-and-replace inside the
+complete root-and-directory operation binding. Its indivisible admission must
+compare the current no-follow target against this run's exact installed
+inode/metadata and target hash, restore the admitted preimage only on an exact
+match, and preserve the displaced failed target in a distinct admitted receipt
+path. Verify the restored bytes and preimage hash. If either lexical entry or
+the current target drifted, preserve it and report a rollback conflict.
 
 For an absent target pre-state, use one fail-closed atomic compare-and-remove
-operation through the retained directory handle. That single primitive must
-bind the exact run-installed device, inode, mount ID, metadata, regular-file
-type, link count one, and target hash to removal of that exact path. A
-compare-then-unlink sequence is forbidden. If the primitive is unavailable or
-the object drifted, preserve it and report a rollback conflict. After success,
-verify absence with a no-follow lookup.
+operation inside the complete root-and-directory operation binding. That single
+primitive must bind the exact run-installed device, inode, mount ID, metadata,
+regular-file type, link count one, and target hash to removal of that exact
+path. A compare-then-unlink sequence is forbidden. If the primitive is
+unavailable or either lexical entry or the object drifted, preserve it and
+report a rollback conflict. After success, verify absence with a no-follow
+lookup.
 
 If the selected skill directory also had an absent pre-state, consider it only
 after the selected target was safely removed. It must be empty and must still
 match the run-created directory's retained handle, device, inode, mount ID,
 metadata, directory type, and recorded link count. Use one guarded atomic
-compare-and-remove-empty-directory operation through the root handle, append
+compare-and-remove-empty-directory transaction that binds the exact root lexical
+entry and retained root identity plus the selected-directory lexical entry and
+retained directory identity to removal of that exact empty directory. Append
 the actual canonical directory path to the touched ledger, then verify absence.
-If it is unavailable, non-empty, or drifted, preserve the directory and report
-a rollback conflict. Never use recursive deletion, an unconditional
+If it is unavailable, non-empty, displaced, or drifted, preserve the directory
+and report a rollback conflict. Never use recursive deletion, an unconditional
 restore/remove, or cleanup of an unrelated or remote-only directory.
 
 ## Output Contract
@@ -332,7 +374,7 @@ rollback_receipts: <machine ID, lexical/canonical directory/file paths, director
 rollback_state: <not-needed|available|restored|failed>
 exact_path_allowlist: <lexical/canonical pair for every admitted directory/target/temp/preimage/receipt>
 touched_path_ledger: <actual canonical paths and subset proof against exact_path_allowlist>
-guarded_operations: <exclusive-create, create-directory-if-absent, compare-and-replace/create-if-absent, atomic compare-and-remove, returned-preimage evidence>
+guarded_operations: <atomic root-and-selected-directory lexical-entry/retained-handle bindings, exclusive-create, create-directory-if-absent, compare-and-replace/create-if-absent, atomic compare-and-remove, returned-preimage evidence>
 scope_proof: <no path outside an exact selected Codewith skill directory changed>
 blockers: <none or bounded evidence>
 ```
@@ -354,5 +396,6 @@ secret-scan findings, traversal or non-normalized path input, symlink/hard-link
 or special-file presence, canonical or mount escape, unavailable no-follow
 containment, a pre-existing run-owned path, concurrent target drift,
 unavailable atomic guarded replacement/create/rollback, incomplete exact-path
-audit, unavailable in-tree rollback, or any requested action outside this
-workflow's scope.
+audit, unavailable indivisible root-and-selected-directory operation binding,
+unavailable in-tree rollback, or any requested action outside this workflow's
+scope.
