@@ -55,6 +55,12 @@ def object_sha256(value: dict[str, Any]) -> str:
     ).hexdigest()
 
 
+def argv_sha256(value: list[str]) -> str:
+    return hashlib.sha256(
+        json.dumps(value, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def normalize_line_endings(value: str) -> str:
     if "\x00" in value:
         raise GuardError("message input contains a NUL byte")
@@ -419,6 +425,7 @@ def build_command(args: argparse.Namespace) -> dict[str, Any]:
         "acceptance_scope": snapshot["acceptance_scope"],
         "repair_cycle_count": args.repair_cycle_count,
         "preflight_sha256": object_sha256(snapshot),
+        "command_argv_sha256": argv_sha256(argv),
         "mode": mode,
         "argv": argv,
         "display": shlex.join(argv),
@@ -482,6 +489,7 @@ def validate_postverify_provenance(args: argparse.Namespace) -> None:
         "acceptance_scope": args.acceptance_scope,
         "repair_cycle_count": args.repair_cycle_count,
         "preflight_sha256": digest,
+        "command_argv_sha256": args.command_argv_sha256.lower(),
     }
     for field, expected in expected_plan_fields.items():
         observed = plan.get(field)
@@ -515,6 +523,8 @@ def validate_postverify_provenance(args: argparse.Namespace) -> None:
     argv = plan.get("argv")
     if not isinstance(argv, list) or not all(isinstance(value, str) for value in argv):
         raise GuardError("postverify command plan argv is invalid")
+    if argv_sha256(argv) != args.command_argv_sha256.lower():
+        raise GuardError("postverify command argv digest mismatch")
     if argv[:6] != ["gh", "pr", "merge", str(args.pr), "--repo", args.repo]:
         raise GuardError("postverify command plan target is invalid")
     prefix = ["gh", "pr", "merge", str(args.pr), "--repo", args.repo]
@@ -557,6 +567,7 @@ def postverify(args: argparse.Namespace) -> int:
         "acceptance_scope": args.acceptance_scope,
         "repair_cycle_count": args.repair_cycle_count,
         "preflight_sha256": args.preflight_sha256.lower(),
+        "command_argv_sha256": args.command_argv_sha256.lower(),
         "expected_base": args.expected_base,
         "expected_head_sha": args.expected_head_sha.lower(),
         "observed_at": utc_now(),
@@ -577,6 +588,8 @@ def postverify(args: argparse.Namespace) -> int:
             raise GuardError("postverify expected base is blank")
         if not SHA256_PATTERN.fullmatch(args.preflight_sha256):
             raise GuardError("postverify preflight digest is invalid")
+        if not SHA256_PATTERN.fullmatch(args.command_argv_sha256):
+            raise GuardError("postverify command argv digest is invalid")
         validate_postverify_provenance(args)
         pr_view, commit, evidence_source = provider_result(args)
         provider_head = pr_view.get("headRefOid")
@@ -657,6 +670,7 @@ def parser() -> argparse.ArgumentParser:
     verify.add_argument("--expected-base", required=True)
     verify.add_argument("--expected-head-sha", required=True)
     verify.add_argument("--preflight-sha256", required=True)
+    verify.add_argument("--command-argv-sha256", required=True)
     verify.add_argument("--preflight", required=True)
     verify.add_argument("--command-plan", required=True)
     verify.add_argument("--receipt", required=True)

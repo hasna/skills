@@ -157,6 +157,8 @@ class GuardCliTests(unittest.TestCase):
             HEAD_SHA,
             "--preflight-sha256",
             str(plan["preflight_sha256"]),
+            "--command-argv-sha256",
+            str(plan["command_argv_sha256"]),
             "--preflight",
             str(preflight_path),
             "--command-plan",
@@ -184,6 +186,7 @@ class GuardCliTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--match-head-commit") + 1], HEAD_SHA)
         self.assertEqual(plan["base"], "main")
         self.assertEqual(len(plan["preflight_sha256"]), 64)
+        self.assertEqual(len(plan["command_argv_sha256"]), 64)
         self.assertTrue({"--admin", "--force", "--delete-branch"}.isdisjoint(argv))
         self.assertNotIn("push", argv)
 
@@ -505,6 +508,7 @@ class GuardCliTests(unittest.TestCase):
         self.assertEqual(durable["acceptance_scope"], ACCEPTANCE_SCOPE)
         self.assertEqual(durable["repair_cycle_count"], 0)
         self.assertEqual(durable["preflight_sha256"], plan["preflight_sha256"])
+        self.assertEqual(durable["command_argv_sha256"], plan["command_argv_sha256"])
         self.assertEqual(durable["provider_url"], "https://github.com/hasna/tai/pull/4")
         self.assertEqual(durable["provider_base"], "main")
         self.assertEqual(durable["evidence_source"], "fixture")
@@ -573,6 +577,31 @@ class GuardCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(durable["outcome"], "failed")
         self.assertIs(durable["authoritative"], False)
+
+    def test_postverify_rejects_saved_subject_or_body_mutation(self) -> None:
+        for option in ("--subject", "--body"):
+            with self.subTest(option=option), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                preflight_path, plan_path, plan = self.provenance(directory)
+                option_index = plan["argv"].index(option)
+                plan["argv"][option_index + 1] = "changed but trailer-free"
+                plan_path.write_text(json.dumps(plan), encoding="utf-8")
+                receipt = directory / "postverify.json"
+                result = self.run_cli(
+                    "postverify",
+                    *self.postverify_contract_args(preflight_path, plan_path, plan),
+                    "--fixture",
+                    str(FIXTURES / "trailer-free-provider.json"),
+                    "--receipt",
+                    str(receipt),
+                )
+                durable = json.loads(receipt.read_text(encoding="utf-8"))
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(durable["outcome"], "failed")
+            self.assertTrue(
+                any("command argv digest mismatch" in reason for reason in durable["failure_reasons"])
+            )
+            self.assertIs(durable["authoritative"], False)
 
     def test_literal_command_words_remain_custom_body_data(self) -> None:
         for body in ("push", "--admin"):

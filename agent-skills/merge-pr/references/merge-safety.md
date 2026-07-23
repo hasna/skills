@@ -47,7 +47,8 @@ multi-commit results require a wider provenance check.
 
 After provider mutation:
 
-1. Recompute the preflight digest and match the saved command plan.
+1. Recompute the preflight and complete command-argv digests, then match the
+   saved command plan.
 2. Re-read the PR and require `MERGED`.
 3. Match the provider-reported source head to the reviewed head.
 4. Resolve the provider merge-commit SHA.

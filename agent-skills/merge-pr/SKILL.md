@@ -75,9 +75,9 @@ message. Here `clean` means trailer-clean, not byte-for-byte equality with the
 requested message. A synthesized trailer is a failed result. Fixture mode is
 test-only, marks receipts non-authoritative, and can never complete a live
 merge. Pass the build result's task, mode, scope, cycle count, base, exact head,
-and preflight digest to postverify. Postverify must also read the exact
-preflight and saved command-plan JSON; it recomputes the digest and rejects any
-field or argv mismatch before querying the provider.
+preflight digest, and command-argv digest to postverify. Postverify must also
+read the exact preflight and saved command-plan JSON; it recomputes both digests
+and rejects any field, message, or argv mismatch before querying the provider.
 
 Never rewrite protected-main history, revert, force push, or delete the branch
 in response. Record the failure and escalate through the owning task.
