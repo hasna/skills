@@ -49,6 +49,12 @@ def load_object(path: str) -> dict[str, Any]:
     return value
 
 
+def object_sha256(value: dict[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
 def normalize_line_endings(value: str) -> str:
     if "\x00" in value:
         raise GuardError("message input contains a NUL byte")
@@ -261,11 +267,8 @@ def validate_preflight(
         raise GuardError("preflight merge state is not clean")
     if verdict == "pending" and merge_status not in {"BEHIND", "HAS_HOOKS", "UNSTABLE"}:
         raise GuardError("pending preflight merge state is not queue-compatible")
-    review_decision = merge_state.get("review_decision")
-    if not isinstance(review_decision, str):
-        raise GuardError("preflight review decision evidence is missing")
-    if review_decision.upper() in {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}:
-        raise GuardError("preflight review decision blocks merge")
+    if merge_state.get("review_decision") != "APPROVED":
+        raise GuardError("preflight review decision is not approved")
 
     checks = snapshot.get("checks")
     if not isinstance(checks, list) or not checks:
@@ -281,12 +284,13 @@ def validate_preflight(
         "failure",
         "neutral",
         "skipped",
+        "skipping",
         "stale",
         "timed_out",
     }
     pending_states = {"expected", "in_progress", "pending", "queued", "requested", "waiting"}
-    success_states = {"completed", "pass", "passed", "success", "successful"}
-    known_states = blocking_states | pending_states | success_states
+    success_states = {"pass", "passed", "success", "successful"}
+    known_states = blocking_states | pending_states | success_states | {"completed"}
     for check in checks:
         if not isinstance(check, dict):
             raise GuardError("preflight check entry is invalid")
@@ -304,6 +308,8 @@ def validate_preflight(
         if states.intersection(pending_states):
             saw_pending = True
             continue
+        if "completed" in states and not states.intersection(success_states):
+            raise GuardError("completed check lacks a successful conclusion")
         if not states.intersection(success_states):
             raise GuardError("preflight contains an unknown check state")
     if verdict == "pending" and not saw_pending:
@@ -408,13 +414,12 @@ def build_command(args: argparse.Namespace) -> dict[str, Any]:
         "outcome": "ready",
         "repo": repo,
         "pr_number": pr_number,
+        "base": snapshot["base"],
         "head_sha": head_sha,
         "task_id": args.task_id,
         "acceptance_scope": snapshot["acceptance_scope"],
         "repair_cycle_count": args.repair_cycle_count,
-        "preflight_sha256": hashlib.sha256(
-            json.dumps(snapshot, separators=(",", ":"), sort_keys=True).encode("utf-8")
-        ).hexdigest(),
+        "preflight_sha256": object_sha256(snapshot),
         "mode": mode,
         "argv": argv,
         "display": shlex.join(argv),
@@ -459,6 +464,90 @@ def atomic_write(path: Path, value: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
+def validate_postverify_provenance(args: argparse.Namespace) -> None:
+    snapshot = load_object(args.preflight)
+    plan = load_object(args.command_plan)
+    digest = object_sha256(snapshot)
+    if args.preflight_sha256.lower() != digest:
+        raise GuardError("postverify preflight digest does not match the preflight")
+    if plan.get("kind") != "merge-pr-command" or plan.get("outcome") != "ready":
+        raise GuardError("postverify command plan is not a ready merge command")
+
+    expected_plan_fields: dict[str, Any] = {
+        "repo": args.repo,
+        "pr_number": args.pr,
+        "base": args.expected_base,
+        "head_sha": args.expected_head_sha.lower(),
+        "task_id": args.task_id,
+        "mode": args.mode,
+        "acceptance_scope": args.acceptance_scope,
+        "repair_cycle_count": args.repair_cycle_count,
+        "preflight_sha256": digest,
+    }
+    for field, expected in expected_plan_fields.items():
+        observed = plan.get(field)
+        if field == "head_sha" and isinstance(observed, str):
+            observed = observed.lower()
+        if observed != expected:
+            raise GuardError(f"postverify command plan {field} mismatch")
+
+    cycles = snapshot.get("repair_cycles")
+    expected_snapshot_fields: dict[str, Any] = {
+        "repo": args.repo,
+        "pr_number": args.pr,
+        "base": args.expected_base,
+        "head_sha": args.expected_head_sha.lower(),
+        "task_id": args.task_id,
+        "mode": args.mode,
+        "acceptance_scope": args.acceptance_scope,
+        "repair_cycle_count": cycles.get("count") if isinstance(cycles, dict) else None,
+    }
+    for field, expected in expected_snapshot_fields.items():
+        if field == "repair_cycle_count":
+            if expected != args.repair_cycle_count:
+                raise GuardError("postverify preflight repair cycle count mismatch")
+            continue
+        observed = snapshot.get(field)
+        if field == "head_sha" and isinstance(observed, str):
+            observed = observed.lower()
+        if observed != expected:
+            raise GuardError(f"postverify preflight {field} mismatch")
+
+    argv = plan.get("argv")
+    if not isinstance(argv, list) or not all(isinstance(value, str) for value in argv):
+        raise GuardError("postverify command plan argv is invalid")
+    if argv[:6] != ["gh", "pr", "merge", str(args.pr), "--repo", args.repo]:
+        raise GuardError("postverify command plan target is invalid")
+    if {"--admin", "--force", "--delete-branch"}.intersection(argv) or "push" in argv:
+        raise GuardError("postverify command plan contains forbidden behavior")
+    prefix = ["gh", "pr", "merge", str(args.pr), "--repo", args.repo]
+    if args.mode == "merge-queue":
+        expected_argv = prefix + ["--match-head-commit", args.expected_head_sha.lower()]
+    else:
+        if argv.count("--subject") != 1 or argv.count("--body") != 1:
+            raise GuardError("postverify squash plan lacks an explicit message")
+        subject_index = argv.index("--subject")
+        body_index = argv.index("--body")
+        if subject_index + 1 >= len(argv) or body_index + 1 >= len(argv):
+            raise GuardError("postverify squash plan message is incomplete")
+        subject = argv[subject_index + 1]
+        body = argv[body_index + 1]
+        validate_message(subject, body)
+        expected_argv = prefix + [
+            "--squash",
+            "--subject",
+            subject,
+            "--body",
+            body,
+            "--match-head-commit",
+            args.expected_head_sha.lower(),
+        ]
+        if args.mode == "auto-merge":
+            expected_argv.append("--auto")
+    if argv != expected_argv:
+        raise GuardError("postverify command plan argv does not match the guarded form")
+
+
 def postverify(args: argparse.Namespace) -> int:
     receipt_path = Path(args.receipt)
     receipt: dict[str, Any] = {
@@ -491,6 +580,7 @@ def postverify(args: argparse.Namespace) -> int:
             raise GuardError("postverify expected base is blank")
         if not SHA256_PATTERN.fullmatch(args.preflight_sha256):
             raise GuardError("postverify preflight digest is invalid")
+        validate_postverify_provenance(args)
         pr_view, commit, evidence_source = provider_result(args)
         provider_head = pr_view.get("headRefOid")
         merge_commit = pr_view.get("mergeCommit")
@@ -570,6 +660,8 @@ def parser() -> argparse.ArgumentParser:
     verify.add_argument("--expected-base", required=True)
     verify.add_argument("--expected-head-sha", required=True)
     verify.add_argument("--preflight-sha256", required=True)
+    verify.add_argument("--preflight", required=True)
+    verify.add_argument("--command-plan", required=True)
     verify.add_argument("--receipt", required=True)
     verify.add_argument("--fixture")
     return root

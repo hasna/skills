@@ -47,14 +47,15 @@ multi-commit results require a wider provenance check.
 
 After provider mutation:
 
-1. Re-read the PR and require `MERGED`.
-2. Match the provider-reported source head to the reviewed head.
-3. Resolve the provider merge-commit SHA.
-4. Fetch that commit's actual message.
-5. Scan it for forbidden trailers.
-6. Bind the receipt to the task, mode, scope, cycle count, preflight digest,
+1. Recompute the preflight digest and match the saved command plan.
+2. Re-read the PR and require `MERGED`.
+3. Match the provider-reported source head to the reviewed head.
+4. Resolve the provider merge-commit SHA.
+5. Fetch that commit's actual message.
+6. Scan it for forbidden trailers.
+7. Bind the receipt to the task, mode, scope, cycle count, preflight digest,
    provider URL, base, source head, and merge commit.
-7. Persist the receipt before interpreting success.
+8. Persist the receipt before interpreting success.
 
 A forbidden trailer or provider mismatch produces a durable failed receipt and
 nonzero exit. Do not claim a clean merge, rewrite protected main, revert, force
@@ -65,3 +66,13 @@ review budget.
 message assertion. `--fixture` exists only for inert tests. Fixture receipts
 name their source, set `authoritative: false`, bind their target to the supplied
 repository and PR, and cannot satisfy live postverify.
+
+## Recovery and workflow rollback
+
+On failed postverify, preserve the failed receipt, mark the owning Todo blocked,
+and report the provider mismatch through the normal incident or blocker
+surface. Do not retry the same mutation or automate a protected-history revert.
+Correct product behavior, if needed, through a new reviewed PR that preserves
+history. Before further merges, roll back a faulty workflow version through an
+ordinary PR that reverts the skill change, then repeat the full exact-head
+review and release gates.

@@ -25,7 +25,6 @@ PR_NUMBER = 4
 HEAD_SHA = "2797e3264c416018c06608434c0c57340f647330"
 ACCEPTANCE_SCOPE = "skills-merge-trailer-hardening-v1"
 TASK_ID = "fae9ac3b-5af9-4f15-aaca-748e2a5da394"
-PREFLIGHT_SHA256 = "0" * 64
 
 
 def artifact(identity: str) -> dict[str, object]:
@@ -114,6 +113,53 @@ class GuardCliTests(unittest.TestCase):
         )
         return result, json.loads(result.stdout) if result.stdout else None
 
+    def provenance(self, directory: Path) -> tuple[Path, Path, dict[str, object]]:
+        result, plan = self.build(
+            directory,
+            "--strategy",
+            "squash",
+            "--subject",
+            "fix: safe",
+        )
+        if result.returncode != 0 or not isinstance(plan, dict):
+            raise AssertionError(result.stderr)
+        plan_path = directory / "command-plan.json"
+        plan_path.write_text(json.dumps(plan), encoding="utf-8")
+        return directory / "preflight.json", plan_path, plan
+
+    def postverify_contract_args(
+        self,
+        preflight_path: Path,
+        plan_path: Path,
+        plan: dict[str, object],
+        repo: str = REPO,
+        pr_number: int = PR_NUMBER,
+    ) -> list[str]:
+        return [
+            "--repo",
+            repo,
+            "--pr",
+            str(pr_number),
+            "--task-id",
+            TASK_ID,
+            "--mode",
+            "immediate-merge",
+            "--acceptance-scope",
+            ACCEPTANCE_SCOPE,
+            "--repair-cycle-count",
+            "0",
+            "--expected-base",
+            "main",
+            "--expected-head-sha",
+            HEAD_SHA,
+            "--preflight-sha256",
+            str(plan["preflight_sha256"]),
+            "--preflight",
+            str(preflight_path),
+            "--command-plan",
+            str(plan_path),
+        ]
+
     def test_multi_commit_squash_builds_explicit_message_and_exact_head_cas(self) -> None:
         raw = json.loads((FIXTURES / "multi-commit-synthesized.json").read_text(encoding="utf-8"))
         self.assertEqual(len(raw["source_commits"]), 2)
@@ -133,6 +179,8 @@ class GuardCliTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--subject") + 1], "ci: add provider-native validation workflow")
         self.assertEqual(argv[argv.index("--body") + 1], "")
         self.assertEqual(argv[argv.index("--match-head-commit") + 1], HEAD_SHA)
+        self.assertEqual(plan["base"], "main")
+        self.assertEqual(len(plan["preflight_sha256"]), 64)
         self.assertTrue({"--admin", "--force", "--delete-branch"}.isdisjoint(argv))
         self.assertNotIn("push", argv)
 
@@ -255,9 +303,21 @@ class GuardCliTests(unittest.TestCase):
     def test_missing_review_decision_and_stateless_check_fail_closed(self) -> None:
         missing_decision = preflight()
         del missing_decision["merge_state"]["review_decision"]
+        blank_decision = preflight()
+        blank_decision["merge_state"]["review_decision"] = ""
+        invented_decision = preflight()
+        invented_decision["merge_state"]["review_decision"] = "INVENTED"
         stateless_check = preflight()
         stateless_check["checks"] = [{}]
-        for snapshot in (missing_decision, stateless_check):
+        completed_without_conclusion = preflight()
+        completed_without_conclusion["checks"] = [{"state": "COMPLETED"}]
+        for snapshot in (
+            missing_decision,
+            blank_decision,
+            invented_decision,
+            stateless_check,
+            completed_without_conclusion,
+        ):
             with tempfile.TemporaryDirectory() as temporary:
                 result, _ = self.build(
                     Path(temporary),
@@ -399,27 +459,12 @@ class GuardCliTests(unittest.TestCase):
 
     def test_synthesized_provider_trailer_writes_failed_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            receipt = Path(temporary) / "postverify.json"
+            directory = Path(temporary)
+            preflight_path, plan_path, plan = self.provenance(directory)
+            receipt = directory / "postverify.json"
             result = self.run_cli(
                 "postverify",
-                "--repo",
-                REPO,
-                "--pr",
-                str(PR_NUMBER),
-                "--task-id",
-                TASK_ID,
-                "--mode",
-                "immediate-merge",
-                "--acceptance-scope",
-                ACCEPTANCE_SCOPE,
-                "--repair-cycle-count",
-                "0",
-                "--expected-base",
-                "main",
-                "--expected-head-sha",
-                HEAD_SHA,
-                "--preflight-sha256",
-                PREFLIGHT_SHA256,
+                *self.postverify_contract_args(preflight_path, plan_path, plan),
                 "--fixture",
                 str(FIXTURES / "multi-commit-synthesized.json"),
                 "--receipt",
@@ -436,27 +481,12 @@ class GuardCliTests(unittest.TestCase):
 
     def test_trailer_free_fixture_is_clean_but_cannot_complete_live_postverify(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            receipt = Path(temporary) / "postverify.json"
+            directory = Path(temporary)
+            preflight_path, plan_path, plan = self.provenance(directory)
+            receipt = directory / "postverify.json"
             result = self.run_cli(
                 "postverify",
-                "--repo",
-                REPO,
-                "--pr",
-                str(PR_NUMBER),
-                "--task-id",
-                TASK_ID,
-                "--mode",
-                "immediate-merge",
-                "--acceptance-scope",
-                ACCEPTANCE_SCOPE,
-                "--repair-cycle-count",
-                "0",
-                "--expected-base",
-                "main",
-                "--expected-head-sha",
-                HEAD_SHA,
-                "--preflight-sha256",
-                PREFLIGHT_SHA256,
+                *self.postverify_contract_args(preflight_path, plan_path, plan),
                 "--fixture",
                 str(FIXTURES / "trailer-free-provider.json"),
                 "--receipt",
@@ -471,7 +501,7 @@ class GuardCliTests(unittest.TestCase):
         self.assertEqual(durable["mode"], "immediate-merge")
         self.assertEqual(durable["acceptance_scope"], ACCEPTANCE_SCOPE)
         self.assertEqual(durable["repair_cycle_count"], 0)
-        self.assertEqual(durable["preflight_sha256"], PREFLIGHT_SHA256)
+        self.assertEqual(durable["preflight_sha256"], plan["preflight_sha256"])
         self.assertEqual(durable["provider_url"], "https://github.com/hasna/tai/pull/4")
         self.assertEqual(durable["provider_base"], "main")
         self.assertEqual(durable["evidence_source"], "fixture")
@@ -479,27 +509,18 @@ class GuardCliTests(unittest.TestCase):
 
     def test_fixture_target_mismatch_writes_failed_non_authoritative_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            receipt = Path(temporary) / "postverify.json"
+            directory = Path(temporary)
+            preflight_path, plan_path, plan = self.provenance(directory)
+            receipt = directory / "postverify.json"
             result = self.run_cli(
                 "postverify",
-                "--repo",
-                "hasna/not-tai",
-                "--pr",
-                "999",
-                "--task-id",
-                TASK_ID,
-                "--mode",
-                "immediate-merge",
-                "--acceptance-scope",
-                ACCEPTANCE_SCOPE,
-                "--repair-cycle-count",
-                "0",
-                "--expected-base",
-                "main",
-                "--expected-head-sha",
-                HEAD_SHA,
-                "--preflight-sha256",
-                PREFLIGHT_SHA256,
+                *self.postverify_contract_args(
+                    preflight_path,
+                    plan_path,
+                    plan,
+                    repo="hasna/not-tai",
+                    pr_number=999,
+                ),
                 "--fixture",
                 str(FIXTURES / "trailer-free-provider.json"),
                 "--receipt",
@@ -509,6 +530,46 @@ class GuardCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(durable["outcome"], "failed")
         self.assertNotEqual(durable.get("authoritative"), True)
+
+    def test_postverify_recomputes_preflight_and_rejects_plan_provenance_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            preflight_path, plan_path, plan = self.provenance(directory)
+            plan["preflight_sha256"] = "f" * 64
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            receipt = directory / "postverify.json"
+            result = self.run_cli(
+                "postverify",
+                *self.postverify_contract_args(preflight_path, plan_path, plan),
+                "--fixture",
+                str(FIXTURES / "trailer-free-provider.json"),
+                "--receipt",
+                str(receipt),
+            )
+            durable = json.loads(receipt.read_text(encoding="utf-8"))
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(durable["outcome"], "failed")
+        self.assertIs(durable["authoritative"], False)
+
+    def test_postverify_rejects_command_plan_argv_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            preflight_path, plan_path, plan = self.provenance(directory)
+            plan["argv"].append("--admin")
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            receipt = directory / "postverify.json"
+            result = self.run_cli(
+                "postverify",
+                *self.postverify_contract_args(preflight_path, plan_path, plan),
+                "--fixture",
+                str(FIXTURES / "trailer-free-provider.json"),
+                "--receipt",
+                str(receipt),
+            )
+            durable = json.loads(receipt.read_text(encoding="utf-8"))
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(durable["outcome"], "failed")
+        self.assertIs(durable["authoritative"], False)
 
 
 if __name__ == "__main__":
