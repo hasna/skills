@@ -11,6 +11,19 @@ const skillPath = join(
 const readmePath = join(repositoryRoot, "agent-skills/README.md");
 const skill = readFileSync(skillPath, "utf8");
 
+const expectedFrontmatterLines = [
+  "name: fleet-skill-normalization",
+  'description: "Use when distributing repository-tracked instruction skills into Codewith skill directories across an explicitly scoped machine set with exact provenance, canonical containment, finite transactions, and rollback evidence."',
+  "user_invocable: true",
+] as const;
+
+const expectedFrontmatter = {
+  name: "fleet-skill-normalization",
+  description:
+    "Use when distributing repository-tracked instruction skills into Codewith skill directories across an explicitly scoped machine set with exact provenance, canonical containment, finite transactions, and rollback evidence.",
+  user_invocable: true,
+};
+
 const invariantIds = [
   "SFN-SOURCE-PROVENANCE-v1",
   "SFN-DETERMINISTIC-RENDERING-v1",
@@ -227,19 +240,19 @@ const invariantSpecs: Record<InvariantId, InvariantSpec> = {
   "SFN-TOUCHED-LEDGER-v1": {
     require: [
       "exact_lexical_and_canonical_allowlist",
-      "authoritative_actual_canonical_touches",
-      "touched_subset_proof",
+      "authoritative_actual_canonical_mutation_touches",
+      "mutation_touched_subset_proof",
     ],
     deny: ["prefix_glob_or_wildcard_admission", "out_of_allowlist_touch"],
     clauses: {
       exact_allowlist:
-        "2e0dcd0864d5ca6bda1b54b3f24391c09e9408d3858ed0e12555de298d5d1466",
+        "372a95cfe89bd8f8e347cd7ed4f53d33deee6adbd4c3511bd5b3e3e7eb1f3832",
       actual_touch:
-        "7b6bef5baa90480d39183f97af45997767196894d07b83bb3f0579fa6dc2d2af",
+        "0b7afd08fc61681c89e1fbfd36d2827ee0101b81ea2c9534edd5c482ebbf3d82",
       subset_proof:
-        "bb23c9fd19e6a674ef2ef7b78dee74685a1a6a9899b41e2c9d354c009c4ab0fc",
+        "c9151de8f2ccdf9b9912d4953fc577a0810fa719a1edfa00d35bdbc0aa0247ef",
       outside_touch:
-        "3a71cac3eebe2bb26cfb2054a0fe03e36b6f0756c9b3bb1d3db82a3c8b1e7f71",
+        "e6a9b11e109e270846506f893c8090413cd2529c90819dfbde35ae50e2de6af9",
     },
   },
   "SFN-RECEIPT-FINITENESS-v1": {
@@ -251,7 +264,7 @@ const invariantSpecs: Record<InvariantId, InvariantSpec> = {
     deny: ["recursive_receipt_requirement", "unbound_or_overwritable_receipt"],
     clauses: {
       mutation_receipt:
-        "1416518816a99ddd6e737ecc6c25404bdf8d0db9b3f35b06156dcf94f56d0ba0",
+        "2b11a443bd0221b85a5896e33c93cf909e146adb1abeefa4ba6de80e29a4cf95",
       finite_base_case:
         "a97ea086a2319b38ce40cb1f3b904f4264559ebcd45a79416ba77ec29720bc52",
       receipt_chain:
@@ -270,11 +283,11 @@ const invariantSpecs: Record<InvariantId, InvariantSpec> = {
     deny: ["unversioned_artifact", "free_form_identity_or_transition"],
     clauses: {
       artifact_versions:
-        "d031680351529f54258835c877206aad9663fd31574c9b26a086b95001965b7d",
+        "a62c094d4f82636a117cff77f373e4e70c2e567f31bada72c47a34cd4e4e0667",
       artifact_encoding:
         "8103e494a68260cc2a430f23849fde128f26778199d60b582bc48d80ca5d20ac",
       identity_binding:
-        "4809e648ed85119654fa5da6c52ee1447fb12ef24f600ee1b96d122fd972d358",
+        "0ab069a0011cbb115eaeb7fc536530f6c1825b69c1ffec57b0e9b2095e89027e",
       schema_drift:
         "12bd1fb87a2126ad641cb76e67162912c22fd96ad5c98cc9f0a8742aeab7fe0f",
     },
@@ -293,7 +306,7 @@ const invariantSpecs: Record<InvariantId, InvariantSpec> = {
     ],
     clauses: {
       finite_transitions:
-        "88b1f52efa34200680749f95d4aacc2d4b5f89aecdda77668f0df4bf2b9ad370",
+        "6bb4caa3ea06e6e2ec918ed5da0c41ece085b83adf8d867a7505eee21afeaa31",
       interruption:
         "617f80b6f25ffeb4bd67a7db40df2f2f2785a19c82908d3ce51816033b51999d",
       mixed_outcome:
@@ -366,11 +379,16 @@ const invariantSpecs: Record<InvariantId, InvariantSpec> = {
 };
 
 const expectedNormativeLanguage = {
-  version: "sfn-normative-lines-v1",
-  operative_scope: "all_uncommented_markdown_outside_structured_contract",
+  version: "sfn-normative-layout-v2",
+  operative_scope:
+    "exact_uncommented_section_layout_outside_structured_contract",
   html_comments: "stripped_as_non_operative",
   tagged_clause_format: "[invariant-id/effect/key]",
-  registered_clause_policy: "exact_single_live_bijection",
+  registered_clause_policy:
+    "exact_section_list_indent_order_single_occurrence",
+  frontmatter_policy: "exact_supported_key_order_ascii_identity_and_values",
+  yaml_mapping_policy:
+    "reject_duplicate_keys_before_parse_at_every_mapping_level",
   unknown_tagged_clause: "deny",
   unknown_untagged_behavioral_content: "deny",
   safe_near_miss_policy: "exact_registered_examples_only",
@@ -406,13 +424,17 @@ const expectedStateRoot = {
 };
 
 const expectedArtifactEncoding = {
-  version: "sfn-canonical-artifact-json-v1",
+  version: "sfn-canonical-artifact-json-v2",
   bytes: "rfc8785_canonical_json_utf8_without_bom",
   digest: "sha256:<lowercase-hex>",
   plan_digest_rule:
     "hash_complete_plan_artifact_then_bind_digest_only_in_downstream_artifacts",
   receipt_digest_rule:
     "hash_complete_receipt_artifact_then_bind_digest_only_in_the_next_receipt",
+  transition_receipt_rule:
+    "every_enumerated_run_and_target_edge_has_exactly_one_matching_transition_receipt",
+  mutation_receipt_rule:
+    "apply_and_rollback_receipts_are_immediately_followed_and_bound_by_the_corresponding_target_transition_receipt",
   unknown_fields: "deny",
 };
 
@@ -483,6 +505,45 @@ const expectedArtifacts: ArtifactSchema[] = [
     ],
   },
   {
+    name: "run_transition_receipt",
+    version: "sfn-run-transition-receipt-v1",
+    required_fields: [
+      "schema_version",
+      "run_id",
+      "plan_id",
+      "plan_artifact_sha256",
+      "worker_id",
+      "receipt_sequence",
+      "previous_receipt_sha256",
+      "operation_id",
+      "run_state_from",
+      "run_state_to",
+      "transition_reason_hash",
+      "machine_target_states_hash",
+    ],
+  },
+  {
+    name: "target_transition_receipt",
+    version: "sfn-target-transition-receipt-v1",
+    required_fields: [
+      "schema_version",
+      "run_id",
+      "plan_id",
+      "plan_artifact_sha256",
+      "worker_id",
+      "receipt_sequence",
+      "previous_receipt_sha256",
+      "operation_id",
+      "machine_id",
+      "destination_record_hash",
+      "target_state_from",
+      "target_state_to",
+      "transition_reason_hash",
+      "transition_evidence_sha256",
+      "live_identity_hash",
+    ],
+  },
+  {
     name: "apply_receipt",
     version: "sfn-apply-receipt-v1",
     required_fields: [
@@ -500,8 +561,6 @@ const expectedArtifacts: ArtifactSchema[] = [
       "prestate_identity_hash",
       "poststate_identity_hash",
       "touched_ledger_entry_hash",
-      "run_state_from",
-      "run_state_to",
     ],
   },
   {
@@ -522,8 +581,6 @@ const expectedArtifacts: ArtifactSchema[] = [
       "rollback_result",
       "final_identity_hash",
       "touched_ledger_entry_hash",
-      "target_state_from",
-      "target_state_to",
     ],
   },
   {
@@ -540,6 +597,8 @@ const expectedArtifacts: ArtifactSchema[] = [
       "unresolved_machine_ids",
       "immutable_reason_codes",
       "last_receipt_sha256",
+      "last_run_transition_receipt_sha256",
+      "last_target_transition_receipts_hash",
       "recovery_requirement",
     ],
   },
@@ -552,8 +611,11 @@ const expectedArtifacts: ArtifactSchema[] = [
       "plan_id",
       "plan_artifact_sha256",
       "worker_id",
+      "receipt_sequence",
+      "previous_receipt_sha256",
       "result",
       "terminal_run_state",
+      "run_transition_receipt_sha256",
       "receipt_chain_sha256",
       "machine_target_states_hash",
       "exact_allowlist_hash",
@@ -678,11 +740,11 @@ const expectedWorkflow = {
     },
     {
       id: "admit",
-      text: "Persist the versioned plan and destination records, prove all roots and children, and enter applying only after the exclusive run state and receipt chain exist.",
+      text: "Persist the versioned plan and destination records, prove all roots and children, and enter applying only after the exclusive run state, receipt chain, and matching run-transition receipt exist.",
     },
     {
       id: "apply",
-      text: "Execute each destination change through the indivisible guarded transaction and append its apply receipt to the external state journal.",
+      text: "Execute each destination change through the indivisible guarded transaction, append its apply or rollback receipt, then append the matching target-transition receipt whose previous digest and transition-evidence digest equal that operation-receipt digest.",
     },
     {
       id: "verify",
@@ -694,7 +756,7 @@ const expectedWorkflow = {
     },
     {
       id: "close",
-      text: "Emit one versioned terminal receipt, export its hash as Todos evidence, retain operational evidence through the planned interval, and permit only policy-owned state-store garbage collection.",
+      text: "Append the terminal run-transition receipt, emit one versioned terminal receipt bound to it, export the terminal hash as Todos evidence, retain operational evidence through the planned interval, and permit only policy-owned state-store garbage collection.",
     },
   ],
 };
@@ -772,16 +834,22 @@ const safeNearMisses = [
   },
 ] satisfies Array<{ id: InvariantId; key: string; text: string }>;
 
-const fixedLiveLines = new Set([
+const expectedPreambleLines = [
   "# Fleet Skill Normalization",
   "This workflow distributes immutable repository-tracked skill bytes to explicitly selected Codewith destinations. It does not publish packages, mutate source repositories, or widen machine or skill scope.",
-  "## Contract Interpretation",
+] as const;
+
+const expectedSectionNames = [
+  "Contract Interpretation",
+  "Safety Contract",
+  "Canonical Normative Clauses",
+  "Finite Workflow",
+  "Safe Near-Misses",
+] as const;
+
+const expectedContractInterpretationLines = [
   "The structured contract and every live tagged clause are jointly normative. HTML comments and fenced examples other than the structured contract are non-operative. Unknown, duplicate, missing, or altered live behavioral content fails closed.",
-  "## Safety Contract",
-  "## Canonical Normative Clauses",
-  "## Finite Workflow",
-  "## Safe Near-Misses",
-]);
+] as const;
 
 function hashClause(clause: Clause): string {
   return createHash("sha256")
@@ -797,8 +865,125 @@ function stripHtmlComments(document: string): string {
   return document.replace(/<!--[\s\S]*?-->/g, "");
 }
 
-function stripFrontmatter(document: string): string {
-  return document.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
+function extractFrontmatter(document: string): {
+  yaml: string;
+  body: string;
+} {
+  if (!document.startsWith("---\n")) {
+    throw new Error("missing exact opening delimiter");
+  }
+  const end = document.indexOf("\n---\n", 4);
+  if (end < 0) {
+    throw new Error("missing exact closing delimiter");
+  }
+  return {
+    yaml: document.slice(4, end),
+    body: document.slice(end + 5),
+  };
+}
+
+function assertNoDuplicateYamlMappingKeys(
+  yaml: string,
+  label: string,
+): void {
+  type MappingFrame = { column: number; keys: Set<string> };
+  const frames: MappingFrame[] = [];
+
+  for (const [index, line] of yaml.split("\n").entries()) {
+    if (line.trim() === "") continue;
+    if (/^\s*#/.test(line)) {
+      throw new Error(`${label} line ${index + 1}: comments are not admitted`);
+    }
+    const leadingWhitespace = line.match(/^[\t ]*/)?.[0] ?? "";
+    if (leadingWhitespace.includes("\t")) {
+      throw new Error(`${label} line ${index + 1}: tab indentation`);
+    }
+    const indentation = leadingWhitespace.length;
+    let content = line.slice(indentation);
+    const sequenceItem = content.startsWith("- ");
+    if (sequenceItem) content = content.slice(2);
+
+    const keyMatch = content.match(
+      /^([A-Za-z_][A-Za-z0-9_-]*):(?:\s|$)/,
+    );
+    if (!keyMatch) {
+      if (!sequenceItem || content.includes(":")) {
+        throw new Error(
+          `${label} line ${index + 1}: unsupported YAML mapping syntax`,
+        );
+      }
+      continue;
+    }
+    const inlineValue = content
+      .slice(keyMatch[1].length + 1)
+      .trimStart();
+    if (
+      inlineValue.startsWith("{") ||
+      (inlineValue.startsWith("[") && inlineValue !== "[]") ||
+      /^[&*!]/.test(inlineValue)
+    ) {
+      throw new Error(
+        `${label} line ${index + 1}: unsupported flow, anchor, alias, or tag syntax`,
+      );
+    }
+
+    const column = indentation + (sequenceItem ? 2 : 0);
+    if (sequenceItem) {
+      while (
+        frames.length > 0 &&
+        frames[frames.length - 1].column >= column
+      ) {
+        frames.pop();
+      }
+      frames.push({ column, keys: new Set() });
+    } else {
+      while (
+        frames.length > 0 &&
+        frames[frames.length - 1].column > column
+      ) {
+        frames.pop();
+      }
+      if (
+        frames.length === 0 ||
+        frames[frames.length - 1].column < column
+      ) {
+        frames.push({ column, keys: new Set() });
+      }
+    }
+
+    const frame = frames[frames.length - 1];
+    const key = keyMatch[1];
+    if (frame.keys.has(key)) {
+      throw new Error(
+        `${label} line ${index + 1}: duplicate mapping key ${key}`,
+      );
+    }
+    frame.keys.add(key);
+  }
+}
+
+function parseAndValidateFrontmatter(document: string): string {
+  const { yaml, body } = extractFrontmatter(document);
+  assertNoDuplicateYamlMappingKeys(yaml, "frontmatter");
+  if (!same(yaml.split("\n"), expectedFrontmatterLines)) {
+    throw new Error("frontmatter line format, key order, or value mismatch");
+  }
+  const parsed = Bun.YAML.parse(yaml) as Record<string, unknown>;
+  if (
+    !same(Object.keys(parsed), ["name", "description", "user_invocable"])
+  ) {
+    throw new Error("frontmatter schema mismatch");
+  }
+  if (!same(parsed, expectedFrontmatter)) {
+    throw new Error("frontmatter value mismatch");
+  }
+  if (
+    parsed.name !== "fleet-skill-normalization" ||
+    !/^[\x00-\x7f]+$/.test(parsed.name)
+  ) {
+    throw new Error("frontmatter name is not the exact ASCII identity");
+  }
+  return body;
 }
 
 function section(document: string, name: string): string {
@@ -815,15 +1000,60 @@ function section(document: string, name: string): string {
   return match[1];
 }
 
-function parseSafetyContract(document: string): SafetyContract {
-  const liveDocument = stripHtmlComments(document);
-  const block = section(liveDocument, "Safety Contract").match(
-    /```yaml\r?\n([\s\S]*?)\r?\n```/,
-  );
-  if (!block) {
-    throw new Error("missing live safety contract YAML block");
+function safetyContractYamlBlocks(document: string): string[] {
+  const blocks: string[] = [];
+  let currentSection: string | undefined;
+  let fence: { marker: "`" | "~"; length: number } | undefined;
+  let captured: string[] | undefined;
+
+  for (const line of document.split("\n")) {
+    if (!fence) {
+      const heading = line.match(/^## ([^\n]+)$/);
+      if (heading) {
+        currentSection = heading[1];
+        continue;
+      }
+      const opening = line.match(/^( {0,3})(`{3,}|~{3,})(.*)$/);
+      if (!opening) continue;
+      const run = opening[2];
+      const marker = run[0] as "`" | "~";
+      const info = opening[3];
+      if (marker === "`" && info.includes("`")) continue;
+      fence = { marker, length: run.length };
+      if (
+        currentSection === "Safety Contract" &&
+        line === "```yaml"
+      ) {
+        captured = [];
+      }
+      continue;
+    }
+
+    const closing = line.match(/^( {0,3})(`{3,}|~{3,})[ \t]*$/);
+    if (
+      closing &&
+      closing[2][0] === fence.marker &&
+      closing[2].length >= fence.length
+    ) {
+      if (captured) blocks.push(captured.join("\n"));
+      captured = undefined;
+      fence = undefined;
+    } else if (captured) {
+      captured.push(line);
+    }
   }
-  return Bun.YAML.parse(block[1]) as SafetyContract;
+  return blocks;
+}
+
+function parseSafetyContract(document: string): SafetyContract {
+  const { body } = extractFrontmatter(document);
+  const liveDocument = stripHtmlComments(body);
+  const blocks = safetyContractYamlBlocks(liveDocument);
+  if (blocks.length !== 1) {
+    throw new Error("expected exactly one live safety contract YAML block");
+  }
+  assertNoDuplicateYamlMappingKeys(blocks[0], "safety contract");
+  return Bun.YAML.parse(blocks[0]) as SafetyContract;
 }
 
 function canonicalClauseLine(id: string, clause: Clause): string {
@@ -843,22 +1073,136 @@ function violationInvariant(violation: string): string {
 }
 
 function classifyUnknownLine(line: string): string {
-  const canonical = line.match(
+  const operative = line.trimStart();
+  const canonical = operative.match(
     /^- \[(SFN-[A-Z-]+-v1)\/(?:require|deny)\/[a-z0-9_]+\]/,
   );
   if (canonical) {
     return `${canonical[1]}: unregistered, duplicate, or altered live clause`;
   }
-  const safe = line.match(
+  const safe = operative.match(
     /^- \[SAFE\/(SFN-[A-Z-]+-v1)\/[a-z0-9_]+\]/,
   );
   if (safe) {
     return `${safe[1]}: unregistered, duplicate, or altered safe near-miss`;
   }
-  if (/^\d+\. \[STEP\//.test(line)) {
+  if (/^\d+\. \[STEP\//.test(operative)) {
     return "SFN-RUN-STATE-MACHINE-v1: unregistered or altered workflow step";
   }
   return "SFN-NORMATIVE-LANGUAGE-v1: unregistered live content";
+}
+
+function stripFencedBlocks(document: string): string {
+  const output: string[] = [];
+  let fence: { marker: "`" | "~"; length: number } | undefined;
+  for (const line of document.split("\n")) {
+    if (!fence) {
+      const opening = line.match(/^( {0,3})(`{3,}|~{3,})(.*)$/);
+      if (!opening) {
+        output.push(line);
+        continue;
+      }
+      const run = opening[2];
+      const marker = run[0] as "`" | "~";
+      const info = opening[3];
+      if (marker === "`" && info.includes("`")) {
+        output.push(line);
+        continue;
+      }
+      fence = { marker, length: run.length };
+      continue;
+    }
+
+    const closing = line.match(/^( {0,3})(`{3,}|~{3,})[ \t]*$/);
+    if (
+      closing &&
+      closing[2][0] === fence.marker &&
+      closing[2].length >= fence.length
+    ) {
+      fence = undefined;
+    }
+  }
+  if (fence) {
+    output.push("SFN-UNTERMINATED-FENCED-CONTENT");
+  }
+  return output.join("\n");
+}
+
+function significantLines(lines: string[]): string[] {
+  return lines.filter((line) => line.length > 0);
+}
+
+function splitLiveSections(document: string): {
+  preamble: string[];
+  sections: Array<{ name: string; lines: string[] }>;
+} {
+  const preamble: string[] = [];
+  const sections: Array<{ name: string; lines: string[] }> = [];
+  let current: { name: string; lines: string[] } | undefined;
+  for (const line of document.split("\n")) {
+    const heading = line.match(/^## ([^\n]+)$/);
+    if (heading) {
+      current = { name: heading[1], lines: [] };
+      sections.push(current);
+    } else if (current) {
+      current.lines.push(line);
+    } else {
+      preamble.push(line);
+    }
+  }
+  return { preamble, sections };
+}
+
+function validateRegisteredSequence(
+  actualInput: string[],
+  expectedInput: readonly string[],
+  defaultViolation: string,
+): string[] {
+  const violations: string[] = [];
+  const actual = significantLines(actualInput);
+  const expected = [...expectedInput];
+  const registered = new Set(expected);
+
+  for (const line of expected) {
+    const count = actual.filter((candidate) => candidate === line).length;
+    if (count !== 1) {
+      const classified = classifyUnknownLine(line);
+      violations.push(
+        classified.startsWith("SFN-NORMATIVE-LANGUAGE-v1:")
+          ? `${defaultViolation}: registered line count is ${count}`
+          : classified,
+      );
+    }
+  }
+
+  const registeredOrder = actual.filter((line) => registered.has(line));
+  if (
+    registeredOrder.length === expected.length &&
+    !same(registeredOrder, expected)
+  ) {
+    for (const [index, line] of registeredOrder.entries()) {
+      if (line !== expected[index]) {
+        const classified = classifyUnknownLine(line);
+        violations.push(
+          classified.startsWith("SFN-NORMATIVE-LANGUAGE-v1:")
+            ? `${defaultViolation}: registered line order mismatch`
+            : classified,
+        );
+      }
+    }
+  }
+
+  for (const line of actual) {
+    if (!registered.has(line)) {
+      const classified = classifyUnknownLine(line);
+      violations.push(
+        classified.startsWith("SFN-NORMATIVE-LANGUAGE-v1:")
+          ? `${defaultViolation}: unexpected live content`
+          : classified,
+      );
+    }
+  }
+  return violations;
 }
 
 function validateLiveMarkdown(
@@ -866,14 +1210,9 @@ function validateLiveMarkdown(
   contract: SafetyContract,
 ): string[] {
   const violations: string[] = [];
-  const live = stripFrontmatter(stripHtmlComments(document))
-    .replace(/```yaml\r?\n[\s\S]*?\r?\n```/, "")
-    .replace(/```[\s\S]*?```/g, "");
-  const lines = live
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
+  const { body } = extractFrontmatter(document);
+  const live = stripFencedBlocks(stripHtmlComments(body));
+  const layout = splitLiveSections(live);
   const canonicalLines = contract.invariants.flatMap((invariant) =>
     invariant.clauses.map((clause) =>
       canonicalClauseLine(invariant.id, clause),
@@ -881,52 +1220,55 @@ function validateLiveMarkdown(
   );
   const workflowLines = contract.workflow.steps.map(workflowLine);
   const safeLines = safeNearMisses.map(safeLine);
-  const registered = new Set([
-    ...fixedLiveLines,
-    ...canonicalLines,
-    ...workflowLines,
-    ...safeLines,
-  ]);
 
-  for (const expected of fixedLiveLines) {
-    const count = lines.filter((line) => line === expected).length;
-    if (count !== 1) {
-      violations.push(
-        `SFN-NORMATIVE-LANGUAGE-v1: fixed live-line count is ${count}`,
-      );
-    }
+  violations.push(
+    ...validateRegisteredSequence(
+      layout.preamble,
+      expectedPreambleLines,
+      "SFN-NORMATIVE-LANGUAGE-v1",
+    ),
+  );
+
+  const sectionNames = layout.sections.map(({ name }) => name);
+  if (!same(sectionNames, expectedSectionNames)) {
+    violations.push(
+      "SFN-NORMATIVE-LANGUAGE-v1: section set or order mismatch",
+    );
   }
-  for (const expected of canonicalLines) {
-    const count = lines.filter((line) => line === expected).length;
-    if (count !== 1) {
-      const id = expected.match(/^- \[([^/]+)/)?.[1] ?? "SAFETY-CONTRACT";
-      violations.push(
-        `${id}: live structured-clause bijection count is ${count}`,
-      );
-    }
-  }
-  for (const expected of workflowLines) {
-    const count = lines.filter((line) => line === expected).length;
-    if (count !== 1) {
-      violations.push(
-        `SFN-RUN-STATE-MACHINE-v1: workflow-step bijection count is ${count}`,
-      );
-    }
-  }
-  for (const fixture of safeNearMisses) {
-    const expected = safeLine(fixture);
-    const count = lines.filter((line) => line === expected).length;
-    if (count !== 1) {
-      violations.push(
-        `${fixture.id}: safe near-miss bijection count is ${count}`,
-      );
-    }
-  }
-  for (const line of lines) {
-    if (!registered.has(line)) {
-      violations.push(classifyUnknownLine(line));
-    }
-  }
+  const uniqueSection = (name: string): string[] => {
+    const matches = layout.sections.filter(
+      (candidate) => candidate.name === name,
+    );
+    return matches.length === 1 ? matches[0].lines : [];
+  };
+
+  violations.push(
+    ...validateRegisteredSequence(
+      uniqueSection("Contract Interpretation"),
+      expectedContractInterpretationLines,
+      "SFN-NORMATIVE-LANGUAGE-v1",
+    ),
+    ...validateRegisteredSequence(
+      uniqueSection("Safety Contract"),
+      [],
+      "SFN-NORMATIVE-LANGUAGE-v1",
+    ),
+    ...validateRegisteredSequence(
+      uniqueSection("Canonical Normative Clauses"),
+      canonicalLines,
+      "SFN-NORMATIVE-LANGUAGE-v1",
+    ),
+    ...validateRegisteredSequence(
+      uniqueSection("Finite Workflow"),
+      workflowLines,
+      "SFN-RUN-STATE-MACHINE-v1",
+    ),
+    ...validateRegisteredSequence(
+      uniqueSection("Safe Near-Misses"),
+      safeLines,
+      "SFN-NORMATIVE-LANGUAGE-v1",
+    ),
+  );
 
   return violations;
 }
@@ -1083,6 +1425,11 @@ function validateStructuredContract(contract: SafetyContract): string[] {
 }
 
 function validateContract(document: string): string[] {
+  try {
+    parseAndValidateFrontmatter(document);
+  } catch (error) {
+    return [`SKILL-FRONTMATTER: ${String(error)}`];
+  }
   let contract: SafetyContract;
   try {
     contract = parseSafetyContract(document);
@@ -1460,9 +1807,110 @@ const structuredMutationFixtures = [
     mutate: (document: string) =>
       document.replace("      - recovery_requirement\n", ""),
   },
+  {
+    label: "run-transition receipt drops declared run state",
+    id: "SFN-ARTIFACT-SCHEMAS-v1",
+    mutate: (document: string) =>
+      document.replace("      - run_state_to\n", ""),
+  },
 ] satisfies Array<{
   label: string;
   id: InvariantId;
+  mutate: (document: string) => string;
+}>;
+
+const requiredSectionLine = skill
+  .split("\n")
+  .find((line) =>
+    line.startsWith("- [SFN-ROOT-CONTAINMENT-v1/deny/root_escape]"),
+  );
+if (!requiredSectionLine) {
+  throw new Error("missing canonical root-containment clause");
+}
+
+const terminalRepairFixtures = [
+  {
+    label: "duplicate top-level YAML key with equal values",
+    violation: "SAFETY-CONTRACT",
+    mutate: (document: string) =>
+      document.replace(
+        "version: skills-fleet-normalization-semantic-v2\nnormative_language:",
+        "version: skills-fleet-normalization-semantic-v2\nversion: skills-fleet-normalization-semantic-v2\nnormative_language:",
+      ),
+  },
+  {
+    label: "duplicate nested YAML key with equal values",
+    violation: "SAFETY-CONTRACT",
+    mutate: (document: string) =>
+      document.replace(
+        "  html_comments: stripped_as_non_operative\n",
+        "  html_comments: stripped_as_non_operative\n  html_comments: stripped_as_non_operative\n",
+      ),
+  },
+  {
+    label: "required clause moved to Safe Near-Misses",
+    violation: "SFN-ROOT-CONTAINMENT-v1",
+    mutate: (document: string) =>
+      appendToSection(
+        document.replace(`${requiredSectionLine}\n`, ""),
+        "Safe Near-Misses",
+        requiredSectionLine,
+      ),
+  },
+  {
+    label: "required clause indented into a nested list",
+    violation: "SFN-ROOT-CONTAINMENT-v1",
+    mutate: (document: string) =>
+      document.replace(
+        `${requiredSectionLine}\n`,
+        `  ${requiredSectionLine}\n`,
+      ),
+  },
+  {
+    label: "required clause duplicated across sections",
+    violation: "SFN-ROOT-CONTAINMENT-v1",
+    mutate: (document: string) =>
+      appendToSection(document, "Safe Near-Misses", requiredSectionLine),
+  },
+  {
+    label: "Unicode-confusable frontmatter name",
+    violation: "SKILL-FRONTMATTER",
+    mutate: (document: string) =>
+      document.replace(
+        "name: fleet-skill-normalization",
+        "name: fleet-skіll-normalization",
+      ),
+  },
+  {
+    label: "duplicate frontmatter key with equal values",
+    violation: "SKILL-FRONTMATTER",
+    mutate: (document: string) =>
+      document.replace(
+        "name: fleet-skill-normalization\n",
+        "name: fleet-skill-normalization\nname: fleet-skill-normalization\n",
+      ),
+  },
+  {
+    label: "unknown frontmatter key",
+    violation: "SKILL-FRONTMATTER",
+    mutate: (document: string) =>
+      document.replace(
+        "user_invocable: true\n",
+        "user_invocable: true\nfrontmatter_extra: deny\n",
+      ),
+  },
+  {
+    label: "unknown structured field",
+    violation: "SAFETY-CONTRACT",
+    mutate: (document: string) =>
+      document.replace(
+        "version: skills-fleet-normalization-semantic-v2\n",
+        "version: skills-fleet-normalization-semantic-v2\nunknown_contract_field: deny\n",
+      ),
+  },
+] satisfies Array<{
+  label: string;
+  violation: string;
   mutate: (document: string) => string;
 }>;
 
@@ -1555,6 +2003,56 @@ describe("fleet-skill-normalization semantic safety contract", () => {
       "```text\nA displaced root may continue serving writes.\n```",
     );
     expect(validateContract(fencedExample)).toEqual([]);
+    const tildeFencedExample = appendToSection(
+      skill,
+      "Finite Workflow",
+      "~~~text\nA displaced root may continue serving writes.\n~~~",
+    );
+    expect(validateContract(tildeFencedExample)).toEqual([]);
+    const headingFencedExample = appendToSection(
+      skill,
+      "Finite Workflow",
+      "````text\n## Safety Contract\n```yaml\nversion: shadow\n```\n````",
+    );
+    expect(validateContract(headingFencedExample)).toEqual([]);
+
+    const fencedRequiredOnly = appendToSection(
+      skill.replace(`${requiredSectionLine}\n`, ""),
+      "Canonical Normative Clauses",
+      `\`\`\`text\n${requiredSectionLine}\n\`\`\``,
+    );
+    expectOnlyInvariant(
+      fencedRequiredOnly,
+      "SFN-ROOT-CONTAINMENT-v1",
+      "required clause preserved only in a fenced example",
+    );
+  });
+
+  test("the YAML pre-parser rejects deep duplicates and alternate mapping syntax before Bun parsing", () => {
+    expect(() =>
+      assertNoDuplicateYamlMappingKeys(
+        "items:\n  - name: one\n    name: one",
+        "deep fixture",
+      ),
+    ).toThrow(/duplicate mapping key name/);
+    expect(() =>
+      assertNoDuplicateYamlMappingKeys(
+        '"name": one\n"name": one',
+        "quoted-key fixture",
+      ),
+    ).toThrow(/unsupported YAML mapping syntax/);
+    expect(() =>
+      assertNoDuplicateYamlMappingKeys(
+        "root: {name: one, name: one}",
+        "flow fixture",
+      ),
+    ).toThrow(/unsupported flow/);
+    expect(() =>
+      assertNoDuplicateYamlMappingKeys(
+        "root: &shared\n  name: one",
+        "anchor fixture",
+      ),
+    ).toThrow(/unsupported flow/);
   });
 
   test("structured receipt, state-root, recovery, and artifact mutations fail their owning invariant", () => {
@@ -1567,20 +2065,34 @@ describe("fleet-skill-normalization semantic safety contract", () => {
     }
   });
 
-  test("each major rule accepts its exact positive near-miss even after section relocation", () => {
+  for (const fixture of terminalRepairFixtures) {
+    test(`terminal repair rejects ${fixture.label}`, () => {
+      const candidate = fixture.mutate(skill);
+      expect(candidate, `fixture did not mutate: ${fixture.label}`).not.toBe(
+        skill,
+      );
+      const violations = validateContract(candidate);
+      expect(
+        violations.length,
+        `validator accepted ${fixture.label}`,
+      ).toBeGreaterThan(0);
+      expect(
+        [...new Set(violations.map(violationInvariant))],
+        `validator misclassified ${fixture.label}: ${violations.join(" | ")}`,
+      ).toEqual([fixture.violation]);
+    });
+  }
+
+  test("each major rule accepts its exact positive near-miss in the operative safe section", () => {
+    const safeSection = section(
+      stripHtmlComments(extractFrontmatter(skill).body),
+      "Safe Near-Misses",
+    );
     for (const fixture of safeNearMisses) {
       const line = safeLine(fixture);
-      const withoutLine = skill.replace(`${line}\n`, "");
-      const relocated = appendToSection(
-        withoutLine,
-        "Contract Interpretation",
-        line,
-      );
-      expect(
-        validateContract(relocated),
-        `safe near-miss was overrejected: ${fixture.id}/${fixture.key}`,
-      ).toEqual([]);
+      expect(safeSection.split("\n")).toContain(line);
     }
+    expect(validateContract(skill)).toEqual([]);
   });
 
   test("source identity and destination path collisions reject the complete set before apply", () => {
@@ -1673,6 +2185,71 @@ describe("fleet-skill-normalization semantic safety contract", () => {
         >
       ).unreachable_unknown,
     ).toEqual(["recovery_pending"]);
+
+    const runTransitionReceipt = contract.artifacts.find(
+      ({ name }) => name === "run_transition_receipt",
+    );
+    const targetTransitionReceipt = contract.artifacts.find(
+      ({ name }) => name === "target_transition_receipt",
+    );
+    expect(runTransitionReceipt?.required_fields).toContain(
+      "run_state_from",
+    );
+    expect(runTransitionReceipt?.required_fields).toContain("run_state_to");
+    expect(targetTransitionReceipt?.required_fields).toContain(
+      "target_state_from",
+    );
+    expect(targetTransitionReceipt?.required_fields).toContain(
+      "target_state_to",
+    );
+    expect(targetTransitionReceipt?.required_fields).toContain(
+      "transition_evidence_sha256",
+    );
+    expect(
+      contract.artifacts.find(({ name }) => name === "apply_receipt")
+        ?.required_fields,
+    ).not.toContain("target_transition_receipt_sha256");
+    expect(
+      contract.artifacts.find(({ name }) => name === "rollback_receipt")
+        ?.required_fields,
+    ).not.toContain("target_transition_receipt_sha256");
+    const runEdges = Object.values(
+      contract.run_state_machine.transitions as Record<string, string[]>,
+    ).flat();
+    const targetEdges = Object.values(
+      contract.target_state_machine.transitions as Record<string, string[]>,
+    ).flat();
+    expect(runEdges.length).toBeGreaterThan(0);
+    expect(targetEdges.length).toBeGreaterThan(0);
+    expect(contract.artifact_encoding.transition_receipt_rule).toBe(
+      "every_enumerated_run_and_target_edge_has_exactly_one_matching_transition_receipt",
+    );
+    expect(contract.artifact_encoding.mutation_receipt_rule).toBe(
+      "apply_and_rollback_receipts_are_immediately_followed_and_bound_by_the_corresponding_target_transition_receipt",
+    );
+  });
+
+  test("mutation allowlisting does not contradict provenance-bound immutable source reads", () => {
+    const contract = parseSafetyContract(skill);
+    const touchedLedger = contract.invariants.find(
+      ({ id }) => id === "SFN-TOUCHED-LEDGER-v1",
+    );
+    const sourceProvenance = contract.invariants.find(
+      ({ id }) => id === "SFN-SOURCE-PROVENANCE-v1",
+    );
+    expect(
+      sourceProvenance?.clauses.find(
+        ({ key }) => key === "source_repository_read_only",
+      )?.text,
+    ).toContain("may read the repository-tracked source");
+    expect(
+      touchedLedger?.clauses.find(({ key }) => key === "exact_allowlist")
+        ?.text,
+    ).toContain("immutable source reads are separately provenance-bound");
+    expect(
+      touchedLedger?.clauses.find(({ key }) => key === "outside_touch")
+        ?.text,
+    ).not.toMatch(/^Any read,/);
   });
 
   test("README registers only the bounded Codewith workflow without live distribution", () => {

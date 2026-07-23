@@ -17,11 +17,13 @@ The structured contract and every live tagged clause are jointly normative. HTML
 ```yaml
 version: skills-fleet-normalization-semantic-v2
 normative_language:
-  version: sfn-normative-lines-v1
-  operative_scope: all_uncommented_markdown_outside_structured_contract
+  version: sfn-normative-layout-v2
+  operative_scope: exact_uncommented_section_layout_outside_structured_contract
   html_comments: stripped_as_non_operative
   tagged_clause_format: "[invariant-id/effect/key]"
-  registered_clause_policy: exact_single_live_bijection
+  registered_clause_policy: exact_section_list_indent_order_single_occurrence
+  frontmatter_policy: exact_supported_key_order_ascii_identity_and_values
+  yaml_mapping_policy: reject_duplicate_keys_before_parse_at_every_mapping_level
   unknown_tagged_clause: deny
   unknown_untagged_behavioral_content: deny
   safe_near_miss_policy: exact_registered_examples_only
@@ -46,11 +48,13 @@ state_root:
   retention: retain_hash_chain_receipts_failures_and_preimages_until_plan_retention_expiry
   cleanup: terminal_state_and_exported_terminal_hash_required_before_state_store_garbage_collection
 artifact_encoding:
-  version: sfn-canonical-artifact-json-v1
+  version: sfn-canonical-artifact-json-v2
   bytes: rfc8785_canonical_json_utf8_without_bom
   digest: "sha256:<lowercase-hex>"
   plan_digest_rule: hash_complete_plan_artifact_then_bind_digest_only_in_downstream_artifacts
   receipt_digest_rule: hash_complete_receipt_artifact_then_bind_digest_only_in_the_next_receipt
+  transition_receipt_rule: every_enumerated_run_and_target_edge_has_exactly_one_matching_transition_receipt
+  mutation_receipt_rule: apply_and_rollback_receipts_are_immediately_followed_and_bound_by_the_corresponding_target_transition_receipt
   unknown_fields: deny
 artifacts:
   - name: plan
@@ -109,6 +113,39 @@ artifacts:
       - child_identity
       - child_prestate_sha256
       - rendered_target_sha256
+  - name: run_transition_receipt
+    version: sfn-run-transition-receipt-v1
+    required_fields:
+      - schema_version
+      - run_id
+      - plan_id
+      - plan_artifact_sha256
+      - worker_id
+      - receipt_sequence
+      - previous_receipt_sha256
+      - operation_id
+      - run_state_from
+      - run_state_to
+      - transition_reason_hash
+      - machine_target_states_hash
+  - name: target_transition_receipt
+    version: sfn-target-transition-receipt-v1
+    required_fields:
+      - schema_version
+      - run_id
+      - plan_id
+      - plan_artifact_sha256
+      - worker_id
+      - receipt_sequence
+      - previous_receipt_sha256
+      - operation_id
+      - machine_id
+      - destination_record_hash
+      - target_state_from
+      - target_state_to
+      - transition_reason_hash
+      - transition_evidence_sha256
+      - live_identity_hash
   - name: apply_receipt
     version: sfn-apply-receipt-v1
     required_fields:
@@ -126,8 +163,6 @@ artifacts:
       - prestate_identity_hash
       - poststate_identity_hash
       - touched_ledger_entry_hash
-      - run_state_from
-      - run_state_to
   - name: rollback_receipt
     version: sfn-rollback-receipt-v1
     required_fields:
@@ -145,8 +180,6 @@ artifacts:
       - rollback_result
       - final_identity_hash
       - touched_ledger_entry_hash
-      - target_state_from
-      - target_state_to
   - name: failure_evidence
     version: sfn-failure-evidence-v1
     required_fields:
@@ -160,6 +193,8 @@ artifacts:
       - unresolved_machine_ids
       - immutable_reason_codes
       - last_receipt_sha256
+      - last_run_transition_receipt_sha256
+      - last_target_transition_receipts_hash
       - recovery_requirement
   - name: terminal_receipt
     version: sfn-terminal-receipt-v1
@@ -169,8 +204,11 @@ artifacts:
       - plan_id
       - plan_artifact_sha256
       - worker_id
+      - receipt_sequence
+      - previous_receipt_sha256
       - result
       - terminal_run_state
+      - run_transition_receipt_sha256
       - receipt_chain_sha256
       - machine_target_states_hash
       - exact_allowlist_hash
@@ -285,15 +323,15 @@ workflow:
     - id: collide
       text: Reject duplicate identities in the selected source-record set and reject duplicate collision keys or paths in the expanded machine-destination set before any apply transition.
     - id: admit
-      text: Persist the versioned plan and destination records, prove all roots and children, and enter applying only after the exclusive run state and receipt chain exist.
+      text: Persist the versioned plan and destination records, prove all roots and children, and enter applying only after the exclusive run state, receipt chain, and matching run-transition receipt exist.
     - id: apply
-      text: Execute each destination change through the indivisible guarded transaction and append its apply receipt to the external state journal.
+      text: Execute each destination change through the indivisible guarded transaction, append its apply or rollback receipt, then append the matching target-transition receipt whose previous digest and transition-evidence digest equal that operation-receipt digest.
     - id: verify
       text: Revalidate every destination and secret-scan result, aggregate all machine target states, and emit terminal success only when every selected target is verified.
     - id: recover
       text: On interruption, partition, or mixed outcome stop forward mutation, replay only the exact run journal, reconcile every target, and drive the finite rollback path.
     - id: close
-      text: Emit one versioned terminal receipt, export its hash as Todos evidence, retain operational evidence through the planned interval, and permit only policy-owned state-store garbage collection.
+      text: Append the terminal run-transition receipt, emit one versioned terminal receipt bound to it, export the terminal hash as Todos evidence, retain operational evidence through the planned interval, and permit only policy-owned state-store garbage collection.
 invariants:
   - id: SFN-SOURCE-PROVENANCE-v1
     require:
@@ -460,24 +498,24 @@ invariants:
   - id: SFN-TOUCHED-LEDGER-v1
     require:
       - exact_lexical_and_canonical_allowlist
-      - authoritative_actual_canonical_touches
-      - touched_subset_proof
+      - authoritative_actual_canonical_mutation_touches
+      - mutation_touched_subset_proof
     deny:
       - prefix_glob_or_wildcard_admission
       - out_of_allowlist_touch
     clauses:
       - key: exact_allowlist
         effect: require
-        text: The immutable plan enumerates every exact lexical and canonical destination entry and every exact external run-state entry; directory prefixes, recursive admission, globs, and wildcards authorize nothing.
+        text: The immutable plan enumerates every exact lexical and canonical destination mutation entry and every exact external run-state mutation entry; immutable source reads are separately provenance-bound, and directory prefixes, recursive admission, globs, and wildcards authorize nothing.
       - key: actual_touch
         effect: require
-        text: The guarded transaction records the actual canonical entry reached through retained handles, not a caller-supplied path string, in the authoritative append-only touched ledger.
+        text: The guarded transaction records every actual canonical entry it mutates through retained handles, not a caller-supplied path string, in the authoritative append-only mutation-touched ledger.
       - key: subset_proof
         effect: require
-        text: Before every further mutation and at closure, the actual touched set must be an exact subset of the planned lexical and canonical allowlist with every pair still equal.
+        text: Before every further mutation and at closure, the actual mutation-touched set must be an exact subset of the planned lexical and canonical mutation allowlist with every pair still equal.
       - key: outside_touch
         effect: deny
-        text: Any read, write, create, removal, restoration, or receipt-state touch outside the exact allowlist fails closed.
+        text: Any write, create, removal, restoration, or receipt-state mutation outside the exact mutation allowlist fails closed; provenance-bound immutable source reads do not grant mutation authority.
   - id: SFN-RECEIPT-FINITENESS-v1
     require:
       - destination_mutation_receipt
@@ -489,7 +527,7 @@ invariants:
     clauses:
       - key: mutation_receipt
         effect: require
-        text: Every destination mutation and rollback atomically appends one versioned operation receipt that binds run ID, plan ID, plan artifact digest, worker, machine, source, destination, prestate, poststate, touch, transition, sequence, and previous-receipt digest.
+        text: Every run-state edge appends one run-transition receipt and every target-state edge appends one target-transition receipt; each destination mutation or rollback atomically appends its versioned operation receipt followed by the matching target-transition receipt whose next sequence, previous-receipt digest, and transition-evidence digest bind that operation-receipt digest without a hash cycle.
       - key: finite_base_case
         effect: require
         text: Receipt persistence is an external state-store journal operation rather than a destination child mutation, and it does not require another receipt.
@@ -511,13 +549,13 @@ invariants:
     clauses:
       - key: artifact_versions
         effect: require
-        text: Plan, source, destination, apply, rollback, failure, and terminal artifacts use only the exact versioned schemas and required fields in this contract.
+        text: Plan, source, destination, run-transition, target-transition, apply, rollback, failure, and terminal artifacts use only the exact versioned schemas and required fields in this contract.
       - key: artifact_encoding
         effect: require
         text: Artifacts use RFC 8785 canonical JSON UTF-8 bytes without a BOM and labeled sha256 digests; a complete plan digest appears only in downstream artifacts and a complete receipt digest appears only in the next receipt, so neither artifact hashes itself.
       - key: identity_binding
         effect: require
-        text: Every operational artifact binds schema version, run ID, plan ID, and its declared plan digest, worker, source, destination, machine, state-transition, hash-chain, or terminal identities.
+        text: Every operational artifact binds schema version, run ID, plan ID, and its declared plan digest, worker, source, destination, machine, exact run or target state edge, transition-evidence digest, hash-chain, or terminal identities.
       - key: schema_drift
         effect: deny
         text: Missing fields, unknown fields, unversioned maps, free-form state names, inferred identities, and schema-version fallback reject admission, replay, and handoff.
@@ -534,7 +572,7 @@ invariants:
     clauses:
       - key: finite_transitions
         effect: require
-        text: Run and target state changes use only the enumerated transition tables, persist the transition in the receipt chain, and reject every unknown state or edge.
+        text: Run and target state changes use only the enumerated transition tables, append exactly one matching versioned run-transition or target-transition receipt before the next state-dependent effect, and reject every unreceipted, duplicate, unknown, or mismatched state or edge.
       - key: interruption
         effect: require
         text: An interrupted apply enters apply-interrupted then recovery-pending, replays the exact journal identity, reconciles live destinations, and performs no new forward mutation.
@@ -646,19 +684,19 @@ invariants:
 - [SFN-RUN-PATH-EXCLUSIVITY-v1/deny/state_path_reuse] A pre-existing, raced, symlinked, previously used, overwritten, truncated, or reused run state path rejects the run.
 - [SFN-RUN-PATH-EXCLUSIVITY-v1/require/retention_cleanup] The plan fixes retention before apply; immutable hash-chain receipts, failures, and preimages remain until expiry, and garbage collection is eligible only after a verified terminal receipt hash is exported to canonical Todos evidence.
 - [SFN-RUN-PATH-EXCLUSIVITY-v1/deny/live_shadow_store] Live skill directories never contain normalization temporaries, preimages, receipts, journals, recovery files, tombstones, or cleanup metadata.
-- [SFN-TOUCHED-LEDGER-v1/require/exact_allowlist] The immutable plan enumerates every exact lexical and canonical destination entry and every exact external run-state entry; directory prefixes, recursive admission, globs, and wildcards authorize nothing.
-- [SFN-TOUCHED-LEDGER-v1/require/actual_touch] The guarded transaction records the actual canonical entry reached through retained handles, not a caller-supplied path string, in the authoritative append-only touched ledger.
-- [SFN-TOUCHED-LEDGER-v1/require/subset_proof] Before every further mutation and at closure, the actual touched set must be an exact subset of the planned lexical and canonical allowlist with every pair still equal.
-- [SFN-TOUCHED-LEDGER-v1/deny/outside_touch] Any read, write, create, removal, restoration, or receipt-state touch outside the exact allowlist fails closed.
-- [SFN-RECEIPT-FINITENESS-v1/require/mutation_receipt] Every destination mutation and rollback atomically appends one versioned operation receipt that binds run ID, plan ID, plan artifact digest, worker, machine, source, destination, prestate, poststate, touch, transition, sequence, and previous-receipt digest.
+- [SFN-TOUCHED-LEDGER-v1/require/exact_allowlist] The immutable plan enumerates every exact lexical and canonical destination mutation entry and every exact external run-state mutation entry; immutable source reads are separately provenance-bound, and directory prefixes, recursive admission, globs, and wildcards authorize nothing.
+- [SFN-TOUCHED-LEDGER-v1/require/actual_touch] The guarded transaction records every actual canonical entry it mutates through retained handles, not a caller-supplied path string, in the authoritative append-only mutation-touched ledger.
+- [SFN-TOUCHED-LEDGER-v1/require/subset_proof] Before every further mutation and at closure, the actual mutation-touched set must be an exact subset of the planned lexical and canonical mutation allowlist with every pair still equal.
+- [SFN-TOUCHED-LEDGER-v1/deny/outside_touch] Any write, create, removal, restoration, or receipt-state mutation outside the exact mutation allowlist fails closed; provenance-bound immutable source reads do not grant mutation authority.
+- [SFN-RECEIPT-FINITENESS-v1/require/mutation_receipt] Every run-state edge appends one run-transition receipt and every target-state edge appends one target-transition receipt; each destination mutation or rollback atomically appends its versioned operation receipt followed by the matching target-transition receipt whose next sequence, previous-receipt digest, and transition-evidence digest bind that operation-receipt digest without a hash cycle.
 - [SFN-RECEIPT-FINITENESS-v1/require/finite_base_case] Receipt persistence is an external state-store journal operation rather than a destination child mutation, and it does not require another receipt.
 - [SFN-RECEIPT-FINITENESS-v1/require/receipt_chain] The exclusive append-only receipt sequence and previous-hash chain make duplicate replay idempotent and any gap, fork, overwrite, or truncation fail closed.
 - [SFN-RECEIPT-FINITENESS-v1/deny/recursive_receipt] A receipt for receipt persistence, a receipt stored under live skill content, or an unbound mutable receipt is forbidden.
-- [SFN-ARTIFACT-SCHEMAS-v1/require/artifact_versions] Plan, source, destination, apply, rollback, failure, and terminal artifacts use only the exact versioned schemas and required fields in this contract.
+- [SFN-ARTIFACT-SCHEMAS-v1/require/artifact_versions] Plan, source, destination, run-transition, target-transition, apply, rollback, failure, and terminal artifacts use only the exact versioned schemas and required fields in this contract.
 - [SFN-ARTIFACT-SCHEMAS-v1/require/artifact_encoding] Artifacts use RFC 8785 canonical JSON UTF-8 bytes without a BOM and labeled sha256 digests; a complete plan digest appears only in downstream artifacts and a complete receipt digest appears only in the next receipt, so neither artifact hashes itself.
-- [SFN-ARTIFACT-SCHEMAS-v1/require/identity_binding] Every operational artifact binds schema version, run ID, plan ID, and its declared plan digest, worker, source, destination, machine, state-transition, hash-chain, or terminal identities.
+- [SFN-ARTIFACT-SCHEMAS-v1/require/identity_binding] Every operational artifact binds schema version, run ID, plan ID, and its declared plan digest, worker, source, destination, machine, exact run or target state edge, transition-evidence digest, hash-chain, or terminal identities.
 - [SFN-ARTIFACT-SCHEMAS-v1/deny/schema_drift] Missing fields, unknown fields, unversioned maps, free-form state names, inferred identities, and schema-version fallback reject admission, replay, and handoff.
-- [SFN-RUN-STATE-MACHINE-v1/require/finite_transitions] Run and target state changes use only the enumerated transition tables, persist the transition in the receipt chain, and reject every unknown state or edge.
+- [SFN-RUN-STATE-MACHINE-v1/require/finite_transitions] Run and target state changes use only the enumerated transition tables, append exactly one matching versioned run-transition or target-transition receipt before the next state-dependent effect, and reject every unreceipted, duplicate, unknown, or mismatched state or edge.
 - [SFN-RUN-STATE-MACHINE-v1/require/interruption] An interrupted apply enters apply-interrupted then recovery-pending, replays the exact journal identity, reconciles live destinations, and performs no new forward mutation.
 - [SFN-RUN-STATE-MACHINE-v1/require/mixed_outcome] Any mutation combined with a failure or unreachable machine enters mixed-outcome, reconciles every selected machine, then rolls back every run mutation through the finite rollback path.
 - [SFN-RUN-STATE-MACHINE-v1/require/partition] A partitioned machine remains unreachable-unknown and keeps the run recovery-pending and nonterminal until exact live state is reconciled.
@@ -680,11 +718,11 @@ invariants:
 
 1. [STEP/plan] Resolve exact source records, authoritative machine IDs, per-machine skills roots, external run state, retention, and the complete destination allowlist.
 2. [STEP/collide] Reject duplicate identities in the selected source-record set and reject duplicate collision keys or paths in the expanded machine-destination set before any apply transition.
-3. [STEP/admit] Persist the versioned plan and destination records, prove all roots and children, and enter applying only after the exclusive run state and receipt chain exist.
-4. [STEP/apply] Execute each destination change through the indivisible guarded transaction and append its apply receipt to the external state journal.
+3. [STEP/admit] Persist the versioned plan and destination records, prove all roots and children, and enter applying only after the exclusive run state, receipt chain, and matching run-transition receipt exist.
+4. [STEP/apply] Execute each destination change through the indivisible guarded transaction, append its apply or rollback receipt, then append the matching target-transition receipt whose previous digest and transition-evidence digest equal that operation-receipt digest.
 5. [STEP/verify] Revalidate every destination and secret-scan result, aggregate all machine target states, and emit terminal success only when every selected target is verified.
 6. [STEP/recover] On interruption, partition, or mixed outcome stop forward mutation, replay only the exact run journal, reconcile every target, and drive the finite rollback path.
-7. [STEP/close] Emit one versioned terminal receipt, export its hash as Todos evidence, retain operational evidence through the planned interval, and permit only policy-owned state-store garbage collection.
+7. [STEP/close] Append the terminal run-transition receipt, emit one versioned terminal receipt bound to it, export the terminal hash as Todos evidence, retain operational evidence through the planned interval, and permit only policy-owned state-store garbage collection.
 
 ## Safe Near-Misses
 
