@@ -637,7 +637,7 @@ def postverify(args: argparse.Namespace) -> int:
             receipt["outcome"] = "clean"
         else:
             receipt["outcome"] = "fixture_clean"
-    except (GuardError, OSError, json.JSONDecodeError) as error:
+    except (GuardError, OSError, UnicodeError, json.JSONDecodeError) as error:
         receipt["failure_reasons"] = [str(error)]
 
     atomic_write(receipt_path, receipt)
@@ -685,7 +685,7 @@ def main() -> int:
             print(json.dumps(build_command(args), indent=2, sort_keys=True))
             return 0
         return postverify(args)
-    except (GuardError, OSError, json.JSONDecodeError) as error:
+    except (GuardError, OSError, UnicodeError, json.JSONDecodeError) as error:
         print(json.dumps({"kind": "merge-pr-guard-error", "error": str(error)}, sort_keys=True), file=sys.stderr)
         return 2
 

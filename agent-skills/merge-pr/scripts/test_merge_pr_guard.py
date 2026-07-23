@@ -603,6 +603,26 @@ class GuardCliTests(unittest.TestCase):
             )
             self.assertIs(durable["authoritative"], False)
 
+    def test_postverify_persists_failed_receipt_for_non_utf8_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            preflight_path, plan_path, plan = self.provenance(directory)
+            plan_path.write_bytes(b"\xff")
+            receipt = directory / "postverify.json"
+            result = self.run_cli(
+                "postverify",
+                *self.postverify_contract_args(preflight_path, plan_path, plan),
+                "--fixture",
+                str(FIXTURES / "trailer-free-provider.json"),
+                "--receipt",
+                str(receipt),
+            )
+            durable = json.loads(receipt.read_text(encoding="utf-8"))
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(durable["outcome"], "failed")
+        self.assertIs(durable["authoritative"], False)
+        self.assertNotIn("Traceback", result.stderr)
+
     def test_literal_command_words_remain_custom_body_data(self) -> None:
         for body in ("push", "--admin"):
             with self.subTest(body=body), tempfile.TemporaryDirectory() as temporary:

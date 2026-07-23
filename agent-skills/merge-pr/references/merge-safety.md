@@ -47,6 +47,9 @@ multi-commit results require a wider provenance check.
 
 After provider mutation:
 
+For auto and queue modes, start these checks only after the provider reports
+`MERGED`; an enabled or queued PR is still pending.
+
 1. Recompute the preflight and complete command-argv digests, then match the
    saved command plan.
 2. Re-read the PR and require `MERGED`.

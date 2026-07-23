@@ -41,7 +41,9 @@ For an actual merge:
    `--match-head-commit`; it never includes admin, force, direct-main push, or
    branch deletion. Use auto mode only with explicit delayed intent.
 7. Run `scripts/merge_pr_guard.py postverify` against the provider result and
-   save its required receipt. Do not report clean until it exits zero.
+   save its required receipt. For auto or queue mode, wait until the provider
+   reports `MERGED`; enablement or enqueue is not merge completion. Do not
+   report clean until postverify exits zero.
 
 ## Squash message rule
 
