@@ -45,16 +45,119 @@ function expectOrdered(content: string, terms: string[]): void {
   }
 }
 
-function expectRejects(content: string, unsafePattern: RegExp): void {
-  const normalized = content.replace(/\s+/g, " ");
-  const match = normalized.match(unsafePattern);
-  expect(match, `missing negative case for ${unsafePattern}`).not.toBeNull();
-  const offset = match?.index ?? 0;
-  const context = normalized.slice(Math.max(0, offset - 160), offset + (match?.[0].length ?? 0) + 160);
-  expect(
-    context,
-    `unsafe wording must be explicitly fail-closed near: ${match?.[0] ?? unsafePattern}`,
-  ).toMatch(/\b(?:reject|forbid|forbidden|never|fail|stop|without|unavailable)\b/i);
+const contradictionFixtures = [
+  {
+    sentence: "Symlink components are permitted.",
+    pattern: /\bsymlink components are permitted\b/i,
+  },
+  {
+    sentence: "The resolved root may contain symlink components.",
+    pattern: /\bresolved root may contain symlink components\b/i,
+  },
+  {
+    sentence: "Hard-linked targets may be replaced after validation.",
+    pattern: /\bhard-linked targets may be replaced after validation\b/i,
+  },
+  {
+    sentence: "Wildcards are permitted.",
+    pattern: /\bwildcards are permitted\b/i,
+  },
+  {
+    sentence: "Pre-existing receipt files are reusable after validation.",
+    pattern: /\bpre-existing receipt files are reusable after validation\b/i,
+  },
+  {
+    sentence: "Previously used temporary paths are safe.",
+    pattern: /\bpreviously used temporary paths are safe\b/i,
+  },
+  {
+    sentence: "Recursive deletion is acceptable after verification.",
+    pattern: /\brecursive deletion is acceptable after verification\b/i,
+  },
+  {
+    sentence: "Unconditional restore is permitted.",
+    pattern: /\bunconditional restore is permitted\b/i,
+  },
+] as const;
+
+const requiredStructures = [
+  {
+    section: "Deterministic Adaptation",
+    label: "canonical scalar encoder",
+    pattern:
+      /`codewith-json-yaml-scalar-v1`[\s\S]*lowercase `\\u00xx`[\s\S]*solidus `\/` literally[\s\S]*shortest well-formed UTF-8 byte sequence/,
+  },
+  {
+    section: "Deterministic Adaptation",
+    label: "exact emitted key bytes",
+    pattern:
+      /---\\n[\s\S]*name: <codewith-json-yaml-scalar-v1\(name\)>\\n[\s\S]*description: <codewith-json-yaml-scalar-v1\(description\)>\\n[\s\S]*one and only one rendered byte sequence/,
+  },
+  {
+    section: "Canonical Path Admission",
+    label: "root lexical canonical binding",
+    pattern:
+      /Open the final lexical root anchor first[\s\S]*canonical path from that retained handle[\s\S]*exact lexical\/canonical path agreement[\s\S]*latest expected-state ledger[\s\S]*Reject every other drift/,
+  },
+  {
+    section: "Canonical Path Admission",
+    label: "repeated retained-handle single-link checks",
+    pattern:
+      /Immediately after creation, before and after[\s\S]*each read, write, hash, exchange, install, restore, or removal use[\s\S]*same regular file with link count one[\s\S]*hard-link race cannot alias a write/,
+  },
+  {
+    section: "Canonical Path Admission",
+    label: "absent-parent canonical child admission",
+    pattern:
+      /If the selected directory exists[\s\S]*If it is absent, canonicalize the existing root[\s\S]*exact child candidate[\s\S]*require exact agreement with its admitted lexical\/canonical pair/,
+  },
+  {
+    section: "Inventory and Exact-Path Allowlist",
+    label: "directory allowlist and touched ledger",
+    pattern:
+      /exact selected skill directory creation[\s\S]*lexical path and canonical path[\s\S]*Record a directory touch[\s\S]*subset of the exact canonical allowlist/,
+  },
+  {
+    section: "Guarded Forward Mutation",
+    label: "missing directory create",
+    pattern:
+      /guarded no-follow[\s\S]*atomic create-directory-if-absent[\s\S]*device, inode, mount ID,[\s\S]*append its actual canonical path to the touched-path ledger/,
+  },
+  {
+    section: "Guarded Rollback",
+    label: "atomic absent-target rollback",
+    pattern:
+      /one fail-closed atomic compare-and-remove[\s\S]*exact run-installed device, inode, mount ID, metadata,[\s\S]*compare-then-unlink sequence is forbidden/,
+  },
+  {
+    section: "Guarded Rollback",
+    label: "missing directory rollback",
+    pattern:
+      /selected skill directory also had an absent pre-state[\s\S]*run-created directory's retained handle[\s\S]*atomic compare-and-remove-empty-directory[\s\S]*preserve the directory and report[\s\S]*rollback conflict/,
+  },
+] as const;
+
+function contractViolations(document: string): string[] {
+  const violations: string[] = [];
+
+  for (const fixture of contradictionFixtures) {
+    if (fixture.pattern.test(document)) {
+      violations.push(`unsafe contradiction: ${fixture.sentence}`);
+    }
+  }
+
+  for (const requirement of requiredStructures) {
+    const escapedName = requirement.section.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = document.match(
+      new RegExp(`^## ${escapedName}\\r?\\n([\\s\\S]*?)(?=^## |(?![\\s\\S]))`, "m"),
+    );
+    const normalizedSection = (match?.[1] ?? "").replace(/\s+/g, " ");
+    if (!match || !requirement.pattern.test(normalizedSection)) {
+      violations.push(`missing structure: ${requirement.label}`);
+    }
+  }
+
+  return violations;
 }
 
 describe("fleet-skill-normalization tracked contract", () => {
@@ -103,17 +206,19 @@ describe("fleet-skill-normalization tracked contract", () => {
     const adaptation = section("Deterministic Adaptation");
 
     expect(adaptation).toMatch(
-      /frontmatter containing exactly `name` and[\s\S]*`description`, in that order/,
+      /`codewith-json-yaml-scalar-v1` encoder[\s\S]*sequence of Unicode scalar values[\s\S]*reject an unpaired[\s\S]*surrogate/,
     );
     expect(adaptation).toMatch(
-      /both values as deterministic,[\s\S]*JSON-compatible double-quoted YAML scalars/,
+      /escapes `"` as `\\"` and `\\` as[\s\S]*uses exactly `\\b`, `\\t`, `\\n`, `\\f`, and `\\r`/,
     );
     expectOrdered(adaptation, [
-      "LF-only delimiters",
-      "ordered key lines",
-      "closing delimiter plus LF",
+      "solidus `/` literally and never as `\\/`",
+      "shortest well-formed UTF-8 byte sequence",
+      "name: <codewith-json-yaml-scalar-v1(name)>\\n",
+      "description: <codewith-json-yaml-scalar-v1(description)>\\n",
+      "every `\\n` denotes exactly one byte `0x0a`",
       "source body",
-      "normalize only its line endings to LF",
+      "one and only one rendered byte sequence",
     ]);
     expect(adaptation).toMatch(
       /non-printing secret scan over the[\s\S]*source and rendered bytes[\s\S]*finding blocks that skill/,
@@ -128,16 +233,21 @@ describe("fleet-skill-normalization tracked contract", () => {
     const admission = section("Canonical Path Admission");
 
     expectOrdered(admission, [
-      "absolute, normalized directory path",
-      "canonical realpath",
-      "without following symlinks",
-      "retained root handle",
+      "absolute lexical path without dereferencing it",
+      "normalized lexical spelling byte for byte",
+      "Open the final lexical root anchor first",
+      "canonical path from that retained handle",
+      "exact lexical/canonical path agreement",
+      "re-stat both the handle and the lexical root",
+      "latest expected-state ledger",
+      "Reject every other",
+      "drift",
     ]);
     expect(admission).toMatch(
-      /Record both the absolute normalized lexical path and its canonical path[\s\S]*canonicalize the[\s\S]*existing parent first/,
+      /Record both the absolute normalized lexical path and its canonical path[\s\S]*If the selected directory exists[\s\S]*If it is absent, canonicalize the existing root/,
     );
     expect(admission).toMatch(
-      /whether existing or absent[\s\S]*never invoke a[\s\S]*symlink-following realpath operation on the final component/,
+      /Never invoke a symlink-following realpath operation on an[\s\S]*absent or final component[\s\S]*require exact[\s\S]*agreement with its admitted lexical\/canonical pair/,
     );
     expect(admission).toMatch(
       /Reject `\.\.`, `\.`, empty segments, repeated separators, alternate[\s\S]*A selected skill name must be one basename, never a path/,
@@ -145,15 +255,16 @@ describe("fleet-skill-normalization tracked contract", () => {
     expect(admission).toMatch(
       /any canonical path not strictly inside the exact canonical[\s\S]*root and its exact selected skill directory/,
     );
-    expectRejects(admission, /\.\.|non-normalized|absolute child|path escapes?/i);
-    expect(skill).not.toMatch(/\b(?:allow|accept|follow)\b[^\n]*(?:traversal|\.\.|outside the root)/i);
+    expect(admission).toMatch(
+      /Resolving a lexical symlink and then opening its canonical destination[\s\S]*is forbidden/,
+    );
   });
 
   test("rejects symlink components, hard links, special files, and no-follow uncertainty", () => {
     const admission = section("Canonical Path Admission");
 
     expect(admission).toMatch(
-      /Walk every component from the retained root handle with no-follow semantics[\s\S]*Reject symlinked or magic-link components[\s\S]*cross-mount components/,
+      /Walk every existing component from the retained root handle with no-follow semantics[\s\S]*Reject symlinked or magic-link components[\s\S]*cross-mount components/,
     );
     expect(admission).toMatch(
       /openat2[\s\S]*RESOLVE_BENEATH\|RESOLVE_NO_SYMLINKS\|RESOLVE_NO_MAGICLINKS\|RESOLVE_NO_XDEV/,
@@ -164,8 +275,15 @@ describe("fleet-skill-normalization tracked contract", () => {
     expect(admission).toMatch(
       /Existing targets must be single-link regular files[\s\S]*Reject directories,[\s\S]*hard-linked files[\s\S]*special file/,
     );
-    expectRejects(admission, /symlink|magic-link|hard-linked|special file|cannot be proven/i);
-    expect(skill).not.toMatch(/\b(?:allow|accept|follow)\b[^\n]*(?:symlink|magic-link|special file)/i);
+    expect(admission).toMatch(
+      /same regular file with link count one[\s\S]*bind the single-link\/type[\s\S]*hard-link race cannot alias a write/,
+    );
+    expect(admission).toMatch(
+      /Apply the equivalent retained-handle identity proof to a run-created selected[\s\S]*directory/,
+    );
+    expect(admission).toMatch(
+      /Only a guarded creation or removal of[\s\S]*an exact allowlisted child may atomically return and advance that snapshot/,
+    );
   });
 
   test("rejects every pre-existing run-owned path and requires exclusive creation", () => {
@@ -185,9 +303,11 @@ describe("fleet-skill-normalization tracked contract", () => {
     ]);
     expect(admission).toContain("O_CREAT|O_EXCL|O_NOFOLLOW");
     expect(admission).toMatch(/never reuse, truncate, or overwrite it/);
-    expectRejects(admission, /pre-existing|previously used|reuse|overwrite/i);
-    expect(skill).not.toMatch(
-      /\b(?:may|can|should|must)\b[^\n]*(?:reuse|truncate|overwrite)[^\n]*(?:temp|preimage|receipt)/i,
+    expect(admission).toMatch(
+      /pre-existing, raced, symlinked, or previously used[\s\S]*rejects the run; never reuse, truncate, or overwrite/,
+    );
+    expect(admission).toMatch(
+      /directory is absent, its proven absence proves every admitted[\s\S]*child candidate absent[\s\S]*re-prove each[\s\S]*child absent[\s\S]*immediately before its exclusive[\s\S]*create/,
     );
   });
 
@@ -195,7 +315,7 @@ describe("fleet-skill-normalization tracked contract", () => {
     const allowlist = section("Inventory and Exact-Path Allowlist");
 
     expect(allowlist).toMatch(
-      /allowlist records both the normalized lexical path and canonical path for every[\s\S]*Directory-prefix, recursive, glob, or wildcard admission is forbidden/,
+      /allowlist records both the normalized lexical path and canonical[\s\S]*path for every entry[\s\S]*Directory-prefix, recursive, glob, or wildcard admission is[\s\S]*forbidden/,
     );
     expectOrdered(allowlist, [
       "authoritative touched-path ledger",
@@ -207,9 +327,8 @@ describe("fleet-skill-normalization tracked contract", () => {
     expect(allowlist).toMatch(
       /touch to any unselected or remote-only path fails closure[\s\S]*stop further writes/,
     );
-    expectRejects(allowlist, /Directory-prefix|wildcard|unselected|remote-only/i);
-    expect(skill).not.toMatch(
-      /\b(?:allow|accept|sufficient)\b[^\n]*(?:directory-prefix|directory prefix|glob|wildcard)/i,
+    expect(allowlist).toMatch(
+      /directory entry authorizes only guarded creation or[\s\S]*guarded rollback removal[\s\S]*never authorizes[\s\S]*prefix writes/,
     );
   });
 
@@ -217,9 +336,12 @@ describe("fleet-skill-normalization tracked contract", () => {
     const inventory = section("Inventory and Exact-Path Allowlist");
     const forward = section("Guarded Forward Mutation");
 
-    expect(inventory).toMatch(
-      /capture its exact inventoried[\s\S]*bytes, inode identity, metadata, and hash[\s\S]*atomically return the exact displaced preimage/,
-    );
+    expectOrdered(inventory, [
+      "capture its exact inventoried",
+      "bytes, inode identity, metadata, and hash",
+      "atomically return the exact",
+      "displaced preimage",
+    ]);
     expectOrdered(forward, [
       "one fail-closed atomic",
       "binds the expected existing inode/metadata",
@@ -234,7 +356,9 @@ describe("fleet-skill-normalization tracked contract", () => {
     expect(forward).toMatch(
       /missing target uses one atomic create-if-absent[\s\S]*fail if any object appeared after inventory/,
     );
-    expectRejects(forward, /compare-then-rename|unconditional rename|cannot prove/i);
+    expect(forward).toMatch(
+      /guarded no-follow[\s\S]*atomic create-directory-if-absent[\s\S]*run-created directory/,
+    );
   });
 
   test("rolls back only after comparing exact run-installed state and preserves conflicts", () => {
@@ -251,12 +375,25 @@ describe("fleet-skill-normalization tracked contract", () => {
       /If the current target[\s\S]*drifted, preserve it and report a rollback conflict/,
     );
     expect(rollback).toMatch(
-      /absent pre-state[\s\S]*atomically comparing its current inode\/metadata and hash[\s\S]*Verify the target is absent with a no-follow lookup/,
+      /absent target pre-state[\s\S]*one fail-closed atomic compare-and-remove[\s\S]*compare-then-unlink sequence is forbidden/,
     );
-    expectRejects(rollback, /recursive deletion|unconditional restore|unconditional restore\/remove/i);
-    expect(skill).not.toMatch(
-      /^(?![^\n]*\b(?:never|reject|forbid)\b)[^\n]*\b(?:perform|use|allow)\b[^\n]*(?:unconditional restore|unconditional remove|recursive deletion)/im,
+    expect(rollback).toMatch(
+      /selected skill directory also had an absent pre-state[\s\S]*empty[\s\S]*atomic[\s\S]*compare-and-remove-empty-directory/,
     );
+  });
+
+  test("satisfies every consolidated structural safety requirement", () => {
+    expect(contractViolations(skill)).toEqual([]);
+  });
+
+  test("rejects each explicit unsafe contradiction fixture", () => {
+    for (const fixture of contradictionFixtures) {
+      const candidate = `${skill}\n${fixture.sentence}\n`;
+      expect(
+        contractViolations(candidate),
+        `validator accepted unsafe contradiction: ${fixture.sentence}`,
+      ).toContain(`unsafe contradiction: ${fixture.sentence}`);
+    }
   });
 
   test("output proves canonical scope and forbids out-of-tree or coordinator mutation", () => {
@@ -278,6 +415,7 @@ describe("fleet-skill-normalization tracked contract", () => {
       "source_path",
       "source_hash",
       "machines",
+      "root_admission",
       "selected_target_inventory",
       "changed_skills",
       "missing_skills",

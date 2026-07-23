@@ -72,13 +72,34 @@ For each canonical source:
 1. Verify the source commit, tracked path, and source hash from the immutable
    repository or package object.
 2. Parse the tracked frontmatter under this repository's contract.
-3. Render the Codewith copy with frontmatter containing exactly `name` and
-   `description`, in that order. Encode both values as deterministic,
-   JSON-compatible double-quoted YAML scalars. Emit LF-only delimiters, the
-   ordered key lines, the closing delimiter plus LF, then the source body that
-   begins immediately after the source frontmatter's closing-delimiter newline;
-   normalize only its line endings to LF.
-4. Compute the rendered target hash and run a non-printing secret scan over the
+3. Render the Codewith copy with the canonical
+   `codewith-json-yaml-scalar-v1` encoder. Treat each parsed `name` and
+   `description` as a sequence of Unicode scalar values; reject an unpaired
+   surrogate and do not apply Unicode normalization. The encoder emits an
+   opening and closing ASCII double quote, escapes `"` as `\"` and `\` as
+   `\\`, uses exactly `\b`, `\t`, `\n`, `\f`, and `\r` for U+0008, U+0009,
+   U+000A, U+000C, and U+000D, uses lowercase `\u00xx` for every other
+   U+0000–U+001F control, emits solidus `/` literally and never as `\/`, and
+   emits every other scalar—including U+2028 and U+2029—literally as its
+   shortest well-formed UTF-8 byte sequence. It emits no BOM.
+4. Emit the frontmatter as exactly these ASCII prefixes, encoded scalar bytes,
+   and LF bytes:
+
+   ```text
+   ---\n
+   name: <codewith-json-yaml-scalar-v1(name)>\n
+   description: <codewith-json-yaml-scalar-v1(description)>\n
+   ---\n
+   ```
+
+   In this formula, every `\n` denotes exactly one byte `0x0a`, never the two
+   bytes backslash and `n`; angle-bracket terms denote the encoder's exact
+   bytes and are not emitted. Append the source body that begins immediately
+   after the tracked
+   frontmatter's closing-delimiter newline, normalizing only CRLF or CR line
+   endings to LF. No other byte may change. The same immutable source bytes
+   therefore produce one and only one rendered byte sequence and target hash.
+5. Compute the rendered target hash and run a non-printing secret scan over the
    source and rendered bytes. Any finding blocks that skill.
 
 The rendered bytes and their hash are the canonical desired state. Do not add
@@ -86,24 +107,46 @@ machine-specific content or infer a winner from a live copy.
 
 ## Canonical Path Admission
 
-Resolve the Codewith skills root separately on every selected machine. The root
-must be an absolute, normalized directory path whose canonical realpath is
-proven before admission. Open that canonical root as a directory without
-following symlinks and retain its directory handle as the containment anchor.
+Resolve the Codewith skills root separately on every selected machine. Expand
+the configured root to one absolute lexical path without dereferencing it, then
+require its input spelling to equal its normalized lexical spelling byte for
+byte. Starting from the filesystem root, open every lexical component with
+no-follow directory-handle operations. Reject the root if any component is a
+symlink, magic link, non-directory, cross-mount escape, or otherwise
+non-canonical.
+
+Open the final lexical root anchor first with no-follow semantics, then derive
+its canonical path from that retained handle. Record the root's lexical path,
+canonical path, device, inode, mount ID, type, and link count. Admission
+requires exact lexical/canonical path agreement. Bind every subsequent child
+admission and operation to that same retained handle, and before each mutation
+and at closure re-stat both the handle and the lexical root with no-follow
+semantics. Require its path, inode, device, mount, and directory type to remain
+fixed. Metadata and link count must equal the latest expected-state ledger
+snapshot; only a guarded creation or removal of an exact allowlisted selected
+directory may atomically return and advance that snapshot. Reject every other
+drift. Resolving a lexical symlink and then opening its canonical destination
+is forbidden.
 
 Derive each selected skill directory, target `SKILL.md`, run-owned temporary
 file, preimage, and rollback receipt from the admitted root and a single
-validated skill-name path segment. For every one of those paths:
+validated skill-name path segment. A selected skill directory may be existing
+or absent. For every one of those paths:
 
 1. Record both the absolute normalized lexical path and its canonical path.
    Canonicalize each existing directory through its retained no-follow handle.
-   For every final file component, whether existing or absent, canonicalize the
-   existing parent first and append only the validated basename; never invoke a
-   symlink-following realpath operation on the final component.
+   If the selected directory exists, append each validated final file basename
+   to that canonical directory. If it is absent, canonicalize the existing root
+   first, append the one validated directory basename to form its canonical
+   candidate, then append each validated final file basename to form the exact
+   child candidate. Never invoke a symlink-following realpath operation on an
+   absent or final component. After guarded directory creation, resolve every
+   child candidate through the retained directory handle and require exact
+   agreement with its admitted lexical/canonical pair before creating it.
 2. Reject `..`, `.`, empty segments, repeated separators, alternate
    non-normalized aliases, absolute child inputs, and any lexical/canonical
    disagreement. A selected skill name must be one basename, never a path.
-3. Walk every component from the retained root handle with no-follow semantics.
+3. Walk every existing component from the retained root handle with no-follow semantics.
    Reject symlinked or magic-link components, cross-mount components, mount or
    path escapes, and any canonical path not strictly inside the exact canonical
    root and its exact selected skill directory.
@@ -112,7 +155,12 @@ validated skill-name path segment. For every one of those paths:
    or a proven equivalent component-by-component directory-handle walk using
    `O_NOFOLLOW` plus mount identity checks. If canonical containment or
    no-follow operation cannot be proven, fail closed without mutation.
-5. Existing targets must be single-link regular files. Reject directories,
+5. An existing selected skill directory must be a directory whose retained
+   handle, device, inode, mount ID, metadata, type, and link count are recorded.
+   For an absent directory, record an exact canonical candidate as the
+   canonical root plus the validated basename and prove absence through the
+   retained root handle.
+6. Existing targets must be single-link regular files. Reject directories,
    devices, sockets, FIFOs, hard-linked files, and every other special file.
    An absent target must be proven absent with a no-follow lookup.
 
@@ -124,6 +172,30 @@ creates the temporary, guarded forward replacement creates and returns the
 preimage, and guarded rollback creates its receipt. Do not pre-create a
 preimage or receipt. A pre-existing, raced, symlinked, or previously used
 run-owned path rejects the run; never reuse, truncate, or overwrite it.
+When the selected directory is absent, its proven absence proves every admitted
+child candidate absent at inventory; after directory creation, re-prove each
+child absent through the retained handle immediately before its exclusive
+create.
+
+Retain a no-follow handle and initial device, inode, mount ID, metadata, file
+type, and link count for every created temporary, returned preimage, rollback
+receipt, and installed target. Immediately after creation, before and after
+each read, write, hash, exchange, install, restore, or removal use, and at
+closure, a guarded handle-bound primitive must prove that the handle and exact
+path still identify that same regular file with link count one. A before/after
+path check alone is insufficient. The primitive must bind the single-link/type
+check to the operation so a same-filesystem hard-link race cannot alias a write
+outside the allowlist. Metadata and content must match the latest
+expected-state ledger snapshot; an allowlisted guarded write may atomically
+return and advance that snapshot. If that binding is unavailable or any
+identity, type, link, metadata, or content invariant drifts, stop without
+another mutation and preserve the object.
+
+Apply the equivalent retained-handle identity proof to a run-created selected
+skill directory: its path, inode, device, mount, and directory type remain
+fixed; its metadata and link count equal the latest expected-state ledger
+snapshot before every use and at closure. Only a guarded creation or removal of
+an exact allowlisted child may atomically return and advance that snapshot.
 
 ## Inventory and Exact-Path Allowlist
 
@@ -131,16 +203,21 @@ For every connected machine ID, inventory the selected canonical target paths
 and record source and target hashes, frontmatter validity, file type/link count,
 and whether each skill is missing, identical, or conflicting.
 
-Route admission enumerates each exact selected target `SKILL.md` and each
-explicitly named run-owned temporary, preimage, and rollback receipt. The
-allowlist records both the normalized lexical path and canonical path for every
-entry. Directory-prefix, recursive, glob, or wildcard admission is forbidden.
+Route admission enumerates each exact selected skill directory creation, target
+`SKILL.md`, and explicitly named run-owned temporary, preimage, and rollback
+receipt. The allowlist records both the normalized lexical path and canonical
+path for every entry. A directory entry authorizes only guarded creation or
+guarded rollback removal of that one selected directory; it never authorizes
+prefix writes. Directory-prefix, recursive, glob, or wildcard admission is
+forbidden.
 
 Capture an authoritative touched-path ledger from the mutation boundary. Each
 ledger entry records the actual canonical path reached through its retained
-directory handle, not a caller-supplied string. Before another write and at
-closure, prove the set of actual canonical touched paths is a subset of the
-exact canonical allowlist and that each lexical/canonical pair still agrees. A
+directory handle, not a caller-supplied string. Record a directory touch when
+the run creates or removes the exact selected skill directory. Before another
+write and at closure, prove the set of actual canonical touched paths is a
+subset of the exact canonical allowlist and that each lexical/canonical pair
+still agrees. A
 touch to any unselected or remote-only path fails closure: stop further writes,
 preserve and report the unauthorized path, and guard rollback of only selected
 targets with valid receipts. If exact-path enforcement or authoritative touched
@@ -155,18 +232,28 @@ is outside the selected canonical input. For each selected skill:
 - changed inode, bytes, metadata, or hash after inventory: fail closed and do
   not overwrite it.
 
-Before replacing or creating a selected target, record `pre_state` as
-`existing` or `absent`. For an existing target, capture its exact inventoried
-bytes, inode identity, metadata, and hash. The guarded replacement must
-atomically return the exact displaced preimage into the admitted exclusive
-preimage path; verify that returned preimage against the inventory before
-accepting the write. For an absent target, record the absent pre-state.
+Before replacing or creating a selected target, record the directory
+`pre_state` and target `pre_state` independently as `existing` or `absent`. For
+an existing target, capture its exact inventoried bytes, inode identity,
+metadata, and hash. The guarded replacement must atomically return the exact
+displaced preimage into the admitted exclusive preimage path; verify that
+returned preimage against the inventory before accepting the write. For an
+absent target or directory, record the absent pre-state.
 
 ## Guarded Forward Mutation
 
 Use only the admitted exclusive temporary path, write the deterministic bytes
 through its retained no-follow handle, fsync as required by the runtime, and
 verify its target hash before installation.
+
+When the selected skill directory is absent, first use one guarded no-follow
+atomic create-directory-if-absent operation through the retained root handle,
+bound to the exact admitted lexical/canonical directory entry. It must fail if
+any object appeared after inventory. Open the created directory immediately
+with no-follow semantics; record and prove its exact device, inode, mount ID,
+metadata, directory type, and link count, append its actual canonical path to
+the touched-path ledger, and retain that handle for every child operation.
+Never create or alter an unselected or remote-only directory.
 
 An existing target may be replaced only by one fail-closed atomic
 compare-and-replace primitive that:
@@ -184,8 +271,10 @@ cannot prove and return the exact displaced preimage is forbidden.
 A missing target uses one atomic create-if-absent primitive bound to the exact
 admitted canonical path. It must fail if any object appeared after inventory.
 After either operation, reparse frontmatter, rerun the non-printing secret scan,
-verify the final target hash through a no-follow handle, and append the actual
-canonical target to the authoritative touched-path ledger.
+verify the final target hash plus regular single-link identity through the
+retained no-follow handle, and append the actual canonical target to the
+authoritative touched-path ledger. Recheck every run-owned path and any
+run-created directory under the repeated identity rules before closure.
 
 ## Guarded Rollback
 
@@ -199,12 +288,23 @@ preimage and preserves the displaced failed target in a distinct admitted
 receipt path. Verify the restored bytes and preimage hash. If the current target
 drifted, preserve it and report a rollback conflict.
 
-For an absent pre-state, remove only the exact run-created regular single-link
-target after atomically comparing its current inode/metadata and hash to this
-run's installed target. Verify the target is absent with a no-follow lookup. If
-either comparison fails, preserve the conflict and report rollback failure.
-Never use recursive deletion, an unconditional restore/remove, or cleanup of a
-remote-only skill.
+For an absent target pre-state, use one fail-closed atomic compare-and-remove
+operation through the retained directory handle. That single primitive must
+bind the exact run-installed device, inode, mount ID, metadata, regular-file
+type, link count one, and target hash to removal of that exact path. A
+compare-then-unlink sequence is forbidden. If the primitive is unavailable or
+the object drifted, preserve it and report a rollback conflict. After success,
+verify absence with a no-follow lookup.
+
+If the selected skill directory also had an absent pre-state, consider it only
+after the selected target was safely removed. It must be empty and must still
+match the run-created directory's retained handle, device, inode, mount ID,
+metadata, directory type, and recorded link count. Use one guarded atomic
+compare-and-remove-empty-directory operation through the root handle, append
+the actual canonical directory path to the touched ledger, then verify absence.
+If it is unavailable, non-empty, or drifted, preserve the directory and report
+a rollback conflict. Never use recursive deletion, an unconditional
+restore/remove, or cleanup of an unrelated or remote-only directory.
 
 ## Output Contract
 
@@ -220,18 +320,19 @@ source_commit: <exact commit per skill>
 source_path: <tracked path per skill>
 source_hash: <verified sha256:lowercase-hex per skill>
 machines: <exact machine IDs, authoritative aliases, current/local proof, connectivity>
-selected_target_inventory: <machine ID, lexical/canonical target, inode/metadata, link/type, before hash>
+root_admission: <machine ID, lexical/canonical root agreement, retained device/inode/mount/type/link proof>
+selected_target_inventory: <machine ID, lexical/canonical directory and target, inode/metadata/mount/link/type, before hash>
 changed_skills: <skill, machine ID, before hash, target hash>
 missing_skills: <skill and machine ID>
 conflicting_skills: <skill, machine ID, observed hash, reason>
 target_hashes: <verified sha256:lowercase-hex per selected skill and machine ID>
 validation: <frontmatter, canonical containment, no-follow, file-type, connectivity, and hash results>
 secret_scan: <non-printing source/target result>
-rollback_receipts: <machine ID, lexical/canonical paths, pre_state, preimage hash, target hash>
+rollback_receipts: <machine ID, lexical/canonical directory/file paths, directory/target pre_state, preimage hash, target hash>
 rollback_state: <not-needed|available|restored|failed>
-exact_path_allowlist: <lexical/canonical pair for every admitted target/temp/preimage/receipt>
+exact_path_allowlist: <lexical/canonical pair for every admitted directory/target/temp/preimage/receipt>
 touched_path_ledger: <actual canonical paths and subset proof against exact_path_allowlist>
-guarded_operations: <exclusive-create, compare-and-replace/create-if-absent, returned-preimage evidence>
+guarded_operations: <exclusive-create, create-directory-if-absent, compare-and-replace/create-if-absent, atomic compare-and-remove, returned-preimage evidence>
 scope_proof: <no path outside an exact selected Codewith skill directory changed>
 blockers: <none or bounded evidence>
 ```
