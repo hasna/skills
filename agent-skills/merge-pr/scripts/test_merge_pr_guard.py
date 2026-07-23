@@ -1,0 +1,293 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+SCRIPT = Path(__file__).with_name("merge_pr_guard.py")
+FIXTURES = Path(__file__).parents[1] / "tests" / "fixtures"
+SPEC = importlib.util.spec_from_file_location("merge_pr_guard", SCRIPT)
+assert SPEC and SPEC.loader
+GUARD = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(GUARD)
+
+REPO = "hasna/tai"
+PR_NUMBER = 4
+HEAD_SHA = "2797e3264c416018c06608434c0c57340f647330"
+
+
+def artifact(identity: str) -> dict[str, object]:
+    return {
+        "repository": REPO,
+        "pr_number": PR_NUMBER,
+        "head_sha": HEAD_SHA,
+        "acceptance_scope": "skills-merge-trailer-hardening-v1",
+        "reviewer_identity": identity,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "verdict": "approved",
+        "checked_risks_summary": "Checked exact-head merge and message provenance.",
+        "blocking_findings": [],
+    }
+
+
+def preflight(mode: str = "immediate-merge", verdict: str = "mergeable") -> dict[str, object]:
+    snapshot: dict[str, object] = {
+        "mode": mode,
+        "risk_tier": {"declared": "elevated", "effective": "elevated", "source": "explicit"},
+        "acceptance_scope": "skills-merge-trailer-hardening-v1",
+        "required_reviewer_artifacts": 2,
+        "repair_cycles": {"count": 0, "cap": 2},
+        "verdict": verdict,
+        "repo": REPO,
+        "pr_number": PR_NUMBER,
+        "head_sha": HEAD_SHA,
+        "merge_state": {
+            "state": "OPEN",
+            "is_draft": False,
+            "mergeable": "MERGEABLE",
+            "merge_state_status": "CLEAN",
+            "review_decision": "APPROVED",
+        },
+        "checks": [{"name": "ci", "bucket": "pass", "state": "SUCCESS"}],
+        "reviewer_artifacts": [artifact("reviewer-a"), artifact("reviewer-b")],
+        "worker_identity": "worker",
+        "executor_identity": "executor",
+        "blocking_reasons": [],
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if verdict == "pending":
+        snapshot["merge_state"]["merge_state_status"] = "UNSTABLE"
+        snapshot["checks"] = [{"name": "ci", "bucket": "pending", "state": "PENDING"}]
+    return snapshot
+
+
+class GuardCliTests(unittest.TestCase):
+    def run_cli(self, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), *args],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def build(self, directory: Path, *args: str, snapshot: dict[str, object] | None = None):
+        snapshot_path = directory / "preflight.json"
+        snapshot_path.write_text(json.dumps(snapshot or preflight()), encoding="utf-8")
+        result = self.run_cli("build", "--preflight", str(snapshot_path), *args)
+        return result, json.loads(result.stdout) if result.stdout else None
+
+    def test_multi_commit_squash_builds_explicit_message_and_exact_head_cas(self) -> None:
+        raw = json.loads((FIXTURES / "multi-commit-synthesized.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(raw["source_commits"]), 2)
+        self.assertTrue(all(not GUARD.forbidden_trailer_lines(commit["message"]) for commit in raw["source_commits"]))
+        with tempfile.TemporaryDirectory() as temporary:
+            result, plan = self.build(
+                Path(temporary),
+                "--strategy",
+                "squash",
+                "--subject",
+                "ci: add provider-native validation workflow",
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        argv = plan["argv"]
+        self.assertEqual(argv[:3], ["gh", "pr", "merge"])
+        self.assertIn("--squash", argv)
+        self.assertEqual(argv[argv.index("--subject") + 1], "ci: add provider-native validation workflow")
+        self.assertEqual(argv[argv.index("--body") + 1], "")
+        self.assertEqual(argv[argv.index("--match-head-commit") + 1], HEAD_SHA)
+        self.assertTrue({"--admin", "--force", "--delete-branch"}.isdisjoint(argv))
+        self.assertNotIn("push", argv)
+
+    def test_omitted_and_explicit_empty_body_are_identical(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            omitted, omitted_plan = self.build(directory, "--strategy", "squash", "--subject", "fix: safe")
+            explicit, explicit_plan = self.build(
+                directory, "--strategy", "squash", "--subject", "fix: safe", "--body", ""
+            )
+        self.assertEqual(omitted.returncode, 0)
+        self.assertEqual(explicit.returncode, 0)
+        self.assertEqual(omitted_plan["argv"], explicit_plan["argv"])
+
+    def test_custom_body_normalizes_line_endings_deterministically(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            result, plan = self.build(
+                Path(temporary),
+                "--strategy",
+                "squash",
+                "--subject",
+                "fix: safe",
+                "--body",
+                "first\r\nsecond\rthird",
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(plan["argv"][plan["argv"].index("--body") + 1], "first\nsecond\nthird")
+
+    def test_co_authored_by_case_and_whitespace_variants_are_rejected(self) -> None:
+        variants = [
+            "Co-Authored-By: person <person@example.invalid>",
+            "co-authored-by : person <person@example.invalid>",
+            "\tCO - AUTHORED - BY\t: person <person@example.invalid>",
+            "Co Authored By: person <person@example.invalid>",
+        ]
+        for variant in variants:
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as temporary:
+                result, _ = self.build(
+                    Path(temporary),
+                    "--strategy",
+                    "squash",
+                    "--subject",
+                    "fix: safe",
+                    "--body",
+                    f"Summary\n\n{variant}",
+                )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("forbidden Co-Authored-By trailer", result.stderr)
+
+    def test_co_authored_by_subject_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            result, _ = self.build(
+                Path(temporary),
+                "--strategy",
+                "squash",
+                "--subject",
+                "CO - AUTHORED - BY : person <person@example.invalid>",
+            )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("forbidden Co-Authored-By trailer", result.stderr)
+
+    def test_auto_merge_requires_explicit_delayed_intent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            rejected, _ = self.build(
+                directory,
+                "--strategy",
+                "squash",
+                "--subject",
+                "fix: safe",
+                snapshot=preflight("auto-merge"),
+            )
+            accepted, plan = self.build(
+                directory,
+                "--strategy",
+                "squash",
+                "--subject",
+                "fix: safe",
+                "--delayed-intent",
+                snapshot=preflight("auto-merge"),
+            )
+        self.assertEqual(rejected.returncode, 2)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertIn("--auto", plan["argv"])
+
+    def test_non_mergeable_or_identity_colliding_preflight_fails_closed(self) -> None:
+        blocked = preflight()
+        blocked["verdict"] = "not_mergeable"
+        collision = preflight()
+        collision["reviewer_artifacts"][0]["reviewer_identity"] = "executor"
+        for snapshot in (blocked, collision):
+            with tempfile.TemporaryDirectory() as temporary:
+                result, _ = self.build(
+                    Path(temporary),
+                    "--strategy",
+                    "squash",
+                    "--subject",
+                    "fix: safe",
+                    snapshot=snapshot,
+                )
+            self.assertEqual(result.returncode, 2)
+
+    def test_stale_artifact_and_failed_check_fail_closed(self) -> None:
+        stale = preflight()
+        stale["reviewer_artifacts"][0]["timestamp"] = "2020-01-01T00:00:00Z"
+        failed_check = preflight()
+        failed_check["checks"] = [{"name": "ci", "bucket": "fail", "state": "FAILURE"}]
+        for snapshot in (stale, failed_check):
+            with tempfile.TemporaryDirectory() as temporary:
+                result, _ = self.build(
+                    Path(temporary),
+                    "--strategy",
+                    "squash",
+                    "--subject",
+                    "fix: safe",
+                    snapshot=snapshot,
+                )
+            self.assertEqual(result.returncode, 2)
+
+    def test_merge_queue_has_exact_head_cas_and_no_strategy_or_mutation_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            result, plan = self.build(Path(temporary), snapshot=preflight("merge-queue"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        argv = plan["argv"]
+        self.assertEqual(argv[argv.index("--match-head-commit") + 1], HEAD_SHA)
+        self.assertTrue(
+            {"--squash", "--merge", "--rebase", "--admin", "--force", "--delete-branch", "--auto"}.isdisjoint(argv)
+        )
+
+    def test_pending_merge_queue_requires_delayed_intent_without_auto_flag(self) -> None:
+        pending = preflight("merge-queue", "pending")
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            rejected, _ = self.build(directory, snapshot=pending)
+            accepted, plan = self.build(directory, "--delayed-intent", snapshot=pending)
+        self.assertEqual(rejected.returncode, 2)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertNotIn("--auto", plan["argv"])
+        self.assertIn("--match-head-commit", plan["argv"])
+
+    def test_synthesized_provider_trailer_writes_failed_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = Path(temporary) / "postverify.json"
+            result = self.run_cli(
+                "postverify",
+                "--repo",
+                REPO,
+                "--pr",
+                str(PR_NUMBER),
+                "--expected-head-sha",
+                HEAD_SHA,
+                "--fixture",
+                str(FIXTURES / "multi-commit-synthesized.json"),
+                "--receipt",
+                str(receipt),
+            )
+            durable = json.loads(receipt.read_text(encoding="utf-8"))
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(durable["outcome"], "failed")
+        self.assertIn("forbidden_co_authored_by_trailer", durable["failure_reasons"])
+        self.assertTrue(durable["forbidden_trailer_line_numbers"])
+        self.assertNotIn("message", durable)
+
+    def test_trailer_free_provider_result_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = Path(temporary) / "postverify.json"
+            result = self.run_cli(
+                "postverify",
+                "--repo",
+                REPO,
+                "--pr",
+                str(PR_NUMBER),
+                "--expected-head-sha",
+                HEAD_SHA,
+                "--fixture",
+                str(FIXTURES / "trailer-free-provider.json"),
+                "--receipt",
+                str(receipt),
+            )
+            durable = json.loads(receipt.read_text(encoding="utf-8"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(durable["outcome"], "clean")
+        self.assertEqual(durable["forbidden_trailer_line_numbers"], [])
+
+
+if __name__ == "__main__":
+    unittest.main()

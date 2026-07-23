@@ -1,0 +1,28 @@
+{
+  "pr_view": {
+    "state": "MERGED",
+    "mergedAt": "2026-07-23T15:36:23Z",
+    "mergeCommit": {
+      "oid": "03b55df060fa034ad31a67fa14d35be81297f59c"
+    },
+    "headRefOid": "2797e3264c416018c06608434c0c57340f647330",
+    "baseRefName": "main",
+    "url": "https://github.com/hasna/tai/pull/4"
+  },
+  "source_commits": [
+    {
+      "oid": "5d38cd4fe95556a06f7d9f31481ce88c8bb78e85",
+      "message": "ci: add provider-native validation workflow"
+    },
+    {
+      "oid": "2797e3264c416018c06608434c0c57340f647330",
+      "message": "ci: disable setup action cache and token"
+    }
+  ],
+  "commit": {
+    "sha": "03b55df060fa034ad31a67fa14d35be81297f59c",
+    "commit": {
+      "message": "ci: add provider-native validation workflow (#4)\n\n* ci: add provider-native validation workflow\n\n* ci: disable setup action cache and token\n\n---------\n\nCo-authored-by: fixture-user <fixture@example.invalid>"
+    }
+  }
+}

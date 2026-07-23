@@ -1,8 +1,8 @@
 # Agent Workflow Skills (fleet)
 
-Canonical git source for Hasna **agent workflow skills** — instruction-only
-skills (a single `SKILL.md`, no executable package) that tell coding agents how
-to run fleet workflows: session login, project creation, publishing, and so on.
+Canonical git source for Hasna **agent workflow skills** — instruction-first
+skills that tell coding agents how to run fleet workflows: session login,
+project creation, publishing, guarded merging, and so on.
 
 These are deliberately **not** part of the public `skills/` corpus:
 
@@ -15,12 +15,18 @@ These are deliberately **not** part of the public `skills/` corpus:
 
 ## Layout
 
-```
-agent-skills/<skill-name>/SKILL.md
+```text
+agent-skills/<skill-name>/
+├── SKILL.md
+├── scripts/       # optional deterministic helpers and focused tests
+├── references/    # optional progressively disclosed safety detail
+└── tests/         # optional raw, inert fixtures
 ```
 
-Frontmatter follows the Claude Code skill format (`name`, `description`,
-`user_invocable`). The Claude copy is the source copy.
+Frontmatter follows the agent skill format (`name`, `description`). Older
+workflow skills may retain Claude's `user_invocable` compatibility field. Keep
+only resources required to make fragile behavior deterministic. The repository
+copy is canonical.
 
 ## Distribution
 
