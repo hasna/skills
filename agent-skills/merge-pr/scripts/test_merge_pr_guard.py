@@ -113,13 +113,16 @@ class GuardCliTests(unittest.TestCase):
         )
         return result, json.loads(result.stdout) if result.stdout else None
 
-    def provenance(self, directory: Path) -> tuple[Path, Path, dict[str, object]]:
+    def provenance(
+        self, directory: Path, body: str = ""
+    ) -> tuple[Path, Path, dict[str, object]]:
         result, plan = self.build(
             directory,
             "--strategy",
             "squash",
             "--subject",
             "fix: safe",
+            f"--body={body}",
         )
         if result.returncode != 0 or not isinstance(plan, dict):
             raise AssertionError(result.stderr)
@@ -570,6 +573,25 @@ class GuardCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(durable["outcome"], "failed")
         self.assertIs(durable["authoritative"], False)
+
+    def test_literal_command_words_remain_custom_body_data(self) -> None:
+        for body in ("push", "--admin"):
+            with self.subTest(body=body), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                preflight_path, plan_path, plan = self.provenance(directory, body)
+                receipt = directory / "postverify.json"
+                result = self.run_cli(
+                    "postverify",
+                    *self.postverify_contract_args(preflight_path, plan_path, plan),
+                    "--fixture",
+                    str(FIXTURES / "trailer-free-provider.json"),
+                    "--receipt",
+                    str(receipt),
+                )
+                durable = json.loads(receipt.read_text(encoding="utf-8"))
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(durable["outcome"], "fixture_clean")
+            self.assertIs(durable["authoritative"], False)
 
 
 if __name__ == "__main__":

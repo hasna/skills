@@ -406,8 +406,7 @@ def build_command(args: argparse.Namespace) -> dict[str, Any]:
     if mode == "auto-merge":
         argv.append("--auto")
 
-    forbidden = {"--admin", "--force", "--delete-branch"}
-    if forbidden.intersection(argv) or argv[:3] != ["gh", "pr", "merge"]:
+    if argv[:3] != ["gh", "pr", "merge"]:
         raise GuardError("constructed command violates the merge safety contract")
     return {
         "kind": "merge-pr-command",
@@ -518,8 +517,6 @@ def validate_postverify_provenance(args: argparse.Namespace) -> None:
         raise GuardError("postverify command plan argv is invalid")
     if argv[:6] != ["gh", "pr", "merge", str(args.pr), "--repo", args.repo]:
         raise GuardError("postverify command plan target is invalid")
-    if {"--admin", "--force", "--delete-branch"}.intersection(argv) or "push" in argv:
-        raise GuardError("postverify command plan contains forbidden behavior")
     prefix = ["gh", "pr", "merge", str(args.pr), "--repo", args.repo]
     if args.mode == "merge-queue":
         expected_argv = prefix + ["--match-head-commit", args.expected_head_sha.lower()]
