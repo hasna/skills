@@ -19,16 +19,17 @@ These are deliberately **not** part of the public `skills/` corpus:
 agent-skills/<skill-name>/SKILL.md
 ```
 
-Frontmatter follows the Claude Code skill format (`name`, `description`,
-`user_invocable`). The Claude copy is the source copy.
+Tracked frontmatter uses the repository format (`name`, `description`,
+`user_invocable`). Distribution adapters derive target-specific copies from
+this tracked source.
 
 ## Distribution
 
-Live copies run from each tool's skill directory (`~/.claude/skills`,
-`~/.codex/skills`, `~/.config/opencode/skills`, `~/.cursor/skills`) on every
-fleet machine. After a change merges here, distribution happens via
-**skill-sync** (see `skill-sync` in the live skill set): Claude copy verbatim,
-non-Claude copies with `user_invocable` stripped, all five machines.
+Codewith is a supported distribution target. After a change merges, use the
+tracked `agent-skills/fleet-skill-normalization/SKILL.md` workflow to derive
+Codewith copies with exactly `name` and `description` frontmatter and normalize
+only explicitly scoped Codewith skill directories from the exact merged commit.
 
-Do not edit the live `~/.claude/skills` copies directly for these skills —
-change them here, merge, then sync.
+Other tool adaptation and distribution is separate unless explicitly scoped.
+Do not manually edit live copies as source: change the canonical file here,
+merge it, then run the tracked workflow for the supported target.

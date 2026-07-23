@@ -48,8 +48,9 @@ worktree_and_branch: <task-owned absolute path and one non-protected branch>
 writer_generation: <active lease/generation ID and owner>
 pr_group: <one coherent single-repository change identifier>
 dependencies: <stable IDs and current readiness>
-route: <provider and profile alias, never an email or credential>
+pinned_provider_profile_alias: <admitted provider/profile alias, never an email or credential>
 admitted_capabilities: <checkout, subprocess, network, Git metadata, push, PR>
+completion_event: <durable completion/failure event and correlation fields>
 validation_and_cleanup_owner: <required gates and responsible role>
 ```
 
@@ -62,10 +63,23 @@ Prove the route before dispatch. It must be subscription-backed and headless,
 with the task's checkout, subprocess, network, Git metadata, push, and PR
 capabilities admitted and tested sufficiently for the assignment.
 
+Pin the admitted provider/profile alias in the worker input and authoritative
+evidence for the entire writer lifecycle. Silent provider or profile
+substitution is prohibited. If the route cannot continue, stop the writer.
+Any ownership transfer must be explicit in authoritative evidence, identify
+the prior and next owners, increment or rebind the writer generation as
+appropriate, and rerun route admission before work resumes.
+
 Infinity is eligible only when that exact capability set is admitted. A direct,
 durable Codewith route is the controlled fallback when another route cannot
 prove it. Never use tmux prompt paste. Identify routes with provider and profile
 aliases only; never expose account emails, tokens, or credentials.
+
+Automated background routing is admitted only when the dispatch/runtime owner
+emits a durable completion/failure event tied to the worker ID, task ID, and
+writer generation. If that event is unavailable, classify the lane as
+`controlled/manual` and use only bounded dependency checks; never repetitive
+polling.
 
 Detect supported surfaces before invoking the owning Todos, worktree, dispatch,
 secret-scan, PR, review, or merge skill/CLI. Do not copy commands from a stale
@@ -77,15 +91,29 @@ Interactive coordinators delegate implementation and do not write product
 code. After dispatch, immediately advance every safe, ready, non-overlapping
 task. Do not idle-watch workers or repeatedly poll them.
 
-Check a worker only on a completion signal, when a dependency needs its result,
-or for a bounded intervention prompted by evidence. If all remaining work is
-genuinely dependency-blocked, yield and wait for a useful signal; do not
-duplicate active work or manufacture busywork.
+Consume the admitted durable event to check a worker. For a controlled/manual
+lane, check only when a dependency needs its result or for a bounded
+intervention prompted by evidence. If all remaining work is genuinely
+dependency-blocked, yield and wait for a useful signal; do not duplicate active
+work or manufacture busywork.
+
+## Task State
+
+`pending`, `in_progress`, `completed`, `failed`, and `cancelled` are the only
+task statuses. Dependency blocking is derived state from the recorded
+dependency graph, not a task status. `recovery-required` is a classification,
+comment, or evidence field, never a task status.
+
+Keep a dependency-blocked task in the supported status that reflects its actual
+lifecycle. A failed or cancelled worker that has unique changes records the
+accurate `failed` or `cancelled` status plus the recovery classification,
+preserves its worktree and branch, and never falsely completes the task.
 
 ## Worker Lifecycle
 
 1. Verify the input contract, route admission, repository identity, clean task
-   worktree, branch, dependency readiness, and current writer generation.
+   worktree, branch, dependency readiness, pinned provider/profile alias,
+   completion-event contract, and current writer generation.
 2. Claim only the assigned writer generation and mutate only the declared
    worktree, branch, repository, and scope.
 3. Keep owner evidence current as work changes state. Preserve stable IDs across
@@ -101,12 +129,18 @@ duplicate active work or manufacture busywork.
    blocking findings. Any head change invalidates the prior review and check
    evidence and requires exact-head re-verification.
 7. Hand the verified PR to the repository's merge operator. Only that operator
-   performs the merge under the repository's merge policy.
+   performs the merge, and the operation must fail closed atomically on the
+   reviewed expected head. Use a provider-authoritative expected-head
+   compare-and-swap, a merge queue with equivalent expected-head protection, or
+   an immediately coupled final assertion supported by the provider. Head drift
+   invalidates every review/check artifact and prevents merge until the new
+   exact head is reviewed and verified. If no such guard is available, do not
+   merge.
 
-A failed or cancelled worker that has unique changes leaves the task
-`failed`, `blocked`, or `recovery-required`. Preserve its worktree and branch,
-record the last known writer generation and reachable commits, and transfer
-ownership explicitly. Never discard unique work or mark the task complete.
+When unique changes survive a failed or cancelled worker, preserve its worktree
+and branch, record the last known writer generation and reachable commits, and
+transfer ownership only through the explicit admission flow. Never discard
+unique work or mark the task complete.
 
 ## Cleanup Gate
 
@@ -126,7 +160,10 @@ If any condition is unknown, preserve the worktree and report
 Every completion, handoff, failure, and recovery report includes:
 
 ```text
-result: <complete|handoff|failed|blocked|recovery-required>
+result: <complete|handoff|failed|cancelled>
+task_status: <pending|in_progress|completed|failed|cancelled>
+dependency_state: <ready|derived dependency evidence>
+recovery_classification: <none|recovery-required>
 root_task_id: <ID>
 runtime_root_or_plan_id: <ID|none>
 plan_node_id: <ID|none>
@@ -135,12 +172,14 @@ repo: <identity and remote>
 worktree: <absolute task-owned path>
 branch: <name>
 writer_generation: <ID, owner, active|released|superseded>
-route: <provider and profile alias; admitted capabilities>
+pinned_provider_profile_alias: <alias; admitted capabilities>
+completion_event: <durable event ID/type or controlled/manual evidence>
 validation: <commands or gates and outcomes>
 secret_scan: <staged and committed-range modes; pass|fail>
 commit_and_head: <local commit and exact remote head>
 pr: <number/URL, group, base, state>
 review: <reviewer, exact reviewed head, findings, reconciliation>
+merge_guard: <expected head and atomic provider mechanism>
 blockers: <none or evidence-backed list>
 cleanup_state: <not-ready|preserved|eligible|complete with evidence>
 ```
