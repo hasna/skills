@@ -9,6 +9,63 @@ const skillPath = join(
   "SKILL.md",
 );
 
+const invariantIds = [
+  "deterministic-binding",
+  "identifier-lifetimes",
+  "route-admission",
+  "fenced-ownership",
+  "completion-events",
+  "finite-repair",
+  "identity-separation",
+  "coordinator-state",
+  "failure-preservation",
+  "exact-head-merge",
+  "cleanup-gate",
+] as const;
+
+type InvariantId = (typeof invariantIds)[number];
+
+type InvariantRecord = {
+  polarity: "fail_closed";
+  authoritative_fields: string[];
+  allowed: Record<string, unknown>;
+  denied: Record<string, unknown>;
+  relationships: Record<string, unknown>;
+};
+
+type FieldContract = {
+  invariants: InvariantId[];
+  sections: string[];
+};
+
+type InvariantManifest = {
+  version: 1;
+  authoritative: true;
+  proof_boundary: "typed_records_and_authoritative_text_fields";
+  field_contracts: Record<string, FieldContract>;
+  invariants: Record<InvariantId, InvariantRecord>;
+};
+
+type FieldOccurrence = {
+  field: string;
+  value: string;
+  section: string;
+};
+
+type ExpectedPath = {
+  path: string;
+  value: unknown;
+};
+
+type RiskFixture = {
+  id: InvariantId;
+  field: string;
+  manifestFrom: string;
+  manifestTo: string;
+  unsafeFieldValue: string;
+  safeNearMiss: string;
+};
+
 function readSkill(): string {
   return readFileSync(skillPath, "utf8");
 }
@@ -21,7 +78,9 @@ function section(content: string, heading: string): string {
   const source = content.replace(/\r\n/g, "\n");
   const marker = `## ${heading}\n`;
   const markerIndex = source.indexOf(marker);
-  expect(markerIndex, `missing section: ${heading}`).toBeGreaterThanOrEqual(0);
+  if (markerIndex < 0) {
+    throw new Error(`missing section: ${heading}`);
+  }
   const bodyStart = markerIndex + marker.length;
   const nextHeading = source.indexOf("\n## ", bodyStart);
   return source.slice(bodyStart, nextHeading === -1 ? undefined : nextHeading);
@@ -38,1160 +97,691 @@ function expectInOrder(content: string, values: string[]): void {
   }
 }
 
-type InvariantId =
-  | "deterministic-binding"
-  | "identifier-lifetimes"
-  | "route-admission"
-  | "fenced-ownership"
-  | "completion-events"
-  | "finite-repair"
-  | "identity-separation"
-  | "coordinator-state"
-  | "failure-preservation"
-  | "exact-head-merge"
-  | "cleanup-gate";
-
-type SemanticClause = {
-  label: string;
-  concepts: string[][];
-};
-
-type StructuralExpectation = {
-  section: string;
-  fields?: string[];
-  subheadings?: string[];
-  terms?: string[];
-};
-
-type ContractRule = {
-  id: InvariantId;
-  section: string;
-  structures: StructuralExpectation[];
-  required: SemanticClause[];
-  unsafe: SemanticClause[];
-};
-
-type ParsedSection = {
-  heading: string;
-  body: string;
-  fields: string[];
-  subheadings: string[];
-  statements: string[];
-};
-
-type ParsedContract = {
-  sections: Map<string, ParsedSection>;
-  statements: string[];
-};
-
-function semanticText(value: string): string {
-  const normalized = value
-    .toLowerCase()
-    .replace(/[`*_]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return ` ${normalized} `;
-}
-
-function containsSemanticAlternative(
-  statement: string,
-  alternatives: string[],
-): boolean {
-  const normalizedStatement = semanticText(statement);
-  return alternatives.some((alternative) =>
-    normalizedStatement.includes(semanticText(alternative)),
-  );
-}
-
-function matchesSemanticClause(
-  statement: string,
-  clause: SemanticClause,
-): boolean {
-  return clause.concepts.every((alternatives) =>
-    containsSemanticAlternative(statement, alternatives),
-  );
-}
-
-function parseStatements(body: string): string[] {
-  const blocks: string[] = [];
-  let current: string[] = [];
-  let inFence = false;
-
-  const flush = () => {
-    if (current.length > 0) {
-      blocks.push(current.join(" "));
-      current = [];
-    }
-  };
-
-  for (const rawLine of body.replace(/\r\n/g, "\n").split("\n")) {
-    const line = rawLine.trim();
-    if (line.startsWith("```")) {
-      flush();
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence || line.startsWith("### ")) {
-      continue;
-    }
-    if (line === "") {
-      flush();
-      continue;
-    }
-    if (/^(?:[-*]|\d+\.)\s+/.test(line)) {
-      flush();
-      current.push(line.replace(/^(?:[-*]|\d+\.)\s+/, ""));
-      continue;
-    }
-    current.push(line);
+function parseManifest(content: string): InvariantManifest {
+  const matches = [
+    ...content.matchAll(
+      /```yaml task-to-pr-invariants\r?\n([\s\S]*?)\r?\n```/g,
+    ),
+  ];
+  if (matches.length !== 1) {
+    throw new Error(`expected one invariant manifest, found ${matches.length}`);
   }
-  flush();
-
-  return blocks.flatMap((block) =>
-    block
-      .split(/(?<=[.!?])\s+(?=[A-Z`])/)
-      .map((statement) => statement.trim())
-      .filter(Boolean),
-  );
+  return Bun.YAML.parse(matches[0]?.[1] ?? "") as InvariantManifest;
 }
 
-function parseContract(content: string): ParsedContract {
-  const source = content.replace(/\r\n/g, "\n");
-  const matches = [...source.matchAll(/^## ([^\n]+)\n/gm)];
-  const sections = new Map<string, ParsedSection>();
+function sectionAt(content: string, offset: number): string {
+  const prefix = content.slice(0, offset);
+  const headings = [...prefix.matchAll(/^## ([^\n]+)$/gm)];
+  return headings.at(-1)?.[1]?.trim() ?? "<before-first-section>";
+}
 
-  for (const [index, match] of matches.entries()) {
-    const heading = match[1]?.trim() ?? "";
-    const bodyStart = (match.index ?? 0) + match[0].length;
-    const bodyEnd = matches[index + 1]?.index ?? source.length;
-    const body = source.slice(bodyStart, bodyEnd);
-    sections.set(heading, {
-      heading,
-      body,
-      fields: [...body.matchAll(/^([a-z][a-z0-9_]*):/gm)].map(
-        (field) => field[1] ?? "",
-      ),
-      subheadings: [...body.matchAll(/^### ([^\n]+)$/gm)].map(
-        (subheading) => subheading[1]?.trim() ?? "",
-      ),
-      statements: parseStatements(body),
-    });
+function parseTextFields(content: string): FieldOccurrence[] {
+  const occurrences: FieldOccurrence[] = [];
+  for (const match of content.matchAll(/```text\r?\n([\s\S]*?)\r?\n```/g)) {
+    const body = match[1] ?? "";
+    const containingSection = sectionAt(content, match.index ?? 0);
+    for (const line of body.replace(/\r\n/g, "\n").split("\n")) {
+      const field = line.match(/^([a-z][a-z0-9_]*):\s*(.+)$/);
+      if (field) {
+        occurrences.push({
+          field: field[1] ?? "",
+          value: field[2]?.trim() ?? "",
+          section: containingSection,
+        });
+      }
+    }
   }
-
-  return {
-    sections,
-    statements: [...sections.values()].flatMap((entry) => entry.statements),
-  };
+  return occurrences;
 }
 
-const contractRules: ContractRule[] = [
-  {
-    id: "deterministic-binding",
-    section: "Deterministic PR-Group Binding",
-    structures: [
-      {
-        section: "Dispatch Input Contract",
-        fields: [
-          "root_task_id",
-          "task_id",
-          "canonical_repo_identity",
-          "base_ref",
-          "frozen_scope_acceptance_hash",
-          "pr_group_binding",
-        ],
-      },
-      {
-        section: "Evidence and Output Contract",
-        fields: ["pr_group_binding", "pr_group_binding_inputs", "pr"],
-      },
-    ],
-    required: [
-      {
-        label: "ordered tuple is canonicalized and hashed",
-        concepts: [
-          ["canonicalize"],
-          ["hash"],
-          ["ordered tuple"],
-          ["root_task_id"],
-          ["task_id"],
-          ["canonical_repo_identity"],
-          ["base_ref"],
-          ["frozen_scope_acceptance_hash"],
-        ],
-      },
-      {
-        label: "second active group is rejected",
-        concepts: [
-          ["reject"],
-          ["second active"],
-          ["pr group"],
-          ["binding"],
-        ],
-      },
-      {
-        label: "retry and handoff retain the binding",
-        concepts: [
-          ["retries"],
-          ["handoffs"],
-          ["keep the same binding"],
-        ],
-      },
-    ],
-    unsafe: [
-      {
-        label: "retry creates a replacement active group",
-        concepts: [
-          ["retry", "repair"],
-          ["second", "replacement", "additional"],
-          ["active"],
-          ["pr group"],
-          ["create", "open", "start", "allow", "permit"],
-        ],
-      },
+function valueAtPath(record: InvariantRecord, path: string): unknown {
+  return path
+    .split(".")
+    .reduce<unknown>(
+      (value, key) =>
+        value && typeof value === "object"
+          ? (value as Record<string, unknown>)[key]
+          : undefined,
+      record,
+    );
+}
+
+function equalValue(actual: unknown, expected: unknown): boolean {
+  return JSON.stringify(actual) === JSON.stringify(expected);
+}
+
+function policyReference(contract: FieldContract): string {
+  return `<policy=${contract.invariants.join(
+    "+",
+  )}; authoritative=task-to-pr-invariants-v1>`;
+}
+
+const expectedFieldContracts: Record<string, FieldContract> = {
+  pr_group_binding: {
+    invariants: ["deterministic-binding"],
+    sections: ["Dispatch Input Contract", "Evidence and Output Contract"],
+  },
+  writer_generation: {
+    invariants: ["identifier-lifetimes", "fenced-ownership"],
+    sections: ["Dispatch Input Contract"],
+  },
+  fencing_token: {
+    invariants: ["fenced-ownership", "identifier-lifetimes"],
+    sections: ["Dispatch Input Contract"],
+  },
+  resolved_provider_profile_route: {
+    invariants: ["route-admission"],
+    sections: ["Dispatch Input Contract"],
+  },
+  completion_event: {
+    invariants: ["completion-events"],
+    sections: ["Dispatch Input Contract"],
+  },
+  repair_cycle: {
+    invariants: ["finite-repair"],
+    sections: ["Dispatch Input Contract", "Evidence and Output Contract"],
+  },
+  worker_identity_and_run_id: {
+    invariants: ["identity-separation"],
+    sections: [
+      "Dispatch Input Contract",
+      "Identity Separation",
+      "Evidence and Output Contract",
     ],
   },
-  {
-    id: "identifier-lifetimes",
-    section: "Identifier Lifetimes",
-    structures: [
-      {
-        section: "Identifier Lifetimes",
-        subheadings: [
-          "Stable lineage IDs",
-          "Fresh per-handoff and per-attempt IDs",
-        ],
-        terms: [
-          "root_task_id",
-          "runtime_root_or_plan_id",
-          "plan_node_id",
-          "task_id",
-          "pr_group_binding",
-          "writer_generation",
-          "fencing_token",
-          "attempt_nonce",
-        ],
-      },
-      {
-        section: "Evidence and Output Contract",
-        fields: [
-          "root_task_id",
-          "runtime_root_or_plan_id",
-          "plan_node_id",
-          "task_id",
-          "writer_generation_and_fencing_token",
-          "completion_event_and_attempt_nonce",
-        ],
-      },
-    ],
-    required: [
-      {
-        label: "handoff revokes old ownership before fresh fencing",
-        concepts: [
-          ["handoff"],
-          ["revoked"],
-          ["fresh writer generation"],
-          ["fresh fencing token"],
-        ],
-      },
-      {
-        label: "every retry mints a fresh attempt nonce",
-        concepts: [
-          ["every retry", "every dispatch attempt"],
-          ["fresh attempt nonce"],
-          ["current worker"],
-          ["generation"],
-        ],
-      },
-    ],
-    unsafe: [
-      {
-        label: "attempt nonce is reusable across attempts",
-        concepts: [
-          ["attempt nonce"],
-          ["reuse", "reusable", "recycle", "recycled"],
-          ["retry", "attempt"],
-        ],
-      },
+  reviewer_identities_and_run_ids: {
+    invariants: ["identity-separation"],
+    sections: [
+      "Dispatch Input Contract",
+      "Identity Separation",
+      "Evidence and Output Contract",
     ],
   },
-  {
-    id: "route-admission",
-    section: "Route Admission",
-    structures: [
-      {
-        section: "Dispatch Input Contract",
-        fields: [
-          "pinned_provider_profile_alias",
-          "resolved_provider_profile_route",
-          "admitted_capabilities",
-        ],
-      },
-      {
-        section: "Evidence and Output Contract",
-        fields: ["provider_profile_route"],
-      },
-    ],
-    required: [
-      {
-        label: "provider profile alias is pinned",
-        concepts: [
-          ["pin"],
-          ["provider profile alias"],
-          ["worker input"],
-        ],
-      },
-      {
-        label: "resolved route and receipt are immutable",
-        concepts: [
-          ["immutable resolved route identity"],
-          ["admission receipt"],
-          ["writer generation"],
-          ["fencing token"],
-        ],
-      },
-      {
-        label: "silent route substitution is prohibited",
-        concepts: [
-          ["provider or profile substitution"],
-          ["prohibited"],
-        ],
-      },
-    ],
-    unsafe: [
-      {
-        label: "route changes bypass the immutable receipt",
-        concepts: [
-          ["provider profile route", "provider or profile route"],
-          ["change", "substitute", "remap"],
-          ["without", "bypass", "skip"],
-          ["admission receipt", "original receipt"],
-        ],
-      },
+  merge_operator_identity_and_run_id: {
+    invariants: ["identity-separation"],
+    sections: [
+      "Dispatch Input Contract",
+      "Identity Separation",
+      "Evidence and Output Contract",
     ],
   },
-  {
-    id: "fenced-ownership",
-    section: "Fenced Checkpoints",
-    structures: [
-      {
-        section: "Dispatch Input Contract",
-        fields: ["writer_generation", "fencing_token"],
-      },
-      {
-        section: "Evidence and Output Contract",
-        fields: ["writer_generation_and_fencing_token"],
-      },
-    ],
-    required: [
-      {
-        label: "all five checkpoints are mandatory",
-        concepts: [
-          ["at claim"],
-          ["before each mutation"],
-          ["before commit"],
-          ["before push"],
-          ["at handoff"],
-          ["revalidate"],
-        ],
-      },
-      {
-        label: "mutations use fail-closed fenced writes",
-        concepts: [
-          ["every mutation"],
-          ["token fenced compare and write"],
-          ["fail closed"],
-        ],
-      },
-      {
-        label: "inactive writer cannot act",
-        concepts: [
-          ["revoked"],
-          ["superseded"],
-          ["writer"],
-          ["cannot mutate"],
-          ["push"],
-          ["hand off"],
-        ],
-      },
-    ],
-    unsafe: [
-      {
-        label: "inactive writer continues writing",
-        concepts: [
-          ["writer", "writers"],
-          ["revoked", "retiring", "superseded"],
-          ["mutate", "push", "publish", "write", "commit"],
-          ["continue", "remain authorized", "allowed", "permitted", "may", "can"],
-        ],
-      },
-    ],
+  dependencies: {
+    invariants: ["coordinator-state"],
+    sections: ["Dispatch Input Contract"],
   },
-  {
-    id: "completion-events",
-    section: "Completion Events",
-    structures: [
-      {
-        section: "Dispatch Input Contract",
-        fields: ["completion_event"],
-      },
-      {
-        section: "Evidence and Output Contract",
-        fields: ["completion_event_and_attempt_nonce"],
-      },
-    ],
-    required: [
-      {
-        label: "event binds the exact attempt identity",
-        concepts: [
-          ["durable completion or failure event"],
-          ["worker identity"],
-          ["task id"],
-          ["writer generation"],
-          ["fresh attempt_nonce"],
-        ],
-      },
-      {
-        label: "event is validated against terminal state",
-        concepts: [
-          ["before consuming"],
-          ["authoritative current terminal state"],
-          ["attempt nonce"],
-          ["terminal outcome"],
-        ],
-      },
-      {
-        label: "event is consumed once with a replay marker",
-        concepts: [
-          ["consume it once"],
-          ["atomic replay marker"],
-        ],
-      },
-      {
-        label: "stale and replayed events are rejected",
-        concepts: [
-          ["reject"],
-          ["replayed"],
-        ],
-      },
-    ],
-    unsafe: [
-      {
-        label: "completion accepted without terminal validation",
-        concepts: [
-          ["completion event", "completion message", "completion signal"],
-          ["accept", "consume", "trust"],
-          ["before", "without", "skip"],
-          ["authoritative terminal validation", "authoritative terminal state"],
-        ],
-      },
-      {
-        label: "completion replay is accepted",
-        concepts: [
-          ["completion event", "completion message"],
-          ["consume", "process", "processed", "accept"],
-          ["again", "replay", "repeatedly"],
-          ["allow", "permitted", "may", "can"],
-        ],
-      },
-    ],
+  worktree_and_branch: {
+    invariants: ["failure-preservation", "cleanup-gate"],
+    sections: ["Dispatch Input Contract"],
   },
-  {
-    id: "finite-repair",
-    section: "Finite Repair Lifecycle",
-    structures: [
-      {
-        section: "Dispatch Input Contract",
-        fields: ["repair_cycle"],
-      },
-      {
-        section: "Evidence and Output Contract",
-        fields: ["repair_cycle"],
-      },
-    ],
-    required: [
-      {
-        label: "repair is capped at two cumulative cycles",
-        concepts: [
-          ["at most two"],
-          ["cumulative repair"],
-          ["one deterministic binding"],
-        ],
-      },
-      {
-        label: "head and force updates preserve repair count",
-        concepts: [
-          ["head changes"],
-          ["never reset"],
-          ["cumulative repair count"],
-        ],
-      },
-      {
-        label: "cycle two is terminal",
-        concepts: [
-          ["cycle 2 is terminal"],
-          ["no third repair"],
-          ["permitted"],
-        ],
-      },
-    ],
-    unsafe: [
-      {
-        label: "head update restarts repair history",
-        concepts: [
-          ["head update", "force update", "force push"],
-          ["repair history", "repair count", "repair cycle"],
-          [
-            "restart",
-            "restarts",
-            "resets",
-            "begin again",
-            "start over",
-            "back to zero",
-            "at zero",
-          ],
-        ],
-      },
-    ],
+  task_status: {
+    invariants: ["coordinator-state", "failure-preservation"],
+    sections: ["Evidence and Output Contract"],
   },
-  {
-    id: "identity-separation",
-    section: "Identity Separation",
-    structures: [
-      {
-        section: "Dispatch Input Contract",
-        fields: [
-          "worker_identity_and_run_id",
-          "reviewer_identities_and_run_ids",
-          "merge_operator_identity_and_run_id",
-        ],
-      },
-      {
-        section: "Evidence and Output Contract",
-        fields: [
-          "worker_identity_and_run_id",
-          "reviewer_identities_and_run_ids",
-          "merge_operator_identity_and_run_id",
-        ],
-      },
-    ],
-    required: [
-      {
-        label: "execution identities and runs are pairwise distinct",
-        concepts: [
-          ["worker"],
-          ["every reviewer"],
-          ["merge operator"],
-          ["pairwise distinct"],
-          ["identity"],
-          ["run id"],
-        ],
-      },
-      {
-        label: "only merge operator may merge",
-        concepts: [
-          ["only the recorded merge operator"],
-          ["invoke merge"],
-        ],
-      },
-    ],
-    unsafe: [
-      {
-        label: "review role is allowed to merge",
-        concepts: [
-          ["reviewer", "replacement reviewer"],
-          ["merge", "land"],
-          ["allowed", "permitted", "authorized", "may", "can"],
-        ],
-      },
-      {
-        label: "execution identities overlap",
-        concepts: [
-          ["worker"],
-          ["reviewer", "merge operator"],
-          ["share", "same", "overlap"],
-          ["identity", "run id"],
-        ],
-      },
-    ],
+  writer_generation_and_fencing_token: {
+    invariants: ["identifier-lifetimes", "fenced-ownership"],
+    sections: ["Evidence and Output Contract"],
   },
-  {
-    id: "coordinator-state",
-    section: "Coordinator Loop and Task State",
-    structures: [
-      {
-        section: "Evidence and Output Contract",
-        fields: ["result", "task_status", "blockers"],
-      },
-    ],
-    required: [
-      {
-        label: "coordinator advances ready work instead of idling",
-        concepts: [
-          ["after dispatch"],
-          ["immediately advance"],
-          ["safe"],
-          ["ready"],
-          ["non overlapping task"],
-        ],
-      },
-      {
-        label: "task statuses are closed and supported",
-        concepts: [
-          ["pending"],
-          ["in_progress"],
-          ["completed"],
-          ["failed"],
-          ["cancelled"],
-          ["only task statuses"],
-        ],
-      },
-      {
-        label: "failed worker never reports completion",
-        concepts: [
-          ["failed or cancelled worker"],
-          ["terminal status"],
-          ["never reports false completion"],
-        ],
-      },
-    ],
-    unsafe: [
-      {
-        label: "coordinator idles while worker runs",
-        concepts: [
-          ["coordinator"],
-          ["idle", "wait"],
-          ["worker", "implementation"],
-          ["runs", "active", "in progress"],
-          ["may", "can", "allowed", "permitted"],
-        ],
-      },
-    ],
+  provider_profile_route: {
+    invariants: ["route-admission"],
+    sections: ["Evidence and Output Contract"],
   },
-  {
-    id: "failure-preservation",
-    section: "Failure Preservation",
-    structures: [
-      {
-        section: "Evidence and Output Contract",
-        fields: ["result", "task_status", "cleanup_state", "blockers"],
-      },
-    ],
-    required: [
-      {
-        label: "unique failed worktree and branch are preserved",
-        concepts: [
-          ["unique changes"],
-          ["failed"],
-          ["preserve the worktree and branch"],
-        ],
-      },
-      {
-        label: "partial evidence cannot complete owning task",
-        concepts: [
-          ["never discard unique work"],
-          ["stale writer"],
-          ["mark the owning task complete"],
-          ["partial evidence"],
-        ],
-      },
-    ],
-    unsafe: [
-      {
-        label: "success overwrites failed task outcome",
-        concepts: [
-          ["success", "successful worker exit"],
-          ["failed task", "cancelled task", "failed or cancelled task"],
-          ["completed", "complete"],
-          ["overwrite", "change", "replace", "mark"],
-        ],
-      },
-      {
-        label: "unique failed work is discarded",
-        concepts: [
-          ["failed", "cancelled"],
-          ["unique work", "unique changes"],
-          ["discard", "discarded", "delete", "remove"],
-          ["allow", "permitted", "may", "can"],
-        ],
-      },
-    ],
+  completion_event_and_attempt_nonce: {
+    invariants: ["completion-events", "identifier-lifetimes"],
+    sections: ["Evidence and Output Contract"],
   },
-  {
-    id: "exact-head-merge",
-    section: "Review and Merge",
-    structures: [
-      {
-        section: "Evidence and Output Contract",
-        fields: [
-          "reviewer_identities_and_run_ids",
-          "merge_operator_identity_and_run_id",
-          "commit_and_exact_heads",
-          "merge_guard",
-        ],
-      },
-    ],
-    required: [
-      {
-        label: "review and CI validate exact head",
-        concepts: [
-          ["reviewers and ci"],
-          ["validate"],
-          ["exact remote pr head"],
-        ],
-      },
-      {
-        label: "head change invalidates exact-head evidence",
-        concepts: [
-          ["any head change"],
-          ["invalidates"],
-          ["review"],
-          ["ci artifact"],
-        ],
-      },
-      {
-        label: "merge atomically compares provider head",
-        concepts: [
-          ["merge must atomically compare"],
-          ["provider authoritative current head"],
-          ["recorded reviewed head"],
-        ],
-      },
-      {
-        label: "missing expected-head guard prevents merge",
-        concepts: [
-          ["missing expected head guard"],
-          ["prevents merge"],
-        ],
-      },
-    ],
-    unsafe: [
-      {
-        label: "expected-head protection is weakened",
-        concepts: [
-          ["expected head guard", "expected head comparison"],
-          ["optional", "advisory", "best effort"],
-        ],
-      },
-    ],
+  merge_guard: {
+    invariants: ["exact-head-merge"],
+    sections: ["Evidence and Output Contract"],
   },
-  {
-    id: "cleanup-gate",
-    section: "Cleanup Gate",
-    structures: [
-      {
-        section: "Evidence and Output Contract",
-        fields: ["cleanup_state", "blockers"],
-      },
-    ],
-    required: [
-      {
-        label: "cleanup requires inactive ownership",
-        concepts: [
-          ["no active owner"],
-          ["writer"],
-          ["lease"],
-          ["worker process"],
-        ],
-      },
-      {
-        label: "cleanup requires clean or preserved worktree",
-        concepts: [
-          ["worktree is clean"],
-          ["unique remaining state"],
-          ["preserved"],
-        ],
-      },
-      {
-        label: "cleanup requires durable reachable commits",
-        concepts: [
-          ["required commit"],
-          ["reachable"],
-          ["durable remote ref"],
-        ],
-      },
-      {
-        label: "cleanup requires authoritative lifecycle evidence",
-        concepts: [
-          ["pr"],
-          ["exact head"],
-          ["merge outcome"],
-          ["recorded"],
-          ["stable lineage ids"],
-        ],
-      },
-      {
-        label: "cleanup requires dependency readiness",
-        concepts: [
-          ["dependents consumed"],
-          ["no longer depend"],
-          ["worktree"],
-        ],
-      },
-      {
-        label: "unknown cleanup evidence blocks deletion",
-        concepts: [
-          ["condition is unknown"],
-          ["preserve the worktree"],
-          ["cleanup_state blocked"],
-        ],
-      },
-    ],
-    unsafe: [
-      {
-        label: "cleanup precedes authoritative readiness",
-        concepts: [
-          ["cleanup", "delete the worktree", "remove the worktree"],
-          ["before", "without"],
-          [
-            "authoritative merge",
-            "merge outcome",
-            "evidence readiness",
-            "dependency readiness",
-            "dependents are ready",
-          ],
-        ],
-      },
-    ],
+  cleanup_state: {
+    invariants: ["cleanup-gate"],
+    sections: ["Evidence and Output Contract"],
   },
-];
+};
+
+const invariantExpectations: Record<InvariantId, ExpectedPath[]> = {
+  "deterministic-binding": [
+    { path: "authoritative_fields", value: ["pr_group_binding"] },
+    { path: "allowed.derivation", value: "canonical_ordered_tuple" },
+    { path: "allowed.active_pr_groups_max", value: 1 },
+    { path: "allowed.retry_binding", value: "preserve" },
+    { path: "denied.regrouping", value: true },
+    { path: "denied.second_active_group", value: true },
+    {
+      path: "relationships.binding_inputs",
+      value: [
+        "root_task_id",
+        "task_id",
+        "canonical_repo_identity",
+        "base_ref",
+        "frozen_scope_acceptance_hash",
+      ],
+    },
+  ],
+  "identifier-lifetimes": [
+    {
+      path: "authoritative_fields",
+      value: [
+        "writer_generation",
+        "fencing_token",
+        "writer_generation_and_fencing_token",
+        "completion_event_and_attempt_nonce",
+      ],
+    },
+    {
+      path: "allowed.stable",
+      value: [
+        "root_task_id",
+        "runtime_root_or_plan_id",
+        "plan_node_id",
+        "task_id",
+        "pr_group_binding",
+      ],
+    },
+    {
+      path: "allowed.fresh_per_handoff",
+      value: ["writer_generation", "fencing_token"],
+    },
+    { path: "allowed.fresh_per_attempt", value: ["attempt_nonce"] },
+    { path: "denied.reuse_generation_or_token", value: true },
+    { path: "denied.reuse_attempt_nonce", value: true },
+    {
+      path: "relationships.handoff_requires",
+      value: ["prior_worker_stopped", "lease_revoked", "token_revoked"],
+    },
+  ],
+  "route-admission": [
+    {
+      path: "authoritative_fields",
+      value: ["resolved_provider_profile_route", "provider_profile_route"],
+    },
+    { path: "allowed.route_identity", value: "immutable_receipt_bound" },
+    { path: "allowed.reresolution", value: "same_identity_and_receipt" },
+    { path: "denied.silent_substitution", value: true },
+    { path: "denied.receipt_bypass", value: true },
+    {
+      path: "relationships.receipt_binds",
+      value: [
+        "task_id",
+        "pr_group_binding",
+        "writer_generation",
+        "fencing_token",
+      ],
+    },
+  ],
+  "fenced-ownership": [
+    {
+      path: "authoritative_fields",
+      value: [
+        "writer_generation",
+        "fencing_token",
+        "writer_generation_and_fencing_token",
+      ],
+    },
+    {
+      path: "allowed.checkpoints",
+      value: [
+        "claim",
+        "before_each_mutation",
+        "before_commit",
+        "before_push",
+        "handoff",
+      ],
+    },
+    {
+      path: "allowed.mutation_primitive",
+      value: "token_fenced_compare_and_write",
+    },
+    { path: "denied.revoked_writer_continues", value: true },
+    { path: "denied.superseded_writer_continues", value: true },
+    {
+      path: "relationships.revalidate",
+      value: [
+        "owner",
+        "writer_generation",
+        "fencing_token",
+        "route_receipt",
+      ],
+    },
+  ],
+  "completion-events": [
+    {
+      path: "authoritative_fields",
+      value: ["completion_event", "completion_event_and_attempt_nonce"],
+    },
+    { path: "allowed.terminal_validation", value: "authoritative" },
+    { path: "allowed.consume_count", value: 1 },
+    { path: "allowed.nonce_per_attempt", value: "fresh" },
+    { path: "denied.replay", value: true },
+    { path: "denied.duplicate_consumption", value: true },
+    {
+      path: "relationships.event_matches",
+      value: [
+        "worker_identity",
+        "run_id",
+        "task_id",
+        "writer_generation",
+        "attempt_nonce",
+        "terminal_outcome",
+      ],
+    },
+  ],
+  "finite-repair": [
+    { path: "authoritative_fields", value: ["repair_cycle"] },
+    { path: "allowed.max_cumulative_cycles", value: 2 },
+    { path: "allowed.head_change_resets_count", value: false },
+    {
+      path: "allowed.residual_safe_landing",
+      value: "requires_frozen_acceptance_pass",
+    },
+    { path: "denied.third_cycle", value: true },
+    { path: "denied.count_decrement", value: true },
+    {
+      path: "relationships.exhaustion_actions",
+      value: ["simplify", "revert", "split", "close", "defer"],
+    },
+  ],
+  "identity-separation": [
+    {
+      path: "authoritative_fields",
+      value: [
+        "worker_identity_and_run_id",
+        "reviewer_identities_and_run_ids",
+        "merge_operator_identity_and_run_id",
+      ],
+    },
+    { path: "allowed.pairwise_distinct_identities", value: true },
+    { path: "allowed.pairwise_distinct_run_ids", value: true },
+    { path: "allowed.merge_authority", value: "merge_operator_only" },
+    { path: "denied.role_overlap", value: true },
+    { path: "denied.reviewer_or_worker_merges", value: true },
+    {
+      path: "relationships.roles",
+      value: ["worker", "every_reviewer", "merge_operator"],
+    },
+  ],
+  "coordinator-state": [
+    {
+      path: "authoritative_fields",
+      value: ["dependencies", "task_status"],
+    },
+    { path: "allowed.ready_work", value: "advance_nonoverlapping" },
+    { path: "allowed.blocked_work", value: "yield_for_durable_signal" },
+    { path: "denied.idle_with_ready_work", value: true },
+    { path: "denied.repetitive_polling", value: true },
+    {
+      path: "relationships.statuses",
+      value: ["pending", "in_progress", "completed", "failed", "cancelled"],
+    },
+  ],
+  "failure-preservation": [
+    {
+      path: "authoritative_fields",
+      value: ["worktree_and_branch", "task_status"],
+    },
+    { path: "allowed.unique_work", value: "preserve_reachable" },
+    { path: "allowed.failure_state", value: "record_terminal_and_recovery" },
+    { path: "denied.worker_exit_implies_completion", value: true },
+    { path: "denied.discard_unique_work", value: true },
+    {
+      path: "relationships.preserve",
+      value: ["worktree", "branch", "commits", "owner_and_token_evidence"],
+    },
+  ],
+  "exact-head-merge": [
+    { path: "authoritative_fields", value: ["merge_guard"] },
+    { path: "allowed.review_target", value: "exact_remote_pr_head" },
+    {
+      path: "allowed.merge_guard",
+      value: "provider_atomic_expected_head",
+    },
+    { path: "allowed.head_change_invalidates_artifacts", value: true },
+    { path: "denied.advisory_only_guard", value: true },
+    { path: "denied.head_drift_merge", value: true },
+    {
+      path: "relationships.required_artifacts",
+      value: ["reviews", "approvals", "ci"],
+    },
+  ],
+  "cleanup-gate": [
+    {
+      path: "authoritative_fields",
+      value: ["worktree_and_branch", "cleanup_state"],
+    },
+    { path: "allowed.unknown_condition", value: "preserve_and_block" },
+    { path: "allowed.unique_state", value: "preserve" },
+    { path: "denied.early_cleanup", value: true },
+    { path: "denied.uncertain_state_deletion", value: true },
+    {
+      path: "relationships.requires",
+      value: [
+        "no_active_writer",
+        "clean_or_preserved_state",
+        "durable_remote_reachability",
+        "recorded_outcome",
+        "dependencies_consumed",
+      ],
+    },
+  ],
+};
 
 function validateContract(content: string): string[] {
-  const parsed = parseContract(content);
   const violations: string[] = [];
+  let manifest: InvariantManifest;
 
-  for (const rule of contractRules) {
-    for (const structure of rule.structures) {
-      const parsedSection = parsed.sections.get(structure.section);
-      if (!parsedSection) {
-        violations.push(`${rule.id}:missing-section:${structure.section}`);
-        continue;
-      }
-      for (const field of structure.fields ?? []) {
-        if (!parsedSection.fields.includes(field)) {
-          violations.push(`${rule.id}:missing-field:${field}`);
-        }
-      }
-      for (const subheading of structure.subheadings ?? []) {
-        if (!parsedSection.subheadings.includes(subheading)) {
-          violations.push(`${rule.id}:missing-subheading:${subheading}`);
-        }
-      }
-      for (const term of structure.terms ?? []) {
-        if (!semanticText(parsedSection.body).includes(semanticText(term))) {
-          violations.push(`${rule.id}:missing-term:${term}`);
-        }
-      }
-    }
+  try {
+    manifest = parseManifest(content);
+  } catch (error) {
+    return [`manifest:parse:${String(error)}`];
+  }
 
-    const semanticSection = parsed.sections.get(rule.section);
-    if (!semanticSection) {
-      violations.push(`${rule.id}:missing-section:${rule.section}`);
+  if (manifest.version !== 1) {
+    violations.push("manifest:version");
+  }
+  if (manifest.authoritative !== true) {
+    violations.push("manifest:authority");
+  }
+  if (manifest.proof_boundary !== "typed_records_and_authoritative_text_fields") {
+    violations.push("manifest:proof-boundary");
+  }
+
+  const actualIds = Object.keys(manifest.invariants).sort();
+  if (!equalValue(actualIds, [...invariantIds].sort())) {
+    violations.push("manifest:invariant-set");
+  }
+
+  for (const id of invariantIds) {
+    const record = manifest.invariants[id];
+    if (!record) {
+      violations.push(`${id}:manifest:missing`);
       continue;
     }
-    for (const requirement of rule.required) {
-      if (
-        !semanticSection.statements.some((statement) =>
-          matchesSemanticClause(statement, requirement),
-        )
-      ) {
-        violations.push(`${rule.id}:missing-required:${requirement.label}`);
-      }
+    if (record.polarity !== "fail_closed") {
+      violations.push(`${id}:manifest:polarity`);
     }
-    for (const unsafe of rule.unsafe) {
-      if (
-        parsed.statements.some((statement) =>
-          matchesSemanticClause(statement, unsafe),
-        )
-      ) {
-        violations.push(`${rule.id}:unsafe:${unsafe.label}`);
+    if (
+      !Array.isArray(record.authoritative_fields) ||
+      record.authoritative_fields.length === 0
+    ) {
+      violations.push(`${id}:manifest:authoritative-fields`);
+    }
+    for (const expected of invariantExpectations[id]) {
+      if (!equalValue(valueAtPath(record, expected.path), expected.value)) {
+        violations.push(`${id}:manifest:${expected.path}`);
       }
     }
   }
 
-  return [...new Set(violations)];
+  if (
+    !equalValue(
+      Object.keys(manifest.field_contracts).sort(),
+      Object.keys(expectedFieldContracts).sort(),
+    )
+  ) {
+    violations.push("manifest:field-contract-set");
+  }
+
+  const occurrences = parseTextFields(content);
+  for (const [field, contract] of Object.entries(expectedFieldContracts)) {
+    const prefixes =
+      contract.invariants.length > 0 ? contract.invariants : ["manifest"];
+    const addViolation = (suffix: string): void => {
+      for (const prefix of prefixes) {
+        violations.push(`${prefix}:field:${field}:${suffix}`);
+      }
+    };
+    const recordedContract = manifest.field_contracts[field];
+    if (!equalValue(recordedContract, contract)) {
+      addViolation("manifest-contract");
+    }
+    if (
+      !Array.isArray(contract.invariants) ||
+      contract.invariants.length === 0 ||
+      contract.invariants.some((id) => !invariantIds.includes(id))
+    ) {
+      addViolation("invariants");
+      continue;
+    }
+    if (!Array.isArray(contract.sections) || contract.sections.length === 0) {
+      addViolation("sections");
+      continue;
+    }
+    const fieldOccurrences = occurrences.filter((entry) => entry.field === field);
+    const expectedValue = policyReference(contract);
+
+    for (const expectedSection of contract.sections) {
+      const inSection = fieldOccurrences.filter(
+        (entry) => entry.section === expectedSection,
+      );
+      if (inSection.length !== 1) {
+        addViolation(`${expectedSection}:count`);
+      }
+    }
+    for (const occurrence of fieldOccurrences) {
+      if (!contract.sections.includes(occurrence.section)) {
+        addViolation(`${occurrence.section}:unexpected`);
+      }
+      if (occurrence.value !== expectedValue) {
+        addViolation(`${occurrence.section}:value`);
+      }
+    }
+  }
+
+  for (const id of invariantIds) {
+    const record = manifest.invariants[id];
+    for (const field of record?.authoritative_fields ?? []) {
+      const contract = manifest.field_contracts[field];
+      if (!contract || !contract.invariants.includes(id)) {
+        violations.push(`${id}:manifest:unbound-field:${field}`);
+      }
+    }
+  }
+
+  return violations;
+}
+
+function replaceOnce(content: string, from: string, to: string): string {
+  const index = content.indexOf(from);
+  if (index < 0) {
+    throw new Error(`fixture source not found: ${from}`);
+  }
+  return `${content.slice(0, index)}${to}${content.slice(index + from.length)}`;
+}
+
+function replaceFirstField(
+  content: string,
+  field: string,
+  value: string,
+): string {
+  const expression = new RegExp(`^${field}: .+$`, "m");
+  if (!expression.test(content)) {
+    throw new Error(`field not found: ${field}`);
+  }
+  return content.replace(expression, `${field}: ${value}`);
 }
 
 function appendToSection(
   content: string,
   heading: string,
-  unsafeStatement: string,
+  addition: string,
 ): string {
-  const marker = `## ${heading}\n`;
-  const sectionStart = content.indexOf(marker);
-  if (sectionStart === -1) {
-    throw new Error(`missing mutation section: ${heading}`);
-  }
-  const nextSection = content.indexOf("\n## ", sectionStart + marker.length);
-  const insertAt = nextSection === -1 ? content.length : nextSection;
-  return `${content.slice(0, insertAt).trimEnd()}\n\n${unsafeStatement}\n${content.slice(insertAt)}`;
+  const body = section(content, heading);
+  return replaceOnce(content, body, `${body.trimEnd()}\n\n${addition}\n`);
 }
 
-function substituteContractText(
-  content: string,
-  safeText: string,
-  unsafeText: string,
-): string {
-  if (!content.includes(safeText)) {
-    throw new Error(`missing mutation source: ${safeText}`);
-  }
-  return content.replace(safeText, unsafeText);
-}
+const riskFixtures: RiskFixture[] = [
+  {
+    id: "deterministic-binding",
+    field: "pr_group_binding",
+    manifestFrom: "active_pr_groups_max: 1",
+    manifestTo: "active_pr_groups_max: 4",
+    unsafeFieldValue: "<make room for a companion change request>",
+    safeNearMiss:
+      "A coordinator may not create another active PR group for the binding.",
+  },
+  {
+    id: "identifier-lifetimes",
+    field: "writer_generation",
+    manifestFrom: "fresh_per_attempt: [attempt_nonce]",
+    manifestTo: "fresh_per_attempt: [carry_forward_marker]",
+    unsafeFieldValue: "<keep the same ownership epoch>",
+    safeNearMiss: "An attempt nonce is not reusable.",
+  },
+  {
+    id: "route-admission",
+    field: "resolved_provider_profile_route",
+    manifestFrom: "route_identity: immutable_receipt_bound",
+    manifestTo: "route_identity: whichever_account_answers",
+    unsafeFieldValue: "<whichever account resolves today>",
+    safeNearMiss: "The route receipt must not be skipped.",
+  },
+  {
+    id: "fenced-ownership",
+    field: "fencing_token",
+    manifestFrom: "mutation_primitive: token_fenced_compare_and_write",
+    manifestTo: "mutation_primitive: ordinary_unchecked_write",
+    unsafeFieldValue: "<accept an earlier lease credential>",
+    safeNearMiss: "A superseded writer may not continue.",
+  },
+  {
+    id: "completion-events",
+    field: "completion_event",
+    manifestFrom: "consume_count: 1",
+    manifestTo: "consume_count: 2",
+    unsafeFieldValue: "<trust the callback without checking durable state>",
+    safeNearMiss: "A replayed completion event is not acceptable.",
+  },
+  {
+    id: "finite-repair",
+    field: "repair_cycle",
+    manifestFrom: "max_cumulative_cycles: 2",
+    manifestTo: "max_cumulative_cycles: 3",
+    unsafeFieldValue: "<start the counter over after rebasing>",
+    safeNearMiss:
+      "The repair count must not return to zero after a head change.",
+  },
+  {
+    id: "identity-separation",
+    field: "reviewer_identities_and_run_ids",
+    manifestFrom: "merge_authority: merge_operator_only",
+    manifestTo: "merge_authority: any_participant",
+    unsafeFieldValue: "<same person and execution may cover every role>",
+    safeNearMiss: "A reviewer may not merge.",
+  },
+  {
+    id: "coordinator-state",
+    field: "dependencies",
+    manifestFrom: "ready_work: advance_nonoverlapping",
+    manifestTo: "ready_work: hold_until_worker_returns",
+    unsafeFieldValue: "<pause despite unrelated ready items>",
+    safeNearMiss:
+      "The coordinator is not allowed to idle while ready work remains.",
+  },
+  {
+    id: "failure-preservation",
+    field: "worktree_and_branch",
+    manifestFrom: "unique_work: preserve_reachable",
+    manifestTo: "unique_work: remove_after_exit",
+    unsafeFieldValue: "<remove the only local copy when the worker exits>",
+    safeNearMiss: "Unique failed work must not be discarded.",
+  },
+  {
+    id: "exact-head-merge",
+    field: "merge_guard",
+    manifestFrom: "merge_guard: provider_atomic_expected_head",
+    manifestTo: "merge_guard: best_effort_observation",
+    unsafeFieldValue: "<compare eventually after integration>",
+    safeNearMiss: "The expected-head guard is not optional.",
+  },
+  {
+    id: "cleanup-gate",
+    field: "cleanup_state",
+    manifestFrom: "unknown_condition: preserve_and_block",
+    manifestTo: "unknown_condition: delete_immediately",
+    unsafeFieldValue: "<tear down before reachability is known>",
+    safeNearMiss: "Cleanup must not precede dependency readiness.",
+  },
+];
 
-type UnsafeMutation = {
-  name: string;
-  invariant: InvariantId;
-  kind: "append" | "substitute";
-  mutate: (content: string) => string;
-};
-
-const unsafeMutations: UnsafeMutation[] = [
+const exactReviewerUnsafeProbes: Array<{
+  id: InvariantId;
+  field: string;
+  value: string;
+}> = [
   {
-    name: "retry creates a replacement active PR group",
-    invariant: "deterministic-binding",
-    kind: "substitute",
-    mutate: (content) =>
-      substituteContractText(
-        content,
-        "Reject regrouping and reject a second active\nPR group for the same binding.",
-        "Following a retry, create a replacement active PR group for the same binding.",
-      ),
+    id: "deterministic-binding",
+    field: "pr_group_binding",
+    value: "<A retry may spin up another concurrent pull-request group>",
   },
   {
-    name: "retry permits a second active PR group",
-    invariant: "deterministic-binding",
-    kind: "append",
-    mutate: (content) =>
-      appendToSection(
-        content,
-        "Deterministic PR-Group Binding",
-        "After a repair retry, allow a second active PR group to open.",
-      ),
+    id: "identifier-lifetimes",
+    field: "completion_event_and_attempt_nonce",
+    value: "<preserve the dispatch marker for the next attempt>",
   },
   {
-    name: "attempt nonce becomes reusable",
-    invariant: "identifier-lifetimes",
-    kind: "substitute",
-    mutate: (content) =>
-      substituteContractText(
-        content,
-        "Every retry or dispatch attempt mints a fresh attempt nonce and binds it to the\ncurrent worker, task, generation, and expected terminal outcome.",
-        "The attempt nonce is reusable for later retry attempts and remains bound to the current worker.",
-      ),
+    id: "route-admission",
+    field: "resolved_provider_profile_route",
+    value: "<allow switching without a receipt>",
   },
   {
-    name: "provider profile route bypasses its receipt",
-    invariant: "route-admission",
-    kind: "append",
-    mutate: (content) =>
-      appendToSection(
-        content,
-        "Route Admission",
-        "The provider/profile route may change without validating the original admission receipt.",
-      ),
+    id: "fenced-ownership",
+    field: "fencing_token",
+    value: "<the retiring writer may finish its remaining writes>",
   },
   {
-    name: "revoked retiring and superseded writers keep pushing",
-    invariant: "fenced-ownership",
-    kind: "append",
-    mutate: (content) =>
-      appendToSection(
-        content,
-        "Fenced Checkpoints",
-        "Revoked, retiring, or superseded writers remain authorized to push and publish commits.",
-      ),
+    id: "completion-events",
+    field: "completion_event",
+    value: "<allow replay before terminal validation>",
   },
   {
-    name: "completion accepted before terminal validation",
-    invariant: "completion-events",
-    kind: "append",
-    mutate: (content) =>
-      appendToSection(
-        content,
-        "Completion Events",
-        "Accept a completion message before authoritative terminal validation finishes.",
-      ),
+    id: "completion-events",
+    field: "completion_event_and_attempt_nonce",
+    value: "<process the duplicate completion twice>",
   },
   {
-    name: "completion replay is processed twice",
-    invariant: "completion-events",
-    kind: "append",
-    mutate: (content) =>
-      appendToSection(
-        content,
-        "Completion Events",
-        "A completion event may be processed again when a consumer misses its local acknowledgement.",
-      ),
+    id: "finite-repair",
+    field: "repair_cycle",
+    value: "<return the repair counter to zero after the head changes>",
   },
   {
-    name: "repair history restarts after a head update",
-    invariant: "finite-repair",
-    kind: "append",
-    mutate: (content) =>
-      appendToSection(
-        content,
-        "Finite Repair Lifecycle",
-        "A head update restarts the repair history.",
-      ),
+    id: "identity-separation",
+    field: "merge_operator_identity_and_run_id",
+    value: "<give the reviewer merge authority>",
   },
   {
-    name: "repair history begins again after a force update",
-    invariant: "finite-repair",
-    kind: "append",
-    mutate: (content) =>
-      appendToSection(
-        content,
-        "Finite Repair Lifecycle",
-        "After a force update, begin the repair history again at zero.",
-      ),
+    id: "identity-separation",
+    field: "reviewer_identities_and_run_ids",
+    value: "<let identities and executions overlap across roles>",
   },
   {
-    name: "reviewer is permitted to merge",
-    invariant: "identity-separation",
-    kind: "append",
-    mutate: (content) =>
-      appendToSection(
-        content,
-        "Identity Separation",
-        "A reviewer is permitted to merge after recording findings.",
-      ),
+    id: "coordinator-state",
+    field: "dependencies",
+    value: "<block all coordination while the worker runs>",
   },
   {
-    name: "replacement reviewer is authorized to land",
-    invariant: "identity-separation",
-    kind: "append",
-    mutate: (content) =>
-      appendToSection(
-        content,
-        "Identity Separation",
-        "A replacement reviewer is authorized to land the PR.",
-      ),
+    id: "failure-preservation",
+    field: "task_status",
+    value: "<transition a failed task to completed after process exit>",
   },
   {
-    name: "worker and reviewer share an identity",
-    invariant: "identity-separation",
-    kind: "append",
-    mutate: (content) =>
-      appendToSection(
-        content,
-        "Identity Separation",
-        "The worker and reviewer may share the same identity.",
-      ),
+    id: "failure-preservation",
+    field: "worktree_and_branch",
+    value: "<remove the exclusive work when the failed process stops>",
   },
   {
-    name: "coordinator idles while a worker runs",
-    invariant: "coordinator-state",
-    kind: "append",
-    mutate: (content) =>
-      appendToSection(
-        content,
-        "Coordinator Loop and Task State",
-        "The coordinator may idle while the implementation worker runs.",
-      ),
+    id: "exact-head-merge",
+    field: "merge_guard",
+    value: "<Treat expected-head protection as a recommendation>",
   },
   {
-    name: "success overwrites a failed task",
-    invariant: "failure-preservation",
-    kind: "append",
-    mutate: (content) =>
-      appendToSection(
-        content,
-        "Failure Preservation",
-        "A successful worker exit may change a failed task to completed.",
-      ),
-  },
-  {
-    name: "success overwrites a cancelled task",
-    invariant: "failure-preservation",
-    kind: "append",
-    mutate: (content) =>
-      appendToSection(
-        content,
-        "Failure Preservation",
-        "A successful worker exit may replace a cancelled task with completed status.",
-      ),
-  },
-  {
-    name: "unique failed work may be discarded",
-    invariant: "failure-preservation",
-    kind: "append",
-    mutate: (content) =>
-      appendToSection(
-        content,
-        "Failure Preservation",
-        "Failed unique changes may be discarded after the worker exits.",
-      ),
-  },
-  {
-    name: "expected-head guard is optional",
-    invariant: "exact-head-merge",
-    kind: "append",
-    mutate: (content) =>
-      appendToSection(
-        content,
-        "Review and Merge",
-        "The expected-head guard is optional during merge.",
-      ),
-  },
-  {
-    name: "expected-head comparison is advisory",
-    invariant: "exact-head-merge",
-    kind: "append",
-    mutate: (content) =>
-      appendToSection(
-        content,
-        "Review and Merge",
-        "Expected-head comparison is advisory for protected branches.",
-      ),
-  },
-  {
-    name: "expected-head guard is best effort",
-    invariant: "exact-head-merge",
-    kind: "append",
-    mutate: (content) =>
-      appendToSection(
-        content,
-        "Review and Merge",
-        "The expected-head guard is best-effort when provider checks are green.",
-      ),
-  },
-  {
-    name: "cleanup precedes authoritative merge",
-    invariant: "cleanup-gate",
-    kind: "append",
-    mutate: (content) =>
-      appendToSection(
-        content,
-        "Cleanup Gate",
-        "Delete the worktree before authoritative merge is confirmed.",
-      ),
-  },
-  {
-    name: "cleanup precedes evidence readiness",
-    invariant: "cleanup-gate",
-    kind: "append",
-    mutate: (content) =>
-      appendToSection(
-        content,
-        "Cleanup Gate",
-        "Cleanup may run before evidence readiness.",
-      ),
-  },
-  {
-    name: "cleanup precedes dependency readiness",
-    invariant: "cleanup-gate",
-    kind: "append",
-    mutate: (content) =>
-      appendToSection(
-        content,
-        "Cleanup Gate",
-        "Remove the worktree without dependency readiness.",
-      ),
+    id: "cleanup-gate",
+    field: "cleanup_state",
+    value: "<tear down the worktree before evidence and dependents settle>",
   },
 ];
 
 describe("task-to-PR lifecycle skill", () => {
-  test("has the repository instruction-skill frontmatter and a balanced body", () => {
+  test("has repository skill frontmatter and one balanced manifest", () => {
     const content = readSkill();
     const frontmatter = content.match(
       /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/,
@@ -1208,172 +798,24 @@ describe("task-to-PR lifecycle skill", () => {
       "user_invocable",
     ]);
     expect(parsed.name).toBe("task-to-pr-lifecycle");
-    expect(parsed.description).toBeTypeOf("string");
     expect(parsed.user_invocable).toBe(true);
     expect((content.match(/^\s*```.*$/gm)?.length ?? 0) % 2).toBe(0);
+    expect(parseManifest(content).authoritative).toBe(true);
   });
 
-  test("binds one immutable PR group to the complete deterministic tuple", () => {
-    const dispatch = section(readSkill(), "Dispatch Input Contract");
+  test("keeps the readable lifecycle and required output fields", () => {
+    const content = readSkill();
+    const output = section(content, "Evidence and Output Contract");
 
-    expectInOrder(dispatch, [
-      "root_task_id:",
-      "task_id:",
-      "canonical_repo_identity:",
-      "base_ref:",
-      "frozen_scope_acceptance_hash:",
-      "pr_group_binding:",
-    ]);
-    expect(normalize(dispatch)).toContain(
-      "pr_group_binding: <deterministic immutable ID derived from root_task_id + task_id + canonical_repo_identity + base_ref + frozen_scope_acceptance_hash>",
+    expect(normalize(content)).toContain(
+      "One coherent repository change produces exactly one PR",
     );
-    expect(dispatch).toContain(
-      "frozen_scope_acceptance_hash: <sha256:64-lowercase-hex>",
-    );
-
-    const binding = normalize(
-      section(readSkill(), "Deterministic PR-Group Binding"),
-    );
-    expect(binding).toContain(
-      "Canonicalize and hash the exact ordered tuple",
-    );
-    expect(binding).toContain(
-      "`root_task_id`, `task_id`, `canonical_repo_identity`, `base_ref`, and `frozen_scope_acceptance_hash`",
-    );
-    expect(binding).toContain(
-      "Reject regrouping and reject a second active PR group for the same binding",
-    );
-    expect(binding).toContain(
-      "Retries, repairs, head changes, and provider or worker handoffs keep the same binding",
-    );
-  });
-
-  test("separates stable lineage IDs from fresh ownership and attempt IDs", () => {
-    const lifetimes = section(readSkill(), "Identifier Lifetimes");
-    const normalized = normalize(lifetimes);
-
-    expectInOrder(lifetimes, [
-      "### Stable lineage IDs",
-      "`root_task_id`",
-      "`runtime_root_or_plan_id`",
-      "`plan_node_id`",
-      "`task_id`",
-      "`pr_group_binding`",
-      "### Fresh per-handoff and per-attempt IDs",
-      "`writer_generation`",
-      "`fencing_token`",
-      "`attempt_nonce`",
-    ]);
-    expect(normalized).toContain(
-      "Every provider or worker handoff first proves the prior worker stopped and the prior lease and token were revoked",
-    );
-    expect(normalized).toContain(
-      "then issues both a fresh writer generation and a fresh fencing token",
-    );
-    expect(normalized).toContain(
-      "Every retry or dispatch attempt mints a fresh attempt nonce",
-    );
-    expect(normalized).toContain(
-      "Stable lineage IDs never become fresh attempt IDs, and fresh IDs are never preserved across the boundary that invalidates them",
-    );
-  });
-
-  test("requires authoritative token-fenced ownership at every write checkpoint", () => {
-    const checkpoints = normalize(section(readSkill(), "Fenced Checkpoints"));
-
-    for (const checkpoint of [
-      "at claim",
-      "before each mutation",
-      "before commit",
-      "before push",
-      "at handoff",
-    ]) {
-      expect(checkpoints, `missing checkpoint: ${checkpoint}`).toContain(
-        checkpoint,
-      );
-    }
-    expect(checkpoints).toContain(
-      "authoritatively re-resolve the pinned provider/profile route and revalidate the current owner, writer generation, and fencing token",
-    );
-    expect(checkpoints).toContain(
-      "Every mutation must use a token-fenced compare-and-write or equivalent fail-closed primitive",
-    );
-    expect(checkpoints).toContain(
-      "A revoked, released, expired, or superseded writer cannot mutate, commit, push, or hand off",
-    );
-  });
-
-  test("caps elevated repair at two cumulative cycles without head-reset loopholes", () => {
-    const repair = normalize(section(readSkill(), "Finite Repair Lifecycle"));
-
-    expect(repair).toContain(
-      "Elevated work receives at most two cumulative repair and re-review cycles",
-    );
-    expect(repair).toContain(
-      "Head changes invalidate all exact-head review and CI artifacts but never reset or decrement the cumulative repair count",
-    );
-    expect(repair).toContain(
-      "Cycle 2 is terminal: no third repair or re-review cycle is permitted",
-    );
-    expect(repair).toContain(
-      "residual-safe landing may proceed only when the frozen acceptance contract passes",
-    );
-    expect(repair).toContain(
-      "Otherwise simplify, revert, split into a new bounded task and binding, close, or defer",
-    );
-    expect(repair).toContain(
-      "without granting another cycle to the exhausted binding",
-    );
-  });
-
-  test("enforces pairwise-distinct worker, reviewers, and merge operator", () => {
-    const identities = section(readSkill(), "Identity Separation");
-    const normalized = normalize(identities);
-
-    expectInOrder(identities, [
-      "worker_identity_and_run_id:",
-      "reviewer_identities_and_run_ids:",
-      "merge_operator_identity_and_run_id:",
-    ]);
-    expect(normalized).toContain(
-      "The worker, every reviewer, and the merge operator must be pairwise distinct in both identity and run ID",
-    );
-    expect(normalized).toContain(
-      "Reviewer entries must also be mutually distinct",
-    );
-    expect(normalized).toContain(
-      "Only the recorded merge operator may invoke merge",
-    );
-  });
-
-  test("keeps exact-head review and merge fail-closed", () => {
-    const review = normalize(section(readSkill(), "Review and Merge"));
-
-    expect(review).toContain(
-      "Reviewers and CI validate the exact remote PR head",
-    );
-    expect(review).toContain(
-      "Any head change invalidates every prior exact-head review, approval, and CI artifact",
-    );
-    expect(review).toContain(
-      "Merge must atomically compare the provider-authoritative current head with the recorded reviewed head",
-    );
-    expect(review).toContain(
-      "Head drift or a missing expected-head guard prevents merge",
-    );
-  });
-
-  test("records binding, freshness, fencing, repair, identity, and cleanup evidence", () => {
-    const output = section(readSkill(), "Evidence and Output Contract");
-
     expectInOrder(output, [
       "result:",
       "task_status:",
       "root_task_id:",
       "task_id:",
       "pr_group_binding:",
-      "pr_group_binding_inputs:",
-      "worker_identity_and_run_id:",
       "writer_generation_and_fencing_token:",
       "provider_profile_route:",
       "completion_event_and_attempt_nonce:",
@@ -1381,75 +823,130 @@ describe("task-to-PR lifecycle skill", () => {
       "reviewer_identities_and_run_ids:",
       "merge_operator_identity_and_run_id:",
       "commit_and_exact_heads:",
-      "pr:",
       "validation:",
       "secret_scan:",
       "merge_guard:",
       "cleanup_state:",
+      "blockers:",
     ]);
-  });
-
-  test("retains read-only exemptions and one coherent change per PR", () => {
-    const content = normalize(readSkill());
-
-    expect(content).toContain(
-      "One coherent repository change produces exactly one PR",
-    );
-    expect(content).toContain(
+    expect(normalize(section(content, "Non-Goals and Exceptions"))).toContain(
       "Research, diagnosis, planning, status checks, and one-step read-only work are exempt",
     );
   });
 
-  test("parses and validates every lifecycle invariant structurally", () => {
+  test("validates typed invariant records and all authoritative field values", () => {
     const content = readSkill();
-    const parsed = parseContract(content);
+    const manifest = parseManifest(content);
 
-    expect([...parsed.sections.keys()]).toEqual([
-      "Invariants",
-      "Dispatch Input Contract",
-      "Deterministic PR-Group Binding",
-      "Identifier Lifetimes",
-      "Route Admission",
-      "Fenced Checkpoints",
-      "Completion Events",
-      "Coordinator Loop and Task State",
-      "Worker Lifecycle",
-      "Finite Repair Lifecycle",
-      "Identity Separation",
-      "Review and Merge",
-      "Failure Preservation",
-      "Cleanup Gate",
-      "Evidence and Output Contract",
-      "Non-Goals and Exceptions",
-    ]);
-    expect(
-      contractRules.every(
-        (rule) =>
-          rule.structures.length > 0 &&
-          rule.required.length > 0 &&
-          rule.unsafe.length > 0,
-      ),
-    ).toBe(true);
+    expect(Object.keys(manifest.invariants).sort()).toEqual(
+      [...invariantIds].sort(),
+    );
+    expect(new Set(riskFixtures.map((fixture) => fixture.id))).toEqual(
+      new Set(invariantIds),
+    );
+    expect(new Set(exactReviewerUnsafeProbes.map((probe) => probe.id))).toEqual(
+      new Set(invariantIds),
+    );
     expect(validateContract(content)).toEqual([]);
   });
 
-  test("table-driven unsafe mutations fail closed with invariant-specific violations", () => {
+  test("rejects typed unsafe states with invariant-specific violations", () => {
     const content = readSkill();
-    expect(new Set(unsafeMutations.map((fixture) => fixture.invariant))).toEqual(
-      new Set(contractRules.map((rule) => rule.id)),
-    );
-    expect(new Set(unsafeMutations.map((fixture) => fixture.kind))).toEqual(
-      new Set(["append", "substitute"]),
-    );
 
-    for (const fixture of unsafeMutations) {
-      const violations = validateContract(fixture.mutate(content));
+    for (const fixture of riskFixtures) {
+      const mutated = replaceOnce(
+        content,
+        fixture.manifestFrom,
+        fixture.manifestTo,
+      );
+      const violations = validateContract(mutated);
       expect(
         violations.some((violation) =>
-          violation.startsWith(`${fixture.invariant}:unsafe:`),
+          violation.startsWith(`${fixture.id}:manifest:`),
         ),
-        `${fixture.name}: ${violations.join(", ")}`,
+        `${fixture.id}: ${violations.join(", ")}`,
       ).toBe(true);
     }
+  });
+
+  test("rejects paraphrased unsafe values in authoritative fields", () => {
+    const content = readSkill();
+
+    for (const fixture of riskFixtures) {
+      const mutated = replaceFirstField(
+        content,
+        fixture.field,
+        fixture.unsafeFieldValue,
+      );
+      const violations = validateContract(mutated);
+      expect(
+        violations.some((violation) => violation.startsWith(`${fixture.id}:`)),
+        `${fixture.id}: ${violations.join(", ")}`,
+      ).toBe(true);
+    }
+  });
+
+  test("replays every exact rejected-head unsafe probe structurally", () => {
+    const content = readSkill();
+
+    for (const probe of exactReviewerUnsafeProbes) {
+      const violations = validateContract(
+        replaceFirstField(content, probe.field, probe.value),
+      );
+      expect(
+        violations.some((violation) => violation.startsWith(`${probe.id}:`)),
+        `${probe.id}: ${probe.value}: ${violations.join(", ")}`,
+      ).toBe(true);
+    }
+  });
+
+  test("enforces authoritative fields when repeated in another section", () => {
+    const content = readSkill();
+
+    for (const fixture of riskFixtures) {
+      const mutated = appendToSection(
+        content,
+        "Non-Goals and Exceptions",
+        [
+          "```text",
+          `${fixture.field}: ${fixture.unsafeFieldValue}`,
+          "```",
+        ].join("\n"),
+      );
+      const violations = validateContract(mutated);
+      expect(
+        violations.some((violation) => violation.startsWith(`${fixture.id}:`)),
+        `${fixture.id}: ${violations.join(", ")}`,
+      ).toBe(true);
+    }
+  });
+
+  test("accepts strengthening negations and positive near-misses", () => {
+    const content = readSkill();
+
+    for (const fixture of riskFixtures) {
+      const mutated = appendToSection(
+        content,
+        "Non-Goals and Exceptions",
+        fixture.safeNearMiss,
+      );
+      expect(
+        validateContract(mutated),
+        `${fixture.id}: ${fixture.safeNearMiss}`,
+      ).toEqual([]);
+    }
+  });
+
+  test("does not claim natural-language semantic enforcement", () => {
+    const contract = normalize(
+      section(readSkill(), "Machine-Checkable Invariant Contract"),
+    );
+
+    expect(contract).toContain(
+      "validates typed records and authoritative fenced field values",
+    );
+    expect(contract).toContain(
+      "It does not claim to infer policy meaning from unrestricted prose",
+    );
   });
 });

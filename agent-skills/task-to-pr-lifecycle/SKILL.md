@@ -34,6 +34,202 @@ specific in-scope instruction. Never downgrade an active safety control.
 Preserve sole-writer, immutable binding, finite repair, identity separation,
 and expected-head guards; record an unresolved conflict as a blocker.
 
+## Machine-Checkable Invariant Contract
+
+The readable lifecycle below explains how to apply these rules. The following
+manifest is the single authoritative machine-checkable policy record. It
+validates typed records and authoritative fenced field values. It does not
+claim to infer policy meaning from unrestricted prose. Policy-bearing input and
+output fields point back to this manifest so their values cannot silently
+contradict it.
+
+```yaml task-to-pr-invariants
+version: 1
+authoritative: true
+proof_boundary: typed_records_and_authoritative_text_fields
+field_contracts:
+  pr_group_binding:
+    invariants: [deterministic-binding]
+    sections: [Dispatch Input Contract, Evidence and Output Contract]
+  writer_generation:
+    invariants: [identifier-lifetimes, fenced-ownership]
+    sections: [Dispatch Input Contract]
+  fencing_token:
+    invariants: [fenced-ownership, identifier-lifetimes]
+    sections: [Dispatch Input Contract]
+  resolved_provider_profile_route:
+    invariants: [route-admission]
+    sections: [Dispatch Input Contract]
+  completion_event:
+    invariants: [completion-events]
+    sections: [Dispatch Input Contract]
+  repair_cycle:
+    invariants: [finite-repair]
+    sections: [Dispatch Input Contract, Evidence and Output Contract]
+  worker_identity_and_run_id:
+    invariants: [identity-separation]
+    sections: [Dispatch Input Contract, Identity Separation, Evidence and Output Contract]
+  reviewer_identities_and_run_ids:
+    invariants: [identity-separation]
+    sections: [Dispatch Input Contract, Identity Separation, Evidence and Output Contract]
+  merge_operator_identity_and_run_id:
+    invariants: [identity-separation]
+    sections: [Dispatch Input Contract, Identity Separation, Evidence and Output Contract]
+  dependencies:
+    invariants: [coordinator-state]
+    sections: [Dispatch Input Contract]
+  worktree_and_branch:
+    invariants: [failure-preservation, cleanup-gate]
+    sections: [Dispatch Input Contract]
+  task_status:
+    invariants: [coordinator-state, failure-preservation]
+    sections: [Evidence and Output Contract]
+  writer_generation_and_fencing_token:
+    invariants: [identifier-lifetimes, fenced-ownership]
+    sections: [Evidence and Output Contract]
+  provider_profile_route:
+    invariants: [route-admission]
+    sections: [Evidence and Output Contract]
+  completion_event_and_attempt_nonce:
+    invariants: [completion-events, identifier-lifetimes]
+    sections: [Evidence and Output Contract]
+  merge_guard:
+    invariants: [exact-head-merge]
+    sections: [Evidence and Output Contract]
+  cleanup_state:
+    invariants: [cleanup-gate]
+    sections: [Evidence and Output Contract]
+invariants:
+  deterministic-binding:
+    polarity: fail_closed
+    authoritative_fields: [pr_group_binding]
+    allowed:
+      derivation: canonical_ordered_tuple
+      active_pr_groups_max: 1
+      retry_binding: preserve
+    denied:
+      caller_chosen_binding: true
+      regrouping: true
+      second_active_group: true
+    relationships:
+      binding_inputs: [root_task_id, task_id, canonical_repo_identity, base_ref, frozen_scope_acceptance_hash]
+  identifier-lifetimes:
+    polarity: fail_closed
+    authoritative_fields: [writer_generation, fencing_token, writer_generation_and_fencing_token, completion_event_and_attempt_nonce]
+    allowed:
+      stable: [root_task_id, runtime_root_or_plan_id, plan_node_id, task_id, pr_group_binding]
+      fresh_per_handoff: [writer_generation, fencing_token]
+      fresh_per_attempt: [attempt_nonce]
+    denied:
+      reuse_generation_or_token: true
+      reuse_attempt_nonce: true
+    relationships:
+      handoff_requires: [prior_worker_stopped, lease_revoked, token_revoked]
+  route-admission:
+    polarity: fail_closed
+    authoritative_fields: [resolved_provider_profile_route, provider_profile_route]
+    allowed:
+      route_identity: immutable_receipt_bound
+      reresolution: same_identity_and_receipt
+    denied:
+      silent_substitution: true
+      receipt_bypass: true
+    relationships:
+      receipt_binds: [task_id, pr_group_binding, writer_generation, fencing_token]
+  fenced-ownership:
+    polarity: fail_closed
+    authoritative_fields: [writer_generation, fencing_token, writer_generation_and_fencing_token]
+    allowed:
+      checkpoints: [claim, before_each_mutation, before_commit, before_push, handoff]
+      mutation_primitive: token_fenced_compare_and_write
+    denied:
+      revoked_writer_continues: true
+      superseded_writer_continues: true
+    relationships:
+      revalidate: [owner, writer_generation, fencing_token, route_receipt]
+  completion-events:
+    polarity: fail_closed
+    authoritative_fields: [completion_event, completion_event_and_attempt_nonce]
+    allowed:
+      terminal_validation: authoritative
+      consume_count: 1
+      nonce_per_attempt: fresh
+    denied:
+      replay: true
+      duplicate_consumption: true
+    relationships:
+      event_matches: [worker_identity, run_id, task_id, writer_generation, attempt_nonce, terminal_outcome]
+  finite-repair:
+    polarity: fail_closed
+    authoritative_fields: [repair_cycle]
+    allowed:
+      max_cumulative_cycles: 2
+      head_change_resets_count: false
+      residual_safe_landing: requires_frozen_acceptance_pass
+    denied:
+      third_cycle: true
+      count_decrement: true
+    relationships:
+      exhaustion_actions: [simplify, revert, split, close, defer]
+  identity-separation:
+    polarity: fail_closed
+    authoritative_fields: [worker_identity_and_run_id, reviewer_identities_and_run_ids, merge_operator_identity_and_run_id]
+    allowed:
+      pairwise_distinct_identities: true
+      pairwise_distinct_run_ids: true
+      merge_authority: merge_operator_only
+    denied:
+      role_overlap: true
+      reviewer_or_worker_merges: true
+    relationships:
+      roles: [worker, every_reviewer, merge_operator]
+  coordinator-state:
+    polarity: fail_closed
+    authoritative_fields: [dependencies, task_status]
+    allowed:
+      ready_work: advance_nonoverlapping
+      blocked_work: yield_for_durable_signal
+    denied:
+      idle_with_ready_work: true
+      repetitive_polling: true
+    relationships:
+      statuses: [pending, in_progress, completed, failed, cancelled]
+  failure-preservation:
+    polarity: fail_closed
+    authoritative_fields: [worktree_and_branch, task_status]
+    allowed:
+      unique_work: preserve_reachable
+      failure_state: record_terminal_and_recovery
+    denied:
+      worker_exit_implies_completion: true
+      discard_unique_work: true
+    relationships:
+      preserve: [worktree, branch, commits, owner_and_token_evidence]
+  exact-head-merge:
+    polarity: fail_closed
+    authoritative_fields: [merge_guard]
+    allowed:
+      review_target: exact_remote_pr_head
+      merge_guard: provider_atomic_expected_head
+      head_change_invalidates_artifacts: true
+    denied:
+      advisory_only_guard: true
+      head_drift_merge: true
+    relationships:
+      required_artifacts: [reviews, approvals, ci]
+  cleanup-gate:
+    polarity: fail_closed
+    authoritative_fields: [worktree_and_branch, cleanup_state]
+    allowed:
+      unknown_condition: preserve_and_block
+      unique_state: preserve
+    denied:
+      early_cleanup: true
+      uncertain_state_deletion: true
+    relationships:
+      requires: [no_active_writer, clean_or_preserved_state, durable_remote_reachability, recorded_outcome, dependencies_consumed]
+```
+
 ## Dispatch Input Contract
 
 Do not dispatch until the coordinator provides or authoritatively resolves:
@@ -46,20 +242,20 @@ task_id: <stable assigned task ID>
 canonical_repo_identity: <canonical owner/name plus normalized immutable remote identity>
 base_ref: <fully qualified or provider-canonical base ref>
 frozen_scope_acceptance_hash: <sha256:64-lowercase-hex>
-pr_group_binding: <deterministic immutable ID derived from root_task_id + task_id + canonical_repo_identity + base_ref + frozen_scope_acceptance_hash>
+pr_group_binding: <policy=deterministic-binding; authoritative=task-to-pr-invariants-v1>
 scope_and_acceptance: <bounded mutation, exclusions, and done criteria matching the frozen hash>
-worktree_and_branch: <task-owned absolute path and one non-protected branch>
-worker_identity_and_run_id: <worker identity plus unique run ID>
-writer_generation: <fresh generation ID, current owner, and active state>
-fencing_token: <fresh non-reusable token bound to task, owner, generation, and PR group>
+worktree_and_branch: <policy=failure-preservation+cleanup-gate; authoritative=task-to-pr-invariants-v1>
+worker_identity_and_run_id: <policy=identity-separation; authoritative=task-to-pr-invariants-v1>
+writer_generation: <policy=identifier-lifetimes+fenced-ownership; authoritative=task-to-pr-invariants-v1>
+fencing_token: <policy=fenced-ownership+identifier-lifetimes; authoritative=task-to-pr-invariants-v1>
 pinned_provider_profile_alias: <admitted alias, never an email or credential>
-resolved_provider_profile_route: <immutable route identity and admission receipt>
-reviewer_identities_and_run_ids: <one entry per required independent reviewer>
-merge_operator_identity_and_run_id: <the only operator authorized to merge>
-repair_cycle: <0|1|2 and durable cumulative history>
-dependencies: <stable IDs and current readiness>
+resolved_provider_profile_route: <policy=route-admission; authoritative=task-to-pr-invariants-v1>
+reviewer_identities_and_run_ids: <policy=identity-separation; authoritative=task-to-pr-invariants-v1>
+merge_operator_identity_and_run_id: <policy=identity-separation; authoritative=task-to-pr-invariants-v1>
+repair_cycle: <policy=finite-repair; authoritative=task-to-pr-invariants-v1>
+dependencies: <policy=coordinator-state; authoritative=task-to-pr-invariants-v1>
 admitted_capabilities: <checkout, subprocess, network, Git metadata, push, and PR>
-completion_event: <durable worker/task/generation/attempt_nonce contract>
+completion_event: <policy=completion-events; authoritative=task-to-pr-invariants-v1>
 validation_and_cleanup_owner: <required gates and responsible roles>
 ```
 
@@ -249,9 +445,9 @@ Record the execution identities in dispatch input, every review artifact, merge
 evidence, and final output:
 
 ```text
-worker_identity_and_run_id: <identity; unique run ID>
-reviewer_identities_and_run_ids: <ordered identity/run entries; exact reviewed head per entry>
-merge_operator_identity_and_run_id: <identity; unique run ID>
+worker_identity_and_run_id: <policy=identity-separation; authoritative=task-to-pr-invariants-v1>
+reviewer_identities_and_run_ids: <policy=identity-separation; authoritative=task-to-pr-invariants-v1>
+merge_operator_identity_and_run_id: <policy=identity-separation; authoritative=task-to-pr-invariants-v1>
 ```
 
 The worker, every reviewer, and the merge operator must be pairwise distinct in
@@ -318,26 +514,26 @@ Every completion, handoff, failure, cancellation, and recovery report includes:
 
 ```text
 result: <complete|handoff|failed|cancelled>
-task_status: <pending|in_progress|completed|failed|cancelled>
+task_status: <policy=coordinator-state+failure-preservation; authoritative=task-to-pr-invariants-v1>
 root_task_id: <stable ID>
 runtime_root_or_plan_id: <stable ID|none>
 plan_node_id: <stable ID|none>
 task_id: <stable assigned ID>
-pr_group_binding: <deterministic immutable ID and active|terminal state>
+pr_group_binding: <policy=deterministic-binding; authoritative=task-to-pr-invariants-v1>
 pr_group_binding_inputs: <root task; assigned task; canonical repo; base ref; frozen scope acceptance hash; canonicalization version>
-worker_identity_and_run_id: <identity and run ID>
-writer_generation_and_fencing_token: <fresh IDs; active|released|revoked|superseded; checkpoint receipts>
-provider_profile_route: <pinned alias; immutable resolved identity; admission receipt; checkpoint results>
-completion_event_and_attempt_nonce: <event ID/type; fresh nonce; authoritative terminal validation; replay-consumption state>
-repair_cycle: <0|1|2; cumulative history; exhausted|available>
-reviewer_identities_and_run_ids: <pairwise-distinct entries; exact heads; findings; reconciliation>
-merge_operator_identity_and_run_id: <distinct identity/run; merge-only authority>
+worker_identity_and_run_id: <policy=identity-separation; authoritative=task-to-pr-invariants-v1>
+writer_generation_and_fencing_token: <policy=identifier-lifetimes+fenced-ownership; authoritative=task-to-pr-invariants-v1>
+provider_profile_route: <policy=route-admission; authoritative=task-to-pr-invariants-v1>
+completion_event_and_attempt_nonce: <policy=completion-events+identifier-lifetimes; authoritative=task-to-pr-invariants-v1>
+repair_cycle: <policy=finite-repair; authoritative=task-to-pr-invariants-v1>
+reviewer_identities_and_run_ids: <policy=identity-separation; authoritative=task-to-pr-invariants-v1>
+merge_operator_identity_and_run_id: <policy=identity-separation; authoritative=task-to-pr-invariants-v1>
 commit_and_exact_heads: <local; remote; provider PR head; equality proof>
 pr: <number; URL; binding; base; open|closed|merged>
 validation: <commands; exit states; exact head>
 secret_scan: <staged and committed-range non-printing modes; pass|fail>
-merge_guard: <reviewed expected head; provider-atomic mechanism; result>
-cleanup_state: <not-ready|preserved|blocked|eligible|complete plus evidence>
+merge_guard: <policy=exact-head-merge; authoritative=task-to-pr-invariants-v1>
+cleanup_state: <policy=cleanup-gate; authoritative=task-to-pr-invariants-v1>
 blockers: <none or evidence-backed list>
 ```
 
