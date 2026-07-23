@@ -17,7 +17,8 @@ native Codewith worker, and verifies the returned evidence. The coordinator
 does not edit live skill files.
 
 The worker may read the canonical repository or package source and authoritative
-Machines data. It may mutate only the resolved Codewith skills tree:
+Machines data. It may mutate only exact admitted paths inside the resolved
+Codewith skills tree:
 
 ```text
 ${CODEWITH_HOME:-$HOME/.codewith}/skills
@@ -35,6 +36,7 @@ Use one immutable source record per selected skill:
 ```text
 run_id: <stable idempotency key>
 source_repository_or_package: <canonical identity>
+source_package_version_and_integrity: <version and integrity|not-packaged>
 source_commit: <exact immutable commit>
 source_path: <tracked relative SKILL.md path>
 source_hash: <sha256:lowercase-hex of the exact source bytes>
@@ -88,9 +90,15 @@ For every connected machine ID, inventory the selected target paths and record
 source and target hashes, frontmatter validity, and whether each skill is
 missing, identical, or conflicting.
 
-Route admission requires a write allowlist enforced by the worker runtime for
-the resolved Codewith skills trees, plus an authoritative write-set or audit
-surface. Capture its touched-path ledger for the run. If either control is
+Route admission enumerates the exact selected target `SKILL.md` paths and the
+explicitly named run-owned temporary and rollback receipt paths, including any
+preimage file. The worker runtime write allowlist contains only those exact
+paths; directory prefixes and wildcards are insufficient. Capture an
+authoritative touched-path ledger for the run, and require that it must be a
+subset of that exact allowlist. A touch to any unselected or remote-only path,
+even inside a Codewith skills tree, fails closure: stop further writes, preserve
+and report the unauthorized path, and guard rollback of only selected targets
+with valid receipts. If either enforcement or authoritative audit is
 unavailable, do not admit a mutating worker.
 
 Preserve remote-only skills: never delete, move, or rewrite a target skill that
@@ -104,18 +112,28 @@ is outside the selected canonical input. For each selected skill:
 Before replacing or creating a selected target, record `pre_state` as
 `existing` or `absent`. For an existing target, capture its exact bytes/hash and
 a rollback receipt inside the same Codewith skills tree. For an absent target,
-record the absent pre-state and exact run-owned path. Write a temporary file in
-that tree, verify its hash, then atomically rename it into the exact target.
-Reparse frontmatter, rerun the non-printing secret scan, and verify the final
+record the absent pre-state and exact run-owned path.
+
+Forward writes require a fail-closed compare-and-replace operation. An existing
+target is replaced only when the same atomic operation asserts that its current
+bytes/hash equal the inventoried preimage. A missing target uses an atomic
+create-if-absent operation. An equivalent immediately coupled preimage/hash
+guard is acceptable only when it makes concurrent drift impossible to
+overwrite; a separate check followed by an unconditional rename is not
+sufficient. If neither primitive is available, stop without writing. Use only
+the named temporary path, verify its hash, perform the guarded operation, then
+reparse frontmatter, rerun the non-printing secret scan, and verify the final
 target hash.
 
 On any write or verification failure, stop further writes and restore every
-target already changed in this run. Restore an existing target from its recorded
-in-tree preimage and verify the preimage hash. For an absent pre-state, remove
-only the exact run-created target after proving it still has this run's target
-hash, then verify the target is absent. If either check fails, preserve the
-conflict and report rollback failure. Never delete remote-only skills as
-cleanup.
+target already changed in this run. Before restoring an existing target, prove
+the current target still has this run's exact target hash, then use guarded
+compare-and-replace to restore its recorded in-tree preimage and verify the
+preimage hash. If the current hash drifted, preserve it and report a rollback
+conflict. For an absent pre-state, remove only the exact run-created target
+after proving it still has this run's target hash, then verify the target is
+absent. If either check fails, preserve the conflict and report rollback
+failure. Never delete remote-only skills as cleanup.
 
 ## Output Contract
 
@@ -125,6 +143,8 @@ The fresh native Codewith worker returns:
 result: <complete|partial|failed>
 worker_id: <native worker ID>
 run_id: <idempotency key>
+source_repository_or_package: <canonical identity per skill>
+source_package_version_and_integrity: <version and integrity per packaged skill|not-packaged>
 source_commit: <exact commit per skill>
 source_path: <tracked path per skill>
 source_hash: <verified sha256:lowercase-hex per skill>
@@ -137,14 +157,16 @@ validation: <frontmatter, scope, connectivity, and hash results>
 secret_scan: <non-printing source/target result>
 rollback_receipts: <machine ID, path, pre_state, preimage/backup hash, target hash>
 rollback_state: <not-needed|available|restored|failed>
-scope_proof: <write allowlist and touched-path ledger proving no outside changes>
+scope_proof: <exact-path allowlist and subset ledger proving no paths outside each Codewith skills tree changed>
 blockers: <none or bounded evidence>
 ```
 
-The coordinator accepts completion only when every in-scope machine is accounted
-for, every changed target matches the deterministic hash, validation and secret
-scans pass, rollback receipts are complete, and scope proof shows no paths
-outside each Codewith skills tree changed.
+The coordinator accepts completion only when the reported source repository or
+package, commit, path, source hash, and—when packaged—package version and
+integrity match the immutable input; every in-scope machine is accounted for;
+every changed target matches the deterministic hash; validation and secret
+scans pass; rollback receipts are complete; and the touched-path ledger is a
+subset of the exact-path allowlist with no unselected or remote-only change.
 
 ## Stop Conditions
 

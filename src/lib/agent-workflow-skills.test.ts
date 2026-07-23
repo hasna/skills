@@ -59,12 +59,19 @@ describe("agent workflow skills", () => {
 
     expectPhrases(content, [
       "pinned_provider_profile_alias",
+      "resolved_provider_profile_route",
+      "immutable resolved route identity",
+      "admission receipt",
       "Silent provider or profile substitution is prohibited",
-      "authoritative evidence",
-      "increment or rebind the writer generation",
-      "rerun route admission",
+      "re-resolve the alias",
+      "reject alias remapping",
+      "fresh, non-reusable fencing token and writer generation",
+      "prior worker is stopped",
+      "prior lease is revoked or released",
       "durable completion/failure event",
-      "worker ID, task ID, and writer generation",
+      "attempt_nonce",
+      "authoritative current terminal state",
+      "Reject stale, replayed",
       "`controlled/manual`",
       "bounded dependency checks",
       "never repetitive polling",
@@ -78,6 +85,26 @@ describe("agent workflow skills", () => {
       "`recovery-required` is a classification",
       "never a task status",
     ]);
+    expect(content).toMatch(
+      /pinned_provider_profile_alias:.*\nresolved_provider_profile_route: <immutable resolved route identity and admission receipt>/,
+    );
+    expect(content).toMatch(
+      /At each lifecycle\s+checkpoint—claim, before mutation, before commit, before push,\s+and handoff—re-resolve the alias/,
+    );
+    expect(content).toMatch(
+      /Every ownership transfer issues a fresh, non-reusable fencing token and\nwriter generation/,
+    );
+    expect(content).toMatch(
+      /Validate the event against the authoritative current terminal state[\s\S]*Reject stale, replayed/,
+    );
+    expect(content).toMatch(
+      /emits a durable completion\/failure event tied to the worker ID, task ID, and\s+writer generation, plus a fresh `attempt_nonce`[\s\S]*authoritative current terminal state[\s\S]*Reject stale, replayed/,
+    );
+    expect(content).toMatch(
+      /writer_generation: <fresh non-reusable generation ID, fencing token, owner, active\|released\|superseded>\npinned_provider_profile_alias:.*\nresolved_provider_profile_route: <immutable identity; admission receipt; task\/generation binding>/,
+    );
+    expect(content).not.toContain("increment or rebind the writer generation");
+    expect(content).not.toContain("rebind the writer generation");
   });
 
   test("fleet normalization is canonical, Codewith-only, identity-safe, and reversible", () => {
@@ -88,6 +115,7 @@ describe("agent workflow skills", () => {
       "source_commit",
       "source_path",
       "source_hash",
+      "source_package_version_and_integrity",
       "`sha256:<lowercase-hex>`",
       "exactly `name` and `description`",
       "in that order",
@@ -108,9 +136,38 @@ describe("agent workflow skills", () => {
       "record `pre_state` as `existing` or `absent`",
       "remove only the exact run-created target",
       "verify the target is absent",
-      "write allowlist enforced by the worker runtime",
+      "exact selected target `SKILL.md` paths",
+      "explicitly named run-owned temporary and rollback receipt paths",
       "touched-path ledger",
+      "must be a subset of that exact allowlist",
+      "unselected or remote-only path",
+      "fail-closed compare-and-replace",
+      "create-if-absent",
+      "current target still has this run's exact target hash",
+      "source_repository_or_package",
     ]);
+    expect(content).toMatch(
+      /source_repository_or_package: <canonical identity>\nsource_package_version_and_integrity: <version and integrity\|not-packaged>/,
+    );
+    expect(content).toMatch(
+      /Forward writes require a fail-closed compare-and-replace operation[\s\S]*If neither primitive is available, stop without writing/,
+    );
+    expect(content).toMatch(
+      /Before restoring an existing target, prove\s+the current target still has\s+this run's exact target hash/,
+    );
+    expect(content).toMatch(
+      /write allowlist contains only those exact\s+paths[\s\S]*touched-path ledger[\s\S]*subset of that exact allowlist[\s\S]*unselected or remote-only path[\s\S]*fails closure/,
+    );
+    expect(content).toMatch(
+      /The fresh native Codewith worker returns:[\s\S]*source_repository_or_package: <canonical identity per skill>\nsource_package_version_and_integrity: <version and integrity per packaged skill\|not-packaged>\nsource_commit: <exact commit per skill>\nsource_path: <tracked path per skill>\nsource_hash: <verified sha256:lowercase-hex per skill>/,
+    );
+    expect(content).toMatch(
+      /The coordinator accepts completion only when[\s\S]*source repository or\s+package[\s\S]*package version and\s+integrity/,
+    );
+    expect(content).not.toContain(
+      "write allowlist enforced by the worker runtime for the resolved Codewith skills trees",
+    );
+    expect(content).not.toContain("then atomically rename it into the exact target");
     expect(content).not.toContain("ssh ");
     expect(content).not.toMatch(/\b(?:station|spark)\d+\b/);
   });

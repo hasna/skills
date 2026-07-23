@@ -22,8 +22,9 @@ source change.
 - Use one task-owned worktree under `$HOME/.hasna/repos/worktrees`, one branch,
   one active writer within one active lease generation, and one PR group for
   each coherent single-repository change. Never mutate a shared checkout.
-- A writer generation is a fencing boundary. Do not overlap writers or reuse a
-  stale worker after ownership advances.
+- A writer generation and its fencing token are non-reusable ownership
+  boundaries. Do not overlap writers or reuse a stale worker after ownership
+  advances.
 - Existing user authorization covers ordinary in-scope execution. Escalate only
   a genuinely new destructive, secret-bearing, public, spend, ownership, or
   user-only decision.
@@ -45,12 +46,13 @@ task_id: <stable assigned task ID>
 scope_and_acceptance: <bounded mutation and done criteria>
 repo_and_base: <repository identity, remote, and base branch>
 worktree_and_branch: <task-owned absolute path and one non-protected branch>
-writer_generation: <active lease/generation ID and owner>
+writer_generation: <fresh non-reusable fencing token/generation ID and owner>
 pr_group: <one coherent single-repository change identifier>
 dependencies: <stable IDs and current readiness>
 pinned_provider_profile_alias: <admitted provider/profile alias, never an email or credential>
+resolved_provider_profile_route: <immutable resolved route identity and admission receipt>
 admitted_capabilities: <checkout, subprocess, network, Git metadata, push, PR>
-completion_event: <durable completion/failure event and correlation fields>
+completion_event: <durable event contract with worker/task/generation/attempt_nonce>
 validation_and_cleanup_owner: <required gates and responsible role>
 ```
 
@@ -63,12 +65,20 @@ Prove the route before dispatch. It must be subscription-backed and headless,
 with the task's checkout, subprocess, network, Git metadata, push, and PR
 capabilities admitted and tested sufficiently for the assignment.
 
-Pin the admitted provider/profile alias in the worker input and authoritative
-evidence for the entire writer lifecycle. Silent provider or profile
-substitution is prohibited. If the route cannot continue, stop the writer.
-Any ownership transfer must be explicit in authoritative evidence, identify
-the prior and next owners, increment or rebind the writer generation as
-appropriate, and rerun route admission before work resumes.
+Pin the admitted provider/profile alias in the worker input. Resolve it during
+admission and bind it in authoritative evidence to an immutable resolved route
+identity and admission receipt for the task and writer generation. Silent
+provider or profile substitution is prohibited. At each lifecycle
+checkpoint—claim, before mutation, before commit, before push,
+and handoff—re-resolve the alias with the same authority, validate the original
+receipt, and require the same immutable identity. The worker must reject alias
+remapping or a stale/invalid receipt and stop.
+
+Every ownership transfer issues a fresh, non-reusable fencing token and
+writer generation; neither may be rebound or reused. Record the prior and next
+owners in authoritative evidence. Before successor admission, prove the prior
+worker is stopped and the prior lease is revoked or released. Only then rerun
+route admission for the successor. Missing revocation evidence blocks transfer.
 
 Infinity is eligible only when that exact capability set is admitted. A direct,
 durable Codewith route is the controlled fallback when another route cannot
@@ -77,9 +87,13 @@ aliases only; never expose account emails, tokens, or credentials.
 
 Automated background routing is admitted only when the dispatch/runtime owner
 emits a durable completion/failure event tied to the worker ID, task ID, and
-writer generation. If that event is unavailable, classify the lane as
-`controlled/manual` and use only bounded dependency checks; never repetitive
-polling.
+writer generation, plus a fresh `attempt_nonce` minted for that dispatch
+attempt. Validate the event against the authoritative current terminal state
+and require the same worker, task, generation, attempt nonce, and terminal
+outcome before consuming it once. Reject stale, replayed, duplicate,
+non-terminal, or superseded-attempt events. If that event contract is
+unavailable, classify the lane as `controlled/manual` and use only bounded
+dependency checks; never repetitive polling.
 
 Detect supported surfaces before invoking the owning Todos, worktree, dispatch,
 secret-scan, PR, review, or merge skill/CLI. Do not copy commands from a stale
@@ -111,9 +125,10 @@ preserves its worktree and branch, and never falsely completes the task.
 
 ## Worker Lifecycle
 
-1. Verify the input contract, route admission, repository identity, clean task
-   worktree, branch, dependency readiness, pinned provider/profile alias,
-   completion-event contract, and current writer generation.
+1. Verify the input contract, route admission and receipt, repository identity,
+   clean task worktree, branch, dependency readiness, pinned alias and resolved
+   route identity, completion-event attempt nonce, and current writer
+   generation/fencing token.
 2. Claim only the assigned writer generation and mutate only the declared
    worktree, branch, repository, and scope.
 3. Keep owner evidence current as work changes state. Preserve stable IDs across
@@ -171,9 +186,10 @@ task_id: <ID>
 repo: <identity and remote>
 worktree: <absolute task-owned path>
 branch: <name>
-writer_generation: <ID, owner, active|released|superseded>
-pinned_provider_profile_alias: <alias; admitted capabilities>
-completion_event: <durable event ID/type or controlled/manual evidence>
+writer_generation: <fresh non-reusable generation ID, fencing token, owner, active|released|superseded>
+pinned_provider_profile_alias: <alias; re-resolution checkpoint results>
+resolved_provider_profile_route: <immutable identity; admission receipt; task/generation binding>
+completion_event: <event ID/type, worker/task/generation/attempt_nonce, authoritative terminal validation, or controlled/manual evidence>
 validation: <commands or gates and outcomes>
 secret_scan: <staged and committed-range modes; pass|fail>
 commit_and_head: <local commit and exact remote head>
