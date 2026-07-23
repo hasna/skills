@@ -38,6 +38,1158 @@ function expectInOrder(content: string, values: string[]): void {
   }
 }
 
+type InvariantId =
+  | "deterministic-binding"
+  | "identifier-lifetimes"
+  | "route-admission"
+  | "fenced-ownership"
+  | "completion-events"
+  | "finite-repair"
+  | "identity-separation"
+  | "coordinator-state"
+  | "failure-preservation"
+  | "exact-head-merge"
+  | "cleanup-gate";
+
+type SemanticClause = {
+  label: string;
+  concepts: string[][];
+};
+
+type StructuralExpectation = {
+  section: string;
+  fields?: string[];
+  subheadings?: string[];
+  terms?: string[];
+};
+
+type ContractRule = {
+  id: InvariantId;
+  section: string;
+  structures: StructuralExpectation[];
+  required: SemanticClause[];
+  unsafe: SemanticClause[];
+};
+
+type ParsedSection = {
+  heading: string;
+  body: string;
+  fields: string[];
+  subheadings: string[];
+  statements: string[];
+};
+
+type ParsedContract = {
+  sections: Map<string, ParsedSection>;
+  statements: string[];
+};
+
+function semanticText(value: string): string {
+  const normalized = value
+    .toLowerCase()
+    .replace(/[`*_]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return ` ${normalized} `;
+}
+
+function containsSemanticAlternative(
+  statement: string,
+  alternatives: string[],
+): boolean {
+  const normalizedStatement = semanticText(statement);
+  return alternatives.some((alternative) =>
+    normalizedStatement.includes(semanticText(alternative)),
+  );
+}
+
+function matchesSemanticClause(
+  statement: string,
+  clause: SemanticClause,
+): boolean {
+  return clause.concepts.every((alternatives) =>
+    containsSemanticAlternative(statement, alternatives),
+  );
+}
+
+function parseStatements(body: string): string[] {
+  const blocks: string[] = [];
+  let current: string[] = [];
+  let inFence = false;
+
+  const flush = () => {
+    if (current.length > 0) {
+      blocks.push(current.join(" "));
+      current = [];
+    }
+  };
+
+  for (const rawLine of body.replace(/\r\n/g, "\n").split("\n")) {
+    const line = rawLine.trim();
+    if (line.startsWith("```")) {
+      flush();
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence || line.startsWith("### ")) {
+      continue;
+    }
+    if (line === "") {
+      flush();
+      continue;
+    }
+    if (/^(?:[-*]|\d+\.)\s+/.test(line)) {
+      flush();
+      current.push(line.replace(/^(?:[-*]|\d+\.)\s+/, ""));
+      continue;
+    }
+    current.push(line);
+  }
+  flush();
+
+  return blocks.flatMap((block) =>
+    block
+      .split(/(?<=[.!?])\s+(?=[A-Z`])/)
+      .map((statement) => statement.trim())
+      .filter(Boolean),
+  );
+}
+
+function parseContract(content: string): ParsedContract {
+  const source = content.replace(/\r\n/g, "\n");
+  const matches = [...source.matchAll(/^## ([^\n]+)\n/gm)];
+  const sections = new Map<string, ParsedSection>();
+
+  for (const [index, match] of matches.entries()) {
+    const heading = match[1]?.trim() ?? "";
+    const bodyStart = (match.index ?? 0) + match[0].length;
+    const bodyEnd = matches[index + 1]?.index ?? source.length;
+    const body = source.slice(bodyStart, bodyEnd);
+    sections.set(heading, {
+      heading,
+      body,
+      fields: [...body.matchAll(/^([a-z][a-z0-9_]*):/gm)].map(
+        (field) => field[1] ?? "",
+      ),
+      subheadings: [...body.matchAll(/^### ([^\n]+)$/gm)].map(
+        (subheading) => subheading[1]?.trim() ?? "",
+      ),
+      statements: parseStatements(body),
+    });
+  }
+
+  return {
+    sections,
+    statements: [...sections.values()].flatMap((entry) => entry.statements),
+  };
+}
+
+const contractRules: ContractRule[] = [
+  {
+    id: "deterministic-binding",
+    section: "Deterministic PR-Group Binding",
+    structures: [
+      {
+        section: "Dispatch Input Contract",
+        fields: [
+          "root_task_id",
+          "task_id",
+          "canonical_repo_identity",
+          "base_ref",
+          "frozen_scope_acceptance_hash",
+          "pr_group_binding",
+        ],
+      },
+      {
+        section: "Evidence and Output Contract",
+        fields: ["pr_group_binding", "pr_group_binding_inputs", "pr"],
+      },
+    ],
+    required: [
+      {
+        label: "ordered tuple is canonicalized and hashed",
+        concepts: [
+          ["canonicalize"],
+          ["hash"],
+          ["ordered tuple"],
+          ["root_task_id"],
+          ["task_id"],
+          ["canonical_repo_identity"],
+          ["base_ref"],
+          ["frozen_scope_acceptance_hash"],
+        ],
+      },
+      {
+        label: "second active group is rejected",
+        concepts: [
+          ["reject"],
+          ["second active"],
+          ["pr group"],
+          ["binding"],
+        ],
+      },
+      {
+        label: "retry and handoff retain the binding",
+        concepts: [
+          ["retries"],
+          ["handoffs"],
+          ["keep the same binding"],
+        ],
+      },
+    ],
+    unsafe: [
+      {
+        label: "retry creates a replacement active group",
+        concepts: [
+          ["retry", "repair"],
+          ["second", "replacement", "additional"],
+          ["active"],
+          ["pr group"],
+          ["create", "open", "start", "allow", "permit"],
+        ],
+      },
+    ],
+  },
+  {
+    id: "identifier-lifetimes",
+    section: "Identifier Lifetimes",
+    structures: [
+      {
+        section: "Identifier Lifetimes",
+        subheadings: [
+          "Stable lineage IDs",
+          "Fresh per-handoff and per-attempt IDs",
+        ],
+        terms: [
+          "root_task_id",
+          "runtime_root_or_plan_id",
+          "plan_node_id",
+          "task_id",
+          "pr_group_binding",
+          "writer_generation",
+          "fencing_token",
+          "attempt_nonce",
+        ],
+      },
+      {
+        section: "Evidence and Output Contract",
+        fields: [
+          "root_task_id",
+          "runtime_root_or_plan_id",
+          "plan_node_id",
+          "task_id",
+          "writer_generation_and_fencing_token",
+          "completion_event_and_attempt_nonce",
+        ],
+      },
+    ],
+    required: [
+      {
+        label: "handoff revokes old ownership before fresh fencing",
+        concepts: [
+          ["handoff"],
+          ["revoked"],
+          ["fresh writer generation"],
+          ["fresh fencing token"],
+        ],
+      },
+      {
+        label: "every retry mints a fresh attempt nonce",
+        concepts: [
+          ["every retry", "every dispatch attempt"],
+          ["fresh attempt nonce"],
+          ["current worker"],
+          ["generation"],
+        ],
+      },
+    ],
+    unsafe: [
+      {
+        label: "attempt nonce is reusable across attempts",
+        concepts: [
+          ["attempt nonce"],
+          ["reuse", "reusable", "recycle", "recycled"],
+          ["retry", "attempt"],
+        ],
+      },
+    ],
+  },
+  {
+    id: "route-admission",
+    section: "Route Admission",
+    structures: [
+      {
+        section: "Dispatch Input Contract",
+        fields: [
+          "pinned_provider_profile_alias",
+          "resolved_provider_profile_route",
+          "admitted_capabilities",
+        ],
+      },
+      {
+        section: "Evidence and Output Contract",
+        fields: ["provider_profile_route"],
+      },
+    ],
+    required: [
+      {
+        label: "provider profile alias is pinned",
+        concepts: [
+          ["pin"],
+          ["provider profile alias"],
+          ["worker input"],
+        ],
+      },
+      {
+        label: "resolved route and receipt are immutable",
+        concepts: [
+          ["immutable resolved route identity"],
+          ["admission receipt"],
+          ["writer generation"],
+          ["fencing token"],
+        ],
+      },
+      {
+        label: "silent route substitution is prohibited",
+        concepts: [
+          ["provider or profile substitution"],
+          ["prohibited"],
+        ],
+      },
+    ],
+    unsafe: [
+      {
+        label: "route changes bypass the immutable receipt",
+        concepts: [
+          ["provider profile route", "provider or profile route"],
+          ["change", "substitute", "remap"],
+          ["without", "bypass", "skip"],
+          ["admission receipt", "original receipt"],
+        ],
+      },
+    ],
+  },
+  {
+    id: "fenced-ownership",
+    section: "Fenced Checkpoints",
+    structures: [
+      {
+        section: "Dispatch Input Contract",
+        fields: ["writer_generation", "fencing_token"],
+      },
+      {
+        section: "Evidence and Output Contract",
+        fields: ["writer_generation_and_fencing_token"],
+      },
+    ],
+    required: [
+      {
+        label: "all five checkpoints are mandatory",
+        concepts: [
+          ["at claim"],
+          ["before each mutation"],
+          ["before commit"],
+          ["before push"],
+          ["at handoff"],
+          ["revalidate"],
+        ],
+      },
+      {
+        label: "mutations use fail-closed fenced writes",
+        concepts: [
+          ["every mutation"],
+          ["token fenced compare and write"],
+          ["fail closed"],
+        ],
+      },
+      {
+        label: "inactive writer cannot act",
+        concepts: [
+          ["revoked"],
+          ["superseded"],
+          ["writer"],
+          ["cannot mutate"],
+          ["push"],
+          ["hand off"],
+        ],
+      },
+    ],
+    unsafe: [
+      {
+        label: "inactive writer continues writing",
+        concepts: [
+          ["writer", "writers"],
+          ["revoked", "retiring", "superseded"],
+          ["mutate", "push", "publish", "write", "commit"],
+          ["continue", "remain authorized", "allowed", "permitted", "may", "can"],
+        ],
+      },
+    ],
+  },
+  {
+    id: "completion-events",
+    section: "Completion Events",
+    structures: [
+      {
+        section: "Dispatch Input Contract",
+        fields: ["completion_event"],
+      },
+      {
+        section: "Evidence and Output Contract",
+        fields: ["completion_event_and_attempt_nonce"],
+      },
+    ],
+    required: [
+      {
+        label: "event binds the exact attempt identity",
+        concepts: [
+          ["durable completion or failure event"],
+          ["worker identity"],
+          ["task id"],
+          ["writer generation"],
+          ["fresh attempt_nonce"],
+        ],
+      },
+      {
+        label: "event is validated against terminal state",
+        concepts: [
+          ["before consuming"],
+          ["authoritative current terminal state"],
+          ["attempt nonce"],
+          ["terminal outcome"],
+        ],
+      },
+      {
+        label: "event is consumed once with a replay marker",
+        concepts: [
+          ["consume it once"],
+          ["atomic replay marker"],
+        ],
+      },
+      {
+        label: "stale and replayed events are rejected",
+        concepts: [
+          ["reject"],
+          ["replayed"],
+        ],
+      },
+    ],
+    unsafe: [
+      {
+        label: "completion accepted without terminal validation",
+        concepts: [
+          ["completion event", "completion message", "completion signal"],
+          ["accept", "consume", "trust"],
+          ["before", "without", "skip"],
+          ["authoritative terminal validation", "authoritative terminal state"],
+        ],
+      },
+      {
+        label: "completion replay is accepted",
+        concepts: [
+          ["completion event", "completion message"],
+          ["consume", "process", "processed", "accept"],
+          ["again", "replay", "repeatedly"],
+          ["allow", "permitted", "may", "can"],
+        ],
+      },
+    ],
+  },
+  {
+    id: "finite-repair",
+    section: "Finite Repair Lifecycle",
+    structures: [
+      {
+        section: "Dispatch Input Contract",
+        fields: ["repair_cycle"],
+      },
+      {
+        section: "Evidence and Output Contract",
+        fields: ["repair_cycle"],
+      },
+    ],
+    required: [
+      {
+        label: "repair is capped at two cumulative cycles",
+        concepts: [
+          ["at most two"],
+          ["cumulative repair"],
+          ["one deterministic binding"],
+        ],
+      },
+      {
+        label: "head and force updates preserve repair count",
+        concepts: [
+          ["head changes"],
+          ["never reset"],
+          ["cumulative repair count"],
+        ],
+      },
+      {
+        label: "cycle two is terminal",
+        concepts: [
+          ["cycle 2 is terminal"],
+          ["no third repair"],
+          ["permitted"],
+        ],
+      },
+    ],
+    unsafe: [
+      {
+        label: "head update restarts repair history",
+        concepts: [
+          ["head update", "force update", "force push"],
+          ["repair history", "repair count", "repair cycle"],
+          [
+            "restart",
+            "restarts",
+            "resets",
+            "begin again",
+            "start over",
+            "back to zero",
+            "at zero",
+          ],
+        ],
+      },
+    ],
+  },
+  {
+    id: "identity-separation",
+    section: "Identity Separation",
+    structures: [
+      {
+        section: "Dispatch Input Contract",
+        fields: [
+          "worker_identity_and_run_id",
+          "reviewer_identities_and_run_ids",
+          "merge_operator_identity_and_run_id",
+        ],
+      },
+      {
+        section: "Evidence and Output Contract",
+        fields: [
+          "worker_identity_and_run_id",
+          "reviewer_identities_and_run_ids",
+          "merge_operator_identity_and_run_id",
+        ],
+      },
+    ],
+    required: [
+      {
+        label: "execution identities and runs are pairwise distinct",
+        concepts: [
+          ["worker"],
+          ["every reviewer"],
+          ["merge operator"],
+          ["pairwise distinct"],
+          ["identity"],
+          ["run id"],
+        ],
+      },
+      {
+        label: "only merge operator may merge",
+        concepts: [
+          ["only the recorded merge operator"],
+          ["invoke merge"],
+        ],
+      },
+    ],
+    unsafe: [
+      {
+        label: "review role is allowed to merge",
+        concepts: [
+          ["reviewer", "replacement reviewer"],
+          ["merge", "land"],
+          ["allowed", "permitted", "authorized", "may", "can"],
+        ],
+      },
+      {
+        label: "execution identities overlap",
+        concepts: [
+          ["worker"],
+          ["reviewer", "merge operator"],
+          ["share", "same", "overlap"],
+          ["identity", "run id"],
+        ],
+      },
+    ],
+  },
+  {
+    id: "coordinator-state",
+    section: "Coordinator Loop and Task State",
+    structures: [
+      {
+        section: "Evidence and Output Contract",
+        fields: ["result", "task_status", "blockers"],
+      },
+    ],
+    required: [
+      {
+        label: "coordinator advances ready work instead of idling",
+        concepts: [
+          ["after dispatch"],
+          ["immediately advance"],
+          ["safe"],
+          ["ready"],
+          ["non overlapping task"],
+        ],
+      },
+      {
+        label: "task statuses are closed and supported",
+        concepts: [
+          ["pending"],
+          ["in_progress"],
+          ["completed"],
+          ["failed"],
+          ["cancelled"],
+          ["only task statuses"],
+        ],
+      },
+      {
+        label: "failed worker never reports completion",
+        concepts: [
+          ["failed or cancelled worker"],
+          ["terminal status"],
+          ["never reports false completion"],
+        ],
+      },
+    ],
+    unsafe: [
+      {
+        label: "coordinator idles while worker runs",
+        concepts: [
+          ["coordinator"],
+          ["idle", "wait"],
+          ["worker", "implementation"],
+          ["runs", "active", "in progress"],
+          ["may", "can", "allowed", "permitted"],
+        ],
+      },
+    ],
+  },
+  {
+    id: "failure-preservation",
+    section: "Failure Preservation",
+    structures: [
+      {
+        section: "Evidence and Output Contract",
+        fields: ["result", "task_status", "cleanup_state", "blockers"],
+      },
+    ],
+    required: [
+      {
+        label: "unique failed worktree and branch are preserved",
+        concepts: [
+          ["unique changes"],
+          ["failed"],
+          ["preserve the worktree and branch"],
+        ],
+      },
+      {
+        label: "partial evidence cannot complete owning task",
+        concepts: [
+          ["never discard unique work"],
+          ["stale writer"],
+          ["mark the owning task complete"],
+          ["partial evidence"],
+        ],
+      },
+    ],
+    unsafe: [
+      {
+        label: "success overwrites failed task outcome",
+        concepts: [
+          ["success", "successful worker exit"],
+          ["failed task", "cancelled task", "failed or cancelled task"],
+          ["completed", "complete"],
+          ["overwrite", "change", "replace", "mark"],
+        ],
+      },
+      {
+        label: "unique failed work is discarded",
+        concepts: [
+          ["failed", "cancelled"],
+          ["unique work", "unique changes"],
+          ["discard", "discarded", "delete", "remove"],
+          ["allow", "permitted", "may", "can"],
+        ],
+      },
+    ],
+  },
+  {
+    id: "exact-head-merge",
+    section: "Review and Merge",
+    structures: [
+      {
+        section: "Evidence and Output Contract",
+        fields: [
+          "reviewer_identities_and_run_ids",
+          "merge_operator_identity_and_run_id",
+          "commit_and_exact_heads",
+          "merge_guard",
+        ],
+      },
+    ],
+    required: [
+      {
+        label: "review and CI validate exact head",
+        concepts: [
+          ["reviewers and ci"],
+          ["validate"],
+          ["exact remote pr head"],
+        ],
+      },
+      {
+        label: "head change invalidates exact-head evidence",
+        concepts: [
+          ["any head change"],
+          ["invalidates"],
+          ["review"],
+          ["ci artifact"],
+        ],
+      },
+      {
+        label: "merge atomically compares provider head",
+        concepts: [
+          ["merge must atomically compare"],
+          ["provider authoritative current head"],
+          ["recorded reviewed head"],
+        ],
+      },
+      {
+        label: "missing expected-head guard prevents merge",
+        concepts: [
+          ["missing expected head guard"],
+          ["prevents merge"],
+        ],
+      },
+    ],
+    unsafe: [
+      {
+        label: "expected-head protection is weakened",
+        concepts: [
+          ["expected head guard", "expected head comparison"],
+          ["optional", "advisory", "best effort"],
+        ],
+      },
+    ],
+  },
+  {
+    id: "cleanup-gate",
+    section: "Cleanup Gate",
+    structures: [
+      {
+        section: "Evidence and Output Contract",
+        fields: ["cleanup_state", "blockers"],
+      },
+    ],
+    required: [
+      {
+        label: "cleanup requires inactive ownership",
+        concepts: [
+          ["no active owner"],
+          ["writer"],
+          ["lease"],
+          ["worker process"],
+        ],
+      },
+      {
+        label: "cleanup requires clean or preserved worktree",
+        concepts: [
+          ["worktree is clean"],
+          ["unique remaining state"],
+          ["preserved"],
+        ],
+      },
+      {
+        label: "cleanup requires durable reachable commits",
+        concepts: [
+          ["required commit"],
+          ["reachable"],
+          ["durable remote ref"],
+        ],
+      },
+      {
+        label: "cleanup requires authoritative lifecycle evidence",
+        concepts: [
+          ["pr"],
+          ["exact head"],
+          ["merge outcome"],
+          ["recorded"],
+          ["stable lineage ids"],
+        ],
+      },
+      {
+        label: "cleanup requires dependency readiness",
+        concepts: [
+          ["dependents consumed"],
+          ["no longer depend"],
+          ["worktree"],
+        ],
+      },
+      {
+        label: "unknown cleanup evidence blocks deletion",
+        concepts: [
+          ["condition is unknown"],
+          ["preserve the worktree"],
+          ["cleanup_state blocked"],
+        ],
+      },
+    ],
+    unsafe: [
+      {
+        label: "cleanup precedes authoritative readiness",
+        concepts: [
+          ["cleanup", "delete the worktree", "remove the worktree"],
+          ["before", "without"],
+          [
+            "authoritative merge",
+            "merge outcome",
+            "evidence readiness",
+            "dependency readiness",
+            "dependents are ready",
+          ],
+        ],
+      },
+    ],
+  },
+];
+
+function validateContract(content: string): string[] {
+  const parsed = parseContract(content);
+  const violations: string[] = [];
+
+  for (const rule of contractRules) {
+    for (const structure of rule.structures) {
+      const parsedSection = parsed.sections.get(structure.section);
+      if (!parsedSection) {
+        violations.push(`${rule.id}:missing-section:${structure.section}`);
+        continue;
+      }
+      for (const field of structure.fields ?? []) {
+        if (!parsedSection.fields.includes(field)) {
+          violations.push(`${rule.id}:missing-field:${field}`);
+        }
+      }
+      for (const subheading of structure.subheadings ?? []) {
+        if (!parsedSection.subheadings.includes(subheading)) {
+          violations.push(`${rule.id}:missing-subheading:${subheading}`);
+        }
+      }
+      for (const term of structure.terms ?? []) {
+        if (!semanticText(parsedSection.body).includes(semanticText(term))) {
+          violations.push(`${rule.id}:missing-term:${term}`);
+        }
+      }
+    }
+
+    const semanticSection = parsed.sections.get(rule.section);
+    if (!semanticSection) {
+      violations.push(`${rule.id}:missing-section:${rule.section}`);
+      continue;
+    }
+    for (const requirement of rule.required) {
+      if (
+        !semanticSection.statements.some((statement) =>
+          matchesSemanticClause(statement, requirement),
+        )
+      ) {
+        violations.push(`${rule.id}:missing-required:${requirement.label}`);
+      }
+    }
+    for (const unsafe of rule.unsafe) {
+      if (
+        parsed.statements.some((statement) =>
+          matchesSemanticClause(statement, unsafe),
+        )
+      ) {
+        violations.push(`${rule.id}:unsafe:${unsafe.label}`);
+      }
+    }
+  }
+
+  return [...new Set(violations)];
+}
+
+function appendToSection(
+  content: string,
+  heading: string,
+  unsafeStatement: string,
+): string {
+  const marker = `## ${heading}\n`;
+  const sectionStart = content.indexOf(marker);
+  if (sectionStart === -1) {
+    throw new Error(`missing mutation section: ${heading}`);
+  }
+  const nextSection = content.indexOf("\n## ", sectionStart + marker.length);
+  const insertAt = nextSection === -1 ? content.length : nextSection;
+  return `${content.slice(0, insertAt).trimEnd()}\n\n${unsafeStatement}\n${content.slice(insertAt)}`;
+}
+
+function substituteContractText(
+  content: string,
+  safeText: string,
+  unsafeText: string,
+): string {
+  if (!content.includes(safeText)) {
+    throw new Error(`missing mutation source: ${safeText}`);
+  }
+  return content.replace(safeText, unsafeText);
+}
+
+type UnsafeMutation = {
+  name: string;
+  invariant: InvariantId;
+  kind: "append" | "substitute";
+  mutate: (content: string) => string;
+};
+
+const unsafeMutations: UnsafeMutation[] = [
+  {
+    name: "retry creates a replacement active PR group",
+    invariant: "deterministic-binding",
+    kind: "substitute",
+    mutate: (content) =>
+      substituteContractText(
+        content,
+        "Reject regrouping and reject a second active\nPR group for the same binding.",
+        "Following a retry, create a replacement active PR group for the same binding.",
+      ),
+  },
+  {
+    name: "retry permits a second active PR group",
+    invariant: "deterministic-binding",
+    kind: "append",
+    mutate: (content) =>
+      appendToSection(
+        content,
+        "Deterministic PR-Group Binding",
+        "After a repair retry, allow a second active PR group to open.",
+      ),
+  },
+  {
+    name: "attempt nonce becomes reusable",
+    invariant: "identifier-lifetimes",
+    kind: "substitute",
+    mutate: (content) =>
+      substituteContractText(
+        content,
+        "Every retry or dispatch attempt mints a fresh attempt nonce and binds it to the\ncurrent worker, task, generation, and expected terminal outcome.",
+        "The attempt nonce is reusable for later retry attempts and remains bound to the current worker.",
+      ),
+  },
+  {
+    name: "provider profile route bypasses its receipt",
+    invariant: "route-admission",
+    kind: "append",
+    mutate: (content) =>
+      appendToSection(
+        content,
+        "Route Admission",
+        "The provider/profile route may change without validating the original admission receipt.",
+      ),
+  },
+  {
+    name: "revoked retiring and superseded writers keep pushing",
+    invariant: "fenced-ownership",
+    kind: "append",
+    mutate: (content) =>
+      appendToSection(
+        content,
+        "Fenced Checkpoints",
+        "Revoked, retiring, or superseded writers remain authorized to push and publish commits.",
+      ),
+  },
+  {
+    name: "completion accepted before terminal validation",
+    invariant: "completion-events",
+    kind: "append",
+    mutate: (content) =>
+      appendToSection(
+        content,
+        "Completion Events",
+        "Accept a completion message before authoritative terminal validation finishes.",
+      ),
+  },
+  {
+    name: "completion replay is processed twice",
+    invariant: "completion-events",
+    kind: "append",
+    mutate: (content) =>
+      appendToSection(
+        content,
+        "Completion Events",
+        "A completion event may be processed again when a consumer misses its local acknowledgement.",
+      ),
+  },
+  {
+    name: "repair history restarts after a head update",
+    invariant: "finite-repair",
+    kind: "append",
+    mutate: (content) =>
+      appendToSection(
+        content,
+        "Finite Repair Lifecycle",
+        "A head update restarts the repair history.",
+      ),
+  },
+  {
+    name: "repair history begins again after a force update",
+    invariant: "finite-repair",
+    kind: "append",
+    mutate: (content) =>
+      appendToSection(
+        content,
+        "Finite Repair Lifecycle",
+        "After a force update, begin the repair history again at zero.",
+      ),
+  },
+  {
+    name: "reviewer is permitted to merge",
+    invariant: "identity-separation",
+    kind: "append",
+    mutate: (content) =>
+      appendToSection(
+        content,
+        "Identity Separation",
+        "A reviewer is permitted to merge after recording findings.",
+      ),
+  },
+  {
+    name: "replacement reviewer is authorized to land",
+    invariant: "identity-separation",
+    kind: "append",
+    mutate: (content) =>
+      appendToSection(
+        content,
+        "Identity Separation",
+        "A replacement reviewer is authorized to land the PR.",
+      ),
+  },
+  {
+    name: "worker and reviewer share an identity",
+    invariant: "identity-separation",
+    kind: "append",
+    mutate: (content) =>
+      appendToSection(
+        content,
+        "Identity Separation",
+        "The worker and reviewer may share the same identity.",
+      ),
+  },
+  {
+    name: "coordinator idles while a worker runs",
+    invariant: "coordinator-state",
+    kind: "append",
+    mutate: (content) =>
+      appendToSection(
+        content,
+        "Coordinator Loop and Task State",
+        "The coordinator may idle while the implementation worker runs.",
+      ),
+  },
+  {
+    name: "success overwrites a failed task",
+    invariant: "failure-preservation",
+    kind: "append",
+    mutate: (content) =>
+      appendToSection(
+        content,
+        "Failure Preservation",
+        "A successful worker exit may change a failed task to completed.",
+      ),
+  },
+  {
+    name: "success overwrites a cancelled task",
+    invariant: "failure-preservation",
+    kind: "append",
+    mutate: (content) =>
+      appendToSection(
+        content,
+        "Failure Preservation",
+        "A successful worker exit may replace a cancelled task with completed status.",
+      ),
+  },
+  {
+    name: "unique failed work may be discarded",
+    invariant: "failure-preservation",
+    kind: "append",
+    mutate: (content) =>
+      appendToSection(
+        content,
+        "Failure Preservation",
+        "Failed unique changes may be discarded after the worker exits.",
+      ),
+  },
+  {
+    name: "expected-head guard is optional",
+    invariant: "exact-head-merge",
+    kind: "append",
+    mutate: (content) =>
+      appendToSection(
+        content,
+        "Review and Merge",
+        "The expected-head guard is optional during merge.",
+      ),
+  },
+  {
+    name: "expected-head comparison is advisory",
+    invariant: "exact-head-merge",
+    kind: "append",
+    mutate: (content) =>
+      appendToSection(
+        content,
+        "Review and Merge",
+        "Expected-head comparison is advisory for protected branches.",
+      ),
+  },
+  {
+    name: "expected-head guard is best effort",
+    invariant: "exact-head-merge",
+    kind: "append",
+    mutate: (content) =>
+      appendToSection(
+        content,
+        "Review and Merge",
+        "The expected-head guard is best-effort when provider checks are green.",
+      ),
+  },
+  {
+    name: "cleanup precedes authoritative merge",
+    invariant: "cleanup-gate",
+    kind: "append",
+    mutate: (content) =>
+      appendToSection(
+        content,
+        "Cleanup Gate",
+        "Delete the worktree before authoritative merge is confirmed.",
+      ),
+  },
+  {
+    name: "cleanup precedes evidence readiness",
+    invariant: "cleanup-gate",
+    kind: "append",
+    mutate: (content) =>
+      appendToSection(
+        content,
+        "Cleanup Gate",
+        "Cleanup may run before evidence readiness.",
+      ),
+  },
+  {
+    name: "cleanup precedes dependency readiness",
+    invariant: "cleanup-gate",
+    kind: "append",
+    mutate: (content) =>
+      appendToSection(
+        content,
+        "Cleanup Gate",
+        "Remove the worktree without dependency readiness.",
+      ),
+  },
+];
+
 describe("task-to-PR lifecycle skill", () => {
   test("has the repository instruction-skill frontmatter and a balanced body", () => {
     const content = readSkill();
@@ -248,33 +1400,56 @@ describe("task-to-PR lifecycle skill", () => {
     );
   });
 
-  test("rejects contradictory unsafe lifecycle wording", () => {
+  test("parses and validates every lifecycle invariant structurally", () => {
     const content = readSkill();
-    const contradictions = [
-      /regroup on retry/i,
-      /a third cycle is allowed/i,
-      /head changes reset/i,
-      /reuse the attempt nonce/i,
-      /revoked writer may continue/i,
-      /reviewer may merge/i,
-      /any operator may merge/i,
-      /worker and merge operator may be the same/i,
-      /best-effort expected head/i,
-      /multiple active PR groups are allowed/i,
-      /at (?:least|most) three cumulative repair/i,
-      /repair count (?:may|can|does) reset/i,
-      /attempt nonce (?:may|can) be reused/i,
-      /revoked writer (?:may|can) (?:continue|write|push)/i,
-      /merge operator (?:may|can) be (?:the )?(?:worker|reviewer)/i,
-      /reviewer identities?.*need not be distinct/i,
-      /expected-head (?:check|guard) is optional/i,
-      /second active PR group.*(?:allow|permit)/i,
-    ];
+    const parsed = parseContract(content);
 
-    for (const contradiction of contradictions) {
-      expect(content, `unsafe contradiction: ${contradiction}`).not.toMatch(
-        contradiction,
-      );
+    expect([...parsed.sections.keys()]).toEqual([
+      "Invariants",
+      "Dispatch Input Contract",
+      "Deterministic PR-Group Binding",
+      "Identifier Lifetimes",
+      "Route Admission",
+      "Fenced Checkpoints",
+      "Completion Events",
+      "Coordinator Loop and Task State",
+      "Worker Lifecycle",
+      "Finite Repair Lifecycle",
+      "Identity Separation",
+      "Review and Merge",
+      "Failure Preservation",
+      "Cleanup Gate",
+      "Evidence and Output Contract",
+      "Non-Goals and Exceptions",
+    ]);
+    expect(
+      contractRules.every(
+        (rule) =>
+          rule.structures.length > 0 &&
+          rule.required.length > 0 &&
+          rule.unsafe.length > 0,
+      ),
+    ).toBe(true);
+    expect(validateContract(content)).toEqual([]);
+  });
+
+  test("table-driven unsafe mutations fail closed with invariant-specific violations", () => {
+    const content = readSkill();
+    expect(new Set(unsafeMutations.map((fixture) => fixture.invariant))).toEqual(
+      new Set(contractRules.map((rule) => rule.id)),
+    );
+    expect(new Set(unsafeMutations.map((fixture) => fixture.kind))).toEqual(
+      new Set(["append", "substitute"]),
+    );
+
+    for (const fixture of unsafeMutations) {
+      const violations = validateContract(fixture.mutate(content));
+      expect(
+        violations.some((violation) =>
+          violation.startsWith(`${fixture.invariant}:unsafe:`),
+        ),
+        `${fixture.name}: ${violations.join(", ")}`,
+      ).toBe(true);
     }
   });
 });
