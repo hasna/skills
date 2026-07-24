@@ -55,7 +55,9 @@ export function registerDiagnostic(parent: Command) {
 
 function handleDoctor(options: { json: boolean }) {
   const installed = getInstalledSkills();
-  if (!installed.length) { console.log(options.json ? JSON.stringify({ skills: [], message: "No pinned skills" }) : "No pinned skills"); return; }
+  // Keep the --json top-level shape stable across states: always an array of
+  // per-skill reports (empty when nothing is pinned), matching the pinned case below.
+  if (!installed.length) { console.log(options.json ? JSON.stringify([], null, 2) : "No pinned skills"); return; }
 
   function cmdAvailable(cmd: string): boolean { try { execSync(`which ${cmd}`, { stdio: "ignore" }); return true; } catch { return false; } }
 
