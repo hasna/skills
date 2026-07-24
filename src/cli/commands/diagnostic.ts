@@ -9,7 +9,7 @@ import type { Command } from "commander";
 import { execSync } from "child_process";
 import pkg from "../../../package.json" with { type: "json" };
 import { getSkill } from "../../lib/registry.js";
-import { getSkillRequirements } from "../../lib/skillinfo.js";
+import { getSkillRequirements, getSkillDependencyStatus } from "../../lib/skillinfo.js";
 import { getInstallMeta, getInstalledSkills, getSkillPath, getAgentSkillsDir, AGENT_TARGETS, AGENT_LABELS } from "../../lib/installer.js";
 
 export function registerDiagnostic(parent: Command) {
@@ -66,7 +66,8 @@ function handleDoctor(options: { json: boolean }) {
     const reqs = getSkillRequirements(name);
     const envVars = (reqs?.envVars ?? []).map((v) => ({ name: v, set: !!process.env[v] }));
     const systemDeps = (reqs?.systemDeps ?? []).map((d) => ({ name: d, available: cmdAvailable(d) }));
-    report.push({ skill: name, envVars, systemDeps, healthy: envVars.every((v) => v.set) && systemDeps.every((d) => d.available) });
+    const npmDeps = getSkillDependencyStatus(name);
+    report.push({ skill: name, envVars, systemDeps, npmDeps, healthy: envVars.every((v) => v.set) && systemDeps.every((d) => d.available) && npmDeps.every((d) => d.installed) });
   }
 
   if (options.json) { console.log(JSON.stringify(report, null, 2)); return; }
@@ -76,7 +77,8 @@ function handleDoctor(options: { json: boolean }) {
     console.log(`  ${entry.healthy ? chalk.green("✓") : chalk.red("✗")} ${chalk.bold(entry.skill)}`);
     for (const v of entry.envVars) console.log(`      ${v.name} [${v.set ? chalk.green("set") : chalk.red("missing")}]`);
     for (const d of entry.systemDeps) console.log(`      ${d.name} [${d.available ? chalk.green("available") : chalk.red("not found")}]`);
-    if (!entry.envVars.length && !entry.systemDeps.length) console.log(chalk.dim("      No requirements"));
+    for (const d of entry.npmDeps) console.log(`      ${d.name} [${d.installed ? chalk.green("installed") : chalk.red("not installed")}]`);
+    if (!entry.envVars.length && !entry.systemDeps.length && !entry.npmDeps.length) console.log(chalk.dim("      No requirements"));
   }
   if (!issues.length) console.log(chalk.green("\n  All skills healthy! ✓"));
 }
@@ -104,8 +106,8 @@ async function handleTest(skillArg: string | undefined, options: { json: boolean
       const proc = Bun.spawnSync(["which", dep]);
       return { name: dep, available: proc.exitCode === 0 };
     });
-    const npmDeps = Object.entries(reqs?.dependencies ?? {}).map(([pkgName, version]) => ({ name: pkgName, version: version as string }));
-    results.push({ skill: name, envVars, systemDeps, npmDeps, ready: envVars.every((v) => v.set) && systemDeps.every((d) => d.available) });
+    const npmDeps = getSkillDependencyStatus(name);
+    results.push({ skill: name, envVars, systemDeps, npmDeps, ready: envVars.every((v) => v.set) && systemDeps.every((d) => d.available) && npmDeps.every((d) => d.installed) });
   }
 
   if (options.json) { console.log(JSON.stringify(results, null, 2)); return; }
@@ -116,7 +118,7 @@ async function handleTest(skillArg: string | undefined, options: { json: boolean
     if (!result.envVars.length && !result.systemDeps.length) console.log(chalk.dim("    No requirements"));
     for (const v of result.envVars) console.log(v.set ? `    ${chalk.green("\u2713")} ${v.name}` : `    ${chalk.red("\u2717")} ${v.name} ${chalk.dim("(missing)")}`);
     for (const dep of result.systemDeps) console.log(dep.available ? `    ${chalk.green("\u2713")} ${dep.name} ${chalk.dim("(system)")}` : `    ${chalk.red("\u2717")} ${dep.name} ${chalk.dim("(not installed)")}`);
-    if (result.npmDeps.length > 0) console.log(chalk.dim(`    npm: ${result.npmDeps.map((d) => d.name).join(", ")}`));
+    for (const dep of result.npmDeps) console.log(dep.installed ? `    ${chalk.green("✓")} ${dep.name} ${chalk.dim("(npm)")}` : `    ${chalk.red("✗")} ${dep.name} ${chalk.dim("(npm — not installed; run: skills run " + result.skill + ")")}`);
   }
   console.log();
   if (allReady) console.log(chalk.green(`All ${results.length} skill(s) ready`));

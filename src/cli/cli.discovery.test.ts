@@ -249,6 +249,22 @@ describe("CLI discovery", () => {
       expect(exitCode).not.toBe(0);
     });
 
+    test("outputs one name per line with --format compact", async () => {
+      const { stdout, exitCode } = await runCli(["list", "--format", "compact"]);
+      expect(exitCode).toBe(0);
+      const lines = stdout.trim().split("\n").filter(Boolean);
+      expect(lines.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
+      expect(lines).toContain("image");
+    });
+
+    test("rejects an unknown --format value instead of silently falling back", async () => {
+      const { stdout, stderr, exitCode } = await runCli(["list", "--format", "bogusfmt"]);
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("Unknown --format value: bogusfmt");
+      expect(stderr).toContain("compact, csv");
+      expect(stdout).not.toContain("Available default skills");
+    });
+
     test("outputs JSON with --json", async () => {
       const { stdout } = await runCli(["list", "--json"]);
       const data = JSON.parse(stdout);
@@ -380,6 +396,13 @@ describe("CLI discovery", () => {
     test("shows message for no results", async () => {
       const { stdout } = await runCli(["search", "zzzznonexistentzzzzz"]);
       expect(stdout).toContain("No skills found");
+    });
+
+    test("rejects an unknown --format value instead of silently falling back", async () => {
+      const { stdout, stderr, exitCode } = await runCli(["search", "pdf", "--format", "bogusfmt"]);
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("Unknown --format value: bogusfmt");
+      expect(stdout).not.toContain("Found");
     });
 
     test("outputs JSON with --json", async () => {

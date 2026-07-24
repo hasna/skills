@@ -5,26 +5,38 @@
 import type { Command } from "commander";
 import { SKILLS, CATEGORIES } from "../../lib/registry.js";
 
-const subcommands = [
-  "interactive", "install", "pin", "unpin", "pins", "list", "search", "info", "show", "docs", "requires",
-  "run", "init", "remove", "update", "categories", "tags", "mcp",
-  "self-update", "completion", "export", "import", "doctor", "auth", "billing", "credits", "env-check",
-  "setup-info", "test", "outdated", "config", "new", "scaffold", "port", "add", "create", "sync", "validate", "diff",
-  "schedule", "registry", "feedback", "quote",
-];
 const skillCmds = ["pin", "unpin", "info", "show", "docs", "requires", "run", "quote", "validate"];
 const skillNames = SKILLS.map((s) => s.name);
 const categoryNames = CATEGORIES.map((c) => c);
+
+/**
+ * Enumerate the actual top-level subcommands from the live commander tree so
+ * completion never drifts out of sync with the real command surface. Reads the
+ * registered command tree (including groups added by dependencies such as
+ * @hasna/events) rather than a hand-maintained list.
+ */
+function collectSubcommands(parent: Command): string[] {
+  const help = parent.createHelp();
+  const names = new Set<string>();
+  for (const cmd of help.visibleCommands(parent)) {
+    names.add(cmd.name());
+    for (const alias of cmd.aliases()) names.add(alias);
+  }
+  // The auto-generated `help` command is not a user-facing verb worth completing.
+  names.delete("help");
+  return [...names];
+}
 
 export function registerCompletion(parent: Command) {
   parent
     .command("completion")
     .argument("<shell>", "Shell type: bash, zsh, or fish")
     .description("Generate shell completions")
-    .action((shell: string) => generateCompletion(shell));
+    .action((shell: string) => generateCompletion(shell, parent));
 }
 
-function generateCompletion(shell: string) {
+function generateCompletion(shell: string, parent: Command) {
+  const subcommands = collectSubcommands(parent);
   switch (shell) {
     case "bash": {
       console.log(`# Bash completion for skills CLI
