@@ -153,6 +153,49 @@ function isHostedPremiumSkill(skillName: string, meta?: SkillMeta): boolean {
   return isPremiumSkill(skillName) || Boolean(meta?.tags.includes("premium") || meta?.tags.includes("remote"));
 }
 
+export interface SkillDependencyStatus {
+  name: string;
+  version: string;
+  installed: boolean;
+}
+
+/**
+ * Check whether `pkgName` is resolvable from `fromDir` using node_modules
+ * resolution: walk up ancestor directories looking for
+ * `node_modules/<pkgName>/package.json`. Handles scoped packages because
+ * `pkgName` already contains the `@scope/` prefix. This mirrors how a skill
+ * actually imports the dependency at runtime.
+ */
+function isPackageResolvable(pkgName: string, fromDir: string): boolean {
+  let dir = fromDir;
+  while (true) {
+    if (existsSync(join(dir, "node_modules", pkgName, "package.json"))) return true;
+    const parent = join(dir, "..");
+    if (parent === dir) return false;
+    dir = parent;
+  }
+}
+
+/**
+ * Resolve npm dependency install status for a skill.
+ *
+ * A dependency counts as installed only when it is resolvable from the skill
+ * directory (the skill's own node_modules or any ancestor node_modules),
+ * matching how the skill imports it when it runs. This keeps the doctor/test
+ * readiness signal truthful: a runnable skill that imports `xlsx` is not
+ * "ready" until `xlsx` is actually installed, even if every env var is set.
+ */
+export function getSkillDependencyStatus(name: string): SkillDependencyStatus[] {
+  const skillPath = getSkillPath(name);
+  const reqs = getSkillRequirements(name);
+  const deps = reqs?.dependencies ?? {};
+  return Object.entries(deps).map(([pkgName, version]) => ({
+    name: pkgName,
+    version: version as string,
+    installed: isPackageResolvable(pkgName, skillPath),
+  }));
+}
+
 /**
  * Run a skill by name with given arguments
  */
