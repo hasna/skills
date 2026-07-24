@@ -13,6 +13,9 @@ All notable changes to this project will be documented in this file.
   `SKILLS_API_URL` / `skills setup` for a misconfigured API URL (#24).
 - `--json` auth/billing failures now carry `endpoint` and `apiUrl` alongside
   `error`/`status`/`code`/`detail` (#24).
+- Reported endpoints strip any credentials embedded in the configured API URL
+  (`https://user:pass@host`) so they are never echoed to the terminal or into
+  `--json` output (#24).
 
 ## [0.1.59] - 2026-07-24
 

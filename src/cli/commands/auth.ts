@@ -40,9 +40,23 @@ function prompt(question: string): Promise<string> {
   });
 }
 
+// The configured API URL may embed credentials (https://user:pass@host); never echo those.
+function redactUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.username && !parsed.password) return url;
+    parsed.username = "";
+    parsed.password = "";
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    return url;
+  }
+}
+
 async function apiRequest(path: string, options?: RequestInit) {
   const url = getApiUrl();
-  const endpoint = `${(options?.method || "GET").toUpperCase()} ${url}${path}`;
+  const safeUrl = redactUrl(url);
+  const endpoint = `${(options?.method || "GET").toUpperCase()} ${safeUrl}${path}`;
   let res: Response;
   try {
     res = await fetch(`${url}${path}`, {
@@ -52,7 +66,7 @@ async function apiRequest(path: string, options?: RequestInit) {
   } catch (err) {
     throw new HostedApiError(`Unable to reach the Skills API: ${(err as Error).message}`, {
       endpoint,
-      apiUrl: url,
+      apiUrl: safeUrl,
     });
   }
 
@@ -68,7 +82,7 @@ async function apiRequest(path: string, options?: RequestInit) {
       code,
       detail,
       endpoint,
-      apiUrl: url,
+      apiUrl: safeUrl,
     });
   }
 
@@ -124,7 +138,8 @@ function writeCommandError(err: unknown, fallback: string, json?: boolean): void
 
   const message = String(payload.detail || payload.error || fallback);
   const status = typeof payload.status === "number" ? payload.status : undefined;
-  console.error(chalk.red(status ? `${message} (HTTP ${status})` : message));
+  const showStatus = status !== undefined && !message.startsWith(String(status));
+  console.error(chalk.red(showStatus ? `${message} (HTTP ${status})` : message));
   if (payload.endpoint) console.error(chalk.dim(`Endpoint: ${payload.endpoint}`));
   if (status !== undefined && CONFIG_HINT_STATUSES.has(status)) {
     console.error(chalk.dim(`Hint: check SKILLS_API_URL (currently ${payload.apiUrl}) or run: skills setup`));

@@ -416,6 +416,34 @@ describe("CLI self-hosted auth and billing", () => {
     }
   });
 
+  test("reported endpoints never echo credentials embedded in the API URL (issue #24)", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "cli-endpoint-redaction-"));
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => Response.json({ error: "Something went wrong!" }, { status: 500 }),
+    });
+
+    try {
+      const credentialedApiUrl = new URL(`http://127.0.0.1:${server.port}`);
+      credentialedApiUrl.username = "apiuser";
+      credentialedApiUrl.password = "pw-not-real";
+
+      const result = await runCliInCwd(["auth", "signup", "--email", "me@example.com"], tmpDir, {
+        HOME: tmpDir,
+        SKILLS_API_URL: credentialedApiUrl.toString(),
+      });
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain(`POST http://127.0.0.1:${server.port}/api/auth/login`);
+      expect(result.stderr).not.toContain("pw-not-real");
+      expect(result.stderr).not.toContain("apiuser");
+      expect(result.stdout).not.toContain("pw-not-real");
+    } finally {
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test("self-hosted auth and billing failures stay structured with --json", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-hosted-json-errors-"));
     const server = Bun.serve({
