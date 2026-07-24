@@ -295,6 +295,127 @@ describe("CLI self-hosted auth and billing", () => {
     }
   });
 
+  test("email sign-in failures report status, endpoint and a condensed body (issue #24)", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "cli-signup-opaque-error-"));
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => Response.json({ error: "Something went wrong!" }, { status: 500 }),
+    });
+
+    try {
+      const apiUrl = `http://127.0.0.1:${server.port}`;
+      const result = await runCliInCwd(["auth", "signup", "--email", "me@example.com"], tmpDir, {
+        HOME: tmpDir,
+        SKILLS_API_URL: apiUrl,
+      });
+
+      expect(result.exitCode).not.toBe(0);
+      // The server message must survive, but never on its own: a bare
+      // "Something went wrong!" leaves users with nothing to act on.
+      expect(result.stderr).toContain("Something went wrong!");
+      expect(result.stderr).toContain("500");
+      expect(result.stderr).toContain(`POST ${apiUrl}/api/auth/login`);
+    } finally {
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("email sign-in condenses non-JSON error pages instead of dumping them (issue #24)", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "cli-signup-html-error-"));
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => new Response(
+        "<!DOCTYPE html>\n<html><head><title>502 Bad Gateway</title></head>\n<body>\n<h1>Something went wrong!</h1>\n<p>noise</p>\n</body></html>",
+        { status: 502, headers: { "content-type": "text/html" } },
+      ),
+    });
+
+    try {
+      const result = await runCliInCwd(["auth", "signup", "--email", "me@example.com"], tmpDir, {
+        HOME: tmpDir,
+        SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+      });
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("Something went wrong!");
+      expect(result.stderr).toContain("502");
+      expect(result.stderr).not.toContain("<!DOCTYPE html>");
+      expect(result.stderr).not.toContain("<h1>");
+    } finally {
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("email sign-in against an API without email routes points at SKILLS_API_URL (issue #24)", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "cli-signup-wrong-api-"));
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => Response.json({ error: "authentication required", code: "AUTH_REQUIRED" }, { status: 401 }),
+    });
+
+    try {
+      const result = await runCliInCwd(["auth", "signup", "--email", "me@example.com"], tmpDir, {
+        HOME: tmpDir,
+        SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+      });
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("401");
+      expect(result.stderr).toContain("SKILLS_API_URL");
+    } finally {
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("unreachable API errors name the endpoint that could not be reached (issue #24)", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "cli-signup-unreachable-"));
+    const server = Bun.serve({ port: 0, fetch: () => new Response("ok") });
+    const port = server.port;
+    server.stop(true);
+
+    try {
+      const result = await runCliInCwd(["auth", "signup", "--email", "me@example.com"], tmpDir, {
+        HOME: tmpDir,
+        SKILLS_API_URL: `http://127.0.0.1:${port}`,
+      });
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain(`http://127.0.0.1:${port}/api/auth/login`);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("--json auth failures carry the endpoint and status machine-readably (issue #24)", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "cli-json-endpoint-"));
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => Response.json({ error: "Something went wrong!" }, { status: 500 }),
+    });
+
+    try {
+      const apiUrl = `http://127.0.0.1:${server.port}`;
+      const result = await runCliInCwd(["auth", "login", "--email", "me@example.com", "--json"], tmpDir, {
+        HOME: tmpDir,
+        SKILLS_API_URL: apiUrl,
+      });
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toBe("");
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        error: "Something went wrong!",
+        status: 500,
+        endpoint: `POST ${apiUrl}/api/auth/login`,
+      });
+    } finally {
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test("self-hosted auth and billing failures stay structured with --json", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-hosted-json-errors-"));
     const server = Bun.serve({
