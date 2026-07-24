@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.59] - 2026-07-24
+
+### Fixed
+- Rebranded "Open Skills" to "Hasna Skills" and scrubbed internal domain/infra
+  leakage from published output (#34).
+- `doctor --json` now always emits an array shape for stable machine parsing
+  (#43).
+- `list`/`search` reject unknown `--format` values instead of silently falling
+  back (#44).
+- `doctor`/`test` diagnostics verify npm dependencies so reported readiness is
+  truthful (#41).
+- Shell completion derives subcommands from the live command tree, enumerating
+  the real subcommands (runs, exports, storage, webhooks, events) (#42).
+
+### Added
+- Hardened squash-merge provenance handling (#40).
+
 ## [0.1.54] - 2026-06-29
 
 ### Fixed
