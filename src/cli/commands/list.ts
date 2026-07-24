@@ -95,6 +95,24 @@ export function registerBrowse(parent: Command) {
     });
 }
 
+const VALID_LIST_FORMATS = ["compact", "csv"] as const;
+type ListFormat = (typeof VALID_LIST_FORMATS)[number];
+
+/**
+ * Validate a user-supplied --format value. Returns the format when valid or
+ * undefined when none was supplied. Throws for unknown values so callers surface
+ * a nonzero exit + error instead of silently falling back to default output.
+ */
+function resolveListFormat(format: unknown): ListFormat | undefined {
+  if (format === undefined || format === null) return undefined;
+  if (!(VALID_LIST_FORMATS as readonly string[]).includes(format as string)) {
+    throw new Error(
+      `Unknown --format value: ${format}\nValid formats: ${VALID_LIST_FORMATS.join(", ")}`,
+    );
+  }
+  return format as ListFormat;
+}
+
 function formatBrief(skill: PublicSkillDiscovery) {
   return `${skill.name} \u2014 ${truncateText(skill.description, 110)} (${publicDiscoveryPriceLabel(skill)}) [${skill.category}]`;
 }
@@ -144,7 +162,8 @@ function availableCategories(options: { remote?: boolean }, registry: SkillMeta[
 
 async function handleList(options: any) {
   const brief = options.brief && !options.json;
-  const fmt = !options.json ? (options.format as string | undefined) : undefined;
+  const requestedFormat = resolveListFormat(options.format);
+  const fmt = !options.json ? requestedFormat : undefined;
   const profile: SkillRegistryProfile = options.all ? "all" : "basic";
   const registry = await getBrowseRegistry(options);
   const limit = parsePageLimit(options.limit, DEFAULT_LIST_LIMIT, { allowAll: true });
@@ -246,7 +265,8 @@ async function handleSearch(query: string, options: any) {
   }
 
   const brief = options.brief && !options.json;
-  const fmt = !options.json ? options.format : undefined;
+  const requestedFormat = resolveListFormat(options.format);
+  const fmt = !options.json ? requestedFormat : undefined;
 
   const output = enrichDiscovery(results);
   if (options.json) { await writeJson(output, 2); return; }
