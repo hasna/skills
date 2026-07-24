@@ -315,10 +315,40 @@ describe("CLI pin and search controls", () => {
     test("outputs valid JSON", async () => {
       const { stdout } = await runCli(["doctor", "--json"]);
       const data = JSON.parse(stdout);
-      // Either an array (skills found) or object with message (none pinned).
-      const isArray = Array.isArray(data);
-      const isEmptyMsg = data.message === "No pinned skills";
-      expect(isArray || isEmptyMsg).toBe(true);
+      // The top-level shape is always an array, regardless of pin state.
+      expect(Array.isArray(data)).toBe(true);
+    });
+
+    test("--json shape is a stable array across pin states", async () => {
+      const { mkdtempSync, rmSync, mkdirSync, writeFileSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+
+      // No pins: fresh HOME + cwd with nothing pinned.
+      const emptyDir = mkdtempSync(join(tmpdir(), "cli-doctor-empty-"));
+      // Pinned: a cwd that pins a real skill via .skills/project.json.
+      const pinnedDir = mkdtempSync(join(tmpdir(), "cli-doctor-pinned-"));
+      try {
+        const emptyRes = await runCliInCwd(["doctor", "--json"], emptyDir, { HOME: emptyDir });
+        const emptyData = JSON.parse(emptyRes.stdout);
+        expect(Array.isArray(emptyData)).toBe(true);
+        expect(emptyData).toEqual([]);
+        expect(emptyRes.exitCode).toBe(0);
+
+        const pinRes = await runCliInCwd(["pin", "excel", "--json"], pinnedDir, { HOME: pinnedDir });
+        expect(pinRes.exitCode).toBe(0);
+        const doctorRes = await runCliInCwd(["doctor", "--json"], pinnedDir, { HOME: pinnedDir });
+        const pinnedData = JSON.parse(doctorRes.stdout);
+        expect(Array.isArray(pinnedData)).toBe(true);
+        expect(pinnedData.length).toBeGreaterThan(0);
+        expect(doctorRes.exitCode).toBe(0);
+
+        // Same top-level JSON type in both states.
+        expect(typeof emptyData).toBe(typeof pinnedData);
+      } finally {
+        rmSync(emptyDir, { recursive: true, force: true });
+        rmSync(pinnedDir, { recursive: true, force: true });
+      }
     });
 
     test("shows help for doctor command", async () => {
