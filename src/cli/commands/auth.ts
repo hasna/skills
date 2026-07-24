@@ -6,17 +6,27 @@ import { getApiKey, getAuthConfig, saveAuthConfig, clearAuthConfig, getApiUrl } 
 const isTTY = process.stdin.isTTY && process.stdout.isTTY;
 const DEFAULT_DEVICE_POLL_TIMEOUT_MS = 10 * 60 * 1000;
 
+const MAX_ERROR_DETAIL_LENGTH = 200;
+const CONFIG_HINT_STATUSES = new Set([401, 403, 404, 405, 501]);
+
 class HostedApiError extends Error {
   readonly status?: number;
   readonly code?: string;
   readonly detail?: string;
+  readonly endpoint?: string;
+  readonly apiUrl?: string;
 
-  constructor(message: string, options: { status?: number; code?: string; detail?: string } = {}) {
+  constructor(
+    message: string,
+    options: { status?: number; code?: string; detail?: string; endpoint?: string; apiUrl?: string } = {},
+  ) {
     super(message);
     this.name = "HostedApiError";
     this.status = options.status;
     this.code = options.code;
     this.detail = options.detail;
+    this.endpoint = options.endpoint;
+    this.apiUrl = options.apiUrl;
   }
 }
 
@@ -30,8 +40,23 @@ function prompt(question: string): Promise<string> {
   });
 }
 
+// The configured API URL may embed credentials (https://user:pass@host); never echo those.
+function redactUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.username && !parsed.password) return url;
+    parsed.username = "";
+    parsed.password = "";
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    return url;
+  }
+}
+
 async function apiRequest(path: string, options?: RequestInit) {
   const url = getApiUrl();
+  const safeUrl = redactUrl(url);
+  const endpoint = `${(options?.method || "GET").toUpperCase()} ${safeUrl}${path}`;
   let res: Response;
   try {
     res = await fetch(`${url}${path}`, {
@@ -39,7 +64,10 @@ async function apiRequest(path: string, options?: RequestInit) {
       headers: { "Content-Type": "application/json", ...options?.headers },
     });
   } catch (err) {
-    throw new HostedApiError(`Unable to reach self-hosted Skills API: ${(err as Error).message}`);
+    throw new HostedApiError(`Unable to reach the Skills API: ${(err as Error).message}`, {
+      endpoint,
+      apiUrl: safeUrl,
+    });
   }
 
   const text = await res.text();
@@ -53,6 +81,8 @@ async function apiRequest(path: string, options?: RequestInit) {
       status: res.status,
       code,
       detail,
+      endpoint,
+      apiUrl: safeUrl,
     });
   }
 
@@ -63,8 +93,21 @@ function parseJsonBody(text: string): unknown {
   try {
     return JSON.parse(text);
   } catch {
-    return { detail: text };
+    return { detail: condenseErrorBody(text) };
   }
+}
+
+// Error bodies are frequently HTML pages from a proxy/CDN rather than API JSON.
+// Dumping the raw page hides the real message, so keep a short single-line summary.
+function condenseErrorBody(text: string): string {
+  const stripped = /<[a-z!/]/i.test(text)
+    ? text
+        .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
+        .replace(/<[^>]*>/g, " ")
+    : text;
+  const collapsed = stripped.replace(/\s+/g, " ").trim();
+  if (collapsed.length <= MAX_ERROR_DETAIL_LENGTH) return collapsed;
+  return `${collapsed.slice(0, MAX_ERROR_DETAIL_LENGTH - 1).trimEnd()}…`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -78,6 +121,8 @@ function commandErrorPayload(err: unknown, fallback: string): Record<string, unk
       ...(err.status !== undefined ? { status: err.status } : {}),
       ...(err.code ? { code: err.code } : {}),
       ...(err.detail && err.detail !== err.message ? { detail: err.detail } : {}),
+      ...(err.endpoint ? { endpoint: err.endpoint } : {}),
+      ...(err.apiUrl ? { apiUrl: err.apiUrl } : {}),
     };
   }
   return { error: (err as Error)?.message || fallback };
@@ -85,8 +130,20 @@ function commandErrorPayload(err: unknown, fallback: string): Record<string, unk
 
 function writeCommandError(err: unknown, fallback: string, json?: boolean): void {
   const payload = commandErrorPayload(err, fallback);
-  if (json) console.log(JSON.stringify(payload, null, 2));
-  else console.error(chalk.red(String(payload.detail || payload.error || fallback)));
+  if (json) {
+    console.log(JSON.stringify(payload, null, 2));
+    process.exitCode = 1;
+    return;
+  }
+
+  const message = String(payload.detail || payload.error || fallback);
+  const status = typeof payload.status === "number" ? payload.status : undefined;
+  const showStatus = status !== undefined && !message.startsWith(String(status));
+  console.error(chalk.red(showStatus ? `${message} (HTTP ${status})` : message));
+  if (payload.endpoint) console.error(chalk.dim(`Endpoint: ${payload.endpoint}`));
+  if (status !== undefined && CONFIG_HINT_STATUSES.has(status)) {
+    console.error(chalk.dim(`Hint: check SKILLS_API_URL (currently ${payload.apiUrl}) or run: skills setup`));
+  }
   process.exitCode = 1;
 }
 

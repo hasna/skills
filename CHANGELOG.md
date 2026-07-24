@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.60] - 2026-07-25
+
+### Fixed
+- `skills auth signup`/`auth login` no longer fail with a bare, unactionable
+  message such as "Something went wrong!". API failures now report the HTTP
+  status and the exact endpoint that was called, non-JSON error bodies (proxy
+  or CDN HTML pages) are condensed to a single readable line instead of being
+  dumped raw, and 401/403/404/405/501 responses add a hint pointing at
+  `SKILLS_API_URL` / `skills setup` for a misconfigured API URL (#24).
+- `--json` auth/billing failures now carry `endpoint` and `apiUrl` alongside
+  `error`/`status`/`code`/`detail` (#24).
+- Reported endpoints strip any credentials embedded in the configured API URL
+  (`https://user:pass@host`) so they are never echoed to the terminal or into
+  `--json` output (#24).
+
 ## [0.1.59] - 2026-07-24
 
 ### Fixed
