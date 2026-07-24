@@ -6,7 +6,7 @@ recommend a compatible self-hosted API, while local-only usage remains available
 without requiring an API account or source-copy installs.
 
 The open package can optionally talk to the Hasna self-hosted API at
-`https://skills.hasna.xyz` for server-executed skills. That API path is explicit
+`https://skills.md` for server-executed skills. That API path is explicit
 configuration, not a dependency of local-only use.
 
 ## Target Users

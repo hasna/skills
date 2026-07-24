@@ -1,4 +1,4 @@
-export const DEFAULT_SELF_HOSTED_API_URL = "https://skills.hasna.xyz";
+export const DEFAULT_SELF_HOSTED_API_URL = "https://skills.md";
 
 export interface SkillsServerConfig {
   host: string;

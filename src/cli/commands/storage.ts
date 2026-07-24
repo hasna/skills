@@ -24,7 +24,7 @@ export function registerStorage(parent: Command) {
         console.log(JSON.stringify(status, null, 2));
         return;
       }
-      console.log(chalk.bold("Open Skills storage"));
+      console.log(chalk.bold("Hasna Skills storage"));
       console.log(`${chalk.dim("Mode:")} ${status.mode}`);
       console.log(`${chalk.dim("Project state:")} ${status.local.projectStateDir}`);
       console.log(`${chalk.dim("Feedback DB:")} ${status.local.feedbackDbPath}`);
@@ -63,7 +63,7 @@ export function registerStorage(parent: Command) {
         console.log(JSON.stringify(plan, null, 2));
         return;
       }
-      console.log(chalk.bold("Open Skills sync plan"));
+      console.log(chalk.bold("Hasna Skills sync plan"));
       console.log(`${chalk.dim("Mode:")} ${plan.mode}`);
       console.log(`${chalk.dim("Snapshot files:")} ${plan.snapshotFileCount}`);
       console.log(`${chalk.dim("S3 objects:")} ${plan.s3ObjectCount}`);

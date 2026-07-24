@@ -9,7 +9,7 @@ with self-hosted execution kept behind explicit setup and auth.
 - `hasna/skills` is the canonical open repository.
 - `@hasna/skills` is the public npm package.
 - Local-only setup works without API credentials.
-- Compatible self-hosted APIs such as `https://skills.hasna.xyz` are optional
+- Compatible self-hosted APIs such as `https://your-server.example` are optional
   API targets over public contracts.
 - Provider secrets, billing, tenant, database, and deployment state stay outside
   local projects and source packages unless explicitly part of the deployable

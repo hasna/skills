@@ -382,9 +382,9 @@ describe("CLI run premium developer", () => {
             const body = await req.json() as { args?: string[] };
             expect(body.args).toEqual([
               "--target",
-              "https://skills.hasna.xyz",
+              "https://your-server.example",
               "--app",
-              "Open Skills",
+              "Hasna Skills",
               "--surface",
               "web",
             ]);
@@ -417,9 +417,9 @@ describe("CLI run premium developer", () => {
           "--json",
           "performance-audit-report",
           "--target",
-          "https://skills.hasna.xyz",
+          "https://your-server.example",
           "--app",
-          "Open Skills",
+          "Hasna Skills",
           "--surface",
           "web",
         ], {

@@ -1,5 +1,5 @@
 /**
- * Open Skills - Open source skill library for AI coding agents
+ * Hasna Skills - Open source skill library for AI coding agents
  *
  * Pin AI agent skills with a single command:
  *   skills pin image deepresearch

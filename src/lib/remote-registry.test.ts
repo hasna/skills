@@ -17,11 +17,11 @@ describe("remote registry", () => {
   });
 
   test("builds skills endpoint from self-hosted origin", () => {
-    expect(buildSkillsApiUrl("https://skills.hasna.xyz")).toBe("https://skills.hasna.xyz/api/v1/skills");
+    expect(buildSkillsApiUrl("https://registry.example.com")).toBe("https://registry.example.com/api/v1/skills");
   });
 
   test("builds skills endpoint from explicit API base", () => {
-    expect(buildSkillsApiUrl("https://skills.hasna.xyz/api/v1/")).toBe("https://skills.hasna.xyz/api/v1/skills");
+    expect(buildSkillsApiUrl("https://registry.example.com/api/v1/")).toBe("https://registry.example.com/api/v1/skills");
     expect(buildSkillsApiUrl("http://localhost:3505/api")).toBe("http://localhost:3505/api/skills");
   });
 

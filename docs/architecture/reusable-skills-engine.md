@@ -1,7 +1,7 @@
 # Reusable Skills Engine
 
 This package stays useful as `hasna/skills` without requiring the
-`skills.hasna.xyz` self-hosted API. Generic engine behavior must remain
+`skills.md` self-hosted API. Generic engine behavior must remain
 local-first, tested, and documented so the deployable service and compatible
 operators can reuse it without forking the core agent contracts.
 
@@ -135,5 +135,5 @@ Coverage expectations:
 
 Do not add deployment-only assumptions to the local engine contract. Tenant
 state, Postgres persistence, billing providers, workers, AWS infrastructure, and
-`skills.hasna.xyz` deployment configuration belong in the self-hosted service
+`skills.md` deployment configuration belong in the self-hosted service
 surface and infrastructure, not in local skill discovery/pinning contracts.

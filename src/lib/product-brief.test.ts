@@ -35,7 +35,7 @@ describe("@hasna/skills product brief", () => {
   test("anchors product to public package and optional self-hosted API", () => {
     expect(brief).toContain("hasna/skills");
     expect(brief).toContain("@hasna/skills");
-    expect(brief).toContain("https://skills.hasna.xyz");
+    expect(brief).toContain("https://skills.md");
     expect(brief).toContain("local-only");
     expect(brief).not.toContain(cloudPackage);
   });
