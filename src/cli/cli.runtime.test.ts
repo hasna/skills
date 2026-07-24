@@ -277,6 +277,27 @@ describe("CLI runtime and misc commands", () => {
       const { stdout } = await runCli(["test", "--help"]);
       expect(stdout).toContain("readiness");
     });
+
+    test("npmDeps entries expose install status and gate readiness", async () => {
+      // Regression: `skills test excel --json` previously listed npmDeps without
+      // an `installed` field and computed `ready` from env vars alone, so a skill
+      // that cannot run without its npm deps could report a false-green readiness.
+      const { stdout } = await runCli(["test", "excel", "--json"]);
+      const data = JSON.parse(stdout);
+      const entry = data[0];
+      expect(entry.npmDeps.length).toBeGreaterThan(0);
+      for (const dep of entry.npmDeps) {
+        expect(dep).toHaveProperty("name");
+        expect(dep).toHaveProperty("installed");
+        expect(typeof dep.installed).toBe("boolean");
+      }
+      // Readiness must reflect every signal, including npm deps.
+      const expectedReady =
+        entry.envVars.every((v: { set: boolean }) => v.set) &&
+        entry.systemDeps.every((d: { available: boolean }) => d.available) &&
+        entry.npmDeps.every((d: { installed: boolean }) => d.installed);
+      expect(entry.ready).toBe(expectedReady);
+    });
   });
 
   describe("schedule --json", () => {

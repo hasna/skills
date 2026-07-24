@@ -6,6 +6,7 @@ import {
   getSkillDocs,
   getSkillBestDoc,
   getSkillRequirements,
+  getSkillDependencyStatus,
   generateEnvExample,
   generateSkillMd,
   detectProjectSkills,
@@ -119,6 +120,84 @@ describe("skillinfo", () => {
       const reqs = getSkillRequirements("read-csv");
       expect(reqs).not.toBeNull();
       expect(reqs!.dependencies).toHaveProperty("csv-parse");
+    });
+  });
+
+  describe("getSkillDependencyStatus", () => {
+    // Regression: doctor/test previously computed readiness only from env vars
+    // and system deps, never verifying that a skill's npm dependencies were
+    // installed — so a runnable skill like `excel` (which needs `xlsx`) could
+    // report a false-green readiness while being unable to run at all.
+    let prevSkillsDir: string | undefined;
+    let skillsRoot: string;
+
+    beforeEach(() => {
+      prevSkillsDir = process.env.HASNA_SKILLS_DIR;
+      skillsRoot = mkdtempSync(join(tmpdir(), "skills-dep-root-"));
+      process.env.HASNA_SKILLS_DIR = skillsRoot;
+    });
+
+    afterEach(() => {
+      const { rmSync } = require("fs");
+      if (prevSkillsDir === undefined) delete process.env.HASNA_SKILLS_DIR;
+      else process.env.HASNA_SKILLS_DIR = prevSkillsDir;
+      rmSync(skillsRoot, { recursive: true, force: true });
+    });
+
+    function scaffold(name: string, deps: Record<string, string>): string {
+      const dir = join(skillsRoot, name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({ name, version: "0.1.0", dependencies: deps }),
+      );
+      writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\n---\n# ${name}\n`);
+      return dir;
+    }
+
+    function installDep(dir: string, pkgName: string): void {
+      const modDir = join(dir, "node_modules", pkgName);
+      mkdirSync(modDir, { recursive: true });
+      writeFileSync(
+        join(modDir, "package.json"),
+        JSON.stringify({ name: pkgName, version: "1.3.0" }),
+      );
+    }
+
+    test("flags declared npm deps as not installed when node_modules is missing", () => {
+      scaffold("dep-fixture", { "left-pad": "^1.3.0" });
+      const status = getSkillDependencyStatus("dep-fixture");
+      expect(status).toEqual([{ name: "left-pad", version: "^1.3.0", installed: false }]);
+    });
+
+    test("reports a dep as installed once resolvable from the skill dir", () => {
+      const dir = scaffold("dep-fixture-installed", { "left-pad": "^1.3.0" });
+      installDep(dir, "left-pad");
+      const status = getSkillDependencyStatus("dep-fixture-installed");
+      expect(status).toEqual([{ name: "left-pad", version: "^1.3.0", installed: true }]);
+    });
+
+    test("resolves deps hoisted into an ancestor node_modules", () => {
+      scaffold("dep-fixture-hoisted", { "left-pad": "^1.3.0" });
+      installDep(skillsRoot, "left-pad");
+      const status = getSkillDependencyStatus("dep-fixture-hoisted");
+      expect(status.find((d) => d.name === "left-pad")?.installed).toBe(true);
+    });
+
+    test("reports mixed install status across multiple deps", () => {
+      const dir = scaffold("dep-fixture-mixed", { "left-pad": "^1.3.0", "right-pad": "^2.0.0" });
+      installDep(dir, "left-pad");
+      const status = getSkillDependencyStatus("dep-fixture-mixed");
+      const byName = Object.fromEntries(status.map((d) => [d.name, d.installed]));
+      expect(byName["left-pad"]).toBe(true);
+      expect(byName["right-pad"]).toBe(false);
+      // Readiness must be false while any dep is missing — the core false-green fix.
+      expect(status.every((d) => d.installed)).toBe(false);
+    });
+
+    test("returns an empty list for a skill with no dependencies", () => {
+      scaffold("dep-fixture-none", {});
+      expect(getSkillDependencyStatus("dep-fixture-none")).toEqual([]);
     });
   });
 
