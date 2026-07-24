@@ -277,6 +277,27 @@ describe("CLI runtime and misc commands", () => {
       const { stdout } = await runCli(["test", "--help"]);
       expect(stdout).toContain("readiness");
     });
+
+    test("npmDeps entries expose install status and gate readiness", async () => {
+      // Regression: `skills test excel --json` previously listed npmDeps without
+      // an `installed` field and computed `ready` from env vars alone, so a skill
+      // that cannot run without its npm deps could report a false-green readiness.
+      const { stdout } = await runCli(["test", "excel", "--json"]);
+      const data = JSON.parse(stdout);
+      const entry = data[0];
+      expect(entry.npmDeps.length).toBeGreaterThan(0);
+      for (const dep of entry.npmDeps) {
+        expect(dep).toHaveProperty("name");
+        expect(dep).toHaveProperty("installed");
+        expect(typeof dep.installed).toBe("boolean");
+      }
+      // Readiness must reflect every signal, including npm deps.
+      const expectedReady =
+        entry.envVars.every((v: { set: boolean }) => v.set) &&
+        entry.systemDeps.every((d: { available: boolean }) => d.available) &&
+        entry.npmDeps.every((d: { installed: boolean }) => d.installed);
+      expect(entry.ready).toBe(expectedReady);
+    });
   });
 
   describe("schedule --json", () => {
@@ -493,6 +514,11 @@ describe("CLI runtime and misc commands", () => {
   });
 
   describe("completion", () => {
+    // Real top-level subcommands that were historically omitted because the
+    // completion generator used a hand-maintained list (see audit
+    // completion-missing-subcmds). These must always tab-complete.
+    const previouslyMissingSubcmds = ["runs", "exports", "storage", "webhooks", "events"];
+
     test("bash completion includes all current top-level commands", async () => {
       const { stdout } = await runCli(["completion", "bash"]);
       expect(stdout).toContain("interactive");
@@ -510,6 +536,16 @@ describe("CLI runtime and misc commands", () => {
       expect(stdout).toContain("feedback");
     });
 
+    test("bash completion enumerates real subcommands the generator once omitted", async () => {
+      const { stdout } = await runCli(["completion", "bash"]);
+      const match = stdout.match(/subcmds="([^"]*)"/);
+      expect(match).not.toBeNull();
+      const subcmds = (match?.[1] ?? "").split(/\s+/);
+      for (const cmd of previouslyMissingSubcmds) {
+        expect(subcmds).toContain(cmd);
+      }
+    });
+
     test("zsh completion includes all current top-level commands", async () => {
       const { stdout } = await runCli(["completion", "zsh"]);
       expect(stdout).toContain("'interactive:interactive command'");
@@ -525,6 +561,20 @@ describe("CLI runtime and misc commands", () => {
       expect(stdout).toContain("'schedule:schedule command'");
       expect(stdout).toContain("'registry:registry command'");
       expect(stdout).toContain("'feedback:feedback command'");
+    });
+
+    test("zsh completion enumerates real subcommands the generator once omitted", async () => {
+      const { stdout } = await runCli(["completion", "zsh"]);
+      for (const cmd of previouslyMissingSubcmds) {
+        expect(stdout).toContain(`'${cmd}:${cmd} command'`);
+      }
+    });
+
+    test("fish completion enumerates real subcommands the generator once omitted", async () => {
+      const { stdout } = await runCli(["completion", "fish"]);
+      for (const cmd of previouslyMissingSubcmds) {
+        expect(stdout).toContain(`__fish_use_subcommand' -a '${cmd}'`);
+      }
     });
   });
 });
