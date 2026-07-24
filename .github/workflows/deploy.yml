@@ -178,4 +178,4 @@ jobs:
       - name: Smoke health endpoint
         run: |
           set -euo pipefail
-          curl -fsS https://skills.md/health | jq -e '.ok == true and .service == "open-skills" and .mode == "self-hosted"'
+          curl -fsS https://skills.hasna.xyz/health | jq -e '.ok == true and .service == "open-skills" and .mode == "self-hosted"'
