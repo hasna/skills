@@ -36,24 +36,76 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: gha-deploy-${{ env.APP }}-${{ github.run_id }}
 
+      # Every infrastructure identifier this workflow needs (cluster, service,
+      # task family, container, ECR repo, networking, health URL) is resolved
+      # here from the deploy manifest, with an optional CI-variable override.
+      # No infrastructure name is written literally anywhere in this repository.
+      # The DEPLOY_MANIFEST line below is the single tracked line that names
+      # where the manifest lives; everything else is read out of it.
       - name: Load deploy manifest
         id: m
+        env:
+          DEPLOY_MANIFEST: ${{ vars.DEPLOY_MANIFEST || format('/hasna/deploy/{0}', env.APP) }}
+          VAR_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          VAR_SERVICE: ${{ vars.ECS_SERVICE }}
+          VAR_WEB_FAMILY: ${{ vars.WEB_TASK_FAMILY }}
+          VAR_WEB_CONTAINER: ${{ vars.WEB_CONTAINER }}
+          VAR_MIG_FAMILY: ${{ vars.MIGRATION_TASK_FAMILY }}
+          VAR_MIG_CONTAINER: ${{ vars.MIGRATION_CONTAINER }}
+          VAR_ECR_URL: ${{ vars.ECR_REPOSITORY_URL }}
+          VAR_ASSIGN_PUBLIC_IP: ${{ vars.ASSIGN_PUBLIC_IP }}
+          VAR_SUBNETS: ${{ vars.SUBNETS }}
+          VAR_SGS: ${{ vars.SECURITY_GROUPS }}
+          VAR_WORKER_SERVICE: ${{ vars.WORKER_SERVICE }}
+          VAR_WORKER_FAMILY: ${{ vars.WORKER_TASK_FAMILY }}
+          VAR_WORKER_CONTAINER: ${{ vars.WORKER_CONTAINER }}
+          VAR_HEALTH_URL: ${{ vars.HEALTH_URL }}
         run: |
           set -euo pipefail
-          M="$(aws ssm get-parameter --name "/hasna/deploy/${APP}" --query Parameter.Value --output text)"
-          get() { jq -er ".$1" <<<"$M"; }
-          {
-            echo "cluster=$(get cluster)"
-            echo "service=$(get service)"
-            echo "web_family=$(get web_task_family)"
-            echo "web_container=$(get web_container)"
-            echo "mig_family=$(get migration_task_family)"
-            echo "mig_container=$(get migration_container)"
-            echo "ecr_url=$(get ecr_repository_url)"
-            echo "assign_public_ip=$(get assign_public_ip)"
-            echo "subnets=$(jq -er '.subnets | join(",")' <<<"$M")"
-            echo "sgs=$(jq -er '.security_groups | join(",")' <<<"$M")"
-          } >> "$GITHUB_OUTPUT"
+          M="$(aws ssm get-parameter --name "$DEPLOY_MANIFEST" --query Parameter.Value --output text)"
+
+          missing=""
+
+          # resolve <output> <jq-filter> <ci-variable-name> <ci-variable-value>
+          # Manifest wins; the CI variable is the fallback. Anything that resolves
+          # to neither is collected and reported together at the end -- BEFORE any
+          # image is built and before any service is mutated, so an incompletely
+          # configured deployment fails clean rather than half-applied.
+          resolve() {
+            output="$1"; filter="$2"; var_name="$3"; var_value="${4:-}"
+            # An explicit "null" test rather than jq's `// empty`: the alternative
+            # operator also swallows `false`, which would corrupt assign_public_ip.
+            value="$(jq -r "$filter" <<<"$M" 2>/dev/null || true)"
+            if [ "$value" = "null" ]; then value=""; fi
+            if [ -z "$value" ]; then value="$var_value"; fi
+            if [ -z "$value" ]; then
+              missing="${missing}  - ${output}: manifest key '${filter}' or repository variable '${var_name}'"$'\n'
+              return 0
+            fi
+            echo "${output}=${value}" >> "$GITHUB_OUTPUT"
+          }
+
+          resolve cluster          '.cluster'                       ECS_CLUSTER            "${VAR_CLUSTER:-}"
+          resolve service          '.service'                       ECS_SERVICE            "${VAR_SERVICE:-}"
+          resolve web_family       '.web_task_family'               WEB_TASK_FAMILY        "${VAR_WEB_FAMILY:-}"
+          resolve web_container    '.web_container'                 WEB_CONTAINER          "${VAR_WEB_CONTAINER:-}"
+          resolve mig_family       '.migration_task_family'         MIGRATION_TASK_FAMILY  "${VAR_MIG_FAMILY:-}"
+          resolve mig_container    '.migration_container'           MIGRATION_CONTAINER    "${VAR_MIG_CONTAINER:-}"
+          resolve ecr_url          '.ecr_repository_url'            ECR_REPOSITORY_URL     "${VAR_ECR_URL:-}"
+          resolve assign_public_ip '.assign_public_ip'              ASSIGN_PUBLIC_IP       "${VAR_ASSIGN_PUBLIC_IP:-}"
+          resolve subnets          '.subnets | join(",")'           SUBNETS                "${VAR_SUBNETS:-}"
+          resolve sgs              '.security_groups | join(",")'   SECURITY_GROUPS        "${VAR_SGS:-}"
+          resolve worker_service   '.worker_service'                WORKER_SERVICE         "${VAR_WORKER_SERVICE:-}"
+          resolve worker_family    '.worker_task_family'            WORKER_TASK_FAMILY     "${VAR_WORKER_FAMILY:-}"
+          resolve worker_container '.worker_container'              WORKER_CONTAINER       "${VAR_WORKER_CONTAINER:-}"
+          resolve health_url       '.health_url'                    HEALTH_URL             "${VAR_HEALTH_URL:-}"
+
+          if [ -n "$missing" ]; then
+            echo "::error::deploy manifest '$DEPLOY_MANIFEST' is missing required values and no repository-variable fallback is set:"
+            printf '%s' "$missing"
+            echo "::error::add the listed manifest keys to the SSM parameter, or set the listed repository variables."
+            exit 1
+          fi
 
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
@@ -148,9 +200,9 @@ jobs:
         env:
           IMAGE: ${{ steps.build.outputs.image }}
           CLUSTER: ${{ steps.m.outputs.cluster }}
-          WORKER_SERVICE: skills-prod-worker
-          WORKER_FAMILY: skills-prod-worker
-          WORKER_CONTAINER: skills-worker
+          WORKER_SERVICE: ${{ steps.m.outputs.worker_service }}
+          WORKER_FAMILY: ${{ steps.m.outputs.worker_family }}
+          WORKER_CONTAINER: ${{ steps.m.outputs.worker_container }}
         run: |
           set -euo pipefail
           NEW_TD="$(aws ecs describe-task-definition --task-definition "$WORKER_FAMILY" \
@@ -175,7 +227,13 @@ jobs:
           done
           echo "::error::worker deployment did not complete cleanly"; exit 1
 
+      # Asserts only `.ok`, the one field of /health that is part of the
+      # endpoint's contract. `service` and `mode` are deliberately NOT asserted:
+      # `service` is churning with the product rename, and `mode` is being
+      # removed outright -- there is one deployment story, you run it.
       - name: Smoke health endpoint
+        env:
+          HEALTH_URL: ${{ steps.m.outputs.health_url }}
         run: |
           set -euo pipefail
-          curl -fsS https://skills.hasna.xyz/health | jq -e '.ok == true and .service == "open-skills" and .mode == "self-hosted"'
+          curl -fsS "$HEALTH_URL" | jq -e '.ok == true'
