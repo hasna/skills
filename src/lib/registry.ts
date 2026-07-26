@@ -4,7 +4,7 @@
 
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { join } from "path";
-import { getDataDir } from "./config.js";
+import { DATA_DIR_ENV, getDataDir } from "./config.js";
 import { listPortableSkillMetas } from "./portable-skills.js";
 import { normalizeSkillSlug, resolveSkillAlias } from "./skill-aliases.js";
 import { SKILLS } from "./registry-data/index.js";
@@ -85,24 +85,61 @@ function discoverSkillsInDir(dir: string): SkillMeta[] {
 
 let registryCache: SkillMeta[] | null = null;
 let registryCacheTime = 0;
+let registryCacheKey: string | null = null;
 const REGISTRY_CACHE_TTL = 5000;
 
 /**
- * Load the full registry: official skills merged with global custom skills
- * from ~/.hasna/skills/<name>/ and the legacy ~/.hasna/skills/custom/<name>/ path.
+ * Identifies the roots getDataDir() would resolve from, without calling it.
+ *
+ * Deliberately a string compare over the ambient inputs rather than the resolved
+ * path: getDataDir() mkdirs, stats, and walks the legacy ~/.skills tree on every
+ * call, so resolving it before the cache check would put that work on every cache
+ * *hit* and defeat the cache entirely.
+ *
+ * Must list every variable getDataDir() reads, or the key degenerates and serves
+ * entries discovered under a root the caller has already moved away from.
+ *
+ * JSON rather than a delimiter-joined string: no path can make it ambiguous, and
+ * it keeps this file plain ASCII. An earlier revision used a raw NUL as the
+ * delimiter, which made the file binary to git and therefore unreviewable.
+ */
+function registryRootKey(): string {
+  return JSON.stringify([
+    process.env[DATA_DIR_ENV] ?? "",
+    process.env["HOME"] ?? "",
+    process.env["USERPROFILE"] ?? "",
+  ]);
+}
+
+/**
+ * Load the full registry: official skills merged with global custom skills from
+ * ~/.hasna/skills/installed/<name>/ and the legacy ~/.hasna/skills/custom/<name>/
+ * path that migration folds into it.
  *
  * Custom skills with the same name as official skills take precedence.
  * Results are cached for 5 seconds.
  */
 export function loadRegistry(cwd?: string): SkillMeta[] {
   const now = Date.now();
-  if (registryCache && now - registryCacheTime < REGISTRY_CACHE_TTL) {
+  // Key the cache on where the data dir resolves from, not just elapsed time: a
+  // caller that repoints $HASNA_SKILLS_DIR (or $HOME) must not be served entries
+  // discovered under the previous root. Without this the 5s TTL leaks skills
+  // across isolation boundaries.
+  const rootKey = registryRootKey();
+  if (registryCache && registryCacheKey === rootKey && now - registryCacheTime < REGISTRY_CACHE_TTL) {
     return registryCache;
   }
 
-  const official = SKILLS.map((s) => ({ ...s, source: "official" as const }));
   const dataDir = getDataDir();
-  const portableCustom = listPortableSkillMetas({ rootDir: dataDir });
+  const official = SKILLS.map((s) => ({ ...s, source: "official" as const }));
+  // No rootDir: let getPortableSkillsRoot() resolve <dataDir>/installed and run
+  // the layout migration. Passing the app folder as rootDir would read app data
+  // as if it were the corpus.
+  const portableCustom = listPortableSkillMetas();
+  // Kept as a safety net, not as a second home: migration copies custom/<name>
+  // into installed/, but if it ever fails (unreadable, out of space) those skills
+  // must still be discoverable. mergeCustomSkills() dedupes by name and the
+  // installed/ copy is merged last, so it wins.
   const legacyCustom = discoverSkillsInDir(join(dataDir, "custom"));
   const globalCustom = mergeCustomSkills([...legacyCustom, ...portableCustom]);
 
@@ -111,6 +148,7 @@ export function loadRegistry(cwd?: string): SkillMeta[] {
 
   registryCache = [...filtered, ...globalCustom];
   registryCacheTime = now;
+  registryCacheKey = rootKey;
   return registryCache;
 }
 
@@ -131,6 +169,7 @@ export function loadRegistryProfile(profile: SkillRegistryProfile = "basic", cwd
 export function clearRegistryCache(): void {
   registryCache = null;
   registryCacheTime = 0;
+  registryCacheKey = null;
 }
 
 export function getSkillsByCategory(category: Category): SkillMeta[] {

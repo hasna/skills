@@ -26,7 +26,7 @@ describe("portable skills", () => {
 
       expect(result.created).toBe(true);
       expect(result.name).toBe("demo-skill");
-      expect(result.path).toBe(join(home, ".hasna", "skills", "demo-skill"));
+      expect(result.path).toBe(join(home, ".hasna", "skills", "installed", "demo-skill"));
       expect(existsSync(join(result.path, "SKILL.md"))).toBe(true);
       expect(existsSync(join(result.path, "skill.json"))).toBe(true);
       expect(existsSync(join(result.path, "AGENTS.md"))).toBe(true);

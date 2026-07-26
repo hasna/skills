@@ -8,6 +8,7 @@ import { join } from "path";
 import { homedir } from "os";
 import type { Command } from "commander";
 import { loadConfig, saveConfig, getConfigPath } from "../../lib/config.js";
+import { getPortableSkillsRoot } from "../../lib/portable-skills.js";
 import { clearRegistryCache } from "../../lib/registry.js";
 
 export function registerCreateSync(parent: Command) {
@@ -104,7 +105,9 @@ export function registerCreateSync(parent: Command) {
 function handleCreate(name: string, options: { category: string; description?: string; tags?: string; global: boolean; json: boolean }) {
   const bare = name.trim();
   const dirName = bare;
-  const baseDir = join(homedir(), ".hasna", "skills", "custom");
+  // The corpus, not the legacy custom/ folder, and resolved rather than rebuilt
+  // from homedir() so this honours $HASNA_SKILLS_DIR like every other write path.
+  const baseDir = getPortableSkillsRoot();
   const skillDir = join(baseDir, dirName);
 
   if (existsSync(skillDir)) {

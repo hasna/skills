@@ -10,6 +10,7 @@ import {
   scaffoldPortableSkill,
 } from "./portable-skills.js";
 import { clearRegistryCache, loadBasicRegistry, loadRegistryProfile } from "./registry.js";
+import { withHomeDataDir } from "../test-preload.js";
 
 function makeExecutableSkill(root: string, name: string, description = `${name} skill`): string {
   const dir = join(root, name);
@@ -160,22 +161,26 @@ describe("I5: custom skills gated out of the basic profile", () => {
     const prevHome = process.env["HOME"];
     try {
       process.env["HOME"] = home;
-      const customDir = join(home, ".hasna", "skills", "my-custom-skill");
+      const customDir = join(home, ".hasna", "skills", "installed", "my-custom-skill");
       mkdirSync(customDir, { recursive: true });
       writeFileSync(
         join(customDir, "SKILL.md"),
         `---\nname: my-custom-skill\ndescription: A custom imported skill.\nversion: 0.1.0\n---\n\n# My Custom Skill\n`,
       );
 
-      clearRegistryCache();
-      const basicNames = loadBasicRegistry().map((skill) => skill.name);
-      expect(basicNames).not.toContain("my-custom-skill");
-      // Basic profile must not carry arbitrary custom entries.
-      expect(basicNames.every((name) => name !== "my-custom-skill")).toBe(true);
+      // The skill is planted under a $HOME-derived path, so the data-dir override
+      // is lifted for the registry reads that are supposed to find it.
+      withHomeDataDir(() => {
+        clearRegistryCache();
+        const basicNames = loadBasicRegistry().map((skill) => skill.name);
+        expect(basicNames).not.toContain("my-custom-skill");
+        // Basic profile must not carry arbitrary custom entries.
+        expect(basicNames.every((name) => name !== "my-custom-skill")).toBe(true);
 
-      clearRegistryCache();
-      const allNames = loadRegistryProfile("all").map((skill) => skill.name);
-      expect(allNames).toContain("my-custom-skill");
+        clearRegistryCache();
+        const allNames = loadRegistryProfile("all").map((skill) => skill.name);
+        expect(allNames).toContain("my-custom-skill");
+      });
     } finally {
       if (prevHome === undefined) delete process.env["HOME"];
       else process.env["HOME"] = prevHome;

@@ -94,11 +94,71 @@ function normalizeConfigValue(key: keyof SkillsConfig, value: unknown): string |
 export type ConfigScope = "global" | "project";
 
 /**
+ * Environment variable that relocates the skills data directory.
+ *
+ * Exported so that every reader agrees on the name: previously the literal was
+ * duplicated in portable-skills.ts and honoured there but *not* in getDataDir(),
+ * which is what made the override only half work (see getDataDir below).
+ */
+export const DATA_DIR_ENV = "HASNA_SKILLS_DIR";
+
+/**
+ * Subfolder of the data directory holding the installed skill corpus.
+ *
+ * ~/.hasna/skills is the skills *app* folder, matching every sibling Hasna app:
+ * mementos keeps agents/ beside config.json and mementos.db, accounts keeps
+ * profiles/ beside accounts.json, knowledge keeps artifacts/ and cache/ beside
+ * auth.json. Each puts app data at the app root and content in a named subfolder.
+ *
+ * Skills used to be the exception, writing one folder per skill straight into the
+ * app root next to config.json and skills.db. That is the only reason a denylist
+ * of "entries that look like skills but aren't" ever had to exist; no sibling app
+ * needs one. With the corpus under installed/, a skill may be named `config` or
+ * `custom` without colliding with anything.
+ */
+export const INSTALLED_SKILLS_DIRNAME = "installed";
+
+/**
  * Get the data directory for skills global config/data.
- * New default: ~/.hasna/skills/
+ * Default: ~/.hasna/skills/, overridable with $HASNA_SKILLS_DIR.
  * Auto-migrates from ~/.skills/ and ~/.skillsrc without deleting legacy data.
  */
 export function getDataDir(): string {
+  // $HASNA_SKILLS_DIR outranks $HOME. Both are ambient, and the more specific one
+  // wins; an explicit argument passed by a caller outranks both, which is why
+  // getPortableSkillsRoot() resolves options.rootDir/options.homeDir before it
+  // ever reaches this function.
+  //
+  // This branch is a bug fix, not just test scaffolding. getPortableSkillsRoot()
+  // has always honoured $HASNA_SKILLS_DIR while getDataDir() ignored it, so with
+  // the variable set, `skills new`/`port` wrote into the override while `skills
+  // list` and the config file kept reading $HOME. Those two now agree.
+  //
+  // Not yet routed through here, and therefore still $HOME-rooted regardless of
+  // the override: auth-store.ts (paths frozen as import-time constants) and
+  // create-sync-config.ts. Both are tracked as follow-ups.
+  //
+  // NOTE: this also relocates the global config file, since getConfigPath()
+  // derives from getDataDir(). See the PR description - it is intentional and
+  // user-visible.
+  //
+  // Legacy ~/.skills migration is deliberately skipped for an overridden dir: it
+  // is a $HOME concern, and copying a stray legacy tree into an operator-chosen
+  // (often temporary) directory would be a surprising write.
+  const override = process.env[DATA_DIR_ENV];
+  if (override) {
+    // Best-effort, like the migration below. Read paths (`skills list`, `search`,
+    // `info`) must not throw because the override names a read-only parent or an
+    // existing file; callers that actually write surface their own error, and
+    // readers already treat a missing root as "no custom skills".
+    try {
+      mkdirSync(override, { recursive: true });
+    } catch {
+      // Keep returning the override; the caller decides whether it needs to exist.
+    }
+    return override;
+  }
+
   const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
   const newDir = join(home, ".hasna", "skills");
   const oldDir = join(home, ".skills");

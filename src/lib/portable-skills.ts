@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -13,7 +14,7 @@ import {
 import { basename, dirname, isAbsolute, join, normalize, relative } from "path";
 import { homedir } from "os";
 
-import { getDataDir } from "./config.js";
+import { INSTALLED_SKILLS_DIRNAME, getDataDir } from "./config.js";
 import { SKILLS } from "./registry-data/index.js";
 import type { SkillKind, SkillMeta } from "./registry-types.js";
 import {
@@ -153,12 +154,11 @@ interface PackageJson {
   dependencies?: unknown;
 }
 
-const DATA_DIR_NON_SKILL_ENTRIES = new Set([
-  "auth.json",
-  "config.json",
-  "custom",
-  "skills.db",
-]);
+/**
+ * Pre-`installed/` location of custom skills. Read only by the migration below;
+ * it is not part of the corpus.
+ */
+const LEGACY_CUSTOM_DIRNAME = "custom";
 
 // Structural / junk entries excluded at ANY depth of the source tree: VCS metadata,
 // dependency trees, and macOS/agent sidecar dirs never belong in a portable skill.
@@ -199,11 +199,111 @@ export function normalizePortableSkillName(name: string): string {
   return normalized;
 }
 
+/**
+ * Resolve the corpus: the directory holding one folder per installed skill.
+ *
+ * Precedence is explicit-over-ambient, most specific first:
+ *   1. `options.rootDir`  - the corpus, named outright (no `installed` suffix)
+ *   2. `options.homeDir`  - <home>/.hasna/skills/installed
+ *   3. `getDataDir()`     - <app folder>/installed, where the app folder is
+ *                           $HASNA_SKILLS_DIR, else ~/.hasna/skills
+ *
+ * The app folder holds app data (config.json, skills.db, auth.json); the corpus
+ * is a named subfolder of it, matching every sibling Hasna app. One variable
+ * relocates the app folder and the corpus moves with it.
+ *
+ * `options.homeDir` used to sit *below* the $HASNA_SKILLS_DIR lookup, so an
+ * ambient environment variable silently overrode an argument the caller had
+ * passed deliberately - the caller could not target a directory at all once the
+ * variable was set anywhere in the process. Reading the environment is now left
+ * entirely to getDataDir(), so there is one place that knows the variable's name
+ * and one rule for which source wins.
+ */
 export function getPortableSkillsRoot(options: PortableSkillOptions = {}): string {
+  // rootDir names the corpus directly - it is not an app folder and gets no
+  // `installed` suffix. Callers that hand over a directory of skill folders mean
+  // exactly that directory.
   if (options.rootDir) return options.rootDir;
-  if (process.env["HASNA_SKILLS_DIR"]) return process.env["HASNA_SKILLS_DIR"]!;
-  if (options.homeDir) return join(options.homeDir, ".hasna", "skills");
-  return getDataDir();
+  const appDir = options.homeDir ? join(options.homeDir, ".hasna", "skills") : getDataDir();
+  const installed = join(appDir, INSTALLED_SKILLS_DIRNAME);
+  migrateLegacySkillLayout(appDir, installed);
+  return installed;
+}
+
+/** True for a directory that carries any of the files a skill is identified by. */
+function looksLikeSkillDirectory(path: string): boolean {
+  if (!safeIsDirectory(path)) return false;
+  return existsSync(join(path, "SKILL.md"))
+    || existsSync(join(path, "skill.json"))
+    || existsSync(join(path, "package.json"));
+}
+
+/**
+ * Fold the two pre-`installed/` layouts into the corpus: skills written straight
+ * into the app root, and the older `custom/` subfolder.
+ *
+ * Copies, never deletes - the same contract as getDataDir()'s ~/.skills merge,
+ * and for the same reason: a half-finished migration must never be able to lose
+ * a skill somebody wrote. Anything already present under installed/ is left
+ * alone, which also makes this cheap to call on every resolution: once migrated,
+ * every candidate short-circuits on the existence check and nothing is copied.
+ *
+ * Entries that are not directories, or that carry none of a skill's identifying
+ * files, are left where they are. That is what keeps app data (config.json,
+ * skills.db, auth.json) and anything unrecognised out of the corpus without
+ * needing a denylist of known non-skills.
+ */
+function migrateLegacySkillLayout(appDir: string, installed: string): void {
+  if (!safeIsDirectory(appDir)) return;
+
+  const candidates: Array<{ from: string; name: string }> = [];
+  try {
+    for (const entry of readdirSync(appDir)) {
+      if (entry.startsWith(".") || entry === INSTALLED_SKILLS_DIRNAME) continue;
+      const path = join(appDir, entry);
+      if (entry === LEGACY_CUSTOM_DIRNAME) {
+        // The other half of the same mess: ~/.hasna/skills/custom/<name>/.
+        if (!safeIsDirectory(path)) continue;
+        try {
+          for (const nested of readdirSync(path)) {
+            if (nested.startsWith(".")) continue;
+            const nestedPath = join(path, nested);
+            if (looksLikeSkillDirectory(nestedPath)) candidates.push({ from: nestedPath, name: nested });
+          }
+        } catch {
+          // Unreadable legacy dir: nothing to migrate from it.
+        }
+        continue;
+      }
+      if (looksLikeSkillDirectory(path)) candidates.push({ from: path, name: entry });
+    }
+  } catch {
+    return;
+  }
+
+  for (const { from, name } of candidates) {
+    const target = join(installed, name);
+    if (existsSync(target)) continue;
+    // Stage then rename, rather than copying straight to the target. A copy that
+    // dies half way (out of space, permissions, interrupted) would otherwise
+    // leave a partial skill at the target, and the existence check above would
+    // treat it as migrated and never retry. The staging name is dot-prefixed so
+    // that a leftover is skipped by the corpus listing.
+    const staging = join(installed, `.migrating-${name}-${process.pid}`);
+    try {
+      rmSync(staging, { recursive: true, force: true });
+      cpSync(from, staging, { recursive: true, errorOnExist: false });
+      renameSync(staging, target);
+    } catch {
+      // Leave the original in place and carry on; a skill that cannot be copied
+      // is still readable where it is, and the next resolution will retry.
+      try {
+        rmSync(staging, { recursive: true, force: true });
+      } catch {
+        // Nothing further to do.
+      }
+    }
+  }
 }
 
 export function getPortableSkillPath(name: string, options: PortableSkillOptions = {}): string {
@@ -228,10 +328,17 @@ export function findPortableSkill(name: string, options: PortableSkillOptions = 
 
 export function listPortableSkills(options: PortableSkillOptions = {}): PortableSkillSummary[] {
   const root = getPortableSkillsRoot(options);
-  if (!existsSync(root)) return [];
+  // Not existsSync: a root that exists but is a *file* passed that check and then
+  // threw ENOTDIR out of readdirSync below, so `skills list`/`search`/`info` all
+  // exited 1 when $HASNA_SKILLS_DIR named a file. Listing no skills is the right
+  // answer for anything that is not a readable directory.
+  if (!safeIsDirectory(root)) return [];
   const skills: PortableSkillSummary[] = [];
   for (const entry of readdirSync(root).sort()) {
-    if (entry.startsWith(".") || DATA_DIR_NON_SKILL_ENTRIES.has(entry)) continue;
+    // Every directory under the corpus is a skill by construction, so there is no
+    // denylist of app-data names to consult. Dotfiles are skipped as cheap
+    // defence against editor and VCS droppings.
+    if (entry.startsWith(".")) continue;
     const path = join(root, entry);
     if (!safeIsDirectory(path)) continue;
     try {

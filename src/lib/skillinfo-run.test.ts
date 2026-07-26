@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { INSTALLED_SKILLS_DIRNAME } from "./config";
 import { runSkill } from "./skillinfo";
 
 let testDir: string;
@@ -40,7 +41,9 @@ describe("runSkill", () => {
 
   test("returns a not-runnable error for instruction skills", async () => {
     const skillsRoot = join(testDir, "instruction-skills");
-    const skillDir = join(skillsRoot, "skill-project");
+    // Written into the corpus, not the app root, so this exercises skill running
+    // rather than the layout migration.
+    const skillDir = join(skillsRoot, INSTALLED_SKILLS_DIRNAME, "skill-project");
     mkdirSync(skillDir, { recursive: true });
     writeFileSync(join(skillDir, "SKILL.md"), `---
 name: skill-project
