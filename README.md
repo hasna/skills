@@ -322,10 +322,12 @@ The data directory follows `$HASNA_SKILLS_DIR`, so the database moves with the r
 of the app's state. The database file sits at the app root, beside `config.json` —
 not inside `installed/`, which holds only the installed skill corpus.
 
-Note that `HASNA_SKILLS_DATABASE_URL` is also read by the optional repo-native
-storage sync described under [Storage Boundary](#storage-boundary), which accepts
-Postgres only. If you use both, keep them on the same Postgres URL, or scope the
-sync with `HASNA_SKILLS_STORAGE_MODE=local`.
+One sharp edge: `HASNA_SKILLS_DATABASE_URL` is shared with the optional repo-native
+storage sync under [Storage Boundary](#storage-boundary), and that sync speaks
+Postgres only — it takes this variable's value as given rather than checking it. If
+you point the server at a SQLite path and also use `skills storage sync-plan`, set
+the sync's database separately. The two are independent features that happen to
+read the same name.
 
 SQLite applies pending migrations when the server opens the database, so a single
 operator needs no separate migrate step. Postgres deployments run migrations

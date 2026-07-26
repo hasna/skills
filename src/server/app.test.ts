@@ -14,7 +14,7 @@ const SEED = [
 // parameterising is to be able to state which backends were actually covered.
 const backends = await resolveStoreBackends();
 for (const notice of storeBackendNotices()) console.log(`[store-backends] ${notice}`);
-console.log(`[store-backends] running the self-hosted API suite against: ${backends.map((b) => b.name).join(", ")}`);
+console.log(`[store-backends] running the server API suite against: ${backends.map((b) => b.name).join(", ")}`);
 
 async function testServer(backend: StoreBackendFixture) {
   const fixture = await backend.create(SEED);

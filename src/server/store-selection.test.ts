@@ -182,7 +182,7 @@ describe("startup durability guard", () => {
     try {
       const health = await fetch(`http://127.0.0.1:${server.port}/health`);
       expect(health.status).toBe(200);
-      expect(await health.json()).toMatchObject({ ok: true, mode: "self-hosted" });
+      expect(await health.json()).toMatchObject({ ok: true, service: "open-skills" });
       // /health reporting ok now means something: the store behind it is on disk.
       expect(resolveDatabaseTarget(undefined)).toMatchObject({ durable: true });
       expect(store.backend).toMatchObject({ kind: "sqlite", durable: true });
