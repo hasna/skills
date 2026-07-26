@@ -1,6 +1,7 @@
 ---
 name: video-highlight-pack
-description: Generate premium video highlight packages with clip plans, captions, thumbnails, chapter markers, social copy, edit decisions, and manifest metadata.
+description: Generate video highlight packages with clip plans, captions, thumbnails, chapter markers, social copy, edit decisions, and manifest metadata.
+kind: instruction
 ---
 
 # Video Highlight Pack
@@ -9,28 +10,25 @@ Generate a practical highlight package from a long video, recording, webinar, de
 
 ## Requirements
 
-- Authenticate with `skills auth login`.
-- This premium skill runs through the hosted Skills runtime; local installs expose only metadata and instructions.
+None. This is an instruction skill: it is prose an agent follows, so it needs no
+credentials, no network access, and no local runtime.
 
 ## Usage
 
-```bash
-skills run video-highlight-pack --source ./webinar.mp4 --title "AI billing launch webinar" --platforms "youtube-shorts,linkedin"
-skills run video-highlight-pack --source ./transcript.txt --duration-minutes 58 --aspect-ratio 9:16
-```
+Ask an agent for the deliverables below and give it the inputs. Reading this file
+IS the invocation; `skills run` refuses instruction skills on purpose.
 
-## Options
+## Inputs
 
-| Option | Description | Default |
+| Input | Description | Default |
 |--------|-------------|---------|
-| `--source <path-or-text>` | Video file, transcript text file, or transcript text. | required |
-| `--title <text>` | Recording title. | Video Highlight Pack |
-| `--platforms <list>` | Comma-separated platforms for export planning. | youtube-shorts,instagram,tiktok,linkedin |
-| `--duration-minutes <n>` | Approximate source runtime for timestamp spacing. | 45 |
-| `--aspect-ratio <ratio>` | Primary edit aspect ratio. | 9:16 |
-| `--output <dir>` | Output directory for direct local execution. Hosted runs use the run export directory. | run export dir |
+| `source` | Video file, transcript text file, or transcript text. | required |
+| `title` | Recording title. | Video Highlight Pack |
+| `platforms` | Comma-separated platforms for export planning. | youtube-shorts,instagram,tiktok,linkedin |
+| `duration-minutes` | Approximate source runtime for timestamp spacing. | 45 |
+| `aspect-ratio` | Primary edit aspect ratio. | 9:16 |
 
-## Outputs
+## Deliverables
 
 - `highlight-plan.md`
 - `clips.csv`
@@ -41,4 +39,16 @@ skills run video-highlight-pack --source ./transcript.txt --duration-minutes 58 
 - `edit-decision-list.json`
 - `manifest.json`
 
-After submitting a hosted run, poll with `skills runs status <run-id>` and download outputs with `skills exports download <run-id>`.
+## Method
+
+1. Work from a transcript. If given a media file, transcribe it first (the
+   `audio-transcript-pack` skill, or a local `ffmpeg` + transcription step); this
+   skill plans from text.
+2. Select highlights by self-contained value: a clip that needs context to make
+   sense is not a highlight.
+3. Give each clip precise in/out timecodes and a reason for selection.
+4. Write captions to the platform's line-length limits and keep them readable at
+   speed.
+5. Set chapter markers at genuine topic boundaries, not at fixed intervals.
+6. Write per-platform social copy that stands alone without the video.
+7. Deliver the edit decision list so an editor can cut without re-watching.

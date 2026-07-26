@@ -282,56 +282,6 @@ version: 0.3.0
     }
   }, 15000);
 
-  test("quote_skill validates create-blog-article options", async () => {
-    const client = new McpClient();
-    try {
-      await client.initialize();
-      const validResponse = await client.request("tools/call", {
-        name: "quote_skill",
-        arguments: {
-          name: "create-blog-article",
-          input: {
-            topic: "SaaS onboarding",
-            count: 8,
-            audience: "founders",
-            tone: "technical",
-            length: "long",
-            seo: true,
-            outline: "Problem, workflow, rollout",
-          },
-        },
-      }, 80);
-      expect(validResponse).not.toBeNull();
-      const valid = JSON.parse(validResponse.result.content[0].text);
-      expect(valid).toMatchObject({
-        skill: "blog-article",
-        availability: { status: "available" },
-        pricing: {
-          billingUnit: "article",
-          unitCount: 8,
-          costCents: 200,
-          formattedCost: "$2.00 total",
-        },
-      });
-
-      const invalidResponse = await client.request("tools/call", {
-        name: "quote_skill",
-        arguments: {
-          name: "create-blog-article",
-          input: { topic: "SaaS onboarding", count: 13 },
-        },
-      }, 81);
-      expect(invalidResponse).not.toBeNull();
-      expect(invalidResponse.result.isError).toBe(true);
-      const invalid = JSON.parse(invalidResponse.result.content[0].text);
-      expect(invalid).toMatchObject({
-        code: "INVALID_BLOG_ARTICLE_OPTIONS",
-        message: "Count must be an integer between 1 and 12.",
-      });
-    } finally {
-      await client.close();
-    }
-  }, 15000);
 
   test("run_skill rejects unauthenticated premium skills without local fallback", async () => {
     const { mkdtempSync, rmSync } = require("fs");

@@ -5,7 +5,6 @@
   "description": "Hosted skill metadata for pitch-deck",
   "type": "module",
   "skills": {
-    "runtime": "hosted",
-    "source": "remote"
+    "kind": "instruction"
   }
 }

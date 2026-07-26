@@ -5,7 +5,6 @@
   "description": "Hosted premium email sequence artifact generator",
   "type": "module",
   "skills": {
-    "runtime": "hosted",
-    "source": "remote"
+    "kind": "instruction"
   }
 }

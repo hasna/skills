@@ -49,36 +49,17 @@ import { resolveSkillAlias } from "./skill-aliases.js";
  * the drift test. Canonical slugs only; callers are alias-resolved for you.
  */
 export const HOSTED_RUNTIME_SLUGS: readonly string[] = [
-  "ad-creative-pack",
   "api-docs-portal",
   "audio-transcript-pack",
-  "blog-article",
   "brand-assets",
-  "brand-kit",
-  "contract-review-report",
-  "customer-feedback-report",
-  "email-sequence",
   "invoice-reconciliation",
-  "landing-page-pack",
   "logo-design",
-  "market-research-report",
-  "meeting-pack",
-  "migration-plan-pack",
   "one-page-website",
   "pdf-to-dataset",
   "pdf-to-markdown",
-  "performance-audit-report",
-  "pitch-deck",
   "product-mockup",
-  "proposal-pack",
-  "repo-onboarding-report",
   "sdk-generator",
-  "security-audit-report",
-  "seo-content-pack",
   "slide-deck-generator",
-  "social-content-calendar",
-  "test-suite-generator",
-  "video-highlight-pack",
 ];
 
 const hostedRuntimeSlugs = new Set(HOSTED_RUNTIME_SLUGS);

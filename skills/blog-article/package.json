@@ -5,7 +5,6 @@
   "description": "Hosted premium blog article artifact generator",
   "type": "module",
   "skills": {
-    "runtime": "hosted",
-    "source": "remote"
+    "kind": "instruction"
   }
 }

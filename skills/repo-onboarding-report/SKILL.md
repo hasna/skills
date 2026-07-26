@@ -1,6 +1,7 @@
 ---
 name: repo-onboarding-report
-description: Generate premium repository onboarding reports with architecture maps, setup guides, first-week plans, code inventory, risk register, and manifest metadata.
+description: Generate repository onboarding reports with architecture maps, setup guides, first-week plans, code inventory, risk register, and manifest metadata.
+kind: instruction
 ---
 
 # Repo Onboarding Report
@@ -9,27 +10,24 @@ Generate a practical onboarding package for a software repository so a new engin
 
 ## Requirements
 
-- Authenticate with `skills auth login`.
-- This premium skill runs through the hosted Skills runtime; local installs expose only metadata and instructions.
+None. This is an instruction skill: it is prose an agent follows, so it needs no
+credentials, no network access, and no local runtime.
 
 ## Usage
 
-```bash
-skills run repo-onboarding-report --target ./my-app --name "Acme Web App" --stack "Next.js SaaS"
-skills run repo-onboarding-report --target . --focus "architecture,setup,testing,risks"
-```
+Ask an agent for the deliverables below and give it the inputs. Reading this file
+IS the invocation; `skills run` refuses instruction skills on purpose.
 
-## Options
+## Inputs
 
-| Option | Description | Default |
+| Input | Description | Default |
 |--------|-------------|---------|
-| `--target <path>` | Repository directory to inspect. | current directory |
-| `--name <text>` | Project name used in report titles. | package name or folder name |
-| `--stack <text>` | Stack or product context. | inferred from repository files |
-| `--focus <list>` | Comma-separated focus areas. | architecture,setup,testing,risks,first-week |
-| `--output <dir>` | Output directory for direct local execution. Hosted runs use the run export directory. | run export dir |
+| `target` | Repository directory to inspect. | current directory |
+| `name` | Project name used in report titles. | package name or folder name |
+| `stack` | Stack or product context. | inferred from repository files |
+| `focus` | Comma-separated focus areas. | architecture,setup,testing,risks,first-week |
 
-## Outputs
+## Deliverables
 
 - `repo-onboarding-report.md`
 - `architecture-map.md`
@@ -39,4 +37,16 @@ skills run repo-onboarding-report --target . --focus "architecture,setup,testing
 - `risk-register.json`
 - `manifest.json`
 
-After submitting a hosted run, poll with `skills runs status <run-id>` and download outputs with `skills exports download <run-id>`.
+## Method
+
+1. Explore before you explain. Read the entry points, the build config, the test
+   setup, and the largest modules; do not summarize the README back to the user.
+2. Draw the architecture as the flow of a real request or command through the
+   system, naming the files it passes through.
+3. Write setup as a verified sequence — every command you list must be one you
+   found evidence for in the repo.
+4. Build the code inventory around responsibility ("where auth lives"), not
+   directory listing.
+5. Record risks concretely: untested paths, stale dependencies, undocumented
+   env vars, single points of knowledge.
+6. Make the first-week plan a series of increasingly non-trivial real tasks.

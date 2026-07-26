@@ -1,6 +1,7 @@
 ---
 name: social-content-calendar
-description: Generate premium social content calendars with daily posts, channel strategy, asset briefs, publishing schedule, and repurposing map.
+description: Generate social content calendars with daily posts, channel strategy, asset briefs, publishing schedule, and repurposing map.
+kind: instruction
 ---
 
 # Social Content Calendar
@@ -9,29 +10,26 @@ Generate a 14 to 45 day campaign calendar for launch, nurture, hiring, community
 
 ## Requirements
 
-- Authenticate with `skills auth login`.
-- This premium skill runs through the hosted Skills runtime; local installs expose only skill metadata and instructions.
+None. This is an instruction skill: it is prose an agent follows, so it needs no
+credentials, no network access, and no local runtime.
 
 ## Usage
 
-```bash
-skills run social-content-calendar "Usage-based billing for AI SaaS" --audience "founders" --days 30
-skills run social-content-calendar --campaign "API monitoring launch" --channels "LinkedIn,X,Newsletter" --tone technical
-```
+Ask an agent for the deliverables below and give it the inputs. Reading this file
+IS the invocation; `skills run` refuses instruction skills on purpose.
 
-## Options
+## Inputs
 
-| Option | Description | Default |
+| Input | Description | Default |
 |--------|-------------|---------|
-| `--campaign <text>` | Campaign, product, or content brief. Positional text also works. | required |
-| `--audience <text>` | Target segment. | software teams |
-| `--goal <text>` | Campaign goal. | build qualified demand |
-| `--days <n>` | Calendar length, 14-45 days. | 30 |
-| `--channels <list>` | Comma-separated channels. | LinkedIn, X, Newsletter |
-| `--tone <tone>` | `direct`, `premium`, `friendly`, or `technical`. | direct |
-| `--output <dir>` | Output directory for direct local execution. Hosted runs use the run export directory. | run export dir |
+| `campaign` | Campaign, product, or content brief. Positional text also works. | required |
+| `audience` | Target segment. | software teams |
+| `goal` | Campaign goal. | build qualified demand |
+| `days` | Calendar length, 14-45 days. | 30 |
+| `channels` | Comma-separated channels. | LinkedIn, X, Newsletter |
+| `tone` | `direct`, `premium`, `friendly`, or `technical`. | direct |
 
-## Outputs
+## Deliverables
 
 - `calendar.md`
 - `posts.csv`
@@ -42,4 +40,15 @@ skills run social-content-calendar --campaign "API monitoring launch" --channels
 - `repurposing-map.md`
 - `manifest.json`
 
-After submitting a hosted run, poll with `skills runs status <run-id>` and download outputs with `skills exports download <run-id>`.
+## Method
+
+1. Fix the campaign goal and the two or three content pillars everything maps to.
+2. Adapt per channel rather than cross-posting: length, format and tone differ,
+   and an unadapted post reads as spam on at least one network.
+3. Write the hook as the first line, because on most networks it is the only line
+   guaranteed to be read.
+4. Schedule with real dates from the requested start, and balance the pillars
+   across the week rather than batching them.
+5. Build the repurposing map explicitly: which long-form asset each post derives
+   from, so production cost stays bounded.
+6. Include asset briefs for anything needing design, with dimensions per channel.

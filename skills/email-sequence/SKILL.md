@@ -1,6 +1,7 @@
 ---
 name: email-sequence
-description: Generate premium email campaigns with subject lines, preview text, body copy, segmentation notes, CTA variants, and HTML exports.
+description: Generate email campaigns with subject lines, preview text, body copy, segmentation notes, CTA variants, and HTML exports.
+kind: instruction
 ---
 
 # Email Sequence
@@ -9,28 +10,25 @@ Generate a 5 to 10 email campaign package for launch, nurture, onboarding, or re
 
 ## Requirements
 
-- Authenticate with `skills auth login`.
-- This premium skill runs through the hosted Skills runtime; local installs expose only skill metadata and instructions.
+None. This is an instruction skill: it is prose an agent follows, so it needs no
+credentials, no network access, and no local runtime.
 
 ## Usage
 
-```bash
-skills run email-sequence "Usage-based billing for AI SaaS" --audience "founders" --goal "book demos"
-skills run email-sequence --campaign "API monitoring launch" --emails 7 --tone technical
-```
+Ask an agent for the deliverables below and give it the inputs. Reading this file
+IS the invocation; `skills run` refuses instruction skills on purpose.
 
-## Options
+## Inputs
 
-| Option | Description | Default |
+| Input | Description | Default |
 |--------|-------------|---------|
-| `--campaign <text>` | Campaign, product, or offer brief. Positional text also works. | required |
-| `--audience <text>` | Target segment. | software teams |
-| `--goal <text>` | Conversion goal. | book demos |
-| `--emails <n>` | Number of emails, 5-10. | 5 |
-| `--tone <tone>` | `direct`, `premium`, `friendly`, or `technical`. | direct |
-| `--output <dir>` | Output directory for direct local execution. Hosted runs use the run export directory. | run export dir |
+| `campaign` | Campaign, product, or offer brief. Positional text also works. | required |
+| `audience` | Target segment. | software teams |
+| `goal` | Conversion goal. | book demos |
+| `emails` | Number of emails, 5-10. | 5 |
+| `tone` | `direct`, `premium`, `friendly`, or `technical`. | direct |
 
-## Outputs
+## Deliverables
 
 - `sequence.md`
 - `emails/email-XX.md`
@@ -41,4 +39,15 @@ skills run email-sequence --campaign "API monitoring launch" --emails 7 --tone t
 - `send-plan.csv`
 - `manifest.json`
 
-After submitting a hosted run, poll with `skills runs status <run-id>` and download outputs with `skills exports download <run-id>`.
+## Method
+
+1. Fix the sequence goal and the single action each email drives, then map the
+   arc across the whole sequence before writing any email.
+2. Write subject lines and preview text as a pair — preview text that repeats the
+   subject wastes the strongest real estate in the inbox.
+3. Keep one idea per email. If an email needs two CTAs, it is two emails.
+4. Vary structure across the sequence (story, proof, objection, direct offer) so
+   it does not read as one message sent five times.
+5. Add segmentation notes: who should be excluded, and what behaviour triggers
+   the next send.
+6. Provide plain-text alongside HTML; many recipients will only see the former.

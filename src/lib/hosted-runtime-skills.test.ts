@@ -3,7 +3,6 @@ import { join } from "node:path";
 
 import { HOSTED_RUNTIME_SLUGS, isHostedRuntimeSkill } from "./hosted-runtime-skills.js";
 import { diffSlugSets, listHostedMetadataSlugs } from "./hosted-skill-set.js";
-import { SKILL_ALIASES } from "./skill-aliases.js";
 
 const skillsRoot = join(process.cwd(), "skills");
 
@@ -34,15 +33,6 @@ describe("hosted runtime classifier", () => {
     expect(isHostedRuntimeSkill("definitely-not-a-skill")).toBe(false);
   });
 
-  test("resolves aliases, so callers never have to canonicalise first", () => {
-    for (const [alias, canonical] of Object.entries(SKILL_ALIASES)) {
-      expect(isHostedRuntimeSkill(alias)).toBe(isHostedRuntimeSkill(canonical));
-    }
-    // Guard against the assertion above passing because every alias resolves
-    // to a non-hosted slug, which would make it vacuous.
-    const hostedAliases = Object.keys(SKILL_ALIASES).filter((alias) => isHostedRuntimeSkill(alias));
-    expect(hostedAliases.length).toBeGreaterThan(0);
-  });
 
   // The classifier carries deployment facts only. Cost, tier, currency and
   // plan vocabulary belong to a billing layer, not to "where does this run".

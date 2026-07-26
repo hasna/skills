@@ -5,7 +5,6 @@
   "description": "Hosted premium video highlight package generator",
   "type": "module",
   "skills": {
-    "runtime": "hosted",
-    "source": "remote"
+    "kind": "instruction"
   }
 }

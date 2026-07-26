@@ -1,6 +1,7 @@
 ---
 name: ad-creative-pack
-description: Generate premium paid-ad copy, creative concepts, image prompts, audience angles, and test matrices.
+description: Generate paid-ad copy, creative concepts, image prompts, audience angles, and test matrices.
+kind: instruction
 ---
 
 # Ad Creative Pack
@@ -9,29 +10,26 @@ Generate a paid-ad launch package for Meta, Google, and LinkedIn.
 
 ## Requirements
 
-- Authenticate with `skills auth login`.
-- This premium skill runs through the hosted Skills runtime; local installs expose only skill metadata and instructions.
+None. This is an instruction skill: it is prose an agent follows, so it needs no
+credentials, no network access, and no local runtime.
 
 ## Usage
 
-```bash
-skills run ad-creative-pack "Usage-based billing for AI SaaS" --audience "founders" --goal "book demos"
-skills run ad-creative-pack --product "API monitoring" --offer "Find broken API workflows before customers do"
-```
+Ask an agent for the deliverables below and give it the inputs. Reading this file
+IS the invocation; `skills run` refuses instruction skills on purpose.
 
-## Options
+## Inputs
 
-| Option | Description | Default |
+| Input | Description | Default |
 |--------|-------------|---------|
-| `--product <text>` | Product, service, or campaign brief. Positional text also works. | required |
-| `--audience <text>` | Target buyer or segment. | software teams |
-| `--offer <text>` | Campaign promise or offer. | derived from product |
-| `--goal <text>` | Conversion goal. | book demos |
-| `--platforms <list>` | Comma-separated platforms. | Meta, Google, LinkedIn |
-| `--tone <tone>` | `direct`, `premium`, `friendly`, or `technical`. | direct |
-| `--output <dir>` | Output directory for direct local execution. Hosted runs use the run export directory. | run export dir |
+| `product` | Product, service, or campaign brief. Positional text also works. | required |
+| `audience` | Target buyer or segment. | software teams |
+| `offer` | Campaign promise or offer. | derived from product |
+| `goal` | Conversion goal. | book demos |
+| `platforms` | Comma-separated platforms. | Meta, Google, LinkedIn |
+| `tone` | `direct`, `premium`, `friendly`, or `technical`. | direct |
 
-## Outputs
+## Deliverables
 
 - `platform-copy.md`
 - `ad-copy.json`
@@ -42,4 +40,16 @@ skills run ad-creative-pack --product "API monitoring" --offer "Find broken API 
 - `launch-checklist.md`
 - `manifest.json`
 
-After submitting a hosted run, poll with `skills runs status <run-id>` and download outputs with `skills exports download <run-id>`.
+## Method
+
+1. Restate the offer, audience and platform mix in one line, and name the single
+   conversion action every asset drives toward.
+2. Draft 3-5 distinct creative concepts. Each needs a different *angle* (pain,
+   aspiration, proof, novelty, objection), not a different adjective.
+3. For each platform, write copy to that platform's real limits — headline and
+   primary text lengths differ, so do not reuse one block everywhere.
+4. Write image prompts as briefs a designer or an image model could act on:
+   subject, composition, mood, colour, text placement.
+5. Build the test matrix so exactly one variable changes per row; a matrix that
+   varies two things at once cannot attribute a win.
+6. Close with a launch checklist covering tracking, naming, and budget split.

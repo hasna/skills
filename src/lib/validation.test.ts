@@ -94,6 +94,19 @@ const HOSTED_METADATA_SKILLS = new Set([
   ...listHostedMetadataSlugs(SKILLS_DIR),
 ]);
 
+// Instruction skills are the third shape: like hosted skills they carry no bin
+// and no src/, but unlike hosted skills their implementation is not off-repo —
+// there is no implementation, because the SKILL.md prose IS the deliverable.
+// Derived from the frontmatter rather than hardcoded, so the guard cannot drift
+// from the declaration it is supposed to police.
+const INSTRUCTION_SKILLS = new Set(
+  skillDirs.filter((dir) => {
+    const skillMd = join(SKILLS_DIR, dir, "SKILL.md");
+    if (!existsSync(skillMd)) return false;
+    return parseSkillFrontmatter(readFileSync(skillMd, "utf8"))?.kind === "instruction";
+  }),
+);
+
 function validationFor(dir: string) {
   return validateSkillDirectory(dir, join(SKILLS_DIR, dir), SKILLS.find((skill) => skill.name === dir));
 }
@@ -126,13 +139,20 @@ describe("structural validation of all registered skills", () => {
     expect(failures).toEqual([]);
   });
 
-  test("local skill packages declare bin commands and hosted metadata packages do not", () => {
+  test("each skill directory has exactly one of the three legal shapes", () => {
+    // executable  -> has bin + src/
+    // hosted      -> no bin, no src/ (implementation lives off-repo)
+    // instruction -> no bin required, no src/ (the prose is the deliverable)
+    const overlap = [...INSTRUCTION_SKILLS].filter((dir) => HOSTED_METADATA_SKILLS.has(dir));
+    expect(overlap, "a skill cannot be both hosted and instruction").toEqual([]);
+
     const failures = skillDirs
       .map((dir) => validationFor(dir))
       .filter((result) => {
         if (HOSTED_METADATA_SKILLS.has(result.name)) {
           return result.metadata.binCommands.length !== 0;
         }
+        if (INSTRUCTION_SKILLS.has(result.name)) return false;
         return result.issues.some((issue) => issue.code === "package.bin_missing" || issue.code === "package.bin_invalid");
       })
       .map((result) => `${result.name}: ${result.metadata.binCommands.join(",") || "no bin"}`);
@@ -142,7 +162,7 @@ describe("structural validation of all registered skills", () => {
   test("free local package entrypoints do not point at legacy hosted HTTP wrappers", () => {
     const failures: string[] = [];
     for (const dir of skillDirs) {
-      if (HOSTED_METADATA_SKILLS.has(dir)) continue;
+      if (HOSTED_METADATA_SKILLS.has(dir) || INSTRUCTION_SKILLS.has(dir)) continue;
       const pkgPath = join(SKILLS_DIR, dir, "package.json");
       const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
         bin?: Record<string, string>;
@@ -211,10 +231,16 @@ describe("structural validation of all registered skills", () => {
     const minimal: string[] = [];
     const missing: string[] = [];
     const leakedHostedSource: string[] = [];
+    const leakedInstructionSource: string[] = [];
     for (const dir of skillDirs) {
       const srcDir = join(SKILLS_DIR, dir, "src");
       if (HOSTED_METADATA_SKILLS.has(dir)) {
         if (existsSync(srcDir)) leakedHostedSource.push(dir);
+        continue;
+      }
+      // Instruction skills carry no implementation at all, by definition.
+      if (INSTRUCTION_SKILLS.has(dir)) {
+        if (existsSync(srcDir)) leakedInstructionSource.push(dir);
         continue;
       }
       const tsIndexPath = join(SKILLS_DIR, dir, "src", "index.ts");
@@ -229,6 +255,7 @@ describe("structural validation of all registered skills", () => {
     }
 
     expect(leakedHostedSource).toEqual([]);
+    expect(leakedInstructionSource).toEqual([]);
     expect(missing).toEqual([]);
     if (minimal.length > 0) {
       console.warn(`Skills with minimal src/index.ts (<50B): ${minimal.join(", ")}`);

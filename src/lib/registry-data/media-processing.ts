@@ -69,7 +69,8 @@ export const MEDIA_PROCESSING_SKILLS: SkillMeta[] = [
     displayName: "Video Highlight Pack",
     description: "Generate self-hosted video highlight packages with clip plans, captions, thumbnail briefs, chapter markers, social posts, and edit decisions",
     category: "Media Processing",
-    tags: ["video", "highlights", "clips", "captions", "premium", "remote"],
+    kind: "instruction",
+    tags: ["video", "highlights", "clips", "captions"],
   },
   {
     name: "video-downloader",
