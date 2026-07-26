@@ -1,8 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import { loadConfig } from "./config.js";
-import { DEFAULT_SELF_HOSTED_API_URL } from "../server/config.js";
+import { requireApiUrl } from "./api-url.js";
 
 const AUTH_DIR = join(homedir(), ".hasna", "skills");
 const AUTH_FILE = join(AUTH_DIR, "auth.json");
@@ -66,6 +65,13 @@ export function normalizeSkillsApiOrigin(apiUrl: string): string {
   return url.toString().replace(/\/+$/, "");
 }
 
-export function getApiUrl(): string {
-  return normalizeSkillsApiOrigin(process.env.SKILLS_API_URL || loadConfig().apiUrl || DEFAULT_SELF_HOSTED_API_URL);
+/**
+ * Origin every credential-bearing request is sent to.
+ *
+ * Throws `MissingApiUrlError` when the install has not been pointed at an
+ * instance. There is no fallback endpoint: an unconfigured CLI must not decide
+ * on the user's behalf where their email address, login code, or API key goes.
+ */
+export function getApiUrl(action?: string): string {
+  return normalizeSkillsApiOrigin(requireApiUrl(action));
 }

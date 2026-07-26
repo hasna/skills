@@ -27,7 +27,8 @@ Examples:
   skills run github-manager -- action=list-prs repo=owner/repo
 
 Requirements:
-  GitHub connector must be connected in skills.md (provides GITHUB_ACCESS_TOKEN).
+  Requires GITHUB_ACCESS_TOKEN in the environment, or the GitHub connector
+  enabled on the Skills instance you configured.
 `);
 }
 
@@ -44,7 +45,7 @@ const titleArg = args.find(a => a.startsWith("title="))?.split("=")[1];
 const bodyArg = args.find(a => a.startsWith("body="))?.split("=")[1];
 
 if (!process.env.GITHUB_ACCESS_TOKEN) {
-  console.error("Error: GitHub connector not connected. Please connect GitHub in skills.md.");
+  console.error("Error: GitHub not connected. Set GITHUB_ACCESS_TOKEN, or enable the GitHub connector on your Skills instance.");
   process.exit(1);
 }
 

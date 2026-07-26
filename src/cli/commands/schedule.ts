@@ -221,7 +221,7 @@ async function executeScheduledSkill(skillName: string, args: string[], options:
     const { getApiKey } = await import("../../lib/auth-store.js");
     const apiKey = getApiKey();
     if (!apiKey) {
-      throw new Error(`${skill.name} is a self-hosted skill. Run: skills setup --mode self-hosted && skills auth login`);
+      throw new Error(`${skill.name} is a self-hosted skill. Run: skills auth login`);
     }
 
     const { RemoteSkillsClient } = await import("../../lib/remote-client.js");

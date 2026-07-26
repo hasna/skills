@@ -12,7 +12,7 @@ import {
 export function registerStorage(parent: Command) {
   const storage = parent
     .command("storage")
-    .description("Inspect native local/remote storage configuration");
+    .description("Inspect on-box storage paths and optional Postgres/S3 configuration");
 
   storage
     .command("status")
@@ -25,7 +25,6 @@ export function registerStorage(parent: Command) {
         return;
       }
       console.log(chalk.bold("Hasna Skills storage"));
-      console.log(`${chalk.dim("Mode:")} ${status.mode}`);
       console.log(`${chalk.dim("Project state:")} ${status.local.projectStateDir}`);
       console.log(`${chalk.dim("Feedback DB:")} ${status.local.feedbackDbPath}`);
       console.log(`${chalk.dim("Remote DB:")} ${status.remote.databaseConfigured ? "configured" : `not configured (${status.remote.databaseEnv})`}`);
@@ -47,13 +46,11 @@ export function registerStorage(parent: Command) {
       const plan = {
         package: "open-skills",
         noNetwork: true,
-        mode: config.mode,
         databaseConfigured: Boolean(config.databaseUrl),
         s3Configured: Boolean(config.s3Bucket),
         snapshotFileCount: snapshot.files.length,
         s3ObjectCount: s3Plan.length,
         env: {
-          mode: SKILLS_NATIVE_STORAGE_ENV.mode,
           databaseUrl: SKILLS_NATIVE_STORAGE_ENV.databaseUrl,
           s3Bucket: SKILLS_NATIVE_STORAGE_ENV.s3Bucket,
         },
@@ -64,7 +61,8 @@ export function registerStorage(parent: Command) {
         return;
       }
       console.log(chalk.bold("Hasna Skills sync plan"));
-      console.log(`${chalk.dim("Mode:")} ${plan.mode}`);
+      console.log(`${chalk.dim("Postgres:")} ${plan.databaseConfigured ? "configured" : "not configured"}`);
+      console.log(`${chalk.dim("S3:")} ${plan.s3Configured ? "configured" : "not configured"}`);
       console.log(`${chalk.dim("Snapshot files:")} ${plan.snapshotFileCount}`);
       console.log(`${chalk.dim("S3 objects:")} ${plan.s3ObjectCount}`);
       if (options.schemaSql) {

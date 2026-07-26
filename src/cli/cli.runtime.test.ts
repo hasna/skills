@@ -8,134 +8,194 @@ import {
   runCli,
   runCliInCwd,
 } from "./cli.test-utils";
-import { getFirstRunOnboardingMessage, shouldShowFirstRunOnboarding } from "./onboarding";
 
 describe("CLI runtime and misc commands", () => {
-  describe("first-run onboarding guard", () => {
-    test("nudges interactive normal commands until a self-hosted or local mode is configured", () => {
-      expect(
-        shouldShowFirstRunOnboarding({
-          argv: ["list"],
-          commandName: "list",
-          config: {},
-          isInteractive: true,
-        }),
-      ).toBe(true);
-      expect(
-        shouldShowFirstRunOnboarding({
-          argv: ["list"],
-          commandName: "list",
-          config: { mode: "local" },
-          isInteractive: true,
-        }),
-      ).toBe(false);
-      expect(
-        shouldShowFirstRunOnboarding({
-          argv: ["run", "image"],
-          commandName: "run",
-          config: { mode: "self-hosted" },
-          isInteractive: true,
-        }),
-      ).toBe(false);
-    });
-
-    test("stays quiet for JSON, help, onboarding, and automation", () => {
-      for (const input of [
-        { argv: ["list", "--json"], commandName: "list", isInteractive: true },
-        { argv: ["list", "--help"], commandName: "list", isInteractive: true },
-        { argv: ["setup"], commandName: "setup", isInteractive: true },
-        { argv: ["auth", "login"], commandName: "auth", isInteractive: true },
-        { argv: ["list"], commandName: "list", isInteractive: false },
-        { argv: ["list"], commandName: "list", isInteractive: true, testMode: true },
-      ]) {
-        expect(shouldShowFirstRunOnboarding({ ...input, config: {} })).toBe(false);
-      }
-    });
-
-    test("points to self-hosted first and local second without naming skills.md as a mode", () => {
-      const message = getFirstRunOnboardingMessage();
-      expect(message).toContain("skills setup --mode self-hosted");
-      expect(message).toContain("skills auth login");
-      expect(message).toContain("skills setup --mode local");
-      expect(message).not.toContain("--mode skills.md");
-    });
-  });
-
-  describe("setup mode", () => {
-    test("stores local mode in project config", async () => {
+  describe("setup", () => {
+    test("stores the API URL it was given in project config", async () => {
       const { mkdtempSync, rmSync, readFileSync } = require("fs");
       const { tmpdir } = require("os");
       const { join } = require("path");
-      const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-local-"));
-      try {
-        const { stdout, exitCode } = await runCliInCwd(["setup", "--mode", "local", "--json"], tmpDir, { HOME: tmpDir });
-        expect(exitCode).toBe(0);
-        const data = JSON.parse(stdout);
-        expect(data).toMatchObject({ mode: "local", scope: "project" });
-        const config = JSON.parse(readFileSync(join(tmpDir, "skills.config.json"), "utf8"));
-        expect(config.mode).toBe("local");
-      } finally {
-        rmSync(tmpDir, { recursive: true, force: true });
-      }
-    });
-
-    test("stores self-hosted mode and API URL while accepting legacy skills.md alias", async () => {
-      const { mkdtempSync, rmSync, readFileSync } = require("fs");
-      const { tmpdir } = require("os");
-      const { join } = require("path");
-      const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-hosted-"));
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-api-url-"));
       try {
         const { stdout, exitCode } = await runCliInCwd(
-          ["setup", "--mode", "skills.md", "--api-url", "https://skills.example.com/api/v1", "--json"],
+          ["setup", "--api-url", "https://skills.example.com/api/v1", "--json"],
           tmpDir,
           { HOME: tmpDir },
         );
         expect(exitCode).toBe(0);
         const data = JSON.parse(stdout);
-        expect(data).toMatchObject({ mode: "self-hosted", scope: "project" });
+        expect(data).toMatchObject({ apiUrl: "https://skills.example.com/api/v1", scope: "project" });
         expect(data.next).toContain("skills auth login");
         const config = JSON.parse(readFileSync(join(tmpDir, "skills.config.json"), "utf8"));
-        expect(config.mode).toBe("self-hosted");
         expect(config.apiUrl).toBe("https://skills.example.com/api/v1");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
     });
 
-    test("stores canonical self-hosted mode from --mode self-hosted", async () => {
-      const { mkdtempSync, rmSync, readFileSync } = require("fs");
+    test("writes no API URL when none is given, and never invents one", async () => {
+      const { mkdtempSync, rmSync, existsSync } = require("fs");
       const { tmpdir } = require("os");
       const { join } = require("path");
-      const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-hosted-canonical-"));
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-unconfigured-"));
       try {
-        const { stdout, exitCode } = await runCliInCwd(
-          ["setup", "--mode", "self-hosted", "--api-url", "https://skills.example.com", "--json"],
-          tmpDir,
-          { HOME: tmpDir },
-        );
+        const { stdout, exitCode } = await runCliInCwd(["setup", "--json"], tmpDir, { HOME: tmpDir });
         expect(exitCode).toBe(0);
-        expect(JSON.parse(stdout)).toMatchObject({ mode: "self-hosted", scope: "project" });
-        expect(JSON.parse(readFileSync(join(tmpDir, "skills.config.json"), "utf8"))).toMatchObject({
-          mode: "self-hosted",
-          apiUrl: "https://skills.example.com",
-        });
+        const data = JSON.parse(stdout);
+        expect(data).toMatchObject({ apiUrl: null, scope: "project" });
+        expect(data.next).toContain("skills list");
+        expect(data.config.apiUrl).toBeUndefined();
+        expect(data.saved).toBeNull();
+        // The claim is that nothing is written at all, not that whatever was
+        // written happens to lack an apiUrl.
+        expect(existsSync(join(tmpDir, "skills.config.json"))).toBe(false);
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
     });
 
-    test("rejects cloud and remote as setup modes", async () => {
+    test("saves the API URL to the global config with --global", async () => {
+      const { mkdtempSync, rmSync, existsSync, readFileSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-global-"));
+      try {
+        const { stdout, exitCode } = await runCliInCwd(
+          ["setup", "--api-url", "https://skills.example.com", "--global", "--json"],
+          tmpDir,
+          { HOME: tmpDir },
+        );
+        expect(exitCode).toBe(0);
+        expect(JSON.parse(stdout)).toMatchObject({ apiUrl: "https://skills.example.com", scope: "global" });
+        expect(existsSync(join(tmpDir, "skills.config.json"))).toBe(false);
+        const global = JSON.parse(readFileSync(join(tmpDir, ".hasna", "skills", "config.json"), "utf8"));
+        expect(global.apiUrl).toBe("https://skills.example.com");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("rejects an API URL that is not an http(s) origin", async () => {
+      const { mkdtempSync, rmSync, existsSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-reject-url-"));
+      try {
+        const result = await runCliInCwd(["setup", "--api-url", "ftp://skills.example.com", "--json"], tmpDir, { HOME: tmpDir });
+        expect(result.exitCode).not.toBe(0);
+        expect(JSON.parse(result.stdout).error).toContain("http(s) URL");
+        expect(existsSync(join(tmpDir, "skills.config.json"))).toBe(false);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("offers no deployment mode flag, only an API origin", async () => {
+      const { stdout, exitCode } = await runCli(["setup", "--help"]);
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("--api-url");
+      expect(stdout).not.toContain("--mode");
+      expect(stdout.toLowerCase()).not.toContain("self-hosted");
+      expect(stdout).toContain("agents");
+    });
+
+    test("rejects an explicitly empty --api-url instead of silently doing nothing", async () => {
+      // `skills setup --api-url "$SKILLS_URL"` with the variable unset must not
+      // exit 0 claiming success while pointing nowhere.
+      const { mkdtempSync, rmSync, existsSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-empty-url-"));
+      try {
+        const result = await runCliInCwd(["setup", "--api-url", "", "--json"], tmpDir, { HOME: tmpDir });
+        expect(result.exitCode).not.toBe(0);
+        expect(JSON.parse(result.stdout).error).toContain("Expected an http(s) URL");
+        expect(existsSync(join(tmpDir, "skills.config.json"))).toBe(false);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("reports an inherited API URL as inherited, not as a write it just made", async () => {
+      // apiUrl in the global scope, `setup` invoked for the project scope: the
+      // effective origin is the global one, and `saved` must stay null rather
+      // than let the command claim it wrote to the project.
+      const { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-inherited-"));
+      try {
+        mkdirSync(join(tmpDir, ".hasna", "skills"), { recursive: true });
+        writeFileSync(
+          join(tmpDir, ".hasna", "skills", "config.json"),
+          JSON.stringify({ apiUrl: "https://global.example.com" }),
+        );
+        const { stdout, exitCode } = await runCliInCwd(["setup", "--json"], tmpDir, { HOME: tmpDir });
+        expect(exitCode).toBe(0);
+        const data = JSON.parse(stdout);
+        expect(data.apiUrl).toBe("https://global.example.com");
+        expect(data.saved).toBeNull();
+        expect(existsSync(join(tmpDir, "skills.config.json"))).toBe(false);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("config unset apiUrl returns a project to running on this machine", async () => {
+      // Under the old design there was a setup flag whose value was the word
+      // local. With that gone, local is the absence of an origin, so there has
+      // to be a supported way back to it.
       const { mkdtempSync, rmSync } = require("fs");
       const { tmpdir } = require("os");
       const { join } = require("path");
-      const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-reject-modes-"));
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-unset-"));
       try {
-        const remote = await runCliInCwd(["setup", "--mode", "remote", "--json"], tmpDir, { HOME: tmpDir });
-        expect(remote.exitCode).not.toBe(0);
-        expect(remote.stderr).toContain("Invalid setup mode");
-        const cloud = await runCliInCwd(["setup", "--mode", "cloud", "--json"], tmpDir, { HOME: tmpDir });
-        expect(cloud.exitCode).not.toBe(0);
-        expect(cloud.stderr).toContain("Invalid setup mode");
+        await runCliInCwd(["setup", "--api-url", "https://skills.example.com", "--json"], tmpDir, { HOME: tmpDir });
+        const unset = await runCliInCwd(["config", "unset", "apiUrl", "--json"], tmpDir, { HOME: tmpDir });
+        expect(unset.exitCode).toBe(0);
+        expect(JSON.parse(unset.stdout)).toMatchObject({ key: "apiUrl", removed: true, scope: "project" });
+
+        const after = await runCliInCwd(["setup", "--json"], tmpDir, { HOME: tmpDir });
+        expect(JSON.parse(after.stdout)).toMatchObject({ apiUrl: null, saved: null });
+
+        const again = await runCliInCwd(["config", "unset", "apiUrl", "--json"], tmpDir, { HOME: tmpDir });
+        expect(again.exitCode).toBe(0);
+        expect(JSON.parse(again.stdout).removed).toBe(false);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("prints no first-run onboarding nudge on a normal command", async () => {
+      // The nudge existed only to force a mode choice. It is deleted, and the
+      // replacement for its three tests is this: a fresh HOME running a normal
+      // command must emit nothing on stderr.
+      const { mkdtempSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-no-onboarding-"));
+      try {
+        const result = await runCliInCwd(["list", "--limit", "1"], tmpDir, { HOME: tmpDir });
+        expect(result.exitCode).toBe(0);
+        expect(result.stderr).not.toContain("No Skills setup found");
+        expect(result.stderr).not.toContain("skills setup");
+        expect(result.stderr.trim()).toBe("");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    }, SLOW_TEST_TIMEOUT);
+
+    test("refuses a mode config key so the concept cannot come back through config set", async () => {
+      const { mkdtempSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-no-mode-key-"));
+      try {
+        for (const value of ["local", "self-hosted", "cloud", "remote"]) {
+          const result = await runCliInCwd(["config", "set", "mode", value, "--json"], tmpDir, { HOME: tmpDir });
+          expect(result.exitCode).not.toBe(0);
+          expect(JSON.parse(result.stdout).error).toContain("Unknown config key: mode");
+        }
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }

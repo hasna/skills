@@ -16,11 +16,13 @@ self-hosted service without making the OSS core depend on one deployment.
 ## Onboarding
 
 - Do not prompt during package install.
-- On first interactive setup, recommend `self-hosted` when the Hasna-owned AWS
-  service is the primary path.
-- In non-interactive and CI contexts, do not silently phone home. Require
-  explicit self-hosted mode, `SKILLS_API_URL`, or `SKILLS_API_KEY`.
-- Use canonical mode names `self-hosted` and `local`; keep domains in
+- Do not prompt a user to choose a deployment variant. There is one product and
+  one deployment story: you run it. Setup asks for an API origin, or for nothing.
+- In non-interactive and CI contexts, do not silently phone home. Talking to a
+  server requires an explicitly configured origin (`SKILLS_API_URL` or the
+  `apiUrl` config key) and `SKILLS_API_KEY`.
+- Do not introduce names for deployment variants. Running on this machine is not
+  a mode; it is the absence of a configured API origin. Keep domains in
   configurable API URLs.
 
 ## OSS Client Surface

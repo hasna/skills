@@ -351,7 +351,7 @@ async function mergePdfs(fileSpecs: FileSpec[]): Promise<void> {
   if (options.author) {
     mergedPdf.setAuthor(options.author);
   }
-  mergedPdf.setCreator("skills.md merge-pdfs");
+  mergedPdf.setCreator("merge-pdfs skill");
   mergedPdf.setProducer("pdf-lib");
   mergedPdf.setCreationDate(new Date());
   mergedPdf.setModificationDate(new Date());

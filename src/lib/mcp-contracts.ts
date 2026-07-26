@@ -628,7 +628,7 @@ const toolContracts: McpToolContract[] = [
   {
     name: "storage_status",
     title: "Storage Status",
-    description: "Show local-first storage paths and optional repo-owned Postgres/S3 readiness.",
+    description: "Show on-box storage paths and optional repo-owned Postgres/S3 readiness.",
     params: ["directory?"],
     category: "storage",
     sideEffects: "none",
@@ -636,10 +636,9 @@ const toolContracts: McpToolContract[] = [
     inputSchema: objectSchema({ directory: stringSchema("Project directory.") }),
     outputSchema: objectSchema({
       package: stringSchema("Package name."),
-      mode: { type: "string", enum: ["local", "remote", "hybrid"] },
       local: objectSchema({}, [], "Local storage paths.", true),
       remote: objectSchema({}, [], "Remote storage readiness.", true),
-    }, ["package", "mode", "local", "remote"]),
+    }, ["package", "local", "remote"]),
   },
   {
     name: "storage_sync_plan",
@@ -656,14 +655,13 @@ const toolContracts: McpToolContract[] = [
     outputSchema: objectSchema({
       package: stringSchema("Package name."),
       noNetwork: { type: "boolean", const: true },
-      mode: { type: "string", enum: ["local", "remote", "hybrid"] },
       databaseConfigured: { type: "boolean" },
       s3Configured: { type: "boolean" },
       snapshotFileCount: { type: "number" },
       s3ObjectCount: { type: "number" },
       env: objectSchema({}, [], "Storage env var names.", true),
       schemaSql: stringSchema("Optional Postgres schema SQL."),
-    }, ["package", "noNetwork", "mode", "databaseConfigured", "s3Configured"]),
+    }, ["package", "noNetwork", "databaseConfigured", "s3Configured"]),
   },
   {
     name: "schedule_skill",

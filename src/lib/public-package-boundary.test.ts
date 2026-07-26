@@ -217,6 +217,20 @@ describe("public package boundary", () => {
       ["@hasna", "cloud"].join("/"),
       ["open", "cloud"].join("-"),
       ["skills", "cloud"].join("_"),
+      // Retired deployment/storage "mode" vocabulary. Three unrelated concepts
+      // were all called mode, and the third crept in while the first two were
+      // being written; a payload-shape assertion cannot catch a doc telling the
+      // next contributor to rebuild it, so the words are banned outright.
+      // Markers are assembled from fragments so this file does not match itself.
+      ["HASNA_SKILLS", "STORAGE", "MODE"].join("_"),
+      ["SKILLS", "STORAGE", "MODE"].join("_"),
+      ["Skills", "Storage", "Mode"].join(""),
+      ["get", "Storage", "Mode"].join(""),
+      ["MODE", "ALIASES"].join("_"),
+      ["MODE", "VALUES"].join("_"),
+      ["setup --", "mode"].join(""),
+      ["self-hosted", " mode"].join(""),
+      ["local-only", " mode"].join(""),
     ];
     const roots = ["src", "docs", "scripts", "README.md", "package.json"];
     const files = roots.flatMap((root) => {

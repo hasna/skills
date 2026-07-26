@@ -6,7 +6,7 @@ artifacts.
 ## Usage
 
 ```bash
-skills setup --mode self-hosted
+skills setup --api-url <origin>
 skills auth login
 skills run image "editorial product photo on a white sweep"
 ```
