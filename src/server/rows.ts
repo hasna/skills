@@ -18,6 +18,20 @@ export function nowIso(): string {
   return new Date().toISOString();
 }
 
+/**
+ * Coerce a caller-supplied row limit to a non-negative integer.
+ *
+ * The two engines disagree loudly about what a bad limit means. SQLite reads `LIMIT -1`
+ * as *unlimited* and rejects `LIMIT 1.5` as a datatype mismatch; Postgres rejects -1 and
+ * rounds 1.5 up. Left alone, `listRuns(principal, -1)` returned one org's entire history
+ * on SQLite and an error on Postgres - and the SQLite answer is the dangerous direction,
+ * since the argument exists to bound the response. HTTP callers are already clamped in
+ * app.ts; this covers the store used as a library, which is a published seam.
+ */
+export function normalizeLimit(limit: number): number {
+  return Number.isFinite(limit) ? Math.max(0, Math.trunc(limit)) : 0;
+}
+
 export function runId(): string {
   return `run_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`;
 }

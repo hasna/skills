@@ -50,7 +50,9 @@ export interface StoreBackendFixture {
   create(seed?: SeedApiKey[]): Promise<StoreFixture>;
 }
 
-const skipNotices: string[] = [];
+// A Set, because resolveStoreBackends() is called once per test file and a plain array
+// printed the same "postgres: skipped" line once per caller.
+const skipNotices = new Set<string>();
 
 /** Human-readable reasons a backend is absent from the current run. */
 export function storeBackendNotices(): string[] {
@@ -103,7 +105,7 @@ function sqliteBackend(): StoreBackendFixture {
 async function postgresBackendIfReachable(): Promise<StoreBackendFixture | null> {
   const adminUrl = process.env[TEST_DATABASE_URL_ENV]?.trim();
   if (!adminUrl) {
-    skipNotices.push(`postgres: skipped, ${TEST_DATABASE_URL_ENV} is not set`);
+    skipNotices.add(`postgres: skipped, ${TEST_DATABASE_URL_ENV} is not set`);
     return null;
   }
   try {
@@ -111,7 +113,7 @@ async function postgresBackendIfReachable(): Promise<StoreBackendFixture | null>
       await sql`SELECT 1`;
     });
   } catch (error) {
-    skipNotices.push(`postgres: skipped, ${TEST_DATABASE_URL_ENV} is set but unreachable (${shortError(error)})`);
+    skipNotices.add(`postgres: skipped, ${TEST_DATABASE_URL_ENV} is set but unreachable (${shortError(error)})`);
     return null;
   }
 

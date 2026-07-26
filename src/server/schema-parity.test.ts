@@ -30,7 +30,18 @@ interface TableShape {
   notNull: string[];
   primaryKey: string[];
   unique: string[];
+  /** `column->table [ON DELETE ACTION]`. The action is compared: it is org-scoping policy. */
   foreignKeys: string[];
+  /**
+   * `column=literal` for literal DEFAULTs only.
+   *
+   * Function defaults are excluded on purpose - `now()` and
+   * `strftime('%Y-%m-%dT%H:%M:%fZ','now')` are the documented dialect mapping and can
+   * never match textually. Literal defaults have no such excuse: `scopes_json` defaulting
+   * to the full scope list on one backend and `[]` on the other would silently hand new
+   * API keys different permissions depending on which database you ran.
+   */
+  literalDefaults: string[];
 }
 
 const EXPECTED_TABLES = [
@@ -99,14 +110,25 @@ describe("migration set parity", () => {
     }
     // Every row that belongs to a tenant references the tenant.
     for (const table of ["api_keys", "skills_runs", "skills_run_logs", "skills_artifacts", "skills_approvals"]) {
-      expect(sqliteShapes[table]!.foreignKeys).toContain("org_id->organizations");
+      expect(sqliteShapes[table]!.foreignKeys.some((fk) => fk.startsWith("org_id->organizations"))).toBe(true);
     }
   });
 
-  test("the run status domain matches the TypeScript union in both dialects", () => {
-    const expected = [...SERVER_RUN_STATUSES].sort();
-    expect(statusDomain(readDialect("postgres"))).toEqual(expected);
-    expect(statusDomain(readDialect("sqlite"))).toEqual(expected);
+  test("every CHECK-ed status domain matches across dialects, and runs matches the TypeScript union", () => {
+    const postgres = statusDomains(readDialect("postgres"));
+    const sqlite = statusDomains(readDialect("sqlite"));
+    // Two of them today: skills_runs and skills_approvals.
+    expect(postgres.length).toBeGreaterThan(1);
+    expect(sqlite).toEqual(postgres);
+    expect(postgres[0]).toEqual([...SERVER_RUN_STATUSES].sort());
+  });
+
+  test("literal column defaults match, so a row means the same thing on either backend", () => {
+    for (const table of EXPECTED_TABLES) {
+      expect({ table, defaults: sqliteShapes[table]!.literalDefaults }).toEqual({ table, defaults: postgresShapes[table]!.literalDefaults });
+    }
+    // The one that would silently change what a new API key is allowed to do.
+    expect(sqliteShapes.api_keys!.literalDefaults).toContain(`scopes_json=${normalizeLiteral(`'["skills:read","runs:write"]'`)}`);
   });
 });
 
@@ -117,11 +139,45 @@ function readDialect(dialect: (typeof MIGRATION_DIALECTS)[number]): string {
   return files.map((file) => readFileSync(join(dir, file), "utf8")).join("\n");
 }
 
-/** Status values named by the run table's CHECK constraint. */
-function statusDomain(sql: string): string[] {
-  const match = sql.match(/CHECK\s*\(\s*status\s+IN\s*\(([^)]*)\)/i);
-  if (!match) throw new Error("no CHECK (status IN (...)) constraint found");
-  return [...match[1]!.matchAll(/'([^']+)'/g)].map((m) => m[1]!).sort();
+/**
+ * Every `CHECK (status IN (...))` domain in a dialect's DDL, keyed by position.
+ *
+ * Global regex, because there are two of them: skills_runs and skills_approvals. A
+ * non-global match compared only the first, leaving the approvals status domain free to
+ * diverge between dialects unnoticed.
+ */
+function statusDomains(sql: string): string[][] {
+  const matches = [...sql.matchAll(/CHECK\s*\(\s*status\s+IN\s*\(([^)]*)\)/gi)];
+  if (matches.length === 0) throw new Error("no CHECK (status IN (...)) constraint found");
+  return matches.map((match) => [...match[1]!.matchAll(/'([^']+)'/g)].map((m) => m[1]!).sort());
+}
+
+function foreignKeyKey(column: string, table: string, onDelete: string | null | undefined): string {
+  const action = (onDelete || "NO ACTION").toUpperCase().trim();
+  return `${column}->${table} ON DELETE ${action}`;
+}
+
+function onDeleteAction(clause: string): string {
+  return clause.match(/ON\s+DELETE\s+(CASCADE|SET\s+NULL|SET\s+DEFAULT|RESTRICT|NO\s+ACTION)/i)?.[1]?.replace(/\s+/g, " ") ?? "NO ACTION";
+}
+
+/**
+ * True only for a bare literal: a quoted string, a number, or a boolean.
+ *
+ * Whitelist rather than blacklist. The first attempt excluded values starting with "(",
+ * which missed SQLite's `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')` - PRAGMA table_info
+ * strips the wrapping parens - and so compared a function default against Postgres's
+ * `now()` and failed on the one difference the two files are supposed to have.
+ */
+function isLiteralDefault(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const text = value.trim();
+  return /^'(?:[^']|'')*'$/.test(text) || /^-?\d+(?:\.\d+)?$/.test(text) || /^(?:true|false)$/i.test(text);
+}
+
+/** Collapse SQL literal spelling differences that carry no meaning (quoting, whitespace). */
+function normalizeLiteral(value: string): string {
+  return value.trim().replace(/\s+/g, "");
 }
 
 /**
@@ -137,7 +193,7 @@ function introspectSqliteSchema(sql: string): Record<string, TableShape> {
 
     const shapes: Record<string, TableShape> = {};
     for (const table of tables) {
-      const info = db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string; notnull: number; pk: number }>;
+      const info = db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string; notnull: number; pk: number; dflt_value: unknown }>;
       const primaryKey = info.filter((column) => column.pk > 0).map((column) => column.name).sort();
       // SQLite lets a non-INTEGER PRIMARY KEY column hold NULL unless NOT NULL is
       // spelled out; Postgres makes PRIMARY KEY imply NOT NULL. Unioning the two here
@@ -154,11 +210,16 @@ function introspectSqliteSchema(sql: string): Record<string, TableShape> {
         })
         .sort();
 
-      const foreignKeys = (db.query(`PRAGMA foreign_key_list(${table})`).all() as Array<{ from: string; table: string }>)
-        .map((fk) => `${fk.from}->${fk.table}`)
+      const foreignKeys = (db.query(`PRAGMA foreign_key_list(${table})`).all() as Array<{ from: string; table: string; on_delete: string }>)
+        .map((fk) => foreignKeyKey(fk.from, fk.table, fk.on_delete))
         .sort();
 
-      shapes[table] = { columns: info.map((column) => column.name).sort(), notNull, primaryKey, unique: uniques, foreignKeys };
+      const defaults = info
+        .filter((column) => isLiteralDefault(column.dflt_value))
+        .map((column) => `${column.name}=${normalizeLiteral(column.dflt_value as string)}`)
+        .sort();
+
+      shapes[table] = { columns: info.map((column) => column.name).sort(), notNull, primaryKey, unique: uniques, foreignKeys, literalDefaults: defaults };
     }
     return shapes;
   } finally {
@@ -187,12 +248,27 @@ function parsePostgresSchema(sql: string): Record<string, TableShape> {
     let primaryKey: string[] = [];
     const uniques: string[] = [];
     const foreignKeys: string[] = [];
+    const defaults: string[] = [];
 
-    for (const clause of splitTopLevel(body)) {
-      const text = clause.trim();
+    for (const raw of splitTopLevel(body)) {
+      // A named constraint is the same constraint. Stripping "CONSTRAINT <name>" up
+      // front means `CONSTRAINT x UNIQUE (a)` is compared like `UNIQUE (a)` instead of
+      // being skipped - the earlier version ignored every clause starting with
+      // CONSTRAINT, so a named UNIQUE or FOREIGN KEY added to one dialect only was
+      // invisible to this guard. That is the form a future migration is most likely to
+      // use, since it is what most schema tools emit.
+      const text = raw.trim().replace(/^CONSTRAINT\s+"?[\w]+"?\s+/i, "").trim();
       if (!text) continue;
       const upper = text.toUpperCase();
 
+      if (upper.startsWith("FOREIGN KEY")) {
+        // FOREIGN KEY (a, b) REFERENCES t (x, y) ON DELETE CASCADE
+        const columns = columnList(text);
+        const referenced = text.match(/REFERENCES\s+"?(\w+)"?/i);
+        if (!referenced) throw new Error(`unparseable FOREIGN KEY clause: ${text}`);
+        for (const column of columns) foreignKeys.push(foreignKeyKey(column, referenced[1]!, onDeleteAction(text)));
+        continue;
+      }
       if (upper.startsWith("PRIMARY KEY")) {
         primaryKey = columnList(text).sort();
         continue;
@@ -201,7 +277,7 @@ function parsePostgresSchema(sql: string): Record<string, TableShape> {
         uniques.push(uniqueKey(columnList(text), false));
         continue;
       }
-      if (upper.startsWith("CHECK") || upper.startsWith("FOREIGN KEY") || upper.startsWith("CONSTRAINT")) continue;
+      if (upper.startsWith("CHECK") || upper.startsWith("EXCLUDE")) continue;
 
       const name = text.split(/\s+/)[0]!;
       columns.push(name);
@@ -209,8 +285,10 @@ function parsePostgresSchema(sql: string): Record<string, TableShape> {
       if (/\bPRIMARY\s+KEY\b/i.test(text)) primaryKey.push(name);
       // Inline UNIQUE, but not the "UNIQUE (a, b)" table constraint handled above.
       if (/\bUNIQUE\b(?!\s*\()/i.test(text)) uniques.push(uniqueKey([name], false));
-      const references = text.match(/\bREFERENCES\s+(\w+)/i);
-      if (references) foreignKeys.push(`${name}->${references[1]}`);
+      const references = text.match(/\bREFERENCES\s+"?(\w+)"?/i);
+      if (references) foreignKeys.push(foreignKeyKey(name, references[1]!, onDeleteAction(text)));
+      const literalDefault = text.match(/\bDEFAULT\s+('(?:[^']|'')*'|-?\d+(?:\.\d+)?|true|false)/i);
+      if (literalDefault && isLiteralDefault(literalDefault[1]!)) defaults.push(`${name}=${normalizeLiteral(literalDefault[1]!)}`);
     }
 
     shapes[table] = {
@@ -219,6 +297,7 @@ function parsePostgresSchema(sql: string): Record<string, TableShape> {
       primaryKey: unique_(primaryKey),
       unique: uniques.sort(),
       foreignKeys: foreignKeys.sort(),
+      literalDefaults: defaults.sort(),
     };
   }
 

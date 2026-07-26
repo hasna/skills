@@ -19,6 +19,15 @@
  * deliberately unsafe claimer (read, yield, write, with no status predicate) must
  * produce duplicates. Without it, "no duplicates observed" is equally consistent with a
  * correct implementation and with a harness that never created any contention.
+ *
+ * What this proves, precisely: that the shipped combination neither duplicates a claim
+ * nor drops one under real multi-process contention, and that the harness is capable of
+ * detecting duplicates when they exist. What it does NOT isolate is which arm carries
+ * the guarantee. Mutating BEGIN IMMEDIATE to BEGIN, or busy_timeout to 0, fails this
+ * suite - but as a SQLITE_BUSY crash rather than as duplicate claims. Removing the
+ * UPDATE's status predicate does not fail it at all, because inside BEGIN IMMEDIATE that
+ * predicate is unreachable defence in depth. The comments on claimNextRun say the same
+ * thing; neither should be read as claiming test coverage the suite does not have.
  */
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

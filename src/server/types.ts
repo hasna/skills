@@ -90,7 +90,14 @@ export interface ClaimRunInput {
  * unless the operator explicitly opted in.
  */
 export interface StoreBackendInfo {
-  kind: "postgres" | "sqlite" | "memory";
+  /**
+   * The three bundled backends are named for autocomplete; the open `string` arm is
+   * deliberate. This interface is a published seam, and a third-party store must be able
+   * to declare what it is - "mysql", "dynamodb" - without either a type error or having
+   * to misreport itself as one of ours. A closed union would make the seam implementable
+   * only by us, which is the test R3 sets for it.
+   */
+  kind: "postgres" | "sqlite" | "memory" | (string & {});
   /** False when the data does not survive process exit. */
   durable: boolean;
   /** Credential-free description, safe to put in logs and error messages. */

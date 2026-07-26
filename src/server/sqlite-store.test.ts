@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, existsSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { publicPrincipal } from "./auth.js";
@@ -111,6 +111,61 @@ describe("SqliteSkillsStore durability and schema", () => {
     }
     // Reassign so afterEach's close() has a live handle to close.
     store = new SqliteSkillsStore(dbPath);
+  });
+
+  test("concurrent first opens of a brand-new database all succeed", async () => {
+    // The zero-config topology starts `skills-server` and `skills-worker` against a file
+    // that does not exist yet. Converting a fresh database to WAL takes an exclusive
+    // lock, so if busy_timeout is not installed BEFORE that pragma, the second opener
+    // gets a bare "database is locked" with no path and no hint to retry.
+    //
+    // Separate processes, not Promise.all: bun:sqlite is synchronous, so six "parallel"
+    // constructions in one process run one after another in a single tick and cannot
+    // contend at all. An in-process version of this test passes against the broken
+    // pragma order - verified - which would have made it worse than no test.
+    const fresh = join(dir, "concurrent.db");
+    const script = join(dir, "open-probe.ts");
+    writeFileSync(
+      script,
+      `const [dbPath, startAt, storeModule] = process.argv.slice(2);
+const { SqliteSkillsStore } = await import(storeModule);
+while (Date.now() < Number(startAt)) await new Promise((r) => setTimeout(r, 1));
+const store = new SqliteSkillsStore(dbPath);
+const mode = store.database.query("PRAGMA journal_mode").get().journal_mode;
+const tables = store.database.query("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").get().n;
+await store.close();
+console.log(JSON.stringify({ mode, tables }));
+`,
+    );
+
+    const startAt = Date.now() + 600;
+    const children = Array.from({ length: 6 }, () =>
+      Bun.spawn(["bun", "run", script, fresh, String(startAt), join(import.meta.dir, "sqlite-store.ts")], { stdout: "pipe", stderr: "pipe" }),
+    );
+    const results = await Promise.all(
+      children.map(async (child) => {
+        const [stdout, stderr, code] = await Promise.all([
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+          child.exited,
+        ]);
+        return { code, stdout: stdout.trim(), stderr: stderr.trim() };
+      }),
+    );
+
+    // Every process must have opened the database, converted it to WAL, and seen the
+    // full migrated schema. A single "database is locked" here is the bug.
+    for (const result of results) {
+      expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
+      expect(JSON.parse(result.stdout.split("\n").at(-1)!)).toEqual({ mode: "wal", tables: 11 });
+    }
+  }, 60_000);
+
+  test("an unopenable database path reports the path and the setting that moves it", () => {
+    // Raw bun:sqlite says "unable to open database file" for a read-only mount, a
+    // missing parent, and a path that is a directory alike, naming none of them.
+    expect(() => new SqliteSkillsStore(dir)).toThrow(/cannot open the skills database at/);
+    expect(() => new SqliteSkillsStore(dir)).toThrow(/HASNA_SKILLS_DATABASE_URL/);
   });
 
   test("opening a store creates the file and applies migrations exactly once", async () => {

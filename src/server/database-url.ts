@@ -82,7 +82,10 @@ export function resolveDatabaseTarget(raw?: string | null): DatabaseTarget {
     return { kind: "sqlite", path: SQLITE_MEMORY_PATH, durable: false, label: "sqlite (in-memory)" };
   }
 
-  const schemeMatch = value.match(/^([a-z][a-z0-9+.-]*):/i);
+  // A single-letter "scheme" is a Windows drive letter, not a scheme. `C:\data\skills.db`
+  // would otherwise be rejected as `unsupported database scheme "c:"`, and this package
+  // publishes `skills-server` as an npm bin. No real URL scheme is one character.
+  const schemeMatch = value.match(/^([a-z][a-z0-9+.-]+):/i);
   const scheme = schemeMatch?.[1]?.toLowerCase();
 
   if (scheme && POSTGRES_SCHEMES.has(scheme)) {
@@ -121,33 +124,58 @@ export function resolveDatabaseTarget(raw?: string | null): DatabaseTarget {
 }
 
 function sqlitePathFromUrl(value: string, scheme: string): string {
-  const rest = value.slice(scheme.length + 1);
+  // Drop SQLite's URI query parameters and any fragment before the path is read.
+  //
+  // fileURLToPath does this for `file://…`, so without it here the two documented-as-
+  // equivalent spellings diverged: `file:///srv/db.sqlite?x=1` resolved to /srv/db.sqlite
+  // while `sqlite:/srv/db.sqlite?mode=ro` created a file literally named
+  // "db.sqlite?mode=ro". The parameters themselves are not honoured - bun:sqlite is not
+  // opened in URI mode - so silently keeping them in a filename is the worst option.
+  const rest = value.slice(scheme.length + 1).replace(/[?#].*$/, "");
 
   // sqlite::memory: / file::memory: - the in-memory literal carried behind a scheme,
   // with or without SQLite's URI query parameters. Matched by prefix so that
   // "sqlite::memory:?cache=shared" cannot fall through and become a file on disk
   // literally named ":memory:?cache=shared".
-  if (rest.startsWith(SQLITE_MEMORY_PATH) || rest === "" || rest === "//") {
-    return SQLITE_MEMORY_PATH;
+  if (rest.startsWith(SQLITE_MEMORY_PATH)) return SQLITE_MEMORY_PATH;
+
+  // An empty path is a configuration accident, not a request for an anonymous database.
+  // "sqlite:" and "sqlite://" are what a templated `sqlite://${DB_PATH}` collapses to
+  // when DB_PATH is unset; resolving that to an in-memory database would answer a
+  // missing variable with silently non-durable storage. Say so instead.
+  if (rest === "" || rest === "//") {
+    throw new Error(
+      `"${value}" names no database file. Give a path (${scheme}:///var/lib/skills/server.db), ` +
+        `or ":memory:" if a non-durable database is genuinely what you want. ` +
+        "An empty path here usually means an unset variable in a templated URL.",
+    );
   }
 
-  if (scheme === "file") {
-    // file:///abs/path.db is a real URL; file:relative.db and file:/abs.db are the
-    // shorthands people actually type. fileURLToPath handles only the first.
-    if (value.startsWith("file://")) {
+  if (rest.startsWith("//")) {
+    // scheme://authority/path. Only an empty authority (i.e. "///path") is meaningful
+    // for a local file. "sqlite://srv/a.db" is the classic one-slash-short typo for an
+    // absolute path, and silently resolving it relative to the working directory would
+    // produce a different, empty database - the exact "empty database instead of a
+    // configuration error" outcome this module exists to prevent.
+    if (!rest.startsWith("///")) {
+      const authority = rest.slice(2).split("/")[0];
+      throw new Error(
+        `"${value}" has a host ("${authority}") where a path was expected. Remote SQLite files are not a thing; ` +
+          `for an absolute path use ${scheme}:///${rest.slice(2)}, and for a relative one use ${scheme}:${rest.slice(2)}.`,
+      );
+    }
+    if (scheme === "file") {
       try {
         return fileURLToPath(new URL(value));
       } catch {
-        // Fall through to the textual handling below rather than failing on a
-        // technically-invalid-but-obvious value like file://relative.db.
+        // Fall through to textual handling rather than rejecting a path that is
+        // obvious but not a strictly valid URL.
       }
     }
+    return rest.slice(2).replace(/^\/\/+/, "/");
   }
 
-  const withoutSlashes = rest.startsWith("//") ? rest.slice(2) : rest;
-  const path = withoutSlashes.replace(/^\/\/+/, "/");
-  if (!path) return SQLITE_MEMORY_PATH;
-  return isAbsolute(path) ? path : join(process.cwd(), path);
+  return isAbsolute(rest) ? rest : join(process.cwd(), rest);
 }
 
 function looksLikeSqlitePath(value: string): boolean {

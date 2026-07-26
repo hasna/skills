@@ -11,7 +11,7 @@ import type {
 } from "./types.js";
 import { hashApiKey, publicPrincipal } from "./auth.js";
 import { resolveDatabaseTarget, type DatabaseTarget } from "./database-url.js";
-import { artifactId, nowIso, rowToArtifact, rowToLog, rowToRun, parseJsonArray, runId } from "./rows.js";
+import { artifactId, nowIso, normalizeLimit, rowToArtifact, rowToLog, rowToRun, parseJsonArray, runId } from "./rows.js";
 import { SqliteSkillsStore, type SqliteStoreOptions } from "./sqlite-store.js";
 
 type SqlTag = {
@@ -24,6 +24,13 @@ function resolvePoolMax(env: Record<string, string | undefined> = process.env): 
   const parsed = Number.parseInt(env.HASNA_SKILLS_DATABASE_POOL_MAX || env.SKILLS_DATABASE_POOL_MAX || "", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 4;
 }
+
+/**
+ * Bounded retries for a log sequence lost to a concurrent writer. Generous, because each
+ * retry only loses when another writer wins, and a run producing many simultaneous log
+ * lines is exactly when losing one matters least and dropping the run matters most.
+ */
+const LOG_SEQUENCE_ATTEMPTS = 12;
 
 export function createArtifactId(): string {
   return artifactId();
@@ -130,7 +137,10 @@ export class MemorySkillsStore implements SkillsProductStore {
     return Array.from(this.runs.values())
       .filter((run) => run.orgId === principal.orgId)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .slice(0, limit);
+      // Normalised like the SQL backends: Array#slice reads a negative end as an offset
+      // from the tail, so `slice(0, -1)` silently dropped the newest run instead of
+      // returning nothing.
+      .slice(0, normalizeLimit(limit));
   }
 
   async getRun(principal: ApiPrincipal, runId: string): Promise<ServerRunRecord | null> {
@@ -229,6 +239,24 @@ export class PostgresSkillsStore implements SkillsProductStore {
           `Check HASNA_SKILLS_DATABASE_URL and that the instance is accepting connections. Driver reported: ${connectionFailureSummary(error)}`,
       );
     }
+
+    // Reachable is not the same as usable, and `SELECT 1` only proves the former.
+    //
+    // SQLite migrates itself when the store opens it; Postgres does not, because
+    // several replicas auto-migrating a shared database concurrently is not something
+    // to do implicitly. That asymmetry means a Postgres deployment can be pointed at an
+    // empty database, and without this check it produced exactly the symptom the block
+    // above exists to prevent: /health answering ok:true and the first API call
+    // returning 500 `relation "api_keys" does not exist`.
+    try {
+      await this.sql`SELECT 1 FROM api_keys LIMIT 0`;
+    } catch (error) {
+      throw new Error(
+        "the configured Postgres database is reachable but has no skills schema. Run `skills-migrate` against it " +
+          "before starting the server - unlike SQLite, Postgres is not migrated automatically, so that several " +
+          `replicas cannot race to migrate a shared database. Driver reported: ${connectionFailureSummary(error)}`,
+      );
+    }
   }
 
   async close(): Promise<void> {
@@ -306,7 +334,7 @@ export class PostgresSkillsStore implements SkillsProductStore {
   async listRuns(principal: ApiPrincipal, limit: number): Promise<ServerRunRecord[]> {
     const rows = await this.sql`
       SELECT * FROM skills_runs WHERE org_id = ${principal.orgId}
-      ORDER BY created_at DESC LIMIT ${limit}
+      ORDER BY created_at DESC LIMIT ${normalizeLimit(limit)}
     `;
     return rows.map(rowToRun);
   }
@@ -353,15 +381,42 @@ export class PostgresSkillsStore implements SkillsProductStore {
     return rows[0] ? rowToRun(rows[0]) : null;
   }
 
+  /**
+   * Append a log line, retrying when another writer took the sequence number first.
+   *
+   * This was `SELECT MAX(sequence)+1` and then a separate `INSERT`, with an await in
+   * between. Measured with five concurrent appendLog calls on one run: one succeeded and
+   * four threw `duplicate key value violates unique constraint`, which executeRun's catch
+   * turns into a failed run - a skill killed by its own logging.
+   *
+   * Folding the MAX into the INSERT helps but does not fix it: under READ COMMITTED each
+   * statement takes its own snapshot, so concurrent inserts still compute the same MAX
+   * (measured: 2 of 5 succeeded). SQLite has one writer and needs no retry; Postgres does,
+   * so the loop lives here rather than in shared code. Bounded, and only ever retried for
+   * a uniqueness conflict - any other error propagates on the first attempt.
+   */
   async appendLog(runId: string, orgId: string, level: ServerRunLog["level"], message: string): Promise<ServerRunLog> {
-    const seqRows = await this.sql`SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM skills_run_logs WHERE run_id = ${runId}`;
-    const sequence = Number(seqRows[0]?.next_sequence ?? 1);
-    const rows = await this.sql`
-      INSERT INTO skills_run_logs (run_id, org_id, sequence, level, message)
-      VALUES (${runId}, ${orgId}, ${sequence}, ${level}, ${message})
-      RETURNING *
-    `;
-    return rowToLog(rows[0]);
+    let lastError: unknown;
+    for (let attempt = 0; attempt < LOG_SEQUENCE_ATTEMPTS; attempt += 1) {
+      try {
+        const rows = await this.sql`
+          INSERT INTO skills_run_logs (run_id, org_id, sequence, level, message)
+          VALUES (
+            ${runId},
+            ${orgId},
+            (SELECT COALESCE(MAX(sequence), 0) + 1 FROM skills_run_logs WHERE run_id = ${runId}),
+            ${level},
+            ${message}
+          )
+          RETURNING *
+        `;
+        return rowToLog(rows[0]);
+      } catch (error) {
+        if (!isUniqueViolation(error)) throw error;
+        lastError = error;
+      }
+    }
+    throw lastError;
   }
 
   async listLogs(principal: ApiPrincipal, runId: string): Promise<ServerRunLog[]> {
@@ -411,6 +466,14 @@ export class PostgresSkillsStore implements SkillsProductStore {
  * error message. This keeps the class and a short reason - enough to tell "host is
  * down" from "password rejected" - and drops anything that looks like a URL.
  */
+/** Postgres SQLSTATE 23505. Matched on the code where the driver exposes it, message otherwise. */
+function isUniqueViolation(error: unknown): boolean {
+  const code = (error as { code?: unknown; errno?: unknown })?.code;
+  if (code === "23505" || code === 23505) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /duplicate key value violates unique constraint/i.test(message);
+}
+
 function connectionFailureSummary(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.replace(/[a-z][a-z0-9+.-]*:\/\/\S*/gi, "<redacted-url>").split("\n")[0]!.slice(0, 200);

@@ -304,34 +304,59 @@ HASNA_SKILLS_DATABASE_URL=/srv/skills/server.db skills-server
 HASNA_SKILLS_DATABASE_URL=postgres://user:pw@host/skills skills-server
 ```
 
-| `HASNA_SKILLS_DATABASE_URL` | Backend | Durable |
+| `HASNA_SKILLS_DATABASE_URL` | Backend | Survives restart |
 | --- | --- | --- |
 | *(unset)* | SQLite at `<data dir>/server.db` | yes |
-| `/path/to.db`, `sqlite:…`, `file:…` | SQLite at that path | yes |
+| `/path/to.db`, `sqlite:/path`, `file:///path` | SQLite at that path | yes |
 | `postgres://…`, `postgresql://…` | Postgres | yes |
-| `:memory:` | SQLite, in memory | no |
+| `:memory:`, `sqlite::memory:` | SQLite, in memory | no |
 | `memory:` | in-process map | no |
-| anything else | startup error naming what is supported | — |
+| `sqlite:`, `sqlite://host/p`, `mysql://…`, … | startup error naming what is supported | — |
+
+An empty path (`sqlite:` — what `sqlite://${DB_PATH}` becomes when `DB_PATH` is
+unset) and a host where a path belongs (`sqlite://srv/a.db`, one slash short of
+`sqlite:///srv/a.db`) are configuration errors, not silently a scratch database or a
+new empty file under the working directory.
 
 The data directory follows `$HASNA_SKILLS_DIR`, so the database moves with the rest
 of the app's state. The database file sits at the app root, beside `config.json` —
 not inside `installed/`, which holds only the installed skill corpus.
 
+Note that `HASNA_SKILLS_DATABASE_URL` is also read by the optional repo-native
+storage sync described under [Storage Boundary](#storage-boundary), which accepts
+Postgres only. If you use both, keep them on the same Postgres URL, or scope the
+sync with `HASNA_SKILLS_STORAGE_MODE=local`.
+
 SQLite applies pending migrations when the server opens the database, so a single
 operator needs no separate migrate step. Postgres deployments run migrations
-explicitly, because concurrent auto-migration across several server replicas is not
+explicitly, because several replicas racing to migrate one shared database is not
 something to do implicitly:
 
 ```bash
 HASNA_SKILLS_DATABASE_URL=postgres://… skills-migrate
 ```
 
-Two things the server will not do. A configured Postgres URL that cannot be reached
-is a startup failure, never a silent fallback to another backend — degrading would
-leave your data split across two stores with no signal. And a store that does not
-survive a restart is refused at startup unless
-`HASNA_SKILLS_ALLOW_EPHEMERAL_STORE=1` says otherwise, so the server can no longer
-report healthy while quietly losing every run.
+`skills-migrate` fails if no database is configured rather than migrating a default
+SQLite file, so it stays usable as a deploy gate.
+
+Three things the server will not do:
+
+- Fall back to another backend when a configured Postgres URL cannot be reached.
+  Degrading would leave your data split across two stores with no signal.
+- Start against a reachable Postgres that has no schema. `/health` returning `ok`
+  while the first API call 500s on a missing table is the failure this replaces.
+- Start on a store that does not survive a restart, unless
+  `HASNA_SKILLS_ALLOW_EPHEMERAL_STORE=1` says otherwise. The same guard applies to
+  `skills-worker`.
+
+**Durability is per-filesystem, not magic.** SQLite survives a process restart
+against the same file — nothing more. A container without a persistent volume gets a
+database in its own ephemeral layer, and two replicas each get their *own* database
+rather than sharing one. Multi-replica and container deployments want Postgres; both
+`skills-server` and `skills-worker` print the database they opened on startup, so a
+split-brain SQLite setup shows up as two different paths in the logs.
+
+<a id="storage-boundary"></a>
 
 ## Storage Boundary
 

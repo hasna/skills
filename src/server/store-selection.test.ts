@@ -10,11 +10,13 @@
  * asked for by name is refused at startup rather than served from.
  */
 import { describe, expect, test } from "bun:test";
+import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { getDataDir } from "../lib/config.js";
 import { assertDurableStore, createSkillsFetchHandler } from "./app.js";
 import { resolveServerConfig } from "./config.js";
 import { DEFAULT_SQLITE_FILENAME, defaultSqlitePath, resolveDatabaseTarget } from "./database-url.js";
+import { runMigrations } from "./migrate.js";
 import { MemorySkillsStore, createStore } from "./store.js";
 import { SqliteSkillsStore } from "./sqlite-store.js";
 
@@ -68,6 +70,25 @@ describe("database target resolution", () => {
     for (const value of ["sqlite::memory:?cache=shared", "file::memory:"]) {
       expect(resolveDatabaseTarget(value)).toMatchObject({ kind: "sqlite", path: ":memory:", durable: false });
     }
+  });
+
+  test("an empty path is a configuration error, not a request for a scratch database", () => {
+    // What `sqlite://${DB_PATH}` collapses to when DB_PATH is unset. Answering a missing
+    // variable with silently non-durable storage is the failure mode this whole change
+    // is about, so it must not be reachable by accident here either.
+    for (const value of ["sqlite:", "sqlite://", "file:", "file://"]) {
+      expect(() => resolveDatabaseTarget(value)).toThrow(/names no database file/);
+    }
+  });
+
+  test("a host where a path belongs is rejected rather than resolved against the cwd", () => {
+    // "sqlite://srv/a.db" is one slash short of an absolute path. Resolving it relative
+    // to the working directory would hand back a different, empty database.
+    expect(() => resolveDatabaseTarget("sqlite://srv/skills.db")).toThrow(/has a host/);
+    expect(() => resolveDatabaseTarget("file://srv/skills.db")).toThrow(/has a host/);
+    // The correct spellings still work, and mean the same file.
+    expect(resolveDatabaseTarget("sqlite:///srv/skills.db")).toMatchObject({ path: "/srv/skills.db" });
+    expect(resolveDatabaseTarget("sqlite:/srv/skills.db")).toMatchObject({ path: "/srv/skills.db" });
   });
 
   test("an unsupported scheme throws instead of being reinterpreted as a file path", () => {
@@ -153,8 +174,10 @@ describe("startup durability guard", () => {
 
   test("the server starts unconfigured and is durable, with a working health endpoint", async () => {
     // The end-to-end version of the fix: no environment, no flags, and what comes up is
-    // backed by a file that outlives the process.
-    const handler = await createSkillsFetchHandler({ config: { inlineWorker: false } });
+    // backed by a file that outlives the process. The store is built here rather than
+    // left to the handler so the test can close the handle it opened.
+    const store = await createStore({});
+    const handler = await createSkillsFetchHandler({ store, config: { inlineWorker: false } });
     const server = Bun.serve({ port: 0, fetch: handler });
     try {
       const health = await fetch(`http://127.0.0.1:${server.port}/health`);
@@ -162,8 +185,46 @@ describe("startup durability guard", () => {
       expect(await health.json()).toMatchObject({ ok: true, mode: "self-hosted" });
       // /health reporting ok now means something: the store behind it is on disk.
       expect(resolveDatabaseTarget(undefined)).toMatchObject({ durable: true });
+      expect(store.backend).toMatchObject({ kind: "sqlite", durable: true });
     } finally {
       server.stop(true);
+      await store.close?.();
+    }
+  });
+
+  test("a rejected configuration never opens a database", async () => {
+    // The guard used to run after createStore(), so a store we were about to refuse was
+    // built anyway - creating a file, or a Postgres pool nothing then closed.
+    const before = readdirSync(getDataDir());
+    await expect(
+      createSkillsFetchHandler({ config: { databaseUrl: "memory:", allowEphemeralStore: false } }),
+    ).rejects.toThrow(/refusing to start/);
+    expect(readdirSync(getDataDir())).toEqual(before);
+  });
+
+  test("an injected store bypasses ambient database configuration entirely", async () => {
+    // resolveServerConfig() reads $DATABASE_URL, which is the single most commonly
+    // exported variable on a developer machine. A test or embedder that supplies its own
+    // store must not be dragged onto whatever that names.
+    const store = new MemorySkillsStore();
+    const handler = await createSkillsFetchHandler({
+      store,
+      config: { databaseUrl: "postgres://nobody@127.0.0.1:1/none", allowEphemeralStore: true, inlineWorker: false },
+    });
+    const server = Bun.serve({ port: 0, fetch: handler });
+    try {
+      expect((await fetch(`http://127.0.0.1:${server.port}/health`)).status).toBe(200);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("migrations refuse a target that does not outlive the process", async () => {
+    // `skills-migrate` reporting {applied:["0001_…"]} and exit 0 for a database thrown
+    // away microseconds later is a green result meaning the opposite of what it says -
+    // in a command whose exit code gates a deploy rollout.
+    for (const target of ["memory:", ":memory:"]) {
+      await expect(runMigrations(target)).rejects.toThrow(/refusing to migrate/);
     }
   });
 

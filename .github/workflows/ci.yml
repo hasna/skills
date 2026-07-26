@@ -9,6 +9,29 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+
+    # The server store has two durable backends and the suite is parameterised over
+    # whichever ones are reachable. Without a Postgres here, CI silently exercised only
+    # memory and sqlite and reported green for a backend it never touched - which is
+    # exactly the coverage gap the parameterisation exists to close.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Names the maintenance database. Each fixture creates and drops its own database
+      # under it, so test files can run concurrently without sharing a run queue.
+      HASNA_SKILLS_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+
     steps:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2

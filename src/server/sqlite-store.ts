@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { hashApiKey, publicPrincipal } from "./auth.js";
 import { SQLITE_MEMORY_PATH } from "./database-url.js";
 import { resolveMigrationsDir } from "./migrations-dir.js";
-import { artifactId, nowIso, rowToArtifact, rowToLog, rowToRun, runId } from "./rows.js";
+import { nowIso, normalizeLimit, rowToArtifact, rowToLog, rowToRun, runId } from "./rows.js";
 import type {
   ApiPrincipal,
   ClaimRunInput,
@@ -49,14 +49,23 @@ export interface SqliteStoreOptions {
 
 /**
  * Bounded retry for the "another claimer took the row between our SELECT and our
- * UPDATE" case. Cannot happen while BEGIN IMMEDIATE holds, but the conditional UPDATE
- * is what makes that a provable property rather than an assumption, and if it ever does
- * fire the correct response is to look at the next queued row, not to return null and
- * let a runnable job sit.
+ * UPDATE" case.
+ *
+ * Unreachable by construction today, and stated as such rather than implied: while
+ * BEGIN IMMEDIATE holds the write lock nothing else can change the row, so the
+ * conditional UPDATE always reports one row and this loop always exits on its first
+ * pass. It is defence in depth for the day someone weakens the transaction - which is a
+ * plausible edit, since the isolation is one keyword - and it is why a weakened
+ * transaction would degrade into retries rather than into two workers running the same
+ * skill. Being unreachable, it is also untested; do not read a green suite as evidence
+ * that this path works.
  */
 const CLAIM_ATTEMPTS = 8;
 
 const CLAIMABLE_STATUSES = ["queued", "retrying"] as const;
+
+/** How stale api_keys.last_used_at is allowed to get before authentication refreshes it. */
+const LAST_USED_RESOLUTION_MS = 60_000;
 
 export class SqliteSkillsStore implements SkillsProductStore {
   readonly backend: StoreBackendInfo;
@@ -67,13 +76,24 @@ export class SqliteSkillsStore implements SkillsProductStore {
     const inMemory = path === SQLITE_MEMORY_PATH;
     if (!inMemory) mkdirSync(dirname(path), { recursive: true });
 
-    this.db = new Database(path, { create: true, readwrite: true });
+    this.db = openDatabase(path);
 
+    // busy_timeout MUST be installed before anything that takes a lock, and the very
+    // next statement takes the strongest one there is.
+    //
+    // Switching a fresh database into WAL needs an exclusive lock. With no busy handler
+    // yet, a second process opening the same new file gets SQLITE_BUSY immediately and
+    // throws a bare "database is locked" - and the zero-config topology starts exactly
+    // two processes against a brand-new file at once (`skills-server` and
+    // `skills-worker`). Measured with the pragmas in the other order: 8 of 10 concurrent
+    // first opens failed. It is a first-start-only race, because once the file is in WAL
+    // the conversion is a no-op, which is precisely what makes it the kind of bug that
+    // survives every test run on an already-initialised database.
+    this.db.exec(`PRAGMA busy_timeout = ${Math.max(0, options.busyTimeoutMs ?? 5000)}`);
     // WAL lets readers proceed while a writer holds the lock, which is what keeps the
     // API process responsive while a worker is mid-claim. Meaningless for :memory:,
     // where SQLite silently keeps journal_mode=memory.
-    if (!inMemory) this.db.exec("PRAGMA journal_mode = WAL");
-    this.db.exec(`PRAGMA busy_timeout = ${Math.max(0, options.busyTimeoutMs ?? 5000)}`);
+    if (!inMemory) enableWalMode(this.db);
     // SQLite ignores foreign keys unless asked. The schema declares org_id/user_id
     // references on every table; without this pragma the org model would be decorative
     // on SQLite and enforced on Postgres - exactly the kind of silent cross-backend
@@ -132,7 +152,7 @@ export class SqliteSkillsStore implements SkillsProductStore {
 
   async authenticateApiKeyHash(hash: string): Promise<ApiPrincipal | null> {
     const row = this.get(
-      `SELECT k.id AS api_key_id, k.scopes_json, o.id AS org_id, o.slug AS org_slug, o.name AS org_name,
+      `SELECT k.id AS api_key_id, k.scopes_json, k.last_used_at, o.id AS org_id, o.slug AS org_slug, o.name AS org_name,
               u.id AS user_id, u.email, m.role
        FROM api_keys k
        JOIN organizations o ON o.id = k.org_id
@@ -143,7 +163,24 @@ export class SqliteSkillsStore implements SkillsProductStore {
       [hash],
     );
     if (!row) return null;
-    this.db.run("UPDATE api_keys SET last_used_at = ? WHERE id = ?", [nowIso(), String(row.api_key_id)]);
+
+    // last_used_at is refreshed at most once per LAST_USED_RESOLUTION_MS, not on every
+    // request.
+    //
+    // bun:sqlite is synchronous, so a write here does not merely await - it blocks the
+    // entire JS thread until it lands. Measured with another process holding BEGIN
+    // IMMEDIATE, one authentication took 1937ms during which a 10ms interval fired zero
+    // times: every other in-flight request on the server was frozen too, and past
+    // busy_timeout the whole thing becomes a 500. Authentication runs on every /api/*
+    // request, so an unconditional write turned the busiest read path into the busiest
+    // write path.
+    //
+    // The column exists to answer "is this key still in use", which a minute's
+    // resolution answers just as well as a millisecond's.
+    const lastUsed = typeof row.last_used_at === "string" ? Date.parse(row.last_used_at) : Number.NaN;
+    if (!Number.isFinite(lastUsed) || Date.now() - lastUsed >= LAST_USED_RESOLUTION_MS) {
+      this.db.run("UPDATE api_keys SET last_used_at = ? WHERE id = ?", [nowIso(), String(row.api_key_id)]);
+    }
     return {
       apiKeyId: String(row.api_key_id),
       orgId: String(row.org_id),
@@ -191,7 +228,7 @@ export class SqliteSkillsStore implements SkillsProductStore {
     // submitted in the same millisecond would otherwise come back in arbitrary order.
     return this.all(
       "SELECT * FROM skills_runs WHERE org_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
-      [principal.orgId, limit],
+      [principal.orgId, normalizeLimit(limit)],
     ).map(rowToRun);
   }
 
@@ -272,8 +309,17 @@ export class SqliteSkillsStore implements SkillsProductStore {
       }
 
       const row = this.get("SELECT * FROM skills_runs WHERE id = ? LIMIT 1", [id]);
+      if (!row) {
+        // Unreachable: the UPDATE above just reported one row changed for this id,
+        // inside this transaction. Returning null here would COMMIT the claim and then
+        // tell the caller the queue was empty, orphaning a run as `running` with a
+        // locked_by and no worker - silent work loss with no error anywhere. Roll back
+        // and raise instead, so the impossible case is loud rather than lossy.
+        this.db.exec("ROLLBACK");
+        throw new Error(`claimed run ${id} vanished within its own transaction; refusing to report a lost claim as an empty queue`);
+      }
       this.db.exec("COMMIT");
-      return row ? rowToRun(row) : null;
+      return rowToRun(row);
     } catch (error) {
       this.rollbackQuietly();
       throw error;
@@ -335,7 +381,7 @@ export class SqliteSkillsStore implements SkillsProductStore {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        RETURNING *`,
       [
-        artifact.id || artifactId(),
+        artifact.id,
         artifact.runId,
         artifact.orgId,
         artifact.fileName,
@@ -405,9 +451,6 @@ export function applySqliteMigrations(db: Database, migrationsDir = resolveMigra
        applied_at text NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
      )`,
   );
-  const applied = new Set(
-    (db.query("SELECT version FROM schema_migrations").all() as Array<{ version: string }>).map((row) => row.version),
-  );
 
   const files = readdirSync(migrationsDir)
     .filter((name) => name.endsWith(".sql"))
@@ -419,15 +462,99 @@ export function applySqliteMigrations(db: Database, migrationsDir = resolveMigra
   const appliedNow: string[] = [];
   for (const file of files) {
     const version = file.replace(/\.sql$/, "");
-    if (applied.has(version)) continue;
     const text = readFileSync(join(migrationsDir, file), "utf8");
-    db.transaction(() => {
+
+    // IMMEDIATE, and the already-applied check happens INSIDE the transaction.
+    //
+    // Migrating on open means several processes can migrate the same fresh file at the
+    // same moment - which is exactly what the zero-config topology does, starting
+    // `skills-server` and `skills-worker` together. Reading the applied set once up
+    // front and then opening a deferred transaction let every process decide "not
+    // applied" before any of them wrote: the DDL survived on CREATE TABLE IF NOT EXISTS,
+    // and then every loser died on `UNIQUE constraint failed: schema_migrations.version`.
+    // Measured: 5 of 6 concurrent first opens failed that way.
+    //
+    // BEGIN IMMEDIATE takes the write lock before the check, so exactly one process is
+    // ever deciding; the others block on busy_timeout and then find the row present and
+    // skip. Re-reading inside the transaction is the load-bearing half - without it the
+    // lock would only serialise the same wrong decision.
+    const apply = db.transaction(() => {
+      const already = db.query("SELECT 1 AS present FROM schema_migrations WHERE version = ? LIMIT 1").get(version);
+      if (already) return false;
       db.exec(text);
       db.run("INSERT INTO schema_migrations (version) VALUES (?)", [version]);
-    })();
-    appliedNow.push(version);
+      return true;
+    });
+    if (apply.immediate()) appliedNow.push(version);
   }
   return appliedNow;
+}
+
+/**
+ * Switch the database into WAL, retrying while another connection is converting it.
+ *
+ * busy_timeout does not cover this. SQLite's busy handler is not invoked for a
+ * journal_mode change - the statement returns SQLITE_BUSY immediately if any other
+ * connection has the database open - so setting busy_timeout first is necessary but not
+ * sufficient. Measured with the timeout set and no retry: 6 of 12 barrier-synchronised
+ * rounds had at least one of six processes die with a bare "database is locked".
+ *
+ * The retry is a synchronous sleep because bun:sqlite is synchronous and this runs
+ * inside a constructor at startup. The window it covers is one process's conversion of
+ * an empty file; once any process has converted it, every other `PRAGMA journal_mode =
+ * WAL` is a no-op that returns "wal" immediately.
+ *
+ * Returns false rather than throwing if the conversion never succeeds. WAL is a
+ * concurrency optimisation, not a correctness requirement: claiming is safe in
+ * rollback-journal mode too, because it rests on BEGIN IMMEDIATE and busy_timeout. A
+ * slower server beats a server that will not start.
+ */
+function enableWalMode(db: Database, attempts = 50, pauseMs = 10): boolean {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (journalMode(db) === "wal") return true;
+    try {
+      if (String((db.query("PRAGMA journal_mode = WAL").get() as { journal_mode?: string } | null)?.journal_mode).toLowerCase() === "wal") {
+        return true;
+      }
+    } catch {
+      // SQLITE_BUSY: another connection is converting, or holds a read lock on a
+      // database still in rollback-journal mode. Both clear on their own.
+    }
+    Bun.sleepSync(pauseMs);
+  }
+  return false;
+}
+
+function journalMode(db: Database): string {
+  try {
+    return String((db.query("PRAGMA journal_mode").get() as { journal_mode?: string } | null)?.journal_mode ?? "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Open the database file, turning SQLite's context-free errors into ones an operator
+ * can act on.
+ *
+ * Raw bun:sqlite reports "unable to open database file" identically for a read-only
+ * mount, a missing parent directory, and a path that is a directory, and "file is not a
+ * database" with no indication of which file. Since this path is now reached by every
+ * server that starts with no configuration at all, the message has to say what was
+ * being opened and which setting moves it.
+ */
+function openDatabase(path: string): Database {
+  try {
+    return new Database(path, { create: true, readwrite: true });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `cannot open the skills database at ${path}: ${reason}. ` +
+        "Check that the directory exists and is writable. Set HASNA_SKILLS_DATABASE_URL to choose a " +
+        "different path or a postgres:// URL, or HASNA_SKILLS_DIR to relocate the whole data directory.",
+      { cause: error },
+    );
+  }
 }
 
 function parseScopes(value: unknown): string[] {
