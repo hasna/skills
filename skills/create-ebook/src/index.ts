@@ -390,7 +390,7 @@ Topic context: ${this.options.topic}`;
     imageUrls: Map<number, string>
   ): Promise<string> {
     let markdown = `# ${toc.title}\n\n`;
-    markdown += `*Generated with skills.md create-ebook*\n\n`;
+    markdown += `*Generated with the create-ebook skill*\n\n`;
     markdown += `---\n\n`;
 
     // Table of contents

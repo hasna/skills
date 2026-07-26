@@ -248,7 +248,7 @@ async function splitPdf(): Promise<void> {
     }
 
     // Set metadata
-    newPdf.setCreator("skills.md split-pdf");
+    newPdf.setCreator("split-pdf skill");
     newPdf.setProducer("pdf-lib");
 
     // Generate output path

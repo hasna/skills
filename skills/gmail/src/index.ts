@@ -48,10 +48,10 @@ function getAccessToken(): string {
   if (!token) {
     log("Error: Gmail not connected.", "error");
     console.error("");
-    console.error("To use this skill, you need to connect your Gmail account:");
-    console.error("1. Go to https://skills.md/dashboard/connectors");
-    console.error("2. Click 'Connect' on the Gmail connector");
-    console.error("3. Authorize access to your Gmail account");
+    console.error("To use this skill, provide a Gmail access token:");
+    console.error("1. Set GMAIL_ACCESS_TOKEN in your environment, or");
+    console.error("2. Connect the Gmail connector on your own Skills instance");
+    console.error("   (its dashboard lives at $SKILLS_API_URL/dashboard/connectors)");
     process.exit(1);
   }
   return token;

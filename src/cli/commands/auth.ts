@@ -54,7 +54,9 @@ function redactUrl(url: string): string {
 }
 
 async function apiRequest(path: string, options?: RequestInit) {
-  const url = getApiUrl();
+  // Throws MissingApiUrlError when nothing is configured. Credentials are never
+  // sent to a default host, so the command fails before any request is made.
+  const url = getApiUrl(`${(options?.method || "GET").toUpperCase()} ${path}`);
   const safeUrl = redactUrl(url);
   const endpoint = `${(options?.method || "GET").toUpperCase()} ${safeUrl}${path}`;
   let res: Response;
@@ -125,7 +127,11 @@ function commandErrorPayload(err: unknown, fallback: string): Record<string, unk
       ...(err.apiUrl ? { apiUrl: err.apiUrl } : {}),
     };
   }
-  return { error: (err as Error)?.message || fallback };
+  const code = isRecord(err) && typeof err.code === "string" ? err.code : undefined;
+  return {
+    error: (err as Error)?.message || fallback,
+    ...(code ? { code } : {}),
+  };
 }
 
 function writeCommandError(err: unknown, fallback: string, json?: boolean): void {

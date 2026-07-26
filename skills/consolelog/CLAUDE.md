@@ -150,7 +150,7 @@ Global config: `~/.consolelog.json`
 
 ## Repository Context
 
-- **Owner:** Hasna (dev@hasna.com)
+- **Owner:** Hasna — https://github.com/hasna/skills/issues
 - **Organization:** Hasna
 - **Pattern:** service-<name>
 - **Runtime:** Bun

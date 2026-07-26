@@ -2,7 +2,7 @@
 name: doc-generate
 version: 1.0.0
 description: Generate docx with customizable options
-author: skills.md
+author: Hasna
 category: Documentation
 tags:
   - documentation
@@ -290,6 +290,6 @@ export OPENAI_API_KEY="sk-..."
 
 ## Support
 
-For issues or feature requests, visit [skills.md/skills/generate-docx](https://skills.md/skills/generate-docx)
+For issues or feature requests, open one at [github.com/hasna/skills/issues](https://github.com/hasna/skills/issues)
 
 ```

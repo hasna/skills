@@ -5,10 +5,10 @@ export function getAccessToken(): string {
   if (!token) {
     log("Error: Google Calendar not connected.", "error");
     console.error("");
-    console.error("To use this skill, you need to connect your Google Calendar:");
-    console.error("1. Go to https://skills.md/dashboard/connectors");
-    console.error("2. Click 'Connect' on the Google Calendar connector");
-    console.error("3. Authorize access to your Google Calendar");
+    console.error("To use this skill, provide a Google Calendar access token:");
+    console.error("1. Set GOOGLE_CALENDAR_ACCESS_TOKEN in your environment, or");
+    console.error("2. Connect the Google Calendar connector on your own Skills instance");
+    console.error("   (its dashboard lives at $SKILLS_API_URL/dashboard/connectors)");
     process.exit(1);
   }
   return token;

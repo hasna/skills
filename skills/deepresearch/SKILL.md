@@ -12,7 +12,7 @@ worker orchestration, and credentials stay server-side.
 ## Usage
 
 ```bash
-skills setup --mode self-hosted
+skills setup --api-url <origin>
 skills auth login
 skills run deepresearch "Best practices for building production RAG systems" --depth normal
 skills runs status <run-id>

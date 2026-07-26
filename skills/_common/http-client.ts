@@ -5,7 +5,14 @@
  * Usage: import and call executeSkill() from your skill CLI
  */
 
-const SKILL_API_URL = process.env.SKILLS_API_URL || process.env.SKILL_API_URL || "https://skills.md/api/v1";
+// No default endpoint. An unconfigured install has no instance to talk to, and
+// guessing one would send this skill's payload and API key to a host the
+// operator never chose.
+const SKILL_API_URL = process.env.SKILLS_API_URL || process.env.SKILL_API_URL || "";
+
+const MISSING_API_URL_MESSAGE =
+  "Set SKILLS_API_URL to the origin of the Skills instance you run, " +
+  "or run `skills setup --api-url <origin>`";
 
 export interface SkillRequest {
   skill: string;
@@ -29,6 +36,14 @@ export interface SkillResponse {
  */
 export async function executeSkill(request: SkillRequest): Promise<SkillResponse | Blob> {
   const { skill, ...params } = request;
+
+  if (!SKILL_API_URL) {
+    return {
+      success: false,
+      error: "Missing SKILLS_API_URL",
+      details: MISSING_API_URL_MESSAGE,
+    };
+  }
 
   const url = `${SKILL_API_URL}/${skill}/`;
 
@@ -95,7 +110,7 @@ export async function saveBlob(blob: Blob, outputPath: string): Promise<void> {
  * Helper to execute a skill and save file if needed
  */
 export async function executeAndSave(request: SkillRequest): Promise<boolean> {
-  console.log(`🔗 Connecting to ${SKILL_API_URL}...`);
+  if (SKILL_API_URL) console.log(`🔗 Connecting to ${SKILL_API_URL}...`);
 
   const result = await executeSkill(request);
 

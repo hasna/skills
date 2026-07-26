@@ -2,7 +2,7 @@
 name: analyze-data
 version: 0.1.0
 description: Instant data science insights for CSV and JSON files with statistical summaries, quality audits, and trend detection
-author: skills.md
+author: Hasna
 category: Data & Analytics
 tags:
   - data

@@ -5,9 +5,11 @@ server, API, and worker runtime for AI coding agents. It can be pointed at a
 compatible API for server-executed skills, while local-only usage remains
 available without requiring an API account or source-copy installs.
 
-The open package can optionally talk to the Hasna self-hosted API at
-`https://skills.md` for server-executed skills. That API path is explicit
-configuration, not a dependency of local-only use.
+The open package can optionally talk to a Skills API for server-executed skills.
+It ships with no default endpoint: the operator names their own instance through
+`SKILLS_API_URL` or `skills setup --api-url <origin>`. That
+API path is explicit configuration, not a dependency of local-only use, and an
+unconfigured install never sends credentials anywhere.
 
 ## Target Users
 
