@@ -27,7 +27,8 @@ Examples:
   skills run notion-manager -- action=create-page parentId=xyz789... title="New Document"
 
 Requirements:
-  Requires Notion connector to be connected in skills.md.
+  Requires NOTION_ACCESS_TOKEN in the environment, or the Notion connector
+  enabled on the Skills instance you configured.
 `);
   process.exit(0);
 }
@@ -39,7 +40,7 @@ const parentIdArg = args.find(a => a.startsWith("parentId="))?.split("=")[1];
 const titleArg = args.find(a => a.startsWith("title="))?.split("=")[1];
 
 if (!process.env.NOTION_ACCESS_TOKEN) {
-  console.error("Error: Notion connector not connected. Please connect Notion in skills.md.");
+  console.error("Error: Notion not connected. Set NOTION_ACCESS_TOKEN, or enable the Notion connector on your Skills instance.");
   process.exit(1);
 }
 

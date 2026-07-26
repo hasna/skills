@@ -298,21 +298,56 @@ interface Sentinels {
   hole: string;
 }
 
-/** Two distinct characters, both verified absent from `text`. */
-export function pickSentinels(text: string): Sentinels | undefined {
-  const found: string[] = [];
-  for (let code = SENTINEL_START; code <= SENTINEL_END && found.length < 2; code++) {
-    const char = String.fromCharCode(code);
-    if (!text.includes(char)) found.push(char);
-  }
-  if (found.length < 2) return undefined;
-  return { placeholder: found[0], hole: found[1] };
+/**
+ * The Private Use Area, reserved here for sentinels.
+ *
+ * `sanitizeForScanning` deletes every character in this range from any text
+ * before it is scanned, which is what makes a sentinel unforgeable: the marker
+ * cannot occur in the input because the input cannot contain it. Verifying
+ * absence was not enough — absence was checked against the file's RAW bytes
+ * while the sentinel was compared against COOKED literal text, so `""`
+ * written as a six-character escape was absent from one and present in the
+ * other, and could be used to make a complete hostname look templated.
+ */
+const PRIVATE_USE_AREA = new RegExp(`[\\u${SENTINEL_START.toString(16)}-\\u${SENTINEL_END.toString(16)}]`, "gu");
+
+/**
+ * Normalise text before any URL is read out of it.
+ *
+ *  - Private Use Area characters are removed, so sentinels stay out of band.
+ *  - Tab, LF and CR are removed because the WHATWG URL parser removes them
+ *    before parsing: `https://example.com\n@skills.md/x` is a request to
+ *    skills.md with `example.com` as userinfo, and a scanner that stops at the
+ *    newline reads the opposite of what the runtime does.
+ */
+export function sanitizeForScanning(text: string): string {
+  return text.replace(PRIVATE_USE_AREA, "").replace(/[\t\n\r]/g, "");
 }
 
-/** Placeholder syntaxes that appear inside URL templates. */
+/** Two distinct sentinel characters. Guaranteed absent by sanitisation. */
+export function pickSentinels(_text?: string): Sentinels {
+  return { placeholder: String.fromCharCode(SENTINEL_START), hole: String.fromCharCode(SENTINEL_START + 1) };
+}
+
+/**
+ * Placeholder syntaxes that appear inside URL templates.
+ *
+ * Applied ONLY to a URL's authority, never to the surrounding text. Applying it
+ * to whole text was a blinding bug: `\{[^}]*\}` spans from the first `{` to the
+ * first `}`, so every URL inside a flat JSON object — `{"apiUrl":"https://…"}`
+ * — was deleted before matching, in code and in prose alike.
+ */
 const URL_PLACEHOLDER = /\$\{[^}]*\}|\{[^}]*\}|<[^>]*>|%[sd]/g;
 
-const ABSOLUTE_URL_SOURCE = "\\bhttps?://[^\\s\"'`<>()\\[\\]{}\\\\|^,;]+";
+/**
+ * Absolute URLs, including templated ones.
+ *
+ * No leading `\b`: a word boundary meant one prefix character (`"_https://…"`)
+ * removed the URL from the scan entirely. The authority may be EMPTY so that a
+ * bare `https://` fragment is still seen — that is the shape a split host takes,
+ * and it must surface as an uncertifiable host rather than as nothing at all.
+ */
+const ABSOLUTE_URL_SOURCE = "https?://(?:\\$?\\{[^{}\\s\"'`]*\\}|[^\\s\"'`<>()\\[\\]{}\\\\|^,;])*";
 
 /** A final label that could plausibly be a public TLD. */
 const TLD_SHAPED = /^[a-z]{2,24}$/;
@@ -389,20 +424,31 @@ function resolveMarkedHost(
  * containing `/`, `?` or `#` cannot cut the authority in half.
  */
 export function extractUrlReferences(text: string, sentinels?: Sentinels): UrlReference[] {
-  const marks = sentinels ?? pickSentinels(text);
-  if (!marks) return [];
-  const masked = text.replace(URL_PLACEHOLDER, marks.placeholder);
+  const marks = sentinels ?? pickSentinels();
+  // Text that arrived with sentinels was sanitised when its literals were read
+  // and now carries the guard's markers; stripping the PUA again would delete
+  // them. Tab/LF/CR removal still applies to both paths.
+  const scannable = sentinels ? text.replace(/[\t\n\r]/g, "") : sanitizeForScanning(text);
   const pattern = new RegExp(ABSOLUTE_URL_SOURCE, "gi");
   const references: UrlReference[] = [];
-  for (const match of masked.matchAll(pattern)) {
+  for (const match of scannable.matchAll(pattern)) {
     const raw = match[0].replace(/[.:!?]+$/, "");
-    const authority = raw.slice(raw.indexOf("//") + 2).split(/[/?#]/)[0];
+    // Placeholder masking is confined to the MATCHED URL, and runs before the
+    // authority is split off so that a `{…}` body containing `/`, `?` or `#`
+    // cannot cut the host in half. It must never be able to delete a URL from
+    // the surrounding text — doing that erased every URL inside a JSON object.
+    const masked = raw.replace(URL_PLACEHOLDER, marks.placeholder);
+    const authority = masked.slice(masked.indexOf("//") + 2).split(/[/?#]/)[0];
     const markedHost = stripPort(authority.replace(/^[^@]*@/, ""))
       // Control characters are not legal in a hostname. Dropping them stops a
       // stray byte from turning a vendor host into a merely "unapproved" one,
       // and denies any classification game played with in-band control bytes.
       .replace(CONTROL_CHARS, "")
       .toLowerCase();
+    // An EMPTY authority means the literal is a bare scheme — `"https://"` used
+    // in a `startsWith` test, not a host. When a scheme literal is actually
+    // concatenated with something, folding puts a hole after it and the
+    // authority is non-empty, so the split-host case is still reported.
     if (!markedHost) continue;
     references.push({
       url: stripSentinels(raw, marks),
@@ -476,6 +522,46 @@ export type UrlLiteralPosition =
   | "return value"
   | "literal";
 
+/**
+ * A vendor domain written into a string literal, whether or not it forms a URL.
+ *
+ * The URL-shaped checks are value-dependent: they have to reconstruct what the
+ * program will produce, and every reconstruction is a finite set of cases that
+ * an attacker can step outside of (`.concat`, `.slice`, `.replace`, a `const`
+ * referenced by name, a JSON blob parsed at runtime). This check is
+ * value-INDEPENDENT: the vendor's own domain has to appear somewhere in the
+ * bytes for the program to reach the vendor, so looking for the domain as a
+ * token catches every assembly trick at once.
+ *
+ * It is a denylist, so it says nothing about a vendor domain nobody has listed —
+ * that case is what the URL allowlist is for. The two are deliberately different
+ * shapes because they fail in different directions.
+ */
+/**
+ * The one file that must name the vendor's domains: this one, where the
+ * denylist is declared. Excluded from the token check only — every URL-shaped
+ * check still applies to it, it ships in no published artifact, and a test
+ * asserts both facts.
+ */
+export const VENDOR_DOMAIN_DECLARATION_FILE = "src/lib/vendor-host-guard.ts";
+
+export function findVendorDomainTokens(text: string): { domain: string; index: number }[] {
+  let scannable = sanitizeForScanning(text).toLowerCase();
+  // Audited exact-URL exceptions are removed before the token search, so an
+  // approved identifier is not reported twice under two different rules.
+  for (const exception of VENDOR_HOST_URL_EXCEPTIONS) {
+    scannable = scannable.split(exception.url.toLowerCase()).join(" ");
+  }
+  const hits: { domain: string; index: number }[] = [];
+  for (const domain of VENDOR_CONTROLLED_DOMAINS) {
+    const pattern = new RegExp(`(^|[^a-z0-9-])${domain.replace(/\./g, "\\.")}($|[^a-z0-9-])`, "g");
+    for (const match of scannable.matchAll(pattern)) {
+      hits.push({ domain, index: match.index ?? 0 });
+    }
+  }
+  return hits;
+}
+
 export type CodeFindingKind =
   /** Host resolves to a domain we operate. */
   | "vendor-host"
@@ -486,7 +572,9 @@ export type CodeFindingKind =
   /** The file could not be parsed, so its contents were never inspected. */
   | "unparsable"
   /** The bytes could not be decoded as text, so they were never inspected. */
-  | "undecodable";
+  | "undecodable"
+  /** A vendor domain appears in a string literal, in any form. */
+  | "vendor-domain-token";
 
 export interface CodeUrlFinding {
   file: string;
@@ -568,8 +656,234 @@ function constantSeparator(node: ts.CallExpression): string | undefined {
   return ts.isStringLiteralLike(arg) ? arg.text : undefined;
 }
 
-function fold(node: ts.Node, out: Folded): void {
+/**
+ * Module-local constant bindings, so `const H = "skills.md"` used by name is
+ * resolved rather than treated as an opaque runtime value.
+ *
+ * Without this, moving the host one `const` away from the URL was enough to turn
+ * a hard-coded endpoint into an "undeterminable host", which the annotation
+ * carve-outs then waved through. Scope is deliberately shallow — a single
+ * assignment to a `const` with a constant initialiser — because anything cleverer
+ * would need a type checker, and the guard should be honest about being a
+ * syntactic tool.
+ */
+type ConstantBindings = Map<string, string | Map<string, string>>;
+
+function collectConstantBindings(source: ts.SourceFile): ConstantBindings {
+  const bindings: ConstantBindings = new Map();
+  const assigned = new Set<string>();
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      const name = node.name.text;
+      // A name bound more than once is not a constant we can rely on.
+      if (assigned.has(name)) bindings.delete(name);
+      assigned.add(name);
+      const initializer = unwrap(node.initializer);
+      const literal = literalString(initializer);
+      if (literal !== undefined) {
+        bindings.set(name, literal);
+      } else if (ts.isObjectLiteralExpression(initializer)) {
+        const properties = new Map<string, string>();
+        for (const property of initializer.properties) {
+          if (!ts.isPropertyAssignment(property)) continue;
+          const key = ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name)
+            ? property.name.text
+            : undefined;
+          const value = key === undefined ? undefined : literalString(unwrap(property.initializer));
+          if (key !== undefined && value !== undefined) properties.set(key, value);
+        }
+        if (properties.size > 0) bindings.set(name, properties);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+
+  visit(source);
+  return bindings;
+}
+
+function literalString(node: ts.Node): string | undefined {
   const target = unwrap(node);
+  // Sanitised HERE, at the point the literal is read: folding inserts sentinels
+  // afterwards, so stripping the Private Use Area later would remove the
+  // guard's own markers instead of the attacker's.
+  if (ts.isStringLiteralLike(target)) return sanitizeForScanning(target.text);
+  if (ts.isNumericLiteral(target)) return sanitizeForScanning(target.text);
+  return undefined;
+}
+
+const MAX_FOLD_DEPTH = 40;
+
+/**
+ * Evaluate a fully-constant string expression.
+ *
+ * The previous version folded exactly three forms — `+`, template literals and
+ * `Array#join`. Everything else produced fragments that the URL matcher could
+ * not see, so `"https://".concat("skills.md/api/v1")` and
+ * `"_https://skills.md/x".slice(1)` shipped clean. The method set below is still
+ * finite, but anything outside it now degrades to a *reported* uncertifiable
+ * host rather than to silence, and the vendor-domain token check runs over every
+ * literal regardless of how the value is assembled.
+ */
+function constantString(node: ts.Node, bindings: ConstantBindings, depth = 0): string | undefined {
+  if (depth > MAX_FOLD_DEPTH) return undefined;
+  const target = unwrap(node);
+  const recurse = (child: ts.Node) => constantString(child, bindings, depth + 1);
+
+  const literal = literalString(target);
+  if (literal !== undefined) return literal;
+
+  if (ts.isIdentifier(target)) {
+    const bound = bindings.get(target.text);
+    return typeof bound === "string" ? bound : undefined;
+  }
+
+  if (ts.isPropertyAccessExpression(target) && ts.isIdentifier(target.expression)) {
+    const bound = bindings.get(target.expression.text);
+    if (bound instanceof Map) return bound.get(target.name.text);
+    return undefined;
+  }
+
+  if (ts.isBinaryExpression(target) && target.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    const left = recurse(target.left);
+    const right = recurse(target.right);
+    return left === undefined || right === undefined ? undefined : left + right;
+  }
+
+  if (ts.isTemplateExpression(target)) {
+    let out = sanitizeForScanning(target.head.text);
+    for (const span of target.templateSpans) {
+      const value = recurse(span.expression);
+      if (value === undefined) return undefined;
+      out += value + sanitizeForScanning(span.literal.text);
+    }
+    return out;
+  }
+
+  if (ts.isNoSubstitutionTemplateLiteral(target)) return sanitizeForScanning(target.text);
+
+  if (ts.isTaggedTemplateExpression(target)) {
+    const tag = target.tag;
+    const isStringRaw =
+      ts.isPropertyAccessExpression(tag) &&
+      ts.isIdentifier(tag.expression) &&
+      tag.expression.text === "String" &&
+      tag.name.text === "raw";
+    if (isStringRaw) return recurse(target.template);
+    return undefined;
+  }
+
+  if (ts.isArrayLiteralExpression(target)) {
+    const parts = target.elements.map(recurse);
+    return parts.some((part) => part === undefined) ? undefined : parts.join(" ");
+  }
+
+  if (ts.isCallExpression(target)) return constantCall(target, bindings, depth);
+
+  return undefined;
+}
+
+/** String/array methods and global functions whose constant result we can compute. */
+function constantCall(
+  call: ts.CallExpression,
+  bindings: ConstantBindings,
+  depth: number,
+): string | undefined {
+  const recurse = (child: ts.Node) => constantString(child, bindings, depth + 1);
+  const args = call.arguments.map(recurse);
+
+  if (ts.isIdentifier(call.expression)) {
+    const name = call.expression.text;
+    if (args.some((arg) => arg === undefined)) return undefined;
+    try {
+      if (name === "decodeURIComponent") return decodeURIComponent(args[0] as string);
+      if (name === "decodeURI") return decodeURI(args[0] as string);
+      if (name === "atob") return Buffer.from(args[0] as string, "base64").toString("binary");
+    } catch {
+      return undefined;
+    }
+    return undefined;
+  }
+
+  if (!ts.isPropertyAccessExpression(call.expression)) return undefined;
+  const method = call.expression.name.text;
+  const receiverNode = unwrap(call.expression.expression);
+
+  if (
+    ts.isIdentifier(receiverNode) &&
+    receiverNode.text === "String" &&
+    method === "fromCharCode" &&
+    args.every((arg) => arg !== undefined)
+  ) {
+    return String.fromCharCode(...args.map((arg) => Number(arg)));
+  }
+
+  // Array receivers: join / concat / flat / reduce over constant elements.
+  if (ts.isArrayLiteralExpression(receiverNode)) {
+    const elements = receiverNode.elements.map(recurse);
+    if (elements.some((element) => element === undefined)) return undefined;
+    const values = elements as string[];
+    if (method === "join") return values.join(args.length === 0 ? "," : (args[0] ?? ""));
+    if (method === "flat") return values.join("");
+    if (method === "reduce") {
+      // Only the canonical string-accumulating reduce is folded.
+      const seed = args.length > 1 ? (args[1] ?? "") : "";
+      return seed + values.join("");
+    }
+    if (method === "concat") {
+      const extra = args.every((arg) => arg !== undefined) ? (args as string[]).join("") : undefined;
+      return extra === undefined ? undefined : values.join("") + extra;
+    }
+    return undefined;
+  }
+
+  const receiver = recurse(receiverNode);
+  if (receiver === undefined) return undefined;
+  if (args.some((arg) => arg === undefined)) return undefined;
+  const text = args as string[];
+
+  try {
+    switch (method) {
+      case "concat": return receiver.concat(...text);
+      case "slice": return receiver.slice(...numeric(text));
+      case "substring": { const [a, b] = numeric(text); return b === undefined ? receiver.substring(a ?? 0) : receiver.substring(a ?? 0, b); }
+      case "substr": return receiver.slice(...numeric(text));
+      case "trim": return receiver.trim();
+      case "trimStart": return receiver.trimStart();
+      case "trimEnd": return receiver.trimEnd();
+      case "toLowerCase": return receiver.toLowerCase();
+      case "toUpperCase": return receiver.toUpperCase();
+      case "padStart": return receiver.padStart(Number(text[0] ?? 0), text[1] ?? " ");
+      case "padEnd": return receiver.padEnd(Number(text[0] ?? 0), text[1] ?? " ");
+      case "repeat": return receiver.repeat(Number(text[0] ?? 0));
+      case "at": return receiver.at(Number(text[0] ?? 0)) ?? "";
+      case "normalize": return receiver.normalize();
+      case "replace": return receiver.replace(text[0] ?? "", text[1] ?? "");
+      case "replaceAll": return receiver.replaceAll(text[0] ?? "", text[1] ?? "");
+      case "split": return receiver.split(text[0] ?? "").join(" ");
+      case "join": return receiver.split(" ").join(text[0] ?? ",");
+      default: return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+function numeric(values: string[]): [number?, number?] {
+  return values.slice(0, 2).map((value) => Number(value)) as [number?, number?];
+}
+
+function fold(node: ts.Node, out: Folded, bindings: ConstantBindings): void {
+  const target = unwrap(node);
+
+  // A fully constant sub-expression collapses to its value, whatever syntax
+  // produced it. Only what cannot be evaluated becomes a hole.
+  const constant = constantString(target, bindings);
+  if (constant !== undefined) {
+    out.segments.push({ text: constant });
+    return;
+  }
 
   if (ts.isStringLiteralLike(target) || ts.isNumericLiteral(target)) {
     out.segments.push({ text: target.text });
@@ -577,16 +891,16 @@ function fold(node: ts.Node, out: Folded): void {
   }
 
   if (ts.isBinaryExpression(target) && target.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-    fold(target.left, out);
-    fold(target.right, out);
+    fold(target.left, out, bindings);
+    fold(target.right, out, bindings);
     return;
   }
 
   if (ts.isTemplateExpression(target)) {
-    out.segments.push({ text: target.head.text });
+    out.segments.push({ text: sanitizeForScanning(target.head.text) });
     for (const span of target.templateSpans) {
-      fold(span.expression, out);
-      out.segments.push({ text: span.literal.text });
+      fold(span.expression, out, bindings);
+      out.segments.push({ text: sanitizeForScanning(span.literal.text) });
     }
     return;
   }
@@ -602,7 +916,7 @@ function fold(node: ts.Node, out: Folded): void {
     if (ts.isArrayLiteralExpression(receiver) && separator !== undefined) {
       receiver.elements.forEach((element, index) => {
         if (index > 0) out.segments.push({ text: separator });
-        fold(element, out);
+        fold(element, out, bindings);
       });
       return;
     }
@@ -688,6 +1002,8 @@ export function findCodeUrlLiterals(file: string, content: string): CodeUrlFindi
     }];
   }
 
+  const bindings = collectConstantBindings(source);
+
   const lineOf = (node: ts.Node): number =>
     source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
 
@@ -741,16 +1057,18 @@ export function findCodeUrlLiterals(file: string, content: string): CodeUrlFindi
   };
 
   const visit = (node: ts.Node): void => {
+    // Any expression that can produce a string is a fold candidate. Restricting
+    // this to `+`, templates and `Array#join` was how `.concat`, `.slice`,
+    // `.replace` and `decodeURIComponent` walked past the scan.
     const isStringBuilder =
       (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) ||
       ts.isTemplateExpression(node) ||
-      (ts.isCallExpression(node) &&
-        ts.isPropertyAccessExpression(node.expression) &&
-        node.expression.name.text === "join");
+      ts.isTaggedTemplateExpression(node) ||
+      ts.isCallExpression(node);
 
     if (isStringBuilder && isFoldRoot(node)) {
       const folded: Folded = { segments: [], holes: [] };
-      fold(node, folded);
+      fold(node, folded, bindings);
       if (folded.segments.some((segment) => "text" in segment)) {
         record(node, renderFolded(folded, sentinels));
         // Keep scanning inside the parts we could not fold.
@@ -767,6 +1085,39 @@ export function findCodeUrlLiterals(file: string, content: string): CodeUrlFindi
   };
 
   visit(source);
+
+  // Second pass, value-INDEPENDENT: a vendor domain written into any literal,
+  // whatever expression later assembles it. The URL passes above must
+  // reconstruct the program's value to see a host, and every reconstruction is
+  // a finite set of cases; this one only needs the domain to be present in the
+  // bytes, which it must be for the program to reach the vendor at all.
+  const skipTokenScan = file === VENDOR_DOMAIN_DECLARATION_FILE;
+  const tokenVisit = (node: ts.Node): void => {
+    if (skipTokenScan) return;
+    const literalText =
+      ts.isStringLiteralLike(node) ||
+      node.kind === ts.SyntaxKind.TemplateHead ||
+      node.kind === ts.SyntaxKind.TemplateMiddle ||
+      node.kind === ts.SyntaxKind.TemplateTail
+        ? (node as ts.LiteralLikeNode).text
+        : undefined;
+    if (literalText !== undefined) {
+      for (const hit of findVendorDomainTokens(literalText)) {
+        findings.push({
+          file,
+          line: lineOf(node),
+          kind: "vendor-domain-token",
+          vendor: true,
+          domain: hit.domain,
+          position: classifyPosition(node),
+          detail: `the vendor domain ${hit.domain} appears in a string literal`,
+        });
+      }
+    }
+    ts.forEachChild(node, tokenVisit);
+  };
+  tokenVisit(source);
+
   return findings;
 }
 
@@ -917,6 +1268,8 @@ export function formatFindings(
           return `  ${where}: ${finding.url} (${finding.position}; host ${finding.domain} — not on APPROVED_CODE_HOSTS)`;
         case "undeterminable-host":
           return `  ${where}: ${finding.url} (${finding.position}; ${finding.detail})`;
+        case "vendor-domain-token":
+          return `  ${where}: ${finding.position}; ${finding.detail} — VENDOR-CONTROLLED`;
         default:
           return `  ${where}: cannot certify — ${finding.detail}`;
       }
