@@ -503,8 +503,12 @@ export interface ScanAllowlistEntry {
  */
 export function applyAllowlist(findings: ScanFinding[], allowlist: ScanAllowlistEntry[]): ScanFinding[] {
   if (allowlist.length === 0) return findings;
-  const allowed = new Set(allowlist.map((entry) => `${entry.file} ${entry.ruleId}`));
-  return findings.filter((finding) => !allowed.has(`${finding.file} ${finding.ruleId}`));
+  // Composite key. The separator is NUL because it cannot appear in a path or a
+  // rule id, so the key is unambiguous. It MUST be written as the escape sequence:
+  // a raw NUL byte here makes grep treat this whole file as binary and silently
+  // report no matches, which hid this module from two reviewers.
+  const allowed = new Set(allowlist.map((entry) => `${entry.file}\0${entry.ruleId}`));
+  return findings.filter((finding) => !allowed.has(`${finding.file}\0${finding.ruleId}`));
 }
 
 /** Serialize findings as redacted JSON. Safe to print — contains no secret values. */
