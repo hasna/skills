@@ -117,7 +117,19 @@ describe("content-scan blocks personal data about an identified individual", () 
       diacritics: "Zorvax Kellstrøm,on_leave_maternity,8,0",
       "hyphenated surname": "Zorvax Kell-Strom,terminated,8",
       "quoted RFC-4180 last-first": `"Kellstrom, Zorvax",on_leave_maternity,8,0`,
+      // Review finding: the rule only understood the last-first spelling, which
+      // needs an internal comma. Every OTHER quoted shape walked through, because
+      // the closing `"` sat between the name and the delimiter. Quote-all is what
+      // csv.QUOTE_ALL, Excel and most BI tools emit, so re-pasting a real CSV
+      // timesheet export — the exact leak this guard exists to stop — is the one
+      // recurrence path it missed.
+      "quote-all, leave status": `"Zorvax Kellstrom","on_leave_maternity","8","0"`,
+      "quote-all, neutral status": `"Zorvax Kellstrom","active","8","160"`,
+      "quote-all last-first": `"Kellstrom, Zorvax","on_leave_maternity","8","0"`,
+      "quoted name, bare status": `"Zorvax Kellstrom",active,8,160`,
+      "bare name, quoted status": `Zorvax Kellstrom,"active","8","160"`,
       "semicolon-delimited EU export": "Zorvax Kellstrom;on_leave_maternity;8;0",
+      "quote-all EU export": `"Zorvax Kellstrom";"on_leave_maternity";"8";"0"`,
       "middle initial": "Zorvax D Kellstrom,on_leave_maternity,8,0",
       "Title-case status": "Zorvax Kellstrom,On_Leave_Maternity,8,0",
     };
@@ -142,6 +154,26 @@ describe("content-scan blocks personal data about an identified individual", () 
     expect(scanText(reversed).some((f) => f.ruleId === "person-record-status")).toBe(true);
   });
 
+  // Review finding: the proximity window opens at the FIRST person key, so one
+  // match can span two records. The allowlist check read only the first bound
+  // name, so a placeholder sitting above a pasted real record suppressed the
+  // whole span — and the multiline scan had already advanced past the real
+  // record, so it was never re-examined. That is deny-by-default inverted: the
+  // more example content a README carries, the easier it is to launder.
+  test("a placeholder person record does not launder a real one beside it", () => {
+    const afterPlaceholder = `employee: John Doe\nemployee: ${UNAPPROVED_NAME}\nemployee_status: on_leave_maternity\n`;
+    expect(scanText(afterPlaceholder).some((f) => f.ruleId === "person-record-status")).toBe(true);
+
+    // A schema/column-header line is enough: `employee name` is on the
+    // placeholder allowlist because it shares the "Two Capitalized Words" shape.
+    const afterSchemaHeader = `employee: Employee Name\nemployee: ${UNAPPROVED_NAME}\nemployee_status: active\n`;
+    expect(scanText(afterSchemaHeader).some((f) => f.ruleId === "person-record-status")).toBe(true);
+
+    // ...and the real record first, with the placeholder between it and the status.
+    const beforePlaceholder = `employee: ${UNAPPROVED_NAME}\nemployee: Jane Doe\nemployee_status: terminated\n`;
+    expect(scanText(beforePlaceholder).some((f) => f.ruleId === "person-record-status")).toBe(true);
+  });
+
   test("personal-data findings never print the name or identifier", () => {
     const findings = scanText(`${UNAPPROVED_NAME},on_leave_maternity,8,0`);
     const json = toRedactedJson(findings);
@@ -159,6 +191,29 @@ describe("content-scan does NOT false-positive on legitimate public content", ()
       "Sam Chen,on_leave_maternity,8\n" +
       "John Doe,terminated,8\n";
     expect(scanText(csv).some((f) => f.category === "pii-personal")).toBe(false);
+  });
+
+  test("allows documented synthetic placeholder people in a quote-all export", () => {
+    // The allowlist has to survive the quoted spellings too, or teaching the rule
+    // to read csv.QUOTE_ALL would fail CI on the corpus's own examples.
+    const csv =
+      `"employee","employee_status","daily_hours"\n` +
+      `"Alex Rivera","active","8"\n` +
+      `"Chen, Sam","on_leave_maternity","8"\n` +
+      `"John Doe",terminated,8\n`;
+    expect(scanText(csv).some((f) => f.category === "pii-personal")).toBe(false);
+  });
+
+  test("a stray quote beside a delimiter is not a field boundary", () => {
+    // Regression: matching an OPTIONAL quote on either side of the delimiter —
+    // rather than quoting each field as a whole — turned an ordinary source
+    // literal into a three-field record, and this very file tripped its own
+    // guard. A two-field row is prose or a two-column table, quoted or not.
+    expect(scanText(`  "Web Server,active",`).some((f) => f.category === "pii-personal")).toBe(false);
+    expect(scanText(`["Redis Cache,active", "Batch Worker,inactive"]`).some((f) => f.category === "pii-personal")).toBe(
+      false,
+    );
+    expect(scanText(`"Web Server","active"`).some((f) => f.category === "pii-personal")).toBe(false);
   });
 
   test("allows a neutral status in a markdown table cell", () => {

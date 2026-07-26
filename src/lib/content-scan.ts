@@ -201,6 +201,25 @@ const QUOTED_PERSON_NAME_SOURCE = `"${NAME_PART}, *${NAME_PART}(?: ${NAME_PART})
 /** The field delimiters a real timesheet export uses (EU exports use `;`). */
 const RECORD_DELIMITER = String.raw`[,;\t]`;
 
+/** The separator between two fields of a record, spacing included. */
+const RECORD_SEPARATOR = String.raw` *${RECORD_DELIMITER} *`;
+
+/**
+ * The person field of a record, in the three spellings a real export writes it:
+ * bare (`First Last`), quoted (`"First Last"`) and quoted last-first
+ * (`"Last, First"`).
+ *
+ * Quoting is matched PER FIELD rather than as a loose optional quote beside the
+ * delimiter. `csv.QUOTE_ALL`, Excel and most BI tools quote EVERY field, so
+ * `"First Last","active","8","160"` is the dominant spelling of exactly the CSV
+ * timesheet export this guard exists to police — and matching only the bare and
+ * last-first forms let it walk straight through, because the closing `"` sat
+ * between the name and the delimiter. A stray quote next to a delimiter is not
+ * a field boundary, though: treating it as one makes an ordinary source literal
+ * such as `"Web Server,active",` look like a three-field record.
+ */
+const PERSON_FIELD_SOURCE = `(?:${PERSON_NAME_SOURCE}|"${PERSON_NAME_CORE}"|${QUOTED_PERSON_NAME_SOURCE})`;
+
 /**
  * Spell a literal token so it matches in ANY case without an `i` flag. The flag
  * is not usable here: it would also relax the capitalized-name half of these
@@ -227,6 +246,16 @@ function statusAlternation(tokens: string[]): string {
     .sort((a, b) => b.length - a.length)
     .map(anyCase)
     .join("|");
+}
+
+/**
+ * The status field of a record, bare (`active`) or quoted (`"active"`) — the
+ * same per-field quoting {@link PERSON_FIELD_SOURCE} matches, so a quote-all
+ * export pairs with a quote-all name.
+ */
+function statusField(tokens: string[]): string {
+  const alternation = statusAlternation(tokens);
+  return `(?:"(?:${alternation})"|(?:${alternation})\\b)`;
 }
 
 const QUOTED_LAST_FIRST = new RegExp(`"(${NAME_PART}), *(${NAME_PART}(?: ${NAME_PART})?)"`, "gu");
@@ -288,12 +317,30 @@ const RECORD_PROXIMITY = 200;
 const PERSON_KEY_VALUE_SOURCE = `${PERSON_KEY_SOURCE} *[:=] *["']?(${PERSON_NAME_CORE})`;
 const STATUS_KEY_VALUE_SOURCE = `${STATUS_KEY_SOURCE} *[:=] *["']?(?:${statusAlternation(EMPLOYMENT_STATUS_TOKENS)})\\b`;
 
-const PERSON_KEY_VALUE = new RegExp(PERSON_KEY_VALUE_SOURCE, "u");
+const PERSON_KEY_VALUES = new RegExp(PERSON_KEY_VALUE_SOURCE, "gu");
 
-/** The allowlist check for `person-record-status`: the name bound to the person key. */
+/**
+ * The allowlist check for `person-record-status`: EVERY name bound to a person
+ * key inside the match must be a placeholder.
+ *
+ * The proximity window opens at the FIRST person key, so one match can span two
+ * records — a schema line or a placeholder example sitting directly above a
+ * pasted real export puts both inside it. Reading only the first bound name let
+ * the allowlisted placeholder launder the real record: `employee: John Doe`
+ * above a real employee suppressed the whole span, and the multiline scan had
+ * already advanced past the real record by then, so it was never re-examined.
+ * A match with no person key at all is not an example — it is not a match this
+ * rule can produce, and defaulting to `false` keeps the rule deny-by-default.
+ */
 const isSyntheticPersonRecord = (match: string): boolean => {
-  const name = PERSON_KEY_VALUE.exec(match)?.[1];
-  return name !== undefined && SYNTHETIC_PERSON_NAMES.has(name.toLowerCase());
+  PERSON_KEY_VALUES.lastIndex = 0;
+  let sawPersonKey = false;
+  let bound: RegExpExecArray | null;
+  while ((bound = PERSON_KEY_VALUES.exec(match)) !== null) {
+    sawPersonKey = true;
+    if (!SYNTHETIC_PERSON_NAMES.has(bound[1].toLowerCase())) return false;
+  }
+  return sawPersonKey;
 };
 
 /**
@@ -327,9 +374,9 @@ const PII_PERSONAL_RULES: ScanRule[] = [
     category: "pii-personal",
     description: "Personal name paired with an employment/HR status in a CSV/TSV record",
     pattern: new RegExp(
-      `(?:${PERSON_NAME_SOURCE}|${QUOTED_PERSON_NAME_SOURCE}) *${RECORD_DELIMITER} *(?:` +
-        `(?:${statusAlternation(EMPLOYMENT_STATUS_TOKENS)})\\b *${RECORD_DELIMITER}` +
-        `|(?:${statusAlternation(LEAVE_STATUS_TOKENS)})\\b)`,
+      `${PERSON_FIELD_SOURCE}${RECORD_SEPARATOR}(?:` +
+        `${statusField(EMPLOYMENT_STATUS_TOKENS)}${RECORD_SEPARATOR}` +
+        `|${statusField(LEAVE_STATUS_TOKENS)})`,
       "u",
     ),
     isExample: isSyntheticPerson,
