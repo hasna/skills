@@ -201,8 +201,8 @@ describe("CLI discovery", () => {
     test("lists default basic skills", async () => {
       const { stdout } = await runCli(["list"]);
       expect(stdout).toContain(`Available default skills (${EXPECTED_BASIC_SKILL_COUNT})`);
-      expect(stdout).toContain("image");
-      expect(stdout).toContain("$0.04 estimated");
+      expect(stdout).toContain("pdf-to-markdown");
+      expect(stdout).toContain("$0.05/run");
       expect(stdout).not.toContain("workout-cycle-planner");
       expect(stdout.toLowerCase()).not.toContain("openai");
       expect(stdout.toLowerCase()).not.toContain("gemini");
@@ -233,8 +233,8 @@ describe("CLI discovery", () => {
 
     test("lists by category", async () => {
       const { stdout } = await runCli(["list", "--category", "Data & Analysis"]);
-      expect(stdout).toContain("Data & Analysis (7)");
-      expect(stdout).toContain("read-pdf");
+      expect(stdout).toContain("Data & Analysis (5)");
+      expect(stdout).toContain("read-csv");
     });
 
     test("lists full-registry categories with --all", async () => {
@@ -254,7 +254,7 @@ describe("CLI discovery", () => {
       expect(exitCode).toBe(0);
       const lines = stdout.trim().split("\n").filter(Boolean);
       expect(lines.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
-      expect(lines).toContain("image");
+      expect(lines).toContain("pdf-to-markdown");
     });
 
     test("rejects an unknown --format value instead of silently falling back", async () => {
@@ -270,10 +270,10 @@ describe("CLI discovery", () => {
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
       expect(data.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
-      const image = data.find((skill: any) => skill.name === "image");
+      const image = data.find((skill: any) => skill.name === "pdf-to-markdown");
       expect(image.pricing).toMatchObject({
         tier: "premium",
-        quoteDependsOnInput: true,
+        formattedCost: "$0.05/run",
       });
       expect(JSON.stringify(image.pricing)).not.toContain("openai");
     });
@@ -286,11 +286,16 @@ describe("CLI discovery", () => {
           return Response.json({
             skills: [
               {
-                name: "image",
-                displayName: "Image",
-                description: "Hosted image generation",
-                category: "Media Processing",
-                tags: ["image"],
+                name: "market-research-report",
+                displayName: "Market Research Report",
+                description: "Hosted market research",
+                category: "Research & Writing",
+                tags: ["research"],
+                availability: {
+                  status: "unavailable",
+                  code: "HOSTED_PROVIDER_UNAVAILABLE",
+                  details: ["No balance was charged."],
+                },
               },
               {
                 name: "logo-design",
@@ -312,7 +317,7 @@ describe("CLI discovery", () => {
         const data = JSON.parse(stdout);
         expect(exitCode).toBe(0);
         expect(data).toHaveLength(2);
-        const image = data.find((skill: any) => skill.name === "image");
+        const image = data.find((skill: any) => skill.name === "market-research-report");
         const logo = data.find((skill: any) => skill.name === "logo-design");
         expect(image).toMatchObject({
           source: "remote",
@@ -450,10 +455,10 @@ describe("CLI discovery", () => {
 
   describe("info", () => {
     test("shows skill info", async () => {
-      const { stdout } = await runCli(["info", "deepresearch"]);
-      expect(stdout).toContain("Deep Research (Agentic)");
+      const { stdout } = await runCli(["info", "market-research-report"]);
+      expect(stdout).toContain("Market Research Report");
       expect(stdout).toContain("Research & Writing");
-      expect(stdout).toContain("Pricing: $0.20/run");
+      expect(stdout).toContain("Pricing: $1.50/run");
       expect(stdout.toLowerCase()).not.toContain("exa");
       expect(stdout.toLowerCase()).not.toContain("openai");
       expect(stdout.toLowerCase()).not.toContain("claude");
@@ -466,15 +471,15 @@ describe("CLI discovery", () => {
     });
 
     test("outputs JSON with --json", async () => {
-      const { stdout } = await runCli(["info", "deepresearch", "--json"]);
+      const { stdout } = await runCli(["info", "market-research-report", "--json"]);
       const data = JSON.parse(stdout);
-      expect(data.name).toBe("deepresearch");
-      expect(data.displayName).toBe("Deep Research (Agentic)");
+      expect(data.name).toBe("market-research-report");
+      expect(data.displayName).toBe("Market Research Report");
       expect(data.category).toBe("Research & Writing");
       expect(Array.isArray(data.tags)).toBe(true);
       expect(data.pricing).toMatchObject({
         tier: "premium",
-        formattedCost: "$0.20/run",
+        formattedCost: "$1.50/run",
       });
       expect(JSON.stringify(data).toLowerCase()).not.toContain("exa");
       expect(JSON.stringify(data).toLowerCase()).not.toContain("openai");
@@ -535,25 +540,6 @@ describe("CLI discovery", () => {
   });
 
   describe("quote", () => {
-    test("fails fast for unavailable hosted provider skills without charging", async () => {
-      const quoted = await runCli(["quote", "image", "--json"]);
-      expect(quoted.exitCode).toBe(1);
-      const data = JSON.parse(quoted.stdout);
-      expect(data).toMatchObject({
-        skill: "image",
-        code: "HOSTED_PROVIDER_UNAVAILABLE",
-        availability: {
-          status: "unavailable",
-          code: "HOSTED_PROVIDER_UNAVAILABLE",
-        },
-      });
-      expect(data.pricing).toMatchObject({
-        tier: "premium",
-        billingUnit: "image",
-      });
-      expect(data.details).toContain("No balance was charged.");
-    });
-
     test("quotes fixed and variable premium skills without provider internals", async () => {
       const fixed = await runCli(["quote", "logo-design", "--json"]);
       expect(fixed.exitCode).toBe(0);

@@ -14,7 +14,7 @@ import { isHostedMetadataPackage } from "./hosted-skill-set";
 
 const BASIC_SKILLS = [...BASIC_SKILL_NAMES];
 
-const CONNECTOR_BACKED_SKILLS = ["image", "video", "audio", "music", "transcript", "convert"];
+const CONNECTOR_BACKED_SKILLS = ["convert"];
 const HOSTED_RUNTIME_PROVIDER_KEYS = ["OPENAI_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY", "GOOGLE_PROJECT_ID"];
 
 const EXPECTED_PACKAGE_DEPS: Record<string, string[]> = {
@@ -73,8 +73,7 @@ describe("basic skill profile for Takumi", () => {
     expect(names.filter((name) => isBasicSkillName(name))).toEqual(BASIC_SKILLS);
     expect(basic.filter((skill) => skill.source !== "custom").length).toBeLessThanOrEqual(25);
     expect(names).not.toContain("logo-design");
-    expect(names).not.toContain("deepresearch");
-    expect(loadRegistryProfile("all").some((skill) => skill.name === "deepresearch")).toBe(true);
+    expect(loadRegistryProfile("all").some((skill) => skill.name === "logo-design")).toBe(true);
   });
 
   test("every basic skill is registered, documented, promptable, and callable", () => {
@@ -105,7 +104,7 @@ describe("basic skill profile for Takumi", () => {
   });
 
   test("connector-backed basic skills declare the hosted runtime key", () => {
-    for (const skill of [...CONNECTOR_BACKED_SKILLS, "read-pdf", "pdf-read", "pdf-to-markdown"]) {
+    for (const skill of [...CONNECTOR_BACKED_SKILLS, "pdf-to-markdown"]) {
       const reqs = getSkillRequirements(skill);
       expect(reqs?.envVars, `${skill} should disclose SKILLS_API_KEY`).toContain("SKILLS_API_KEY");
       expect(reqs?.envVars, `${skill} should not expose legacy SKILL_API_KEY`).not.toContain("SKILL_API_KEY");

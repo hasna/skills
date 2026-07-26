@@ -24,7 +24,7 @@ describe("public API exports", () => {
 
   test("BASIC_SKILL_NAMES array is populated", () => {
     expect(Array.isArray(publicAPI.BASIC_SKILL_NAMES)).toBe(true);
-    expect(publicAPI.BASIC_SKILL_NAMES.length).toBe(17);
+    expect(publicAPI.BASIC_SKILL_NAMES.length).toBe(10);
   });
 
   test("AGENT_TARGETS array is populated", () => {
@@ -146,22 +146,22 @@ describe("public API exports", () => {
 
   test("key functions return expected results", () => {
     // Verify getSkill works through the public API
-    const skill = publicAPI.getSkill("image");
+    const skill = publicAPI.getSkill("logo-design");
     expect(skill).toBeDefined();
-    expect(skill!.name).toBe("image");
+    expect(skill!.name).toBe("logo-design");
 
     // Verify searchSkills works through the public API
-    const results = publicAPI.searchSkills("image");
+    const results = publicAPI.searchSkills("logo");
     expect(results.length).toBeGreaterThan(0);
 
     // Verify clean basic profile works through the public API
     const basic = publicAPI.loadRegistryProfile("basic");
     expect(basic.filter((s) => s.source !== "custom").map((s) => s.name)).toEqual([...publicAPI.BASIC_SKILL_NAMES]);
-    expect(publicAPI.isBasicSkillName("image")).toBe(true);
-    expect(publicAPI.isBasicSkillName("deepresearch")).toBe(false);
+    expect(publicAPI.isBasicSkillName("convert")).toBe(true);
+    expect(publicAPI.isBasicSkillName("logo-design")).toBe(false);
 
     // Verify skillExists works through the public API
-    expect(publicAPI.skillExists("image")).toBe(true);
+    expect(publicAPI.skillExists("logo-design")).toBe(true);
     expect(publicAPI.skillExists("nonexistent-xyz")).toBe(false);
   });
 });

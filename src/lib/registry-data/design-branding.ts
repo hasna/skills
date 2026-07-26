@@ -9,13 +9,6 @@ export const DESIGN_BRANDING_SKILLS: SkillMeta[] = [
     tags: ["brand", "logo", "assets", "palette", "typography", "premium", "remote"],
   },
   {
-    name: "icon-pack",
-    displayName: "Icon Pack",
-    description: "Generate a coordinated set of high-quality icons delivered as SVGs and transparent PNGs",
-    category: "Design & Branding",
-    tags: ["icons", "icon-pack", "svg", "png", "design", "premium", "remote"],
-  },
-  {
     name: "logo-design",
     displayName: "Logo Design",
     description: "Generate premium multi-variant logo packages with transparent PNGs, vector-style SVGs, usage notes, and manifests",
@@ -49,13 +42,6 @@ export const DESIGN_BRANDING_SKILLS: SkillMeta[] = [
     description: "Generate harmonious color palettes for design and branding projects",
     category: "Design & Branding",
     tags: ["color", "palette", "design", "harmony"],
-  },
-  {
-    name: "generate-book-cover",
-    displayName: "Generate Book Cover",
-    description: "Generate professional book cover designs with AI",
-    category: "Design & Branding",
-    tags: ["book-cover", "design", "generation", "publishing"],
   },
   {
     name: "generate-favicon",

@@ -51,25 +51,11 @@ export const MEDIA_PROCESSING_SKILLS: SkillMeta[] = [
     tags: ["highlights", "video", "editing", "content"],
   },
   {
-    name: "remove-background",
-    displayName: "Remove Background",
-    description: "Remove backgrounds from images using AI segmentation",
-    category: "Media Processing",
-    tags: ["background-removal", "image", "ai", "editing"],
-  },
-  {
     name: "subtitle",
     displayName: "Subtitle",
     description: "Generate styled subtitles from audio using OpenAI Whisper",
     category: "Media Processing",
     tags: ["subtitles", "transcription", "whisper", "video"],
-  },
-  {
-    name: "transcript",
-    displayName: "Transcript",
-    description: "Transcribe audio, video, and media URLs with OpenAI GPT-4o, ElevenLabs Scribe v2, DeepGram, or self-hosted runtime",
-    category: "Media Processing",
-    tags: ["transcript", "audio", "video", "speech-to-text", "diarization", "youtube"],
   },
   {
     name: "video-cut-suggester",

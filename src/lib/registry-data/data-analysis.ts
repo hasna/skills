@@ -93,20 +93,6 @@ export const DATA_ANALYSIS_SKILLS: SkillMeta[] = [
     tags: ["image", "vision", "ocr", "analysis"],
   },
   {
-    name: "read-pdf",
-    displayName: "Read PDF",
-    description: "Extract text and structured content from PDF files with chunked Claude document analysis",
-    category: "Data & Analysis",
-    tags: ["pdf", "documents", "extraction", "analysis", "remote", "premium", "gateway"],
-  },
-  {
-    name: "pdf-read",
-    displayName: "PDF Read",
-    description: "Read multiple PDFs with page-range selection, chunked reading, and parallel processing",
-    category: "Data & Analysis",
-    tags: ["pdf", "reader", "extraction", "parallel", "remote", "premium", "gateway"],
-  },
-  {
     name: "pdf-to-markdown",
     displayName: "PDF to Markdown",
     description: "Convert PDFs into clean markdown with remote extraction and structure cleanup",

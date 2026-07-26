@@ -28,7 +28,7 @@ describe("hosted runtime classifier", () => {
   });
 
   test("classifies a hosted slug, and does not classify a bundled one", () => {
-    expect(isHostedRuntimeSkill("image")).toBe(true);
+    expect(isHostedRuntimeSkill("logo-design")).toBe(true);
     // `commit` ships real src/ in this package; it must never be hosted.
     expect(isHostedRuntimeSkill("commit")).toBe(false);
     expect(isHostedRuntimeSkill("definitely-not-a-skill")).toBe(false);

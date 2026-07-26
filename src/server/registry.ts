@@ -2,19 +2,18 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getSkill, loadRegistry, type SkillMeta } from "../lib/registry.js";
 import { getSkillDocs } from "../lib/skillinfo.js";
-import { getHostedAvailabilityMetadata } from "../lib/hosted-availability.js";
 
 export function listServerSkills(): SkillMeta[] {
   return loadRegistry().map((skill) => ({
     ...skill,
-    availability: skill.availability ?? getHostedAvailabilityMetadata(skill.name),
+    availability: skill.availability ?? { status: "available" },
   }));
 }
 
 export function getServerSkill(slug: string): SkillMeta | null {
   const skill = getSkill(slug);
   return skill
-    ? { ...skill, availability: skill.availability ?? getHostedAvailabilityMetadata(skill.name) }
+    ? { ...skill, availability: skill.availability ?? { status: "available" } }
     : null;
 }
 

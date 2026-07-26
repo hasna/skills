@@ -27,16 +27,16 @@ skills auth login --api-key "$SKILLS_API_KEY"
 skills list
 
 # Optionally pin a skill preference in this project
-skills pin image
+skills pin logo-design
 
 # Register the Skills MCP server with every supported agent
 skills setup agents
 
 # See what a skill needs
-skills info image
+skills info logo-design
 
 # Premium skills run through the configured self-hosted API
-skills run image "a cat sitting on a windowsill"
+skills run logo-design --brief "minimal geometric owl mark"
 
 # Free/local skills can still use your own provider keys when documented
 skills requires brand-style-guide
@@ -56,7 +56,7 @@ execution:
 ```bash
 skills setup --api-url https://skills.example.com
 skills auth login --api-key "$SKILLS_API_KEY"
-skills run image "editorial product photo on a white sweep"
+skills run logo-design --brief "minimal geometric owl mark"
 skills runs status <run-id>
 skills exports download <run-id>
 ```
@@ -151,7 +151,7 @@ skills list --all --limit 50
 skills list --all --cursor 50 --limit 50
 skills list --all --limit all
 skills list --all --verbose
-skills show image
+skills show logo-design
 skills search pdf --json
 ```
 

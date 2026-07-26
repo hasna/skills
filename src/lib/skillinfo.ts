@@ -296,7 +296,7 @@ export function detectProjectSkills(cwd: string = process.cwd()): DetectedProjec
   const pkgPath = join(cwd, "package.json");
   if (!existsSync(pkgPath)) {
     // No package.json — return always-recommended skills only
-    const alwaysRecommend = ["implementation-plan", "write", "deepresearch"];
+    const alwaysRecommend = ["implementation-plan", "write", "market-research-report"];
     const recommended = alwaysRecommend
       .map((name) => loadRegistry().find((s) => s.name === name))
       .filter((s): s is SkillMeta => s !== undefined);
@@ -307,7 +307,7 @@ export function detectProjectSkills(cwd: string = process.cwd()): DetectedProjec
   try {
     pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
   } catch {
-    const alwaysRecommend = ["implementation-plan", "write", "deepresearch"];
+    const alwaysRecommend = ["implementation-plan", "write", "market-research-report"];
     const recommended = alwaysRecommend
       .map((name) => loadRegistry().find((s) => s.name === name))
       .filter((s): s is SkillMeta => s !== undefined);
@@ -325,7 +325,7 @@ export function detectProjectSkills(cwd: string = process.cwd()): DetectedProjec
   const recommendedNames = new Set<string>();
 
   // Always recommend these
-  for (const name of ["implementation-plan", "write", "deepresearch"]) {
+  for (const name of ["implementation-plan", "write", "market-research-report"]) {
     recommendedNames.add(name);
   }
 
@@ -334,7 +334,7 @@ export function detectProjectSkills(cwd: string = process.cwd()): DetectedProjec
   for (const dep of frontendDeps) {
     if (depNames.some((d) => d === dep || d.startsWith(`${dep}/`))) {
       detected.push(dep);
-      for (const name of ["image", "generate-favicon", "seo-brief-builder"]) {
+      for (const name of ["logo-design", "generate-favicon", "seo-brief-builder"]) {
         recommendedNames.add(name);
       }
       break;
@@ -358,7 +358,7 @@ export function detectProjectSkills(cwd: string = process.cwd()): DetectedProjec
   for (const dep of aiDeps) {
     if (depNames.includes(dep)) {
       detected.push(dep);
-      for (const name of ["deepresearch", "webcrawling"]) {
+      for (const name of ["market-research-report", "seo-content-pack"]) {
         recommendedNames.add(name);
       }
       break;

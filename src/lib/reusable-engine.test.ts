@@ -82,7 +82,6 @@ describe("reusable skills engine contract", () => {
       "skills/_common/installer.ts",
       "skills/_common/skill-install.ts",
       "skills/_common/install.sh",
-      "skills/deepresearch/README.md",
       "skills/npmpublish/src/index.ts",
       "skills/npmpublish/README.md",
       "skills/npmpublish/CLAUDE.md",

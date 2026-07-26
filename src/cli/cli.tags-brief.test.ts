@@ -136,7 +136,7 @@ describe("CLI tags and brief output", () => {
 
   describe("search --tags", () => {
     test("filters search results by tag", async () => {
-      const { stdout, exitCode } = await runCli(["search", "image", "--tags", "api"]);
+      const { stdout, exitCode } = await runCli(["search", "logo-design", "--tags", "api"]);
       expect(exitCode).toBe(0);
       // Either finds matching results or says no results found
       const hasResults = stdout.includes("Found") || stdout.includes("No skills found");
@@ -219,8 +219,8 @@ describe("CLI tags and brief output", () => {
       expect(Array.isArray(data)).toBe(true);
     }, SLOW_TEST_TIMEOUT);
 
-    test("search image --brief shows compact results", async () => {
-      const { stdout, exitCode } = await runCli(["search", "image", "--brief"]);
+    test("search --brief shows compact results", async () => {
+      const { stdout, exitCode } = await runCli(["search", "pdf", "--brief"]);
       expect(exitCode).toBe(0);
       const lines = stdout.trim().split("\n").filter(Boolean);
       expect(lines.length).toBeGreaterThan(0);
@@ -231,44 +231,44 @@ describe("CLI tags and brief output", () => {
     }, SLOW_TEST_TIMEOUT);
 
     test("search --brief output has fewer lines than default search output", async () => {
-      const { stdout: brief } = await runCli(["search", "image", "--brief"]);
-      const { stdout: normal } = await runCli(["search", "image"]);
+      const { stdout: brief } = await runCli(["search", "pdf", "--brief"]);
+      const { stdout: normal } = await runCli(["search", "pdf"]);
       const briefLines = brief.trim().split("\n").filter(Boolean).length;
       const normalLines = normal.trim().split("\n").filter(Boolean).length;
       expect(briefLines).toBeLessThan(normalLines);
     }, SLOW_TEST_TIMEOUT);
 
     test("search --brief --json uses json (--json wins)", async () => {
-      const { stdout, exitCode } = await runCli(["search", "image", "--brief", "--json"]);
+      const { stdout, exitCode } = await runCli(["search", "pdf", "--brief", "--json"]);
       expect(exitCode).toBe(0);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
     });
 
     test("info image --brief shows single line", async () => {
-      const { stdout, exitCode } = await runCli(["info", "image", "--brief"]);
+      const { stdout, exitCode } = await runCli(["info", "logo-design", "--brief"]);
       expect(exitCode).toBe(0);
       const lines = stdout.trim().split("\n").filter(Boolean);
       expect(lines.length).toBe(1);
-      expect(lines[0]).toContain("image");
+      expect(lines[0]).toContain("logo-design");
       expect(lines[0]).toContain(" \u2014 ");
       expect(lines[0]).toContain("[");
       expect(lines[0]).toContain("(tags:");
     });
 
     test("info --brief output has fewer lines than default info output", async () => {
-      const { stdout: brief } = await runCli(["info", "image", "--brief"]);
-      const { stdout: normal } = await runCli(["info", "image"]);
+      const { stdout: brief } = await runCli(["info", "logo-design", "--brief"]);
+      const { stdout: normal } = await runCli(["info", "logo-design"]);
       const briefLines = brief.trim().split("\n").filter(Boolean).length;
       const normalLines = normal.trim().split("\n").filter(Boolean).length;
       expect(briefLines).toBeLessThan(normalLines);
     });
 
     test("info --brief --json uses json (--json wins)", async () => {
-      const { stdout, exitCode } = await runCli(["info", "image", "--brief", "--json"]);
+      const { stdout, exitCode } = await runCli(["info", "logo-design", "--brief", "--json"]);
       expect(exitCode).toBe(0);
       const data = JSON.parse(stdout);
-      expect(data.name).toBe("image");
+      expect(data.name).toBe("logo-design");
     });
   });
 

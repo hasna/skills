@@ -2,7 +2,7 @@
  * Hasna Skills - Open source skill library for AI coding agents
  *
  * Pin AI agent skills with a single command:
- *   skills pin image deepresearch
+ *   skills pin logo-design market-research-report
  *
  * Or use the interactive CLI:
  *   skills

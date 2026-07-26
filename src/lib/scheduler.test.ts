@@ -101,10 +101,10 @@ describe("addSchedule", () => {
 
   test("creates a valid schedule", () => {
     dir = makeTmpDir();
-    const { schedule, error } = addSchedule("image", "0 9 * * *", { name: "daily image", targetDir: dir });
+    const { schedule, error } = addSchedule("logo-design", "0 9 * * *", { name: "daily image", targetDir: dir });
     expect(error).toBeUndefined();
     expect(schedule).not.toBeNull();
-    expect(schedule!.skill).toBe("image");
+    expect(schedule!.skill).toBe("logo-design");
     expect(schedule!.cron).toBe("0 9 * * *");
     expect(schedule!.enabled).toBe(true);
     expect(schedule!.nextRun).toBeDefined();
@@ -112,7 +112,7 @@ describe("addSchedule", () => {
 
   test("rejects invalid cron", () => {
     dir = makeTmpDir();
-    const { schedule, error } = addSchedule("image", "99 99 * * *", { targetDir: dir });
+    const { schedule, error } = addSchedule("logo-design", "99 99 * * *", { targetDir: dir });
     expect(error).toBeDefined();
     expect(schedule).toBeNull();
   });
@@ -128,21 +128,21 @@ describe("listSchedules / removeSchedule / setScheduleEnabled", () => {
   });
 
   test("add then list", () => {
-    addSchedule("image", "0 9 * * *", { name: "daily", targetDir: dir });
+    addSchedule("logo-design", "0 9 * * *", { name: "daily", targetDir: dir });
     const schedules = listSchedules(dir);
     expect(schedules).toHaveLength(1);
     expect(schedules[0].name).toBe("daily");
   });
 
   test("remove by id", () => {
-    addSchedule("image", "0 9 * * *", { targetDir: dir });
+    addSchedule("logo-design", "0 9 * * *", { targetDir: dir });
     const schedules = listSchedules(dir);
     expect(removeSchedule(schedules[0].id, dir)).toBe(true);
     expect(listSchedules(dir)).toHaveLength(0);
   });
 
   test("setScheduleEnabled disables and re-enables", () => {
-    addSchedule("image", "0 9 * * *", { targetDir: dir });
+    addSchedule("logo-design", "0 9 * * *", { targetDir: dir });
     const schedules = listSchedules(dir);
     expect(schedules[0].enabled).toBe(true);
 
@@ -157,12 +157,12 @@ describe("getDueSchedules", () => {
   afterEach(() => cleanup(dir));
 
   test("no schedules due in the future", () => {
-    addSchedule("image", "0 9 * * *", { targetDir: dir });
+    addSchedule("logo-design", "0 9 * * *", { targetDir: dir });
     expect(getDueSchedules(dir)).toHaveLength(0);
   });
 
   test("schedule is due when nextRun is in the past", () => {
-    addSchedule("image", "* * * * *", { targetDir: dir });
+    addSchedule("logo-design", "* * * * *", { targetDir: dir });
     const schedules = listSchedules(dir);
     expect(schedules[0].nextRun).toBeDefined();
     // Wait 0ms — nextRun should be ~1 min from now; not due yet
@@ -181,7 +181,7 @@ describe("recordScheduleRun", () => {
   afterEach(() => cleanup(dir));
 
   test("updates lastRun and nextRun", () => {
-    addSchedule("image", "0 9 * * *", { targetDir: dir });
+    addSchedule("logo-design", "0 9 * * *", { targetDir: dir });
     const schedules = listSchedules(dir);
     expect(schedules[0].lastRun).toBeUndefined();
     recordScheduleRun(schedules[0].id, "success", dir);

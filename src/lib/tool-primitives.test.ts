@@ -20,7 +20,7 @@ describe("tool primitives", () => {
   });
 
   test("maps representative skills to primitive dependencies", () => {
-    const image = getSkillToolDependencies("image");
+    const image = getSkillToolDependencies("logo-design");
     expect(image?.dependencies.map((dependency) => dependency.primitive)).toEqual(expect.arrayContaining([
       "ai-gateway",
       "hosted-auth",
@@ -28,9 +28,9 @@ describe("tool primitives", () => {
     ]));
     expect(image?.gatewayBacked).toBe(true);
     expect(image?.hostedRuntime).toBe(true);
-    expect(isGatewayBackedSkill("image")).toBe(true);
+    expect(isGatewayBackedSkill("logo-design")).toBe(true);
 
-    const pdf = getSkillToolDependencies("read-pdf");
+    const pdf = getSkillToolDependencies("pdf-to-markdown");
     expect(pdf?.dependencies.map((dependency) => dependency.primitive)).toContain("documents-read");
 
     const csv = getSkillToolDependencies("read-csv");

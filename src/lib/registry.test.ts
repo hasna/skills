@@ -82,10 +82,10 @@ describe("registry", () => {
 
   describe("getSkill", () => {
     test("finds existing skill by name", () => {
-      const skill = getSkill("deepresearch");
+      const skill = getSkill("market-research-report");
       expect(skill).toBeDefined();
-      expect(skill!.name).toBe("deepresearch");
-      expect(skill!.displayName).toBe("Deep Research (Agentic)");
+      expect(skill!.name).toBe("market-research-report");
+      expect(skill!.displayName).toBe("Market Research Report");
     });
 
     test("returns undefined for nonexistent skill", () => {
@@ -94,9 +94,9 @@ describe("registry", () => {
     });
 
     test("finds skill with exact name match", () => {
-      const skill = getSkill("image");
+      const skill = getSkill("logo-design");
       expect(skill).toBeDefined();
-      expect(skill!.name).toBe("image");
+      expect(skill!.name).toBe("logo-design");
     });
   });
 
@@ -134,13 +134,13 @@ describe("registry", () => {
 
   describe("searchSkills", () => {
     test("finds skills by name", () => {
-      const results = searchSkills("deepresearch");
+      const results = searchSkills("market-research-report");
       expect(results.length).toBeGreaterThanOrEqual(1);
-      expect(results.some((s) => s.name === "deepresearch")).toBe(true);
+      expect(results.some((s) => s.name === "market-research-report")).toBe(true);
     });
 
     test("finds skills by displayName", () => {
-      const results = searchSkills("Deep Research (Agentic)");
+      const results = searchSkills("Market Research Report");
       expect(results.length).toBeGreaterThanOrEqual(1);
     });
 
@@ -170,9 +170,9 @@ describe("registry", () => {
       expect(results.length).toBeGreaterThan(5);
     });
 
-    test('fuzzy match: "imge" finds "image" (edit distance 1 for 4-char word)', () => {
-      const results = searchSkills("imge");
-      expect(results.some((s) => s.name === "image" || s.tags.includes("image"))).toBe(true);
+    test('fuzzy match: "wrte" finds "write" (edit distance 1 for a short word)', () => {
+      const results = searchSkills("wrte");
+      expect(results.some((s) => s.name === "write" || s.tags.includes("write"))).toBe(true);
     });
 
     test('fuzzy match: "emal" finds skills related to "email" (edit distance 1)', () => {

@@ -16,13 +16,13 @@ describe("CLI pin and search controls", () => {
       const { tmpdir } = require("os");
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-alias-install-"));
       try {
-        const { stdout, exitCode } = await runCliInCwd(["pin", "transcribe", "--json"], tmpDir, { HOME: tmpDir });
+        const { stdout, exitCode } = await runCliInCwd(["pin", "create-blog-article", "--json"], tmpDir, { HOME: tmpDir });
         const data = JSON.parse(stdout);
         expect(exitCode).toBe(0);
-        expect(data[0].skill).toBe("transcript");
+        expect(data[0].skill).toBe("blog-article");
         const projectConfig = JSON.parse(readFileSync(require("path").join(tmpDir, ".skills", "project.json"), "utf-8"));
-        expect(projectConfig.pinnedSkills).toContain("transcript");
-        expect(projectConfig.pinnedSkills).not.toContain("transcribe");
+        expect(projectConfig.pinnedSkills).toContain("blog-article");
+        expect(projectConfig.pinnedSkills).not.toContain("create-blog-article");
         expect(existsSync(require("path").join(tmpDir, ".skills", "skills"))).toBe(false);
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
@@ -49,12 +49,12 @@ describe("CLI pin and search controls", () => {
     });
 
     test("dry-run install emits JSON actions", async () => {
-      const { stdout, stderr, exitCode } = await runCli(["pin", "image", "--dry-run", "--json"]);
+      const { stdout, stderr, exitCode } = await runCli(["pin", "logo-design", "--dry-run", "--json"]);
       const data = JSON.parse(stdout);
       expect(stderr).toBe("");
       expect(exitCode).toBe(0);
       expect(data.dryRun).toBe(true);
-      expect(data.actions).toEqual([{ skill: "image", target: ".skills/project.json", action: "pin" }]);
+      expect(data.actions).toEqual([{ skill: "logo-design", target: ".skills/project.json", action: "pin" }]);
     });
 
     test("pins remote registry skills without copying source", async () => {
@@ -125,18 +125,18 @@ describe("CLI pin and search controls", () => {
     });
 
     test("dry-run remove emits JSON actions", async () => {
-      const { stdout, stderr, exitCode } = await runCli(["unpin", "image", "--dry-run", "--json"]);
+      const { stdout, stderr, exitCode } = await runCli(["unpin", "logo-design", "--dry-run", "--json"]);
       const data = JSON.parse(stdout);
       expect(stderr).toBe("");
       expect(exitCode).toBe(0);
       expect(data.dryRun).toBe(true);
-      expect(data.actions).toEqual([{ skill: "image", target: ".skills/project.json", action: "unpin" }]);
+      expect(data.actions).toEqual([{ skill: "logo-design", target: ".skills/project.json", action: "unpin" }]);
     });
   });
 
   describe("deprecated install/remove", () => {
     test("install points skill pinning to the pin command", async () => {
-      const { stderr, exitCode } = await runCli(["install", "image"]);
+      const { stderr, exitCode } = await runCli(["install", "logo-design"]);
       expect(stderr).toContain("skills pin <name>");
       expect(exitCode).not.toBe(0);
     });
@@ -148,7 +148,7 @@ describe("CLI pin and search controls", () => {
     });
 
     test("remove points to the unpin command", async () => {
-      const { stderr, exitCode } = await runCli(["remove", "image"]);
+      const { stderr, exitCode } = await runCli(["remove", "logo-design"]);
       expect(stderr).toContain("skills unpin <name>");
       expect(exitCode).not.toBe(0);
     });
