@@ -2,6 +2,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { applyAllowlist, scanFiles, scanPaths, toRedactedJson, type ScanAllowlistEntry, type ScanFinding } from "../src/lib/content-scan.js";
+import { formatInfraFindings, isGitWorkTree, scanRepositoryInfraIdentifiers } from "../src/lib/infra-identifiers.js";
 import { getPackedFiles } from "../src/lib/packlist.js";
 import { findPrivatePacklistLeaks, listPrivateSkillSlugs } from "../src/lib/public-boundary.js";
 import {
@@ -152,6 +153,48 @@ if (findings.length > 0) {
     console.error(sanitizeForPublicLog(`  ${finding.kind}: ${finding.file}: ${finding.marker}`));
   }
   process.exit(1);
+}
+
+// ---------------------------------------------------------------------------
+// R4: vendor infrastructure identifiers live behind ONE indirection.
+//
+// Scanned over TRACKED files rather than packed files: the leak this prevents
+// lives in .github/workflows, which never enters the tarball but is fully public
+// on the forge. Account IDs, ARNs, cluster/service/task names and health hosts
+// are properties of a deployment, not of the software.
+// ---------------------------------------------------------------------------
+// R4 scans TRACKED files, so it only applies inside a git work tree. Elsewhere
+// (the synthetic package fixtures the guard is exercised against) there are no
+// tracked files and the rule has nothing to say. `bun test` runs the same scan
+// against the repo root on every CI run, so the property is enforced whether or
+// not this particular invocation is in a checkout.
+if (!isGitWorkTree(repoRoot)) {
+  console.error("R4 infrastructure-identifier scan: not a git work tree, skipping (enforced by bun test).");
+} else {
+  try {
+    const infra = scanRepositoryInfraIdentifiers(repoRoot);
+
+    // Coverage is reported on every run, pass or fail. A guard that says only
+    // "passed" cannot be audited for what it did not look at.
+    console.log(
+      `R4 scan coverage: ${infra.scannedFileCount} scanned, ${infra.skippedFiles.length} skipped, ` +
+        `of ${infra.trackedFileCount} tracked.`,
+    );
+    for (const skippedFile of infra.skippedFiles) {
+      console.log(sanitizeForPublicLog(`  not scanned (${skippedFile.reason}): ${skippedFile.path}`));
+    }
+
+    if (infra.findings.length > 0) {
+      console.error("Release guard failed: tracked files name vendor infrastructure directly (R4).");
+      console.error(sanitizeForPublicLog(formatInfraFindings(infra.findings)));
+      console.error("  Resolve these from the deploy manifest or a CI variable instead of writing them literally.");
+      process.exit(1);
+    }
+  } catch (error) {
+    console.error("Release guard failed: the infrastructure-identifier scan could not run.");
+    console.error(sanitizeForPublicLog(`  ${error instanceof Error ? error.message : String(error)}`));
+    process.exit(1);
+  }
 }
 
 // ---------------------------------------------------------------------------
