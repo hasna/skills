@@ -7,7 +7,7 @@ import { join } from "path";
 import { getInstalledSkills, getSkillPath } from "./installer.js";
 import { getSkill, loadRegistry, type SkillMeta } from "./registry.js";
 import { normalizeSkillName } from "./utils.js";
-import { isPremiumSkill } from "./pricing.js";
+import { isHostedRuntimeSkill } from "./hosted-runtime-skills.js";
 import { parseSkillFrontmatter } from "./skill-validation.js";
 
 /**
@@ -150,7 +150,7 @@ export function getSkillRequirements(name: string): SkillRequirements | null {
 }
 
 function isHostedPremiumSkill(skillName: string, meta?: SkillMeta): boolean {
-  return isPremiumSkill(skillName) || Boolean(meta?.tags.includes("premium") || meta?.tags.includes("remote"));
+  return isHostedRuntimeSkill(skillName) || Boolean(meta?.tags.includes("premium") || meta?.tags.includes("remote"));
 }
 
 export interface SkillDependencyStatus {
@@ -564,7 +564,7 @@ function extractEnvVars(text: string): Set<string> {
   return envVars;
 }
 
-function isHostedRuntimeSkill(skillPath: string, text: string): boolean {
+function docsDeclareHostedRuntime(skillPath: string, text: string): boolean {
   if (/hosted skills\/connectors runtime/i.test(text) || /provider-specific keys are managed by that runtime/i.test(text)) {
     return true;
   }

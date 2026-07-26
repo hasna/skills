@@ -17,6 +17,7 @@ import {
 import { loadConfig, saveConfig, type ConfigScope } from "../../lib/config.js";
 import { DEFAULT_SELF_HOSTED_API_URL } from "../../server/config.js";
 import { getHostedRunAvailability } from "../../lib/hosted-availability.js";
+import { isHostedRuntimeSkill } from "../../lib/hosted-runtime-skills.js";
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../../lib/remote-run-contract.js";
 import {
   completeSkillRun,
@@ -318,18 +319,18 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       return;
     }
   }
-  const isPremium = pricing.isPremiumSkill(skill.name);
-  const costCents = isPremium ? pricing.getSkillRunCostCents(skill.name, {}, args) : undefined;
+  const isHostedRuntime = isHostedRuntimeSkill(skill.name);
+  const costCents = isHostedRuntime ? pricing.getSkillRunCostCents(skill.name, {}, args) : undefined;
   const publicPricing = pricing.getPublicSkillPricing(skill.name, {}, args);
   const runContext = createSkillRun({
     skill: skill.name,
     args,
     prompt,
-    remote: isPremium,
+    remote: isHostedRuntime,
     costCents,
   });
 
-  if (isPremium) {
+  if (isHostedRuntime) {
     const hostedAvailability = getHostedRunAvailability(skill.name);
     if (!hostedAvailability.ok) {
       const payload = unavailableHostedPayload(skill.name, publicPricing, hostedAvailability);
