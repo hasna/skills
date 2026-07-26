@@ -68,7 +68,83 @@ describe("content-scan planted fixtures MUST block", () => {
   });
 });
 
+// An unmistakably invented person who is NOT on the synthetic-placeholder
+// allowlist. Using a made-up name keeps this test file from planting a real
+// person's data while still exercising the deny-by-default behaviour.
+const UNAPPROVED_NAME = "Zorvax Kellstrom";
+
+describe("content-scan blocks personal data about an identified individual", () => {
+  // Regression: a CSV example in a skill README once shipped real employees'
+  // names alongside their employment and maternity-leave status.
+  test("blocks a name paired with an employment status in a CSV row", () => {
+    const csv = `employee,employee_status,daily_hours\n${UNAPPROVED_NAME},active,8\n`;
+    const findings = scanText(csv, "skills/timesheet/README.md");
+    expect(findings.some((f) => f.category === "pii-personal" && f.ruleId === "person-employment-status")).toBe(true);
+  });
+
+  test("blocks a name paired with a leave/health status", () => {
+    for (const status of ["on_leave_maternity", "on_leave_sick", "terminated"]) {
+      const findings = scanText(`${UNAPPROVED_NAME},${status},8,0`);
+      expect(findings.some((f) => f.category === "pii-personal")).toBe(true);
+    }
+  });
+
+  test("blocks a name + sensitive status in a markdown table or key/value pair", () => {
+    expect(
+      scanText(`| ${UNAPPROVED_NAME} | on_leave_maternity |`).some((f) => f.ruleId === "person-leave-status"),
+    ).toBe(true);
+    expect(scanText(`${UNAPPROVED_NAME}: sick_leave`).some((f) => f.ruleId === "person-leave-status")).toBe(true);
+  });
+
+  test("blocks a personal email at a consumer mail provider", () => {
+    for (const address of ["jane.doe1987@gmail.com", "someone@outlook.com", "a.person@proton.me"]) {
+      const findings = scanText(`reach me at ${address}`);
+      expect(findings.some((f) => f.category === "pii-contact" && f.ruleId === "personal-email")).toBe(true);
+    }
+  });
+
+  test("blocks a government identifier carrying a real-looking value", () => {
+    expect(scanText("ssn 078-05-1120 on file").some((f) => f.ruleId === "government-id")).toBe(true);
+    expect(scanText(`passport_number: "X1234567"`).some((f) => f.ruleId === "government-id")).toBe(true);
+  });
+
+  test("personal-data findings never print the name or identifier", () => {
+    const findings = scanText(`${UNAPPROVED_NAME},on_leave_maternity,8,0`);
+    const json = toRedactedJson(findings);
+    expect(json).not.toContain(UNAPPROVED_NAME);
+    expect(json).not.toContain("Kellstrom");
+    expect(findings[0]?.redacted).toContain("*");
+  });
+});
+
 describe("content-scan does NOT false-positive on legitimate public content", () => {
+  test("allows documented synthetic placeholder people", () => {
+    const csv =
+      "employee,employee_status,daily_hours\n" +
+      "Alex Rivera,active,8\n" +
+      "Sam Chen,on_leave_maternity,8\n" +
+      "John Doe,terminated,8\n";
+    expect(scanText(csv).some((f) => f.category === "pii-personal")).toBe(false);
+  });
+
+  test("allows a neutral status in a markdown table cell", () => {
+    // Not a person — the `|` rule deliberately only covers sensitive statuses.
+    expect(scanText("| Some Feature | active |")).toEqual([]);
+    expect(scanText("| Legacy Runner | inactive |")).toEqual([]);
+  });
+
+  test("allows the project's own maintainer contact at its own domain", () => {
+    // A package naming its own author is public-by-definition; only consumer
+    // mailboxes belonging to third parties are blocked.
+    expect(scanText("**Owner:** Hasna (dev@hasna.com)").some((f) => f.ruleId === "personal-email")).toBe(false);
+    expect(scanText("author: andrei@hasna.com").some((f) => f.ruleId === "personal-email")).toBe(false);
+  });
+
+  test("allows identifier schema fields and detection regexes (definitions, not data)", () => {
+    expect(scanText("  ssn: {").some((f) => f.ruleId === "government-id")).toBe(false);
+    expect(scanText("  tax_id: string | null;").some((f) => f.ruleId === "government-id")).toBe(false);
+  });
+
   test("allows a 555 documentation phone example", () => {
     const findings = scanText(`e.g. '${EXAMPLE_PHONE}'`);
     expect(findings.some((f) => f.category === "pii-contact")).toBe(false);

@@ -2,9 +2,13 @@
  * content-scan.ts — scans skill BODIES (not just package.json/README) for content
  * that must never ship in the public @hasna/skills package.
  *
- * Finding categories:
+ * Five finding categories:
  *   - secret-value:     credential-shaped values (API keys, tokens, private keys)
- *   - pii-contact:      personal contact PII (E.164 phone numbers)
+ *   - pii-contact:      personal contact PII (E.164 phone numbers, consumer-provider
+ *                       email addresses)
+ *   - pii-personal:     personal data ABOUT an identified individual — a real human
+ *                       name paired with employment/HR/leave/health status, or a
+ *                       government identifier carrying a real-looking value
  *   - private-context:  internal/operational context that leaks the private fleet
  *                       (fleet hostnames, home-directory paths with a real user,
  *                       internal CLI invocations, internal infra/product names)
@@ -12,19 +16,26 @@
  *                       run artifact (timestamped filename, data file under an
  *                       exports/ directory) rather than an authored fixture
  *
- * The first three categories are matched against file CONTENT (see {@link scanText}).
+ * The first four categories are matched against file CONTENT (see {@link scanText}).
  * `committed-output` is matched against the package-relative PATH instead (see
  * {@link scanPaths}), because what makes an artifact wrong is where it came from,
  * not what is inside it — a scraped catalog and a hand-written fixture can be
  * byte-identical in shape.
  *
- * All output is REDACTED: secret values are never emitted, phone numbers are masked
- * to their country code, and only the rule id + a safe redacted marker are reported.
+ * All output is REDACTED: secret values are never emitted, phone numbers, emails and
+ * personal names are masked, and only the rule id + a safe redacted marker are
+ * reported. Findings are surfaced in (potentially public) CI logs, so a rule must
+ * never echo the personal data it just found.
  */
 
 import { readFileSync } from "node:fs";
 
-export type ScanCategory = "secret-value" | "pii-contact" | "private-context" | "committed-output";
+export type ScanCategory =
+  | "secret-value"
+  | "pii-contact"
+  | "pii-personal"
+  | "private-context"
+  | "committed-output";
 
 export interface ScanRule {
   category: ScanCategory;
@@ -67,9 +78,114 @@ const SECRET_RULES: Omit<ScanRule, "category">[] = [
 ];
 
 /**
- * E.164 phone numbers. Word-boundaried so we don't match inside longer digit runs
- * (hashes, ids). North-American (+1) numbers with a 555 area code are treated as
- * documentation examples and ignored.
+ * Employment / HR states that reveal something SENSITIVE about an identified
+ * person — leave (including family and medical leave), or an involuntary or
+ * adverse end to their employment.
+ */
+const SENSITIVE_STATUS_TOKENS = [
+  "on_leave_maternity",
+  "on_leave_paternity",
+  "on_leave_parental",
+  "on_leave_sick",
+  "on_leave",
+  "maternity_leave",
+  "paternity_leave",
+  "parental_leave",
+  "bereavement_leave",
+  "medical_leave",
+  "unpaid_leave",
+  "sick_leave",
+  "laid_off",
+  "terminated",
+  "furloughed",
+  "suspended",
+  "dismissed",
+  "resigned",
+  "probation",
+  "redundant",
+];
+
+/**
+ * The full employment-status vocabulary: the sensitive states above plus neutral
+ * ones. A neutral status is still personal data once it is attached to a named
+ * individual ("<real person>,active" discloses where someone works), so the CSV /
+ * TSV record rule below matches the whole vocabulary.
+ */
+const EMPLOYMENT_STATUS_TOKENS = [
+  ...SENSITIVE_STATUS_TOKENS,
+  "contractor",
+  "part_time",
+  "full_time",
+  "salaried",
+  "inactive",
+  "retired",
+  "active",
+];
+
+/**
+ * Obviously-fictional placeholder people. Example content in the public corpus MUST
+ * use one of these (or another clearly-invented name added here during review)
+ * rather than a real person. This allowlist is what makes the person rules
+ * DENY-BY-DEFAULT: any NEW name paired with an employment status fails the guard
+ * until it is either replaced with a placeholder or consciously added here. That is
+ * deliberate — a denylist of known real names could never stop the next person's
+ * name from being pasted into an example.
+ */
+const SYNTHETIC_PERSON_NAMES = new Set([
+  "alex rivera",
+  "sam chen",
+  "jordan lee",
+  "taylor kim",
+  "casey morgan",
+  "riley parker",
+  "john doe",
+  "jane doe",
+  "john smith",
+  "jane smith",
+  "john roe",
+  "jane roe",
+  "demo user",
+  "example user",
+  "sample user",
+  "test user",
+  // Column headers and placeholder tokens that share the "Two Capitalized Words" shape.
+  "display name",
+  "employee name",
+  "first last",
+  "full name",
+  "your name",
+]);
+
+/** A personal name: two or three capitalized words. */
+const PERSON_NAME_SOURCE = String.raw`\b[A-Z][a-z]+(?: [A-Z][a-z]+){1,2}`;
+
+/**
+ * Build a status alternation, longest token first so the regex prefers the most
+ * specific match, and accepting the UPPER_CASE spelling of each token too.
+ */
+function statusAlternation(tokens: string[]): string {
+  const ordered = [...tokens].sort((a, b) => b.length - a.length);
+  return [...ordered, ...ordered.map((token) => token.toUpperCase())].join("|");
+}
+
+/** The name that precedes the delimiter in a person+status match. */
+function personNameFromMatch(match: string): string {
+  return match.split(/[,|:\t]/, 1)[0].trim().toLowerCase();
+}
+
+const isSyntheticPerson = (match: string): boolean =>
+  SYNTHETIC_PERSON_NAMES.has(personNameFromMatch(match));
+
+/**
+ * Personal contact PII.
+ *
+ * E.164 phone numbers are word-boundaried so we don't match inside longer digit
+ * runs (hashes, ids). North-American (+1) numbers with a 555 area code are treated
+ * as documentation examples and ignored.
+ *
+ * The email rule targets CONSUMER mail providers only. A project naming its own
+ * maintainer contact at its own domain is public-by-definition and intentionally
+ * NOT matched; what must never ship is a third party's personal mailbox.
  */
 const PII_RULES: ScanRule[] = [
   {
@@ -78,6 +194,56 @@ const PII_RULES: ScanRule[] = [
     description: "E.164 phone number",
     pattern: /(?<![\d+])\+[1-9]\d{7,14}(?!\d)/,
     isExample: (match) => /^\+1555/.test(match),
+  },
+  {
+    id: "personal-email",
+    category: "pii-contact",
+    description: "Personal email address at a consumer mail provider",
+    pattern:
+      /\b[A-Za-z0-9._%+-]+@(?:gmail|googlemail|outlook|hotmail|yahoo|ymail|icloud|protonmail|proton|aol|gmx|yandex)\.[a-z]{2,}\b/i,
+  },
+];
+
+/**
+ * Personal data ABOUT an identified individual.
+ *
+ * `person-employment-status` matches the CSV / TSV record shape that produced the
+ * original leak — a personal name, a comma or tab, then an employment status.
+ * `person-leave-status` covers table and key/value shapes (`|`, `:`) but only for
+ * the SENSITIVE status vocabulary, because a markdown table cell such as
+ * `| Some Feature | active |` legitimately uses the neutral tokens.
+ *
+ * `government-id` requires a real-LOOKING value: a bare `ssn:` schema field or a
+ * detection regex inside a scanner skill is a definition, not somebody's data, and
+ * must not trip the guard.
+ */
+const PII_PERSONAL_RULES: ScanRule[] = [
+  {
+    id: "person-employment-status",
+    category: "pii-personal",
+    description: "Personal name paired with an employment/HR status in a CSV/TSV record",
+    pattern: new RegExp(`${PERSON_NAME_SOURCE} *[,\\t] *(?:${statusAlternation(EMPLOYMENT_STATUS_TOKENS)})\\b`),
+    isExample: isSyntheticPerson,
+  },
+  {
+    id: "person-leave-status",
+    category: "pii-personal",
+    description: "Personal name paired with a leave, health or termination status",
+    pattern: new RegExp(`${PERSON_NAME_SOURCE} *[|:] *(?:${statusAlternation(SENSITIVE_STATUS_TOKENS)})\\b`),
+    isExample: isSyntheticPerson,
+  },
+  {
+    id: "government-id",
+    category: "pii-personal",
+    description: "Government identifier carrying a real-looking value",
+    pattern: new RegExp(
+      [
+        // US SSN shape.
+        String.raw`(?<![\d-])\d{3}-\d{2}-\d{4}(?![\d-])`,
+        // A labelled identifier assigned an actual value (not a type or a regex).
+        String.raw`\b(?:ssn|cnp|national_id|nationalId|passport_number|passportNumber|tax_id|taxId)\b *[:=] *["'][A-Za-z0-9][A-Za-z0-9 .-]{5,}["']`,
+      ].join("|"),
+    ),
   },
 ];
 
@@ -118,6 +284,7 @@ const PRIVATE_CONTEXT_RULES: ScanRule[] = [
 export const SCAN_RULES: ScanRule[] = [
   ...SECRET_RULES.map((rule) => ({ ...rule, category: "secret-value" as const })),
   ...PII_RULES,
+  ...PII_PERSONAL_RULES,
   ...PRIVATE_CONTEXT_RULES,
 ];
 
@@ -233,16 +400,22 @@ export function scanPaths(paths: string[]): ScanFinding[] {
 
 /**
  * Produce a redacted marker for a matched value. Secret values are NEVER emitted;
- * phone numbers are reduced to their leading country context; private-context
- * matches (hostnames, paths, CLI names — not credentials) are shown verbatim so a
- * maintainer can locate and remove them.
+ * PII (phone numbers, emails, personal names and identifiers) keeps only a short
+ * two-character locating prefix; private-context matches (hostnames, paths, CLI
+ * names — not credentials) are shown verbatim so a maintainer can locate and
+ * remove them.
+ *
+ * Personal data must be masked here as well as elsewhere: findings are printed
+ * into (potentially public) CI logs, so reporting a leaked name in full would
+ * republish the very data the rule exists to catch. The rule id plus file:line is
+ * enough for a maintainer to find it in the working tree.
  */
 export function redactMatch(category: ScanCategory, ruleId: string, match: string): string {
   if (category === "secret-value") {
     return `[redacted secret-value:${ruleId}]`;
   }
-  if (category === "pii-contact") {
-    const head = match.slice(0, 2); // "+<countryDigit>"
+  if (category === "pii-contact" || category === "pii-personal") {
+    const head = match.slice(0, 2); // "+<countryDigit>" / first two chars of a name
     return `${head}${"*".repeat(Math.max(0, match.length - 2))}`;
   }
   return match;
