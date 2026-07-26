@@ -12,9 +12,10 @@ import {
   listHostedMetadataSlugs,
 } from "../src/lib/hosted-skill-set.js";
 import {
-  findEndpointDefaults,
+  findDisallowedCodeUrls,
   findVendorHostReferences,
   formatFindings,
+  isCodeFile,
   readPackedSources,
 } from "../src/lib/vendor-host-guard.js";
 
@@ -299,9 +300,9 @@ if (scanFindings.length > 0) {
 }
 
 // ---------------------------------------------------------------------------
-// R1 — the published package must not carry a network endpoint default or a
-// vendor-controlled host. This is the only gate that runs at publish time, so
-// the property lives here as well as in the test suite.
+// R1 — the published package must not name an unapproved network host. This is
+// the only gate that runs at publish time, so the property lives here as well
+// as in the test suite.
 // ---------------------------------------------------------------------------
 const packedSources = readPackedSources(packedFiles, repoRoot, { existsSync, statSync, readFileSync }, join);
 
@@ -310,16 +311,38 @@ if (packedSources.length === 0) {
   process.exit(1);
 }
 
-const endpointDefaults = findEndpointDefaults(packedSources);
-if (endpointDefaults.length > 0) {
-  console.error("Release guard failed: the package hard-codes network endpoint defaults.");
-  console.error(sanitizeForPublicLog(formatFindings(endpointDefaults)));
-  console.error("  An unconfigured install must resolve to no endpoint at all.");
-  console.error("  Remove the default, or add the provider domain to ENDPOINT_DEFAULT_ALLOWED_DOMAINS");
-  console.error("  in src/lib/vendor-host-guard.ts with a reviewed justification.");
+const packedCodeSources = packedSources.filter((source) => isCodeFile(source.file));
+
+// Anti-vacuity: a package that declares executable entry points but yields zero
+// scannable code means the scan silently matched nothing, and every check below
+// would pass for the wrong reason. A package that ships no code at all (a pure
+// docs or metadata package) legitimately has nothing to scan.
+const manifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as {
+  bin?: unknown;
+  main?: unknown;
+  exports?: unknown;
+};
+const declaresExecutableCode = Boolean(manifest.bin || manifest.main || manifest.exports);
+if (declaresExecutableCode && packedCodeSources.length === 0) {
+  console.error(
+    "Release guard failed: the package declares entry points but no executable code was scanned.",
+  );
+  console.error("  The host scan would pass vacuously. Check that the build ran before packing.");
   process.exit(1);
 }
 
+// Strong check: AST scan of every packed code file, position-independent.
+const disallowedCodeUrls = findDisallowedCodeUrls(packedCodeSources);
+if (disallowedCodeUrls.length > 0) {
+  console.error("Release guard failed: package code names hosts that are not approved.");
+  console.error(sanitizeForPublicLog(formatFindings(disallowedCodeUrls)));
+  console.error("  A host we operate may never be a default. A third-party provider host is");
+  console.error("  allowed only when it is listed in APPROVED_CODE_HOSTS in");
+  console.error("  src/lib/vendor-host-guard.ts with a written justification.");
+  process.exit(1);
+}
+
+// Weak backstop: known vendor domains in prose (Markdown, JSON, plain text).
 const vendorHostReferences = findVendorHostReferences(packedSources);
 if (vendorHostReferences.length > 0) {
   console.error("Release guard failed: the package references vendor-controlled hosts.");
@@ -328,7 +351,7 @@ if (vendorHostReferences.length > 0) {
 }
 
 console.log(
-  `Release guard passed: ${packedFiles.length} package-visible files are free of retired cloud markers, ` +
-    "secrets, PII, private context, private-skill leaks, hosted implementation source, " +
-    "committed tool output, endpoint defaults, and vendor-controlled hosts.",
+  `Release guard passed: ${packedFiles.length} package-visible files (${packedCodeSources.length} code) are free of ` +
+    "retired cloud markers, secrets, PII, private context, private-skill leaks, " +
+    "hosted implementation source, committed tool output, unapproved hosts, and vendor-controlled hosts.",
 );

@@ -21,13 +21,15 @@ import { MissingApiUrlError, requireApiUrl, resolveApiUrl } from "./api-url.js";
 import { getPackedFiles } from "./packlist.js";
 import { getConfiguredApiUrl } from "./remote-registry.js";
 import {
-  ENDPOINT_DEFAULT_ALLOWED_DOMAINS,
+  APPROVED_CODE_HOSTS,
   VENDOR_CONTROLLED_DOMAINS,
   VENDOR_HOST_URL_EXCEPTIONS,
   extractUrlReferences,
-  findEndpointDefaults,
+  findCodeUrlLiterals,
+  findDisallowedCodeUrls,
   findVendorHostReferences,
   formatFindings,
+  isCodeFile,
   isVendorControlledHost,
   readPackedSources,
   registrableDomain,
@@ -161,57 +163,158 @@ describe("R1 — unconfigured client produces no endpoint", () => {
   }, 60_000);
 });
 
-describe("R1 — the published package ships no endpoint defaults", () => {
-  test("the allowlist cannot be used to smuggle a vendor host back in", () => {
-    for (const domain of ENDPOINT_DEFAULT_ALLOWED_DOMAINS) {
-      expect(VENDOR_CONTROLLED_DOMAINS, `${domain} may not be allowlisted`).not.toContain(domain);
-      expect(isVendorControlledHost(domain)).toBe(false);
+/**
+ * Every syntactic position a URL literal can occupy. The guard's pass/fail
+ * decision is position-independent, but this table is what stops the guard
+ * silently regressing to the shape-matching version it replaced: each entry
+ * must be detected, and the list must cover the forms a reviewer would think
+ * to try.
+ */
+const URL_LITERAL_POSITIONS: ReadonlyArray<{ label: string; code: string }> = [
+  { label: "variable initializer", code: 'const DEFAULT_API_URL = "https://relapse.example";' },
+  { label: "fallback operand", code: 'const u = process.env.SKILLS_API_URL || "https://relapse.example";' },
+  { label: "nullish fallback", code: 'const u = config.apiUrl ?? "https://relapse.example";' },
+  {
+    label: "constructor parameter default",
+    code: 'export class C { constructor(key: string, apiUrl: string = "https://relapse.example") {} }',
+  },
+  {
+    label: "function parameter default",
+    code: 'export function f(apiUrl = "https://relapse.example") { return apiUrl; }',
+  },
+  {
+    label: "object property",
+    code: 'const DEFAULT_CONFIG: Config = { apiUrl: "https://relapse.example" };',
+  },
+  {
+    label: "nested object property",
+    code: 'export const settings = { net: { endpoints: { primary: "https://relapse.example" } } };',
+  },
+  { label: "class field", code: 'class C { private base = "https://relapse.example"; }' },
+  { label: "ternary branch", code: 'const u = isProd ? "https://relapse.example" : local;' },
+  { label: "call argument", code: 'await fetch("https://relapse.example/api/auth/login", init);' },
+  { label: "return value", code: 'function base() { return "https://relapse.example"; }' },
+  { label: "array element", code: 'const mirrors = ["https://relapse.example", other];' },
+  { label: "template literal head", code: 'const u = `https://relapse.example/${path}`;' },
+  { label: "unnamed identifier", code: 'const x = "https://relapse.example";' },
+];
+
+describe("R1 — the published package names no unapproved host", () => {
+  test("the approved-host list cannot be used to smuggle a vendor host back in", () => {
+    expect(APPROVED_CODE_HOSTS.length).toBeGreaterThan(0);
+    for (const entry of APPROVED_CODE_HOSTS) {
+      expect(VENDOR_CONTROLLED_DOMAINS, `${entry.domain} may not be approved`).not.toContain(entry.domain);
+      expect(isVendorControlledHost(entry.domain)).toBe(false);
+      // Every approval carries a written justification, so the list stays an
+      // audited inventory rather than a dumping ground.
+      expect(entry.reason.length, `${entry.domain} needs a reason`).toBeGreaterThan(20);
     }
     // The documented exceptions are exact URLs, never bare domains, so an
     // endpoint on an excepted domain is still a failure.
     for (const exception of VENDOR_HOST_URL_EXCEPTIONS) {
       expect(exception.url).toMatch(/^https?:\/\/[^\s]+\/[^\s]+/);
       expect(exception.reason.length).toBeGreaterThan(20);
+      expect(isVendorControlledHost(exception.url.split("/")[2])).toBe(true);
     }
   });
 
-  test("the scanners actually fire on a reintroduced default", () => {
+  test("detection is position-independent, not shape-matched", () => {
+    // The previous regex guard matched exactly two syntactic forms and let a
+    // constructor parameter default and an object property through. Every form
+    // below must be detected, on a domain that is on no list at all.
+    const missed: string[] = [];
+    for (const { label, code } of URL_LITERAL_POSITIONS) {
+      const found = findCodeUrlLiterals(`${label}.ts`, code);
+      if (!found.some((f) => f.host === "relapse.example")) missed.push(label);
+    }
+    expect(missed).toEqual([]);
+
+    // ...and each one is rejected, because relapse.example is not approved.
+    const rejected = findDisallowedCodeUrls(
+      URL_LITERAL_POSITIONS.map(({ label, code }) => ({ file: `${label}.ts`, content: code })),
+    );
+    expect(rejected.length).toBe(URL_LITERAL_POSITIONS.length);
+  });
+
+  test("the scanners fire on a reintroduced default in any position", () => {
     // Anti-vacuity: prove the detectors are wired before trusting their silence.
+    // Case 1 is a known vendor domain; case 2 is a constructor parameter default
+    // on a domain no denylist has ever heard of — the exact evasion that the
+    // shape-matching version of this guard missed.
     const relapse = [
       {
         file: "src/server/config.ts",
         content: 'export const DEFAULT_SELF_HOSTED_API_URL = "https://skills.md";',
       },
       {
-        file: "skills/_common/http-client.ts",
+        file: "src/lib/remote-client.ts",
         content:
-          'const SKILL_API_URL = process.env.SKILLS_API_URL || process.env.SKILL_API_URL || "https://some-other-vendor.example/api/v1";',
+          'export class RemoteSkillsClient { constructor(apiKey: string, apiUrl: string = "https://api.new-vendor-host.example") {} }',
       },
     ];
-    const defaults = findEndpointDefaults(relapse);
-    expect(defaults.map((f) => f.file).sort()).toEqual([
-      "skills/_common/http-client.ts",
+    const findings = findDisallowedCodeUrls(relapse);
+    expect(findings.map((f) => f.file).sort()).toEqual([
+      "src/lib/remote-client.ts",
       "src/server/config.ts",
     ]);
-    // The second case names a host nobody has denylisted — the domain-agnostic
-    // half of the guard is what catches it.
-    expect(defaults.some((f) => !VENDOR_CONTROLLED_DOMAINS.includes(registrableDomain(f.host)))).toBe(true);
+    expect(findings.find((f) => f.file === "src/lib/remote-client.ts")?.position).toBe("parameter default");
+    // The second case is caught without anyone classifying its host as ours.
+    expect(
+      findings.some((f) => !VENDOR_CONTROLLED_DOMAINS.includes(registrableDomain(f.host))),
+    ).toBe(true);
     expect(findVendorHostReferences(relapse).length).toBeGreaterThan(0);
   });
 
-  test("no packed file hard-codes a network endpoint default", () => {
-    const sources = packedSources();
-    expect(sources.length, "packed file scan must not be empty").toBeGreaterThan(100);
-    const findings = findEndpointDefaults(sources);
-    expect(findings.length === 0 ? "" : `\n${formatFindings(findings)}`).toBe("");
-  }, 120_000);
+  // POLICY, made explicit rather than accidental: R1 forbids defaulting to a
+  // host WE operate. A bring-your-own-key skill naming its provider's public
+  // API is legitimate — the user supplies the credential and we never see it.
+  // Identical syntax, opposite verdict, decided by who runs the host.
+  test("a third-party provider default is allowed where a vendor default is not", () => {
+    const asObjectProperty = (host: string) =>
+      `const DEFAULT_CONFIG: Config = { apiUrl: "https://api.${host}" };`;
 
-  test("no packed file references a vendor-controlled host", () => {
+    const thirdParty = findDisallowedCodeUrls([
+      { file: "skills/domainsearch/src/lib/config.ts", content: asObjectProperty("godaddy.com") },
+    ]);
+    expect(thirdParty).toEqual([]);
+
+    const vendor = findDisallowedCodeUrls([
+      { file: "skills/domainsearch/src/lib/config.ts", content: asObjectProperty("skills.md") },
+    ]);
+    expect(vendor.length).toBe(1);
+    expect(vendor[0].vendor).toBe(true);
+    expect(vendor[0].position).toBe("object property");
+
+    // An unapproved third party is also rejected: "third-party" is not a
+    // blanket pass, it is a reviewed entry in APPROVED_CODE_HOSTS.
+    const unreviewed = findDisallowedCodeUrls([
+      { file: "skills/whatever/src/config.ts", content: asObjectProperty("some-unreviewed-provider.io") },
+    ]);
+    expect(unreviewed.length).toBe(1);
+    expect(unreviewed[0].vendor).toBe(false);
+  });
+
+  test("comments and prose are not code — the scan reads string literals only", () => {
+    const withComment = [
+      { file: "a.ts", content: "// see https://not-approved.example for background\nconst x = 1;" },
+    ];
+    expect(findDisallowedCodeUrls(withComment)).toEqual([]);
+  });
+
+  test("no packed code file names a host outside APPROVED_CODE_HOSTS", () => {
+    const sources = packedSources().filter((source) => isCodeFile(source.file));
+    // Anti-vacuity: deleting the code would otherwise make this pass silently.
+    expect(sources.length, "packed code scan must not be empty").toBeGreaterThan(100);
+    const findings = findDisallowedCodeUrls(sources);
+    expect(findings.length === 0 ? "" : `\n${formatFindings(findings)}`).toBe("");
+  }, 180_000);
+
+  test("no packed file of any kind references a vendor-controlled host", () => {
     const sources = packedSources();
     expect(sources.length, "packed file scan must not be empty").toBeGreaterThan(100);
     const findings = findVendorHostReferences(sources);
     expect(findings.length === 0 ? "" : `\n${formatFindings(findings)}`).toBe("");
-  }, 120_000);
+  }, 180_000);
 });
 
 describe("R1 — client does not depend on the server module", () => {
