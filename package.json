@@ -31,7 +31,7 @@
     "skills/",
     "!skills/**/node_modules",
     "!skills/scaffold-project/my-app",
-    "!skills/{ad-creative-pack,api-docs-portal,audio,audio-transcript-pack,blog-article,brand-kit,brand-photo-shoot,browse,contract-review-report,customer-feedback-report,deepresearch,email-sequence,generate-book-cover,icon-pack,image,invoice-reconciliation,landing-page-pack,logo-design,market-research-report,meeting-pack,migration-plan-pack,music,music-album,one-page-website,pdf-read,pdf-to-dataset,pdf-to-markdown,performance-audit-report,photo-album,pitch-deck,playlist-maker,product-mockup,proposal-pack,read-pdf,remove-background,repo-onboarding-report,sdk-generator,security-audit-report,seo-content-pack,short-video-pack,slide-deck-generator,social-content-calendar,test-suite-generator,transcript,video,video-highlight-pack,voiceover-jingle-pack,webcrawling}/src",
+    "!skills/{ad-creative-pack,api-docs-portal,audio,audio-transcript-pack,blog-article,brand-assets,brand-kit,brand-photo-shoot,browse,contract-review-report,customer-feedback-report,deepresearch,email-sequence,generate-book-cover,icon-pack,image,invoice-reconciliation,landing-page-pack,logo-design,market-research-report,meeting-pack,migration-plan-pack,music,music-album,one-page-website,pdf-read,pdf-to-dataset,pdf-to-markdown,performance-audit-report,photo-album,pitch-deck,playlist-maker,product-mockup,proposal-pack,read-pdf,remove-background,repo-onboarding-report,sdk-generator,security-audit-report,seo-content-pack,short-video-pack,slide-deck-generator,social-content-calendar,test-suite-generator,transcript,video,video-highlight-pack,voiceover-jingle-pack,webcrawling}/src",
     "LICENSE",
     "README.md"
   ],

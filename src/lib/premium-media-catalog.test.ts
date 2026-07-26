@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getSkill, loadRegistry } from "./registry";
-import { getSkillPath } from "./installer";
+import { getSkill } from "./registry";
+import { requireHostedMetadataSlugs } from "./hosted-skill-set";
 import { getSkillRequirements } from "./skillinfo";
 import {
   getPublicSkillPricing,
@@ -19,19 +19,15 @@ const NEW_MEDIA_SKILLS = [
   "brand-photo-shoot",
 ] as const;
 
-function isHostedMetadataSkill(slug: string): boolean {
-  const pkgPath = join(getSkillPath(slug), "package.json");
-  if (!existsSync(pkgPath)) return false;
-  const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { skills?: { runtime?: string; source?: string } };
-  return pkg.skills?.runtime === "hosted" || pkg.skills?.source === "remote" || pkg.skills?.source === "private-hosted";
-}
-
 describe("premium media catalog", () => {
   test("routes every hosted metadata skill through premium hosted billing", () => {
-    for (const skill of loadRegistry()) {
-      if (!isHostedMetadataSkill(skill.name)) continue;
-      expect(isPremiumSkill(skill.name), `${skill.name} hosted metadata should be premium`).toBe(true);
-      expect(getPublicSkillPricing(skill.name).tier, `${skill.name} public pricing should be premium`).toBe("premium");
+    // Iterate the authoritative hosted set rather than filtering the loaded
+    // registry: the set refuses to be empty, so this can never silently check
+    // nothing once the hosted directories are deleted or converted.
+    const hosted = requireHostedMetadataSlugs(join(process.cwd(), "skills"));
+    for (const slug of hosted) {
+      expect(isPremiumSkill(slug), `${slug} hosted metadata should be premium`).toBe(true);
+      expect(getPublicSkillPricing(slug).tier, `${slug} public pricing should be premium`).toBe("premium");
     }
   });
 
