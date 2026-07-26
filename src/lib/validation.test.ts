@@ -7,6 +7,7 @@ import { tmpdir } from "os";
 import { fileURLToPath } from "url";
 import { SKILLS } from "./registry";
 import { getAllPremiumSlugs } from "./pricing";
+import { listHostedMetadataSlugs } from "./hosted-skill-set";
 import { generateSkillMd } from "./skillinfo";
 import {
   parseSkillFrontmatter,
@@ -90,12 +91,7 @@ const skillDirs = readdirSync(SKILLS_DIR).filter((f) => {
 });
 const HOSTED_METADATA_SKILLS = new Set([
   ...getAllPremiumSlugs(),
-  ...skillDirs.filter((dir) => {
-    const pkgPath = join(SKILLS_DIR, dir, "package.json");
-    if (!existsSync(pkgPath)) return false;
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { skills?: { runtime?: string; source?: string } };
-    return pkg.skills?.runtime === "hosted" || pkg.skills?.source === "remote" || pkg.skills?.source === "private-hosted";
-  }),
+  ...listHostedMetadataSlugs(SKILLS_DIR),
 ]);
 
 function validationFor(dir: string) {

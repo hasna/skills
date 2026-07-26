@@ -124,4 +124,39 @@ describe("release-guard end-to-end (S1 + S2)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("S3: blocks a hosted skill whose implementation source enters the packed file list", () => {
+    const dir = makePkg(["skills/", "README.md"]);
+    try {
+      addSkill(dir, "hosted-thing", {
+        "SKILL.md": "---\nname: hosted-thing\n---\n\n# Hosted thing\n",
+        "package.json": JSON.stringify({ name: "hosted-thing", skills: { runtime: "hosted" } }),
+        "src/index.ts": "export const secretSauce = 1;\n",
+      });
+      const result = runGuard(dir);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("hosted skill implementation source leaked");
+      expect(result.stderr).toContain("skills/hosted-thing/src/index.ts");
+      // The printed fix must be a glob npm actually honours: a one-element
+      // `{slug}` brace is inert under `npm pack`, so the bare form is emitted.
+      expect(result.stderr).toContain("!skills/hosted-thing/src");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("S3: a hosted skill whose src is excluded via files globs does NOT trip the boundary", () => {
+    const dir = makePkg(["skills/", "!skills/hosted-thing/src", "README.md"]);
+    try {
+      addSkill(dir, "hosted-thing", {
+        "SKILL.md": "---\nname: hosted-thing\n---\n\n# Hosted thing\n",
+        "package.json": JSON.stringify({ name: "hosted-thing", skills: { runtime: "hosted" } }),
+        "src/index.ts": "export const secretSauce = 1;\n",
+      });
+      const result = runGuard(dir);
+      expect(result.exitCode, result.stderr).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

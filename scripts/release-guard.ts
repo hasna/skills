@@ -4,6 +4,11 @@ import { join, relative } from "node:path";
 import { applyAllowlist, scanFiles, toRedactedJson, type ScanAllowlistEntry, type ScanFinding } from "../src/lib/content-scan.js";
 import { getPackedFiles } from "../src/lib/packlist.js";
 import { findPrivatePacklistLeaks, listPrivateSkillSlugs } from "../src/lib/public-boundary.js";
+import {
+  buildHostedSourceExclusionGlob,
+  findHostedSourcePacklistLeaks,
+  listHostedMetadataSlugs,
+} from "../src/lib/hosted-skill-set.js";
 
 type Finding = {
   file: string;
@@ -177,6 +182,27 @@ if (boundaryLeaks.length > 0) {
   process.exit(1);
 }
 
+// S3 — hosted metadata boundary: a skill that declares itself hosted ships its
+// package.json and docs but never its implementation source. Asserted against
+// the real packed file list, so it holds regardless of how `files` is written.
+//
+// This uses the non-asserting accessor on purpose: the guard runs against
+// arbitrary packages, for which zero hosted skills is a legitimate answer. THIS
+// repo's expectation that its own hosted set is non-empty — and therefore that
+// this check is not vacuous — is enforced in src/lib/hosted-skill-set.test.ts.
+const hostedSlugs = listHostedMetadataSlugs(join(repoRoot, "skills"));
+const hostedSourceLeaks = findHostedSourcePacklistLeaks(packedFiles, hostedSlugs);
+if (hostedSourceLeaks.length > 0) {
+  console.error("Release guard failed: hosted skill implementation source leaked into the published package file list:");
+  for (const leaked of hostedSourceLeaks) {
+    console.error(sanitizeForPublicLog(`  hosted-boundary: ${leaked}`));
+  }
+  console.error("  Skills declaring `skills.runtime: hosted` (or `skills.source: remote|private-hosted`)");
+  console.error("  must have their `src/` excluded by the `files` list in package.json:");
+  console.error(`    ${JSON.stringify(buildHostedSourceExclusionGlob(hostedSlugs))}`);
+  process.exit(1);
+}
+
 // S2 — content scan of package-visible bodies (skip built artifacts under dist/ and bin/).
 const scannablePacked = packedFiles.filter((path) => !path.startsWith("dist/") && !path.startsWith("bin/"));
 const absoluteScanTargets = scannablePacked
@@ -207,5 +233,5 @@ if (scanFindings.length > 0) {
 
 console.log(
   `Release guard passed: ${packedFiles.length} package-visible files are free of retired cloud markers, ` +
-    "secrets, PII, private context, and private-skill leaks.",
+    "secrets, PII, private context, private-skill leaks, and hosted implementation source.",
 );
