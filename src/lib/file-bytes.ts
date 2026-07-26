@@ -35,9 +35,9 @@ const BINARY_MAGICS: readonly (readonly number[])[] = [
  * ever being opened. An extension is attacker-chosen; the leading bytes are not.
  *
  * Note what this deliberately does NOT do: it does not treat "contains a NUL"
- * as binary. Plenty of legitimate source files contain NUL (this repo's own
- * `content-scan.ts` uses one as a composite-key separator), and treating that
- * byte as a skip signal is exactly the hole being closed.
+ * as binary. Plenty of legitimate text files contain NUL — fixtures, test
+ * corpora, anything storing a NUL-separated key — and treating that byte as a
+ * skip signal is exactly the hole being closed.
  */
 export function looksBinary(buffer: Buffer): boolean {
   if (buffer.length === 0) return false;

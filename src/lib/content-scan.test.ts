@@ -68,7 +68,201 @@ describe("content-scan planted fixtures MUST block", () => {
   });
 });
 
+// An unmistakably invented person who is NOT on the synthetic-placeholder
+// allowlist. Using a made-up name keeps this test file from planting a real
+// person's data while still exercising the deny-by-default behaviour.
+const UNAPPROVED_NAME = "Zorvax Kellstrom";
+
+describe("content-scan blocks personal data about an identified individual", () => {
+  // Regression: a CSV example in a skill README once shipped real employees'
+  // names alongside their employment and maternity-leave status.
+  test("blocks a name paired with an employment status in a CSV row", () => {
+    const csv = `employee,employee_status,daily_hours\n${UNAPPROVED_NAME},active,8\n`;
+    const findings = scanText(csv, "skills/timesheet/README.md");
+    expect(findings.some((f) => f.category === "pii-personal" && f.ruleId === "person-employment-status")).toBe(true);
+  });
+
+  test("blocks a name paired with a leave/health status", () => {
+    for (const status of ["on_leave_maternity", "on_leave_sick", "terminated"]) {
+      const findings = scanText(`${UNAPPROVED_NAME},${status},8,0`);
+      expect(findings.some((f) => f.category === "pii-personal")).toBe(true);
+    }
+  });
+
+  test("blocks a name + sensitive status in a markdown table or key/value pair", () => {
+    expect(
+      scanText(`| ${UNAPPROVED_NAME} | on_leave_maternity |`).some((f) => f.ruleId === "person-leave-status"),
+    ).toBe(true);
+    expect(scanText(`${UNAPPROVED_NAME}: sick_leave`).some((f) => f.ruleId === "person-leave-status")).toBe(true);
+  });
+
+  test("blocks a personal email at a consumer mail provider", () => {
+    for (const address of ["jane.doe1987@gmail.com", "someone@outlook.com", "a.person@proton.me"]) {
+      const findings = scanText(`reach me at ${address}`);
+      expect(findings.some((f) => f.category === "pii-contact" && f.ruleId === "personal-email")).toBe(true);
+    }
+  });
+
+  test("blocks a government identifier carrying a real-looking value", () => {
+    expect(scanText("ssn 078-05-1120 on file").some((f) => f.ruleId === "government-id")).toBe(true);
+    expect(scanText(`passport_number: "X1234567"`).some((f) => f.ruleId === "government-id")).toBe(true);
+  });
+
+  // Review finding: the guard advertised deny-by-default, but the name half was
+  // ASCII-and-comma-only, so every shape below walked straight through it. The
+  // names actually removed from the timesheet README were Romanian, which makes
+  // the accented spelling the single most likely next paste.
+  test("blocks the record shapes a real export actually emits", () => {
+    const shapes: Record<string, string> = {
+      diacritics: "Zorvax Kellstrøm,on_leave_maternity,8,0",
+      "hyphenated surname": "Zorvax Kell-Strom,terminated,8",
+      "quoted RFC-4180 last-first": `"Kellstrom, Zorvax",on_leave_maternity,8,0`,
+      // Review finding: the rule only understood the last-first spelling, which
+      // needs an internal comma. Every OTHER quoted shape walked through, because
+      // the closing `"` sat between the name and the delimiter. Quote-all is what
+      // csv.QUOTE_ALL, Excel and most BI tools emit, so re-pasting a real CSV
+      // timesheet export — the exact leak this guard exists to stop — is the one
+      // recurrence path it missed.
+      "quote-all, leave status": `"Zorvax Kellstrom","on_leave_maternity","8","0"`,
+      "quote-all, neutral status": `"Zorvax Kellstrom","active","8","160"`,
+      "quote-all last-first": `"Kellstrom, Zorvax","on_leave_maternity","8","0"`,
+      "quoted name, bare status": `"Zorvax Kellstrom",active,8,160`,
+      "bare name, quoted status": `Zorvax Kellstrom,"active","8","160"`,
+      "semicolon-delimited EU export": "Zorvax Kellstrom;on_leave_maternity;8;0",
+      "quote-all EU export": `"Zorvax Kellstrom";"on_leave_maternity";"8";"0"`,
+      "middle initial": "Zorvax D Kellstrom,on_leave_maternity,8,0",
+      "Title-case status": "Zorvax Kellstrom,On_Leave_Maternity,8,0",
+    };
+    // Assert as a map so a failure names the shape that got through.
+    const blocked = Object.fromEntries(
+      Object.entries(shapes).map(([shape, row]) => [shape, scanText(row).some((f) => f.category === "pii-personal")]),
+    );
+    expect(blocked).toEqual(Object.fromEntries(Object.keys(shapes).map((shape) => [shape, true])));
+  });
+
+  test("blocks a person-keyed record in JSON or YAML, including across lines", () => {
+    // skills/timesheet/README.md advertises "Export to CSV or JSON format", so
+    // re-adding the identical leak as a JSON example is a live recurrence path.
+    const json = `{"employee": "${UNAPPROVED_NAME}", "employee_status": "on_leave_maternity"}`;
+    expect(scanText(json).some((f) => f.ruleId === "person-record-status")).toBe(true);
+
+    const yaml = `employee: ${UNAPPROVED_NAME}\nemployee_status: on_leave_maternity\n`;
+    expect(scanText(yaml).some((f) => f.ruleId === "person-record-status")).toBe(true);
+
+    // Either order — the status key may be written first.
+    const reversed = `{"employmentStatus": "terminated", "staff_name": "${UNAPPROVED_NAME}"}`;
+    expect(scanText(reversed).some((f) => f.ruleId === "person-record-status")).toBe(true);
+  });
+
+  // Review finding: the proximity window opens at the FIRST person key, so one
+  // match can span two records. The allowlist check read only the first bound
+  // name, so a placeholder sitting above a pasted real record suppressed the
+  // whole span — and the multiline scan had already advanced past the real
+  // record, so it was never re-examined. That is deny-by-default inverted: the
+  // more example content a README carries, the easier it is to launder.
+  test("a placeholder person record does not launder a real one beside it", () => {
+    const afterPlaceholder = `employee: John Doe\nemployee: ${UNAPPROVED_NAME}\nemployee_status: on_leave_maternity\n`;
+    expect(scanText(afterPlaceholder).some((f) => f.ruleId === "person-record-status")).toBe(true);
+
+    // A schema/column-header line is enough: `employee name` is on the
+    // placeholder allowlist because it shares the "Two Capitalized Words" shape.
+    const afterSchemaHeader = `employee: Employee Name\nemployee: ${UNAPPROVED_NAME}\nemployee_status: active\n`;
+    expect(scanText(afterSchemaHeader).some((f) => f.ruleId === "person-record-status")).toBe(true);
+
+    // ...and the real record first, with the placeholder between it and the status.
+    const beforePlaceholder = `employee: ${UNAPPROVED_NAME}\nemployee: Jane Doe\nemployee_status: terminated\n`;
+    expect(scanText(beforePlaceholder).some((f) => f.ruleId === "person-record-status")).toBe(true);
+  });
+
+  test("personal-data findings never print the name or identifier", () => {
+    const findings = scanText(`${UNAPPROVED_NAME},on_leave_maternity,8,0`);
+    const json = toRedactedJson(findings);
+    expect(json).not.toContain(UNAPPROVED_NAME);
+    expect(json).not.toContain("Kellstrom");
+    expect(findings[0]?.redacted).toContain("*");
+  });
+});
+
 describe("content-scan does NOT false-positive on legitimate public content", () => {
+  test("allows documented synthetic placeholder people", () => {
+    const csv =
+      "employee,employee_status,daily_hours\n" +
+      "Alex Rivera,active,8\n" +
+      "Sam Chen,on_leave_maternity,8\n" +
+      "John Doe,terminated,8\n";
+    expect(scanText(csv).some((f) => f.category === "pii-personal")).toBe(false);
+  });
+
+  test("allows documented synthetic placeholder people in a quote-all export", () => {
+    // The allowlist has to survive the quoted spellings too, or teaching the rule
+    // to read csv.QUOTE_ALL would fail CI on the corpus's own examples.
+    const csv =
+      `"employee","employee_status","daily_hours"\n` +
+      `"Alex Rivera","active","8"\n` +
+      `"Chen, Sam","on_leave_maternity","8"\n` +
+      `"John Doe",terminated,8\n`;
+    expect(scanText(csv).some((f) => f.category === "pii-personal")).toBe(false);
+  });
+
+  test("a stray quote beside a delimiter is not a field boundary", () => {
+    // Regression: matching an OPTIONAL quote on either side of the delimiter —
+    // rather than quoting each field as a whole — turned an ordinary source
+    // literal into a three-field record, and this very file tripped its own
+    // guard. A two-field row is prose or a two-column table, quoted or not.
+    expect(scanText(`  "Web Server,active",`).some((f) => f.category === "pii-personal")).toBe(false);
+    expect(scanText(`["Redis Cache,active", "Batch Worker,inactive"]`).some((f) => f.category === "pii-personal")).toBe(
+      false,
+    );
+    expect(scanText(`"Web Server","active"`).some((f) => f.category === "pii-personal")).toBe(false);
+  });
+
+  test("allows a neutral status in a markdown table cell", () => {
+    // Not a person — the `|` rule deliberately only covers sensitive statuses.
+    expect(scanText("| Some Feature | active |")).toEqual([]);
+    expect(scanText("| Legacy Runner | inactive |")).toEqual([]);
+  });
+
+  test("allows ordinary process/job/session state prose", () => {
+    // Review finding: `terminated` / `suspended` / `resigned` / `probation` are
+    // ordinary technical English, and `<Two Capitalized Words>: <state>` is the
+    // standard shape of a status line in a README. This guard blocks every PR,
+    // so a doc that describes a worker's lifecycle must not fail CI with a
+    // two-character-masked marker nobody can act on.
+    const prose = [
+      "Process Status: suspended",
+      "Connection State: terminated",
+      "Session Lifecycle: terminated",
+      "Container Runtime: suspended",
+      "The Docker Daemon: terminated the container.",
+      "| Batch Worker | terminated |",
+      "| Legacy Runner | suspended |",
+      "In Task Manager, active tasks are listed first.",
+      "With Docker Compose, active containers restart automatically.",
+      "Web Server,active",
+    ];
+    const flagged = prose.filter((line) => scanText(line).some((f) => f.category === "pii-personal"));
+    expect(flagged).toEqual([]);
+  });
+
+  test("allows a non-person record keyed by something other than a person", () => {
+    // `person-record-status` needs a PERSON key. A job or deployment record
+    // carrying a status is not personal data.
+    expect(scanText(`{"job": "Batch Worker", "job_status": "terminated"}`)).toEqual([]);
+    expect(scanText("name: Build Docker Image\nstatus: active\n")).toEqual([]);
+  });
+
+  test("allows the project's own maintainer contact at its own domain", () => {
+    // A package naming its own author is public-by-definition; only consumer
+    // mailboxes belonging to third parties are blocked.
+    expect(scanText("**Owner:** Hasna (dev@hasna.com)").some((f) => f.ruleId === "personal-email")).toBe(false);
+    expect(scanText("author: andrei@hasna.com").some((f) => f.ruleId === "personal-email")).toBe(false);
+  });
+
+  test("allows identifier schema fields and detection regexes (definitions, not data)", () => {
+    expect(scanText("  ssn: {").some((f) => f.ruleId === "government-id")).toBe(false);
+    expect(scanText("  tax_id: string | null;").some((f) => f.ruleId === "government-id")).toBe(false);
+  });
+
   test("allows a 555 documentation phone example", () => {
     const findings = scanText(`e.g. '${EXAMPLE_PHONE}'`);
     expect(findings.some((f) => f.category === "pii-contact")).toBe(false);
