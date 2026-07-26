@@ -80,7 +80,41 @@ export interface ClaimRunInput {
   workerId: string;
 }
 
+/**
+ * What a store is, in the only two dimensions the server needs at boot: which backend
+ * it is (for logs and diagnostics) and whether it survives a restart.
+ *
+ * `durable` exists because the server used to boot onto an in-process Map, report
+ * `ok: true` at /health, and lose every run on restart with no warning at any point. A
+ * store that knows it is non-durable can now say so, and startSkillsServer() refuses it
+ * unless the operator explicitly opted in.
+ */
+export interface StoreBackendInfo {
+  kind: "postgres" | "sqlite" | "memory";
+  /** False when the data does not survive process exit. */
+  durable: boolean;
+  /** Credential-free description, safe to put in logs and error messages. */
+  label: string;
+}
+
 export interface SkillsProductStore {
+  /**
+   * Optional so a third-party store implementing this seam keeps compiling. An
+   * undeclared backend is treated as durable: we can refuse what a store tells us is
+   * ephemeral, and cannot infer it about somebody else's implementation. The hazard
+   * actually being closed is our own default, which is now SQLite on disk.
+   */
+  readonly backend?: StoreBackendInfo;
+  /** Release connections and file handles. Optional; not every backend holds any. */
+  close?(): Promise<void>;
+  /**
+   * Prove the backend is actually reachable, throwing if it is not.
+   *
+   * Called once at startup. Bun's SQL client connects lazily, so without this a
+   * Postgres URL pointing at a dead host produced a server that started happily and
+   * then 500ed on the first request.
+   */
+  verifyConnectivity?(): Promise<void>;
   authenticateApiKeyHash(hash: string): Promise<ApiPrincipal | null>;
   ensureBootstrapApiKey?(token: string, principal?: Partial<ApiPrincipal>): Promise<void>;
   createRun(input: CreateRunInput): Promise<ServerRunRecord>;

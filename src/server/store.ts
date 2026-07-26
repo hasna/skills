@@ -6,10 +6,13 @@ import type {
   ServerArtifact,
   ServerRunLog,
   ServerRunRecord,
-  ServerRunStatus,
   SkillsProductStore,
+  StoreBackendInfo,
 } from "./types.js";
 import { hashApiKey, publicPrincipal } from "./auth.js";
+import { resolveDatabaseTarget, type DatabaseTarget } from "./database-url.js";
+import { artifactId, nowIso, rowToArtifact, rowToLog, rowToRun, parseJsonArray, runId } from "./rows.js";
+import { SqliteSkillsStore, type SqliteStoreOptions } from "./sqlite-store.js";
 
 type SqlTag = {
   (strings: TemplateStringsArray, ...values: unknown[]): Promise<Record<string, unknown>[]>;
@@ -22,18 +25,6 @@ function resolvePoolMax(env: Record<string, string | undefined> = process.env): 
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 4;
 }
 
-function nowIso(): string {
-  return new Date().toISOString();
-}
-
-function runId(): string {
-  return `run_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`;
-}
-
-function artifactId(): string {
-  return `art_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
-}
-
 export function createArtifactId(): string {
   return artifactId();
 }
@@ -41,19 +32,47 @@ export function createArtifactId(): string {
 export interface StoreOptions {
   databaseUrl?: string;
   bootstrapApiKey?: string;
+  /** SQLite tuning, forwarded when the resolved target is SQLite. */
+  sqlite?: SqliteStoreOptions;
 }
 
+/**
+ * Build the store an operator's configuration asks for.
+ *
+ * The old body was `options.databaseUrl ? Postgres : Memory`, which meant that the
+ * single most common way to start this server - run it with nothing set - produced a
+ * process that looked healthy and forgot everything on restart. There is no longer any
+ * input that yields a non-durable store by accident:
+ *
+ *   - a postgres:// URL         -> Postgres, and a failure to reach it is fatal here
+ *   - a sqlite path / file: URL -> SQLite at that path, migrated on open
+ *   - nothing at all            -> SQLite at ~/.hasna/skills/server.db, migrated on open
+ *   - "memory:" or ":memory:"   -> non-durable, and only because it was named
+ *   - anything else             -> throws, naming what is supported
+ */
 export async function createStore(options: StoreOptions = {}): Promise<SkillsProductStore> {
-  const store: SkillsProductStore = options.databaseUrl
-    ? new PostgresSkillsStore(options.databaseUrl)
-    : new MemorySkillsStore();
+  const target = resolveDatabaseTarget(options.databaseUrl);
+  const store = instantiateStore(target, options.sqlite);
+  await store.verifyConnectivity?.();
   if (options.bootstrapApiKey && store.ensureBootstrapApiKey) {
     await store.ensureBootstrapApiKey(options.bootstrapApiKey);
   }
   return store;
 }
 
+function instantiateStore(target: DatabaseTarget, sqliteOptions?: SqliteStoreOptions): SkillsProductStore {
+  switch (target.kind) {
+    case "postgres":
+      return new PostgresSkillsStore(target.url);
+    case "sqlite":
+      return new SqliteSkillsStore(target.path, sqliteOptions);
+    case "memory":
+      return new MemorySkillsStore();
+  }
+}
+
 export class MemorySkillsStore implements SkillsProductStore {
+  readonly backend: StoreBackendInfo = { kind: "memory", durable: false, label: "memory (non-durable)" };
   private apiKeys = new Map<string, ApiPrincipal>();
   private runs = new Map<string, ServerRunRecord>();
   private logs = new Map<string, ServerRunLog[]>();
@@ -119,12 +138,23 @@ export class MemorySkillsStore implements SkillsProductStore {
     return run && run.orgId === principal.orgId ? run : null;
   }
 
-  async claimNextRun(input: ClaimRunInput): Promise<ServerRunRecord | null> {
+  /**
+   * Exclusive only by accident: nothing here takes a lock, and it is safe purely
+   * because the read and the write happen in one synchronous turn of a single event
+   * loop. That is not a claiming strategy, it is a property of there being exactly one
+   * process and one Map. It is left as-is because this store is now explicitly
+   * non-durable and test-only - the durable backends implement claiming properly
+   * (Postgres via FOR UPDATE SKIP LOCKED, SQLite via BEGIN IMMEDIATE plus a conditional
+   * claim by id). Do not use this as the model for a new backend.
+   *
+   * startedAt is preserved on re-claim to match both durable backends' COALESCE.
+   */
+  async claimNextRun(_input: ClaimRunInput): Promise<ServerRunRecord | null> {
     const run = Array.from(this.runs.values())
       .filter((candidate) => candidate.status === "queued" || candidate.status === "retrying")
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
     if (!run) return null;
-    return this.patchRun(run.id, { status: "running", startedAt: nowIso() });
+    return this.patchRun(run.id, { status: "running", startedAt: run.startedAt ?? nowIso() });
   }
 
   async updateRun(runId: string, patch: Partial<Pick<ServerRunRecord, "status" | "outputType" | "outputPreview" | "errorCode" | "errorMessage" | "startedAt" | "completedAt">>): Promise<ServerRunRecord | null> {
@@ -172,11 +202,37 @@ export class MemorySkillsStore implements SkillsProductStore {
 }
 
 export class PostgresSkillsStore implements SkillsProductStore {
+  readonly backend: StoreBackendInfo = { kind: "postgres", durable: true, label: "postgres" };
   private sql: SqlTag;
 
   constructor(databaseUrl: string) {
     const bunWithSql = Bun as unknown as { SQL: new (url: string, options?: { max?: number }) => SqlTag };
     this.sql = new bunWithSql.SQL(databaseUrl, { max: resolvePoolMax() });
+  }
+
+  /**
+   * Bun's SQL client connects lazily, so constructing this store proves nothing about
+   * the database being there. Without an explicit probe, a wrong host or a down
+   * instance produced a server that started, answered /health with ok:true, and 500ed
+   * on the first API call.
+   *
+   * The error deliberately carries no URL: a Postgres URL is a credential, the driver's
+   * own messages sometimes echo it, and this string ends up in logs.
+   */
+  async verifyConnectivity(): Promise<void> {
+    try {
+      await this.sql`SELECT 1`;
+    } catch (error) {
+      throw new Error(
+        "cannot reach the configured Postgres database. The server will not start with an unreachable " +
+          "database rather than fall back to another backend and silently split your data across two stores. " +
+          `Check HASNA_SKILLS_DATABASE_URL and that the instance is accepting connections. Driver reported: ${connectionFailureSummary(error)}`,
+      );
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.sql.close?.();
   }
 
   async ensureBootstrapApiKey(token: string, principal?: Partial<ApiPrincipal>): Promise<void> {
@@ -348,81 +404,14 @@ export class PostgresSkillsStore implements SkillsProductStore {
   }
 }
 
-function rowToRun(row: Record<string, unknown>): ServerRunRecord {
-  return {
-    id: String(row.id),
-    orgId: String(row.org_id),
-    userId: String(row.user_id),
-    skill: String(row.skill_slug),
-    requestedSlug: String(row.requested_slug),
-    status: String(row.status) as ServerRunStatus,
-    input: parseJsonObject(row.input_json),
-    args: parseJsonArray(row.args_json),
-    ...(typeof row.idempotency_key === "string" ? { idempotencyKey: row.idempotency_key } : {}),
-    correlationId: String(row.correlation_id),
-    costCents: Number(row.cost_cents ?? 0),
-    ...(typeof row.output_type === "string" ? { outputType: row.output_type } : {}),
-    ...(typeof row.output_preview === "string" ? { outputPreview: row.output_preview } : {}),
-    ...(typeof row.error_code === "string" ? { errorCode: row.error_code } : {}),
-    ...(typeof row.error_message === "string" ? { errorMessage: row.error_message } : {}),
-    createdAt: dateString(row.created_at),
-    ...(row.started_at ? { startedAt: dateString(row.started_at) } : {}),
-    ...(row.completed_at ? { completedAt: dateString(row.completed_at) } : {}),
-  };
-}
-
-function rowToLog(row: Record<string, unknown>): ServerRunLog {
-  return {
-    runId: String(row.run_id),
-    sequence: Number(row.sequence),
-    level: String(row.level) as ServerRunLog["level"],
-    message: String(row.message),
-    createdAt: dateString(row.created_at),
-  };
-}
-
-function rowToArtifact(row: Record<string, unknown>): ServerArtifact {
-  return {
-    id: String(row.id),
-    runId: String(row.run_id),
-    orgId: String(row.org_id),
-    fileName: String(row.file_name),
-    relativePath: String(row.relative_path),
-    contentType: String(row.content_type),
-    byteSize: Number(row.byte_size),
-    sha256: String(row.sha256),
-    storageKind: String(row.storage_kind) as ServerArtifact["storageKind"],
-    ...(typeof row.storage_key === "string" ? { storageKey: row.storage_key } : {}),
-    ...(typeof row.body_text === "string" ? { bodyText: row.body_text } : {}),
-    createdAt: dateString(row.created_at),
-  };
-}
-
-function parseJsonObject(value: unknown): Record<string, unknown> {
-  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-    } catch {}
-  }
-  return {};
-}
-
-function parseJsonArray(value: unknown): string[] {
-  const parsed = typeof value === "string" ? safeParse(value) : value;
-  return Array.isArray(parsed) ? parsed.map(String) : [];
-}
-
-function safeParse(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return undefined;
-  }
-}
-
-function dateString(value: unknown): string {
-  if (value instanceof Date) return value.toISOString();
-  return String(value);
+/**
+ * One-line, credential-free summary of a connection failure.
+ *
+ * A Postgres URL is a credential and drivers routinely echo the whole DSN back in the
+ * error message. This keeps the class and a short reason - enough to tell "host is
+ * down" from "password rejected" - and drops anything that looks like a URL.
+ */
+function connectionFailureSummary(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/[a-z][a-z0-9+.-]*:\/\/\S*/gi, "<redacted-url>").split("\n")[0]!.slice(0, 200);
 }

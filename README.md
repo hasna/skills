@@ -289,8 +289,49 @@ skills billing status
 
 Self-hosted account, run, log, artifact, and optional billing commands use the
 configured self-hosted API. The public package stores only local configuration
-and CLI credentials. Runtime state belongs in Postgres and artifacts can be
-stored in S3 when `HASNA_SKILLS_S3_BUCKET` is configured.
+and CLI credentials. Artifacts can be stored in S3 when `HASNA_SKILLS_S3_BUCKET`
+is configured.
+
+### Server database
+
+The server supports SQLite and Postgres. The database is an adapter choice, not a
+different product: the schema, the organization scoping, and the run lifecycle are
+identical either way.
+
+```bash
+skills-server                                            # SQLite at ~/.hasna/skills/server.db
+HASNA_SKILLS_DATABASE_URL=/srv/skills/server.db skills-server
+HASNA_SKILLS_DATABASE_URL=postgres://user:pw@host/skills skills-server
+```
+
+| `HASNA_SKILLS_DATABASE_URL` | Backend | Durable |
+| --- | --- | --- |
+| *(unset)* | SQLite at `<data dir>/server.db` | yes |
+| `/path/to.db`, `sqlite:…`, `file:…` | SQLite at that path | yes |
+| `postgres://…`, `postgresql://…` | Postgres | yes |
+| `:memory:` | SQLite, in memory | no |
+| `memory:` | in-process map | no |
+| anything else | startup error naming what is supported | — |
+
+The data directory follows `$HASNA_SKILLS_DIR`, so the database moves with the rest
+of the app's state. The database file sits at the app root, beside `config.json` —
+not inside `installed/`, which holds only the installed skill corpus.
+
+SQLite applies pending migrations when the server opens the database, so a single
+operator needs no separate migrate step. Postgres deployments run migrations
+explicitly, because concurrent auto-migration across several server replicas is not
+something to do implicitly:
+
+```bash
+HASNA_SKILLS_DATABASE_URL=postgres://… skills-migrate
+```
+
+Two things the server will not do. A configured Postgres URL that cannot be reached
+is a startup failure, never a silent fallback to another backend — degrading would
+leave your data split across two stores with no signal. And a store that does not
+survive a restart is refused at startup unless
+`HASNA_SKILLS_ALLOW_EPHEMERAL_STORE=1` says otherwise, so the server can no longer
+report healthy while quietly losing every run.
 
 ## Storage Boundary
 
