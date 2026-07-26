@@ -161,7 +161,7 @@ describe("I5: custom skills gated out of the basic profile", () => {
     const prevHome = process.env["HOME"];
     try {
       process.env["HOME"] = home;
-      const customDir = join(home, ".hasna", "skills", "my-custom-skill");
+      const customDir = join(home, ".hasna", "skills", "installed", "my-custom-skill");
       mkdirSync(customDir, { recursive: true });
       writeFileSync(
         join(customDir, "SKILL.md"),

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { DATA_DIR_ENV, getDataDir } from "./config.js";
+import { DATA_DIR_ENV, INSTALLED_SKILLS_DIRNAME, getDataDir } from "./config.js";
 import { getPortableSkillsRoot } from "./portable-skills.js";
 import { loadRegistry } from "./registry.js";
 import { withTempHome } from "../test-preload.js";
@@ -123,7 +123,7 @@ describe("data directory precedence", () => {
   test("options.homeDir outranks the environment", () => {
     const home = freshRoot();
     try {
-      expect(getPortableSkillsRoot({ homeDir: home })).toBe(join(home, ".hasna", "skills"));
+      expect(getPortableSkillsRoot({ homeDir: home })).toBe(join(home, ".hasna", "skills", "installed"));
     } finally {
       cleanup();
     }
@@ -142,9 +142,11 @@ describe("data directory precedence", () => {
   test("the environment outranks $HOME, and $HOME applies once it is unset", () => {
     const overridden = useAsDataDir();
     try {
-      expect(getPortableSkillsRoot()).toBe(overridden);
+      // The variable names the app folder; the corpus is always <app folder>/installed.
+      expect(getDataDir()).toBe(overridden);
+      expect(getPortableSkillsRoot()).toBe(join(overridden, INSTALLED_SKILLS_DIRNAME));
       const fromHome = withTempHome((home) => {
-        expect(getPortableSkillsRoot()).toBe(join(home, ".hasna", "skills"));
+        expect(getPortableSkillsRoot()).toBe(join(home, ".hasna", "skills", "installed"));
         return home;
       });
       // withTempHome must restore the override rather than leaking the temp home.

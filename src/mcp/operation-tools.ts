@@ -49,7 +49,7 @@ import { getHostedRunAvailability } from "../lib/hosted-availability.js";
 export function registerOperationTools(server: McpServer): void {
   server.registerTool("scaffold_skill", {
     title: "Scaffold Skill",
-    description: "Create a portable skill folder under ~/.hasna/skills/<name> with SKILL.md, skill.json, AGENTS.md, package.json, and src/index.ts.",
+    description: "Create a portable skill folder under ~/.hasna/skills/installed/<name> with SKILL.md, skill.json, AGENTS.md, package.json, and src/index.ts.",
     inputSchema: {
       name: z.string(),
       description: z.string().optional(),
@@ -68,7 +68,7 @@ export function registerOperationTools(server: McpServer): void {
 
   server.registerTool("port_skill", {
     title: "Port Skill",
-    description: "Import an existing skill folder into the portable ~/.hasna/skills/<name> standard and add missing standard files.",
+    description: "Import an existing skill folder into the portable ~/.hasna/skills/installed/<name> standard and add missing standard files.",
     inputSchema: {
       path: z.string(),
       name: z.string().optional(),

@@ -5,17 +5,31 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
-- `HASNA_SKILLS_DIR` now relocates the **whole** data directory. It previously
-  moved only the portable-skills tree, because `getPortableSkillsRoot()` honoured
-  it while `getDataDir()` ignored it — so `skills new` wrote to the override while
-  `skills list` and `config.json` kept reading `$HOME`. Two paths move that did
-  not before: the global config file (`config.json`) and the feedback database
-  (`skills.db`). Anyone who set the variable to relocate their skills tree will
-  see `skills config list` report defaults until they copy `config.json` across;
-  `skills config path` prints the file actually in use. Auth (`auth.json`) still
-  resolves from `$HOME` at startup and is unchanged.
+- **`~/.hasna/skills/` is now the skills app folder and installed skills live in
+  `~/.hasna/skills/installed/<name>/`.** App data (`config.json`, `skills.db`,
+  `auth.json`) stays at the app root. This matches every sibling Hasna app —
+  `mementos` keeps `agents/` beside `config.json`, `accounts` keeps `profiles/`,
+  `knowledge` keeps `artifacts/` — and skills was the only one writing content
+  into its own root.
+- Skills from both older layouts (`~/.hasna/skills/<name>/` and the legacy
+  `~/.hasna/skills/custom/<name>/`) are folded into `installed/` automatically the
+  first time the corpus is resolved. The migration **copies and never deletes**,
+  never overwrites an entry already under `installed/`, and leaves any directory
+  carrying none of a skill's identifying files (`SKILL.md`, `skill.json`,
+  `package.json`) exactly where it is.
+- `HASNA_SKILLS_DIR` relocates the whole app folder; the corpus is always
+  `<app folder>/installed`. It previously moved only the skills tree, because
+  `getPortableSkillsRoot()` honoured it while `getDataDir()` ignored it — so
+  `skills new` wrote to the override while `skills list` and `config.json` kept
+  reading `$HOME`. Auth (`auth.json`) still resolves from `$HOME` at startup.
 
 ### Fixed
+- **A skill may now be named `config`, `custom`, `auth`, or `installed`.** Those
+  names were previously excluded outright by a denylist that existed only because
+  the corpus shared the app root with app data. The denylist is deleted.
+- Directories that are not skills are no longer listed as skills. Run output such
+  as `~/.hasna/skills/deepresearch/{exports,logs}` was being read as a custom
+  skill and shadowing the bundled `deepresearch` entry.
 - `skills list`, `search`, and `info` no longer exit 1 with `ENOTDIR` when
   `HASNA_SKILLS_DIR` names a file rather than a directory.
 - `getDataDir()` no longer throws when the configured data directory cannot be
@@ -23,6 +37,8 @@ All notable changes to this project will be documented in this file.
   degrade to "no custom skills" instead of failing.
 - `skills storage` reported a feedback-database path that differed from the one
   actually written when the data directory was relocated.
+- `skills create` wrote to the legacy `custom/` folder and ignored
+  `HASNA_SKILLS_DIR`; it now writes to the resolved corpus.
 - The registry's 5s cache is keyed on the resolved data directory, so changing
   `HASNA_SKILLS_DIR` or `$HOME` no longer serves entries from the previous root.
 

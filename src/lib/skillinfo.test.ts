@@ -11,6 +11,7 @@ import {
   generateSkillMd,
   detectProjectSkills,
 } from "./skillinfo";
+import { INSTALLED_SKILLS_DIRNAME } from "./config";
 import { installSkill } from "./installer";
 
 let testDir: string;
@@ -145,7 +146,10 @@ describe("skillinfo", () => {
     });
 
     function scaffold(name: string, deps: Record<string, string>): string {
-      const dir = join(skillsRoot, name);
+      // Written into the corpus, not the app root: placing it at the root would
+      // make this test depend on the layout migration copying it - including its
+      // node_modules fixture - on every resolution.
+      const dir = join(skillsRoot, INSTALLED_SKILLS_DIRNAME, name);
       mkdirSync(dir, { recursive: true });
       writeFileSync(
         join(dir, "package.json"),

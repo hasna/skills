@@ -112,8 +112,9 @@ function registryRootKey(): string {
 }
 
 /**
- * Load the full registry: official skills merged with global custom skills
- * from ~/.hasna/skills/<name>/ and the legacy ~/.hasna/skills/custom/<name>/ path.
+ * Load the full registry: official skills merged with global custom skills from
+ * ~/.hasna/skills/installed/<name>/ and the legacy ~/.hasna/skills/custom/<name>/
+ * path that migration folds into it.
  *
  * Custom skills with the same name as official skills take precedence.
  * Results are cached for 5 seconds.
@@ -131,7 +132,14 @@ export function loadRegistry(cwd?: string): SkillMeta[] {
 
   const dataDir = getDataDir();
   const official = SKILLS.map((s) => ({ ...s, source: "official" as const }));
-  const portableCustom = listPortableSkillMetas({ rootDir: dataDir });
+  // No rootDir: let getPortableSkillsRoot() resolve <dataDir>/installed and run
+  // the layout migration. Passing the app folder as rootDir would read app data
+  // as if it were the corpus.
+  const portableCustom = listPortableSkillMetas();
+  // Kept as a safety net, not as a second home: migration copies custom/<name>
+  // into installed/, but if it ever fails (unreadable, out of space) those skills
+  // must still be discoverable. mergeCustomSkills() dedupes by name and the
+  // installed/ copy is merged last, so it wins.
   const legacyCustom = discoverSkillsInDir(join(dataDir, "custom"));
   const globalCustom = mergeCustomSkills([...legacyCustom, ...portableCustom]);
 

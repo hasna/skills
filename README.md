@@ -109,7 +109,7 @@ requirements explicitly document local provider use.
 | `skills export` | | Export pinned skills as JSON |
 | `skills import <file>` | | Pin skills from a JSON export |
 | `skills config set <key> <value>` | | Set default agent, scope, or output format |
-| `skills new <name>` | `scaffold` | Scaffold a portable skill under `~/.hasna/skills/<name>` |
+| `skills new <name>` | `scaffold` | Scaffold a portable skill under `~/.hasna/skills/installed/<name>` |
 | `skills port <path>` | `add` | Import an existing skill folder into the portable standard |
 | `skills create <name>` | | Scaffold a new custom skill directory |
 | `skills sync --to claude` | | Disabled by design; use `skills mcp --register <agent|all>` |
@@ -214,7 +214,7 @@ For the reusable upstream contract, see
 
 ## Portable Skills
 
-Portable skills live directly under `~/.hasna/skills/<name>/` and follow the
+Portable skills live under `~/.hasna/skills/installed/<name>/` and follow the
 standard documented in `docs/skill-standard.md`.
 
 ```bash
@@ -382,29 +382,55 @@ bun run typecheck          # TypeScript type checking
 Premium self-hosted skills should add public contracts, pricing, docs, and tests
 without adding provider secrets to the OSS package.
 
-Portable skill directories are auto-discovered from `~/.hasna/skills/<name>/`.
-Legacy custom skill directories are still discovered from
-`~/.hasna/skills/custom/`.
+Portable skill directories are auto-discovered from
+`~/.hasna/skills/installed/<name>/`. Skills found in either older location -
+`~/.hasna/skills/<name>/` or `~/.hasna/skills/custom/<name>/` - are copied into
+`installed/` on first use; the originals are left in place.
 Project `.skills/` is reserved for runtime state and outputs.
 
 ## Data Directory
 
-Global configuration is stored in `~/.hasna/skills/`. Auth is stored in
-`~/.hasna/skills/auth.json`. Project runtime data is stored in `.skills/runs`,
-`.skills/exports`, `.skills/tmp`, and optional `.skills/project.json`.
+`~/.hasna/skills/` is the skills **app folder**. App data sits at its root and
+the installed skill corpus lives in a named subfolder, matching every sibling
+Hasna app (`mementos` has `agents/`, `accounts` has `profiles/`, `knowledge` has
+`artifacts/`):
 
-Set `HASNA_SKILLS_DIR` to relocate the data directory. It replaces
-`~/.hasna/skills` entirely — portable skills, `config.json`, and the feedback
-database all move with it, and the legacy `~/.skills` migration is skipped.
-Config written under the default location is *not* read back when the variable is
-set; `skills config path` reports the file actually in use.
+```
+~/.hasna/skills/                    app folder
+~/.hasna/skills/installed/<name>/   the corpus, one folder per skill
+~/.hasna/skills/config.json         app data
+~/.hasna/skills/skills.db
+~/.hasna/skills/auth.json
+```
 
-| Path | Default | Follows `HASNA_SKILLS_DIR` |
+Because the corpus has its own folder, a skill may be named `config`, `custom`, or
+anything else without colliding with app data.
+
+Project runtime data stays in `.skills/runs`, `.skills/exports`, `.skills/tmp`,
+and optional `.skills/project.json`.
+
+Set `HASNA_SKILLS_DIR` to relocate the **app folder**. Everything moves together
+— the corpus is always `<app folder>/installed` — so there is one variable and one
+coherent relocation. The legacy `~/.skills` migration is skipped for an
+overridden folder. `skills config path` reports the config file actually in use.
+
+| Path | Location | Moves with `HASNA_SKILLS_DIR` |
 |---|---|---|
-| Portable skills | `~/.hasna/skills/<name>/` | yes |
-| Global config | `~/.hasna/skills/config.json` | yes |
-| Feedback database | `~/.hasna/skills/skills.db` | yes |
+| Installed skills | `<app folder>/installed/<name>/` | yes |
+| Global config | `<app folder>/config.json` | yes |
+| Feedback database | `<app folder>/skills.db` | yes |
 | Auth | `~/.hasna/skills/auth.json` | no (resolved at startup) |
+
+### Migrating from the older layout
+
+Skills used to be written straight into the app root, and before that into
+`custom/`. Both are folded into `installed/` automatically the first time the
+corpus is resolved. The migration **copies and never deletes**, skips anything
+already present under `installed/`, and leaves behind any directory that carries
+none of a skill's identifying files (`SKILL.md`, `skill.json`, `package.json`) —
+so run output and app data are not swept into the corpus. Once you have confirmed
+`skills list --all` shows what you expect, the old directories can be removed by
+hand.
 
 ## License
 

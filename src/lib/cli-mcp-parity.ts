@@ -39,7 +39,7 @@ export const SKILLS_CLI_MCP_PARITY: SkillsCliMcpParityEntry[] = [
     mcpTools: ["list_skills"],
     jsonContracts: ["public_skill_discovery"],
     status: "matched",
-    notes: "Portable skills under ~/.hasna/skills/<name> are merged into the custom registry.",
+    notes: "Portable skills under ~/.hasna/skills/installed/<name> are merged into the custom registry.",
   },
   {
     domain: "portable-skills",

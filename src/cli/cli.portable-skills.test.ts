@@ -26,7 +26,7 @@ describe("CLI portable skills", () => {
         name: "my-skill",
         created: true,
       });
-      expect(createdData.path).toBe(join(home, ".hasna", "skills", "my-skill"));
+      expect(createdData.path).toBe(join(home, ".hasna", "skills", "installed", "my-skill"));
       expect(existsSync(join(createdData.path, "AGENTS.md"))).toBe(true);
 
       // Custom skills are gated out of the default (basic) profile (I5) but remain
@@ -143,7 +143,7 @@ version: 0.2.0
       const data = JSON.parse(created.stdout);
       expect(data.name).toBe("prose-skill");
       expect(data.manifest.kind).toBe("instruction");
-      const skillDir = join(home, ".hasna", "skills", "prose-skill");
+      const skillDir = join(home, ".hasna", "skills", "installed", "prose-skill");
       expect(existsSync(join(skillDir, "SKILL.md"))).toBe(true);
       expect(existsSync(join(skillDir, "skill.json"))).toBe(true);
       expect(existsSync(join(skillDir, "package.json"))).toBe(false);
@@ -182,10 +182,11 @@ version: 0.2.0
     }
   });
 
-  test("HASNA_SKILLS_DIR relocates the skills root the CLI reads and writes", async () => {
-    // The override is a real product feature, not just test scaffolding: before
-    // this change getDataDir() ignored it, so `skills new` wrote to the override
-    // while `skills list --all` kept reading $HOME and never saw the result.
+  test("HASNA_SKILLS_DIR relocates the whole app folder, corpus included", async () => {
+    // One variable, one coherent relocation: it names the app folder, and the
+    // corpus is always <app folder>/installed. Before this change getDataDir()
+    // ignored it, so `skills new` wrote to the override while `skills list --all`
+    // kept reading $HOME and never saw the result.
     const home = mkdtempSync(join(tmpdir(), "cli-override-home-"));
     const root = mkdtempSync(join(tmpdir(), "cli-override-root-"));
     const cwd = mkdtempSync(join(tmpdir(), "cli-override-cwd-"));
@@ -193,8 +194,8 @@ version: 0.2.0
       const env = { HOME: home, HASNA_SKILLS_DIR: root };
       const created = await runCliInCwd(["new", "override-skill", "--json"], cwd, env);
       expect(created.exitCode).toBe(0);
-      expect(JSON.parse(created.stdout).path).toBe(join(root, "override-skill"));
-      expect(existsSync(join(home, ".hasna", "skills", "override-skill"))).toBe(false);
+      expect(JSON.parse(created.stdout).path).toBe(join(root, "installed", "override-skill"));
+      expect(existsSync(join(home, ".hasna", "skills", "installed", "override-skill"))).toBe(false);
 
       const listed = await runCliInCwd(["list", "--all", "--json"], cwd, env);
       expect(listed.exitCode).toBe(0);
@@ -229,8 +230,8 @@ version: 0.2.0
       expect(summary.skipped.some((e: any) => e.sourcePath.endsWith("junk"))).toBe(true);
       // Non-zero exit because there was a skip.
       expect(bulk.exitCode).toBe(1);
-      expect(existsSync(join(home, ".hasna", "skills", "one", "SKILL.md"))).toBe(true);
-      expect(existsSync(join(home, ".hasna", "skills", "two", "SKILL.md"))).toBe(true);
+      expect(existsSync(join(home, ".hasna", "skills", "installed", "one", "SKILL.md"))).toBe(true);
+      expect(existsSync(join(home, ".hasna", "skills", "installed", "two", "SKILL.md"))).toBe(true);
     } finally {
       rmSync(home, { recursive: true, force: true });
       rmSync(cwd, { recursive: true, force: true });

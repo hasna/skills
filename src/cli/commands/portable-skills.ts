@@ -19,7 +19,7 @@ export function registerPortableSkillCommands(parent: Command) {
     .option("--kind <kind>", "Skill class: executable (default) or instruction (prose only)", "executable")
     .option("-o, --overwrite", "Replace an existing portable skill folder", false)
     .option("--json", "Output result as JSON", false)
-    .description("Scaffold a portable skill under ~/.hasna/skills/<name>")
+    .description("Scaffold a portable skill under ~/.hasna/skills/installed/<name>")
     .action((name: string, options: { description?: string; kind: string; overwrite: boolean; json: boolean }) => {
       try {
         const kind = parseSkillKind(options.kind);
@@ -57,7 +57,7 @@ export function registerPortableSkillCommands(parent: Command) {
     .option("-o, --overwrite", "Replace an existing portable skill folder", false)
     .option("--allow-shadow", "Allow an imported name that shadows a bundled official skill", false)
     .option("--json", "Output result as JSON", false)
-    .description("Import an existing skill folder into ~/.hasna/skills/<name>")
+    .description("Import an existing skill folder into ~/.hasna/skills/installed/<name>")
     .action((path: string, options: { name?: string; all: boolean; overwrite: boolean; allowShadow: boolean; json: boolean }) => {
       if (options.all) {
         handleBulkPort(path, options);

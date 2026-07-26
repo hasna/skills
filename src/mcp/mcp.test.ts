@@ -209,7 +209,7 @@ describe("MCP Server", () => {
       expect(scaffoldResponse).not.toBeNull();
       const scaffolded = JSON.parse(scaffoldResponse.result.content[0].text);
       expect(scaffolded).toMatchObject({ name: "mcp-skill", created: true });
-      expect(existsSync(join(home, ".hasna", "skills", "mcp-skill", "AGENTS.md"))).toBe(true);
+      expect(existsSync(join(home, ".hasna", "skills", "installed", "mcp-skill", "AGENTS.md"))).toBe(true);
 
       const infoResponse = await client.request("tools/call", {
         name: "get_skill_info",
@@ -276,7 +276,7 @@ version: 0.3.0
         name: "ported-mcp",
         created: true,
       });
-      expect(existsSync(join(home, ".hasna", "skills", "ported-mcp", "skill.json"))).toBe(true);
+      expect(existsSync(join(home, ".hasna", "skills", "installed", "ported-mcp", "skill.json"))).toBe(true);
     } finally {
       await client.close();
       rmSync(sourceRoot, { recursive: true, force: true });

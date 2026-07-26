@@ -103,6 +103,22 @@ export type ConfigScope = "global" | "project";
 export const DATA_DIR_ENV = "HASNA_SKILLS_DIR";
 
 /**
+ * Subfolder of the data directory holding the installed skill corpus.
+ *
+ * ~/.hasna/skills is the skills *app* folder, matching every sibling Hasna app:
+ * mementos keeps agents/ beside config.json and mementos.db, accounts keeps
+ * profiles/ beside accounts.json, knowledge keeps artifacts/ and cache/ beside
+ * auth.json. Each puts app data at the app root and content in a named subfolder.
+ *
+ * Skills used to be the exception, writing one folder per skill straight into the
+ * app root next to config.json and skills.db. That is the only reason a denylist
+ * of "entries that look like skills but aren't" ever had to exist; no sibling app
+ * needs one. With the corpus under installed/, a skill may be named `config` or
+ * `custom` without colliding with anything.
+ */
+export const INSTALLED_SKILLS_DIRNAME = "installed";
+
+/**
  * Get the data directory for skills global config/data.
  * Default: ~/.hasna/skills/, overridable with $HASNA_SKILLS_DIR.
  * Auto-migrates from ~/.skills/ and ~/.skillsrc without deleting legacy data.
