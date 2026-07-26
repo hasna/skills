@@ -52,10 +52,7 @@ jobs:
       - name: Test
         run: bun run test
       # The release guard is the only gate that runs at publish time. Running it
-      # in CI too means a boundary violation — a retired cloud marker, a secret,
-      # PII, private context, committed tool output — fails the PR rather than
-      # the release. This branch added a separate "Content scan" step for the
-      # same reason; it invoked the identical command, so it is dropped in
-      # favour of this one rather than run twice.
+      # in CI too means a boundary violation fails the PR rather than the
+      # release.
       - name: Release guard
         run: bun run verify:release
