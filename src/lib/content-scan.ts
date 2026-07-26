@@ -2,12 +2,21 @@
  * content-scan.ts — scans skill BODIES (not just package.json/README) for content
  * that must never ship in the public @hasna/skills package.
  *
- * Three finding categories:
+ * Finding categories:
  *   - secret-value:     credential-shaped values (API keys, tokens, private keys)
  *   - pii-contact:      personal contact PII (E.164 phone numbers)
  *   - private-context:  internal/operational context that leaks the private fleet
  *                       (fleet hostnames, home-directory paths with a real user,
  *                       internal CLI invocations, internal infra/product names)
+ *   - committed-output: operational tool output committed into the package — a
+ *                       run artifact (timestamped filename, data file under an
+ *                       exports/ directory) rather than an authored fixture
+ *
+ * The first three categories are matched against file CONTENT (see {@link scanText}).
+ * `committed-output` is matched against the package-relative PATH instead (see
+ * {@link scanPaths}), because what makes an artifact wrong is where it came from,
+ * not what is inside it — a scraped catalog and a hand-written fixture can be
+ * byte-identical in shape.
  *
  * All output is REDACTED: secret values are never emitted, phone numbers are masked
  * to their country code, and only the rule id + a safe redacted marker are reported.
@@ -15,7 +24,7 @@
 
 import { readFileSync } from "node:fs";
 
-export type ScanCategory = "secret-value" | "pii-contact" | "private-context";
+export type ScanCategory = "secret-value" | "pii-contact" | "private-context" | "committed-output";
 
 export interface ScanRule {
   category: ScanCategory;
@@ -111,6 +120,116 @@ export const SCAN_RULES: ScanRule[] = [
   ...PII_RULES,
   ...PRIVATE_CONTEXT_RULES,
 ];
+
+/** A rule matched against a package-relative path rather than file content. */
+export interface ScanPathRule {
+  category: ScanCategory;
+  id: string;
+  description: string;
+  pattern: RegExp;
+  /** Optional predicate to drop known-safe paths (e.g. source trees). */
+  isExample?: (path: string) => boolean;
+}
+
+/**
+ * Extensions that carry DATA. Source code that happens to live in a directory
+ * called `output/` is not a committed artifact, so the directory rule below only
+ * fires on a data file.
+ */
+const DATA_FILE_EXTENSIONS = [
+  "csv",
+  "tsv",
+  "json",
+  "jsonl",
+  "ndjson",
+  "sql",
+  "log",
+  "har",
+  "xlsx",
+  "xls",
+  "parquet",
+  "db",
+  "sqlite",
+  "sqlite3",
+  "dump",
+];
+
+/** Directory names that conventionally hold the OUTPUT of a run. */
+const ARTIFACT_DIRECTORIES = [
+  "exports",
+  "export",
+  "outputs",
+  "output",
+  "runs",
+  "results",
+  "dumps",
+  "artifacts",
+  "snapshots",
+];
+
+/**
+ * Operational output committed into the published package.
+ *
+ * Both rules are deliberately narrow, because a guard that cries wolf gets
+ * disabled. Measured against the real packed file list, each matches the known
+ * offenders and nothing else:
+ *
+ *   timestamped-artifact-filename — an ISO date-TIME in a filename is close to
+ *     proof of a tool run; authored source files are not named after the second
+ *     they were created. A bare 8-digit date or an epoch-millisecond number is
+ *     deliberately NOT matched: those are indistinguishable from migration
+ *     prefixes and ordinary ids.
+ *
+ *   committed-artifact-directory — a DATA file under exports/, output/, runs/…
+ *     Source trees are exempt so that a legitimate `src/output/` module of code
+ *     is not flagged.
+ */
+const PATH_RULES: ScanPathRule[] = [
+  {
+    id: "timestamped-artifact-filename",
+    category: "committed-output",
+    description: "Package file whose name carries a run timestamp (tool output, not a fixture)",
+    pattern: /(?:^|\/)[^/]*\d{4}-\d{2}-\d{2}T\d{2}[-:]\d{2}[-:]\d{2}[^/]*$/,
+  },
+  {
+    id: "committed-artifact-directory",
+    category: "committed-output",
+    description: "Data file committed under an artifact/output directory",
+    pattern: new RegExp(
+      `(?:^|/)(?:${ARTIFACT_DIRECTORIES.join("|")})/[^/]+\\.(?:${DATA_FILE_EXTENSIONS.join("|")})$`,
+      "i",
+    ),
+    isExample: (path) => /(?:^|\/)src\//.test(path),
+  },
+];
+
+/**
+ * Scan package-relative PATHS for committed tool output. Unlike the content
+ * scanners this reads nothing from disk — the path itself is the evidence. The
+ * reported marker is the path verbatim: it is not sensitive, and the maintainer
+ * needs it in order to delete the file.
+ */
+export function scanPaths(paths: string[]): ScanFinding[] {
+  const findings: ScanFinding[] = [];
+
+  for (const path of paths) {
+    for (const rule of PATH_RULES) {
+      if (!rule.pattern.test(path)) continue;
+      if (rule.isExample?.(path)) continue;
+      findings.push({
+        file: path,
+        // 0/0 denotes "the whole file", not a position within it.
+        line: 0,
+        column: 0,
+        category: rule.category,
+        ruleId: rule.id,
+        redacted: path,
+      });
+    }
+  }
+
+  return findings.sort((a, b) => a.file.localeCompare(b.file) || a.ruleId.localeCompare(b.ruleId));
+}
 
 /**
  * Produce a redacted marker for a matched value. Secret values are NEVER emitted;

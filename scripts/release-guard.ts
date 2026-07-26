@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { applyAllowlist, scanFiles, toRedactedJson, type ScanAllowlistEntry, type ScanFinding } from "../src/lib/content-scan.js";
+import { applyAllowlist, scanFiles, scanPaths, toRedactedJson, type ScanAllowlistEntry, type ScanFinding } from "../src/lib/content-scan.js";
 import { getPackedFiles } from "../src/lib/packlist.js";
 import { findPrivatePacklistLeaks, listPrivateSkillSlugs } from "../src/lib/public-boundary.js";
 import {
@@ -204,6 +204,22 @@ if (hostedSourceLeaks.length > 0) {
   process.exit(1);
 }
 
+// S4 — committed tool output: a run artifact (timestamped filename, data file under
+// an exports/ directory) must never be published. Matched on the packed PATHS, since
+// what makes an artifact wrong is its provenance, not its contents. Built output
+// under dist/ and bin/ is exempt — it is produced by the build, not committed.
+const artifactFindings = scanPaths(
+  packedFiles.filter((path) => !path.startsWith("dist/") && !path.startsWith("bin/")),
+);
+if (artifactFindings.length > 0) {
+  console.error("Release guard failed: committed tool output would be published.");
+  console.error(toRedactedJson(artifactFindings));
+  console.error("  These look like the output of an actual run rather than authored fixtures.");
+  console.error("  Delete them and gitignore the directory, or replace them with a small");
+  console.error("  synthetic fixture under a stable, non-timestamped filename.");
+  process.exit(1);
+}
+
 // S2 — content scan of package-visible bodies (skip built artifacts under dist/ and bin/).
 const scannablePacked = packedFiles.filter((path) => !path.startsWith("dist/") && !path.startsWith("bin/"));
 const absoluteScanTargets = scannablePacked
@@ -234,5 +250,6 @@ if (scanFindings.length > 0) {
 
 console.log(
   `Release guard passed: ${packedFiles.length} package-visible files are free of retired cloud markers, ` +
-    "secrets, PII, private context, private-skill leaks, and hosted implementation source.",
+    "secrets, PII, private context, private-skill leaks, hosted implementation source, " +
+    "and committed tool output.",
 );
