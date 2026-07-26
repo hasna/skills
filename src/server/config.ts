@@ -9,6 +9,15 @@ export interface SkillsServerConfig {
   requestBodyLimitBytes: number;
   publicBaseUrl: string;
   nodeEnv: string;
+  /**
+   * Allow starting on a store that declares itself non-durable.
+   *
+   * Off by default, because "started fine, lost everything on restart" is the failure
+   * this whole change exists to remove. Tests and throwaway demos that genuinely want
+   * an in-process store set HASNA_SKILLS_ALLOW_EPHEMERAL_STORE=1 and own the
+   * consequence; nobody gets there by forgetting to configure a database.
+   */
+  allowEphemeralStore: boolean;
 }
 
 export function resolveServerConfig(env: Record<string, string | undefined> = process.env): SkillsServerConfig {
@@ -28,6 +37,7 @@ export function resolveServerConfig(env: Record<string, string | undefined> = pr
     // configured or its own bound address. It never names someone else's host.
     publicBaseUrl: (env.SKILLS_PUBLIC_BASE_URL || localOrigin(host, port)).replace(/\/+$/, ""),
     nodeEnv,
+    allowEphemeralStore: env.HASNA_SKILLS_ALLOW_EPHEMERAL_STORE === "1",
   };
 }
 

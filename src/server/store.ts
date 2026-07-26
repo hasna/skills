@@ -6,10 +6,13 @@ import type {
   ServerArtifact,
   ServerRunLog,
   ServerRunRecord,
-  ServerRunStatus,
   SkillsProductStore,
+  StoreBackendInfo,
 } from "./types.js";
 import { hashApiKey, publicPrincipal } from "./auth.js";
+import { resolveDatabaseTarget, type DatabaseTarget } from "./database-url.js";
+import { artifactId, nowIso, normalizeLimit, rowToArtifact, rowToLog, rowToRun, parseJsonArray, runId } from "./rows.js";
+import { SqliteSkillsStore, type SqliteStoreOptions } from "./sqlite-store.js";
 
 type SqlTag = {
   (strings: TemplateStringsArray, ...values: unknown[]): Promise<Record<string, unknown>[]>;
@@ -22,17 +25,12 @@ function resolvePoolMax(env: Record<string, string | undefined> = process.env): 
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 4;
 }
 
-function nowIso(): string {
-  return new Date().toISOString();
-}
-
-function runId(): string {
-  return `run_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`;
-}
-
-function artifactId(): string {
-  return `art_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
-}
+/**
+ * Bounded retries for a log sequence lost to a concurrent writer. Generous, because each
+ * retry only loses when another writer wins, and a run producing many simultaneous log
+ * lines is exactly when losing one matters least and dropping the run matters most.
+ */
+const LOG_SEQUENCE_ATTEMPTS = 12;
 
 export function createArtifactId(): string {
   return artifactId();
@@ -41,19 +39,47 @@ export function createArtifactId(): string {
 export interface StoreOptions {
   databaseUrl?: string;
   bootstrapApiKey?: string;
+  /** SQLite tuning, forwarded when the resolved target is SQLite. */
+  sqlite?: SqliteStoreOptions;
 }
 
+/**
+ * Build the store an operator's configuration asks for.
+ *
+ * The old body was `options.databaseUrl ? Postgres : Memory`, which meant that the
+ * single most common way to start this server - run it with nothing set - produced a
+ * process that looked healthy and forgot everything on restart. There is no longer any
+ * input that yields a non-durable store by accident:
+ *
+ *   - a postgres:// URL         -> Postgres, and a failure to reach it is fatal here
+ *   - a sqlite path / file: URL -> SQLite at that path, migrated on open
+ *   - nothing at all            -> SQLite at ~/.hasna/skills/server.db, migrated on open
+ *   - "memory:" or ":memory:"   -> non-durable, and only because it was named
+ *   - anything else             -> throws, naming what is supported
+ */
 export async function createStore(options: StoreOptions = {}): Promise<SkillsProductStore> {
-  const store: SkillsProductStore = options.databaseUrl
-    ? new PostgresSkillsStore(options.databaseUrl)
-    : new MemorySkillsStore();
+  const target = resolveDatabaseTarget(options.databaseUrl);
+  const store = instantiateStore(target, options.sqlite);
+  await store.verifyConnectivity?.();
   if (options.bootstrapApiKey && store.ensureBootstrapApiKey) {
     await store.ensureBootstrapApiKey(options.bootstrapApiKey);
   }
   return store;
 }
 
+function instantiateStore(target: DatabaseTarget, sqliteOptions?: SqliteStoreOptions): SkillsProductStore {
+  switch (target.kind) {
+    case "postgres":
+      return new PostgresSkillsStore(target.url);
+    case "sqlite":
+      return new SqliteSkillsStore(target.path, sqliteOptions);
+    case "memory":
+      return new MemorySkillsStore();
+  }
+}
+
 export class MemorySkillsStore implements SkillsProductStore {
+  readonly backend: StoreBackendInfo = { kind: "memory", durable: false, label: "memory (non-durable)" };
   private apiKeys = new Map<string, ApiPrincipal>();
   private runs = new Map<string, ServerRunRecord>();
   private logs = new Map<string, ServerRunLog[]>();
@@ -111,7 +137,10 @@ export class MemorySkillsStore implements SkillsProductStore {
     return Array.from(this.runs.values())
       .filter((run) => run.orgId === principal.orgId)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .slice(0, limit);
+      // Normalised like the SQL backends: Array#slice reads a negative end as an offset
+      // from the tail, so `slice(0, -1)` silently dropped the newest run instead of
+      // returning nothing.
+      .slice(0, normalizeLimit(limit));
   }
 
   async getRun(principal: ApiPrincipal, runId: string): Promise<ServerRunRecord | null> {
@@ -119,12 +148,23 @@ export class MemorySkillsStore implements SkillsProductStore {
     return run && run.orgId === principal.orgId ? run : null;
   }
 
-  async claimNextRun(input: ClaimRunInput): Promise<ServerRunRecord | null> {
+  /**
+   * Exclusive only by accident: nothing here takes a lock, and it is safe purely
+   * because the read and the write happen in one synchronous turn of a single event
+   * loop. That is not a claiming strategy, it is a property of there being exactly one
+   * process and one Map. It is left as-is because this store is now explicitly
+   * non-durable and test-only - the durable backends implement claiming properly
+   * (Postgres via FOR UPDATE SKIP LOCKED, SQLite via BEGIN IMMEDIATE plus a conditional
+   * claim by id). Do not use this as the model for a new backend.
+   *
+   * startedAt is preserved on re-claim to match both durable backends' COALESCE.
+   */
+  async claimNextRun(_input: ClaimRunInput): Promise<ServerRunRecord | null> {
     const run = Array.from(this.runs.values())
       .filter((candidate) => candidate.status === "queued" || candidate.status === "retrying")
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
     if (!run) return null;
-    return this.patchRun(run.id, { status: "running", startedAt: nowIso() });
+    return this.patchRun(run.id, { status: "running", startedAt: run.startedAt ?? nowIso() });
   }
 
   async updateRun(runId: string, patch: Partial<Pick<ServerRunRecord, "status" | "outputType" | "outputPreview" | "errorCode" | "errorMessage" | "startedAt" | "completedAt">>): Promise<ServerRunRecord | null> {
@@ -172,11 +212,55 @@ export class MemorySkillsStore implements SkillsProductStore {
 }
 
 export class PostgresSkillsStore implements SkillsProductStore {
+  readonly backend: StoreBackendInfo = { kind: "postgres", durable: true, label: "postgres" };
   private sql: SqlTag;
 
   constructor(databaseUrl: string) {
     const bunWithSql = Bun as unknown as { SQL: new (url: string, options?: { max?: number }) => SqlTag };
     this.sql = new bunWithSql.SQL(databaseUrl, { max: resolvePoolMax() });
+  }
+
+  /**
+   * Bun's SQL client connects lazily, so constructing this store proves nothing about
+   * the database being there. Without an explicit probe, a wrong host or a down
+   * instance produced a server that started, answered /health with ok:true, and 500ed
+   * on the first API call.
+   *
+   * The error deliberately carries no URL: a Postgres URL is a credential, the driver's
+   * own messages sometimes echo it, and this string ends up in logs.
+   */
+  async verifyConnectivity(): Promise<void> {
+    try {
+      await this.sql`SELECT 1`;
+    } catch (error) {
+      throw new Error(
+        "cannot reach the configured Postgres database. The server will not start with an unreachable " +
+          "database rather than fall back to another backend and silently split your data across two stores. " +
+          `Check HASNA_SKILLS_DATABASE_URL and that the instance is accepting connections. Driver reported: ${connectionFailureSummary(error)}`,
+      );
+    }
+
+    // Reachable is not the same as usable, and `SELECT 1` only proves the former.
+    //
+    // SQLite migrates itself when the store opens it; Postgres does not, because
+    // several replicas auto-migrating a shared database concurrently is not something
+    // to do implicitly. That asymmetry means a Postgres deployment can be pointed at an
+    // empty database, and without this check it produced exactly the symptom the block
+    // above exists to prevent: /health answering ok:true and the first API call
+    // returning 500 `relation "api_keys" does not exist`.
+    try {
+      await this.sql`SELECT 1 FROM api_keys LIMIT 0`;
+    } catch (error) {
+      throw new Error(
+        "the configured Postgres database is reachable but has no skills schema. Run `skills-migrate` against it " +
+          "before starting the server - unlike SQLite, Postgres is not migrated automatically, so that several " +
+          `replicas cannot race to migrate a shared database. Driver reported: ${connectionFailureSummary(error)}`,
+      );
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.sql.close?.();
   }
 
   async ensureBootstrapApiKey(token: string, principal?: Partial<ApiPrincipal>): Promise<void> {
@@ -250,7 +334,7 @@ export class PostgresSkillsStore implements SkillsProductStore {
   async listRuns(principal: ApiPrincipal, limit: number): Promise<ServerRunRecord[]> {
     const rows = await this.sql`
       SELECT * FROM skills_runs WHERE org_id = ${principal.orgId}
-      ORDER BY created_at DESC LIMIT ${limit}
+      ORDER BY created_at DESC LIMIT ${normalizeLimit(limit)}
     `;
     return rows.map(rowToRun);
   }
@@ -297,15 +381,42 @@ export class PostgresSkillsStore implements SkillsProductStore {
     return rows[0] ? rowToRun(rows[0]) : null;
   }
 
+  /**
+   * Append a log line, retrying when another writer took the sequence number first.
+   *
+   * This was `SELECT MAX(sequence)+1` and then a separate `INSERT`, with an await in
+   * between. Measured with five concurrent appendLog calls on one run: one succeeded and
+   * four threw `duplicate key value violates unique constraint`, which executeRun's catch
+   * turns into a failed run - a skill killed by its own logging.
+   *
+   * Folding the MAX into the INSERT helps but does not fix it: under READ COMMITTED each
+   * statement takes its own snapshot, so concurrent inserts still compute the same MAX
+   * (measured: 2 of 5 succeeded). SQLite has one writer and needs no retry; Postgres does,
+   * so the loop lives here rather than in shared code. Bounded, and only ever retried for
+   * a uniqueness conflict - any other error propagates on the first attempt.
+   */
   async appendLog(runId: string, orgId: string, level: ServerRunLog["level"], message: string): Promise<ServerRunLog> {
-    const seqRows = await this.sql`SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM skills_run_logs WHERE run_id = ${runId}`;
-    const sequence = Number(seqRows[0]?.next_sequence ?? 1);
-    const rows = await this.sql`
-      INSERT INTO skills_run_logs (run_id, org_id, sequence, level, message)
-      VALUES (${runId}, ${orgId}, ${sequence}, ${level}, ${message})
-      RETURNING *
-    `;
-    return rowToLog(rows[0]);
+    let lastError: unknown;
+    for (let attempt = 0; attempt < LOG_SEQUENCE_ATTEMPTS; attempt += 1) {
+      try {
+        const rows = await this.sql`
+          INSERT INTO skills_run_logs (run_id, org_id, sequence, level, message)
+          VALUES (
+            ${runId},
+            ${orgId},
+            (SELECT COALESCE(MAX(sequence), 0) + 1 FROM skills_run_logs WHERE run_id = ${runId}),
+            ${level},
+            ${message}
+          )
+          RETURNING *
+        `;
+        return rowToLog(rows[0]);
+      } catch (error) {
+        if (!isUniqueViolation(error)) throw error;
+        lastError = error;
+      }
+    }
+    throw lastError;
   }
 
   async listLogs(principal: ApiPrincipal, runId: string): Promise<ServerRunLog[]> {
@@ -348,81 +459,22 @@ export class PostgresSkillsStore implements SkillsProductStore {
   }
 }
 
-function rowToRun(row: Record<string, unknown>): ServerRunRecord {
-  return {
-    id: String(row.id),
-    orgId: String(row.org_id),
-    userId: String(row.user_id),
-    skill: String(row.skill_slug),
-    requestedSlug: String(row.requested_slug),
-    status: String(row.status) as ServerRunStatus,
-    input: parseJsonObject(row.input_json),
-    args: parseJsonArray(row.args_json),
-    ...(typeof row.idempotency_key === "string" ? { idempotencyKey: row.idempotency_key } : {}),
-    correlationId: String(row.correlation_id),
-    costCents: Number(row.cost_cents ?? 0),
-    ...(typeof row.output_type === "string" ? { outputType: row.output_type } : {}),
-    ...(typeof row.output_preview === "string" ? { outputPreview: row.output_preview } : {}),
-    ...(typeof row.error_code === "string" ? { errorCode: row.error_code } : {}),
-    ...(typeof row.error_message === "string" ? { errorMessage: row.error_message } : {}),
-    createdAt: dateString(row.created_at),
-    ...(row.started_at ? { startedAt: dateString(row.started_at) } : {}),
-    ...(row.completed_at ? { completedAt: dateString(row.completed_at) } : {}),
-  };
+/**
+ * One-line, credential-free summary of a connection failure.
+ *
+ * A Postgres URL is a credential and drivers routinely echo the whole DSN back in the
+ * error message. This keeps the class and a short reason - enough to tell "host is
+ * down" from "password rejected" - and drops anything that looks like a URL.
+ */
+/** Postgres SQLSTATE 23505. Matched on the code where the driver exposes it, message otherwise. */
+function isUniqueViolation(error: unknown): boolean {
+  const code = (error as { code?: unknown; errno?: unknown })?.code;
+  if (code === "23505" || code === 23505) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /duplicate key value violates unique constraint/i.test(message);
 }
 
-function rowToLog(row: Record<string, unknown>): ServerRunLog {
-  return {
-    runId: String(row.run_id),
-    sequence: Number(row.sequence),
-    level: String(row.level) as ServerRunLog["level"],
-    message: String(row.message),
-    createdAt: dateString(row.created_at),
-  };
-}
-
-function rowToArtifact(row: Record<string, unknown>): ServerArtifact {
-  return {
-    id: String(row.id),
-    runId: String(row.run_id),
-    orgId: String(row.org_id),
-    fileName: String(row.file_name),
-    relativePath: String(row.relative_path),
-    contentType: String(row.content_type),
-    byteSize: Number(row.byte_size),
-    sha256: String(row.sha256),
-    storageKind: String(row.storage_kind) as ServerArtifact["storageKind"],
-    ...(typeof row.storage_key === "string" ? { storageKey: row.storage_key } : {}),
-    ...(typeof row.body_text === "string" ? { bodyText: row.body_text } : {}),
-    createdAt: dateString(row.created_at),
-  };
-}
-
-function parseJsonObject(value: unknown): Record<string, unknown> {
-  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-    } catch {}
-  }
-  return {};
-}
-
-function parseJsonArray(value: unknown): string[] {
-  const parsed = typeof value === "string" ? safeParse(value) : value;
-  return Array.isArray(parsed) ? parsed.map(String) : [];
-}
-
-function safeParse(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return undefined;
-  }
-}
-
-function dateString(value: unknown): string {
-  if (value instanceof Date) return value.toISOString();
-  return String(value);
+function connectionFailureSummary(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/[a-z][a-z0-9+.-]*:\/\/\S*/gi, "<redacted-url>").split("\n")[0]!.slice(0, 200);
 }

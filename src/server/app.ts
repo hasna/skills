@@ -2,6 +2,7 @@ import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../lib/remote-run-contract.js
 import { ArtifactStorage } from "./artifact-storage.js";
 import { authenticateRequest } from "./auth.js";
 import { resolveServerConfig, type SkillsServerConfig } from "./config.js";
+import { resolveDatabaseTarget } from "./database-url.js";
 import { executeRun } from "./handlers.js";
 import { quoteServerSkill, getServerSkill, getServerSkillMd, listServerSkills } from "./registry.js";
 import { createStore, type MemorySkillsStore } from "./store.js";
@@ -12,12 +13,48 @@ export interface SkillsServerOptions {
   store?: SkillsProductStore;
 }
 
+/**
+ * Refuse to serve traffic from storage that will not survive a restart.
+ *
+ * /health answering `ok: true` from a process backed by a Map is worse than a crash: it
+ * satisfies every load balancer, container orchestrator, and smoke test we have, right
+ * up until the process restarts and every run, log, and artifact is gone. Failing at
+ * startup puts the problem where an operator will see it.
+ *
+ * A store that declares no backend is assumed durable - see StoreBackendInfo. This
+ * guard's job is to make our own defaults safe, not to audit somebody else's store.
+ */
+export function assertDurableStore(store: SkillsProductStore, config: Pick<SkillsServerConfig, "allowEphemeralStore">): void {
+  const backend = store.backend;
+  if (!backend || backend.durable) return;
+  assertDurableTarget(backend, config);
+}
+
+/** The same refusal, expressed against a resolved target so it can run before anything opens. */
+export function assertDurableTarget(
+  target: { durable: boolean; label: string },
+  config: Pick<SkillsServerConfig, "allowEphemeralStore">,
+): void {
+  if (target.durable || config.allowEphemeralStore) return;
+  throw new Error(
+    `refusing to start: the configured store is ${target.label} and does not survive a restart. ` +
+      "Leave HASNA_SKILLS_DATABASE_URL unset to use the durable SQLite database in the skills data " +
+      "directory, or point it at a postgres:// URL. Set HASNA_SKILLS_ALLOW_EPHEMERAL_STORE=1 only if " +
+      "losing every run on restart is genuinely what you want.",
+  );
+}
+
 export async function createSkillsFetchHandler(options: SkillsServerOptions = {}): Promise<(request: Request) => Promise<Response>> {
   const config = { ...resolveServerConfig(), ...options.config };
+  // Refuse before opening anything. Resolving the target is pure, so a configuration we
+  // are going to reject never gets as far as creating a database file or a connection
+  // pool that nothing then closes.
+  if (!options.store) assertDurableTarget(resolveDatabaseTarget(config.databaseUrl), config);
   const store = options.store ?? await createStore({
     databaseUrl: config.databaseUrl,
     bootstrapApiKey: config.bootstrapApiKey,
   });
+  assertDurableStore(store, config);
   const artifactStorage = new ArtifactStorage({
     bucket: config.artifactBucket,
     prefix: config.artifactPrefix,
