@@ -7,7 +7,7 @@ available without requiring an API account or source-copy installs.
 
 The open package can optionally talk to a Skills API for server-executed skills.
 It ships with no default endpoint: the operator names their own instance through
-`SKILLS_API_URL` or `skills setup --mode self-hosted --api-url <origin>`. That
+`SKILLS_API_URL` or `skills setup --api-url <origin>`. That
 API path is explicit configuration, not a dependency of local-only use, and an
 unconfigured install never sends credentials anywhere.
 

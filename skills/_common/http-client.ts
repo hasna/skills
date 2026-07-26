@@ -12,7 +12,7 @@ const SKILL_API_URL = process.env.SKILLS_API_URL || process.env.SKILL_API_URL ||
 
 const MISSING_API_URL_MESSAGE =
   "Set SKILLS_API_URL to the origin of the Skills instance you run, " +
-  "or run `skills setup --mode self-hosted --api-url <origin>`";
+  "or run `skills setup --api-url <origin>`";
 
 export interface SkillRequest {
   skill: string;

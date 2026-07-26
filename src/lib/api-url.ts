@@ -22,7 +22,7 @@ export const API_URL_CONFIG_KEY = "apiUrl";
 /** Hint shown wherever a Skills API URL is required but absent. */
 export const MISSING_API_URL_HINT =
   `set ${API_URL_ENV_VAR}=<your Skills instance origin>, ` +
-  `or run: skills setup --mode self-hosted --api-url <your Skills instance origin>`;
+  `or run: skills setup --api-url <your Skills instance origin>`;
 
 export class MissingApiUrlError extends Error {
   readonly code = "MISSING_API_URL";

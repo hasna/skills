@@ -20,7 +20,7 @@ Requires [Bun](https://bun.sh/) 1.0+.
 skills
 
 # Point the CLI at a Skills API server when you want remote runs
-skills setup --api-url https://skills.md
+skills setup --api-url https://skills.example.com
 skills auth login --api-key "$SKILLS_API_KEY"
 
 # With no API URL configured, skills simply run on this machine

@@ -126,7 +126,7 @@ describe("R1 — unconfigured client produces no endpoint", () => {
       const message = (thrown as Error).message;
       // The error has to be actionable: it names the env var and the command.
       expect(message).toContain("SKILLS_API_URL");
-      expect(message).toContain("skills setup --mode self-hosted --api-url");
+      expect(message).toContain("skills setup --api-url");
       // ...and it must not smuggle a usable endpoint into the "error".
       expect(extractUrlReferences(message)).toEqual([]);
     }
