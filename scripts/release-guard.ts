@@ -11,6 +11,15 @@ import {
   findHostedSourcePacklistLeaks,
   listHostedMetadataSlugs,
 } from "../src/lib/hosted-skill-set.js";
+import {
+  checkEntryPointCoverage,
+  findDisallowedCodeUrls,
+  findVendorHostReferences,
+  formatFindings,
+  isCodeFile,
+  readPackedSources,
+  uncoveredEntryPoints,
+} from "../src/lib/vendor-host-guard.js";
 
 type Finding = {
   file: string;
@@ -292,8 +301,73 @@ if (scanFindings.length > 0) {
   process.exit(1);
 }
 
+// ---------------------------------------------------------------------------
+// R1 — the published package must not name an unapproved network host. This is
+// the only gate that runs at publish time, so the property lives here as well
+// as in the test suite.
+// ---------------------------------------------------------------------------
+const packedSources = readPackedSources(packedFiles, repoRoot, { existsSync, statSync, readFileSync }, join);
+
+if (packedSources.length === 0) {
+  console.error("Release guard failed: the package file scan produced no readable files.");
+  process.exit(1);
+}
+
+const packedCodeSources = packedSources.filter((source) => isCodeFile(source.file));
+
+// Strong check: AST scan of every packed code file, position-independent. Run it
+// BEFORE the coverage assertion so that "we could not read this file" is a
+// finding with a reason rather than a bare coverage number.
+const disallowedCodeUrls = findDisallowedCodeUrls(packedCodeSources);
+if (disallowedCodeUrls.length > 0) {
+  console.error("Release guard failed: package code names hosts that are not approved.");
+  console.error(sanitizeForPublicLog(formatFindings(disallowedCodeUrls)));
+  console.error("  A host we operate may never be a default. A third-party provider host is");
+  console.error("  allowed only when it is listed in APPROVED_CODE_HOSTS in");
+  console.error("  src/lib/vendor-host-guard.ts with a written justification.");
+  console.error("  A 'cannot certify' finding means a file was never inspected — fix the file,");
+  console.error("  never the threshold.");
+  process.exit(1);
+}
+
+// Anti-vacuity, PER ENTRY POINT rather than as a global count. A global "we
+// scanned more than N files" is satisfiable by files that have nothing to do
+// with the code under test: on an unbuilt tree the skill corpus alone cleared
+// the old threshold while bin/ and dist/ — and therefore everything in src/ they
+// are built from — went entirely unscanned. Every path a consumer can execute or
+// import must be present, readable and certified.
+const manifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as unknown;
+const certifiedByFile = new Map(
+  packedCodeSources
+    .filter((source) => !source.undecodable)
+    .map((source) => [source.file, { certified: true }] as const),
+);
+const uncovered = uncoveredEntryPoints(checkEntryPointCoverage(manifest, packedFiles, certifiedByFile));
+if (uncovered.length > 0) {
+  console.error("Release guard failed: declared entry points were not scanned.");
+  for (const entry of uncovered) {
+    console.error(
+      sanitizeForPublicLog(
+        `  ${entry.path}: packed=${entry.packed} read=${entry.read} certified=${entry.certified}`,
+      ),
+    );
+  }
+  console.error("  The host scan would pass vacuously for the code consumers actually run.");
+  console.error("  Run `bun run build` before packing so the published artifacts exist.");
+  process.exit(1);
+}
+
+// Weak backstop: known vendor domains in prose (Markdown, JSON, plain text).
+const vendorHostReferences = findVendorHostReferences(packedSources);
+if (vendorHostReferences.length > 0) {
+  console.error("Release guard failed: the package references vendor-controlled hosts.");
+  console.error(sanitizeForPublicLog(formatFindings(vendorHostReferences)));
+  process.exit(1);
+}
+
 console.log(
-  `Release guard passed: ${packedFiles.length} package-visible files are free of retired cloud markers, ` +
-    "secrets, PII, private context, private-skill leaks, hosted implementation source, " +
-    "and committed tool output.",
+  `Release guard passed: ${packedFiles.length} package-visible files (${packedCodeSources.length} code) are free of ` +
+    "retired cloud markers, secrets, PII, private context, private-skill leaks, " +
+    "hosted implementation source, committed tool output, unapproved hosts, and vendor-controlled hosts; " +
+    "every declared entry point was read and certified.",
 );

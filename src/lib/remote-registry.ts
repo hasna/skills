@@ -7,10 +7,10 @@
  */
 
 import { z } from "zod";
+import { resolveApiUrl } from "./api-url.js";
 import { getApiKey } from "./auth-store.js";
 import { loadConfig, type SkillsConfig } from "./config.js";
 import { sanitizePublicDiscoveryText } from "./discovery.js";
-import { getHostedAvailabilityMetadata } from "./hosted-availability.js";
 import type { SkillMeta } from "./registry.js";
 
 const remoteAvailabilitySchema = z.object({
@@ -84,9 +84,10 @@ export function getConfiguredApiUrl(
   config: SkillsConfig = loadConfig(),
   env: Record<string, string | undefined> = process.env,
 ): string | undefined {
-  const raw = env["SKILLS_API_URL"] || config.apiUrl;
-  const trimmed = raw?.trim().replace(/\/+$/, "");
-  return trimmed || undefined;
+  // Read paths fail closed: no configuration means no remote registry, never a
+  // fallback host. Resolution lives in one place so auth/write paths and read
+  // paths cannot drift apart again.
+  return resolveApiUrl(config, env);
 }
 
 export function buildSkillsApiUrl(apiUrl: string, endpoint = "/skills"): string {
@@ -128,16 +129,15 @@ function normalizeRemoteSkill(skill: z.infer<typeof remoteSkillSchema>): SkillMe
     dependencies: skill.dependencies,
     ...(skill.version ? { version: skill.version } : {}),
     ...(skill.pricing ? { pricing: skill.pricing } : {}),
-    availability: normalizeRemoteAvailability(name, skill.availability),
+    availability: normalizeRemoteAvailability(skill.availability),
     source: "remote",
   };
 }
 
 function normalizeRemoteAvailability(
-  name: string,
   availability?: z.infer<typeof remoteAvailabilitySchema>,
 ): NonNullable<SkillMeta["availability"]> {
-  if (!availability) return getHostedAvailabilityMetadata(name);
+  if (!availability) return { status: "available" };
   if (availability.status === "available") return { status: "available" };
   return {
     status: availability.status,

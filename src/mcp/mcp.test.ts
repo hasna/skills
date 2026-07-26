@@ -9,7 +9,6 @@ const MCP_PATH = join(import.meta.dir, "index.ts");
 const EXPECTED_ALL_SKILL_COUNT = SKILLS.length;
 const EXPECTED_BASIC_SKILL_COUNT = BASIC_SKILL_NAMES.length;
 const CLEAN_STORAGE_ENV = {
-  HASNA_SKILLS_STORAGE_MODE: "",
   HASNA_SKILLS_DATABASE_URL: "",
   HASNA_SKILLS_DATABASE_SSL: "",
   HASNA_SKILLS_DATABASE_SCHEMA: "",
@@ -17,7 +16,6 @@ const CLEAN_STORAGE_ENV = {
   HASNA_SKILLS_S3_PREFIX: "",
   HASNA_SKILLS_AWS_REGION: "",
   HASNA_SKILLS_SYNC_DRY_RUN: "",
-  SKILLS_STORAGE_MODE: "",
   SKILLS_DATABASE_URL: "",
   SKILLS_DATABASE_SSL: "",
   SKILLS_DATABASE_SCHEMA: "",
@@ -176,12 +174,12 @@ describe("MCP Server", () => {
       await client.initialize();
       const response = await client.request("tools/call", {
         name: "get_skill_tool_dependencies",
-        arguments: { name: "image" },
+        arguments: { name: "logo-design" },
       }, 14);
       expect(response).not.toBeNull();
       const payload = JSON.parse(response.result.content[0].text);
       expect(payload).toMatchObject({
-        skill: "image",
+        skill: "logo-design",
         gatewayBacked: true,
         hostedRuntime: true,
       });
@@ -335,31 +333,6 @@ version: 0.3.0
     }
   }, 15000);
 
-  test("quote_skill fails fast for unavailable hosted provider skills", async () => {
-    const client = new McpClient();
-    try {
-      await client.initialize();
-      const response = await client.request("tools/call", {
-        name: "quote_skill",
-        arguments: { name: "image" },
-      }, 82);
-      expect(response).not.toBeNull();
-      expect(response.result.isError).toBe(true);
-      const payload = JSON.parse(response.result.content[0].text);
-      expect(payload).toMatchObject({
-        skill: "image",
-        code: "HOSTED_PROVIDER_UNAVAILABLE",
-        availability: {
-          status: "unavailable",
-          code: "HOSTED_PROVIDER_UNAVAILABLE",
-        },
-      });
-      expect(payload.details).toContain("No balance was charged.");
-    } finally {
-      await client.close();
-    }
-  }, 15000);
-
   test("run_skill rejects unauthenticated premium skills without local fallback", async () => {
     const { mkdtempSync, rmSync } = require("fs");
     const { tmpdir } = require("os");
@@ -416,38 +389,6 @@ version: 0.3.0
       expect(error).toMatchObject({ code: "PLATFORM_ERROR" });
       expect(error.message).toContain("requires self-hosted API access");
       expect(error.message).not.toContain("Skill Image CLI");
-    } finally {
-      await client.close();
-      rmSync(tmpDir, { recursive: true, force: true });
-    }
-  }, 15000);
-
-  test("run_skill rejects unavailable hosted provider skills before auth or approval", async () => {
-    const { mkdtempSync, rmSync } = require("fs");
-    const { tmpdir } = require("os");
-    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-premium-unavailable-provider-"));
-    const client = new McpClient({
-      HOME: tmpDir,
-      SKILLS_API_KEY: "",
-      SKILLS_TEST_MODE: "1",
-    });
-    try {
-      await client.initialize();
-      const response = await client.request("tools/call", {
-        name: "run_skill",
-        arguments: {
-          name: "image",
-          args: ["a mountain at sunrise"],
-        },
-      }, 85);
-      expect(response).not.toBeNull();
-      expect(response.result.isError).toBe(true);
-      const error = JSON.parse(response.result.content[0].text);
-      expect(error).toMatchObject({ code: "HOSTED_PROVIDER_UNAVAILABLE" });
-      expect(error.message).toContain("temporarily unavailable");
-      expect(error.message).toContain("No balance was charged.");
-      expect(error.message).not.toContain("skills auth login");
-      expect(error.message).not.toContain("approved: true");
     } finally {
       await client.close();
       rmSync(tmpDir, { recursive: true, force: true });
@@ -651,7 +592,7 @@ version: 0.3.0
       await client.initialize();
       const response = await client.request("tools/call", {
         name: "search_skills",
-        arguments: { query: "image" },
+        arguments: { query: "pdf" },
       });
       expect(response).not.toBeNull();
       expect(response.result).toBeDefined();
@@ -671,26 +612,26 @@ version: 0.3.0
       await client.initialize();
       const response = await client.request("tools/call", {
         name: "get_skill_info",
-        arguments: { name: "image" },
+        arguments: { name: "logo-design" },
       });
       expect(response).not.toBeNull();
       expect(response.result).toBeDefined();
       const info = JSON.parse(response.result.content[0].text);
-      expect(info.name).toBe("image");
+      expect(info.name).toBe("logo-design");
       expect(info.displayName).toBeDefined();
       expect(info.category).toBeDefined();
       expect(info.pricing).toMatchObject({
         tier: "premium",
-        quoteDependsOnInput: true,
+        formattedCost: "$0.50/run",
       });
       expect(info.envVars).toContain("SKILLS_API_KEY");
       expect(info.envVars).not.toContain("SKILL_API_KEY");
       expect(info.envVars).not.toContain("OPENAI_API_KEY");
       expect(info.mcp.schemas.run.inputSchema.properties.name).toMatchObject({
-        const: "image",
+        const: "logo-design",
       });
       expect(info.mcp.schemas.install.inputSchema.properties.name).toMatchObject({
-        const: "image",
+        const: "logo-design",
       });
       expect(JSON.stringify(info).toLowerCase()).not.toContain("openai");
       expect(JSON.stringify(info).toLowerCase()).not.toContain("gemini");
@@ -722,12 +663,12 @@ version: 0.3.0
       await client.initialize();
       const response = await client.request("tools/call", {
         name: "get_skill_docs",
-        arguments: { name: "image" },
+        arguments: { name: "logo-design" },
       }, 10);
       expect(response).not.toBeNull();
       expect(response.result).toBeDefined();
       const text = response.result.content[0].text;
-      expect(text).toContain("Image Generation");
+      expect(text).toContain("Logo Design");
     } finally {
       await client.close();
     }
@@ -754,7 +695,7 @@ version: 0.3.0
       await client.initialize();
       const response = await client.request("tools/call", {
         name: "get_requirements",
-        arguments: { name: "image" },
+        arguments: { name: "logo-design" },
       }, 12);
       expect(response).not.toBeNull();
       expect(response.result).toBeDefined();
@@ -763,7 +704,7 @@ version: 0.3.0
       expect(reqs.envVars).toContain("SKILLS_API_KEY");
       expect(reqs.envVars).not.toContain("SKILL_API_KEY");
       expect(reqs.envVars).not.toContain("OPENAI_API_KEY");
-      expect(reqs.cliCommand).toBe("skills run image");
+      expect(reqs.cliCommand).toBe("skills run logo-design");
     } finally {
       await client.close();
     }
@@ -799,7 +740,7 @@ version: 0.3.0
       expect(result.total).toBe(EXPECTED_BASIC_SKILL_COUNT);
       expect(skills.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
       expect(result.hasMore).toBe(false);
-      expect(skills.map((s: any) => s.name)).not.toContain("deepresearch");
+      expect(skills.map((s: any) => s.name)).not.toContain("market-research-report");
       expect(skills[0].pricing).toHaveProperty("formattedCost");
       // Compact list must surface descriptions so agents can discover
       // without a per-skill get_skill_docs / get_skill_info round-trip.
@@ -981,7 +922,7 @@ version: 0.3.0
       const skills = JSON.parse(response.result.contents[0].text);
       expect(Array.isArray(skills)).toBe(true);
       expect(skills.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
-      expect(skills.map((s: any) => s.name)).not.toContain("deepresearch");
+      expect(skills.map((s: any) => s.name)).not.toContain("market-research-report");
       expect(skills[0].pricing).toHaveProperty("formattedCost");
       for (const s of skills) {
         expect(typeof s.description).toBe("string");
@@ -1017,15 +958,15 @@ version: 0.3.0
     try {
       await client.initialize();
       const response = await client.request("resources/read", {
-        uri: "skills://image",
+        uri: "skills://logo-design",
       }, 33);
       expect(response).not.toBeNull();
       expect(response.result).toBeDefined();
       const info = JSON.parse(response.result.contents[0].text);
-      expect(info.name).toBe("image");
+      expect(info.name).toBe("logo-design");
       expect(info.pricing).toMatchObject({
         tier: "premium",
-        quoteDependsOnInput: true,
+        formattedCost: "$0.50/run",
       });
       expect(info.documentation).toContain("SKILLS_API_KEY");
       expect(info.requirements.envVars).toContain("SKILLS_API_KEY");
@@ -1033,19 +974,19 @@ version: 0.3.0
       expect(info.requirements.envVars).not.toContain("OPENAI_API_KEY");
       expect(info.mcp).toMatchObject({
         schemaVersion: 1,
-        name: "image",
+        name: "logo-design",
         schemas: {
           install: {
             inputSchema: {
               properties: {
-                name: { const: "image" },
+                name: { const: "logo-design" },
               },
             },
           },
           run: {
             inputSchema: {
               properties: {
-                name: { const: "image" },
+                name: { const: "logo-design" },
                 args: { type: "array" },
               },
             },
@@ -1150,7 +1091,7 @@ version: 0.3.0
       await client.initialize();
       const response = await client.request("tools/call", {
         name: "import_skills",
-        arguments: { skills: ["image"], for: "invalid-agent" },
+        arguments: { skills: ["logo-design"], for: "invalid-agent" },
       }, 43);
       expect(response).not.toBeNull();
       expect(response.result.isError).toBe(true);
@@ -1165,7 +1106,7 @@ version: 0.3.0
       await client.initialize();
       const validResponse = await client.request("tools/call", {
         name: "validate_skill",
-        arguments: { name: "image" },
+        arguments: { name: "logo-design" },
       }, 44);
       expect(validResponse).not.toBeNull();
       const validResult = JSON.parse(validResponse.result.content[0].text);
@@ -1187,7 +1128,7 @@ version: 0.3.0
     }
   }, 15000);
 
-  test("storage tools return local-first status and no-network sync plan", async () => {
+  test("storage tools return on-box status and no-network sync plan", async () => {
     const client = new McpClient();
     try {
       await client.initialize();
@@ -1199,7 +1140,6 @@ version: 0.3.0
       const status = JSON.parse(statusResponse.result.content[0].text);
       expect(status).toMatchObject({
         package: "open-skills",
-        mode: "local",
         tables: ["skills_sync_records", "skills_sync_cursors"],
         remote: {
           databaseConfigured: false,
@@ -1210,6 +1150,7 @@ version: 0.3.0
         },
       });
       expect(status.local.projectStateDir).toContain(".skills");
+      expect(status).not.toHaveProperty("mode");
 
       const planResponse = await client.request("tools/call", {
         name: "storage_sync_plan",
@@ -1220,8 +1161,10 @@ version: 0.3.0
       expect(plan).toMatchObject({
         package: "open-skills",
         noNetwork: true,
-        mode: "local",
+        databaseConfigured: false,
+        s3Configured: false,
       });
+      expect(plan).not.toHaveProperty("mode");
       expect(plan.env.databaseUrl).toBe("HASNA_SKILLS_DATABASE_URL");
       expect(plan.schemaSql).toContain("CREATE TABLE IF NOT EXISTS skills_sync_records");
     } finally {

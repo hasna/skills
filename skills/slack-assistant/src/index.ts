@@ -25,7 +25,8 @@ Examples:
   skills run slack-assistant -- action=send channelId=C01234567 text="Hello team!"
 
 Requirements:
-  Requires Slack connector to be connected in skills.md.
+  Requires SLACK_ACCESS_TOKEN in the environment, or the Slack connector
+  enabled on the Skills instance you configured.
 `);
   process.exit(0);
 }
@@ -35,7 +36,7 @@ const channelIdArg = args.find(a => a.startsWith("channelId="))?.split("=")[1];
 const textArg = args.find(a => a.startsWith("text="))?.split("=")[1];
 
 if (!process.env.SLACK_ACCESS_TOKEN) {
-  console.error("Error: Slack connector not connected. Please connect Slack in skills.md.");
+  console.error("Error: Slack not connected. Set SLACK_ACCESS_TOKEN, or enable the Slack connector on your Skills instance.");
   process.exit(1);
 }
 

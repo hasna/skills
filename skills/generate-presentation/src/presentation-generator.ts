@@ -126,7 +126,7 @@ Return ONLY a valid JSON object (no markdown, no code blocks):
 {
   "title": "Presentation Title",
   "subtitle": "Optional subtitle",
-  "author": "skills.md",
+  "author": "generate-presentation",
   "date": "${new Date().toISOString().split('T')[0]}",
   "slides": [
     {

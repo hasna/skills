@@ -4,7 +4,7 @@ import {
   type SkillMeta,
   type SkillRegistryProfile,
 } from "./registry.js";
-import { isPremiumSkill } from "./pricing.js";
+import { isHostedRuntimeSkill as isHostedRuntimeSlug } from "./hosted-runtime-skills.js";
 
 export const TOOL_PRIMITIVE_SCHEMA_VERSION = 1 as const;
 
@@ -265,13 +265,13 @@ const CATEGORY_RULES: PrimitiveRule[] = [
 ];
 
 const NAME_RULES: PrimitiveRule[] = [
-  { primitive: "documents-read", names: ["read-pdf", "pdf-read", "pdf-to-markdown", "pdf-to-dataset", "doc-read", "extract-invoice", "contract-review-report", "invoice-reconciliation"], reason: "Skill explicitly reads or extracts from document files." },
-  { primitive: "documents-write", names: ["pdf-generate", "doc-generate", "generate-presentation", "slide-deck-generator", "pitch-deck", "proposal-pack", "create-ebook", "generate-book-cover", "api-docs-portal", "landing-page-pack", "one-page-website"], reason: "Skill generates downloadable documents or presentation artifacts." },
+  { primitive: "documents-read", names: ["pdf-to-markdown", "pdf-to-dataset", "doc-read", "extract-invoice", "contract-review-report", "invoice-reconciliation"], reason: "Skill explicitly reads or extracts from document files." },
+  { primitive: "documents-write", names: ["pdf-generate", "doc-generate", "generate-presentation", "slide-deck-generator", "pitch-deck", "proposal-pack", "create-ebook", "api-docs-portal", "landing-page-pack", "one-page-website"], reason: "Skill generates downloadable documents or presentation artifacts." },
   { primitive: "structured-data", names: ["read-csv", "read-excel", "excel", "generate-sql", "generate-mock-data", "benchmark-finder", "budget-variance-analyzer", "subscription-spend-watcher", "payroll-change-prepper"], reason: "Skill reads, creates, or analyzes structured data." },
-  { primitive: "media-image", names: ["image", "read-image", "brand-photo-shoot", "campaign-moodboard", "logo-design", "icon-pack", "emoji", "product-mockup", "photo-album", "remove-background", "video-thumbnail", "banner-ad-suite", "ad-creative-generator", "ad-creative-pack", "print-collateral-designer", "packaging-concept-studio"], reason: "Skill works directly with image or visual asset primitives." },
-  { primitive: "media-audio", names: ["audio", "music", "transcript", "audio-extract", "audio-transcript-pack", "music-album", "voiceover-jingle-pack", "podcast-show-notes", "subtitle", "audio-cleanup-lab"], reason: "Skill works directly with audio, music, voiceover, or transcription primitives." },
-  { primitive: "media-video", names: ["video", "short-video-pack", "video-highlight-pack", "video-cut-suggester", "video-thumbnail"], reason: "Skill works directly with video generation, editing, captions, or thumbnails." },
-  { primitive: "web-browser", names: ["browse", "webcrawling", "siteanalyze", "performance-audit-report", "seo-content-pack", "competitor-ad-analyzer", "security-audit-report"], reason: "Skill needs live web, crawl, browser, or site inspection primitives." },
+  { primitive: "media-image", names: ["read-image", "campaign-moodboard", "logo-design", "emoji", "product-mockup", "video-thumbnail", "banner-ad-suite", "ad-creative-generator", "ad-creative-pack", "print-collateral-designer", "packaging-concept-studio"], reason: "Skill works directly with image or visual asset primitives." },
+  { primitive: "media-audio", names: ["audio-extract", "audio-transcript-pack", "podcast-show-notes", "subtitle", "audio-cleanup-lab"], reason: "Skill works directly with audio, music, voiceover, or transcription primitives." },
+  { primitive: "media-video", names: ["video-highlight-pack", "video-cut-suggester", "video-thumbnail"], reason: "Skill works directly with video generation, editing, captions, or thumbnails." },
+  { primitive: "web-browser", names: ["siteanalyze", "performance-audit-report", "seo-content-pack", "competitor-ad-analyzer", "security-audit-report"], reason: "Skill needs live web, crawl, browser, or site inspection primitives." },
   { primitive: "connectors-run", names: ["email-sequence", "meeting-pack", "customer-feedback-report", "inbox-priority-planner", "crm-note-enhancer", "campaign-metric-brief"], reason: "Skill can execute account-scoped external communication or CRM operations." },
   { primitive: "safety-approval", names: ["security-audit-report", "contract-review-report", "risk-disclosure-kit", "compliance-report-pack", "procurement-scorecard"], reason: "Skill produces security, legal, compliance, or procurement-sensitive evidence." },
 ];
@@ -289,18 +289,9 @@ const KEYWORD_RULES: PrimitiveRule[] = [
 
 const primitiveByName = new Map(TOOL_PRIMITIVES.map((primitive) => [primitive.name, primitive]));
 const HOSTED_RUNTIME_SKILL_NAMES = new Set([
-  "audio",
-  "browse",
   "convert",
-  "image",
-  "music",
-  "pdf-read",
   "pdf-to-dataset",
   "pdf-to-markdown",
-  "read-pdf",
-  "transcript",
-  "video",
-  "webcrawling",
 ]);
 
 export function listToolPrimitives(query?: string): ToolPrimitiveSummary[] {
@@ -445,7 +436,7 @@ function ruleMatches(skill: SkillMeta, rule: PrimitiveRule): boolean {
 
 function isHostedRuntimeSkill(skill: SkillMeta): boolean {
   const tags = new Set(skill.tags.map((tag) => tag.toLowerCase()));
-  return isPremiumSkill(skill.name)
+  return isHostedRuntimeSlug(skill.name)
     || HOSTED_RUNTIME_SKILL_NAMES.has(skill.name)
     || tags.has("premium")
     || tags.has("remote")

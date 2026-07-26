@@ -15,7 +15,7 @@ Generate a performance audit package from a URL, repo notes, trace summary, or p
 ## Usage
 
 ```bash
-skills run performance-audit-report --target "https://skills.md" --app "Skills.md"
+skills run performance-audit-report --target "https://example.com" --app "Example"
 skills run performance-audit-report --notes "Dashboard JS is 1.2MB and API p95 is 900ms" --surface web
 ```
 

@@ -11,11 +11,11 @@ describe("CLI tool primitives", () => {
   });
 
   test("shows skill primitive dependencies as JSON", async () => {
-    const { stdout, exitCode } = await runCli(["tools", "deps", "image", "--json"]);
+    const { stdout, exitCode } = await runCli(["tools", "deps", "logo-design", "--json"]);
     expect(exitCode).toBe(0);
     const data = JSON.parse(stdout);
     expect(data).toMatchObject({
-      skill: "image",
+      skill: "logo-design",
       gatewayBacked: true,
       hostedRuntime: true,
     });

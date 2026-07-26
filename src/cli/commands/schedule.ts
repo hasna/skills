@@ -116,18 +116,6 @@ export function registerSchedule(parent: Command) {
       const due = getDueSchedules();
       if (!due.length) { console.log(options.json ? JSON.stringify({ ran: 0, schedules: [] }) : chalk.dim("No schedules are due.")); return; }
       const dueDetails = await Promise.all(due.map((schedule) => describeDueSchedule(schedule)));
-      const unavailable = dueDetails.filter((schedule) => schedule.availability?.status === "unavailable");
-      if (unavailable.length > 0 && !options.dryRun) {
-        const code = unavailable[0]?.availability?.code ?? "HOSTED_PROVIDER_UNAVAILABLE";
-        const error = `Hosted execution is temporarily unavailable for ${unavailable.map((schedule) => schedule.skill).join(", ")}. No balance was charged.`;
-        if (options.json) {
-          console.log(JSON.stringify({ ran: 0, error, code, unavailable, schedules: dueDetails }));
-        } else {
-          console.error(chalk.red(`✗ ${error}`));
-        }
-        process.exitCode = 1;
-        return;
-      }
       const paidTotalCents = dueDetails.reduce((total, schedule) => total + (schedule.costCents ?? 0), 0);
       if (options.dryRun) {
         console.log(options.json ? JSON.stringify({ due: dueDetails, paidTotalCents, paidTotal: formatCost(paidTotalCents) }) : chalk.bold(`${due.length} schedule(s) due:\n`));
@@ -205,13 +193,8 @@ async function executeScheduledSkill(skillName: string, args: string[], options:
   if (!skill) throw new Error(`Skill '${skillName}' not found`);
 
   const pricing = await import("../../lib/pricing.js");
-  if (pricing.isPremiumSkill(skill.name)) {
-    const { getHostedRunAvailability } = await import("../../lib/hosted-availability.js");
-    const hostedAvailability = getHostedRunAvailability(skill.name);
-    if (!hostedAvailability.ok) {
-      throw new Error(`${hostedAvailability.code}: ${hostedAvailability.message}. ${hostedAvailability.details.join(" ")}`);
-    }
-
+  const { isHostedRuntimeSkill } = await import("../../lib/hosted-runtime-skills.js");
+  if (isHostedRuntimeSkill(skill.name)) {
     const publicPricing = pricing.getPublicSkillPricing(skill.name, {}, args);
     if (!options.allowPaid) {
       throw new Error(`${skill.name} is a paid self-hosted skill (${publicPricing.formattedCost}). Review with skills schedule run --dry-run, then rerun with --allow-paid --max-paid-cents ${publicPricing.costCents}.`);
@@ -220,7 +203,7 @@ async function executeScheduledSkill(skillName: string, args: string[], options:
     const { getApiKey } = await import("../../lib/auth-store.js");
     const apiKey = getApiKey();
     if (!apiKey) {
-      throw new Error(`${skill.name} is a self-hosted skill. Run: skills setup --mode self-hosted && skills auth login`);
+      throw new Error(`${skill.name} is a self-hosted skill. Run: skills auth login`);
     }
 
     const { RemoteSkillsClient } = await import("../../lib/remote-client.js");
@@ -241,11 +224,10 @@ async function executeScheduledSkill(skillName: string, args: string[], options:
 async function describeDueSchedule(schedule: { name: string; skill: string; cron: string; args?: string[] }) {
   const { getSkill } = await import("../../lib/registry.js");
   const pricing = await import("../../lib/pricing.js");
-  const { getHostedRunAvailability } = await import("../../lib/hosted-availability.js");
+  const { isHostedRuntimeSkill } = await import("../../lib/hosted-runtime-skills.js");
   const skill = getSkill(schedule.skill);
-  const paid = Boolean(skill && pricing.isPremiumSkill(skill.name));
+  const paid = Boolean(skill && isHostedRuntimeSkill(skill.name));
   const publicPricing = paid && skill ? pricing.getPublicSkillPricing(skill.name, {}, schedule.args ?? []) : null;
-  const availability = skill ? getHostedRunAvailability(skill.name) : { ok: true as const };
   return {
     name: schedule.name,
     skill: schedule.skill,
@@ -253,14 +235,7 @@ async function describeDueSchedule(schedule: { name: string; skill: string; cron
     paid,
     costCents: publicPricing?.costCents,
     cost: publicPricing?.formattedCost,
-    availability: availability.ok
-      ? { status: "available" }
-      : {
-        status: "unavailable",
-        code: availability.code,
-        message: availability.message,
-        details: availability.details,
-      },
+    availability: { status: "available" as const },
   };
 }
 

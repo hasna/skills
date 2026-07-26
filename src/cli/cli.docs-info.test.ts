@@ -12,13 +12,13 @@ import {
 describe("CLI docs and validation", () => {
   describe("docs", () => {
     test("shows documentation for a skill with SKILL.md", async () => {
-      const { stdout } = await runCli(["docs", "image"]);
-      expect(stdout).toContain("Image Generation");
+      const { stdout } = await runCli(["docs", "logo-design"]);
+      expect(stdout).toContain("Logo Design");
     });
 
     test("shows CLAUDE.md when no SKILL.md", async () => {
-      const { stdout } = await runCli(["docs", "deepresearch"]);
-      expect(stdout).toContain("deepresearch");
+      const { stdout } = await runCli(["docs", "apidocs"]);
+      expect(stdout).toContain("service-apidocs");
     });
 
     test("fails for nonexistent skill", async () => {
@@ -28,34 +28,34 @@ describe("CLI docs and validation", () => {
     });
 
     test("outputs JSON with --json", async () => {
-      const { stdout } = await runCli(["docs", "image", "--json"]);
+      const { stdout } = await runCli(["docs", "logo-design", "--json"]);
       const data = JSON.parse(stdout);
-      expect(data.skill).toBe("image");
+      expect(data.skill).toBe("logo-design");
       expect(data.hasSkillMd).toBe(true);
       expect(data.content).toBeTruthy();
     });
 
     test("shows specific file with --file", async () => {
-      const { stdout } = await runCli(["docs", "image", "--file", "skill"]);
-      expect(stdout).toContain("Image Generation");
+      const { stdout } = await runCli(["docs", "logo-design", "--file", "skill"]);
+      expect(stdout).toContain("Logo Design");
     });
 
     test("shows claude file with --file claude", async () => {
-      const { stdout } = await runCli(["docs", "deepresearch", "--file", "claude"]);
-      expect(stdout).toContain("deepresearch");
+      const { stdout } = await runCli(["docs", "apidocs", "--file", "claude"]);
+      expect(stdout).toContain("apidocs");
     });
   });
 
   describe("requires", () => {
     test("shows requirements for a skill", async () => {
-      const { stdout } = await runCli(["requires", "image"]);
-      expect(stdout).toContain("Requirements for image");
+      const { stdout } = await runCli(["requires", "logo-design"]);
+      expect(stdout).toContain("Requirements for logo-design");
       expect(stdout).toContain("SKILLS_API_KEY");
     });
 
     test("shows CLI command", async () => {
-      const { stdout } = await runCli(["requires", "image"]);
-      expect(stdout).toContain("image");
+      const { stdout } = await runCli(["requires", "logo-design"]);
+      expect(stdout).toContain("logo-design");
     });
 
     test("fails for nonexistent skill", async () => {
@@ -65,13 +65,13 @@ describe("CLI docs and validation", () => {
     });
 
     test("outputs JSON with --json", async () => {
-      const { stdout } = await runCli(["requires", "image", "--json"]);
+      const { stdout } = await runCli(["requires", "logo-design", "--json"]);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data.envVars)).toBe(true);
       expect(data.envVars).toContain("SKILLS_API_KEY");
       expect(data.envVars).not.toContain("SKILL_API_KEY");
       expect(data.envVars).not.toContain("OPENAI_API_KEY");
-      expect(data.cliCommand).toBe("skills run image");
+      expect(data.cliCommand).toBe("skills run logo-design");
       expect(data).toHaveProperty("systemDeps");
       expect(data).toHaveProperty("dependencies");
     });
@@ -93,10 +93,10 @@ describe("CLI docs and validation", () => {
 
   describe("validate", () => {
     test("outputs structured validation result with --json", async () => {
-      const { stdout, exitCode } = await runCli(["validate", "image", "--json"]);
+      const { stdout, exitCode } = await runCli(["validate", "logo-design", "--json"]);
       const data = JSON.parse(stdout);
       expect(exitCode).toBe(0);
-      expect(data).toHaveProperty("name", "image");
+      expect(data).toHaveProperty("name", "logo-design");
       expect(data).toHaveProperty("valid", true);
       expect(data).toHaveProperty("issues");
       expect(data).toHaveProperty("warnings");
@@ -120,22 +120,22 @@ describe("CLI docs and validation", () => {
 
   describe("info (enriched)", () => {
     test("JSON includes envVars and cliCommand", async () => {
-      const { stdout } = await runCli(["info", "image", "--json"]);
+      const { stdout } = await runCli(["info", "logo-design", "--json"]);
       const data = JSON.parse(stdout);
-      expect(data.name).toBe("image");
+      expect(data.name).toBe("logo-design");
       expect(data.envVars).toContain("SKILLS_API_KEY");
       expect(data.envVars).not.toContain("SKILL_API_KEY");
       expect(data.envVars).not.toContain("OPENAI_API_KEY");
       expect(data.envVars).not.toContain("GEMINI_API_KEY");
-      expect(data.cliCommand).toBe("skills run image");
-      expect(data.pricing.formattedCost).toBe("$0.04 estimated");
+      expect(data.cliCommand).toBe("skills run logo-design");
+      expect(data.pricing.formattedCost).toBe("$0.50/run");
     });
 
     test("human-readable shows env vars", async () => {
-      const { stdout } = await runCli(["info", "image"]);
+      const { stdout } = await runCli(["info", "logo-design"]);
       expect(stdout).toContain("Env vars:");
       expect(stdout).toContain("SKILLS_API_KEY");
-      expect(stdout).toContain("Pricing: $0.04 estimated");
+      expect(stdout).toContain("Pricing: $0.50/run");
       expect(stdout.toLowerCase()).not.toContain("openai");
       expect(stdout.toLowerCase()).not.toContain("gemini");
       expect(stdout.toLowerCase()).not.toContain("minimax");

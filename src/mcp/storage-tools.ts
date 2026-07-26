@@ -14,7 +14,7 @@ import { mcpJson } from "./helpers.js";
 export function registerStorageTools(server: McpServer): void {
   server.registerTool("storage_status", {
     title: "Storage Status",
-    description: "Show local-first storage paths and optional repo-owned Postgres/S3 readiness.",
+    description: "Show on-box storage paths and optional repo-owned Postgres/S3 readiness.",
     inputSchema: {
       directory: z.string().optional(),
     },
@@ -40,13 +40,11 @@ export function registerStorageTools(server: McpServer): void {
     return mcpJson({
       package: "open-skills",
       noNetwork: true,
-      mode: config.mode,
       databaseConfigured: Boolean(config.databaseUrl),
       s3Configured: Boolean(config.s3Bucket),
       snapshotFileCount: snapshot.files.length,
       s3ObjectCount: s3Plan.length,
       env: {
-        mode: SKILLS_NATIVE_STORAGE_ENV.mode,
         databaseUrl: SKILLS_NATIVE_STORAGE_ENV.databaseUrl,
         s3Bucket: SKILLS_NATIVE_STORAGE_ENV.s3Bucket,
       },

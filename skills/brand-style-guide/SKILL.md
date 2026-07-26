@@ -2,7 +2,7 @@
 name: brand-style-guide
 version: 1.0.0
 description: Perform brand style guide operations
-author: skills.md
+author: Hasna
 category: Productivity
 tags:
   - productivity

@@ -2,7 +2,7 @@
  * Hasna Skills - Open source skill library for AI coding agents
  *
  * Pin AI agent skills with a single command:
- *   skills pin image deepresearch
+ *   skills pin logo-design market-research-report
  *
  * Or use the interactive CLI:
  *   skills
@@ -108,6 +108,7 @@ export {
 export {
   loadConfig,
   saveConfig,
+  unsetConfig,
   getConfigPath,
   type SkillsConfig,
   type ConfigScope,
@@ -122,6 +123,11 @@ export {
   parseRemoteRegistryPayload,
   type RemoteRegistryOptions,
 } from "./lib/remote-registry.js";
+
+export {
+  HOSTED_RUNTIME_SLUGS,
+  isHostedRuntimeSkill,
+} from "./lib/hosted-runtime-skills.js";
 
 export {
   ARTICLE_GENERATION_SLUG,
@@ -293,11 +299,9 @@ export {
   getSkillsNativeStorageStatus,
   getSkillsStorageDatabaseEnv,
   getSkillsStorageDatabaseUrl,
-  getSkillsStorageMode,
   getSkillsStorageStatus,
   getStorageDatabaseEnv,
   getStorageDatabaseUrl,
-  getStorageMode,
   getStorageStatus,
   importSkillsLocalSnapshot,
   planSkillsS3SnapshotUpload,
@@ -318,7 +322,6 @@ export {
   type SkillsS3SnapshotPlanEntry,
   type SkillsS3StoredObject,
   type SkillsSnapshotFile,
-  type SkillsStorageMode,
   type SkillsStorageTable,
   type SkillsSyncRecord,
 } from "./lib/native-storage.js";

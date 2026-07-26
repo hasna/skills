@@ -32,11 +32,20 @@ describe("@hasna/skills product brief", () => {
     expect(brief).toContain("without making the agent workflow dependent on a browser");
   });
 
-  test("anchors product to public package and optional self-hosted API", () => {
+  test("anchors product to public package and operator-supplied self-hosted API", () => {
     expect(brief).toContain("hasna/skills");
     expect(brief).toContain("@hasna/skills");
-    expect(brief).toContain("https://skills.md");
     expect(brief).toContain("local-only");
     expect(brief).not.toContain(cloudPackage);
+  });
+
+  // Inverted from "brief contains https://skills.md". The brief used to present a
+  // vendor endpoint as the product's API address, which is the narrative that
+  // justified shipping that host as the unconfigured default. The brief must now
+  // describe the endpoint as operator-supplied configuration with no default.
+  test("describes the API endpoint as operator-supplied with no shipped default", () => {
+    expect(brief).toContain("no default endpoint");
+    expect(brief).toContain("SKILLS_API_URL");
+    expect(brief).toMatch(/unconfigured install never sends credentials/);
   });
 });

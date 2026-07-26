@@ -1,5 +1,6 @@
 import type { SkillMeta } from "./registry-types.js";
-import { getPublicSkillPricing, isPremiumSkill, type PublicSkillPricing } from "./pricing.js";
+import { isHostedRuntimeSkill } from "./hosted-runtime-skills.js";
+import { getPublicSkillPricing, type PublicSkillPricing } from "./pricing.js";
 
 const VENDOR_TERMS = [
   "Google Gemini",
@@ -133,7 +134,7 @@ export function sanitizePublicDiscoveryText(text: string): string {
 }
 
 export function publicDiscoveryEnvVars(skillName: string, envVars: string[]): string[] {
-  if (!isPremiumSkill(skillName)) return envVars;
+  if (!isHostedRuntimeSkill(skillName)) return envVars;
   const filtered = envVars.filter((envVar) =>
     envVar !== "SKILL_API_KEY" && !VENDOR_ENV_PREFIXES.some((prefix) => envVar.startsWith(prefix))
   );
@@ -144,7 +145,7 @@ export function publicDiscoveryDependencies(
   skillName: string,
   dependencies: Record<string, string>,
 ): Record<string, string> {
-  if (!isPremiumSkill(skillName)) return dependencies;
+  if (!isHostedRuntimeSkill(skillName)) return dependencies;
   return Object.fromEntries(
     Object.entries(dependencies).filter(([name]) => !VENDOR_PACKAGE_PATTERNS.some((pattern) => pattern.test(name))),
   );
@@ -152,7 +153,7 @@ export function publicDiscoveryDependencies(
 
 export function publicDiscoveryDocumentation(skill: SkillMeta, documentation: string | null): string | null {
   if (!documentation) return documentation;
-  if (!isPremiumSkill(skill.name)) return documentation;
+  if (!isHostedRuntimeSkill(skill.name)) return documentation;
 
   return [
     `# ${skill.displayName || skill.name}`,

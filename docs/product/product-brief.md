@@ -1,13 +1,15 @@
 # @hasna/skills Product Brief
 
 `@hasna/skills` is a local-capable and self-hosted skill library, CLI, MCP
-server, API, and worker runtime for AI coding agents. Interactive onboarding can
-recommend a compatible self-hosted API, while local-only usage remains available
-without requiring an API account or source-copy installs.
+server, API, and worker runtime for AI coding agents. It can be pointed at a
+compatible API for server-executed skills, while local-only usage remains
+available without requiring an API account or source-copy installs.
 
-The open package can optionally talk to the Hasna self-hosted API at
-`https://skills.md` for server-executed skills. That API path is explicit
-configuration, not a dependency of local-only use.
+The open package can optionally talk to a Skills API for server-executed skills.
+It ships with no default endpoint: the operator names their own instance through
+`SKILLS_API_URL` or `skills setup --api-url <origin>`. That
+API path is explicit configuration, not a dependency of local-only use, and an
+unconfigured install never sends credentials anywhere.
 
 ## Target Users
 
@@ -23,7 +25,7 @@ configuration, not a dependency of local-only use.
 
 - Browse, search, inspect, and pin bundled skills from the CLI or MCP.
 - Run free or explicitly local skills on the user's machine.
-- Configure first-run mode as self-hosted or local-only.
+- Point the CLI at a compatible API origin, or at nothing and stay local-only.
 - Submit self-hosted skills to the API when the skill contract says execution
   is server-owned.
 - Export machine-readable registry, MCP, config, quote, run, and validation
@@ -36,9 +38,9 @@ configuration, not a dependency of local-only use.
 V1 must keep the public package useful on its own:
 
 - `skills` CLI and `skills-mcp` server ship from npm package `@hasna/skills`.
-- Interactive setup can recommend self-hosted mode, while non-interactive setup
-  stays safe for local/CI use unless self-hosted mode is explicit.
-- Self-hosted setup stores a configurable API URL and uses explicit client auth.
+- Setup stores a configurable API URL and uses explicit client auth. It writes
+  no API origin the user did not supply, interactively or not, which is what
+  keeps local/CI use safe by default.
 - Premium or server-executed skills fail closed without self-hosted credentials
   and do not fall back to bundled local execution.
 - Public package exports expose reusable registry, config, validation,
@@ -83,7 +85,7 @@ is server-owned.
 Agent-native means the core workflow works from tools an agent already has:
 
 - Discover: list and search skills through CLI and MCP.
-- Configure: choose self-hosted mode or local-only mode.
+- Configure: set an API origin for server-executed skills, or none at all.
 - Execute: run local skills directly or submit self-hosted skills to the API.
 - Inspect: poll run status, read local logs, and retrieve exports.
 - Validate: expose package and skill checks as scriptable commands.

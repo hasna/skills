@@ -13,8 +13,26 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readd
 import { join, dirname } from "path";
 import { homedir } from "os";
 
+/**
+ * There is no deployment "mode" key.
+ *
+ * Skills has one deployment story: you run it. Whether this CLI talks to a
+ * server is not a product variant, it is one fact — whether an API origin is
+ * configured (apiUrl here, or $SKILLS_API_URL). Nothing else may be derived
+ * from a declared label, because a label can disagree with the configuration
+ * it claims to describe.
+ *
+ * One caveat, true at the time of writing and tracked separately: getApiUrl()
+ * in auth-store.ts still falls back to a built-in origin when neither is set,
+ * so "no origin configured" is not yet the same as "sends nothing anywhere" on
+ * the auth path. Removing that fallback belongs to the no-vendor-defaults work,
+ * not here; remote-registry.ts already fails closed and is the model.
+ *
+ * Configs written by older versions may still carry a "mode" key on disk. It is
+ * not a valid key, so readConfigFile() drops it and saveConfig() leaves it
+ * untouched in the file; it influences nothing.
+ */
 export interface SkillsConfig {
-  mode?: "local" | "self-hosted";
   defaultAgent?: "claude" | "codex" | "gemini" | "pi" | "opencode" | "all";
   defaultScope?: "global" | "project";
   format?: "compact" | "json" | "csv";
@@ -28,24 +46,12 @@ const ENUM_KEYS: Partial<Record<keyof SkillsConfig, string[]>> = {
 };
 
 const STRING_KEYS = ["apiUrl"] as const satisfies readonly (keyof SkillsConfig)[];
-const MODE_VALUES = ["local", "self-hosted"] as const;
-const MODE_ALIASES: Record<string, (typeof MODE_VALUES)[number]> = {
-  local: "local",
-  offline: "local",
-  "self-hosted": "self-hosted",
-  selfhosted: "self-hosted",
-  self_hosted: "self-hosted",
-  hosted: "self-hosted",
-  "skills.md": "self-hosted",
-  skillsmd: "self-hosted",
-};
 
 function validKeys(): string[] {
-  return ["mode", ...Object.keys(ENUM_KEYS), ...STRING_KEYS];
+  return [...Object.keys(ENUM_KEYS), ...STRING_KEYS];
 }
 
 function allowedValues(key: keyof SkillsConfig): readonly string[] | undefined {
-  if (key === "mode") return MODE_VALUES;
   return ENUM_KEYS[key];
 }
 
@@ -72,8 +78,6 @@ function mergeDirectoryContents(sourceDir: string, targetDir: string): void {
 
 function normalizeConfigValue(key: keyof SkillsConfig, value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
-
-  if (key === "mode") return MODE_ALIASES[value.trim().toLowerCase()];
 
   const allowed = allowedValues(key);
   if (allowed) return allowed.includes(value) ? value : undefined;
@@ -262,4 +266,38 @@ export function saveConfig(key: string, value: string, scope: ConfigScope = "pro
 
   existing[key] = normalized;
   writeFileSync(filePath, JSON.stringify(existing, null, 2) + "\n");
+}
+
+/**
+ * Remove a single config key from the specified scope.
+ *
+ * This is the counterpart that makes "no deployment mode" workable. Running on
+ * this machine is the absence of a configured apiUrl, so there has to be a way
+ * to get back to that state; previously the only way to express the intent was
+ * to set mode=local, and that key is gone.
+ *
+ * Returns whether the key was actually present, so callers can distinguish
+ * "removed" from "there was nothing to remove" instead of guessing.
+ */
+export function unsetConfig(key: string, scope: ConfigScope = "project"): boolean {
+  if (!validKeys().includes(key)) {
+    throw new Error(`Unknown config key: ${key}. Valid keys: ${validKeys().join(", ")}`);
+  }
+
+  const filePath = getConfigPath(scope);
+  if (!existsSync(filePath)) return false;
+
+  let existing: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, "utf-8"));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return false;
+    existing = parsed;
+  } catch {
+    return false;
+  }
+
+  if (!(key in existing)) return false;
+  delete existing[key];
+  writeFileSync(filePath, JSON.stringify(existing, null, 2) + "\n");
+  return true;
 }

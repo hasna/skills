@@ -9,6 +9,29 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+
+    # The server store has two durable backends and the suite is parameterised over
+    # whichever ones are reachable. Without a Postgres here, CI silently exercised only
+    # memory and sqlite and reported green for a backend it never touched - which is
+    # exactly the coverage gap the parameterisation exists to close.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Names the maintenance database. Each fixture creates and drops its own database
+      # under it, so test files can run concurrently without sharing a run queue.
+      HASNA_SKILLS_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+
     steps:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
@@ -18,12 +41,21 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Typecheck
         run: bun run typecheck
-      - name: Test
-        run: bun run test
+      # Build BEFORE test, on purpose. The boundary guards scan the packed file
+      # list, and `bin/` and `dist/` only exist after a build. Running tests
+      # first meant they scanned a package with no executable code in it: 471
+      # skill files, and nothing built from `src/` — so the guards certified a
+      # tree they had never read. Tests now assert per-entry-point coverage and
+      # will fail loudly if this order is reversed again.
       - name: Build
         run: bun run build
-      # Runs the same guard as `prepack`, but on every PR — scanning the real
-      # packed file list for secrets, PII and private context. Without this the
-      # scan only fires at publish time, which is too late to block a merge.
-      - name: Content scan (secrets, PII, private context)
+      - name: Test
+        run: bun run test
+      # The release guard is the only gate that runs at publish time. Running it
+      # in CI too means a boundary violation — a retired cloud marker, a secret,
+      # PII, private context, committed tool output — fails the PR rather than
+      # the release. This branch added a separate "Content scan" step for the
+      # same reason; it invoked the identical command, so it is dropped in
+      # favour of this one rather than run twice.
+      - name: Release guard
         run: bun run verify:release

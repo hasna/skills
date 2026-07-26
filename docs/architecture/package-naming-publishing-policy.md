@@ -47,8 +47,8 @@ Only publish from a clean public-package branch:
 10. Run the gates again after the version bump.
 11. Publish with `npm publish`.
 12. Refresh the local global install with `bun install -g @hasna/skills`.
-13. Verify `skills --version`, `skills --help`, `skills setup --mode local
-    --json`, and `skills-mcp --help`.
+13. Verify `skills --version`, `skills --help`, `skills setup --json`, and
+    `skills-mcp --help`.
 
 Do not publish private cloud dependencies, protected hosted source, account
 state, billing logic, tenant logic, or deployment assumptions in the public npm
@@ -62,7 +62,7 @@ After publishing `@hasna/skills`, refresh the local command:
 bun install -g @hasna/skills
 skills --version
 skills --help
-skills setup --mode local --json
+skills setup --json
 skills registry sync --profile basic --no-docs --no-requirements --no-validation --json
 ```
 

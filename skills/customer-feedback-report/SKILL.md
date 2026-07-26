@@ -15,7 +15,7 @@ Generate a structured customer feedback insight package from reviews, support ti
 ## Usage
 
 ```bash
-skills run customer-feedback-report --feedback "Users love onboarding but struggle with invoices and integrations" --product "Skills.md"
+skills run customer-feedback-report --feedback "Users love onboarding but struggle with invoices and integrations" --product "Acme Analytics"
 skills run customer-feedback-report ./feedback.txt --product "Acme CRM" --channel tickets --format product
 ```
 

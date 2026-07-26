@@ -22,7 +22,7 @@ const DEFAULT_REGISTRY: SkillMeta[] = [
   makeSkill({ name: "video", displayName: "Video Creator", description: "Create videos with AI", tags: ["video", "creation", "ai"] }),
   makeSkill({ name: "deploy", displayName: "Deploy Tool", description: "Deploy applications", tags: ["deployment", "ci-cd"] }),
   makeSkill({ name: "email-campaign", displayName: "Email Campaign Manager", description: "Design email campaigns", tags: ["email", "marketing"] }),
-  makeSkill({ name: "deepresearch", displayName: "Deep Research", description: "Agentic research using Exa", tags: ["research", "exa"] }),
+  makeSkill({ name: "market-research-report", displayName: "Market Research Report", description: "Competitor and audience research", tags: ["research", "market"] }),
 ];
 
 // ── editDistance ──────────────────────────────────────────────────

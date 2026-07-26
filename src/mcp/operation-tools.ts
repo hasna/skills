@@ -44,7 +44,7 @@ import {
 } from "../lib/compact-output.js";
 import { cacheClear, mcpError, mcpJson, remoteRunNextActions } from "./helpers.js";
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../lib/remote-run-contract.js";
-import { getHostedRunAvailability } from "../lib/hosted-availability.js";
+import { isHostedRuntimeSkill } from "../lib/hosted-runtime-skills.js";
 
 export function registerOperationTools(server: McpServer): void {
   server.registerTool("scaffold_skill", {
@@ -286,28 +286,6 @@ export function registerOperationTools(server: McpServer): void {
     }
 
     const pricing = getPublicSkillPricing(skill.name, runInput, runArgs);
-    const hostedAvailability = getHostedRunAvailability(skill.name);
-    if (!hostedAvailability.ok) {
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            skill: skill.name,
-            pricing,
-            error: hostedAvailability.message,
-            code: hostedAvailability.code,
-            details: hostedAvailability.details,
-            availability: {
-              status: "unavailable",
-              code: hostedAvailability.code,
-              message: hostedAvailability.message,
-              details: hostedAvailability.details,
-            },
-          }),
-        }],
-        isError: true,
-      };
-    }
 
     return mcpJson({
       skill: skill.name,
@@ -335,7 +313,6 @@ export function registerOperationTools(server: McpServer): void {
     const { getApiKey } = await import("../lib/auth-store.js");
     const {
       ARTICLE_GENERATION_SLUG,
-      isPremiumSkill,
       getSkillRunCostCents,
       formatCost,
       validateBlogArticleRunOptions,
@@ -351,36 +328,25 @@ export function registerOperationTools(server: McpServer): void {
     }
 
     const apiKey = getApiKey();
-    const costCents = isPremiumSkill(skillName) ? getSkillRunCostCents(skillName, runInput, runArgs) : undefined;
+    const hostedRuntime = isHostedRuntimeSkill(skillName);
+    const costCents = hostedRuntime ? getSkillRunCostCents(skillName, runInput, runArgs) : undefined;
     const runContext = createSkillRun({
       skill: skillName,
       args: runArgs,
-      remote: isPremiumSkill(skillName),
+      remote: hostedRuntime,
       costCents,
     });
 
-    if (isPremiumSkill(skillName)) {
-      const hostedAvailability = getHostedRunAvailability(skillName);
-      if (!hostedAvailability.ok) {
-        const error = `${hostedAvailability.code}: ${hostedAvailability.message}`;
-        writeRunLogs(runContext, "", `${error}\n${hostedAvailability.details.join("\n")}\n`);
-        const run = completeSkillRun(runContext, { status: "failed", error, costCents });
-        return mcpError(
-          hostedAvailability.code,
-          `${hostedAvailability.message}. ${hostedAvailability.details.join(" ")} Local run metadata: ${run.paths.runDir}/run.json`,
-        );
-      }
-    }
 
-    if (isPremiumSkill(skillName) && !apiKey) {
+    if (hostedRuntime && !apiKey) {
       const cost = formatCost(costCents ?? 0);
-      const error = `${skillName} is a self-hosted skill (${cost}). Run: skills setup --mode self-hosted && skills auth login`;
+      const error = `${skillName} is a self-hosted skill (${cost}). Run: skills auth login`;
       writeRunLogs(runContext, "", error + "\n");
       const run = completeSkillRun(runContext, { status: "failed", error, costCents });
       return mcpError("AUTH_REQUIRED", `${error}. Local run metadata: ${run.paths.runDir}/run.json`, ["skills auth login"]);
     }
 
-    if (isPremiumSkill(skillName) && apiKey && approved !== true) {
+    if (hostedRuntime && apiKey && approved !== true) {
       const cost = formatCost(costCents ?? 0);
       const error = `${skillName} is a paid self-hosted skill (${cost}). Call quote_skill first, then call run_skill with approved: true after user approval.`;
       writeRunLogs(runContext, "", error + "\n");
@@ -391,7 +357,7 @@ export function registerOperationTools(server: McpServer): void {
       ]);
     }
 
-    if (isPremiumSkill(skillName) && apiKey) {
+    if (hostedRuntime && apiKey) {
       try {
         const { RemoteSkillsClient } = await import("../lib/remote-client.js");
         const client = new RemoteSkillsClient(apiKey);

@@ -11,8 +11,17 @@ import { dirname, join, normalize, relative, sep } from "node:path";
 import { getDataDir } from "./config.js";
 import { getProjectStateDir } from "./project-state.js";
 
-export type SkillsStorageMode = "local" | "remote" | "hybrid";
-
+/**
+ * There is no storage "mode" either.
+ *
+ * This layer used to carry a declared local|remote|hybrid label. Nothing ever
+ * branched on it: it was echoed into `storage status` and `storage sync-plan`
+ * beside databaseConfigured/s3Configured, which are read from the actual
+ * configuration. A declared label can contradict them (mode=remote with no
+ * database URL), so it was a second, weaker answer to a question already
+ * answered truthfully. What the store does is derived from what you configured:
+ * on-box SQLite plus files, plus Postgres and/or S3 when their env vars are set.
+ */
 export const SKILLS_STORAGE_TABLES = [
   "skills_sync_records",
   "skills_sync_cursors",
@@ -23,7 +32,6 @@ export const STORAGE_TABLES = SKILLS_STORAGE_TABLES;
 export type SkillsStorageTable = typeof SKILLS_STORAGE_TABLES[number];
 
 export interface SkillsNativeStorageConfig {
-  mode: SkillsStorageMode;
   databaseUrl?: string;
   databaseSsl?: boolean;
   databaseSchema?: string;
@@ -37,7 +45,6 @@ export interface SkillsNativeStorageConfig {
 }
 
 export const SKILLS_NATIVE_STORAGE_ENV = {
-  mode: "HASNA_SKILLS_STORAGE_MODE",
   databaseUrl: "HASNA_SKILLS_DATABASE_URL",
   databaseSsl: "HASNA_SKILLS_DATABASE_SSL",
   databaseSchema: "HASNA_SKILLS_DATABASE_SCHEMA",
@@ -54,7 +61,6 @@ export const SKILLS_NATIVE_STORAGE_ENV = {
 } as const;
 
 export const SKILLS_NATIVE_STORAGE_FALLBACK_ENV = {
-  mode: "SKILLS_STORAGE_MODE",
   databaseUrl: "SKILLS_DATABASE_URL",
   databaseSsl: "SKILLS_DATABASE_SSL",
   databaseSchema: "SKILLS_DATABASE_SCHEMA",
@@ -76,9 +82,7 @@ export const SKILLS_STORAGE_FALLBACK_ENV = SKILLS_NATIVE_STORAGE_FALLBACK_ENV;
 export function resolveSkillsNativeStorageConfig(
   env: Record<string, string | undefined> = process.env,
 ): SkillsNativeStorageConfig {
-  const mode = getSkillsStorageMode(env);
   return {
-    mode,
     databaseUrl: getSkillsStorageDatabaseUrl(env),
     databaseSsl: parseBoolean(readStorageEnv(env, "databaseSsl").value),
     databaseSchema: readStorageEnv(env, "databaseSchema").value,
@@ -96,18 +100,6 @@ export function resolveStorageConfig(
   env: Record<string, string | undefined> = process.env,
 ): SkillsNativeStorageConfig {
   return resolveSkillsNativeStorageConfig(env);
-}
-
-export function getSkillsStorageMode(
-  env: Record<string, string | undefined> = process.env,
-): SkillsStorageMode {
-  return parseMode(readStorageEnv(env, "mode").value);
-}
-
-export function getStorageMode(
-  env: Record<string, string | undefined> = process.env,
-): SkillsStorageMode {
-  return getSkillsStorageMode(env);
 }
 
 export function getSkillsStorageDatabaseEnv(
@@ -136,10 +128,8 @@ export function getStorageDatabaseUrl(
 
 export interface SkillsNativeStorageStatus {
   package: "open-skills";
-  mode: SkillsStorageMode;
   tables: readonly SkillsStorageTable[];
   env: {
-    mode: string;
     databaseUrl: string;
     s3Bucket: string;
   };
@@ -153,7 +143,6 @@ export interface SkillsNativeStorageStatus {
     s3Configured: boolean;
     databaseEnv: string;
     s3BucketEnv: string;
-    activeModeEnv: string;
     activeDatabaseEnv: string;
     activeS3BucketEnv: string;
     region: string;
@@ -166,16 +155,13 @@ export function getSkillsNativeStorageStatus(
 ): SkillsNativeStorageStatus {
   const env = options.env ?? process.env;
   const config = resolveSkillsNativeStorageConfig(env);
-  const modeEnv = readStorageEnv(env, "mode");
   const databaseEnv = readStorageEnv(env, "databaseUrl");
   const s3BucketEnv = readStorageEnv(env, "s3Bucket");
   const targetDir = options.targetDir ?? process.cwd();
   return {
     package: "open-skills",
-    mode: config.mode,
     tables: [...SKILLS_STORAGE_TABLES],
     env: {
-      mode: SKILLS_NATIVE_STORAGE_ENV.mode,
       databaseUrl: SKILLS_NATIVE_STORAGE_ENV.databaseUrl,
       s3Bucket: SKILLS_NATIVE_STORAGE_ENV.s3Bucket,
     },
@@ -189,7 +175,6 @@ export function getSkillsNativeStorageStatus(
       s3Configured: Boolean(config.s3Bucket),
       databaseEnv: SKILLS_NATIVE_STORAGE_ENV.databaseUrl,
       s3BucketEnv: SKILLS_NATIVE_STORAGE_ENV.s3Bucket,
-      activeModeEnv: modeEnv.name,
       activeDatabaseEnv: databaseEnv.name,
       activeS3BucketEnv: s3BucketEnv.name,
       region: config.awsRegion ?? "us-east-1",
@@ -652,12 +637,6 @@ export function buildSkillsS3ObjectUrl(params: {
   return params.forcePathStyle
     ? `https://s3.${region}.amazonaws.com/${encodeURIComponent(params.bucket)}/${key}`
     : `https://${params.bucket}.s3.${region}.amazonaws.com/${key}`;
-}
-
-function parseMode(value: string | undefined): SkillsStorageMode {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === "remote" || normalized === "hybrid") return normalized;
-  return "local";
 }
 
 function readStorageEnv(

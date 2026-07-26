@@ -77,10 +77,10 @@ and `skills credits buy`. Those commands are adapters over self-hosted HTTP APIs
 They must not contain Stripe keys, webhook handlers, entitlement ledgers,
 tenant database logic, self-hosted auth servers, or worker execution logic.
 
-The canonical remote execution setup mode is `self-hosted`, not `hosted`, `cloud`,
-`remote`, or a website/domain name. Self-hosted service wrappers can still set a
-default API origin such as `https://your-server.example`, and the CLI may preserve
-legacy aliases like `hosted`, `skills.md`, or `remote` only for compatibility.
+Remote execution is configured by API origin, not by a named setup variant. The
+CLI has no vocabulary for `self-hosted`, `hosted`, `cloud`, or `local` as things
+a user selects, and no alias table mapping domain names onto such a selection.
+Wrappers can set a default API origin such as `https://your-server.example`.
 
 ## Generated Registry Sync
 
@@ -129,4 +129,4 @@ When self-hosted service work needs a generic engine change:
   private deployment infrastructure.
 - No hosted or paid skill should download protected source code into local
   agent folders.
-- The public package must remain useful in local-only mode.
+- The public package must remain fully useful with no API origin configured.
