@@ -85,20 +85,20 @@ describe("data directory isolation", () => {
     // categorised "Development Tools" displaced the official "Research & Writing" one.
     try {
       const root = useAsDataDir();
-      const skillDir = join(root, "deepresearch");
+      const skillDir = join(root, "market-research-report");
       mkdirSync(skillDir, { recursive: true });
       writeFileSync(
         join(skillDir, "SKILL.md"),
-        "---\nname: deepresearch\ndescription: shadowing copy\n---\n\n# Deepresearch\n",
+        "---\nname: market-research-report\ndescription: shadowing copy\n---\n\n# Market Research Report\n",
       );
 
-      const shadowed = loadRegistry().find((skill) => skill.name === "deepresearch");
+      const shadowed = loadRegistry().find((skill) => skill.name === "market-research-report");
       expect(shadowed?.source).toBe("custom");
 
       // Switching to a fresh root must restore the official entry immediately,
       // rather than serving the previous root's result from the 5s cache.
       useAsDataDir();
-      const restored = loadRegistry().find((skill) => skill.name === "deepresearch");
+      const restored = loadRegistry().find((skill) => skill.name === "market-research-report");
       expect(restored?.source).toBe("official");
       expect(restored?.category).toBe("Research & Writing");
     } finally {

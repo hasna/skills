@@ -17,7 +17,7 @@ export interface SkillPricing {
 
 export interface PublicSkillPricing {
   tier: BillingTier;
-  billingUnit: "run" | "image" | "second" | "character" | "song" | "thousand_tokens" | "article";
+  billingUnit: "run" | "article";
   costCents: number;
   formattedCost: string;
   formattedUnitCost?: string;
@@ -35,47 +35,11 @@ export interface SkillCatalogBillingFields {
   creditsPerExecution: number;
 }
 
-export type MediaModality = "image" | "video" | "audio" | "music";
-export type MediaProvider = "openai" | "minimax" | "gemini" | "seedance";
-
-type PriceUnit = "image" | "second" | "character" | "song" | "thousand_tokens";
-
-interface MediaPrice {
-  slug: MediaModality;
-  provider: MediaProvider;
-  model: string;
-  unit: PriceUnit;
-  costMicros: number;
-  description: string;
-  default?: boolean;
-  resolution?: string;
-  durationSeconds?: number;
-}
-
-export const MUSIC_ALBUM_SLUG = "music-album";
-export const MUSIC_ALBUM_SONG_COUNTS = [7, 14, 21] as const;
-const MUSIC_ALBUM_COST_CENTS_PER_SONG = 150;
-
 export const PREMIUM_SKILLS: SkillPricing[] = [
   { slug: "brand-assets", displayName: "Brand Assets", tier: "premium", costCents: 200, providers: ["self-hosted"], description: "Self-hosted brand asset discovery package with logos, PNG sizes, palette, typography, source metadata, and manifest" },
-  { slug: "icon-pack", displayName: "Icon Pack", tier: "premium", costCents: 200, providers: ["self-hosted"], description: "Self-hosted coordinated icon pack with SVGs, transparent PNGs, size variants, and manifest" },
   { slug: "logo-design", displayName: "Logo Design", tier: "premium", costCents: 50, providers: ["self-hosted"], description: "Self-hosted multi-variant logo package with transparent PNGs, vector-style SVGs, usage notes, and manifest" },
-  { slug: "deepresearch", displayName: "Deep Research", tier: "premium", costCents: 20, providers: ["exa"], description: "Agentic web research with semantic search and synthesis" },
-  { slug: "playlist-maker", displayName: "Playlist Maker", tier: "premium", costCents: 30, providers: ["exa", "gemini-3-pro"], description: "Curated playlist with research, track selection, and album art" },
-  { slug: MUSIC_ALBUM_SLUG, displayName: "Music Album", tier: "premium", costCents: MUSIC_ALBUM_COST_CENTS_PER_SONG * 7, providers: ["self-hosted"], description: "Self-hosted music album package with configurable 7, 14, or 21 generated songs, cover art, metadata, manifest, and receipt" },
-  { slug: "photo-album", displayName: "Photo Album", tier: "premium", costCents: 300, providers: ["self-hosted"], description: "Self-hosted themed photo album with configurable image count, cover image, captions, gallery manifest, and downloadable assets" },
-  { slug: "short-video-pack", displayName: "Short Video Pack", tier: "premium", costCents: 500, providers: ["self-hosted"], description: "Self-hosted short-form video package with scripts, shot list, generated clips or edit package, captions, thumbnails, manifest, and receipt" },
-  { slug: "voiceover-jingle-pack", displayName: "Voiceover And Jingle Pack", tier: "premium", costCents: 250, providers: ["self-hosted"], description: "Self-hosted voiceover variants and short jingles with audio artifacts, usage notes, manifest, and receipt" },
-  { slug: "brand-photo-shoot", displayName: "Brand Photo Shoot", tier: "premium", costCents: 600, providers: ["self-hosted"], description: "Self-hosted product or brand photo shoot set with prompt planning, multiple scenes, gallery exports, captions, and receipt" },
   { slug: "product-mockup", displayName: "Product Mockup", tier: "premium", costCents: 200, providers: ["self-hosted"], description: "Self-hosted product mockup package with SVG variants, image direction prompts, scene planning, usage notes, asset metadata, and manifest" },
   { slug: "brand-kit", displayName: "Brand Kit", tier: "premium", costCents: 400, providers: ["self-hosted"], description: "Self-hosted brand kit with logo usage, palette, typography, brand voice, sample applications, Markdown guide, PDF guide, and SVG assets" },
-  { slug: "generate-book-cover", displayName: "Book Cover", tier: "premium", costCents: 20, providers: ["gpt-image-2"], description: "Professional book cover design from title and genre" },
-  { slug: "remove-background", displayName: "Remove Background", tier: "premium", costCents: 10, providers: ["gemini-3-pro"], description: "AI-powered background removal from images" },
-  { slug: "transcript", displayName: "Transcript", tier: "premium", costCents: 10, providers: ["openai", "elevenlabs", "deepgram", "self-hosted"], description: "Audio/video transcription with timestamps, diarization, and URL support" },
-  { slug: "webcrawling", displayName: "Web Crawling", tier: "premium", costCents: 5, providers: ["firecrawl"], description: "Structured web page crawling and extraction" },
-  { slug: "browse", displayName: "Browse", tier: "premium", costCents: 5, providers: ["browser"], description: "Web browsing and page interaction" },
-  { slug: "read-pdf", displayName: "Read PDF", tier: "premium", costCents: 5, providers: ["openrouter"], description: "Self-hosted PDF extraction and structured content analysis" },
-  { slug: "pdf-read", displayName: "PDF Read", tier: "premium", costCents: 5, providers: ["openrouter"], description: "Self-hosted multi-PDF text extraction with page ranges" },
   { slug: "pdf-to-markdown", displayName: "PDF to Markdown", tier: "premium", costCents: 5, providers: ["self-hosted"], description: "Self-hosted PDF to markdown conversion and cleanup" },
   { slug: "pdf-to-dataset", displayName: "PDF to Dataset", tier: "premium", costCents: 15, providers: ["self-hosted"], description: "Self-hosted PDF table and form extraction into CSV/JSON datasets" },
   { slug: "market-research-report", displayName: "Market Research Report", tier: "premium", costCents: 150, providers: ["self-hosted"], description: "Self-hosted market research report with competitor, audience, pricing, and source artifacts" },
@@ -129,39 +93,7 @@ export type BlogArticleValidationResult =
   | { ok: true; options: BlogArticleRunOptions; input: Record<string, unknown>; errors: [] }
   | { ok: false; input: Record<string, unknown>; errors: string[] };
 
-export const MEDIA_GENERATION_PRICES: MediaPrice[] = [
-  { slug: "image", provider: "openai", model: "gpt-image-1.5", unit: "image", costMicros: 34_000, description: "GPT Image 1.5 medium 1024x1024 image", default: true },
-  { slug: "image", provider: "openai", model: "dall-e-3", unit: "image", costMicros: 40_000, description: "DALL-E 3 standard 1024x1024 image" },
-  { slug: "image", provider: "minimax", model: "image-01", unit: "image", costMicros: 3_500, description: "MiniMax image-01 image", default: true },
-  { slug: "image", provider: "gemini", model: "imagen-4.0-generate-001", unit: "image", costMicros: 40_000, description: "Imagen 4 standard image", default: true },
-  { slug: "image", provider: "gemini", model: "imagen-4.0-fast-generate-001", unit: "image", costMicros: 20_000, description: "Imagen 4 fast image" },
-  { slug: "image", provider: "gemini", model: "imagen-4.0-ultra-generate-001", unit: "image", costMicros: 60_000, description: "Imagen 4 ultra image" },
-  { slug: "image", provider: "gemini", model: "gemini-2.5-flash-image", unit: "image", costMicros: 39_000, description: "Gemini 2.5 Flash Image" },
-
-  { slug: "video", provider: "openai", model: "sora-2", unit: "second", costMicros: 100_000, description: "Sora 2 720p video", default: true },
-  { slug: "video", provider: "openai", model: "sora-2-pro", unit: "second", costMicros: 300_000, description: "Sora 2 Pro 720p video" },
-  { slug: "video", provider: "minimax", model: "MiniMax-Hailuo-2.3-Fast", unit: "second", costMicros: 31_667, description: "MiniMax Hailuo 2.3 Fast 768p 6s video", default: true, resolution: "768p", durationSeconds: 6 },
-  { slug: "video", provider: "minimax", model: "MiniMax-Hailuo-2.3", unit: "second", costMicros: 46_667, description: "MiniMax Hailuo 2.3 768p 6s video" },
-  { slug: "video", provider: "gemini", model: "veo-3.1-fast-generate-preview", unit: "second", costMicros: 100_000, description: "Veo 3.1 Fast 720p video", default: true, resolution: "720p" },
-  { slug: "video", provider: "gemini", model: "veo-3.1-generate-preview", unit: "second", costMicros: 400_000, description: "Veo 3.1 standard 720p/1080p video" },
-  { slug: "video", provider: "seedance", model: "dreamina-seedance-2.0", unit: "thousand_tokens", costMicros: 7_000, description: "Dreamina Seedance 2.0 text/image-to-video token price", default: true },
-  { slug: "video", provider: "seedance", model: "dreamina-seedance-2.0-fast", unit: "thousand_tokens", costMicros: 5_600, description: "Dreamina Seedance 2.0 Fast text/image-to-video token price" },
-
-  { slug: "audio", provider: "openai", model: "tts-1", unit: "character", costMicros: 15, description: "OpenAI TTS speech generation", default: true },
-  { slug: "audio", provider: "openai", model: "tts-1-hd", unit: "character", costMicros: 30, description: "OpenAI TTS HD speech generation" },
-  { slug: "audio", provider: "minimax", model: "speech-2.8-turbo", unit: "character", costMicros: 60, description: "MiniMax turbo text-to-audio", default: true },
-  { slug: "audio", provider: "minimax", model: "speech-2.8-hd", unit: "character", costMicros: 100, description: "MiniMax HD text-to-audio" },
-  { slug: "audio", provider: "gemini", model: "gemini-2.5-flash-preview-tts", unit: "character", costMicros: 10, description: "Gemini 2.5 Flash TTS output-token equivalent", default: true },
-  { slug: "audio", provider: "gemini", model: "gemini-2.5-pro-preview-tts", unit: "character", costMicros: 20, description: "Gemini 2.5 Pro TTS output-token equivalent" },
-
-  { slug: "music", provider: "minimax", model: "Music-2.6", unit: "song", costMicros: 150_000, description: "MiniMax Music 2.6 up-to-5-minute song", default: true },
-  { slug: "music", provider: "minimax", model: "Music-2.0", unit: "song", costMicros: 30_000, description: "MiniMax Music 2.0 up-to-5-minute song" },
-  { slug: "music", provider: "gemini", model: "lyria-3-clip-preview", unit: "song", costMicros: 40_000, description: "Lyria 3 30s clip", default: true },
-  { slug: "music", provider: "gemini", model: "lyria-3-pro-preview", unit: "song", costMicros: 80_000, description: "Lyria 3 full song" },
-];
-
 const premiumIndex = new Map(PREMIUM_SKILLS.map((s) => [s.slug, s]));
-const mediaSlugs = new Set<MediaModality>(["image", "video", "audio", "music"]);
 
 export function getSkillPricing(slug: string): SkillPricing | null {
   const canonicalSlug = resolvePricingSlug(slug);
@@ -174,7 +106,7 @@ export function getSkillPricing(slug: string): SkillPricing | null {
  *
  * Every non-billing caller has been migrated. This alias remains only because
  * the symbol is published from the package root; it now delegates so that the
- * price table below can be deleted without changing what any caller computes.
+ * price table above can be deleted without changing what any caller computes.
  * Equality of the two sets is asserted in `hosted-runtime-skills.test.ts`
  * against the filesystem, not assumed here.
  */
@@ -197,55 +129,12 @@ export function getSkillRunPricing(slug: string, input?: unknown, args: string[]
       tier: "premium",
       costCents: ARTICLE_USER_COST_CENTS * count,
       costMicros: ARTICLE_INTERNAL_COST_CENTS * count * 10_000,
-      provider: "openrouter",
-      model: "openai/gpt-4o-mini",
-      providers: ["openrouter"],
-      description: `Remote article generation; ${count} article${count === 1 ? "" : "s"}`,
-    };
-  }
-
-  if (canonicalSlug === MUSIC_ALBUM_SLUG) {
-    const options = collectRunOptions(input, args);
-    const songCount = resolveMusicAlbumSongCount(options);
-    const costCents = MUSIC_ALBUM_COST_CENTS_PER_SONG * songCount;
-    return {
-      slug: canonicalSlug,
-      displayName: "Music Album",
-      tier: "premium",
-      costCents,
-      costMicros: costCents * 10_000,
-      provider: "self-hosted",
       providers: ["self-hosted"],
-      description: `Self-hosted music album package; ${songCount} generated songs`,
+      description: `Hosted article generation; ${count} article${count === 1 ? "" : "s"}`,
     };
   }
 
-  const mediaSlug = canonicalSlug as MediaModality;
-  if (!mediaSlugs.has(mediaSlug)) {
-    return premiumIndex.get(canonicalSlug) || null;
-  }
-
-  const options = collectRunOptions(input, args);
-  const provider = normalizeProvider(options.provider) || defaultProvider(mediaSlug);
-  const model = typeof options.model === "string" ? options.model : undefined;
-  const price = selectMediaPrice(mediaSlug, provider, model);
-  if (!price) return null;
-
-  const units = resolveUnits(price, options);
-  const costMicros = Math.ceil(price.costMicros * units);
-  const costCents = microsToBillableCents(costMicros);
-
-  return {
-    slug: mediaSlug,
-    displayName: `${titleCase(mediaSlug)} Generation`,
-    tier: "premium",
-    costCents,
-    costMicros,
-    provider: price.provider,
-    model: price.model,
-    providers: getMediaProviders(mediaSlug),
-    description: `${price.description}; ${units} ${price.unit}${units === 1 ? "" : "s"}`,
-  };
+  return premiumIndex.get(canonicalSlug) || null;
 }
 
 export function validateBlogArticleRunOptions(
@@ -324,23 +213,6 @@ export function getPublicSkillPricing(slug: string, input?: unknown, args: strin
     };
   }
 
-  if (canonicalSlug === MUSIC_ALBUM_SLUG) {
-    const options = collectRunOptions(input, args);
-    const songCount = resolveMusicAlbumSongCount(options);
-    const total = MUSIC_ALBUM_COST_CENTS_PER_SONG * songCount;
-    return {
-      tier: "premium",
-      billingUnit: "song",
-      costCents: total,
-      formattedCost: `${formatCost(total)} total`,
-      formattedUnitCost: `${formatCost(MUSIC_ALBUM_COST_CENTS_PER_SONG)}/song`,
-      unitCount: songCount,
-      estimated: true,
-      quoteDependsOnInput: true,
-      quoteRequired: true,
-      description: "Estimated album package price. Final price depends on song count and generated media options.",
-    };
-  }
 
   const fixed = premiumIndex.get(canonicalSlug);
   if (fixed) {
@@ -356,26 +228,6 @@ export function getPublicSkillPricing(slug: string, input?: unknown, args: strin
     };
   }
 
-  const mediaSlug = canonicalSlug as MediaModality;
-  if (mediaSlugs.has(mediaSlug)) {
-    const options = collectRunOptions(input, args);
-    const provider = normalizeProvider(options.provider) || defaultProvider(mediaSlug);
-    const model = typeof options.model === "string" ? options.model : undefined;
-    const price = selectMediaPrice(mediaSlug, provider, model);
-    const internal = getSkillRunPricing(canonicalSlug, input, args);
-    const unitCount = price ? resolveUnits(price, options) : undefined;
-    return {
-      tier: "premium",
-      billingUnit: price?.unit ?? "run",
-      costCents: internal?.costCents ?? 0,
-      formattedCost: `${formatCost(internal?.costCents ?? 0)} estimated`,
-      ...(unitCount !== undefined ? { unitCount } : {}),
-      estimated: true,
-      quoteDependsOnInput: true,
-      quoteRequired: true,
-      description: "Estimated price. Final price depends on request options.",
-    };
-  }
 
   return {
     tier: "free",
@@ -409,38 +261,10 @@ export function formatPublicPricing(slug: string, input?: unknown, args: string[
   return getPublicSkillPricing(slug, input, args).formattedCost;
 }
 
-export function isMediaGenerationSkill(slug: string): boolean {
-  return mediaSlugs.has(resolvePricingSlug(slug) as MediaModality);
-}
 
-export function getMediaProviders(slug: MediaModality): string[] {
-  return [...new Set(MEDIA_GENERATION_PRICES.filter((p) => p.slug === slug).map((p) => p.provider))];
-}
 
-function selectMediaPrice(slug: MediaModality, provider: MediaProvider, model?: string): MediaPrice | null {
-  const candidates = MEDIA_GENERATION_PRICES.filter((p) => p.slug === slug && p.provider === provider);
-  if (model) {
-    const exact = candidates.find((p) => p.model.toLowerCase() === model.toLowerCase());
-    if (exact) return exact;
-  }
-  return candidates.find((p) => p.default) || candidates[0] || null;
-}
 
-function defaultProvider(slug: MediaModality): MediaProvider {
-  if (slug === "video") return "seedance";
-  if (slug === "music") return "minimax";
-  if (slug === "audio") return "openai";
-  return "openai";
-}
 
-function normalizeProvider(value: unknown): MediaProvider | null {
-  if (typeof value !== "string") return null;
-  const normalized = value.toLowerCase();
-  if (normalized === "google") return "gemini";
-  if (normalized === "byteplus" || normalized === "bytedance") return "seedance";
-  if (["openai", "minimax", "gemini", "seedance"].includes(normalized)) return normalized as MediaProvider;
-  return null;
-}
 
 function collectRunOptions(input: unknown, args: string[]): Record<string, unknown> {
   const options: Record<string, unknown> = {};
@@ -479,22 +303,7 @@ function collectRunOptions(input: unknown, args: string[]): Record<string, unkno
   return options;
 }
 
-function resolveUnits(price: MediaPrice, options: Record<string, unknown>): number {
-  if (price.unit === "image") return positiveNumber(options.count ?? options.n ?? options.images, 1);
-  if (price.unit === "song") return positiveNumber(options.count ?? options.songs, 1);
-  if (price.unit === "second") return positiveNumber(options.duration ?? options.seconds, price.durationSeconds || 6);
-  if (price.unit === "thousand_tokens") {
-    const tokens = positiveNumber(options.tokens ?? options.estimatedTokens, 1000);
-    return Math.max(1, tokens / 1000);
-  }
-  const text = [options.text, options.prompt, options.lyrics].filter((v) => typeof v === "string").join("\n");
-  return Math.max(1, text.length || positiveNumber(options.characters, 1000));
-}
 
-function positiveNumber(value: unknown, fallback: number): number {
-  const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
-  return Number.isFinite(n) && n > 0 ? n : fallback;
-}
 
 function resolveArticleCount(options: Record<string, unknown>): number {
   const raw = options.count ?? options.articles ?? options.n;
@@ -502,17 +311,6 @@ function resolveArticleCount(options: Record<string, unknown>): number {
   return count ?? 1;
 }
 
-function resolveMusicAlbumSongCount(options: Record<string, unknown>): number {
-  const raw = options.songs ?? options.tracks ?? options.count ?? options.n;
-  const parsed = typeof raw === "number"
-    ? raw
-    : typeof raw === "string" && /^\d+$/.test(raw.trim())
-      ? Number(raw.trim())
-      : MUSIC_ALBUM_SONG_COUNTS[0];
-  return MUSIC_ALBUM_SONG_COUNTS.includes(parsed as typeof MUSIC_ALBUM_SONG_COUNTS[number])
-    ? parsed
-    : MUSIC_ALBUM_SONG_COUNTS[0];
-}
 
 function parseArticleCount(value: unknown): number | null {
   if (value === undefined || value === null || value === "") return 1;
@@ -551,14 +349,7 @@ function parseOptionalBoolean(value: unknown): boolean | null {
   return null;
 }
 
-function microsToBillableCents(costMicros: number): number {
-  if (costMicros <= 0) return 0;
-  return Math.max(1, Math.ceil(costMicros / 10_000));
-}
 
-function titleCase(value: string): string {
-  return value.slice(0, 1).toUpperCase() + value.slice(1);
-}
 
 function resolvePricingSlug(slug: string): string {
   return resolveSkillAlias(slug);
@@ -572,7 +363,6 @@ export function getAllPremiumSlugs(): string[] {
   return [
     ...new Set([
       ...PREMIUM_SKILLS.map((skill) => skill.slug),
-      ...MEDIA_GENERATION_PRICES.map((price) => price.slug),
       ARTICLE_GENERATION_SLUG,
     ]),
   ].sort();

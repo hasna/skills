@@ -328,56 +328,6 @@ describe("CLI run core", () => {
       }
     });
 
-    test("unavailable hosted provider skills fail before auth, approval, or remote calls", async () => {
-      const { mkdtempSync, rmSync } = require("fs");
-      const { tmpdir } = require("os");
-      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-premium-unavailable-provider-"));
-      let remoteCalls = 0;
-      const server = Bun.serve({
-        port: 0,
-        fetch() {
-          remoteCalls += 1;
-          return Response.json({ error: "unavailable skills should not call hosted API" }, { status: 500 });
-        },
-      });
-      try {
-        const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", "run", "--json", "image", "a mountain at sunrise"], {
-          stdout: "pipe",
-          stderr: "pipe",
-          cwd: tmpDir,
-          env: {
-            ...process.env,
-            HOME: tmpDir,
-            NO_COLOR: "1",
-            SKILLS_TEST_MODE: "",
-            SKILLS_API_KEY: "",
-            SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
-          },
-        });
-        const [stdout, stderr, exitCode] = await Promise.all([
-          new Response(proc.stdout).text(),
-          new Response(proc.stderr).text(),
-          proc.exited,
-        ]);
-        const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
-        expect(exitCode).not.toBe(0);
-        expect(data.code).toBe("HOSTED_PROVIDER_UNAVAILABLE");
-        expect(data.availability).toMatchObject({
-          status: "unavailable",
-          code: "HOSTED_PROVIDER_UNAVAILABLE",
-        });
-        expect(data.details).toContain("No balance was charged.");
-        expect(data.error).not.toContain("skills auth login");
-        expect(data.approvalRequired).toBeUndefined();
-        expect(data.run.remote).toBe(true);
-        expect(data.run.status).toBe("failed");
-        expect(remoteCalls).toBe(0);
-      } finally {
-        server.stop(true);
-        rmSync(tmpDir, { recursive: true, force: true });
-      }
-    });
 
     test("run --wait polls remote runs to terminal status and writes remote logs locally", async () => {
       const { existsSync, mkdtempSync, readFileSync, rmSync } = require("fs");

@@ -46,7 +46,7 @@ describe("CLI import export and env checks", () => {
         expect(stdout).toContain("react");
         expect(stdout).toContain("typescript");
         expect(stdout).toContain("Recommended skills");
-        expect(stdout).toContain("image");
+        expect(stdout).toContain("logo-design");
         expect(stdout).toContain("implementation-plan");
         expect(stdout).toContain("skills mcp --register claude");
       } finally {
@@ -157,7 +157,7 @@ describe("CLI import export and env checks", () => {
         fetch(req) {
           const url = new URL(req.url);
           if (url.pathname === "/api/v1/runs/run_remote") {
-            return Response.json({ id: "run_remote", skill: "image", status: "completed" });
+            return Response.json({ id: "run_remote", skill: "logo-design", status: "completed" });
           }
           if (url.pathname === "/api/v1/runs/run_remote/artifacts") {
             return Response.json([
@@ -189,11 +189,11 @@ describe("CLI import export and env checks", () => {
           },
         );
         const data = JSON.parse(stdout);
-        const outputPath = require("path").join(tmpDir, ".skills", "exports", "image", "run_remote", "nested", "report.md");
+        const outputPath = require("path").join(tmpDir, ".skills", "exports", "logo-design", "run_remote", "nested", "report.md");
 
         expect(stderr).toBe("");
         expect(exitCode).toBe(0);
-        expect(data).toMatchObject({ runId: "run_remote", skill: "image" });
+        expect(data).toMatchObject({ runId: "run_remote", skill: "logo-design" });
         expect(data.downloaded).toHaveLength(1);
         expect(existsSync(outputPath)).toBe(true);
         expect(readFileSync(outputPath, "utf8")).toBe("# Remote export\n");
@@ -288,23 +288,23 @@ describe("CLI import export and env checks", () => {
     }
 
     test("shows env var status for a skill", async () => {
-      const { stdout, exitCode } = await runCli(["env-check", "image"]);
+      const { stdout, exitCode } = await runCli(["env-check", "logo-design"]);
       expect(exitCode).toBe(0);
-      expect(stdout).toContain("Auth status for image");
+      expect(stdout).toContain("Auth status for logo-design");
       expect(stdout).toContain("SKILLS_API_KEY");
     });
 
     test("shows set/missing markers for env vars", async () => {
-      const { stdout } = await runCli(["env-check", "image"]);
+      const { stdout } = await runCli(["env-check", "logo-design"]);
       const hasStatus = stdout.includes("set") || stdout.includes("missing");
       expect(hasStatus).toBe(true);
     });
 
     test("outputs JSON with --json flag", async () => {
-      const { stdout, exitCode } = await runCli(["env-check", "image", "--json"]);
+      const { stdout, exitCode } = await runCli(["env-check", "logo-design", "--json"]);
       expect(exitCode).toBe(0);
       const data = JSON.parse(stdout);
-      expect(data.skill).toBe("image");
+      expect(data.skill).toBe("logo-design");
       expect(Array.isArray(data.envVars)).toBe(true);
       expect(data.envVars.length).toBeGreaterThan(0);
       expect(data.envVars[0]).toHaveProperty("name");
@@ -313,7 +313,7 @@ describe("CLI import export and env checks", () => {
     });
 
     test("JSON output contains SKILLS_API_KEY for image skill", async () => {
-      const { stdout } = await runCli(["env-check", "image", "--json"]);
+      const { stdout } = await runCli(["env-check", "logo-design", "--json"]);
       const data = JSON.parse(stdout);
       const skillApiKey = data.envVars.find((v: { name: string }) => v.name === "SKILLS_API_KEY");
       expect(skillApiKey).toBeDefined();
@@ -395,7 +395,7 @@ describe("CLI import export and env checks", () => {
     });
 
     test("env var set field reflects actual environment", async () => {
-      const { stdout } = await runCli(["env-check", "image", "--json"]);
+      const { stdout } = await runCli(["env-check", "logo-design", "--json"]);
       const data = JSON.parse(stdout);
       for (const v of data.envVars) {
         const expectedSet = !!process.env[v.name];
@@ -452,13 +452,13 @@ describe("CLI import export and env checks", () => {
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-import-dryrun-"));
       const filePath = require("path").join(tmpDir, "skills.json");
       try {
-        const payload = { version: 1, skills: ["image", "deepresearch"], timestamp: new Date().toISOString() };
+        const payload = { version: 1, skills: ["logo-design", "market-research-report"], timestamp: new Date().toISOString() };
         writeFileSync(filePath, JSON.stringify(payload));
         const { stdout, exitCode } = await runCli(["import", filePath, "--dry-run"]);
         expect(exitCode).toBe(0);
         expect(stdout).toContain("[dry-run]");
-        expect(stdout).toContain("image");
-        expect(stdout).toContain("deepresearch");
+        expect(stdout).toContain("logo-design");
+        expect(stdout).toContain("market-research-report");
         // Should show [1/2] and [2/2]
         expect(stdout).toContain("[1/2]");
         expect(stdout).toContain("[2/2]");
@@ -471,13 +471,13 @@ describe("CLI import export and env checks", () => {
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-import-dryrun-json-"));
       const filePath = require("path").join(tmpDir, "skills.json");
       try {
-        const payload = { version: 1, skills: ["image"], timestamp: new Date().toISOString() };
+        const payload = { version: 1, skills: ["logo-design"], timestamp: new Date().toISOString() };
         writeFileSync(filePath, JSON.stringify(payload));
         const { stdout, exitCode } = await runCli(["import", filePath, "--dry-run", "--json"]);
         expect(exitCode).toBe(0);
         const data = JSON.parse(stdout);
         expect(data.dryRun).toBe(true);
-        expect(data.skills).toContain("image");
+        expect(data.skills).toContain("logo-design");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }

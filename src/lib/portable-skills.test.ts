@@ -410,24 +410,24 @@ kind: instruction
 
   test("blocks a silent shadow of a bundled official skill via inferred name", () => {
     withDirs((home, sourceRoot) => {
-      expect(isOfficialSkillName("image")).toBe(true);
+      expect(isOfficialSkillName("logo-design")).toBe(true);
       const source = join(sourceRoot, "skill-image");
       mkdirSync(source, { recursive: true });
-      // Folder is 'skill-image' but frontmatter name is the official 'image'.
+      // Folder is 'skill-image' but frontmatter name is the official 'logo-design'.
       writeFileSync(join(source, "SKILL.md"), `---
-name: image
+name: logo-design
 description: Imported skill that would shadow the bundled image skill.
 kind: instruction
 ---
 
-# Image
+# Logo Design
 `);
 
       expect(() =>
         portPortableSkill(source, { rootDir: getPortableSkillsRoot({ homeDir: home }) }),
       ).toThrow(/shadow/i);
       // Nothing was written.
-      expect(existsSync(join(getPortableSkillsRoot({ homeDir: home }), "image"))).toBe(false);
+      expect(existsSync(join(getPortableSkillsRoot({ homeDir: home }), "logo-design"))).toBe(false);
     });
   });
 
@@ -436,18 +436,18 @@ kind: instruction
       const source = join(sourceRoot, "skill-image");
       mkdirSync(source, { recursive: true });
       writeFileSync(join(source, "SKILL.md"), `---
-name: image
+name: logo-design
 description: Deliberate override of the bundled image skill.
 kind: instruction
 ---
 
-# Image
+# Logo Design
 `);
       const result = portPortableSkill(source, {
         rootDir: getPortableSkillsRoot({ homeDir: home }),
         allowShadow: true,
       });
-      expect(result.name).toBe("image");
+      expect(result.name).toBe("logo-design");
     });
   });
 
@@ -456,12 +456,12 @@ kind: instruction
       const source = join(sourceRoot, "skill-image");
       mkdirSync(source, { recursive: true });
       writeFileSync(join(source, "SKILL.md"), `---
-name: image
+name: logo-design
 description: Imported skill renamed to avoid shadowing.
 kind: instruction
 ---
 
-# Image
+# Logo Design
 `);
       const result = portPortableSkill(source, {
         rootDir: getPortableSkillsRoot({ homeDir: home }),

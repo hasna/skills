@@ -172,10 +172,10 @@ version: 0.2.0
       expect(listed.exitCode).toBe(0);
       expect(JSON.parse(listed.stdout).length).toBeGreaterThan(0);
 
-      const searched = await runCliInCwd(["search", "image", "--json"], cwd, env);
+      const searched = await runCliInCwd(["search", "logo-design", "--json"], cwd, env);
       expect(searched.exitCode).toBe(0);
 
-      const info = await runCliInCwd(["info", "image", "--json"], cwd, env);
+      const info = await runCliInCwd(["info", "logo-design", "--json"], cwd, env);
       expect(info.exitCode).toBe(0);
     } finally {
       rmSync(cwd, { recursive: true, force: true });

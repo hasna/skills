@@ -51,53 +51,34 @@ import { resolveSkillAlias } from "./skill-aliases.js";
 export const HOSTED_RUNTIME_SLUGS: readonly string[] = [
   "ad-creative-pack",
   "api-docs-portal",
-  "audio",
   "audio-transcript-pack",
   "blog-article",
   "brand-assets",
   "brand-kit",
-  "brand-photo-shoot",
-  "browse",
   "contract-review-report",
   "customer-feedback-report",
-  "deepresearch",
   "email-sequence",
-  "generate-book-cover",
-  "icon-pack",
-  "image",
   "invoice-reconciliation",
   "landing-page-pack",
   "logo-design",
   "market-research-report",
   "meeting-pack",
   "migration-plan-pack",
-  "music",
-  "music-album",
   "one-page-website",
-  "pdf-read",
   "pdf-to-dataset",
   "pdf-to-markdown",
   "performance-audit-report",
-  "photo-album",
   "pitch-deck",
-  "playlist-maker",
   "product-mockup",
   "proposal-pack",
-  "read-pdf",
-  "remove-background",
   "repo-onboarding-report",
   "sdk-generator",
   "security-audit-report",
   "seo-content-pack",
-  "short-video-pack",
   "slide-deck-generator",
   "social-content-calendar",
   "test-suite-generator",
-  "transcript",
-  "video",
   "video-highlight-pack",
-  "voiceover-jingle-pack",
-  "webcrawling",
 ];
 
 const hostedRuntimeSlugs = new Set(HOSTED_RUNTIME_SLUGS);
@@ -105,7 +86,7 @@ const hostedRuntimeSlugs = new Set(HOSTED_RUNTIME_SLUGS);
 /**
  * Does this skill require an off-repo runtime to execute?
  *
- * Accepts aliases (`generate-image`, `transcribe`, …) and resolves them the
+ * Accepts aliases (`create-blog-article`, `read-document`, …) and resolves them the
  * same way the registry does, so a caller never has to canonicalise first.
  */
 export function isHostedRuntimeSkill(slug: string): boolean {

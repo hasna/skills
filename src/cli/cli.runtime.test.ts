@@ -307,13 +307,13 @@ describe("CLI runtime and misc commands", () => {
     });
 
     test("testing a valid skill returns correct JSON structure", async () => {
-      const { stdout } = await runCli(["test", "image", "--json"]);
+      const { stdout } = await runCli(["test", "logo-design", "--json"]);
       // exit code may be non-zero if env vars are missing, that's fine
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
       expect(data.length).toBe(1);
       const entry = data[0];
-      expect(entry).toHaveProperty("skill", "image");
+      expect(entry).toHaveProperty("skill", "logo-design");
       expect(entry).toHaveProperty("envVars");
       expect(entry).toHaveProperty("systemDeps");
       expect(entry).toHaveProperty("npmDeps");
@@ -323,7 +323,7 @@ describe("CLI runtime and misc commands", () => {
     });
 
     test("each envVars entry has name and set fields", async () => {
-      const { stdout } = await runCli(["test", "image", "--json"]);
+      const { stdout } = await runCli(["test", "logo-design", "--json"]);
       const data = JSON.parse(stdout);
       for (const v of data[0].envVars) {
         expect(v).toHaveProperty("name");
@@ -372,7 +372,7 @@ describe("CLI runtime and misc commands", () => {
         expect(validData.valid).toBe(true);
         expect(validData.nextRuns).toHaveLength(5);
 
-        const add = await runCliInCwd(["schedule", "add", "image", "*/5 * * * *", "--name", "json-test", "--json"], tmpDir);
+        const add = await runCliInCwd(["schedule", "add", "logo-design", "*/5 * * * *", "--name", "json-test", "--json"], tmpDir);
         expect(add.exitCode).toBe(0);
         const schedule = JSON.parse(add.stdout).schedule;
         expect(schedule.name).toBe("json-test");
@@ -429,43 +429,6 @@ describe("CLI runtime and misc commands", () => {
       }
     });
 
-    test("due unavailable hosted schedules fail before paid approval or remote auth", async () => {
-      const { mkdtempSync, readFileSync, rmSync, writeFileSync } = require("fs");
-      const { tmpdir } = require("os");
-      const { join } = require("path");
-      const tmpDir = mkdtempSync(join(tmpdir(), "cli-schedule-unavailable-hosted-"));
-      const env = { HOME: tmpDir, SKILLS_API_KEY: "", SKILLS_TEST_MODE: "1" };
-      try {
-        const add = await runCliInCwd(["schedule", "add", "image", "*/5 * * * *", "--name", "premium-image", "--json"], tmpDir, env);
-        expect(add.exitCode).toBe(0);
-
-        const schedulesPath = join(tmpDir, ".skills", "schedules.json");
-        const data = JSON.parse(readFileSync(schedulesPath, "utf-8"));
-        data.schedules[0].nextRun = "2020-01-01T00:00:00.000Z";
-        writeFileSync(schedulesPath, JSON.stringify(data, null, 2));
-
-        const run = await runCliInCwd(["schedule", "run", "--json"], tmpDir, env);
-        expect(run.exitCode).toBe(1);
-        const result = JSON.parse(run.stdout);
-        expect(result).toMatchObject({
-          ran: 0,
-          code: "HOSTED_PROVIDER_UNAVAILABLE",
-        });
-        expect(result.error).toContain("temporarily unavailable");
-        expect(result.error).toContain("No balance was charged.");
-        expect(result.approvalRequired).toBeUndefined();
-        expect(result.unavailable[0]).toMatchObject({
-          name: "premium-image",
-          skill: "image",
-          availability: {
-            status: "unavailable",
-            code: "HOSTED_PROVIDER_UNAVAILABLE",
-          },
-        });
-      } finally {
-        rmSync(tmpDir, { recursive: true, force: true });
-      }
-    });
   });
 
   describe("runtime --json", () => {

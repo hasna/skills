@@ -178,7 +178,7 @@ describe("native storage", () => {
     const source = join(tmpDir, "source");
     const target = join(tmpDir, "target");
     mkdirSync(join(source, ".skills", "runs", "2026-06-08", "run_1", "logs"), { recursive: true });
-    writeFileSync(join(source, ".skills", "project.json"), JSON.stringify({ version: 1, pinnedSkills: ["image"] }));
+    writeFileSync(join(source, ".skills", "project.json"), JSON.stringify({ version: 1, pinnedSkills: ["logo-design"] }));
     writeFileSync(join(source, ".skills", "runs", "2026-06-08", "run_1", "run.json"), JSON.stringify({ id: "run_1" }));
     writeFileSync(join(source, ".skills", "runs", "2026-06-08", "run_1", "logs", "stdout.log"), "ok\n");
 

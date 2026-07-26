@@ -59,24 +59,42 @@ describe("remote registry", () => {
     ]);
   });
 
-  test("decorates unavailable hosted skills when remote payload omits availability", () => {
-    const skills = parseRemoteRegistryPayload([
+  test("preserves a remote-declared unavailability instead of inventing one", () => {
+    // Availability is now purely a REMOTE assertion: the client ships no local
+    // denylist, so a payload that omits the field is available, and a payload that
+    // declares unavailability is carried through verbatim (after sanitization).
+    const [omitted, declared] = parseRemoteRegistryPayload([
       {
-        name: "webcrawling",
-        description: "Hosted web crawling",
-        category: "Web & Browser",
-        tags: ["web"],
+        name: "seo-content-pack",
+        description: "Hosted SEO content",
+        category: "Business & Marketing",
+        tags: ["seo"],
+      },
+      {
+        name: "market-research-report",
+        description: "Hosted market research",
+        category: "Research & Writing",
+        tags: ["research"],
+        availability: {
+          status: "unavailable",
+          code: "HOSTED_PROVIDER_UNAVAILABLE",
+          details: ["No balance was charged."],
+        },
       },
     ]);
 
-    expect(skills[0]).toMatchObject({
-      name: "webcrawling",
+    expect(omitted).toMatchObject({
+      name: "seo-content-pack",
+      availability: { status: "available" },
+    });
+    expect(declared).toMatchObject({
+      name: "market-research-report",
       availability: {
         status: "unavailable",
         code: "HOSTED_PROVIDER_UNAVAILABLE",
       },
     });
-    expect(skills[0].availability?.details).toContain("No balance was charged.");
+    expect(declared.availability?.details).toContain("No balance was charged.");
   });
 
   test("sanitizes remote-provided availability text before exposing it", () => {

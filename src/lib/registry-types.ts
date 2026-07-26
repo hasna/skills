@@ -75,15 +75,8 @@ export const CATEGORIES = [
 export type Category = (typeof CATEGORIES)[number];
 
 export const BASIC_SKILL_NAMES = [
-  "image",
-  "video",
-  "audio",
-  "music",
-  "transcript",
   "audio-extract",
   "read-image",
-  "read-pdf",
-  "pdf-read",
   "pdf-to-markdown",
   "doc-read",
   "pdf-generate",

@@ -11,7 +11,6 @@ import { resolveApiUrl } from "./api-url.js";
 import { getApiKey } from "./auth-store.js";
 import { loadConfig, type SkillsConfig } from "./config.js";
 import { sanitizePublicDiscoveryText } from "./discovery.js";
-import { getHostedAvailabilityMetadata } from "./hosted-availability.js";
 import type { SkillMeta } from "./registry.js";
 
 const remoteAvailabilitySchema = z.object({
@@ -130,16 +129,15 @@ function normalizeRemoteSkill(skill: z.infer<typeof remoteSkillSchema>): SkillMe
     dependencies: skill.dependencies,
     ...(skill.version ? { version: skill.version } : {}),
     ...(skill.pricing ? { pricing: skill.pricing } : {}),
-    availability: normalizeRemoteAvailability(name, skill.availability),
+    availability: normalizeRemoteAvailability(skill.availability),
     source: "remote",
   };
 }
 
 function normalizeRemoteAvailability(
-  name: string,
   availability?: z.infer<typeof remoteAvailabilitySchema>,
 ): NonNullable<SkillMeta["availability"]> {
-  if (!availability) return getHostedAvailabilityMetadata(name);
+  if (!availability) return { status: "available" };
   if (availability.status === "available") return { status: "available" };
   return {
     status: availability.status,

@@ -15,7 +15,6 @@ import {
   validateBlogArticleRunOptions,
 } from "../../lib/pricing.js";
 import { loadConfig, saveConfig, type ConfigScope } from "../../lib/config.js";
-import { getHostedRunAvailability } from "../../lib/hosted-availability.js";
 import { isHostedRuntimeSkill } from "../../lib/hosted-runtime-skills.js";
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../../lib/remote-run-contract.js";
 import {
@@ -289,18 +288,6 @@ function handleQuote(name: string, args: string[], options: { json: boolean }) {
   }
 
   const pricing = getPublicSkillPricing(skill.name, {}, quoteArgs);
-  const hostedAvailability = getHostedRunAvailability(skill.name);
-  if (!hostedAvailability.ok) {
-    const payload = unavailableHostedPayload(skill.name, pricing, hostedAvailability);
-    if (json) {
-      console.log(JSON.stringify(payload, null, 2));
-    } else {
-      console.error(chalk.red(`${skill.name}: ${hostedAvailability.message}`));
-      for (const detail of hostedAvailability.details) console.error(chalk.dim(`  ${detail}`));
-    }
-    process.exitCode = 1;
-    return;
-  }
 
   const payload = { skill: skill.name, pricing, availability: { status: "available" } };
   if (json) {
@@ -359,29 +346,6 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
   });
 
   if (isHostedRuntime) {
-    const hostedAvailability = getHostedRunAvailability(skill.name);
-    if (!hostedAvailability.ok) {
-      const payload = unavailableHostedPayload(skill.name, publicPricing, hostedAvailability);
-      const error = `${hostedAvailability.code}: ${hostedAvailability.message}`;
-      writeRunLogs(runContext, "", `${error}\n${hostedAvailability.details.join("\n")}\n`);
-      const run = completeSkillRun(runContext, { status: "failed", error, costCents });
-      if (options.json) {
-        console.log(JSON.stringify({
-          contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION,
-          args,
-          exitCode: 1,
-          remote: true,
-          ...payload,
-          run,
-        }, null, 2));
-      } else {
-        console.error(chalk.red(`${skill.name}: ${hostedAvailability.message}`));
-        for (const detail of hostedAvailability.details) console.error(chalk.dim(`  ${detail}`));
-      }
-      process.exitCode = 1;
-      return;
-    }
-
       const { getApiKey } = await import("../../lib/auth-store.js");
       const apiKey = getApiKey();
       if (!apiKey) {
@@ -521,26 +485,6 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
     console.log(chalk.dim(`Exports: ${completed.paths.exportDir}`));
   }
   process.exitCode = result.exitCode;
-}
-
-function unavailableHostedPayload(
-  skill: string,
-  pricing: unknown,
-  availability: Exclude<ReturnType<typeof getHostedRunAvailability>, { ok: true }>,
-) {
-  return {
-    skill,
-    pricing,
-    error: availability.message,
-    code: availability.code,
-    details: availability.details,
-    availability: {
-      status: "unavailable",
-      code: availability.code,
-      message: availability.message,
-      details: availability.details,
-    },
-  };
 }
 
 async function approvePaidHostedRun(params: {
