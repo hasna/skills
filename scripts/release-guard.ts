@@ -2,6 +2,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { applyAllowlist, scanFiles, scanPaths, toRedactedJson, type ScanAllowlistEntry, type ScanFinding } from "../src/lib/content-scan.js";
+import { decodeForScanning, looksBinary } from "../src/lib/file-bytes.js";
 import { formatInfraFindings, isGitWorkTree, scanRepositoryInfraIdentifiers } from "../src/lib/infra-identifiers.js";
 import { getPackedFiles } from "../src/lib/packlist.js";
 import { findPrivatePacklistLeaks, listPrivateSkillSlugs } from "../src/lib/public-boundary.js";
@@ -104,9 +105,7 @@ const secretPatterns: PatternCheck[] = [
   { label: "AK" + "IA" + "[A-Z0-9]", pattern: new RegExp("AK" + "IA" + "[A-Z0-9]") },
 ];
 
-function isText(buffer: Buffer): boolean {
-  return !buffer.includes(0);
-}
+
 
 function collectFiles(path: string): string[] {
   if (!existsSync(path)) return [];
@@ -128,8 +127,10 @@ const secretFiles = new Set(secretRoots.flatMap((root) => collectFiles(join(repo
 const findings: Finding[] = [];
 for (const file of roots.flatMap((root) => collectFiles(join(repoRoot, root)))) {
   const buffer = readFileSync(file);
-  if (!isText(buffer)) continue;
-  const content = buffer.toString("utf8");
+  // A NUL byte used to remove a file from this scan entirely. It no longer does:
+  // only real binary content is skipped, and NULs are stripped during decoding.
+  if (looksBinary(buffer)) continue;
+  const content = decodeForScanning(buffer);
   const relativeFile = relative(repoRoot, file);
 
   for (const marker of retiredCloudMarkers) {

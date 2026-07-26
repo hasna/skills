@@ -38,6 +38,7 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { decodeForScanning, looksBinary } from "./file-bytes.js";
 import { join } from "node:path";
 
 export type InfraRuleId =
@@ -47,7 +48,8 @@ export type InfraRuleId =
   | "unparameterized-workflow-infra"
   | "workflow-vendor-host"
   | "manifest-location-not-unique"
-  | "unscannable-file";
+  | "unscannable-file"
+  | "unparseable-workflow";
 
 export type InfraFinding = {
   file: string;
@@ -121,9 +123,13 @@ const ALLOWED_WORKFLOW_HOSTS = new Set([
 const WORKFLOW_URL = /https?:\/\/([A-Za-z0-9._-]+)/g;
 
 /**
- * A literal SSM-style deploy-manifest path (`'/hasna/deploy/...'`). Note this
+ * A literal SSM-style deploy-manifest path (`'/acme/deploy/...'`). Note this
  * matches the line that NAMES the location, not the lines that dereference the
  * variable holding it — those may appear as often as the script needs.
+ *
+ * The example above is deliberately not the real path: R4 permits exactly ONE
+ * tracked line naming the manifest location, and a doc comment in this file
+ * would be a second one that the cardinality rule cannot see.
  */
 const MANIFEST_LOCATION = /["'`(]\/[a-z0-9_-]+\/deploy\//;
 
@@ -163,12 +169,112 @@ function trimMatch(value: string): string {
 }
 
 /**
+ * Walk a parsed YAML document and yield every `env:` mapping in it, wherever it
+ * sits — workflow level, job level, step level, or inside a reusable-workflow
+ * block. Structure-driven, so it does not care how the YAML was written.
+ */
+function* everyEnvMapping(node: unknown): Generator<Record<string, unknown>> {
+  if (Array.isArray(node)) {
+    for (const item of node) yield* everyEnvMapping(item);
+    return;
+  }
+  if (node === null || typeof node !== "object") return;
+
+  const record = node as Record<string, unknown>;
+  const env = record["env"];
+  if (env !== null && typeof env === "object" && !Array.isArray(env)) {
+    yield env as Record<string, unknown>;
+  }
+  for (const value of Object.values(record)) yield* everyEnvMapping(value);
+}
+
+/**
+ * Best-effort source line for a workflow env key, for a readable finding. The
+ * finding stands on the RESOLVED value; this only helps a human find it.
+ */
+function findKeyLine(lines: string[], key: string): number {
+  const pattern = new RegExp(`^\\s*["']?${key.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}["']?\\s*:`);
+  const index = lines.findIndex((line) => pattern.test(line));
+  return index >= 0 ? index + 1 : 0;
+}
+
+/**
+ * The workflow rule, evaluated against RESOLVED YAML rather than raw lines.
+ *
+ * A line-oriented regex cannot decide this. It was defeated three different ways
+ * — a trailing comment, then a value moved onto the following line
+ * (`CLUSTER: # ${{ ... }}` / newline / `  skills-worker`, which YAML resolves to
+ * the bare literal), then flow mappings and quoted keys. Each fix invited the
+ * next variant, because the question being asked ("what is this key's value?")
+ * is a parser's question.
+ *
+ * So: parse the document and read the value. Every syntactic variant collapses
+ * to the same resolved mapping, which is the thing the rule is actually about.
+ */
+function scanWorkflowEnvironments(file: ScannedFile): InfraFinding[] {
+  const findings: InfraFinding[] = [];
+  const lines = file.content.split("\n");
+
+  let document: unknown;
+  try {
+    document = Bun.YAML.parse(file.content);
+  } catch (error) {
+    // An unparseable workflow is not a pass. It is a file whose infrastructure
+    // values cannot be established.
+    return [
+      {
+        file: file.path,
+        line: 0,
+        ruleId: "unparseable-workflow",
+        match: file.path,
+        message: `workflow could not be parsed as YAML, so its env values cannot be checked: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      },
+    ];
+  }
+
+  for (const env of everyEnvMapping(document)) {
+    for (const [rawKey, rawValue] of Object.entries(env)) {
+      const key = rawKey.trim();
+      if (!INFRA_ENV_KEY.test(key)) continue;
+      // Only string scalars can carry an identifier; numbers/booleans/null cannot.
+      if (typeof rawValue !== "string") continue;
+      const value = rawValue.trim();
+      if (value.length === 0) continue;
+      if (HAS_SUBSTITUTION.test(value)) continue;
+
+      const line = findKeyLine(lines, key);
+      if (isAllowed(lines[line - 1] ?? "", "unparameterized-workflow-infra")) continue;
+
+      findings.push({
+        file: file.path,
+        line,
+        ruleId: "unparameterized-workflow-infra",
+        match: trimMatch(`${key}: ${value}`),
+        message:
+          `workflow env '${key}' resolves to the literal '${value}'; ` +
+          "read it from the deploy manifest or a CI variable.",
+      });
+    }
+  }
+
+  return findings;
+}
+
+/**
  * Scan already-loaded file contents for R4 violations. Pure — no filesystem, no
  * git — so it is trivially testable with synthetic inputs.
  */
 export function scanInfraIdentifiers(files: ScannedFile[]): InfraFinding[] {
   const findings: InfraFinding[] = [];
-  const manifestLocationLines: { file: string; line: number }[] = [];
+  const manifestLocationLines: { file: string; line: number; match: string }[] = [];
+
+  for (const file of files) {
+    if (WORKFLOW_PATH.test(file.path)) {
+      findings.push(...scanWorkflowEnvironments(file));
+    }
+  }
 
   for (const file of files) {
     const isWorkflow = WORKFLOW_PATH.test(file.path);
@@ -210,31 +316,12 @@ export function scanInfraIdentifiers(files: ScannedFile[]): InfraFinding[] {
         );
       }
 
-      if (MANIFEST_LOCATION.test(line)) {
-        manifestLocationLines.push({ file: file.path, line: lineNumber });
+      const manifest = MANIFEST_LOCATION.exec(line);
+      if (manifest) {
+        manifestLocationLines.push({ file: file.path, line: lineNumber, match: trimMatch(manifest[0]) });
       }
 
       if (!isWorkflow) continue;
-
-      const env = /^\s*([A-Z][A-Z0-9_]*)\s*:\s*(\S.*?)\s*$/.exec(line);
-      if (env) {
-        const key = env[1] ?? "";
-        // Test the EFFECTIVE value, not the rest of the line. A trailing YAML
-        // comment is not part of the value, so a substitution mentioned only in
-        // a comment must not satisfy the rule:
-        //   WORKER_CONTAINER: skills-worker # TODO use ${{ steps.m.outputs.x }}
-        // resolves to the bare literal `skills-worker`. Matching YAML's own rule,
-        // a comment starts at `#` preceded by whitespace. Stripping inside a
-        // quoted value can only make this check stricter, never blinder.
-        const value = (env[2] ?? "").replace(/\s+#.*$/, "");
-        if (INFRA_ENV_KEY.test(key) && !HAS_SUBSTITUTION.test(value)) {
-          push(
-            "unparameterized-workflow-infra",
-            `${key}: ${value}`,
-            `workflow env '${key}' names infrastructure but is assigned a literal; read it from the deploy manifest.`,
-          );
-        }
-      }
 
       for (const url of line.matchAll(WORKFLOW_URL)) {
         const host = (url[1] ?? "").toLowerCase();
@@ -255,7 +342,9 @@ export function scanInfraIdentifiers(files: ScannedFile[]): InfraFinding[] {
         file: location.file,
         line: location.line,
         ruleId: "manifest-location-not-unique",
-        match: `${location.file}:${location.line}`,
+        // The matched path, not `file:line` — a line number changes whenever
+        // anything above it moves, which makes the finding impossible to pin.
+        match: location.match,
         message:
           "more than one tracked line names the deploy-manifest location; R4 permits exactly one. " +
           `First occurrence: ${manifestLocationLines[0]?.file}:${manifestLocationLines[0]?.line}.`,
@@ -264,31 +353,6 @@ export function scanInfraIdentifiers(files: ScannedFile[]): InfraFinding[] {
   }
 
   return findings;
-}
-
-const BINARY_EXTENSIONS = new Set([
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".gif",
-  ".webp",
-  ".ico",
-  ".pdf",
-  ".zip",
-  ".gz",
-  ".woff",
-  ".woff2",
-  ".ttf",
-  ".otf",
-  ".mp3",
-  ".mp4",
-  ".wav",
-  ".lockb",
-]);
-
-function isProbablyBinary(path: string): boolean {
-  const dot = path.lastIndexOf(".");
-  return dot >= 0 && BINARY_EXTENSIONS.has(path.slice(dot).toLowerCase());
 }
 
 /**
@@ -339,7 +403,17 @@ export function listTrackedFiles(repoRoot: string): string[] {
  * scanned / skipped / self-excluded, and the scan asserts the three add up.
  * There is no fourth outcome and no silent drop.
  */
-export type SkipReason = "binary-extension" | "not-a-regular-file" | "unreadable";
+export type SkipReason = "binary-content" | "not-a-regular-file" | "unreadable";
+
+/**
+ * Tracked paths permitted to go unscanned, matched exactly on (path, reason).
+ *
+ * Empty, and asserted empty. Any skip at all fails the scan: a file the guard
+ * did not read is a file the guard did not clear, and "logged but forgiven" is
+ * how the NUL-drop survived in the first place. Adding an entry here is a
+ * deliberate, reviewable act.
+ */
+export const PINNED_SKIPS: readonly SkippedFile[] = [];
 
 export type SkippedFile = { path: string; reason: SkipReason };
 
@@ -364,10 +438,6 @@ export function readTrackedFiles(repoRoot: string, paths: string[]): ReadResult 
   const skipped: SkippedFile[] = [];
 
   for (const path of paths) {
-    if (isProbablyBinary(path)) {
-      skipped.push({ path, reason: "binary-extension" });
-      continue;
-    }
     const absolute = join(repoRoot, path);
     // Submodule gitlinks and dangling symlinks appear in `git ls-files` but are
     // not readable regular files.
@@ -375,11 +445,19 @@ export function readTrackedFiles(repoRoot: string, paths: string[]): ReadResult 
       skipped.push({ path, reason: "not-a-regular-file" });
       continue;
     }
+    let buffer: Buffer;
     try {
-      files.push({ path, content: readFileSync(absolute).toString("utf8") });
+      buffer = readFileSync(absolute);
     } catch {
       skipped.push({ path, reason: "unreadable" });
+      continue;
     }
+    // Content, not filename. `leak.gz` containing plain text is scanned.
+    if (looksBinary(buffer)) {
+      skipped.push({ path, reason: "binary-content" });
+      continue;
+    }
+    files.push({ path, content: decodeForScanning(buffer) });
   }
 
   return { files, skipped };
@@ -447,16 +525,22 @@ export function scanRepositoryInfraIdentifiers(repoRoot: string): InfraScanResul
 
   const findings = scanInfraIdentifiers(files);
 
-  // An unreadable tracked file is a FINDING, not a skip. A file the guard cannot
-  // read is a file the guard cannot clear.
+  // EVERY unscanned file is a FINDING unless it is explicitly pinned. Previously
+  // only `unreadable` was a finding while binary and not-a-regular-file were
+  // logged and forgiven — which meant naming a text file `leak.gz` removed it
+  // from the scan and still exited 0. A file the guard did not read is a file
+  // the guard did not clear, whatever the reason.
   for (const file of skipped) {
-    if (file.reason !== "unreadable") continue;
+    const pinned = PINNED_SKIPS.some((entry) => entry.path === file.path && entry.reason === file.reason);
+    if (pinned) continue;
     findings.push({
       file: file.path,
       line: 0,
       ruleId: "unscannable-file",
-      match: file.path,
-      message: "tracked file could not be read, so it cannot be cleared of infrastructure identifiers.",
+      match: `${file.path} (${file.reason})`,
+      message:
+        `tracked file was not scanned (${file.reason}), so it cannot be cleared of infrastructure ` +
+        "identifiers. Make it scannable, or pin it in PINNED_SKIPS with a reason.",
     });
   }
 

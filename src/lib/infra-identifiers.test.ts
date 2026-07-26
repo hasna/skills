@@ -8,14 +8,39 @@ import {
   isGitWorkTree,
   listTrackedFiles,
   readTrackedFiles,
+  PINNED_SKIPS,
   SELF_EXCLUDED_PATHS,
   type InfraRuleId,
 } from "./infra-identifiers.js";
+import { decodeForScanning, looksBinary } from "./file-bytes.js";
+import { scanText } from "./content-scan.js";
 
 const repoRoot = process.cwd();
 
-function ruleIds(content: string, path = ".github/workflows/deploy.yml"): InfraRuleId[] {
+const WORKFLOW = ".github/workflows/deploy.yml";
+
+/**
+ * Line-based rules (account IDs, ARNs, resource names) apply to every tracked
+ * file, so they are exercised against an ordinary source path. Workflow-only
+ * rules get the helpers below, which build a REAL document — the env rule is
+ * evaluated by parsing YAML, so a bare fragment is not a valid fixture.
+ */
+function ruleIds(content: string, path = "src/lib/sample.ts"): InfraRuleId[] {
   return scanInfraIdentifiers([{ path, content }]).map((finding) => finding.ruleId);
+}
+
+/** Wrap step-level `env:` lines (already indented 10 spaces) into a valid workflow. */
+function workflowWithEnv(envLines: string): string {
+  return `name: deploy\non:\n  push: {}\njobs:\n  deploy:\n    steps:\n      - name: step\n        env:\n${envLines}`;
+}
+
+/** Wrap a shell line into a valid workflow `run:` block. */
+function workflowWithRun(runLine: string): string {
+  return `name: deploy\non:\n  push: {}\njobs:\n  deploy:\n    steps:\n      - name: step\n        run: |\n          ${runLine}\n`;
+}
+
+function envRuleIds(envLines: string): InfraRuleId[] {
+  return ruleIds(workflowWithEnv(envLines), WORKFLOW);
 }
 
 describe("R4: vendor infra identifiers live behind one indirection", () => {
@@ -44,23 +69,77 @@ describe("R4: vendor infra identifiers live behind one indirection", () => {
   // hole, each reproducing the exact reported bypass.
   // -------------------------------------------------------------------------
 
-  test("the detector's own fixtures use only documented-fake account IDs", () => {
-    // Review finding 1: this file shipped the org's REAL AWS account ID as a
-    // fixture, and SELF_EXCLUDED_PATHS made the detector blind to it -- a PR
-    // whose purpose was removing infra identifiers put one back.
-    // Every 12-digit literal in the exempt files must be an obviously-fake or
-    // non-account value, so the exemption can never again hide a real one.
-    const allowed = new Set([
-      "123456789012", // RFC-style documentation account
-      "175357440000", // epoch test vector for the anchoring tests
-      "000000000000", // UUID node field in the UUID false-positive test
+  test("the exempt files are AUDITED, not blind: every finding in them is pinned", () => {
+    // Review finding 1, second round. The first fix asserted ONE property
+    // (contiguous 12-digit literal) over a surface exempt from ALL rules, so a
+    // vendor host, a cluster name and a manifest path all sailed through -- and
+    // one really was live: the repo's only tracked `<vendor>.hasna.xyz` sat in
+    // this file, the one place the scanner cannot see.
+    //
+    // So run the FULL scanner over the exempt files and require every finding to
+    // be pinned by (file, ruleId, match). Anything new fails until a human adds
+    // it here. That turns the exemption from "unscanned" into "audited".
+    const pinned = new Set([
+      // Fixtures that must stay literal for the detector's own tests to mean anything.
+      "infra-resource-name|skills-prod", // module docstring + fixtures
+      "infra-resource-name|widgets-staging",
+      "aws-account-id|123456789012", // RFC-style documentation account
+      "aws-account-id|175357440000", // epoch anchoring vector
+      "aws-account-id|000000000000", // UUID node field
+      "aws-arn|arn:aws:iam::123456789012:",
+      "workflow-vendor-host|https://health.invalid", // RFC 2606 reserved TLD
+      "manifest-location-not-unique|'/acme/deploy/", // deliberately not the real path
+      "manifest-location-not-unique|('/acme/deploy/",
     ]);
-    for (const path of SELF_EXCLUDED_PATHS) {
-      const content = readFileSync(join(repoRoot, path), "utf8");
-      for (const token of content.match(/[0-9]{12}/g) ?? []) {
-        expect(`${path}:${token}`).toBe(`${path}:${allowed.has(token) ? token : "DISALLOWED-LITERAL"}`);
-      }
+
+    const { files } = readTrackedFiles(repoRoot, [...SELF_EXCLUDED_PATHS]);
+    expect(files.length).toBe(SELF_EXCLUDED_PATHS.length);
+
+    // Scan each exempt file three ways:
+    //   1. as itself;
+    //   2. concatenation-flattened, so an identifier split across a string `+`
+    //      cannot hide here (which is why nothing in this file may write a split
+    //      12-digit literal, even in a comment -- the flattener reassembles it);
+    //   3. aliased to a workflow path, so the workflow-only rules
+    //      (`workflow-vendor-host`) apply as well. Without this, a vendor
+    //      hostname in these files is invisible to every rule -- and one really
+    //      was.
+    const variants = files.flatMap((file) => {
+      const flattened = file.content.replace(/["']\s*\+\s*["']/g, "");
+      return [
+        file,
+        { path: file.path, content: flattened },
+        { path: `.github/workflows/${file.path.replace(/\//g, "-")}.yml`, content: flattened },
+      ];
+    });
+
+    const unpinned = scanInfraIdentifiers(variants)
+      // The aliased copies are not real YAML; that they do not parse is expected.
+      .filter((finding) => finding.ruleId !== "unparseable-workflow")
+      .map((finding) => `${finding.ruleId}|${finding.match}`)
+      .filter((key) => !pinned.has(key));
+
+    expect([...new Set(unpinned)]).toEqual([]);
+  });
+
+  test("the r4-allow opt-out is capped, per file", () => {
+    // ALLOW_MARKER is an unbounded per-line opt-out usable in ANY tracked file.
+    // SELF_EXCLUDED_PATHS and release-guard's scanAllowlist are both pinned by a
+    // test; this one was not, so `# r4-allow: aws-account-id` appended anywhere
+    // silenced the rule with nothing to notice it.
+    const expected: Record<string, number> = {
+      // The implementation (regex + docstring) and its tests. No production use.
+      "src/lib/infra-identifiers.ts": 2,
+      "src/lib/infra-identifiers.test.ts": 4,
+    };
+
+    const counts: Record<string, number> = {};
+    const { files } = readTrackedFiles(repoRoot, listTrackedFiles(repoRoot));
+    for (const file of files) {
+      const n = (file.content.match(/r4-allow:/g) ?? []).length;
+      if (n > 0) counts[file.path] = n;
     }
+    expect(counts).toEqual(expected);
   });
 
   test("a NUL byte cannot remove a file from the scan", () => {
@@ -80,6 +159,38 @@ describe("R4: vendor infra identifiers live behind one indirection", () => {
     expect(ruleIds(withNul, "src/lib/x.ts")).toContain("aws-account-id");
   });
 
+  test("encoding tricks cannot hide an identifier", () => {
+    // Second-round review: NUL-at-byte-0 and friends were fixed, but three
+    // vectors still passed -- NUL interleaved INTO the digits, UTF-16, and a
+    // text file skipped purely because it was named *.gz.
+    const account = "123456789012";
+    const hidden = (buffer: Buffer) => ruleIds(decodeForScanning(buffer), "src/lib/x.ts");
+
+    // NUL interleaved through the digits themselves (one literal, no JS concat).
+    const interleaved = account.split("").join("\0");
+    expect(hidden(Buffer.from(`const a = "${interleaved}";\n`))).toContain("aws-account-id");
+
+    // UTF-16, both endiannesses, with and without a BOM.
+    const le = Buffer.from(`const a = "${account}";\n`, "utf16le");
+    expect(hidden(Buffer.concat([Buffer.from([0xff, 0xfe]), le]))).toContain("aws-account-id");
+    expect(hidden(le)).toContain("aws-account-id");
+    expect(hidden(Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(le).swap16()]))).toContain("aws-account-id");
+
+    // Binary-ness is decided by CONTENT, not by filename.
+    expect(looksBinary(Buffer.from(`arn:aws:iam::${account}:role/x`))).toBe(false);
+    expect(looksBinary(Buffer.from([0x1f, 0x8b, 0x08, 0x00]))).toBe(true); // real gzip
+    expect(looksBinary(Buffer.from([0x89, 0x50, 0x4e, 0x47]))).toBe(true); // real PNG
+  });
+
+  test("a NUL byte cannot hide a secret from the publish gate either", () => {
+    // The root claim of the second review: the identical NUL drop was still live
+    // in content-scan.ts, which is the actual secret/PII gate at prepack. The R4
+    // scan was only ever one of three call sites.
+    const phone = "+1312" + "8675309";
+    expect(scanText(decodeForScanning(Buffer.from(`Call ${phone}\n`)), "x.md").length).toBeGreaterThan(0);
+    expect(scanText(decodeForScanning(Buffer.from(`Call +1\x003128675309\n`)), "x.md").length).toBeGreaterThan(0);
+  });
+
   test("every tracked file is scanned, skipped with a reason, or self-excluded", () => {
     // The accounting that makes finding 2 structurally impossible to repeat.
     const result = scanRepositoryInfraIdentifiers(repoRoot);
@@ -88,10 +199,10 @@ describe("R4: vendor infra identifiers live behind one indirection", () => {
     expect(result.trackedFileCount).toBe(tracked.length);
     expect(result.scannedFileCount + result.skippedFiles.length + SELF_EXCLUDED_PATHS.length).toBe(tracked.length);
 
-    // Nothing is skipped today; if that changes, the reason must be stated.
-    for (const skippedFile of result.skippedFiles) {
-      expect(["binary-extension", "not-a-regular-file", "unreadable"]).toContain(skippedFile.reason);
-    }
+    // Nothing is skipped today, and any skip at all is now a finding unless
+    // pinned -- "logged but forgiven" is how the NUL drop survived.
+    expect(result.skippedFiles).toEqual([]);
+    expect(PINNED_SKIPS).toEqual([]);
   });
 
   test("deploy.yml is asserted against the SCANNED set, not merely the tracked list", () => {
@@ -112,15 +223,15 @@ describe("R4: vendor infra identifiers live behind one indirection", () => {
     // the line, so a substitution mentioned only in a comment passed while the
     // effective value stayed a bare literal.
     const bypass = "          WORKER_CONTAINER: skills-worker # TODO switch to ${{ steps.m.outputs.worker_container }}\n";
-    expect(ruleIds(bypass)).toContain("unparameterized-workflow-infra");
+    expect(envRuleIds(bypass)).toContain("unparameterized-workflow-infra");
 
     // Same shape, other infra keys.
-    expect(ruleIds("  CLUSTER: my-things # later: ${{ steps.m.outputs.cluster }}\n")).toContain(
+    expect(envRuleIds("          CLUSTER: my-things # later: ${{ steps.m.outputs.cluster }}\n")).toContain(
       "unparameterized-workflow-infra",
     );
 
     // A real substitution with a trailing comment is still compliant.
-    expect(ruleIds("  CLUSTER: ${{ steps.m.outputs.cluster }} # from the manifest\n")).toEqual([]);
+    expect(envRuleIds("          CLUSTER: ${{ steps.m.outputs.cluster }} # from the manifest\n")).toEqual([]);
   });
 
   test("the release guard's not-a-git-work-tree skip can never apply to this repo", () => {
@@ -170,19 +281,23 @@ describe("R4: vendor infra identifiers live behind one indirection", () => {
 
   test("detects a literal assigned to an infrastructure-named workflow variable", () => {
     // The rule that catches names following no convention at all.
-    expect(ruleIds("          WORKER_CONTAINER: skills-worker\n")).toContain("unparameterized-workflow-infra");
-    expect(ruleIds("          CLUSTER: my-things\n")).toContain("unparameterized-workflow-infra");
+    expect(envRuleIds("          WORKER_CONTAINER: skills-worker\n")).toContain("unparameterized-workflow-infra");
+    expect(envRuleIds("          CLUSTER: my-things\n")).toContain("unparameterized-workflow-infra");
   });
 
   test("detects a literal deploy or health host in a workflow", () => {
-    const line = "          curl -fsS https://skills.hasna.xyz/health\n";
-    expect(ruleIds(line)).toContain("workflow-vendor-host");
+    // Reserved-TLD host (RFC 2606). The vendor's real hostname must not appear
+    // in a tracked file even as a fixture -- least of all in the one file the
+    // scanner cannot see.
+    expect(ruleIds(workflowWithRun("curl -fsS https://health.invalid/health"), WORKFLOW)).toContain(
+      "workflow-vendor-host",
+    );
   });
 
   test("detects a second tracked line naming the deploy-manifest location", () => {
     const findings = scanInfraIdentifiers([
-      { path: ".github/workflows/deploy.yml", content: "  M: ${{ format('/hasna/deploy/{0}', env.APP) }}\n" },
-      { path: "docs/ops.md", content: "the manifest is at '/hasna/deploy/skills'\n" },
+      { path: ".github/workflows/deploy.yml", content: "  M: ${{ format('/acme/deploy/{0}', env.APP) }}\n" },
+      { path: "docs/ops.md", content: "the manifest is at '/acme/deploy/thing'\n" },
     ]);
     expect(findings.map((f) => f.ruleId)).toContain("manifest-location-not-unique");
   });
@@ -202,10 +317,9 @@ describe("R4: vendor infra identifiers live behind one indirection", () => {
       "          WORKER_FAMILY: ${{ steps.m.outputs.worker_family }}",
       "          WORKER_CONTAINER: ${{ steps.m.outputs.worker_container }}",
       "          CLUSTER: ${{ steps.m.outputs.cluster }}",
-      '          curl -fsS "$HEALTH_URL" | jq -e \'.ok == true\'',
       "",
     ].join("\n");
-    expect(ruleIds(content)).toEqual([]);
+    expect(envRuleIds(content)).toEqual([]);
   });
 
   test("does not fire inside a UUID", () => {
@@ -226,22 +340,17 @@ describe("R4: vendor infra identifiers live behind one indirection", () => {
   });
 
   test("does not treat well-known CI hosts as deploy targets", () => {
-    const content = [
-      "      - uses: actions/checkout@v6",
-      "        run: curl -fsSL https://bun.sh/install | bash",
-      "        run: gh api https://api.github.com/repos/o/r",
-      "",
-    ].join("\n");
-    expect(ruleIds(content)).toEqual([]);
+    expect(ruleIds(workflowWithRun("curl -fsSL https://bun.sh/install | bash"), WORKFLOW)).toEqual([]);
+    expect(ruleIds(workflowWithRun("gh api https://api.github.com/repos/o/r"), WORKFLOW)).toEqual([]);
   });
 
   test("an allow marker suppresses exactly one named rule and nothing else", () => {
-    const suppressed = "  CLUSTER: my-things # r4-allow: unparameterized-workflow-infra -- doc example\n";
-    expect(ruleIds(suppressed)).toEqual([]);
+    const suppressed = "          CLUSTER: my-things # r4-allow: unparameterized-workflow-infra -- doc example\n";
+    expect(envRuleIds(suppressed)).toEqual([]);
 
     // A marker for a different rule does not suppress this one.
-    const wrongRule = "  CLUSTER: my-things # r4-allow: aws-account-id\n";
-    expect(ruleIds(wrongRule)).toContain("unparameterized-workflow-infra");
+    const wrongRule = "          CLUSTER: my-things # r4-allow: aws-account-id\n";
+    expect(envRuleIds(wrongRule)).toContain("unparameterized-workflow-infra");
   });
 
   // -------------------------------------------------------------------------
