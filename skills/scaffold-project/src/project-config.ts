@@ -333,6 +333,6 @@ Deploy your application on [Vercel](https://vercel.com) or [Railway](https://rai
 
 ---
 
-Generated with [scaffold-project](https://skills.md/skills/scaffold-project)
+Generated with [scaffold-project](https://github.com/hasna/skills)
 `;
 }

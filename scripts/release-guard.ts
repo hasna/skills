@@ -11,6 +11,12 @@ import {
   findHostedSourcePacklistLeaks,
   listHostedMetadataSlugs,
 } from "../src/lib/hosted-skill-set.js";
+import {
+  findEndpointDefaults,
+  findVendorHostReferences,
+  formatFindings,
+  readPackedSources,
+} from "../src/lib/vendor-host-guard.js";
 
 type Finding = {
   file: string;
@@ -292,8 +298,37 @@ if (scanFindings.length > 0) {
   process.exit(1);
 }
 
+// ---------------------------------------------------------------------------
+// R1 — the published package must not carry a network endpoint default or a
+// vendor-controlled host. This is the only gate that runs at publish time, so
+// the property lives here as well as in the test suite.
+// ---------------------------------------------------------------------------
+const packedSources = readPackedSources(packedFiles, repoRoot, { existsSync, statSync, readFileSync }, join);
+
+if (packedSources.length === 0) {
+  console.error("Release guard failed: the package file scan produced no readable files.");
+  process.exit(1);
+}
+
+const endpointDefaults = findEndpointDefaults(packedSources);
+if (endpointDefaults.length > 0) {
+  console.error("Release guard failed: the package hard-codes network endpoint defaults.");
+  console.error(sanitizeForPublicLog(formatFindings(endpointDefaults)));
+  console.error("  An unconfigured install must resolve to no endpoint at all.");
+  console.error("  Remove the default, or add the provider domain to ENDPOINT_DEFAULT_ALLOWED_DOMAINS");
+  console.error("  in src/lib/vendor-host-guard.ts with a reviewed justification.");
+  process.exit(1);
+}
+
+const vendorHostReferences = findVendorHostReferences(packedSources);
+if (vendorHostReferences.length > 0) {
+  console.error("Release guard failed: the package references vendor-controlled hosts.");
+  console.error(sanitizeForPublicLog(formatFindings(vendorHostReferences)));
+  process.exit(1);
+}
+
 console.log(
   `Release guard passed: ${packedFiles.length} package-visible files are free of retired cloud markers, ` +
     "secrets, PII, private context, private-skill leaks, hosted implementation source, " +
-    "and committed tool output.",
+    "committed tool output, endpoint defaults, and vendor-controlled hosts.",
 );

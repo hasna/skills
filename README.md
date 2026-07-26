@@ -54,7 +54,7 @@ Use `SKILLS_API_KEY` or `skills auth login --api-key` for premium self-hosted
 execution:
 
 ```bash
-skills setup --api-url https://skills.md
+skills setup --api-url https://skills.example.com
 skills auth login --api-key "$SKILLS_API_KEY"
 skills run image "editorial product photo on a white sweep"
 skills runs status <run-id>
@@ -282,7 +282,7 @@ skills mcp --register all       # Register with all supported agents
 ## Self-Hosted API
 
 ```bash
-skills setup --api-url https://skills.md
+skills setup --api-url https://skills.example.com
 skills auth login --api-key "$SKILLS_API_KEY"
 skills billing status
 ```
