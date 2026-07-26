@@ -425,8 +425,8 @@ export type ReadResult = { files: ScannedFile[]; skipped: SkippedFile[] };
  * This function used to do `if (buffer.includes(0)) continue` — dropping any
  * file containing a NUL byte, with no counter and no warning. That is a bypass,
  * not a heuristic: appending one NUL to a comment removed a file from the scan
- * entirely, and `src/lib/content-scan.ts` (NUL at byte 8373, a deliberate
- * composite-key separator) was already being dropped on a clean tree.
+ * entirely, and `src/lib/content-scan.ts` (which then wrote its composite-key
+ * separator as a raw NUL) was already being dropped on a clean tree.
  *
  * A NUL byte is now simply a byte. The content is decoded and scanned like any
  * other; the patterns work fine on a string that happens to contain U+0000.

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   scanInfraIdentifiers,
@@ -144,15 +145,28 @@ describe("R4: vendor infra identifiers live behind one indirection", () => {
 
   test("a NUL byte cannot remove a file from the scan", () => {
     // Review finding 2: readTrackedFiles did `if (buffer.includes(0)) continue`,
-    // silently dropping any NUL-bearing file. src/lib/content-scan.ts (NUL at
-    // byte 8373) was already being dropped on a clean tree, and appending one
-    // NUL to a comment hid an arbitrary leak.
-    const nulFile = "src/lib/content-scan.ts";
-    expect(readFileSync(join(repoRoot, nulFile)).includes(0)).toBe(true);
+    // silently dropping any NUL-bearing file, so appending one NUL to a comment
+    // hid an arbitrary leak.
+    //
+    // The fixture is WRITTEN here rather than pointing at a source file that
+    // happens to contain a NUL. This test used to assert that
+    // src/lib/content-scan.ts still had one, which made a production file's
+    // bytes load-bearing for the suite: the moment that NUL was replaced with a
+    // `\0` escape (it made grep treat the module as binary), the suite went red
+    // for a reason that had nothing to do with the property under test.
+    const dir = mkdtempSync(join(tmpdir(), "nul-tracked-"));
+    try {
+      const nulFile = "src/lib/nul-bearing.ts";
+      mkdirSync(join(dir, "src/lib"), { recursive: true });
+      writeFileSync(join(dir, nulFile), `const sep = "\0";\nconst kept = true;\n`);
+      expect(readFileSync(join(dir, nulFile)).includes(0)).toBe(true);
 
-    const { files, skipped } = readTrackedFiles(repoRoot, [nulFile]);
-    expect(files.map((f) => f.path)).toEqual([nulFile]);
-    expect(skipped).toEqual([]);
+      const { files, skipped } = readTrackedFiles(dir, [nulFile]);
+      expect(files.map((f) => f.path)).toEqual([nulFile]);
+      expect(skipped).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
 
     // And a leak inside NUL-bearing content is still found.
     const withNul = `const sep = "\0";\nconst account = "123456789012";\n`;

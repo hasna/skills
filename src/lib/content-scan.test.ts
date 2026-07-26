@@ -108,6 +108,40 @@ describe("content-scan blocks personal data about an identified individual", () 
     expect(scanText(`passport_number: "X1234567"`).some((f) => f.ruleId === "government-id")).toBe(true);
   });
 
+  // Review finding: the guard advertised deny-by-default, but the name half was
+  // ASCII-and-comma-only, so every shape below walked straight through it. The
+  // names actually removed from the timesheet README were Romanian, which makes
+  // the accented spelling the single most likely next paste.
+  test("blocks the record shapes a real export actually emits", () => {
+    const shapes: Record<string, string> = {
+      diacritics: "Zorvax Kellstrøm,on_leave_maternity,8,0",
+      "hyphenated surname": "Zorvax Kell-Strom,terminated,8",
+      "quoted RFC-4180 last-first": `"Kellstrom, Zorvax",on_leave_maternity,8,0`,
+      "semicolon-delimited EU export": "Zorvax Kellstrom;on_leave_maternity;8;0",
+      "middle initial": "Zorvax D Kellstrom,on_leave_maternity,8,0",
+      "Title-case status": "Zorvax Kellstrom,On_Leave_Maternity,8,0",
+    };
+    // Assert as a map so a failure names the shape that got through.
+    const blocked = Object.fromEntries(
+      Object.entries(shapes).map(([shape, row]) => [shape, scanText(row).some((f) => f.category === "pii-personal")]),
+    );
+    expect(blocked).toEqual(Object.fromEntries(Object.keys(shapes).map((shape) => [shape, true])));
+  });
+
+  test("blocks a person-keyed record in JSON or YAML, including across lines", () => {
+    // skills/timesheet/README.md advertises "Export to CSV or JSON format", so
+    // re-adding the identical leak as a JSON example is a live recurrence path.
+    const json = `{"employee": "${UNAPPROVED_NAME}", "employee_status": "on_leave_maternity"}`;
+    expect(scanText(json).some((f) => f.ruleId === "person-record-status")).toBe(true);
+
+    const yaml = `employee: ${UNAPPROVED_NAME}\nemployee_status: on_leave_maternity\n`;
+    expect(scanText(yaml).some((f) => f.ruleId === "person-record-status")).toBe(true);
+
+    // Either order — the status key may be written first.
+    const reversed = `{"employmentStatus": "terminated", "staff_name": "${UNAPPROVED_NAME}"}`;
+    expect(scanText(reversed).some((f) => f.ruleId === "person-record-status")).toBe(true);
+  });
+
   test("personal-data findings never print the name or identifier", () => {
     const findings = scanText(`${UNAPPROVED_NAME},on_leave_maternity,8,0`);
     const json = toRedactedJson(findings);
@@ -131,6 +165,35 @@ describe("content-scan does NOT false-positive on legitimate public content", ()
     // Not a person — the `|` rule deliberately only covers sensitive statuses.
     expect(scanText("| Some Feature | active |")).toEqual([]);
     expect(scanText("| Legacy Runner | inactive |")).toEqual([]);
+  });
+
+  test("allows ordinary process/job/session state prose", () => {
+    // Review finding: `terminated` / `suspended` / `resigned` / `probation` are
+    // ordinary technical English, and `<Two Capitalized Words>: <state>` is the
+    // standard shape of a status line in a README. This guard blocks every PR,
+    // so a doc that describes a worker's lifecycle must not fail CI with a
+    // two-character-masked marker nobody can act on.
+    const prose = [
+      "Process Status: suspended",
+      "Connection State: terminated",
+      "Session Lifecycle: terminated",
+      "Container Runtime: suspended",
+      "The Docker Daemon: terminated the container.",
+      "| Batch Worker | terminated |",
+      "| Legacy Runner | suspended |",
+      "In Task Manager, active tasks are listed first.",
+      "With Docker Compose, active containers restart automatically.",
+      "Web Server,active",
+    ];
+    const flagged = prose.filter((line) => scanText(line).some((f) => f.category === "pii-personal"));
+    expect(flagged).toEqual([]);
+  });
+
+  test("allows a non-person record keyed by something other than a person", () => {
+    // `person-record-status` needs a PERSON key. A job or deployment record
+    // carrying a status is not personal data.
+    expect(scanText(`{"job": "Batch Worker", "job_status": "terminated"}`)).toEqual([]);
+    expect(scanText("name: Build Docker Image\nstatus: active\n")).toEqual([]);
   });
 
   test("allows the project's own maintainer contact at its own domain", () => {
