@@ -9,7 +9,6 @@ const MCP_PATH = join(import.meta.dir, "index.ts");
 const EXPECTED_ALL_SKILL_COUNT = SKILLS.length;
 const EXPECTED_BASIC_SKILL_COUNT = BASIC_SKILL_NAMES.length;
 const CLEAN_STORAGE_ENV = {
-  HASNA_SKILLS_STORAGE_MODE: "",
   HASNA_SKILLS_DATABASE_URL: "",
   HASNA_SKILLS_DATABASE_SSL: "",
   HASNA_SKILLS_DATABASE_SCHEMA: "",
@@ -17,7 +16,6 @@ const CLEAN_STORAGE_ENV = {
   HASNA_SKILLS_S3_PREFIX: "",
   HASNA_SKILLS_AWS_REGION: "",
   HASNA_SKILLS_SYNC_DRY_RUN: "",
-  SKILLS_STORAGE_MODE: "",
   SKILLS_DATABASE_URL: "",
   SKILLS_DATABASE_SSL: "",
   SKILLS_DATABASE_SCHEMA: "",
@@ -1187,7 +1185,7 @@ version: 0.3.0
     }
   }, 15000);
 
-  test("storage tools return local-first status and no-network sync plan", async () => {
+  test("storage tools return on-box status and no-network sync plan", async () => {
     const client = new McpClient();
     try {
       await client.initialize();
@@ -1199,7 +1197,6 @@ version: 0.3.0
       const status = JSON.parse(statusResponse.result.content[0].text);
       expect(status).toMatchObject({
         package: "open-skills",
-        mode: "local",
         tables: ["skills_sync_records", "skills_sync_cursors"],
         remote: {
           databaseConfigured: false,
@@ -1210,6 +1207,7 @@ version: 0.3.0
         },
       });
       expect(status.local.projectStateDir).toContain(".skills");
+      expect(status).not.toHaveProperty("mode");
 
       const planResponse = await client.request("tools/call", {
         name: "storage_sync_plan",
@@ -1220,8 +1218,10 @@ version: 0.3.0
       expect(plan).toMatchObject({
         package: "open-skills",
         noNetwork: true,
-        mode: "local",
+        databaseConfigured: false,
+        s3Configured: false,
       });
+      expect(plan).not.toHaveProperty("mode");
       expect(plan.env.databaseUrl).toBe("HASNA_SKILLS_DATABASE_URL");
       expect(plan.schemaSql).toContain("CREATE TABLE IF NOT EXISTS skills_sync_records");
     } finally {

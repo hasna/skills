@@ -19,12 +19,12 @@ Requires [Bun](https://bun.sh/) 1.0+.
 # Browse skills interactively
 skills
 
-# Self-hosted setup points the CLI at the Hasna-owned API
-skills setup --mode self-hosted
+# Point the CLI at a Skills API server when you want remote runs
+skills setup --api-url https://skills.md
 skills auth login --api-key "$SKILLS_API_KEY"
 
-# Local-only setup stays available and does not require an account
-skills setup --mode local
+# With no API URL configured, skills simply run on this machine
+skills list
 
 # Optionally pin a skill preference in this project
 skills pin image
@@ -54,7 +54,7 @@ Use `SKILLS_API_KEY` or `skills auth login --api-key` for premium self-hosted
 execution:
 
 ```bash
-skills setup --mode self-hosted --api-url https://skills.md
+skills setup --api-url https://skills.md
 skills auth login --api-key "$SKILLS_API_KEY"
 skills run image "editorial product photo on a white sweep"
 skills runs status <run-id>
@@ -79,8 +79,8 @@ requirements explicitly document local provider use.
 | `skills pin --category "Development Tools"` | | Pin all skills in a category |
 | `skills unpin <name>` | | Remove a project pin |
 | `skills pins list` | | List pinned skills |
-| `skills setup --mode self-hosted` | | Configure self-hosted mode with a compatible API origin |
-| `skills setup --mode local` | | Configure local-only mode without self-hosted credentials |
+| `skills setup --api-url <url>` | | Point the CLI at a Skills API origin for remote runs |
+| `skills setup` | | Show whether an API origin is configured; with none, skills run on this machine |
 | `skills setup agents` | | Register the Skills MCP server with all supported agents |
 | `skills list` | `ls` | List available skills (filter with `-c`, `--pinned`, `-t`, `--brief`) |
 | `skills search <query>` | `s` | Search by name, description, or tags |
@@ -108,7 +108,8 @@ requirements explicitly document local provider use.
 | `skills setup-info` | | Version, pinned skills, agent configs, paths |
 | `skills export` | | Export pinned skills as JSON |
 | `skills import <file>` | | Pin skills from a JSON export |
-| `skills config set <key> <value>` | | Set default agent, scope, or output format |
+| `skills config set <key> <value>` | | Set default agent, scope, output format, or API origin |
+| `skills config unset <key>` | | Remove a configuration value (`skills config unset apiUrl` returns to running on this machine) |
 | `skills new <name>` | `scaffold` | Scaffold a portable skill under `~/.hasna/skills/installed/<name>` |
 | `skills port <path>` | `add` | Import an existing skill folder into the portable standard |
 | `skills create <name>` | | Scaffold a new custom skill directory |
@@ -195,6 +196,8 @@ commands at a compatible self-hosted registry, set an API base URL:
 export SKILLS_API_URL=https://your-server.example
 # or persist it:
 skills config set apiUrl https://your-server.example
+# and to stop using it:
+skills config unset apiUrl
 
 skills list --remote --json
 skills search transcribe --remote --json
@@ -279,7 +282,7 @@ skills mcp --register all       # Register with all supported agents
 ## Self-Hosted API
 
 ```bash
-skills setup --mode self-hosted --api-url https://skills.md
+skills setup --api-url https://skills.md
 skills auth login --api-key "$SKILLS_API_KEY"
 skills billing status
 ```
@@ -297,7 +300,6 @@ config and auth stay under `~/.hasna/skills/`.
 Optional repo-native sync can be configured without a self-hosted API account:
 
 ```bash
-HASNA_SKILLS_STORAGE_MODE=hybrid # local | remote | hybrid
 HASNA_SKILLS_DATABASE_URL=postgres://...
 HASNA_SKILLS_S3_BUCKET=skills-artifacts
 HASNA_SKILLS_S3_PREFIX=opensource/prod/skills
@@ -313,10 +315,12 @@ pulling in CLI/runtime helpers:
 import { getStorageStatus, resolveStorageConfig } from "@hasna/skills/storage";
 ```
 
-Plain `SKILLS_DATABASE_URL`, `SKILLS_STORAGE_MODE`, and `SKILLS_S3_BUCKET`
-fallbacks are accepted for local development. Self-hosted deployments should map
-runtime database and artifact settings into `HASNA_SKILLS_*` so local CLI state
-cannot accidentally point at production storage.
+Plain `SKILLS_DATABASE_URL` and `SKILLS_S3_BUCKET` fallbacks are accepted for
+local development. There is nothing to declare beyond these: on-box SQLite and
+files are always there, and Postgres or S3 are used when, and only when, their
+variables are set. Deployments should map runtime database and artifact settings
+into `HASNA_SKILLS_*` so local CLI state cannot accidentally point at production
+storage.
 
 ## Project Structure
 

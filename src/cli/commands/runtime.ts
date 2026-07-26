@@ -15,7 +15,6 @@ import {
   validateBlogArticleRunOptions,
 } from "../../lib/pricing.js";
 import { loadConfig, saveConfig, type ConfigScope } from "../../lib/config.js";
-import { DEFAULT_SELF_HOSTED_API_URL } from "../../server/config.js";
 import { getHostedRunAvailability } from "../../lib/hosted-availability.js";
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../../lib/remote-run-contract.js";
 import {
@@ -116,10 +115,9 @@ export function registerRuntime(parent: Command) {
 
   const setup = parent
     .command("setup")
-    .description("Choose self-hosted mode, local-only mode, or agent integrations")
-    .option("--mode <mode>", "Runtime mode: self-hosted or local")
-    .option("--api-url <url>", "Self-hosted API origin")
-    .option("--global", "Save setup choice globally", false)
+    .description("Point this CLI at a Skills API server, or register agent integrations")
+    .option("--api-url <url>", "Skills API origin to send remote work to")
+    .option("--global", "Save the API origin globally instead of in this project", false)
     .option("--json", "Output setup result as JSON", false)
     .action(async (options: SetupCommandOptions) => handleSetup(options));
 
@@ -169,32 +167,66 @@ export function registerRuntime(parent: Command) {
 }
 
 interface SetupCommandOptions {
-  mode?: string;
   apiUrl?: string;
   global: boolean;
   json: boolean;
 }
 
+/**
+ * Setup answers exactly one question: which Skills API server, if any, this CLI
+ * should send remote work to.
+ *
+ * There is no mode to pick. Running skills on this machine is not a mode, it is
+ * what happens when no API origin is configured, so setup never has to be run
+ * to get there and this command never writes a URL the operator did not supply.
+ * (Clearing one already written is `skills config unset apiUrl`.)
+ *
+ * Note the two separate facts in the output. `saved` is what this invocation
+ * wrote, and only this invocation; `apiUrl` is the origin in effect after the
+ * merge of global and project config. They differ whenever an origin is
+ * inherited from a wider scope, and reporting only the second one would have
+ * this command claim a write it never performed.
+ */
 async function handleSetup(options: SetupCommandOptions) {
   const scope: ConfigScope = options.global ? "global" : "project";
-  let mode = normalizeSetupMode(options.mode);
-
-  if (!mode && process.stdin.isTTY && process.stdout.isTTY) {
-    mode = normalizeSetupMode(await promptLine("Use self-hosted Skills or local-only mode? [self-hosted/local] ")) ?? "self-hosted";
+  // An absent flag means "tell me where I stand". A present but empty flag is
+  // an unset variable in a script (`--api-url "$SKILLS_URL"`), which must fail
+  // loudly rather than report success while pointing nowhere.
+  if (options.apiUrl !== undefined && !options.apiUrl.trim()) {
+    const error = "Invalid value '' for --api-url. Expected an http(s) URL";
+    if (options.json) console.log(JSON.stringify({ saved: null, scope, error }, null, 2));
+    else console.error(chalk.red(error));
+    process.exitCode = 1;
+    return;
   }
-  mode = mode ?? "local";
 
-  saveConfig("mode", mode, scope);
-  if (mode === "self-hosted") {
-    saveConfig("apiUrl", options.apiUrl || DEFAULT_SELF_HOSTED_API_URL, scope);
+  let requested = options.apiUrl?.trim();
+  if (!requested && process.stdin.isTTY && process.stdout.isTTY) {
+    requested = (await promptLine("Skills API URL (blank to leave unchanged): ")).trim();
+  }
+
+  let saved: string | null = null;
+  if (requested) {
+    try {
+      saveConfig("apiUrl", requested, scope);
+      saved = loadConfig().apiUrl ?? requested;
+    } catch (err) {
+      const error = (err as Error).message;
+      if (options.json) console.log(JSON.stringify({ saved: null, requested, scope, error }, null, 2));
+      else console.error(chalk.red(error));
+      process.exitCode = 1;
+      return;
+    }
   }
 
   const config = loadConfig();
-  const next = mode === "self-hosted"
+  const configured = config.apiUrl ?? null;
+  const next = configured
     ? ["skills auth login", "skills list --remote"]
     : ["skills list", "skills run <skill>"];
   const payload = {
-    mode,
+    apiUrl: configured,
+    saved,
     scope,
     config,
     next,
@@ -205,24 +237,20 @@ async function handleSetup(options: SetupCommandOptions) {
     return;
   }
 
-  console.log(chalk.green(`Set Skills mode to ${mode}`));
-  console.log(chalk.dim(`  Scope: ${scope}`));
-  if (mode === "self-hosted") {
-    console.log(chalk.dim(`  API: ${config.apiUrl || DEFAULT_SELF_HOSTED_API_URL}`));
+  if (saved) {
+    console.log(chalk.green(`Skills API set to ${saved}`));
+    console.log(chalk.dim(`  Scope: ${scope}`));
+    console.log(chalk.dim("  Next: skills auth login"));
+  } else if (configured) {
+    console.log(chalk.green(`Skills API already configured: ${configured}`));
+    console.log(chalk.dim("  Change it with: skills setup --api-url <url>"));
+    console.log(chalk.dim("  Clear it with:  skills config unset apiUrl"));
     console.log(chalk.dim("  Next: skills auth login"));
   } else {
-    console.log(chalk.dim("  Skills will run locally unless a command explicitly uses remote registry access."));
+    console.log(chalk.green("No Skills API configured; skills run on this machine."));
+    console.log(chalk.dim("  Point at a server with: skills setup --api-url <url>"));
     console.log(chalk.dim("  Next: skills list"));
   }
-}
-
-function normalizeSetupMode(value: string | undefined): "local" | "self-hosted" | undefined {
-  if (!value) return undefined;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "local" || normalized === "offline") return "local";
-  if (["self-hosted", "selfhosted", "self_hosted", "hosted", "skills.md", "skillsmd"].includes(normalized)) return "self-hosted";
-  if (normalized === "cloud" || normalized === "remote") throw new Error("Invalid setup mode. Use self-hosted or local.");
-  throw new Error("Invalid setup mode. Use self-hosted or local.");
 }
 
 function promptLine(question: string): Promise<string> {
@@ -356,7 +384,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       const { getApiKey } = await import("../../lib/auth-store.js");
       const apiKey = getApiKey();
       if (!apiKey) {
-        const error = `${skill.name} is a self-hosted skill (${pricing.formatCost(costCents ?? 0)}). Run: skills setup --mode self-hosted && skills auth login`;
+        const error = `${skill.name} is a self-hosted skill (${pricing.formatCost(costCents ?? 0)}). Run: skills auth login`;
         writeRunLogs(runContext, "", error + "\n");
         const run = completeSkillRun(runContext, { status: "failed", error, costCents });
         if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, pricing: publicPricing, run }, null, 2));

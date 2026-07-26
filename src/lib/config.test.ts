@@ -6,7 +6,7 @@ import { tmpdir } from "os";
 // We test the module functions by importing them and overriding cwd/homedir behavior
 // via temp directories and direct file manipulation.
 
-import { DATA_DIR_ENV, loadConfig, saveConfig, getConfigPath, getDataDir, type SkillsConfig, type ConfigScope } from "./config";
+import { DATA_DIR_ENV, loadConfig, saveConfig, unsetConfig, getConfigPath, getDataDir, type SkillsConfig, type ConfigScope } from "./config";
 import { withHomeDataDir, withTempHome } from "../test-preload.js";
 import { clearRegistryCache, loadRegistry } from "./registry.js";
 
@@ -90,15 +90,24 @@ describe("config", () => {
         defaultAgent: "gemini",
         defaultScope: "project",
         format: "csv",
-        mode: "skills.md",
         apiUrl: "https://skills.example.com/api/v1/",
       }));
       const config = loadConfig();
       expect(config.defaultAgent).toBe("gemini");
       expect(config.defaultScope).toBe("project");
       expect(config.format).toBe("csv");
-      expect(config.mode).toBe("self-hosted");
       expect(config.apiUrl).toBe("https://skills.example.com/api/v1");
+      expect(Object.keys(config).sort()).toEqual(["apiUrl", "defaultAgent", "defaultScope", "format"]);
+    });
+
+    test("drops a legacy mode key left behind by an older version", () => {
+      writeFileSync(join(tmpDir, "skills.config.json"), JSON.stringify({
+        mode: "self-hosted",
+        format: "json",
+      }));
+      const config = loadConfig();
+      expect(config).toEqual({ format: "json" });
+      expect("mode" in config).toBe(false);
     });
 
     test("ignores invalid apiUrl values", () => {
@@ -219,17 +228,48 @@ describe("config", () => {
       expect(() => saveConfig("defaultAgent", "badAgent")).toThrow("Invalid value");
     });
 
-    test("saves local or self-hosted mode and normalizes legacy hosted aliases", () => {
-      saveConfig("mode", "local", "project");
-      expect(loadConfig().mode).toBe("local");
-      saveConfig("mode", "skills.md", "project");
-      expect(loadConfig().mode).toBe("self-hosted");
-      saveConfig("mode", "hosted", "project");
-      expect(loadConfig().mode).toBe("self-hosted");
-      saveConfig("mode", "self-hosted", "project");
-      expect(loadConfig().mode).toBe("self-hosted");
-      expect(() => saveConfig("mode", "remote", "project")).toThrow("Invalid value");
-      expect(() => saveConfig("mode", "cloud", "project")).toThrow("Invalid value");
+    test("rejects mode as a config key, under every spelling it ever had", () => {
+      // Not "invalid value for mode" — there is no mode key at all, so every
+      // former alias fails the same way an invented key does.
+      for (const value of ["local", "self-hosted", "selfhosted", "hosted", "skills.md", "offline", "remote", "cloud"]) {
+        expect(() => saveConfig("mode", value, "project")).toThrow("Unknown config key: mode");
+      }
+    });
+
+    test("does not advertise mode among the valid keys", () => {
+      let message = "";
+      try {
+        saveConfig("badKey", "value");
+      } catch (err) {
+        message = (err as Error).message;
+      }
+      expect(message).toContain("Valid keys:");
+      // Parsed, not substring-matched: `not.toContain("mode")` would also trip
+      // on an unrelated future key such as modelDefault.
+      const keys = message.split("Valid keys: ")[1].split(", ");
+      expect(keys).not.toContain("mode");
+      expect(keys).toContain("apiUrl");
+    });
+
+    test("leaves an existing legacy mode key on disk alone instead of rewriting it", () => {
+      // Inert, not migrated: nothing reads it, so nothing needs to rewrite the
+      // operator's file to remove it.
+      writeFileSync(join(tmpDir, "skills.config.json"), JSON.stringify({ mode: "self-hosted" }));
+      saveConfig("format", "json", "project");
+      const raw = JSON.parse(readFileSync(join(tmpDir, "skills.config.json"), "utf-8"));
+      expect(raw.mode).toBe("self-hosted");
+      expect(raw.format).toBe("json");
+      expect(loadConfig()).toEqual({ format: "json" });
+    });
+
+    test("unsetConfig removes a key and reports whether one was there", () => {
+      saveConfig("apiUrl", "https://skills.example.com", "project");
+      expect(loadConfig().apiUrl).toBe("https://skills.example.com");
+      expect(unsetConfig("apiUrl", "project")).toBe(true);
+      expect(loadConfig().apiUrl).toBeUndefined();
+      expect(unsetConfig("apiUrl", "project")).toBe(false);
+      expect(existsSync(join(tmpDir, "skills.config.json"))).toBe(true);
+      expect(() => unsetConfig("mode", "project")).toThrow("Unknown config key: mode");
     });
 
     test("saves apiUrl after URL validation", () => {

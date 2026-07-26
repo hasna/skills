@@ -17,8 +17,8 @@ deployment-specific private service code must stay outside the npm package.
 Changes belong in `hasna/skills` when they are useful without a private self-hosted
 service:
 
-- CLI support for self-hosted-aware setup, local-only setup, and compatible API
-  endpoints.
+- CLI support for pointing at a compatible API origin, and for running with no
+  API origin configured.
 - Machine-readable `--json` output for CLI commands.
 - MCP tool schema, registration, and transport improvements.
 - Skill packaging, metadata, validation, and registry improvements.
@@ -47,8 +47,9 @@ These belong in a self-hosted service wrapper, not the open core:
 ## Sync Rules
 
 1. Preserve local-capable behavior for the open package.
-2. Keep self-hosted mode explicit through config and credentials, with local-safe
-   behavior for non-interactive environments.
+2. Keep the API origin explicit through config and credentials. There is no
+   deployment mode to select: with no origin configured, skills run on this
+   machine, which is what makes non-interactive environments safe by default.
 3. Expose reusable contracts from `src/index.ts` before wrappers depend on
    them.
 4. Do not publish private service dependencies, protected source, or self-hosted

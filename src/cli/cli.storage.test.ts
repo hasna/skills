@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { runCliInCwd } from "./cli.test-utils";
 
 const CLEAN_STORAGE_ENV = {
-  HASNA_SKILLS_STORAGE_MODE: "",
   HASNA_SKILLS_DATABASE_URL: "",
   HASNA_SKILLS_DATABASE_SSL: "",
   HASNA_SKILLS_DATABASE_SCHEMA: "",
@@ -13,7 +12,6 @@ const CLEAN_STORAGE_ENV = {
   HASNA_SKILLS_S3_PREFIX: "",
   HASNA_SKILLS_AWS_REGION: "",
   HASNA_SKILLS_SYNC_DRY_RUN: "",
-  SKILLS_STORAGE_MODE: "",
   SKILLS_DATABASE_URL: "",
   SKILLS_DATABASE_SSL: "",
   SKILLS_DATABASE_SCHEMA: "",
@@ -30,7 +28,7 @@ const CLEAN_STORAGE_ENV = {
 };
 
 describe("CLI storage", () => {
-  test("reports local native storage status by default", async () => {
+  test("reports on-box storage status by default", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "skills-cli-storage-"));
     try {
       const result = await runCliInCwd(["storage", "status", "--json"], tmpDir, { ...CLEAN_STORAGE_ENV, HOME: tmpDir });
@@ -38,7 +36,6 @@ describe("CLI storage", () => {
       const data = JSON.parse(result.stdout);
       expect(data).toMatchObject({
         package: "open-skills",
-        mode: "local",
         tables: ["skills_sync_records", "skills_sync_cursors"],
         remote: {
           databaseConfigured: false,
@@ -50,12 +47,19 @@ describe("CLI storage", () => {
         },
       });
       expect(data.local.projectStateDir).toContain(".skills");
+      // Storage topology is read from what is configured, never from a label.
+      expect(data).not.toHaveProperty("mode");
+      expect(data.env).not.toHaveProperty("mode");
+      expect(data.remote).not.toHaveProperty("activeModeEnv");
+      // Pin the surviving shape so those negatives cannot pass by the object
+      // they inspect disappearing.
+      expect(Object.keys(data.env).sort()).toEqual(["databaseUrl", "s3Bucket"]);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
-  test("plans hybrid storage sync without network access", async () => {
+  test("plans Postgres and S3 sync without network access", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "skills-cli-storage-plan-"));
     try {
       const result = await runCliInCwd([
@@ -66,7 +70,6 @@ describe("CLI storage", () => {
       ], tmpDir, {
         ...CLEAN_STORAGE_ENV,
         HOME: tmpDir,
-        HASNA_SKILLS_STORAGE_MODE: "hybrid",
         HASNA_SKILLS_DATABASE_URL: "postgres://example/skills",
         HASNA_SKILLS_S3_BUCKET: "skills-artifacts",
         HASNA_SKILLS_S3_PREFIX: "opensource/prod/skills",
@@ -76,10 +79,10 @@ describe("CLI storage", () => {
       expect(data).toMatchObject({
         package: "open-skills",
         noNetwork: true,
-        mode: "hybrid",
         databaseConfigured: true,
         s3Configured: true,
       });
+      expect(data).not.toHaveProperty("mode");
       expect(data.env.databaseUrl).toBe("HASNA_SKILLS_DATABASE_URL");
       expect(data.schemaSql).toContain("CREATE TABLE IF NOT EXISTS skills_sync_records");
     } finally {
@@ -93,7 +96,6 @@ describe("CLI storage", () => {
       const result = await runCliInCwd(["storage", "status", "--json"], tmpDir, {
         ...CLEAN_STORAGE_ENV,
         HOME: tmpDir,
-        SKILLS_STORAGE_MODE: "remote",
         SKILLS_DATABASE_URL: "postgres://example/fallback-skills",
         SKILLS_S3_BUCKET: "skills-artifacts",
       });
@@ -101,7 +103,6 @@ describe("CLI storage", () => {
       const data = JSON.parse(result.stdout);
       expect(data).toMatchObject({
         package: "open-skills",
-        mode: "remote",
         env: {
           databaseUrl: "HASNA_SKILLS_DATABASE_URL",
         },

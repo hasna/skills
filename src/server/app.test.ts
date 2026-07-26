@@ -14,13 +14,17 @@ async function testServer() {
   return { server, store, baseUrl: `http://127.0.0.1:${server.port}` };
 }
 
-describe("self-hosted skills API", () => {
+describe("skills API", () => {
   test("serves unauthenticated health and requires auth for API routes", async () => {
     const { server, baseUrl } = await testServer();
     try {
       const health = await fetch(`${baseUrl}/health`);
       expect(health.status).toBe(200);
-      expect(await health.json()).toMatchObject({ ok: true, mode: "self-hosted" });
+      const healthBody = await health.json();
+      expect(healthBody).toMatchObject({ ok: true, service: "open-skills" });
+      // The server does not describe who is running it. One product, one
+      // deployment story; /health reports liveness, not a deployment variant.
+      expect(healthBody).not.toHaveProperty("mode");
 
       const denied = await fetch(`${baseUrl}/api/v1/skills`);
       expect(denied.status).toBe(401);

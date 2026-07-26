@@ -17,11 +17,10 @@ with self-hosted execution kept behind explicit setup and auth.
 
 ## CLI Acceptance
 
-- User can run `skills setup --mode local` and get local-only config.
-- User can run `skills setup --mode self-hosted --api-url <url>` for
-  self-hosted mode.
-- Interactive setup recommends self-hosted mode; non-interactive setup remains
-  local-safe unless self-hosted mode is explicit.
+- User can run `skills setup --api-url <url>` to point the CLI at a Skills API
+  origin.
+- With no API origin configured, skills run on this machine; setup never writes
+  an API origin the user did not supply, interactively or not.
 - User can run `skills auth login --api-key <key>` to verify and store a
   provisioned self-hosted API key.
 - User can inspect self-hosted account state with `skills billing status`; when

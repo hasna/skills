@@ -4,6 +4,43 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Removed
+- **The deployment "mode" concept is gone, in all three unrelated places it had
+  grown.** Skills has one deployment story: you run it. Where it runs and who
+  runs it were never product variants, and three separate subsystems had each
+  invented a `mode` to describe them.
+  - `skills setup --mode <self-hosted|local>` and the `mode` config key
+    (including the eight-entry alias table that mapped `hosted`, `skills.md`,
+    `selfhosted`, `offline` and friends onto two values). Setup now asks one
+    question — `--api-url <url>` — and running on this machine is simply no API
+    origin being configured, which needs no setup at all. A `mode` key left in
+    an existing config file is ignored, not migrated; nothing reads it.
+  - `HASNA_SKILLS_STORAGE_MODE` / `SKILLS_STORAGE_MODE`, the exported type
+    `SkillsStorageMode`, and the functions `getStorageMode` /
+    `getSkillsStorageMode` from both `@hasna/skills` and `@hasna/skills/storage`.
+    Nothing ever branched on the label: it was echoed into `storage status` and
+    `storage sync-plan` beside `databaseConfigured` / `s3Configured`, which are
+    read from the configuration that is actually set and therefore cannot
+    contradict it. On-box SQLite and files are always present; Postgres and S3
+    are used when, and only when, their variables are set. The status and
+    sync-plan payloads lose `mode`, `env.mode`, and `remote.activeModeEnv`, and
+    the corresponding MCP tool output contracts lose `mode`.
+  - `mode: "self-hosted"` from the server's `/health` and billing-credits
+    payloads. `/health` reports liveness, not who is running the server.
+- The first-run onboarding nudge (`src/cli/onboarding.ts`). It existed only to
+  push users toward choosing a mode, and there is no longer a choice to make.
+
+### Added
+- `skills config unset <key>` (and the exported `unsetConfig`). With modes gone,
+  "run on this machine" is the absence of a configured `apiUrl`, so there has to
+  be a supported way back to that state; previously the only way to express the
+  intent was `setup --mode local`.
+- `skills setup --json` now reports `saved` (what this invocation wrote)
+  separately from `apiUrl` (the origin in effect after merging global and
+  project config), so the command can no longer claim a write it did not make
+  when an origin is inherited from a wider scope. An explicitly empty
+  `--api-url ""` is now an error rather than a silent no-op.
+
 ### Changed
 - **`~/.hasna/skills/` is now the skills app folder and installed skills live in
   `~/.hasna/skills/installed/<name>/`.** App data (`config.json`, `skills.db`,
