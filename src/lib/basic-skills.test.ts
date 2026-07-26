@@ -10,6 +10,7 @@ import {
 } from "./registry";
 import { getSkillDocs, getSkillRequirements } from "./skillinfo";
 import { getSkillPath } from "./installer";
+import { isHostedMetadataPackage } from "./hosted-skill-set";
 
 const BASIC_SKILLS = [...BASIC_SKILL_NAMES];
 
@@ -34,8 +35,7 @@ function readPackageJson(skill: string): {
 }
 
 function isHostedMetadataSkill(skill: string): boolean {
-  const pkg = readPackageJson(skill);
-  return pkg.skills?.runtime === "hosted" || pkg.skills?.source === "remote" || pkg.skills?.source === "private-hosted";
+  return isHostedMetadataPackage(readPackageJson(skill));
 }
 
 function readSkillMdFrontmatterName(skill: string): string | null {

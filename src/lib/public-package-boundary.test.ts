@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getPackedFiles } from "./packlist";
+import { requireHostedMetadataSlugs } from "./hosted-skill-set";
 
 const cloudPackage = "@hasna" + "/cloud";
 const cloudNodeModulesPath = "node_modules/@hasna/" + "cloud";
@@ -12,18 +13,12 @@ function readPackedFiles(): string[] {
   return getPackedFiles(process.cwd());
 }
 
+// Single source of truth for the hosted metadata set: hosted-skill-set.ts.
+// The `require` accessor throws on an empty set rather than returning one, so
+// deleting or converting the hosted directories fails these guards loudly
+// instead of making them pass vacuously with nothing left to check.
 function hostedMetadataSlugs(): string[] {
-  const skillsDir = join(process.cwd(), "skills");
-  return readdirSync(skillsDir)
-    .filter((entry) => {
-      const skillDir = join(skillsDir, entry);
-      if (!statSync(skillDir).isDirectory()) return false;
-      const pkgPath = join(skillDir, "package.json");
-      if (!existsSync(pkgPath)) return false;
-      const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { skills?: { runtime?: string; source?: string } };
-      return pkg.skills?.runtime === "hosted" || pkg.skills?.source === "remote" || pkg.skills?.source === "private-hosted";
-    })
-    .sort();
+  return requireHostedMetadataSlugs(join(process.cwd(), "skills"));
 }
 
 function collectSkillFiles(dir: string): string[] {

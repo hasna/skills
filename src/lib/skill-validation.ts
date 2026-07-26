@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "fs";
 import { isAbsolute, join, normalize } from "path";
+import { isHostedMetadataPackage } from "./hosted-skill-set.js";
 import { isPremiumSkill } from "./pricing.js";
 import type { SkillMeta } from "./registry.js";
 import type { SkillKind } from "./registry-types.js";
@@ -140,11 +141,10 @@ function isSafeRelativePath(value: string): boolean {
 }
 
 function isHostedPackageMetadata(pkg: PackageJson): boolean {
-  const skills = asRecord(pkg.skills);
-  if (!skills) return false;
-  const runtime = typeof skills.runtime === "string" ? skills.runtime.trim().toLowerCase() : "";
-  const source = typeof skills.source === "string" ? skills.source.trim().toLowerCase() : "";
-  return runtime === "hosted" || source === "remote" || source === "private-hosted";
+  // Authoritative predicate lives in hosted-skill-set.ts so validation, the
+  // packaging guards, and the drift checks cannot disagree about what "hosted"
+  // means.
+  return isHostedMetadataPackage(pkg);
 }
 
 function isHostedMetadataSkill(
