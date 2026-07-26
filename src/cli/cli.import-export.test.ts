@@ -288,23 +288,23 @@ describe("CLI import export and env checks", () => {
     }
 
     test("shows env var status for a skill", async () => {
-      const { stdout, exitCode } = await runCli(["env-check", "logo-design"]);
+      const { stdout, exitCode } = await runCli(["env-check", "audio-transcript-pack"]);
       expect(exitCode).toBe(0);
-      expect(stdout).toContain("Auth status for logo-design");
-      expect(stdout).toContain("SKILLS_API_KEY");
+      expect(stdout).toContain("Auth status for audio-transcript-pack");
+      expect(stdout).toContain("OPENAI_API_KEY");
     });
 
     test("shows set/missing markers for env vars", async () => {
-      const { stdout } = await runCli(["env-check", "logo-design"]);
+      const { stdout } = await runCli(["env-check", "audio-transcript-pack"]);
       const hasStatus = stdout.includes("set") || stdout.includes("missing");
       expect(hasStatus).toBe(true);
     });
 
     test("outputs JSON with --json flag", async () => {
-      const { stdout, exitCode } = await runCli(["env-check", "logo-design", "--json"]);
+      const { stdout, exitCode } = await runCli(["env-check", "audio-transcript-pack", "--json"]);
       expect(exitCode).toBe(0);
       const data = JSON.parse(stdout);
-      expect(data.skill).toBe("logo-design");
+      expect(data.skill).toBe("audio-transcript-pack");
       expect(Array.isArray(data.envVars)).toBe(true);
       expect(data.envVars.length).toBeGreaterThan(0);
       expect(data.envVars[0]).toHaveProperty("name");
@@ -312,11 +312,12 @@ describe("CLI import export and env checks", () => {
       expect(typeof data.envVars[0].set).toBe("boolean");
     });
 
-    test("JSON output contains SKILLS_API_KEY for image skill", async () => {
-      const { stdout } = await runCli(["env-check", "logo-design", "--json"]);
+    test("JSON output names the provider key a BYO-key skill needs", async () => {
+      const { stdout } = await runCli(["env-check", "audio-transcript-pack", "--json"]);
       const data = JSON.parse(stdout);
-      const skillApiKey = data.envVars.find((v: { name: string }) => v.name === "SKILLS_API_KEY");
-      expect(skillApiKey).toBeDefined();
+      const providerKey = data.envVars.find((v: { name: string }) => v.name === "OPENAI_API_KEY");
+      expect(providerKey).toBeDefined();
+      expect(data.envVars.find((v: { name: string }) => v.name === "SKILLS_API_KEY")).toBeUndefined();
     });
 
     test("fails for nonexistent skill", async () => {
@@ -395,7 +396,7 @@ describe("CLI import export and env checks", () => {
     });
 
     test("env var set field reflects actual environment", async () => {
-      const { stdout } = await runCli(["env-check", "logo-design", "--json"]);
+      const { stdout } = await runCli(["env-check", "audio-transcript-pack", "--json"]);
       const data = JSON.parse(stdout);
       for (const v of data.envVars) {
         const expectedSet = !!process.env[v.name];

@@ -32,7 +32,6 @@
     "skills/",
     "!skills/**/node_modules",
     "!skills/scaffold-project/my-app",
-    "!skills/{api-docs-portal,audio-transcript-pack,brand-assets,invoice-reconciliation,logo-design,one-page-website,pdf-to-dataset,pdf-to-markdown,product-mockup,sdk-generator,slide-deck-generator}/src",
     "LICENSE",
     "README.md"
   ],

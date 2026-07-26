@@ -125,18 +125,12 @@ export {
 } from "./lib/remote-registry.js";
 
 export {
-  HOSTED_RUNTIME_SLUGS,
-  isHostedRuntimeSkill,
-} from "./lib/hosted-runtime-skills.js";
-
-export {
   ARTICLE_GENERATION_SLUG,
   getAllPremiumSlugs,
   getPublicSkillPricing,
   getSkillCatalogBillingFields,
   getSkillPricing,
   getSkillRunCostCents,
-  isPremiumSkill,
   validateBlogArticleRunOptions,
   type BlogArticleRunOptions,
   type BlogArticleValidationResult,

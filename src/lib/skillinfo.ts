@@ -7,7 +7,6 @@ import { join } from "path";
 import { getInstalledSkills, getSkillPath } from "./installer.js";
 import { getSkill, loadRegistry, type SkillMeta } from "./registry.js";
 import { normalizeSkillName } from "./utils.js";
-import { isHostedRuntimeSkill } from "./hosted-runtime-skills.js";
 import { parseSkillFrontmatter } from "./skill-validation.js";
 
 /**
@@ -150,7 +149,7 @@ export function getSkillRequirements(name: string): SkillRequirements | null {
 }
 
 function isHostedPremiumSkill(skillName: string, meta?: SkillMeta): boolean {
-  return isHostedRuntimeSkill(skillName) || Boolean(meta?.tags.includes("premium") || meta?.tags.includes("remote"));
+  return Boolean(meta?.tags.includes("premium") || meta?.tags.includes("remote"));
 }
 
 export interface SkillDependencyStatus {

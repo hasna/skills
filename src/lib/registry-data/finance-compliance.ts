@@ -75,9 +75,9 @@ export const FINANCE_COMPLIANCE_SKILLS: SkillMeta[] = [
   {
     name: "invoice-reconciliation",
     displayName: "Invoice Reconciliation",
-    description: "Generate premium invoice reconciliation reports with matched payments, discrepancies, anomaly notes, summaries, and manifest artifacts",
+    description: "Generate invoice reconciliation reports with matched payments, discrepancies, anomaly notes, summaries, and manifest artifacts",
     category: "Finance & Compliance",
-    tags: ["invoice", "payments", "reconciliation", "finance", "premium", "remote"],
+    tags: ["invoice", "payments", "reconciliation", "finance"],
   },
   {
     name: "payroll-change-prepper",

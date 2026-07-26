@@ -16,8 +16,7 @@ describe("CLI tool primitives", () => {
     const data = JSON.parse(stdout);
     expect(data).toMatchObject({
       skill: "logo-design",
-      gatewayBacked: true,
-      hostedRuntime: true,
+            hostedRuntime: false,
     });
     expect(data.dependencies.map((dependency: { primitive: string }) => dependency.primitive)).toContain("media-image");
   });

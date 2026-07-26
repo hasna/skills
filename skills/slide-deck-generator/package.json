@@ -2,10 +2,37 @@
   "name": "slide-deck-generator",
   "version": "0.1.0",
   "private": true,
-  "description": "Hosted premium slide deck generator",
+  "description": "Turn a brief or markdown outline into a real slide deck: slides.json, deck.md, speaker notes, theme guide, self-contained HTML, and a PPTX file",
   "type": "module",
-  "skills": {
-    "runtime": "hosted",
-    "source": "remote"
+  "main": "src/index.ts",
+  "bin": {
+    "slide-deck-generator": "src/index.ts"
+  },
+  "files": [
+    "src",
+    "SKILL.md",
+    "tsconfig.json"
+  ],
+  "keywords": [
+    "slides",
+    "deck",
+    "pptx",
+    "powerpoint",
+    "presentation",
+    "markdown",
+    "cli",
+    "skill"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "marked": "^15.0.0",
+    "pptxgenjs": "^3.12.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
   }
 }

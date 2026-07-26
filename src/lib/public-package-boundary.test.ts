@@ -3,7 +3,6 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getPackedFiles } from "./packlist";
-import { requireHostedMetadataSlugs } from "./hosted-skill-set";
 
 const cloudPackage = "@hasna" + "/cloud";
 const cloudNodeModulesPath = "node_modules/@hasna/" + "cloud";
@@ -11,14 +10,6 @@ const cloudNodeModulesPath = "node_modules/@hasna/" + "cloud";
 // Single source of truth for the published file list: the packager itself.
 function readPackedFiles(): string[] {
   return getPackedFiles(process.cwd());
-}
-
-// Single source of truth for the hosted metadata set: hosted-skill-set.ts.
-// The `require` accessor throws on an empty set rather than returning one, so
-// deleting or converting the hosted directories fails these guards loudly
-// instead of making them pass vacuously with nothing left to check.
-function hostedMetadataSlugs(): string[] {
-  return requireHostedMetadataSlugs(join(process.cwd(), "skills"));
 }
 
 function collectSkillFiles(dir: string): string[] {
@@ -121,61 +112,8 @@ describe("public package boundary", () => {
     expect(lock).not.toContain("@hasnatools/platform-skills");
   });
 
-  test("keeps premium implementation source out of the packed public package", () => {
-    const files = readPackedFiles();
-    const packed = new Set(files);
-    const premiumSlugs = hostedMetadataSlugs();
 
-    const leakedPremiumSource = files.filter((path) =>
-      premiumSlugs.some((slug) => path.startsWith(`skills/${slug}/src/`)),
-    );
 
-    expect(leakedPremiumSource).toEqual([]);
-    for (const slug of premiumSlugs) {
-      expect(packed.has(`skills/${slug}/package.json`)).toBe(true);
-    }
-  });
-
-  test("keeps hosted premium implementation source out of the public repository", () => {
-    const leakedPremiumSource = hostedMetadataSlugs()
-      .filter((slug) => existsSync(join(process.cwd(), "skills", slug, "src")));
-
-    expect(leakedPremiumSource).toEqual([]);
-  });
-
-  test("keeps hosted metadata free of provider credential instructions", () => {
-    const forbiddenProviderEnvVars = [
-      "OPENAI_API_KEY",
-      "ANTHROPIC_API_KEY",
-      "GEMINI_API_KEY",
-      "GOOGLE_API_KEY",
-      "GOOGLE_PROJECT_ID",
-      "XAI_API_KEY",
-      "FIRECRAWL_API_KEY",
-      "EXA_API_KEY",
-      "ELEVENLABS_API_KEY",
-      "BROWSER_USE_API_KEY",
-      "MINIMAX_API_KEY",
-      "DEEPGRAM_API_KEY",
-      "REPLICATE_API_KEY",
-      "FAL_API_KEY",
-      "STABILITY_API_KEY",
-    ];
-    const leaks: string[] = [];
-
-    for (const slug of hostedMetadataSlugs()) {
-      const skillDir = join(process.cwd(), "skills", slug);
-      for (const file of collectSkillFiles(skillDir)) {
-        const relative = file.replace(`${process.cwd()}/`, "");
-        const content = readFileSync(file, "utf8");
-        for (const marker of forbiddenProviderEnvVars) {
-          if (content.includes(marker)) leaks.push(`${relative}: ${marker}`);
-        }
-      }
-    }
-
-    expect(leaks).toEqual([]);
-  });
 
   test("does not strip free local skill source from the packed public package", () => {
     const files = readPackedFiles();

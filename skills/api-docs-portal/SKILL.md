@@ -1,46 +1,84 @@
 ---
 name: api-docs-portal
-description: Generate premium API documentation portals from OpenAPI specs, route lists, or examples.
+description: Generate a self-contained static API documentation portal, normalized endpoint JSON, and a markdown reference from an OpenAPI 3.x or Swagger 2.0 spec.
 ---
 
 # API Docs Portal
 
-Generate a polished API documentation portal from OpenAPI specs, route files, or endpoint examples.
+Turn an OpenAPI/Swagger document into a browsable static portal. Everything is
+generated locally and deterministically: no network calls, no credentials, and
+the emitted HTML makes no external requests.
+
+## What It Does
+
+- Reads OpenAPI 3.x or Swagger 2.0 specs in JSON or YAML.
+- Resolves local `$ref` pointers (`#/components/schemas/...`, `#/definitions/...`) with a cycle guard, so referenced request/response schemas render inline.
+- Groups endpoints by their first tag, falling back to the first path segment.
+- Renders method, path, summary, description, deprecation, path/query/header/cookie parameters (including path-level shared parameters), request body fields, and per-status response fields.
+- Flattens nested object schemas up to three levels and labels types (`string<uuid>`, `object[]`, `string (open | paid | cancelled)`, `A | B`).
+- Extracts security schemes and per-operation security requirements, and generates a cURL example per endpoint.
 
 ## Requirements
 
-- Authenticate with `skills auth login`.
-- This premium skill runs through the hosted Skills runtime; local installs expose only metadata and instructions.
+- [Bun](https://bun.sh) 1.x
+- npm dependency: `yaml` (install once with `bun install` in this skill directory) — only needed for YAML specs, JSON specs parse natively
+- An OpenAPI/Swagger document with a `paths` object. External (`http://`, `other.yaml#/...`) `$ref`s are not fetched; they are marked as unresolved in the output.
 
 ## Usage
 
 ```bash
-skills run api-docs-portal --spec "GET /v1/projects, POST /v1/projects" --title "Acme API"
-skills run api-docs-portal --spec-file ./openapi.json --base-url "https://api.example.com" --auth bearer
+# Generate the portal into ./api-portal
+skills run api-docs-portal -- --spec ./openapi.yaml
+
+# Dark theme, custom output directory and base URL
+skills run api-docs-portal -- --spec ./openapi.json --output ./docs/api \
+  --theme slate --base-url https://api.example.com/v2
+
+# Machine-readable summary on stdout
+skills run api-docs-portal -- --spec ./openapi.yaml --json
 ```
+
+Then open `./api-portal/index.html` in a browser. Run it directly from the skill
+directory with `bun run src/index.ts --spec ./openapi.yaml`.
 
 ## Options
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--spec <text>` | OpenAPI JSON, route list, or endpoint examples. Positional text also works. | required |
-| `--spec-file <path>` | Read the API spec or route list from a file. | none |
-| `--title <text>` | Portal and API title. | API Documentation |
-| `--base-url <url>` | Base URL used in examples. | https://api.example.com |
-| `--auth <mode>` | Auth mode: `bearer`, `api-key`, `oauth`, `session`, or `none`. | bearer |
-| `--theme <name>` | Portal theme: `light` or `slate`. | light |
-| `--output <dir>` | Output directory for direct local execution. Hosted runs use the run export directory. | run export dir |
+| `-s, --spec <path>` | OpenAPI/Swagger document, JSON or YAML (also accepted positionally) | required |
+| `-o, --output <dir>` | Output directory | `./api-portal` |
+| `--theme <name>` | `light` or `slate` | `light` |
+| `--base-url <url>` | Base URL shown in the portal and cURL examples | first `servers[].url` |
+| `--title <text>` | Override the portal title | spec `info.title` |
+| `--json` | Print a JSON summary on stdout | off |
+| `--help` | Show usage | |
+| `--version` | Show version | |
 
 ## Outputs
 
-- `site/index.html`
-- `site/styles.css`
-- `site/endpoints.json`
-- `openapi.json`
-- `endpoint-reference.md`
-- `auth-guide.md`
-- `examples.md`
-- `README.md`
-- `manifest.json`
+Written into `--output` (default `./api-portal`):
 
-After submitting a hosted run, poll with `skills runs status <run-id>` and download outputs with `skills exports download <run-id>`.
+| File | Contents |
+|------|----------|
+| `index.html` | Self-contained portal: inline CSS, sticky sidebar navigation, responsive layout, zero external requests (no CDN scripts, fonts, or images) |
+| `endpoints.json` | Normalized endpoint model (method, path, group, params, request body fields, response fields, security) |
+| `reference.md` | Markdown API reference with parameter/field tables and cURL examples |
+
+Without `--json`, a summary is printed to stdout:
+
+```
+api-docs-portal: /abs/path/openapi.yaml
+  title      Orders API v2.1.0
+  base url   https://api.example.com/v2
+  theme      slate
+  endpoints  5 in 2 groups
+    customers: 1
+    orders: 4
+  output     /abs/path/api-portal
+  files      index.html, endpoints.json, reference.md
+```
+
+## Exit Codes
+
+- `0` — portal generated
+- `1` — missing/unreadable spec, invalid JSON/YAML, no `paths` object, no operations, or an invalid option value

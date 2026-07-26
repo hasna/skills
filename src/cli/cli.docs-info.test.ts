@@ -48,14 +48,14 @@ describe("CLI docs and validation", () => {
 
   describe("requires", () => {
     test("shows requirements for a skill", async () => {
-      const { stdout } = await runCli(["requires", "logo-design"]);
-      expect(stdout).toContain("Requirements for logo-design");
-      expect(stdout).toContain("SKILLS_API_KEY");
+      const { stdout } = await runCli(["requires", "audio-transcript-pack"]);
+      expect(stdout).toContain("Requirements for audio-transcript-pack");
+      expect(stdout).not.toContain("SKILLS_API_KEY");
     });
 
     test("shows CLI command", async () => {
-      const { stdout } = await runCli(["requires", "logo-design"]);
-      expect(stdout).toContain("logo-design");
+      const { stdout } = await runCli(["requires", "audio-transcript-pack"]);
+      expect(stdout).toContain("skills run audio-transcript-pack");
     });
 
     test("fails for nonexistent skill", async () => {
@@ -65,13 +65,14 @@ describe("CLI docs and validation", () => {
     });
 
     test("outputs JSON with --json", async () => {
-      const { stdout } = await runCli(["requires", "logo-design", "--json"]);
+      const { stdout } = await runCli(["requires", "audio-transcript-pack", "--json"]);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data.envVars)).toBe(true);
-      expect(data.envVars).toContain("SKILLS_API_KEY");
+      expect(data.envVars).not.toContain("SKILLS_API_KEY");
       expect(data.envVars).not.toContain("SKILL_API_KEY");
-      expect(data.envVars).not.toContain("OPENAI_API_KEY");
-      expect(data.cliCommand).toBe("skills run logo-design");
+      // BYO-key: the user's own provider variable must be surfaced, not hidden.
+      expect(data.envVars).toContain("OPENAI_API_KEY");
+      expect(data.cliCommand).toBe("skills run audio-transcript-pack");
       expect(data).toHaveProperty("systemDeps");
       expect(data).toHaveProperty("dependencies");
     });
@@ -103,8 +104,8 @@ describe("CLI docs and validation", () => {
       expect(data).toHaveProperty("metadata");
       expect(Array.isArray(data.issues)).toBe(true);
       expect(Array.isArray(data.warnings)).toBe(true);
-      expect(data.metadata.runtime).toBe("hosted");
-      expect(data.metadata.binCommands).toEqual([]);
+      expect(data.metadata.runtime).toBe("local");
+      expect(data.metadata.binCommands).toEqual(["logo-design"]);
     });
 
     test("outputs structured validation errors for missing skills", async () => {
@@ -120,23 +121,24 @@ describe("CLI docs and validation", () => {
 
   describe("info (enriched)", () => {
     test("JSON includes envVars and cliCommand", async () => {
-      const { stdout } = await runCli(["info", "logo-design", "--json"]);
+      const { stdout } = await runCli(["info", "audio-transcript-pack", "--json"]);
       const data = JSON.parse(stdout);
-      expect(data.name).toBe("logo-design");
-      expect(data.envVars).toContain("SKILLS_API_KEY");
+      expect(data.name).toBe("audio-transcript-pack");
+      expect(data.envVars).not.toContain("SKILLS_API_KEY");
       expect(data.envVars).not.toContain("SKILL_API_KEY");
-      expect(data.envVars).not.toContain("OPENAI_API_KEY");
+      // BYO-key: the user's own provider variable must be surfaced, not hidden.
+      expect(data.envVars).toContain("OPENAI_API_KEY");
       expect(data.envVars).not.toContain("GEMINI_API_KEY");
-      expect(data.cliCommand).toBe("skills run logo-design");
-      expect(data.pricing.formattedCost).toBe("$0.50/run");
+      expect(data.cliCommand).toBe("skills run audio-transcript-pack");
+      expect(data.pricing.formattedCost).toBe("Free");
     });
 
     test("human-readable shows env vars", async () => {
-      const { stdout } = await runCli(["info", "logo-design"]);
+      const { stdout } = await runCli(["info", "audio-transcript-pack"]);
       expect(stdout).toContain("Env vars:");
-      expect(stdout).toContain("SKILLS_API_KEY");
-      expect(stdout).toContain("Pricing: $0.50/run");
-      expect(stdout.toLowerCase()).not.toContain("openai");
+      expect(stdout).not.toContain("SKILLS_API_KEY");
+      expect(stdout).toContain("Pricing: Free");
+      expect(stdout).toContain("OPENAI_API_KEY");
       expect(stdout.toLowerCase()).not.toContain("gemini");
       expect(stdout.toLowerCase()).not.toContain("minimax");
     });

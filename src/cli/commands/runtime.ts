@@ -15,7 +15,6 @@ import {
   validateBlogArticleRunOptions,
 } from "../../lib/pricing.js";
 import { loadConfig, saveConfig, type ConfigScope } from "../../lib/config.js";
-import { isHostedRuntimeSkill } from "../../lib/hosted-runtime-skills.js";
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../../lib/remote-run-contract.js";
 import {
   completeSkillRun,
@@ -334,7 +333,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       return;
     }
   }
-  const isHostedRuntime = isHostedRuntimeSkill(skill.name);
+  const isHostedRuntime = false;
   const costCents = isHostedRuntime ? pricing.getSkillRunCostCents(skill.name, {}, args) : undefined;
   const publicPricing = pricing.getPublicSkillPricing(skill.name, {}, args);
   const runContext = createSkillRun({

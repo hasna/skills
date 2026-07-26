@@ -7,22 +7,23 @@
  *
  *   1. Each skill's own `package.json` -> `skills.runtime` / `skills.source`.
  *   2. The negated `!skills/{...}/src` glob(s) in the root `package.json` `files`.
- *   3. The premium catalog in `pricing.ts`.
- *
+  *
  * (1) is AUTHORITATIVE. It lives next to the thing it describes, so it cannot be
  * forgotten when a directory is added, removed, or converted. (2) and (3) are
  * projections of it and are guarded against drift in `hosted-skill-set.test.ts`.
  *
  * Two accessors, deliberately different:
  *
- *   - `listHostedMetadataSlugs` is the library answer. Zero hosted skills is a
- *     legitimate answer for an arbitrary skills root.
- *   - `requireHostedMetadataSlugs` is the repo-guard answer. Guards that FILTER
- *     by this set pass vacuously when it is empty, so emptiness must be a loud,
- *     deliberate decision rather than a silent side effect of deleting or
- *     converting the directories. Every guard derived from the enumerated set
- *     goes through this accessor so a mass deletion fails the whole family of
- *     guards at once instead of turning them green.
+ * THIS REPO now has ZERO hosted skills: every catalog entry ships bundled source
+ * or is instruction prose. The guard-facing `requireHostedMetadataSlugs`
+ * accessor, and the five guards derived from it, were retired in the change that
+ * emptied the set — which is precisely what its own emptiness error demanded.
+ * `catalog-runnable.test.ts` now asserts the set stays empty, so re-introducing
+ * a hosted skill fails loudly rather than silently.
+ *
+ * The parsing helpers below remain: `release-guard.ts` still applies them to
+ * ARBITRARY packages, where a non-empty hosted set is a legitimate answer, and
+ * `release-guard.integration.test.ts` exercises them against synthetic fixtures.
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -69,8 +70,7 @@ export function isHostedMetadataSkillDir(skillDir: string): boolean {
 
 /**
  * Enumerate the hosted metadata slugs under a `skills/` root, sorted.
- * May legitimately return `[]` for an arbitrary root — see
- * `requireHostedMetadataSlugs` for the guard-facing accessor.
+ * Returns `[]` for this repo, and may legitimately be non-empty for another.
  */
 export function listHostedMetadataSlugs(skillsRoot: string): string[] {
   if (!existsSync(skillsRoot)) return [];
@@ -99,19 +99,6 @@ export const HOSTED_METADATA_SET_EMPTY_ERROR = [
   "runnable in-repo skill), retire the derived guards in the SAME change — do not let them",
   "stay green and empty.",
 ].join("\n");
-
-/**
- * Guard-facing accessor. Identical to `listHostedMetadataSlugs`, except it
- * refuses to hand back an empty set. Throwing here — rather than leaving each
- * call site to remember its own non-emptiness assertion — is the point: a new
- * guard written against this accessor inherits the anti-vacuity property for
- * free, and it cannot be forgotten.
- */
-export function requireHostedMetadataSlugs(skillsRoot: string): string[] {
-  const slugs = listHostedMetadataSlugs(skillsRoot);
-  if (slugs.length === 0) throw new Error(HOSTED_METADATA_SET_EMPTY_ERROR);
-  return slugs;
-}
 
 // ---------------------------------------------------------------------------
 // Projection 2: the root package.json `files` source-exclusion globs.

@@ -97,14 +97,14 @@ export const DATA_ANALYSIS_SKILLS: SkillMeta[] = [
     displayName: "PDF to Markdown",
     description: "Convert PDFs into clean markdown with remote extraction and structure cleanup",
     category: "Data & Analysis",
-    tags: ["pdf", "markdown", "conversion", "remote", "premium"],
+    tags: ["pdf", "markdown", "conversion"],
   },
   {
     name: "pdf-to-dataset",
     displayName: "PDF to Dataset",
     description: "Extract PDF tables, forms, invoices, and semi-structured content into CSV and JSON datasets",
     category: "Data & Analysis",
-    tags: ["pdf", "dataset", "csv", "json", "extraction", "remote", "premium"],
+    tags: ["pdf", "dataset", "csv", "json", "extraction"],
   },
   {
     name: "doc-read",

@@ -1,57 +1,118 @@
 ---
 name: brand-assets
-description: Fetch official brand assets from a website or brand name, then return logos, palette, typography, source metadata, and a clean asset manifest. Use when a user asks to find, extract, download, package, or normalize a brand's logo and visual identity assets.
+description: Extract brand assets from a website you name — icons, social preview images, logo images, inline SVG marks, theme colors, CSS color tokens, and font stacks — downloaded into a folder with full source provenance. Use when a user asks to find, extract, download, or package a site's logo and visual identity.
 ---
 
 # Brand Assets
 
-Discover official brand identity material for a company, product, or website and package it into a clean handoff folder.
+Point this at a URL. It fetches that page over plain HTTP, parses the markup and
+the stylesheets it links, and pulls out the brand's icons, social images, logo
+images, colors, and typography. Everything downloaded is recorded against the
+exact URL it came from.
+
+The only hosts contacted are the one you name and whatever that page links its
+own assets from. There is no search API, no AI service, and no key of any kind.
 
 ## Requirements
 
-- Hosted premium execution requires `SKILLS_API_KEY`.
-- Provider keys stay server-side in the hosted runtime.
-- Provide either a brand name, a website URL, or both. A URL is preferred when the brand name is ambiguous.
+- Bun (the skill runs as `bun run src/index.ts`).
+- Outbound HTTP access to the site you pass. Nothing else.
+- No API keys and no environment variables.
+- One runtime dependency: `node-html-parser`. Run `bun install` in this skill
+  directory. If it is missing you get
+  `Missing dependency 'node-html-parser'. Run bun install in this skill directory.`
+
+`--url` is **required**. There is no brand-name search fallback — omitting it
+fails immediately and names the flag.
 
 ## Usage
 
 ```bash
-skills run brand-assets --url https://example.com
-skills run brand-assets --brand "Acme Ledger" --sizes 64,128,256,512,1024
-skills run brand-assets "Acme Ledger" --url https://example.com --include-screenshot
+# the normal case
+skills run brand-assets -- --url https://example.com
+
+# positional URL, custom destination and timeout
+skills run brand-assets -- https://example.com --output ./out/example --timeout 30000
+
+# inspect without downloading any binaries
+skills run brand-assets -- --url https://example.com --no-download
+
+# machine-readable profile on stdout
+skills run brand-assets -- --url https://example.com --json
 ```
+
+Run it directly from the skill directory with `bun run src/index.ts --help`.
 
 ## Options
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--brand <text>` | Brand, product, or company name. Positional text also works. | inferred when possible |
-| `--url <url>` | Official website or landing page to inspect. | optional |
-| `--sizes <list>` | Comma-separated PNG export sizes. | `64,128,256,512,1024` |
-| `--include-screenshot` | Include a visual reference screenshot when available. | false |
+| `--url <url>`, `-u` | Website to inspect. A bare hostname is upgraded to `https://`. A positional URL also works. | **required** |
+| `--output <dir>`, `-o` | Output directory. | `./brand-assets` |
+| `--timeout <ms>`, `-t` | Per-request timeout, 500–300000. Applies to the page, each stylesheet, and each asset. | `15000` |
+| `--max-assets <n>` | Cap on downloaded assets, 0–200. Anything beyond is listed as `skipped`. | `20` |
+| `--no-download` | Discover and report only; fetch no binaries. | off |
+| `--json` | Print the full profile as JSON on stdout. | off |
+| `--help` | Show help and exit 0. | |
+| `--version` | Print the version. | |
 
-## Hosted Workflow
+## What is discovered
 
-1. Resolve the most likely official website and brand pages from the supplied brand or URL.
-2. Inspect the selected pages for linked logos, favicon assets, social preview images, brand colors, fonts, typography, and structured metadata.
-3. Prefer official vector logos, then normalize fallback image assets into the requested PNG sizes.
-4. Name every asset with a stable brand slug, file role, variant, and size.
-5. Include source URLs and confidence notes so downstream users know where each asset came from.
+| Source | What is taken |
+|--------|---------------|
+| `<link rel="icon">`, `shortcut icon`, `apple-touch-icon`, `mask-icon` | Favicons and touch icons, with their `sizes` and `type` |
+| `<link rel="manifest">` | The web app manifest: `name`, `short_name`, `theme_color`, `background_color`, and every declared icon |
+| `<meta property="og:image">`, `<meta name="twitter:image">` | Social preview images |
+| `<meta name="theme-color">` | Brand color, including per-`media` light/dark variants |
+| `<img>` whose `src`, `alt`, `class`, or `id` matches logo / wordmark / brandmark / brand | Logo images |
+| Inline `<svg>` inside `header`, `nav`, links, or logo-classed elements | Up to three inline marks, saved as standalone SVG files |
+| Inline `<style>`, `style=` attributes, and up to 6 linked stylesheets | CSS custom properties whose name mentions color / brand / accent / primary / bg / fg / surface / theme, plus ordinary `color`, `background`, `fill`, and `stroke` declarations |
+| The same CSS | `font-family` declarations and font-related custom properties |
+
+If the page declares no icon at all, `/favicon.ico` is tried as a conventional
+fallback and reported honestly if it 404s.
+
+### How colors are ranked
+
+`<meta>` and web app manifest colors first, then hand-authored CSS custom
+properties, then ordinary declarations. Utility-framework plumbing (`--tw-*` and
+friends) is deliberately demoted so real brand tokens surface first. Every entry
+records how many times it was seen and every source it appeared in. The palette
+is capped at 48 distinct colors.
 
 ## Outputs
 
-- `manifest.json`
-- `brand-profile.json`
-- `brand-profile.md`
-- `palette.json`
-- `typography.md`
-- `logo-usage.md`
-- `sources.json`
-- `logos/svg/<brand>-logo.svg`
-- `logos/png/<brand>-logo-64.png`
-- `logos/png/<brand>-logo-128.png`
-- `logos/png/<brand>-logo-256.png`
-- `logos/png/<brand>-logo-512.png`
-- `logos/png/<brand>-logo-1024.png`
+| File | Contents |
+|------|----------|
+| `assets/` | Every downloaded file, named `<role>-<original-name>.<ext>` — e.g. `icon-favicon-32x32.png`, `logo-img-wordmark.svg`, `inline-logo-01.svg`. |
+| `brand-profile.json` | Everything discovered: metadata, assets with status, palette, typography, stylesheet results, counts. |
+| `brand-profile.md` | The same profile as a readable summary with asset, palette, and typography tables. |
+| `palette.json` | Every color: hex, how it was declared, which properties carried it, its kind, occurrence count, and every source. |
+| `typography.md` | Each font stack with its full fallback chain, source, and notes on reproducing the type without the font binaries. |
+| `sources.json` | The provenance map: downloaded file → source URL, status, content type, byte size, plus per-stylesheet fetch results. |
+| `manifest.json` | Every file written, with byte sizes and the run inputs. |
 
-After submitting a hosted run, poll with `skills runs status <run-id>` and download outputs with `skills exports download <run-id>`.
+Webfont binaries are never downloaded — licenses almost never permit
+redistributing them. `typography.md` gives you the stacks instead.
+
+## Failure behaviour
+
+Exit code 1 with a single clear line on stderr for each of:
+
+- `--url` missing — names the flag and shows an example.
+- A value that is not an http(s) URL.
+- DNS or connection failure.
+- A timeout — the message tells you to raise `--timeout`.
+- A non-200 response — the status code is included.
+- A response whose content type is not HTML — the actual content type is quoted.
+
+Failures *below* the page level are not fatal: a 404 favicon, an unreachable
+stylesheet, or a malformed manifest is recorded with its status in
+`sources.json` and `brand-profile.md`, and the run still completes.
+
+## Provenance and reuse
+
+These are someone else's trademarks. `sources.json` exists so you can prove where
+each file came from. Confirm you have the right to use an asset before you ship
+it, and check the site's own brand or press page for official guidelines and
+higher-resolution originals.

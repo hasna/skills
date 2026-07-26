@@ -6,14 +6,14 @@ export const DESIGN_BRANDING_SKILLS: SkillMeta[] = [
     displayName: "Brand Assets",
     description: "Fetch official brand assets from a website or brand name with logos, PNG sizes, palette, typography, source metadata, and manifests",
     category: "Design & Branding",
-    tags: ["brand", "logo", "assets", "palette", "typography", "premium", "remote"],
+    tags: ["brand", "logo", "assets", "palette", "typography"],
   },
   {
     name: "logo-design",
     displayName: "Logo Design",
-    description: "Generate premium multi-variant logo packages with transparent PNGs, vector-style SVGs, usage notes, and manifests",
+    description: "Generate multi-variant logo packages with transparent PNGs, vector-style SVGs, usage notes, and manifests",
     category: "Design & Branding",
-    tags: ["logo", "design", "branding", "identity", "premium", "remote"],
+    tags: ["logo", "design", "branding", "identity"],
   },
   {
     name: "brand-kit",
@@ -84,7 +84,7 @@ export const DESIGN_BRANDING_SKILLS: SkillMeta[] = [
     displayName: "Product Mockup",
     description: "Generate self-hosted product mockup packages with visual variants, prompts, usage notes, and asset metadata",
     category: "Design & Branding",
-    tags: ["product", "mockup", "visualization", "marketing", "premium", "remote"],
+    tags: ["product", "mockup", "visualization", "marketing"],
   },
   {
     name: "testimonial-graphics",
