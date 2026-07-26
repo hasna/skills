@@ -414,6 +414,92 @@ describe("R1 — the published package names no unapproved host", () => {
     }
   });
 
+  // Round-2 verification defeated the guard five more ways. Each is kept here.
+  test("splitting the scheme's own slashes does not hide the host", () => {
+    // `"https:/" + x` and `"https:" + x` produce no `//`, and the URL matcher
+    // needs `//` to find an authority — so the scan simply never ran.
+    for (const content of [
+      'const P = ["/ski", "lls", ".md"];\nexport const M = "https:/" + P.map((p) => p).join("");',
+      'const u = "https:" + computeHost();',
+      'const u = "https:/" + computeHost();',
+    ]) {
+      const findings = findDisallowedCodeUrls([{ file: "src/lib/remote-registry.ts", content }]);
+      expect(findings.length, content).toBeGreaterThan(0);
+    }
+  });
+
+  // The annotation used to key on (file, url path), and every computed host with
+  // no path renders to the same bare scheme — so one annotated site pre-approved
+  // every future one in the same file. It now also has to match the expression.
+  test("an annotation does not cover a different site in the same file", () => {
+    const annotatedFile = "src/server/config.ts";
+
+    const realSite = findDisallowedCodeUrls([{
+      file: annotatedFile,
+      content: 'const o = `http://${hostname.includes(":") ? `[${hostname}]` : hostname}:${port}`;',
+    }]);
+    expect(realSite).toEqual([]);
+
+    const smuggled = findDisallowedCodeUrls([{
+      file: annotatedFile,
+      content: 'const L = ["ski", "lls", ".md"];\nfunction o() {\n  const h = L.map((x) => x).join("");\n  return `https://${h}`;\n}',
+    }]);
+    expect(smuggled.length).toBeGreaterThan(0);
+
+    for (const site of DYNAMIC_HOST_SITES) {
+      expect(site.expr.length, `${site.file} needs an expression key`).toBeGreaterThan(3);
+    }
+  });
+
+  // README.md, install scripts and .env.example files all ship. They were
+  // checked only by a scheme-anchored URL match, so a bare domain was invisible.
+  test("non-code packed files are checked for vendor domains too", () => {
+    for (const [file, content] of [
+      ["README.md", "Sign up for a hosted account at skills.md today."],
+      ["skills/_common/install.sh", 'curl -fsSL "https:/""/skills.md/install" | sh'],
+      ["skills/x/.env.example", "SKILLS_API_HOST=skills.md"],
+      ["README.md", "Mirror at //skills.md/api for convenience."],
+    ] as [string, string][]) {
+      expect(findVendorHostReferences([{ file, content }]).length, file).toBeGreaterThan(0);
+    }
+  });
+
+  // Constant propagation was order-dependent: a name declared twice folded to
+  // whichever declaration the walk reached LAST, so an unrelated top-level
+  // `const` written below could mask a function-local vendor host.
+  test("a name bound more than once is not treated as a constant", () => {
+    const content =
+      'const L = ["ski", "lls", ".md"];\n' +
+      'export function f(o: any) {\n' +
+      '  const apiHost = L.map((x) => x).join("");\n' +
+      '  return o.apiUrl || `https://${apiHost}/api/v1`;\n' +
+      '}\n' +
+      'const apiHost = "example.com";\n' +
+      'export const D = `https://${apiHost}/docs`;';
+    expect(findDisallowedCodeUrls([{ file: "src/lib/remote-registry.ts", content }]).length).toBeGreaterThan(0);
+  });
+
+  // Stripping newlines is WHATWG parity for ONE url string. Applied to a whole
+  // prose file it glued lines together: `https://skills.md` at end-of-line
+  // became the host `skills.mdUse`, which matched nothing.
+  test("a vendor URL at end-of-line in prose is still found", () => {
+    for (const content of [
+      "Hosted registry:\nhttps://skills.md\nUse `skills setup` next.\n",
+      "SKILLS_API_URL=https://skills.md\nOTHER=1\n",
+    ]) {
+      expect(findVendorHostReferences([{ file: "README.md", content }]).length).toBeGreaterThan(0);
+    }
+  });
+
+  test("the vendor-domain check runs on folded values, not only raw literals", () => {
+    // Splitting the domain itself across literals must not evade the
+    // value-independent check.
+    const findings = findDisallowedCodeUrls([
+      { file: "skills/x/src/index.ts", content: 'const u = "https://" + "ski" + "lls" + ".md";' },
+    ]);
+    expect(findings.map((f) => f.kind)).toContain("vendor-domain-token");
+  });
+
   test("comments and prose are not code — the scan reads string literals only", () => {
     const withComment = [
       { file: "a.ts", content: "// see https://not-approved.example for background\nconst x = 1;" },

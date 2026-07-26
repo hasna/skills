@@ -12,7 +12,7 @@ tags:
   - contracts
   - conversion
   - automation
-author: skills.md
+author: Hasna
 license: MIT
 compatibility:
   - claude-code

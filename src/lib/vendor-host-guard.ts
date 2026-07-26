@@ -101,7 +101,6 @@ export const APPROVED_CODE_HOSTS: readonly { domain: string; reason: string }[] 
   { domain: "example.com", reason: "RFC 2606 reserved example domain." },
   { domain: "example.org", reason: "RFC 2606 reserved example domain." },
   { domain: "example.net", reason: "RFC 2606 reserved example domain." },
-  { domain: "your-domain.com", reason: "Obvious placeholder in generated sitemap output." },
 
   // --- Documentation and reference links embedded in generated scaffolding ---
   { domain: "github.com", reason: "This project's own repository and GitHub docs links." },
@@ -214,51 +213,78 @@ function allowsTemplateHost(file: string): boolean {
  * so that rebuilding a bundle does not churn the list. A new dynamic-host site
  * fails until someone reads it and adds it.
  */
-export const DYNAMIC_HOST_SITES: readonly { file: string; path: string; reason: string }[] = [
-  {
-    file: "bin/mcp.js",
-    path: "",
-    reason: "src/mcp/http.ts parses an INBOUND request's Host header; nothing is dialled.",
-  },
-  {
-    file: "bin/mcp.js",
-    path: "/mcp",
-    reason: "src/mcp/http.ts logs the address the MCP server just bound to.",
-  },
-  {
-    file: "bin/server.js",
-    path: "",
-    reason: "src/server/index.ts logs the address the API server just bound to.",
-  },
-  {
-    file: "bin/worker.js",
-    path: "",
-    reason: "src/server/config.ts derives the server's own origin from its bound host and port.",
-  },
-  {
-    file: "bin/migrate.js",
-    path: "",
-    reason: "src/server/config.ts derives the server's own origin from its bound host and port.",
-  },
+export const DYNAMIC_HOST_SITES: readonly { file: string; path: string; expr: string; reason: string }[] = [
   {
     file: "src/mcp/http.ts",
     path: "",
+    expr: "req.headers.host",
     reason: "Parses an INBOUND request's Host header to resolve a relative URL; nothing is dialled.",
   },
   {
+    file: "bin/mcp.js",
+    path: "",
+    expr: "req.headers.host",
+    reason: "Bundled copy of src/mcp/http.ts inbound Host-header parsing.",
+  },
+  {
     file: "src/mcp/http.ts",
     path: "/mcp",
+    expr: "listenPort",
     reason: "Logs the address the MCP server just bound to.",
+  },
+  {
+    file: "bin/mcp.js",
+    path: "/mcp",
+    expr: "listenPort",
+    reason: "Bundled copy of the MCP bound-address log line.",
   },
   {
     file: "src/server/index.ts",
     path: "",
+    expr: "config.host",
     reason: "Logs the address the API server just bound to.",
+  },
+  {
+    file: "bin/server.js",
+    path: "",
+    expr: "config.host",
+    reason: "Bundled copy of the API server bound-address log line.",
   },
   {
     file: "src/server/config.ts",
     path: "",
+    expr: "hostname.includes",
     reason: "Derives the server's own public origin from its bound host and port, with no vendor default.",
+  },
+  {
+    file: "bin/server.js",
+    path: "",
+    expr: "hostname.includes",
+    reason: "Bundled copy of the server's own-origin derivation.",
+  },
+  {
+    file: "bin/worker.js",
+    path: "",
+    expr: "hostname.includes",
+    reason: "Bundled copy of the server's own-origin derivation.",
+  },
+  {
+    file: "bin/migrate.js",
+    path: "",
+    expr: "hostname.includes",
+    reason: "Bundled copy of the server's own-origin derivation.",
+  },
+  {
+    file: "bin/server.js",
+    path: "",
+    expr: "DEFAULT_LINK_LOCAL_HOST",
+    reason: "Bundled AWS SDK appends a relative path to the ECS link-local credentials address.",
+  },
+  {
+    file: "bin/worker.js",
+    path: "",
+    expr: "DEFAULT_LINK_LOCAL_HOST",
+    reason: "Bundled AWS SDK appends a relative path to the ECS link-local credentials address.",
   },
 ];
 
@@ -273,9 +299,20 @@ export function urlPath(url: string): string {
   return separator === -1 ? "" : afterScheme.slice(separator);
 }
 
-function isAnnotatedDynamicHost(file: string, url: string): boolean {
+/**
+ * Is this specific site annotated?
+ *
+ * Matched on file AND url path AND a substring of the host-producing EXPRESSION.
+ * The expression is what makes the annotation site-scoped: keying on
+ * (file, path) alone degenerated to keying on the file, because every
+ * computed host with no path renders to the same bare scheme — so one annotated
+ * site silently pre-approved every future one in the same file.
+ */
+function isAnnotatedDynamicHost(file: string, url: string, expressionText: string): boolean {
   const path = urlPath(url);
-  return DYNAMIC_HOST_SITES.some((entry) => entry.file === file && entry.path === path);
+  return DYNAMIC_HOST_SITES.some(
+    (entry) => entry.file === file && entry.path === path && expressionText.includes(entry.expr),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -316,16 +353,34 @@ const PRIVATE_USE_AREA = new RegExp(`[\\u${SENTINEL_START.toString(16)}-\\u${SEN
  *
  *  - Private Use Area characters are removed, so sentinels stay out of band.
  *  - Tab, LF and CR are removed because the WHATWG URL parser removes them
- *    before parsing: `https://example.com\n@skills.md/x` is a request to
- *    skills.md with `example.com` as userinfo, and a scanner that stops at the
+ *    before parsing: `https://example.com\n@vendor.invalid/x` is a request to
+ *    vendor.invalid with `example.com` as userinfo, and a scanner that stops at the
  *    newline reads the opposite of what the runtime does.
  */
 export function sanitizeForScanning(text: string): string {
   return text.replace(PRIVATE_USE_AREA, "").replace(/[\t\n\r]/g, "");
 }
 
-/** Two distinct sentinel characters. Guaranteed absent by sanitisation. */
-export function pickSentinels(_text?: string): Sentinels {
+/**
+ * Sanitiser for free text (Markdown, JSON, shell, dotenv).
+ *
+ * Deliberately does NOT strip newlines. Removing them is right inside a single
+ * URL string, where the runtime parser removes them too; applied to a whole
+ * file it concatenates unrelated lines, and a verbatim `https://vendor.invalid` at
+ * end-of-line became `vendor.invalidUse` — invisible to every host rule.
+ */
+export function sanitizeProseForScanning(text: string): string {
+  return text.replace(PRIVATE_USE_AREA, "");
+}
+
+/**
+ * Two distinct sentinel characters.
+ *
+ * They are not searched for: `sanitizeForScanning` deletes the whole Private Use
+ * Area from every literal as it is read, so these characters cannot appear in
+ * the input and no per-input search is needed.
+ */
+export function pickSentinels(): Sentinels {
   return { placeholder: String.fromCharCode(SENTINEL_START), hole: String.fromCharCode(SENTINEL_START + 1) };
 }
 
@@ -428,7 +483,7 @@ export function extractUrlReferences(text: string, sentinels?: Sentinels): UrlRe
   // Text that arrived with sentinels was sanitised when its literals were read
   // and now carries the guard's markers; stripping the PUA again would delete
   // them. Tab/LF/CR removal still applies to both paths.
-  const scannable = sentinels ? text.replace(/[\t\n\r]/g, "") : sanitizeForScanning(text);
+  const scannable = sentinels ? text.replace(/[\t\n\r]/g, "") : sanitizeProseForScanning(text);
   const pattern = new RegExp(ABSOLUTE_URL_SOURCE, "gi");
   const references: UrlReference[] = [];
   for (const match of scannable.matchAll(pattern)) {
@@ -487,10 +542,20 @@ export function findVendorHostReferences(sources: Iterable<ScanSource>): VendorH
   const findings: VendorHostFinding[] = [];
   for (const source of sources) {
     if (!source.content) continue;
+    if (source.file === VENDOR_DOMAIN_DECLARATION_FILE) continue;
+
     for (const reference of extractUrlReferences(source.content)) {
       if (!reference.domain || !VENDOR_CONTROLLED_DOMAINS.includes(reference.domain)) continue;
       if (allowed.has(reference.url)) continue;
       findings.push({ file: source.file, url: reference.url, host: reference.markedHost });
+    }
+
+    // The scheme-anchored match above only sees a vendor domain when it is the
+    // authority of a contiguous `https://…`. A bare domain, a broken scheme or a
+    // scheme-relative `//host` is invisible to it — and prose ships too:
+    // README.md, install scripts and .env.example files are all in the package.
+    for (const hit of findVendorDomainTokens(source.content)) {
+      findings.push({ file: source.file, url: hit.domain, host: hit.domain });
     }
   }
   return findings;
@@ -546,7 +611,7 @@ export type UrlLiteralPosition =
 export const VENDOR_DOMAIN_DECLARATION_FILE = "src/lib/vendor-host-guard.ts";
 
 export function findVendorDomainTokens(text: string): { domain: string; index: number }[] {
-  let scannable = sanitizeForScanning(text).toLowerCase();
+  let scannable = sanitizeProseForScanning(text).toLowerCase();
   // Audited exact-URL exceptions are removed before the token search, so an
   // approved identifier is not reported twice under two different rules.
   for (const exception of VENDOR_HOST_URL_EXCEPTIONS) {
@@ -671,14 +736,38 @@ type ConstantBindings = Map<string, string | Map<string, string>>;
 
 function collectConstantBindings(source: ts.SourceFile): ConstantBindings {
   const bindings: ConstantBindings = new Map();
-  const assigned = new Set<string>();
+
+  // Two passes, because one pass is order-dependent and therefore unsound: a
+  // name declared twice was folded to whichever declaration the walk reached
+  // LAST, so a function-local vendor host could be masked by an unrelated
+  // top-level `const` of the same name written below it. A name that is bound
+  // or assigned more than once anywhere in the file is not a constant.
+  const declarations = new Map<string, number>();
+  const count = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+      declarations.set(node.name.text, (declarations.get(node.name.text) ?? 0) + 1);
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isIdentifier(node.left)
+    ) {
+      declarations.set(node.left.text, (declarations.get(node.left.text) ?? 0) + 2);
+    }
+    if (ts.isParameter(node) && ts.isIdentifier(node.name)) {
+      declarations.set(node.name.text, (declarations.get(node.name.text) ?? 0) + 2);
+    }
+    ts.forEachChild(node, count);
+  };
+  count(source);
 
   const visit = (node: ts.Node): void => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
       const name = node.name.text;
-      // A name bound more than once is not a constant we can rely on.
-      if (assigned.has(name)) bindings.delete(name);
-      assigned.add(name);
+      if ((declarations.get(name) ?? 0) !== 1) {
+        ts.forEachChild(node, visit);
+        return;
+      }
       const initializer = unwrap(node.initializer);
       const literal = literalString(initializer);
       if (literal !== undefined) {
@@ -991,26 +1080,61 @@ export function findCodeUrlLiterals(file: string, content: string): CodeUrlFindi
     }];
   }
 
-  const sentinels = pickSentinels(content);
-  if (!sentinels) {
-    return [{
-      file,
-      line: 1,
-      kind: "unparsable",
-      vendor: false,
-      detail: "no out-of-band sentinel available for this file; refusing to certify",
-    }];
-  }
+  const sentinels = pickSentinels();
 
   const bindings = collectConstantBindings(source);
+
+  // The one file that declares the vendor denylist is exempt from the token
+  // check only; every URL-shaped rule still applies to it.
+  const skipTokenScan = file === VENDOR_DOMAIN_DECLARATION_FILE;
 
   const lineOf = (node: ts.Node): number =>
     source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
 
+  // A scheme fragment immediately followed by a computed value: `"https:/" + x`
+  // or `"https:" + x`. The URL matcher needs `//` to see an authority, so these
+  // renderings would otherwise be silent — which is precisely how the scheme's
+  // own slashes were used to smuggle a host past the scan.
+  const SCHEME_FRAGMENT_THEN_HOLE = new RegExp(`https?:/{0,2}[${sentinels.hole}${sentinels.placeholder}]`, "i");
+
   const record = (node: ts.Node, candidates: string[]): void => {
     const seen = new Set<string>();
     for (const candidate of candidates) {
-      if (!candidate.includes("//")) continue;
+      // Value-INDEPENDENT check, run on the FOLDED value as well as on raw
+      // literals, so splitting the domain itself across literals does not help.
+      for (const hit of skipTokenScan ? [] : findVendorDomainTokens(candidate)) {
+        const key = `token:${hit.domain}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        findings.push({
+          file,
+          line: lineOf(node),
+          kind: "vendor-domain-token",
+          vendor: true,
+          domain: hit.domain,
+          position: classifyPosition(node),
+          detail: `the vendor domain ${hit.domain} is assembled in this expression`,
+        });
+      }
+
+      if (SCHEME_FRAGMENT_THEN_HOLE.test(candidate) && !candidate.includes("//")) {
+        const key = "scheme-fragment";
+        if (!seen.has(key)) {
+          seen.add(key);
+          findings.push({
+            file,
+            line: lineOf(node),
+            kind: "undeterminable-host",
+            vendor: false,
+            url: stripSentinels(candidate, sentinels).slice(0, 40),
+            host: "",
+            position: classifyPosition(node),
+            detail: "a URL scheme is concatenated with a computed value, so no host can be certified",
+          });
+        }
+      }
+
+      if (!/https?:/i.test(candidate)) continue;
       for (const reference of extractUrlReferences(candidate, sentinels)) {
         if (seen.has(reference.url + "|" + (reference.domain ?? ""))) continue;
         seen.add(reference.url + "|" + (reference.domain ?? ""));
@@ -1019,7 +1143,12 @@ export function findCodeUrlLiterals(file: string, content: string): CodeUrlFindi
           // The TLD itself is dynamic. `{…}` template syntax is legitimate in the
           // bundled AWS SDK; a host completed from code needs an annotation.
           if (reference.undeterminedBy === "placeholder" && allowsTemplateHost(file)) continue;
-          if (reference.undeterminedBy === "hole" && isAnnotatedDynamicHost(file, reference.url)) continue;
+          if (
+            reference.undeterminedBy === "hole" &&
+            isAnnotatedDynamicHost(file, reference.url, node.getText(source))
+          ) {
+            continue;
+          }
           findings.push({
             file,
             line: lineOf(node),
@@ -1078,7 +1207,9 @@ export function findCodeUrlLiterals(file: string, content: string): CodeUrlFindi
     }
 
     if (ts.isStringLiteralLike(node)) {
-      record(node, [node.text]);
+      // Sanitised here too: this path used to pass RAW text, which let a literal
+      // Private Use Area character forge the guard's own hole marker.
+      record(node, [sanitizeForScanning(node.text)]);
     }
 
     ts.forEachChild(node, visit);
@@ -1091,7 +1222,6 @@ export function findCodeUrlLiterals(file: string, content: string): CodeUrlFindi
   // reconstruct the program's value to see a host, and every reconstruction is
   // a finite set of cases; this one only needs the domain to be present in the
   // bytes, which it must be for the program to reach the vendor at all.
-  const skipTokenScan = file === VENDOR_DOMAIN_DECLARATION_FILE;
   const tokenVisit = (node: ts.Node): void => {
     if (skipTokenScan) return;
     const literalText =
@@ -1099,7 +1229,7 @@ export function findCodeUrlLiterals(file: string, content: string): CodeUrlFindi
       node.kind === ts.SyntaxKind.TemplateHead ||
       node.kind === ts.SyntaxKind.TemplateMiddle ||
       node.kind === ts.SyntaxKind.TemplateTail
-        ? (node as ts.LiteralLikeNode).text
+        ? sanitizeForScanning((node as ts.LiteralLikeNode).text)
         : undefined;
     if (literalText !== undefined) {
       for (const hit of findVendorDomainTokens(literalText)) {

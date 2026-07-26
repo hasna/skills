@@ -2,7 +2,7 @@
 name: doc-generate
 version: 1.0.0
 description: Generate docx with customizable options
-author: skills.md
+author: Hasna
 category: Documentation
 tags:
   - documentation

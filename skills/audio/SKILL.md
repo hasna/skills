@@ -16,7 +16,7 @@ Generate speech or short audio from text using provider-backed audio models. Thi
 ## Usage
 
 ```bash
-audio generate --provider openai --text "Welcome to Skills.md" --voice alloy --output ./voice.mp3
+audio generate --provider openai --text "Welcome to the audio skill" --voice alloy --output ./voice.mp3
 audio generate --provider minimax --model speech-2.8-turbo --text "Fast narration" --output ./voice.mp3
 audio generate --provider gemini --text "Studio announcement" --output ./voice.wav
 ```

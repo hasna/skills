@@ -524,7 +524,7 @@ async function generateSitemap(
   console.log("   1. Upload sitemap to your website root");
   console.log("   2. Submit to search engines (Google Search Console, Bing Webmaster)");
   console.log("   3. Add sitemap location to robots.txt:");
-  console.log(`      Sitemap: https://your-domain.com/${basename(outputPath)}`);
+  console.log(`      Sitemap: https://example.com/${basename(outputPath)}`);
 }
 
 // ============================================================================
