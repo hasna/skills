@@ -76,6 +76,12 @@ export function listHostedMetadataSlugs(skillsRoot: string): string[] {
   if (!existsSync(skillsRoot)) return [];
   const slugs: string[] = [];
   for (const entry of readdirSync(skillsRoot)) {
+    // Dot-directories are not skills anywhere else in the repo (see
+    // validateRegistryConsistency), and `files` globs do not match a leading
+    // dot by default, so a dot-directory could never be excluded by the entry
+    // this module renders. Skipping keeps the derivation and the renderer in
+    // agreement about what a slug can be.
+    if (entry.startsWith(".")) continue;
     const dir = join(skillsRoot, entry);
     if (!statSync(dir).isDirectory()) continue;
     if (isHostedMetadataSkillDir(dir)) slugs.push(entry);
@@ -111,8 +117,9 @@ export function requireHostedMetadataSlugs(skillsRoot: string): string[] {
 // Projection 2: the root package.json `files` source-exclusion globs.
 // ---------------------------------------------------------------------------
 
-// Anchored, and tolerant of BOTH shapes so the guard survives a reformat of the
-// `files` array: one brace glob listing the slugs, or one entry per slug.
+// Anchored. Two spellings are recognised: one brace glob listing the slugs, or
+// one bare entry per slug. Anything else parses to nothing and therefore fails
+// the drift guard loudly rather than being assumed to work.
 //
 // The brace form deliberately requires at least TWO comma-separated slugs.
 // `npm pack` does not brace-expand a single-element `{slug}` — it treats the
@@ -120,16 +127,44 @@ export function requireHostedMetadataSlugs(skillsRoot: string): string[] {
 // expand it. Accepting a one-element brace here would mean reporting a slug as
 // excluded when npm, the authoritative packer for publishing, still ships its
 // source. The only single-slug form that works in both packers is the bare one.
-const BRACE_SOURCE_EXCLUSION = /^!skills\/\{([a-z0-9][a-z0-9-]*(?:,[a-z0-9][a-z0-9-]*)+)\}\/src$/;
-const SINGLE_SOURCE_EXCLUSION = /^!skills\/([a-z0-9][a-z0-9-]*)\/src$/;
+//
+// The slug character class is `[^,{}/]` rather than `[a-z0-9-]` so that every
+// slug `buildHostedSourceExclusionGlob` can emit also parses back. A narrower
+// class here would let the guard print a "fix" that does not satisfy it.
+const SLUG = "[^,{}/]+";
+const BRACE_SOURCE_EXCLUSION = new RegExp(`^!skills/\\{(${SLUG}(?:,${SLUG})+)\\}/src$`);
+const SINGLE_SOURCE_EXCLUSION = new RegExp(`^!skills/(${SLUG})/src$`);
+
+/**
+ * A non-negated `files` entry that re-includes paths under `skills/`.
+ *
+ * `files` is ORDER-SENSITIVE: an entry appearing after a negation undoes it. A
+ * set-based reading would happily report every slug as excluded while npm packs
+ * all of their sources. Conservative by construction — anything that might
+ * re-include counts as re-inclusion, so an unrecognised pattern fails the guard
+ * rather than silently satisfying it.
+ */
+function reincludesSkillSources(entry: string): boolean {
+  if (entry.startsWith("!")) return false;
+  const normalized = entry.replace(/^\.\//, "");
+  return normalized === "*" || normalized === "**" || normalized.startsWith("skills");
+}
 
 /**
  * Extract the set of slugs whose `src/` the root `files` array genuinely
  * excludes from the published package, sorted and de-duplicated.
+ *
+ * Only negations that survive to the end of the array count: a later entry that
+ * re-includes `skills/` discards every exclusion before it, exactly as npm
+ * resolves them.
  */
 export function parseHostedSourceExclusionSlugs(files: readonly string[]): string[] {
-  const slugs = new Set<string>();
+  let slugs = new Set<string>();
   for (const entry of files) {
+    if (reincludesSkillSources(entry)) {
+      slugs = new Set();
+      continue;
+    }
     const brace = BRACE_SOURCE_EXCLUSION.exec(entry);
     if (brace) {
       for (const slug of brace[1].split(",")) slugs.add(slug);

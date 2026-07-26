@@ -155,8 +155,9 @@ if (findings.length > 0) {
 }
 
 // ---------------------------------------------------------------------------
-// S1 + S2: derive the REAL package file list and enforce the public/private
-// boundary and body content scan against exactly what would be published.
+// S1 + S3 + S2: derive the REAL package file list and enforce the public/private
+// boundary, the hosted-source boundary, and the body content scan against
+// exactly what would be published.
 // ---------------------------------------------------------------------------
 let packedFiles: string[];
 try {

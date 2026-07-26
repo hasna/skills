@@ -40,7 +40,7 @@ function runGuard(cwd: string): GuardResult {
   };
 }
 
-describe("release-guard end-to-end (S1 + S2)", () => {
+describe("release-guard end-to-end (S1 + S2 + S3)", () => {
   test("passes on a clean package", () => {
     const dir = makePkg(["skills/", "README.md"]);
     try {

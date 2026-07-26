@@ -149,6 +149,40 @@ describe("hosted skill set — glob parsing", () => {
     expect(() => buildHostedSourceExclusionGlob([])).toThrow(/empty slug set/);
   });
 
+  // Regression: `files` is ORDER-SENSITIVE. A `skills/` entry after the
+  // negation re-includes everything the negation removed. Measured with npm:
+  //   ["skills/", "!skills/{one,two}/src"] -> packs neither src
+  //   ["!skills/{one,two}/src", "skills/"] -> packs BOTH srcs
+  // A set-based reading would report both slugs excluded in the second case.
+  test("a later entry that re-includes skills/ discards the exclusions before it", () => {
+    expect(parseHostedSourceExclusionSlugs(["skills/", "!skills/{alpha,beta}/src"])).toEqual([
+      "alpha",
+      "beta",
+    ]);
+    expect(parseHostedSourceExclusionSlugs(["!skills/{alpha,beta}/src", "skills/"])).toEqual([]);
+    expect(parseHostedSourceExclusionSlugs(["!skills/alpha/src", "skills/**"])).toEqual([]);
+    expect(parseHostedSourceExclusionSlugs(["!skills/alpha/src", "**"])).toEqual([]);
+    // Re-inclusion of an unrelated tree leaves the exclusion standing.
+    expect(parseHostedSourceExclusionSlugs(["!skills/alpha/src", "dist/", "README.md"])).toEqual([
+      "alpha",
+    ]);
+  });
+
+  // Every slug the renderer can emit must parse back, or the guard would print
+  // a "fix" that does not satisfy it.
+  test("build and parse round-trip for every slug shape the derivation can yield", () => {
+    for (const slugs of [["_common", "beta"], ["Alpha", "beta"], ["x_y", "beta"], ["solo"]]) {
+      const glob = buildHostedSourceExclusionGlob(slugs);
+      expect(parseHostedSourceExclusionSlugs([glob]), `round-trip failed for ${glob}`).toEqual(
+        [...slugs].sort(),
+      );
+    }
+  });
+
+  test("the derivation never yields a dot-directory, which no files glob could exclude", () => {
+    expect(listHostedMetadataSlugs(SKILLS_ROOT).filter((slug) => slug.startsWith("."))).toEqual([]);
+  });
+
   test("finds packed paths that would ship hosted implementation source", () => {
     const packed = [
       "skills/alpha/package.json",
