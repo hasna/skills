@@ -35,3 +35,8 @@ coverage/
 
 # Local installation
 .service-consolelog/
+
+# Run output. `exports/` was not ignored, so a product-catalog export from an
+# actual tool run was committed and published to npm. Keep run artifacts out of
+# git — they are output, not source.
+exports/

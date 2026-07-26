@@ -6,6 +6,7 @@ import {
   applyAllowlist,
   scanFile,
   scanFiles,
+  scanPaths,
   scanText,
   toRedactedJson,
   type ScanCategory,
@@ -84,6 +85,73 @@ describe("content-scan does NOT false-positive on legitimate public content", ()
 
   test("clean prose yields no findings", () => {
     expect(scanText("This skill summarizes a transcript into bullet points.")).toEqual([]);
+  });
+});
+
+describe("scanPaths blocks committed tool output", () => {
+  // Regression: a real merchant product catalog, written by an actual tool run,
+  // was committed under a skill's exports/ directory and published to npm.
+  test("blocks a timestamped export committed under a skill", () => {
+    const findings = scanPaths(["skills/consolelog/exports/products-2025-12-14T13-50-53-041Z.csv"]);
+    expect(findings.some((f) => f.ruleId === "timestamped-artifact-filename")).toBe(true);
+    expect(findings.some((f) => f.ruleId === "committed-artifact-directory")).toBe(true);
+    expect(findings.every((f) => f.category === "committed-output")).toBe(true);
+  });
+
+  test("blocks a data file under an artifact directory even without a timestamp", () => {
+    for (const path of [
+      "skills/x/exports/catalog.csv",
+      "skills/x/output/dump.json",
+      "skills/x/runs/result.jsonl",
+      "skills/x/results/scrape.sql",
+    ]) {
+      expect(scanPaths([path]).some((f) => f.ruleId === "committed-artifact-directory")).toBe(true);
+    }
+  });
+
+  test("blocks a timestamped artifact anywhere, not just under exports/", () => {
+    expect(
+      scanPaths(["skills/x/report-2025-12-14T13-50-53-041Z.json"]).some(
+        (f) => f.ruleId === "timestamped-artifact-filename",
+      ),
+    ).toBe(true);
+  });
+
+  test("reports the path verbatim so a maintainer can delete the file", () => {
+    const path = "skills/x/exports/catalog.csv";
+    const [finding] = scanPaths([path]);
+    expect(finding.file).toBe(path);
+    expect(finding.redacted).toBe(path);
+    // 0/0 denotes the whole file rather than a position inside it.
+    expect(finding.line).toBe(0);
+  });
+});
+
+describe("scanPaths does NOT false-positive on ordinary package files", () => {
+  test("allows source, docs and config", () => {
+    expect(
+      scanPaths([
+        "skills/x/src/index.ts",
+        "skills/x/package.json",
+        "skills/x/README.md",
+        "skills/x/tsconfig.json",
+        "src/lib/content-scan.ts",
+        "migrations/0001_initial.sql",
+        "dist/index.js",
+      ]),
+    ).toEqual([]);
+  });
+
+  test("allows a source module that merely lives in an output/ directory", () => {
+    // Code is not an artifact: `src/` trees are exempt from the directory rule.
+    expect(scanPaths(["skills/x/src/output/formatter.ts"])).toEqual([]);
+    expect(scanPaths(["skills/x/src/output/schema.json"])).toEqual([]);
+  });
+
+  test("does not match a bare date or an epoch number in a filename", () => {
+    // Deliberately not matched: indistinguishable from migration prefixes and ids.
+    expect(scanPaths(["migrations/20251214_add_table.sql"])).toEqual([]);
+    expect(scanPaths(["skills/x/src/fixtures/1734182453000.json"])).toEqual([]);
   });
 });
 
