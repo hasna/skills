@@ -22,3 +22,8 @@ jobs:
         run: bun run test
       - name: Build
         run: bun run build
+      # Runs the same guard as `prepack`, but on every PR — scanning the real
+      # packed file list for secrets, PII and private context. Without this the
+      # scan only fires at publish time, which is too late to block a merge.
+      - name: Content scan (secrets, PII, private context)
+        run: bun run verify:release
