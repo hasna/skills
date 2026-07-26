@@ -199,9 +199,23 @@ export function normalizePortableSkillName(name: string): string {
   return normalized;
 }
 
+/**
+ * Resolve the directory holding portable skills.
+ *
+ * Precedence is explicit-over-ambient, most specific first:
+ *   1. `options.rootDir`  - caller named the directory outright
+ *   2. `options.homeDir`  - caller named the home to derive it from
+ *   3. `getDataDir()`     - ambient: $HASNA_SKILLS_DIR, else $HOME
+ *
+ * `options.homeDir` used to sit *below* the $HASNA_SKILLS_DIR lookup, so an
+ * ambient environment variable silently overrode an argument the caller had
+ * passed deliberately - the caller could not target a directory at all once the
+ * variable was set anywhere in the process. Reading the environment is now left
+ * entirely to getDataDir(), so there is one place that knows the variable's name
+ * and one rule for which source wins.
+ */
 export function getPortableSkillsRoot(options: PortableSkillOptions = {}): string {
   if (options.rootDir) return options.rootDir;
-  if (process.env["HASNA_SKILLS_DIR"]) return process.env["HASNA_SKILLS_DIR"]!;
   if (options.homeDir) return join(options.homeDir, ".hasna", "skills");
   return getDataDir();
 }
@@ -228,7 +242,11 @@ export function findPortableSkill(name: string, options: PortableSkillOptions = 
 
 export function listPortableSkills(options: PortableSkillOptions = {}): PortableSkillSummary[] {
   const root = getPortableSkillsRoot(options);
-  if (!existsSync(root)) return [];
+  // Not existsSync: a root that exists but is a *file* passed that check and then
+  // threw ENOTDIR out of readdirSync below, so `skills list`/`search`/`info` all
+  // exited 1 when $HASNA_SKILLS_DIR named a file. Listing no skills is the right
+  // answer for anything that is not a readable directory.
+  if (!safeIsDirectory(root)) return [];
   const skills: PortableSkillSummary[] = [];
   for (const entry of readdirSync(root).sort()) {
     if (entry.startsWith(".") || DATA_DIR_NON_SKILL_ENTRIES.has(entry)) continue;

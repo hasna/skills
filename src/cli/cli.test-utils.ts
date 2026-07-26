@@ -3,6 +3,7 @@ import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import pkg from "../../package.json" with { type: "json" };
 import { BASIC_SKILL_NAMES, SKILLS } from "../lib/registry.js";
+import { withoutDataDirOverrideEnv } from "../test-preload.js";
 
 export const CLI_PATH = join(import.meta.dir, "index.tsx");
 export const EXPECTED_ALL_SKILL_COUNT = SKILLS.length;
@@ -11,8 +12,22 @@ export const PACKAGE_VERSION = pkg.version;
 export const SLOW_TEST_TIMEOUT = 15000;
 export const CLEAN_CLI_HOME = mkdtempSync(join(tmpdir(), "skills-cli-home-"));
 
+// The CLI under test resolves its data dir from $HOME. Drop the preload's
+// $HASNA_SKILLS_DIR from the *inherited* environment, or that ambient override
+// wins inside the child and CLEAN_CLI_HOME (or a test's own $HOME) is never
+// consulted. Isolation is preserved by $HOME itself always being a throwaway dir.
+//
+// Stripped before the caller's `env` is merged, not after, so a test that wants to
+// exercise the override can still pass one explicitly - same explicit-over-ambient
+// rule the resolver itself follows.
 function testEnv(env: Record<string, string>): Record<string, string> {
-  return { ...process.env, HOME: CLEAN_CLI_HOME, ...env, NO_COLOR: "1", SKILLS_TEST_MODE: "1" };
+  return {
+    ...withoutDataDirOverrideEnv({ ...process.env }),
+    HOME: CLEAN_CLI_HOME,
+    ...env,
+    NO_COLOR: "1",
+    SKILLS_TEST_MODE: "1",
+  } as Record<string, string>;
 }
 
 export async function runCli(

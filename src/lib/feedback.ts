@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync } from "fs";
-import { homedir } from "os";
 import { dirname, join } from "path";
 import { Database } from "bun:sqlite";
+import { getDataDir } from "./config.js";
 
 export type FeedbackCategory = "bug" | "feature" | "general";
 
@@ -19,8 +19,15 @@ export interface FeedbackResult {
   path: string;
 }
 
+/**
+ * Resolved via getDataDir() rather than homedir() so that it agrees with the
+ * path `skills storage` advertises (native-storage.ts builds `feedbackDbPath`
+ * from getDataDir()). While this read the home directly, setting
+ * $HASNA_SKILLS_DIR made the reported path and the written path diverge - the
+ * CLI would name a database it was not using.
+ */
 export function getFeedbackDbPath(): string {
-  return join(homedir(), ".hasna", "skills", "skills.db");
+  return join(getDataDir(), "skills.db");
 }
 
 function getFeedbackDb(): Database {

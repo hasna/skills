@@ -158,6 +158,54 @@ version: 0.2.0
     }
   });
 
+  test("read commands still work when HASNA_SKILLS_DIR names a file", async () => {
+    // The symptom this guards: getDataDir() returned the file path, existsSync()
+    // said it existed, and readdirSync threw ENOTDIR - so `skills list`, `search`,
+    // and `info` all exited 1 instead of simply reporting no custom skills.
+    const cwd = mkdtempSync(join(tmpdir(), "cli-override-file-cwd-"));
+    const file = join(cwd, "not-a-directory.txt");
+    writeFileSync(file, "this is a file, not a skills root");
+    try {
+      const env = { HASNA_SKILLS_DIR: file };
+
+      const listed = await runCliInCwd(["list", "--json"], cwd, env);
+      expect(listed.exitCode).toBe(0);
+      expect(JSON.parse(listed.stdout).length).toBeGreaterThan(0);
+
+      const searched = await runCliInCwd(["search", "image", "--json"], cwd, env);
+      expect(searched.exitCode).toBe(0);
+
+      const info = await runCliInCwd(["info", "image", "--json"], cwd, env);
+      expect(info.exitCode).toBe(0);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test("HASNA_SKILLS_DIR relocates the skills root the CLI reads and writes", async () => {
+    // The override is a real product feature, not just test scaffolding: before
+    // this change getDataDir() ignored it, so `skills new` wrote to the override
+    // while `skills list --all` kept reading $HOME and never saw the result.
+    const home = mkdtempSync(join(tmpdir(), "cli-override-home-"));
+    const root = mkdtempSync(join(tmpdir(), "cli-override-root-"));
+    const cwd = mkdtempSync(join(tmpdir(), "cli-override-cwd-"));
+    try {
+      const env = { HOME: home, HASNA_SKILLS_DIR: root };
+      const created = await runCliInCwd(["new", "override-skill", "--json"], cwd, env);
+      expect(created.exitCode).toBe(0);
+      expect(JSON.parse(created.stdout).path).toBe(join(root, "override-skill"));
+      expect(existsSync(join(home, ".hasna", "skills", "override-skill"))).toBe(false);
+
+      const listed = await runCliInCwd(["list", "--all", "--json"], cwd, env);
+      expect(listed.exitCode).toBe(0);
+      expect(JSON.parse(listed.stdout).find((s: any) => s.name === "override-skill")).toBeDefined();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   test("port --all bulk-imports every subfolder with a summary", async () => {
     const home = mkdtempSync(join(tmpdir(), "cli-portable-home-"));
     const cwd = mkdtempSync(join(tmpdir(), "cli-portable-cwd-"));

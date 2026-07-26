@@ -23,6 +23,7 @@
   "files": [
     "dist/",
     "!dist/**/*.test.d.ts",
+    "!dist/test-preload.d.ts",
     "!dist/platform",
     "!dist/server",
     "bin/",

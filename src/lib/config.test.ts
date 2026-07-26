@@ -6,7 +6,9 @@ import { tmpdir } from "os";
 // We test the module functions by importing them and overriding cwd/homedir behavior
 // via temp directories and direct file manipulation.
 
-import { loadConfig, saveConfig, getConfigPath, getDataDir, type SkillsConfig, type ConfigScope } from "./config";
+import { DATA_DIR_ENV, loadConfig, saveConfig, getConfigPath, getDataDir, type SkillsConfig, type ConfigScope } from "./config";
+import { withHomeDataDir, withTempHome } from "../test-preload.js";
+import { clearRegistryCache, loadRegistry } from "./registry.js";
 
 describe("config", () => {
   let tmpDir: string;
@@ -32,9 +34,17 @@ describe("config", () => {
       expect(p).toBe(join(tmpDir, "skills.config.json"));
     });
 
+    // Asserts the $HOME-derived layout, so it must run with the data-dir override
+    // lifted; the throwaway $HOME keeps getDataDir()'s mkdir off the real home.
     test("returns global path for 'global' scope", () => {
-      const p = getConfigPath("global");
+      const p = withTempHome(() => getConfigPath("global"));
       expect(p).toContain(join(".hasna", "skills", "config.json"));
+    });
+
+    test("returns the overridden data dir for 'global' scope when HASNA_SKILLS_DIR is set", () => {
+      // The override has to reach the config file too, not just the skills tree.
+      const p = getConfigPath("global");
+      expect(p).toBe(join(process.env["HASNA_SKILLS_DIR"]!, "config.json"));
     });
   });
 
@@ -100,13 +110,58 @@ describe("config", () => {
 
   describe("getDataDir", () => {
     test("returns path inside ~/.hasna/skills/", () => {
-      const dir = getDataDir();
+      const dir = withTempHome(() => getDataDir());
       expect(dir).toContain(join(".hasna", "skills"));
     });
 
+    // Both halves must start from a path that does NOT exist, or they assert
+    // nothing: under the preload $HASNA_SKILLS_DIR already names a directory that
+    // mkdtemp created, so a bare existsSync(getDataDir()) passes even if
+    // getDataDir() creates nothing at all.
     test("directory exists after call", () => {
-      const dir = getDataDir();
-      expect(existsSync(dir)).toBe(true);
+      withTempHome((home) => {
+        const target = join(home, ".hasna", "skills");
+        expect(existsSync(target)).toBe(false);
+        expect(existsSync(getDataDir())).toBe(true);
+      });
+    });
+
+    test("creates the overridden data dir when it does not exist yet", () => {
+      const root = join(tmpdir(), `skills-override-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      const previous = process.env[DATA_DIR_ENV];
+      process.env[DATA_DIR_ENV] = root;
+      try {
+        expect(existsSync(root)).toBe(false);
+        expect(getDataDir()).toBe(root);
+        expect(existsSync(root)).toBe(true);
+      } finally {
+        if (previous === undefined) delete process.env[DATA_DIR_ENV];
+        else process.env[DATA_DIR_ENV] = previous;
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("read paths still work when the overridden data dir names a file", () => {
+      // Asserted at the level the user experiences: mkdirSync failing is not the
+      // symptom, `skills list` exiting 1 is. getDataDir() swallowing EEXIST was not
+      // enough on its own - it still returned the file path, and listPortableSkills
+      // then threw ENOTDIR out of readdirSync.
+      const file = join(tmpdir(), `skills-override-file-${Date.now()}.txt`);
+      writeFileSync(file, "not a directory");
+      const previous = process.env[DATA_DIR_ENV];
+      process.env[DATA_DIR_ENV] = file;
+      try {
+        expect(() => getDataDir()).not.toThrow();
+        expect(getDataDir()).toBe(file);
+        clearRegistryCache();
+        expect(() => loadRegistry()).not.toThrow();
+        expect(loadRegistry().length).toBeGreaterThan(0);
+      } finally {
+        if (previous === undefined) delete process.env[DATA_DIR_ENV];
+        else process.env[DATA_DIR_ENV] = previous;
+        clearRegistryCache();
+        rmSync(file, { force: true });
+      }
     });
 
     test("copies missing legacy ~/.skills files into an existing ~/.hasna/skills without overwriting", () => {
@@ -123,7 +178,9 @@ describe("config", () => {
         writeFileSync(join(home, ".hasna", "skills", "config.json"), JSON.stringify({ defaultAgent: "codex" }));
 
         process.env.HOME = home;
-        const dir = getDataDir();
+        // Legacy migration is a $HOME-only concern, so the override is lifted for
+        // the call under test.
+        const dir = withHomeDataDir(() => getDataDir());
 
         expect(dir).toBe(join(home, ".hasna", "skills"));
         expect(readFileSync(join(dir, "config.json"), "utf-8")).toContain("codex");

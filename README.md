@@ -393,6 +393,19 @@ Global configuration is stored in `~/.hasna/skills/`. Auth is stored in
 `~/.hasna/skills/auth.json`. Project runtime data is stored in `.skills/runs`,
 `.skills/exports`, `.skills/tmp`, and optional `.skills/project.json`.
 
+Set `HASNA_SKILLS_DIR` to relocate the data directory. It replaces
+`~/.hasna/skills` entirely — portable skills, `config.json`, and the feedback
+database all move with it, and the legacy `~/.skills` migration is skipped.
+Config written under the default location is *not* read back when the variable is
+set; `skills config path` reports the file actually in use.
+
+| Path | Default | Follows `HASNA_SKILLS_DIR` |
+|---|---|---|
+| Portable skills | `~/.hasna/skills/<name>/` | yes |
+| Global config | `~/.hasna/skills/config.json` | yes |
+| Feedback database | `~/.hasna/skills/skills.db` | yes |
+| Auth | `~/.hasna/skills/auth.json` | no (resolved at startup) |
+
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE)

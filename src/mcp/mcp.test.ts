@@ -3,6 +3,7 @@ import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { BASIC_SKILL_NAMES, SKILLS } from "../lib/registry.js";
+import { withoutDataDirOverrideEnv } from "../test-preload.js";
 
 const MCP_PATH = join(import.meta.dir, "index.ts");
 const EXPECTED_ALL_SKILL_COUNT = SKILLS.length;
@@ -47,7 +48,17 @@ class McpClient {
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, HOME: home, ...CLEAN_STORAGE_ENV, ...env, MCP_STDIO: "1", NO_COLOR: "1" },
+      // Drop the preload's $HASNA_SKILLS_DIR: the server under test must resolve
+      // its data dir from the throwaway $HOME above, not from the parent's
+      // ambient override inherited via ...process.env.
+      env: withoutDataDirOverrideEnv({
+        ...process.env,
+        HOME: home,
+        ...CLEAN_STORAGE_ENV,
+        ...env,
+        MCP_STDIO: "1",
+        NO_COLOR: "1",
+      }) as Record<string, string>,
     });
     this.reader = (this.proc.stdout as ReadableStream<Uint8Array>).getReader();
     this._readLoop();

@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- `HASNA_SKILLS_DIR` now relocates the **whole** data directory. It previously
+  moved only the portable-skills tree, because `getPortableSkillsRoot()` honoured
+  it while `getDataDir()` ignored it — so `skills new` wrote to the override while
+  `skills list` and `config.json` kept reading `$HOME`. Two paths move that did
+  not before: the global config file (`config.json`) and the feedback database
+  (`skills.db`). Anyone who set the variable to relocate their skills tree will
+  see `skills config list` report defaults until they copy `config.json` across;
+  `skills config path` prints the file actually in use. Auth (`auth.json`) still
+  resolves from `$HOME` at startup and is unchanged.
+
+### Fixed
+- `skills list`, `search`, and `info` no longer exit 1 with `ENOTDIR` when
+  `HASNA_SKILLS_DIR` names a file rather than a directory.
+- `getDataDir()` no longer throws when the configured data directory cannot be
+  created (read-only parent, or the path is an existing file); read commands
+  degrade to "no custom skills" instead of failing.
+- `skills storage` reported a feedback-database path that differed from the one
+  actually written when the data directory was relocated.
+- The registry's 5s cache is keyed on the resolved data directory, so changing
+  `HASNA_SKILLS_DIR` or `$HOME` no longer serves entries from the previous root.
+
 ## [0.1.60] - 2026-07-25
 
 ### Fixed
