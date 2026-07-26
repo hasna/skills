@@ -108,6 +108,7 @@ export {
 export {
   loadConfig,
   saveConfig,
+  unsetConfig,
   getConfigPath,
   type SkillsConfig,
   type ConfigScope,
@@ -293,11 +294,9 @@ export {
   getSkillsNativeStorageStatus,
   getSkillsStorageDatabaseEnv,
   getSkillsStorageDatabaseUrl,
-  getSkillsStorageMode,
   getSkillsStorageStatus,
   getStorageDatabaseEnv,
   getStorageDatabaseUrl,
-  getStorageMode,
   getStorageStatus,
   importSkillsLocalSnapshot,
   planSkillsS3SnapshotUpload,
@@ -318,7 +317,6 @@ export {
   type SkillsS3SnapshotPlanEntry,
   type SkillsS3StoredObject,
   type SkillsSnapshotFile,
-  type SkillsStorageMode,
   type SkillsStorageTable,
   type SkillsSyncRecord,
 } from "./lib/native-storage.js";

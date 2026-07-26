@@ -374,7 +374,7 @@ export function registerOperationTools(server: McpServer): void {
 
     if (isPremiumSkill(skillName) && !apiKey) {
       const cost = formatCost(costCents ?? 0);
-      const error = `${skillName} is a self-hosted skill (${cost}). Run: skills setup --mode self-hosted && skills auth login`;
+      const error = `${skillName} is a self-hosted skill (${cost}). Run: skills auth login`;
       writeRunLogs(runContext, "", error + "\n");
       const run = completeSkillRun(runContext, { status: "failed", error, costCents });
       return mcpError("AUTH_REQUIRED", `${error}. Local run metadata: ${run.paths.runDir}/run.json`, ["skills auth login"]);

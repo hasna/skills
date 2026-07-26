@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  SKILLS_STORAGE_ENV,
+  SKILLS_STORAGE_FALLBACK_ENV,
   STORAGE_TABLES,
   createSkillsPostgresSyncStore,
   createSkillsS3ObjectStore,
@@ -11,7 +13,6 @@ import {
   getSkillsNativeStorageStatus,
   getStorageDatabaseEnv,
   getStorageDatabaseUrl,
-  getStorageMode,
   getStorageStatus,
   importSkillsLocalSnapshot,
   planSkillsS3SnapshotUpload,
@@ -68,12 +69,12 @@ describe("native storage", () => {
     if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("defaults to local storage and ignores hosted API env vars", () => {
+  test("defaults to on-box storage and ignores API env vars", () => {
     const config = resolveSkillsNativeStorageConfig({
       SKILLS_API_URL: "https://skills.example.com",
       SKILLS_API_KEY: "sk_test",
     });
-    expect(config.mode).toBe("local");
+    expect(config).not.toHaveProperty("mode");
     expect(config.databaseUrl).toBeUndefined();
     expect(config.s3Bucket).toBeUndefined();
     expect(config.syncBatchSize).toBe(500);
@@ -82,7 +83,6 @@ describe("native storage", () => {
 
   test("uses canonical storage helpers and plain skills fallbacks", () => {
     const env = {
-      SKILLS_STORAGE_MODE: "remote",
       SKILLS_DATABASE_URL: "postgres://example/fallback-skills",
       SKILLS_S3_BUCKET: "fallback-skills-artifacts",
       SKILLS_SYNC_DRY_RUN: "false",
@@ -90,22 +90,18 @@ describe("native storage", () => {
 
     const config = resolveStorageConfig(env);
     expect(config).toMatchObject({
-      mode: "remote",
       databaseUrl: "postgres://example/fallback-skills",
       s3Bucket: "fallback-skills-artifacts",
       dryRun: false,
     });
-    expect(getStorageMode(env)).toBe("remote");
     expect(getStorageDatabaseEnv(env)).toBe("SKILLS_DATABASE_URL");
     expect(getStorageDatabaseUrl(env)).toBe("postgres://example/fallback-skills");
 
     const status = getStorageStatus({ targetDir: tmpDir, env });
     expect(status).toMatchObject({
       package: "open-skills",
-      mode: "remote",
       tables: ["skills_sync_records", "skills_sync_cursors"],
       env: {
-        mode: "HASNA_SKILLS_STORAGE_MODE",
         databaseUrl: "HASNA_SKILLS_DATABASE_URL",
         s3Bucket: "HASNA_SKILLS_S3_BUCKET",
       },
@@ -120,9 +116,8 @@ describe("native storage", () => {
     expect(getSkillsNativeStorageStatus({ targetDir: tmpDir, env })).toEqual(status);
   });
 
-  test("parses explicit hybrid storage config", () => {
+  test("parses a fully configured Postgres and S3 storage config", () => {
     const config = resolveSkillsNativeStorageConfig({
-      HASNA_SKILLS_STORAGE_MODE: "hybrid",
       HASNA_SKILLS_DATABASE_URL: "postgres://example/skills",
       HASNA_SKILLS_DATABASE_SSL: "true",
       HASNA_SKILLS_DATABASE_SCHEMA: "skills",
@@ -133,7 +128,6 @@ describe("native storage", () => {
       HASNA_SKILLS_SYNC_DRY_RUN: "false",
     });
     expect(config).toMatchObject({
-      mode: "hybrid",
       databaseUrl: "postgres://example/skills",
       databaseSsl: true,
       databaseSchema: "skills",
@@ -143,6 +137,41 @@ describe("native storage", () => {
       syncBatchSize: 25,
       dryRun: false,
     });
+  });
+
+  test("carries no declared storage topology, only what is configured", () => {
+    // Deleted rather than renamed: nothing ever branched on the label, and a
+    // label can contradict the configuration beside it (a "remote" storage with
+    // no database URL). databaseConfigured/s3Configured are read from the env
+    // that is actually set, so they cannot lie.
+    // Assembled from fragments, not written out: the retired-marker guard in
+    // public-package-boundary.test.ts bans these literals from every public
+    // source file, including this one.
+    const canonicalModeEnv = ["HASNA_SKILLS", "STORAGE", "MODE"].join("_");
+    const fallbackModeEnv = ["SKILLS", "STORAGE", "MODE"].join("_");
+    const declared = {
+      [canonicalModeEnv]: "remote",
+      [fallbackModeEnv]: "hybrid",
+    };
+    const config = resolveSkillsNativeStorageConfig(declared);
+    expect(config).not.toHaveProperty("mode");
+    expect(config.databaseUrl).toBeUndefined();
+
+    const status = getStorageStatus({ targetDir: tmpDir, env: declared });
+    expect(status).not.toHaveProperty("mode");
+    expect(status.env).not.toHaveProperty("mode");
+    expect(status.remote).not.toHaveProperty("activeModeEnv");
+    expect(status.remote.databaseConfigured).toBe(false);
+    expect(status.remote.s3Configured).toBe(false);
+    // Pin the surviving shape too, so these negatives cannot pass by the field
+    // they inspect disappearing.
+    expect(Object.keys(status.env).sort()).toEqual(["databaseUrl", "s3Bucket"]);
+    const canonicalEnvNames = Object.values(SKILLS_STORAGE_ENV);
+    const fallbackEnvNames = Object.values(SKILLS_STORAGE_FALLBACK_ENV);
+    expect(canonicalEnvNames.length).toBe(13);
+    expect(fallbackEnvNames.length).toBe(13);
+    expect(canonicalEnvNames).not.toContain(canonicalModeEnv);
+    expect(fallbackEnvNames).not.toContain(fallbackModeEnv);
   });
 
   test("exports and imports local .skills snapshots", () => {

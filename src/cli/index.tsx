@@ -8,7 +8,6 @@ import pkg from "../../package.json" with { type: "json" };
 import { App } from "./components/App.js";
 import { loadBasicRegistry } from "../lib/registry.js";
 import { getCompactSkillDiscovery } from "../lib/discovery.js";
-import { maybePrintFirstRunOnboarding } from "./onboarding.js";
 
 const isTTY = (process.stdout.isTTY ?? false) && (process.stdin.isTTY ?? false);
 
@@ -89,9 +88,5 @@ const { registerStorage } = await import("./commands/storage.js");
 registerStorage(program);
 
 registerEventsCommands(program as any, { source: "skills" });
-
-program.hook("preAction", (_thisCommand, actionCommand) => {
-  maybePrintFirstRunOnboarding(actionCommand, process.argv.slice(2), isTTY);
-});
 
 await program.parseAsync();

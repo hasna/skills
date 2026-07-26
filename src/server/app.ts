@@ -29,7 +29,7 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
 
     try {
       if (request.method === "GET" && url.pathname === "/health") {
-        return json({ ok: true, service: "open-skills", mode: "self-hosted", time: new Date().toISOString() });
+        return json({ ok: true, service: "open-skills", time: new Date().toISOString() });
       }
 
       if (request.method === "GET" && url.pathname === "/ready") {
@@ -152,10 +152,10 @@ async function handleApiV1(
       return json({ plan: "self-hosted", balanceCents: 0, balance: "$0.00", subscription: null, hasPaymentMethod: false });
     }
     if (request.method === "GET" && id === "credits") {
-      return json({ packs: [], mode: "self-hosted" });
+      return json({ packs: [] });
     }
     if (request.method === "POST") {
-      return json({ error: "billing is not configured for this self-hosted deployment", code: "BILLING_NOT_CONFIGURED" }, { status: 501 });
+      return json({ error: "billing is not configured for this deployment", code: "BILLING_NOT_CONFIGURED" }, { status: 501 });
     }
   }
 
