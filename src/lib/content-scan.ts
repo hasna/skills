@@ -23,6 +23,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { decodeForScanning, looksBinary } from "./file-bytes.js";
 
 export type ScanCategory = "secret-value" | "pii-contact" | "private-context" | "committed-output";
 
@@ -290,16 +291,20 @@ export function scanText(text: string, file = "<text>"): ScanFinding[] {
   );
 }
 
-function isProbablyBinary(buffer: Buffer): boolean {
-  const sample = buffer.subarray(0, 8000);
-  return sample.includes(0);
-}
-
-/** Read a file and scan its contents. Binary files are skipped and yield no findings. */
+/**
+ * Read a file and scan its contents.
+ *
+ * This used to skip any file whose first 8000 bytes contained a NUL, which made
+ * a NUL byte a silent opt-out from secret and PII scanning: the identical
+ * credential-shaped literal was caught without a NUL and passed with one. Only
+ * genuinely compiled/compressed content is skipped now, decided by magic number
+ * rather than by the presence of a byte, and NULs are stripped during decoding
+ * so they cannot be used to break a pattern apart either.
+ */
 export function scanFile(path: string, reportedName = path): ScanFinding[] {
   const buffer = readFileSync(path);
-  if (isProbablyBinary(buffer)) return [];
-  return scanText(buffer.toString("utf8"), reportedName);
+  if (looksBinary(buffer)) return [];
+  return scanText(decodeForScanning(buffer), reportedName);
 }
 
 /**
