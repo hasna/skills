@@ -42,6 +42,7 @@
  */
 
 import ts from "typescript";
+import { decodeForScanning, looksBinary } from "./file-bytes.js";
 
 /**
  * Registrable domains the vendor controls. A URL on one of these fails both
@@ -180,99 +181,233 @@ export function isApprovedCodeHost(host: string): boolean {
   return APPROVED_CODE_HOSTS.some((entry) => entry.domain === domain);
 }
 
-export interface UrlReference {
-  /** The matched URL, trimmed of trailing punctuation. */
-  url: string;
-  /** Host component, lower-cased, port stripped, placeholders removed. */
-  host: string;
-  /** Offset of the match within the scanned text. */
-  index: number;
-  /** Offset just past the match within the scanned text. */
-  end: number;
-  /** Authority exactly as written, before placeholder and punctuation cleanup. */
-  rawAuthority: string;
+/**
+ * Packed files allowed to contain a host whose TLD is supplied by `{…}` template
+ * syntax (`https://s3.{partitionResult#dnsSuffix}`). These are bundles of the
+ * AWS SDK, whose endpoint-rule engine substitutes the DNS suffix per partition.
+ *
+ * File-scoped on purpose: the carve-out used to be package-wide, which meant any
+ * file could park a partial authority next to a runtime value and be exempted.
+ * A host completed from a *code* expression is never exempt, in any file.
+ */
+export const TEMPLATE_HOST_FILES: readonly { file: string; reason: string }[] = [
+  { file: "bin/server.js", reason: "Bundles the AWS SDK endpoint-rule tables (S3, STS, SSO, signin)." },
+  { file: "bin/worker.js", reason: "Bundles the AWS SDK endpoint-rule tables (S3, STS, SSO, signin)." },
+  { file: "bin/index.js", reason: "Bundles the AWS SDK endpoint-rule tables via the storage module." },
+  { file: "bin/mcp.js", reason: "Bundles the AWS SDK endpoint-rule tables via the storage module." },
+  { file: "bin/migrate.js", reason: "Bundles the AWS SDK endpoint-rule tables via the storage module." },
+  { file: "dist/index.js", reason: "Bundles the AWS SDK endpoint-rule tables via the storage module." },
+  { file: "dist/storage.js", reason: "Bundles the AWS SDK endpoint-rule tables." },
+];
+
+function allowsTemplateHost(file: string): boolean {
+  return TEMPLATE_HOST_FILES.some((entry) => entry.file === file);
 }
 
 /**
- * Absolute URLs, including ones written as templates. A `{…}` / `${…}` group is
- * matched as a unit so that `https://s3.{partitionResult#dnsSuffix}/x` is read
- * as one URL with a templated host, rather than truncated to the fragment
- * `https://s3.` and then mistaken for a host named `s3`.
+ * Sites that build a host out of a computed value.
+ *
+ * Building a host from configuration is exactly what R1 asks for, so these are
+ * not defects — but they are also the shape an endpoint default hides in, so
+ * each one is acknowledged here rather than exempted by a blanket rule. Matched
+ * on file AND exact URL fragment, never on file alone, and never on line number
+ * so that rebuilding a bundle does not churn the list. A new dynamic-host site
+ * fails until someone reads it and adds it.
  */
-const ABSOLUTE_URL = /\bhttps?:\/\/(?:\$?\{[^{}\s"'`]*\}|[^\s"'`<>()[\]{}\\|^,;])+/gi;
+export const DYNAMIC_HOST_SITES: readonly { file: string; path: string; reason: string }[] = [
+  {
+    file: "bin/mcp.js",
+    path: "",
+    reason: "src/mcp/http.ts parses an INBOUND request's Host header; nothing is dialled.",
+  },
+  {
+    file: "bin/mcp.js",
+    path: "/mcp",
+    reason: "src/mcp/http.ts logs the address the MCP server just bound to.",
+  },
+  {
+    file: "bin/server.js",
+    path: "",
+    reason: "src/server/index.ts logs the address the API server just bound to.",
+  },
+  {
+    file: "bin/worker.js",
+    path: "",
+    reason: "src/server/config.ts derives the server's own origin from its bound host and port.",
+  },
+  {
+    file: "bin/migrate.js",
+    path: "",
+    reason: "src/server/config.ts derives the server's own origin from its bound host and port.",
+  },
+  {
+    file: "src/mcp/http.ts",
+    path: "",
+    reason: "Parses an INBOUND request's Host header to resolve a relative URL; nothing is dialled.",
+  },
+  {
+    file: "src/mcp/http.ts",
+    path: "/mcp",
+    reason: "Logs the address the MCP server just bound to.",
+  },
+  {
+    file: "src/server/index.ts",
+    path: "",
+    reason: "Logs the address the API server just bound to.",
+  },
+  {
+    file: "src/server/config.ts",
+    path: "",
+    reason: "Derives the server's own public origin from its bound host and port, with no vendor default.",
+  },
+];
 
 /**
- * Placeholders that appear inside URL templates (`https://s3.{Region}.aws…`,
- * `https://${host}/api`, `https://%s/v1`). Removing them before parsing keeps a
- * templated host from being reported as the nonsense host `s3.`.
+ * Path component of a URL, used as the annotation key. Deliberately not the full
+ * URL: a dynamic-host URL renders as a bare scheme, and storing that literal
+ * would both read as noise and trip the repo's own insecure-HTTP scanner.
  */
+export function urlPath(url: string): string {
+  const afterScheme = url.slice(url.indexOf("//") + 2);
+  const separator = afterScheme.search(/[/?#]/);
+  return separator === -1 ? "" : afterScheme.slice(separator);
+}
+
+function isAnnotatedDynamicHost(file: string, url: string): boolean {
+  const path = urlPath(url);
+  return DYNAMIC_HOST_SITES.some((entry) => entry.file === file && entry.path === path);
+}
+
+// ---------------------------------------------------------------------------
+// Sentinels.
+//
+// Marking "a hole goes here" needs a character that CANNOT occur in the input,
+// or the marker is forgeable: the previous version used a literal \x01, so a
+// \x01 written into a string literal made the guard treat a complete hostname as
+// templated and skip it. Sentinels are therefore chosen per input and *verified
+// absent* from it before use.
+// ---------------------------------------------------------------------------
+
+const SENTINEL_START = 0xe000; // Unicode Private Use Area
+const SENTINEL_END = 0xf8ff;
+
+interface Sentinels {
+  /** Stands for `{…}` / `${…}` template syntax inside a single literal. */
+  placeholder: string;
+  /** Stands for a value computed by code (a non-constant concatenation operand). */
+  hole: string;
+}
+
+/** Two distinct characters, both verified absent from `text`. */
+export function pickSentinels(text: string): Sentinels | undefined {
+  const found: string[] = [];
+  for (let code = SENTINEL_START; code <= SENTINEL_END && found.length < 2; code++) {
+    const char = String.fromCharCode(code);
+    if (!text.includes(char)) found.push(char);
+  }
+  if (found.length < 2) return undefined;
+  return { placeholder: found[0], hole: found[1] };
+}
+
+/** Placeholder syntaxes that appear inside URL templates. */
 const URL_PLACEHOLDER = /\$\{[^}]*\}|\{[^}]*\}|<[^>]*>|%[sd]/g;
 
-/**
- * Placeholders are collapsed to a single sentinel before the authority is split
- * off, because a placeholder body can itself contain `/`, `?` or `#`
- * (`{partitionResult#dnsSuffix}`) and would otherwise cut the host in half.
- */
-const PLACEHOLDER_MASK = "";
-
-function maskPlaceholders(text: string): string {
-  return text.replace(URL_PLACEHOLDER, PLACEHOLDER_MASK);
-}
-
-function rawAuthorityOf(url: string): string {
-  const masked = maskPlaceholders(url);
-  return masked.slice(masked.indexOf("//") + 2).split(/[/?#]/)[0];
-}
-
-function hostOf(rawAuthority: string): string {
-  return rawAuthority
-    .split(PLACEHOLDER_MASK)
-    .join("")
-    .replace(/\.{2,}/g, ".")
-    .replace(/^\.+|\.+$/g, "")
-    .replace(/^[^@]*@/, "")
-    .replace(/:.*$/, "")
-    .toLowerCase();
-}
-
-function hasPlaceholder(rawAuthority: string): boolean {
-  return rawAuthority.includes(PLACEHOLDER_MASK);
-}
+const ABSOLUTE_URL_SOURCE = "\\bhttps?://[^\\s\"'`<>()\\[\\]{}\\\\|^,;]+";
 
 /** A final label that could plausibly be a public TLD. */
 const TLD_SHAPED = /^[a-z]{2,24}$/;
 
-/**
- * Is this host a *fragment* rather than a whole hostname? True for the pieces
- * the AWS SDK concatenates at runtime (`"https://s3." + region + ".amazonaws.com"`),
- * which arrive here as the literal `https://s3.`.
- *
- * Used only in combination with a syntactic continuation signal, so a complete
- * hostname written with a trailing dot is still reported.
- */
-export function isTruncatedHost(rawAuthority: string, host: string): boolean {
-  // A host ending in a bare dot or a placeholder has its tail supplied later:
-  // `"https://s3." + region`, or `https://s3.{partitionResult#dnsSuffix}`.
-  if (rawAuthority.endsWith(".") || rawAuthority.endsWith(PLACEHOLDER_MASK)) return true;
-  const labels = host.split(".").filter(Boolean);
-  if (labels.length < 2) return true;
-  return !TLD_SHAPED.test(labels[labels.length - 1]);
+/** C0/C1 control characters, which are never legal in a hostname. */
+const CONTROL_CHARS = new RegExp("[\\u0000-\\u001f\\u007f-\\u009f]", "g");
+
+export interface UrlReference {
+  /** The matched URL, trimmed of trailing punctuation. Sentinels removed. */
+  url: string;
+  /** Host as far as it is statically known, with sentinels still in place. */
+  markedHost: string;
+  /** Registrable domain, or undefined when it cannot be determined statically. */
+  domain?: string;
+  /** When `domain` is undefined, what supplied the undeterminable tail. */
+  undeterminedBy?: "placeholder" | "hole";
 }
 
-/** Every absolute http(s) URL in a blob of text, with its host extracted. */
-export function extractUrlReferences(text: string): UrlReference[] {
+/**
+ * Drop the port from an authority whose userinfo has already been removed.
+ *
+ * The port is dropped even when it is dynamic: `http://localhost:${port}` names
+ * a perfectly determinate host, and treating the port as part of the host would
+ * report the reader's own machine as an uncertifiable destination.
+ */
+function stripPort(authority: string): string {
+  if (authority.startsWith("[")) {
+    const close = authority.indexOf("]");
+    return close === -1 ? authority : authority.slice(0, close + 1);
+  }
+  const colon = authority.lastIndexOf(":");
+  return colon === -1 ? authority : authority.slice(0, colon);
+}
+
+function stripSentinels(text: string, sentinels: Sentinels): string {
+  return text.split(sentinels.placeholder).join("").split(sentinels.hole).join("");
+}
+
+/**
+ * Registrable domain of a host that may contain sentinels.
+ *
+ * A sentinel anywhere before a complete static suffix is harmless
+ * (`{Region}.signin.amazonaws.cn` is still `amazonaws.cn`). A sentinel in or
+ * after the final label means the TLD itself is dynamic, and the host cannot be
+ * certified — that is reported, not silently skipped.
+ */
+function resolveMarkedHost(
+  markedHost: string,
+  sentinels: Sentinels,
+): { domain?: string; undeterminedBy?: "placeholder" | "hole" } {
+  const lastPlaceholder = markedHost.lastIndexOf(sentinels.placeholder);
+  const lastHole = markedHost.lastIndexOf(sentinels.hole);
+  const lastSentinel = Math.max(lastPlaceholder, lastHole);
+
+  if (lastSentinel === -1) {
+    const host = markedHost;
+    return host ? { domain: registrableDomain(host) } : {};
+  }
+
+  const undeterminedBy = lastHole > lastPlaceholder ? "hole" : "placeholder";
+  const staticSuffix = markedHost.slice(lastSentinel + 1).replace(/^\.+/, "");
+  const labels = staticSuffix.split(".").filter(Boolean);
+  if (labels.length >= 2 && TLD_SHAPED.test(labels[labels.length - 1])) {
+    return { domain: registrableDomain(staticSuffix) };
+  }
+  return { undeterminedBy };
+}
+
+/**
+ * Every absolute http(s) URL in a blob of text.
+ *
+ * `text` is expected to be already sentinel-marked when it came from folding.
+ * Placeholder syntax inside the text is masked here so that a `{…}` body
+ * containing `/`, `?` or `#` cannot cut the authority in half.
+ */
+export function extractUrlReferences(text: string, sentinels?: Sentinels): UrlReference[] {
+  const marks = sentinels ?? pickSentinels(text);
+  if (!marks) return [];
+  const masked = text.replace(URL_PLACEHOLDER, marks.placeholder);
+  const pattern = new RegExp(ABSOLUTE_URL_SOURCE, "gi");
   const references: UrlReference[] = [];
-  for (const match of text.matchAll(ABSOLUTE_URL)) {
-    const url = match[0].replace(/[.:!?]+$/, "");
-    const rawAuthority = rawAuthorityOf(match[0]);
-    const host = hostOf(rawAuthority);
-    if (!host) continue;
+  for (const match of masked.matchAll(pattern)) {
+    const raw = match[0].replace(/[.:!?]+$/, "");
+    const authority = raw.slice(raw.indexOf("//") + 2).split(/[/?#]/)[0];
+    const markedHost = stripPort(authority.replace(/^[^@]*@/, ""))
+      // Control characters are not legal in a hostname. Dropping them stops a
+      // stray byte from turning a vendor host into a merely "unapproved" one,
+      // and denies any classification game played with in-band control bytes.
+      .replace(CONTROL_CHARS, "")
+      .toLowerCase();
+    if (!markedHost) continue;
     references.push({
-      url,
-      host,
-      rawAuthority,
-      index: match.index ?? 0,
-      end: (match.index ?? 0) + match[0].length,
+      url: stripSentinels(raw, marks),
+      markedHost,
+      ...resolveMarkedHost(markedHost, marks),
     });
   }
   return references;
@@ -282,6 +417,8 @@ export interface ScanSource {
   /** Package-relative path, used for reporting. */
   file: string;
   content: string;
+  /** Set when the bytes could not be decoded as text; `content` is then empty. */
+  undecodable?: string;
 }
 
 export interface VendorHostFinding {
@@ -293,26 +430,28 @@ export interface VendorHostFinding {
 /**
  * WEAK backstop: known vendor domains anywhere in the shipped bytes.
  *
- * A denylist. It cannot see a vendor domain that is not on
- * `VENDOR_CONTROLLED_DOMAINS`. For executable code that gap is closed by
- * `findDisallowedCodeUrls`; for prose it is accepted, because prose cannot
- * issue a request.
+ * A denylist over raw text. It cannot see a vendor domain that is not on
+ * `VENDOR_CONTROLLED_DOMAINS`, and it cannot see a host split across string
+ * literals. Both gaps are closed for executable code by `findDisallowedCodeUrls`,
+ * which folds constants and works from an allowlist. This check exists for prose,
+ * which cannot issue a request.
  */
 export function findVendorHostReferences(sources: Iterable<ScanSource>): VendorHostFinding[] {
   const allowed = new Set(VENDOR_HOST_URL_EXCEPTIONS.map((entry) => entry.url));
   const findings: VendorHostFinding[] = [];
   for (const source of sources) {
+    if (!source.content) continue;
     for (const reference of extractUrlReferences(source.content)) {
-      if (!isVendorControlledHost(reference.host)) continue;
+      if (!reference.domain || !VENDOR_CONTROLLED_DOMAINS.includes(reference.domain)) continue;
       if (allowed.has(reference.url)) continue;
-      findings.push({ file: source.file, url: reference.url, host: reference.host });
+      findings.push({ file: source.file, url: reference.url, host: reference.markedHost });
     }
   }
   return findings;
 }
 
 // ---------------------------------------------------------------------------
-// Check 1 — AST scan of executable code.
+// The strong check — AST scan of executable code.
 // ---------------------------------------------------------------------------
 
 export const CODE_FILE_PATTERN = /\.(?:[cm]?[jt]sx?)$/i;
@@ -337,15 +476,29 @@ export type UrlLiteralPosition =
   | "return value"
   | "literal";
 
+export type CodeFindingKind =
+  /** Host resolves to a domain we operate. */
+  | "vendor-host"
+  /** Host resolves to a domain that is not on APPROVED_CODE_HOSTS. */
+  | "unapproved-host"
+  /** The TLD is supplied by code, so no host can be certified. */
+  | "undeterminable-host"
+  /** The file could not be parsed, so its contents were never inspected. */
+  | "unparsable"
+  /** The bytes could not be decoded as text, so they were never inspected. */
+  | "undecodable";
+
 export interface CodeUrlFinding {
   file: string;
   line: number;
-  url: string;
-  host: string;
-  domain: string;
-  position: UrlLiteralPosition;
-  /** True when the host is one we operate — a strictly worse failure. */
+  kind: CodeFindingKind;
+  /** True only for `kind === "vendor-host"`. */
   vendor: boolean;
+  url?: string;
+  host?: string;
+  domain?: string;
+  position?: UrlLiteralPosition;
+  detail?: string;
 }
 
 function classifyPosition(node: ts.Node): UrlLiteralPosition {
@@ -377,81 +530,239 @@ function classifyPosition(node: ts.Node): UrlLiteralPosition {
   return "literal";
 }
 
-/**
- * Every absolute URL that appears in a string literal in this source file,
- * found by walking the AST rather than by matching a syntactic shape.
- *
- * Walking string literals (rather than raw text) also means comments and prose
- * are ignored: what is reported is data the program can actually use.
- */
-/**
- * Is this literal syntactically continued by an adjacent expression, so that a
- * host cut off at its end is completed at runtime? True for a template head or
- * middle (always followed by `${…}`) and for an operand of string concatenation.
- */
-function isContinuedLiteral(node: ts.Node): boolean {
-  if (node.kind === ts.SyntaxKind.TemplateHead || node.kind === ts.SyntaxKind.TemplateMiddle) {
-    return true;
-  }
-  let child: ts.Node = node;
-  let current: ts.Node | undefined = node.parent;
-  while (current) {
-    if (
-      ts.isBinaryExpression(current) &&
-      current.operatorToken.kind === ts.SyntaxKind.PlusToken &&
-      current.left === child
-    ) {
-      return true;
-    }
-    if (!ts.isParenthesizedExpression(current) && !ts.isAsExpression(current)) break;
-    child = current;
-    current = current.parent;
-  }
-  return false;
+// ---------------------------------------------------------------------------
+// Constant folding.
+//
+// `"https://" + "skills.md/api/v1"` is a compile-time constant that no
+// per-literal scan can see: the first fragment holds only a scheme, the second
+// holds no "//" at all. Folding the expression before extraction is the only
+// honest way to read what the program will actually use.
+// ---------------------------------------------------------------------------
+
+type FoldSegment = { text: string } | { hole: ts.Node };
+
+interface Folded {
+  segments: FoldSegment[];
+  /** Sub-expressions that were not constant, so the walker can still scan them. */
+  holes: ts.Node[];
 }
 
-export function findCodeUrlLiterals(file: string, content: string): CodeUrlFinding[] {
-  const source = ts.createSourceFile(file, content, ts.ScriptTarget.Latest, /* setParentNodes */ true);
-  const findings: CodeUrlFinding[] = [];
+function unwrap(node: ts.Node): ts.Node {
+  let current = node;
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isSatisfiesExpression(current) ||
+    ts.isNonNullExpression(current) ||
+    ts.isTypeAssertionExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
 
-  const visit = (node: ts.Node): void => {
-    const isLiteral =
-      ts.isStringLiteralLike(node) ||
-      node.kind === ts.SyntaxKind.TemplateHead ||
-      node.kind === ts.SyntaxKind.TemplateMiddle ||
-      node.kind === ts.SyntaxKind.TemplateTail;
-    if (isLiteral) {
-      const text = (node as ts.LiteralLikeNode).text;
-      if (typeof text === "string" && text.includes("//")) {
-        const continued = isContinuedLiteral(node);
-        for (const reference of extractUrlReferences(text)) {
-          const domain = registrableDomain(reference.host);
-          // A fully templated host is resolved at runtime from configuration —
-          // there is no default to object to.
-          if (!domain) continue;
-          // A host whose remaining static part is not a whole hostname is not a
-          // default either. Two ways that happens, both requiring evidence that
-          // the rest of the host arrives at runtime:
-          //   1. the authority embeds a placeholder — `https://s3.{dnsSuffix}/x`;
-          //   2. the literal is concatenated with an expression that continues
-          //      the host — `"https://s3." + region`.
-          // Requiring the runtime-completion evidence means a complete hostname
-          // written with a trailing dot is still reported.
-          const truncated = isTruncatedHost(reference.rawAuthority, reference.host);
-          if (truncated && hasPlaceholder(reference.rawAuthority)) continue;
-          if (truncated && continued && reference.end === text.length) continue;
+function constantSeparator(node: ts.CallExpression): string | undefined {
+  if (node.arguments.length === 0) return ",";
+  if (node.arguments.length > 1) return undefined;
+  const arg = unwrap(node.arguments[0]);
+  return ts.isStringLiteralLike(arg) ? arg.text : undefined;
+}
+
+function fold(node: ts.Node, out: Folded): void {
+  const target = unwrap(node);
+
+  if (ts.isStringLiteralLike(target) || ts.isNumericLiteral(target)) {
+    out.segments.push({ text: target.text });
+    return;
+  }
+
+  if (ts.isBinaryExpression(target) && target.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    fold(target.left, out);
+    fold(target.right, out);
+    return;
+  }
+
+  if (ts.isTemplateExpression(target)) {
+    out.segments.push({ text: target.head.text });
+    for (const span of target.templateSpans) {
+      fold(span.expression, out);
+      out.segments.push({ text: span.literal.text });
+    }
+    return;
+  }
+
+  // `["https://", "host"].join("")` — a constant assembled through a call.
+  if (
+    ts.isCallExpression(target) &&
+    ts.isPropertyAccessExpression(target.expression) &&
+    target.expression.name.text === "join"
+  ) {
+    const receiver = unwrap(target.expression.expression);
+    const separator = constantSeparator(target);
+    if (ts.isArrayLiteralExpression(receiver) && separator !== undefined) {
+      receiver.elements.forEach((element, index) => {
+        if (index > 0) out.segments.push({ text: separator });
+        fold(element, out);
+      });
+      return;
+    }
+  }
+
+  out.segments.push({ hole: target });
+  out.holes.push(target);
+}
+
+/** Is this node the outermost part of a string-building expression? */
+function isFoldRoot(node: ts.Node): boolean {
+  let current: ts.Node | undefined = node.parent;
+  while (
+    current &&
+    (ts.isParenthesizedExpression(current) ||
+      ts.isAsExpression(current) ||
+      ts.isSatisfiesExpression(current) ||
+      ts.isNonNullExpression(current))
+  ) {
+    current = current.parent;
+  }
+  if (!current) return true;
+  if (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.PlusToken) return false;
+  if (ts.isTemplateSpan(current)) return false;
+  if (ts.isArrayLiteralExpression(current) && current.parent && ts.isPropertyAccessExpression(current.parent)) {
+    return current.parent.name.text !== "join";
+  }
+  return true;
+}
+
+/**
+ * Render a folded expression two ways, because both are values the program can
+ * produce and each hides a different attack:
+ *
+ *   - holes as sentinels: keeps `https://s3.${region}.amazonaws.com` readable as
+ *     the amazonaws.com host it is, and makes `"https://" + host` visible as a
+ *     scheme with an undeterminable authority;
+ *   - holes as empty strings: catches a host split by an interpolation that
+ *     contributes nothing, e.g. `` `https://ski${""}lls.md` ``.
+ */
+function renderFolded(folded: Folded, sentinels: Sentinels): string[] {
+  const text = folded.segments.map((s) => ("text" in s ? s.text : "")).join("");
+  const marked = folded.segments.map((s) => ("text" in s ? s.text : sentinels.hole)).join("");
+  return marked === text ? [marked] : [marked, text];
+}
+
+/**
+ * Every absolute URL a source file can statically produce, found by folding
+ * string expressions and walking the AST — never by matching a syntactic shape.
+ *
+ * Failure to read the file is itself reported. A scanner that returns "clean"
+ * for a file it could not parse is worse than no scanner, because it converts an
+ * unknown into a certification. One stray byte used to do exactly that.
+ */
+export function findCodeUrlLiterals(file: string, content: string): CodeUrlFinding[] {
+  const findings: CodeUrlFinding[] = [];
+  const source = ts.createSourceFile(file, content, ts.ScriptTarget.Latest, /* setParentNodes */ true);
+
+  const diagnostics = (source as unknown as { parseDiagnostics?: { messageText?: unknown }[] }).parseDiagnostics ?? [];
+  const binaryDiagnostic = diagnostics.some((d) =>
+    typeof d.messageText === "string" && /binary/i.test(d.messageText),
+  );
+  if (binaryDiagnostic || (content.trim().length > 0 && source.statements.length === 0)) {
+    return [{
+      file,
+      line: 1,
+      kind: "unparsable",
+      vendor: false,
+      detail: binaryDiagnostic
+        ? "TypeScript refused the file as binary; no statement was inspected"
+        : "file is non-empty but parsed to zero statements; no statement was inspected",
+    }];
+  }
+
+  const sentinels = pickSentinels(content);
+  if (!sentinels) {
+    return [{
+      file,
+      line: 1,
+      kind: "unparsable",
+      vendor: false,
+      detail: "no out-of-band sentinel available for this file; refusing to certify",
+    }];
+  }
+
+  const lineOf = (node: ts.Node): number =>
+    source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+
+  const record = (node: ts.Node, candidates: string[]): void => {
+    const seen = new Set<string>();
+    for (const candidate of candidates) {
+      if (!candidate.includes("//")) continue;
+      for (const reference of extractUrlReferences(candidate, sentinels)) {
+        if (seen.has(reference.url + "|" + (reference.domain ?? ""))) continue;
+        seen.add(reference.url + "|" + (reference.domain ?? ""));
+
+        if (!reference.domain) {
+          // The TLD itself is dynamic. `{…}` template syntax is legitimate in the
+          // bundled AWS SDK; a host completed from code needs an annotation.
+          if (reference.undeterminedBy === "placeholder" && allowsTemplateHost(file)) continue;
+          if (reference.undeterminedBy === "hole" && isAnnotatedDynamicHost(file, reference.url)) continue;
           findings.push({
             file,
-            line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
+            line: lineOf(node),
+            kind: "undeterminable-host",
+            vendor: false,
             url: reference.url,
-            host: reference.host,
-            domain,
+            host: reference.markedHost,
             position: classifyPosition(node),
-            vendor: isVendorControlledHost(reference.host),
+            detail:
+              reference.undeterminedBy === "hole"
+                ? "the host is completed by a computed value, so no host can be certified"
+                : "the host is completed by template syntax, so no host can be certified",
           });
+          continue;
         }
+
+        if (isLoopbackHost(reference.markedHost)) continue;
+
+        const vendor = VENDOR_CONTROLLED_DOMAINS.includes(reference.domain);
+        if (!vendor && APPROVED_CODE_HOSTS.some((entry) => entry.domain === reference.domain)) continue;
+        if (VENDOR_HOST_URL_EXCEPTIONS.some((entry) => entry.url === reference.url)) continue;
+
+        findings.push({
+          file,
+          line: lineOf(node),
+          kind: vendor ? "vendor-host" : "unapproved-host",
+          vendor,
+          url: reference.url,
+          host: reference.markedHost,
+          domain: reference.domain,
+          position: classifyPosition(node),
+        });
       }
     }
+  };
+
+  const visit = (node: ts.Node): void => {
+    const isStringBuilder =
+      (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) ||
+      ts.isTemplateExpression(node) ||
+      (ts.isCallExpression(node) &&
+        ts.isPropertyAccessExpression(node.expression) &&
+        node.expression.name.text === "join");
+
+    if (isStringBuilder && isFoldRoot(node)) {
+      const folded: Folded = { segments: [], holes: [] };
+      fold(node, folded);
+      if (folded.segments.some((segment) => "text" in segment)) {
+        record(node, renderFolded(folded, sentinels));
+        // Keep scanning inside the parts we could not fold.
+        for (const hole of folded.holes) ts.forEachChild(hole, visit);
+        return;
+      }
+    }
+
+    if (ts.isStringLiteralLike(node)) {
+      record(node, [node.text]);
+    }
+
     ts.forEachChild(node, visit);
   };
 
@@ -460,45 +771,55 @@ export function findCodeUrlLiterals(file: string, content: string): CodeUrlFindi
 }
 
 /**
- * STRONG check: URL literals in packed executable code that are neither on an
- * approved host nor an audited exact-URL exception.
+ * STRONG check over packed executable code.
  *
- * Loopback is skipped — it names the reader's own machine, not somebody else's
- * service, and appears legitimately in scaffolding templates. Loopback as a
- * *credential* target is covered by the resolver property test, which asserts
- * an unconfigured install resolves to nothing at all.
+ * Every finding is a refusal to certify, not only a bad host: an unreadable or
+ * unparsable code file is reported, because silence about a file nobody read is
+ * indistinguishable from silence about a clean file.
  */
 export function findDisallowedCodeUrls(sources: Iterable<ScanSource>): CodeUrlFinding[] {
-  const excepted = new Set(VENDOR_HOST_URL_EXCEPTIONS.map((entry) => entry.url));
   const findings: CodeUrlFinding[] = [];
   for (const source of sources) {
     if (!isCodeFile(source.file)) continue;
-    for (const finding of findCodeUrlLiterals(source.file, source.content)) {
-      if (excepted.has(finding.url)) continue;
-      if (isLoopbackHost(finding.host)) continue;
-      if (!finding.vendor && isApprovedCodeHost(finding.host)) continue;
-      findings.push(finding);
+    if (source.undecodable) {
+      findings.push({
+        file: source.file,
+        line: 1,
+        kind: "undecodable",
+        vendor: false,
+        detail: source.undecodable,
+      });
+      continue;
     }
+    findings.push(...findCodeUrlLiterals(source.file, source.content));
   }
   return findings;
 }
 
+// ---------------------------------------------------------------------------
+// Reading the package, and proving we actually read it.
+// ---------------------------------------------------------------------------
+
+export interface PackedFs {
+  existsSync: (path: string) => boolean;
+  statSync: (path: string) => { isFile: () => boolean };
+  readFileSync: (path: string) => Buffer;
+}
+
 /**
- * Read every text file in the published package as a scan source.
+ * Read every file in the published package as a scan source.
  *
- * Deliberately driven by the packer's own file list rather than by walking
- * `src/`: package.json's `files` negation globs mean the repository and the
- * published tarball are different sets of bytes, and the tarball is what a user
- * actually installs and runs.
+ * Driven by the packer's own file list rather than by walking `src/`: the `files`
+ * negation globs mean the repository and the published tarball are different
+ * sets of bytes, and the tarball is what a user installs.
+ *
+ * Bytes that will not decode are recorded as `undecodable` rather than skipped.
+ * Skipping is how a single NUL byte makes a whole file invisible to a scanner.
  */
 export function readPackedSources(
   packedFiles: readonly string[],
   root: string,
-  fs: {
-    existsSync: (path: string) => boolean;
-    statSync: (path: string) => { isFile: () => boolean };
-    readFileSync: (path: string) => Buffer;
-  },
+  fs: PackedFs,
   joinPath: (...parts: string[]) => string,
 ): ScanSource[] {
   const sources: ScanSource[] = [];
@@ -506,22 +827,99 @@ export function readPackedSources(
     const absolute = joinPath(root, file);
     if (!fs.existsSync(absolute) || !fs.statSync(absolute).isFile()) continue;
     const buffer = fs.readFileSync(absolute);
-    if (buffer.includes(0)) continue; // binary
-    sources.push({ file, content: buffer.toString("utf8") });
+    // Decoding is shared with the rest of the guards (`file-bytes.ts`), which
+    // handle UTF-16 and strip NULs rather than skipping the file. Only genuinely
+    // compiled/compressed content is set aside, and for a source file that is
+    // itself reported rather than passed over.
+    if (looksBinary(buffer)) {
+      sources.push({ file, content: "", undecodable: "compiled or compressed binary content" });
+      continue;
+    }
+    sources.push({ file, content: decodeForScanning(buffer) });
   }
   return sources;
+}
+
+export interface EntryPointCoverage {
+  path: string;
+  packed: boolean;
+  read: boolean;
+  certified: boolean;
+}
+
+/** Every path a consumer can `require`/`import`/execute, from package.json. */
+export function declaredEntryPoints(manifest: unknown): string[] {
+  const paths = new Set<string>();
+  const collect = (value: unknown): void => {
+    if (typeof value === "string") {
+      if (value.startsWith("./") || value.startsWith("bin/") || value.startsWith("dist/")) {
+        paths.add(value.replace(/^\.\//, ""));
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(collect);
+      return;
+    }
+    if (value && typeof value === "object") {
+      Object.values(value as Record<string, unknown>).forEach(collect);
+    }
+  };
+  const record = (manifest ?? {}) as Record<string, unknown>;
+  collect(record.bin);
+  collect(record.main);
+  collect(record.exports);
+  collect(record.module);
+  return [...paths].filter((path) => !path.endsWith(".d.ts")).sort();
+}
+
+/**
+ * Anti-vacuity, per entry point.
+ *
+ * A global "we scanned more than N files" is satisfiable by files that have
+ * nothing to do with the code under test: on an unbuilt tree the skill corpus
+ * alone cleared the old threshold while `bin/`, `dist/` and everything they are
+ * built from went unscanned. Coverage has to be asserted against the specific
+ * artifacts a consumer runs.
+ */
+export function checkEntryPointCoverage(
+  manifest: unknown,
+  packedFiles: readonly string[],
+  scanned: ReadonlyMap<string, { certified: boolean }>,
+): EntryPointCoverage[] {
+  const packed = new Set(packedFiles);
+  return declaredEntryPoints(manifest).map((path) => {
+    const entry = scanned.get(path);
+    return {
+      path,
+      packed: packed.has(path),
+      read: entry !== undefined,
+      certified: entry?.certified ?? false,
+    };
+  });
+}
+
+export function uncoveredEntryPoints(coverage: readonly EntryPointCoverage[]): EntryPointCoverage[] {
+  return coverage.filter((entry) => !entry.packed || !entry.read || !entry.certified);
 }
 
 export function formatFindings(
   findings: ReadonlyArray<VendorHostFinding | CodeUrlFinding>,
 ): string {
   return findings
-    .map((finding) =>
-      "position" in finding
-        ? `  ${finding.file}:${finding.line}: ${finding.url}` +
-          ` (${finding.position}; host ${finding.domain}` +
-          `${finding.vendor ? " — VENDOR-CONTROLLED" : " — not on APPROVED_CODE_HOSTS"})`
-        : `  ${finding.file}: ${finding.url}`,
-    )
+    .map((finding) => {
+      if (!("kind" in finding)) return `  ${finding.file}: ${finding.url}`;
+      const where = `${finding.file}:${finding.line}`;
+      switch (finding.kind) {
+        case "vendor-host":
+          return `  ${where}: ${finding.url} (${finding.position}; host ${finding.domain} — VENDOR-CONTROLLED)`;
+        case "unapproved-host":
+          return `  ${where}: ${finding.url} (${finding.position}; host ${finding.domain} — not on APPROVED_CODE_HOSTS)`;
+        case "undeterminable-host":
+          return `  ${where}: ${finding.url} (${finding.position}; ${finding.detail})`;
+        default:
+          return `  ${where}: cannot certify — ${finding.detail}`;
+      }
+    })
     .join("\n");
 }

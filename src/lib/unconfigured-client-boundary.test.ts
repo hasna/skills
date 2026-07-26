@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MissingApiUrlError, requireApiUrl, resolveApiUrl } from "./api-url.js";
@@ -22,8 +22,12 @@ import { getPackedFiles } from "./packlist.js";
 import { getConfiguredApiUrl } from "./remote-registry.js";
 import {
   APPROVED_CODE_HOSTS,
+  DYNAMIC_HOST_SITES,
+  TEMPLATE_HOST_FILES,
   VENDOR_CONTROLLED_DOMAINS,
   VENDOR_HOST_URL_EXCEPTIONS,
+  checkEntryPointCoverage,
+  declaredEntryPoints,
   extractUrlReferences,
   findCodeUrlLiterals,
   findDisallowedCodeUrls,
@@ -33,6 +37,7 @@ import {
   isVendorControlledHost,
   readPackedSources,
   registrableDomain,
+  uncoveredEntryPoints,
 } from "./vendor-host-guard.js";
 
 /**
@@ -155,7 +160,7 @@ describe("R1 — unconfigured client produces no endpoint", () => {
       expect(result.exitCode).not.toBe(0);
       // No host is named anywhere in the failure — not a vendor host, not localhost.
       for (const reference of extractUrlReferences(output)) {
-        expect(isVendorControlledHost(reference.host), `${reference.url} is vendor-controlled`).toBe(false);
+        expect(isVendorControlledHost(reference.markedHost), `${reference.url} is vendor-controlled`).toBe(false);
       }
     } finally {
       rmSync(home, { recursive: true, force: true });
@@ -200,7 +205,7 @@ const URL_LITERAL_POSITIONS: ReadonlyArray<{ label: string; code: string }> = [
 ];
 
 describe("R1 — the published package names no unapproved host", () => {
-  test("the approved-host list cannot be used to smuggle a vendor host back in", () => {
+  test("a KNOWN vendor domain cannot be smuggled onto the approved-host list", () => {
     expect(APPROVED_CODE_HOSTS.length).toBeGreaterThan(0);
     for (const entry of APPROVED_CODE_HOSTS) {
       expect(VENDOR_CONTROLLED_DOMAINS, `${entry.domain} may not be approved`).not.toContain(entry.domain);
@@ -214,7 +219,7 @@ describe("R1 — the published package names no unapproved host", () => {
     for (const exception of VENDOR_HOST_URL_EXCEPTIONS) {
       expect(exception.url).toMatch(/^https?:\/\/[^\s]+\/[^\s]+/);
       expect(exception.reason.length).toBeGreaterThan(20);
-      expect(isVendorControlledHost(exception.url.split("/")[2])).toBe(true);
+      expect(isVendorControlledHost(exception.url.split("/")[2] ?? "")).toBe(true);
     }
   });
 
@@ -260,7 +265,7 @@ describe("R1 — the published package names no unapproved host", () => {
     expect(findings.find((f) => f.file === "src/lib/remote-client.ts")?.position).toBe("parameter default");
     // The second case is caught without anyone classifying its host as ours.
     expect(
-      findings.some((f) => !VENDOR_CONTROLLED_DOMAINS.includes(registrableDomain(f.host))),
+      findings.some((f) => !VENDOR_CONTROLLED_DOMAINS.includes(registrableDomain(f.host ?? ""))),
     ).toBe(true);
     expect(findVendorHostReferences(relapse).length).toBeGreaterThan(0);
   });
@@ -294,6 +299,103 @@ describe("R1 — the published package names no unapproved host", () => {
     expect(unreviewed[0].vendor).toBe(false);
   });
 
+  // A host split across string literals is a compile-time constant that no
+  // per-literal scan can see: `"https://"` holds only a scheme, and
+  // `"skills.md/api/v1"` holds no "//" at all, so neither fragment looks like a
+  // URL. This shipped green through build, typecheck, 816 tests and the release
+  // guard before constant folding was added.
+  test("a host split across string literals is folded and caught", () => {
+    const splits: ReadonlyArray<{ label: string; code: string }> = [
+      { label: "scheme + host", code: 'const u = "https://" + "skills.md/api/v1";' },
+      { label: "split at the slashes", code: 'const u = "https:" + "//skills.md/api/v1";' },
+      { label: "split mid-authority", code: 'const u = "https://api." + "skills.md";' },
+      { label: "nested parenthesised", code: 'const u = ("https" + "://") + ("skills" + ".md");' },
+      { label: "through an as-expression", code: 'const u = ("https://" as string) + "skills.md";' },
+      { label: "array join, empty separator", code: 'const u = ["https://", "skills.md"].join("");' },
+      { label: "array join, separator carries it", code: 'const u = ["https:", "skills.md"].join("//");' },
+      { label: "template with an empty hole", code: "const u = `https://ski${''}lls.md`;" },
+      { label: "template with a runtime hole", code: "const u = `https://ski${x}lls.md`;" },
+    ];
+
+    const missed: string[] = [];
+    for (const { label, code } of splits) {
+      const findings = findDisallowedCodeUrls([{ file: "skills/_common/http-client.ts", content: code }]);
+      if (!findings.some((f) => f.kind === "vendor-host")) missed.push(label);
+    }
+    expect(missed).toEqual([]);
+  });
+
+  // The sentinel marking "a value goes here" must not be forgeable from input.
+  // It used to be a literal \x01 byte, so writing that byte into a string made a
+  // complete hostname look templated and the finding was skipped.
+  test("an in-band control byte cannot forge the hole marker", () => {
+    const forged = String.fromCharCode(1);
+    for (const code of [
+      `const u = "https://skills.md${forged}";`,
+      `const u = "https://skills${forged}.md";`,
+    ]) {
+      const findings = findDisallowedCodeUrls([{ file: "skills/x/src/index.ts", content: code }]);
+      expect(findings.map((f) => f.kind)).toContain("vendor-host");
+    }
+  });
+
+  // A host completed by a computed value is legitimate — it is what R1 asks for
+  // — but it is also the shape a default hides in, so each site is acknowledged
+  // rather than exempted by a blanket rule.
+  test("a computed host is a finding unless the site is annotated", () => {
+    const unannotated = findDisallowedCodeUrls([
+      { file: "skills/brand-new/src/index.ts", content: 'const u = "https://" + host;' },
+    ]);
+    expect(unannotated.map((f) => f.kind)).toEqual(["undeterminable-host"]);
+
+    for (const site of DYNAMIC_HOST_SITES) {
+      expect(site.reason.length, `${site.file} ${site.path} needs a reason`).toBeGreaterThan(20);
+      // Keyed on a path, never on a bare file, so the annotation cannot be
+      // stretched to cover a different site in the same file.
+      expect(site.path === "" || site.path.startsWith("/")).toBe(true);
+    }
+    for (const entry of TEMPLATE_HOST_FILES) {
+      expect(entry.reason.length).toBeGreaterThan(20);
+      // File-scoped, so the carve-out cannot be claimed package-wide.
+      expect(entry.file).toMatch(/^(?:bin|dist)\//);
+    }
+  });
+
+  // A scanner that reports "clean" for a file it could not read has converted an
+  // unknown into a certification. One stray byte used to do exactly that:
+  // TypeScript returns zero statements for a file it considers binary, and the
+  // walk then found nothing in an empty tree.
+  test("a file that cannot be parsed is a finding, not a pass", () => {
+    const strayByte = String.fromCharCode(0xe9);
+    const content = `${strayByte}\nconst u = "https://a-brand-new-vendor.example";`;
+    const findings = findDisallowedCodeUrls([{ file: "skills/_common/http-client.ts", content }]);
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings.some((f) => f.kind === "unparsable" || f.kind === "vendor-host" || f.kind === "unapproved-host")).toBe(true);
+  });
+
+  test("a code file that cannot be decoded is a finding, not a skip", () => {
+    const findings = findDisallowedCodeUrls([
+      { file: "skills/x/src/index.ts", content: "", undecodable: "compiled or compressed binary content" },
+    ]);
+    expect(findings.map((f) => f.kind)).toEqual(["undecodable"]);
+  });
+
+  // NUL bytes must not remove a file from the scan — the recurring bypass this
+  // repo has now fixed in three scanners. Decoding strips them instead.
+  test("NUL bytes do not hide a code file from the scan", () => {
+    const nul = String.fromCharCode(0);
+    const root = mkdtempSync(join(tmpdir(), "skills-r1-nul-"));
+    try {
+      const file = join(root, "leak.ts");
+      writeFileSync(file, `${nul}const u = "https://skills.md";${nul}`);
+      const sources = readPackedSources(["leak.ts"], root, { existsSync, statSync, readFileSync }, join);
+      expect(sources).toHaveLength(1);
+      expect(findDisallowedCodeUrls(sources).map((f) => f.kind)).toContain("vendor-host");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("comments and prose are not code — the scan reads string literals only", () => {
     const withComment = [
       { file: "a.ts", content: "// see https://not-approved.example for background\nconst x = 1;" },
@@ -303,18 +405,58 @@ describe("R1 — the published package names no unapproved host", () => {
 
   test("no packed code file names a host outside APPROVED_CODE_HOSTS", () => {
     const sources = packedSources().filter((source) => isCodeFile(source.file));
-    // Anti-vacuity: deleting the code would otherwise make this pass silently.
-    expect(sources.length, "packed code scan must not be empty").toBeGreaterThan(100);
     const findings = findDisallowedCodeUrls(sources);
     expect(findings.length === 0 ? "" : `\n${formatFindings(findings)}`).toBe("");
   }, 180_000);
 
   test("no packed file of any kind references a vendor-controlled host", () => {
     const sources = packedSources();
-    expect(sources.length, "packed file scan must not be empty").toBeGreaterThan(100);
     const findings = findVendorHostReferences(sources);
     expect(findings.length === 0 ? "" : `\n${formatFindings(findings)}`).toBe("");
   }, 180_000);
+
+  // ANTI-VACUITY, per entry point rather than as a global count.
+  //
+  // A threshold like "more than 100 files were scanned" is satisfiable by files
+  // that have nothing to do with the code under test. On an unbuilt tree the
+  // skill corpus alone cleared it — 471 files — while bin/, dist/ and therefore
+  // everything in src/ they are built from went entirely unscanned, including
+  // the two files this PR exists to fix. Coverage is now asserted against the
+  // specific artifacts a consumer runs.
+  test("every declared entry point is packed, read and certified", () => {
+    const manifest = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"));
+    const entryPoints = declaredEntryPoints(manifest);
+    expect(entryPoints.length, "package.json must declare entry points").toBeGreaterThan(0);
+
+    const packed = getPackedFiles(process.cwd());
+    const certified = new Map(
+      packedSources()
+        .filter((source) => isCodeFile(source.file) && !source.undecodable)
+        .map((source) => [source.file, { certified: true }] as const),
+    );
+    const uncovered = uncoveredEntryPoints(checkEntryPointCoverage(manifest, packed, certified));
+    expect(
+      uncovered.length === 0
+        ? ""
+        : `\n  unscanned entry points (run \`bun run build\` first):\n` +
+          uncovered.map((e) => `    ${e.path} packed=${e.packed} read=${e.read}`).join("\n"),
+    ).toBe("");
+  }, 180_000);
+
+  // Defence in depth. The packed set contains src/ only after a build, via the
+  // bundles. Scanning the tree directly means the check still has something to
+  // say on an unbuilt checkout, and it is where a reviewer looks first.
+  test("no file under src/ names a host outside APPROVED_CODE_HOSTS", () => {
+    const root = join(process.cwd(), "src");
+    const files = collectSourceFiles(root, /\.tsx?$/).filter((file) => !/\.test\.tsx?$/.test(file));
+    expect(files.length, "src/ scan must not be empty").toBeGreaterThan(50);
+    const sources = files.map((file) => ({
+      file: file.replace(`${process.cwd()}/`, ""),
+      content: readFileSync(file, "utf8"),
+    }));
+    const findings = findDisallowedCodeUrls(sources);
+    expect(findings.length === 0 ? "" : `\n${formatFindings(findings)}`).toBe("");
+  }, 120_000);
 });
 
 describe("R1 — client does not depend on the server module", () => {

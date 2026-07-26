@@ -12,11 +12,13 @@ import {
   listHostedMetadataSlugs,
 } from "../src/lib/hosted-skill-set.js";
 import {
+  checkEntryPointCoverage,
   findDisallowedCodeUrls,
   findVendorHostReferences,
   formatFindings,
   isCodeFile,
   readPackedSources,
+  uncoveredEntryPoints,
 } from "../src/lib/vendor-host-guard.js";
 
 type Finding = {
@@ -313,25 +315,9 @@ if (packedSources.length === 0) {
 
 const packedCodeSources = packedSources.filter((source) => isCodeFile(source.file));
 
-// Anti-vacuity: a package that declares executable entry points but yields zero
-// scannable code means the scan silently matched nothing, and every check below
-// would pass for the wrong reason. A package that ships no code at all (a pure
-// docs or metadata package) legitimately has nothing to scan.
-const manifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as {
-  bin?: unknown;
-  main?: unknown;
-  exports?: unknown;
-};
-const declaresExecutableCode = Boolean(manifest.bin || manifest.main || manifest.exports);
-if (declaresExecutableCode && packedCodeSources.length === 0) {
-  console.error(
-    "Release guard failed: the package declares entry points but no executable code was scanned.",
-  );
-  console.error("  The host scan would pass vacuously. Check that the build ran before packing.");
-  process.exit(1);
-}
-
-// Strong check: AST scan of every packed code file, position-independent.
+// Strong check: AST scan of every packed code file, position-independent. Run it
+// BEFORE the coverage assertion so that "we could not read this file" is a
+// finding with a reason rather than a bare coverage number.
 const disallowedCodeUrls = findDisallowedCodeUrls(packedCodeSources);
 if (disallowedCodeUrls.length > 0) {
   console.error("Release guard failed: package code names hosts that are not approved.");
@@ -339,6 +325,35 @@ if (disallowedCodeUrls.length > 0) {
   console.error("  A host we operate may never be a default. A third-party provider host is");
   console.error("  allowed only when it is listed in APPROVED_CODE_HOSTS in");
   console.error("  src/lib/vendor-host-guard.ts with a written justification.");
+  console.error("  A 'cannot certify' finding means a file was never inspected — fix the file,");
+  console.error("  never the threshold.");
+  process.exit(1);
+}
+
+// Anti-vacuity, PER ENTRY POINT rather than as a global count. A global "we
+// scanned more than N files" is satisfiable by files that have nothing to do
+// with the code under test: on an unbuilt tree the skill corpus alone cleared
+// the old threshold while bin/ and dist/ — and therefore everything in src/ they
+// are built from — went entirely unscanned. Every path a consumer can execute or
+// import must be present, readable and certified.
+const manifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as unknown;
+const certifiedByFile = new Map(
+  packedCodeSources
+    .filter((source) => !source.undecodable)
+    .map((source) => [source.file, { certified: true }] as const),
+);
+const uncovered = uncoveredEntryPoints(checkEntryPointCoverage(manifest, packedFiles, certifiedByFile));
+if (uncovered.length > 0) {
+  console.error("Release guard failed: declared entry points were not scanned.");
+  for (const entry of uncovered) {
+    console.error(
+      sanitizeForPublicLog(
+        `  ${entry.path}: packed=${entry.packed} read=${entry.read} certified=${entry.certified}`,
+      ),
+    );
+  }
+  console.error("  The host scan would pass vacuously for the code consumers actually run.");
+  console.error("  Run `bun run build` before packing so the published artifacts exist.");
   process.exit(1);
 }
 
@@ -353,5 +368,6 @@ if (vendorHostReferences.length > 0) {
 console.log(
   `Release guard passed: ${packedFiles.length} package-visible files (${packedCodeSources.length} code) are free of ` +
     "retired cloud markers, secrets, PII, private context, private-skill leaks, " +
-    "hosted implementation source, committed tool output, unapproved hosts, and vendor-controlled hosts.",
+    "hosted implementation source, committed tool output, unapproved hosts, and vendor-controlled hosts; " +
+    "every declared entry point was read and certified.",
 );
