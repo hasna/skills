@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "fs";
 import { isAbsolute, join, normalize } from "path";
 import { isHostedMetadataPackage } from "./hosted-skill-set.js";
-import { isPremiumSkill } from "./pricing.js";
+import { isHostedRuntimeSkill } from "./hosted-runtime-skills.js";
 import type { SkillMeta } from "./registry.js";
 import type { SkillKind } from "./registry-types.js";
 import type { PortableSkillManifest } from "./portable-skills.js";
@@ -154,7 +154,7 @@ function isHostedMetadataSkill(
   packageDeclaresHosted: boolean,
 ): boolean {
   if (packageDeclaresHosted) return true;
-  if (isPremiumSkill(skillName)) return true;
+  if (isHostedRuntimeSkill(skillName)) return true;
   if (frontmatter?.source === "private-hosted") return true;
   if (frontmatter?.source === "remote" && !registryMeta?.tags.includes("local")) return true;
   return false;

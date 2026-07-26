@@ -205,7 +205,8 @@ async function executeScheduledSkill(skillName: string, args: string[], options:
   if (!skill) throw new Error(`Skill '${skillName}' not found`);
 
   const pricing = await import("../../lib/pricing.js");
-  if (pricing.isPremiumSkill(skill.name)) {
+  const { isHostedRuntimeSkill } = await import("../../lib/hosted-runtime-skills.js");
+  if (isHostedRuntimeSkill(skill.name)) {
     const { getHostedRunAvailability } = await import("../../lib/hosted-availability.js");
     const hostedAvailability = getHostedRunAvailability(skill.name);
     if (!hostedAvailability.ok) {
@@ -242,8 +243,9 @@ async function describeDueSchedule(schedule: { name: string; skill: string; cron
   const { getSkill } = await import("../../lib/registry.js");
   const pricing = await import("../../lib/pricing.js");
   const { getHostedRunAvailability } = await import("../../lib/hosted-availability.js");
+  const { isHostedRuntimeSkill } = await import("../../lib/hosted-runtime-skills.js");
   const skill = getSkill(schedule.skill);
-  const paid = Boolean(skill && pricing.isPremiumSkill(skill.name));
+  const paid = Boolean(skill && isHostedRuntimeSkill(skill.name));
   const publicPricing = paid && skill ? pricing.getPublicSkillPricing(skill.name, {}, schedule.args ?? []) : null;
   const availability = skill ? getHostedRunAvailability(skill.name) : { ok: true as const };
   return {

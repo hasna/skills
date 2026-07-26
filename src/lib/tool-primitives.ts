@@ -4,7 +4,7 @@ import {
   type SkillMeta,
   type SkillRegistryProfile,
 } from "./registry.js";
-import { isPremiumSkill } from "./pricing.js";
+import { isHostedRuntimeSkill as isHostedRuntimeSlug } from "./hosted-runtime-skills.js";
 
 export const TOOL_PRIMITIVE_SCHEMA_VERSION = 1 as const;
 
@@ -445,7 +445,7 @@ function ruleMatches(skill: SkillMeta, rule: PrimitiveRule): boolean {
 
 function isHostedRuntimeSkill(skill: SkillMeta): boolean {
   const tags = new Set(skill.tags.map((tag) => tag.toLowerCase()));
-  return isPremiumSkill(skill.name)
+  return isHostedRuntimeSlug(skill.name)
     || HOSTED_RUNTIME_SKILL_NAMES.has(skill.name)
     || tags.has("premium")
     || tags.has("remote")

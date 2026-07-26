@@ -1,3 +1,4 @@
+import { isHostedRuntimeSkill } from "./hosted-runtime-skills.js";
 import { resolveSkillAlias } from "./skill-aliases.js";
 
 export type BillingTier = "free" | "premium";
@@ -167,9 +168,18 @@ export function getSkillPricing(slug: string): SkillPricing | null {
   return premiumIndex.get(canonicalSlug) || getSkillRunPricing(canonicalSlug);
 }
 
+/**
+ * @deprecated Runtime class, not price. Use `isHostedRuntimeSkill` from
+ * `hosted-runtime-skills.js`.
+ *
+ * Every non-billing caller has been migrated. This alias remains only because
+ * the symbol is published from the package root; it now delegates so that the
+ * price table below can be deleted without changing what any caller computes.
+ * Equality of the two sets is asserted in `hosted-runtime-skills.test.ts`
+ * against the filesystem, not assumed here.
+ */
 export function isPremiumSkill(slug: string): boolean {
-  const canonicalSlug = resolvePricingSlug(slug);
-  return premiumIndex.has(canonicalSlug) || isMediaGenerationSkill(canonicalSlug) || canonicalSlug === ARTICLE_GENERATION_SLUG;
+  return isHostedRuntimeSkill(slug);
 }
 
 export function getSkillCostCents(slug: string): number {
