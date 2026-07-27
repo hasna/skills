@@ -1,206 +1,485 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) when working in this repository.
+
+Every count in this file is re-derived from the tree by `src/lib/claude-md.test.ts`.
+If you change something it measures, that test tells you which line to update. Do not
+copy a number out of this file into a commit message, an issue, or another document
+without re-deriving it — that is how the previous version of this file rotted.
 
 ## Build and Development Commands
 
 ```bash
-bun install                       # Install dependencies
-bun run build                     # Build CLI, MCP server, library, and type declarations
-bun run dev                       # Run CLI in development mode (bun run src/cli/index.tsx)
-bun test                          # Run all tests (Bun native test runner)
-bun test src/lib/registry.test.ts # Run a single test file
-bun run typecheck                 # Type-check without emitting (tsc --noEmit)
-bun run dashboard:build           # Build Next.js dashboard (cd dashboard && bun install && bun run build)
-bun run dashboard:dev             # Next.js dev server with HMR (port 3505, proxies /api to :3579)
-bun run server                    # Start HTTP server (port 3579, serves dashboard + API)
-bun run server:dev                # Start server with --watch
+bun install                        # Install dependencies
+bun run build                      # Clean, then build 5 bins + the library + .d.ts
+bun test                           # Run the whole suite (Bun native runner)
+bun test src/lib/registry.test.ts  # Run a single test file
+bun run typecheck                  # tsc --noEmit
+bun run dev                        # Run the CLI from source
+bun run dev:watch                  # CLI with --watch
+bun run dev:mcp                    # MCP server with --watch
+bun run dev:server                 # HTTP API server with --watch
+bun run dev:worker                 # Run queue worker with --watch
+bun run migrate                    # Apply migrations to the configured database
+bun run verify:release             # Release guard: packlist + boundary + content scans
 ```
 
-## Architecture
+CI (`.github/workflows/ci.yml`) runs typecheck → **build** → test → release guard, in
+that order. The build must precede the test run: several guards scan the packed file
+list, and `bin/`/`dist/` only exist after a build. Reversing the order makes those
+guards certify a tree they never read. CI also stands up a Postgres service and sets
+`HASNA_SKILLS_TEST_DATABASE_URL`, because the store suite is parameterised over
+whichever durable backends are reachable and silently skips the ones that are not.
 
-Monorepo containing 202 AI agent skills plus a framework for discovering, installing, and managing them. Four interfaces share a common set of core modules:
+## What this repository is
+
+`@hasna/skills` is a catalog of AI agent skills plus the machinery to discover, pin,
+document, and run them. Four surfaces share one set of core modules:
+
+- **CLI** (`skills`) — Commander + an Ink TUI.
+- **MCP server** (`skills-mcp`) — the same capabilities over Model Context Protocol.
+- **HTTP API server** (`skills-server`, `skills-worker`, `skills-migrate`) — a real,
+  shipped, self-hostable service with a queue, a durable store, and `/api/v1/*`.
+- **Library** (`@hasna/skills`, plus the `@hasna/skills/storage` subpath).
+
+There is **one deployment story: you run it.** There is no `mode` concept anywhere —
+no `local`/`self-hosted`/`cloud` config key, no storage mode, no `--mode` flag, no
+`mode` field in any server payload. "Running locally" is simply the absence of a
+configured API origin. See [No deployment modes](#no-deployment-modes).
+
+## Repository layout
 
 ```
 src/
 ├── cli/
-│   ├── index.tsx                 # Commander.js CLI + Ink TUI entry
-│   ├── cli.test.ts
-│   └── components/
-│       └── App.tsx               # Interactive TUI (React/Ink)
+│   ├── index.tsx                 # Commander program; registers command groups, then parseAsync()
+│   ├── commands/                 # One registrar per command group (install, list, runtime, auth, …)
+│   ├── components/               # Ink TUI (App, SearchView, SkillSelect, CategorySelect, …)
+│   └── cli.*.test.ts             # CLI integration tests, split by area
 ├── mcp/
-│   ├── index.ts                  # MCP server (stdio transport)
-│   └── mcp.test.ts
+│   ├── index.ts                  # skills-mcp entry: stdio or Streamable HTTP
+│   ├── server.ts                 # buildServer(): composition root, calls the 5 registrars
+│   ├── http.ts                   # Streamable HTTP transport (127.0.0.1:8836 by default)
+│   ├── discovery-tools.ts        # registrar
+│   ├── operation-tools.ts        # registrar
+│   ├── schedule-tools.ts         # registrar
+│   ├── storage-tools.ts          # registrar
+│   ├── resource-meta-tools.ts    # registrar + all 4 MCP resources
+│   └── helpers.ts                # mcpJson()/mcpError() response shaping
 ├── server/
-│   ├── serve.ts                  # Bun.serve HTTP server + REST API
-│   └── serve.test.ts
+│   ├── index.ts                  # skills-server entry
+│   ├── app.ts                    # Bun.serve fetch handler + /api/v1 dispatch + durability guards
+│   ├── handlers.ts               # executeRun(): what a queued run actually does
+│   ├── store.ts                  # createStore(): postgres | sqlite | memory
+│   ├── sqlite-store.ts           # bun:sqlite backend (the zero-config default)
+│   ├── database-url.ts           # Pure URL -> backend target resolution
+│   ├── migrate.ts                # skills-migrate entry
+│   ├── worker.ts                 # skills-worker entry
+│   ├── auth.ts                   # Bearer API key -> ApiPrincipal
+│   ├── artifact-storage.ts       # Artifact bodies: database column or S3
+│   ├── redaction.ts              # Scrub credentials out of logs and error text
+│   └── config.ts, registry.ts, rows.ts, types.ts, migrations-dir.ts, store-fixtures.ts
 ├── lib/
-│   ├── registry.ts               # SKILLS array (202 entries) + CATEGORIES (17)
-│   ├── installer.ts              # Install/remove to .skills/ and agent dirs
-│   ├── skillinfo.ts              # Docs, requirements, env var extraction, run
-│   ├── utils.ts                  # normalizeSkillName()
-│   ├── registry.test.ts
-│   ├── installer.test.ts
-│   ├── skillinfo.test.ts
-│   ├── skillinfo-run.test.ts
-│   ├── utils.test.ts
-│   └── validation.test.ts        # Structural validation: all 202 skills
-├── index.ts                      # Library re-exports
-└── index.test.ts
+│   ├── registry-data/            # The SKILLS array, one file per category + index.ts
+│   ├── registry.ts               # Registry loading, merging, caching, lookup
+│   ├── registry-types.ts         # SkillMeta, SkillKind, SkillSource, CATEGORIES, BASIC_SKILL_NAMES
+│   ├── installer.ts              # Project pins (source and manifest installs are disabled)
+│   ├── project-state.ts          # .skills/project.json
+│   ├── portable-skills.ts        # ~/.hasna/skills/installed/<name>/ corpus: scaffold, port, run
+│   ├── skillinfo.ts              # Docs, requirements, env-var extraction, runSkill()
+│   ├── config.ts                 # Config file + getDataDir()
+│   ├── api-url.ts                # The only place an API origin is resolved
+│   ├── content-scan.ts           # Guard: secrets, PII, private context, committed output
+│   ├── infra-identifiers.ts      # Guard: no literal infra identifiers
+│   ├── vendor-host-guard.ts      # Guard: no vendor endpoint defaults
+│   ├── packlist.ts               # The real npm-packed file list, from the packager
+│   └── …                         # search, discovery, scheduler, run-state, tool-primitives, …
+├── types/api.ts
+├── index.ts                      # Library entry
+├── storage.ts                    # @hasna/skills/storage subpath entry
+└── test-preload.ts               # Per-test throwaway data dir (see Hermetic tests)
 
-dashboard/                        # Vite + React 19 + Tailwind v4 + shadcn/ui
-├── src/components/
-│   ├── skills-table.tsx          # TanStack Table for skills
-│   ├── skill-detail-dialog.tsx
-│   ├── stats-cards.tsx
-│   ├── theme-provider.tsx        # Dark/light/system (oklch tokens)
-│   ├── theme-toggle.tsx
-│   └── ui/                       # shadcn/ui primitives
-├── package.json
-├── vite.config.ts
-└── tsconfig.json
+skills/                           # The catalog: bare-named directories, no skill- prefix
+├── _common/                      # Shared helpers, not a skill
+├── pdf-generate/
+├── read-image/
+└── …
 
-skills/                           # 202 self-contained skill directories
-├── _common/                      # Shared utilities for skills
-├── skill-image/
-├── skill-deep-research/
-├── ...
-└── tsconfig.base.json
+agent-skills/                     # Instruction-only fleet workflow skills. NOT the public
+                                  # catalog, no registry entries, excluded from the package.
+migrations/{postgres,sqlite}/     # One numbered migration per dialect, kept at parity
+docs/{architecture,product,release}/  # Design docs, several of them test-asserted
+scripts/                          # release-guard.ts + corpus/upstream drift checks
 ```
 
-### Interfaces
+There is no `dashboard/` directory and no `src/server/serve.ts`.
 
-**CLI (`src/cli/index.tsx`)** -- Commander.js with Ink (React for terminal). Running `skills` with no args launches an interactive TUI. Subcommands: `install`, `list`, `search`, `info`, `docs`, `requires`, `run`, `remove`, `update`, `categories`, `init`, `mcp`, `serve`, `self-update`.
+### Derived counts
 
-**MCP Server (`src/mcp/index.ts`)** -- Model Context Protocol server over stdio. 9 tools (`list_skills`, `search_skills`, `get_skill_info`, `get_skill_docs`, `install_skill`, `remove_skill`, `list_categories`, `get_requirements`, `run_skill`) and 2 resources (`skills://registry`, `skills://{name}`).
+| Count | Value | Derived from |
+|---|---|---|
+| Catalog skills | 229 | `SKILLS.length` (`src/lib/registry-data/index.ts`) |
+| Instruction-kind skills | 19 | `SKILLS` entries with `kind: "instruction"` |
+| Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
+| MCP tools | 38 | `tools/list` against a live `buildServer()` |
+| MCP resources | 4 | `resources/list` + `resources/templates/list` (3 static + 1 template) |
+| Published bins | 5 | `bin` in `package.json` |
+| bun build invocations | 6 | the `build` script in `package.json` |
 
-**HTTP Server** — not shipped in OSS. The SaaS dashboard and `/api/v1/*` endpoints live in the private `platform-skills` repo.
+`skills/` holds those 229 catalog directories plus `_common`. The 229 split into 210
+executable skills (each with `src/`) and 19 instruction skills.
 
-**Library (`src/index.ts`)** -- npm package `@hasna/skills` re-exporting registry, installer, and skillinfo modules.
+## Interfaces
 
-### Core Modules
+### CLI — `src/cli/index.tsx`
 
-**`src/lib/registry.ts`** -- The `SKILLS` array (202 entries) with `SkillMeta` interface (name, displayName, description, category, tags) and `CATEGORIES` tuple (17 categories). Functions: `getSkill()`, `getSkillsByCategory()`, `searchSkills()`.
+Commander program named `skills`. `index.tsx` is thin: it declares global options,
+registers the default `interactive` command, then `await import()`s one registrar per
+command group from `src/cli/commands/` and calls `parseAsync()`. Event and webhook
+commands come from the external `@hasna/events/commander` package.
 
-**`src/lib/installer.ts`** -- Copies skill source into `.skills/` in the user's project. Updates `.skills/index.ts` on every install/remove. Also supports agent-specific installs (copies SKILL.md to `~/.claude/skills/`, `~/.codex/skills/`, or `~/.gemini/skills/`). Functions: `installSkill()`, `installSkills()`, `removeSkill()`, `getInstalledSkills()`, `installSkillForAgent()`, `removeSkillForAgent()`, `resolveAgents()`.
+Top-level commands, grouped by registrar:
 
-**`src/lib/skillinfo.ts`** -- Reads docs (priority: SKILL.md > README.md > CLAUDE.md), extracts env vars and system deps via regex patterns, reads CLI command from package.json bin field, generates SKILL.md from metadata if missing, can execute skills via `runSkill()` (auto-installs deps, spawns via Bun). Functions: `getSkillDocs()`, `getSkillBestDoc()`, `getSkillRequirements()`, `runSkill()`, `generateEnvExample()`, `generateSkillMd()`.
+| Registrar | Commands |
+|---|---|
+| `index.tsx` itself | `interactive`/`i` (the default command) |
+| `install.ts` | `pin`, `unpin`, `pins`, `update`, `install` (deprecated), `remove` (deprecated) |
+| `list.ts` | `list`/`ls`, `search`/`s`, `categories`, `tags` |
+| `introspect.ts` | `info`, `show`, `docs`, `requires`, `validate`, `diff` |
+| `tool-primitives.ts` | `tools` (`list`, `info`, `deps`, `validate`) |
+| `init.ts` | `init`, `export`, `import` |
+| `diagnostic.ts` | `doctor`, `test`, `env-check`/`check-env`, `setup-info`, `outdated` |
+| `runtime.ts` | `quote`, `run`, `runs`, `exports`, `mcp`, `setup`, `self-update` |
+| `completion.ts` | `completion` |
+| `create-sync-config.ts` | `config`, `create`, `sync` (disabled legacy) |
+| `portable-skills.ts` | `new`/`scaffold`, `port`/`add` |
+| `schedule.ts` | `schedule` |
+| `registry.ts` | `registry sync` |
+| `auth.ts` | `auth`, `billing`, `credits` |
+| `feedback.ts` | `feedback` |
+| `storage.ts` | `storage` (`status`, `sync-plan`) |
+| `@hasna/events` | `webhooks`, `events` |
 
-**`src/lib/utils.ts`** -- `normalizeSkillName()` which prefixes `skill-` if missing.
+**TTY detection.** `const isTTY = (process.stdout.isTTY ?? false) && (process.stdin.isTTY ?? false)`
+at the top of `index.tsx`. The default `interactive` command renders the Ink TUI when
+that is true; when false it prints the compact basic-profile registry as one line of
+JSON and exits 0. (It does not print help — piping `skills` gives you machine-readable
+output.)
 
-## Key Patterns
+### MCP server — `src/mcp/`
 
-### Skill Name Normalization
+`buildServer()` in `src/mcp/server.ts` is the composition root and calls five
+registrars in order. Tool counts per registrar:
 
-Registry uses bare names (`image`), filesystem uses prefixed names (`skill-image`). `normalizeSkillName()` in `src/lib/utils.ts` handles conversion. This applies everywhere: installer, skillinfo, server, MCP.
+| Registrar | Tools |
+|---|---|
+| `discovery-tools.ts` | 9 |
+| `operation-tools.ts` | 14 |
+| `schedule-tools.ts` | 5 |
+| `storage-tools.ts` | 2 |
+| `resource-meta-tools.ts` | 8 (3 `registerTool` + 5 legacy positional `server.tool`) |
 
-### Installation Modes
+`resource-meta-tools.ts` also registers all MCP resources.
 
-1. **Full source install** (default): copies entire `skills/skill-{name}/` to `.skills/skill-{name}/` in the project, auto-generates `.skills/index.ts` with re-exports.
-2. **Agent install** (`--for claude|codex|gemini|all`): copies only SKILL.md to `~/.{agent}/skills/skill-{name}/SKILL.md`. If SKILL.md does not exist, one is generated from registry metadata + README.md/CLAUDE.md content via `generateSkillMd()`.
+**Transports.** The `skills-mcp` binary defaults to **Streamable HTTP** on
+`127.0.0.1:8836`; stdio requires `--stdio` or `MCP_STDIO=1`. Port precedence is
+`--port <n>` → `MCP_HTTP_PORT` → 8836. The HTTP transport builds a fresh server per
+request and closes it when the response closes, and exposes `GET /health`.
 
-### Path Resolution
+### HTTP API server — `src/server/`
 
-The `findSkillsDir()` function in `installer.ts` walks up to 5 parent directories from `__dirname` looking for a `skills/` directory. This makes it work from both `src/lib/` (dev) and `bin/` or `dist/` (built).
+This **is** shipped in this repository. `bun run build` produces `bin/server.js`,
+`bin/worker.js`, and `bin/migrate.js`, published as `skills-server`, `skills-worker`,
+and `skills-migrate`. The `Dockerfile` runs `bun bin/server.js` and exposes 8787.
 
-### TTY Detection
+Routing is a hand-written dispatcher in `src/server/app.ts` — `handleApiV1` destructures
+exactly four path segments after `/api/v1`.
 
-CLI checks `process.stdout.isTTY && process.stdin.isTTY`. If true, renders Ink TUI. If false (piped, CI), prints help text and exits. This is the `isTTY` variable at the top of `src/cli/index.tsx`.
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/health` | Liveness. Deliberately reports no deployment variant. |
+| GET | `/ready` | |
+| GET | `/api/auth/whoami` | Under `/api/auth`, not `/api/v1`. |
+| GET | `/api/v1/skills` | |
+| GET | `/api/v1/skills/:slug` | |
+| GET | `/api/v1/skills/:slug/skill.md` | `text/markdown` |
+| POST | `/api/v1/skills/:slug/quote` | |
+| GET | `/api/v1/runs` | `?limit=` default 20, clamped to 100 |
+| POST | `/api/v1/runs/:slug` | `:slug` is a **skill** slug. Enqueues, returns 202. Honours `idempotency-key`. |
+| GET | `/api/v1/runs/:runId` | |
+| GET | `/api/v1/runs/:runId/logs` | |
+| GET | `/api/v1/runs/:runId/artifacts` | |
+| GET | `/api/v1/runs/:runId/artifacts/:artifactId` | Streams the body as an attachment |
+| POST | `/api/v1/runs/:runId/cancel` | |
+| GET | `/api/v1/billing/status`, `/api/v1/billing/credits` | Static self-hosted responses |
+| POST | `/api/v1/billing/*` | `501 BILLING_NOT_CONFIGURED` |
 
-### Skill Name Validation
+Everything under `/api/` requires a bearer API key first (`401 AUTH_REQUIRED`).
+Everything else 404s. Every JSON response carries `Cache-Control: no-store`. Org
+isolation is enforced by `principal.orgId` predicates in the store layer.
 
-The HTTP server validates skill names with `/^[a-z0-9-]+$/` to prevent path traversal attacks.
+Auth is a bearer token hashed with SHA-256 and looked up as `api_keys.key_hash`; the
+raw token never reaches the store. `HASNA_SKILLS_BOOTSTRAP_API_KEY` seeds a dev
+org/user/key. Scopes and roles are parsed and returned but not yet enforced —
+authorization today is org scoping.
 
-### ESM with .js Extensions
+`skills-worker` claims one run at a time via `store.claimNextRun()`, honours
+`cancel_requested`, and backs off exponentially on error. `executeRun()` in
+`handlers.ts` currently implements a provider-free handler for three skills only
+(`audio-transcript-pack`, `transcript`, `video-highlight-pack`); anything else fails
+with `HANDLER_UNAVAILABLE` rather than pretending.
 
-All imports use `.js` extensions even for `.ts` source files (e.g., `from "../lib/registry.js"`). JSON imports use `with { type: "json" }` syntax.
+### Library — `src/index.ts`
 
-### Build Outputs
+Re-exports registry, installer, project state, run state, skillinfo, config, remote
+registry/client, pricing, discovery, tool primitives, scheduler, skill validation,
+portable skills, CLI↔MCP parity, registry sync, MCP contracts, feedback, skill
+aliases, and API types. `src/storage.ts` is the separate `@hasna/skills/storage`
+entry point for the native storage helpers.
 
-Three separate `bun build` invocations in the build script:
-- CLI: `src/cli/index.tsx` -> `bin/index.js` (externals: ink, react, chalk)
-- MCP: `src/mcp/index.ts` -> `bin/mcp.js`
-- Library: `src/index.ts` -> `dist/index.js`
-- Types: `tsc --emitDeclarationOnly --declaration --outDir dist`
+## Invariants worth knowing before you change anything
 
-### Environment Variable Extraction
+### No deployment modes
 
-`skillinfo.ts` scans docs and `.env.example` files using two regex patterns:
-- `ENV_VAR_PATTERN` -- matches `*_API_KEY`, `*_TOKEN`, `*_SECRET`, etc.
-- `GENERIC_ENV_PATTERN` -- matches known provider prefixes (OPENAI_, ANTHROPIC_, AWS_, etc.)
+Removed wholesale (see `CHANGELOG.md` → Unreleased → Removed). There is no `mode`
+config key, no `HASNA_SKILLS_STORAGE_MODE`, no `skills setup --mode`, and no `mode`
+in `/health`. A `mode` key left in an old config file on disk is **ignored, not
+migrated**. `skills config unset <key>` replaced `setup --mode local`.
 
-### System Dependency Detection
+The one fact that survives is whether an API origin is configured, and
+`src/lib/api-url.ts` is the only place that is resolved: `resolveApiUrl()` returns
+`undefined` on read paths (callers fall back to the bundled registry), and
+`requireApiUrl()` throws `MissingApiUrlError` on auth and write paths.
 
-`skillinfo.ts` scans doc files for known tool names (ffmpeg, playwright, docker, pandoc, etc.) using regex patterns.
+Regression guards: `src/lib/config.test.ts` (all eight legacy `mode` spellings throw
+`Unknown config key`), `src/cli/cli.runtime.test.ts` (`setup --help` contains
+`--api-url` and not `--mode`), `src/server/app.test.ts` (`/health` has no `mode`
+property).
 
-## Skill Structure Template
+### No vendor endpoint defaults
 
-Each skill under `skills/skill-{name}/` follows this structure:
+An unconfigured install must never produce a URL on a vendor-controlled host — there
+is no fallback endpoint and no localhost default. `src/lib/vendor-host-guard.ts`
+enforces this over the **packed** file list (not `src/`, because `files` negation
+globs make the repo and the tarball different byte sets), with two checks of
+deliberately different strength: an **allowlist** over URL string literals in code,
+found by walking the TypeScript AST so position cannot hide one; and a weaker
+**denylist** over prose. Naming a third-party provider's own published API for a
+bring-your-own-key skill is explicitly allowed.
+
+Related: `src/lib/infra-identifiers.ts` (no literal AWS account IDs, ARNs, or
+`<app>-<env>-<component>` resource names outside the deploy manifest) and
+`src/lib/content-scan.ts` (secret values, contact PII, personal data, private fleet
+context, and committed tool output). All findings are redacted before printing,
+because they surface in potentially public CI logs.
+
+### Durable storage or nothing
+
+SQLite is the zero-config default. With `HASNA_SKILLS_DATABASE_URL` / `DATABASE_URL`
+unset the server opens `<data dir>/server.db` and migrates it itself. Postgres is the
+alternative and must be migrated explicitly with `skills-migrate` — several replicas
+must not race to migrate a shared database.
+
+**The server refuses to start on a non-durable store.** `assertDurableTarget()` runs
+against the *pure resolved target* before any file or connection is opened, so a
+rejected configuration never creates a database. `MemorySkillsStore` still exists but
+is unreachable without naming `memory:` explicitly *and* setting
+`HASNA_SKILLS_ALLOW_EPHEMERAL_STORE=1`. There is no silent in-memory fallback. The
+worker applies the same guard. `skills-migrate` refuses a non-durable target and
+refuses to run with nothing configured, because the deploy workflow gates rollout on
+its exit code.
+
+Unresolvable database strings throw with a diagnosis rather than guessing; an
+unreachable Postgres, or a reachable one with no schema, aborts startup rather than
+falling back and splitting data across two stores. Connection errors are summarised
+through a redactor that strips anything URL-shaped.
+
+Artifact bodies live in the `skills_artifacts.body_text` column unless
+`HASNA_SKILLS_S3_BUCKET` is set, in which case they go to S3. There is no
+local-filesystem artifact backend.
+
+### Skill names are bare; the corpus lives under the app root
+
+`skills/pdf-generate`, not `skills/skill-pdf-generate`. `normalizeSkillName()` in `src/lib/utils.ts`
+is now the identity function and is kept only so call sites do not have to change.
+`src/lib/skill-aliases.ts` holds the handful of real renames (`generate-pdf` →
+`pdf-generate`, etc.).
+
+The installed corpus is `~/.hasna/skills/installed/<name>/`, with app data
+(`config.json`, `auth.json`, `skills.db`) at the app root — matching every sibling
+Hasna app. `$HASNA_SKILLS_DIR` relocates the whole data dir and outranks `$HOME`.
+The legacy `~/.hasna/skills/custom/` path is still read as a migration safety net,
+and `~/.skills` / `~/.skillsrc` are merged forward without deleting the originals.
+
+### Pins, not installs
+
+`.skills/project.json` records **metadata-only pins** — name, version, source,
+timestamp. Nothing copies skill source or SKILL.md into a project or an agent skills
+folder. `installSkillSource()` and `installSkillManifest()` exist and deliberately
+return `success: false` with an explanatory error; the MCP `pin_skill`/`unpin_skill`
+tools do the same when handed a `for: <agent>` argument, redirecting to
+`skills mcp --register <agent>`. `.skills/` is output state: `project.json`,
+`runs/<day>/<id>/` with `logs/`, `exports/`, and `schedules.json`.
+
+Skills execute from the bundled package source (or the configured API), never from
+`.skills/`.
+
+### Executable vs instruction skills
+
+`kind` in SKILL.md frontmatter, mirrored into `SkillMeta.kind`. `executable` (the
+default when absent) means a runnable folder with `package.json` + `src/`.
+`instruction` means SKILL.md-primary prose an agent follows — no credentials, no
+runtime. `runSkill()` refuses instruction skills with an explanatory error rather
+than trying to spawn them.
+
+Every catalog entry is runnable by someone running only this repository: bundled
+code, a third-party key the user supplies, or instruction prose. There are **zero**
+hosted skills and `PREMIUM_SKILLS` is empty; `src/lib/catalog-runnable.test.ts`
+asserts the hosted set stays empty and that every executable skill ships a runnable
+entry point in the packed tarball.
+
+### Hermetic tests
+
+`bunfig.toml` sets `root = "./src"` and preloads `src/test-preload.ts`, which points
+`$HASNA_SKILLS_DIR` at a throwaway directory before any test file is imported and
+re-points it per test. Without it the suite reads and writes the developer's real
+`~/.hasna/skills` and fails differently on every machine. Tests that need the `$HOME`
+resolution branch opt out with `withHomeDataDir()` / `withTempHome()`; child
+processes that must resolve from a given `$HOME` use `withoutDataDirOverrideEnv()`.
+
+Set `NO_COLOR=1` for deterministic CLI output in tests.
+
+### ESM with `.js` extensions
+
+All relative imports use `.js` even from `.ts` sources (`from "../lib/registry.js"`).
+JSON imports use `with { type: "json" }`.
+
+## Skill structure
 
 ```
-skills/skill-{name}/
-├── src/
-│   ├── index.ts          # Main entry / programmatic API
-│   ├── commands/          # CLI command handlers (optional)
-│   ├── lib/               # Core logic
-│   ├── types/             # TypeScript types
-│   └── utils/             # Utility functions
-├── SKILL.md               # Skill definition (frontmatter: name, description)
-├── README.md              # Usage documentation
-├── CLAUDE.md              # Development guide (optional)
-├── package.json           # Must have "bin" entry for runnable skills
-└── tsconfig.json          # Extends ../tsconfig.base.json
+skills/<name>/                # bare name, matches SkillMeta.name exactly
+├── SKILL.md                  # frontmatter: name, description, [kind], [category], [tags]
+├── package.json              # "bin" for runnable skills; skills.kind for instruction ones
+├── tsconfig.json             # extends ../tsconfig.base.json
+├── src/                      # executable skills only
+│   └── index.ts
+├── README.md                 # optional
+└── CLAUDE.md                 # optional
 ```
 
-## MCP Tools Reference
+All 210 executable skills have both a `bin` entry and `src/index.ts`; that pair is what
+`catalog-runnable.test.ts` checks against the packed tarball. An instruction skill is
+just `SKILL.md` + `package.json`, with `kind: instruction` in the frontmatter and
+`skills.kind: "instruction"` in the package, and no `src/` at all.
 
-| Tool | Input Schema | Description |
-|------|-------------|-------------|
-| `list_skills` | `{ category?: string }` | List all skills, optionally filtered by category |
-| `search_skills` | `{ query: string }` | Search by name, description, and tags |
-| `get_skill_info` | `{ name: string }` | Metadata + requirements |
-| `get_skill_docs` | `{ name: string }` | Best available doc (SKILL.md > README.md > CLAUDE.md) |
-| `install_skill` | `{ name: string, for?: string, scope?: string }` | Install full source or agent SKILL.md |
-| `remove_skill` | `{ name: string, for?: string, scope?: string }` | Remove installed skill |
-| `list_categories` | `{}` | Categories with skill counts |
-| `get_requirements` | `{ name: string }` | Env vars, system deps, npm deps |
-| `run_skill` | `{ name: string, args?: string[] }` | Execute a skill |
+SKILL.md is required for new skills but is **not** universal in the existing corpus:
+most bundled executable skills carry none, because their metadata lives in the
+`src/lib/registry-data/` entry instead and `generateSkillMd()` synthesises a document
+on demand. Instruction skills are the exception — their SKILL.md *is* the skill, so it
+is always present and always the source of `kind`.
 
-Resources: `skills://registry` (full JSON), `skills://{name}` (individual skill + docs + requirements).
+`src/lib/skillinfo.ts` picks the best doc in the order SKILL.md → README.md →
+CLAUDE.md, extracts env vars with `ENV_VAR_PATTERN` (suffixes: `_API_KEY`, `_KEY`,
+`_TOKEN`, `_SECRET`, `_URL`, `_ID`, `_PASSWORD`, `_ENDPOINT`, `_REGION`, `_BUCKET`)
+and `GENERIC_ENV_PATTERN` (known provider prefixes), and detects system dependencies
+by scanning docs for known tool names.
+
+`findSkillsDir()` walks up to 5 parents from `__dirname` looking for `skills/`, so it
+resolves from both `src/lib/` in development and `bin/`/`dist/` when built.
+
+## MCP tool reference
+
+38 tools. Grouped by registrar; required parameters in **bold**.
+
+**`discovery-tools.ts`** — `list_skills` (category, profile, detail, limit, offset) ·
+`list_pinned_skills` (directory) · `search_skills` (**query**, profile, detail, limit,
+offset) · `get_skill_info` (**name**) · `get_skill_docs` (**name**) ·
+`list_tool_primitives` (query) · `get_tool_primitive` (**name**) ·
+`get_skill_tool_dependencies` (**name**) · `validate_tool_primitives` (profile)
+
+**`operation-tools.ts`** — `scaffold_skill` (**name**, description, overwrite) ·
+`port_skill` (**path**, name, overwrite, allowShadow) · `pin_skill` (**name**, for,
+scope) · `pin_category` (**category**, for, scope) · `unpin_skill` (**name**, for,
+scope) · `list_categories` · `list_tags` · `get_requirements` (**name**) ·
+`quote_skill` (**name**, input, args) · `run_skill` (**name**, input, args, approved,
+detail) · `get_run_status` (**run_id**, detail) · `export_skills` · `import_skills`
+(**skills**, for, scope) · `whoami`
+
+**`schedule-tools.ts`** — `schedule_skill` (**skill**, **cron**, name, args) ·
+`list_schedules` (limit, offset) · `remove_schedule` (**id_or_name**) ·
+`detect_project_skills` (directory) · `validate_skill` (**name**)
+
+**`storage-tools.ts`** — `storage_status` (directory) · `storage_sync_plan`
+(directory, includeSchemaSql)
+
+**`resource-meta-tools.ts`** — `search_tools` (query, detail) · `describe_tools`
+(**names**) · `get_mcp_contracts` (names, includeResources) · `register_agent`
+(**name**, session_id) · `heartbeat` (**agent_id**) · `set_focus` (**agent_id**,
+project_id) · `list_agents` · `send_feedback` (**message**, email, category)
+
+There are no `install_skill` / `remove_skill` tools; they are `pin_skill` /
+`unpin_skill`. The agent-session tools keep state in a per-process in-memory `Map`.
+
+**Resources:** `skills://mcp/contracts`, `skills://registry`,
+`skills://tool-primitives`, and the template `skills://{name}`.
+
+`src/lib/mcp-contracts.ts` holds a parallel machine-readable contract manifest for the
+same tools and resources, served by `get_mcp_contracts` and pinned against a
+compatibility fixture in `src/lib/fixtures/`. It currently lists the same 38 tools and
+4 resources, but **nothing enforces that**: `mcp-contracts.test.ts` compares the
+manifest against a hand-picked subset fixture, and `describeMcpToolContracts()` returns
+`{ known: false, description: "Unknown tool" }` for anything missing. So adding a tool
+without adding its contract fails no test — do both.
+
+`src/lib/cli-mcp-parity.ts` declares a CLI↔MCP mapping table with the same caveat: it
+covers only the `portable-skills` and `tool-primitives` domains, only
+`portable-skills` entries are cross-checked against the contract manifest, and nothing
+checks the reverse direction or that the CLI command strings resolve against commander.
 
 ## Testing
 
-Tests use `bun:test` with `describe`/`test`/`expect`. Set `NO_COLOR=1` in test environments for deterministic output.
+`bun test` with `bun:test` (`describe`/`test`/`expect`). Test roots and preload come
+from `bunfig.toml`. Tests live beside the code they cover.
 
-### Test Files
+Beyond ordinary unit tests, a large share of this suite is **guards** — tests whose
+job is to fail when an invariant erodes. Read the file header before changing one;
+most explain what they replaced and why the replacement is not weaker.
 
-| File | What It Tests |
-|------|---------------|
-| `src/lib/registry.test.ts` | Registry lookups, search, category filtering |
-| `src/lib/installer.test.ts` | Install, remove, agent install, index generation |
-| `src/lib/skillinfo.test.ts` | Docs reading, requirements extraction, SKILL.md generation |
-| `src/lib/skillinfo-run.test.ts` | Skill execution via `runSkill()` |
-| `src/lib/utils.test.ts` | `normalizeSkillName()` |
-| `src/lib/validation.test.ts` | Structural validation: every registry entry has a directory, every directory has a registry entry, all have package.json and at least one doc file |
-| `src/index.test.ts` | Library re-exports are present |
-| `src/cli/cli.test.ts` | CLI integration tests (spawns subprocesses, checks stdout) |
-| `src/mcp/mcp.test.ts` | MCP integration tests (in-memory transport via SDK) |
-| `src/server/serve.test.ts` | HTTP server and REST API tests |
+| Area | Files |
+|---|---|
+| Registry & catalog | `registry.test.ts`, `validation.test.ts`, `search.test.ts`, `skill-aliases.test.ts`, `renamed-skills.test.ts`, `basic-skills.test.ts`, `catalog-runnable.test.ts` |
+| Pins, docs, execution | `installer.test.ts`, `skillinfo.test.ts`, `skillinfo-run.test.ts`, `portable-skills.test.ts`, `scheduler.test.ts` |
+| Boundaries & packaging | `public-boundary.test.ts`, `public-package-boundary.test.ts`, `packlist.test.ts`, `api-boundaries.test.ts`, `upstream-boundary.test.ts`, `unconfigured-client-boundary.test.ts`, `no-cloud-boundary.test.ts`, `release-guard.integration.test.ts` |
+| Content & infra guards | `content-scan.test.ts`, `infra-identifiers.test.ts` |
+| Data dir & migration | `hermetic-data-dir.test.ts`, `installed-skills-layout.test.ts`, `skill-corpus-migration.test.ts`, `config.test.ts` |
+| Server | `app.test.ts`, `store-selection.test.ts`, `store-parity.test.ts`, `schema-parity.test.ts`, `sqlite-store.test.ts`, `sqlite-claim.test.ts`, `security.test.ts` |
+| CLI | `src/cli/cli.*.test.ts` (auth, discovery, docs-info, import-export, pin, portable-skills, run-core, runtime, storage, tags-brief, tool-primitives) |
+| MCP | `src/mcp/mcp.test.ts`, `src/mcp/mcp-http.test.ts`, `src/lib/mcp-contracts.test.ts`, `src/lib/cli-mcp-parity.test.ts` |
+| Docs | `claude-md.test.ts` (this file's counts), plus `product-brief.test.ts`, `open-core-saas-pattern.test.ts`, `human-approval-model.test.ts`, and siblings that assert `docs/**` content |
 
-### Running Tests
+`src/lib/claude-md.test.ts` re-derives the [Derived counts](#derived-counts) table. It
+checks only that table — never prose — so rewording this file cannot break it, while
+adding a skill, an MCP tool, a bin, or a build step will.
 
-```bash
-bun test                              # All tests
-bun test src/lib/registry.test.ts     # Single file
-bun test --timeout 30000              # Increase timeout for slow tests
-```
+## Adding a new skill
 
-## Adding a New Skill
-
-1. Create `skills/skill-{name}/` with `src/index.ts`, `package.json`, `tsconfig.json`, `SKILL.md`
-2. Add entry to the `SKILLS` array in `src/lib/registry.ts` (name, displayName, description, category from `CATEGORIES`, tags)
-3. Run `bun test` to verify the registry and structural validation tests pass
+1. Create `skills/<name>/` (bare name, no prefix) with `SKILL.md` and `package.json`.
+   Executable skills also need `src/index.ts`, a `bin` entry, and `tsconfig.json`
+   extending `../tsconfig.base.json`. Instruction skills set `kind: instruction` in
+   both SKILL.md frontmatter and `package.json` `skills.kind`, and ship no `src/`.
+2. Add the entry to the right category file under `src/lib/registry-data/` — one file
+   per category, re-exported by `registry-data/index.ts`. Do **not** add it to
+   `src/lib/registry.ts`; that file no longer holds the array.
+3. Bump the `Catalog skills` row (and `Instruction-kind skills`, if applicable) in
+   [Derived counts](#derived-counts).
+4. `bun run build && bun test`. `validation.test.ts` checks registry↔directory
+   consistency both ways; `catalog-runnable.test.ts` checks the skill is actually
+   runnable from the packed package.
 
 ## TypeScript
 
-Strict mode. JSX uses `react-jsx` transform for Ink components. Target: ES2022, module: ESNext, moduleResolution: bundler.
+Strict mode. Target ES2022, module ESNext, `moduleResolution: bundler`, and
+`jsx: react-jsx` for Ink. The root `tsconfig.json` compiles `src/**/*` only —
+`skills/` is explicitly excluded, and executable skills carry their own tsconfig
+extending `skills/tsconfig.base.json`. So `bun run typecheck` does **not** type-check
+the skill corpus.
