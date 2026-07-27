@@ -46,7 +46,7 @@ export const CONTENT_GENERATION_SKILLS: SkillMeta[] = [
   {
     name: "slide-deck-generator",
     displayName: "Slide Deck Generator",
-    description: "Generate self-hosted slide decks from briefs, docs, or outlines with PDF, PPTX, speaker notes, and structured slide metadata",
+    description: "Generate slide decks from briefs, docs, or outlines with PDF, PPTX, speaker notes, and structured slide metadata",
     category: "Content Generation",
     tags: ["presentation", "slides", "deck", "documents"],
   },
