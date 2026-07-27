@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createMcpContractManifest, getMcpToolDescriptions } from "./mcp-contracts.js";
+import { TOOL_PRIMITIVES } from "./tool-primitives.js";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
 
@@ -68,7 +69,14 @@ function cliHelpSurface(): string {
 }
 
 function mcpContractSurface(): string {
-  return JSON.stringify(createMcpContractManifest()) + JSON.stringify(getMcpToolDescriptions());
+  // The contract manifest + tool descriptions, plus the full tool-primitive
+  // catalog that `get_tool_primitive` ships (its cliCommands/mcpTools/
+  // capabilities are where "billing" and "skills billing status" once lived).
+  return (
+    JSON.stringify(createMcpContractManifest()) +
+    JSON.stringify(getMcpToolDescriptions()) +
+    JSON.stringify(TOOL_PRIMITIVES)
+  );
 }
 
 function serverRouteSurface(): string {
@@ -100,6 +108,7 @@ describe("no billing surface", () => {
   test("MCP contract JSON exposes no billing/payments vocabulary", () => {
     const surface = mcpContractSurface();
     expect(surface).toContain("run_skill");
+    expect(surface).toContain("hosted-auth");
     expect(surface).not.toContain("quote_skill");
     expect(findBanned(surface)).toEqual([]);
   });
