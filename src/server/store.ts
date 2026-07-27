@@ -3,20 +3,35 @@ import type {
   ApiPrincipal,
   ClaimRunInput,
   CreateRunInput,
+  PublishSkillInput,
   ServerArtifact,
   ServerRunLog,
   ServerRunRecord,
+  ServerSkillBundle,
+  ServerSkillRecord,
   SkillsProductStore,
   StoreBackendInfo,
+  UpdateSkillPatch,
 } from "./types.js";
 import { hashApiKey, publicPrincipal } from "./auth.js";
 import { resolveDatabaseTarget, type DatabaseTarget } from "./database-url.js";
-import { artifactId, nowIso, normalizeLimit, rowToArtifact, rowToLog, rowToRun, parseJsonArray, runId } from "./rows.js";
+import { artifactId, nowIso, normalizeLimit, rowToArtifact, rowToLog, rowToRun, rowToSkill, rowToSkillBundle, parseJsonArray, runId } from "./rows.js";
 import { SqliteSkillsStore, type SqliteStoreOptions } from "./sqlite-store.js";
 
 type SqlTag = {
   (strings: TemplateStringsArray, ...values: unknown[]): Promise<Record<string, unknown>[]>;
   unsafe(query: string): Promise<Record<string, unknown>[]>;
+  /**
+   * Run a callback against one reserved connection inside a transaction.
+   *
+   * Declared rather than reached for via `unsafe("BEGIN")`. This store's client is
+   * pooled (resolvePoolMax(), 4 by default), so `unsafe("BEGIN")` opens a transaction on
+   * whichever connection the pool happened to hand out and the statements that follow
+   * are free to land on the other three - a "transaction" that wraps nothing and commits
+   * nothing, silently. migrate.ts gets away with the bare form only because it
+   * constructs its client with `max: 1`.
+   */
+  begin<T>(fn: (tx: SqlTag) => Promise<T>): Promise<T>;
   close?: () => Promise<void>;
 };
 
@@ -85,6 +100,8 @@ export class MemorySkillsStore implements SkillsProductStore {
   private logs = new Map<string, ServerRunLog[]>();
   private artifacts = new Map<string, ServerArtifact[]>();
   private idempotency = new Map<string, string>();
+  private skills = new Map<string, ServerSkillRecord>();
+  private bundles = new Map<string, ServerSkillBundle>();
 
   constructor(apiKeys: Array<{ token: string; principal?: Partial<ApiPrincipal> }> = []) {
     for (const key of apiKeys) this.addApiKey(key.token, key.principal);
@@ -202,6 +219,88 @@ export class MemorySkillsStore implements SkillsProductStore {
     return artifacts.find((artifact) => artifact.id === id) ?? null;
   }
 
+  async publishSkill(input: PublishSkillInput): Promise<ServerSkillRecord> {
+    const key = skillKey(input.principal.orgId, input.slug);
+    const now = nowIso();
+    const previous = this.skills.get(key);
+    if (input.bundle) {
+      const bundleMapKey = skillKey(input.principal.orgId, input.bundle.sha256);
+      // Overwrite rather than skip, matching the SQL backends' DO UPDATE: the digest
+      // proves the bytes are the same, so the only thing a re-upload can carry that is
+      // worth keeping is a corrected placement (db vs s3, and the key).
+      this.bundles.set(bundleMapKey, {
+        ...this.bundles.get(bundleMapKey),
+        ...input.bundle,
+        orgId: input.principal.orgId,
+        createdAt: this.bundles.get(bundleMapKey)?.createdAt ?? now,
+      });
+    }
+    const record: ServerSkillRecord = {
+      orgId: input.principal.orgId,
+      slug: input.slug,
+      displayName: input.displayName,
+      description: input.description,
+      category: input.category,
+      tags: [...input.tags],
+      source: input.source,
+      kind: input.kind,
+      ...(input.version ? { version: input.version } : {}),
+      ...(input.skillMd ? { skillMd: input.skillMd } : {}),
+      // Absent bundle means "unchanged", so the previous digest is carried forward -
+      // the same COALESCE the SQL backends do.
+      ...(input.bundle
+        ? { bundleSha256: input.bundle.sha256, bundleByteSize: input.bundle.byteSize }
+        : previous?.bundleSha256
+          ? { bundleSha256: previous.bundleSha256, ...(previous.bundleByteSize === undefined ? {} : { bundleByteSize: previous.bundleByteSize }) }
+          : {}),
+      publishedByUserId: input.principal.userId,
+      createdAt: previous?.createdAt ?? now,
+      updatedAt: now,
+    };
+    this.skills.set(key, record);
+    if (previous?.bundleSha256 && input.bundle && previous.bundleSha256 !== input.bundle.sha256) {
+      this.collectOrphanBundle(input.principal.orgId, previous.bundleSha256);
+    }
+    return record;
+  }
+
+  async listSkills(principal: ApiPrincipal): Promise<ServerSkillRecord[]> {
+    return Array.from(this.skills.values())
+      .filter((skill) => skill.orgId === principal.orgId)
+      .sort((a, b) => a.slug.localeCompare(b.slug));
+  }
+
+  async getSkill(principal: ApiPrincipal, slug: string): Promise<ServerSkillRecord | null> {
+    const skill = this.skills.get(skillKey(principal.orgId, slug));
+    return skill && skill.orgId === principal.orgId ? skill : null;
+  }
+
+  async updateSkill(principal: ApiPrincipal, slug: string, patch: UpdateSkillPatch): Promise<ServerSkillRecord | null> {
+    const current = await this.getSkill(principal, slug);
+    if (!current) return null;
+    const next = { ...current, ...patch, updatedAt: nowIso() };
+    this.skills.set(skillKey(principal.orgId, slug), next);
+    return next;
+  }
+
+  async deleteSkill(principal: ApiPrincipal, slug: string): Promise<boolean> {
+    const current = await this.getSkill(principal, slug);
+    if (!current) return false;
+    this.skills.delete(skillKey(principal.orgId, slug));
+    if (current.bundleSha256) this.collectOrphanBundle(principal.orgId, current.bundleSha256);
+    return true;
+  }
+
+  async getSkillBundle(principal: ApiPrincipal, sha256: string): Promise<ServerSkillBundle | null> {
+    const bundle = this.bundles.get(skillKey(principal.orgId, sha256));
+    return bundle && bundle.orgId === principal.orgId ? bundle : null;
+  }
+
+  private collectOrphanBundle(orgId: string, sha256: string): void {
+    const referenced = Array.from(this.skills.values()).some((skill) => skill.orgId === orgId && skill.bundleSha256 === sha256);
+    if (!referenced) this.bundles.delete(skillKey(orgId, sha256));
+  }
+
   private patchRun(runId: string, patch: Partial<ServerRunRecord>): ServerRunRecord | null {
     const run = this.runs.get(runId);
     if (!run) return null;
@@ -209,6 +308,25 @@ export class MemorySkillsStore implements SkillsProductStore {
     this.runs.set(runId, next);
     return next;
   }
+}
+
+/**
+ * Composite map key for the in-process store.
+ *
+ * Length-prefixed rather than joined on a separator. Any separator character can appear
+ * in an org id supplied through ensureBootstrapApiKey(), and for an org-scoped map two
+ * inputs collapsing to one key is a cross-tenant read, not a cosmetic collision: org
+ * "a:b" + slug "c" and org "a" + slug "b:c" are the same string under a ":" join.
+ * Prefixing the org id's length makes the split unambiguous with no byte excluded from
+ * either field.
+ *
+ * A NUL separator would also be unambiguous and is deliberately not used: the first
+ * version of this function used one, which made store.ts a binary file to git - `git
+ * diff` refused to show it and every text-based scanner in scripts/release-guard.ts
+ * skips it while still reporting the file as clean.
+ */
+function skillKey(orgId: string, slug: string): string {
+  return `${orgId.length}:${orgId}:${slug}`;
 }
 
 export class PostgresSkillsStore implements SkillsProductStore {
@@ -456,6 +574,123 @@ export class PostgresSkillsStore implements SkillsProductStore {
       LIMIT 1
     `;
     return rows[0] ? rowToArtifact(rows[0]) : null;
+  }
+
+  async publishSkill(input: PublishSkillInput): Promise<ServerSkillRecord> {
+    const orgId = input.principal.orgId;
+    return await this.sql.begin(async (tx) => {
+      const previousRows = await tx`SELECT bundle_sha256 FROM skills_registry WHERE org_id = ${orgId} AND slug = ${input.slug} LIMIT 1`;
+      const previousSha = typeof previousRows[0]?.bundle_sha256 === "string" ? String(previousRows[0]!.bundle_sha256) : null;
+
+      if (input.bundle) {
+        // Content-addressed: the same digest is the same bytes, so a re-upload is a
+        // no-op rather than a conflict or a duplicate blob.
+        await tx`
+          INSERT INTO skills_bundles (org_id, sha256, byte_size, content_type, storage_kind, storage_key, body_blob)
+          VALUES (${orgId}, ${input.bundle.sha256}, ${input.bundle.byteSize}, ${input.bundle.contentType}, ${input.bundle.storageKind}, ${input.bundle.storageKey ?? null}, ${input.bundle.bytes ?? null})
+          ON CONFLICT (org_id, sha256) DO UPDATE SET
+            byte_size = EXCLUDED.byte_size,
+            content_type = EXCLUDED.content_type,
+            storage_kind = EXCLUDED.storage_kind,
+            storage_key = EXCLUDED.storage_key,
+            body_blob = EXCLUDED.body_blob
+        `;
+      }
+
+      const rows = await tx`
+        INSERT INTO skills_registry (org_id, slug, display_name, description, category, tags_json, source, kind, version, skill_md,
+                                     bundle_sha256, bundle_byte_size, published_by_user_id, updated_at)
+        VALUES (${orgId}, ${input.slug}, ${input.displayName}, ${input.description}, ${input.category}, ${JSON.stringify(input.tags)}::jsonb,
+                ${input.source}, ${input.kind}, ${input.version ?? null}, ${input.skillMd ?? null},
+                ${input.bundle?.sha256 ?? null}, ${input.bundle?.byteSize ?? null}, ${input.principal.userId}, now())
+        ON CONFLICT (org_id, slug) DO UPDATE SET
+          display_name = EXCLUDED.display_name,
+          description = EXCLUDED.description,
+          category = EXCLUDED.category,
+          tags_json = EXCLUDED.tags_json,
+          source = EXCLUDED.source,
+          kind = EXCLUDED.kind,
+          version = EXCLUDED.version,
+          skill_md = EXCLUDED.skill_md,
+          -- COALESCE: see the SQLite twin. A bundle-less publish is a metadata update,
+          -- not an instruction to discard the stored tarball.
+          bundle_sha256 = COALESCE(EXCLUDED.bundle_sha256, skills_registry.bundle_sha256),
+          bundle_byte_size = COALESCE(EXCLUDED.bundle_byte_size, skills_registry.bundle_byte_size),
+          published_by_user_id = EXCLUDED.published_by_user_id,
+          updated_at = EXCLUDED.updated_at
+        RETURNING *
+      `;
+      if (previousSha && input.bundle && previousSha !== input.bundle.sha256) {
+        await tx`
+          DELETE FROM skills_bundles
+          WHERE org_id = ${orgId} AND sha256 = ${previousSha}
+            AND NOT EXISTS (SELECT 1 FROM skills_registry WHERE org_id = ${orgId} AND bundle_sha256 = ${previousSha})
+        `;
+      }
+      return rowToSkill(rows[0]!);
+    });
+  }
+
+  async listSkills(principal: ApiPrincipal): Promise<ServerSkillRecord[]> {
+    const rows = await this.sql`SELECT * FROM skills_registry WHERE org_id = ${principal.orgId} ORDER BY slug ASC`;
+    return rows.map(rowToSkill);
+  }
+
+  async getSkill(principal: ApiPrincipal, slug: string): Promise<ServerSkillRecord | null> {
+    const rows = await this.sql`SELECT * FROM skills_registry WHERE org_id = ${principal.orgId} AND slug = ${slug} LIMIT 1`;
+    return rows[0] ? rowToSkill(rows[0]) : null;
+  }
+
+  async updateSkill(principal: ApiPrincipal, slug: string, patch: UpdateSkillPatch): Promise<ServerSkillRecord | null> {
+    const current = await this.getSkill(principal, slug);
+    if (!current) return null;
+    const next = { ...current, ...patch };
+    const rows = await this.sql`
+      UPDATE skills_registry
+      SET display_name = ${next.displayName}, description = ${next.description}, category = ${next.category},
+          tags_json = ${JSON.stringify(next.tags)}::jsonb, kind = ${next.kind}, version = ${next.version ?? null},
+          skill_md = ${next.skillMd ?? null}, updated_at = now()
+      WHERE org_id = ${principal.orgId} AND slug = ${slug}
+      RETURNING *
+    `;
+    return rows[0] ? rowToSkill(rows[0]) : null;
+  }
+
+  async deleteSkill(principal: ApiPrincipal, slug: string): Promise<boolean> {
+    // One transaction, matching the SQLite twin. As two statements on the pooled tag the
+    // DELETE and the orphan collection could land on different connections with a
+    // concurrent publish in between, and the NOT EXISTS guard narrows that window without
+    // closing it.
+    return await this.sql.begin(async (tx) => {
+      const rows = await tx`
+        DELETE FROM skills_registry WHERE org_id = ${principal.orgId} AND slug = ${slug}
+        RETURNING bundle_sha256
+      `;
+      if (!rows[0]) return false;
+      const sha = rows[0].bundle_sha256;
+      if (typeof sha === "string") {
+        await tx`
+          DELETE FROM skills_bundles
+          WHERE org_id = ${principal.orgId} AND sha256 = ${sha}
+            AND NOT EXISTS (SELECT 1 FROM skills_registry WHERE org_id = ${principal.orgId} AND bundle_sha256 = ${sha})
+        `;
+      }
+      return true;
+    });
+  }
+
+  async getSkillBundle(principal: ApiPrincipal, sha256: string): Promise<ServerSkillBundle | null> {
+    const rows = await this.sql`SELECT * FROM skills_bundles WHERE org_id = ${principal.orgId} AND sha256 = ${sha256} LIMIT 1`;
+    return rows[0] ? rowToSkillBundle(rows[0]) : null;
+  }
+
+  /** Drop a bundle no remaining skill in the org points at. See the SQLite twin. */
+  private async collectOrphanBundle(orgId: string, sha256: string): Promise<void> {
+    await this.sql`
+      DELETE FROM skills_bundles
+      WHERE org_id = ${orgId} AND sha256 = ${sha256}
+        AND NOT EXISTS (SELECT 1 FROM skills_registry WHERE org_id = ${orgId} AND bundle_sha256 = ${sha256})
+    `;
   }
 }
 

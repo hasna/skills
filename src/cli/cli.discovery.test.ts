@@ -200,7 +200,13 @@ describe("CLI discovery", () => {
           SKILLS_API_URL: `http://localhost:${server.port}`,
         });
         expect(exitCode).toBe(0);
-        expect(JSON.parse(stdout)).toEqual([{ name: "Remote Tools", count: 2 }]);
+        // Merged: the instance's categories appear ALONGSIDE the bundled ones rather than
+        // replacing them. Asserting the exact list would just re-encode the whole bundled
+        // taxonomy into this test, so it asserts the property that changed.
+        const data = JSON.parse(stdout);
+        expect(data).toContainEqual({ name: "Remote Tools", count: 2 });
+        expect(data.map((entry: any) => entry.name)).toContain("Development Tools");
+        expect(data.length).toBeGreaterThan(1);
       } finally {
         server.stop(true);
       }
@@ -326,7 +332,15 @@ describe("CLI discovery", () => {
         });
         const data = JSON.parse(stdout);
         expect(exitCode).toBe(0);
-        expect(data).toHaveLength(2);
+        // MERGED, not replaced. `--remote` used to return exactly what the instance
+        // served, so pointing the CLI at your own server made the bundled corpus and
+        // every locally written skill vanish from the listing. Both halves are present
+        // now, resolved by the precedence rule in src/lib/registry-merge.ts.
+        const names = data.map((skill: any) => skill.name);
+        expect(names).toContain("market-research-report");
+        expect(names).toContain("logo-design");
+        expect(names).toContain("pdf-to-markdown");
+        expect(data.length).toBeGreaterThan(2);
         const image = data.find((skill: any) => skill.name === "market-research-report");
         const logo = data.find((skill: any) => skill.name === "logo-design");
         expect(image).toMatchObject({

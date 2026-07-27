@@ -78,6 +78,9 @@ registerSchedule(program);
 const { registerRegistry } = await import("./commands/registry.js");
 registerRegistry(program);
 
+const { registerPublish } = await import("./commands/publish.js");
+registerPublish(program);
+
 const { registerAuth } = await import("./commands/auth.js");
 registerAuth(program);
 

@@ -12,7 +12,16 @@
  * needs no equivalent of pgcrypto.
  */
 import { randomUUID } from "node:crypto";
-import type { ServerArtifact, ServerRunLog, ServerRunRecord, ServerRunStatus } from "./types.js";
+import { ownBytes, type OwnedBytes } from "../lib/skill-bundle.js";
+import type {
+  BlobStorageKind,
+  ServerArtifact,
+  ServerRunLog,
+  ServerRunRecord,
+  ServerRunStatus,
+  ServerSkillBundle,
+  ServerSkillRecord,
+} from "./types.js";
 
 export function nowIso(): string {
   return new Date().toISOString();
@@ -88,6 +97,56 @@ export function rowToArtifact(row: Record<string, unknown>): ServerArtifact {
     ...(typeof row.body_text === "string" ? { bodyText: row.body_text } : {}),
     createdAt: dateString(row.created_at),
   };
+}
+
+export function rowToSkill(row: Record<string, unknown>): ServerSkillRecord {
+  return {
+    orgId: String(row.org_id),
+    slug: String(row.slug),
+    displayName: String(row.display_name),
+    description: String(row.description ?? ""),
+    category: String(row.category),
+    tags: parseJsonArray(row.tags_json),
+    source: String(row.source),
+    kind: String(row.kind) === "instruction" ? "instruction" : "executable",
+    ...(typeof row.version === "string" ? { version: row.version } : {}),
+    ...(typeof row.skill_md === "string" ? { skillMd: row.skill_md } : {}),
+    ...(typeof row.bundle_sha256 === "string" ? { bundleSha256: row.bundle_sha256 } : {}),
+    ...(row.bundle_byte_size === null || row.bundle_byte_size === undefined ? {} : { bundleByteSize: Number(row.bundle_byte_size) }),
+    ...(typeof row.published_by_user_id === "string" ? { publishedByUserId: row.published_by_user_id } : {}),
+    createdAt: dateString(row.created_at),
+    updatedAt: dateString(row.updated_at),
+  };
+}
+
+export function rowToSkillBundle(row: Record<string, unknown>): ServerSkillBundle {
+  return {
+    orgId: String(row.org_id),
+    sha256: String(row.sha256),
+    byteSize: Number(row.byte_size),
+    contentType: String(row.content_type),
+    storageKind: String(row.storage_kind) as BlobStorageKind,
+    ...(typeof row.storage_key === "string" ? { storageKey: row.storage_key } : {}),
+    ...(toBytes(row.body_blob) ? { bytes: toBytes(row.body_blob)! } : {}),
+    createdAt: dateString(row.created_at),
+  };
+}
+
+/**
+ * Normalise whatever a driver hands back for a blob column into bytes we own.
+ *
+ * bun:sqlite returns a Uint8Array for a BLOB; Bun's Postgres client returns a Buffer for
+ * bytea, which *is* a Uint8Array but whose `.buffer` is frequently a larger pooled
+ * ArrayBuffer - so `new Uint8Array(value.buffer)` would silently include neighbouring
+ * rows' bytes, and even a correct byteOffset/byteLength window would stay alive only as
+ * long as the driver leaves that pool alone. Copying is a few hundred kilobytes per read
+ * and removes both hazards.
+ */
+function toBytes(value: unknown): OwnedBytes | null {
+  if (value == null) return null;
+  if (value instanceof Uint8Array) return ownBytes(value);
+  if (value instanceof ArrayBuffer) return ownBytes(value);
+  return null;
 }
 
 export function parseJsonObject(value: unknown): Record<string, unknown> {

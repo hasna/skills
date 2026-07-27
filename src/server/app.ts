@@ -4,7 +4,18 @@ import { authenticateRequest } from "./auth.js";
 import { resolveServerConfig, type SkillsServerConfig } from "./config.js";
 import { resolveDatabaseTarget } from "./database-url.js";
 import { executeRun } from "./handlers.js";
-import { quoteServerSkill, getServerSkill, getServerSkillMd, listServerSkills } from "./registry.js";
+import { quoteServerSkill } from "./registry.js";
+import {
+  SkillRequestError,
+  getMergedSkill,
+  getMergedSkillMd,
+  listMergedSkills,
+  parsePublishRequest,
+  readPublishedBundle,
+  storePublishedSkill,
+  deletePublishedSkill,
+  publishedPayload,
+} from "./skills-api.js";
 import { createStore, type MemorySkillsStore } from "./store.js";
 import type { ApiPrincipal, ServerRunRecord, SkillsProductStore } from "./types.js";
 
@@ -88,6 +99,12 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
 
       return json({ error: "not found", code: "NOT_FOUND" }, { status: 404 });
     } catch (error) {
+      // A SkillRequestError is a statement about the request, not a server fault. Left to
+      // the generic handler below, "bundle is 40000000 bytes, over the 25000000 byte
+      // limit" would come back as a 500 and read as our bug rather than the caller's.
+      if (error instanceof SkillRequestError) {
+        return json({ error: error.message, code: error.code }, { status: error.status });
+      }
       return json({ error: "internal server error", detail: (error as Error).message }, { status: 500 });
     }
   };
@@ -96,8 +113,32 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
 export async function startSkillsServer(options: SkillsServerOptions = {}): Promise<Bun.Server<undefined>> {
   const config = { ...resolveServerConfig(), ...options.config };
   const fetch = await createSkillsFetchHandler({ ...options, config });
-  return Bun.serve({ hostname: config.host, port: config.port, fetch });
+  return Bun.serve({ hostname: config.host, port: config.port, fetch, ...skillsServeLimits(config) });
 }
+
+/**
+ * Socket-level body ceiling, derived from the same setting the publish route enforces.
+ *
+ * Without this the configured bundle limit was only ever advisory: Bun.serve defaults to
+ * 128 MB, a chunked request sends no Content-Length for the early check to read, and
+ * `request.formData()` materialises the whole body before any per-part check can run. So
+ * a 25 MB configured cap admitted 128 MB of buffered request per connection. This refuses
+ * it at the socket, before any of that is allocated.
+ *
+ * Exported so an embedder calling Bun.serve() with our fetch handler gets the same
+ * ceiling instead of silently inheriting the default.
+ */
+export function skillsServeLimits(config: Pick<SkillsServerConfig, "skillBundleLimitBytes" | "requestBodyLimitBytes">): { maxRequestBodySize: number } {
+  return { maxRequestBodySize: Math.max(config.skillBundleLimitBytes, config.requestBodyLimitBytes) + BODY_LIMIT_HEADROOM_BYTES };
+}
+
+/**
+ * Slack between the configured payload cap and the socket cap, for multipart framing:
+ * boundaries, per-part headers, and the manifest part that travels beside the bundle. Too
+ * small and a bundle exactly at the limit is rejected by the transport with a message
+ * about the wrong thing.
+ */
+const BODY_LIMIT_HEADROOM_BYTES = 1_000_000;
 
 async function handleApiV1(
   store: SkillsProductStore,
@@ -119,15 +160,62 @@ async function handleApiV1(
   }
 
   if (resource === "skills") {
-    if (request.method === "GET" && !id) return json(listServerSkills());
-    if (request.method === "GET" && id && subresource === "skill.md") {
-      const docs = getServerSkillMd(id);
-      return docs ? new Response(docs, { headers: { "Content-Type": "text/markdown; charset=utf-8" } }) : json({ error: "skill not found" }, { status: 404 });
+    if (request.method === "GET" && !id) return json(await listMergedSkills(store, principal));
+
+    // Publish. The only route that reads config.skillBundleLimitBytes.
+    if (request.method === "POST" && !id) {
+      const parsed = await parsePublishRequest(request, config);
+      const record = await storePublishedSkill(store, artifactStorage, principal, parsed);
+      return json(publishedPayload(record), { status: 201 });
     }
+
+    if (request.method === "GET" && id && subresource === "skill.md") {
+      // Traversal defence for this route lives at the router boundary (segmentEscapesPath,
+      // #65) and inside the getServerSkillMd() fallback getMergedSkillMd() delegates to;
+      // no per-route slug assertion is re-applied here.
+      const docs = await getMergedSkillMd(store, principal, id);
+      return docs
+        ? new Response(docs, { headers: { "Content-Type": "text/markdown; charset=utf-8", "Cache-Control": "no-store" } })
+        : json({ error: "skill not found", code: "SKILL_NOT_FOUND" }, { status: 404 });
+    }
+
+    if (request.method === "GET" && id && subresource === "bundle") {
+      const { record, bytes } = await readPublishedBundle(store, artifactStorage, principal, id);
+      return new Response(bytes, {
+        headers: {
+          "Content-Type": "application/gzip",
+          "Content-Length": String(bytes.byteLength),
+          "Content-Disposition": `attachment; filename="${record.slug}.tar.gz"`,
+          // The digest a client should verify against, so an intermediary cannot swap the
+          // body without the client being able to notice.
+          "X-Skill-Bundle-Sha256": record.bundleSha256 ?? "",
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+
     if (request.method === "GET" && id && !subresource) {
-      const skill = getServerSkill(id);
+      const skill = await getMergedSkill(store, principal, id);
       return skill ? json(skill) : json({ error: "skill not found", code: "SKILL_NOT_FOUND" }, { status: 404 });
     }
+
+    if ((request.method === "PUT" || request.method === "PATCH") && id && !subresource) {
+      const body = await readJson(request, config.requestBodyLimitBytes);
+      const updated = await store.updateSkill(principal, id, skillPatch(body));
+      // 404 rather than an implicit create: PUT against a slug this org has not published
+      // would otherwise silently mint a bundle-less skill from a typo'd name.
+      return updated
+        ? json(publishedPayload(updated))
+        : json({ error: "published skill not found", code: "SKILL_NOT_FOUND" }, { status: 404 });
+    }
+
+    if (request.method === "DELETE" && id && !subresource) {
+      const removed = await deletePublishedSkill(store, artifactStorage, principal, id);
+      return removed
+        ? json({ deleted: true, slug: id })
+        : json({ error: "published skill not found", code: "SKILL_NOT_FOUND" }, { status: 404 });
+    }
+
     if (request.method === "POST" && id && subresource === "quote") return json(quoteServerSkill(id));
   }
 
@@ -239,6 +327,24 @@ function runPayload(run: ServerRunRecord): Record<string, unknown> {
     ...(run.errorCode ? { errorCode: run.errorCode, code: run.errorCode } : {}),
     ...(run.errorMessage ? { errorMessage: run.errorMessage, error: run.errorMessage } : {}),
   };
+}
+
+/**
+ * Metadata-only patch from a JSON body.
+ *
+ * Absent keys are absent, not null: spreading `{version: undefined}` over the current
+ * record would erase the version on every PATCH that did not mention it.
+ */
+function skillPatch(body: Record<string, unknown>): Parameters<SkillsProductStore["updateSkill"]>[2] {
+  const patch: Record<string, unknown> = {};
+  if (typeof body.displayName === "string") patch.displayName = body.displayName;
+  if (typeof body.description === "string") patch.description = body.description;
+  if (typeof body.category === "string") patch.category = body.category;
+  if (Array.isArray(body.tags)) patch.tags = body.tags.filter((tag): tag is string => typeof tag === "string");
+  if (typeof body.version === "string") patch.version = body.version;
+  if (typeof body.skillMd === "string") patch.skillMd = body.skillMd;
+  if (body.kind === "executable" || body.kind === "instruction") patch.kind = body.kind;
+  return patch;
 }
 
 async function readJson(request: Request, limitBytes: number): Promise<Record<string, unknown>> {
