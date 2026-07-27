@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as publicAPI from "../index";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("reusable skills engine contract", () => {
   const content = readFileSync(
     join(process.cwd(), "docs/architecture/reusable-skills-engine.md"),

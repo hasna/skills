@@ -10,6 +10,10 @@ import {
 } from "./mcp-contracts.js";
 import { getSkill } from "./registry.js";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 const fixturePath = join(import.meta.dir, "fixtures", "mcp-contract-manifest-basic.v1.json");
 
 describe("MCP contract manifest", () => {

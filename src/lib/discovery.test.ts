@@ -4,6 +4,10 @@ import { getCompactSkillDiscovery, sanitizePublicDiscoveryText } from "./discove
 import { loadBasicRegistry, loadRegistryProfile } from "./registry.js";
 import type { SkillMeta } from "./registry-types.js";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("getCompactSkillDiscovery", () => {
   test("includes name, category, pricing, and a description", () => {
     const skill: SkillMeta = {

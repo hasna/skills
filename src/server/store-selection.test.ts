@@ -20,6 +20,10 @@ import { runMigrations } from "./migrate.js";
 import { MemorySkillsStore, createStore } from "./store.js";
 import { SqliteSkillsStore } from "./sqlite-store.js";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 const UNREACHABLE_POSTGRES = "postgres://someuser:hunter2-not-a-real-password@127.0.0.1:1/skills";
 
 describe("database target resolution", () => {

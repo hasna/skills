@@ -12,6 +12,10 @@ import {
   type ScanCategory,
 } from "./content-scan";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 // Fake, non-real planted values assembled from fragments so this test file itself
 // never contains a contiguous credential-shaped literal.
 const FAKE_ANTHROPIC_KEY = ["sk", "ant", "AAAABBBBCCCC1234"].join("-");

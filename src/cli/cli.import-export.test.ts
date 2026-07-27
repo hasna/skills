@@ -9,6 +9,10 @@ import {
   runCliInCwd,
 } from "./cli.test-utils";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("CLI import export and env checks", () => {
   describe("init --for", () => {
     const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = require("fs");

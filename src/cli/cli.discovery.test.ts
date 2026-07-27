@@ -10,6 +10,10 @@ import {
   runCliInCwd,
 } from "./cli.test-utils";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
@@ -131,7 +135,13 @@ describe("CLI discovery", () => {
         'process.stdin.on("end",()=>{const data=JSON.parse(s);console.log(JSON.stringify({length:s.length,count:data.skills.length}));});',
       ].join("");
       const command = `bun run ${shellQuote(CLI_PATH)} -- registry sync --profile all --json | node -e ${shellQuote(parser)}`;
-      const proc = Bun.spawn(["bash", "-lc", command], {
+      // `-c`, not `-lc`. The property under test is "a pipe does not truncate the
+      // CLI's stdout", which no login shell is needed to express, and `-l` sources
+      // /etc/profile — measured at ~220ms per spawn on the reference machine, and,
+      // worse, anything that profile writes to stderr lands inside the
+      // `expect(stderr).toBe("")` below. That makes the assertion a property of
+      // whichever machine runs it. PATH is inherited from the parent either way.
+      const proc = Bun.spawn(["bash", "-c", command], {
         stdout: "pipe",
         stderr: "pipe",
         env: { ...process.env, HOME: CLEAN_CLI_HOME, NO_COLOR: "1", SKILLS_TEST_MODE: "1" },
@@ -362,7 +372,8 @@ describe("CLI discovery", () => {
         'process.stdin.on("end",()=>{const data=JSON.parse(s);console.log(JSON.stringify({length:s.length,count:data.length}));});',
       ].join("");
       const command = `bun run ${shellQuote(CLI_PATH)} -- list --all --json | node -e ${shellQuote(parser)}`;
-      const proc = Bun.spawn(["bash", "-lc", command], {
+      // `-c` rather than `-lc`, for the reason given on the registry-sync pipe above.
+      const proc = Bun.spawn(["bash", "-c", command], {
         stdout: "pipe",
         stderr: "pipe",
         env: { ...process.env, HOME: CLEAN_CLI_HOME, NO_COLOR: "1", SKILLS_TEST_MODE: "1" },

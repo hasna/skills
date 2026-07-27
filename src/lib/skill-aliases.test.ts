@@ -6,6 +6,10 @@ import { installSkill, removeSkill, skillExists } from "./installer.js";
 import { getSkill, SKILLS } from "./registry.js";
 import { SKILL_ALIASES, normalizeSkillSlug, resolveSkillAlias } from "./skill-aliases.js";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("skill aliases", () => {
   test("normalizes skill aliases without skill prefix", () => {
     expect(normalizeSkillSlug("create-blog-article")).toBe("create-blog-article");

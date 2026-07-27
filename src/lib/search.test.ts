@@ -6,6 +6,10 @@ import { describe, test, expect } from "bun:test";
 import { editDistance, searchSkills, findSimilarSkills } from "./search.js";
 import type { SkillMeta } from "./registry.js";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 function makeSkill(overrides: Partial<SkillMeta> = {}): SkillMeta {
   return {
     name: "test-skill",

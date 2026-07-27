@@ -3,7 +3,9 @@ import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { BASIC_SKILL_NAMES, SKILLS } from "../lib/registry.js";
-import { withoutDataDirOverrideEnv } from "../test-preload.js";
+import { useDefaultTestTimeout, withoutDataDirOverrideEnv } from "../test-preload.js";
+
+useDefaultTestTimeout();
 
 const MCP_PATH = join(import.meta.dir, "index.ts");
 const EXPECTED_ALL_SKILL_COUNT = SKILLS.length;

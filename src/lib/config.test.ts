@@ -7,8 +7,10 @@ import { tmpdir } from "os";
 // via temp directories and direct file manipulation.
 
 import { DATA_DIR_ENV, loadConfig, saveConfig, unsetConfig, getConfigPath, getDataDir, type SkillsConfig, type ConfigScope } from "./config";
-import { withHomeDataDir, withTempHome } from "../test-preload.js";
+import { useDefaultTestTimeout, withHomeDataDir, withTempHome } from "../test-preload.js";
 import { clearRegistryCache, loadRegistry } from "./registry.js";
+
+useDefaultTestTimeout();
 
 describe("config", () => {
   let tmpDir: string;

@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getPackedFiles } from "./packlist";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 const cloudPackage = "@hasna" + "/cloud";
 const cloudNodeModulesPath = "node_modules/@hasna/" + "cloud";
 

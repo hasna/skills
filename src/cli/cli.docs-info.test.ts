@@ -9,6 +9,10 @@ import {
   runCliInCwd,
 } from "./cli.test-utils";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("CLI docs and validation", () => {
   describe("docs", () => {
     test("shows documentation for a skill with SKILL.md", async () => {

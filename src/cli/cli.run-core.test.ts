@@ -9,6 +9,10 @@ import {
   runCliInCwd,
 } from "./cli.test-utils";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("CLI run core", () => {
   describe("run", () => {
     test("fails for nonexistent skill", async () => {

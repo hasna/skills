@@ -46,6 +46,10 @@ import { getPackedFiles } from "./packlist.js";
 import { listHostedMetadataSlugs, parseHostedSourceExclusionSlugs } from "./hosted-skill-set.js";
 import { parseSkillFrontmatter } from "./skill-validation.js";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 const REPO_ROOT = process.cwd();
 const SKILLS_ROOT = join(REPO_ROOT, "skills");
 

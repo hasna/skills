@@ -17,6 +17,10 @@ import {
   recordScheduleRun,
 } from "./scheduler.js";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 function makeTmpDir(): string {

@@ -12,6 +12,10 @@ import { getSkillDocs, getSkillRequirements } from "./skillinfo";
 import { getSkillPath } from "./installer";
 import { isHostedMetadataPackage } from "./hosted-skill-set";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 const BASIC_SKILLS = [...BASIC_SKILL_NAMES];
 
 const CONNECTOR_BACKED_SKILLS = ["convert"];

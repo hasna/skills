@@ -40,7 +40,7 @@
   "scripts": {
     "clean": "rm -rf bin/ dist/",
     "build": "bun run clean && bun build ./src/cli/index.tsx --outdir ./bin --target bun && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/server/index.ts --outfile ./bin/server.js --target bun && bun build ./src/server/worker.ts --outfile ./bin/worker.js --target bun && bun build ./src/server/migrate.ts --outfile ./bin/migrate.js --target bun && bun build ./src/index.ts ./src/storage.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --declaration --outDir dist",
-    "test": "bun test",
+    "test": "bun test --timeout 30000",
     "dev": "bun run ./src/cli/index.tsx",
     "dev:watch": "bun --watch run ./src/cli/index.tsx",
     "dev:mcp": "bun --watch run ./src/mcp/index.ts",

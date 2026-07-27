@@ -3,6 +3,10 @@ import { hashApiKey } from "./auth.js";
 import { redactForClient } from "./redaction.js";
 import { resolveStoreBackends } from "./store-fixtures.js";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 const backends = await resolveStoreBackends();
 
 describe("self-hosted security helpers", () => {

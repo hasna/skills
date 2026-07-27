@@ -3,6 +3,10 @@ import { createServer } from "node:http";
 import { buildServer } from "./server.js";
 import { handleMcpHttpNodeRequest, MCP_HTTP_SERVICE_NAME } from "./http.js";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 async function startHttpServer() {
   const httpServer = createServer(async (req, res) => {
     const handled = await handleMcpHttpNodeRequest(req, res);

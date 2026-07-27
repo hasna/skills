@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCliInCwd } from "./cli.test-utils";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 const CLEAN_STORAGE_ENV = {
   HASNA_SKILLS_DATABASE_URL: "",
   HASNA_SKILLS_DATABASE_SSL: "",

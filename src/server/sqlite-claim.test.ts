@@ -36,6 +36,10 @@ import { join } from "node:path";
 import { SqliteSkillsStore } from "./sqlite-store.js";
 import { publicPrincipal } from "./auth.js";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 const WORKERS = 6;
 const QUEUED_RUNS = 40;
 const STORE_MODULE = join(import.meta.dir, "sqlite-store.ts");

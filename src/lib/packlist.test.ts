@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { getPackedFiles, parseNpmPackJson } from "./packlist.js";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 /**
  * The packed-file list is what every "nothing leaked into the tarball" guard is
  * asserted against, so the two failure modes that matter are: crashing on output

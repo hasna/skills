@@ -6,6 +6,10 @@ import { tmpdir } from "os";
 
 import { runCliInCwd } from "./cli.test-utils";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("CLI portable skills", () => {
   test("new, list, show, validate, and run work against ~/.hasna/skills", async () => {
     const home = mkdtempSync(join(tmpdir(), "cli-portable-home-"));

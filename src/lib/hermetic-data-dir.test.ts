@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { DATA_DIR_ENV, INSTALLED_SKILLS_DIRNAME, getDataDir } from "./config.js";
 import { getPortableSkillsRoot } from "./portable-skills.js";
 import { loadRegistry } from "./registry.js";
-import { withTempHome } from "../test-preload.js";
+import { useDefaultTestTimeout, withTempHome } from "../test-preload.js";
+
+useDefaultTestTimeout();
 
 /**
  * Guards test hermeticity with respect to the user's real data directory.

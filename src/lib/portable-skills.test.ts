@@ -15,6 +15,10 @@ import {
   validatePortableSkillDirectory,
 } from "./portable-skills";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("portable skills", () => {
   test("scaffolds a standard skill folder with agent instructions and a runnable command", async () => {
     const home = mkdtempSync(join(tmpdir(), "portable-skill-home-"));

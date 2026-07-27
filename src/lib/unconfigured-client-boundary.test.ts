@@ -40,6 +40,10 @@ import {
   uncoveredEntryPoints,
 } from "./vendor-host-guard.js";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 /**
  * Every client-side resolver that can turn configuration into a URL the CLI
  * would contact. `kind` records the contract each one owes when nothing is
@@ -95,6 +99,55 @@ function collectSourceFiles(dir: string, matcher: RegExp): string[] {
     else if (matcher.test(entry.name)) found.push(path);
   }
   return found;
+}
+
+/**
+ * True on a checkout where NOT ONE declared entry point has been built.
+ *
+ * Every entry point in package.json is a build output — `bin/*.js` from the CLI
+ * and MCP bundles, `dist/*.js` from the library bundle — and `.gitignore`
+ * excludes both directories. So on a fresh clone the coverage check below has
+ * nothing to read, and the red it produces means "you have not run the build",
+ * not "you broke the boundary". That is the worst kind of failing test: a
+ * developer or agent running `bun test` on a clean tree sees a boundary guard go
+ * red and reasonably reads it as a regression they caused. Suites that cry wolf
+ * stop being read at all.
+ *
+ * Three properties keep this from being a test switched off to make a suite green:
+ *
+ *   - CI never skips. `.github/workflows/ci.yml` runs Build before Test (asserted
+ *     by "CI builds before it tests" below), so an unbuilt tree under CI is a real
+ *     failure of that ordering and stays red — which is the case the check was
+ *     written for.
+ *   - A PARTIAL build still runs the check in full. `some` rather than `every`:
+ *     the moment one entry point exists, a second one that does not is exactly
+ *     the regression being guarded — a `bin` entry added without a build step.
+ *   - The neighbouring guards are unconditional. "no file under src/ names a host
+ *     outside APPROVED_CODE_HOSTS" scans the tree directly and runs on any
+ *     checkout, so an unbuilt run still asserts the boundary itself. Only the
+ *     per-entry-point coverage assertion, which needs artifacts that do not
+ *     exist yet, stands down.
+ */
+const UNBUILT_LOCAL_TREE = (() => {
+  if (process.env["CI"]) return false;
+  try {
+    const manifest = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"));
+    return !declaredEntryPoints(manifest).some((path) => existsSync(join(process.cwd(), path)));
+  } catch {
+    // Anything unexpected here (run from the wrong directory, unreadable manifest)
+    // means run the check and let it report, rather than throwing at module scope
+    // and taking the other 27 assertions in this file down with it.
+    return false;
+  }
+})();
+
+if (UNBUILT_LOCAL_TREE) {
+  // Bun does not name skipped tests in non-TTY output, only counts them, so the
+  // reason has to be printed or it is invisible to the person who needs it.
+  console.log(
+    "[entry-point-coverage] skipped: no declared entry point is built. " +
+      "Run `bun run build` first to include it (CI always runs it).",
+  );
 }
 
 describe("R1 — unconfigured client produces no endpoint", () => {
@@ -527,7 +580,10 @@ describe("R1 — the published package names no unapproved host", () => {
   // everything in src/ they are built from went entirely unscanned, including
   // the two files this PR exists to fix. Coverage is now asserted against the
   // specific artifacts a consumer runs.
-  test("every declared entry point is packed, read and certified", () => {
+  //
+  // Reported as "cannot run" rather than "failed" on an unbuilt local checkout —
+  // see UNBUILT_LOCAL_TREE. Under CI it always runs, because CI builds first.
+  test.skipIf(UNBUILT_LOCAL_TREE)("every declared entry point is packed, read and certified", () => {
     const manifest = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"));
     const entryPoints = declaredEntryPoints(manifest);
     expect(entryPoints.length, "package.json must declare entry points").toBeGreaterThan(0);
@@ -546,6 +602,28 @@ describe("R1 — the published package names no unapproved host", () => {
           uncovered.map((e) => `    ${e.path} packed=${e.packed} read=${e.read}`).join("\n"),
     ).toBe("");
   }, 180_000);
+
+  // The invariant UNBUILT_LOCAL_TREE leans on, asserted rather than assumed.
+  // Skipping the coverage check on an unbuilt local tree is only safe while CI
+  // guarantees a built one; reordering the workflow would otherwise turn that
+  // skip from "not applicable here" into "not checked anywhere", silently.
+  test("CI builds before it tests", () => {
+    const workflow = join(process.cwd(), ".github", "workflows", "ci.yml");
+    expect(existsSync(workflow), `${workflow} must exist`).toBe(true);
+    const lines = readFileSync(workflow, "utf8").split(/\r?\n/);
+    const stepLine = (script: string) =>
+      lines.findIndex((line) => new RegExp(`^\\s*run:\\s*bun run ${script}\\s*$`).test(line));
+    const build = stepLine("build");
+    const tests = stepLine("test");
+    expect(build, "ci.yml must run `bun run build`").toBeGreaterThanOrEqual(0);
+    expect(tests, "ci.yml must run `bun run test`").toBeGreaterThanOrEqual(0);
+    expect(
+      build < tests
+        ? ""
+        : `ci.yml runs \`bun run test\` (line ${tests + 1}) before \`bun run build\` (line ${build + 1}); ` +
+          "the entry-point coverage check needs bin/ and dist/ to exist",
+    ).toBe("");
+  });
 
   // Defence in depth. The packed set contains src/ only after a build, via the
   // bundles. Scanning the tree directly means the check still has something to

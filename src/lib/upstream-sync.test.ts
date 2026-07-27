@@ -3,6 +3,10 @@ import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import pkg from "../../package.json" with { type: "json" };
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("upstream sync workflow", () => {
   const cloudPackage = "@hasna" + "/cloud";
   const doc = readFileSync(join(process.cwd(), "docs/architecture/upstream-sync.md"), "utf8");

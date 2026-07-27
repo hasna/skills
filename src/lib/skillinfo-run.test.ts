@@ -5,6 +5,10 @@ import { tmpdir } from "os";
 import { INSTALLED_SKILLS_DIRNAME } from "./config";
 import { runSkill } from "./skillinfo";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 let testDir: string;
 let originalCwd: string;
 

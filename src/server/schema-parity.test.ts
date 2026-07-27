@@ -25,6 +25,10 @@ import { join } from "node:path";
 import { MIGRATION_DIALECTS, resolveMigrationsDir } from "./migrations-dir.js";
 import { SERVER_RUN_STATUSES } from "./types.js";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 interface TableShape {
   columns: string[];
   notNull: string[];

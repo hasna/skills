@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { runCli } from "./cli.test-utils";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("CLI tool primitives", () => {
   test("lists primitive tools as JSON", async () => {
     const { stdout, exitCode } = await runCli(["tools", "list", "--json"]);

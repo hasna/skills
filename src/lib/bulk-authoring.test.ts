@@ -10,7 +10,9 @@ import {
   scaffoldPortableSkill,
 } from "./portable-skills.js";
 import { clearRegistryCache, loadBasicRegistry, loadRegistryProfile } from "./registry.js";
-import { withHomeDataDir } from "../test-preload.js";
+import { useDefaultTestTimeout, withHomeDataDir } from "../test-preload.js";
+
+useDefaultTestTimeout();
 
 function makeExecutableSkill(root: string, name: string, description = `${name} skill`): string {
   const dir = join(root, name);
