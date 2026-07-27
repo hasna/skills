@@ -8,6 +8,10 @@ import { DEFAULT_TEST_TIMEOUT_MS, withoutDataDirOverrideEnv } from "../test-prel
 export const CLI_PATH = join(import.meta.dir, "index.tsx");
 export const EXPECTED_ALL_SKILL_COUNT = SKILLS.length;
 export const EXPECTED_BASIC_SKILL_COUNT = BASIC_SKILL_NAMES.length;
+// The `categories` command lists only categories that hold at least one skill.
+// The declarative-only catalog populates a subset of CATEGORIES, so derive the
+// expected count from the registry rather than hardcoding it.
+export const EXPECTED_POPULATED_CATEGORY_COUNT = new Set(SKILLS.map((s) => s.category)).size;
 export const PACKAGE_VERSION = pkg.version;
 
 /**

@@ -31,7 +31,6 @@
     "docs/skill-standard.md",
     "skills/",
     "!skills/**/node_modules",
-    "!skills/scaffold-project/my-app",
     "LICENSE",
     "README.md"
   ],

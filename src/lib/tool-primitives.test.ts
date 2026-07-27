@@ -24,27 +24,26 @@ describe("tool primitives", () => {
   });
 
   test("maps representative skills to primitive dependencies", () => {
-    const image = getSkillToolDependencies("logo-design");
+    const image = getSkillToolDependencies("ad-creative-pack");
     expect(image?.dependencies.map((dependency) => dependency.primitive)).toEqual(expect.arrayContaining([
       "media-image",
     ]));
-    expect(image?.gatewayBacked).toBe(true); // category rule: Design & Branding is AI-assisted
+    expect(image?.gatewayBacked).toBe(true); // category rule: Business & Marketing is AI-assisted
     expect(image?.hostedRuntime).toBe(false);
-    expect(isGatewayBackedSkill("logo-design")).toBe(true);
+    expect(isGatewayBackedSkill("ad-creative-pack")).toBe(true);
 
-    const pdf = getSkillToolDependencies("pdf-to-markdown");
-    expect(pdf?.dependencies.map((dependency) => dependency.primitive)).toContain("documents-read");
-
-    const csv = getSkillToolDependencies("read-csv");
-    expect(csv?.dependencies.map((dependency) => dependency.primitive)).toContain("structured-data");
+    const doc = getSkillToolDependencies("contract-review-report");
+    expect(doc?.dependencies.map((dependency) => dependency.primitive)).toContain("documents-read");
+    expect(doc?.dependencies.map((dependency) => dependency.primitive)).toContain("structured-data");
   });
 
   test("validates primitive coverage for the bundled catalog", () => {
     const result = validateToolPrimitiveCoverage("all");
     expect(result.valid).toBe(true);
-    expect(result.skillCount).toBeGreaterThanOrEqual(200);
+    // Declarative-only catalog: 19 shipped skills, every one mapped to a primitive.
+    expect(result.skillCount).toBe(19);
     expect(result.mappedSkillCount).toBe(result.skillCount);
-    expect(result.gatewayBackedSkillCount).toBeGreaterThan(25);
+    expect(result.gatewayBackedSkillCount).toBe(12);
     expect(result.issues).toEqual([]);
   });
 });

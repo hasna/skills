@@ -33,7 +33,8 @@ function bundledSkillPackageNames(): string[] {
 describe("registry", () => {
   describe("SKILLS", () => {
     test("has a populated registry", () => {
-      expect(SKILLS.length).toBeGreaterThan(200);
+      // Declarative-only OSS catalog: 19 instruction skills.
+      expect(SKILLS.length).toBe(19);
     });
 
     test("all skills have required fields", () => {
@@ -76,9 +77,15 @@ describe("registry", () => {
       expect(unique.size).toBe(CATEGORIES.length);
     });
 
-    test("every category has at least one skill", () => {
-      for (const category of CATEGORIES) {
-        const skills = getSkillsByCategory(category);
+    test("every category used by a shipped skill resolves to those skills", () => {
+      // The declarative-only catalog populates only a subset of CATEGORIES (10 are
+      // intentionally empty so a restored dev skill drops back into its category).
+      // Assert the invariant that still holds: every category a skill claims
+      // resolves back to at least that skill.
+      const usedCategories = new Set(SKILLS.map((skill) => skill.category));
+      expect(usedCategories.size).toBeGreaterThan(0);
+      for (const category of usedCategories) {
+        const skills = getSkillsByCategory(category as Category);
         expect(skills.length).toBeGreaterThan(0);
       }
     });
@@ -98,9 +105,9 @@ describe("registry", () => {
     });
 
     test("finds skill with exact name match", () => {
-      const skill = getSkill("logo-design");
+      const skill = getSkill("brand-kit");
       expect(skill).toBeDefined();
-      expect(skill!.name).toBe("logo-design");
+      expect(skill!.name).toBe("brand-kit");
     });
   });
 
@@ -149,12 +156,13 @@ describe("registry", () => {
     });
 
     test("finds skills by description", () => {
-      const results = searchSkills("invoice");
+      // "clusters" appears only in customer-feedback-report's description.
+      const results = searchSkills("clusters");
       expect(results.length).toBeGreaterThanOrEqual(1);
     });
 
     test("finds skills by tag", () => {
-      const results = searchSkills("pdf");
+      const results = searchSkills("report");
       expect(results.length).toBeGreaterThanOrEqual(1);
     });
 
@@ -174,9 +182,9 @@ describe("registry", () => {
       expect(results.length).toBeGreaterThan(5);
     });
 
-    test('fuzzy match: "wrte" finds "write" (edit distance 1 for a short word)', () => {
-      const results = searchSkills("wrte");
-      expect(results.some((s) => s.name === "write" || s.tags.includes("write"))).toBe(true);
+    test('fuzzy match: "prosal" finds "proposal" (edit distance 1)', () => {
+      const results = searchSkills("prosal");
+      expect(results.some((s) => s.name === "proposal-pack" || s.tags.includes("proposal"))).toBe(true);
     });
 
     test('fuzzy match: "emal" finds skills related to "email" (edit distance 1)', () => {
@@ -191,9 +199,9 @@ describe("registry", () => {
       ).toBe(true);
     });
 
-    test('fuzzy match: "depl" prefix-matches "deploy"', () => {
-      const results = searchSkills("depl");
-      expect(results.some((s) => s.name === "deploy")).toBe(true);
+    test('fuzzy match: "prop" prefix-matches "proposal-pack"', () => {
+      const results = searchSkills("prop");
+      expect(results.some((s) => s.name === "proposal-pack")).toBe(true);
     });
   });
 
@@ -214,8 +222,8 @@ describe("registry", () => {
     });
 
     test("supports partial tag match", () => {
-      // "gen" should match tags like "generation", "generate", etc.
-      const results = getSkillsByTag("gen");
+      // "mark" should match tags like "marketing", "market-research", etc.
+      const results = getSkillsByTag("mark");
       expect(results.length).toBeGreaterThan(0);
     });
 

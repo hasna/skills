@@ -56,16 +56,16 @@ describe("registry sync artifact", () => {
 
   test("includes docs, requirements, validation, and provenance by default", () => {
     const artifact = withCleanHome(() => createRegistrySyncArtifact({ profile: "basic" }));
-    const image = artifact.skills.find((skill) => skill.name === "pdf-to-markdown");
+    const image = artifact.skills.find((skill) => skill.name === "market-research-report");
 
     expect(image).toBeDefined();
     expect(image?.source).toMatchObject({
       packageName: "@hasna/skills",
       packageVersion: pkg.version,
       repository: "hasna/skills",
-      directory: "skills/pdf-to-markdown",
+      directory: "skills/market-research-report",
     });
-    expect(image?.docs?.best).toContain("Convert");
+    expect(image?.docs?.best).toContain("Market Research");
     expect(Array.isArray(image?.requirements?.envVars)).toBe(true);
     expect(image?.validation?.valid).toBe(true);
     expect(artifact.summary.invalidSkillCount).toBe(0);

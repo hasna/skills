@@ -285,13 +285,9 @@ const rawScanFindings = scanFiles(absoluteScanTargets, (abs) => packRelativeByAb
 
 // Documented, audited exceptions. Each entry is matched EXACTLY on (file, ruleId);
 // it can never suppress a different file or rule. Keep this list minimal.
-const scanAllowlist: ScanAllowlistEntry[] = [
-  {
-    file: "skills/security-audit/src/index.ts",
-    ruleId: "private-key-block",
-    reason: "Detection regex literal inside the security-audit scanner skill, not a real private key.",
-  },
-];
+// Empty: the declarative-only OSS catalog ships no scanner source that embeds a
+// detection-regex literal, so there is nothing to allowlist.
+const scanAllowlist: ScanAllowlistEntry[] = [];
 
 const scanFindings = applyAllowlist(rawScanFindings, scanAllowlist);
 

@@ -119,9 +119,12 @@ describe("public package boundary", () => {
 
 
 
-  test("does not strip free local skill source from the packed public package", () => {
+  test("does not strip shipped skill content from the packed public package", () => {
+    // The declarative-only catalog ships SKILL.md prose, not src/. Guard that the
+    // package.json files[] negations do not accidentally strip a shipped skill's
+    // deliverable. (catalog-runnable.test.ts covers every skill; this pins one.)
     const files = readPackedFiles();
-    expect(files).toContain("skills/brand-style-guide/src/index.ts");
+    expect(files).toContain("skills/brand-kit/SKILL.md");
   });
 
   test("keeps legacy service server and cloud scaffolds out of the public package", () => {

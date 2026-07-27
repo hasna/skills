@@ -82,13 +82,13 @@ describe("reusable skills engine contract", () => {
   });
 
   test("keeps bundled per-skill install surfaces MCP-only", () => {
+    // The shared install surface lives in skills/_common. (The declarative-only
+    // catalog ships no per-skill executable install scripts — those were archived
+    // with the executable skills — so _common is the whole surface to police.)
     const files = [
       "skills/_common/installer.ts",
       "skills/_common/skill-install.ts",
       "skills/_common/install.sh",
-      "skills/npmpublish/src/index.ts",
-      "skills/npmpublish/README.md",
-      "skills/npmpublish/CLAUDE.md",
     ];
 
     for (const file of files) {

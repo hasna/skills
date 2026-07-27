@@ -101,14 +101,14 @@ describe("CLI tags and brief output", () => {
     });
 
     test("returns JSON array filtered by tag", async () => {
-      const { stdout, exitCode } = await runCli(["list", "--tags", "api", "--all", "--json"]);
+      const { stdout, exitCode } = await runCli(["list", "--tags", "marketing", "--all", "--json"]);
       expect(exitCode).toBe(0);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
       expect(data.length).toBeGreaterThan(0);
-      // Every returned skill must have the "api" tag
+      // Every returned skill must have the "marketing" tag
       for (const s of data) {
-        expect(s.tags.map((t: string) => t.toLowerCase())).toContain("api");
+        expect(s.tags.map((t: string) => t.toLowerCase())).toContain("marketing");
       }
     });
 
@@ -150,7 +150,7 @@ describe("CLI tags and brief output", () => {
 
   describe("search --tags", () => {
     test("filters search results by tag", async () => {
-      const { stdout, exitCode } = await runCli(["search", "logo-design", "--tags", "api"]);
+      const { stdout, exitCode } = await runCli(["search", "brand-kit", "--tags", "api"]);
       expect(exitCode).toBe(0);
       // Either finds matching results or says no results found
       const hasResults = stdout.includes("Found") || stdout.includes("No skills found");
@@ -205,18 +205,18 @@ describe("CLI tags and brief output", () => {
     }, SLOW_TEST_TIMEOUT);
 
     test("list --brief with --category shows compact results", async () => {
-      const { stdout, exitCode } = await runCli(["list", "--brief", "--category", "Health & Wellness", "--all"]);
+      const { stdout, exitCode } = await runCli(["list", "--brief", "--category", "Business & Marketing", "--all"]);
       expect(exitCode).toBe(0);
       const lines = stdout.trim().split("\n").filter(Boolean);
       expect(lines.length).toBeGreaterThan(0);
       for (const line of lines) {
         expect(line).toContain(" \u2014 ");
-        expect(line).toContain("[Health & Wellness]");
+        expect(line).toContain("[Business & Marketing]");
       }
     }, SLOW_TEST_TIMEOUT);
 
     test("list --brief with --tags shows compact results", async () => {
-      const { stdout, exitCode } = await runCli(["list", "--brief", "--tags", "api", "--all"]);
+      const { stdout, exitCode } = await runCli(["list", "--brief", "--tags", "marketing", "--all"]);
       expect(exitCode).toBe(0);
       const lines = stdout.trim().split("\n").filter(Boolean);
       expect(lines.length).toBeGreaterThan(0);
@@ -260,29 +260,29 @@ describe("CLI tags and brief output", () => {
     });
 
     test("info image --brief shows single line", async () => {
-      const { stdout, exitCode } = await runCli(["info", "logo-design", "--brief"]);
+      const { stdout, exitCode } = await runCli(["info", "brand-kit", "--brief"]);
       expect(exitCode).toBe(0);
       const lines = stdout.trim().split("\n").filter(Boolean);
       expect(lines.length).toBe(1);
-      expect(lines[0]).toContain("logo-design");
+      expect(lines[0]).toContain("brand-kit");
       expect(lines[0]).toContain(" \u2014 ");
       expect(lines[0]).toContain("[");
       expect(lines[0]).toContain("(tags:");
     });
 
     test("info --brief output has fewer lines than default info output", async () => {
-      const { stdout: brief } = await runCli(["info", "logo-design", "--brief"]);
-      const { stdout: normal } = await runCli(["info", "logo-design"]);
+      const { stdout: brief } = await runCli(["info", "brand-kit", "--brief"]);
+      const { stdout: normal } = await runCli(["info", "brand-kit"]);
       const briefLines = brief.trim().split("\n").filter(Boolean).length;
       const normalLines = normal.trim().split("\n").filter(Boolean).length;
       expect(briefLines).toBeLessThan(normalLines);
     });
 
     test("info --brief --json uses json (--json wins)", async () => {
-      const { stdout, exitCode } = await runCli(["info", "logo-design", "--brief", "--json"]);
+      const { stdout, exitCode } = await runCli(["info", "brand-kit", "--brief", "--json"]);
       expect(exitCode).toBe(0);
       const data = JSON.parse(stdout);
-      expect(data.name).toBe("logo-design");
+      expect(data.name).toBe("brand-kit");
     });
   });
 

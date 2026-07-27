@@ -87,9 +87,12 @@ describe("every catalog entry is runnable without a vendor service (R2)", () => 
   // Anti-vacuity for the whole file. Every assertion below iterates one of these
   // sets; an empty catalog would turn all of them green while proving nothing.
   test("the catalog is non-empty and every entry is classified", () => {
-    expect(skillDirs.length).toBeGreaterThan(200);
-    expect(instructionSkills.length).toBeGreaterThan(0);
-    expect(executableSkills.length).toBeGreaterThan(0);
+    // Declarative-only OSS catalog: 19 shipped skills, all instruction-kind, zero
+    // executable. The executable-skill guards below still exist so a restored dev
+    // skill would be checked, but currently have no subject.
+    expect(skillDirs.length).toBe(19);
+    expect(instructionSkills.length).toBe(19);
+    expect(executableSkills.length).toBe(0);
     expect(instructionSkills.length + executableSkills.length).toBe(skillDirs.length);
   });
 
@@ -120,7 +123,10 @@ describe("the published package carries what the catalog promises", () => {
   const packedSet = new Set(packed);
 
   test("packs a non-trivial file list", () => {
-    expect(packed.length).toBeGreaterThan(500);
+    // Declarative-only catalog: ~48 skill files (19 skills + _common) plus docs,
+    // migrations, README, and LICENSE. Floored well below the real count so it
+    // stays anti-vacuous without pinning an exact number.
+    expect(packed.length).toBeGreaterThan(40);
   });
 
   // Inverts the retired "hosted src is excluded" guard. `files` is
@@ -171,11 +177,12 @@ describe("BYO-key skills declare their credentials and ship none", () => {
     if (read.size > 0) byoKeySkills.set(slug, { read, documented });
   }
 
-  // Replaces the retired banned-strings guard, turned around: mentioning a
-  // provider variable is now REQUIRED rather than forbidden. Without this
-  // assertion the guard family would have no subject at all.
-  test("at least one skill is BYO-key, so this guard is not vacuous", () => {
-    expect([...byoKeySkills.keys()].length).toBeGreaterThan(0);
+  // The declarative-only catalog reads no provider credential at all — every
+  // shipped skill is prose with no src/ to call process.env. So the BYO-key set is
+  // empty by construction. The guard below stays wired (a restored executable skill
+  // would repopulate the set), but its current, asserted subject is emptiness.
+  test("the declarative catalog reads no provider credential", () => {
+    expect([...byoKeySkills.keys()].length).toBe(0);
   });
 
   // Skills converted from hosted metadata by the R2 series. These are held to
@@ -207,7 +214,8 @@ describe("BYO-key skills declare their credentials and ship none", () => {
   // skills predate this change and read a provider credential without naming it
   // in their own docs. The count may only go DOWN; a new undocumented BYO-key
   // skill fails this immediately.
-  const PREEXISTING_UNDOCUMENTED_LIMIT = 131;
+  // Declarative-only catalog: no skill reads a credential, so the backlog is empty.
+  const PREEXISTING_UNDOCUMENTED_LIMIT = 0;
 
   test("the pre-existing undocumented-credential backlog does not grow", () => {
     expect(undocumentedPairs().length).toBeLessThanOrEqual(PREEXISTING_UNDOCUMENTED_LIMIT);
@@ -242,11 +250,9 @@ describe("BYO-key skills declare their credentials and ship none", () => {
       /\bAKIA[A-Z0-9]{16}\b/,
       /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/,
     ];
-    const allowlist = new Set([
-      // Detection regex literal inside the security-audit scanner skill, not a
-      // real private key. Mirrors the audited exception in release-guard.ts.
-      "skills/security-audit/src/index.ts",
-    ]);
+    // No allowlist needed: the declarative-only catalog ships no scanner source
+    // that embeds a detection-regex literal. Mirrors release-guard.ts.
+    const allowlist = new Set<string>();
     const leaks: string[] = [];
     for (const path of getPackedFiles(REPO_ROOT)) {
       if (path.startsWith("dist/") || path.startsWith("bin/")) continue;

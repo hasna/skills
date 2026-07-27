@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import {
@@ -20,28 +20,60 @@ useDefaultTestTimeout();
 
 let testDir: string;
 
+// The OSS catalog is declarative-only (every shipped skill is kind: "instruction"
+// with no bin, no src/, and no provider credentials). Tests that need an
+// executable/BYO-key skill shape build an isolated fixture under a temp
+// $HASNA_SKILLS_DIR/custom/<name>/ instead of leaning on a bundled skill.
+let fixtureRoot: string | undefined;
+let savedSkillsDir: string | undefined;
+
+function customSkill(
+  name: string,
+  files: { pkg?: unknown; skillMd?: string; readme?: string; claudeMd?: string },
+): void {
+  if (fixtureRoot === undefined) {
+    savedSkillsDir = process.env.HASNA_SKILLS_DIR;
+    fixtureRoot = mkdtempSync(join(tmpdir(), "skillinfo-fixture-"));
+    process.env.HASNA_SKILLS_DIR = fixtureRoot;
+  }
+  const dir = join(fixtureRoot, "custom", name);
+  mkdirSync(dir, { recursive: true });
+  if (files.pkg !== undefined) writeFileSync(join(dir, "package.json"), JSON.stringify(files.pkg, null, 2));
+  if (files.skillMd !== undefined) writeFileSync(join(dir, "SKILL.md"), files.skillMd);
+  if (files.readme !== undefined) writeFileSync(join(dir, "README.md"), files.readme);
+  if (files.claudeMd !== undefined) writeFileSync(join(dir, "CLAUDE.md"), files.claudeMd);
+}
+
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "skillinfo-test-"));
 });
 
 afterEach(() => {
-  const { rmSync } = require("fs");
   rmSync(testDir, { recursive: true, force: true });
+  if (fixtureRoot !== undefined) {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+    if (savedSkillsDir === undefined) delete process.env.HASNA_SKILLS_DIR;
+    else process.env.HASNA_SKILLS_DIR = savedSkillsDir;
+    fixtureRoot = undefined;
+    savedSkillsDir = undefined;
+  }
 });
 
 describe("skillinfo", () => {
   describe("getSkillDocs", () => {
     test("returns docs for skill with SKILL.md", () => {
-      const docs = getSkillDocs("logo-design");
+      const docs = getSkillDocs("brand-kit");
       expect(docs).not.toBeNull();
       expect(docs!.skillMd).toBeTruthy();
-      expect(docs!.skillMd).toContain("Logo Design");
+      expect(docs!.skillMd).toContain("Brand Kit");
     });
 
     test("returns docs for skill with CLAUDE.md only", () => {
-      const docs = getSkillDocs("apidocs");
+      customSkill("claude-only-fixture", { claudeMd: "# Claude Only Fixture\n\nGuidance body.\n" });
+      const docs = getSkillDocs("claude-only-fixture");
       expect(docs).not.toBeNull();
       expect(docs!.claudeMd).toBeTruthy();
+      expect(docs!.skillMd).toBeFalsy();
     });
 
     test("returns null for nonexistent skill", () => {
@@ -50,25 +82,30 @@ describe("skillinfo", () => {
     });
 
     test("returns null fields for missing doc files", () => {
-      const docs = getSkillDocs("scaffold-project");
+      customSkill("skillmd-only-fixture", {
+        skillMd: "---\nname: skillmd-only-fixture\ndescription: Fixture with only SKILL.md.\n---\n# Skillmd Only\n",
+      });
+      const docs = getSkillDocs("skillmd-only-fixture");
       expect(docs).not.toBeNull();
-      // At least one doc exists
-      const hasAny = docs!.skillMd || docs!.readme || docs!.claudeMd;
-      // scaffold-project has CLAUDE.md at minimum
-      expect(docs!.claudeMd).toBeTruthy();
+      expect(docs!.skillMd).toBeTruthy();
+      // README.md and CLAUDE.md are absent -> null fields.
+      expect(docs!.readme).toBeFalsy();
+      expect(docs!.claudeMd).toBeFalsy();
     });
   });
 
   describe("getSkillBestDoc", () => {
     test("returns SKILL.md when available", () => {
-      const doc = getSkillBestDoc("logo-design");
+      const doc = getSkillBestDoc("brand-kit");
       expect(doc).toBeTruthy();
-      expect(doc).toContain("Logo Design");
+      expect(doc).toContain("Brand Kit");
     });
 
     test("falls back to CLAUDE.md", () => {
-      const doc = getSkillBestDoc("apidocs");
+      customSkill("claude-fallback-fixture", { claudeMd: "# Claude Fallback\n\nBody.\n" });
+      const doc = getSkillBestDoc("claude-fallback-fixture");
       expect(doc).toBeTruthy();
+      expect(doc).toContain("Claude Fallback");
     });
 
     test("returns null for nonexistent skill", () => {
@@ -79,7 +116,11 @@ describe("skillinfo", () => {
 
   describe("getSkillRequirements", () => {
     test("surfaces the provider key a BYO-key skill actually reads", () => {
-      const reqs = getSkillRequirements("audio-transcript-pack");
+      customSkill("byo-key-fixture", {
+        pkg: { name: "byo-key-fixture", version: "0.1.0" },
+        skillMd: "---\nname: byo-key-fixture\ndescription: Reads a provider key.\n---\n# BYO\n\nSet `OPENAI_API_KEY`.\n",
+      });
+      const reqs = getSkillRequirements("byo-key-fixture");
       expect(reqs).not.toBeNull();
       expect(reqs!.envVars).not.toContain("SKILLS_API_KEY");
       expect(reqs!.envVars).not.toContain("SKILL_API_KEY");
@@ -90,16 +131,20 @@ describe("skillinfo", () => {
     });
 
     test("preserves provider API keys for free local skills", () => {
-      const reqs = getSkillRequirements("brand-style-guide");
+      customSkill("free-local-fixture", {
+        pkg: { name: "free-local-fixture", version: "0.1.0" },
+        skillMd: "---\nname: free-local-fixture\ndescription: Free local skill.\n---\n# Free\n\nRequires `OPENAI_API_KEY`.\n",
+      });
+      const reqs = getSkillRequirements("free-local-fixture");
       expect(reqs).not.toBeNull();
       expect(reqs!.envVars).toContain("OPENAI_API_KEY");
       expect(reqs!.envVars).not.toContain("SKILLS_API_KEY");
     });
 
-    test("extracts CLI command from package.json", () => {
-      const reqs = getSkillRequirements("audio-transcript-pack");
+    test("extracts CLI command from the registry", () => {
+      const reqs = getSkillRequirements("brand-kit");
       expect(reqs).not.toBeNull();
-      expect(reqs!.cliCommand).toBe("skills run audio-transcript-pack");
+      expect(reqs!.cliCommand).toBe("skills run brand-kit");
     });
 
     test("extracts CLI command for a hosted report skill", () => {
@@ -114,15 +159,25 @@ describe("skillinfo", () => {
     });
 
     test("returns sorted env vars", () => {
-      const reqs = getSkillRequirements("audio-transcript-pack");
+      customSkill("sorted-env-fixture", {
+        pkg: { name: "sorted-env-fixture", version: "0.1.0" },
+        skillMd:
+          "---\nname: sorted-env-fixture\ndescription: Reads two keys.\n---\n# Sorted\n\nSet `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`.\n",
+      });
+      const reqs = getSkillRequirements("sorted-env-fixture");
       expect(reqs).not.toBeNull();
       const vars = reqs!.envVars;
+      expect(vars.length).toBeGreaterThanOrEqual(2);
       const sorted = [...vars].sort();
       expect(vars).toEqual(sorted);
     });
 
     test("extracts dependencies from package.json", () => {
-      const reqs = getSkillRequirements("read-csv");
+      customSkill("deps-fixture", {
+        pkg: { name: "deps-fixture", version: "0.1.0", dependencies: { "csv-parse": "^5.0.0" } },
+        skillMd: "---\nname: deps-fixture\ndescription: Declares a dependency.\n---\n# Deps\n",
+      });
+      const reqs = getSkillRequirements("deps-fixture");
       expect(reqs).not.toBeNull();
       expect(reqs!.dependencies).toHaveProperty("csv-parse");
     });
@@ -131,8 +186,8 @@ describe("skillinfo", () => {
   describe("getSkillDependencyStatus", () => {
     // Regression: doctor/test previously computed readiness only from env vars
     // and system deps, never verifying that a skill's npm dependencies were
-    // installed — so a runnable skill like `excel` (which needs `xlsx`) could
-    // report a false-green readiness while being unable to run at all.
+    // installed — so a runnable skill that needs an npm package could report a
+    // false-green readiness while being unable to run at all.
     let prevSkillsDir: string | undefined;
     let skillsRoot: string;
 
@@ -143,7 +198,6 @@ describe("skillinfo", () => {
     });
 
     afterEach(() => {
-      const { rmSync } = require("fs");
       if (prevSkillsDir === undefined) delete process.env.HASNA_SKILLS_DIR;
       else process.env.HASNA_SKILLS_DIR = prevSkillsDir;
       rmSync(skillsRoot, { recursive: true, force: true });
@@ -221,22 +275,34 @@ describe("skillinfo", () => {
     });
 
     test("generates env example from pinned skills", () => {
-      installSkill("audio-transcript-pack", { targetDir: testDir });
+      customSkill("env-example-fixture", {
+        pkg: { name: "env-example-fixture", version: "0.1.0" },
+        skillMd: "---\nname: env-example-fixture\ndescription: BYO-key fixture.\n---\n# Env\n\nSet `OPENAI_API_KEY`.\n",
+      });
+      installSkill("env-example-fixture", { targetDir: testDir });
       const result = generateEnvExample(testDir);
       expect(result).toContain("OPENAI_API_KEY");
       expect(result).not.toContain("SKILL_API_KEY");
-      expect(result).toContain("# Used by: audio-transcript-pack");
+      expect(result).toContain("# Used by: env-example-fixture");
     });
 
     test("includes header comments", () => {
-      installSkill("audio-transcript-pack", { targetDir: testDir });
+      customSkill("env-header-fixture", {
+        pkg: { name: "env-header-fixture", version: "0.1.0" },
+        skillMd: "---\nname: env-header-fixture\ndescription: BYO-key fixture.\n---\n# Env\n\nSet `OPENAI_API_KEY`.\n",
+      });
+      installSkill("env-header-fixture", { targetDir: testDir });
       const result = generateEnvExample(testDir);
       expect(result).toContain("# Environment variables for pinned skills");
       expect(result).toContain("# Auto-generated by: skills init");
     });
 
     test("groups by provider prefix", () => {
-      installSkill("audio-transcript-pack", { targetDir: testDir });
+      customSkill("env-group-fixture", {
+        pkg: { name: "env-group-fixture", version: "0.1.0" },
+        skillMd: "---\nname: env-group-fixture\ndescription: BYO-key fixture.\n---\n# Env\n\nSet `OPENAI_API_KEY`.\n",
+      });
+      installSkill("env-group-fixture", { targetDir: testDir });
       const result = generateEnvExample(testDir);
       expect(result).toContain("# OPENAI");
       expect(result).not.toContain("# GEMINI");
@@ -254,10 +320,10 @@ describe("skillinfo", () => {
     });
 
     test("generates SKILL.md for a skill with existing SKILL.md source", () => {
-      // logo-design has a SKILL.md, but generateSkillMd still works
-      const md = generateSkillMd("logo-design");
+      // brand-kit ships a SKILL.md, but generateSkillMd still works
+      const md = generateSkillMd("brand-kit");
       expect(md).not.toBeNull();
-      expect(md!).toContain("name: logo-design");
+      expect(md!).toContain("name: brand-kit");
     });
 
     test("includes category and tags", () => {
@@ -267,11 +333,12 @@ describe("skillinfo", () => {
       expect(md!).toContain("Tags:");
     });
 
-    test("includes CLI section for skills with bin entry", () => {
-      const md = generateSkillMd("read-csv");
+    test("omits the CLI section for an instruction skill (no bin entry)", () => {
+      // Declarative catalog: shipped skills carry no bin, so generateSkillMd emits
+      // no `## CLI` block. (The block is added only when package.json declares a bin.)
+      const md = generateSkillMd("market-research-report");
       expect(md).not.toBeNull();
-      expect(md!).toContain("## CLI");
-      expect(md!).toContain("skills run read-csv");
+      expect(md!).not.toContain("## CLI");
     });
 
     test("returns null for nonexistent skill", () => {
@@ -279,12 +346,10 @@ describe("skillinfo", () => {
       expect(md).toBeNull();
     });
 
-    test("uses CLAUDE.md content when README.md is absent", () => {
-      // academic-journal-matcher has CLAUDE.md but no README.md and no SKILL.md
-      const md = generateSkillMd("academic-journal-matcher");
+    test("builds a non-trivial document from a shipped skill's metadata and docs", () => {
+      const md = generateSkillMd("blog-article");
       expect(md).not.toBeNull();
-      expect(md!).toContain("name: academic-journal-matcher");
-      // Should include content from CLAUDE.md
+      expect(md!).toContain("name: blog-article");
       expect(md!.length).toBeGreaterThan(100);
     });
 
@@ -306,9 +371,9 @@ describe("skillinfo", () => {
       const result = detectProjectSkills(testDir);
       expect(result.detected).toEqual([]);
       const names = result.recommended.map((s) => s.name);
-      expect(names).toContain("implementation-plan");
-      expect(names).toContain("write");
       expect(names).toContain("market-research-report");
+      expect(names).toContain("repo-onboarding-report");
+      expect(names).toContain("blog-article");
     });
 
     test("detects react and recommends frontend skills", () => {
@@ -320,15 +385,13 @@ describe("skillinfo", () => {
       expect(result.detected).toContain("react");
       expect(result.detected).toContain("typescript");
       const names = result.recommended.map((s) => s.name);
-      expect(names).toContain("logo-design");
-      expect(names).toContain("generate-favicon");
-      expect(names).toContain("seo-brief-builder");
-      expect(names).toContain("scaffold-project");
-      expect(names).toContain("deploy");
+      expect(names).toContain("landing-page-pack");
+      expect(names).toContain("seo-content-pack");
+      expect(names).toContain("brand-kit");
       // Always included
-      expect(names).toContain("implementation-plan");
-      expect(names).toContain("write");
       expect(names).toContain("market-research-report");
+      expect(names).toContain("repo-onboarding-report");
+      expect(names).toContain("blog-article");
     });
 
     test("detects express and recommends backend skills", () => {
@@ -339,8 +402,8 @@ describe("skillinfo", () => {
       const result = detectProjectSkills(testDir);
       expect(result.detected).toContain("express");
       const names = result.recommended.map((s) => s.name);
-      expect(names).toContain("api-test-suite");
-      expect(names).toContain("apidocs");
+      expect(names).toContain("test-suite-generator");
+      expect(names).toContain("security-audit-report");
     });
 
     test("detects anthropic SDK and recommends AI skills", () => {
@@ -355,7 +418,7 @@ describe("skillinfo", () => {
       expect(names).toContain("seo-content-pack");
     });
 
-    test("detects stripe and recommends invoice skill", () => {
+    test("detects stripe and recommends a sales artifact skill", () => {
       writeFileSync(
         join(testDir, "package.json"),
         JSON.stringify({ dependencies: { stripe: "^14.0.0" } })
@@ -363,10 +426,10 @@ describe("skillinfo", () => {
       const result = detectProjectSkills(testDir);
       expect(result.detected).toContain("stripe");
       const names = result.recommended.map((s) => s.name);
-      expect(names).toContain("invoice");
+      expect(names).toContain("proposal-pack");
     });
 
-    test("detects test framework and recommends api-test-suite", () => {
+    test("detects test framework and recommends a test-suite skill", () => {
       writeFileSync(
         join(testDir, "package.json"),
         JSON.stringify({ devDependencies: { vitest: "^1.0.0" } })
@@ -374,7 +437,7 @@ describe("skillinfo", () => {
       const result = detectProjectSkills(testDir);
       expect(result.detected).toContain("vitest");
       const names = result.recommended.map((s) => s.name);
-      expect(names).toContain("api-test-suite");
+      expect(names).toContain("test-suite-generator");
     });
 
     test("returns unique recommended skills with no duplicates", () => {
@@ -416,7 +479,7 @@ describe("skillinfo", () => {
       const result = detectProjectSkills(testDir);
       expect(result.detected).toEqual([]);
       const names = result.recommended.map((s) => s.name);
-      expect(names).toContain("implementation-plan");
+      expect(names).toContain("market-research-report");
     });
   });
 });
