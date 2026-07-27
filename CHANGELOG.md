@@ -31,6 +31,17 @@ All notable changes to this project will be documented in this file.
   push users toward choosing a mode, and there is no longer a choice to make.
 
 ### Added
+- `CLAUDE.md` rewritten to describe the repository as it is, and a guard —
+  `src/lib/claude-md.test.ts` — that re-derives its load-bearing counts from the
+  tree on every run. The previous file had drifted back to roughly the v0.0.x
+  shape: 202 skills where there are 229, 9 MCP tools where there are 38, 2 MCP
+  resources where there are 4, a `dashboard/` directory and four npm scripts that
+  do not exist, a `skill-` filesystem prefix that is gone, and — the most
+  damaging line — the claim that the HTTP server "is not shipped in OSS" while
+  `src/server/` was already shipping three of the five published bins. The guard
+  checks one fixed table and nothing else: rewording the document cannot fail it,
+  but adding a skill, an MCP tool, a bin, or a build step will, and the failure
+  names the row and both numbers.
 - `skills config unset <key>` (and the exported `unsetConfig`). With modes gone,
   "run on this machine" is the absence of a configured `apiUrl`, so there has to
   be a supported way back to that state; previously the only way to express the
