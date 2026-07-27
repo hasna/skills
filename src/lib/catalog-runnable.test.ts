@@ -209,6 +209,26 @@ describe("BYO-key skills declare their credentials and ship none", () => {
     expect(undocumentedPairs().length).toBeLessThanOrEqual(PREEXISTING_UNDOCUMENTED_LIMIT);
   });
 
+  // The other half of the bracket, and what makes the ceiling tamper-evident.
+  // The test above only stops the backlog GROWING; on its own it would let the
+  // constant be quietly raised, or let real progress go unrecorded. Pinning the
+  // constant to the true count closes both:
+  //
+  //   - Raising 131 to a larger number does not pass. It fails with
+  //     `expected <constant> to be <actual>` until the constant equals reality,
+  //     so any loosening is an explicit, reviewable edit rather than a silent one.
+  //   - Fixing skills is not enough either. Dropping BELOW the ceiling fails and
+  //     names the new number, so the constant must be lowered in the same diff —
+  //     which makes the improvement visible and permanently locks it in.
+  //
+  // Anti-vacuity: an equality against a count derived at test time from actual
+  // source and docs cannot pass vacuously, and the guard above asserts the
+  // derived set has a subject at all.
+  test("the frozen backlog constant matches reality", () => {
+    const actual = undocumentedPairs().length;
+    expect(PREEXISTING_UNDOCUMENTED_LIMIT).toBe(actual);
+  });
+
   // The rule the banned-strings guard was a proxy for: the OSS must ship no
   // credential VALUE. Asserted against the packed tarball, not the repo.
   test("the packed package ships no credential value", () => {
