@@ -55,6 +55,7 @@ const EXPECTED_TABLES = [
   "skills_approvals",
   "skills_artifacts",
   "skills_audit_events",
+  "skills_bundles",
   "skills_registry",
   "skills_run_logs",
   "skills_runs",
@@ -118,13 +119,19 @@ describe("migration set parity", () => {
     }
   });
 
-  test("every CHECK-ed status domain matches across dialects, and runs matches the TypeScript union", () => {
-    const postgres = statusDomains(readDialect("postgres"));
-    const sqlite = statusDomains(readDialect("sqlite"));
-    // Two of them today: skills_runs and skills_approvals.
-    expect(postgres.length).toBeGreaterThan(1);
+  test("every CHECK-ed value domain matches across dialects, and runs matches the TypeScript union", () => {
+    const postgres = checkDomains(readDialect("postgres"));
+    const sqlite = checkDomains(readDialect("sqlite"));
+    // Three of them today: skills_runs.status, skills_approvals.status,
+    // skills_registry.kind.
+    expect(postgres.length).toBeGreaterThan(2);
     expect(sqlite).toEqual(postgres);
-    expect(postgres[0]).toEqual([...SERVER_RUN_STATUSES].sort());
+    expect(postgres[0]).toEqual(`status:${[...SERVER_RUN_STATUSES].sort().join(",")}`);
+    // A CHECK on any column, not only `status`. The first version of this matched
+    // `CHECK (status IN ...)` literally, which meant the `kind` domain added by 0002
+    // could have been spelled differently in the two dialects with nothing to notice:
+    // neither PRAGMA introspection nor the Postgres column parser looks at CHECKs.
+    expect(postgres).toContain(`kind:${["executable", "instruction"].join(",")}`);
   });
 
   test("literal column defaults match, so a row means the same thing on either backend", () => {
@@ -144,16 +151,67 @@ function readDialect(dialect: (typeof MIGRATION_DIALECTS)[number]): string {
 }
 
 /**
- * Every `CHECK (status IN (...))` domain in a dialect's DDL, keyed by position.
+ * Every `CHECK (<column> IN (...))` domain in a dialect's DDL, in document order, as
+ * `column:sorted,values`.
  *
- * Global regex, because there are two of them: skills_runs and skills_approvals. A
- * non-global match compared only the first, leaving the approvals status domain free to
- * diverge between dialects unnoticed.
+ * Global regex, because there are several: skills_runs.status, skills_approvals.status,
+ * and skills_registry.kind. A non-global match compared only the first, leaving every
+ * later domain free to diverge between dialects unnoticed. The column name is part of the
+ * key so that a domain moving from one column to another is a difference rather than a
+ * coincidence of ordering.
+ *
+ * This is the only guard covering CHECK constraints at all: PRAGMA introspection does not
+ * report them, and parsePostgresSchema() skips them.
  */
-function statusDomains(sql: string): string[][] {
-  const matches = [...sql.matchAll(/CHECK\s*\(\s*status\s+IN\s*\(([^)]*)\)/gi)];
-  if (matches.length === 0) throw new Error("no CHECK (status IN (...)) constraint found");
-  return matches.map((match) => [...match[1]!.matchAll(/'([^']+)'/g)].map((m) => m[1]!).sort());
+function checkDomains(sql: string): string[] {
+  const matches = [...stripSqlComments(sql).matchAll(/CHECK\s*\(\s*(\w+)\s+IN\s*\(([^)]*)\)/gi)];
+  if (matches.length === 0) throw new Error("no CHECK (<column> IN (...)) constraint found");
+  return matches.map((match) => `${match[1]!}:${[...match[2]!.matchAll(/'([^']+)'/g)].map((m) => m[1]!).sort().join(",")}`);
+}
+
+/**
+ * Remove `--` line comments, leaving anything inside a single-quoted literal alone.
+ *
+ * Not cosmetic. Without it every prose line inside a CREATE TABLE body was split on its
+ * commas by splitTopLevel() and each fragment parsed as a column definition, so
+ * 0002's comments produced phantom Postgres columns named `--`, `and`, `kept`, and
+ * `which` - and, worse, swallowed the two real columns whose definitions followed a
+ * comment line containing an unbalanced `(`. The whole comparison silently described a
+ * schema neither dialect has. 0001 happened to carry no in-body comments, which is the
+ * only reason this went unnoticed.
+ */
+function stripSqlComments(sql: string): string {
+  let out = "";
+  let quoted = false;
+  // Double-quoted identifiers are tracked separately from single-quoted literals. Sharing
+  // one flag meant a legal identifier containing an apostrophe - CREATE TABLE "it's" - hit
+  // the `'` branch, left the parser permanently "inside a literal", and preserved every
+  // `--` comment in the rest of the file: the exact phantom-column failure this function
+  // exists to prevent, reintroduced by a table name.
+  let identifier = false;
+  for (let i = 0; i < sql.length; i += 1) {
+    const char = sql[i]!;
+    if (char === "'" && !identifier) quoted = !quoted;
+    else if (char === '"' && !quoted) identifier = !identifier;
+    if (!quoted && !identifier && char === "-" && sql[i + 1] === "-") {
+      const newline = sql.indexOf("\n", i);
+      if (newline === -1) break;
+      i = newline;
+      out += "\n";
+      continue;
+    }
+    if (!quoted && !identifier && char === "/" && sql[i + 1] === "*") {
+      // Block comments: without this, `/* CREATE TABLE ghost (x int); */` was parsed as a
+      // real table and the comparison described a schema neither dialect has.
+      const end = sql.indexOf("*/", i + 2);
+      if (end === -1) break;
+      i = end + 1;
+      out += " ";
+      continue;
+    }
+    out += char;
+  }
+  return out;
 }
 
 function foreignKeyKey(column: string, table: string, onDelete: string | null | undefined): string {
@@ -239,14 +297,41 @@ function introspectSqliteSchema(sql: string): Record<string, TableShape> {
  * column count, so a parser that silently degrades fails loudly instead of making the
  * comparisons vacuous.
  */
-function parsePostgresSchema(sql: string): Record<string, TableShape> {
+function parsePostgresSchema(rawSql: string): Record<string, TableShape> {
+  const sql = stripSqlComments(rawSql);
   const shapes: Record<string, TableShape> = {};
 
-  const tablePattern = /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+(\w+)\s*\(/gi;
+  // CREATE TABLE, DROP TABLE, and CREATE UNIQUE INDEX applied in document order.
+  //
+  // Order became load-bearing the moment a second migration existed. The previous version
+  // made two unordered passes - every CREATE TABLE, then every CREATE UNIQUE INDEX - which
+  // is indistinguishable from correct for a single-file schema and wrong for a set: a
+  // table dropped by a later migration stayed in the result, and an index created in 0001
+  // would have been attached to a same-named table recreated in 0002. The SQLite side is
+  // executed, so it has always been ordered; this is the side that had to catch up.
+  const statementPattern = /(CREATE TABLE(?:\s+IF NOT EXISTS)?\s+(\w+)\s*\()|(DROP TABLE(?:\s+IF EXISTS)?\s+(\w+))|(CREATE\s+UNIQUE\s+INDEX(?:\s+IF NOT EXISTS)?\s+\w+\s+ON\s+(\w+)\s*\(([^)]*)\)([^;]*);)/gi;
   let match: RegExpExecArray | null;
-  while ((match = tablePattern.exec(sql))) {
-    const table = match[1]!;
-    const body = extractParenBody(sql, match.index + match[0].length - 1);
+  while ((match = statementPattern.exec(sql))) {
+    if (match[3]) {
+      delete shapes[match[4]!];
+      continue;
+    }
+    if (match[5]) {
+      const table = match[6]!;
+      const shape = shapes[table];
+      if (!shape) throw new Error(`unique index references unknown table ${table}`);
+      const indexColumns = match[7]!.split(",").map((column) => column.trim().replace(/\s+(ASC|DESC)$/i, ""));
+      shape.unique = [...shape.unique, uniqueKey(indexColumns, /\bWHERE\b/i.test(match[8]!))].sort();
+      continue;
+    }
+
+    const table = match[2]!;
+    const openParen = match.index + match[1]!.length - 1;
+    const body = extractParenBody(sql, openParen);
+    // Resume AFTER the table body, not inside it. The regex's lastIndex sits just past the
+    // opening paren, so scanning continued through the columns: a DEFAULT 'DROP TABLE a'
+    // erased table `a` from the map, and a DEFAULT 'CREATE TABLE inner (' invented one.
+    statementPattern.lastIndex = openParen + body.length + 2;
     const columns: string[] = [];
     const notNull: string[] = [];
     let primaryKey: string[] = [];
@@ -303,15 +388,6 @@ function parsePostgresSchema(sql: string): Record<string, TableShape> {
       foreignKeys: foreignKeys.sort(),
       literalDefaults: defaults.sort(),
     };
-  }
-
-  const indexPattern = /CREATE\s+UNIQUE\s+INDEX(?:\s+IF NOT EXISTS)?\s+\w+\s+ON\s+(\w+)\s*\(([^)]*)\)([^;]*);/gi;
-  while ((match = indexPattern.exec(sql))) {
-    const table = match[1]!;
-    const shape = shapes[table];
-    if (!shape) throw new Error(`unique index references unknown table ${table}`);
-    const columns = match[2]!.split(",").map((column) => column.trim().replace(/\s+(ASC|DESC)$/i, ""));
-    shape.unique = [...shape.unique, uniqueKey(columns, /\bWHERE\b/i.test(match[3]!))].sort();
   }
 
   return shapes;

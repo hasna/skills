@@ -161,7 +161,9 @@ console.log(JSON.stringify({ mode, tables }));
     // full migrated schema. A single "database is locked" here is the bug.
     for (const result of results) {
       expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
-      expect(JSON.parse(result.stdout.split("\n").at(-1)!)).toEqual({ mode: "wal", tables: 11 });
+      // 12 since migration 0002 added skills_bundles. The count is asserted rather than
+      // ranged so that a migration silently failing to apply is a failure here.
+      expect(JSON.parse(result.stdout.split("\n").at(-1)!)).toEqual({ mode: "wal", tables: 12 });
     }
   }, 60_000);
 

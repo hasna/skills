@@ -83,6 +83,38 @@ export class RemoteSkillsClient {
     });
   }
 
+  /**
+   * Publish a skill to the configured instance.
+   *
+   * Sent as multipart rather than as JSON with a base64 field. A base64 body would inflate
+   * the bundle by a third and would have to pass through the server's JSON reader, whose
+   * 1 MB cap exists to keep JSON bodies sane; multipart keeps the tarball on its own path
+   * with its own, larger limit.
+   *
+   * Note the deliberate absence of `request()`: that helper pins
+   * `Content-Type: application/json`, and a multipart body whose Content-Type does not
+   * carry the generated boundary is unparseable at the other end.
+   */
+  async publishSkill(manifest: Record<string, unknown>, bundle?: Uint8Array): Promise<Response> {
+    const form = new FormData();
+    form.set("manifest", JSON.stringify(manifest));
+    if (bundle) {
+      form.set("bundle", new Blob([bundle as BlobPart], { type: "application/gzip" }), `${String(manifest.slug ?? "skill")}.tar.gz`);
+    }
+    return fetch(`${this.apiUrl}/api/v1/skills`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${this.apiKey}` },
+      body: form,
+    });
+  }
+
+  async deleteSkill(slug: string): Promise<Response> {
+    return this.request(`/api/v1/skills/${encodeURIComponent(slug)}`, { method: "DELETE" });
+  }
+
+  async downloadSkillBundle(slug: string): Promise<Response> {
+    return this.request(`/api/v1/skills/${encodeURIComponent(slug)}/bundle`, { method: "GET" });
+  }
 }
 
 export function createRemoteSkillsClient(): RemoteSkillsClient | null {

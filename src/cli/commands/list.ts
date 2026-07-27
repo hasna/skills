@@ -13,6 +13,7 @@ import {
   type SkillMeta,
   type SkillRegistryProfile,
 } from "../../lib/registry.js";
+import { mergeSkillRegistryLists } from "../../lib/registry-merge.js";
 import { loadRemoteRegistry } from "../../lib/remote-registry.js";
 import { getInstalledSkills, getInstallMeta } from "../../lib/installer.js";
 import {
@@ -142,10 +143,31 @@ async function writeJson(value: unknown, space?: number) {
   });
 }
 
+/**
+ * The registry a browsing command should show.
+ *
+ * `--remote` used to REPLACE the local registry: `skills list --remote` returned exactly
+ * what the instance served and nothing else, so the bundled corpus and every skill the
+ * operator had written locally disappeared from the listing the moment they pointed the
+ * CLI at their own server. It now MERGES, under the precedence documented in
+ * src/lib/registry-merge.ts: custom > remote > official, "whichever copy this machine
+ * would actually use wins the listing".
+ *
+ * The profile (`--all` vs the curated basic set) applies to the local half only. The
+ * instance's skills are never filtered by it: the basic profile is a hand-written list of
+ * ten bundled names, so applying it to remote entries would drop every published skill
+ * from `skills list --remote` - the same disappearance this change exists to fix.
+ *
+ * A remote failure is still fatal. `--remote` is an explicit request, and silently
+ * returning the local half of a merge the user asked to include the remote half in would
+ * report success for a listing that is missing entries.
+ */
 async function getBrowseRegistry(options: { all?: boolean; remote?: boolean }): Promise<SkillMeta[]> {
-  if (options.remote) return loadRemoteRegistry();
   const profile: SkillRegistryProfile = options.all ? "all" : "basic";
-  return loadRegistryProfile(profile);
+  const local = loadRegistryProfile(profile);
+  if (!options.remote) return local;
+  const remote = await loadRemoteRegistry();
+  return mergeSkillRegistryLists(local, remote);
 }
 
 function registryCategories(registry: SkillMeta[]): string[] {

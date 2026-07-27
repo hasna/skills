@@ -19,16 +19,20 @@ import { dirname, join } from "node:path";
 import { hashApiKey, publicPrincipal } from "./auth.js";
 import { SQLITE_MEMORY_PATH } from "./database-url.js";
 import { resolveMigrationsDir } from "./migrations-dir.js";
-import { nowIso, normalizeLimit, rowToArtifact, rowToLog, rowToRun, runId } from "./rows.js";
+import { nowIso, normalizeLimit, rowToArtifact, rowToLog, rowToRun, rowToSkill, rowToSkillBundle, runId } from "./rows.js";
 import type {
   ApiPrincipal,
   ClaimRunInput,
   CreateRunInput,
+  PublishSkillInput,
   ServerArtifact,
   ServerRunLog,
   ServerRunRecord,
+  ServerSkillBundle,
+  ServerSkillRecord,
   SkillsProductStore,
   StoreBackendInfo,
+  UpdateSkillPatch,
 } from "./types.js";
 
 export interface SqliteStoreOptions {
@@ -417,6 +421,156 @@ export class SqliteSkillsStore implements SkillsProductStore {
       [principal.orgId, id, artifact],
     );
     return row ? rowToArtifact(row) : null;
+  }
+
+  async publishSkill(input: PublishSkillInput): Promise<ServerSkillRecord> {
+    const orgId = input.principal.orgId;
+    const now = nowIso();
+    return this.db.transaction(() => {
+      // Read the outgoing digest before overwriting it, so the bundle it pointed at can
+      // be collected if this republish leaves it referenced by nothing.
+      const previous = this.get("SELECT bundle_sha256 FROM skills_registry WHERE org_id = ? AND slug = ?", [orgId, input.slug]);
+      const previousSha = typeof previous?.bundle_sha256 === "string" ? previous.bundle_sha256 : null;
+
+      if (input.bundle) {
+        // Content-addressed: an identical digest is identical bytes, so re-uploading the
+        // same bundle is a no-op rather than a conflict or a second copy.
+        this.db.run(
+          `INSERT INTO skills_bundles (org_id, sha256, byte_size, content_type, storage_kind, storage_key, body_blob, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (org_id, sha256) DO UPDATE SET
+             byte_size = excluded.byte_size,
+             content_type = excluded.content_type,
+             storage_kind = excluded.storage_kind,
+             storage_key = excluded.storage_key,
+             body_blob = excluded.body_blob`,
+          [
+            orgId,
+            input.bundle.sha256,
+            input.bundle.byteSize,
+            input.bundle.contentType,
+            input.bundle.storageKind,
+            input.bundle.storageKey ?? null,
+            input.bundle.bytes ?? null,
+            now,
+          ],
+        );
+      }
+
+      const row = this.get(
+        `INSERT INTO skills_registry (org_id, slug, display_name, description, category, tags_json, source, kind, version, skill_md,
+                                      bundle_sha256, bundle_byte_size, published_by_user_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (org_id, slug) DO UPDATE SET
+           display_name = excluded.display_name,
+           description = excluded.description,
+           category = excluded.category,
+           tags_json = excluded.tags_json,
+           source = excluded.source,
+           kind = excluded.kind,
+           version = excluded.version,
+           skill_md = excluded.skill_md,
+           -- COALESCE, not a straight assignment. A publish that carries no bundle is a
+           -- metadata update, not an instruction to discard the stored one: the plain
+           -- assignment nulled bundle_sha256 and then handed the old digest to orphan
+           -- collection, so re-publishing metadata over an existing skill deleted its
+           -- tarball and left every client with a 404.
+           bundle_sha256 = COALESCE(excluded.bundle_sha256, skills_registry.bundle_sha256),
+           bundle_byte_size = COALESCE(excluded.bundle_byte_size, skills_registry.bundle_byte_size),
+           published_by_user_id = excluded.published_by_user_id,
+           updated_at = excluded.updated_at
+         RETURNING *`,
+        [
+          orgId,
+          input.slug,
+          input.displayName,
+          input.description,
+          input.category,
+          JSON.stringify(input.tags),
+          input.source,
+          input.kind,
+          input.version ?? null,
+          input.skillMd ?? null,
+          input.bundle?.sha256 ?? null,
+          input.bundle?.byteSize ?? null,
+          input.principal.userId,
+          now,
+          now,
+        ],
+      );
+      // Only when this publish actually replaced the bundle. `input.bundle` being
+      // absent now means "unchanged", so there is nothing superseded to collect.
+      if (previousSha && input.bundle && previousSha !== input.bundle.sha256) this.collectOrphanBundle(orgId, previousSha);
+      return rowToSkill(row!);
+    })();
+  }
+
+  async listSkills(principal: ApiPrincipal): Promise<ServerSkillRecord[]> {
+    return this.all(
+      "SELECT * FROM skills_registry WHERE org_id = ? ORDER BY slug ASC",
+      [principal.orgId],
+    ).map(rowToSkill);
+  }
+
+  async getSkill(principal: ApiPrincipal, slug: string): Promise<ServerSkillRecord | null> {
+    const row = this.get("SELECT * FROM skills_registry WHERE org_id = ? AND slug = ? LIMIT 1", [principal.orgId, slug]);
+    return row ? rowToSkill(row) : null;
+  }
+
+  async updateSkill(principal: ApiPrincipal, slug: string, patch: UpdateSkillPatch): Promise<ServerSkillRecord | null> {
+    const current = await this.getSkill(principal, slug);
+    if (!current) return null;
+    const next = { ...current, ...patch };
+    const row = this.get(
+      `UPDATE skills_registry
+       SET display_name = ?, description = ?, category = ?, tags_json = ?, kind = ?, version = ?, skill_md = ?, updated_at = ?
+       WHERE org_id = ? AND slug = ?
+       RETURNING *`,
+      [
+        next.displayName,
+        next.description,
+        next.category,
+        JSON.stringify(next.tags),
+        next.kind,
+        next.version ?? null,
+        next.skillMd ?? null,
+        nowIso(),
+        principal.orgId,
+        slug,
+      ],
+    );
+    return row ? rowToSkill(row) : null;
+  }
+
+  async deleteSkill(principal: ApiPrincipal, slug: string): Promise<boolean> {
+    return this.db.transaction(() => {
+      const existing = this.get("SELECT bundle_sha256 FROM skills_registry WHERE org_id = ? AND slug = ?", [principal.orgId, slug]);
+      if (!existing) return false;
+      this.db.run("DELETE FROM skills_registry WHERE org_id = ? AND slug = ?", [principal.orgId, slug]);
+      if (typeof existing.bundle_sha256 === "string") this.collectOrphanBundle(principal.orgId, existing.bundle_sha256);
+      return true;
+    })();
+  }
+
+  async getSkillBundle(principal: ApiPrincipal, sha256: string): Promise<ServerSkillBundle | null> {
+    const row = this.get("SELECT * FROM skills_bundles WHERE org_id = ? AND sha256 = ? LIMIT 1", [principal.orgId, sha256]);
+    return row ? rowToSkillBundle(row) : null;
+  }
+
+  /**
+   * Drop a bundle no remaining skill in the org points at.
+   *
+   * The reference count is over skills_registry rather than a stored counter: a counter
+   * would be a second source of truth for something one COUNT(*) answers exactly, and a
+   * drifted counter either leaks blobs forever or deletes a bundle still in use.
+   */
+  private collectOrphanBundle(orgId: string, sha256: string): void {
+    const referenced = this.get(
+      "SELECT 1 AS present FROM skills_registry WHERE org_id = ? AND bundle_sha256 = ? LIMIT 1",
+      [orgId, sha256],
+    );
+    if (referenced) return;
+    this.db.run("DELETE FROM skills_bundles WHERE org_id = ? AND sha256 = ?", [orgId, sha256]);
   }
 
   private get(sql: string, params: unknown[]): Record<string, unknown> | null {

@@ -7,6 +7,17 @@ export interface SkillsServerConfig {
   artifactPrefix: string;
   inlineWorker: boolean;
   requestBodyLimitBytes: number;
+  /**
+   * Cap for a skill bundle upload, separate from requestBodyLimitBytes on purpose.
+   *
+   * requestBodyLimitBytes is 1 MB and guards JSON request bodies, where a megabyte of
+   * JSON is already pathological. A real skill with a references/ folder goes past that
+   * routinely, so publishing needed either a raised general cap - which would also have
+   * raised the ceiling on every JSON endpoint, quietly - or its own. This is the "its
+   * own": POST /api/v1/skills is the only route that reads it, it is checked before the
+   * body is buffered, and the JSON cap is untouched.
+   */
+  skillBundleLimitBytes: number;
   publicBaseUrl: string;
   nodeEnv: string;
   /**
@@ -33,6 +44,7 @@ export function resolveServerConfig(env: Record<string, string | undefined> = pr
     artifactPrefix: normalizePrefix(env.HASNA_SKILLS_S3_PREFIX || env.SKILLS_S3_PREFIX || "skills/artifacts"),
     inlineWorker: env.HASNA_SKILLS_INLINE_WORKER === "1",
     requestBodyLimitBytes: parsePositiveInt(env.HASNA_SKILLS_REQUEST_BODY_LIMIT_BYTES, 1_000_000),
+    skillBundleLimitBytes: parsePositiveInt(env.HASNA_SKILLS_BUNDLE_LIMIT_BYTES, 25_000_000),
     // No vendor default: an operator's server advertises either the origin they
     // configured or its own bound address. It never names someone else's host.
     publicBaseUrl: (env.SKILLS_PUBLIC_BASE_URL || localOrigin(host, port)).replace(/\/+$/, ""),

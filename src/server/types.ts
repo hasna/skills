@@ -1,3 +1,5 @@
+import type { OwnedBytes } from "../lib/skill-bundle.js";
+
 export const SERVER_RUN_STATUSES = [
   "queued",
   "waiting_for_approval",
@@ -68,6 +70,75 @@ export interface ServerArtifact {
   createdAt: string;
 }
 
+/** Where bytes actually live. Same vocabulary as ServerArtifact, same meaning. */
+export type BlobStorageKind = "db" | "s3";
+
+/**
+ * A skill published to this instance by one organization.
+ *
+ * Distinct from `SkillMeta` (src/lib/registry-types.ts), which describes a skill the CLI
+ * knows about from any source. This is the row: it always belongs to an org, and it
+ * always carries the provenance of who put it there.
+ */
+export interface ServerSkillRecord {
+  orgId: string;
+  slug: string;
+  displayName: string;
+  description: string;
+  category: string;
+  tags: string[];
+  source: string;
+  kind: "executable" | "instruction";
+  version?: string;
+  /** The agent-facing document, served verbatim by GET /skills/:slug/skill.md. */
+  skillMd?: string;
+  /** Digest of the stored bundle. Absent for a metadata-only publish. */
+  bundleSha256?: string;
+  bundleByteSize?: number;
+  publishedByUserId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Bundle bytes, addressed by their own digest.
+ *
+ * `bytes` is present only when the bundle is stored in the database (`storageKind: "db"`).
+ * For S3 the row is a pointer and SkillBundleStorage.read() fetches the object - the same
+ * split ServerArtifact makes between `bodyText` and `storageKey`, except that a bundle is
+ * a gzipped tar and so cannot be a string at any layer.
+ */
+export interface ServerSkillBundle {
+  orgId: string;
+  sha256: string;
+  byteSize: number;
+  contentType: string;
+  storageKind: BlobStorageKind;
+  storageKey?: string;
+  bytes?: OwnedBytes;
+  createdAt: string;
+}
+
+export interface PublishSkillInput {
+  principal: ApiPrincipal;
+  slug: string;
+  displayName: string;
+  description: string;
+  category: string;
+  tags: string[];
+  source: string;
+  kind: ServerSkillRecord["kind"];
+  version?: string;
+  skillMd?: string;
+  /** Omitted for a metadata-only publish or update. */
+  bundle?: Omit<ServerSkillBundle, "orgId" | "createdAt">;
+}
+
+/** Metadata-only patch. Never touches the bundle; republish to change bytes. */
+export type UpdateSkillPatch = Partial<
+  Pick<ServerSkillRecord, "displayName" | "description" | "category" | "tags" | "version" | "kind" | "skillMd">
+>;
+
 export interface CreateRunInput {
   principal: ApiPrincipal;
   slug: string;
@@ -134,4 +205,21 @@ export interface SkillsProductStore {
   addArtifact(artifact: Omit<ServerArtifact, "createdAt">): Promise<ServerArtifact>;
   listArtifacts(principal: ApiPrincipal, runId: string): Promise<ServerArtifact[]>;
   getArtifact(principal: ApiPrincipal, runId: string, artifactId: string): Promise<ServerArtifact | null>;
+
+  /*
+   * Published skills.
+   *
+   * Required rather than optional, unlike the lifecycle hooks above. A store that
+   * silently cannot persist a skill would give `skills push` a 2xx and lose the upload,
+   * and there is no safe default behaviour to fall back to. Every read here takes a
+   * principal and is scoped to its org, exactly as the run reads are: a private team
+   * skill visible to another tenant is the failure this whole surface has to not have.
+   */
+  publishSkill(input: PublishSkillInput): Promise<ServerSkillRecord>;
+  listSkills(principal: ApiPrincipal): Promise<ServerSkillRecord[]>;
+  getSkill(principal: ApiPrincipal, slug: string): Promise<ServerSkillRecord | null>;
+  updateSkill(principal: ApiPrincipal, slug: string, patch: UpdateSkillPatch): Promise<ServerSkillRecord | null>;
+  /** False when the org has no skill by that slug. Also drops a bundle nothing else references. */
+  deleteSkill(principal: ApiPrincipal, slug: string): Promise<boolean>;
+  getSkillBundle(principal: ApiPrincipal, sha256: string): Promise<ServerSkillBundle | null>;
 }
