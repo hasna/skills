@@ -222,6 +222,43 @@ describe("bundle exclusions", () => {
     });
   });
 
+  test("keeps env-prefixed source and an env/ directory, dropping only real dotenv files", () => {
+    // A dotenv file's suffix names an environment (local, production, ...), never a file
+    // type. Source that merely shares the `env.` prefix - `env.ts`, `env.mjs`, `env.json`,
+    // `env.config.js` - and a directory literally named `env/` are content and must survive
+    // the pack, while the actual dotless dotenv files (`env.local`, `env.production`) must
+    // still be dropped so the security guarantee this filter exists for is not weakened.
+    withSkillDir({
+      ...MINIMAL,
+      "src/env.ts": "export const env = process.env;\n",
+      "src/env.js": "module.exports = process.env;\n",
+      "src/env.mjs": "export default process.env;\n",
+      "src/env.config.js": "module.exports = {};\n",
+      "config/env.json": '{"schema":true}\n',
+      "env/schema.ts": "export type Env = Record<string, string>;\n",
+      "lib/environment.ts": "export const environment = 1;\n",
+      "env.local": "SECRET=dotless-env-local-leak\n",
+      "env.production": "SECRET=dotless-env-prod-leak\n",
+    }, (dir) => {
+      const packed = packSkillBundle(dir);
+      for (const kept of [
+        "src/env.ts", "src/env.js", "src/env.mjs", "src/env.config.js",
+        "config/env.json", "env/schema.ts", "lib/environment.ts",
+      ]) {
+        expect(packed.paths).toContain(kept);
+      }
+      for (const dropped of ["env.local", "env.production"]) {
+        expect(packed.paths).not.toContain(dropped);
+      }
+      // Belt and braces: assert on the bytes, not only the path list. The dropped secrets
+      // are absent, and the kept source is really present rather than reported-but-omitted.
+      const text = new TextDecoder().decode(concatEntries(unpackSkillBundle(packed.bytes)));
+      expect(text).not.toContain("dotless-env-local-leak");
+      expect(text).not.toContain("dotless-env-prod-leak");
+      expect(text).toContain("export type Env");
+    });
+  });
+
   test("keeps env templates, which carry names rather than values", () => {
     withSkillDir({ ...MINIMAL, ".env.example": "OPENAI_API_KEY=\n", ".env.sample": "X=\n" }, (dir) => {
       const paths = packSkillBundle(dir).paths;

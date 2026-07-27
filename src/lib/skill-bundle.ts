@@ -71,6 +71,54 @@ const CREDENTIAL_EXTENSIONS = [".pem", ".key", ".p12", ".pfx", ".keystore", ".jk
 const ENV_TEMPLATE_NAMES = new Set([".env.example", ".env.sample", ".env.template", ".env.dist"]);
 
 /**
+ * Extensions that make an `env.*` name source, data, or an asset rather than a dotenv file.
+ *
+ * A dotenv file's suffix names an ENVIRONMENT - `env.local`, `env.production`, `env.ci` -
+ * and an environment name is never a file type. So a dotless `env.<x>` is a credential file
+ * unless `<x>` is one of these recognised extensions, which is what keeps `env.ts`,
+ * `env.mjs`, `env.json`, and `env.config.js` (all common config-module names) in the bundle
+ * while still dropping every real dotenv file, including custom-named ones like `env.qa`.
+ * Erring toward exclusion for unrecognised suffixes keeps the security posture: a stray
+ * `env.<unknown>` is over-excluded, never leaked.
+ */
+const NON_DOTENV_EXTENSIONS = new Set([
+  // code
+  "ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs", "json", "jsonc", "json5",
+  "py", "rb", "go", "rs", "java", "kt", "kts", "swift", "c", "h", "cc", "cpp", "hpp",
+  "cs", "php", "sh", "bash", "zsh", "fish", "ps1", "bat", "cmd", "lua", "pl", "pm",
+  "r", "jl", "dart", "ex", "exs", "scala", "clj", "cljs", "groovy", "gradle", "vb", "fs",
+  // data / config / markup
+  "yaml", "yml", "toml", "ini", "xml", "csv", "tsv", "html", "htm", "css", "scss", "sass",
+  "less", "md", "mdx", "txt", "rst", "adoc", "sql", "graphql", "gql", "proto", "d",
+  // assets
+  "png", "jpg", "jpeg", "gif", "svg", "webp", "ico", "bmp", "pdf", "woff", "woff2",
+  "ttf", "otf", "eot", "mp3", "mp4", "wav", "webm", "zip", "gz", "tar", "wasm",
+]);
+
+/**
+ * True for a dotenv file - one that holds live environment values - by either spelling:
+ *   - dotted:  `.env`, `.env.local`, `.env.production` (the standard; matched broadly,
+ *     because nobody writes source as a leading-dot `.env.ts`)
+ *   - dotless: `env`, `env.local`, `env.production` (a rarer variant some tools emit)
+ *
+ * The trap the dotless arm has to avoid is source that merely shares the `env.` prefix:
+ * `env.ts`, `env.mjs`, `env.json`, `env.config.js` are config modules, not secrets. They
+ * are separated by their extension - a real dotenv suffix is an environment name, never a
+ * code/data extension - so a dotless `env.<x>` is a dotenv file only when `<x>` is not a
+ * recognised file type. A directory named `env/` is not a file at all and is never passed
+ * here; the caller filters credentials on regular files only.
+ */
+function isDotenvFile(lower: string): boolean {
+  if (lower === ".env" || lower.startsWith(".env.")) return true;
+  if (lower === "env") return true;
+  if (lower.startsWith("env.")) {
+    const extension = lower.slice(lower.lastIndexOf(".") + 1);
+    return !NON_DOTENV_EXTENSIONS.has(extension);
+  }
+  return false;
+}
+
+/**
  * Credential-bearing files, excluded at ANY depth.
  *
  * Not a tidiness rule, and not redundant with validation. `skills push` uploads to a
@@ -82,11 +130,16 @@ const ENV_TEMPLATE_NAMES = new Set([".env.example", ".env.sample", ".env.templat
  * Matched case-insensitively. macOS and Windows filesystems are case-insensitive, so a
  * file created as `.env` is reachable and committable as `.ENV`; an exact-case denylist
  * is one `shift` key away from being no denylist at all.
+ *
+ * Meant for regular files only. `walk()` calls it after the directory branch, so a
+ * directory named `env/` or `credentials/` is treated as content and recursed into rather
+ * than pruned whole - the collateral damage a name-only check would otherwise do to a
+ * whole subtree.
  */
 function isCredentialFile(name: string): boolean {
   const lower = name.toLowerCase();
   if (ENV_TEMPLATE_NAMES.has(lower)) return false;
-  if (lower === ".env" || lower.startsWith(".env.") || lower.startsWith("env.") || lower === "env") return true;
+  if (isDotenvFile(lower)) return true;
   if (CREDENTIAL_FILENAMES.has(lower)) return true;
   return CREDENTIAL_EXTENSIONS.some((extension) => lower.endsWith(extension));
 }
@@ -151,7 +204,6 @@ function walk(root: string, current: string, out: SkillBundleEntry[]): void {
     if (ANY_SEGMENT_EXCLUDES.has(entry.name.toLowerCase())) continue;
     if (isRootLevel && ROOT_EXCLUDES.has(entry.name.toLowerCase())) continue;
     if (entry.name.startsWith("._")) continue;
-    if (isCredentialFile(entry.name)) continue;
     // Symlinks are skipped rather than followed or recorded. A recorded link can point
     // outside the extraction root, and following one can pull in an entire home
     // directory through a stray link in a skill folder.
@@ -161,6 +213,11 @@ function walk(root: string, current: string, out: SkillBundleEntry[]): void {
       continue;
     }
     if (!entry.isFile()) continue;
+    // Credential exclusion runs on regular files only. Evaluating it before the directory
+    // branch above would prune a whole subtree named `env/` (or `credentials/`) before it
+    // could be recursed, dropping legitimate source with no warning; a credential is a
+    // file, so this is where the check belongs.
+    if (isCredentialFile(entry.name)) continue;
     const stats = statSync(absolute);
     out.push({
       path: rel,
