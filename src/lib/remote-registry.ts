@@ -2,7 +2,7 @@
  * Remote registry client.
  *
  * Local registry behavior remains the default. These helpers are opt-in and
- * read from SKILLS_API_URL or config.apiUrl so self-hosted services can expose
+ * read from SKILLS_API_URL or config.apiUrl so services can expose
  * a compatible registry API without hard-coding deployment details upstream.
  */
 
