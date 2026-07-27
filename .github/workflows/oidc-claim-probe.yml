@@ -1,0 +1,61 @@
+# =============================================================================
+# TEMPORARY DIAGNOSTIC — DELETE AFTER USE.
+#
+# Purpose: prove empirically that GitHub delivers the `repository_id` and
+# `repository_owner_id` OIDC claims, which iapp-infra now pins in the trust
+# policy of skills-prod-gha-deploy (and of identities-/domains-prod-gha-deploy).
+#
+# Background: on 2026-07-27 those three roles were changed to require
+#   token.actions.githubusercontent.com:repository_id       = <numeric repo id>
+#   token.actions.githubusercontent.com:repository_owner_id = 162366860
+# in addition to the existing `sub` and `aud`. Before that change, ZERO roles in
+# the AWS estate pinned those claims, so there was no live proof they are
+# actually delivered. If they are not, all three production deploy lanes deny.
+#
+# Why a separate workflow instead of re-running deploy.yml: deploy.yml runs a
+# one-shot database migration and updates ECS services. This job authenticates
+# and stops. It intentionally has NO build, NO register-task-definition, NO
+# update-service and NO migration, so it exercises exactly the auth path and
+# nothing else.
+#
+# The auth step below is a byte-for-byte copy of deploy.yml's "Configure AWS
+# credentials" step (same action version, same role, same region), and the job
+# declares `environment: production` so GitHub mints the same subject
+# `repo:hasna/skills:environment:production` that the trust policy requires.
+#
+# workflow_dispatch only — this must never run on push.
+# =============================================================================
+name: oidc-claim-probe
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  APP: skills
+  AWS_REGION: us-east-1
+
+jobs:
+  probe:
+    name: assume prod deploy role and stop
+    runs-on: ubuntu-24.04-arm
+    environment: production
+    timeout-minutes: 5
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ env.APP }}-prod-gha-deploy
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-oidc-claim-probe-${{ env.APP }}-${{ github.run_id }}
+
+      # Proves the assume actually produced usable credentials. Prints only the
+      # caller ARN / account / assumed-role id — no secret material.
+      - name: Confirm the assumed identity
+        run: |
+          aws sts get-caller-identity --output json
+          echo "OIDC_CLAIM_PROBE_RESULT=success" >> "$GITHUB_STEP_SUMMARY"
