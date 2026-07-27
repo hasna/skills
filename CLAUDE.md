@@ -2,10 +2,11 @@
 
 Guidance for Claude Code (claude.ai/code) when working in this repository.
 
-Every count in this file is re-derived from the tree by `src/lib/claude-md.test.ts`.
-If you change something it measures, that test tells you which line to update. Do not
-copy a number out of this file into a commit message, an issue, or another document
-without re-deriving it — that is how the previous version of this file rotted.
+Seven counts in this file — the ones in [Derived counts](#derived-counts) — are
+re-derived from the tree by `src/lib/claude-md.test.ts`, which fails when they drift.
+**Every other number here is unguarded prose**, true when written and verified by hand.
+Do not copy a number out of this file into a commit message, an issue, or another
+document without re-deriving it; that is how the previous version of this file rotted.
 
 ## Build and Development Commands
 
@@ -28,8 +29,10 @@ CI (`.github/workflows/ci.yml`) runs typecheck → **build** → test → releas
 that order. The build must precede the test run: several guards scan the packed file
 list, and `bin/`/`dist/` only exist after a build. Reversing the order makes those
 guards certify a tree they never read. CI also stands up a Postgres service and sets
-`HASNA_SKILLS_TEST_DATABASE_URL`, because the store suite is parameterised over
-whichever durable backends are reachable and silently skips the ones that are not.
+`HASNA_SKILLS_TEST_DATABASE_URL`: the store suite always runs against memory and
+SQLite, and adds Postgres only when that variable points at a reachable server. The
+skip is announced, not silent — `src/server/app.test.ts` prints `storeBackendNotices()`
+so "passed against both backends" is never claimed on a run that tested one.
 
 ## What this repository is
 
@@ -39,13 +42,17 @@ document, and run them. Four surfaces share one set of core modules:
 - **CLI** (`skills`) — Commander + an Ink TUI.
 - **MCP server** (`skills-mcp`) — the same capabilities over Model Context Protocol.
 - **HTTP API server** (`skills-server`, `skills-worker`, `skills-migrate`) — a real,
-  shipped, self-hostable service with a queue, a durable store, and `/api/v1/*`.
+  shipped service you can run yourself: a queue, a durable store, and `/api/v1/*`.
 - **Library** (`@hasna/skills`, plus the `@hasna/skills/storage` subpath).
 
-There is **one deployment story: you run it.** There is no `mode` concept anywhere —
+There is **one deployment story: you run it.** No *deployment* mode concept survives —
 no `local`/`self-hosted`/`cloud` config key, no storage mode, no `--mode` flag, no
 `mode` field in any server payload. "Running locally" is simply the absence of a
 configured API origin. See [No deployment modes](#no-deployment-modes).
+
+(Unrelated `mode`-named things do still exist and are not part of that cleanup:
+`InstallMode` in `src/lib/installer.ts` labels a pin/source/manifest result, and
+SQLite's `journal_mode` is a pragma. Neither describes a deployment.)
 
 ## Repository layout
 
@@ -53,7 +60,8 @@ configured API origin. See [No deployment modes](#no-deployment-modes).
 src/
 ├── cli/
 │   ├── index.tsx                 # Commander program; registers command groups, then parseAsync()
-│   ├── commands/                 # One registrar per command group (install, list, runtime, auth, …)
+│   ├── commands/                 # Mostly one registrar per command group; runtime-mcp.ts
+│   │                             # is a plain handler imported by runtime.ts, not a registrar
 │   ├── components/               # Ink TUI (App, SearchView, SkillSelect, CategorySelect, …)
 │   └── cli.*.test.ts             # CLI integration tests, split by area
 ├── mcp/
@@ -186,6 +194,15 @@ registrars in order. Tool counts per registrar:
 `--port <n>` → `MCP_HTTP_PORT` → 8836. The HTTP transport builds a fresh server per
 request and closes it when the response closes, and exposes `GET /health`.
 
+**Known wart — the agent-session tools are stateless over the default transport.**
+`register_agent` / `heartbeat` / `set_focus` / `list_agents` share a `Map` that is a
+local of `registerResourceMetaTools()`, so its lifetime is one `buildServer()`. Under
+stdio that is the process; under the default HTTP transport it is *one request*. So
+over HTTP, `register_agent` returns an id that is discarded immediately, `heartbeat`
+and `set_focus` always answer `AGENT_NOT_FOUND`, and `list_agents` always returns
+empty. Do not build on those four until the state is moved somewhere that outlives a
+request.
+
 ### HTTP API server — `src/server/`
 
 This **is** shipped in this repository. `bun run build` produces `bin/server.js`,
@@ -211,12 +228,15 @@ exactly four path segments after `/api/v1`.
 | GET | `/api/v1/runs/:runId/artifacts` | |
 | GET | `/api/v1/runs/:runId/artifacts/:artifactId` | Streams the body as an attachment |
 | POST | `/api/v1/runs/:runId/cancel` | |
-| GET | `/api/v1/billing/status`, `/api/v1/billing/credits` | Static self-hosted responses |
+| GET | `/api/v1/billing/status` | `{billingConfigured: false, code: "BILLING_NOT_CONFIGURED"}` — a capability statement, never a deployment name |
+| GET | `/api/v1/billing/credits` | `{packs: []}` |
 | POST | `/api/v1/billing/*` | `501 BILLING_NOT_CONFIGURED` |
 
 Everything under `/api/` requires a bearer API key first (`401 AUTH_REQUIRED`).
-Everything else 404s. Every JSON response carries `Cache-Control: no-store`. Org
-isolation is enforced by `principal.orgId` predicates in the store layer.
+Unmatched paths 404 — but note the dispatcher *ignores* a fifth and later segment
+rather than rejecting it, so `/api/v1/skills/pdf-generate/skill.md/junk` still serves
+markdown. Every JSON response carries `Cache-Control: no-store`. Org isolation is
+enforced by `principal.orgId` predicates in the store layer.
 
 Auth is a bearer token hashed with SHA-256 and looked up as `api_keys.key_hash`; the
 raw token never reaches the store. `HASNA_SKILLS_BOOTSTRAP_API_KEY` seeds a dev
@@ -224,7 +244,8 @@ org/user/key. Scopes and roles are parsed and returned but not yet enforced —
 authorization today is org scoping.
 
 `skills-worker` claims one run at a time via `store.claimNextRun()`, honours
-`cancel_requested`, and backs off exponentially on error. `executeRun()` in
+`cancel_requested`, and on error backs off linearly (`idle × consecutiveErrors`,
+capped at 30s). `executeRun()` in
 `handlers.ts` currently implements a provider-free handler for three skills only
 (`audio-transcript-pack`, `transcript`, `video-highlight-pack`); anything else fails
 with `HANDLER_UNAVAILABLE` rather than pretending.
@@ -232,10 +253,14 @@ with `HANDLER_UNAVAILABLE` rather than pretending.
 ### Library — `src/index.ts`
 
 Re-exports registry, installer, project state, run state, skillinfo, config, remote
-registry/client, pricing, discovery, tool primitives, scheduler, skill validation,
-portable skills, CLI↔MCP parity, registry sync, MCP contracts, feedback, skill
-aliases, and API types. `src/storage.ts` is the separate `@hasna/skills/storage`
-entry point for the native storage helpers.
+registry/client, remote run contract, pricing, discovery, tool primitives, scheduler,
+skill validation, portable skills, CLI↔MCP parity, registry sync, MCP contracts,
+feedback, skill aliases, native storage, and API types.
+
+`src/storage.ts` is the `@hasna/skills/storage` subpath entry. It is a **duplicate**,
+not a split: `src/index.ts` re-exports the same ~40 `native-storage.ts` symbols
+verbatim, and nothing tests that the two lists agree. Add a storage export to one and
+you must add it to the other by hand.
 
 ## Invariants worth knowing before you change anything
 
@@ -251,8 +276,8 @@ The one fact that survives is whether an API origin is configured, and
 `undefined` on read paths (callers fall back to the bundled registry), and
 `requireApiUrl()` throws `MissingApiUrlError` on auth and write paths.
 
-Regression guards: `src/lib/config.test.ts` (all eight legacy `mode` spellings throw
-`Unknown config key`), `src/cli/cli.runtime.test.ts` (`setup --help` contains
+Regression guards: `src/lib/config.test.ts` (all eight legacy `mode` *values* throw
+`Unknown config key: mode`), `src/cli/cli.runtime.test.ts` (`setup --help` contains
 `--api-url` and not `--mode`), `src/server/app.test.ts` (`/health` has no `mode`
 property).
 
@@ -267,8 +292,10 @@ found by walking the TypeScript AST so position cannot hide one; and a weaker
 **denylist** over prose. Naming a third-party provider's own published API for a
 bring-your-own-key skill is explicitly allowed.
 
-Related: `src/lib/infra-identifiers.ts` (no literal AWS account IDs, ARNs, or
-`<app>-<env>-<component>` resource names outside the deploy manifest) and
+Related: `src/lib/infra-identifiers.ts`, which expresses "vendor infrastructure lives
+behind one indirection" as six properties rather than a blocklist — `aws-account-id`,
+`aws-arn`, `infra-resource-name`, `unparameterized-workflow-infra`,
+`workflow-vendor-host`, and the cardinality rule `manifest-location-not-unique`. And
 `src/lib/content-scan.ts` (secret values, contact PII, personal data, private fleet
 context, and committed tool output). All findings are redacted before printing,
 because they surface in potentially public CI logs.
@@ -307,7 +334,13 @@ is now the identity function and is kept only so call sites do not have to chang
 
 The installed corpus is `~/.hasna/skills/installed/<name>/`, with app data
 (`config.json`, `auth.json`, `skills.db`) at the app root — matching every sibling
-Hasna app. `$HASNA_SKILLS_DIR` relocates the whole data dir and outranks `$HOME`.
+Hasna app. `$HASNA_SKILLS_DIR` relocates everything resolved through `getDataDir()`
+and outranks `$HOME` there. **Two paths are not yet routed through it and stay
+`$HOME`-rooted regardless**: `src/lib/auth-store.ts` (its paths are frozen as
+import-time constants from `homedir()`, so `auth.json` ignores the override) and
+`create-sync-config.ts`. Both are tracked follow-ups; the caveat matters because it
+also means the hermetic-test override below does not isolate `auth.json`.
+
 The legacy `~/.hasna/skills/custom/` path is still read as a migration safety net,
 and `~/.skills` / `~/.skillsrc` are merged forward without deleting the originals.
 
@@ -318,11 +351,20 @@ timestamp. Nothing copies skill source or SKILL.md into a project or an agent sk
 folder. `installSkillSource()` and `installSkillManifest()` exist and deliberately
 return `success: false` with an explanatory error; the MCP `pin_skill`/`unpin_skill`
 tools do the same when handed a `for: <agent>` argument, redirecting to
-`skills mcp --register <agent>`. `.skills/` is output state: `project.json`,
-`runs/<day>/<id>/` with `logs/`, `exports/`, and `schedules.json`.
+`skills mcp --register <agent>`. `.skills/` is output state:
 
-Skills execute from the bundled package source (or the configured API), never from
-`.skills/`.
+```
+.skills/
+├── project.json                  # pins, disabled skills, default export dir
+├── runs/<day>/<run-id>/logs/     # run records and logs
+├── exports/<skill>/<run-id>/     # sibling of runs/, NOT nested inside it
+├── tmp/
+└── schedules.json
+```
+
+Skills execute from the bundled package source, the portable corpus under
+`~/.hasna/skills/installed/` (`runPortableSkill()`), or the configured API — never
+from `.skills/`.
 
 ### Executable vs instruction skills
 
@@ -335,8 +377,16 @@ than trying to spawn them.
 Every catalog entry is runnable by someone running only this repository: bundled
 code, a third-party key the user supplies, or instruction prose. There are **zero**
 hosted skills and `PREMIUM_SKILLS` is empty; `src/lib/catalog-runnable.test.ts`
-asserts the hosted set stays empty and that every executable skill ships a runnable
-entry point in the packed tarball.
+asserts the hosted set stays empty and that every executable skill ships
+`src/index.ts` (or `.js`) both in the repo and in the packed tarball. Note what that
+guard does *not* check: it never reads `bin` from a skill's `package.json`, so a skill
+with an entry file and no `bin` passes.
+
+"Runnable" also carries a known backlog. The same file freezes
+`PREEXISTING_UNDOCUMENTED_LIMIT = 131` — 131 skill/variable pairs read a provider
+credential without naming it in their own docs. The constant is bracketed from both
+sides (it may only go down, and it must equal the true count), so a *new* undocumented
+BYO-key skill fails immediately, but the existing 131 are not yet self-describing.
 
 ### Hermetic tests
 
@@ -347,12 +397,18 @@ re-points it per test. Without it the suite reads and writes the developer's rea
 resolution branch opt out with `withHomeDataDir()` / `withTempHome()`; child
 processes that must resolve from a given `$HOME` use `withoutDataDirOverrideEnv()`.
 
+The isolation is only as wide as `getDataDir()`, so it does not cover the
+`$HOME`-frozen paths noted above — notably `~/.hasna/skills/auth.json`.
+
 Set `NO_COLOR=1` for deterministic CLI output in tests.
 
 ### ESM with `.js` extensions
 
-All relative imports use `.js` even from `.ts` sources (`from "../lib/registry.js"`).
-JSON imports use `with { type: "json" }`.
+Relative imports carry `.js` even from `.ts` sources (`from "../lib/registry.js"`).
+JSON imports use `with { type: "json" }`. This is a convention, not an invariant —
+nothing enforces it, and `src/lib/remote-run-contract.ts` currently imports
+`"./pricing"` bare. Follow the convention in new code; do not assume it holds when
+reading.
 
 ## Skill structure
 
@@ -360,15 +416,17 @@ JSON imports use `with { type: "json" }`.
 skills/<name>/                # bare name, matches SkillMeta.name exactly
 ├── SKILL.md                  # frontmatter: name, description, [kind], [category], [tags]
 ├── package.json              # "bin" for runnable skills; skills.kind for instruction ones
-├── tsconfig.json             # extends ../tsconfig.base.json
+├── tsconfig.json             # extends ../tsconfig.base.json (4 executable skills lack one)
 ├── src/                      # executable skills only
 │   └── index.ts
 ├── README.md                 # optional
 └── CLAUDE.md                 # optional
 ```
 
-All 210 executable skills have both a `bin` entry and `src/index.ts`; that pair is what
-`catalog-runnable.test.ts` checks against the packed tarball. An instruction skill is
+All 210 executable skills have both a `bin` entry and `src/index.ts` — but only the
+entry file is guarded (see above), and four (`colorextract`,
+`project-dashboard-reports`, `siteanalyze`, `todos-plan`) have no `tsconfig.json`.
+Write new skills to the full template anyway. An instruction skill is
 just `SKILL.md` + `package.json`, with `kind: instruction` in the frontmatter and
 `skills.kind: "instruction"` in the package, and no `src/` at all.
 
@@ -384,8 +442,11 @@ CLAUDE.md, extracts env vars with `ENV_VAR_PATTERN` (suffixes: `_API_KEY`, `_KEY
 and `GENERIC_ENV_PATTERN` (known provider prefixes), and detects system dependencies
 by scanning docs for known tool names.
 
-`findSkillsDir()` walks up to 5 parents from `__dirname` looking for `skills/`, so it
-resolves from both `src/lib/` in development and `bin/`/`dist/` when built.
+`findSkillsDir()` — in `src/lib/installer.ts`, not `skillinfo.ts` — walks up to 5
+parents from `__dirname` looking for a `skills/` directory that is not inside a
+`.skills` path, so it resolves from both `src/lib/` in development and `bin/`/`dist/`
+when built. It falls back silently to `<__dirname>/../skills` if nothing matches.
+`src/lib/validation.test.ts` carries its own slightly different copy.
 
 ## MCP tool reference
 
