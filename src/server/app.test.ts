@@ -111,15 +111,15 @@ for (const backend of backends) {
         const client = new RemoteSkillsClient("sk_test_org_a", ctx.baseUrl);
         const skills = await client.listSkills();
         expect(Array.isArray(skills)).toBe(true);
-        expect(skills.some((skill) => skill.name === "audio-transcript-pack")).toBe(true);
+        expect(skills.some((skill) => skill.name === "video-highlight-pack")).toBe(true);
 
-        const submitted = await client.submitRun("audio-transcript-pack", { transcript: "Hello world from self hosted skills." }, ["--title", "Demo"]);
+        const submitted = await client.submitRun("video-highlight-pack", { transcript: "Hello world from self hosted skills." }, ["--title", "Demo"]);
         expect(submitted.status).toBe("queued");
         expect(submitted.id).toBeTruthy();
 
         expect(await runWorkerOnce(ctx.store, "worker_test")).toBe(true);
         const run = await client.getRun(submitted.id!);
-        expect(run).toMatchObject({ status: "succeeded", skill: "audio-transcript-pack" });
+        expect(run).toMatchObject({ status: "succeeded", skill: "video-highlight-pack" });
 
         const logs = await client.getRunLogs(submitted.id!);
         expect(logs.map((log) => log.message).join("\n")).toContain("generated");
@@ -140,7 +140,7 @@ for (const backend of backends) {
       try {
         const orgA = new RemoteSkillsClient("sk_test_org_a", ctx.baseUrl);
         const orgB = new RemoteSkillsClient("sk_test_org_b", ctx.baseUrl);
-        const submitted = await orgA.submitRun("audio-transcript-pack", { text: "secret run text" }, []);
+        const submitted = await orgA.submitRun("video-highlight-pack", { text: "secret run text" }, []);
         expect(await runWorkerOnce(ctx.store, "worker_test")).toBe(true);
 
         const crossRun = await orgB.getRun(submitted.id!);
@@ -188,7 +188,7 @@ for (const backend of backends) {
         const listed = await client.listSkills();
         expect(listed.some((skill) => skill.name === "team-runbook")).toBe(true);
         // Merged, not replaced: a bundled skill must still be there.
-        expect(listed.some((skill) => skill.name === "audio-transcript-pack")).toBe(true);
+        expect(listed.some((skill) => skill.name === "video-highlight-pack")).toBe(true);
 
         expect(await client.getSkill("team-runbook")).toMatchObject({ slug: "team-runbook", bundleSha256: bundle.sha256 });
         expect(await client.getSkillMd("team-runbook")).toBe(bundle.skillMd);
@@ -210,17 +210,17 @@ for (const backend of backends) {
         const orgB = new RemoteSkillsClient("sk_test_org_b", ctx.baseUrl);
         const bundle = fixtureBundle("override");
 
-        await orgA.publishSkill(manifestFor("audio-transcript-pack", "override", bundle.skillMd, bundle.sha256), bundle.bytes);
+        await orgA.publishSkill(manifestFor("video-highlight-pack", "override", bundle.skillMd, bundle.sha256), bundle.bytes);
 
-        expect(await orgA.getSkill("audio-transcript-pack")).toMatchObject({ description: "override deployment runbook", source: "remote" });
+        expect(await orgA.getSkill("video-highlight-pack")).toMatchObject({ description: "override deployment runbook", source: "remote" });
         const listedA = await orgA.listSkills();
-        expect(listedA.filter((skill) => skill.name === "audio-transcript-pack")).toHaveLength(1);
-        expect(listedA.find((skill) => skill.name === "audio-transcript-pack")).toMatchObject({ displayName: "override Runbook" });
+        expect(listedA.filter((skill) => skill.name === "video-highlight-pack")).toHaveLength(1);
+        expect(listedA.find((skill) => skill.name === "video-highlight-pack")).toMatchObject({ displayName: "override Runbook" });
 
         // Org B still sees the bundled one, unchanged.
-        const bundledForB = await orgB.getSkill("audio-transcript-pack");
+        const bundledForB = await orgB.getSkill("video-highlight-pack");
         expect(bundledForB.description).not.toBe("override deployment runbook");
-        expect((await orgB.downloadSkillBundle("audio-transcript-pack")).status).toBe(404);
+        expect((await orgB.downloadSkillBundle("video-highlight-pack")).status).toBe(404);
       } finally {
         await ctx.stop();
       }
@@ -295,18 +295,18 @@ for (const backend of backends) {
 
         // Control: the bundled skill's document is served before anything is published,
         // so the null below is the override taking effect and not a route that never works.
-        const bundledDoc = await client.getSkillMd("audio-transcript-pack");
+        const bundledDoc = await client.getSkillMd("video-highlight-pack");
         expect(bundledDoc).toBeTruthy();
 
-        const manifest = manifestFor("audio-transcript-pack", "shadow", "", bundle.sha256);
+        const manifest = manifestFor("video-highlight-pack", "shadow", "", bundle.sha256);
         delete manifest.skillMd;
         expect((await client.publishSkill(manifest, bundle.bytes)).status).toBe(201);
 
         // Falling through to the bundled document here would hand an agent one skill's
         // instructions under another skill's name - the published row is what this
         // instance serves under that slug, and it has no document.
-        expect(await client.getSkillMd("audio-transcript-pack")).toBeNull();
-        expect(await client.getSkill("audio-transcript-pack")).toMatchObject({ description: "shadow deployment runbook" });
+        expect(await client.getSkillMd("video-highlight-pack")).toBeNull();
+        expect(await client.getSkill("video-highlight-pack")).toMatchObject({ description: "shadow deployment runbook" });
       } finally {
         await ctx.stop();
       }

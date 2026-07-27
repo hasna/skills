@@ -31,11 +31,11 @@ const SEED_PRINCIPAL = {
   apiKeyId: "key_a",
 };
 
-// A real, in-registry skill whose SKILL.md lives at skills/read-csv/SKILL.md. The POSITIVE
+// A real, in-registry skill whose SKILL.md lives at skills/brand-kit/SKILL.md. The POSITIVE
 // CONTROL: proves the endpoint actually serves a 200 with real content, so a fix that broke
 // the whole route (or a test blind to 200s) cannot masquerade as "traversal blocked".
-const CONTROL_SLUG = "read-csv";
-const CONTROL_MARKER = "name: read-csv"; // frontmatter unique to the control's SKILL.md
+const CONTROL_SLUG = "brand-kit";
+const CONTROL_MARKER = "name: brand-kit"; // frontmatter unique to the control's SKILL.md
 
 // The exact incident payload. The id segment is `..%2Fagent-skills%2Fskill-project-create`;
 // the trailing `/skill.md` is a separate, literal segment.
