@@ -188,6 +188,70 @@ describe("public package boundary", () => {
     expect(leaks).toEqual([]);
   });
 
+  // The marker list above bans the deployment "mode" vocabulary everywhere,
+  // which is right for prose: no doc should tell the next contributor to
+  // rebuild the concept. It is deliberately not enough here. Removing `mode`
+  // left three fields that still carried the deployment variant as a *value* —
+  // `orgSlug: "self-hosted"` in the stored credentials, `plan: "self-hosted"`
+  // on the billing response, `tier: "self-hosted"` on the quote response (not
+  // even a valid BillingTier). A client that can read the deployment variant
+  // off a response can fingerprint the instance, so deleting `mode` while
+  // leaving those only renamed the leak.
+  //
+  // Scope differs from the list above on purpose:
+  //   - src and scripts only. Docs and command help legitimately describe
+  //     self-hosted deployment; the ban is on code emitting it as data.
+  //   - non-test files only. Negative tests must be free to name the value
+  //     they assert is rejected (config.test.ts, cli.runtime.test.ts).
+  test("keeps the deployment variant out of values that code emits", () => {
+    // All markers are assembled from fragments so this file does not match itself.
+
+    // A whole string literal that *is* the deployment name. Case-sensitive on
+    // purpose: "Self-hosted skill availability metadata." and "Self-hosted
+    // runtime:" are prose describing the deployment, which stays allowed.
+    const quotedValueMarkers = [
+      ['"', "self-hosted"].join(""),
+      ["'", "self-hosted"].join(""),
+    ];
+    // Identifier spellings. No separator or an underscore never occurs in
+    // English prose, so these are matched case-insensitively and catch
+    // isSelfHosted, SELF_HOSTED, org_self_hosted alike.
+    const identifierMarkers = [
+      ["self", "hosted"].join("_"),
+      ["self", "hosted"].join(""),
+    ];
+
+    const roots = ["src", "scripts"];
+    const files = roots
+      .flatMap((root) => {
+        const path = join(process.cwd(), root);
+        if (!existsSync(path)) return [];
+        return statSync(path).isDirectory() ? collectFiles(path) : [path];
+      })
+      .filter((file) => !file.endsWith(".test.ts") && !file.endsWith(".test.tsx"));
+
+    // Positive control: the scan is worthless if it reports zero because it
+    // read nothing. Assert it actually reached the files that held the leak.
+    expect(files.some((file) => file.endsWith("src/server/app.ts"))).toBe(true);
+    expect(files.some((file) => file.endsWith("src/server/registry.ts"))).toBe(true);
+    expect(files.some((file) => file.endsWith("src/cli/commands/auth.ts"))).toBe(true);
+
+    const leaks: string[] = [];
+    for (const file of files) {
+      const content = readFileSync(file, "utf8");
+      const lowered = content.toLowerCase();
+      const relative = file.replace(`${process.cwd()}/`, "");
+      for (const marker of quotedValueMarkers) {
+        if (content.includes(marker)) leaks.push(`${relative}: ${marker}`);
+      }
+      for (const marker of identifierMarkers) {
+        if (lowered.includes(marker)) leaks.push(`${relative}: ${marker}`);
+      }
+    }
+
+    expect(leaks).toEqual([]);
+  });
+
   test("keeps private implementation markers out of built entrypoints", () => {
     const builtFiles = buildEntryPointsForBoundaryScan();
 
