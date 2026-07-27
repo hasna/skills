@@ -530,6 +530,33 @@ export function registerAuth(parent: Command) {
     });
 
   auth
+    .command("signup")
+    .description("Create or sign in with your email (passwordless)")
+    .option("--email <email>", "Email address (non-interactive)")
+    .option("--code <code>", "Verification code (non-interactive)")
+    .action(async (options: { email?: string; code?: string }) => {
+      let email = options.email;
+
+      if (!email && isTTY) {
+        const existing = getAuthConfig();
+        if (existing) {
+          console.log(chalk.dim(`Already signed in as ${existing.email}`));
+          const again = await prompt("Continue with a different account? (y/N) ");
+          if (again.toLowerCase() !== "y") return;
+        }
+        email = await prompt(chalk.bold("Email: "));
+      }
+
+      if (!email) {
+        console.error(chalk.red("Email required. Use: skills auth signup --email you@example.com"));
+        process.exitCode = 1;
+        return;
+      }
+
+      await doLogin(email, options.code);
+    });
+
+  auth
     .command("logout")
     .description("Sign out and remove stored credentials")
     .action(() => {

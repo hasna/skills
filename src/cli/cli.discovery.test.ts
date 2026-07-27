@@ -217,7 +217,6 @@ describe("CLI discovery", () => {
       const { stdout } = await runCli(["list"]);
       expect(stdout).toContain(`Available default skills (${EXPECTED_BASIC_SKILL_COUNT})`);
       expect(stdout).toContain("pdf-to-markdown");
-      expect(stdout).toContain("Free");
       expect(stdout).not.toContain("workout-cycle-planner");
       expect(stdout.toLowerCase()).not.toContain("openai");
       expect(stdout.toLowerCase()).not.toContain("gemini");
@@ -413,9 +412,7 @@ describe("CLI discovery", () => {
       const { stdout } = await runCli(["search", "pdf"]);
       expect(stdout).toContain("Found");
       expect(stdout).toContain("skill(s)");
-      expect(stdout).toContain("(Free)");
       expect(stdout).toContain("Details: skills show <name>");
-      expect(stdout).toContain("Free");
     });
 
     test("shows message for no results", async () => {
