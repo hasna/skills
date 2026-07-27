@@ -7,12 +7,21 @@ const AUTH_DIR = join(homedir(), ".hasna", "skills");
 const AUTH_FILE = join(AUTH_DIR, "auth.json");
 const LEGACY_AUTH_FILE = join(homedir(), ".skills", "auth.json");
 
+/**
+ * Stored credentials for a Skills API instance.
+ *
+ * `apiKey` is the only credential. The identity fields are display metadata
+ * echoed back from the instance's `whoami`, so they are optional: an instance
+ * that does not return them leaves them unset. They are never invented locally
+ * — a placeholder written here is indistinguishable from a value the server
+ * actually returned once it is read back out of `auth.json`.
+ */
 export interface AuthConfig {
   apiKey: string;
-  email: string;
-  orgId: string;
-  orgSlug: string;
-  userId: string;
+  email?: string;
+  orgId?: string;
+  orgSlug?: string;
+  userId?: string;
 }
 
 let cachedConfig: AuthConfig | null | undefined;
@@ -22,7 +31,7 @@ export function getAuthConfig(): AuthConfig | null {
   try {
     const raw = readFileSync(existsSync(AUTH_FILE) ? AUTH_FILE : LEGACY_AUTH_FILE, "utf-8");
     const config = JSON.parse(raw) as AuthConfig;
-    if (!config.apiKey || !config.email) {
+    if (!config.apiKey) {
       cachedConfig = null;
       return null;
     }

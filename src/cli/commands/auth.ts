@@ -357,12 +357,16 @@ async function doApiKeyLogin(apiKey: string, json?: boolean) {
   const orgSlug = stringField(identity.organization);
   const userId = stringField(identity.userId);
 
+  // Only what `whoami` actually returned is stored. Filling a missing identity
+  // field with a placeholder both invents a fact about the user and, when the
+  // placeholder names a deployment variant, hands every later reader of
+  // `auth.json` a fingerprint of the instance the key belongs to.
   saveAuthConfig({
     apiKey: trimmed,
-    email: email ?? "self-hosted-api-key",
-    orgId: orgId ?? "org_self_hosted",
-    orgSlug: orgSlug ?? "self-hosted",
-    userId: userId ?? "user_self_hosted",
+    ...(email ? { email } : {}),
+    ...(orgId ? { orgId } : {}),
+    ...(orgSlug ? { orgSlug } : {}),
+    ...(userId ? { userId } : {}),
   });
 
   if (json || !isTTY) {
@@ -635,8 +639,11 @@ async function handleBillingStatus(options: { json?: boolean } = {}) {
       console.log(JSON.stringify(res, null, 2));
       return;
     }
-    console.log(chalk.bold("Plan:    ") + res.plan);
-    console.log(chalk.bold("Balance: ") + res.balance);
+    // A server without a billing provider reports no plan and no balance
+    // rather than a fabricated one, so neither field is assumed present.
+    if (res.plan) console.log(chalk.bold("Plan:    ") + res.plan);
+    if (res.balance) console.log(chalk.bold("Balance: ") + res.balance);
+    if (!res.plan && !res.balance) console.log(chalk.dim("Billing is not configured for this instance."));
   } catch (err) {
     writeCommandError(err, "Failed to fetch billing status", options.json);
   }
