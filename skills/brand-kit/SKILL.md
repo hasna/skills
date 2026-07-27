@@ -1,6 +1,7 @@
 ---
 name: brand-kit
-description: Generate premium brand kits with logo usage, palette, typography, brand voice, sample applications, Markdown guide, and PDF guide.
+description: Generate brand kits with logo usage, palette, typography, brand voice, sample applications, Markdown guide, and PDF guide.
+kind: instruction
 ---
 
 # Brand Kit
@@ -9,31 +10,27 @@ Generate a production-ready brand guide package for a startup, product, internal
 
 ## Requirements
 
-- Authenticate with `skills auth login`.
-- This premium skill runs through the hosted Skills runtime; local installs expose only skill metadata and instructions.
+None. This is an instruction skill: it is prose an agent follows, so it needs no
+credentials, no network access, and no local runtime.
 
 ## Usage
 
-```bash
-skills run brand-kit "Usage-based billing for AI SaaS" --audience "founders" --personality "precise, calm, pragmatic"
-skills run brand-kit --brand "Acme Ledger" --category "developer tools" --tone premium
-```
+Ask an agent for the deliverables below and give it the inputs. Reading this file
+IS the invocation; `skills run` refuses instruction skills on purpose.
 
-## Options
+## Inputs
 
-| Option | Description | Default |
+| Input | Description | Default |
 |--------|-------------|---------|
-| `--brand <text>` | Brand, product, or company name. Positional text also works. | required |
-| `--category <text>` | Market category or product type. | software product |
-| `--audience <text>` | Primary audience. | software teams |
-| `--personality <text>` | Brand personality words. | clear, capable, direct |
-| `--tone <tone>` | `direct`, `premium`, `friendly`, or `technical`. | direct |
-| `--output <dir>` | Output directory for direct local execution. Hosted runs use the run export directory. | run export dir |
+| `brand` | Brand, product, or company name. Positional text also works. | required |
+| `category` | Market category or product type. | software product |
+| `audience` | Primary audience. | software teams |
+| `personality` | Brand personality words. | clear, capable, direct |
+| `tone` | `direct`, `premium`, `friendly`, or `technical`. | direct |
 
-## Outputs
+## Deliverables
 
 - `brand-guide.md`
-- `brand-guide.pdf`
 - `palette.json`
 - `typography.md`
 - `voice-guide.md`
@@ -42,4 +39,16 @@ skills run brand-kit --brand "Acme Ledger" --category "developer tools" --tone p
 - `brand-assets.svg`
 - `manifest.json`
 
-After submitting a hosted run, poll with `skills runs status <run-id>` and download outputs with `skills exports download <run-id>`.
+## Method
+
+1. Establish positioning first — audience, category, and the one adjective the
+   brand must own. Every later choice is judged against it.
+2. Build the palette with roles, not just hex values: primary, surface, text,
+   accent, semantic states. Record contrast ratios for text pairs.
+3. Choose type by role (display, body, mono) with fallbacks, and give a scale.
+4. Write voice as do/don't pairs with example sentences; adjectives alone are
+   not actionable.
+5. Specify logo usage: clear space, minimum size, permitted and forbidden
+   treatments, and behaviour on light and dark backgrounds.
+6. Show the system applied to at least two real surfaces (a landing hero, a
+   social card) so the rules are demonstrated rather than asserted.

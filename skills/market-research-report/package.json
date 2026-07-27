@@ -2,10 +2,9 @@
   "name": "market-research-report",
   "version": "0.1.0",
   "private": true,
-  "description": "Generate market research report artifacts through the hosted Skills runtime",
+  "description": "Generate market research report artifacts",
   "type": "module",
   "skills": {
-    "runtime": "hosted",
-    "source": "remote"
+    "kind": "instruction"
   }
 }

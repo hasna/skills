@@ -1,6 +1,7 @@
 ---
 name: meeting-pack
-description: Generate premium meeting artifact packs from transcripts or notes with summaries, decisions, action items, owner/deadline tables, follow-up email, project export, timeline, and manifest metadata.
+description: Generate meeting artifact packs from transcripts or notes with summaries, decisions, action items, owner/deadline tables, follow-up email, project export, timeline, and manifest metadata.
+kind: instruction
 ---
 
 # Meeting Pack
@@ -9,28 +10,25 @@ Generate a complete meeting artifact package from transcripts, notes, call summa
 
 ## Requirements
 
-- Authenticate with `skills auth login`.
-- This premium skill runs through the hosted Skills runtime; local installs expose only metadata and instructions.
+None. This is an instruction skill: it is prose an agent follows, so it needs no
+credentials, no network access, and no local runtime.
 
 ## Usage
 
-```bash
-skills run meeting-pack --notes "Discussed billing launch, docs, and support owner follow-ups" --meeting "Billing Launch Sync"
-skills run meeting-pack ./transcript.txt --participants "Hasna,Alex,Sam" --format executive
-```
+Ask an agent for the deliverables below and give it the inputs. Reading this file
+IS the invocation; `skills run` refuses instruction skills on purpose.
 
-## Options
+## Inputs
 
-| Option | Description | Default |
+| Input | Description | Default |
 |--------|-------------|---------|
-| `--notes <text>` | Meeting transcript, rough notes, or summary. Positional text also works. | required unless `--source` is used |
-| `--source <path>` | Read notes or transcript from a file. | none |
-| `--meeting <text>` | Meeting title. | Meeting |
-| `--participants <list>` | Comma-separated participant names. | Team |
-| `--format <type>` | `project`, `executive`, `sales`, or `standup`. | project |
-| `--output <dir>` | Output directory for direct local execution. Hosted runs use the run export directory. | run export dir |
+| `notes` | Meeting transcript, rough notes, or summary. Positional text also works. | required unless `--source` is used |
+| `source` | Read notes or transcript from a file. | none |
+| `meeting` | Meeting title. | Meeting |
+| `participants` | Comma-separated participant names. | Team |
+| `format` | `project`, `executive`, `sales`, or `standup`. | project |
 
-## Outputs
+## Deliverables
 
 - `meeting-summary.md`
 - `decisions.md`
@@ -40,4 +38,15 @@ skills run meeting-pack ./transcript.txt --participants "Hasna,Alex,Sam" --forma
 - `timeline.md`
 - `manifest.json`
 
-After submitting a hosted run, poll with `skills runs status <run-id>` and download outputs with `skills exports download <run-id>`.
+## Method
+
+1. Read the transcript fully before summarizing; decisions are often reversed
+   later in the same meeting.
+2. Separate decisions from discussion. A decision has an owner and a resolution;
+   everything else is context.
+3. Extract action items with owner, deadline, and the acceptance condition. An
+   action item without an owner will not happen.
+4. Flag anything explicitly deferred, and anything raised but never resolved —
+   the second category is what meetings routinely lose.
+5. Build the timeline from what was said, not from what you expect the process to be.
+6. Draft the follow-up email so a non-attendee can act on it without the transcript.

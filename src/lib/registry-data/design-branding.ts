@@ -18,9 +18,10 @@ export const DESIGN_BRANDING_SKILLS: SkillMeta[] = [
   {
     name: "brand-kit",
     displayName: "Brand Kit",
-    description: "Generate premium brand kits with logo usage, palette, typography, brand voice, sample applications, Markdown guide, PDF guide, and SVG assets",
+    description: "Generate brand kits with logo usage, palette, typography, brand voice, sample applications, Markdown guide, PDF guide, and SVG assets",
     category: "Design & Branding",
-    tags: ["brand", "design", "palette", "typography", "premium", "remote"],
+    kind: "instruction",
+    tags: ["brand", "design", "palette", "typography"],
   },
   {
     name: "brand-style-guide",

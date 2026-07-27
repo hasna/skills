@@ -1,6 +1,7 @@
 ---
 name: proposal-pack
-description: Generate premium client proposal packages with proposal, SOW, pricing, timeline, assumptions, cover email, Markdown, and PDF artifacts.
+description: Generate client proposal packages with proposal, SOW, pricing, timeline, assumptions, cover email, Markdown, and PDF artifacts.
+kind: instruction
 ---
 
 # Proposal Pack
@@ -9,32 +10,28 @@ Generate a client-ready proposal package for agencies, consultants, SaaS service
 
 ## Requirements
 
-- Authenticate with `skills auth login`.
-- This premium skill runs through the hosted Skills runtime; local installs expose only metadata and instructions.
+None. This is an instruction skill: it is prose an agent follows, so it needs no
+credentials, no network access, and no local runtime.
 
 ## Usage
 
-```bash
-skills run proposal-pack --client "Acme" --project "AI onboarding workflow" --budget "25k USD" --timeline "6 weeks"
-skills run proposal-pack "Revamp the customer onboarding portal" --services "Discovery,Design,Build,Training"
-```
+Ask an agent for the deliverables below and give it the inputs. Reading this file
+IS the invocation; `skills run` refuses instruction skills on purpose.
 
-## Options
+## Inputs
 
-| Option | Description | Default |
+| Input | Description | Default |
 |--------|-------------|---------|
-| `--project <text>` | Project scope or proposal brief. Positional text also works. | required |
-| `--client <name>` | Client or account name. | Client |
-| `--budget <text>` | Budget range or fixed price. | To be confirmed |
-| `--timeline <text>` | Delivery timeline. | 4-6 weeks |
-| `--services <list>` | Comma-separated services or workstreams. | discovery, implementation, enablement |
-| `--tone <tone>` | `executive`, `friendly`, or `technical`. | executive |
-| `--output <dir>` | Output directory for direct local execution. Hosted runs use the run export directory. | run export dir |
+| `project` | Project scope or proposal brief. Positional text also works. | required |
+| `client` | Client or account name. | Client |
+| `budget` | Budget range or fixed price. | To be confirmed |
+| `timeline` | Delivery timeline. | 4-6 weeks |
+| `services` | Comma-separated services or workstreams. | discovery, implementation, enablement |
+| `tone` | `executive`, `friendly`, or `technical`. | executive |
 
-## Outputs
+## Deliverables
 
 - `proposal.md`
-- `proposal.pdf`
 - `statement-of-work.md`
 - `pricing.csv`
 - `timeline.csv`
@@ -42,4 +39,15 @@ skills run proposal-pack "Revamp the customer onboarding portal" --services "Dis
 - `cover-email.md`
 - `manifest.json`
 
-After submitting a hosted run, poll with `skills runs status <run-id>` and download outputs with `skills exports download <run-id>`.
+## Method
+
+1. Open by restating the client's problem in their words. A proposal that starts
+   with your company loses before it is read.
+2. Scope by outcome, then by deliverable. Make the exclusions explicit — most
+   disputes come from what was never written down.
+3. Tie pricing to the scope structure so a scope change has an obvious price
+   consequence.
+4. Build the timeline with client-side dependencies named, since those are the
+   usual cause of slip.
+5. List assumptions plainly; each one is a risk you are asking the client to accept.
+6. Keep the cover email short: problem, approach, price range, next step.

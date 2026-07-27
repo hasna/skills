@@ -5,7 +5,6 @@
   "description": "Hosted premium paid ad creative artifact generator",
   "type": "module",
   "skills": {
-    "runtime": "hosted",
-    "source": "remote"
+    "kind": "instruction"
   }
 }

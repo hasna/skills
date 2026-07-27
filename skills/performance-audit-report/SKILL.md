@@ -1,6 +1,7 @@
 ---
 name: performance-audit-report
-description: Generate premium performance audit reports for web apps, APIs, or SaaS surfaces with metrics, findings, budgets, remediation plans, and manifest metadata.
+description: Generate performance audit reports for web apps, APIs, or SaaS surfaces with metrics, findings, budgets, remediation plans, and manifest metadata.
+kind: instruction
 ---
 
 # Performance Audit Report
@@ -9,28 +10,25 @@ Generate a performance audit package from a URL, repo notes, trace summary, or p
 
 ## Requirements
 
-- Authenticate with `skills auth login`.
-- This premium skill runs through the hosted Skills runtime; local installs expose only metadata and instructions.
+None. This is an instruction skill: it is prose an agent follows, so it needs no
+credentials, no network access, and no local runtime.
 
 ## Usage
 
-```bash
-skills run performance-audit-report --target "https://example.com" --app "Example"
-skills run performance-audit-report --notes "Dashboard JS is 1.2MB and API p95 is 900ms" --surface web
-```
+Ask an agent for the deliverables below and give it the inputs. Reading this file
+IS the invocation; `skills run` refuses instruction skills on purpose.
 
-## Options
+## Inputs
 
-| Option | Description | Default |
+| Input | Description | Default |
 |--------|-------------|---------|
-| `--target <url-or-path>` | App URL, route, repo path, or service name. | optional |
-| `--notes <text>` | Performance notes, metrics, trace summary, or constraints. Positional text also works. | optional |
-| `--app <text>` | Application or product name. | Performance Target |
-| `--surface <type>` | `web`, `api`, `mobile`, or `worker`. | web |
-| `--budget <profile>` | `strict`, `balanced`, or `growth`. | balanced |
-| `--output <dir>` | Output directory for direct local execution. Hosted runs use the run export directory. | run export dir |
+| `target` | App URL, route, repo path, or service name. | optional |
+| `notes` | Performance notes, metrics, trace summary, or constraints. Positional text also works. | optional |
+| `app` | Application or product name. | Performance Target |
+| `surface` | `web`, `api`, `mobile`, or `worker`. | web |
+| `budget` | `strict`, `balanced`, or `growth`. | balanced |
 
-## Outputs
+## Deliverables
 
 - `performance-audit-report.md`
 - `findings.csv`
@@ -39,4 +37,13 @@ skills run performance-audit-report --notes "Dashboard JS is 1.2MB and API p95 i
 - `metrics.json`
 - `manifest.json`
 
-After submitting a hosted run, poll with `skills runs status <run-id>` and download outputs with `skills exports download <run-id>`.
+## Method
+
+1. State what evidence you actually have. If no measurements were supplied, say
+   so — an audit that presents guesses as measurements is worse than none.
+2. Establish the budget before the findings: target metrics and thresholds.
+3. Order findings by user-perceived impact, not by how easy they are to describe.
+4. For each finding, give the mechanism (why it is slow), not just the symptom.
+5. Attach an estimated saving and a confidence level to each recommendation.
+6. Separate quick wins from structural work, and say what must be measured again
+   after each change to confirm it worked.

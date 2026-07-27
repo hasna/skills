@@ -5,7 +5,6 @@
   "description": "Hosted premium meeting artifact package generator",
   "type": "module",
   "skills": {
-    "runtime": "hosted",
-    "source": "remote"
+    "kind": "instruction"
   }
 }

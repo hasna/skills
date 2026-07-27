@@ -5,7 +5,6 @@
   "description": "Hosted premium performance audit report generator",
   "type": "module",
   "skills": {
-    "runtime": "hosted",
-    "source": "remote"
+    "kind": "instruction"
   }
 }

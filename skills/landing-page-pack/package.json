@@ -5,7 +5,6 @@
   "description": "Hosted premium landing page copy and conversion artifact generator",
   "type": "module",
   "skills": {
-    "runtime": "hosted",
-    "source": "remote"
+    "kind": "instruction"
   }
 }

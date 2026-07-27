@@ -32,7 +32,7 @@
     "skills/",
     "!skills/**/node_modules",
     "!skills/scaffold-project/my-app",
-    "!skills/{ad-creative-pack,api-docs-portal,audio-transcript-pack,blog-article,brand-assets,brand-kit,contract-review-report,customer-feedback-report,email-sequence,invoice-reconciliation,landing-page-pack,logo-design,market-research-report,meeting-pack,migration-plan-pack,one-page-website,pdf-to-dataset,pdf-to-markdown,performance-audit-report,pitch-deck,product-mockup,proposal-pack,repo-onboarding-report,sdk-generator,security-audit-report,seo-content-pack,slide-deck-generator,social-content-calendar,test-suite-generator,video-highlight-pack}/src",
+    "!skills/{api-docs-portal,audio-transcript-pack,brand-assets,invoice-reconciliation,logo-design,one-page-website,pdf-to-dataset,pdf-to-markdown,product-mockup,sdk-generator,slide-deck-generator}/src",
     "LICENSE",
     "README.md"
   ],

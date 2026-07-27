@@ -32,9 +32,10 @@ export const FINANCE_COMPLIANCE_SKILLS: SkillMeta[] = [
   {
     name: "contract-review-report",
     displayName: "Contract Review Report",
-    description: "Generate premium contract review reports with risk register, clause summary, redline suggestions, negotiation email, and manifest artifacts",
+    description: "Generate contract review reports with risk register, clause summary, redline suggestions, negotiation email, and manifest artifacts",
     category: "Finance & Compliance",
-    tags: ["contract", "legal", "review", "risk", "premium", "remote"],
+    kind: "instruction",
+    tags: ["contract", "legal", "review", "risk"],
   },
   {
     name: "extract-invoice",

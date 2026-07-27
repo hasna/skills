@@ -1,6 +1,7 @@
 ---
 name: test-suite-generator
-description: Generate premium API, unit, and browser test suite packages with runnable tests and coverage notes.
+description: Generate API, unit, and browser test suite packages with runnable tests and coverage notes.
+kind: instruction
 ---
 
 # Test Suite Generator
@@ -9,27 +10,24 @@ Generate a test package for SaaS apps from routes, specs, or user flows.
 
 ## Requirements
 
-- Authenticate with `skills auth login`.
-- This premium skill runs through the hosted Skills runtime; local installs expose only metadata and instructions.
+None. This is an instruction skill: it is prose an agent follows, so it needs no
+credentials, no network access, and no local runtime.
 
 ## Usage
 
-```bash
-skills run test-suite-generator --spec "POST /api/projects, GET /api/projects/:id" --framework "Next.js" --runner "bun"
-skills run test-suite-generator "signup, checkout, billing success" --include-browser
-```
+Ask an agent for the deliverables below and give it the inputs. Reading this file
+IS the invocation; `skills run` refuses instruction skills on purpose.
 
-## Options
+## Inputs
 
-| Option | Description | Default |
+| Input | Description | Default |
 |--------|-------------|---------|
-| `--spec <text>` | Routes, specs, or user flows. Positional text also works. | required |
-| `--framework <name>` | Application framework. | generic SaaS app |
-| `--runner <name>` | Test runner style: `bun`, `vitest`, or `playwright`. | bun |
-| `--include-browser` | Include browser flow tests. | false |
-| `--output <dir>` | Output directory for direct local execution. Hosted runs use the run export directory. | run export dir |
+| `spec` | Routes, specs, or user flows. Positional text also works. | required |
+| `framework` | Application framework. | generic SaaS app |
+| `runner` | Test runner style: `bun`, `vitest`, or `playwright`. | bun |
+| `include-browser` | Include browser flow tests. | false |
 
-## Outputs
+## Deliverables
 
 - `tests/api.test.ts`
 - `tests/unit.test.ts`
@@ -38,4 +36,16 @@ skills run test-suite-generator "signup, checkout, billing success" --include-br
 - `coverage-notes.md`
 - `manifest.json`
 
-After submitting a hosted run, poll with `skills runs status <run-id>` and download outputs with `skills exports download <run-id>`.
+## Method
+
+1. Turn the natural-language spec into an explicit list of behaviours with their
+   expected outcomes before writing any test code.
+2. Cover the boundaries first — empty, maximum, malformed, unauthorized,
+   concurrent. Happy-path-only suites give false confidence.
+3. Write assertions against observable behaviour, not implementation detail, so
+   the suite survives refactoring.
+4. Keep tests independent and order-agnostic; shared mutable fixtures are the
+   most common source of flakiness.
+5. Match the project's existing framework and conventions — detect them from the
+   repo rather than imposing your own.
+6. Note explicitly what you did NOT cover and why, so the gaps are visible.

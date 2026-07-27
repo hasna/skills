@@ -53,9 +53,10 @@ export const PRODUCTIVITY_ORGANIZATION_SKILLS: SkillMeta[] = [
   {
     name: "meeting-pack",
     displayName: "Meeting Pack",
-    description: "Generate premium meeting artifact packages with summaries, decisions, action items, follow-up email, timeline, project export, and manifest",
+    description: "Generate meeting artifact packages with summaries, decisions, action items, follow-up email, timeline, project export, and manifest",
     category: "Productivity & Organization",
-    tags: ["meeting", "summary", "action-items", "decisions", "premium", "remote"],
+    kind: "instruction",
+    tags: ["meeting", "summary", "action-items", "decisions"],
   },
   {
     name: "merge-pdfs",
