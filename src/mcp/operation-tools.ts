@@ -260,39 +260,6 @@ export function registerOperationTools(server: McpServer): void {
     return { content: [{ type: "text", text: JSON.stringify(reqs, null, 2) }] };
   });
 
-  server.registerTool("quote_skill", {
-    title: "Quote Skill",
-    description: "Quote a skill run before spending account balance.",
-    inputSchema: {
-      name: z.string(),
-      input: z.record(z.string(), z.unknown()).optional(),
-      args: z.array(z.string()).optional(),
-    },
-  }, async ({ name, input, args }) => {
-    const skill = getSkill(name);
-    if (!skill) {
-      return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
-    }
-
-    const { ARTICLE_GENERATION_SLUG, getPublicSkillPricing, validateBlogArticleRunOptions } = await import("../lib/pricing.js");
-    const runInput = input || {};
-    const runArgs = args || [];
-    if (skill.name === ARTICLE_GENERATION_SLUG) {
-      const validation = validateBlogArticleRunOptions(runInput, runArgs);
-      if (!validation.ok) {
-        return mcpError("INVALID_BLOG_ARTICLE_OPTIONS", validation.errors.join(" "));
-      }
-    }
-
-    const pricing = getPublicSkillPricing(skill.name, runInput, runArgs);
-
-    return mcpJson({
-      skill: skill.name,
-      pricing,
-      availability: { status: "available" },
-    });
-  });
-
   server.registerTool("run_skill", {
     title: "Run Skill",
     description: "Run a skill by name with optional arguments.",
@@ -300,10 +267,9 @@ export function registerOperationTools(server: McpServer): void {
       name: z.string(),
       input: z.record(z.string(), z.unknown()).optional(),
       args: z.array(z.string()).optional(),
-      approved: z.boolean().optional(),
       detail: z.boolean().optional(),
     },
-  }, async ({ name, input, args, approved, detail }) => {
+  }, async ({ name, input, args, detail }) => {
     const skill = getSkill(name);
     if (!skill) {
       return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
@@ -312,10 +278,8 @@ export function registerOperationTools(server: McpServer): void {
     const { getApiKey } = await import("../lib/auth-store.js");
     const {
       ARTICLE_GENERATION_SLUG,
-      getSkillRunCostCents,
-      formatCost,
       validateBlogArticleRunOptions,
-    } = await import("../lib/pricing.js");
+    } = await import("../lib/blog-article.js");
     const skillName = skill.name;
     const runInput = input || {};
     const runArgs = args || [];
@@ -328,32 +292,18 @@ export function registerOperationTools(server: McpServer): void {
 
     const apiKey = getApiKey();
     const hostedRuntime = false;
-    const costCents = hostedRuntime ? getSkillRunCostCents(skillName, runInput, runArgs) : undefined;
     const runContext = createSkillRun({
       skill: skillName,
       args: runArgs,
       remote: hostedRuntime,
-      costCents,
     });
 
 
     if (hostedRuntime && !apiKey) {
-      const cost = formatCost(costCents ?? 0);
-      const error = `${skillName} is a hosted skill (${cost}). Run: skills auth login`;
+      const error = `${skillName} is a hosted skill. Run: skills auth login`;
       writeRunLogs(runContext, "", error + "\n");
-      const run = completeSkillRun(runContext, { status: "failed", error, costCents });
+      const run = completeSkillRun(runContext, { status: "failed", error });
       return mcpError("AUTH_REQUIRED", `${error}. Local run metadata: ${run.paths.runDir}/run.json`, ["skills auth login"]);
-    }
-
-    if (hostedRuntime && apiKey && approved !== true) {
-      const cost = formatCost(costCents ?? 0);
-      const error = `${skillName} is a paid hosted skill (${cost}). Call quote_skill first, then call run_skill with approved: true after user approval.`;
-      writeRunLogs(runContext, "", error + "\n");
-      const run = completeSkillRun(runContext, { status: "failed", error, costCents });
-      return mcpError("APPROVAL_REQUIRED", `${error}. Local run metadata: ${run.paths.runDir}/run.json`, [
-        "quote_skill",
-        "run_skill approved=true",
-      ]);
     }
 
     if (hostedRuntime && apiKey) {
@@ -573,7 +523,6 @@ function compactRunToolPayload(payload: Record<string, any>, detailHint: string)
     ...(payload.status !== undefined ? { status: payload.status } : {}),
     ...(payload.remote !== undefined ? { remote: payload.remote } : {}),
     ...(payload.correlationId !== undefined ? { correlationId: payload.correlationId } : {}),
-    ...(payload.pricing !== undefined ? { pricing: payload.pricing } : {}),
     ...(payload.error !== undefined ? { error: payload.error } : {}),
     ...(payload.remoteRun !== undefined ? { remoteRun: compactRemoteRun(payload.remoteRun) } : {}),
     run: compactRunRecord(payload.run),

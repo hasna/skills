@@ -27,8 +27,7 @@ describe("CLI discovery", () => {
       expect(data.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
       expect(data[0]).toHaveProperty("name");
       expect(data[0]).toHaveProperty("category");
-      expect(data[0]).toHaveProperty("pricing");
-      expect(data[0].pricing).toHaveProperty("formattedCost");
+      expect(data[0]).not.toHaveProperty("pricing");
       // Compact mode carries a short description so agents can discover without
       // a per-skill lookup, but still omits tags to keep tokens low.
       expect(data[0]).toHaveProperty("description");
@@ -287,11 +286,7 @@ describe("CLI discovery", () => {
       expect(Array.isArray(data)).toBe(true);
       expect(data.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
       const image = data.find((skill: any) => skill.name === "pdf-to-markdown");
-      expect(image.pricing).toMatchObject({
-        tier: "free",
-        formattedCost: "Free",
-      });
-      expect(JSON.stringify(image.pricing)).not.toContain("openai");
+      expect(image).not.toHaveProperty("pricing");
     });
 
     test("lists remote registry with --remote --json", async () => {
@@ -310,7 +305,7 @@ describe("CLI discovery", () => {
                 availability: {
                   status: "unavailable",
                   code: "HOSTED_PROVIDER_UNAVAILABLE",
-                  details: ["No balance was charged."],
+                  details: ["Hosted provider is temporarily unavailable."],
                 },
               },
               {
@@ -350,7 +345,7 @@ describe("CLI discovery", () => {
             code: "HOSTED_PROVIDER_UNAVAILABLE",
           },
         });
-        expect(image.availability.details).toContain("No balance was charged.");
+        expect(image.availability.details).toContain("Hosted provider is temporarily unavailable.");
         expect(logo).toMatchObject({
           source: "remote",
           availability: { status: "available" },
@@ -441,7 +436,7 @@ describe("CLI discovery", () => {
       expect(Array.isArray(data)).toBe(true);
       expect(data.length).toBeGreaterThan(0);
       expect(data[0]).toHaveProperty("name");
-      expect(data[0]).toHaveProperty("pricing");
+      expect(data[0]).not.toHaveProperty("pricing");
     });
 
     test("searches remote registry with --remote --json", async () => {
@@ -483,7 +478,7 @@ describe("CLI discovery", () => {
       const { stdout } = await runCli(["info", "pdf-to-markdown"]);
       expect(stdout).toContain("PDF to Markdown");
       expect(stdout).toContain("Data & Analysis");
-      expect(stdout).toContain("Pricing: Free");
+      expect(stdout).not.toContain("Pricing:");
       expect(stdout.toLowerCase()).not.toContain("exa");
       expect(stdout.toLowerCase()).not.toContain("openai");
       expect(stdout.toLowerCase()).not.toContain("claude");
@@ -502,16 +497,13 @@ describe("CLI discovery", () => {
       expect(data.displayName).toBe("PDF to Markdown");
       expect(data.category).toBe("Data & Analysis");
       expect(Array.isArray(data.tags)).toBe(true);
-      expect(data.pricing).toMatchObject({
-        tier: "free",
-        formattedCost: "Free",
-      });
+      expect(data).not.toHaveProperty("pricing");
       expect(JSON.stringify(data).toLowerCase()).not.toContain("exa");
       expect(JSON.stringify(data).toLowerCase()).not.toContain("openai");
       expect(JSON.stringify(data).toLowerCase()).not.toContain("claude");
     });
 
-    test("shows remote skill info with auth and remote pricing", async () => {
+    test("shows remote skill info with auth and drops server pricing", async () => {
       const server = Bun.serve({
         port: 0,
         fetch: (req) => {
@@ -527,13 +519,7 @@ describe("CLI discovery", () => {
             version: "0.2.0",
             pricing: {
               tier: "free",
-              billingUnit: "run",
-              costCents: 75,
               formattedCost: "$0.75/run",
-              estimated: false,
-              quoteDependsOnInput: false,
-              quoteRequired: false,
-              description: "Fixed remote price.",
             },
           });
         },
@@ -553,18 +539,12 @@ describe("CLI discovery", () => {
           category: "Remote Tools",
           source: "remote",
           version: "0.2.0",
-          pricing: {
-            formattedCost: "$0.75/run",
-            estimated: false,
-          },
         });
+        expect(data).not.toHaveProperty("pricing");
       } finally {
         server.stop(true);
       }
     });
-  });
-
-  describe("quote", () => {
   });
 
 });

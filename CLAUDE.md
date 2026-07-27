@@ -130,7 +130,7 @@ There is no `dashboard/` directory and no `src/server/serve.ts`.
 | Catalog skills | 229 | `SKILLS.length` (`src/lib/registry-data/index.ts`) |
 | Instruction-kind skills | 19 | `SKILLS` entries with `kind: "instruction"` |
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
-| MCP tools | 38 | `tools/list` against a live `buildServer()` |
+| MCP tools | 37 | `tools/list` against a live `buildServer()` |
 | MCP resources | 4 | `resources/list` + `resources/templates/list` (3 static + 1 template) |
 | Published bins | 5 | `bin` in `package.json` |
 | bun build invocations | 6 | the `build` script in `package.json` |
@@ -472,7 +472,7 @@ offset) · `get_skill_info` (**name**) · `get_skill_docs` (**name**) ·
 `port_skill` (**path**, name, overwrite, allowShadow) · `pin_skill` (**name**, for,
 scope) · `pin_category` (**category**, for, scope) · `unpin_skill` (**name**, for,
 scope) · `list_categories` · `list_tags` · `get_requirements` (**name**) ·
-`quote_skill` (**name**, input, args) · `run_skill` (**name**, input, args, approved,
+`run_skill` (**name**, input, args,
 detail) · `get_run_status` (**run_id**, detail) · `export_skills` · `import_skills`
 (**skills**, for, scope) · `whoami`
 

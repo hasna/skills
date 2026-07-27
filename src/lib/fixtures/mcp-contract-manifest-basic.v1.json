@@ -55,7 +55,6 @@
         "name"
       ],
       "properties": [
-        "approved",
         "args",
         "detail",
         "input",

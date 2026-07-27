@@ -18,7 +18,6 @@ import { loadRemoteRegistry } from "../../lib/remote-registry.js";
 import { getInstalledSkills, getInstallMeta } from "../../lib/installer.js";
 import {
   getPublicSkillDiscovery,
-  publicDiscoveryPriceLabel,
   type PublicSkillDiscovery,
 } from "../../lib/discovery.js";
 import {
@@ -115,13 +114,13 @@ function resolveListFormat(format: unknown): ListFormat | undefined {
 }
 
 function formatBrief(skill: PublicSkillDiscovery) {
-  return `${skill.name} \u2014 ${truncateText(skill.description, 110)} (${publicDiscoveryPriceLabel(skill)}) [${skill.category}]`;
+  return `${skill.name} \u2014 ${truncateText(skill.description, 110)} [${skill.category}]`;
 }
 
 function formatSkillLine(skill: PublicSkillDiscovery, options: { verbose?: boolean } = {}): string {
   const description = truncateText(skill.description, options.verbose ? 180 : 88);
   const tags = options.verbose && skill.tags.length ? chalk.dim(` tags: ${skill.tags.join(", ")}`) : "";
-  return `  ${chalk.cyan(skill.name)}${skill.source === "custom" ? chalk.yellow(" [custom]") : ""} ${chalk.dim(`[${skill.category}]`)} ${chalk.dim(`(${publicDiscoveryPriceLabel(skill)})`)} - ${description}${tags}`;
+  return `  ${chalk.cyan(skill.name)}${skill.source === "custom" ? chalk.yellow(" [custom]") : ""} ${chalk.dim(`[${skill.category}]`)} - ${description}${tags}`;
 }
 
 function enrichDiscovery<T extends SkillMeta>(skills: T[]): Array<PublicSkillDiscovery<T>> {
@@ -252,8 +251,8 @@ async function handleList(options: any) {
   if (options.json) { await writeJson(allSkills, 2); return; }
   if (fmt === "compact") { for (const s of allSkills) console.log(s.name); return; }
   if (fmt === "csv") {
-    console.log("name,category,price,description,source");
-    for (const s of allSkills) { const desc = s.description.replace(/"/g, '""'); console.log(`${s.name},${s.category},"${publicDiscoveryPriceLabel(s)}","${desc}",${s.source ?? "official"}`); }
+    console.log("name,category,description,source");
+    for (const s of allSkills) { const desc = s.description.replace(/"/g, '""'); console.log(`${s.name},${s.category},"${desc}",${s.source ?? "official"}`); }
     return;
   }
   if (brief) {
@@ -300,8 +299,8 @@ async function handleSearch(query: string, options: any) {
   }
   if (fmt === "compact") { for (const s of output) console.log(s.name); return; }
   if (fmt === "csv") {
-    console.log("name,category,price,description");
-    for (const s of output) { const desc = s.description.replace(/"/g, '""'); console.log(`${s.name},${s.category},"${publicDiscoveryPriceLabel(s)}","${desc}"`); }
+    console.log("name,category,description");
+    for (const s of output) { const desc = s.description.replace(/"/g, '""'); console.log(`${s.name},${s.category},"${desc}"`); }
     return;
   }
   const limit = parsePageLimit(options.limit, DEFAULT_SEARCH_LIMIT, { allowAll: true });

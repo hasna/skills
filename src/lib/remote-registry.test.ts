@@ -189,7 +189,7 @@ describe("remote registry", () => {
     expect(serialized).toContain("credential");
   });
 
-  test("parses versioned remote skill metadata with pricing", () => {
+  test("parses versioned remote skill metadata and drops server pricing", () => {
     const skills = parseRemoteRegistryPayload({
       data: [
         {
@@ -201,13 +201,7 @@ describe("remote registry", () => {
           version: "1.2.3",
           pricing: {
             tier: "premium",
-            billingUnit: "second",
-            costCents: 120,
             formattedCost: "$1.20 estimated",
-            estimated: true,
-            quoteDependsOnInput: true,
-            quoteRequired: true,
-            description: "Estimated by duration.",
           },
         },
       ],
@@ -220,12 +214,9 @@ describe("remote registry", () => {
       category: "Media Processing",
       tags: ["video", "remote"],
       version: "1.2.3",
-      pricing: {
-        formattedCost: "$1.20 estimated",
-        estimated: true,
-      },
       source: "remote",
     });
+    expect(skills[0]).not.toHaveProperty("pricing");
   });
 
   test("loads remote registry with injected fetch implementation", async () => {

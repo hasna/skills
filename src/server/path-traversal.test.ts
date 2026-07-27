@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createSkillsFetchHandler } from "./app.js";
-import { getServerSkill, getServerSkillMd, quoteServerSkill } from "./registry.js";
+import { getServerSkill, getServerSkillMd } from "./registry.js";
 import { MemorySkillsStore } from "./store.js";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
@@ -154,16 +154,6 @@ describe("skill.md path traversal (HTTP boundary)", () => {
     }
   });
 
-  test("quote route: a traversal id does not 200 and leaks nothing", async () => {
-    const ctx = await startTestServer();
-    try {
-      const res = await ctx.post(`/api/v1/skills/${EXPLOIT_ID}/quote`);
-      expect(res.status).not.toBe(200);
-      expect(await res.text()).not.toContain(LEAK_MARKER);
-    } finally {
-      ctx.stop();
-    }
-  });
 });
 
 describe("skill.md path traversal (registry layer, HTTP decoding bypassed)", () => {
@@ -189,11 +179,5 @@ describe("skill.md path traversal (registry layer, HTTP decoding bypassed)", () 
 
   test("getServerSkill refuses a traversal slug and returns null", () => {
     expect(getServerSkill(TRAVERSAL_SLUG)).toBeNull();
-  });
-
-  test("quoteServerSkill refuses a traversal slug and leaks nothing", () => {
-    const quote = quoteServerSkill(TRAVERSAL_SLUG);
-    expect(quote).toMatchObject({ code: "SKILL_NOT_FOUND" });
-    expect(JSON.stringify(quote)).not.toContain(LEAK_MARKER);
   });
 });
