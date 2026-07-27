@@ -30,11 +30,85 @@
  * Tests that exist to prove the $HOME-resolution branch cannot run under the
  * override; they opt out with withHomeDataDir()/withTempHome() below.
  */
-import { beforeEach, afterEach } from "bun:test";
+import { beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DATA_DIR_ENV } from "./lib/config.js";
+
+/**
+ * Per-test timeout for the whole suite. THIS IS THE ONE PLACE THE NUMBER LIVES —
+ * a new test that spawns a subprocess needs no timeout argument of its own.
+ *
+ * Why it exists: bun's default is 5000ms, and the CLI tests spawn a real `bun
+ * run src/cli/index.tsx` per assertion. Two agents independently watched the
+ * same subprocess tests come in at 5000.00-5003.90ms against that 5000ms limit
+ * and go red, and both reproduced it on a pristine `origin/main` checkout, so it
+ * was never anyone's diff — it was the ceiling.
+ *
+ * Measured rather than guessed. One full run (896 tests, 347s wall, this repo at
+ * commit 53bc5f2, machine at load average 82-88 with other agents' `bun test`
+ * runs in flight), per-test times from `--reporter=junit`:
+ *
+ *   11.06s  cli.discovery      flushes complete registry sync JSON through a shell pipe
+ *    9.50s  unconfigured-...   no packed code file names a host outside APPROVED_CODE_HOSTS
+ *    9.01s  cli.portable-...   new, list, show, validate, and run work against ~/.hasna/skills
+ *    8.83s  cli.runtime        config unset apiUrl returns a project to running on this machine
+ *    7.53s  agent-workflow     merge-pr guard passes its raw-fixture behavior suite
+ *
+ *   over 1s: 56 · over 2s: 37 · over 3s: 30 · over 5s: 14 · over 10s: 1 · over 15s: 0
+ *
+ * FOURTEEN of 896 tests exceed 5000ms on a loaded machine. That is not marginal
+ * flakiness at the tail, it is a ceiling set below the working set, and a CI
+ * runner having a bad minute reproduces the same shape.
+ *
+ * Why 30s rather than tighter or looser: it is ~2.7x the slowest test ever
+ * observed here and ~6x the 5s cluster that was failing, with nothing measured
+ * between 11.1s and the limit — so a test that hits 30s is not slow, it is
+ * stuck. It also keeps a hang cheap to find: 30s against a 347s suite. Going
+ * higher starts converting hangs into "slow tests"; going much lower puts the
+ * ceiling back inside the observed distribution, which is the bug being fixed.
+ *
+ * Override for one run with HASNA_SKILLS_TEST_TIMEOUT_MS — including to LOWER it,
+ * which is how you tell a hang from a slow test without waiting 30s a time.
+ *
+ * A per-test timeout argument still wins over this, as it always did.
+ */
+export const DEFAULT_TEST_TIMEOUT_MS = 30_000;
+
+const timeoutOverride = Number(process.env["HASNA_SKILLS_TEST_TIMEOUT_MS"]);
+const effectiveTimeout =
+  Number.isFinite(timeoutOverride) && timeoutOverride > 0 ? timeoutOverride : DEFAULT_TEST_TIMEOUT_MS;
+
+/**
+ * Applies DEFAULT_TEST_TIMEOUT_MS to the calling file. CALL IT ONCE AT THE TOP OF
+ * EVERY TEST FILE — `src/test-timeout.test.ts` fails the build if a file forgets,
+ * so this is checked rather than remembered.
+ *
+ * Why a function every file calls, and not one call right here: measured on bun
+ * 1.3.14, none of the tidier spellings work.
+ *
+ *   - `[test] timeout` in bunfig.toml — accepted and SILENTLY IGNORED. A 400ms
+ *     test passed under a declared 100ms ceiling.
+ *   - `setDefaultTimeout()` at preload module scope — applies to exactly ONE
+ *     test file. Three files, one call, 150ms ceiling: one file timed out and
+ *     two ran to 400ms unbothered. The preload is evaluated once, so the setting
+ *     lands on whichever file happens to be loading at the time. This is the
+ *     shape that would have shipped as a no-op: `bun test` on the full suite
+ *     still failed a CLI test "after 5000ms" with the call sitting right here.
+ *   - `setDefaultTimeout()` from a beforeEach, and a BUN_TEST_TIMEOUT env var —
+ *     no effect at all.
+ *
+ * What does work is a call made while each file is being evaluated, which is why
+ * this is a function rather than a statement. It does not matter that the call
+ * lives in this module; it matters when it runs. `--timeout` on the command line
+ * also works globally, and `package.json`'s `test` script passes it — but only
+ * that one invocation gets it, and `bun test` without `run` is what people and
+ * agents actually type.
+ */
+export function useDefaultTestTimeout(): void {
+  setDefaultTimeout(effectiveTimeout);
+}
 
 /**
  * Set at module scope, before any test file is imported, so there is never a

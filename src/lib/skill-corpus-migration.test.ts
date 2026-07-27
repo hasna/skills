@@ -2,6 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("skill corpus migration policy", () => {
   const content = readFileSync(
     join(process.cwd(), "docs/architecture/skill-corpus-migration.md"),

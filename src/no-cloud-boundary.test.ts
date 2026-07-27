@@ -3,6 +3,10 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { useDefaultTestTimeout } from "./test-preload.js";
+
+useDefaultTestTimeout();
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const forbiddenPackages = ["@hasna/" + "cloud", "open-" + "cloud", "@hasna/" + "wallets"];
 const forbiddenLegacyStorageTerms = [

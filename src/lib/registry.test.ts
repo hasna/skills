@@ -17,6 +17,10 @@ import {
   type Category,
 } from "./registry";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 function bundledSkillPackageNames(): string[] {
   const skillsDir = join(process.cwd(), "skills");
   return readdirSync(skillsDir, { withFileTypes: true })

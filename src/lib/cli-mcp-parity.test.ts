@@ -8,6 +8,10 @@ import {
 } from "./cli-mcp-parity";
 import { listMcpToolContracts } from "./mcp-contracts";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("skills CLI/MCP parity", () => {
   test("documents portable skill workflow parity", () => {
     expect(validateSkillsCliMcpParity()).toEqual([]);

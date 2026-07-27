@@ -59,6 +59,9 @@ import pkg from "../../package.json" with { type: "json" };
 import { buildServer } from "../mcp/server.js";
 import { SKILLS } from "./registry.js";
 import { CATEGORIES } from "./registry-types.js";
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
 
 const CLAUDE_MD_PATH = join(import.meta.dir, "..", "..", "CLAUDE.md");
 const TABLE_HEADING = "### Derived counts";

@@ -9,6 +9,10 @@ import {
   writeRegistrySyncArtifact,
 } from "./registry-sync.js";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 function withCleanHome<T>(fn: () => T): T {
   const originalHome = process.env["HOME"];
   const home = mkdtempSync(join(tmpdir(), "registry-sync-home-"));

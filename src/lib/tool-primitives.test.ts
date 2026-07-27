@@ -7,6 +7,10 @@ import {
   validateToolPrimitiveCoverage,
 } from "./tool-primitives.js";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("tool primitives", () => {
   test("exposes stable primitive definitions", () => {
     const primitives = listToolPrimitives();

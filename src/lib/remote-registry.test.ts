@@ -8,6 +8,10 @@ import {
   parseRemoteSkillPayload,
 } from "./remote-registry.js";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("remote registry", () => {
   const originalSkillsApiUrl = process.env.SKILLS_API_URL;
 

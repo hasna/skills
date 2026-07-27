@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SKILL_ALIASES } from "./skill-aliases.js";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("renamed skills documentation", () => {
   const content = readFileSync(
     join(process.cwd(), "docs/architecture/renamed-skills.md"),

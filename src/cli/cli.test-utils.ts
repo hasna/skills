@@ -3,13 +3,24 @@ import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import pkg from "../../package.json" with { type: "json" };
 import { BASIC_SKILL_NAMES, SKILLS } from "../lib/registry.js";
-import { withoutDataDirOverrideEnv } from "../test-preload.js";
+import { DEFAULT_TEST_TIMEOUT_MS, withoutDataDirOverrideEnv } from "../test-preload.js";
 
 export const CLI_PATH = join(import.meta.dir, "index.tsx");
 export const EXPECTED_ALL_SKILL_COUNT = SKILLS.length;
 export const EXPECTED_BASIC_SKILL_COUNT = BASIC_SKILL_NAMES.length;
 export const PACKAGE_VERSION = pkg.version;
-export const SLOW_TEST_TIMEOUT = 15000;
+
+/**
+ * Retained for the ~36 call sites that already pass it. NEW TESTS DO NOT NEED IT:
+ * every test file calls useDefaultTestTimeout(), so a subprocess test written
+ * with no timeout argument is already covered — which is the point, because
+ * remembering to annotate the next one is exactly what did not happen.
+ *
+ * Aliased rather than left at its old 15000 so this constant can never sit BELOW
+ * the suite default and quietly give the slowest tests in the suite the tightest
+ * ceiling in it.
+ */
+export const SLOW_TEST_TIMEOUT = DEFAULT_TEST_TIMEOUT_MS;
 export const CLEAN_CLI_HOME = mkdtempSync(join(tmpdir(), "skills-cli-home-"));
 
 // The CLI under test resolves its data dir from $HOME. Drop the preload's

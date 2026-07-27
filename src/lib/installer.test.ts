@@ -24,6 +24,10 @@ import {
   resolveAgents,
 } from "./installer";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 let testDir: string;
 
 beforeEach(() => {

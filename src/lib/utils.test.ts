@@ -1,6 +1,10 @@
 import { describe, test, expect } from "bun:test";
 import { normalizeSkillName } from "./utils";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("utils", () => {
   describe("normalizeSkillName", () => {
     test("preserves bare skill names", () => {

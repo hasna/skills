@@ -7,6 +7,10 @@ import { SqliteSkillsStore, applySqliteMigrations } from "./sqlite-store.js";
 import { resolveMigrationsDir } from "./migrations-dir.js";
 import type { ApiPrincipal } from "./types.js";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 let artifactSeq = 0;
 
 const ORG_A: Partial<ApiPrincipal> = { orgId: "org_a", orgSlug: "org-a", orgName: "Org A", userId: "user_a", email: "a@example.com", apiKeyId: "key_a" };

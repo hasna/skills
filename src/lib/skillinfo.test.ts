@@ -14,6 +14,10 @@ import {
 import { INSTALLED_SKILLS_DIRNAME } from "./config";
 import { installSkill } from "./installer";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 let testDir: string;
 
 beforeEach(() => {

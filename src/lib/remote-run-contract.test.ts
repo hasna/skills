@@ -4,6 +4,10 @@ import {
   normalizeRemoteSkillRunContract,
 } from "./remote-run-contract";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("remote skill run contract", () => {
   test("normalizes submitted run payloads for CLI, MCP, and web clients", () => {
     const run = normalizeRemoteSkillRunContract({

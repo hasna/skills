@@ -9,6 +9,10 @@ import {
   runCliInCwd,
 } from "./cli.test-utils";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("CLI pin and search controls", () => {
   describe("pin", () => {
     test("pins a legacy alias to the canonical skill name", async () => {

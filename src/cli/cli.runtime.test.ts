@@ -9,6 +9,10 @@ import {
   runCliInCwd,
 } from "./cli.test-utils";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("CLI runtime and misc commands", () => {
   describe("setup", () => {
     test("stores the API URL it was given in project config", async () => {

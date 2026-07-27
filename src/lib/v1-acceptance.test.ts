@@ -2,6 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("v1 acceptance criteria", () => {
   const doc = readFileSync(join(process.cwd(), "docs/release/v1-acceptance.md"), "utf8");
 

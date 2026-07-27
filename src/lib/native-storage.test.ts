@@ -23,6 +23,10 @@ import {
   type SkillsPostgresQueryClient,
 } from "./native-storage";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 class FakePostgresClient implements SkillsPostgresQueryClient {
   queries: Array<{ sql: string; values?: readonly unknown[] }> = [];
   records: any[] = [];

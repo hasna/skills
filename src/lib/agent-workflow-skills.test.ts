@@ -5,6 +5,10 @@ import { spawnSync } from "node:child_process";
 import { SKILLS } from "./registry";
 import { parseSkillFrontmatter } from "./skill-validation";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 const ROOT = process.cwd();
 const AGENT_SKILLS_DIR = join(ROOT, "agent-skills");
 

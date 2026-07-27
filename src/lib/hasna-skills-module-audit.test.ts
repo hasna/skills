@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as publicAPI from "../index";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("hasna/skills module audit", () => {
   const content = readFileSync(
     join(process.cwd(), "docs/architecture/hasna-skills-module-audit.md"),

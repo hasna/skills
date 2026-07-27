@@ -6,6 +6,10 @@ import { DATA_DIR_ENV, INSTALLED_SKILLS_DIRNAME } from "./config.js";
 import { findPortableSkill, getPortableSkillsRoot, listPortableSkills } from "./portable-skills.js";
 import { clearRegistryCache, loadRegistry } from "./registry.js";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 /**
  * ~/.hasna/skills is the skills *app* folder; the corpus lives in installed/.
  *

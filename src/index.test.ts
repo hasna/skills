@@ -1,6 +1,10 @@
 import { describe, test, expect } from "bun:test";
 import * as publicAPI from "./index";
 
+import { useDefaultTestTimeout } from "./test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("public API exports", () => {
   test("all named exports from src/index.ts are defined (not undefined)", () => {
     const undefinedExports: string[] = [];

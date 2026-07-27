@@ -9,6 +9,10 @@ import {
   listPrivateSkillSlugs,
 } from "./public-boundary";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 function makeSkill(root: string, slug: string, files: Record<string, string>): string {
   const dir = join(root, slug);
   mkdirSync(dir, { recursive: true });

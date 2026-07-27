@@ -11,6 +11,10 @@ import { publicPrincipal } from "./auth.js";
 import { resolveStoreBackends } from "./store-fixtures.js";
 import type { ApiPrincipal, SkillsProductStore } from "./types.js";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 const ORG: Partial<ApiPrincipal> = { orgId: "org_a", orgSlug: "org-a", orgName: "Org A", userId: "user_a", email: "a@example.com", apiKeyId: "key_a" };
 const backends = await resolveStoreBackends();
 

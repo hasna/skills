@@ -16,6 +16,10 @@ import {
 import { decodeForScanning, looksBinary } from "./file-bytes.js";
 import { scanText } from "./content-scan.js";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 const repoRoot = process.cwd();
 
 const WORKFLOW = ".github/workflows/deploy.yml";

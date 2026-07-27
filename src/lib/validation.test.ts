@@ -14,6 +14,10 @@ import {
   validateSkillDirectory,
 } from "./skill-validation";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SECURITY_AUDIT_EXTENSIONS = new Set([
   ".js",

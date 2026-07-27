@@ -96,9 +96,19 @@ This launches the Model Context Protocol server that exposes skills as tools for
 2. Make your changes and verify everything passes:
 
    ```bash
-   bun test
    bun run typecheck
+   bun run build
+   bun test
    ```
+
+   Same order as CI. `bun test` on its own is fine for day-to-day work, but one
+   boundary guard reads the built `bin/` and `dist/` output and reports itself as
+   skipped until you have built.
+
+   If you add a test file, open it with `useDefaultTestTimeout()` from
+   `src/test-preload.ts` — that is what gives every test the suite's 30s ceiling
+   instead of bun's 5000ms default, and `src/test-timeout.test.ts` will tell you
+   if you forget. Individual tests then need no timeout argument of their own.
 
 3. Write meaningful commit messages that describe what changed and why.
 

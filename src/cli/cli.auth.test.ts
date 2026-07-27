@@ -4,6 +4,10 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { runCliInCwd } from "./cli.test-utils";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("CLI self-hosted auth and billing", () => {
   test("billing commands accept SKILLS_API_KEY without a stored login", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-billing-api-key-"));

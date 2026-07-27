@@ -2,6 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 describe("@hasna/skills product brief", () => {
   const brief = readFileSync(join(process.cwd(), "docs/product/product-brief.md"), "utf8");
   const cloudPackage = "@hasna" + "/cloud";

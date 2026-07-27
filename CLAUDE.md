@@ -15,6 +15,7 @@ bun install                        # Install dependencies
 bun run build                      # Clean, then build 5 bins + the library + .d.ts
 bun test                           # Run the whole suite (Bun native runner)
 bun test src/lib/registry.test.ts  # Run a single test file
+HASNA_SKILLS_TEST_TIMEOUT_MS=5000 bun test   # Override the 30s per-test timeout
 bun run typecheck                  # tsc --noEmit
 bun run dev                        # Run the CLI from source
 bun run dev:watch                  # CLI with --watch
@@ -521,6 +522,45 @@ most explain what they replaced and why the replacement is not weaker.
 `src/lib/claude-md.test.ts` re-derives the [Derived counts](#derived-counts) table. It
 checks only that table — never prose — so rewording this file cannot break it, while
 adding a skill, an MCP tool, a bin, or a build step will.
+
+### Timeouts
+
+The per-test timeout is **30s**. `DEFAULT_TEST_TIMEOUT_MS` in
+`src/test-preload.ts` is the only place the number lives. **A new test that
+spawns a subprocess needs no timeout argument** — bun's 5000ms default is what
+made subprocess tests fail at 5001-5003ms on a loaded machine, and the fix is the
+default, not an annotation per test.
+
+Every test file opens with two lines:
+
+```ts
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+```
+
+`src/test-timeout.test.ts` fails if a test file omits them, so a new file cannot
+quietly run at 5000ms. It looks like boilerplate because bun leaves no
+alternative — measured on bun 1.3.14:
+
+- `[test] timeout` in `bunfig.toml` is **accepted and silently ignored**.
+- `setDefaultTimeout()` at preload module scope reaches **exactly one test file**.
+- `setDefaultTimeout()` from a `beforeEach`, and a `BUN_TEST_TIMEOUT` env var,
+  do nothing at all.
+- `--timeout` on the command line works globally, and `bun run test` passes it —
+  but plain `bun test` is what people and agents actually type.
+
+Use `HASNA_SKILLS_TEST_TIMEOUT_MS` to override for one run, including to *lower*
+it when telling a hang apart from a slow test.
+
+### Build before test, locally
+
+One boundary guard (`every declared entry point is packed, read and certified`)
+can only read `bin/` and `dist/`, which exist only after a build. On an unbuilt
+checkout that one check reports itself as skipped with a one-line reason rather
+than failing, so a fresh clone does not open with a red that looks like a
+regression. Run `bun run build` first to exercise it locally; CI never skips it,
+and a *partial* build still fails it.
 
 ## Adding a new skill
 
