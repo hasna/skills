@@ -42,6 +42,18 @@ All notable changes to this project will be documented in this file.
   checks one fixed table and nothing else: rewording the document cannot fail it,
   but adding a skill, an MCP tool, a bin, or a build step will, and the failure
   names the row and both numbers.
+
+  The rewrite also records several things that were true but undocumented, and
+  that adversarial review of the draft turned up: the MCP agent-session tools
+  (`register_agent`, `heartbeat`, `set_focus`, `list_agents`) share a `Map` whose
+  lifetime is one `buildServer()`, which under the default per-request HTTP
+  transport means one request — so they are effectively stateless there;
+  `auth-store.ts` freezes its paths from `homedir()` at import, so `auth.json`
+  ignores `$HASNA_SKILLS_DIR` and is not covered by the hermetic-test override;
+  `catalog-runnable.test.ts` guards a skill's `src/index.ts` but never its `bin`;
+  `src/index.ts` and `src/storage.ts` duplicate the whole native-storage export
+  list with nothing checking they agree; and `.skills/exports/` is a sibling of
+  `runs/`, not nested inside it.
 - `skills config unset <key>` (and the exported `unsetConfig`). With modes gone,
   "run on this machine" is the absence of a configured `apiUrl`, so there has to
   be a supported way back to that state; previously the only way to express the
