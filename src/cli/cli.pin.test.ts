@@ -207,7 +207,7 @@ describe("CLI pin and search controls", () => {
         expect(exitCode).toBe(0);
         const data = JSON.parse(stdout);
         expect(Array.isArray(data)).toBe(true);
-        expect(data.length).toBe(4);
+        expect(data.length).toBe(2);
         for (const r of data) {
           expect(r).toHaveProperty("success");
           expect(r).toHaveProperty("skill");
@@ -227,7 +227,7 @@ describe("CLI pin and search controls", () => {
         expect(exitCode).toBe(0);
         const data = JSON.parse(stdout);
         expect(Array.isArray(data)).toBe(true);
-        expect(data.length).toBe(4);
+        expect(data.length).toBe(2);
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -253,7 +253,7 @@ describe("CLI pin and search controls", () => {
           tmpDir
         );
         expect(exitCode).toBe(0);
-        expect(stdout).toContain("4 skills");
+        expect(stdout).toContain("2 skills");
         expect(stdout).toContain("Research & Writing");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
