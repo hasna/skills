@@ -12,11 +12,12 @@ useDefaultTestTimeout();
 
 describe("skill aliases", () => {
   test("normalizes skill aliases without skill prefix", () => {
+    // Declarative-only catalog: aliases pointing at archived executable skills were
+    // removed; create-blog-article -> blog-article is the surviving alias.
     expect(normalizeSkillSlug("create-blog-article")).toBe("create-blog-article");
-    expect(resolveSkillAlias("read-document")).toBe("doc-read");
-    expect(resolveSkillAlias("generate-pdf")).toBe("pdf-generate");
     expect(resolveSkillAlias("create-blog-article")).toBe("blog-article");
-    expect(resolveSkillAlias("skill-diff")).toBe("diff-viewer");
+    // An unknown/removed alias resolves to itself (identity), never to a dead target.
+    expect(resolveSkillAlias("generate-pdf")).toBe("generate-pdf");
   });
 
   test("aliases target existing skills and do not shadow exact skills", () => {
@@ -28,12 +29,11 @@ describe("skill aliases", () => {
   });
 
   test("getSkill resolves legacy aliases to canonical skills", () => {
-    expect(getSkill("read-document")?.name).toBe("doc-read");
-    expect(getSkill("generate-pdf")?.name).toBe("pdf-generate");
     expect(getSkill("create-blog-article")?.name).toBe("blog-article");
-    expect(getSkill("skill-diff")?.name).toBe("diff-viewer");
     // exact match wins over an alias of the same shape
-    expect(getSkill("doc-read")?.name).toBe("doc-read");
+    expect(getSkill("blog-article")?.name).toBe("blog-article");
+    // a removed alias target does not resolve to a phantom skill
+    expect(getSkill("generate-pdf")).toBeUndefined();
   });
 
   test("pin and unpin accept aliases but use canonical project pins", () => {

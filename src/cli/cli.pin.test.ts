@@ -53,12 +53,12 @@ describe("CLI pin and search controls", () => {
     });
 
     test("dry-run install emits JSON actions", async () => {
-      const { stdout, stderr, exitCode } = await runCli(["pin", "logo-design", "--dry-run", "--json"]);
+      const { stdout, stderr, exitCode } = await runCli(["pin", "brand-kit", "--dry-run", "--json"]);
       const data = JSON.parse(stdout);
       expect(stderr).toBe("");
       expect(exitCode).toBe(0);
       expect(data.dryRun).toBe(true);
-      expect(data.actions).toEqual([{ skill: "logo-design", target: ".skills/project.json", action: "pin" }]);
+      expect(data.actions).toEqual([{ skill: "brand-kit", target: ".skills/project.json", action: "pin" }]);
     });
 
     test("pins remote registry skills without copying source", async () => {
@@ -129,18 +129,18 @@ describe("CLI pin and search controls", () => {
     });
 
     test("dry-run remove emits JSON actions", async () => {
-      const { stdout, stderr, exitCode } = await runCli(["unpin", "logo-design", "--dry-run", "--json"]);
+      const { stdout, stderr, exitCode } = await runCli(["unpin", "brand-kit", "--dry-run", "--json"]);
       const data = JSON.parse(stdout);
       expect(stderr).toBe("");
       expect(exitCode).toBe(0);
       expect(data.dryRun).toBe(true);
-      expect(data.actions).toEqual([{ skill: "logo-design", target: ".skills/project.json", action: "unpin" }]);
+      expect(data.actions).toEqual([{ skill: "brand-kit", target: ".skills/project.json", action: "unpin" }]);
     });
   });
 
   describe("deprecated install/remove", () => {
     test("install points skill pinning to the pin command", async () => {
-      const { stderr, exitCode } = await runCli(["install", "logo-design"]);
+      const { stderr, exitCode } = await runCli(["install", "brand-kit"]);
       expect(stderr).toContain("skills pin <name>");
       expect(exitCode).not.toBe(0);
     });
@@ -152,7 +152,7 @@ describe("CLI pin and search controls", () => {
     });
 
     test("remove points to the unpin command", async () => {
-      const { stderr, exitCode } = await runCli(["remove", "logo-design"]);
+      const { stderr, exitCode } = await runCli(["remove", "brand-kit"]);
       expect(stderr).toContain("skills unpin <name>");
       expect(exitCode).not.toBe(0);
     });
@@ -201,13 +201,13 @@ describe("CLI pin and search controls", () => {
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-install-cat-"));
       try {
         const { stdout, exitCode } = await runCliInDir(
-          ["pin", "--category", "Event Management", "--json"],
+          ["pin", "--category", "Research & Writing", "--json"],
           tmpDir
         );
         expect(exitCode).toBe(0);
         const data = JSON.parse(stdout);
         expect(Array.isArray(data)).toBe(true);
-        expect(data.length).toBe(4);
+        expect(data.length).toBe(2);
         for (const r of data) {
           expect(r).toHaveProperty("success");
           expect(r).toHaveProperty("skill");
@@ -221,13 +221,13 @@ describe("CLI pin and search controls", () => {
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-install-cat-ci-"));
       try {
         const { stdout, exitCode } = await runCliInDir(
-          ["pin", "--category", "event management", "--json"],
+          ["pin", "--category", "research & writing", "--json"],
           tmpDir
         );
         expect(exitCode).toBe(0);
         const data = JSON.parse(stdout);
         expect(Array.isArray(data)).toBe(true);
-        expect(data.length).toBe(4);
+        expect(data.length).toBe(2);
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -249,12 +249,12 @@ describe("CLI pin and search controls", () => {
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-install-cat-header-"));
       try {
         const { stdout, exitCode } = await runCliInDir(
-          ["pin", "--category", "Event Management"],
+          ["pin", "--category", "Research & Writing"],
           tmpDir
         );
         expect(exitCode).toBe(0);
-        expect(stdout).toContain("4 skills");
-        expect(stdout).toContain("Event Management");
+        expect(stdout).toContain("2 skills");
+        expect(stdout).toContain("Research & Writing");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -281,16 +281,16 @@ describe("CLI pin and search controls", () => {
 
   describe("search --category", () => {
     test("filters search results by category", async () => {
-      const { stdout } = await runCli(["search", "plan", "--category", "Health & Wellness", "--all"]);
-      expect(stdout).toContain("Health & Wellness");
+      const { stdout } = await runCli(["search", "market", "--category", "Research & Writing", "--all"]);
+      expect(stdout).toContain("Research & Writing");
     });
 
     test("filters search results by category with --json", async () => {
-      const { stdout } = await runCli(["search", "plan", "--category", "Health & Wellness", "--all", "--json"]);
+      const { stdout } = await runCli(["search", "market", "--category", "Research & Writing", "--all", "--json"]);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
       for (const s of data) {
-        expect(s.category).toBe("Health & Wellness");
+        expect(s.category).toBe("Research & Writing");
       }
     });
 
@@ -339,7 +339,7 @@ describe("CLI pin and search controls", () => {
         expect(emptyData).toEqual([]);
         expect(emptyRes.exitCode).toBe(0);
 
-        const pinRes = await runCliInCwd(["pin", "excel", "--json"], pinnedDir, { HOME: pinnedDir });
+        const pinRes = await runCliInCwd(["pin", "market-research-report", "--json"], pinnedDir, { HOME: pinnedDir });
         expect(pinRes.exitCode).toBe(0);
         const doctorRes = await runCliInCwd(["doctor", "--json"], pinnedDir, { HOME: pinnedDir });
         const pinnedData = JSON.parse(doctorRes.stdout);

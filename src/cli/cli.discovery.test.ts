@@ -4,6 +4,7 @@ import {
   CLEAN_CLI_HOME,
   EXPECTED_ALL_SKILL_COUNT,
   EXPECTED_BASIC_SKILL_COUNT,
+  EXPECTED_POPULATED_CATEGORY_COUNT,
   PACKAGE_VERSION,
   SLOW_TEST_TIMEOUT,
   runCli,
@@ -173,14 +174,14 @@ describe("CLI discovery", () => {
       const { stdout } = await runCli(["categories"]);
       expect(stdout).toContain("Development Tools");
       expect(stdout).toContain("Business & Marketing");
-      expect(stdout).toContain("Health & Wellness");
+      expect(stdout).toContain("Research & Writing");
     });
 
     test("outputs JSON with --json", async () => {
       const { stdout } = await runCli(["categories", "--json"]);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBe(17);
+      expect(data.length).toBe(EXPECTED_POPULATED_CATEGORY_COUNT);
       expect(data[0]).toHaveProperty("name");
       expect(data[0]).toHaveProperty("count");
     });
@@ -216,7 +217,7 @@ describe("CLI discovery", () => {
     test("lists default basic skills", async () => {
       const { stdout } = await runCli(["list"]);
       expect(stdout).toContain(`Available default skills (${EXPECTED_BASIC_SKILL_COUNT})`);
-      expect(stdout).toContain("pdf-to-markdown");
+      expect(stdout).toContain("blog-article");
       expect(stdout).not.toContain("workout-cycle-planner");
       expect(stdout.toLowerCase()).not.toContain("openai");
       expect(stdout.toLowerCase()).not.toContain("gemini");
@@ -224,9 +225,9 @@ describe("CLI discovery", () => {
     });
 
     test("lists all skills with --all", async () => {
-      const { stdout } = await runCli(["list", "--all"]);
-      expect(stdout).toContain(`Available skills (showing 30 of ${EXPECTED_ALL_SKILL_COUNT}, cursor 0)`);
-      expect(stdout).toContain("Next: skills list --all --cursor 30 --limit 30");
+      const { stdout } = await runCli(["list", "--all", "--limit", "10"]);
+      expect(stdout).toContain(`Available skills (showing 10 of ${EXPECTED_ALL_SKILL_COUNT}, cursor 0)`);
+      expect(stdout).toContain("Next: skills list --all --cursor 10 --limit 10");
       expect(stdout).toContain("Details: skills show <name>");
       expect(stdout).not.toContain("workout-cycle-planner");
     });
@@ -234,8 +235,8 @@ describe("CLI discovery", () => {
     test("lists all human rows when explicitly requested", async () => {
       const { stdout } = await runCli(["list", "--all", "--limit", "all"]);
       expect(stdout).toContain(`Available skills (${EXPECTED_ALL_SKILL_COUNT})`);
-      expect(stdout).toContain("Health & Wellness");
-      expect(stdout).toContain("workout-cycle-planner");
+      expect(stdout).toContain("Research & Writing");
+      expect(stdout).toContain("blog-article");
     }, SLOW_TEST_TIMEOUT);
 
     test("verbose human list discloses extra fields without removing pagination", async () => {
@@ -246,15 +247,15 @@ describe("CLI discovery", () => {
     });
 
     test("lists by category", async () => {
-      const { stdout } = await runCli(["list", "--category", "Data & Analysis"]);
-      expect(stdout).toContain("Data & Analysis (5)");
-      expect(stdout).toContain("read-csv");
+      const { stdout } = await runCli(["list", "--category", "Research & Writing"]);
+      expect(stdout).toContain("Research & Writing (2)");
+      expect(stdout).toContain("blog-article");
     });
 
     test("lists full-registry categories with --all", async () => {
-      const { stdout } = await runCli(["list", "--category", "Health & Wellness", "--all"]);
-      expect(stdout).toContain("Health & Wellness (8)");
-      expect(stdout).toContain("workout-cycle-planner");
+      const { stdout } = await runCli(["list", "--category", "Development Tools", "--all"]);
+      expect(stdout).toContain("Development Tools (5)");
+      expect(stdout).toContain("repo-onboarding-report");
     });
 
     test("fails for invalid category", async () => {
@@ -268,7 +269,7 @@ describe("CLI discovery", () => {
       expect(exitCode).toBe(0);
       const lines = stdout.trim().split("\n").filter(Boolean);
       expect(lines.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
-      expect(lines).toContain("pdf-to-markdown");
+      expect(lines).toContain("blog-article");
     });
 
     test("rejects an unknown --format value instead of silently falling back", async () => {
@@ -284,7 +285,7 @@ describe("CLI discovery", () => {
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
       expect(data.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
-      const image = data.find((skill: any) => skill.name === "pdf-to-markdown");
+      const image = data.find((skill: any) => skill.name === "blog-article");
       expect(image).not.toHaveProperty("pricing");
     });
 
@@ -333,7 +334,7 @@ describe("CLI discovery", () => {
         const names = data.map((skill: any) => skill.name);
         expect(names).toContain("market-research-report");
         expect(names).toContain("logo-design");
-        expect(names).toContain("pdf-to-markdown");
+        expect(names).toContain("blog-article");
         expect(data.length).toBeGreaterThan(2);
         const image = data.find((skill: any) => skill.name === "market-research-report");
         const logo = data.find((skill: any) => skill.name === "logo-design");
@@ -365,7 +366,11 @@ describe("CLI discovery", () => {
       for (let attempt = 0; attempt < 5; attempt += 1) {
         const { stdout, exitCode } = await runCli(["list", "--all", "--json"]);
         expect(exitCode).toBe(0);
-        expect(stdout.length).toBeGreaterThan(65_536);
+        // The declarative-only catalog serialises to ~8KB, below the 64KB pipe
+        // buffer, so completeness is asserted by the full skill count rather than a
+        // buffer-exceeding byte length. The >64KB flush case is covered by the
+        // registry-sync pipe test (its --profile all payload exceeds the buffer).
+        expect(stdout.length).toBeGreaterThan(4_000);
         const data = JSON.parse(stdout);
         expect(Array.isArray(data)).toBe(true);
         expect(data.length).toBe(EXPECTED_ALL_SKILL_COUNT);
@@ -392,17 +397,19 @@ describe("CLI discovery", () => {
       expect(stderr).toBe("");
       expect(exitCode).toBe(0);
       const data = JSON.parse(stdout);
-      expect(data.length).toBeGreaterThan(65_536);
+      // See the repeated-pipe test above: completeness is the skill count, not a
+      // buffer-exceeding byte length, now that the catalog is declarative-only.
+      expect(data.length).toBeGreaterThan(4_000);
       expect(data.count).toBe(EXPECTED_ALL_SKILL_COUNT);
     }, SLOW_TEST_TIMEOUT);
 
     test("lists by category with --json", async () => {
-      const { stdout } = await runCli(["list", "--category", "Event Management", "--all", "--json"]);
+      const { stdout } = await runCli(["list", "--category", "Research & Writing", "--all", "--json"]);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBe(4);
+      expect(data.length).toBe(2);
       for (const skill of data) {
-        expect(skill.category).toBe("Event Management");
+        expect(skill.category).toBe("Research & Writing");
       }
     });
   });
@@ -472,9 +479,9 @@ describe("CLI discovery", () => {
 
   describe("info", () => {
     test("shows skill info", async () => {
-      const { stdout } = await runCli(["info", "pdf-to-markdown"]);
-      expect(stdout).toContain("PDF to Markdown");
-      expect(stdout).toContain("Data & Analysis");
+      const { stdout } = await runCli(["info", "blog-article"]);
+      expect(stdout).toContain("Blog Article");
+      expect(stdout).toContain("Research & Writing");
       expect(stdout).not.toContain("Pricing:");
       expect(stdout.toLowerCase()).not.toContain("exa");
       expect(stdout.toLowerCase()).not.toContain("openai");
@@ -488,11 +495,11 @@ describe("CLI discovery", () => {
     });
 
     test("outputs JSON with --json", async () => {
-      const { stdout } = await runCli(["info", "pdf-to-markdown", "--json"]);
+      const { stdout } = await runCli(["info", "blog-article", "--json"]);
       const data = JSON.parse(stdout);
-      expect(data.name).toBe("pdf-to-markdown");
-      expect(data.displayName).toBe("PDF to Markdown");
-      expect(data.category).toBe("Data & Analysis");
+      expect(data.name).toBe("blog-article");
+      expect(data.displayName).toBe("Blog Article");
+      expect(data.category).toBe("Research & Writing");
       expect(Array.isArray(data.tags)).toBe(true);
       expect(data).not.toHaveProperty("pricing");
       expect(JSON.stringify(data).toLowerCase()).not.toContain("exa");

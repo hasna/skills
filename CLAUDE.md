@@ -127,7 +127,7 @@ There is no `dashboard/` directory and no `src/server/serve.ts`.
 
 | Count | Value | Derived from |
 |---|---|---|
-| Catalog skills | 229 | `SKILLS.length` (`src/lib/registry-data/index.ts`) |
+| Catalog skills | 19 | `SKILLS.length` (`src/lib/registry-data/index.ts`) |
 | Instruction-kind skills | 19 | `SKILLS` entries with `kind: "instruction"` |
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
 | MCP tools | 37 | `tools/list` against a live `buildServer()` |
@@ -135,8 +135,12 @@ There is no `dashboard/` directory and no `src/server/serve.ts`.
 | Published bins | 5 | `bin` in `package.json` |
 | bun build invocations | 6 | the `build` script in `package.json` |
 
-`skills/` holds those 229 catalog directories plus `_common`. The 229 split into 210
-executable skills (each with `src/`) and 19 instruction skills.
+`skills/` holds those 19 catalog directories plus `_common`. The OSS catalog is
+**declarative-only**: every shipped skill is `kind: "instruction"` (SKILL.md prose,
+no `src/`). The executable skills (each with `src/`) were archived out of the public
+package — see the archive note below. `CATEGORIES` still lists 17 categories even
+though only 7 currently hold a skill, so a restored dev skill drops back into its
+category without a schema change.
 
 ## Interfaces
 
@@ -384,19 +388,16 @@ default when absent) means a runnable folder with `package.json` + `src/`.
 runtime. `runSkill()` refuses instruction skills with an explanatory error rather
 than trying to spawn them.
 
-Every catalog entry is runnable by someone running only this repository: bundled
-code, a third-party key the user supplies, or instruction prose. There are **zero**
-hosted skills and `PREMIUM_SKILLS` is empty; `src/lib/catalog-runnable.test.ts`
-asserts the hosted set stays empty and that every executable skill ships
-`src/index.ts` (or `.js`) both in the repo and in the packed tarball. Note what that
-guard does *not* check: it never reads `bin` from a skill's `package.json`, so a skill
-with an entry file and no `bin` passes.
-
-"Runnable" also carries a known backlog. The same file freezes
-`PREEXISTING_UNDOCUMENTED_LIMIT = 131` — 131 skill/variable pairs read a provider
-credential without naming it in their own docs. The constant is bracketed from both
-sides (it may only go down, and it must equal the true count), so a *new* undocumented
-BYO-key skill fails immediately, but the existing 131 are not yet self-describing.
+The public OSS catalog is **declarative-only**: every shipped skill is
+`kind: "instruction"`, so there are currently **zero** executable skills and **zero**
+hosted skills, and `PREMIUM_SKILLS` is empty. `src/lib/catalog-runnable.test.ts`
+asserts the hosted set stays empty, that every shipped skill is instruction-kind
+prose with no `src/`, that each SKILL.md ships in the packed tarball, and that the
+package ships no credential value. The executable-skill and BYO-key guards in that
+file still exist (so a restored dev skill would be checked) but currently have no
+subject. The `kind === "instruction"` filter is the single ship criterion — the
+executable half of the catalog is preserved in the archive tag/tarball noted in the
+skill-structure section, not in this package.
 
 ### Hermetic tests
 
@@ -425,26 +426,28 @@ reading.
 ```
 skills/<name>/                # bare name, matches SkillMeta.name exactly
 ├── SKILL.md                  # frontmatter: name, description, [kind], [category], [tags]
-├── package.json              # "bin" for runnable skills; skills.kind for instruction ones
-├── tsconfig.json             # extends ../tsconfig.base.json (4 executable skills lack one)
-├── src/                      # executable skills only
+├── package.json              # skills.kind: "instruction" (declarative); "bin" for runnable ones
+├── src/                      # executable skills only — absent in the declarative catalog
 │   └── index.ts
 ├── README.md                 # optional
 └── CLAUDE.md                 # optional
 ```
 
-All 210 executable skills have both a `bin` entry and `src/index.ts` — but only the
-entry file is guarded (see above), and four (`colorextract`,
-`project-dashboard-reports`, `siteanalyze`, `todos-plan`) have no `tsconfig.json`.
-Write new skills to the full template anyway. An instruction skill is
-just `SKILL.md` + `package.json`, with `kind: instruction` in the frontmatter and
-`skills.kind: "instruction"` in the package, and no `src/` at all.
+Every shipped skill is an instruction skill: just `SKILL.md` + `package.json`, with
+`kind: instruction` in the frontmatter and `skills.kind: "instruction"` in the
+package, and no `src/` at all. Executable skills (with a `bin` entry, `src/index.ts`,
+and a `tsconfig.json` extending `../tsconfig.base.json`) are still supported by the
+validation and packaging guards but none currently ship — they live in the archive,
+not the package. The full 229-skill catalog (210 executable + 19 instruction) is
+preserved at git tag `archive/skills-catalog-229-2026-07-27` and in the rescue
+tarball under `~/.hasna/repos/rescue/skills-catalog-229/`; restore a dev skill by
+copying its directory back and re-adding its `SkillMeta` entry to the matching
+`src/lib/registry-data/*.ts` file.
 
-SKILL.md is required for new skills but is **not** universal in the existing corpus:
-most bundled executable skills carry none, because their metadata lives in the
-`src/lib/registry-data/` entry instead and `generateSkillMd()` synthesises a document
-on demand. Instruction skills are the exception — their SKILL.md *is* the skill, so it
-is always present and always the source of `kind`.
+Every shipped skill carries a SKILL.md — for instruction skills the SKILL.md *is*
+the skill, always present and always the source of `kind`. Executable skills may omit
+it (their metadata lives in the `src/lib/registry-data/` entry and `generateSkillMd()`
+synthesises a document on demand), but none currently ship in the declarative catalog.
 
 `src/lib/skillinfo.ts` picks the best doc in the order SKILL.md → README.md →
 CLAUDE.md, extracts env vars with `ENV_VAR_PATTERN` (suffixes: `_API_KEY`, `_KEY`,

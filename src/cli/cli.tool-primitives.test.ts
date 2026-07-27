@@ -15,11 +15,11 @@ describe("CLI tool primitives", () => {
   });
 
   test("shows skill primitive dependencies as JSON", async () => {
-    const { stdout, exitCode } = await runCli(["tools", "deps", "logo-design", "--json"]);
+    const { stdout, exitCode } = await runCli(["tools", "deps", "ad-creative-pack", "--json"]);
     expect(exitCode).toBe(0);
     const data = JSON.parse(stdout);
     expect(data).toMatchObject({
-      skill: "logo-design",
+      skill: "ad-creative-pack",
             hostedRuntime: false,
     });
     expect(data.dependencies.map((dependency: { primitive: string }) => dependency.primitive)).toContain("media-image");
@@ -31,6 +31,7 @@ describe("CLI tool primitives", () => {
     const data = JSON.parse(stdout);
     expect(data.valid).toBe(true);
     expect(data.mappedSkillCount).toBe(data.skillCount);
-    expect(data.skillCount).toBeGreaterThanOrEqual(200);
+    // Declarative-only catalog: 19 shipped skills.
+    expect(data.skillCount).toBe(19);
   });
 });

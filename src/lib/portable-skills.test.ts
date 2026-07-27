@@ -414,24 +414,24 @@ kind: instruction
 
   test("blocks a silent shadow of a bundled official skill via inferred name", () => {
     withDirs((home, sourceRoot) => {
-      expect(isOfficialSkillName("logo-design")).toBe(true);
+      expect(isOfficialSkillName("brand-kit")).toBe(true);
       const source = join(sourceRoot, "skill-image");
       mkdirSync(source, { recursive: true });
-      // Folder is 'skill-image' but frontmatter name is the official 'logo-design'.
+      // Folder is 'skill-image' but frontmatter name is the official 'brand-kit'.
       writeFileSync(join(source, "SKILL.md"), `---
-name: logo-design
-description: Imported skill that would shadow the bundled image skill.
+name: brand-kit
+description: Imported skill that would shadow the bundled brand-kit skill.
 kind: instruction
 ---
 
-# Logo Design
+# Brand Kit
 `);
 
       expect(() =>
         portPortableSkill(source, { rootDir: getPortableSkillsRoot({ homeDir: home }) }),
       ).toThrow(/shadow/i);
       // Nothing was written.
-      expect(existsSync(join(getPortableSkillsRoot({ homeDir: home }), "logo-design"))).toBe(false);
+      expect(existsSync(join(getPortableSkillsRoot({ homeDir: home }), "brand-kit"))).toBe(false);
     });
   });
 
@@ -440,18 +440,18 @@ kind: instruction
       const source = join(sourceRoot, "skill-image");
       mkdirSync(source, { recursive: true });
       writeFileSync(join(source, "SKILL.md"), `---
-name: logo-design
-description: Deliberate override of the bundled image skill.
+name: brand-kit
+description: Deliberate override of the bundled brand-kit skill.
 kind: instruction
 ---
 
-# Logo Design
+# Brand Kit
 `);
       const result = portPortableSkill(source, {
         rootDir: getPortableSkillsRoot({ homeDir: home }),
         allowShadow: true,
       });
-      expect(result.name).toBe("logo-design");
+      expect(result.name).toBe("brand-kit");
     });
   });
 
@@ -460,12 +460,12 @@ kind: instruction
       const source = join(sourceRoot, "skill-image");
       mkdirSync(source, { recursive: true });
       writeFileSync(join(source, "SKILL.md"), `---
-name: logo-design
+name: brand-kit
 description: Imported skill renamed to avoid shadowing.
 kind: instruction
 ---
 
-# Logo Design
+# Brand Kit
 `);
       const result = portPortableSkill(source, {
         rootDir: getPortableSkillsRoot({ homeDir: home }),

@@ -8,38 +8,25 @@ import {
   loadBasicRegistry,
   loadRegistryProfile,
 } from "./registry";
-import { getSkillDocs, getSkillRequirements } from "./skillinfo";
+import { getSkillBestDoc, getSkillDocs, getSkillRequirements } from "./skillinfo";
 import { getSkillPath } from "./installer";
-import { isHostedMetadataPackage } from "./hosted-skill-set";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
 
+// The OSS catalog is declarative-only: every shipped skill (and therefore every
+// basic-profile skill) is a kind: "instruction" prose skill — no bin, no src/, no
+// runtime dependencies, no provider credentials. The basic profile is a compact,
+// curated subset of that catalog (see BASIC_SKILL_NAMES in registry-types.ts).
 const BASIC_SKILLS = [...BASIC_SKILL_NAMES];
-
-const CONNECTOR_BACKED_SKILLS = ["convert"];
-const HOSTED_RUNTIME_PROVIDER_KEYS = ["OPENAI_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY", "GOOGLE_PROJECT_ID"];
-
-const EXPECTED_PACKAGE_DEPS: Record<string, string[]> = {
-  "doc-read": ["jszip"],
-  "read-csv": ["csv-parse", "iconv-lite"],
-  "read-excel": ["xlsx"],
-  "pdf-generate": ["pdf-lib"],
-  "doc-generate": ["docx", "marked", "openai"],
-  excel: ["openai", "xlsx"],
-};
 
 function readPackageJson(skill: string): {
   bin?: Record<string, string>;
   dependencies?: Record<string, string>;
-  skills?: { runtime?: string; source?: string };
+  skills?: { kind?: string; runtime?: string; source?: string };
 } {
   return JSON.parse(readFileSync(join(getSkillPath(skill), "package.json"), "utf8"));
-}
-
-function isHostedMetadataSkill(skill: string): boolean {
-  return isHostedMetadataPackage(readPackageJson(skill));
 }
 
 function readSkillMdFrontmatterName(skill: string): string | null {
@@ -53,80 +40,56 @@ function readSkillMdFrontmatterName(skill: string): string | null {
   return null;
 }
 
-async function runSkillHelp(skill: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const entry = join(getSkillPath(skill), "src", "index.ts");
-  const proc = Bun.spawn(["bun", "run", entry, "--help"], {
-    stdout: "pipe",
-    stderr: "pipe",
-    env: { ...process.env, NO_COLOR: "1" },
-  });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  return { exitCode, stdout, stderr };
-}
-
-describe("basic skill profile for Takumi", () => {
-  test("default profile is compact and excludes polluted full-registry skills", () => {
+describe("basic skill profile", () => {
+  test("default profile is compact and excludes non-basic full-registry skills", () => {
     const basic = loadBasicRegistry();
     const names = basic.map((skill) => skill.name);
 
     expect(names.slice(0, BASIC_SKILLS.length)).toEqual(BASIC_SKILLS);
     expect(names.filter((name) => isBasicSkillName(name))).toEqual(BASIC_SKILLS);
     expect(basic.filter((skill) => skill.source !== "custom").length).toBeLessThanOrEqual(25);
-    expect(names).not.toContain("logo-design");
-    expect(loadRegistryProfile("all").some((skill) => skill.name === "logo-design")).toBe(true);
+    // brand-kit ships in the catalog but is deliberately NOT in the basic profile.
+    expect(names).not.toContain("brand-kit");
+    expect(loadRegistryProfile("all").some((skill) => skill.name === "brand-kit")).toBe(true);
   });
 
-  test("every basic skill is registered, documented, promptable, and callable", () => {
+  test("every basic skill is registered, documented, instruction-kind, and promptable", () => {
     for (const skill of BASIC_SKILLS) {
       const meta = getSkill(skill);
       expect(meta, skill).toBeDefined();
       expect(isBasicSkillName(skill)).toBe(true);
+      expect(meta!.kind, `${skill} must be an instruction skill`).toBe("instruction");
 
       const docs = getSkillDocs(skill);
       expect(docs?.skillMd, `${skill} needs SKILL.md system instructions`).toBeTruthy();
       expect(docs!.skillMd!.trim().length, `${skill} needs non-trivial instructions`).toBeGreaterThan(200);
       expect(readSkillMdFrontmatterName(skill), `${skill} frontmatter name should match registry`).toBe(skill);
 
+      // Declarative shape: no local bin, no src/ implementation.
       const pkg = readPackageJson(skill);
-      if (isHostedMetadataSkill(skill)) {
-        expect(pkg.bin, `${skill} hosted metadata must not expose local bin`).toBeUndefined();
-        expect(existsSync(join(getSkillPath(skill), "src")), `${skill} hosted metadata must not include local source`).toBe(false);
-      } else {
-        expect(pkg.bin, `${skill} needs a bin entry`).toBeDefined();
-        const entry = Object.values(pkg.bin!)[0];
-        expect(entry, `${skill} needs a callable entry`).toBeTruthy();
-        expect(existsSync(join(getSkillPath(skill), entry)), `${skill} bin entry must exist`).toBe(true);
-      }
+      expect(pkg.bin, `${skill} is an instruction skill and must not expose a bin`).toBeUndefined();
+      expect(pkg.skills?.kind, `${skill} package must declare skills.kind instruction`).toBe("instruction");
+      expect(existsSync(join(getSkillPath(skill), "src")), `${skill} must not ship local source`).toBe(false);
 
       const reqs = getSkillRequirements(skill);
-      expect(reqs?.cliCommand, `${skill} needs a CLI command`).toBeTruthy();
+      expect(reqs?.cliCommand, `${skill} needs a CLI command`).toBe(`skills run ${skill}`);
     }
   });
 
-
-  test("basic skills declare external runtime dependencies they import", () => {
-    for (const [skill, deps] of Object.entries(EXPECTED_PACKAGE_DEPS)) {
+  test("basic skills are prose-only and declare no runtime dependencies", () => {
+    for (const skill of BASIC_SKILLS) {
       const pkg = readPackageJson(skill);
-      for (const dep of deps) {
-        expect(pkg.dependencies?.[dep], `${skill} package.json should declare ${dep}`).toBeTruthy();
-      }
+      const deps = Object.keys(pkg.dependencies ?? {});
+      expect(deps, `${skill} (instruction) must declare no runtime dependencies`).toEqual([]);
     }
   });
 
-  test("every basic skill exposes help without requiring provider credentials", async () => {
-    const failures: string[] = [];
-
-    for (const skill of BASIC_SKILLS.filter((name) => !isHostedMetadataSkill(name))) {
-      const result = await runSkillHelp(skill);
-      if (result.exitCode !== 0 || !/usage|commands?|options?/i.test(result.stdout)) {
-        failures.push(`${skill}: exit=${result.exitCode} stdout=${result.stdout.slice(0, 120)} stderr=${result.stderr.slice(0, 120)}`);
-      }
+  test("every basic skill surfaces its guidance as SKILL.md prose (its deliverable)", () => {
+    for (const skill of BASIC_SKILLS) {
+      const best = getSkillBestDoc(skill);
+      expect(best, `${skill} must resolve a best doc`).toBeTruthy();
+      // The SKILL.md prose IS the skill — no CLI/executable help surface to invoke.
+      expect(existsSync(join(getSkillPath(skill), "src", "index.ts"))).toBe(false);
     }
-
-    expect(failures).toEqual([]);
-  }, 20000);
+  });
 });

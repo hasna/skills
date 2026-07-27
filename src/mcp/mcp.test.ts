@@ -176,12 +176,12 @@ describe("MCP Server", () => {
       await client.initialize();
       const response = await client.request("tools/call", {
         name: "get_skill_tool_dependencies",
-        arguments: { name: "logo-design" },
+        arguments: { name: "brand-kit" },
       }, 14);
       expect(response).not.toBeNull();
       const payload = JSON.parse(response.result.content[0].text);
       expect(payload).toMatchObject({
-        skill: "logo-design",
+        skill: "brand-kit",
         hostedRuntime: false,
       });
       expect(payload.dependencies.map((dependency: { primitive: string }) => dependency.primitive)).toContain("media-image");
@@ -289,9 +289,15 @@ version: 0.3.0
 
 
   test("run_skill keeps free local skills local even when hosted auth is configured", async () => {
-    const { mkdtempSync, rmSync } = require("fs");
+    const { mkdtempSync, mkdirSync, rmSync, writeFileSync } = require("fs");
     const { tmpdir } = require("os");
     const tmpDir = mkdtempSync(join(tmpdir(), "mcp-local-with-auth-"));
+    // The declarative-only catalog ships no bundled executable to run, so scaffold
+    // a local executable skill in the server's corpus (resolved from $HOME=tmpDir).
+    const skillDir = join(tmpDir, ".hasna", "skills", "custom", "lorem-generator");
+    mkdirSync(join(skillDir, "src"), { recursive: true });
+    writeFileSync(join(skillDir, "package.json"), JSON.stringify({ name: "lorem-generator", version: "0.1.0", bin: { "lorem-generator": "src/index.ts" } }));
+    writeFileSync(join(skillDir, "src", "index.ts"), 'console.log("lorem-generator " + process.argv.slice(2).join(" "));');
     let remoteCalls = 0;
     const server = Bun.serve({
       port: 0,
@@ -399,22 +405,22 @@ version: 0.3.0
       await client.initialize();
       const response = await client.request("tools/call", {
         name: "get_skill_info",
-        arguments: { name: "logo-design" },
+        arguments: { name: "brand-kit" },
       });
       expect(response).not.toBeNull();
       expect(response.result).toBeDefined();
       const info = JSON.parse(response.result.content[0].text);
-      expect(info.name).toBe("logo-design");
+      expect(info.name).toBe("brand-kit");
       expect(info.displayName).toBeDefined();
       expect(info.category).toBeDefined();
       expect(info).not.toHaveProperty("pricing");
       expect(info.envVars ?? []).not.toContain("SKILL_API_KEY");
       expect(info.envVars ?? []).not.toContain("OPENAI_API_KEY");
       expect(info.mcp.schemas.run.inputSchema.properties.name).toMatchObject({
-        const: "logo-design",
+        const: "brand-kit",
       });
       expect(info.mcp.schemas.install.inputSchema.properties.name).toMatchObject({
-        const: "logo-design",
+        const: "brand-kit",
       });
       expect(JSON.stringify(info).toLowerCase()).not.toContain("openai");
       expect(JSON.stringify(info).toLowerCase()).not.toContain("gemini");
@@ -446,12 +452,12 @@ version: 0.3.0
       await client.initialize();
       const response = await client.request("tools/call", {
         name: "get_skill_docs",
-        arguments: { name: "logo-design" },
+        arguments: { name: "brand-kit" },
       }, 10);
       expect(response).not.toBeNull();
       expect(response.result).toBeDefined();
       const text = response.result.content[0].text;
-      expect(text).toContain("Logo Design");
+      expect(text).toContain("Brand Kit");
     } finally {
       await client.close();
     }
@@ -478,7 +484,7 @@ version: 0.3.0
       await client.initialize();
       const response = await client.request("tools/call", {
         name: "get_requirements",
-        arguments: { name: "logo-design" },
+        arguments: { name: "brand-kit" },
       }, 12);
       expect(response).not.toBeNull();
       expect(response.result).toBeDefined();
@@ -486,7 +492,7 @@ version: 0.3.0
       expect(Array.isArray(reqs.envVars)).toBe(true);
             expect(reqs.envVars).not.toContain("SKILL_API_KEY");
       expect(reqs.envVars).not.toContain("OPENAI_API_KEY");
-      expect(reqs.cliCommand).toBe("skills run logo-design");
+      expect(reqs.cliCommand).toBe("skills run brand-kit");
     } finally {
       await client.close();
     }
@@ -522,7 +528,7 @@ version: 0.3.0
       expect(result.total).toBe(EXPECTED_BASIC_SKILL_COUNT);
       expect(skills.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
       expect(result.hasMore).toBe(false);
-      expect(skills.map((s: any) => s.name)).not.toContain("market-research-report");
+      expect(skills.map((s: any) => s.name)).not.toContain("brand-kit");
       expect(skills[0]).not.toHaveProperty("pricing");
       // Compact list must surface descriptions so agents can discover
       // without a per-skill get_skill_docs / get_skill_info round-trip.
@@ -541,15 +547,15 @@ version: 0.3.0
       await client.initialize();
       const response = await client.request("tools/call", {
         name: "list_skills",
-        arguments: { profile: "all" },
+        arguments: { profile: "all", limit: 10 },
       }, 19);
       expect(response).not.toBeNull();
       const result = JSON.parse(response.result.content[0].text);
       expect(Array.isArray(result.skills)).toBe(true);
-      expect(result.skills.length).toBe(25);
+      expect(result.skills.length).toBe(10);
       expect(result.total).toBe(EXPECTED_ALL_SKILL_COUNT);
       expect(result.hasMore).toBe(true);
-      expect(result.nextArguments).toMatchObject({ profile: "all", limit: 25, offset: 25 });
+      expect(result.nextArguments).toMatchObject({ profile: "all", limit: 10, offset: 10 });
     } finally {
       await client.close();
     }
@@ -561,16 +567,16 @@ version: 0.3.0
       await client.initialize();
       const response = await client.request("tools/call", {
         name: "list_skills",
-        arguments: { category: "Event Management", profile: "all" },
+        arguments: { category: "Development Tools", profile: "all" },
       }, 15);
       expect(response).not.toBeNull();
       const result = JSON.parse(response.result.content[0].text);
       const skills = result.skills;
       expect(Array.isArray(skills)).toBe(true);
-      expect(skills.length).toBe(4);
-      expect(result.total).toBe(4);
+      expect(skills.length).toBe(5);
+      expect(result.total).toBe(5);
       for (const s of skills) {
-        expect(s.category).toBe("Event Management");
+        expect(s.category).toBe("Development Tools");
       }
     } finally {
       await client.close();
@@ -678,15 +684,15 @@ version: 0.3.0
       await client.initialize();
       const response = await client.request("tools/call", {
         name: "pin_category",
-        arguments: { category: "Event Management" },
+        arguments: { category: "Development Tools" },
       }, 31);
       expect(response).not.toBeNull();
       expect(response.result).toBeDefined();
       const result = JSON.parse(response.result.content[0].text);
-      expect(result.category).toBe("Event Management");
-      expect(result.count).toBe(4);
+      expect(result.category).toBe("Development Tools");
+      expect(result.count).toBe(5);
       expect(Array.isArray(result.results)).toBe(true);
-      expect(result.results.length).toBe(4);
+      expect(result.results.length).toBe(5);
     } finally {
       await client.close();
     }
@@ -704,7 +710,7 @@ version: 0.3.0
       const skills = JSON.parse(response.result.contents[0].text);
       expect(Array.isArray(skills)).toBe(true);
       expect(skills.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
-      expect(skills.map((s: any) => s.name)).not.toContain("market-research-report");
+      expect(skills.map((s: any) => s.name)).not.toContain("brand-kit");
       expect(skills[0]).not.toHaveProperty("pricing");
       for (const s of skills) {
         expect(typeof s.description).toBe("string");
@@ -740,30 +746,30 @@ version: 0.3.0
     try {
       await client.initialize();
       const response = await client.request("resources/read", {
-        uri: "skills://logo-design",
+        uri: "skills://brand-kit",
       }, 33);
       expect(response).not.toBeNull();
       expect(response.result).toBeDefined();
       const info = JSON.parse(response.result.contents[0].text);
-      expect(info.name).toBe("logo-design");
+      expect(info.name).toBe("brand-kit");
       expect(info).not.toHaveProperty("pricing");
                   expect(info.requirements.envVars).not.toContain("SKILL_API_KEY");
       expect(info.requirements.envVars).not.toContain("OPENAI_API_KEY");
       expect(info.mcp).toMatchObject({
         schemaVersion: 1,
-        name: "logo-design",
+        name: "brand-kit",
         schemas: {
           install: {
             inputSchema: {
               properties: {
-                name: { const: "logo-design" },
+                name: { const: "brand-kit" },
               },
             },
           },
           run: {
             inputSchema: {
               properties: {
-                name: { const: "logo-design" },
+                name: { const: "brand-kit" },
                 args: { type: "array" },
               },
             },
@@ -868,7 +874,7 @@ version: 0.3.0
       await client.initialize();
       const response = await client.request("tools/call", {
         name: "import_skills",
-        arguments: { skills: ["logo-design"], for: "invalid-agent" },
+        arguments: { skills: ["brand-kit"], for: "invalid-agent" },
       }, 43);
       expect(response).not.toBeNull();
       expect(response.result.isError).toBe(true);
@@ -883,13 +889,13 @@ version: 0.3.0
       await client.initialize();
       const validResponse = await client.request("tools/call", {
         name: "validate_skill",
-        arguments: { name: "logo-design" },
+        arguments: { name: "brand-kit" },
       }, 44);
       expect(validResponse).not.toBeNull();
       const validResult = JSON.parse(validResponse.result.content[0].text);
       expect(validResult.valid).toBe(true);
-      expect(validResult.metadata.runtime).toBe("local");
-      expect(validResult.metadata.binCommands).toEqual(["logo-design"]);
+      expect(validResult.metadata.runtime).toBe("none");
+      expect(validResult.metadata.binCommands).toEqual([]);
 
       const missingResponse = await client.request("tools/call", {
         name: "validate_skill",

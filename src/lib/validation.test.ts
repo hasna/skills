@@ -1,5 +1,4 @@
 import { describe, test, expect } from "bun:test";
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { mkdtempSync, rmSync } from "fs";
@@ -42,25 +41,6 @@ function findSkillsDir(): string {
     dir = dirname(dir);
   }
   throw new Error("Could not find skills/ directory");
-}
-
-function countSecurityAuditFiles(dir: string): number {
-  let count = 0;
-  for (const entry of readdirSync(dir)) {
-    const path = join(dir, entry);
-    const stats = statSync(path);
-    if (stats.isDirectory()) {
-      if (["node_modules", ".git", "dist", "build"].includes(entry)) {
-        continue;
-      }
-      count += countSecurityAuditFiles(path);
-      continue;
-    }
-    if ([...SECURITY_AUDIT_EXTENSIONS].some((ext) => entry.endsWith(ext))) {
-      count += 1;
-    }
-  }
-  return count;
 }
 
 function listSecurityAuditFiles(dir: string): string[] {
@@ -296,54 +276,14 @@ describe("structural validation of all registered skills", () => {
     expect(failures).toEqual([]);
   });
 
-  test("security-audit skill runs without undeclared dependencies or localhost false positives", () => {
-    const result = spawnSync(
-      "bun",
-      ["run", "skills/security-audit/src/index.ts", "path=src"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Findings:** 0");
-  });
-
-  test("security-audit skill scans release documentation", () => {
-    const expectedFilesScanned = countSecurityAuditFiles(join(process.cwd(), "docs"));
-    const result = spawnSync(
-      "bun",
-      ["run", "skills/security-audit/src/index.ts", "path=docs"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Findings:** 0");
-    expect(result.stdout).toContain(`Files Scanned:** ${expectedFilesScanned}`);
-  });
-
-  test("security-audit skill scans shell deployment scripts", () => {
-    const expectedFilesScanned = countSecurityAuditFiles(join(process.cwd(), "scripts"));
-    const result = spawnSync(
-      "bun",
-      ["run", "skills/security-audit/src/index.ts", "path=scripts"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Findings:** 0");
-    expect(result.stdout).toContain(`Files Scanned:** ${expectedFilesScanned}`);
-  });
+  // The three tests that executed the `security-audit` scanner skill against
+  // src/, docs/, and scripts/ were removed with that skill: it is an executable
+  // dev skill, archived out of the declarative-only OSS catalog (git tag
+  // archive/skills-catalog-229-2026-07-27). Their subject no longer ships, so
+  // there is nothing to run here. The property they proxied — the published
+  // package contains no secrets/PII — is enforced at publish time by
+  // scripts/release-guard.ts and, against the packed tarball, by
+  // catalog-runnable.test.ts ("the packed package ships no credential value").
 });
 
 describe("skill validation helpers", () => {

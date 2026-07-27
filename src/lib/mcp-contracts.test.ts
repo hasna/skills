@@ -92,26 +92,26 @@ describe("MCP contract manifest", () => {
   });
 
   test("creates per-skill MCP metadata with install and run schemas", () => {
-    const image = getSkill("logo-design");
+    const image = getSkill("brand-kit");
     expect(image).toBeDefined();
 
     const metadata = createSkillMcpMetadata(image!);
 
     expect(metadata).toMatchObject({
       schemaVersion: 1,
-      name: "logo-design",
-      slug: "logo-design",
+      name: "brand-kit",
+      slug: "brand-kit",
       source: "official",
-      cliCommand: "skills run logo-design",
+      cliCommand: "skills run brand-kit",
     });
     expect(metadata.schemas.install.inputSchema.properties?.name).toEqual({
       type: "string",
-      const: "logo-design",
+      const: "brand-kit",
       description: "Skill name or alias to pin.",
     });
     expect(metadata.schemas.run.inputSchema.properties?.name).toEqual({
       type: "string",
-      const: "logo-design",
+      const: "brand-kit",
       description: "Skill name or alias to run.",
     });
     expect(metadata.schemas.run.inputSchema.properties?.args).toEqual({

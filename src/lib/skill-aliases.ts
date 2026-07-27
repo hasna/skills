@@ -1,12 +1,9 @@
+// Legacy/friendly aliases -> canonical skill name. Every target MUST be a shipped
+// skill (skill-aliases.test.ts asserts this). The OSS catalog is declarative-only,
+// so aliases that used to point at archived executable skills (pdf-generate,
+// doc-generate, doc-read, diff-viewer, ...) were removed when those skills were.
 export const SKILL_ALIASES = {
-  "generate-pdf": "pdf-generate",
-  "create-pdf": "pdf-generate",
-  "generate-doc": "doc-generate",
-  "generate-document": "doc-generate",
-  "read-document": "doc-read",
-  "document-read": "doc-read",
   "create-blog-article": "blog-article",
-  "skill-diff": "diff-viewer",
 } as const;
 
 export type SkillAlias = keyof typeof SKILL_ALIASES;

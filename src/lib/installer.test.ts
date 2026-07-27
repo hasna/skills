@@ -126,11 +126,11 @@ describe("installer", () => {
 
   describe("manifest installs", () => {
     test("creates a local manifest from a bundled skill", () => {
-      const manifest = createLocalSkillManifest("logo-design");
+      const manifest = createLocalSkillManifest("brand-kit");
       expect(manifest).not.toBeNull();
-      expect(manifest?.name).toBe("logo-design");
+      expect(manifest?.name).toBe("brand-kit");
       expect(manifest?.source).toBe("local");
-      expect(manifest?.skillMd).toContain("Logo Design");
+      expect(manifest?.skillMd).toContain("Brand Kit");
       expect(manifest?.metadata?.category).toBe("Design & Branding");
     });
 
@@ -150,7 +150,7 @@ describe("installer", () => {
     });
 
     test("source installs are disabled", () => {
-      const result = installSkillSource("logo-design", { targetDir: testDir });
+      const result = installSkillSource("brand-kit", { targetDir: testDir });
       expect(result.success).toBe(false);
       expect(result.error).toContain("Source installs are disabled");
       expect(existsSync(join(testDir, ".skills", "skills"))).toBe(false);
@@ -169,15 +169,17 @@ describe("installer", () => {
   });
 
   describe("installSkill dependency warnings", () => {
+    // pitch-deck declares a skill dependency on market-research-report in the
+    // registry (an investor deck builds on market research), which is the
+    // dependency edge this behaviour is exercised against.
     test("warns when a dependency is not installed", () => {
-      // scancommitpr depends on scancommitpush — install only scancommitpr
       const warnSpy: string[] = [];
       const originalWarn = console.warn;
       console.warn = (msg: string) => warnSpy.push(msg);
       try {
-        const result = installSkill("scancommitpr", { targetDir: testDir });
+        const result = installSkill("pitch-deck", { targetDir: testDir });
         expect(result.success).toBe(true);
-        expect(warnSpy.some((m) => m.includes("scancommitpush") && m.includes("not pinned"))).toBe(true);
+        expect(warnSpy.some((m) => m.includes("market-research-report") && m.includes("not pinned"))).toBe(true);
       } finally {
         console.warn = originalWarn;
       }
@@ -185,14 +187,14 @@ describe("installer", () => {
 
     test("does not warn when dependency is already installed", () => {
       // Install the dependency first, then the dependent skill
-      installSkill("scancommitpush", { targetDir: testDir });
+      installSkill("market-research-report", { targetDir: testDir });
       const warnSpy: string[] = [];
       const originalWarn = console.warn;
       console.warn = (msg: string) => warnSpy.push(msg);
       try {
-        const result = installSkill("scancommitpr", { targetDir: testDir });
+        const result = installSkill("pitch-deck", { targetDir: testDir });
         expect(result.success).toBe(true);
-        expect(warnSpy.some((m) => m.includes("scancommitpush") && m.includes("not pinned"))).toBe(false);
+        expect(warnSpy.some((m) => m.includes("market-research-report") && m.includes("not pinned"))).toBe(false);
       } finally {
         console.warn = originalWarn;
       }
@@ -201,7 +203,7 @@ describe("installer", () => {
 
   describe("installSkills", () => {
     test("installs multiple skills", () => {
-      const results = installSkills(["market-research-report", "logo-design"], { targetDir: testDir });
+      const results = installSkills(["market-research-report", "brand-kit"], { targetDir: testDir });
       expect(results.length).toBe(2);
       expect(results[0].success).toBe(true);
       expect(results[1].success).toBe(true);
@@ -215,7 +217,7 @@ describe("installer", () => {
     });
 
     test("does not create source index for pinned skills", () => {
-      installSkills(["market-research-report", "logo-design"], { targetDir: testDir });
+      installSkills(["market-research-report", "brand-kit"], { targetDir: testDir });
       expect(existsSync(join(testDir, ".skills", "index.ts"))).toBe(false);
       expect(existsSync(join(testDir, ".skills", "skills"))).toBe(false);
     });
@@ -235,10 +237,10 @@ describe("installer", () => {
 
     test("returns pinned skill names without prefix", () => {
       installSkill("market-research-report", { targetDir: testDir });
-      installSkill("logo-design", { targetDir: testDir });
+      installSkill("brand-kit", { targetDir: testDir });
       const installed = getInstalledSkills(testDir);
       expect(installed).toContain("market-research-report");
-      expect(installed).toContain("logo-design");
+      expect(installed).toContain("brand-kit");
       expect(installed.length).toBe(2);
     });
 
@@ -266,10 +268,10 @@ describe("installer", () => {
     });
 
     test("updates project pins after removal", () => {
-      installSkills(["market-research-report", "logo-design"], { targetDir: testDir });
+      installSkills(["market-research-report", "brand-kit"], { targetDir: testDir });
       removeSkill("market-research-report", testDir);
       expect(getInstalledSkills(testDir)).not.toContain("market-research-report");
-      expect(getInstalledSkills(testDir)).toContain("logo-design");
+      expect(getInstalledSkills(testDir)).toContain("brand-kit");
       expect(existsSync(join(testDir, ".skills", "skills"))).toBe(false);
     });
 
@@ -320,8 +322,8 @@ describe("installer", () => {
 
     describe("getAgentSkillPath", () => {
       test("returns correct path with bare skill name", () => {
-        const path = getAgentSkillPath("logo-design", "claude", "project", testDir);
-        expect(path).toBe(join(testDir, ".claude", "skills", "logo-design"));
+        const path = getAgentSkillPath("brand-kit", "claude", "project", testDir);
+        expect(path).toBe(join(testDir, ".claude", "skills", "brand-kit"));
       });
 
       test("does not rewrite legacy skill-prefixed names", () => {
@@ -332,14 +334,14 @@ describe("installer", () => {
 
     describe("installSkillForAgent", () => {
       test("does not copy SKILL.md into agent skill folders", () => {
-        const result = installSkillForAgent("logo-design", {
+        const result = installSkillForAgent("brand-kit", {
           agent: "claude",
           scope: "project",
           projectDir: testDir,
         });
         expect(result.success).toBe(false);
         expect(result.error).toContain("skills mcp --register claude");
-        expect(existsSync(join(testDir, ".claude", "skills", "logo-design", "SKILL.md"))).toBe(false);
+        expect(existsSync(join(testDir, ".claude", "skills", "brand-kit", "SKILL.md"))).toBe(false);
       });
 
       test("does not generate agent skill files", () => {
@@ -365,12 +367,12 @@ describe("installer", () => {
 
       test("never writes to any supported agent directory", () => {
         for (const agent of AGENT_TARGETS) {
-          const result = installSkillForAgent("logo-design", {
+          const result = installSkillForAgent("brand-kit", {
             agent,
             scope: "project",
             projectDir: testDir,
           });
-          const expected = join(testDir, `.${agent}`, "skills", "logo-design", "SKILL.md");
+          const expected = join(testDir, `.${agent}`, "skills", "brand-kit", "SKILL.md");
           expect(result.success).toBe(false);
           expect(existsSync(expected)).toBe(false);
         }
@@ -379,13 +381,13 @@ describe("installer", () => {
 
     describe("removeSkillForAgent", () => {
       test("is disabled because agent skill folders are unmanaged", () => {
-        const result = removeSkillForAgent("logo-design", {
+        const result = removeSkillForAgent("brand-kit", {
           agent: "claude",
           scope: "project",
           projectDir: testDir,
         });
         expect(result).toBe(false);
-        const skillDir = join(testDir, ".claude", "skills", "logo-design");
+        const skillDir = join(testDir, ".claude", "skills", "brand-kit");
         expect(existsSync(skillDir)).toBe(false);
       });
 
@@ -403,25 +405,25 @@ describe("installer", () => {
   describe("install/use/remove lifecycle", () => {
     test("full lifecycle: install → verify → list → remove → verify cleanup", () => {
       // 1. Install a skill to a temp directory
-      const result = installSkill("logo-design", { targetDir: testDir });
+      const result = installSkill("brand-kit", { targetDir: testDir });
       expect(result.success).toBe(true);
       expect(result.path).toBeDefined();
 
       // 2. Verify no skill files were copied
-      const skillDir = join(testDir, ".skills", "skills", "logo-design");
+      const skillDir = join(testDir, ".skills", "skills", "brand-kit");
       expect(existsSync(skillDir)).toBe(false);
       expect(existsSync(join(testDir, ".skills", "skills"))).toBe(false);
 
       // 3. Check getInstalledSkills() returns it
       const installed = getInstalledSkills(testDir);
-      expect(installed).toContain("logo-design");
+      expect(installed).toContain("brand-kit");
 
       // Also verify index.ts was not generated.
       const indexPath = join(testDir, ".skills", "index.ts");
       expect(existsSync(indexPath)).toBe(false);
 
       // 4. Remove the skill
-      const removed = removeSkill("logo-design", testDir);
+      const removed = removeSkill("brand-kit", testDir);
       expect(removed).toBe(true);
 
       // 5. Verify no source directory exists
@@ -429,31 +431,31 @@ describe("installer", () => {
 
       // 6. Verify getInstalledSkills() no longer returns it
       const installedAfter = getInstalledSkills(testDir);
-      expect(installedAfter).not.toContain("logo-design");
+      expect(installedAfter).not.toContain("brand-kit");
 
       expect(existsSync(indexPath)).toBe(false);
     });
 
     test("lifecycle with multiple skills: install two, remove one, verify state", () => {
       // Install two skills
-      const r1 = installSkill("logo-design", { targetDir: testDir });
+      const r1 = installSkill("brand-kit", { targetDir: testDir });
       const r2 = installSkill("market-research-report", { targetDir: testDir });
       expect(r1.success).toBe(true);
       expect(r2.success).toBe(true);
 
       // Both should be listed
       let installed = getInstalledSkills(testDir);
-      expect(installed).toContain("logo-design");
+      expect(installed).toContain("brand-kit");
       expect(installed).toContain("market-research-report");
       expect(installed.length).toBe(2);
 
       // Remove one
-      const removed = removeSkill("logo-design", testDir);
+      const removed = removeSkill("brand-kit", testDir);
       expect(removed).toBe(true);
 
       // Only the other should remain
       installed = getInstalledSkills(testDir);
-      expect(installed).not.toContain("logo-design");
+      expect(installed).not.toContain("brand-kit");
       expect(installed).toContain("market-research-report");
       expect(installed.length).toBe(1);
 
@@ -485,25 +487,25 @@ describe("installer", () => {
 
   describe("disableSkill / enableSkill / getDisabledSkills", () => {
     test("getDisabledSkills returns empty array initially", () => {
-      installSkill("logo-design", { targetDir: testDir });
+      installSkill("brand-kit", { targetDir: testDir });
       const disabled = getDisabledSkills(testDir);
       expect(disabled).toEqual([]);
     });
 
     test("disableSkill records disabled state without generating source files", () => {
-      installSkills(["logo-design", "market-research-report"], { targetDir: testDir });
-      const result = disableSkill("logo-design", testDir);
+      installSkills(["brand-kit", "market-research-report"], { targetDir: testDir });
+      const result = disableSkill("brand-kit", testDir);
       expect(result).toBe(true);
 
       expect(existsSync(join(testDir, ".skills", "index.ts"))).toBe(false);
-      expect(getInstalledSkills(testDir)).toEqual(["logo-design", "market-research-report"]);
-      expect(getDisabledSkills(testDir)).toContain("logo-design");
+      expect(getInstalledSkills(testDir)).toEqual(["brand-kit", "market-research-report"]);
+      expect(getDisabledSkills(testDir)).toContain("brand-kit");
     });
 
     test("disableSkill returns false for already disabled skill", () => {
-      installSkill("logo-design", { targetDir: testDir });
-      disableSkill("logo-design", testDir);
-      const result = disableSkill("logo-design", testDir);
+      installSkill("brand-kit", { targetDir: testDir });
+      disableSkill("brand-kit", testDir);
+      const result = disableSkill("brand-kit", testDir);
       expect(result).toBe(false);
     });
 
@@ -513,19 +515,19 @@ describe("installer", () => {
     });
 
     test("enableSkill clears disabled state without generating source files", () => {
-      installSkills(["logo-design", "market-research-report"], { targetDir: testDir });
-      disableSkill("logo-design", testDir);
-      const result = enableSkill("logo-design", testDir);
+      installSkills(["brand-kit", "market-research-report"], { targetDir: testDir });
+      disableSkill("brand-kit", testDir);
+      const result = enableSkill("brand-kit", testDir);
       expect(result).toBe(true);
 
       expect(existsSync(join(testDir, ".skills", "index.ts"))).toBe(false);
-      expect(getInstalledSkills(testDir)).toEqual(["logo-design", "market-research-report"]);
-      expect(getDisabledSkills(testDir)).not.toContain("logo-design");
+      expect(getInstalledSkills(testDir)).toEqual(["brand-kit", "market-research-report"]);
+      expect(getDisabledSkills(testDir)).not.toContain("brand-kit");
     });
 
     test("enableSkill returns false for non-disabled skill", () => {
-      installSkill("logo-design", { targetDir: testDir });
-      const result = enableSkill("logo-design", testDir);
+      installSkill("brand-kit", { targetDir: testDir });
+      const result = enableSkill("brand-kit", testDir);
       expect(result).toBe(false);
     });
 
@@ -537,12 +539,12 @@ describe("installer", () => {
 
   describe("getInstallMeta", () => {
     test("returns empty skills object initially", () => {
-      installSkill("logo-design", { targetDir: testDir });
+      installSkill("brand-kit", { targetDir: testDir });
       const meta = getInstallMeta(testDir);
       expect(meta).toHaveProperty("skills");
-      expect(meta.skills).toHaveProperty("logo-design");
-      expect(meta.skills["logo-design"]).toHaveProperty("installedAt");
-      expect(typeof meta.skills["logo-design"].installedAt).toBe("string");
+      expect(meta.skills).toHaveProperty("brand-kit");
+      expect(meta.skills["brand-kit"]).toHaveProperty("installedAt");
+      expect(typeof meta.skills["brand-kit"].installedAt).toBe("string");
     });
 
     test("meta tracks installedAt timestamp", () => {
@@ -554,10 +556,10 @@ describe("installer", () => {
     });
 
     test("meta no longer contains removed skill", () => {
-      installSkill("logo-design", { targetDir: testDir });
-      removeSkill("logo-design", testDir);
+      installSkill("brand-kit", { targetDir: testDir });
+      removeSkill("brand-kit", testDir);
       const meta = getInstallMeta(testDir);
-      expect(meta.skills["logo-design"]).toBeUndefined();
+      expect(meta.skills["brand-kit"]).toBeUndefined();
     });
   });
 });

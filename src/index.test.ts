@@ -18,7 +18,8 @@ describe("public API exports", () => {
 
   test("SKILLS array is populated", () => {
     expect(Array.isArray(publicAPI.SKILLS)).toBe(true);
-    expect(publicAPI.SKILLS.length).toBeGreaterThan(200);
+    // Declarative-only OSS catalog: 19 instruction skills.
+    expect(publicAPI.SKILLS.length).toBe(19);
   });
 
   test("CATEGORIES array is populated", () => {
@@ -28,7 +29,7 @@ describe("public API exports", () => {
 
   test("BASIC_SKILL_NAMES array is populated", () => {
     expect(Array.isArray(publicAPI.BASIC_SKILL_NAMES)).toBe(true);
-    expect(publicAPI.BASIC_SKILL_NAMES.length).toBe(10);
+    expect(publicAPI.BASIC_SKILL_NAMES.length).toBe(8);
   });
 
   test("AGENT_TARGETS array is populated", () => {
@@ -150,22 +151,22 @@ describe("public API exports", () => {
 
   test("key functions return expected results", () => {
     // Verify getSkill works through the public API
-    const skill = publicAPI.getSkill("logo-design");
+    const skill = publicAPI.getSkill("brand-kit");
     expect(skill).toBeDefined();
-    expect(skill!.name).toBe("logo-design");
+    expect(skill!.name).toBe("brand-kit");
 
     // Verify searchSkills works through the public API
-    const results = publicAPI.searchSkills("logo");
+    const results = publicAPI.searchSkills("brand");
     expect(results.length).toBeGreaterThan(0);
 
     // Verify clean basic profile works through the public API
     const basic = publicAPI.loadRegistryProfile("basic");
     expect(basic.filter((s) => s.source !== "custom").map((s) => s.name)).toEqual([...publicAPI.BASIC_SKILL_NAMES]);
-    expect(publicAPI.isBasicSkillName("convert")).toBe(true);
-    expect(publicAPI.isBasicSkillName("logo-design")).toBe(false);
+    expect(publicAPI.isBasicSkillName("blog-article")).toBe(true);
+    expect(publicAPI.isBasicSkillName("brand-kit")).toBe(false);
 
     // Verify skillExists works through the public API
-    expect(publicAPI.skillExists("logo-design")).toBe(true);
+    expect(publicAPI.skillExists("brand-kit")).toBe(true);
     expect(publicAPI.skillExists("nonexistent-xyz")).toBe(false);
   });
 });

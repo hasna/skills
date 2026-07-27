@@ -1,4 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync as mkdtempSyncTop, mkdirSync as mkdirSyncTop, rmSync as rmSyncTop, writeFileSync as writeFileSyncTop } from "fs";
+import { join as joinTop } from "path";
+import { tmpdir as tmpdirTop } from "os";
 import {
   CLI_PATH,
   EXPECTED_ALL_SKILL_COUNT,
@@ -12,6 +15,18 @@ import {
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
+
+// Declarative-only catalog ships no skill with npm deps; the readiness/npmDeps
+// path is exercised against a fixture the CLI resolves via $HASNA_SKILLS_DIR.
+const FIXTURE_HOME = mkdtempSyncTop(joinTop(tmpdirTop(), "cli-runtime-fixtures-"));
+{
+  const dir = joinTop(FIXTURE_HOME, "custom", "deps-fixture");
+  mkdirSyncTop(dir, { recursive: true });
+  writeFileSyncTop(joinTop(dir, "package.json"), JSON.stringify({ name: "deps-fixture", version: "0.1.0", dependencies: { "csv-parse": "^5.0.0" } }));
+  writeFileSyncTop(joinTop(dir, "SKILL.md"), "---\nname: deps-fixture\ndescription: Declares an npm dependency.\n---\n# Deps\n");
+}
+const FIXTURE_ENV = { HASNA_SKILLS_DIR: FIXTURE_HOME };
+afterAll(() => rmSyncTop(FIXTURE_HOME, { recursive: true, force: true }));
 
 describe("CLI runtime and misc commands", () => {
   describe("setup", () => {
@@ -303,13 +318,13 @@ describe("CLI runtime and misc commands", () => {
     });
 
     test("testing a valid skill returns correct JSON structure", async () => {
-      const { stdout } = await runCli(["test", "logo-design", "--json"]);
+      const { stdout } = await runCli(["test", "brand-kit", "--json"]);
       // exit code may be non-zero if env vars are missing, that's fine
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
       expect(data.length).toBe(1);
       const entry = data[0];
-      expect(entry).toHaveProperty("skill", "logo-design");
+      expect(entry).toHaveProperty("skill", "brand-kit");
       expect(entry).toHaveProperty("envVars");
       expect(entry).toHaveProperty("systemDeps");
       expect(entry).toHaveProperty("npmDeps");
@@ -319,7 +334,7 @@ describe("CLI runtime and misc commands", () => {
     });
 
     test("each envVars entry has name and set fields", async () => {
-      const { stdout } = await runCli(["test", "logo-design", "--json"]);
+      const { stdout } = await runCli(["test", "brand-kit", "--json"]);
       const data = JSON.parse(stdout);
       for (const v of data[0].envVars) {
         expect(v).toHaveProperty("name");
@@ -338,7 +353,7 @@ describe("CLI runtime and misc commands", () => {
       // Regression: `skills test excel --json` previously listed npmDeps without
       // an `installed` field and computed `ready` from env vars alone, so a skill
       // that cannot run without its npm deps could report a false-green readiness.
-      const { stdout } = await runCli(["test", "excel", "--json"]);
+      const { stdout } = await runCli(["test", "deps-fixture", "--json"], FIXTURE_ENV);
       const data = JSON.parse(stdout);
       const entry = data[0];
       expect(entry.npmDeps.length).toBeGreaterThan(0);

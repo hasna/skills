@@ -1,4 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync as mkdtempSyncTop, mkdirSync, rmSync as rmSyncTop, writeFileSync as writeFileSyncTop } from "fs";
+import { join as joinTop } from "path";
+import { tmpdir as tmpdirTop } from "os";
 import {
   CLI_PATH,
   EXPECTED_ALL_SKILL_COUNT,
@@ -12,6 +15,18 @@ import {
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
+
+// Declarative-only catalog ships no BYO-key skill; env-check is exercised against
+// a fixture in a throwaway corpus the CLI resolves via $HASNA_SKILLS_DIR.
+const FIXTURE_HOME = mkdtempSyncTop(joinTop(tmpdirTop(), "cli-envcheck-fixtures-"));
+{
+  const dir = joinTop(FIXTURE_HOME, "custom", "byo-fixture");
+  mkdirSync(dir, { recursive: true });
+  writeFileSyncTop(joinTop(dir, "package.json"), JSON.stringify({ name: "byo-fixture", version: "0.1.0" }));
+  writeFileSyncTop(joinTop(dir, "SKILL.md"), "---\nname: byo-fixture\ndescription: BYO-key fixture.\n---\n# BYO\n\nSet `OPENAI_API_KEY`.\n");
+}
+const FIXTURE_ENV = { HASNA_SKILLS_DIR: FIXTURE_HOME };
+afterAll(() => rmSyncTop(FIXTURE_HOME, { recursive: true, force: true }));
 
 describe("CLI import export and env checks", () => {
   describe("init --for", () => {
@@ -50,8 +65,8 @@ describe("CLI import export and env checks", () => {
         expect(stdout).toContain("react");
         expect(stdout).toContain("typescript");
         expect(stdout).toContain("Recommended skills");
-        expect(stdout).toContain("logo-design");
-        expect(stdout).toContain("implementation-plan");
+        expect(stdout).toContain("landing-page-pack");
+        expect(stdout).toContain("market-research-report");
         expect(stdout).toContain("skills mcp --register claude");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
@@ -75,8 +90,8 @@ describe("CLI import export and env checks", () => {
         expect(Array.isArray(data.detected)).toBe(true);
         expect(Array.isArray(data.recommended)).toBe(true);
         expect(data.detected).toContain("express");
-        expect(data.recommended).toContain("api-test-suite");
-        expect(data.recommended).toContain("implementation-plan");
+        expect(data.recommended).toContain("test-suite-generator");
+        expect(data.recommended).toContain("market-research-report");
         expect(data.agents).toEqual(["claude"]);
         expect(data.mcpRegister).toBe("skills mcp --register claude");
       } finally {
@@ -292,23 +307,23 @@ describe("CLI import export and env checks", () => {
     }
 
     test("shows env var status for a skill", async () => {
-      const { stdout, exitCode } = await runCli(["env-check", "audio-transcript-pack"]);
+      const { stdout, exitCode } = await runCli(["env-check", "byo-fixture"], FIXTURE_ENV);
       expect(exitCode).toBe(0);
-      expect(stdout).toContain("Auth status for audio-transcript-pack");
+      expect(stdout).toContain("Auth status for byo-fixture");
       expect(stdout).toContain("OPENAI_API_KEY");
     });
 
     test("shows set/missing markers for env vars", async () => {
-      const { stdout } = await runCli(["env-check", "audio-transcript-pack"]);
+      const { stdout } = await runCli(["env-check", "byo-fixture"], FIXTURE_ENV);
       const hasStatus = stdout.includes("set") || stdout.includes("missing");
       expect(hasStatus).toBe(true);
     });
 
     test("outputs JSON with --json flag", async () => {
-      const { stdout, exitCode } = await runCli(["env-check", "audio-transcript-pack", "--json"]);
+      const { stdout, exitCode } = await runCli(["env-check", "byo-fixture", "--json"], FIXTURE_ENV);
       expect(exitCode).toBe(0);
       const data = JSON.parse(stdout);
-      expect(data.skill).toBe("audio-transcript-pack");
+      expect(data.skill).toBe("byo-fixture");
       expect(Array.isArray(data.envVars)).toBe(true);
       expect(data.envVars.length).toBeGreaterThan(0);
       expect(data.envVars[0]).toHaveProperty("name");
@@ -317,7 +332,7 @@ describe("CLI import export and env checks", () => {
     });
 
     test("JSON output names the provider key a BYO-key skill needs", async () => {
-      const { stdout } = await runCli(["env-check", "audio-transcript-pack", "--json"]);
+      const { stdout } = await runCli(["env-check", "byo-fixture", "--json"], FIXTURE_ENV);
       const data = JSON.parse(stdout);
       const providerKey = data.envVars.find((v: { name: string }) => v.name === "OPENAI_API_KEY");
       expect(providerKey).toBeDefined();
@@ -400,7 +415,7 @@ describe("CLI import export and env checks", () => {
     });
 
     test("env var set field reflects actual environment", async () => {
-      const { stdout } = await runCli(["env-check", "audio-transcript-pack", "--json"]);
+      const { stdout } = await runCli(["env-check", "byo-fixture", "--json"], FIXTURE_ENV);
       const data = JSON.parse(stdout);
       for (const v of data.envVars) {
         const expectedSet = !!process.env[v.name];
@@ -521,14 +536,18 @@ describe("CLI import export and env checks", () => {
     });
 
     test("export then import --dry-run round-trips cleanly", async () => {
-      const { stdout: exportOut } = await runCli(["export"]);
-      const exported = JSON.parse(exportOut);
-
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-roundtrip-"));
       const filePath = require("path").join(tmpDir, "exported.json");
       try {
+        // Pin a skill so the export is non-empty (dry-run only reports a dryRun
+        // payload when there are skills to import).
+        await runCliInCwd(["pin", "market-research-report"], tmpDir);
+        const { stdout: exportOut } = await runCliInCwd(["export"], tmpDir);
+        const exported = JSON.parse(exportOut);
+        expect(exported.skills).toContain("market-research-report");
+
         writeFileSync(filePath, exportOut);
-        const { stdout, exitCode } = await runCli(["import", filePath, "--dry-run", "--json"]);
+        const { stdout, exitCode } = await runCliInCwd(["import", filePath, "--dry-run", "--json"], tmpDir);
         expect(exitCode).toBe(0);
         const data = JSON.parse(stdout);
         expect(data.dryRun).toBe(true);

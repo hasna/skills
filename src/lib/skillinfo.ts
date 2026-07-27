@@ -295,7 +295,7 @@ export function detectProjectSkills(cwd: string = process.cwd()): DetectedProjec
   const pkgPath = join(cwd, "package.json");
   if (!existsSync(pkgPath)) {
     // No package.json — return always-recommended skills only
-    const alwaysRecommend = ["implementation-plan", "write", "market-research-report"];
+    const alwaysRecommend = ["market-research-report", "repo-onboarding-report", "blog-article"];
     const recommended = alwaysRecommend
       .map((name) => loadRegistry().find((s) => s.name === name))
       .filter((s): s is SkillMeta => s !== undefined);
@@ -306,7 +306,7 @@ export function detectProjectSkills(cwd: string = process.cwd()): DetectedProjec
   try {
     pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
   } catch {
-    const alwaysRecommend = ["implementation-plan", "write", "market-research-report"];
+    const alwaysRecommend = ["market-research-report", "repo-onboarding-report", "blog-article"];
     const recommended = alwaysRecommend
       .map((name) => loadRegistry().find((s) => s.name === name))
       .filter((s): s is SkillMeta => s !== undefined);
@@ -324,7 +324,7 @@ export function detectProjectSkills(cwd: string = process.cwd()): DetectedProjec
   const recommendedNames = new Set<string>();
 
   // Always recommend these
-  for (const name of ["implementation-plan", "write", "market-research-report"]) {
+  for (const name of ["market-research-report", "repo-onboarding-report", "blog-article"]) {
     recommendedNames.add(name);
   }
 
@@ -333,7 +333,7 @@ export function detectProjectSkills(cwd: string = process.cwd()): DetectedProjec
   for (const dep of frontendDeps) {
     if (depNames.some((d) => d === dep || d.startsWith(`${dep}/`))) {
       detected.push(dep);
-      for (const name of ["logo-design", "generate-favicon", "seo-brief-builder"]) {
+      for (const name of ["landing-page-pack", "seo-content-pack", "brand-kit"]) {
         recommendedNames.add(name);
       }
       break;
@@ -345,7 +345,7 @@ export function detectProjectSkills(cwd: string = process.cwd()): DetectedProjec
   for (const dep of backendDeps) {
     if (depNames.some((d) => d === dep || d.startsWith(`${dep}/`))) {
       detected.push(dep);
-      for (const name of ["api-test-suite", "apidocs"]) {
+      for (const name of ["test-suite-generator", "security-audit-report"]) {
         recommendedNames.add(name);
       }
       break;
@@ -367,7 +367,7 @@ export function detectProjectSkills(cwd: string = process.cwd()): DetectedProjec
   // Stripe
   if (depNames.includes("stripe")) {
     detected.push("stripe");
-    recommendedNames.add("invoice");
+    recommendedNames.add("proposal-pack");
   }
 
   // Email
@@ -375,9 +375,7 @@ export function detectProjectSkills(cwd: string = process.cwd()): DetectedProjec
   for (const dep of emailDeps) {
     if (depNames.includes(dep)) {
       detected.push(dep);
-      for (const name of ["gmail", "email-campaign"]) {
-        recommendedNames.add(name);
-      }
+      recommendedNames.add("email-sequence");
       break;
     }
   }
@@ -387,7 +385,7 @@ export function detectProjectSkills(cwd: string = process.cwd()): DetectedProjec
   for (const dep of testDeps) {
     if (depNames.includes(dep)) {
       detected.push(dep);
-      recommendedNames.add("api-test-suite");
+      recommendedNames.add("test-suite-generator");
       break;
     }
   }
@@ -395,9 +393,7 @@ export function detectProjectSkills(cwd: string = process.cwd()): DetectedProjec
   // TypeScript
   if (depNames.includes("typescript")) {
     detected.push("typescript");
-    for (const name of ["scaffold-project", "deploy"]) {
-      recommendedNames.add(name);
-    }
+    recommendedNames.add("repo-onboarding-report");
   }
 
   // Deduplicate detected list
