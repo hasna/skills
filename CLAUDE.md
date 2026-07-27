@@ -239,6 +239,15 @@ rather than rejecting it, so `/api/v1/skills/pdf-generate/skill.md/junk` still s
 markdown. Every JSON response carries `Cache-Control: no-store`. Org isolation is
 enforced by `principal.orgId` predicates in the store layer.
 
+Skill slugs are validated with `/^[a-z0-9-]+$/` (`isValidSkillSlug` in
+`src/server/registry.ts`); `getServerSkill`/`getServerSkillMd`/`quoteServerSkill`
+resolve only registered skills and `getServerSkillMd` additionally confines the
+resolved file to `skills/`. As defence in depth `handleApiV1` rejects any decoded
+path segment carrying a separator or `..` with `400 INVALID_PATH`. This is why an
+encoded traversal such as `/api/v1/skills/..%2Fagent-skills%2F.../skill.md` — where
+`pathSegments()` decodes `%2F` back into separators after splitting — cannot escape
+`skills/`. Regression: `src/server/path-traversal.test.ts`.
+
 Auth is a bearer token hashed with SHA-256 and looked up as `api_keys.key_hash`; the
 raw token never reaches the store. `HASNA_SKILLS_BOOTSTRAP_API_KEY` seeds a dev
 org/user/key. Scopes and roles are parsed and returned but not yet enforced —

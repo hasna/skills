@@ -109,6 +109,15 @@ async function handleApiV1(
 ): Promise<Response> {
   const [resource, id, subresource, childId] = parts;
 
+  // Router boundary (defence in depth): no decoded path segment may carry a path
+  // separator or `..`. pathSegments() decodes each segment AFTER splitting on '/', so an
+  // encoded `%2F`/`%2E%2E` would otherwise smuggle a traversal past the split and into a
+  // handler as one opaque segment. Reject before any dispatch, before touching the store
+  // or the registry.
+  if (parts.some(segmentEscapesPath)) {
+    return json({ error: "invalid path segment", code: "INVALID_PATH" }, { status: 400 });
+  }
+
   if (resource === "skills") {
     if (request.method === "GET" && !id) return json(listServerSkills());
     if (request.method === "GET" && id && subresource === "skill.md") {
@@ -243,7 +252,33 @@ async function readJson(request: Request, limitBytes: number): Promise<Record<st
 }
 
 function pathSegments(pathname: string): string[] {
-  return pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  return pathname.split("/").filter(Boolean).map(decodeSegment);
+}
+
+/**
+ * decodeURIComponent throws URIError on malformed input — a lone `%`, a truncated
+ * `%2`, or an overlong UTF-8 sequence like `%c0%af`. This runs before the request
+ * try/catch, so a throw here would surface as a 500 with a stack trace rather than a
+ * clean rejection. A malformed segment is never a legitimate route, so keep it in its
+ * raw (still-encoded) form: it then fails segmentEscapesPath (if it still carries `..`)
+ * or the isValidSkillSlug guard (its `%` is not slug-shaped), yielding a 400/404.
+ */
+function decodeSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
+/**
+ * A decoded path segment that must never reach a handler: one carrying a path separator
+ * (`/` or `\`) or a `..` parent reference. After pathSegments() decodes, these can only
+ * appear when a client percent-encoded them to slip past the split-on-'/' — i.e. a
+ * traversal attempt. Legitimate segments (slugs, run ids, `skill.md`) contain none.
+ */
+function segmentEscapesPath(segment: string): boolean {
+  return segment.includes("/") || segment.includes("\\") || segment.includes("..");
 }
 
 function json(payload: unknown, init: ResponseInit = {}): Response {
