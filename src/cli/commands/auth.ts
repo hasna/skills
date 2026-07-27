@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import { createInterface } from "readline";
-import { getApiKey, getAuthConfig, saveAuthConfig, clearAuthConfig, getApiUrl } from "../../lib/auth-store.js";
+import { getAuthConfig, saveAuthConfig, clearAuthConfig, getApiUrl } from "../../lib/auth-store.js";
 
 const isTTY = process.stdin.isTTY && process.stdout.isTTY;
 const DEFAULT_DEVICE_POLL_TIMEOUT_MS = 10 * 60 * 1000;
@@ -530,33 +530,6 @@ export function registerAuth(parent: Command) {
     });
 
   auth
-    .command("signup")
-    .description("Create or sign in with your email (passwordless)")
-    .option("--email <email>", "Email address (non-interactive)")
-    .option("--code <code>", "Verification code (non-interactive)")
-    .action(async (options: { email?: string; code?: string }) => {
-      let email = options.email;
-
-      if (!email && isTTY) {
-        const existing = getAuthConfig();
-        if (existing) {
-          console.log(chalk.dim(`Already signed in as ${existing.email}`));
-          const again = await prompt("Continue with a different account? (y/N) ");
-          if (again.toLowerCase() !== "y") return;
-        }
-        email = await prompt(chalk.bold("Email: "));
-      }
-
-      if (!email) {
-        console.error(chalk.red("Email required. Use: skills auth signup --email you@example.com"));
-        process.exitCode = 1;
-        return;
-      }
-
-      await doLogin(email, options.code);
-    });
-
-  auth
     .command("logout")
     .description("Sign out and remove stored credentials")
     .action(() => {
@@ -606,153 +579,4 @@ export function registerAuth(parent: Command) {
       }
     });
 
-  auth.command("status").description("Show billing status").option("--json", "Output as JSON", false).action(handleBillingStatus);
-  auth.command("checkout").description("Create a Pro checkout session").option("--json", "Output as JSON", false).action(handleCheckout);
-  auth.command("portal").description("Create a customer portal session").option("--json", "Output as JSON", false).action(handlePortal);
-  auth.command("buy-credits").description("Create a credit pack checkout session").argument("<amount>", "Credit pack amount: 1, 5, 20, 50, or 100").option("--json", "Output as JSON", false).action(handleBuyCredits);
-
-  registerBilling(parent);
-  registerCredits(parent);
-}
-
-function requireHostedAuth(json?: boolean) {
-  const config = getAuthConfig();
-  if (config) return config;
-  const apiKey = getApiKey();
-  if (apiKey) return { apiKey };
-  const message = "Not signed in. Run: skills auth login";
-  if (json) console.log(JSON.stringify({ error: message }));
-  else console.log(chalk.dim(message));
-  process.exitCode = 1;
-  return null;
-}
-
-async function handleBillingStatus(options: { json?: boolean } = {}) {
-  const config = requireHostedAuth(options.json);
-  if (!config) return;
-
-  try {
-    const res = await apiRequest("/api/v1/billing/status", {
-      headers: { Authorization: `Bearer ${config.apiKey}` },
-    });
-    if (options.json) {
-      console.log(JSON.stringify(res, null, 2));
-      return;
-    }
-    // A server without a billing provider reports no plan and no balance
-    // rather than a fabricated one, so neither field is assumed present.
-    if (res.plan) console.log(chalk.bold("Plan:    ") + res.plan);
-    if (res.balance) console.log(chalk.bold("Balance: ") + res.balance);
-    if (!res.plan && !res.balance) console.log(chalk.dim("Billing is not configured for this instance."));
-  } catch (err) {
-    writeCommandError(err, "Failed to fetch billing status", options.json);
-  }
-}
-
-async function handleCheckout(options: { json?: boolean } = {}) {
-  const config = requireHostedAuth(options.json);
-  if (!config) return;
-
-  let res: any;
-  try {
-    res = await apiRequest("/api/v1/billing/checkout", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${config.apiKey}` },
-    });
-  } catch (err) {
-    writeCommandError(err, "Failed to create checkout session", options.json);
-    return;
-  }
-  if (res.error || !res.url) {
-    writeCommandError(new Error(res.detail || res.error || "Failed to create checkout session"), "Failed to create checkout session", options.json);
-    return;
-  }
-  if (options.json) console.log(JSON.stringify(res, null, 2));
-  else console.log(res.url);
-}
-
-async function handlePortal(options: { json?: boolean } = {}) {
-  const config = requireHostedAuth(options.json);
-  if (!config) return;
-
-  let res: any;
-  try {
-    res = await apiRequest("/api/v1/billing/portal", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${config.apiKey}` },
-    });
-  } catch (err) {
-    writeCommandError(err, "Failed to create customer portal session", options.json);
-    return;
-  }
-  if (res.error || !res.url) {
-    writeCommandError(new Error(res.detail || res.error || "Failed to create customer portal session"), "Failed to create customer portal session", options.json);
-    return;
-  }
-  if (options.json) console.log(JSON.stringify(res, null, 2));
-  else console.log(res.url);
-}
-
-async function handleBuyCredits(amount: string, options: { json?: boolean } = {}) {
-  const config = requireHostedAuth(options.json);
-  if (!config) return;
-
-  let res: any;
-  try {
-    res = await apiRequest("/api/v1/billing/credits", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${config.apiKey}` },
-      body: JSON.stringify({ amount }),
-    });
-  } catch (err) {
-    writeCommandError(err, "Failed to create credit checkout session", options.json);
-    return;
-  }
-  if (res.error || !res.url) {
-    writeCommandError(new Error(res.detail || res.error || "Failed to create credit checkout session"), "Failed to create credit checkout session", options.json);
-    return;
-  }
-  if (options.json) console.log(JSON.stringify(res, null, 2));
-  else console.log(res.url);
-}
-
-async function handleListCreditPacks(options: { json?: boolean } = {}) {
-  const config = requireHostedAuth(options.json);
-  if (!config) return;
-
-  let res: any;
-  try {
-    res = await apiRequest("/api/v1/billing/credits", {
-      headers: { Authorization: `Bearer ${config.apiKey}` },
-    });
-  } catch (err) {
-    writeCommandError(err, "Failed to list credit packs", options.json);
-    return;
-  }
-  if (res.error) {
-    writeCommandError(new Error(res.detail || res.error || "Failed to list credit packs"), "Failed to list credit packs", options.json);
-    return;
-  }
-  if (options.json) {
-    console.log(JSON.stringify(res, null, 2));
-    return;
-  }
-  const packs = Array.isArray(res) ? res : res.packs;
-  for (const pack of packs ?? []) {
-    console.log(`${pack.amount}: ${pack.amountCents ? `$${(pack.amountCents / 100).toFixed(2)}` : pack.label || ""}`);
-  }
-}
-
-function registerBilling(parent: Command) {
-  const billing = parent.command("billing").description("Manage billing");
-  billing.command("status").description("Show billing status").option("--json", "Output as JSON", false).action(handleBillingStatus);
-  billing.command("checkout").description("Create a Pro checkout session").option("--json", "Output as JSON", false).action(handleCheckout);
-  billing.command("portal").description("Create a customer portal session").option("--json", "Output as JSON", false).action(handlePortal);
-  billing.command("buy-credits").description("Create a credit pack checkout session").argument("<amount>", "Credit pack amount: 1, 5, 20, 50, or 100").option("--json", "Output as JSON", false).action(handleBuyCredits);
-}
-
-function registerCredits(parent: Command) {
-  const credits = parent.command("credits").description("Manage credit packs");
-  credits.command("buy").description("Create a credit pack checkout session").argument("<amount>", "Credit pack amount: 1, 5, 20, 50, or 100").option("--json", "Output as JSON", false).action(handleBuyCredits);
-  credits.command("packs").description("List available credit packs").option("--json", "Output as JSON", false).action(handleListCreditPacks);
 }

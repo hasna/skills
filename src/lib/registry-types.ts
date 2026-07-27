@@ -27,22 +27,8 @@ export interface SkillMeta {
    * agents. Missing kind defaults to "executable" during migration.
    */
   kind?: SkillKind;
-  pricing?: SkillPricingMetadata;
   availability?: SkillAvailabilityMetadata;
   source?: SkillSource;
-}
-
-export interface SkillPricingMetadata {
-  tier?: "free" | "premium" | string;
-  billingUnit?: string;
-  costCents?: number;
-  formattedCost: string;
-  formattedUnitCost?: string;
-  unitCount?: number;
-  estimated?: boolean;
-  quoteDependsOnInput?: boolean;
-  quoteRequired?: boolean;
-  description?: string;
 }
 
 export interface SkillAvailabilityMetadata {

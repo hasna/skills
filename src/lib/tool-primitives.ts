@@ -228,29 +228,29 @@ export const TOOL_PRIMITIVES: ToolPrimitive[] = [
     name: "safety-approval",
     title: "Safety And Approval",
     family: "safety",
-    description: "Gate risky, paid, security-sensitive, or compliance-sensitive skill actions behind explicit approval and structured evidence.",
+    description: "Gate risky, security-sensitive, or compliance-sensitive skill actions behind explicit approval and structured evidence.",
     runtime: "mixed",
     stable: true,
-    cliCommands: ["skills quote <skill>", "skills tools deps <skill>"],
-    mcpTools: ["quote_skill", "get_skill_tool_dependencies"],
-    apiSurfaces: ["getSkillPricing", "getSkillRunCostCents", "validateSkillDirectory"],
+    cliCommands: ["skills tools deps <skill>"],
+    mcpTools: ["get_skill_tool_dependencies"],
+    apiSurfaces: ["validateSkillDirectory"],
     envVars: [],
     outputTypes: ["json", "markdown"],
-    capabilities: ["pricing-approval", "risk-review", "policy-evidence", "validation"],
+    capabilities: ["risk-review", "policy-evidence", "validation"],
   },
   {
     name: "hosted-auth",
     title: "Hosted Auth",
     family: "hosted",
-    description: "Authenticate hosted and premium runs through Skills account credentials rather than local provider keys.",
+    description: "Authenticate hosted runs through Skills account credentials rather than local provider keys.",
     runtime: "hosted",
     stable: true,
-    cliCommands: ["skills auth login", "skills billing status", "skills run <skill>"],
-    mcpTools: ["run_skill", "quote_skill"],
+    cliCommands: ["skills auth login", "skills run <skill>"],
+    mcpTools: ["run_skill"],
     apiSurfaces: ["RemoteSkillsClient", "RemoteSkillRunContract"],
     envVars: ["SKILLS_API_KEY"],
     outputTypes: ["json"],
-    capabilities: ["account-auth", "billing", "remote-run-submit"],
+    capabilities: ["account-auth", "remote-run-submit"],
   },
 ];
 
@@ -396,7 +396,7 @@ function inferPrimitiveDependencies(skill: SkillMeta): SkillToolDependency[] {
       primitive: primitive.name,
       family: primitive.family,
       required: true,
-      reason: "Skill is premium, remote, or hosted and must use Skills account authentication.",
+      reason: "Skill is remote or hosted and must use Skills account authentication.",
     });
   }
 
@@ -436,10 +436,8 @@ function ruleMatches(skill: SkillMeta, rule: PrimitiveRule): boolean {
 function isHostedRuntimeSkill(skill: SkillMeta): boolean {
   const tags = new Set(skill.tags.map((tag) => tag.toLowerCase()));
   return HOSTED_RUNTIME_SKILL_NAMES.has(skill.name)
-    || tags.has("premium")
     || tags.has("remote")
-    || tags.has("hosted")
-    || skill.pricing?.tier === "premium";
+    || tags.has("hosted");
 }
 
 function dedupeDependencies(dependencies: SkillToolDependency[]): SkillToolDependency[] {

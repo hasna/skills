@@ -126,17 +126,10 @@ export {
 
 export {
   ARTICLE_GENERATION_SLUG,
-  getAllPremiumSlugs,
-  getPublicSkillPricing,
-  getSkillCatalogBillingFields,
-  getSkillPricing,
-  getSkillRunCostCents,
   validateBlogArticleRunOptions,
   type BlogArticleRunOptions,
   type BlogArticleValidationResult,
-  type PublicSkillPricing,
-  type SkillPricing,
-} from "./lib/pricing.js";
+} from "./lib/blog-article.js";
 
 export {
   getCompactSkillDiscovery,
@@ -144,7 +137,6 @@ export {
   publicDiscoveryDependencies,
   publicDiscoveryDocumentation,
   publicDiscoveryEnvVars,
-  publicDiscoveryPriceLabel,
   sanitizePublicDiscoveryText,
   type CompactSkillDiscovery,
   type PublicSkillDiscovery,
