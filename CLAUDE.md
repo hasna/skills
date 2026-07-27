@@ -42,7 +42,7 @@ document, and run them. Four surfaces share one set of core modules:
 - **CLI** (`skills`) — Commander + an Ink TUI.
 - **MCP server** (`skills-mcp`) — the same capabilities over Model Context Protocol.
 - **HTTP API server** (`skills-server`, `skills-worker`, `skills-migrate`) — a real,
-  shipped, self-hostable service with a queue, a durable store, and `/api/v1/*`.
+  shipped service you can run yourself: a queue, a durable store, and `/api/v1/*`.
 - **Library** (`@hasna/skills`, plus the `@hasna/skills/storage` subpath).
 
 There is **one deployment story: you run it.** No *deployment* mode concept survives —
@@ -228,7 +228,8 @@ exactly four path segments after `/api/v1`.
 | GET | `/api/v1/runs/:runId/artifacts` | |
 | GET | `/api/v1/runs/:runId/artifacts/:artifactId` | Streams the body as an attachment |
 | POST | `/api/v1/runs/:runId/cancel` | |
-| GET | `/api/v1/billing/status`, `/api/v1/billing/credits` | Static self-hosted responses |
+| GET | `/api/v1/billing/status` | `{billingConfigured: false, code: "BILLING_NOT_CONFIGURED"}` — a capability statement, never a deployment name |
+| GET | `/api/v1/billing/credits` | `{packs: []}` |
 | POST | `/api/v1/billing/*` | `501 BILLING_NOT_CONFIGURED` |
 
 Everything under `/api/` requires a bearer API key first (`401 AUTH_REQUIRED`).
