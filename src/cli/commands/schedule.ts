@@ -192,27 +192,6 @@ async function executeScheduledSkill(skillName: string, args: string[], options:
   const skill = getSkill(skillName);
   if (!skill) throw new Error(`Skill '${skillName}' not found`);
 
-  const pricing = await import("../../lib/pricing.js");
-  const { isHostedRuntimeSkill } = await import("../../lib/hosted-runtime-skills.js");
-  if (isHostedRuntimeSkill(skill.name)) {
-    const publicPricing = pricing.getPublicSkillPricing(skill.name, {}, args);
-    if (!options.allowPaid) {
-      throw new Error(`${skill.name} is a paid self-hosted skill (${publicPricing.formattedCost}). Review with skills schedule run --dry-run, then rerun with --allow-paid --max-paid-cents ${publicPricing.costCents}.`);
-    }
-
-    const { getApiKey } = await import("../../lib/auth-store.js");
-    const apiKey = getApiKey();
-    if (!apiKey) {
-      throw new Error(`${skill.name} is a self-hosted skill. Run: skills auth login`);
-    }
-
-    const { RemoteSkillsClient } = await import("../../lib/remote-client.js");
-    const client = new RemoteSkillsClient(apiKey);
-    const run = await client.submitRun(skill.name, {}, args);
-    if (run.error) throw new Error(String(run.error));
-    return { paid: true, costCents: publicPricing.costCents, cost: publicPricing.formattedCost };
-  }
-
   const { runSkill } = await import("../../lib/skillinfo.js");
   const result = await runSkill(skill.name, args);
   if (result.exitCode !== 0) {
@@ -222,19 +201,13 @@ async function executeScheduledSkill(skillName: string, args: string[], options:
 }
 
 async function describeDueSchedule(schedule: { name: string; skill: string; cron: string; args?: string[] }) {
-  const { getSkill } = await import("../../lib/registry.js");
-  const pricing = await import("../../lib/pricing.js");
-  const { isHostedRuntimeSkill } = await import("../../lib/hosted-runtime-skills.js");
-  const skill = getSkill(schedule.skill);
-  const paid = Boolean(skill && isHostedRuntimeSkill(skill.name));
-  const publicPricing = paid && skill ? pricing.getPublicSkillPricing(skill.name, {}, schedule.args ?? []) : null;
   return {
     name: schedule.name,
     skill: schedule.skill,
     cron: schedule.cron,
-    paid,
-    costCents: publicPricing?.costCents,
-    cost: publicPricing?.formattedCost,
+    paid: false,
+    costCents: undefined,
+    cost: undefined,
     availability: { status: "available" as const },
   };
 }

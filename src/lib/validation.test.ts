@@ -6,7 +6,6 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { fileURLToPath } from "url";
 import { SKILLS } from "./registry";
-import { getAllPremiumSlugs } from "./pricing";
 import { listHostedMetadataSlugs } from "./hosted-skill-set";
 import { generateSkillMd } from "./skillinfo";
 import {
@@ -89,10 +88,10 @@ const skillDirs = readdirSync(SKILLS_DIR).filter((f) => {
   const fullPath = join(SKILLS_DIR, f);
   return f !== "_common" && !f.startsWith(".") && statSync(fullPath).isDirectory();
 });
-const HOSTED_METADATA_SKILLS = new Set([
-  ...getAllPremiumSlugs(),
-  ...listHostedMetadataSlugs(SKILLS_DIR),
-]);
+// Empty in this repo, and asserted so by catalog-runnable.test.ts. Kept as a
+// derivation rather than a literal `new Set()` so re-introducing a hosted skill
+// is handled correctly here instead of misclassifying it as executable.
+const HOSTED_METADATA_SKILLS = new Set(listHostedMetadataSlugs(SKILLS_DIR));
 
 // Instruction skills are the third shape: like hosted skills they carry no bin
 // and no src/, but unlike hosted skills their implementation is not off-repo —

@@ -1,4 +1,3 @@
-import { isHostedRuntimeSkill } from "./hosted-runtime-skills.js";
 import { resolveSkillAlias } from "./skill-aliases.js";
 
 export type BillingTier = "free" | "premium";
@@ -35,19 +34,7 @@ export interface SkillCatalogBillingFields {
   creditsPerExecution: number;
 }
 
-export const PREMIUM_SKILLS: SkillPricing[] = [
-  { slug: "brand-assets", displayName: "Brand Assets", tier: "premium", costCents: 200, providers: ["self-hosted"], description: "Self-hosted brand asset discovery package with logos, PNG sizes, palette, typography, source metadata, and manifest" },
-  { slug: "logo-design", displayName: "Logo Design", tier: "premium", costCents: 50, providers: ["self-hosted"], description: "Self-hosted multi-variant logo package with transparent PNGs, vector-style SVGs, usage notes, and manifest" },
-  { slug: "product-mockup", displayName: "Product Mockup", tier: "premium", costCents: 200, providers: ["self-hosted"], description: "Self-hosted product mockup package with SVG variants, image direction prompts, scene planning, usage notes, asset metadata, and manifest" },
-  { slug: "pdf-to-markdown", displayName: "PDF to Markdown", tier: "premium", costCents: 5, providers: ["self-hosted"], description: "Self-hosted PDF to markdown conversion and cleanup" },
-  { slug: "pdf-to-dataset", displayName: "PDF to Dataset", tier: "premium", costCents: 15, providers: ["self-hosted"], description: "Self-hosted PDF table and form extraction into CSV/JSON datasets" },
-  { slug: "one-page-website", displayName: "One Page Website", tier: "premium", costCents: 500, providers: ["self-hosted"], description: "Self-hosted static one-page website bundle with HTML, CSS, JavaScript, copy, section map, deploy notes, and manifest" },
-  { slug: "api-docs-portal", displayName: "API Docs Portal", tier: "premium", costCents: 250, providers: ["self-hosted"], description: "Self-hosted API documentation portal with endpoint reference, auth guide, examples, and static site artifacts" },
-  { slug: "sdk-generator", displayName: "SDK Generator", tier: "premium", costCents: 600, providers: ["self-hosted"], description: "Self-hosted TypeScript SDK scaffold with client code, types, package files, tests, README, examples, API summary, and manifest" },
-  { slug: "audio-transcript-pack", displayName: "Audio Transcript Pack", tier: "premium", costCents: 150, providers: ["self-hosted"], description: "Self-hosted transcript package with timestamps, captions, summary, show notes, clip suggestions, repurposing copy, and manifest" },
-  { slug: "slide-deck-generator", displayName: "Slide Deck Generator", tier: "premium", costCents: 300, providers: ["self-hosted"], description: "Self-hosted slide deck package with markdown, PDF, PPTX, speaker notes, theme guide, structured slide metadata, and manifest" },
-  { slug: "invoice-reconciliation", displayName: "Invoice Reconciliation", tier: "premium", costCents: 200, providers: ["self-hosted"], description: "Self-hosted invoice reconciliation package with matched payments, discrepancies, anomaly notes, summaries, and manifest" },
-];
+export const PREMIUM_SKILLS: SkillPricing[] = [];
 
 export const ARTICLE_GENERATION_SLUG = "blog-article";
 export const ARTICLE_MAX_COUNT = 12;
@@ -82,19 +69,6 @@ export function getSkillPricing(slug: string): SkillPricing | null {
   return premiumIndex.get(canonicalSlug) || getSkillRunPricing(canonicalSlug);
 }
 
-/**
- * @deprecated Runtime class, not price. Use `isHostedRuntimeSkill` from
- * `hosted-runtime-skills.js`.
- *
- * Every non-billing caller has been migrated. This alias remains only because
- * the symbol is published from the package root; it now delegates so that the
- * price table above can be deleted without changing what any caller computes.
- * Equality of the two sets is asserted in `hosted-runtime-skills.test.ts`
- * against the filesystem, not assumed here.
- */
-export function isPremiumSkill(slug: string): boolean {
-  return isHostedRuntimeSkill(slug);
-}
 
 export function getSkillCostCents(slug: string): number {
   return getSkillRunCostCents(slug);

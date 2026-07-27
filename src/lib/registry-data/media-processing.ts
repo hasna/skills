@@ -13,7 +13,7 @@ export const MEDIA_PROCESSING_SKILLS: SkillMeta[] = [
     displayName: "Audio Transcript Pack",
     description: "Generate self-hosted transcript packages with timestamps, summaries, show notes, clips, captions, and repurposing copy",
     category: "Media Processing",
-    tags: ["audio", "transcript", "captions", "show-notes", "premium", "remote"],
+    tags: ["audio", "transcript", "captions", "show-notes"],
   },
   {
     name: "compress-video",

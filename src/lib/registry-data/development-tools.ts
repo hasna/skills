@@ -18,16 +18,16 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
   {
     name: "api-docs-portal",
     displayName: "API Docs Portal",
-    description: "Generate premium static API documentation portals from OpenAPI specs, route lists, and endpoint examples",
+    description: "Generate static API documentation portals from OpenAPI specs, route lists, and endpoint examples",
     category: "Development Tools",
-    tags: ["api", "documentation", "openapi", "portal", "premium", "remote"],
+    tags: ["api", "documentation", "openapi", "portal"],
   },
   {
     name: "sdk-generator",
     displayName: "SDK Generator",
     description: "Generate self-hosted TypeScript SDK scaffolds with client code, types, package files, tests, README, examples, and API summaries",
     category: "Development Tools",
-    tags: ["sdk", "api", "typescript", "developer-tools", "premium", "remote"],
+    tags: ["sdk", "api", "typescript", "developer-tools"],
   },
   {
     name: "repo-onboarding-report",

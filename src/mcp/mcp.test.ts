@@ -180,8 +180,7 @@ describe("MCP Server", () => {
       const payload = JSON.parse(response.result.content[0].text);
       expect(payload).toMatchObject({
         skill: "logo-design",
-        gatewayBacked: true,
-        hostedRuntime: true,
+        hostedRuntime: false,
       });
       expect(payload.dependencies.map((dependency: { primitive: string }) => dependency.primitive)).toContain("media-image");
     } finally {
@@ -283,173 +282,9 @@ version: 0.3.0
   }, 15000);
 
 
-  test("run_skill rejects unauthenticated premium skills without local fallback", async () => {
-    const { mkdtempSync, rmSync } = require("fs");
-    const { tmpdir } = require("os");
-    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-premium-no-auth-"));
-    const client = new McpClient({
-      HOME: tmpDir,
-      SKILLS_API_KEY: "",
-      SKILLS_TEST_MODE: "1",
-    });
-    try {
-      await client.initialize();
-      const response = await client.request("tools/call", {
-        name: "run_skill",
-        arguments: {
-          name: "logo-design",
-          args: ["--help"],
-        },
-      }, 83);
-      expect(response).not.toBeNull();
-      expect(response.result.isError).toBe(true);
-      const error = JSON.parse(response.result.content[0].text);
-      expect(error).toMatchObject({ code: "AUTH_REQUIRED" });
-      expect(error.message).toContain("skills auth login");
-      expect(error.message).not.toContain("Skill Image CLI");
-    } finally {
-      await client.close();
-      rmSync(tmpDir, { recursive: true, force: true });
-    }
-  }, 15000);
 
-  test("run_skill fails closed for premium skills when hosted access fails", async () => {
-    const { mkdtempSync, rmSync } = require("fs");
-    const { tmpdir } = require("os");
-    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-premium-skillsmd-down-"));
-    const client = new McpClient({
-      HOME: tmpDir,
-      SKILLS_API_KEY: "sk_test_skillsmd_down",
-      SKILLS_API_URL: "http://127.0.0.1:1",
-      SKILLS_TEST_MODE: "1",
-    });
-    try {
-      await client.initialize();
-      const response = await client.request("tools/call", {
-        name: "run_skill",
-        arguments: {
-          name: "logo-design",
-          args: ["--help"],
-          approved: true,
-        },
-      }, 84);
-      expect(response).not.toBeNull();
-      expect(response.result.isError).toBe(true);
-      const error = JSON.parse(response.result.content[0].text);
-      expect(error).toMatchObject({ code: "PLATFORM_ERROR" });
-      expect(error.message).toContain("requires self-hosted API access");
-      expect(error.message).not.toContain("Skill Image CLI");
-    } finally {
-      await client.close();
-      rmSync(tmpDir, { recursive: true, force: true });
-    }
-  }, 15000);
 
-  test("run_skill requires explicit approval before paid self-hosted submission", async () => {
-    const { mkdtempSync, rmSync } = require("fs");
-    const { tmpdir } = require("os");
-    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-premium-approval-required-"));
-    let remoteCalls = 0;
-    const server = Bun.serve({
-      port: 0,
-      fetch() {
-        remoteCalls += 1;
-        return Response.json({ error: "run should be blocked before remote submission" }, { status: 500 });
-      },
-    });
-    const client = new McpClient({
-      HOME: tmpDir,
-      SKILLS_API_KEY: "sk_test_mcp_approval_required",
-      SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
-      SKILLS_TEST_MODE: "1",
-    });
-    try {
-      await client.initialize();
-      const response = await client.request("tools/call", {
-        name: "run_skill",
-        arguments: {
-          name: "logo-design",
-          args: ["make a mark"],
-        },
-      }, 84);
-      expect(response).not.toBeNull();
-      expect(response.result.isError).toBe(true);
-      const error = JSON.parse(response.result.content[0].text);
-      expect(error).toMatchObject({ code: "APPROVAL_REQUIRED" });
-      expect(error.message).toContain("paid self-hosted skill");
-      expect(error.message).toContain("approved: true");
-      expect(remoteCalls).toBe(0);
-    } finally {
-      await client.close();
-      server.stop(true);
-      rmSync(tmpDir, { recursive: true, force: true });
-    }
-  }, 15000);
 
-  test("run_skill returns normalized remote run contract for premium submissions", async () => {
-    const { mkdtempSync, rmSync } = require("fs");
-    const { tmpdir } = require("os");
-    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-premium-contract-"));
-    const server = Bun.serve({
-      port: 0,
-      fetch(req) {
-        const url = new URL(req.url);
-        expect(req.headers.get("authorization")).toBe("Bearer sk_test_contract");
-        if (url.pathname === "/api/v1/runs/logo-design" && req.method === "POST") {
-          return Response.json({
-            id: "run_mcp_contract",
-            skill: "logo-design",
-            status: "queued",
-            correlationId: "corr_mcp_contract",
-          }, { status: 202 });
-        }
-        return Response.json({ error: "not found" }, { status: 404 });
-      },
-    });
-    const client = new McpClient({
-      HOME: tmpDir,
-      SKILLS_API_KEY: "sk_test_contract",
-      SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
-      SKILLS_TEST_MODE: "1",
-    });
-    try {
-      await client.initialize();
-      const response = await client.request("tools/call", {
-        name: "run_skill",
-        arguments: {
-          name: "logo-design",
-          args: ["make a mark"],
-          approved: true,
-        },
-      }, 85);
-      expect(response).not.toBeNull();
-      const payload = JSON.parse(response.result.content[0].text);
-      expect(payload).toMatchObject({
-        contractVersion: 1,
-        id: "run_mcp_contract",
-        skill: "logo-design",
-        status: "queued",
-        correlationId: "corr_mcp_contract",
-        remote: true,
-        remoteRun: {
-          contractVersion: 1,
-          id: "run_mcp_contract",
-          skill: "logo-design",
-          status: "queued",
-        },
-        nextActions: {
-          poll: "skills runs status run_mcp_contract",
-          download: "skills exports download run_mcp_contract",
-        },
-      });
-      expect(payload.run.remoteRunId).toBe("run_mcp_contract");
-      expect(payload.detailHint).toContain("detail:true");
-    } finally {
-      await client.close();
-      server.stop(true);
-      rmSync(tmpDir, { recursive: true, force: true });
-    }
-  }, 15000);
 
   test("run_skill keeps free local skills local even when hosted auth is configured", async () => {
     const { mkdtempSync, rmSync } = require("fs");
@@ -571,12 +406,11 @@ version: 0.3.0
       expect(info.displayName).toBeDefined();
       expect(info.category).toBeDefined();
       expect(info.pricing).toMatchObject({
-        tier: "premium",
-        formattedCost: "$0.50/run",
+        tier: "free",
+        formattedCost: "Free",
       });
-      expect(info.envVars).toContain("SKILLS_API_KEY");
-      expect(info.envVars).not.toContain("SKILL_API_KEY");
-      expect(info.envVars).not.toContain("OPENAI_API_KEY");
+      expect(info.envVars ?? []).not.toContain("SKILL_API_KEY");
+      expect(info.envVars ?? []).not.toContain("OPENAI_API_KEY");
       expect(info.mcp.schemas.run.inputSchema.properties.name).toMatchObject({
         const: "logo-design",
       });
@@ -651,8 +485,7 @@ version: 0.3.0
       expect(response.result).toBeDefined();
       const reqs = JSON.parse(response.result.content[0].text);
       expect(Array.isArray(reqs.envVars)).toBe(true);
-      expect(reqs.envVars).toContain("SKILLS_API_KEY");
-      expect(reqs.envVars).not.toContain("SKILL_API_KEY");
+            expect(reqs.envVars).not.toContain("SKILL_API_KEY");
       expect(reqs.envVars).not.toContain("OPENAI_API_KEY");
       expect(reqs.cliCommand).toBe("skills run logo-design");
     } finally {
@@ -915,12 +748,10 @@ version: 0.3.0
       const info = JSON.parse(response.result.contents[0].text);
       expect(info.name).toBe("logo-design");
       expect(info.pricing).toMatchObject({
-        tier: "premium",
-        formattedCost: "$0.50/run",
+        tier: "free",
+        formattedCost: "Free",
       });
-      expect(info.documentation).toContain("SKILLS_API_KEY");
-      expect(info.requirements.envVars).toContain("SKILLS_API_KEY");
-      expect(info.requirements.envVars).not.toContain("SKILL_API_KEY");
+                  expect(info.requirements.envVars).not.toContain("SKILL_API_KEY");
       expect(info.requirements.envVars).not.toContain("OPENAI_API_KEY");
       expect(info.mcp).toMatchObject({
         schemaVersion: 1,
@@ -1061,8 +892,8 @@ version: 0.3.0
       expect(validResponse).not.toBeNull();
       const validResult = JSON.parse(validResponse.result.content[0].text);
       expect(validResult.valid).toBe(true);
-      expect(validResult.metadata.runtime).toBe("hosted");
-      expect(validResult.metadata.binCommands).toEqual([]);
+      expect(validResult.metadata.runtime).toBe("local");
+      expect(validResult.metadata.binCommands).toEqual(["logo-design"]);
 
       const missingResponse = await client.request("tools/call", {
         name: "validate_skill",

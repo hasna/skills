@@ -1,5 +1,4 @@
 import type { SkillMeta } from "./registry-types.js";
-import { isHostedRuntimeSkill } from "./hosted-runtime-skills.js";
 import { getPublicSkillPricing, type PublicSkillPricing } from "./pricing.js";
 
 const VENDOR_TERMS = [
@@ -133,34 +132,26 @@ export function sanitizePublicDiscoveryText(text: string): string {
   return sanitized.trim();
 }
 
-export function publicDiscoveryEnvVars(skillName: string, envVars: string[]): string[] {
-  if (!isHostedRuntimeSkill(skillName)) return envVars;
-  const filtered = envVars.filter((envVar) =>
-    envVar !== "SKILL_API_KEY" && !VENDOR_ENV_PREFIXES.some((prefix) => envVar.startsWith(prefix))
-  );
-  return filtered.includes("SKILLS_API_KEY") ? filtered : ["SKILLS_API_KEY", ...filtered];
+/**
+ * Every skill now runs from bundled source or is instruction prose, so the
+ * environment it declares IS the environment a caller must provide. A BYO-key
+ * skill's variable is the single most important thing to surface, not to redact.
+ */
+export function publicDiscoveryEnvVars(_skillName: string, envVars: string[]): string[] {
+  return envVars;
 }
 
+/** Dependencies are installed locally now, so the real list is the useful one. */
 export function publicDiscoveryDependencies(
-  skillName: string,
+  _skillName: string,
   dependencies: Record<string, string>,
 ): Record<string, string> {
-  if (!isHostedRuntimeSkill(skillName)) return dependencies;
-  return Object.fromEntries(
-    Object.entries(dependencies).filter(([name]) => !VENDOR_PACKAGE_PATTERNS.some((pattern) => pattern.test(name))),
-  );
+  return dependencies;
 }
 
-export function publicDiscoveryDocumentation(skill: SkillMeta, documentation: string | null): string | null {
-  if (!documentation) return documentation;
-  if (!isHostedRuntimeSkill(skill.name)) return documentation;
-
-  return [
-    `# ${skill.displayName || skill.name}`,
-    sanitizePublicDiscoveryText(skill.description),
-    `Pricing: ${getPublicSkillPricing(skill.name).formattedCost}.`,
-    "Set `SKILLS_API_KEY` or run `skills auth login` for self-hosted runtime execution. Runtime routing and model selection are managed by the self-hosted Skills runtime.",
-  ].join("\n\n");
+/** The skill's own docs are the truth; there is no hosted runtime to describe. */
+export function publicDiscoveryDocumentation(_skill: SkillMeta, documentation: string | null): string | null {
+  return documentation;
 }
 
 function escapeRegExp(value: string): string {

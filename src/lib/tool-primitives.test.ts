@@ -22,12 +22,10 @@ describe("tool primitives", () => {
   test("maps representative skills to primitive dependencies", () => {
     const image = getSkillToolDependencies("logo-design");
     expect(image?.dependencies.map((dependency) => dependency.primitive)).toEqual(expect.arrayContaining([
-      "ai-gateway",
-      "hosted-auth",
       "media-image",
     ]));
-    expect(image?.gatewayBacked).toBe(true);
-    expect(image?.hostedRuntime).toBe(true);
+    expect(image?.gatewayBacked).toBe(true); // category rule: Design & Branding is AI-assisted
+    expect(image?.hostedRuntime).toBe(false);
     expect(isGatewayBackedSkill("logo-design")).toBe(true);
 
     const pdf = getSkillToolDependencies("pdf-to-markdown");

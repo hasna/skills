@@ -202,7 +202,7 @@ describe("CLI discovery", () => {
       const { stdout } = await runCli(["list"]);
       expect(stdout).toContain(`Available default skills (${EXPECTED_BASIC_SKILL_COUNT})`);
       expect(stdout).toContain("pdf-to-markdown");
-      expect(stdout).toContain("$0.05/run");
+      expect(stdout).toContain("Free");
       expect(stdout).not.toContain("workout-cycle-planner");
       expect(stdout.toLowerCase()).not.toContain("openai");
       expect(stdout.toLowerCase()).not.toContain("gemini");
@@ -272,8 +272,8 @@ describe("CLI discovery", () => {
       expect(data.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
       const image = data.find((skill: any) => skill.name === "pdf-to-markdown");
       expect(image.pricing).toMatchObject({
-        tier: "premium",
-        formattedCost: "$0.05/run",
+        tier: "free",
+        formattedCost: "Free",
       });
       expect(JSON.stringify(image.pricing)).not.toContain("openai");
     });
@@ -393,9 +393,9 @@ describe("CLI discovery", () => {
       const { stdout } = await runCli(["search", "pdf"]);
       expect(stdout).toContain("Found");
       expect(stdout).toContain("skill(s)");
-      expect(stdout).toContain("($0.05/run)");
+      expect(stdout).toContain("(Free)");
       expect(stdout).toContain("Details: skills show <name>");
-      expect(stdout).toContain("$0.05/run");
+      expect(stdout).toContain("Free");
     });
 
     test("shows message for no results", async () => {
@@ -458,7 +458,7 @@ describe("CLI discovery", () => {
       const { stdout } = await runCli(["info", "pdf-to-markdown"]);
       expect(stdout).toContain("PDF to Markdown");
       expect(stdout).toContain("Data & Analysis");
-      expect(stdout).toContain("Pricing: $0.05/run");
+      expect(stdout).toContain("Pricing: Free");
       expect(stdout.toLowerCase()).not.toContain("exa");
       expect(stdout.toLowerCase()).not.toContain("openai");
       expect(stdout.toLowerCase()).not.toContain("claude");
@@ -478,8 +478,8 @@ describe("CLI discovery", () => {
       expect(data.category).toBe("Data & Analysis");
       expect(Array.isArray(data.tags)).toBe(true);
       expect(data.pricing).toMatchObject({
-        tier: "premium",
-        formattedCost: "$0.05/run",
+        tier: "free",
+        formattedCost: "Free",
       });
       expect(JSON.stringify(data).toLowerCase()).not.toContain("exa");
       expect(JSON.stringify(data).toLowerCase()).not.toContain("openai");
@@ -501,7 +501,7 @@ describe("CLI discovery", () => {
             tags: ["remote", "demo"],
             version: "0.2.0",
             pricing: {
-              tier: "premium",
+              tier: "free",
               billingUnit: "run",
               costCents: 75,
               formattedCost: "$0.75/run",
@@ -540,114 +540,6 @@ describe("CLI discovery", () => {
   });
 
   describe("quote", () => {
-    test("quotes fixed and variable premium skills without provider internals", async () => {
-      const fixed = await runCli(["quote", "logo-design", "--json"]);
-      expect(fixed.exitCode).toBe(0);
-      expect(JSON.parse(fixed.stdout)).toMatchObject({
-        availability: { status: "available" },
-        pricing: {
-          tier: "premium",
-          formattedCost: "$0.50/run",
-          quoteDependsOnInput: false,
-        },
-      });
-
-      const dataset = await runCli(["quote", "pdf-to-dataset", "--json"]);
-      expect(dataset.exitCode).toBe(0);
-      expect(JSON.parse(dataset.stdout).pricing).toMatchObject({
-        tier: "premium",
-        formattedCost: "$0.15/run",
-        quoteDependsOnInput: false,
-      });
-
-      const markdown = await runCli(["quote", "pdf-to-markdown", "--json"]);
-      expect(markdown.exitCode).toBe(0);
-      expect(JSON.parse(markdown.stdout).pricing).toMatchObject({
-        tier: "premium",
-        formattedCost: "$0.05/run",
-        quoteDependsOnInput: false,
-      });
-
-      const productMockup = await runCli(["quote", "product-mockup", "--json"]);
-      expect(productMockup.exitCode).toBe(0);
-      expect(JSON.parse(productMockup.stdout).pricing).toMatchObject({
-        tier: "premium",
-        formattedCost: "$2.00/run",
-        quoteDependsOnInput: false,
-      });
-
-      const onePageWebsite = await runCli(["quote", "one-page-website", "--json"]);
-      expect(onePageWebsite.exitCode).toBe(0);
-      expect(JSON.parse(onePageWebsite.stdout).pricing).toMatchObject({
-        tier: "premium",
-        formattedCost: "$5.00/run",
-        quoteDependsOnInput: false,
-      });
-
-      const apiDocsPortal = await runCli(["quote", "api-docs-portal", "--json"]);
-      expect(apiDocsPortal.exitCode).toBe(0);
-      expect(JSON.parse(apiDocsPortal.stdout).pricing).toMatchObject({
-        tier: "premium",
-        formattedCost: "$2.50/run",
-        quoteDependsOnInput: false,
-      });
-
-      const sdkGenerator = await runCli(["quote", "sdk-generator", "--json"]);
-      expect(sdkGenerator.exitCode).toBe(0);
-      expect(JSON.parse(sdkGenerator.stdout).pricing).toMatchObject({
-        tier: "premium",
-        formattedCost: "$6.00/run",
-        quoteDependsOnInput: false,
-      });
-
-      const audioTranscriptPack = await runCli(["quote", "audio-transcript-pack", "--json"]);
-      expect(audioTranscriptPack.exitCode).toBe(0);
-      expect(JSON.parse(audioTranscriptPack.stdout).pricing).toMatchObject({
-        tier: "premium",
-        formattedCost: "$1.50/run",
-        quoteDependsOnInput: false,
-      });
-
-      const slideDeckGenerator = await runCli(["quote", "slide-deck-generator", "--json"]);
-      expect(slideDeckGenerator.exitCode).toBe(0);
-      expect(JSON.parse(slideDeckGenerator.stdout).pricing).toMatchObject({
-        tier: "premium",
-        formattedCost: "$3.00/run",
-        quoteDependsOnInput: false,
-      });
-
-      const invoiceReconciliation = await runCli(["quote", "invoice-reconciliation", "--json"]);
-      expect(invoiceReconciliation.exitCode).toBe(0);
-      expect(JSON.parse(invoiceReconciliation.stdout).pricing).toMatchObject({
-        tier: "premium",
-        formattedCost: "$2.00/run",
-        quoteDependsOnInput: false,
-      });
-
-      expect(markdown.stdout.toLowerCase()).not.toContain("cerebras");
-      expect(markdown.stdout.toLowerCase()).not.toContain("gpt-oss");
-      expect(productMockup.stdout.toLowerCase()).not.toContain("openai");
-      expect(productMockup.stdout.toLowerCase()).not.toContain("gemini");
-      expect(productMockup.stdout.toLowerCase()).not.toContain("cerebras");
-      expect(productMockup.stdout.toLowerCase()).not.toContain("gpt-oss");
-      expect(onePageWebsite.stdout.toLowerCase()).not.toContain("openai");
-      expect(onePageWebsite.stdout.toLowerCase()).not.toContain("gemini");
-      expect(onePageWebsite.stdout.toLowerCase()).not.toContain("cerebras");
-      expect(onePageWebsite.stdout.toLowerCase()).not.toContain("gpt-oss");
-      expect(apiDocsPortal.stdout.toLowerCase()).not.toContain("cerebras");
-      expect(apiDocsPortal.stdout.toLowerCase()).not.toContain("gpt-oss");
-      expect(sdkGenerator.stdout.toLowerCase()).not.toContain("openai");
-      expect(sdkGenerator.stdout.toLowerCase()).not.toContain("gemini");
-      expect(sdkGenerator.stdout.toLowerCase()).not.toContain("cerebras");
-      expect(sdkGenerator.stdout.toLowerCase()).not.toContain("gpt-oss");
-
-      const invalidBatch = await runCli(["quote", "create-blog-article", "--count", "13", "--topic", "SaaS onboarding", "--json"]);
-      expect(invalidBatch.exitCode).toBe(1);
-      expect(JSON.parse(invalidBatch.stdout)).toMatchObject({
-        code: "INVALID_BLOG_ARTICLE_OPTIONS",
-        details: ["Count must be an integer between 1 and 12."],
-      });
-    }, SLOW_TEST_TIMEOUT);
   });
 
 });

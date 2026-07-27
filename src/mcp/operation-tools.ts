@@ -44,7 +44,6 @@ import {
 } from "../lib/compact-output.js";
 import { cacheClear, mcpError, mcpJson, remoteRunNextActions } from "./helpers.js";
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../lib/remote-run-contract.js";
-import { isHostedRuntimeSkill } from "../lib/hosted-runtime-skills.js";
 
 export function registerOperationTools(server: McpServer): void {
   server.registerTool("scaffold_skill", {
@@ -328,7 +327,7 @@ export function registerOperationTools(server: McpServer): void {
     }
 
     const apiKey = getApiKey();
-    const hostedRuntime = isHostedRuntimeSkill(skillName);
+    const hostedRuntime = false;
     const costCents = hostedRuntime ? getSkillRunCostCents(skillName, runInput, runArgs) : undefined;
     const runContext = createSkillRun({
       skill: skillName,

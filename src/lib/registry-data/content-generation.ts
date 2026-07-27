@@ -48,7 +48,7 @@ export const CONTENT_GENERATION_SKILLS: SkillMeta[] = [
     displayName: "Slide Deck Generator",
     description: "Generate self-hosted slide decks from briefs, docs, or outlines with PDF, PPTX, speaker notes, and structured slide metadata",
     category: "Content Generation",
-    tags: ["presentation", "slides", "deck", "documents", "premium", "remote"],
+    tags: ["presentation", "slides", "deck", "documents"],
   },
   {
     name: "generate-qrcode",

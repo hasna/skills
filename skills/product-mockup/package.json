@@ -2,10 +2,31 @@
   "name": "product-mockup",
   "version": "0.1.0",
   "private": true,
-  "description": "Hosted premium product mockup artifact generator",
+  "description": "Generate parametric SVG product mockup frames with scene plans, asset metadata, and image prompts",
   "type": "module",
-  "skills": {
-    "runtime": "hosted",
-    "source": "remote"
+  "main": "src/index.ts",
+  "bin": {
+    "product-mockup": "src/index.ts"
+  },
+  "files": [
+    "src",
+    "SKILL.md",
+    "tsconfig.json"
+  ],
+  "keywords": [
+    "mockup",
+    "svg",
+    "product",
+    "ui",
+    "skill"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
   }
 }

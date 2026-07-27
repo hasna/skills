@@ -2,10 +2,34 @@
   "name": "api-docs-portal",
   "version": "0.1.0",
   "private": true,
-  "description": "Hosted skill metadata for api-docs-portal",
+  "description": "Generate a self-contained static API documentation portal from an OpenAPI or Swagger spec",
   "type": "module",
-  "skills": {
-    "runtime": "hosted",
-    "source": "remote"
+  "main": "src/index.ts",
+  "bin": {
+    "api-docs-portal": "src/index.ts"
+  },
+  "files": [
+    "src",
+    "SKILL.md",
+    "tsconfig.json"
+  ],
+  "keywords": [
+    "openapi",
+    "swagger",
+    "documentation",
+    "static-site",
+    "cli",
+    "skill"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "yaml": "^2.8.2"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
   }
 }
