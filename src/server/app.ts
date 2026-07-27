@@ -4,7 +4,6 @@ import { authenticateRequest } from "./auth.js";
 import { resolveServerConfig, type SkillsServerConfig } from "./config.js";
 import { resolveDatabaseTarget } from "./database-url.js";
 import { executeRun } from "./handlers.js";
-import { quoteServerSkill } from "./registry.js";
 import {
   SkillRequestError,
   getMergedSkill,
@@ -215,8 +214,6 @@ async function handleApiV1(
         ? json({ deleted: true, slug: id })
         : json({ error: "published skill not found", code: "SKILL_NOT_FOUND" }, { status: 404 });
     }
-
-    if (request.method === "POST" && id && subresource === "quote") return json(quoteServerSkill(id));
   }
 
   if (resource === "runs") {
@@ -278,25 +275,6 @@ async function handleApiV1(
       if (!run) return json({ error: "run not found", code: "RUN_NOT_FOUND" }, { status: 404 });
       const next = await store.updateRun(id, { status: "cancel_requested" });
       return json(runPayload(next ?? run));
-    }
-  }
-
-  if (resource === "billing") {
-    if (request.method === "GET" && id === "status") {
-      // This server has no billing provider — POST /billing/* answers 501. It
-      // therefore has no plan, no ledger and no payment method to report, and
-      // inventing values for them would be a lie a client cannot detect. It
-      // reports the one thing it knows, matching the POST answer. The field
-      // must stay a capability ("billing is off here"), never a deployment
-      // name: a client that can read the deployment variant off a billing
-      // response can fingerprint the instance.
-      return json({ billingConfigured: false, code: "BILLING_NOT_CONFIGURED" });
-    }
-    if (request.method === "GET" && id === "credits") {
-      return json({ packs: [] });
-    }
-    if (request.method === "POST") {
-      return json({ error: "billing is not configured for this deployment", code: "BILLING_NOT_CONFIGURED" }, { status: 501 });
     }
   }
 

@@ -8,55 +8,7 @@ import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
 
-describe("CLI self-hosted auth and billing", () => {
-  test("billing commands accept SKILLS_API_KEY without a stored login", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "cli-billing-api-key-"));
-    const seenAuthHeaders: Array<string | null> = [];
-    const server = Bun.serve({
-      port: 0,
-      fetch: async (req) => {
-        const url = new URL(req.url);
-        if (url.pathname === "/api/v1/billing/status" && req.method === "GET") {
-          seenAuthHeaders.push(req.headers.get("authorization"));
-          return Response.json({
-            plan: "pro",
-            balanceCents: 0,
-            balance: "$0.00",
-            subscription: null,
-            hasPaymentMethod: true,
-          });
-        }
-
-        if (url.pathname === "/api/v1/billing/portal" && req.method === "POST") {
-          seenAuthHeaders.push(req.headers.get("authorization"));
-          return Response.json({ url: "https://billing.example/portal" });
-        }
-
-        return Response.json({ error: `missing route ${req.method} ${url.pathname}` }, { status: 404 });
-      },
-    });
-
-    try {
-      const env = {
-        HOME: tmpDir,
-        SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
-        SKILLS_API_KEY: "sk_env_billing",
-      };
-
-      const status = await runCliInCwd(["billing", "status", "--json"], tmpDir, env);
-      expect(status.exitCode).toBe(0);
-      expect(JSON.parse(status.stdout)).toMatchObject({ plan: "pro", balance: "$0.00" });
-
-      const portal = await runCliInCwd(["billing", "portal", "--json"], tmpDir, env);
-      expect(portal.exitCode).toBe(0);
-      expect(JSON.parse(portal.stdout)).toMatchObject({ url: "https://billing.example/portal" });
-      expect(seenAuthHeaders).toEqual(["Bearer sk_env_billing", "Bearer sk_env_billing"]);
-      expect(existsSync(join(tmpDir, ".hasna", "skills", "auth.json"))).toBe(false);
-    } finally {
-      server.stop(true);
-      rmSync(tmpDir, { recursive: true, force: true });
-    }
-  });
+describe("CLI self-hosted auth", () => {
 
   test("auth whoami accepts SKILLS_API_KEY without storing or exposing the key", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-whoami-api-key-"));
@@ -206,9 +158,8 @@ describe("CLI self-hosted auth and billing", () => {
     }
   });
 
-  test("device login stores credentials and billing commands call the self-hosted API", async () => {
+  test("device login stores credentials for the self-hosted API", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-device-auth-"));
-    const seenAuthHeaders: Array<string | null> = [];
     const server = Bun.serve({
       port: 0,
       fetch: async (req) => {
@@ -232,22 +183,6 @@ describe("CLI self-hosted auth and billing", () => {
             organization: { id: "org_1", slug: "user", name: "User" },
             firstLogin: false,
           });
-        }
-
-        if (url.pathname === "/api/v1/billing/status" && req.method === "GET") {
-          seenAuthHeaders.push(req.headers.get("authorization"));
-          return Response.json({
-            plan: "free",
-            balanceCents: 500,
-            balance: "$5.00",
-            subscription: null,
-            hasPaymentMethod: false,
-          });
-        }
-
-        if (url.pathname === "/api/v1/billing/credits" && req.method === "POST") {
-          seenAuthHeaders.push(req.headers.get("authorization"));
-          return Response.json({ url: "https://billing.example/credits", pack: "$5" });
         }
 
         return Response.json({ error: `missing route ${req.method} ${url.pathname}` }, { status: 404 });
@@ -284,15 +219,6 @@ describe("CLI self-hosted auth and billing", () => {
         email: "user@example.com",
         orgSlug: "user",
       });
-
-      const status = await runCliInCwd(["billing", "status", "--json"], tmpDir, env);
-      expect(status.exitCode).toBe(0);
-      expect(JSON.parse(status.stdout)).toMatchObject({ plan: "free", balance: "$5.00" });
-
-      const credits = await runCliInCwd(["credits", "buy", "5", "--json"], tmpDir, env);
-      expect(credits.exitCode).toBe(0);
-      expect(JSON.parse(credits.stdout)).toMatchObject({ url: "https://billing.example/credits", pack: "$5" });
-      expect(seenAuthHeaders).toEqual(["Bearer sk_device_login", "Bearer sk_device_login"]);
     } finally {
       server.stop(true);
       rmSync(tmpDir, { recursive: true, force: true });
@@ -448,7 +374,7 @@ describe("CLI self-hosted auth and billing", () => {
     }
   });
 
-  test("self-hosted auth and billing failures stay structured with --json", async () => {
+  test("self-hosted auth failures stay structured with --json", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-hosted-json-errors-"));
     const server = Bun.serve({
       port: 0,
@@ -462,11 +388,6 @@ describe("CLI self-hosted auth and billing", () => {
         SKILLS_API_KEY: "sk_json_errors",
       };
       for (const args of [
-        ["billing", "status", "--json"],
-        ["billing", "checkout", "--json"],
-        ["billing", "portal", "--json"],
-        ["credits", "buy", "5", "--json"],
-        ["credits", "packs", "--json"],
         ["auth", "whoami", "--json"],
         ["auth", "login", "--device", "--json"],
       ]) {

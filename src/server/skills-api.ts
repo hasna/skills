@@ -15,7 +15,6 @@ import { createHash } from "node:crypto";
 import { ownBytes, type OwnedBytes } from "../lib/skill-bundle.js";
 import type { SkillMeta } from "../lib/registry-types.js";
 import { mergeSkillRegistryLists } from "../lib/registry-merge.js";
-import { getPublicSkillPricing } from "../lib/pricing.js";
 import type { ArtifactStorage } from "./artifact-storage.js";
 import type { SkillsServerConfig } from "./config.js";
 import { getServerSkill, getServerSkillMd, listServerSkills } from "./registry.js";
@@ -63,12 +62,6 @@ export function publishedSkillMeta(record: ServerSkillRecord): SkillMeta {
     // separately as `publishedSource` rather than overwriting this.
     source: "remote",
     availability: { status: "available" },
-    // Straight from the pricing table, like every other skill. The hand-written object
-    // this replaced put a deployment-variant name in `tier`, which is not a BillingTier
-    // value at all - it answered "where does this run" in the field that answers "what
-    // does a run cost". src/lib/public-package-boundary.test.ts bans that spelling from
-    // emitted values, and this comment is deliberately written not to reintroduce it.
-    pricing: getPublicSkillPricing(record.slug),
   };
 }
 

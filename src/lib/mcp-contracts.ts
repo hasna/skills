@@ -147,43 +147,16 @@ const runArgsSchema: JsonSchemaObject = {
   default: [],
   description: "CLI-style string arguments passed to the skill.",
 };
-const paidRunApprovalSchema: JsonSchemaObject = {
-  type: "boolean",
-  description: "Set true only after the user has approved the quoted cost for a paid hosted run.",
-};
-
 const errorSchema = objectSchema({
   code: stringSchema("Stable error code."),
   message: stringSchema("Human-readable error message."),
   suggestions: stringArraySchema("Suggested next actions."),
 }, ["code", "message"], "Structured MCP error payload.");
 
-const pricingSchema = objectSchema({
-  tier: stringSchema("Pricing tier."),
-  billingUnit: stringSchema("Billing unit."),
-  costCents: { type: "number", description: "Estimated or fixed cost in cents." },
-  formattedCost: stringSchema("Display-ready cost."),
-  estimated: { type: "boolean", description: "Whether the final cost can vary by input." },
-  quoteDependsOnInput: { type: "boolean", description: "Whether input affects the quote." },
-  quoteRequired: { type: "boolean", description: "Whether callers should quote before running." },
-}, [], "Public pricing metadata.");
-
-const skillAvailabilitySchema = objectSchema({
-  status: {
-    type: "string",
-    enum: ["available", "unavailable"],
-    description: "Whether hosted execution is currently available for this skill.",
-  },
-  code: stringSchema("Optional stable unavailability code."),
-  message: stringSchema("Optional human-readable availability message."),
-  details: stringArraySchema("Optional availability details."),
-}, ["status"], "Hosted skill availability metadata.");
-
 const skillSummarySchema = objectSchema({
   name: stringSchema("Canonical skill slug."),
   category: stringSchema("Skill category."),
   description: stringSchema("Sanitized public skill description for discovery."),
-  pricing: pricingSchema,
 }, ["name", "category", "description"], "Compact skill summary.");
 
 const toolPrimitiveSummarySchema = objectSchema({
@@ -244,7 +217,6 @@ const runOutputSchema = objectSchema({
   id: stringSchema("Remote run id when submitted remotely."),
   localRunId: stringSchema("Local run metadata id."),
   status: stringSchema("Run lifecycle status."),
-  pricing: pricingSchema,
   remoteRun: objectSchema({}, [], "Compact remote run summary by default; full contract when detail:true is requested.", true),
   run: objectSchema({}, [], "Compact local run metadata by default; full metadata when detail:true is requested.", true),
   nextActions: objectSchema({
@@ -534,28 +506,10 @@ const toolContracts: McpToolContract[] = [
     }),
   },
   {
-    name: "quote_skill",
-    title: "Quote Skill",
-    description: "Quote a skill run before execution.",
-    params: ["name", "input?", "args?"],
-    category: "execution",
-    sideEffects: "none",
-    stable: true,
-    inputSchema: objectSchema({ name: skillNameInput, input: runInputSchema, args: runArgsSchema }, ["name"]),
-    outputSchema: objectSchema({
-      skill: stringSchema("Skill slug."),
-      pricing: pricingSchema,
-      availability: skillAvailabilitySchema,
-      error: stringSchema("Optional error message when the quote cannot be used to run."),
-      code: stringSchema("Optional stable error code."),
-      details: stringArraySchema("Optional error details."),
-    }, ["skill", "pricing", "availability"]),
-  },
-  {
     name: "run_skill",
     title: "Run Skill",
     description: "Run a skill locally or through a configured remote runner. Returns compact stdout/stderr previews and run summaries by default; pass detail:true for full records.",
-    params: ["name", "input?", "args?", "approved?", "detail?"],
+    params: ["name", "input?", "args?", "detail?"],
     category: "execution",
     sideEffects: "local-process-or-remote-run",
     stable: true,
@@ -563,7 +517,6 @@ const toolContracts: McpToolContract[] = [
       name: skillNameInput,
       input: runInputSchema,
       args: runArgsSchema,
-      approved: paidRunApprovalSchema,
       detail: { type: "boolean", default: false, description: "Return full stdout/stderr, remote run, and local run metadata." },
     }, ["name"]),
     outputSchema: runOutputSchema,

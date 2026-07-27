@@ -20,19 +20,6 @@ const remoteAvailabilitySchema = z.object({
   details: z.array(z.string()).optional(),
 }).passthrough();
 
-const remotePricingSchema = z.object({
-  formattedCost: z.string(),
-  tier: z.string().optional(),
-  billingUnit: z.string().optional(),
-  costCents: z.number().optional(),
-  formattedUnitCost: z.string().optional(),
-  unitCount: z.number().optional(),
-  estimated: z.boolean().optional(),
-  quoteDependsOnInput: z.boolean().optional(),
-  quoteRequired: z.boolean().optional(),
-  description: z.string().optional(),
-}).passthrough();
-
 const remoteSkillSchema = z.object({
   name: z.string().min(1).optional(),
   slug: z.string().min(1).optional(),
@@ -42,7 +29,6 @@ const remoteSkillSchema = z.object({
   tags: z.array(z.string()).optional(),
   dependencies: z.array(z.string()).optional(),
   version: z.string().optional(),
-  pricing: remotePricingSchema.optional(),
   availability: remoteAvailabilitySchema.optional(),
 }).passthrough().refine((skill) => skill.name || skill.slug, {
   message: "Remote skill requires name or slug",
@@ -128,7 +114,6 @@ function normalizeRemoteSkill(skill: z.infer<typeof remoteSkillSchema>): SkillMe
     tags: skill.tags || ["remote"],
     dependencies: skill.dependencies,
     ...(skill.version ? { version: skill.version } : {}),
-    ...(skill.pricing ? { pricing: skill.pricing } : {}),
     availability: normalizeRemoteAvailability(skill.availability),
     source: "remote",
   };

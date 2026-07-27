@@ -157,7 +157,7 @@ describe("MCP Server", () => {
       expect(toolNames).toContain("unpin_skill");
       expect(toolNames).toContain("list_categories");
       expect(toolNames).toContain("get_requirements");
-      expect(toolNames).toContain("quote_skill");
+      expect(toolNames).not.toContain("quote_skill");
       expect(toolNames).toContain("run_skill");
       expect(toolNames).toContain("get_run_status");
       expect(toolNames).toContain("get_mcp_contracts");
@@ -407,10 +407,7 @@ version: 0.3.0
       expect(info.name).toBe("logo-design");
       expect(info.displayName).toBeDefined();
       expect(info.category).toBeDefined();
-      expect(info.pricing).toMatchObject({
-        tier: "free",
-        formattedCost: "Free",
-      });
+      expect(info).not.toHaveProperty("pricing");
       expect(info.envVars ?? []).not.toContain("SKILL_API_KEY");
       expect(info.envVars ?? []).not.toContain("OPENAI_API_KEY");
       expect(info.mcp.schemas.run.inputSchema.properties.name).toMatchObject({
@@ -526,7 +523,7 @@ version: 0.3.0
       expect(skills.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
       expect(result.hasMore).toBe(false);
       expect(skills.map((s: any) => s.name)).not.toContain("market-research-report");
-      expect(skills[0].pricing).toHaveProperty("formattedCost");
+      expect(skills[0]).not.toHaveProperty("pricing");
       // Compact list must surface descriptions so agents can discover
       // without a per-skill get_skill_docs / get_skill_info round-trip.
       for (const s of skills) {
@@ -708,7 +705,7 @@ version: 0.3.0
       expect(Array.isArray(skills)).toBe(true);
       expect(skills.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
       expect(skills.map((s: any) => s.name)).not.toContain("market-research-report");
-      expect(skills[0].pricing).toHaveProperty("formattedCost");
+      expect(skills[0]).not.toHaveProperty("pricing");
       for (const s of skills) {
         expect(typeof s.description).toBe("string");
         expect(s.description.length).toBeGreaterThan(0);
@@ -738,7 +735,7 @@ version: 0.3.0
     }
   }, 15000);
 
-  test("reads public skill resource with pricing and sanitized premium metadata", async () => {
+  test("reads public skill resource with sanitized metadata", async () => {
     const client = new McpClient();
     try {
       await client.initialize();
@@ -749,10 +746,7 @@ version: 0.3.0
       expect(response.result).toBeDefined();
       const info = JSON.parse(response.result.contents[0].text);
       expect(info.name).toBe("logo-design");
-      expect(info.pricing).toMatchObject({
-        tier: "free",
-        formattedCost: "Free",
-      });
+      expect(info).not.toHaveProperty("pricing");
                   expect(info.requirements.envVars).not.toContain("SKILL_API_KEY");
       expect(info.requirements.envVars).not.toContain("OPENAI_API_KEY");
       expect(info.mcp).toMatchObject({
@@ -967,7 +961,7 @@ version: 0.3.0
       const searchResult = JSON.parse(searchResponse.result.content[0].text);
       expect(searchResult.schemaVersion).toBe(1);
       expect(searchResult.tools).toContain("validate_skill");
-      expect(searchResult.tools).toContain("quote_skill");
+      expect(searchResult.tools).not.toContain("quote_skill");
       expect(searchResult.tools).toContain("run_skill");
 
       const storageSearchResponse = await client.request("tools/call", {

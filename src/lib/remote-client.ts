@@ -38,14 +38,6 @@ export class RemoteSkillsClient {
     return res.json();
   }
 
-  async quoteSkill(slug: string, input?: Record<string, unknown>, args?: string[]): Promise<any> {
-    const res = await this.request(`/api/v1/skills/${slug}/quote`, {
-      method: "POST",
-      body: JSON.stringify({ input, args }),
-    });
-    return res.json();
-  }
-
   async submitRun(slug: string, input?: Record<string, unknown>, args?: string[]): Promise<RemoteSkillRunContract> {
     const res = await this.request(`/api/v1/runs/${slug}`, {
       method: "POST",

@@ -59,25 +59,10 @@ describe("MCP contract manifest", () => {
       name: { type: "string", description: expect.any(String) },
       input: { type: "object", additionalProperties: true },
       args: { type: "array", items: { type: "string" } },
-      approved: { type: "boolean", description: expect.stringContaining("approved") },
     });
-    expect(byName.get("quote_skill")?.outputSchema).toMatchObject({
-      required: ["skill", "pricing", "availability"],
-      properties: {
-        availability: {
-          type: "object",
-          properties: {
-            status: { type: "string", enum: ["available", "unavailable"] },
-            code: { type: "string" },
-            message: { type: "string" },
-            details: { type: "array", items: { type: "string" } },
-          },
-        },
-        error: { type: "string" },
-        code: { type: "string" },
-        details: { type: "array", items: { type: "string" } },
-      },
-    });
+    // The billing quote tool has been removed from the OSS contract surface.
+    expect(byName.has("quote_skill")).toBe(false);
+    expect(byName.get("run_skill")?.inputSchema.properties).not.toHaveProperty("approved");
     expect(byName.get("validate_skill")?.outputSchema.properties).toHaveProperty("issues");
 
     const serialized = JSON.stringify(contracts);

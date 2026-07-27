@@ -5,7 +5,7 @@
 import type { Command } from "commander";
 import { SKILLS, CATEGORIES } from "../../lib/registry.js";
 
-const skillCmds = ["pin", "unpin", "info", "show", "docs", "requires", "run", "quote", "validate"];
+const skillCmds = ["pin", "unpin", "info", "show", "docs", "requires", "run", "validate"];
 const skillNames = SKILLS.map((s) => s.name);
 const categoryNames = CATEGORIES.map((c) => c);
 

@@ -134,14 +134,14 @@ describe("CLI docs and validation", () => {
       expect(data.envVars).toContain("OPENAI_API_KEY");
       expect(data.envVars).not.toContain("GEMINI_API_KEY");
       expect(data.cliCommand).toBe("skills run audio-transcript-pack");
-      expect(data.pricing.formattedCost).toBe("Free");
+      expect(data).not.toHaveProperty("pricing");
     });
 
     test("human-readable shows env vars", async () => {
       const { stdout } = await runCli(["info", "audio-transcript-pack"]);
       expect(stdout).toContain("Env vars:");
       expect(stdout).not.toContain("SKILLS_API_KEY");
-      expect(stdout).toContain("Pricing: Free");
+      expect(stdout).not.toContain("Pricing:");
       expect(stdout).toContain("OPENAI_API_KEY");
       expect(stdout.toLowerCase()).not.toContain("gemini");
       expect(stdout.toLowerCase()).not.toContain("minimax");

@@ -1,5 +1,3 @@
-import type { PublicSkillPricing } from "./pricing";
-
 export const REMOTE_SKILL_RUN_CONTRACT_VERSION = 1 as const;
 
 export interface RemoteSkillRunContract {
@@ -10,9 +8,6 @@ export interface RemoteSkillRunContract {
   status?: string;
   exitCode?: number;
   correlationId?: string;
-  costCents?: number;
-  cost?: string;
-  pricing?: PublicSkillPricing;
   createdAt?: string;
   startedAt?: string;
   completedAt?: string;
@@ -21,12 +16,9 @@ export interface RemoteSkillRunContract {
   outputPreview?: unknown;
   errorCode?: string;
   errorMessage?: string;
-  creditsUsed?: number;
   error?: string;
   code?: string;
   details?: unknown;
-  balance?: string;
-  balanceCents?: number;
 }
 
 export function normalizeRemoteSkillRunContract(
@@ -42,9 +34,6 @@ export function normalizeRemoteSkillRunContract(
     ...pickString(record, "status"),
     ...pickNumber(record, "exitCode"),
     ...pickString(record, "correlationId"),
-    ...pickNumber(record, "costCents"),
-    ...pickString(record, "cost"),
-    ...pickPricing(record),
     ...pickString(record, "createdAt"),
     ...pickString(record, "startedAt"),
     ...pickString(record, "completedAt"),
@@ -53,12 +42,9 @@ export function normalizeRemoteSkillRunContract(
     ...(hasOwn(record, "outputPreview") ? { outputPreview: record.outputPreview } : {}),
     ...pickString(record, "errorCode"),
     ...pickString(record, "errorMessage"),
-    ...pickNumber(record, "creditsUsed"),
     ...pickString(record, "error"),
     ...pickString(record, "code"),
     ...(hasOwn(record, "details") ? { details: record.details } : {}),
-    ...pickString(record, "balance"),
-    ...pickNumber(record, "balanceCents"),
   };
 }
 
@@ -83,8 +69,4 @@ function pickStringValue(record: Record<string, unknown>, key: string): string |
 function pickNumber(record: Record<string, unknown>, key: string): Record<string, number> {
   const value = record[key];
   return typeof value === "number" && Number.isFinite(value) ? { [key]: value } : {};
-}
-
-function pickPricing(record: Record<string, unknown>): { pricing?: PublicSkillPricing } {
-  return isRecord(record.pricing) ? { pricing: record.pricing as unknown as PublicSkillPricing } : {};
 }

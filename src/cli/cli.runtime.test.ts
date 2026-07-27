@@ -207,18 +207,10 @@ describe("CLI runtime and misc commands", () => {
   });
 
   describe("hosted account command namespaces", () => {
-    test("exposes billing and credits commands outside auth", async () => {
-      const billing = await runCli(["billing", "--help"]);
-      expect(billing.exitCode).toBe(0);
-      expect(billing.stdout).toContain("status");
-      expect(billing.stdout).toContain("checkout");
-      expect(billing.stdout).toContain("portal");
-      expect(billing.stdout).toContain("buy-credits");
-
-      const credits = await runCli(["credits", "--help"]);
-      expect(credits.exitCode).toBe(0);
-      expect(credits.stdout).toContain("buy");
-      expect(credits.stdout).toContain("packs");
+    test("no longer exposes billing or credits command namespaces", async () => {
+      const help = await runCli(["--help"]);
+      expect(help.stdout).not.toContain("billing");
+      expect(help.stdout).not.toContain("credits");
     });
   });
 

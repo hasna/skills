@@ -16,17 +16,6 @@ describe("remote skill run contract", () => {
       status: "queued",
       exitCode: 0,
       correlationId: "corr_123",
-      costCents: 4,
-      pricing: {
-        tier: "premium",
-        billingUnit: "image",
-        costCents: 4,
-        formattedCost: "$0.04 estimated",
-        estimated: true,
-        quoteDependsOnInput: true,
-        quoteRequired: true,
-        description: "Hosted image generation",
-      },
       createdAt: "2026-05-12T00:00:00.000Z",
     });
 
@@ -37,32 +26,44 @@ describe("remote skill run contract", () => {
       status: "queued",
       exitCode: 0,
       correlationId: "corr_123",
+      createdAt: "2026-05-12T00:00:00.000Z",
+    });
+  });
+
+  test("drops billing fields even when a server sends them", () => {
+    const run = normalizeRemoteSkillRunContract({
+      id: "run_456",
+      skill: "image",
+      status: "completed",
       costCents: 4,
-      pricing: {
-        tier: "premium",
-        quoteDependsOnInput: true,
-      },
+      pricing: { tier: "premium", formattedCost: "$0.04" },
+      creditsUsed: 1,
+      balance: "$1.00",
+      balanceCents: 100,
+    });
+
+    expect(run).toEqual({
+      contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION,
+      id: "run_456",
+      skill: "image",
+      status: "completed",
     });
   });
 
   test("normalizes error payloads without exposing provider internals", () => {
     const run = normalizeRemoteSkillRunContract({
-      error: "insufficient balance",
-      code: "INSUFFICIENT_BALANCE",
+      error: "run failed",
+      code: "RUN_FAILED",
       skill: "music",
-      costCents: 150,
-      balanceCents: 0,
-      details: ["buy credits"],
+      details: ["retry later"],
     });
 
     expect(run).toEqual({
       contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION,
       skill: "music",
-      costCents: 150,
-      error: "insufficient balance",
-      code: "INSUFFICIENT_BALANCE",
-      details: ["buy credits"],
-      balanceCents: 0,
+      error: "run failed",
+      code: "RUN_FAILED",
+      details: ["retry later"],
     });
     expect(JSON.stringify(run).toLowerCase()).not.toContain("openai");
     expect(JSON.stringify(run).toLowerCase()).not.toContain("minimax");

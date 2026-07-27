@@ -9,7 +9,7 @@ import { useDefaultTestTimeout } from "../test-preload.js";
 useDefaultTestTimeout();
 
 describe("getCompactSkillDiscovery", () => {
-  test("includes name, category, pricing, and a description", () => {
+  test("includes name, category, and a description", () => {
     const skill: SkillMeta = {
       name: "sample-skill",
       displayName: "Sample Skill",
@@ -26,7 +26,7 @@ describe("getCompactSkillDiscovery", () => {
       category: "Development Tools",
       description: "Does a useful thing.",
     });
-    expect(compact.pricing).toHaveProperty("formattedCost");
+    expect(compact).not.toHaveProperty("pricing");
   });
 
   test("sanitizes vendor terms out of the compact description", () => {

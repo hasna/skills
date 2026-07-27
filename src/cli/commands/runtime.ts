@@ -11,9 +11,8 @@ import { getSkill, findSimilarSkills } from "../../lib/registry.js";
 import { runSkill } from "../../lib/skillinfo.js";
 import {
   ARTICLE_GENERATION_SLUG,
-  getPublicSkillPricing,
   validateBlogArticleRunOptions,
-} from "../../lib/pricing.js";
+} from "../../lib/blog-article.js";
 import { loadConfig, saveConfig, type ConfigScope } from "../../lib/config.js";
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../../lib/remote-run-contract.js";
 import {
@@ -35,16 +34,6 @@ import {
 } from "../../lib/compact-output.js";
 
 export function registerRuntime(parent: Command) {
-  parent
-    .command("quote")
-    .argument("<skill>", "Skill name")
-    .argument("[args...]", "Arguments that affect pricing, such as --count 8")
-    .allowUnknownOption(true)
-    .passThroughOptions(true)
-    .option("--json", "Output quote as JSON", false)
-    .description("Quote a skill run before spending account balance")
-    .action((name: string, args: string[], options: { json: boolean }) => handleQuote(name, args, options));
-
   // Run
   parent
     .command("run")
@@ -53,7 +42,6 @@ export function registerRuntime(parent: Command) {
     .allowUnknownOption(true)
     .passThroughOptions(true)
     .option("--json", "Output result as JSON", false)
-    .option("-y, --yes", "Approve paid hosted execution without an interactive prompt", false)
     .option("--wait", "Poll remote runs until a terminal status", false)
     .option("--poll-interval-ms <ms>", "Remote polling interval in milliseconds", "1000")
     .option("--poll-timeout-ms <ms>", "Maximum time to wait for a remote run", "300000")
@@ -262,50 +250,8 @@ function promptLine(question: string): Promise<string> {
   });
 }
 
-function handleQuote(name: string, args: string[], options: { json: boolean }) {
-  const json = options.json || args.includes("--json");
-  const quoteArgs = args.filter((arg) => arg !== "--json");
-  const skill = getSkill(name);
-  if (!skill) {
-    const error = `Skill '${name}' not found`;
-    if (json) console.log(JSON.stringify({ error, similar: findSimilarSkills(name) }));
-    else {
-      console.error(chalk.red(error));
-      const similar = findSimilarSkills(name);
-      if (similar.length > 0) console.error(chalk.dim(`Did you mean: ${similar.join(", ")}?`));
-    }
-    process.exitCode = 1;
-    return;
-  }
-
-  if (skill.name === ARTICLE_GENERATION_SLUG) {
-    const validation = validateBlogArticleRunOptions({}, quoteArgs);
-    if (!validation.ok) {
-      writeBlogArticleValidationError(validation.errors, json);
-      return;
-    }
-  }
-
-  const pricing = getPublicSkillPricing(skill.name, {}, quoteArgs);
-
-  const payload = { skill: skill.name, pricing, availability: { status: "available" } };
-  if (json) {
-    console.log(JSON.stringify(payload, null, 2));
-    return;
-  }
-
-  console.log(chalk.bold(`\nQuote for ${skill.name}\n`));
-  console.log(`${chalk.dim("Price:")} ${pricing.formattedCost}`);
-  if (pricing.formattedUnitCost && pricing.unitCount) {
-    console.log(`${chalk.dim("Unit:")} ${pricing.formattedUnitCost} x ${pricing.unitCount}`);
-  }
-  console.log(`${chalk.dim("Type:")} ${pricing.tier}`);
-  if (pricing.quoteDependsOnInput) console.log(chalk.dim("Final price depends on run options."));
-}
-
 interface RunCommandOptions {
   json: boolean;
-  yes?: boolean;
   wait?: boolean;
   pollIntervalMs?: string;
   pollTimeoutMs?: string;
@@ -325,62 +271,30 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
   }
 
   const prompt = extractPrompt(args);
-  const pricing = await import("../../lib/pricing.js");
   if (skill.name === ARTICLE_GENERATION_SLUG) {
-    const validation = pricing.validateBlogArticleRunOptions({}, args, { requireTopic: true });
+    const validation = validateBlogArticleRunOptions({}, args, { requireTopic: true });
     if (!validation.ok) {
       writeBlogArticleValidationError(validation.errors, options.json);
       return;
     }
   }
   const isHostedRuntime = false;
-  const costCents = isHostedRuntime ? pricing.getSkillRunCostCents(skill.name, {}, args) : undefined;
-  const publicPricing = pricing.getPublicSkillPricing(skill.name, {}, args);
   const runContext = createSkillRun({
     skill: skill.name,
     args,
     prompt,
     remote: isHostedRuntime,
-    costCents,
   });
 
   if (isHostedRuntime) {
       const { getApiKey } = await import("../../lib/auth-store.js");
       const apiKey = getApiKey();
       if (!apiKey) {
-        const error = `${skill.name} is a hosted skill (${pricing.formatCost(costCents ?? 0)}). Run: skills auth login`;
+        const error = `${skill.name} is a hosted skill. Run: skills auth login`;
         writeRunLogs(runContext, "", error + "\n");
-        const run = completeSkillRun(runContext, { status: "failed", error, costCents });
-        if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, pricing: publicPricing, run }, null, 2));
+        const run = completeSkillRun(runContext, { status: "failed", error });
+        if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, run }, null, 2));
         else console.error(chalk.red(error));
-        process.exitCode = 1;
-        return;
-      }
-
-      const approval = await approvePaidHostedRun({
-        skill: skill.name,
-        formattedCost: publicPricing.formattedCost,
-        json: options.json,
-        yes: Boolean(options.yes),
-      });
-      if (!approval.approved) {
-        writeRunLogs(runContext, "", approval.error + "\n");
-        const run = completeSkillRun(runContext, { status: "failed", error: approval.error, costCents });
-        if (options.json) {
-          console.log(JSON.stringify({
-            contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION,
-            skill: skill.name,
-            args,
-            exitCode: 1,
-            remote: true,
-            approvalRequired: true,
-            error: approval.error,
-            pricing: publicPricing,
-            run,
-          }, null, 2));
-        } else {
-          console.error(chalk.red(approval.error));
-        }
         process.exitCode = 1;
         return;
       }
@@ -388,12 +302,11 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       try {
         const { RemoteSkillsClient } = await import("../../lib/remote-client.js");
         const client = new RemoteSkillsClient(apiKey);
-        if (!options.json) console.log(`${chalk.dim("Price:")} ${publicPricing.formattedCost}`);
         const run = await client.submitRun(skill.name, {}, args);
         if (run.error) {
           writeRunLogs(runContext, "", String(run.error) + "\n");
-          const localRun = completeSkillRun(runContext, { status: "failed", error: String(run.error), costCents });
-          if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error: run.error, pricing: publicPricing, remoteRun: run, run: localRun }, null, 2));
+          const localRun = completeSkillRun(runContext, { status: "failed", error: String(run.error) });
+          if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error: run.error, remoteRun: run, run: localRun }, null, 2));
           else console.error(chalk.red(run.error));
           process.exitCode = 1;
           return;
@@ -416,7 +329,6 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
           context: runContext,
           remoteRun,
           remoteRunId,
-          costCents,
           fallbackError: error,
         });
         if (options.json) {
@@ -426,7 +338,6 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
             args,
             exitCode,
             remote: true,
-            pricing: publicPricing,
             remoteRun,
             run: localRun,
             nextActions,
@@ -454,8 +365,8 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       } catch (err) {
         const error = `Hosted skill ${skill.name} requires API access: ${(err as Error).message}`;
         writeRunLogs(runContext, "", error + "\n");
-        const run = completeSkillRun(runContext, { status: "failed", error, costCents });
-        if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, pricing: publicPricing, run }, null, 2));
+        const run = completeSkillRun(runContext, { status: "failed", error });
+        if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, run }, null, 2));
         else console.error(chalk.red(error));
         process.exitCode = 1;
         return;
@@ -484,24 +395,6 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
     console.log(chalk.dim(`Exports: ${completed.paths.exportDir}`));
   }
   process.exitCode = result.exitCode;
-}
-
-async function approvePaidHostedRun(params: {
-  skill: string;
-  formattedCost: string;
-  json: boolean;
-  yes: boolean;
-}): Promise<{ approved: true } | { approved: false; error: string }> {
-  if (params.yes) return { approved: true };
-
-  const error = `${params.skill} is a paid hosted skill (${params.formattedCost}). Run skills quote ${params.skill} first, then rerun with --yes to approve the charge.`;
-  if (params.json || !process.stdin.isTTY || !process.stdout.isTTY) {
-    return { approved: false, error };
-  }
-
-  const answer = await promptLine(`Run paid hosted skill ${params.skill} for ${params.formattedCost}? [y/N] `);
-  if (/^(y|yes)$/i.test(answer.trim())) return { approved: true };
-  return { approved: false, error: `Paid hosted run for ${params.skill} was not approved.` };
 }
 
 function writeBlogArticleValidationError(errors: string[], json: boolean) {
@@ -793,7 +686,6 @@ async function persistRemoteRun(params: {
   context: ReturnType<typeof createSkillRun>;
   remoteRun: any;
   remoteRunId?: string;
-  costCents?: number;
   fallbackError?: string;
 }) {
   const status = normalizeRemoteStatus(params.remoteRun.status);
@@ -802,7 +694,6 @@ async function persistRemoteRun(params: {
     return completeSkillRun(params.context, {
       status,
       remoteRunId: params.remoteRunId,
-      costCents: params.costCents,
       ...(status === "failed" ? { error: params.fallbackError ?? "Remote run failed" } : {}),
     });
   }
@@ -810,7 +701,6 @@ async function persistRemoteRun(params: {
   return updateSkillRun(params.context, {
     status,
     remoteRunId: params.remoteRunId,
-    costCents: params.costCents,
   });
 }
 

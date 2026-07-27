@@ -1,47 +1,15 @@
-import { resolveSkillAlias } from "./skill-aliases.js";
-
-export type BillingTier = "free" | "premium";
-
-export interface SkillPricing {
-  slug: string;
-  displayName: string;
-  tier: BillingTier;
-  costCents: number;
-  providers: string[];
-  description: string;
-  provider?: string;
-  model?: string;
-  costMicros?: number;
-}
-
-export interface PublicSkillPricing {
-  tier: BillingTier;
-  billingUnit: "run" | "article";
-  costCents: number;
-  formattedCost: string;
-  formattedUnitCost?: string;
-  unitCount?: number;
-  estimated: boolean;
-  quoteDependsOnInput: boolean;
-  quoteRequired: boolean;
-  description: string;
-}
-
-export type SkillCatalogBillingMode = "free" | "credits" | "subscription" | "metered";
-
-export interface SkillCatalogBillingFields {
-  billingMode: SkillCatalogBillingMode;
-  creditsPerExecution: number;
-}
-
-export const PREMIUM_SKILLS: SkillPricing[] = [];
+/**
+ * Input validation for the `blog-article` skill.
+ *
+ * This is ordinary run-option validation — topic, tone, length, SEO flag, and
+ * article count — surfaced at the CLI/MCP layer so a bad invocation fails with a
+ * clear message before the skill runs. It carries no pricing or billing concern.
+ */
 
 export const ARTICLE_GENERATION_SLUG = "blog-article";
 export const ARTICLE_MAX_COUNT = 12;
 export const ARTICLE_COUNT_ERROR = `Count must be an integer between 1 and ${ARTICLE_MAX_COUNT}.`;
-const ARTICLE_INTERNAL_COST_CENTS = 5;
-const ARTICLE_MARKUP_MULTIPLIER = 5;
-const ARTICLE_USER_COST_CENTS = ARTICLE_INTERNAL_COST_CENTS * ARTICLE_MARKUP_MULTIPLIER;
+
 const ARTICLE_TONES = ["professional", "casual", "technical", "friendly"] as const;
 const ARTICLE_LENGTHS = ["short", "medium", "long"] as const;
 
@@ -61,24 +29,6 @@ export interface BlogArticleRunOptions {
 export type BlogArticleValidationResult =
   | { ok: true; options: BlogArticleRunOptions; input: Record<string, unknown>; errors: [] }
   | { ok: false; input: Record<string, unknown>; errors: string[] };
-
-const premiumIndex = new Map(PREMIUM_SKILLS.map((s) => [s.slug, s]));
-
-export function getSkillPricing(slug: string): SkillPricing | null {
-  const canonicalSlug = resolvePricingSlug(slug);
-  return premiumIndex.get(canonicalSlug) || getSkillRunPricing(canonicalSlug);
-}
-
-
-export function getSkillCostCents(slug: string): number {
-  return getSkillRunCostCents(slug);
-}
-
-export function getSkillRunPricing(slug: string, input?: unknown, args: string[] = []): SkillPricing | null {
-  const canonicalSlug = resolvePricingSlug(slug);
-
-  return premiumIndex.get(canonicalSlug) || null;
-}
 
 export function validateBlogArticleRunOptions(
   input?: unknown,
@@ -132,66 +82,6 @@ export function validateBlogArticleRunOptions(
   };
 }
 
-export function getSkillRunCostCents(slug: string, input?: unknown, args: string[] = []): number {
-  return getSkillRunPricing(slug, input, args)?.costCents || 0;
-}
-
-export function getPublicSkillPricing(slug: string, input?: unknown, args: string[] = []): PublicSkillPricing {
-  const canonicalSlug = resolvePricingSlug(slug);
-
-
-  const fixed = premiumIndex.get(canonicalSlug);
-  if (fixed) {
-    return {
-      tier: "premium",
-      billingUnit: "run",
-      costCents: fixed.costCents,
-      formattedCost: `${formatCost(fixed.costCents)}/run`,
-      estimated: false,
-      quoteDependsOnInput: false,
-      quoteRequired: false,
-      description: "Fixed price per run.",
-    };
-  }
-
-
-  return {
-    tier: "free",
-    billingUnit: "run",
-    costCents: 0,
-    formattedCost: "Free",
-    estimated: false,
-    quoteDependsOnInput: false,
-    quoteRequired: false,
-    description: "Included with Skills access.",
-  };
-}
-
-export function getSkillCatalogBillingFields(slug: string, input?: unknown, args: string[] = []): SkillCatalogBillingFields {
-  const pricing = getPublicSkillPricing(slug, input, args);
-  if (pricing.tier === "free") {
-    return { billingMode: "free", creditsPerExecution: 0 };
-  }
-
-  if (pricing.quoteDependsOnInput || pricing.quoteRequired) {
-    return { billingMode: "metered", creditsPerExecution: 0 };
-  }
-
-  return {
-    billingMode: "credits",
-    creditsPerExecution: pricing.costCents,
-  };
-}
-
-export function formatPublicPricing(slug: string, input?: unknown, args: string[] = []): string {
-  return getPublicSkillPricing(slug, input, args).formattedCost;
-}
-
-
-
-
-
-
 function collectRunOptions(input: unknown, args: string[]): Record<string, unknown> {
   const options: Record<string, unknown> = {};
   if (input && typeof input === "object" && !Array.isArray(input)) {
@@ -229,15 +119,6 @@ function collectRunOptions(input: unknown, args: string[]): Record<string, unkno
   return options;
 }
 
-
-
-function resolveArticleCount(options: Record<string, unknown>): number {
-  const raw = options.count ?? options.articles ?? options.n;
-  const count = parseArticleCount(raw);
-  return count ?? 1;
-}
-
-
 function parseArticleCount(value: unknown): number | null {
   if (value === undefined || value === null || value === "") return 1;
   const parsed = typeof value === "number"
@@ -273,22 +154,4 @@ function parseOptionalBoolean(value: unknown): boolean | null {
   if (["true", "1", "yes", "y", "on"].includes(normalized)) return true;
   if (["false", "0", "no", "n", "off"].includes(normalized)) return false;
   return null;
-}
-
-
-
-function resolvePricingSlug(slug: string): string {
-  return resolveSkillAlias(slug);
-}
-
-export function formatCost(cents: number): string {
-  return `$${(cents / 100).toFixed(2)}`;
-}
-
-export function getAllPremiumSlugs(): string[] {
-  return [
-    ...new Set([
-      ...PREMIUM_SKILLS.map((skill) => skill.slug),
-    ]),
-  ].sort();
 }

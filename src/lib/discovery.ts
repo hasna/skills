@@ -1,5 +1,4 @@
 import type { SkillMeta } from "./registry-types.js";
-import { getPublicSkillPricing, type PublicSkillPricing } from "./pricing.js";
 
 const VENDOR_TERMS = [
   "Google Gemini",
@@ -77,13 +76,11 @@ export interface CompactSkillDiscovery {
   name: string;
   category: string;
   description: string;
-  pricing: PublicSkillPricing;
 }
 
 export type PublicSkillDiscovery<T extends SkillMeta = SkillMeta> = Omit<T, "description" | "tags"> & {
   description: string;
   tags: string[];
-  pricing: PublicSkillPricing;
 };
 
 export function getCompactSkillDiscovery(skill: SkillMeta): CompactSkillDiscovery {
@@ -91,7 +88,6 @@ export function getCompactSkillDiscovery(skill: SkillMeta): CompactSkillDiscover
     name: skill.name,
     category: skill.category,
     description: sanitizePublicDiscoveryText(skill.description),
-    pricing: resolveDiscoveryPricing(skill),
   };
 }
 
@@ -100,12 +96,7 @@ export function getPublicSkillDiscovery<T extends SkillMeta>(skill: T): PublicSk
     ...skill,
     description: sanitizePublicDiscoveryText(skill.description),
     tags: publicDiscoveryTags(skill.tags),
-    pricing: resolveDiscoveryPricing(skill),
   };
-}
-
-export function publicDiscoveryPriceLabel(skill: { name: string; pricing?: PublicSkillPricing }): string {
-  return (skill.pricing ?? getPublicSkillPricing(skill.name)).formattedCost;
 }
 
 export function publicDiscoveryTags(tags: string[]): string[] {
@@ -156,10 +147,4 @@ export function publicDiscoveryDocumentation(_skill: SkillMeta, documentation: s
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function resolveDiscoveryPricing(skill: SkillMeta): PublicSkillPricing {
-  return skill.pricing && typeof skill.pricing.formattedCost === "string"
-    ? skill.pricing as PublicSkillPricing
-    : getPublicSkillPricing(skill.name);
 }

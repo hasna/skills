@@ -362,16 +362,6 @@ export function listPortableSkillMetas(options: PortableSkillOptions = {}): Skil
     version: skill.version,
     ...(manifest.kind ? { kind: manifest.kind } : {}),
     source: "custom" as const,
-    pricing: {
-      tier: "free",
-      billingUnit: "run",
-      costCents: 0,
-      formattedCost: "free",
-      estimated: false,
-      quoteDependsOnInput: false,
-      quoteRequired: false,
-      description: "Local portable skill",
-    },
     };
   });
 }
