@@ -82,7 +82,7 @@ export const DESIGN_BRANDING_SKILLS: SkillMeta[] = [
   {
     name: "product-mockup",
     displayName: "Product Mockup",
-    description: "Generate self-hosted product mockup packages with visual variants, prompts, usage notes, and asset metadata",
+    description: "Generate product mockup packages with visual variants, prompts, usage notes, and asset metadata",
     category: "Design & Branding",
     tags: ["product", "mockup", "visualization", "marketing"],
   },

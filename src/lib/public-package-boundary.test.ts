@@ -256,6 +256,48 @@ describe("public package boundary", () => {
     expect(leaks).toEqual([]);
   });
 
+  // The value guard above bans the deployment name as data in src and scripts.
+  // The retired-storage guard bans the removed deployment-mode setting in docs
+  // too. Neither bans the bare self-hosted wording as prose, and while a real
+  // hosted-run path was still selectable that was right: help text and comments
+  // described something the code had. That path is gone; the product has one
+  // deployment story, so the wording now names a concept the code no longer has
+  // and is banned in src and scripts. Docs at the repo root (README, skill
+  // docs) still describe how the product is deployed and are deliberately out
+  // of scope, so this does not fight the readme-remote-premium onboarding copy.
+  // The marker is assembled from fragments and this file is a .test.ts, so the
+  // retired-storage and value guards above never match on it either.
+  test("keeps the retired self-hosted wording out of shipped code prose", () => {
+    const proseMarker = ["self", "hosted"].join("-");
+
+    const roots = ["src", "scripts"];
+    const files = roots
+      .flatMap((root) => {
+        const path = join(process.cwd(), root);
+        if (!existsSync(path)) return [];
+        return statSync(path).isDirectory() ? collectFiles(path) : [path];
+      })
+      .filter((file) => !file.endsWith(".test.ts") && !file.endsWith(".test.tsx"));
+
+    // Positive control: prove the scan reached the files this cleanup touched,
+    // so a zero result means "absent", not "read nothing".
+    expect(files.some((file) => file.endsWith("src/cli/commands/auth.ts"))).toBe(true);
+    expect(files.some((file) => file.endsWith("src/lib/mcp-contracts.ts"))).toBe(true);
+    expect(files.some((file) => file.endsWith("src/lib/registry-data/media-processing.ts"))).toBe(true);
+
+    const leaks: string[] = [];
+    for (const file of files) {
+      const lowered = readFileSync(file, "utf8").toLowerCase();
+      const relative = file.replace(`${process.cwd()}/`, "");
+      for (let index = lowered.indexOf(proseMarker); index !== -1; index = lowered.indexOf(proseMarker, index + proseMarker.length)) {
+        const line = lowered.slice(0, index).split("\n").length;
+        leaks.push(`${relative}:${line}`);
+      }
+    }
+
+    expect(leaks).toEqual([]);
+  });
+
   test("keeps private implementation markers out of built entrypoints", () => {
     const builtFiles = buildEntryPointsForBoundaryScan();
 

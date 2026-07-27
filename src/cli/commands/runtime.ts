@@ -53,7 +53,7 @@ export function registerRuntime(parent: Command) {
     .allowUnknownOption(true)
     .passThroughOptions(true)
     .option("--json", "Output result as JSON", false)
-    .option("-y, --yes", "Approve paid self-hosted execution without an interactive prompt", false)
+    .option("-y, --yes", "Approve paid hosted execution without an interactive prompt", false)
     .option("--wait", "Poll remote runs until a terminal status", false)
     .option("--poll-interval-ms <ms>", "Remote polling interval in milliseconds", "1000")
     .option("--poll-timeout-ms <ms>", "Maximum time to wait for a remote run", "300000")
@@ -348,7 +348,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       const { getApiKey } = await import("../../lib/auth-store.js");
       const apiKey = getApiKey();
       if (!apiKey) {
-        const error = `${skill.name} is a self-hosted skill (${pricing.formatCost(costCents ?? 0)}). Run: skills auth login`;
+        const error = `${skill.name} is a hosted skill (${pricing.formatCost(costCents ?? 0)}). Run: skills auth login`;
         writeRunLogs(runContext, "", error + "\n");
         const run = completeSkillRun(runContext, { status: "failed", error, costCents });
         if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, pricing: publicPricing, run }, null, 2));
@@ -452,7 +452,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
         process.exitCode = exitCode;
         return;
       } catch (err) {
-        const error = `Self-hosted skill ${skill.name} requires self-hosted API access: ${(err as Error).message}`;
+        const error = `Hosted skill ${skill.name} requires API access: ${(err as Error).message}`;
         writeRunLogs(runContext, "", error + "\n");
         const run = completeSkillRun(runContext, { status: "failed", error, costCents });
         if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, pricing: publicPricing, run }, null, 2));
@@ -494,14 +494,14 @@ async function approvePaidHostedRun(params: {
 }): Promise<{ approved: true } | { approved: false; error: string }> {
   if (params.yes) return { approved: true };
 
-  const error = `${params.skill} is a paid self-hosted skill (${params.formattedCost}). Run skills quote ${params.skill} first, then rerun with --yes to approve the charge.`;
+  const error = `${params.skill} is a paid hosted skill (${params.formattedCost}). Run skills quote ${params.skill} first, then rerun with --yes to approve the charge.`;
   if (params.json || !process.stdin.isTTY || !process.stdout.isTTY) {
     return { approved: false, error };
   }
 
-  const answer = await promptLine(`Run paid self-hosted skill ${params.skill} for ${params.formattedCost}? [y/N] `);
+  const answer = await promptLine(`Run paid hosted skill ${params.skill} for ${params.formattedCost}? [y/N] `);
   if (/^(y|yes)$/i.test(answer.trim())) return { approved: true };
-  return { approved: false, error: `Paid self-hosted run for ${params.skill} was not approved.` };
+  return { approved: false, error: `Paid hosted run for ${params.skill} was not approved.` };
 }
 
 function writeBlogArticleValidationError(errors: string[], json: boolean) {
@@ -570,7 +570,7 @@ async function handleRunsStatus(runId: string, options: { json: boolean }) {
   const { getApiKey } = await import("../../lib/auth-store.js");
   const apiKey = getApiKey();
   if (!apiKey) {
-    const error = "Remote run status requires self-hosted API access. Run: skills auth login";
+    const error = "Remote run status requires API access. Run: skills auth login";
     if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, error }, null, 2));
     else console.error(chalk.red(error));
     process.exitCode = 1;
@@ -659,7 +659,7 @@ async function handleExportsDownload(runId: string, options: { json: boolean }) 
   const { getApiKey } = await import("../../lib/auth-store.js");
   const apiKey = getApiKey();
   if (!apiKey) {
-    const error = "Remote artifact downloads require self-hosted API access. Run: skills auth login";
+    const error = "Remote artifact downloads require API access. Run: skills auth login";
     if (options.json) console.log(JSON.stringify({ error }, null, 2));
     else console.error(chalk.red(error));
     process.exitCode = 1;

@@ -25,14 +25,14 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
   {
     name: "sdk-generator",
     displayName: "SDK Generator",
-    description: "Generate self-hosted TypeScript SDK scaffolds with client code, types, package files, tests, README, examples, and API summaries",
+    description: "Generate TypeScript SDK scaffolds with client code, types, package files, tests, README, examples, and API summaries",
     category: "Development Tools",
     tags: ["sdk", "api", "typescript", "developer-tools"],
   },
   {
     name: "repo-onboarding-report",
     displayName: "Repo Onboarding Report",
-    description: "Generate self-hosted repository onboarding packages with architecture maps, setup guides, risk registers, and first-week plans",
+    description: "Generate repository onboarding packages with architecture maps, setup guides, risk registers, and first-week plans",
     category: "Development Tools",
     kind: "instruction",
     tags: ["repository", "onboarding", "architecture", "developer-tools"],

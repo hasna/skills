@@ -485,14 +485,14 @@ async function doDeviceLogin(options: DeviceLoginOptions) {
 export function registerAuth(parent: Command) {
   const auth = parent
     .command("auth")
-    .description("Manage self-hosted account authentication");
+    .description("Manage account authentication");
 
   auth
     .command("login")
     .description("Sign in with browser/device code or email code")
     .option("--email <email>", "Email address (non-interactive)")
     .option("--code <code>", "Verification code (non-interactive)")
-    .option("--api-key <key>", "Verify and store a self-hosted API key")
+    .option("--api-key <key>", "Verify and store an API key")
     .option("--device", "Use browser/device-code login", false)
     .option("--no-open", "Do not open a browser for device-code login")
     .option("--poll", "Poll until browser authentication completes in non-interactive mode", false)
@@ -606,7 +606,7 @@ export function registerAuth(parent: Command) {
       }
     });
 
-  auth.command("status").description("Show self-hosted billing status").option("--json", "Output as JSON", false).action(handleBillingStatus);
+  auth.command("status").description("Show billing status").option("--json", "Output as JSON", false).action(handleBillingStatus);
   auth.command("checkout").description("Create a Pro checkout session").option("--json", "Output as JSON", false).action(handleCheckout);
   auth.command("portal").description("Create a customer portal session").option("--json", "Output as JSON", false).action(handlePortal);
   auth.command("buy-credits").description("Create a credit pack checkout session").argument("<amount>", "Credit pack amount: 1, 5, 20, 50, or 100").option("--json", "Output as JSON", false).action(handleBuyCredits);
@@ -744,7 +744,7 @@ async function handleListCreditPacks(options: { json?: boolean } = {}) {
 }
 
 function registerBilling(parent: Command) {
-  const billing = parent.command("billing").description("Manage self-hosted billing");
+  const billing = parent.command("billing").description("Manage billing");
   billing.command("status").description("Show billing status").option("--json", "Output as JSON", false).action(handleBillingStatus);
   billing.command("checkout").description("Create a Pro checkout session").option("--json", "Output as JSON", false).action(handleCheckout);
   billing.command("portal").description("Create a customer portal session").option("--json", "Output as JSON", false).action(handlePortal);
@@ -752,7 +752,7 @@ function registerBilling(parent: Command) {
 }
 
 function registerCredits(parent: Command) {
-  const credits = parent.command("credits").description("Manage self-hosted credit packs");
+  const credits = parent.command("credits").description("Manage credit packs");
   credits.command("buy").description("Create a credit pack checkout session").argument("<amount>", "Credit pack amount: 1, 5, 20, 50, or 100").option("--json", "Output as JSON", false).action(handleBuyCredits);
   credits.command("packs").description("List available credit packs").option("--json", "Output as JSON", false).action(handleListCreditPacks);
 }
