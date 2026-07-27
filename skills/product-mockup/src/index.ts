@@ -666,7 +666,7 @@ OUTPUTS:
 EXAMPLES:
   product-mockup "Usage-based billing dashboard" --scene dashboard -n 3
   product-mockup --product "AI meeting assistant" --scene device --device phone
-  product-mockup -p "MeterKit" --scene browser --style noir --url https://meterkit.dev
+  product-mockup -p "MeterKit" --scene browser --style noir --url https://example.com
 `);
 }
 

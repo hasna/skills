@@ -281,6 +281,16 @@ export const DYNAMIC_HOST_SITES: readonly { file: string; path: string; expr: st
     reason: "Bundled AWS SDK appends a relative path to the ECS link-local credentials address.",
   },
   {
+    file: "skills/brand-assets/src/index.ts",
+    path: "",
+    expr: "${input}",
+    reason:
+      "Adds a scheme to the URL the user named on the command line when they omitted one. " +
+      "The host comes entirely from --url, which is required and has no default: the skill " +
+      "refuses to run without it and has no brand-name search fallback, so nothing is dialled " +
+      "that the user did not type.",
+  },
+  {
     file: "bin/worker.js",
     path: "",
     expr: "DEFAULT_LINK_LOCAL_HOST",
