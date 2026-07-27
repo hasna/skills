@@ -34,6 +34,19 @@
  * would tax nearly every PR with a doc edit, and none of them is a claim an
  * agent acts on. The rule of thumb is: guard a number only if it is expensive
  * to be wrong about and cheap to keep right.
+ *
+ * ON `Catalog skills`, WHICH IS THE CONTENTIOUS ROW. It is the highest-churn
+ * number in the table — recent history is -19, then 19 kind flips, then 11
+ * conversions — so every skill PR must now edit one line of CLAUDE.md, and two
+ * concurrent skill PRs conflict on that line. That cost is accepted on purpose:
+ * this is the exact number that rotted (the file claimed 202 against a real 229)
+ * and the one an agent is most likely to act on. A one-line conflict is a
+ * trivial resolution; a doc that lies about the size of the catalog is not.
+ *
+ * If that cost ever does become intolerable, DELETE THE ROW from both the table
+ * and this file. Do not weaken it to a range or a `toBeGreaterThan` — a loosened
+ * assertion still looks green while it has stopped checking the thing it exists
+ * for, which is strictly worse than an honest absence.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -49,7 +62,6 @@ import { CATEGORIES } from "./registry-types.js";
 
 const CLAUDE_MD_PATH = join(import.meta.dir, "..", "..", "CLAUDE.md");
 const TABLE_HEADING = "### Derived counts";
-const HEADER_LABEL = "Count";
 
 /**
  * Parse the `### Derived counts` table into {label -> value}.
@@ -58,6 +70,19 @@ const HEADER_LABEL = "Count";
  * table elsewhere in CLAUDE.md cannot inject rows. Throws rather than returning
  * empty when the section is missing: an empty map would make every assertion
  * below pass or fail for the wrong reason.
+ *
+ * The three tolerances below are not incidental — each one is a way this guard
+ * could have failed for a reason that has nothing to do with doc drift, and a
+ * doc test that cries wolf is a doc test that gets deleted:
+ *
+ *   - Up to three leading spaces before `|`. GFM permits them, so an editor
+ *     that indents the table would otherwise yield zero rows and a diff that
+ *     looks like catastrophic drift.
+ *   - A delimiter row of ANY dash count, with or without alignment colons.
+ *     `|-|-|-|` is legal GFM; an earlier `-{2,}` test let it through as a data
+ *     row named "-".
+ *   - The header is dropped BY POSITION (first row), not by matching the
+ *     literal "Count". Renaming that cell to "Metric" must not break the guard.
  */
 function readDocumentedCounts(): Record<string, string> {
   const text = readFileSync(CLAUDE_MD_PATH, "utf8");
@@ -71,16 +96,17 @@ function readDocumentedCounts(): Record<string, string> {
   // Stop at the next heading of any level so the table cannot swallow later sections.
   const section = text.slice(start + TABLE_HEADING.length).split(/\n#{1,6} /)[0];
 
-  const counts: Record<string, string> = {};
+  const rows: Array<[string, string]> = [];
   for (const line of section.split("\n")) {
-    const cells = line.match(/^\|([^|]*)\|([^|]*)\|/);
+    if (/^ {0,3}\|[\s:|-]*$/.test(line)) continue; // delimiter row, any dash count
+    const cells = line.match(/^ {0,3}\|([^|]*)\|([^|]*)\|/);
     if (!cells) continue;
     const label = cells[1].trim();
-    const value = cells[2].trim();
-    if (!label || /^:?-{2,}/.test(label) || label === HEADER_LABEL) continue;
-    counts[label] = value;
+    if (!label) continue;
+    rows.push([label, cells[2].trim()]);
   }
-  return counts;
+
+  return Object.fromEntries(rows.slice(1)); // drop the header row by position
 }
 
 /**
@@ -93,6 +119,10 @@ function readDocumentedCounts(): Record<string, string> {
  * actually sees, which is what CLAUDE.md is describing.
  */
 async function liveMcpSurface(): Promise<{ tools: number; resources: number }> {
+  // Caveat, stated so a future failure is diagnosable: this is the one assertion
+  // sensitive to something outside the repo. An @modelcontextprotocol/sdk bump
+  // that registers a built-in tool or resource moves these numbers with no
+  // source change here, and the diff will not say so.
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = buildServer();
   const client = new Client({ name: "claude-md-guard", version: "0.0.0" }, { capabilities: {} });
@@ -113,20 +143,22 @@ async function liveMcpSurface(): Promise<{ tools: number; resources: number }> {
   }
 }
 
+async function deriveCounts(): Promise<Record<string, string>> {
+  const mcp = await liveMcpSurface();
+  return {
+    "Catalog skills": String(SKILLS.length),
+    "Instruction-kind skills": String(SKILLS.filter((skill) => skill.kind === "instruction").length),
+    Categories: String(CATEGORIES.length),
+    "MCP tools": String(mcp.tools),
+    "MCP resources": String(mcp.resources),
+    "Published bins": String(Object.keys(pkg.bin).length),
+    "bun build invocations": String((pkg.scripts.build.match(/bun build /g) ?? []).length),
+  };
+}
+
 describe("CLAUDE.md derived counts", () => {
   test("every guarded count matches the tree it describes", async () => {
-    const mcp = await liveMcpSurface();
-
-    const derived: Record<string, string> = {
-      "Catalog skills": String(SKILLS.length),
-      "Instruction-kind skills": String(SKILLS.filter((skill) => skill.kind === "instruction").length),
-      Categories: String(CATEGORIES.length),
-      "MCP tools": String(mcp.tools),
-      "MCP resources": String(mcp.resources),
-      "Published bins": String(Object.keys(pkg.bin).length),
-      "bun build invocations": String((pkg.scripts.build.match(/bun build /g) ?? []).length),
-    };
-
+    const derived = await deriveCounts();
     const documented = readDocumentedCounts();
 
     // One comparison rather than a loop: a whole-object diff names the drifted
@@ -136,10 +168,13 @@ describe("CLAUDE.md derived counts", () => {
     expect(documented).toEqual(derived);
   });
 
-  test("the guarded table is not empty", () => {
-    // Anti-vacuity. If the parser silently stops matching rows — a table
-    // reformatted, a stray pipe, a heading renamed — every value comparison
-    // above would still run, but against nothing worth checking.
-    expect(Object.keys(readDocumentedCounts()).length).toBeGreaterThanOrEqual(7);
+  test("the parser reads one row per guarded count", async () => {
+    // Anti-vacuity, bound to the derived set rather than a magic number: if the
+    // parser silently stops matching rows — table reformatted, stray pipe,
+    // heading renamed — the comparison above would still run, but against
+    // nothing worth checking. Deriving the expected size here means legitimately
+    // removing a row cannot leave this test failing on an unexplained constant.
+    const expected = Object.keys(await deriveCounts()).length;
+    expect(Object.keys(readDocumentedCounts()).length).toBe(expected);
   });
 });
