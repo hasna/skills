@@ -186,7 +186,14 @@ async function handleApiV1(
 
   if (resource === "billing") {
     if (request.method === "GET" && id === "status") {
-      return json({ plan: "self-hosted", balanceCents: 0, balance: "$0.00", subscription: null, hasPaymentMethod: false });
+      // This server has no billing provider — POST /billing/* answers 501. It
+      // therefore has no plan, no ledger and no payment method to report, and
+      // inventing values for them would be a lie a client cannot detect. It
+      // reports the one thing it knows, matching the POST answer. The field
+      // must stay a capability ("billing is off here"), never a deployment
+      // name: a client that can read the deployment variant off a billing
+      // response can fingerprint the instance.
+      return json({ billingConfigured: false, code: "BILLING_NOT_CONFIGURED" });
     }
     if (request.method === "GET" && id === "credits") {
       return json({ packs: [] });

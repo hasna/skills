@@ -163,7 +163,7 @@ export function getPublicSkillPricing(slug: string, input?: unknown, args: strin
     estimated: false,
     quoteDependsOnInput: false,
     quoteRequired: false,
-    description: "Included with self-hosted Skills access.",
+    description: "Included with Skills access.",
   };
 }
 
