@@ -1,0 +1,107 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "open-skills",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.8.0",
+  "description": "Local-capable and self-hosted skills library, CLI, MCP server, API, and worker runtime for AI coding agents.",
+  "bins": [
+    "skills",
+    "skills-mcp",
+    "skills-server",
+    "skills-worker",
+    "skills-migrate"
+  ],
+  "deploymentModes": [
+    "local",
+    "self_hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "http",
+      "kind": "api",
+      "status": "supported",
+      "bin": "skills-server",
+      "mcpBin": "skills-mcp",
+      "authMode": "api-key",
+      "deploymentModes": [
+        "local",
+        "self_hosted"
+      ],
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true
+      },
+      "apiBasePath": "/api/v1",
+      "readinessGates": [
+        {
+          "id": "auth-negative-smoke",
+          "kind": "auth",
+          "required": true,
+          "command": "curl -s -o /dev/null -w '%{http_code}' http://localhost:8787/api/v1/skills  # expect 401/503",
+          "status": "pending",
+          "summary": "Unauthenticated API routes must fail closed before self-hosted readiness."
+        },
+        {
+          "id": "redacted-output-scan",
+          "kind": "redaction",
+          "required": true,
+          "status": "pending",
+          "summary": "API responses, logs, and JSON output must never expose credential values."
+        }
+      ]
+    },
+    {
+      "name": "skills-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "skills",
+      "authMode": "local-only",
+      "deploymentModes": [
+        "local",
+        "self_hosted"
+      ]
+    },
+    {
+      "name": "skills-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "skills-mcp",
+      "authMode": "local-only",
+      "deploymentModes": [
+        "local",
+        "self_hosted"
+      ]
+    }
+  ],
+  "storage": {
+    "mode": "local",
+    "engines": [
+      "sqlite"
+    ],
+    "envPrefix": "HASNA_SKILLS_",
+    "aliasEnvPrefix": "SKILLS_",
+    "sqlitePath": "~/.hasna/skills/skills.db"
+  },
+  "hosting": [
+    "user-hosted"
+  ],
+  "metadata": {
+    "conformance": {
+      "waivedStorageEngines": [
+        {
+          "engine": "postgres",
+          "reason": "Open Skills owns a single-operator local SQLite state store; PostgreSQL adoption is tracked through the vendored @hasna/contracts storage kit.",
+          "reviewedBy": "platform-storage",
+          "expiresAt": "2027-01-01T00:00:00.000Z"
+        }
+      ]
+    }
+  }
+}
