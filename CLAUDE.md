@@ -170,7 +170,7 @@ Top-level commands, grouped by registrar:
 | `create-sync-config.ts` | `config`, `create`, `sync` (disabled legacy) |
 | `portable-skills.ts` | `new`/`scaffold`, `port`/`add` |
 | `schedule.ts` | `schedule` |
-| `registry.ts` | `registry sync` |
+| `registry.ts` | `registry sync`, `pull` |
 | `auth.ts` | `auth`, `billing`, `credits` |
 | `feedback.ts` | `feedback` |
 | `storage.ts` | `storage` (`status`, `sync-plan`) |
