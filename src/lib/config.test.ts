@@ -93,13 +93,15 @@ describe("config", () => {
         defaultScope: "project",
         format: "csv",
         apiUrl: "https://skills.example.com/api/v1/",
+        extensionsDir: "/work/skills-internal",
       }));
       const config = loadConfig();
       expect(config.defaultAgent).toBe("gemini");
       expect(config.defaultScope).toBe("project");
       expect(config.format).toBe("csv");
       expect(config.apiUrl).toBe("https://skills.example.com/api/v1");
-      expect(Object.keys(config).sort()).toEqual(["apiUrl", "defaultAgent", "defaultScope", "format"]);
+      expect(config.extensionsDir).toBe("/work/skills-internal");
+      expect(Object.keys(config).sort()).toEqual(["apiUrl", "defaultAgent", "defaultScope", "extensionsDir", "format"]);
     });
 
     test("refuses a legacy mode key instead of dropping it in silence", () => {
@@ -371,6 +373,13 @@ describe("config", () => {
 
     test("throws on invalid apiUrl", () => {
       expect(() => saveConfig("apiUrl", "file:///tmp/skills")).toThrow("Expected an http(s) URL");
+    });
+
+    test("saves a non-empty extensions directory path", () => {
+      saveConfig("extensionsDir", "/work/skills-internal", "global");
+      const content = JSON.parse(readFileSync(getConfigPath("global"), "utf-8"));
+      expect(content.extensionsDir).toBe("/work/skills-internal");
+      expect(() => saveConfig("extensionsDir", "   ", "global")).toThrow("Expected a non-empty directory path");
     });
 
     test("overwrites existing malformed file", () => {

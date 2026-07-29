@@ -4,8 +4,9 @@
 
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { join } from "path";
-import { DATA_DIR_ENV, getDataDir } from "./config.js";
+import { DATA_DIR_ENV, getDataDir, loadConfig } from "./config.js";
 import { listPortableSkillMetas } from "./portable-skills.js";
+import { mergeSkillRegistryLists } from "./registry-merge.js";
 import { normalizeSkillSlug, resolveSkillAlias } from "./skill-aliases.js";
 import { SKILLS } from "./registry-data/index.js";
 import {
@@ -14,6 +15,7 @@ import {
   type Category,
   type SkillMeta,
   type SkillRegistryProfile,
+  type SkillSource,
 } from "./registry-types.js";
 
 export { BASIC_SKILL_NAMES, CATEGORIES, SKILLS };
@@ -55,7 +57,7 @@ function parseSkillMdFrontmatter(content: string): Partial<SkillMeta> | null {
  * Discover skills from a directory. Each subdirectory is expected to be a skill
  * with a SKILL.md file containing frontmatter metadata.
  */
-function discoverSkillsInDir(dir: string): SkillMeta[] {
+function discoverSkillsInDir(dir: string, source: SkillSource = "custom"): SkillMeta[] {
   if (!existsSync(dir)) return [];
   const result: SkillMeta[] = [];
   try {
@@ -76,7 +78,7 @@ function discoverSkillsInDir(dir: string): SkillMeta[] {
         category: fm.category || "Development Tools",
         tags: fm.tags || [],
         ...(fm.kind ? { kind: fm.kind } : {}),
-        source: "custom",
+        source,
       });
     }
   } catch {}
@@ -89,15 +91,18 @@ let registryCacheKey: string | null = null;
 const REGISTRY_CACHE_TTL = 5000;
 
 /**
- * Identifies the roots getDataDir() would resolve from, without calling it.
+ * Identifies the roots loadRegistry() would resolve from, without calling
+ * getDataDir() or reading config files.
  *
  * Deliberately a string compare over the ambient inputs rather than the resolved
  * path: getDataDir() mkdirs, stats, and walks the legacy ~/.skills tree on every
  * call, so resolving it before the cache check would put that work on every cache
  * *hit* and defeat the cache entirely.
  *
- * Must list every variable getDataDir() reads, or the key degenerates and serves
- * entries discovered under a root the caller has already moved away from.
+ * Must list every variable getDataDir() reads, plus the working directory that
+ * selects the project config, or the key degenerates and serves entries
+ * discovered under a root the caller has already moved away from. Changes made
+ * inside one root follow the documented five-second registry TTL.
  *
  * JSON rather than a delimiter-joined string: no path can make it ambiguous, and
  * it keeps this file plain ASCII. An earlier revision used a raw NUL as the
@@ -108,15 +113,16 @@ function registryRootKey(): string {
     process.env[DATA_DIR_ENV] ?? "",
     process.env["HOME"] ?? "",
     process.env["USERPROFILE"] ?? "",
+    process.cwd(),
   ]);
 }
 
 /**
- * Load the full registry: official skills merged with global custom skills from
- * ~/.hasna/skills/installed/<name>/ and the legacy ~/.hasna/skills/custom/<name>/
- * path that migration folds into it.
+ * Load the full registry: official skills merged with a configured extension
+ * corpus and global custom skills from ~/.hasna/skills/installed/<name>/ (plus
+ * the legacy ~/.hasna/skills/custom/<name>/ path that migration folds into it).
  *
- * Custom skills with the same name as official skills take precedence.
+ * Collisions follow the shared source ranking: custom > extension > official.
  * Results are cached for 5 seconds.
  */
 export function loadRegistry(cwd?: string): SkillMeta[] {
@@ -130,8 +136,12 @@ export function loadRegistry(cwd?: string): SkillMeta[] {
     return registryCache;
   }
 
+  const extensionsDir = loadConfig().extensionsDir;
   const dataDir = getDataDir();
   const official = SKILLS.map((s) => ({ ...s, source: "official" as const }));
+  const extensions = extensionsDir
+    ? discoverSkillsInDir(extensionsDir, "extension")
+    : [];
   // No rootDir: let getPortableSkillsRoot() resolve <dataDir>/installed and run
   // the layout migration. Passing the app folder as rootDir would read app data
   // as if it were the corpus.
@@ -143,10 +153,7 @@ export function loadRegistry(cwd?: string): SkillMeta[] {
   const legacyCustom = discoverSkillsInDir(join(dataDir, "custom"));
   const globalCustom = mergeCustomSkills([...legacyCustom, ...portableCustom]);
 
-  const customNames = new Set(globalCustom.map((s) => s.name));
-  const filtered = official.filter((s) => !customNames.has(s.name));
-
-  registryCache = [...filtered, ...globalCustom];
+  registryCache = mergeSkillRegistryLists(official, extensions, globalCustom);
   registryCacheTime = now;
   registryCacheKey = rootKey;
   return registryCache;

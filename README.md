@@ -108,7 +108,7 @@ requirements explicitly document local provider use.
 | `skills setup-info` | | Version, pinned skills, agent configs, paths |
 | `skills export` | | Export pinned skills as JSON |
 | `skills import <file>` | | Pin skills from a JSON export |
-| `skills config set <key> <value>` | | Set default agent, scope, output format, or API origin |
+| `skills config set <key> <value>` | | Set default agent, scope, output format, API origin, or extension directory |
 | `skills config unset <key>` | | Remove a configuration value (`skills config unset apiUrl` returns to running on this machine) |
 | `skills new <name>` | `scaffold` | Scaffold a portable skill under `~/.hasna/skills/installed/<name>` |
 | `skills port <path>` | `add` | Import an existing skill folder into the portable standard |
@@ -460,6 +460,16 @@ Portable skill directories are auto-discovered from
 `~/.hasna/skills/<name>/` or `~/.hasna/skills/custom/<name>/` - are copied into
 `installed/` on first use; the originals are left in place.
 Project `.skills/` is reserved for runtime state and outputs.
+
+To add a checked-out extension corpus without copying it into `installed/`, set
+its directory in the global config:
+
+```bash
+skills config set extensionsDir /path/to/extensions --global
+```
+
+Extension skills override bundled official skills with the same name; installed
+custom skills still take precedence over extensions.
 
 ## Data Directory
 
