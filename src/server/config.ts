@@ -1,3 +1,14 @@
+import { assertNoRetiredModeEnvVars } from "../lib/retired-settings.js";
+
+/** Canonical variable that decides this server's internal storage backend. */
+const DATABASE_URL_ENV = "HASNA_SKILLS_DATABASE_URL";
+
+/**
+ * Token identifying this application's environment namespace, for scoping the
+ * retired-setting refusal to variables this package owns. See lib/retired-settings.ts.
+ */
+const SKILLS_ENV_NAMESPACE = "SKILLS";
+
 export interface SkillsServerConfig {
   host: string;
   port: number;
@@ -32,13 +43,25 @@ export interface SkillsServerConfig {
 }
 
 export function resolveServerConfig(env: Record<string, string | undefined> = process.env): SkillsServerConfig {
+  // The server is the process the deployment-mode collapse is about: sqlite-or-postgres
+  // is *its* internal storage. A retired storage-mode variable set here used to be read
+  // by nothing, so a server meant for Postgres came up on the default SQLite file and
+  // the startup banner printed "storage: sqlite (...)" as though that had been chosen.
+  // Serving traffic off the wrong database in silence is the worst case of the class,
+  // and it is not covered by the client-side guard in lib/native-storage.ts, because the
+  // server does not go through it.
+  assertNoRetiredModeEnvVars(env, {
+    app: SKILLS_ENV_NAMESPACE,
+    replacement: DATABASE_URL_ENV,
+  });
+
   const nodeEnv = env.NODE_ENV || "development";
   const host = env.HOST || env.SKILLS_HOST || "0.0.0.0";
   const port = parsePositiveInt(env.PORT || env.SKILLS_PORT, 8787);
   return {
     host,
     port,
-    databaseUrl: env.HASNA_SKILLS_DATABASE_URL || env.DATABASE_URL || undefined,
+    databaseUrl: env[DATABASE_URL_ENV] || env.DATABASE_URL || undefined,
     bootstrapApiKey: env.HASNA_SKILLS_BOOTSTRAP_API_KEY || undefined,
     artifactBucket: env.HASNA_SKILLS_S3_BUCKET || env.SKILLS_S3_BUCKET || undefined,
     artifactPrefix: normalizePrefix(env.HASNA_SKILLS_S3_PREFIX || env.SKILLS_S3_PREFIX || "skills/artifacts"),
