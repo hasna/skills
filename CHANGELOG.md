@@ -31,6 +31,9 @@ All notable changes to this project will be documented in this file.
   push users toward choosing a mode, and there is no longer a choice to make.
 
 ### Added
+- Dedicated unit coverage for MCP agent registration and local run-state
+  persistence, including malformed configuration, filesystem refusal, corrupt
+  run records, missing exports, artifact manifests, and event/log output.
 - `CLAUDE.md` rewritten to describe the repository as it is, and a guard —
   `src/lib/claude-md.test.ts` — that re-derives its load-bearing counts from the
   tree on every run. The previous file had drifted back to roughly the v0.0.x
