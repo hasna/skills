@@ -1,0 +1,30 @@
+{
+  "name": "gif-maker",
+  "version": "0.1.0",
+  "description": "Gif Maker skill",
+  "type": "module",
+  "bin": {
+    "gif-maker": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target node",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "minimist": "^1.2.8",
+    "glob": "^11.1.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  },
+  "publishConfig": {
+    "access": "restricted",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "files": [
+    "src",
+    "tsconfig.json"
+  ]
+}

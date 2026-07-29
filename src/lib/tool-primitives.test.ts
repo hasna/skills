@@ -40,10 +40,11 @@ describe("tool primitives", () => {
   test("validates primitive coverage for the bundled catalog", () => {
     const result = validateToolPrimitiveCoverage("all");
     expect(result.valid).toBe(true);
-    // Declarative-only catalog: 19 shipped skills, every one mapped to a primitive.
-    expect(result.skillCount).toBe(19);
+    // OSS catalog: 85 shipped skills (19 instruction + 66 executable), every one
+    // mapped to a primitive by category/keyword inference.
+    expect(result.skillCount).toBe(85);
     expect(result.mappedSkillCount).toBe(result.skillCount);
-    expect(result.gatewayBackedSkillCount).toBe(12);
+    expect(result.gatewayBackedSkillCount).toBe(41);
     expect(result.issues).toEqual([]);
   });
 });

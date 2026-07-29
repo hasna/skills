@@ -1,0 +1,9 @@
+{
+  "name": "todos-plan",
+  "version": "0.1.0",
+  "description": "Author, sync, and verify Todos plans with Todos CLI source-of-truth workflow.",
+  "type": "module",
+  "bin": {
+    "todos-plan": "src/index.ts"
+  }
+}

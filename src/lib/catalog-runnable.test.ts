@@ -1,45 +1,49 @@
 /**
- * catalog-runnable.test.ts — the successor to the hosted-metadata packaging guards.
+ * catalog-runnable.test.ts — the OSS catalog ships instruction prose AND runnable
+ * executable skills, and every executable one must run with no credential.
  *
- * ## What this replaces, and why the replacement is not weaker
+ * ## History, and what this file now guards
  *
- * Until the hosted set was emptied, five guards were derived from
- * `requireHostedMetadataSlugs()`. Every one of them protected the same shape of
- * property: *a skill whose implementation lives off-repo must ship its metadata
- * and NOT its source.* With zero hosted skills that sentence has no subject, so
- * those guards could only pass vacuously. They are retired in the same change
- * that empties the set, exactly as `HOSTED_METADATA_SET_EMPTY_ERROR` demands.
+ * This file began life as the successor to the hosted-metadata packaging guards:
+ * when the hosted set was emptied, the catalog was briefly curated down to
+ * instruction-only prose, and this file asserted "zero executable skills". That
+ * curation has been reversed. The 66 archived executable skills that require NO
+ * credential (verified: no `process.env.<KEY>` read, no documented key, no
+ * provider SDK) are restored alongside the 19 instruction skills, so the catalog
+ * is 85 skills: 19 instruction + 66 executable.
  *
- * The risk did not disappear; it INVERTED. The old danger was shipping source
- * that was supposed to stay private. The new danger is failing to ship source
- * that a skill needs in order to work — a `bin` pointing into a `src/` that
- * `npm pack` stripped produces a package that installs cleanly and then cannot
- * run anything. That failure is silent, which is precisely why it needs a guard.
+ * The executable half reintroduces a real risk, and the invariants here exist to
+ * pin it down:
  *
- * | retired guard | protected | now protected by |
- * |---|---|---|
- * | `hosted-skill-set.test.ts` "set is non-empty" | the other four are not vacuous | this file's own anti-vacuity assertions |
- * | `hosted-skill-set.test.ts` "src excluded by packlist globs" | hosted src stripped | "no skill source is excluded from the package" (inverted) |
- * | `hosted-skill-set.test.ts` "premium catalog == hosted declarations" | pricing/declaration drift | nothing to drift: both sets are empty and the price table is gone |
- * | `hosted-skill-set.test.ts` "no hosted src in packed package" | tarball outcome | "every executable skill ships a runnable entry point" |
- * | `public-package-boundary.test.ts` "hosted src out of repo/package" | same, repo + tarball | same as above |
- * | `public-package-boundary.test.ts` "no provider credential instructions" | hosted docs never named a provider key | "a skill that reads a provider key documents it" (inverted) |
+ *   1. A `bin` pointing into a `src/` that `npm pack` stripped installs cleanly
+ *      and then cannot run — a silent break. Guarded by "every executable skill
+ *      ships a runnable entry point" over both the repo tree and the packed
+ *      tarball.
+ *   2. A restored executable skill that reads a provider credential turns the OSS
+ *      catalog back into a BYO-key catalog. The whole point of the restore was to
+ *      ship ONLY credential-free skills, so this is the load-bearing guard:
+ *      `no shipped executable skill requires a credential`, with a positive
+ *      control fixture so it can never pass vacuously.
+ *   3. The package must still ship no credential VALUE. The one legitimate
+ *      secret-SHAPED string in the catalog is the security-audit scanner's PEM
+ *      "PRIVATE KEY" detection regex; it is allowlisted exactly on that file,
+ *      mirroring scripts/release-guard.ts.
  *
- * That last inversion is the substantive one. The old guard BANNED the strings
- * `OPENAI_API_KEY`, `GEMINI_API_KEY`, `EXA_API_KEY` … from hosted skill
- * directories, which is what made these skills unconvertible: a BYO-key skill
- * must name the variable it reads. Banning the mention was only ever a proxy for
- * the real rule, which is that the OSS must not ship a *credential*. So the guard
- * is turned around: naming a provider variable is now REQUIRED rather than
- * forbidden, and what is checked instead is that no key VALUE ships.
- *
- * The other half of that rule — never routing a credential through a vendor
- * endpoint — is R1, enforced by its own PR. It is deliberately not duplicated
- * here.
+ * The hosted/premium set stays empty — no skill declares an off-repo runtime.
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { getPackedFiles } from "./packlist.js";
@@ -69,9 +73,6 @@ function skillKind(slug: string): "instruction" | "executable" {
 const instructionSkills = skillDirs.filter((slug) => skillKind(slug) === "instruction");
 const executableSkills = skillDirs.filter((slug) => skillKind(slug) === "executable");
 
-/** Provider credential variables a BYO-key skill may legitimately read. */
-const PROVIDER_KEY_PATTERN = /\b([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_(?:API_KEY|TOKEN|SECRET))\b/g;
-
 function collectFiles(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir)) {
@@ -83,16 +84,73 @@ function collectFiles(dir: string): string[] {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Credential detection — the definition of "requires a credential".
+//
+// Mirrors the credential half of ENV_VAR_PATTERN/GENERIC_ENV_PATTERN in
+// src/lib/skillinfo.ts. A var is a credential when its name ends in a secret/key
+// suffix and NOT in an output/config suffix. `_ID`, `_URL`, `_REGION`, `_BUCKET`,
+// `_ENDPOINT`, `_DIR`, `_PATH`, `_OUTPUT` are configuration, never credentials —
+// so `AWS_ACCESS_KEY_ID` (config-shaped) does not disqualify while
+// `AWS_SECRET_ACCESS_KEY` does.
+// ---------------------------------------------------------------------------
+const CREDENTIAL_SUFFIX = /_(?:API_KEY|KEY|TOKEN|SECRET|PASSWORD|CLIENT_SECRET)$/;
+const CONFIG_SUFFIX = /_(?:URL|ID|ENDPOINT|REGION|BUCKET|DIR|PATH|OUTPUT)$/;
+function isCredentialVar(name: string): boolean {
+  return CREDENTIAL_SUFFIX.test(name) && !CONFIG_SUFFIX.test(name);
+}
+
+// Bare env-var tokens as they appear in prose/`.env.example`. Deliberately close
+// to ENV_VAR_PATTERN in skillinfo.ts so a documented credential is caught.
+const DOC_ENV_TOKEN =
+  /\b([A-Z][A-Z0-9_]{2,}(?:_API_KEY|_KEY|_TOKEN|_SECRET|_PASSWORD|_URL|_ID|_ENDPOINT|_REGION|_BUCKET))\b/g;
+
+/**
+ * Credential env vars a skill REQUIRES to run, derived over its own directory two
+ * ways:
+ *   - src: a literal `process.env.<VAR>` / `process.env["<VAR>"]` read of a
+ *     credential-named var — what makes a key mandatory at runtime.
+ *   - docs: a credential-named token in SKILL.md / README.md / CLAUDE.md /
+ *     `.env.example` — a key declared as required in prose.
+ *
+ * Keys accessed dynamically through a shared helper with a graceful fallback are
+ * intentionally NOT counted: siteanalyze reads a provider key via
+ * `skills/_common/vision.ts` only to ENHANCE its output and runs fully in "quick
+ * mode" without one, so it requires no credential.
+ */
+function requiredCredentialVars(dir: string): string[] {
+  const found = new Set<string>();
+  for (const file of collectFiles(dir)) {
+    const content = readFileSync(file, "utf8");
+    if (file.endsWith(".ts") || file.endsWith(".js")) {
+      for (const m of content.matchAll(
+        /process\.env(?:\.([A-Z0-9_]+)|\[["']([A-Z0-9_]+)["']\])/g,
+      )) {
+        const name = m[1] ?? m[2];
+        if (name && isCredentialVar(name)) found.add(name);
+      }
+    } else if (
+      file.endsWith(".md") ||
+      file.endsWith(".env.example") ||
+      file.endsWith(".env.local.example")
+    ) {
+      for (const m of content.matchAll(DOC_ENV_TOKEN)) {
+        if (isCredentialVar(m[1])) found.add(m[1]);
+      }
+    }
+  }
+  return [...found].sort();
+}
+
 describe("every catalog entry is runnable without a vendor service (R2)", () => {
   // Anti-vacuity for the whole file. Every assertion below iterates one of these
   // sets; an empty catalog would turn all of them green while proving nothing.
   test("the catalog is non-empty and every entry is classified", () => {
-    // Declarative-only OSS catalog: 19 shipped skills, all instruction-kind, zero
-    // executable. The executable-skill guards below still exist so a restored dev
-    // skill would be checked, but currently have no subject.
-    expect(skillDirs.length).toBe(19);
+    // OSS catalog: 19 instruction-kind prose skills + 66 restored credential-free
+    // executable skills = 85.
+    expect(skillDirs.length).toBe(85);
     expect(instructionSkills.length).toBe(19);
-    expect(executableSkills.length).toBe(0);
+    expect(executableSkills.length).toBe(66);
     expect(instructionSkills.length + executableSkills.length).toBe(skillDirs.length);
   });
 
@@ -123,10 +181,10 @@ describe("the published package carries what the catalog promises", () => {
   const packedSet = new Set(packed);
 
   test("packs a non-trivial file list", () => {
-    // Declarative-only catalog: ~48 skill files (19 skills + _common) plus docs,
-    // migrations, README, and LICENSE. Floored well below the real count so it
-    // stays anti-vacuous without pinning an exact number.
-    expect(packed.length).toBeGreaterThan(40);
+    // 85 skills (19 instruction + 66 executable) plus _common, docs, migrations,
+    // README, and LICENSE pack to ~500 files. Floored well below the real count
+    // so it stays anti-vacuous without pinning an exact number.
+    expect(packed.length).toBeGreaterThan(200);
   });
 
   // Inverts the retired "hosted src is excluded" guard. `files` is
@@ -153,106 +211,61 @@ describe("the published package carries what the catalog promises", () => {
   });
 });
 
-describe("BYO-key skills declare their credentials and ship none", () => {
-  // Which skills read a provider credential from the environment, and which
-  // variables each one names in its own docs.
-  const byoKeySkills = new Map<string, { read: Set<string>; documented: Set<string> }>();
-
-  for (const slug of skillDirs) {
-    const dir = join(SKILLS_ROOT, slug);
-    const read = new Set<string>();
-    const documented = new Set<string>();
-    for (const file of collectFiles(dir)) {
-      const content = readFileSync(file, "utf8");
-      if (file.endsWith(".ts") || file.endsWith(".js")) {
-        for (const m of content.matchAll(/process\.env(?:\.([A-Z0-9_]+)|\[["']([A-Z0-9_]+)["']\])/g)) {
-          const name = m[1] ?? m[2];
-          if (name && /_(API_KEY|TOKEN|SECRET)$/.test(name)) read.add(name);
-        }
-      }
-      if (file.endsWith(".md")) {
-        for (const m of content.matchAll(PROVIDER_KEY_PATTERN)) documented.add(m[1]);
-      }
+describe("no shipped executable skill requires a credential", () => {
+  // The load-bearing invariant of the restore: the executable half of the catalog
+  // is exactly the credential-free subset. Any skill that reads or documents a
+  // provider key would have turned the OSS back into a BYO-key catalog.
+  test("the executable catalog reads and documents no required credential", () => {
+    const offenders: string[] = [];
+    for (const slug of executableSkills) {
+      const creds = requiredCredentialVars(join(SKILLS_ROOT, slug));
+      if (creds.length) offenders.push(`${slug}: ${creds.join(", ")}`);
     }
-    if (read.size > 0) byoKeySkills.set(slug, { read, documented });
-  }
-
-  // The declarative-only catalog reads no provider credential at all — every
-  // shipped skill is prose with no src/ to call process.env. So the BYO-key set is
-  // empty by construction. The guard below stays wired (a restored executable skill
-  // would repopulate the set), but its current, asserted subject is emptiness.
-  test("the declarative catalog reads no provider credential", () => {
-    expect([...byoKeySkills.keys()].length).toBe(0);
-  });
-
-  // Skills converted from hosted metadata by the R2 series. These are held to
-  // the rule strictly: a BYO-key skill that does not name its variable is
-  // unusable, and these are the ones this change is responsible for.
-  const CONVERTED_SKILLS = new Set([
-    "api-docs-portal", "audio-transcript-pack", "brand-assets", "invoice-reconciliation",
-    "logo-design", "one-page-website", "pdf-to-dataset", "pdf-to-markdown",
-    "product-mockup", "sdk-generator", "slide-deck-generator",
-  ]);
-
-  function undocumentedPairs(): string[] {
-    const out: string[] = [];
-    for (const [slug, { read, documented }] of byoKeySkills) {
-      for (const name of read) {
-        if (name.startsWith("SKILLS_")) continue; // per-skill knob, not a credential
-        if (!documented.has(name)) out.push(`${slug}: reads ${name}, never documents it`);
-      }
-    }
-    return out.sort();
-  }
-
-  test("every skill this series converted documents the credential it reads", () => {
-    const offenders = undocumentedPairs().filter((entry) => CONVERTED_SKILLS.has(entry.split(":")[0]));
     expect(offenders).toEqual([]);
   });
 
-  // Pre-existing gap, deliberately frozen rather than silently tolerated. These
-  // skills predate this change and read a provider credential without naming it
-  // in their own docs. The count may only go DOWN; a new undocumented BYO-key
-  // skill fails this immediately.
-  // Declarative-only catalog: no skill reads a credential, so the backlog is empty.
-  const PREEXISTING_UNDOCUMENTED_LIMIT = 0;
+  // Positive control. Without this the assertion above could pass on a detector
+  // that finds nothing. The detector MUST flag a key read in src, a key declared
+  // in prose, and MUST NOT flag output/config vars.
+  test("the credential detector flags a key-requiring skill (positive control)", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "cred-guard-"));
+    try {
+      const readsKey = join(tmp, "reads-key");
+      mkdirSync(join(readsKey, "src"), { recursive: true });
+      writeFileSync(join(readsKey, "src", "index.ts"), "const k = process.env.OPENAI_API_KEY;\n");
+      expect(requiredCredentialVars(readsKey)).toContain("OPENAI_API_KEY");
 
-  test("the pre-existing undocumented-credential backlog does not grow", () => {
-    expect(undocumentedPairs().length).toBeLessThanOrEqual(PREEXISTING_UNDOCUMENTED_LIMIT);
+      const documentsKey = join(tmp, "documents-key");
+      mkdirSync(documentsKey, { recursive: true });
+      writeFileSync(join(documentsKey, "SKILL.md"), "# k\n\nRequires `STRIPE_SECRET_KEY` to run.\n");
+      expect(requiredCredentialVars(documentsKey)).toContain("STRIPE_SECRET_KEY");
+
+      const configOnly = join(tmp, "config-only");
+      mkdirSync(join(configOnly, "src"), { recursive: true });
+      writeFileSync(
+        join(configOnly, "src", "index.ts"),
+        "const d = process.env.SKILLS_OUTPUT_DIR;\nconst u = process.env.API_BASE_URL;\n",
+      );
+      expect(requiredCredentialVars(configOnly)).toEqual([]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
-  // The other half of the bracket, and what makes the ceiling tamper-evident.
-  // The test above only stops the backlog GROWING; on its own it would let the
-  // constant be quietly raised, or let real progress go unrecorded. Pinning the
-  // constant to the true count closes both:
-  //
-  //   - Raising 131 to a larger number does not pass. It fails with
-  //     `expected <constant> to be <actual>` until the constant equals reality,
-  //     so any loosening is an explicit, reviewable edit rather than a silent one.
-  //   - Fixing skills is not enough either. Dropping BELOW the ceiling fails and
-  //     names the new number, so the constant must be lowered in the same diff —
-  //     which makes the improvement visible and permanently locks it in.
-  //
-  // Anti-vacuity: an equality against a count derived at test time from actual
-  // source and docs cannot pass vacuously, and the guard above asserts the
-  // derived set has a subject at all.
-  test("the frozen backlog constant matches reality", () => {
-    const actual = undocumentedPairs().length;
-    expect(PREEXISTING_UNDOCUMENTED_LIMIT).toBe(actual);
-  });
-
-  // The rule the banned-strings guard was a proxy for: the OSS must ship no
-  // credential VALUE. Asserted against the packed tarball, not the repo.
+  // The other half of the rule: the OSS must ship no credential VALUE. Asserted
+  // against the packed tarball, not the repo.
   test("the packed package ships no credential value", () => {
     const secretShaped = [
       /\bsk-[A-Za-z0-9]{24,}/,
       /\bghp_[A-Za-z0-9]{30,}/,
       /\bAKIA[A-Z0-9]{16}\b/,
-      /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/,
+      /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/, // hasna:allow-secret
     ];
-    // No allowlist needed: the declarative-only catalog ships no scanner source
-    // that embeds a detection-regex literal. Mirrors release-guard.ts.
-    const allowlist = new Set<string>();
+    // security-audit is a hardcoded-secret scanner: its detection table embeds
+    // the PEM "PRIVATE KEY" header as a regex to FIND leaked keys, never as a
+    // credential value. Allowlisted exactly on that file, mirroring the
+    // scanAllowlist entry in scripts/release-guard.ts.
+    const allowlist = new Set<string>(["skills/security-audit/src/index.ts"]);
     const leaks: string[] = [];
     for (const path of getPackedFiles(REPO_ROOT)) {
       if (path.startsWith("dist/") || path.startsWith("bin/")) continue;
@@ -266,5 +279,4 @@ describe("BYO-key skills declare their credentials and ship none", () => {
     }
     expect(leaks).toEqual([]);
   });
-
 });

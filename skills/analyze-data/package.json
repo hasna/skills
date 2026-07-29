@@ -1,0 +1,23 @@
+{
+  "name": "analyze-data",
+  "version": "0.1.0",
+  "description": "Data science insights for CSV and JSON",
+  "type": "module",
+  "bin": {
+    "analyze-data": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target node",
+    "start": "bun run src/index.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "restricted"
+  }
+}
