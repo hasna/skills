@@ -31,6 +31,20 @@ All notable changes to this project will be documented in this file.
   push users toward choosing a mode, and there is no longer a choice to make.
 
 ### Added
+- **`skills sync [names...] [--for <agent>] [--dry-run] [--all] [--force]`** — the last
+  mile: write skills from this machine's corpus into each coding agent's global skills
+  folder (`~/.claude/skills/<name>/SKILL.md`, `~/.codex/…`, `~/.config/opencode/…`,
+  `~/.cursor/…`), per-tool adapted (Claude keeps `user_invocable`; Codex/OpenCode/Cursor
+  have it stripped). Instruction skills are written as prose the agent auto-loads;
+  executable skills as a pointer to `skills run <name>`. **Non-clobbering**: every synced
+  directory carries a `.hasna-skills.json` ownership marker, and a skill directory without
+  it is treated as hand-authored and skipped unless `--force`. This replaces the disabled
+  legacy `sync` command and reverses the `installSkillForAgent()` stub — that function now
+  writes an agent skill folder (single-skill entry point to the same non-clobbering
+  writer) instead of returning `success: false`. New library exports: `syncSkillsToAgents`,
+  `writeManagedAgentSkill`, `writeManagedSkillDir`, `adaptSkillMdForAgent`,
+  `agentGlobalSkillsDir`, `pointerSkillMd`, `resolveSyncAgents`, `removeManagedAgentSkill`,
+  `SYNC_AGENTS`.
 - **`skills pull [names...] [--all] [--for-machine]`** — fetch skills from the
   configured instance into this machine's corpus (`~/.hasna/skills/installed/<name>/`),
   the read half of the dogfooding loop that `skills push` writes to. Each skill's

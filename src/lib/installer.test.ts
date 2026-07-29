@@ -23,6 +23,7 @@ import {
   AGENT_TARGETS,
   resolveAgents,
 } from "./installer";
+import { SYNC_MARKER_FILE } from "./agent-sync.js";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
 
@@ -333,26 +334,52 @@ describe("installer", () => {
     });
 
     describe("installSkillForAgent", () => {
-      test("does not copy SKILL.md into agent skill folders", () => {
-        const result = installSkillForAgent("brand-kit", {
-          agent: "claude",
-          scope: "project",
-          projectDir: testDir,
-        });
-        expect(result.success).toBe(false);
-        expect(result.error).toContain("skills mcp --register claude");
-        expect(existsSync(join(testDir, ".claude", "skills", "brand-kit", "SKILL.md"))).toBe(false);
-      });
-
-      test("does not generate agent skill files", () => {
+      test("writes an adapted SKILL.md plus an ownership marker into the agent folder", () => {
         const result = installSkillForAgent("market-research-report", {
           agent: "claude",
           scope: "project",
           projectDir: testDir,
-        }, (name) => `---\nname: ${name}\ndescription: test\n---\n\n# Test\n`);
-        expect(result.success).toBe(false);
-        expect(result.error).toContain("Direct agent skill-folder installs are disabled");
+        });
+        expect(result.success).toBe(true);
+        const skillDir = join(testDir, ".claude", "skills", "market-research-report");
+        expect(existsSync(join(skillDir, "SKILL.md"))).toBe(true);
+        expect(existsSync(join(skillDir, SYNC_MARKER_FILE))).toBe(true);
+      });
+
+      test("Claude keeps user_invocable; a non-Claude agent has it stripped", () => {
+        installSkillForAgent("market-research-report", { agent: "claude", scope: "project", projectDir: testDir });
+        installSkillForAgent("market-research-report", { agent: "codex", scope: "project", projectDir: testDir });
+        const claudeMd = readFileSync(join(testDir, ".claude", "skills", "market-research-report", "SKILL.md"), "utf-8");
+        const codexMd = readFileSync(join(testDir, ".codex", "skills", "market-research-report", "SKILL.md"), "utf-8");
+        expect(claudeMd).toContain("user_invocable: true");
+        expect(codexMd).not.toContain("user_invocable");
+      });
+
+      test("dry-run reports the write without creating anything", () => {
+        const result = installSkillForAgent("market-research-report", {
+          agent: "claude",
+          scope: "project",
+          projectDir: testDir,
+          dryRun: true,
+        });
+        expect(result.success).toBe(true);
         expect(existsSync(join(testDir, ".claude", "skills", "market-research-report", "SKILL.md"))).toBe(false);
+      });
+
+      test("refuses to clobber a hand-authored skill unless --overwrite", () => {
+        const skillDir = join(testDir, ".claude", "skills", "market-research-report");
+        const { mkdirSync } = require("fs");
+        mkdirSync(skillDir, { recursive: true });
+        const mine = "---\nname: market-research-report\ndescription: MINE\n---\n";
+        writeFileSync(join(skillDir, "SKILL.md"), mine);
+
+        const skipped = installSkillForAgent("market-research-report", { agent: "claude", scope: "project", projectDir: testDir });
+        expect(skipped.success).toBe(false);
+        expect(readFileSync(join(skillDir, "SKILL.md"), "utf-8")).toBe(mine);
+
+        const forced = installSkillForAgent("market-research-report", { agent: "claude", scope: "project", projectDir: testDir, overwrite: true });
+        expect(forced.success).toBe(true);
+        expect(readFileSync(join(skillDir, "SKILL.md"), "utf-8")).not.toBe(mine);
       });
 
       test("still rejects nonexistent skills", () => {
@@ -364,34 +391,27 @@ describe("installer", () => {
         expect(result.success).toBe(false);
         expect(result.error).toContain("not found");
       });
-
-      test("never writes to any supported agent directory", () => {
-        for (const agent of AGENT_TARGETS) {
-          const result = installSkillForAgent("brand-kit", {
-            agent,
-            scope: "project",
-            projectDir: testDir,
-          });
-          const expected = join(testDir, `.${agent}`, "skills", "brand-kit", "SKILL.md");
-          expect(result.success).toBe(false);
-          expect(existsSync(expected)).toBe(false);
-        }
-      });
     });
 
     describe("removeSkillForAgent", () => {
-      test("is disabled because agent skill folders are unmanaged", () => {
-        const result = removeSkillForAgent("brand-kit", {
-          agent: "claude",
-          scope: "project",
-          projectDir: testDir,
-        });
-        expect(result).toBe(false);
-        const skillDir = join(testDir, ".claude", "skills", "brand-kit");
+      test("removes a skill this tool installed", () => {
+        installSkillForAgent("market-research-report", { agent: "claude", scope: "project", projectDir: testDir });
+        const skillDir = join(testDir, ".claude", "skills", "market-research-report");
+        expect(existsSync(skillDir)).toBe(true);
+        expect(removeSkillForAgent("market-research-report", { agent: "claude", scope: "project", projectDir: testDir })).toBe(true);
         expect(existsSync(skillDir)).toBe(false);
       });
 
-      test("returns false for non-pinned skill", () => {
+      test("refuses to remove a hand-authored (unmarked) skill directory", () => {
+        const skillDir = join(testDir, ".claude", "skills", "market-research-report");
+        const { mkdirSync } = require("fs");
+        mkdirSync(skillDir, { recursive: true });
+        writeFileSync(join(skillDir, "SKILL.md"), "---\nname: market-research-report\ndescription: mine\n---\n");
+        expect(removeSkillForAgent("market-research-report", { agent: "claude", scope: "project", projectDir: testDir })).toBe(false);
+        expect(existsSync(skillDir)).toBe(true);
+      });
+
+      test("returns false for a skill that was never installed", () => {
         const result = removeSkillForAgent("nonexistent-xyz", {
           agent: "claude",
           scope: "project",

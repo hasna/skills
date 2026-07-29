@@ -235,6 +235,29 @@ export {
 } from "./lib/pull.js";
 
 export {
+  SYNC_AGENTS,
+  SYNC_MARKER_FILE,
+  SYNC_MARKER_MANAGED_BY,
+  adaptSkillMdForAgent,
+  agentGlobalSkillsDir,
+  isSyncAgent,
+  pointerSkillMd,
+  removeManagedAgentSkill,
+  resolveSyncAgents,
+  syncSkillsToAgents,
+  writeManagedAgentSkill,
+  writeManagedSkillDir,
+  type AgentSyncAction,
+  type ManagedDirWriteResult,
+  type SyncActionKind,
+  type SyncAgent,
+  type SyncMarker,
+  type SyncSkillsOptions,
+  type SyncSkillsResult,
+  type WriteManagedAgentSkillParams,
+} from "./lib/agent-sync.js";
+
+export {
   SKILLS_CLI_MCP_PARITY,
   findSkillsParityForCliCommand,
   findSkillsParityForMcpTool,

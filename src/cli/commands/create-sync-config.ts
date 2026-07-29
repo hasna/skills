@@ -10,6 +10,12 @@ import type { Command } from "commander";
 import { loadConfig, saveConfig, unsetConfig, getConfigPath } from "../../lib/config.js";
 import { getPortableSkillsRoot } from "../../lib/portable-skills.js";
 import { clearRegistryCache } from "../../lib/registry.js";
+import {
+  resolveSyncAgents,
+  SYNC_AGENTS,
+  syncSkillsToAgents,
+  type AgentSyncAction,
+} from "../../lib/agent-sync.js";
 
 export function registerCreateSync(parent: Command) {
   // Config
@@ -110,16 +116,17 @@ export function registerCreateSync(parent: Command) {
     .description("Scaffold a new custom skill directory")
     .action((name: string, options: any) => handleCreate(name, options));
 
-  // Sync
+  // Sync — the last mile: corpus -> each agent's global skills folder.
   parent
     .command("sync")
-    .option("--to <agent>", "Deprecated; use skills mcp --register <agent|all>")
-    .option("--from <agent>", "Deprecated; agent skill-folder sync is disabled")
-    .option("--register", "Deprecated; agent skill-folder imports are disabled", false)
-    .option("--scope <scope>", "Deprecated; ignored", "global")
+    .argument("[names...]", "Skills to sync (default: every skill in this machine's corpus)")
+    .option("--for <agent>", `Target one agent (${SYNC_AGENTS.join(", ")}, or all)`, "all")
+    .option("--all", "Sync every corpus skill (the default)", false)
+    .option("--dry-run", "Show what would be written without touching any agent folder", false)
+    .option("--force", "Overwrite even a hand-authored (unmanaged) agent skill", false)
     .option("--json", "Output as JSON", false)
-    .description("Disabled legacy agent skill-folder sync")
-    .action((options) => handleSync(options));
+    .description("Write corpus skills into each coding agent's global skills folder, per-tool adapted")
+    .action((names: string[], options) => handleSync(names, options));
 }
 
 function handleCreate(name: string, options: { category: string; description?: string; tags?: string; global: boolean; json: boolean }) {
@@ -159,14 +166,56 @@ function handleCreate(name: string, options: { category: string; description?: s
   }
 }
 
-function handleSync(options: { to?: string; from?: string; register: boolean; scope: string; json: boolean }) {
-  const target = options.to ?? options.from ?? "all";
-  const error = "Agent skill-folder sync is disabled. Skills are discovered through the Skills MCP server.";
-  const mcpRegister = `skills mcp --register ${target}`;
-  if (options.json) console.log(JSON.stringify({ error, mcpRegister }));
-  else {
-    console.error(chalk.red(error));
-    console.error(chalk.dim(`Use: ${mcpRegister}`));
+function handleSync(
+  names: string[],
+  options: { for: string; all: boolean; dryRun: boolean; force: boolean; json: boolean },
+) {
+  let agents;
+  try {
+    agents = resolveSyncAgents(options.for);
+  } catch (error) {
+    if (options.json) console.log(JSON.stringify({ error: (error as Error).message }));
+    else console.error(chalk.red((error as Error).message));
+    process.exitCode = 1;
+    return;
   }
-  process.exitCode = 1;
+
+  const { actions } = syncSkillsToAgents({
+    ...(names.length ? { names } : {}),
+    all: options.all,
+    agents,
+    dryRun: options.dryRun,
+    force: options.force,
+  });
+
+  if (options.json) {
+    console.log(JSON.stringify({ dryRun: options.dryRun, actions }, null, 2));
+  } else {
+    printSyncHuman(actions, options.dryRun);
+  }
+  // A skip because a NAMED skill is missing from the corpus is a failure; a skip because a
+  // folder is hand-authored is a deliberate, successful no-op and must not fail the run.
+  if (actions.some((action) => action.action === "skip" && action.reason?.includes("not found"))) {
+    process.exitCode = 1;
+  }
+}
+
+function printSyncHuman(actions: AgentSyncAction[], dryRun?: boolean): void {
+  if (!actions.length) {
+    console.log(chalk.dim("No skills in this machine's corpus to sync. Pull some first: skills pull --all"));
+    return;
+  }
+  const prefix = dryRun ? chalk.dim("[dry-run] ") : "";
+  console.log(chalk.bold(`\n${dryRun ? "Would sync" : "Syncing"} skills into agent folders...\n`));
+  for (const action of actions) {
+    const label = `${action.skill} → ${action.agent}`;
+    if (action.action === "skip") {
+      console.log(`${prefix}${chalk.yellow(`• skip ${label}`)}${action.reason ? chalk.dim(`  (${action.reason})`) : ""}`);
+    } else {
+      const verb = action.action === "create" ? "add" : "update";
+      console.log(`${prefix}${chalk.green(`✓ ${verb} ${label}`)}${chalk.dim(`  → ${action.path}`)}`);
+    }
+  }
+  const written = actions.filter((a) => a.action !== "skip").length;
+  console.log(chalk.dim(`\n${written}/${actions.length} ${dryRun ? "would be written" : "written"}`));
 }
