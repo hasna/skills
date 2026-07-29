@@ -12,6 +12,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readdirSync, statSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
+import { RETIRED_CONFIG_KEYS, assertNoRetiredConfigKeys } from "./retired-settings.js";
 
 /**
  * There is no deployment "mode" key.
@@ -28,9 +29,9 @@ import { homedir } from "os";
  * the auth path. Removing that fallback belongs to the no-vendor-defaults work,
  * not here; remote-registry.ts already fails closed and is the model.
  *
- * Configs written by older versions may still carry a "mode" key on disk. It is
- * not a valid key, so readConfigFile() drops it and saveConfig() leaves it
- * untouched in the file; it influences nothing.
+ * Configs written by older versions may still carry a "mode" key on disk. That is
+ * refused rather than ignored - see lib/retired-settings.ts for why silence is
+ * the worse of the two failures - and `skills config unset mode` removes it.
  */
 export interface SkillsConfig {
   defaultAgent?: "claude" | "codex" | "gemini" | "pi" | "opencode" | "all";
@@ -203,19 +204,27 @@ export function getConfigPath(scope: ConfigScope): string {
  */
 function readConfigFile(path: string): Partial<SkillsConfig> {
   if (!existsSync(path)) return {};
+
+  // Parsing is the only thing inside the catch. A retired deployment-mode key is
+  // a configuration error and has to escape, and the original single try block
+  // would have swallowed the refusal along with the unparseable-file case it
+  // exists for - leaving the guard installed and doing nothing.
+  let parsed: unknown;
   try {
-    const raw = readFileSync(path, "utf-8");
-    const parsed = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
-    const config: Partial<SkillsConfig> = {};
-    for (const key of validKeys() as (keyof SkillsConfig)[]) {
-      const value = normalizeConfigValue(key, parsed[key]);
-      if (value !== undefined) (config as Record<string, string>)[key] = value;
-    }
-    return config;
+    parsed = JSON.parse(readFileSync(path, "utf-8"));
   } catch {
     return {};
   }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+
+  assertNoRetiredConfigKeys(parsed as Record<string, unknown>, path);
+
+  const config: Partial<SkillsConfig> = {};
+  for (const key of validKeys() as (keyof SkillsConfig)[]) {
+    const value = normalizeConfigValue(key, (parsed as Record<string, unknown>)[key]);
+    if (value !== undefined) (config as Record<string, string>)[key] = value;
+  }
+  return config;
 }
 
 /**
@@ -231,6 +240,12 @@ export function loadConfig(): SkillsConfig {
  * Save a single config key-value pair to the specified scope
  */
 export function saveConfig(key: string, value: string, scope: ConfigScope = "project"): void {
+  // Checked before the generic unknown-key error so the operator is told what
+  // replaced this key, not merely that it is not on a list. "Unknown key" is true
+  // and useless: it reads as a typo when the real answer is that the concept was
+  // deleted and something else carries the decision.
+  assertNoRetiredConfigKeys({ [key]: value }, `config set ${key}`);
+
   if (!validKeys().includes(key)) {
     throw new Error(`Unknown config key: ${key}. Valid keys: ${validKeys().join(", ")}`);
   }
@@ -264,6 +279,13 @@ export function saveConfig(key: string, value: string, scope: ConfigScope = "pro
     }
   }
 
+  // A file loadConfig() refuses is not a file to write into. Without this, `skills
+  // config set format json` exits 0 on a config carrying a retired key and every
+  // read afterwards fails - a command that reports success while leaving the
+  // install unusable. Refuse here and name the same fix, which unsetConfig() below
+  // deliberately still allows.
+  assertNoRetiredConfigKeys(existing, filePath);
+
   existing[key] = normalized;
   writeFileSync(filePath, JSON.stringify(existing, null, 2) + "\n");
 }
@@ -280,7 +302,12 @@ export function saveConfig(key: string, value: string, scope: ConfigScope = "pro
  * "removed" from "there was nothing to remove" instead of guessing.
  */
 export function unsetConfig(key: string, scope: ConfigScope = "project"): boolean {
-  if (!validKeys().includes(key)) {
+  // A retired key is removable even though it is not settable, and that asymmetry
+  // is deliberate. loadConfig() now refuses a file carrying one, so refusing to
+  // unset it as well would leave an operator with a config file every command
+  // rejects and no supported way to repair it - the error names this command as
+  // the fix, so the fix has to work.
+  if (!validKeys().includes(key) && !(key in RETIRED_CONFIG_KEYS)) {
     throw new Error(`Unknown config key: ${key}. Valid keys: ${validKeys().join(", ")}`);
   }
 

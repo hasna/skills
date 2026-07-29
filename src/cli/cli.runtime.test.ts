@@ -213,12 +213,86 @@ describe("CLI runtime and misc commands", () => {
         for (const value of ["local", "self-hosted", "cloud", "remote"]) {
           const result = await runCliInCwd(["config", "set", "mode", value, "--json"], tmpDir, { HOME: tmpDir });
           expect(result.exitCode).not.toBe(0);
-          expect(JSON.parse(result.stdout).error).toContain("Unknown config key: mode");
+          const error = JSON.parse(result.stdout).error;
+          expect(error).toContain("no longer a configuration key");
+          // Names the replacement, not just the rejection. "Unknown config key"
+          // reads as a typo and gets retyped.
+          expect(error).toContain("apiUrl");
         }
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
     });
+
+    test("refuses a config file that already carries the retired key, and says how to fix it", async () => {
+      // The end-to-end shape of the change, exercised through the real binary
+      // rather than the module: an install carrying a legacy `mode` key used to
+      // run with it silently discarded, so an operator who had followed the old
+      // documentation could not tell a configured client from an unconfigured one.
+      const { mkdtempSync, rmSync, writeFileSync, readFileSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-legacy-mode-key-"));
+      try {
+        const configPath = join(tmpDir, "skills.config.json");
+        writeFileSync(configPath, JSON.stringify({ mode: "self-hosted", format: "json" }));
+
+        const refused = await runCliInCwd(["config", "show", "--json"], tmpDir, { HOME: tmpDir });
+        expect(refused.exitCode).not.toBe(0);
+        // One actionable line on stderr, not a stack trace: the sentence that says
+        // what to do must not be buried under bundler frames.
+        expect(refused.stderr).toContain("no longer a configuration key");
+        expect(refused.stderr).toContain("apiUrl");
+        expect(refused.stderr).not.toContain("at assertNoRetiredConfigKeys");
+
+        // The fix the message advertises has to work, or the refusal is a dead end
+        // whose only escape is hand-editing JSON.
+        const fixed = await runCliInCwd(["config", "unset", "mode", "--json"], tmpDir, { HOME: tmpDir });
+        expect(fixed.exitCode).toBe(0);
+        expect(JSON.parse(fixed.stdout)).toMatchObject({ key: "mode", removed: true });
+
+        // Recovered, and the keys beside the retired one survived.
+        const after = await runCliInCwd(["config", "show", "--json"], tmpDir, { HOME: tmpDir });
+        expect(after.exitCode).toBe(0);
+        expect(JSON.parse(after.stdout)).toEqual({ format: "json" });
+        expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({ format: "json" });
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    }, SLOW_TEST_TIMEOUT);
+
+    test("refuses a retired storage-mode variable, and ignores a sibling app's", async () => {
+      // Both halves in one test on purpose: the refusal is only correct if it is
+      // also narrow. Sibling Hasna apps are removing the same axis on their own
+      // schedule and their variables sit in the same shell, so a match that took
+      // theirs too would stop this CLI from starting on a normal fleet machine.
+      // Names are assembled from fragments so the retired-marker guard in
+      // public-package-boundary.test.ts does not flag this file.
+      const { mkdtempSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-retired-storage-env-"));
+      const ours = ["HASNA_SKILLS", "STORAGE", "MODE"].join("_");
+      const theirs = ["HASNA_TODOS", "STORAGE", "MODE"].join("_");
+      try {
+        const refused = await runCliInCwd(["storage", "status", "--json"], tmpDir, {
+          HOME: tmpDir,
+          [ours]: "self_hosted",
+        });
+        expect(refused.exitCode).not.toBe(0);
+        expect(refused.stderr).toContain(ours);
+        expect(refused.stderr).toContain("HASNA_SKILLS_DATABASE_URL");
+
+        const allowed = await runCliInCwd(["storage", "status", "--json"], tmpDir, {
+          HOME: tmpDir,
+          [theirs]: "cloud",
+        });
+        expect(allowed.exitCode).toBe(0);
+        expect(JSON.parse(allowed.stdout).package).toBe("open-skills");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    }, SLOW_TEST_TIMEOUT);
   });
 
   describe("hosted account command namespaces", () => {

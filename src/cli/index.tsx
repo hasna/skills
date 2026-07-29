@@ -92,4 +92,17 @@ registerStorage(program);
 
 registerEventsCommands(program as any, { source: "skills" });
 
-await program.parseAsync();
+// A retired deployment-mode setting is an operator error with a one-line fix, and
+// the fix is in the message. Printed bare rather than thrown, because a stack trace
+// with bundler frames buries the sentence that says what to do, and every command
+// that reads configuration can raise this - wrapping each one instead would leave
+// whichever one was added next uncovered.
+try {
+  await program.parseAsync();
+} catch (err) {
+  if ((err as { code?: string } | undefined)?.code === "RETIRED_SETTING") {
+    console.error(chalk.red((err as Error).message));
+    process.exit(1);
+  }
+  throw err;
+}
