@@ -9,7 +9,7 @@ useDefaultTestTimeout();
 
 const backends = await resolveStoreBackends();
 
-describe("self-hosted security helpers", () => {
+describe("server security helpers", () => {
   for (const backend of backends) {
     test(`hashes API keys before lookup (${backend.name})`, async () => {
       const fixture = await backend.create([{ token: "sk_test_secret_value", principal: { orgId: "org_a" } }]);

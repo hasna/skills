@@ -3,8 +3,8 @@
 `hasna/skills` is the canonical open core. It owns the reusable skill engine,
 bundled corpus, CLI, MCP server, public contracts, and package validation.
 
-Self-hosted services such as your-server.example may wrap this package, but their
-deployment-specific private service code must stay outside the npm package.
+Private service wrappers such as your-server.example may wrap this package, but
+their deployment-specific private service code must stay outside the npm package.
 
 ## Remotes
 
@@ -14,8 +14,8 @@ deployment-specific private service code must stay outside the npm package.
 
 ## Open-Core Changes
 
-Changes belong in `hasna/skills` when they are useful without a private self-hosted
-service:
+Changes belong in `hasna/skills` when they are useful without a private service
+wrapper:
 
 - CLI support for pointing at a compatible API origin, and for running with no
   API origin configured.
@@ -28,9 +28,9 @@ service:
   explicit `HASNA_SKILLS_*` database and object-storage envs.
 - Public remote-run, pricing, discovery, and registry contracts.
 
-## Self-Hosted Service Changes
+## Private Service Wrapper Changes
 
-These belong in a self-hosted service wrapper, not the open core:
+These belong in a private service wrapper, not the open core:
 
 - Account state, sessions, organizations, teams, and API key services.
 - Billing, credits, ledgers, invoices, entitlements, and payment approval
@@ -52,10 +52,10 @@ These belong in a self-hosted service wrapper, not the open core:
    machine, which is what makes non-interactive environments safe by default.
 3. Expose reusable contracts from `src/index.ts` before wrappers depend on
    them.
-4. Do not publish private service dependencies, protected source, or self-hosted
+4. Do not publish private service dependencies, protected source, or wrapper
    infrastructure in the public package.
 5. Use `docs/architecture/upstream-sync.md` and the public-boundary preflight
    before moving wrapper work into the open repo.
-6. Keep open-core storage envs (`HASNA_SKILLS_*`) separate from self-hosted service
+6. Keep open-core storage envs (`HASNA_SKILLS_*`) separate from a wrapper's own
    `DATABASE_URL`; wrappers may map explicit storage envs, but must not pass
    their private SaaS database implicitly.

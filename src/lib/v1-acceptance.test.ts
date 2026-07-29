@@ -9,7 +9,7 @@ useDefaultTestTimeout();
 describe("v1 acceptance criteria", () => {
   const doc = readFileSync(join(process.cwd(), "docs/release/v1-acceptance.md"), "utf8");
 
-  test("anchors product, package, and self-hosted service strategy", () => {
+  test("anchors product, package, and server strategy", () => {
     expect(doc).toContain("`hasna/skills` is the canonical open repository");
     expect(doc).toContain("`@hasna/skills` is the public npm package");
     expect(doc).toContain("Local-only setup works without API credentials");
@@ -23,7 +23,7 @@ describe("v1 acceptance criteria", () => {
       "## Primitive Tool Acceptance",
       "## Package Acceptance",
       "## Security Acceptance",
-      "## Self-Hosted Service Acceptance",
+      "## Server Acceptance",
     ]) {
       expect(doc).toContain(section);
     }
@@ -35,7 +35,7 @@ describe("v1 acceptance criteria", () => {
       "Built entrypoints",
       "Packed output",
       "Package-boundary tests",
-      "The self-hosted service exposes health",
+      "The server exposes health",
     ]) {
       expect(doc).toContain(phrase);
     }

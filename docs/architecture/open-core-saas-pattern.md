@@ -1,16 +1,16 @@
-# Open-Core Self-Hosted Service Pattern
+# Open-Core Hosted Service Pattern
 
-This pattern applies to `hasna/skills` and other open packages that need a
-self-hosted service without making the OSS core depend on one deployment.
+This pattern applies to `hasna/skills` and other open packages that need a hosted
+service without making the OSS core depend on one deployment.
 
 ## Package Shape
 
 - The OSS package owns local execution, CLI/MCP adapters, public contracts,
   SDK/client helpers, schemas, validation, docs, and local-safe defaults.
-- The self-hosted service owns auth servers, OAuth callbacks, billing, databases,
+- The hosted service owns auth servers, OAuth callbacks, billing, databases,
   workers, queues, deployment, observability, secrets, and entitlement
   enforcement.
-- The OSS package can be self-hosted-aware, but must remain usable without a self-hosted
+- The OSS package can be server-aware, but must remain usable without a hosted
   account.
 
 ## Onboarding
@@ -34,8 +34,8 @@ Good OSS commands:
 - `credits buy`
 - remote registry, quote, run status, logs, and artifact commands
 
-These commands only call self-hosted APIs, print/open returned URLs, and store scoped
-local credentials.
+These commands only call the configured Skills API, print/open returned URLs, and
+store scoped local credentials.
 
 Do not put these in OSS:
 
@@ -47,7 +47,7 @@ Do not put these in OSS:
 
 ## Web App
 
-The self-hosted web app is the account and billing source of truth. It should expose
+The hosted web app is the account and billing source of truth. It should expose
 login, OAuth, device-code approval, billing portal, credit checkout, API keys,
 organizations, runs, artifacts, and audit views over the same APIs that CLI and
 MCP call.
