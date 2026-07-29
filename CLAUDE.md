@@ -100,7 +100,9 @@ src/
 │   ├── api-url.ts                # The only place an API origin is resolved
 │   ├── content-scan.ts           # Guard: secrets, PII, private context, committed output
 │   ├── infra-identifiers.ts      # Guard: no literal infra identifiers
-│   ├── vendor-host-guard.ts      # Guard: no vendor endpoint defaults
+│   ├── vendor-host-guard.ts      # Public facade for the vendor endpoint guard modules
+│   ├── vendor-host-{policy,url,folding,code-scan,package}.ts
+│   │                             # Policy, parsing, AST folding/scanning, package coverage
 │   ├── packlist.ts               # The real npm-packed file list, from the packager
 │   └── …                         # search, discovery, scheduler, run-state, tool-primitives, …
 ├── types/api.ts
