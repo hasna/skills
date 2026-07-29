@@ -1,16 +1,18 @@
 /**
  * Skill setup and project preferences.
  *
- * Skills are discovered through the CLI/MCP registry and executed from the
- * bundled package or the remote platform. This module deliberately does not
- * copy skill source, SKILL.md, package.json, scripts, or runtime folders into
- * projects or agent-native skill folders.
+ * Skills are discovered through the CLI/MCP registry and executed from the bundled
+ * package or the remote platform. Project state remains metadata-only pins. Agent skill
+ * folders, however, are now written by the last-mile sync: installSkillForAgent() writes a
+ * per-tool-adapted SKILL.md into an agent's folder, non-clobbering, marking each directory
+ * it owns so a re-sync never overwrites a skill the user hand-authored.
  */
 
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, rmSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
+import { adaptSkillMdForAgent, SYNC_MARKER_FILE, writeManagedSkillDir } from "./agent-sync.js";
 import { normalizeSkillName } from "./utils.js";
 import { getDataDir } from "./config.js";
 import { findPortableSkill } from "./portable-skills.js";
@@ -340,24 +342,61 @@ export function getAgentSkillPath(name: string, agent: AgentTarget, scope: Agent
   return join(getAgentSkillsDir(agent, scope, projectDir), skillName);
 }
 
+/**
+ * Write a skill's SKILL.md into one agent's skill folder, per-tool adapted and
+ * non-clobbering.
+ *
+ * This used to be a stub that refused every call ("pins, not installs"). The last-mile
+ * work reverses that: agents load skills from these folders, so `skills sync` writes them
+ * there. A skill the user hand-authored (a directory with no @hasna/skills marker) is
+ * never overwritten unless `overwrite` is set — see writeManagedSkillDir.
+ */
 export function installSkillForAgent(
   name: string,
-  options: AgentInstallOptions,
-  _generateSkillMd?: (name: string) => string | null,
+  options: AgentInstallOptions & { overwrite?: boolean; dryRun?: boolean },
+  generateSkillMd?: (name: string) => string | null,
 ): InstallResult {
   const canonicalName = getCanonicalSkillName(name);
   if (!existsSync(getSkillPath(name))) {
     return { skill: canonicalName, success: false, error: `Skill '${name}' not found` };
   }
-  return {
+
+  const scope = options.scope ?? "global";
+  const dir = getAgentSkillPath(canonicalName, options.agent, scope, options.projectDir);
+  const skillMd = resolveAgentSkillMd(canonicalName, generateSkillMd);
+  if (!skillMd) {
+    return { skill: canonicalName, success: false, error: `Could not resolve a SKILL.md for '${canonicalName}'` };
+  }
+
+  const adapted = adaptSkillMdForAgent(skillMd, options.agent);
+  const result = writeManagedSkillDir(dir, adapted, {
     skill: canonicalName,
-    success: false,
-    error: `Direct agent skill-folder installs are disabled. Register Skills MCP instead: skills mcp --register ${options.agent}`,
-  };
+    dryRun: options.dryRun,
+    force: options.overwrite,
+  });
+  if (result.action === "skip") {
+    return { skill: canonicalName, success: false, error: result.reason ?? "skipped", path: result.path };
+  }
+  return { skill: canonicalName, success: true, path: result.path };
 }
 
-export function removeSkillForAgent(_name: string, _options: AgentInstallOptions): boolean {
-  return false;
+export function removeSkillForAgent(name: string, options: AgentInstallOptions): boolean {
+  const canonicalName = getCanonicalSkillName(name);
+  const scope = options.scope ?? "global";
+  const dir = getAgentSkillPath(canonicalName, options.agent, scope, options.projectDir);
+  // Refuse to delete a directory this tool did not write: no marker means it is the
+  // user's, and removeSkillForAgent must never take a hand-authored skill with it.
+  if (!existsSync(join(dir, SYNC_MARKER_FILE))) return false;
+  rmSync(dir, { recursive: true, force: true });
+  return true;
+}
+
+function resolveAgentSkillMd(name: string, generateSkillMd?: (name: string) => string | null): string | null {
+  const sourcePath = getSkillPath(name);
+  const skillMdPath = join(sourcePath, "SKILL.md");
+  if (existsSync(skillMdPath)) return readFileSync(skillMdPath, "utf-8");
+  if (generateSkillMd) return generateSkillMd(name);
+  return generateMinimalSkillMd(name);
 }
 
 function warnMissingDependencies(name: string, targetDir: string): void {
