@@ -1,0 +1,35 @@
+{
+  "name": "pdf-to-markdown",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Convert PDFs into clean, structured markdown with heading, list, and table detection",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "pdf-to-markdown": "src/index.ts"
+  },
+  "files": [
+    "src",
+    "SKILL.md",
+    "tsconfig.json"
+  ],
+  "keywords": [
+    "pdf",
+    "markdown",
+    "document",
+    "cli",
+    "skill"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "pdf-parse": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/pdf-parse": "^1.1.4",
+    "typescript": "^5.7.0"
+  }
+}

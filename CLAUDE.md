@@ -127,7 +127,7 @@ There is no `dashboard/` directory and no `src/server/serve.ts`.
 
 | Count | Value | Derived from |
 |---|---|---|
-| Catalog skills | 19 | `SKILLS.length` (`src/lib/registry-data/index.ts`) |
+| Catalog skills | 85 | `SKILLS.length` (`src/lib/registry-data/index.ts`) |
 | Instruction-kind skills | 19 | `SKILLS` entries with `kind: "instruction"` |
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
 | MCP tools | 37 | `tools/list` against a live `buildServer()` |
@@ -135,12 +135,15 @@ There is no `dashboard/` directory and no `src/server/serve.ts`.
 | Published bins | 5 | `bin` in `package.json` |
 | bun build invocations | 6 | the `build` script in `package.json` |
 
-`skills/` holds those 19 catalog directories plus `_common`. The OSS catalog is
-**declarative-only**: every shipped skill is `kind: "instruction"` (SKILL.md prose,
-no `src/`). The executable skills (each with `src/`) were archived out of the public
-package — see the archive note below. `CATEGORIES` still lists 17 categories even
-though only 7 currently hold a skill, so a restored dev skill drops back into its
-category without a schema change.
+`skills/` holds those 85 catalog directories plus `_common`. The catalog is
+**mixed**: 19 `kind: "instruction"` skills (SKILL.md prose, no `src/`) plus 66
+**executable** skills (each with `src/` + `package.json` + `bin`) restored from the
+archive. Every restored executable skill requires **no credential** — it reads and
+documents no provider API key (`catalog-runnable.test.ts` enforces this over the
+whole executable set, with a positive control). The remaining archived executable
+skills that DO need a key stay out of the package. `CATEGORIES` still lists 17
+categories even though only some hold a skill, so a further restored dev skill drops
+back into its category without a schema change.
 
 ## Interfaces
 
@@ -388,16 +391,17 @@ default when absent) means a runnable folder with `package.json` + `src/`.
 runtime. `runSkill()` refuses instruction skills with an explanatory error rather
 than trying to spawn them.
 
-The public OSS catalog is **declarative-only**: every shipped skill is
-`kind: "instruction"`, so there are currently **zero** executable skills and **zero**
-hosted skills, and `PREMIUM_SKILLS` is empty. `src/lib/catalog-runnable.test.ts`
-asserts the hosted set stays empty, that every shipped skill is instruction-kind
-prose with no `src/`, that each SKILL.md ships in the packed tarball, and that the
-package ships no credential value. The executable-skill and BYO-key guards in that
-file still exist (so a restored dev skill would be checked) but currently have no
-subject. The `kind === "instruction"` filter is the single ship criterion — the
-executable half of the catalog is preserved in the archive tag/tarball noted in the
-skill-structure section, not in this package.
+The public OSS catalog is **mixed**: 19 `kind: "instruction"` skills plus 66
+**executable** skills, so there are **66** executable skills and **zero** hosted
+skills (the hosted/premium set stays empty). The single ship criterion for an
+executable skill is that it requires **no credential**: `src/lib/catalog-runnable.test.ts`
+asserts the hosted set stays empty, that every executable skill ships a runnable
+entry point in both repo and tarball, that every instruction skill ships SKILL.md
+prose with no `src/`, that **no shipped executable skill reads or documents a
+credential env var** (with a positive-control fixture so the check can't go vacuous),
+and that the package ships no credential value. The credential-requiring executable
+skills from the archive stay out of the package — they are preserved in the archive
+tag/tarball noted in the skill-structure section, not shipped here.
 
 ### Hermetic tests
 
@@ -426,28 +430,28 @@ reading.
 ```
 skills/<name>/                # bare name, matches SkillMeta.name exactly
 ├── SKILL.md                  # frontmatter: name, description, [kind], [category], [tags]
-├── package.json              # skills.kind: "instruction" (declarative); "bin" for runnable ones
-├── src/                      # executable skills only — absent in the declarative catalog
+├── package.json              # skills.kind: "instruction" for prose; "bin" for runnable ones
+├── src/                      # executable skills only — absent in instruction skills
 │   └── index.ts
 ├── README.md                 # optional
 └── CLAUDE.md                 # optional
 ```
 
-Every shipped skill is an instruction skill: just `SKILL.md` + `package.json`, with
-`kind: instruction` in the frontmatter and `skills.kind: "instruction"` in the
-package, and no `src/` at all. Executable skills (with a `bin` entry, `src/index.ts`,
-and a `tsconfig.json` extending `../tsconfig.base.json`) are still supported by the
-validation and packaging guards but none currently ship — they live in the archive,
-not the package. The full 229-skill catalog (210 executable + 19 instruction) is
+The catalog holds both kinds. Instruction skills are just `SKILL.md` +
+`package.json`, with `kind: instruction` in the frontmatter and
+`skills.kind: "instruction"` in the package, and no `src/` at all. Executable skills
+have a `bin` entry, `src/index.ts`, and a `tsconfig.json` extending
+`../tsconfig.base.json`; 66 credential-free ones ship, while the credential-requiring
+ones stay archived. The full 229-skill catalog (210 executable + 19 instruction) is
 preserved at git tag `archive/skills-catalog-229-2026-07-27` and in the rescue
-tarball under `~/.hasna/repos/rescue/skills-catalog-229/`; restore a dev skill by
-copying its directory back and re-adding its `SkillMeta` entry to the matching
-`src/lib/registry-data/*.ts` file.
+tarball under `~/.hasna/repos/rescue/skills-catalog-229/`; restore another dev skill
+by copying its directory back and re-adding its `SkillMeta` entry to the matching
+`src/lib/registry-data/*.ts` file — provided it requires no credential.
 
 Every shipped skill carries a SKILL.md — for instruction skills the SKILL.md *is*
 the skill, always present and always the source of `kind`. Executable skills may omit
 it (their metadata lives in the `src/lib/registry-data/` entry and `generateSkillMd()`
-synthesises a document on demand), but none currently ship in the declarative catalog.
+synthesises a document on demand); the shipped executable skills each carry one.
 
 `src/lib/skillinfo.ts` picks the best doc in the order SKILL.md → README.md →
 CLAUDE.md, extracts env vars with `ENV_VAR_PATTERN` (suffixes: `_API_KEY`, `_KEY`,
