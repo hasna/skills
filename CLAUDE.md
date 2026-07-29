@@ -285,18 +285,44 @@ you must add it to the other by hand.
 
 Removed wholesale (see `CHANGELOG.md` → Unreleased → Removed). There is no `mode`
 config key, no `HASNA_SKILLS_STORAGE_MODE`, no `skills setup --mode`, and no `mode`
-in `/health`. A `mode` key left in an old config file on disk is **ignored, not
-migrated**. `skills config unset <key>` replaced `setup --mode local`.
+in `/health`. `skills config unset <key>` replaced `setup --mode local`.
+
+A retired setting is now **refused, not ignored** — `src/lib/retired-settings.ts`.
+That is the second half of the removal, and it matters more than the first: a
+variable nobody reads produces a process on the default SQLite database and says
+nothing, so an operator who exported `HASNA_SKILLS_STORAGE_MODE` to reach Postgres
+could not tell "configured" from "silently discarded" until something needed the
+rows. Every refusal names the retired setting, the setting that replaced it, and the
+command that fixes it. Two discriminations keep that from doing damage: the match is
+scoped to *this* app's variables (sibling Hasna apps are removing the same axis on
+their own schedule and their variables share the shell), and only the suffixes that
+named the deployment axis count — `SKILLS_TEST_MODE` and SQLite's `journal_mode` are
+different axes and are left alone.
+
+`skills config unset mode` deliberately still works on a key `config set` refuses:
+the refusal advertises that command as the fix, so it has to run on a file every
+other command rejects.
 
 The one fact that survives is whether an API origin is configured, and
 `src/lib/api-url.ts` is the only place that is resolved: `resolveApiUrl()` returns
 `undefined` on read paths (callers fall back to the bundled registry), and
 `requireApiUrl()` throws `MissingApiUrlError` on auth and write paths.
 
-Regression guards: `src/lib/config.test.ts` (all eight legacy `mode` *values* throw
-`Unknown config key: mode`), `src/cli/cli.runtime.test.ts` (`setup --help` contains
-`--api-url` and not `--mode`), `src/server/app.test.ts` (`/health` has no `mode`
-property).
+Regression guards: `src/lib/retired-settings.test.ts` (the refusal, its namespacing,
+and the live `*_MODE` settings it must not touch), `src/lib/config.test.ts` (every
+legacy `mode` *value* refused in both config scopes, and `unset` repairing a file
+`loadConfig` rejects), `src/lib/native-storage.test.ts` (the storage variable refused
+on every entry point, a sibling app's ignored), `src/cli/cli.runtime.test.ts`
+(`setup --help` contains `--api-url` and not `--mode`; the refusal reaching the real
+binary as one line rather than a stack trace), `src/server/app.test.ts` (`/health` has
+no `mode` property), and `src/lib/public-package-boundary.test.ts` (the vocabulary
+banned in `src`, `scripts`, `docs` and `README.md` under all three spellings).
+
+Out of scope for that ban, on purpose: **this file**, which has to name what it bans;
+**`CHANGELOG.md`**, a historical record of the removal that must not be rewritten; and
+**`migrations/*/0001_open_skills_self_hosted.sql`**, whose name is an applied-version
+identifier in deployed databases (`src/server/migrate.ts` keys them by file basename,
+so a rename re-applies 0001 everywhere).
 
 ### No vendor endpoint defaults
 

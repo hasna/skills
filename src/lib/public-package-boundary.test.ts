@@ -264,16 +264,33 @@ describe("public package boundary", () => {
   // too. Neither bans the bare self-hosted wording as prose, and while a real
   // hosted-run path was still selectable that was right: help text and comments
   // described something the code had. That path is gone; the product has one
-  // deployment story, so the wording now names a concept the code no longer has
-  // and is banned in src and scripts. Docs at the repo root (README, skill
-  // docs) still describe how the product is deployed and are deliberately out
-  // of scope, so this does not fight the readme-remote-premium onboarding copy.
+  // deployment story, so the wording now names a concept the code no longer has.
+  //
+  // SCOPE WIDENED to docs and README (owner directive 2026-07-29, "remove
+  // deployment modes entirely ... it must NOT PROPAGATE ACROSS ANY REPO"). This
+  // guard previously covered src and scripts only, on the reasoning that docs
+  // "still describe how the product is deployed". That reasoning is what kept the
+  // word alive, and it had already produced a contradiction: the ownership
+  // strategy told contributors the CLI has no vocabulary for a deployment variant
+  // while using the retired variant as a role name in the same table. Worse, the
+  // word carried two different referents at once - the private wrapper product,
+  // and a server an operator runs - which is precisely the ambiguity the removal
+  // was about. Docs are where the next contributor learns the vocabulary, so
+  // banning it in code and permitting it in the documentation about that code
+  // guarantees it comes back.
+  //
+  // CLAUDE.md stays out of scope on purpose: it is the one file whose job is to
+  // record what was removed, and a file documenting a ban has to be able to name
+  // the thing it bans. CHANGELOG.md likewise - it is a historical record of the
+  // removal, and rewriting history to hide the vocabulary would misrepresent what
+  // the release actually did.
+  //
   // The marker is assembled from fragments and this file is a .test.ts, so the
   // retired-storage and value guards above never match on it either.
-  test("keeps the retired self-hosted wording out of shipped code prose", () => {
+  test("keeps the retired self-hosted wording out of shipped code and docs prose", () => {
     const proseMarker = ["self", "hosted"].join("-");
 
-    const roots = ["src", "scripts"];
+    const roots = ["src", "scripts", "docs", "README.md"];
     const files = roots
       .flatMap((root) => {
         const path = join(process.cwd(), root);
@@ -282,11 +299,18 @@ describe("public package boundary", () => {
       })
       .filter((file) => !file.endsWith(".test.ts") && !file.endsWith(".test.tsx"));
 
-    // Positive control: prove the scan reached the files this cleanup touched,
-    // so a zero result means "absent", not "read nothing".
+    // Positive control: prove the scan reached the files this cleanup touched, so
+    // a zero result means "absent", not "read nothing". Naming one file per root
+    // matters more than naming many in one: a root silently dropped from the list
+    // above (a typo, a rename) is the failure mode that turns this into a check
+    // that cannot fail.
     expect(files.some((file) => file.endsWith("src/cli/commands/auth.ts"))).toBe(true);
     expect(files.some((file) => file.endsWith("src/lib/mcp-contracts.ts"))).toBe(true);
     expect(files.some((file) => file.endsWith("src/lib/registry-data/media-processing.ts"))).toBe(true);
+    expect(files.some((file) => file.endsWith("docs/architecture/upstream-boundary.md"))).toBe(true);
+    expect(files.some((file) => file.endsWith("docs/product/product-brief.md"))).toBe(true);
+    expect(files.some((file) => file.endsWith("docs/release/v1-acceptance.md"))).toBe(true);
+    expect(files.some((file) => file.endsWith("README.md"))).toBe(true);
 
     const leaks: string[] = [];
     for (const file of files) {
@@ -295,6 +319,46 @@ describe("public package boundary", () => {
       for (let index = lowered.indexOf(proseMarker); index !== -1; index = lowered.indexOf(proseMarker, index + proseMarker.length)) {
         const line = lowered.slice(0, index).split("\n").length;
         leaks.push(`${relative}:${line}`);
+      }
+    }
+
+    expect(leaks).toEqual([]);
+  });
+
+  // Second spelling of the same word, and the reason it needs its own test: the
+  // guard above matches only the hyphenated form, so `self_hosted` and
+  // `selfhosted` walk straight past it in exactly the places a schema or a
+  // migration name would put them. The estate's manifests spell it with a hyphen
+  // and its code enums with an underscore, so one pattern was always going to miss
+  // one of the two.
+  //
+  // migrations/ is deliberately NOT scanned. The 0001 migration carries the word
+  // in its filename, and src/server/migrate.ts keys applied versions by file
+  // basename, so renaming it would make every existing database re-apply 0001 as a
+  // new version. That name is an identifier in deployed data, not vocabulary a
+  // reader learns from.
+  test("keeps the underscore and joined spellings out of code and docs prose", () => {
+    const markers = [["self", "hosted"].join("_"), ["self", "hosted"].join("")];
+
+    const roots = ["src", "scripts", "docs", "README.md"];
+    const files = roots
+      .flatMap((root) => {
+        const path = join(process.cwd(), root);
+        if (!existsSync(path)) return [];
+        return statSync(path).isDirectory() ? collectFiles(path) : [path];
+      })
+      .filter((file) => !file.endsWith(".test.ts") && !file.endsWith(".test.tsx"));
+
+    expect(files.some((file) => file.endsWith("src/lib/retired-settings.ts"))).toBe(true);
+    expect(files.some((file) => file.endsWith("docs/architecture/skill-product-model.md"))).toBe(true);
+    expect(files.some((file) => file.endsWith("README.md"))).toBe(true);
+
+    const leaks: string[] = [];
+    for (const file of files) {
+      const lowered = readFileSync(file, "utf8").toLowerCase();
+      const relative = file.replace(`${process.cwd()}/`, "");
+      for (const marker of markers) {
+        if (lowered.includes(marker)) leaks.push(`${relative}: ${marker}`);
       }
     }
 
