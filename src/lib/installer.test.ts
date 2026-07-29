@@ -340,7 +340,8 @@ describe("installer", () => {
           projectDir: testDir,
         });
         expect(result.success).toBe(false);
-        expect(result.error).toContain("skills mcp --register claude");
+        expect(result.error).toContain("skills render");
+        expect(result.error).not.toContain("Skills MCP");
         expect(existsSync(join(testDir, ".claude", "skills", "brand-kit", "SKILL.md"))).toBe(false);
       });
 

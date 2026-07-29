@@ -134,7 +134,9 @@ describe("CLI import export and env checks", () => {
       expect(stderr).toBe("");
       expect(exitCode).toBe(1);
       expect(data.error).toContain("Agent skill-folder sync is disabled");
-      expect(data.mcpRegister).toBe("skills mcp --register claude");
+      expect(data.render).toBe("skills render");
+      expect(stdout).not.toContain("Skills MCP");
+      expect(stdout).not.toContain("skills mcp --register");
     });
   });
 

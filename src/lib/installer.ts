@@ -342,7 +342,7 @@ export function getAgentSkillPath(name: string, agent: AgentTarget, scope: Agent
 
 export function installSkillForAgent(
   name: string,
-  options: AgentInstallOptions,
+  _options: AgentInstallOptions,
   _generateSkillMd?: (name: string) => string | null,
 ): InstallResult {
   const canonicalName = getCanonicalSkillName(name);
@@ -352,7 +352,7 @@ export function installSkillForAgent(
   return {
     skill: canonicalName,
     success: false,
-    error: `Direct agent skill-folder installs are disabled. Register Skills MCP instead: skills mcp --register ${options.agent}`,
+    error: "Direct agent skill-folder installs are disabled. Render skills for native agent loading instead: skills render",
   };
 }
 

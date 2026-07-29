@@ -19,7 +19,7 @@ export function registerInstall(parent: Command) {
     .command("install")
     .argument("[args...]", "Deprecated. Use 'skills pin <name>' for project skill pins.")
     .option("--json", "Output result as JSON", false)
-    .description("Install the Skills CLI/MCP integration. Use 'skills setup agents' for agent setup.")
+    .description("Deprecated. Use 'skills render' for native agent loading.")
     .action((args: string[], options: { json: boolean }) => handleDeprecatedInstall(args, options));
 
   parent
@@ -71,7 +71,7 @@ export function registerInstall(parent: Command) {
 function handleDeprecatedInstall(args: string[], options: { json: boolean }) {
   const error = args.length > 0
     ? "skills install no longer pins or copies skills. Use: skills pin <name>"
-    : "Use: skills setup agents  (or: skills mcp --register all)";
+    : "Use: skills render";
   if (options.json) console.log(JSON.stringify({ success: false, error }));
   else console.error(chalk.red(error));
   process.exitCode = 1;
