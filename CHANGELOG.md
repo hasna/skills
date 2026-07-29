@@ -31,6 +31,18 @@ All notable changes to this project will be documented in this file.
   push users toward choosing a mode, and there is no longer a choice to make.
 
 ### Added
+- **`skills pull [names...] [--all] [--for-machine]`** — fetch skills from the
+  configured instance into this machine's corpus (`~/.hasna/skills/installed/<name>/`),
+  the read half of the dogfooding loop that `skills push` writes to. Each skill's
+  SKILL.md is written verbatim (the agent-facing artifact) with a canonical
+  `skill.json` beside it, so `loadRegistry()` surfaces it to both `skills list --all`
+  and the MCP `list_skills` tool with no further step. Fail-closed: with no instance
+  origin configured it raises `MissingApiUrlError` rather than inventing a host (the
+  vendor-host guard still holds); with no API key it names `skills login` /
+  `SKILLS_API_KEY`. Re-pulling is idempotent — it overwrites SKILL.md/skill.json for a
+  named skill but removes no sibling files. `--for-machine` implies `--all`. The new
+  library entry point `pullSkills()` and corpus writer `writeCorpusSkill()` are exported
+  from `@hasna/skills`.
 - `CLAUDE.md` rewritten to describe the repository as it is, and a guard —
   `src/lib/claude-md.test.ts` — that re-derives its load-bearing counts from the
   tree on every run. The previous file had drifted back to roughly the v0.0.x

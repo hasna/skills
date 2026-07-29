@@ -209,10 +209,12 @@ export {
   runPortableSkill,
   scaffoldPortableSkill,
   validatePortableSkillDirectory,
+  writeCorpusSkill,
   type BulkPortImportedEntry,
   type BulkPortPortableSkillOptions,
   type BulkPortResult,
   type BulkPortSkippedEntry,
+  type CorpusSkillMeta,
   type PortableSkillCommand,
   type PortableSkillInput,
   type PortableSkillManifest,
@@ -220,7 +222,17 @@ export {
   type PortableSkillRunResult,
   type PortableSkillSummary,
   type SkillKind,
+  type WriteCorpusSkillInput,
 } from "./lib/portable-skills.js";
+
+export {
+  pullSkills,
+  PullSkillError,
+  type PullSkillsOptions,
+  type PullSkillsResult,
+  type PulledSkillResult,
+  type SkillPullClient,
+} from "./lib/pull.js";
 
 export {
   SKILLS_CLI_MCP_PARITY,
