@@ -20,7 +20,7 @@ describe("remote registry", () => {
     else process.env.SKILLS_API_URL = originalSkillsApiUrl;
   });
 
-  test("builds skills endpoint from self-hosted origin", () => {
+  test("builds skills endpoint from a bare server origin", () => {
     expect(buildSkillsApiUrl("https://registry.example.com")).toBe("https://registry.example.com/api/v1/skills");
   });
 

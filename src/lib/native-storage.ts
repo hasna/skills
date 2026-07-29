@@ -10,6 +10,7 @@ import {
 import { dirname, join, normalize, relative, sep } from "node:path";
 import { getDataDir } from "./config.js";
 import { getProjectStateDir } from "./project-state.js";
+import { assertNoRetiredModeEnvVars } from "./retired-settings.js";
 
 /**
  * There is no storage "mode" either.
@@ -21,6 +22,9 @@ import { getProjectStateDir } from "./project-state.js";
  * database URL), so it was a second, weaker answer to a question already
  * answered truthfully. What the store does is derived from what you configured:
  * on-box SQLite plus files, plus Postgres and/or S3 when their env vars are set.
+ *
+ * Deleting the label left the variable that used to hold it merely *unread*, which
+ * is the worse failure and is now refused: see lib/retired-settings.ts.
  */
 export const SKILLS_STORAGE_TABLES = [
   "skills_sync_records",
@@ -79,9 +83,27 @@ export const SKILLS_NATIVE_STORAGE_FALLBACK_ENV = {
 export const SKILLS_STORAGE_ENV = SKILLS_NATIVE_STORAGE_ENV;
 export const SKILLS_STORAGE_FALLBACK_ENV = SKILLS_NATIVE_STORAGE_FALLBACK_ENV;
 
+/**
+ * Token identifying this application's environment namespace.
+ *
+ * Used only to scope the retired-setting refusal to our own variables. Sibling
+ * Hasna apps are removing the same axis on their own schedule and their variables
+ * are present in the same shell, so a bare suffix match would refuse to start over
+ * a variable this package does not own.
+ */
+const SKILLS_ENV_NAMESPACE = "SKILLS";
+
 export function resolveSkillsNativeStorageConfig(
   env: Record<string, string | undefined> = process.env,
 ): SkillsNativeStorageConfig {
+  // The single chokepoint: resolveStorageConfig() and every getStorageStatus()
+  // alias route through here, so one guard covers all of them. A guard on one of
+  // three entry points is a guard on none.
+  assertNoRetiredModeEnvVars(env, {
+    app: SKILLS_ENV_NAMESPACE,
+    replacement: SKILLS_NATIVE_STORAGE_ENV.databaseUrl,
+  });
+
   return {
     databaseUrl: getSkillsStorageDatabaseUrl(env),
     databaseSsl: parseBoolean(readStorageEnv(env, "databaseSsl").value),

@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { existsSync, writeFileSync, mkdirSync, rmSync, readFileSync } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
 import { tmpdir } from "os";
 
 // We test the module functions by importing them and overriding cwd/homedir behavior
@@ -102,14 +102,74 @@ describe("config", () => {
       expect(Object.keys(config).sort()).toEqual(["apiUrl", "defaultAgent", "defaultScope", "format"]);
     });
 
-    test("drops a legacy mode key left behind by an older version", () => {
+    test("refuses a legacy mode key instead of dropping it in silence", () => {
+      // The defect this replaces. The key was already unread, so an operator who
+      // wrote it - following documentation that still said to - got a client that
+      // talked to nothing and said nothing about why. Dropping a retired setting
+      // silently is indistinguishable from honouring it.
       writeFileSync(join(tmpDir, "skills.config.json"), JSON.stringify({
         mode: "self-hosted",
         format: "json",
       }));
-      const config = loadConfig();
-      expect(config).toEqual({ format: "json" });
-      expect("mode" in config).toBe(false);
+      let error: unknown;
+      try {
+        loadConfig();
+      } catch (err) {
+        error = err;
+      }
+      expect((error as Error | undefined)?.name).toBe("RetiredSettingError");
+      const message = (error as Error).message;
+      // Actionable: which file, which key, what replaces it, and how to remove it.
+      expect(message).toContain(join(tmpDir, "skills.config.json"));
+      expect(message).toContain("mode");
+      expect(message).toContain("apiUrl");
+      expect(message).toContain("config unset mode");
+    });
+
+    test("refuses a legacy mode key in the global config too, naming that file", () => {
+      // Both scopes are read by loadConfig. A guard on the project file alone
+      // leaves the global one silent, which is the harder case to debug because
+      // nothing in the project explains the behaviour.
+      // Resolved through getConfigPath rather than composed from tmpDir: the test
+      // preload relocates the data dir with $HASNA_SKILLS_DIR, so a hand-built
+      // ~/.hasna/skills path would not be the file loadConfig() reads and this
+      // test would pass without ever presenting the retired key.
+      const globalPath = getConfigPath("global");
+      expect(globalPath).not.toBe(getConfigPath("project"));
+      mkdirSync(dirname(globalPath), { recursive: true });
+      writeFileSync(globalPath, JSON.stringify({ mode: "cloud" }));
+      try {
+        let message = "";
+        try {
+          loadConfig();
+        } catch (err) {
+          message = (err as Error).message;
+        }
+        expect(message).toContain(globalPath);
+        expect(message).toContain("apiUrl");
+      } finally {
+        rmSync(globalPath, { force: true });
+      }
+    });
+
+    test("refuses the retired key whatever its value", () => {
+      // The fault is declaring a deployment label at all. A value denylist would
+      // accept mode:"onprem" and reject mode:"cloud", teaching the reader that
+      // the concept survived and only some spellings of it are wrong.
+      for (const value of ["local", "self-hosted", "cloud", "remote", "hybrid", "onprem", ""]) {
+        writeFileSync(join(tmpDir, "skills.config.json"), JSON.stringify({ mode: value }));
+        expect(() => loadConfig()).toThrow(/no longer a configuration key/);
+      }
+    });
+
+    test("still ignores an unparseable config file rather than refusing", () => {
+      // Positive control on the refusal's placement. readConfigFile() wraps its
+      // read in a catch that returns {}; putting the retired-key check inside it
+      // would have swallowed the refusal and this test would pass while the
+      // feature did nothing. It has to sit outside that catch, and unparseable
+      // files must keep their old lenient behaviour.
+      writeFileSync(join(tmpDir, "skills.config.json"), "{not json");
+      expect(loadConfig()).toEqual({});
     });
 
     test("ignores invalid apiUrl values", () => {
@@ -232,10 +292,21 @@ describe("config", () => {
 
     test("rejects mode as a config key, under every spelling it ever had", () => {
       // Not "invalid value for mode" — there is no mode key at all, so every
-      // former alias fails the same way an invented key does.
+      // former alias fails the same way.
+      //
+      // The message deliberately no longer reads "Unknown config key". That was
+      // true and useless: it reads as a typo when the real answer is that the
+      // concept was deleted and apiUrl carries the decision now. An operator who
+      // is only told their key is unknown retypes it.
       for (const value of ["local", "self-hosted", "selfhosted", "hosted", "skills.md", "offline", "remote", "cloud"]) {
-        expect(() => saveConfig("mode", value, "project")).toThrow("Unknown config key: mode");
+        expect(() => saveConfig("mode", value, "project")).toThrow(
+          /"mode" is no longer a configuration key/,
+        );
+        expect(() => saveConfig("mode", value, "project")).toThrow(/apiUrl/);
       }
+      // An invented key still gets the plain unknown-key error, so the retired-key
+      // path is doing something specific rather than swallowing every bad key.
+      expect(() => saveConfig("badKey", "value", "project")).toThrow("Unknown config key: badKey");
     });
 
     test("does not advertise mode among the valid keys", () => {
@@ -253,15 +324,17 @@ describe("config", () => {
       expect(keys).toContain("apiUrl");
     });
 
-    test("leaves an existing legacy mode key on disk alone instead of rewriting it", () => {
-      // Inert, not migrated: nothing reads it, so nothing needs to rewrite the
-      // operator's file to remove it.
+    test("does not rewrite an operator's file behind their back to remove a retired key", () => {
+      // Refusing is not migrating. The value on disk stays exactly as written -
+      // silently editing someone's config would be its own surprise - and the
+      // refusal names the command that removes it.
       writeFileSync(join(tmpDir, "skills.config.json"), JSON.stringify({ mode: "self-hosted" }));
-      saveConfig("format", "json", "project");
+      expect(() => saveConfig("format", "json", "project")).toThrow(
+        /"mode" is no longer a configuration key/,
+      );
       const raw = JSON.parse(readFileSync(join(tmpDir, "skills.config.json"), "utf-8"));
       expect(raw.mode).toBe("self-hosted");
-      expect(raw.format).toBe("json");
-      expect(loadConfig()).toEqual({ format: "json" });
+      expect(raw.format).toBeUndefined();
     });
 
     test("unsetConfig removes a key and reports whether one was there", () => {
@@ -271,7 +344,23 @@ describe("config", () => {
       expect(loadConfig().apiUrl).toBeUndefined();
       expect(unsetConfig("apiUrl", "project")).toBe(false);
       expect(existsSync(join(tmpDir, "skills.config.json"))).toBe(true);
-      expect(() => unsetConfig("mode", "project")).toThrow("Unknown config key: mode");
+      expect(() => unsetConfig("nonsenseKey", "project")).toThrow("Unknown config key: nonsenseKey");
+    });
+
+    test("unsetConfig repairs a file that loadConfig refuses", () => {
+      // The whole reason a retired key is removable while not being settable. The
+      // refusal tells the operator to run `skills config unset mode`; if that
+      // command also refused, the error would name a fix that does not exist and
+      // the only way out would be hand-editing JSON.
+      writeFileSync(
+        join(tmpDir, "skills.config.json"),
+        JSON.stringify({ mode: "self-hosted", format: "json" }),
+      );
+      expect(() => loadConfig()).toThrow(/no longer a configuration key/);
+      expect(unsetConfig("mode", "project")).toBe(true);
+      // Repaired, and the keys beside it survived the repair.
+      expect(loadConfig()).toEqual({ format: "json" });
+      expect(unsetConfig("mode", "project")).toBe(false);
     });
 
     test("saves apiUrl after URL validation", () => {

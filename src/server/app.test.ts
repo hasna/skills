@@ -113,7 +113,7 @@ for (const backend of backends) {
         expect(Array.isArray(skills)).toBe(true);
         expect(skills.some((skill) => skill.name === "video-highlight-pack")).toBe(true);
 
-        const submitted = await client.submitRun("video-highlight-pack", { transcript: "Hello world from self hosted skills." }, ["--title", "Demo"]);
+        const submitted = await client.submitRun("video-highlight-pack", { transcript: "Hello world from server-run skills." }, ["--title", "Demo"]);
         expect(submitted.status).toBe("queued");
         expect(submitted.id).toBeTruthy();
 

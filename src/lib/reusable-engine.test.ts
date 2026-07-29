@@ -26,7 +26,7 @@ describe("reusable skills engine contract", () => {
     }
   });
 
-  test("documents public APIs that the self-hosted service can wrap", () => {
+  test("documents public APIs that the hosted service can wrap", () => {
     for (const api of [
       "loadRemoteRegistry",
       "installSkillSource",

@@ -232,6 +232,40 @@ describe("startup durability guard", () => {
     }
   });
 
+  test("the server refuses a retired storage-mode variable instead of booting past it", () => {
+    // The server is the process the deployment-mode collapse is actually about: the
+    // sqlite-or-postgres switch is its internal storage. It resolves that through
+    // resolveServerConfig(), NOT through lib/native-storage.ts, so the CLI-side
+    // refusal did not cover it - an operator exporting a storage-mode variable to
+    // put the SERVER on Postgres got a server on the default SQLite file, and the
+    // startup banner said "storage: sqlite (...)" as if that had been asked for.
+    // Silently serving traffic off the wrong database is the worst instance of the
+    // whole class, so it gets its own guard at the server's own entry point.
+    // Assembled from fragments: the retired-marker guard in
+    // public-package-boundary.test.ts bans these literals from every file it scans.
+    const canonical = ["HASNA_SKILLS", "STORAGE", "MODE"].join("_");
+    const fallback = ["SKILLS", "DEPLOYMENT", "MODE"].join("_");
+    for (const name of [canonical, fallback]) {
+      let error: unknown;
+      try {
+        resolveServerConfig({ [name]: "cloud" });
+      } catch (err) {
+        error = err;
+      }
+      expect((error as Error | undefined)?.name).toBe("RetiredSettingError");
+      expect((error as Error).message).toContain(name);
+      expect((error as Error).message).toContain("HASNA_SKILLS_DATABASE_URL");
+    }
+
+    // Narrow as well as loud. A sibling Hasna app's variable must not stop this
+    // server from starting, and a real database URL beside it still resolves.
+    const sibling = ["HASNA_LOOPS", "STORAGE", "MODE"].join("_");
+    expect(
+      resolveServerConfig({ [sibling]: "cloud", HASNA_SKILLS_DATABASE_URL: "postgres://example/skills" })
+        .databaseUrl,
+    ).toBe("postgres://example/skills");
+  });
+
   test("the ephemeral opt-in is off unless explicitly set to 1", () => {
     expect(resolveServerConfig({}).allowEphemeralStore).toBe(false);
     expect(resolveServerConfig({ HASNA_SKILLS_ALLOW_EPHEMERAL_STORE: "0" }).allowEphemeralStore).toBe(false);

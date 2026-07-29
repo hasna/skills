@@ -8,7 +8,7 @@ import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
 
-describe("CLI self-hosted auth", () => {
+describe("CLI server auth", () => {
 
   test("auth whoami accepts SKILLS_API_KEY without storing or exposing the key", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-whoami-api-key-"));
@@ -57,7 +57,7 @@ describe("CLI self-hosted auth", () => {
     }
   });
 
-  test("auth login --api-key verifies and stores a self-hosted key without echoing it", async () => {
+  test("auth login --api-key verifies and stores a server key without echoing it", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-api-key-login-"));
     const seenAuthHeaders: Array<string | null> = [];
     const server = Bun.serve({
@@ -77,7 +77,7 @@ describe("CLI self-hosted auth", () => {
     });
 
     try {
-      const apiKey = "sk_self_hosted_login";
+      const apiKey = "sk_server_login";
       const result = await runCliInCwd(["auth", "login", "--api-key", apiKey, "--json"], tmpDir, {
         HOME: tmpDir,
         SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
@@ -158,7 +158,7 @@ describe("CLI self-hosted auth", () => {
     }
   });
 
-  test("device login stores credentials for the self-hosted API", async () => {
+  test("device login stores credentials for the Skills API", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-device-auth-"));
     const server = Bun.serve({
       port: 0,
@@ -374,7 +374,7 @@ describe("CLI self-hosted auth", () => {
     }
   });
 
-  test("self-hosted auth failures stay structured with --json", async () => {
+  test("server auth failures stay structured with --json", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-hosted-json-errors-"));
     const server = Bun.serve({
       port: 0,

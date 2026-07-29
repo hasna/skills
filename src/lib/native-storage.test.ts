@@ -143,25 +143,18 @@ describe("native storage", () => {
     });
   });
 
+  // Assembled from fragments, not written out: the retired-marker guard in
+  // public-package-boundary.test.ts bans these literals from every public source
+  // file, including this one.
+  const canonicalModeEnv = ["HASNA_SKILLS", "STORAGE", "MODE"].join("_");
+  const fallbackModeEnv = ["SKILLS", "STORAGE", "MODE"].join("_");
+
   test("carries no declared storage topology, only what is configured", () => {
     // Deleted rather than renamed: nothing ever branched on the label, and a
     // label can contradict the configuration beside it (a "remote" storage with
     // no database URL). databaseConfigured/s3Configured are read from the env
     // that is actually set, so they cannot lie.
-    // Assembled from fragments, not written out: the retired-marker guard in
-    // public-package-boundary.test.ts bans these literals from every public
-    // source file, including this one.
-    const canonicalModeEnv = ["HASNA_SKILLS", "STORAGE", "MODE"].join("_");
-    const fallbackModeEnv = ["SKILLS", "STORAGE", "MODE"].join("_");
-    const declared = {
-      [canonicalModeEnv]: "remote",
-      [fallbackModeEnv]: "hybrid",
-    };
-    const config = resolveSkillsNativeStorageConfig(declared);
-    expect(config).not.toHaveProperty("mode");
-    expect(config.databaseUrl).toBeUndefined();
-
-    const status = getStorageStatus({ targetDir: tmpDir, env: declared });
+    const status = getStorageStatus({ targetDir: tmpDir, env: {} });
     expect(status).not.toHaveProperty("mode");
     expect(status.env).not.toHaveProperty("mode");
     expect(status.remote).not.toHaveProperty("activeModeEnv");
@@ -176,6 +169,52 @@ describe("native storage", () => {
     expect(fallbackEnvNames.length).toBe(13);
     expect(canonicalEnvNames).not.toContain(canonicalModeEnv);
     expect(fallbackEnvNames).not.toContain(fallbackModeEnv);
+  });
+
+  test("refuses a declared storage topology instead of discarding it in silence", () => {
+    // The defect this replaces. The variable was already unread, so a run with it
+    // set produced a process on the on-box SQLite database and said nothing - and
+    // an operator who exported it to reach Postgres could not tell the difference
+    // between "configured" and "thrown away" until something needed the rows.
+    // Ignoring a retired setting is worse than never having supported it.
+    for (const name of [canonicalModeEnv, fallbackModeEnv]) {
+      let error: unknown;
+      try {
+        resolveSkillsNativeStorageConfig({ [name]: "cloud" });
+      } catch (err) {
+        error = err;
+      }
+      expect((error as Error | undefined)?.name).toBe("RetiredSettingError");
+      // The refusal has to be actionable: the variable that is dead, and the one
+      // that carries the decision now.
+      expect((error as Error).message).toContain(name);
+      expect((error as Error).message).toContain(SKILLS_STORAGE_ENV.databaseUrl);
+    }
+
+    // Every entry point onto the same resolver refuses, not just the one with a
+    // test. A guard on one of three doors is a guard on none.
+    expect(() => resolveStorageConfig({ [canonicalModeEnv]: "local" })).toThrow(
+      /RetiredSetting|no longer read/,
+    );
+    expect(() => getStorageStatus({ targetDir: tmpDir, env: { [fallbackModeEnv]: "local" } })).toThrow(
+      /no longer read/,
+    );
+    expect(() =>
+      getSkillsNativeStorageStatus({ targetDir: tmpDir, env: { [fallbackModeEnv]: "local" } }),
+    ).toThrow(/no longer read/);
+  });
+
+  test("does not refuse because a sibling Hasna app still declares one", () => {
+    // Positive control for the namespacing, and the reason the match is not a
+    // bare *_STORAGE_MODE suffix: sibling apps are mid-removal on the same axis
+    // and their variables sit in the same shell. Refusing to start over another
+    // app's variable would turn this fix into an outage.
+    const sibling = ["HASNA_TODOS", "STORAGE", "MODE"].join("_");
+    const config = resolveSkillsNativeStorageConfig({
+      [sibling]: "cloud",
+      [SKILLS_STORAGE_ENV.databaseUrl]: "postgres://example/skills",
+    });
+    expect(config.databaseUrl).toBe("postgres://example/skills");
   });
 
   test("exports and imports local .skills snapshots", () => {

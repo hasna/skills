@@ -25,7 +25,7 @@ describe("@hasna/skills product brief", () => {
     expect(brief).toContain("## Pricing Principles");
     expect(brief).toContain("## Trust Model");
     expect(brief).toContain("Billing, payment methods, credits");
-    expect(brief).toContain("Self-hosted skills expose public docs");
+    expect(brief).toContain("Server-executed skills expose public docs");
     expect(brief).toContain("Local skills should remain runnable");
   });
 
@@ -36,7 +36,7 @@ describe("@hasna/skills product brief", () => {
     expect(brief).toContain("without making the agent workflow dependent on a browser");
   });
 
-  test("anchors product to public package and operator-supplied self-hosted API", () => {
+  test("anchors product to public package and operator-supplied Skills API", () => {
     expect(brief).toContain("hasna/skills");
     expect(brief).toContain("@hasna/skills");
     expect(brief).toContain("local-only");

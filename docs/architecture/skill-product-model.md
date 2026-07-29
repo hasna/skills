@@ -37,12 +37,18 @@ membership, entitlement, approval policy, connector state, and spend limits.
 
 ## Execution Mode
 
-Execution mode defines where code runs:
+Execution mode is a property of a *skill*: where that skill's code runs. It is not
+a deployment mode, and it never selects a storage backend or a deployment variant -
+that axis was removed (see `CLAUDE.md` → No deployment modes).
 
 - `local`: bundled or explicitly owned source can run on the user's machine.
-- `remote`: the Skills MCP exposes metadata and docs; server executes source.
-- `hybrid`: local wrapper calls hosted APIs or workers.
+- `remote`: the Skills MCP exposes metadata and docs; the server executes source.
 - `connector_only`: no source execution; skill orchestrates connector actions.
+
+There is deliberately no fourth value for "some of each". The retired `hybrid`
+carried exactly the ambiguity the removal was about: a skill either runs here or it
+runs on the server, and a local wrapper that calls an API is a `local` skill making
+requests. A value meaning "both" gives two answers to a question with one.
 
 Paid or untrusted hosted skills should default to `remote`. Local projects store
 only pins, run records, exports, and logs. They do not receive remote

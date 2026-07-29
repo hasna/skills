@@ -20,9 +20,9 @@ describe("upstream boundary documentation", () => {
     expect(content).not.toContain(cloudPackage);
   });
 
-  test("separates open-core changes from self-hosted service changes", () => {
+  test("separates open-core changes from private service wrapper changes", () => {
     expect(content).toContain("Open-Core Changes");
-    expect(content).toContain("Self-Hosted Service Changes");
+    expect(content).toContain("Private Service Wrapper Changes");
     expect(content).toContain("compatible API");
     expect(content).toContain("Billing, credits, ledgers");
     expect(content).toContain("Deployment infrastructure");
@@ -38,9 +38,9 @@ describe("upstream boundary documentation", () => {
     expect(content).toContain("deployment mode to select");
   });
 
-  test("separates native storage from self-hosted service databases", () => {
+  test("separates native storage from a wrapper's own database", () => {
     expect(content).toContain("HASNA_SKILLS_*");
-    expect(content).toContain("self-hosted service");
+    expect(content).toContain("a wrapper's own");
     expect(content).toContain("must not pass");
   });
 });

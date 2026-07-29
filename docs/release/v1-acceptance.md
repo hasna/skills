@@ -2,14 +2,14 @@
 
 `@hasna/skills` v1 is accepted when an agent can discover, configure, pin, run,
 and validate skills through the CLI and MCP server from the public npm package,
-with self-hosted execution kept behind explicit setup and auth.
+with server-side execution kept behind explicit setup and auth.
 
 ## Product Acceptance
 
 - `hasna/skills` is the canonical open repository.
 - `@hasna/skills` is the public npm package.
 - Local-only setup works without API credentials.
-- Compatible self-hosted APIs such as `https://your-server.example` are optional
+- Compatible Skills APIs such as `https://your-server.example` are optional
   API targets over public contracts.
 - Provider secrets, billing, tenant, database, and deployment state stay outside
   local projects and source packages unless explicitly part of the deployable
@@ -22,11 +22,11 @@ with self-hosted execution kept behind explicit setup and auth.
 - With no API origin configured, skills run on this machine; setup never writes
   an API origin the user did not supply, interactively or not.
 - User can run `skills auth login --api-key <key>` to verify and store a
-  provisioned self-hosted API key.
-- User can inspect self-hosted account state with `skills billing status`; when
+  provisioned Skills API key.
+- User can inspect server account state with `skills billing status`; when
   billing is enabled, checkout/portal URLs use the same API.
 - User can list, search, inspect, pin, unpin, quote, validate, and run skills.
-- Premium or self-hosted skills fail closed without self-hosted credentials.
+- Premium or server-executed skills fail closed without API credentials.
 - CLI errors are structured and scriptable with `--json`.
 
 ## MCP Acceptance
@@ -36,7 +36,7 @@ with self-hosted execution kept behind explicit setup and auth.
   resources.
 - Agent can inspect primitive tool dependencies and validate primitive coverage
   through MCP tools.
-- Agent can request self-hosted execution and receive structured auth or run
+- Agent can request server-side execution and receive structured auth or run
   errors.
 - MCP tests cover success, error, and remote-only fail-closed behavior.
 
@@ -47,7 +47,7 @@ with self-hosted execution kept behind explicit setup and auth.
 - `skills tools list`, `skills tools deps <skill>`, and `skills tools validate`
   provide JSON output for agents and launch checks.
 - The bundled catalog maps every official skill to at least one primitive tool.
-- Gateway-backed and self-hosted runtime skills are marked explicitly so the
+- Gateway-backed and server-runtime skills are marked explicitly so the
   service can route model calls through its configured gateway without
   leaking provider keys into local OSS usage.
 
@@ -64,21 +64,21 @@ with self-hosted execution kept behind explicit setup and auth.
 
 ## Security Acceptance
 
-- Self-hosted skill source is never installed locally unless the public contract
+- Server-executed skill source is never installed locally unless the public contract
   explicitly allows it.
-- Config validation rejects unknown keys and malformed self-hosted API URLs.
+- Config validation rejects unknown keys and malformed Skills API URLs.
 - Remote-only skills do not use test mode as a local execution bypass.
 - Package-boundary tests scan metadata, lockfile, packed output, and built
   entrypoints.
 
-## Self-Hosted Service Acceptance
+## Server Acceptance
 
-- The self-hosted service exposes health, auth, registry, quote, run, log, and
+- The server exposes health, auth, registry, quote, run, log, and
   artifact APIs.
 - The service owns account state, billing integration, approvals, workers,
   secrets, and deployments.
 - Compatible API URLs remain explicit configuration and do not force local users
-  onto the self-hosted service.
+  onto a server.
 
 ## Required Gates
 
