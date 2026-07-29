@@ -31,6 +31,8 @@ All notable changes to this project will be documented in this file.
   push users toward choosing a mode, and there is no longer a choice to make.
 
 ### Added
+- Direct unit coverage for run lifecycle persistence, project pin state, and
+  shared SQL row shaping, including malformed-state and binary-ownership edges.
 - `CLAUDE.md` rewritten to describe the repository as it is, and a guard —
   `src/lib/claude-md.test.ts` — that re-derives its load-bearing counts from the
   tree on every run. The previous file had drifted back to roughly the v0.0.x
