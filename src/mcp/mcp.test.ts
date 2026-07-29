@@ -567,14 +567,16 @@ version: 0.3.0
       await client.initialize();
       const response = await client.request("tools/call", {
         name: "list_skills",
-        arguments: { category: "Development Tools", profile: "all" },
+        // limit past the 25-item default page so all Development Tools skills return.
+        arguments: { category: "Development Tools", profile: "all", limit: 100 },
       }, 15);
       expect(response).not.toBeNull();
       const result = JSON.parse(response.result.content[0].text);
       const skills = result.skills;
       expect(Array.isArray(skills)).toBe(true);
-      expect(skills.length).toBe(5);
-      expect(result.total).toBe(5);
+      // 5 instruction + 23 restored credential-free executable skills.
+      expect(skills.length).toBe(28);
+      expect(result.total).toBe(28);
       for (const s of skills) {
         expect(s.category).toBe("Development Tools");
       }
@@ -690,9 +692,10 @@ version: 0.3.0
       expect(response.result).toBeDefined();
       const result = JSON.parse(response.result.content[0].text);
       expect(result.category).toBe("Development Tools");
-      expect(result.count).toBe(5);
+      // 5 instruction + 23 restored credential-free executable skills.
+      expect(result.count).toBe(28);
       expect(Array.isArray(result.results)).toBe(true);
-      expect(result.results.length).toBe(5);
+      expect(result.results.length).toBe(28);
     } finally {
       await client.close();
     }

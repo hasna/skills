@@ -1,0 +1,33 @@
+{
+  "name": "commitpush",
+  "version": "0.1.0",
+  "description": "Instruction-set skill for logical commits and direct pushes to main",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "commitpush": "src/index.ts"
+  },
+  "files": [
+    "src",
+    "SKILL.md",
+    "tsconfig.json"
+  ],
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "keywords": [
+    "git",
+    "commit",
+    "push",
+    "automation",
+    "skill"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}

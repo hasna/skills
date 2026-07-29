@@ -1,0 +1,23 @@
+{
+  "name": "compress-video",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "compress-video": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target node",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "restricted"
+  },
+  "files": [
+    "src",
+    "dist",
+    "SKILL.md"
+  ]
+}

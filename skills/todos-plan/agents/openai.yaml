@@ -1,0 +1,4 @@
+interface:
+  display_name: "Todos Plan"
+  short_description: "Author, sync, and verify todos plans"
+  default_prompt: "Use the todos-plan skill to create or update a local todos plan, sync it to the hosted platform when appropriate, and record verification evidence."

@@ -31,7 +31,7 @@ describe("CLI tool primitives", () => {
     const data = JSON.parse(stdout);
     expect(data.valid).toBe(true);
     expect(data.mappedSkillCount).toBe(data.skillCount);
-    // Declarative-only catalog: 19 shipped skills.
-    expect(data.skillCount).toBe(19);
+    // OSS catalog: 19 instruction + 66 executable = 85 shipped skills.
+    expect(data.skillCount).toBe(85);
   });
 });
