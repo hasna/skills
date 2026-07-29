@@ -8,6 +8,10 @@ import {
   isRetiredModeEnvVar,
 } from "./retired-settings";
 
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
 // Retired variable names are assembled from fragments throughout this file.
 // public-package-boundary.test.ts bans those literals from every file it scans,
 // this one included, so spelling them out here would fail that guard instead of
