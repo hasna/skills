@@ -31,9 +31,11 @@ Parsed remote skills are normalized to local `SkillMeta` records with
 
 ### Project Pinning And Runtime State
 
-The open engine must not copy skill definitions into a project or into
-agent-native skill folders. Skill discovery comes from the configured remote
-registry, with the bundled OSS registry as the offline fallback.
+The open engine must not copy skill definitions into a project. Skill discovery
+comes from the merged registry, with the bundled OSS registry as the offline
+fallback. `skills render` may materialize instruction-kind skills into
+agent-native homes as a derived view; its marker and per-home manifest keep the
+registry authoritative and make drift detectable.
 
 - `installSkill` writes a project pin to `.skills/project.json`.
 - `installSkillSource` is a disabled compatibility boundary and must return an
@@ -41,6 +43,9 @@ registry, with the bundled OSS registry as the offline fallback.
 - `createLocalSkillManifest` derives a manifest from a local bundled skill.
 - `installSkillManifest` is disabled for project writes; docs are served by the
   registry/API/MCP instead of being copied into `.skills`.
+- `skills render --check` reports missing, drifted, stray, and stale agent-home
+  entries without writing. Removals and explicit stray cleanup are archived,
+  never hard-deleted.
 
 `.skills/` is runtime state only: optional `project.json`, `runs/`,
 `exports/`, `tmp/`, and run-local logs/artifact metadata. There is no
@@ -61,6 +66,7 @@ The current reusable JSON surfaces include:
 - MCP registration helpers
 - self-update status
 - `validate`
+- `render`
 
 ### Validation
 

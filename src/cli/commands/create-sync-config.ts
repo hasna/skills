@@ -113,7 +113,7 @@ export function registerCreateSync(parent: Command) {
   // Sync
   parent
     .command("sync")
-    .option("--to <agent>", "Deprecated; use skills mcp --register <agent|all>")
+    .option("--to <agent>", "Deprecated; use skills render --to <agent|all>")
     .option("--from <agent>", "Deprecated; agent skill-folder sync is disabled")
     .option("--register", "Deprecated; agent skill-folder imports are disabled", false)
     .option("--scope <scope>", "Deprecated; ignored", "global")
@@ -161,12 +161,13 @@ function handleCreate(name: string, options: { category: string; description?: s
 
 function handleSync(options: { to?: string; from?: string; register: boolean; scope: string; json: boolean }) {
   const target = options.to ?? options.from ?? "all";
-  const error = "Agent skill-folder sync is disabled. Skills are discovered through the Skills MCP server.";
+  const error = "Agent skill-folder sync is disabled. Use the manifest-tracked renderer or Skills MCP server.";
+  const render = `skills render --to ${target}`;
   const mcpRegister = `skills mcp --register ${target}`;
-  if (options.json) console.log(JSON.stringify({ error, mcpRegister }));
+  if (options.json) console.log(JSON.stringify({ error, render, mcpRegister }));
   else {
     console.error(chalk.red(error));
-    console.error(chalk.dim(`Use: ${mcpRegister}`));
+    console.error(chalk.dim(`Use: ${render}`));
   }
   process.exitCode = 1;
 }

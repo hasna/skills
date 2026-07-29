@@ -168,6 +168,7 @@ Top-level commands, grouped by registrar:
 | `runtime.ts` | `quote`, `run`, `runs`, `exports`, `mcp`, `setup`, `self-update` |
 | `completion.ts` | `completion` |
 | `create-sync-config.ts` | `config`, `create`, `sync` (disabled legacy) |
+| `render.ts` | `render` |
 | `portable-skills.ts` | `new`/`scaffold`, `port`/`add` |
 | `schedule.ts` | `schedule` |
 | `registry.ts` | `registry sync` |
@@ -390,8 +391,10 @@ and `~/.skills` / `~/.skillsrc` are merged forward without deleting the original
 ### Pins, not installs
 
 `.skills/project.json` records **metadata-only pins** — name, version, source,
-timestamp. Nothing copies skill source or SKILL.md into a project or an agent skills
-folder. `installSkillSource()` and `installSkillManifest()` exist and deliberately
+timestamp. Nothing copies skill source or SKILL.md into a project. Direct agent
+installs also remain disabled; `skills render` is the sole exception, generating an
+instruction-only, manifest-tracked view in agent skill folders. `installSkillSource()`
+and `installSkillManifest()` exist and deliberately
 return `success: false` with an explanatory error; the MCP `pin_skill`/`unpin_skill`
 tools do the same when handed a `for: <agent>` argument, redirecting to
 `skills mcp --register <agent>`. `.skills/` is output state:

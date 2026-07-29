@@ -113,8 +113,11 @@ requirements explicitly document local provider use.
 | `skills new <name>` | `scaffold` | Scaffold a portable skill under `~/.hasna/skills/installed/<name>` |
 | `skills port <path>` | `add` | Import an existing skill folder into the portable standard |
 | `skills create <name>` | | Scaffold a new custom skill directory |
-| `skills sync --to claude` | | Disabled by design; use `skills mcp --register <agent|all>` |
-| `skills sync --from claude` | | Disabled by design; agent skill folders are not used |
+| `skills render` | | Generate manifest-tracked instruction skills in all agent homes |
+| `skills render --check` | | Fail and list missing, drifted, stray, or stale agent-home entries |
+| `skills render --archive-strays` | | Move unmanaged entries to the dated skills archive before rendering |
+| `skills sync --to claude` | | Disabled legacy command; use `skills render --to <agent|all>` |
+| `skills sync --from claude` | | Disabled legacy import; the merged registry is authoritative |
 | `skills validate <name>` | | Check a skill's directory structure |
 | `skills schedule add <skill> <cron>` | | Set up recurring skill execution |
 | `skills schedule list` | | List all schedules (enabled/disabled/last run) |
@@ -417,8 +420,9 @@ skills/                      # 202+ public skill contracts and local OSS skills
 ## Project Runtime State
 
 Skills are discovered from the configured server registry or bundled OSS
-registry. Project folders and agent-native skill folders are never used as skill
-libraries.
+registry. Project folders are never used as skill libraries. Agent-native skill
+folders may hold the instruction-only, generated view created by `skills render`;
+the merged registry remains its source of truth.
 
 `.skills/` is runtime/output state only:
 
@@ -433,6 +437,11 @@ libraries.
 Auth stays global in `~/.hasna/skills/auth.json`. Registry and doc caches
 belong in `~/.cache/skills` or the Skills API, not inside project
 `.skills`.
+
+Rendered agent homes carry `.skills-render-manifest.json`.
+`skills render --check` is read-only and exits non-zero on drift. Unmanaged entries are reported
+and left alone unless `--archive-strays` is explicit; removals and archived
+strays move under `~/.hasna/skills/archive/<agent>/<date>/`.
 
 ## Development
 

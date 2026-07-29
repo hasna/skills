@@ -2,9 +2,9 @@
  * Skill setup and project preferences.
  *
  * Skills are discovered through the CLI/MCP registry and executed from the
- * bundled package or the remote platform. This module deliberately does not
- * copy skill source, SKILL.md, package.json, scripts, or runtime folders into
- * projects or agent-native skill folders.
+ * bundled package or the remote platform. Direct install helpers in this module
+ * deliberately do not copy source into projects or agent homes. The separate
+ * skills renderer owns the generated, manifest-tracked instruction-only view.
  */
 
 import { existsSync, readFileSync } from "fs";
