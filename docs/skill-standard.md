@@ -37,7 +37,7 @@ Minimum `SKILL.md` frontmatter for an instruction skill:
 
 ```yaml
 ---
-name: skill-project
+name: project
 description: Open or resume an existing Hasna repo project using the projects CLI.
 kind: instruction
 version: 0.1.0
