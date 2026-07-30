@@ -56,6 +56,14 @@ describe("repository-managed agent workflow skills", () => {
     ]);
   });
 
+  test("inbox-monitor handles rotating machine identity without hiding same-name traffic", () => {
+    const result = spawnSync("bash", ["agent-skills/inbox-monitor/scripts/test_inbox_monitor.sh"], {
+      cwd: ROOT,
+      encoding: "utf8",
+    });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  });
+
   test("merge-pr guard passes its raw-fixture behavior suite", () => {
     const result = spawnSync(
       "python3",
