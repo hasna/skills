@@ -38,6 +38,7 @@ export interface SkillsConfig {
   defaultScope?: "global" | "project";
   format?: "compact" | "json" | "csv";
   apiUrl?: string;
+  extensionsDir?: string;
 }
 
 const ENUM_KEYS: Partial<Record<keyof SkillsConfig, string[]>> = {
@@ -46,7 +47,7 @@ const ENUM_KEYS: Partial<Record<keyof SkillsConfig, string[]>> = {
   format: ["compact", "json", "csv"],
 };
 
-const STRING_KEYS = ["apiUrl"] as const satisfies readonly (keyof SkillsConfig)[];
+const STRING_KEYS = ["apiUrl", "extensionsDir"] as const satisfies readonly (keyof SkillsConfig)[];
 
 function validKeys(): string[] {
   return [...Object.keys(ENUM_KEYS), ...STRING_KEYS];
@@ -92,6 +93,8 @@ function normalizeConfigValue(key: keyof SkillsConfig, value: unknown): string |
       return undefined;
     }
   }
+
+  if (key === "extensionsDir") return value.trim() ? value : undefined;
 
   return undefined;
 }
@@ -256,7 +259,7 @@ export function saveConfig(key: string, value: string, scope: ConfigScope = "pro
     throw new Error(
       allowed
         ? `Invalid value '${value}' for ${key}. Allowed: ${allowed.join(", ")}`
-        : `Invalid value '${value}' for ${key}. Expected an http(s) URL`
+        : `Invalid value '${value}' for ${key}. Expected ${key === "apiUrl" ? "an http(s) URL" : "a non-empty path"}`
     );
   }
 

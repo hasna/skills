@@ -93,13 +93,15 @@ describe("config", () => {
         defaultScope: "project",
         format: "csv",
         apiUrl: "https://skills.example.com/api/v1/",
+        extensionsDir: "/srv/hasna/private-skill-extensions",
       }));
       const config = loadConfig();
       expect(config.defaultAgent).toBe("gemini");
       expect(config.defaultScope).toBe("project");
       expect(config.format).toBe("csv");
       expect(config.apiUrl).toBe("https://skills.example.com/api/v1");
-      expect(Object.keys(config).sort()).toEqual(["apiUrl", "defaultAgent", "defaultScope", "format"]);
+      expect(config.extensionsDir).toBe("/srv/hasna/private-skill-extensions");
+      expect(Object.keys(config).sort()).toEqual(["apiUrl", "defaultAgent", "defaultScope", "extensionsDir", "format"]);
     });
 
     test("refuses a legacy mode key instead of dropping it in silence", () => {
@@ -367,6 +369,17 @@ describe("config", () => {
       saveConfig("apiUrl", "https://skills.example.com/api/v1/", "project");
       const content = JSON.parse(readFileSync(join(tmpDir, "skills.config.json"), "utf-8"));
       expect(content.apiUrl).toBe("https://skills.example.com/api/v1");
+    });
+
+    test("saves extensionsDir to global config", () => {
+      const extensionsDir = "/srv/hasna/private-skill-extensions";
+      saveConfig("extensionsDir", extensionsDir, "global");
+      const content = JSON.parse(readFileSync(getConfigPath("global"), "utf-8"));
+      expect(content.extensionsDir).toBe(extensionsDir);
+    });
+
+    test("throws on empty extensionsDir", () => {
+      expect(() => saveConfig("extensionsDir", "   ", "global")).toThrow("Expected a non-empty path");
     });
 
     test("throws on invalid apiUrl", () => {
