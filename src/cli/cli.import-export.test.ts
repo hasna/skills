@@ -67,7 +67,8 @@ describe("CLI import export and env checks", () => {
         expect(stdout).toContain("Recommended skills");
         expect(stdout).toContain("landing-page-pack");
         expect(stdout).toContain("market-research-report");
-        expect(stdout).toContain("skills mcp --register claude");
+        expect(stdout).toContain("skills render");
+        expect(stdout).not.toContain("skills mcp --register");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -93,7 +94,7 @@ describe("CLI import export and env checks", () => {
         expect(data.recommended).toContain("test-suite-generator");
         expect(data.recommended).toContain("market-research-report");
         expect(data.agents).toEqual(["claude"]);
-        expect(data.mcpRegister).toBe("skills mcp --register claude");
+        expect(data.mcpRegister).toBe("skills render");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }

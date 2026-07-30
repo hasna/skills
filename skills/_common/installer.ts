@@ -3,9 +3,8 @@
 /**
  * Legacy per-skill installer boundary.
  *
- * Agent-native skill folders are intentionally unmanaged. Skills are exposed
- * through the root Skills CLI/MCP server so local agents discover the catalog
- * without receiving copied source, package files, or SKILL.md files.
+ * Agent-native skill folders are intentionally unmanaged by legacy installers.
+ * The root Skills CLI renders skills into those folders instead.
  */
 
 export interface SkillConfig {
@@ -38,7 +37,7 @@ export class SkillInstaller {
   async uninstall(assistant: AssistantType): Promise<void> {
     throw new Error(
       `Direct agent skill-folder uninstalls are disabled for ${this.config.name}. ` +
-        `Skills MCP owns discovery; update MCP registration with: skills mcp --register ${assistant}`,
+        "Render skills into native agent folders instead: skills render",
     );
   }
 }
@@ -68,6 +67,6 @@ export async function runInstaller(
 function registrationMessage(skillName: string, assistant: AssistantType): string {
   return (
     `Direct agent skill-folder installs are disabled for ${skillName}. ` +
-    `Register the Skills MCP server instead: skills mcp --register ${assistant}`
+    "Render skills into native agent folders instead: skills render"
   );
 }

@@ -91,7 +91,7 @@ export function registerOperationTools(server: McpServer): void {
 
   server.registerTool("pin_skill", {
     title: "Pin Skill",
-    description: "Pin a skill to .skills/project.json. Agent skill-folder installs are disabled; use skills mcp --register.",
+    description: "Pin a skill to .skills/project.json. Agent skill-folder installs are disabled; use skills render.",
     inputSchema: {
       name: z.string(),
       for: z.string().optional(),
@@ -111,7 +111,7 @@ export function registerOperationTools(server: McpServer): void {
         success: false,
         agent: a,
         scope: (scope as "global" | "project") || "global",
-        error: `Direct agent skill-folder installs are disabled. Register Skills MCP instead: skills mcp --register ${a}`,
+        error: "Direct agent skill-folder installs are disabled. Render skills into native agent folders instead: skills render",
       }));
 
       return {
@@ -164,7 +164,7 @@ export function registerOperationTools(server: McpServer): void {
           const r = {
             skill: name,
             success: false,
-            error: `Direct agent skill-folder installs are disabled. Register Skills MCP instead: skills mcp --register ${a}`,
+            error: "Direct agent skill-folder installs are disabled. Render skills into native agent folders instead: skills render",
           };
           results.push({ ...r, agent: a, scope: scope || "global" });
         }
@@ -204,7 +204,7 @@ export function registerOperationTools(server: McpServer): void {
         skill: name,
         agent: a,
         removed: false,
-        error: `Agent skill folders are unmanaged. Register Skills MCP instead: skills mcp --register ${a}`,
+        error: "Agent skill folders are unmanaged. Render skills into native agent folders instead: skills render",
       }));
 
       return {
@@ -451,7 +451,7 @@ export function registerOperationTools(server: McpServer): void {
         results.push({
           skill: name,
           success: false,
-          error: `Direct agent skill-folder installs are disabled. Register Skills MCP instead: skills mcp --register ${agents.join(",")}`,
+          error: "Direct agent skill-folder installs are disabled. Render skills into native agent folders instead: skills render",
         });
       }
     } else {
