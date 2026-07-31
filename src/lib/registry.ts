@@ -85,6 +85,27 @@ function discoverSkillsInDir(dir: string, source: SkillSource = "custom"): Skill
   return result;
 }
 
+export function findExtensionSkillPath(name: string): string | null {
+  const config = loadConfig();
+  if (!config.extensionsDir || !existsSync(config.extensionsDir)) return null;
+
+  try {
+    const entries = readdirSync(config.extensionsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const skillDir = join(config.extensionsDir, entry.name);
+      const skillMdPath = join(skillDir, "SKILL.md");
+      if (!existsSync(skillMdPath)) continue;
+      let content: string;
+      try { content = readFileSync(skillMdPath, "utf-8"); } catch { continue; }
+      const fm = parseSkillMdFrontmatter(content);
+      if (fm?.name === name) return skillDir;
+    }
+  } catch {}
+
+  return null;
+}
+
 let registryCache: SkillMeta[] | null = null;
 let registryCacheTime = 0;
 let registryCacheKey: string | null = null;

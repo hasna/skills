@@ -17,6 +17,7 @@ import {
   type Category,
 } from "./registry";
 import { DATA_DIR_ENV, INSTALLED_SKILLS_DIRNAME } from "./config.js";
+import { getSkillBestDoc } from "./skillinfo.js";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
 
@@ -316,6 +317,9 @@ describe("registry", () => {
         expect(extensionOnly?.source).toBe("extension");
         expect(officialOverlay).toMatchObject({ source: "extension", description: "extension beats official" });
         expect(customOverlay).toMatchObject({ source: "custom", description: "custom beats extension" });
+        expect(getSkillBestDoc("extension-only")).toContain("private extension");
+        expect(getSkillBestDoc("blog-article")).toContain("extension beats official");
+        expect(getSkillBestDoc("custom-overlay")).toContain("custom beats extension");
         expect(existsSync(join(dataDir, INSTALLED_SKILLS_DIRNAME, "extension-only"))).toBe(false);
       } finally {
         clearRegistryCache();
