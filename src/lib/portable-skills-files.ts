@@ -113,7 +113,7 @@ export function readPortableSkillManifest(skillPath: string, fallbackName = base
   };
 }
 
-function parseSkillKind(value: string | undefined): SkillKind | undefined {
+export function parseSkillKind(value: string | undefined): SkillKind | undefined {
   if (value === "executable" || value === "instruction") return value;
   return undefined;
 }
@@ -318,7 +318,7 @@ function renderSkillMd(manifest: PortableSkillManifest): string {
   return `---\nname: ${manifest.name}\ndescription: ${manifest.description}\nversion: ${manifest.version}\nsource: custom\ncategory: ${manifest.category ?? "Development Tools"}\n${tags}---\n\n# ${manifest.displayName ?? displayName(manifest.name)}\n\n${manifest.description}\n\n## Usage\n\n\`\`\`bash\nskills run ${manifest.name} --help\n\`\`\`\n`;
 }
 
-function renderSkillJson(manifest: PortableSkillManifest): string {
+export function renderSkillJson(manifest: PortableSkillManifest): string {
   return `${JSON.stringify({
     $schema: manifest.$schema ?? PORTABLE_SKILL_SCHEMA,
     standard: PORTABLE_SKILL_STANDARD,
@@ -494,4 +494,3 @@ export function displayName(name: string): string {
 function escapeJsString(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r?\n/g, " ");
 }
-

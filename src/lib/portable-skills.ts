@@ -6,6 +6,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "fs";
 import { basename, dirname, isAbsolute, join, normalize } from "path";
 
@@ -13,6 +14,7 @@ import { INSTALLED_SKILLS_DIRNAME, getDataDir } from "./config.js";
 import { SKILLS } from "./registry-data/index.js";
 import type { SkillKind, SkillMeta } from "./registry-types.js";
 import {
+  parseSkillFrontmatter,
   validateSkillDirectory,
   type SkillValidationMessage,
   type SkillValidationResult,
@@ -26,7 +28,9 @@ import {
   ensurePortableSkillFiles,
   hasPackageDependencies,
   normalizePortableSkillName,
+  parseSkillKind,
   readPortableSkillManifest,
+  renderSkillJson,
   writeInstructionSkillTemplate,
   writePortableSkillTemplate,
 } from "./portable-skills-files.js";
@@ -44,7 +48,11 @@ import type {
   PortPortableSkillOptions,
   ScaffoldPortableSkillOptions,
 } from "./portable-skills-types.js";
-import { PORTABLE_SKILL_STANDARD } from "./portable-skills-types.js";
+import {
+  PORTABLE_SKILL_DEFAULT_VERSION,
+  PORTABLE_SKILL_SCHEMA,
+  PORTABLE_SKILL_STANDARD,
+} from "./portable-skills-types.js";
 
 export {
   normalizePortableSkillName,
