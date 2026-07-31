@@ -128,13 +128,64 @@ describe("CLI import export and env checks", () => {
   });
 
   describe("sync", () => {
-    test("legacy agent skill-folder sync is disabled", async () => {
-      const { stdout, stderr, exitCode } = await runCli(["sync", "--from", "claude", "--register", "--json"]);
-      const data = JSON.parse(stdout);
-      expect(stderr).toBe("");
-      expect(exitCode).toBe(1);
-      expect(data.error).toContain("Agent skill-folder sync is disabled");
-      expect(data.mcpRegister).toBe("skills mcp --register claude");
+    const { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } = require("fs");
+    const { tmpdir } = require("os");
+    const { join } = require("path");
+
+    function seedCorpus(home: string, name: string): void {
+      const dir = join(home, ".hasna", "skills", "installed", name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: d\nkind: instruction\n---\n\n# ${name}\n`);
+      writeFileSync(join(dir, "skill.json"), JSON.stringify({ standard: "hasna.skill.v1", name, kind: "instruction" }));
+    }
+
+    test("--help documents the corpus-to-agent sync", async () => {
+      const { stdout } = await runCli(["sync", "--help"]);
+      expect(stdout).toContain("agent");
+      expect(stdout).toContain("--for");
+      expect(stdout).toContain("--dry-run");
+    });
+
+    test("writes a corpus skill into an agent folder", async () => {
+      const home = mkdtempSync(join(tmpdir(), "cli-sync-home-"));
+      try {
+        seedCorpus(home, "deploy-runbook");
+        const { stdout, exitCode } = await runCli(["sync", "deploy-runbook", "--for", "claude", "--json"], { HOME: home });
+        expect(exitCode).toBe(0);
+        const data = JSON.parse(stdout);
+        expect(data.actions[0].action).toBe("create");
+        expect(existsSync(join(home, ".claude", "skills", "deploy-runbook", "SKILL.md"))).toBe(true);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    test("--dry-run reports intended writes without creating anything", async () => {
+      const home = mkdtempSync(join(tmpdir(), "cli-sync-home-"));
+      try {
+        seedCorpus(home, "deploy-runbook");
+        const { stdout, exitCode } = await runCli(["sync", "deploy-runbook", "--for", "claude", "--dry-run", "--json"], { HOME: home });
+        expect(exitCode).toBe(0);
+        const data = JSON.parse(stdout);
+        expect(data.dryRun).toBe(true);
+        expect(data.actions[0].action).toBe("create");
+        expect(existsSync(join(home, ".claude", "skills", "deploy-runbook", "SKILL.md"))).toBe(false);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    test("a named skill missing from the corpus is a skip and exits nonzero", async () => {
+      const home = mkdtempSync(join(tmpdir(), "cli-sync-home-"));
+      try {
+        const { stdout, exitCode } = await runCli(["sync", "ghost", "--for", "claude", "--json"], { HOME: home });
+        expect(exitCode).toBe(1);
+        const data = JSON.parse(stdout);
+        expect(data.actions[0].action).toBe("skip");
+        expect(data.actions[0].reason).toContain("not found");
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
     });
   });
 

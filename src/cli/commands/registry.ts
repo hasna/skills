@@ -6,6 +6,7 @@ import {
   type RegistrySyncOptions,
 } from "../../lib/registry-sync.js";
 import type { SkillRegistryProfile } from "../../lib/registry.js";
+import { pullSkills, PullSkillError, type PulledSkillResult } from "../../lib/pull.js";
 
 export function registerRegistry(parent: Command) {
   const registry = parent
@@ -71,4 +72,60 @@ async function handleRegistrySync(options: {
   console.log(chalk.green(`Registry sync artifact written to ${options.output}`));
   console.log(chalk.dim(`  Skills: ${artifact.summary.skillCount}`));
   console.log(chalk.dim(`  Invalid: ${invalid}`));
+}
+
+/**
+ * `skills pull` — fetch skills from the configured instance into this machine's corpus
+ * (~/.hasna/skills/installed/<name>/). Registered here beside `registry sync` because both
+ * are the "instance <-> local registry" surface. Once a skill is in the corpus,
+ * loadRegistry() shows it to `skills list --all` and the MCP `list_skills` with no further
+ * step.
+ */
+export function registerPull(parent: Command) {
+  parent
+    .command("pull")
+    .argument("[names...]", "Skills to pull from the configured instance")
+    .option("--all", "Pull every skill the instance serves", false)
+    .option("--for-machine", "Prepare this machine with the instance's full catalog (implies --all)", false)
+    .option("--json", "Output results as JSON", false)
+    .description("Fetch skills from the configured Skills instance into this machine's corpus")
+    .action(async (names: string[], options: { all: boolean; forMachine: boolean; json: boolean }) => {
+      try {
+        const { results } = await pullSkills({ names, all: options.all || options.forMachine });
+        if (options.json) {
+          console.log(JSON.stringify({ results }, null, 2));
+        } else {
+          printPullHuman(results);
+        }
+        if (results.some((result) => !result.success)) process.exitCode = 1;
+      } catch (error) {
+        if (options.json) {
+          console.log(JSON.stringify({
+            error: (error as Error).message,
+            ...(error instanceof PullSkillError && error.detail ? { detail: error.detail } : {}),
+          }, null, 2));
+        } else {
+          console.error(chalk.red((error as Error).message));
+          if (error instanceof PullSkillError) for (const line of error.detail ?? []) console.error(chalk.dim(`  - ${line}`));
+        }
+        process.exitCode = 1;
+      }
+    });
+}
+
+function printPullHuman(results: PulledSkillResult[]): void {
+  if (!results.length) {
+    console.log(chalk.dim("No skills to pull."));
+    return;
+  }
+  console.log(chalk.bold("\nPulling skills from the configured instance...\n"));
+  for (const result of results) {
+    if (result.success) {
+      console.log(`${chalk.green(`✓ ${result.name}`)}${chalk.dim(`  ${result.created ? "added" : "updated"} → ${result.path}`)}`);
+    } else {
+      console.log(chalk.red(`✗ ${result.name}: ${result.error}`));
+    }
+  }
+  const ok = results.filter((result) => result.success).length;
+  console.log(chalk.dim(`\n${ok}/${results.length} pulled into ~/.hasna/skills/installed`));
 }

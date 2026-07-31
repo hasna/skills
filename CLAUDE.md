@@ -92,7 +92,7 @@ src/
 │   ├── registry-data/            # The SKILLS array, one file per category + index.ts
 │   ├── registry.ts               # Registry loading, merging, caching, lookup
 │   ├── registry-types.ts         # SkillMeta, SkillKind, SkillSource, CATEGORIES, BASIC_SKILL_NAMES
-│   ├── installer.ts              # Project pins (source and manifest installs are disabled)
+│   ├── installer.ts              # Project pins; installSkillForAgent() writes agent folders (agent-sync)
 │   ├── project-state.ts          # .skills/project.json
 │   ├── portable-skills.ts        # ~/.hasna/skills/installed/<name>/ corpus: scaffold, port, run
 │   ├── skillinfo.ts              # Docs, requirements, env-var extraction, runSkill()
@@ -167,10 +167,10 @@ Top-level commands, grouped by registrar:
 | `diagnostic.ts` | `doctor`, `test`, `env-check`/`check-env`, `setup-info`, `outdated` |
 | `runtime.ts` | `quote`, `run`, `runs`, `exports`, `mcp`, `setup`, `self-update` |
 | `completion.ts` | `completion` |
-| `create-sync-config.ts` | `config`, `create`, `sync` (disabled legacy) |
+| `create-sync-config.ts` | `config`, `create`, `sync` |
 | `portable-skills.ts` | `new`/`scaffold`, `port`/`add` |
 | `schedule.ts` | `schedule` |
-| `registry.ts` | `registry sync` |
+| `registry.ts` | `registry sync`, `pull` |
 | `auth.ts` | `auth`, `billing`, `credits` |
 | `feedback.ts` | `feedback` |
 | `storage.ts` | `storage` (`status`, `sync-plan`) |
@@ -387,14 +387,23 @@ also means the hermetic-test override below does not isolate `auth.json`.
 The legacy `~/.hasna/skills/custom/` path is still read as a migration safety net,
 and `~/.skills` / `~/.skillsrc` are merged forward without deleting the originals.
 
-### Pins, not installs
+### Pins, not installs (except the agent-folder sync)
 
 `.skills/project.json` records **metadata-only pins** — name, version, source,
-timestamp. Nothing copies skill source or SKILL.md into a project or an agent skills
-folder. `installSkillSource()` and `installSkillManifest()` exist and deliberately
-return `success: false` with an explanatory error; the MCP `pin_skill`/`unpin_skill`
-tools do the same when handed a `for: <agent>` argument, redirecting to
-`skills mcp --register <agent>`. `.skills/` is output state:
+timestamp. `installSkillSource()` and `installSkillManifest()` exist and deliberately
+return `success: false`: nothing copies runtime source or a SKILL.md manifest into a
+*project*, and the MCP `pin_skill`/`unpin_skill` tools still redirect a `for: <agent>`
+argument to `skills mcp --register <agent>`.
+
+The one deliberate exception is the last-mile **agent-folder sync** (`skills sync`,
+`src/lib/agent-sync.ts`). It writes a per-tool-adapted `SKILL.md` from the corpus into
+each coding agent's *global* skills directory (`~/.claude/skills/<name>/SKILL.md`,
+`~/.codex/…`, `~/.config/opencode/…`, `~/.cursor/…`) so the agent auto-loads it —
+instruction skills as prose, executable skills as a pointer. `installSkillForAgent()` is
+its single-skill entry point (no longer a stub). Writes are **non-clobbering**: every
+directory the sync writes carries a `.hasna-skills.json` marker, and a skill directory
+without that marker is treated as the user's own and skipped unless `--force`. `.skills/`
+itself remains output state and is never an install target:
 
 ```
 .skills/

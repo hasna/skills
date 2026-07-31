@@ -561,6 +561,75 @@ function safeNormalizeName(name: string): string | undefined {
   }
 }
 
+/** Metadata a Skills instance reports for a skill, used to fill the corpus manifest. */
+export interface CorpusSkillMeta {
+  displayName?: string;
+  description?: string;
+  category?: string;
+  tags?: string[];
+  version?: string;
+  kind?: SkillKind;
+}
+
+export interface WriteCorpusSkillInput {
+  name: string;
+  /** The SKILL.md document as served by the instance. Written verbatim. */
+  skillMd: string;
+  meta?: CorpusSkillMeta | null;
+}
+
+/**
+ * Write a skill fetched from a Skills instance into the local corpus
+ * (~/.hasna/skills/installed/<name>/), so loadRegistry() surfaces it to both the CLI
+ * (`skills list --all`) and the MCP (`list_skills`) with no further step — the whole
+ * point of the pull: the corpus is already a first-class registry source.
+ *
+ * SKILL.md is written verbatim: it is the agent-facing artifact and the registry's
+ * frontmatter source. A canonical skill.json is written beside it so
+ * listPortableSkillMetas() reports the right kind/category/tags/version even when the
+ * fetched SKILL.md carries thin frontmatter.
+ *
+ * Idempotent: re-writing the same fetched bytes yields byte-identical files. It
+ * overwrites SKILL.md and skill.json — the instance is the source of truth for a pulled
+ * skill — but removes nothing else, so a re-pull never destroys sibling files.
+ */
+export function writeCorpusSkill(
+  input: WriteCorpusSkillInput,
+  options: PortableSkillOptions = {},
+): PortableSkillWriteResult {
+  const name = normalizePortableSkillName(input.name);
+  const root = getPortableSkillsRoot(options);
+  const skillPath = join(root, name);
+  const created = !existsSync(skillPath);
+  mkdirSync(skillPath, { recursive: true });
+
+  const skillMd = input.skillMd.endsWith("\n") ? input.skillMd : `${input.skillMd}\n`;
+  writeFileSync(join(skillPath, "SKILL.md"), skillMd);
+
+  const frontmatter = parseSkillFrontmatter(input.skillMd) ?? undefined;
+  // Carry the instance's kind when it reports one; else the SKILL.md frontmatter; else
+  // "instruction", because a pulled skill has no local src/ and is consumed as prose
+  // (runPortableSkill refuses to spawn an instruction skill, which is the safe answer
+  // for a doc-only corpus entry).
+  const kind: SkillKind = input.meta?.kind ?? parseSkillKind(frontmatter?.kind) ?? "instruction";
+  const manifest: PortableSkillManifest = {
+    $schema: PORTABLE_SKILL_SCHEMA,
+    standard: PORTABLE_SKILL_STANDARD,
+    name,
+    description: input.meta?.description ?? frontmatter?.description ?? `${displayName(name)} skill`,
+    version: input.meta?.version ?? frontmatter?.version ?? PORTABLE_SKILL_DEFAULT_VERSION,
+    displayName: input.meta?.displayName ?? frontmatter?.displayName ?? displayName(name),
+    category: input.meta?.category ?? frontmatter?.category ?? "Development Tools",
+    tags: input.meta?.tags?.length ? input.meta.tags : frontmatter?.tags ?? ["remote", name],
+    kind,
+    inputs: [],
+    commands: [],
+  };
+  writeFileSync(join(skillPath, "skill.json"), renderSkillJson(manifest));
+
+  return { name, path: skillPath, manifest, created };
+}
+
 export function validatePortableSkillDirectory(name: string, skillPath: string): SkillValidationResult {
   const normalizedName = normalizePortableSkillName(name);
   const base = validateSkillDirectory(normalizedName, skillPath);
