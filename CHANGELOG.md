@@ -31,6 +31,32 @@ All notable changes to this project will be documented in this file.
   push users toward choosing a mode, and there is no longer a choice to make.
 
 ### Added
+- **`skills sync [names...] [--for <agent>] [--dry-run] [--all] [--force]`** — the last
+  mile: write skills from this machine's corpus into each coding agent's global skills
+  folder (`~/.claude/skills/<name>/SKILL.md`, `~/.codex/…`, `~/.config/opencode/…`,
+  `~/.cursor/…`), per-tool adapted (Claude keeps `user_invocable`; Codex/OpenCode/Cursor
+  have it stripped). Instruction skills are written as prose the agent auto-loads;
+  executable skills as a pointer to `skills run <name>`. **Non-clobbering**: every synced
+  directory carries a `.hasna-skills.json` ownership marker, and a skill directory without
+  it is treated as hand-authored and skipped unless `--force`. This replaces the disabled
+  legacy `sync` command and reverses the `installSkillForAgent()` stub — that function now
+  writes an agent skill folder (single-skill entry point to the same non-clobbering
+  writer) instead of returning `success: false`. New library exports: `syncSkillsToAgents`,
+  `writeManagedAgentSkill`, `writeManagedSkillDir`, `adaptSkillMdForAgent`,
+  `agentGlobalSkillsDir`, `pointerSkillMd`, `resolveSyncAgents`, `removeManagedAgentSkill`,
+  `SYNC_AGENTS`.
+- **`skills pull [names...] [--all] [--for-machine]`** — fetch skills from the
+  configured instance into this machine's corpus (`~/.hasna/skills/installed/<name>/`),
+  the read half of the dogfooding loop that `skills push` writes to. Each skill's
+  SKILL.md is written verbatim (the agent-facing artifact) with a canonical
+  `skill.json` beside it, so `loadRegistry()` surfaces it to both `skills list --all`
+  and the MCP `list_skills` tool with no further step. Fail-closed: with no instance
+  origin configured it raises `MissingApiUrlError` rather than inventing a host (the
+  vendor-host guard still holds); with no API key it names `skills login` /
+  `SKILLS_API_KEY`. Re-pulling is idempotent — it overwrites SKILL.md/skill.json for a
+  named skill but removes no sibling files. `--for-machine` implies `--all`. The new
+  library entry point `pullSkills()` and corpus writer `writeCorpusSkill()` are exported
+  from `@hasna/skills`.
 - `CLAUDE.md` rewritten to describe the repository as it is, and a guard —
   `src/lib/claude-md.test.ts` — that re-derives its load-bearing counts from the
   tree on every run. The previous file had drifted back to roughly the v0.0.x
