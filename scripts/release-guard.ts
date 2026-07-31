@@ -331,7 +331,7 @@ if (disallowedCodeUrls.length > 0) {
   console.error(sanitizeForPublicLog(formatFindings(disallowedCodeUrls)));
   console.error("  A host we operate may never be a default. A third-party provider host is");
   console.error("  allowed only when it is listed in APPROVED_CODE_HOSTS in");
-  console.error("  src/lib/vendor-host-guard.ts with a written justification.");
+  console.error("  src/lib/vendor-host-policy.ts with a written justification.");
   console.error("  A 'cannot certify' finding means a file was never inspected — fix the file,");
   console.error("  never the threshold.");
   process.exit(1);
