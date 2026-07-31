@@ -4,8 +4,9 @@
 
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { join } from "path";
-import { DATA_DIR_ENV, getDataDir } from "./config.js";
+import { DATA_DIR_ENV, getDataDir, loadConfig } from "./config.js";
 import { listPortableSkillMetas } from "./portable-skills.js";
+import { mergeSkillRegistryLists } from "./registry-merge.js";
 import { normalizeSkillSlug, resolveSkillAlias } from "./skill-aliases.js";
 import { SKILLS } from "./registry-data/index.js";
 import {
@@ -14,6 +15,7 @@ import {
   type Category,
   type SkillMeta,
   type SkillRegistryProfile,
+  type SkillSource,
 } from "./registry-types.js";
 
 export { BASIC_SKILL_NAMES, CATEGORIES, SKILLS };
@@ -55,7 +57,7 @@ function parseSkillMdFrontmatter(content: string): Partial<SkillMeta> | null {
  * Discover skills from a directory. Each subdirectory is expected to be a skill
  * with a SKILL.md file containing frontmatter metadata.
  */
-function discoverSkillsInDir(dir: string): SkillMeta[] {
+function discoverSkillsInDir(dir: string, source: SkillSource = "custom"): SkillMeta[] {
   if (!existsSync(dir)) return [];
   const result: SkillMeta[] = [];
   try {
@@ -76,11 +78,32 @@ function discoverSkillsInDir(dir: string): SkillMeta[] {
         category: fm.category || "Development Tools",
         tags: fm.tags || [],
         ...(fm.kind ? { kind: fm.kind } : {}),
-        source: "custom",
+        source,
       });
     }
   } catch {}
   return result;
+}
+
+export function findExtensionSkillPath(name: string): string | null {
+  const config = loadConfig();
+  if (!config.extensionsDir || !existsSync(config.extensionsDir)) return null;
+
+  try {
+    const entries = readdirSync(config.extensionsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const skillDir = join(config.extensionsDir, entry.name);
+      const skillMdPath = join(skillDir, "SKILL.md");
+      if (!existsSync(skillMdPath)) continue;
+      let content: string;
+      try { content = readFileSync(skillMdPath, "utf-8"); } catch { continue; }
+      const fm = parseSkillMdFrontmatter(content);
+      if (fm?.name === name) return skillDir;
+    }
+  } catch {}
+
+  return null;
 }
 
 let registryCache: SkillMeta[] | null = null;
@@ -112,11 +135,12 @@ function registryRootKey(): string {
 }
 
 /**
- * Load the full registry: official skills merged with global custom skills from
- * ~/.hasna/skills/installed/<name>/ and the legacy ~/.hasna/skills/custom/<name>/
- * path that migration folds into it.
+ * Load the full registry: official skills merged with a configured private
+ * extension checkout and global custom skills from ~/.hasna/skills/installed/<name>/
+ * (plus the legacy ~/.hasna/skills/custom/<name>/ migration safety net).
  *
- * Custom skills with the same name as official skills take precedence.
+ * Custom skills take precedence over extensions, which take precedence over
+ * official skills. Extension skills are read in place and never copied into installed/.
  * Results are cached for 5 seconds.
  */
 export function loadRegistry(cwd?: string): SkillMeta[] {
@@ -131,7 +155,11 @@ export function loadRegistry(cwd?: string): SkillMeta[] {
   }
 
   const dataDir = getDataDir();
+  const config = loadConfig();
   const official = SKILLS.map((s) => ({ ...s, source: "official" as const }));
+  const extensions = config.extensionsDir
+    ? discoverSkillsInDir(config.extensionsDir, "extension")
+    : [];
   // No rootDir: let getPortableSkillsRoot() resolve <dataDir>/installed and run
   // the layout migration. Passing the app folder as rootDir would read app data
   // as if it were the corpus.
@@ -143,10 +171,7 @@ export function loadRegistry(cwd?: string): SkillMeta[] {
   const legacyCustom = discoverSkillsInDir(join(dataDir, "custom"));
   const globalCustom = mergeCustomSkills([...legacyCustom, ...portableCustom]);
 
-  const customNames = new Set(globalCustom.map((s) => s.name));
-  const filtered = official.filter((s) => !customNames.has(s.name));
-
-  registryCache = [...filtered, ...globalCustom];
+  registryCache = mergeSkillRegistryLists(official, extensions, globalCustom);
   registryCacheTime = now;
   registryCacheKey = rootKey;
   return registryCache;

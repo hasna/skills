@@ -67,7 +67,8 @@ describe("CLI import export and env checks", () => {
         expect(stdout).toContain("Recommended skills");
         expect(stdout).toContain("landing-page-pack");
         expect(stdout).toContain("market-research-report");
-        expect(stdout).toContain("skills mcp --register claude");
+        expect(stdout).toContain("skills render");
+        expect(stdout).not.toContain("skills mcp --register");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -93,7 +94,7 @@ describe("CLI import export and env checks", () => {
         expect(data.recommended).toContain("test-suite-generator");
         expect(data.recommended).toContain("market-research-report");
         expect(data.agents).toEqual(["claude"]);
-        expect(data.mcpRegister).toBe("skills mcp --register claude");
+        expect(data.mcpRegister).toBe("skills render");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -168,6 +169,23 @@ describe("CLI import export and env checks", () => {
         expect(exitCode).toBe(0);
         const data = JSON.parse(stdout);
         expect(data.dryRun).toBe(true);
+        expect(data.actions[0].action).toBe("create");
+        expect(existsSync(join(home, ".claude", "skills", "deploy-runbook", "SKILL.md"))).toBe(false);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    test("render aliases the corpus-to-agent sync", async () => {
+      const home = mkdtempSync(join(tmpdir(), "cli-render-home-"));
+      try {
+        seedCorpus(home, "deploy-runbook");
+        const { stdout, exitCode } = await runCli(["render", "deploy-runbook", "--for", "claude", "--dry-run", "--json"], { HOME: home });
+        expect(exitCode).toBe(0);
+        const data = JSON.parse(stdout);
+        expect(data.dryRun).toBe(true);
+        expect(data.actions[0].skill).toBe("deploy-runbook");
+        expect(data.actions[0].agent).toBe("claude");
         expect(data.actions[0].action).toBe("create");
         expect(existsSync(join(home, ".claude", "skills", "deploy-runbook", "SKILL.md"))).toBe(false);
       } finally {

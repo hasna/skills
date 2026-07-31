@@ -2,6 +2,6 @@
 set -euo pipefail
 
 echo "Direct per-skill installers are disabled."
-echo "Register the shared Skills MCP server instead:"
-echo "  skills mcp --register all"
+echo "Render skills into native agent folders instead:"
+echo "  skills render"
 exit 1

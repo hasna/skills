@@ -31,7 +31,7 @@ export function registerSetup(parent: Command) {
     .command("import")
     .argument("<file>", "JSON file to import (use - for stdin)")
     .option("--json", "Output results as JSON", false)
-    .option("--for <agent>", "Deprecated: use skills mcp --register <agent|all>")
+    .option("--for <agent>", "Deprecated: use skills render")
     .option("--scope <scope>", "Deprecated agent install scope", "global")
     .option("--dry-run", "Show what would be pinned without actually writing project pins", false)
     .description("Import and pin skills from a JSON export file")
@@ -57,7 +57,7 @@ async function handleInit(options: { json: boolean; for?: string; scope: string 
         detected,
         recommended: recommended.map((s) => s.name),
         agents,
-        mcpRegister: `skills mcp --register ${options.for}`,
+        mcpRegister: "skills render",
       }, null, 2));
       return;
     }
@@ -70,9 +70,9 @@ async function handleInit(options: { json: boolean; for?: string; scope: string 
     console.log(chalk.bold(`\nRecommended skills (${recommended.length}):`));
     for (const skill of recommended) console.log(`  ${chalk.cyan(skill.name)} - ${skill.description}`);
 
-    console.log(chalk.bold(`\nRecommended skills are available through Skills MCP.\n`));
-    for (const agent of agents) console.log(chalk.dim(`  ${agent}: skills mcp --register ${agent}`));
-    console.log(chalk.dim(`\nUse: skills mcp --register ${options.for}`));
+    console.log(chalk.bold(`\nRecommended skills are ready to render into native agent folders.\n`));
+    for (const agent of agents) console.log(chalk.dim(`  ${agent}: skills render`));
+    console.log(chalk.dim(`\nUse: skills render`));
   }
 
   const installed = getInstalledSkills();
@@ -196,8 +196,8 @@ async function handleImport(file: string, options: { json: boolean; for?: string
     }
     for (let i = 0; i < skillList.length; i++) {
       const name = skillList[i];
-      results.push({ skill: name, success: true, agents, mcpRegister: `skills mcp --register ${options.for}` });
-      if (!options.json) process.stdout.write(`[${i + 1}/${skillList.length}] ${name}: available through Skills MCP\n`);
+      results.push({ skill: name, success: true, agents, mcpRegister: "skills render" });
+      if (!options.json) process.stdout.write(`[${i + 1}/${skillList.length}] ${name}: ready for skills render\n`);
     }
   } else {
     const { installSkill } = await import("../../lib/installer.js");

@@ -16,7 +16,7 @@ import { adaptSkillMdForAgent, SYNC_MARKER_FILE, writeManagedSkillDir } from "./
 import { normalizeSkillName } from "./utils.js";
 import { getDataDir } from "./config.js";
 import { findPortableSkill } from "./portable-skills.js";
-import { getSkill, type SkillMeta } from "./registry.js";
+import { findExtensionSkillPath, getSkill, type SkillMeta } from "./registry.js";
 import { normalizeSkillSlug, resolveSkillAlias } from "./skill-aliases.js";
 import {
   getDisabledProjectSkills,
@@ -97,6 +97,8 @@ export function getSkillPath(name: string): string {
   if (portable) return portable.path;
   const legacyCustomPath = join(getDataDir(), "custom", skillName);
   if (existsSync(legacyCustomPath)) return legacyCustomPath;
+  const extensionPath = findExtensionSkillPath(skillName);
+  if (extensionPath) return extensionPath;
   return join(SKILLS_DIR, skillName);
 }
 
@@ -177,7 +179,7 @@ export function installSkillSource(name: string, _options: InstallOptions = {}):
   return {
     skill: canonicalName,
     success: false,
-    error: "Source installs are disabled. Use Skills MCP discovery and project pins instead.",
+    error: "Source installs are disabled. Render skills into native agent folders with: skills render",
     mode: "source",
   };
 }
@@ -194,7 +196,7 @@ export function installSkillManifest(
   return {
     skill: skillName,
     success: false,
-    error: "Manifest installs are disabled. Fetch skill docs through Skills CLI/MCP instead.",
+    error: "Manifest installs are disabled. Render skills into native agent folders with: skills render",
     mode: "manifest",
   };
 }
