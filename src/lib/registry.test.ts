@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   SKILLS,
@@ -16,6 +16,8 @@ import {
   type SkillMeta,
   type Category,
 } from "./registry";
+import { DATA_DIR_ENV, INSTALLED_SKILLS_DIRNAME } from "./config.js";
+import { getSkillBestDoc } from "./skillinfo.js";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
 
@@ -282,6 +284,47 @@ describe("registry", () => {
       const b = loadRegistry();
       // Same array reference within cache TTL
       expect(a).toBe(b);
+    });
+
+    test("loads configured extensions in place between official and custom precedence", () => {
+      const dataDir = process.env[DATA_DIR_ENV]!;
+      const extensionsDir = join(dataDir, "..", `skills-extensions-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      const writeSkill = (root: string, folder: string, name: string, description: string) => {
+        mkdirSync(join(root, folder), { recursive: true });
+        writeFileSync(join(root, folder, "SKILL.md"), [
+          "---",
+          `name: ${name}`,
+          `description: ${description}`,
+          "category: Development Tools",
+          "tags: [extension, test]",
+          "---",
+        ].join("\n"));
+      };
+
+      try {
+        writeSkill(extensionsDir, "extension-only", "extension-only", "private extension");
+        writeSkill(extensionsDir, "official-overlay", "blog-article", "extension beats official");
+        writeSkill(extensionsDir, "custom-overlay", "custom-overlay", "extension loses to custom");
+        writeSkill(join(dataDir, INSTALLED_SKILLS_DIRNAME), "custom-overlay", "custom-overlay", "custom beats extension");
+        writeFileSync(join(dataDir, "config.json"), JSON.stringify({ extensionsDir }));
+
+        clearRegistryCache();
+        const registry = loadRegistry();
+        const extensionOnly = registry.find((skill) => skill.name === "extension-only");
+        const officialOverlay = registry.find((skill) => skill.name === "blog-article");
+        const customOverlay = registry.find((skill) => skill.name === "custom-overlay");
+
+        expect(extensionOnly?.source).toBe("extension");
+        expect(officialOverlay).toMatchObject({ source: "extension", description: "extension beats official" });
+        expect(customOverlay).toMatchObject({ source: "custom", description: "custom beats extension" });
+        expect(getSkillBestDoc("extension-only")).toContain("private extension");
+        expect(getSkillBestDoc("blog-article")).toContain("extension beats official");
+        expect(getSkillBestDoc("custom-overlay")).toContain("custom beats extension");
+        expect(existsSync(join(dataDir, INSTALLED_SKILLS_DIRNAME, "extension-only"))).toBe(false);
+      } finally {
+        clearRegistryCache();
+        rmSync(extensionsDir, { recursive: true, force: true });
+      }
     });
   });
 
