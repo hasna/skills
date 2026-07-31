@@ -147,6 +147,8 @@ describe("installer", () => {
       expect(result.success).toBe(false);
       expect(result.mode).toBe("manifest");
       expect(result.error).toContain("Manifest installs are disabled");
+      expect(result.error).toContain("skills render");
+      expect(result.error).not.toContain("Skills MCP");
       expect(existsSync(join(testDir, ".skills"))).toBe(false);
     });
 
@@ -154,6 +156,8 @@ describe("installer", () => {
       const result = installSkillSource("brand-kit", { targetDir: testDir });
       expect(result.success).toBe(false);
       expect(result.error).toContain("Source installs are disabled");
+      expect(result.error).toContain("skills render");
+      expect(result.error).not.toContain("Skills MCP");
       expect(existsSync(join(testDir, ".skills", "skills"))).toBe(false);
     });
 

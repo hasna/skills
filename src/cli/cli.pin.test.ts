@@ -145,9 +145,10 @@ describe("CLI pin and search controls", () => {
       expect(exitCode).not.toBe(0);
     });
 
-    test("install without args points to MCP setup", async () => {
+    test("install without args points to skills render", async () => {
       const { stderr, exitCode } = await runCli(["install"]);
-      expect(stderr).toContain("skills setup agents");
+      expect(stderr).toContain("skills render");
+      expect(stderr).not.toContain("skills mcp --register");
       expect(exitCode).not.toBe(0);
     });
 
@@ -159,7 +160,8 @@ describe("CLI pin and search controls", () => {
 
     test("shows install integration help", async () => {
       const { stdout } = await runCli(["install", "--help"]);
-      expect(stdout).toContain("skills setup agents");
+      expect(stdout).toContain("skills render");
+      expect(stdout).not.toContain("skills setup agents");
     });
   });
 

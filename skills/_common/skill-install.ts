@@ -2,7 +2,7 @@
  * Legacy install command boundary for bundled skill packages.
  *
  * Per-skill packages must not write into agent-native skill directories.
- * Discovery and execution go through the root Skills CLI/MCP server.
+ * The root Skills CLI renders skills into agent-native skill directories.
  */
 
 interface SkillMeta {
@@ -23,7 +23,7 @@ export async function handleInstallCommand(meta: SkillMeta, args: string[]): Pro
 
   if (!assistant || !["claude", "codex", "windsurf", "cursor"].includes(assistant)) {
     console.error("Direct per-skill installs are disabled.");
-    console.error("Use: skills mcp --register <claude|codex|windsurf|cursor|all>");
+    console.error("Use: skills render");
     process.exit(1);
   }
 
@@ -32,6 +32,6 @@ export async function handleInstallCommand(meta: SkillMeta, args: string[]): Pro
   } else {
     console.error(`Direct uninstalls for ${meta.name} are disabled.`);
   }
-  console.error(`Use: skills mcp --register ${assistant}`);
+  console.error("Use: skills render");
   process.exit(1);
 }

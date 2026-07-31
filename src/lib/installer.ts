@@ -177,7 +177,7 @@ export function installSkillSource(name: string, _options: InstallOptions = {}):
   return {
     skill: canonicalName,
     success: false,
-    error: "Source installs are disabled. Use Skills MCP discovery and project pins instead.",
+    error: "Source installs are disabled. Render skills into native agent folders with: skills render",
     mode: "source",
   };
 }
@@ -194,7 +194,7 @@ export function installSkillManifest(
   return {
     skill: skillName,
     success: false,
-    error: "Manifest installs are disabled. Fetch skill docs through Skills CLI/MCP instead.",
+    error: "Manifest installs are disabled. Render skills into native agent folders with: skills render",
     mode: "manifest",
   };
 }
