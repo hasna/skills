@@ -119,6 +119,7 @@ export function registerCreateSync(parent: Command) {
   // Sync — the last mile: corpus -> each agent's global skills folder.
   parent
     .command("sync")
+    .alias("render")
     .argument("[names...]", "Skills to sync (default: every skill in this machine's corpus)")
     .option("--for <agent>", `Target one agent (${SYNC_AGENTS.join(", ")}, or all)`, "all")
     .option("--all", "Sync every corpus skill (the default)", false)

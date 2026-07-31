@@ -176,6 +176,23 @@ describe("CLI import export and env checks", () => {
       }
     });
 
+    test("render aliases the corpus-to-agent sync", async () => {
+      const home = mkdtempSync(join(tmpdir(), "cli-render-home-"));
+      try {
+        seedCorpus(home, "deploy-runbook");
+        const { stdout, exitCode } = await runCli(["render", "deploy-runbook", "--for", "claude", "--dry-run", "--json"], { HOME: home });
+        expect(exitCode).toBe(0);
+        const data = JSON.parse(stdout);
+        expect(data.dryRun).toBe(true);
+        expect(data.actions[0].skill).toBe("deploy-runbook");
+        expect(data.actions[0].agent).toBe("claude");
+        expect(data.actions[0].action).toBe("create");
+        expect(existsSync(join(home, ".claude", "skills", "deploy-runbook", "SKILL.md"))).toBe(false);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
     test("a named skill missing from the corpus is a skip and exits nonzero", async () => {
       const home = mkdtempSync(join(tmpdir(), "cli-sync-home-"));
       try {
