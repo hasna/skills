@@ -5,9 +5,15 @@ signature=${1:-${INBOX_SIGNATURE:-}}
 poll_seconds=${2:-${INBOX_MONITOR_POLL_SECONDS:-15}}
 state_dir=${INBOX_MONITOR_STATE_DIR:-state/monitors}
 max_polls=${INBOX_MONITOR_MAX_POLLS:-0}
+since_duration=${INBOX_MONITOR_SINCE_DURATION:-30m}
+page_limit=${INBOX_MONITOR_PAGE_LIMIT:-1000}
 
 if [[ -z "$signature" ]]; then
   printf 'usage: %s <content-signature> [poll-seconds]\n' "$0" >&2
+  exit 2
+fi
+if [[ ! "$page_limit" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'inbox-monitor: INBOX_MONITOR_PAGE_LIMIT must be a positive integer\n' >&2
   exit 2
 fi
 
@@ -28,17 +34,22 @@ remember_current_name() {
 }
 
 latest_cursor() {
-  jq -r '[.[] | .id // .message_id // empty] | map(tonumber) | max // 0'
+  jq -r '[.[] | .id // .message_id // empty | tonumber?] | max // 0'
+}
+
+fetch_messages() {
+  conversations since "$since_duration" --limit "$page_limit" -j 2>/dev/null
 }
 
 emit_inbound() {
-  jq -c --arg signature "$signature" --rawfile self_names "$self_names_file" '
+  jq -c --arg signature "$signature" --argjson cursor "$1" --rawfile self_names "$self_names_file" '
     ($self_names | split("\n") | map(select(length > 0))) as $names
     | .[]
+    | select(((.id // .message_id // 0) | tonumber? // 0) > $cursor)
     | select((((.from_agent // "") as $from | (($names | index($from)) != null) and ((.content // .message // .body // "") | tostring | contains($signature))) | not))'
 }
 
-seed=$(conversations since 0 -j 2>/dev/null) || { printf 'inbox-monitor: failed to seed conversations cursor\n' >&2; exit 1; }
+seed=$(fetch_messages) || { printf 'inbox-monitor: failed to seed conversations cursor\n' >&2; exit 1; }
 seed=$(printf '%s' "$seed" | messages) || { printf 'inbox-monitor: invalid seed response\n' >&2; exit 1; }
 printf '%s\n' "$(printf '%s' "$seed" | latest_cursor)" >"$cursor_file"
 remember_current_name || true
@@ -57,10 +68,10 @@ while true; do
   remember_current_name || true
   cursor=$(cat "$cursor_file")
 
-  if response=$(conversations since "$cursor" -j 2>/dev/null) \
+  if response=$(fetch_messages) \
     && normalized=$(printf '%s' "$response" | messages) \
     && next_cursor=$(printf '%s' "$normalized" | latest_cursor) \
-    && printf '%s' "$normalized" | emit_inbound; then
+    && printf '%s' "$normalized" | emit_inbound "$cursor"; then
     if (( failures >= 4 )); then
       printf 'inbox-monitor: recovered after %d consecutive poll failures\n' "$failures"
     fi

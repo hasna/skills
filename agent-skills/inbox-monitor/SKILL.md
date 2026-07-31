@@ -33,8 +33,8 @@ Both checks are required. The identity file is machine-level and can rotate mid-
 
 ## Runtime guarantees
 
-- Uses one `conversations since <cursor> -j` call per poll for channels, DMs, and blockers.
-- Keys cursor and self-name state by monitor PID so concurrent sessions do not share progress.
+- Uses one `conversations since <duration> --limit <n> -j` call per poll for channels, DMs, and blockers.
+- Keys max-message-id cursor and self-name state by monitor PID so concurrent sessions do not share progress.
 - Seeds the cursor at arm time and emits only later messages.
 - Emits a degraded-monitor warning after four consecutive failed polls and a recovery notice after the next successful poll.
 

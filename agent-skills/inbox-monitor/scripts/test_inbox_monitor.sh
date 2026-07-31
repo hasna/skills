@@ -16,13 +16,31 @@ count=0
 count=$((count + 1))
 printf '%s\n' "$count" >"$counter_file"
 
+expect_since() {
+  [[ "${1:-}" == 'since' \
+    && "${2:-}" == '30m' \
+    && "${3:-}" == '--limit' \
+    && "${4:-}" == '1000' \
+    && "${5:-}" == '-j' \
+    && "${6:-}" == '' ]]
+}
+
 case "$1:$count" in
   whoami:1) printf 'manius\n' ;;
   whoami:2) printf 'fabricius\n' ;;
   whoami:3) printf 'agent-ceo\n' ;;
-  since:1) printf '[{"id":100,"from_agent":"old","content":"seed"}]\n' ;;
-  since:2) printf '%s\n' '[{"id":101,"from_agent":"fabricius","content":"own [seat-signature]"},{"id":102,"from_agent":"agent-ceo","content":"genuine before observation"}]' ;;
-  since:3) printf '%s\n' '[{"id":103,"from_agent":"manius","content":"own after rotation [seat-signature]"},{"id":104,"from_agent":"agent-ceo","content":"own current [seat-signature]"},{"id":105,"from_agent":"agent-ceo","content":"genuine from same-name seat"}]' ;;
+  since:1)
+    expect_since "$@"
+    printf '[{"id":100,"from_agent":"old","content":"seed"}]\n'
+    ;;
+  since:2)
+    expect_since "$@"
+    printf '%s\n' '[{"id":101,"from_agent":"fabricius","content":"own [seat-signature]"},{"id":102,"from_agent":"agent-ceo","content":"genuine before observation"}]'
+    ;;
+  since:3)
+    expect_since "$@"
+    printf '%s\n' '[{"id":103,"from_agent":"manius","content":"own after rotation [seat-signature]"},{"id":104,"from_agent":"agent-ceo","content":"own current [seat-signature]"},{"id":105,"from_agent":"agent-ceo","content":"genuine from same-name seat"}]'
+    ;;
   *) exit 1 ;;
 esac
 MOCK
