@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+set -u
+
+signature=${1:-${INBOX_SIGNATURE:-}}
+poll_seconds=${2:-${INBOX_MONITOR_POLL_SECONDS:-15}}
+state_dir=${INBOX_MONITOR_STATE_DIR:-state/monitors}
+max_polls=${INBOX_MONITOR_MAX_POLLS:-0}
+since_duration=${INBOX_MONITOR_SINCE_DURATION:-30m}
+page_limit=${INBOX_MONITOR_PAGE_LIMIT:-1000}
+
+if [[ -z "$signature" ]]; then
+  printf 'usage: %s <content-signature> [poll-seconds]\n' "$0" >&2
+  exit 2
+fi
+if [[ ! "$page_limit" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'inbox: INBOX_MONITOR_PAGE_LIMIT must be a positive integer\n' >&2
+  exit 2
+fi
+
+mkdir -p "$state_dir"
+cursor_file="$state_dir/inbox.$$.cursor"
+self_identities_file="$state_dir/inbox.$$.self-identities"
+: >"$self_identities_file"
+
+messages() {
+  jq -c 'if type == "array" then . elif (.messages? | type) == "array" then .messages elif (.items? | type) == "array" then .items elif (.data? | type) == "array" then .data else error("unsupported conversations since response") end'
+}
+
+remember_identity() {
+  local identity=$1
+  [[ -z "$identity" ]] && return 0
+  grep -Fqx -- "$identity" "$self_identities_file" || printf '%s\n' "$identity" >>"$self_identities_file"
+}
+
+remember_current_identities() {
+  local current_json current_name presence_json registered_ids
+  current_json=$(conversations whoami --json 2>/dev/null) || return 1
+  current_name=$(printf '%s' "$current_json" | jq -r 'if type == "object" then .agent // empty else empty end') || return 1
+  [[ -z "$current_name" ]] && return 0
+  remember_identity "$current_name"
+
+  presence_json=$(conversations agents list --json 2>/dev/null) || return 0
+  registered_ids=$(printf '%s' "$presence_json" | jq -r --arg agent "$current_name" '
+    (if type == "array" then . elif (.agents? | type) == "array" then .agents else [] end)
+    | .[]
+    | select(((.agent // "") | ascii_downcase) == ($agent | ascii_downcase))
+    | .id // empty') || return 0
+  while IFS= read -r registered_id; do
+    remember_identity "$registered_id"
+  done <<<"$registered_ids"
+}
+
+latest_cursor() {
+  jq -r '[.[] | .id // .message_id // empty | tonumber?] | max // 0'
+}
+
+fetch_messages() {
+  conversations since "$since_duration" --limit "$page_limit" -j 2>/dev/null
+}
+
+emit_inbound() {
+  jq -c --arg signature "$signature" --argjson cursor "$1" --rawfile self_identities "$self_identities_file" '
+    ($self_identities | split("\n") | map(select(length > 0))) as $identities
+    | .[]
+    | select(((.id // .message_id // 0) | tonumber? // 0) > $cursor)
+    | select((((.from_agent // "") as $from | (($identities | index($from)) != null) and ((.content // .message // .body // "") | tostring | contains($signature))) | not))'
+}
+
+seed=$(fetch_messages) || { printf 'inbox: failed to seed conversations cursor\n' >&2; exit 1; }
+seed=$(printf '%s' "$seed" | messages) || { printf 'inbox: invalid seed response\n' >&2; exit 1; }
+printf '%s\n' "$(printf '%s' "$seed" | latest_cursor)" >"$cursor_file"
+remember_current_identities || true
+
+failures=0
+polls=0
+
+finish_poll() {
+  ((polls += 1))
+  if ((max_polls > 0 && polls >= max_polls)); then
+    exit 0
+  fi
+}
+
+while true; do
+  sleep "$poll_seconds"
+  remember_current_identities || true
+  cursor=$(<"$cursor_file")
+
+  if response=$(fetch_messages) \
+    && normalized=$(printf '%s' "$response" | messages) \
+    && next_cursor=$(printf '%s' "$normalized" | latest_cursor) \
+    && printf '%s' "$normalized" | emit_inbound "$cursor"; then
+    if ((failures >= 4)); then
+      printf 'inbox: recovered after %d consecutive poll failures\n' "$failures"
+    fi
+    failures=0
+    if ((next_cursor > cursor)); then
+      printf '%s\n' "$next_cursor" >"$cursor_file"
+    fi
+    finish_poll
+    continue
+  fi
+
+  ((failures += 1))
+  if ((failures == 4)); then
+    printf 'inbox: DEGRADED after 4 consecutive poll failures; inbox may be stale\n'
+  fi
+  finish_poll
+done
