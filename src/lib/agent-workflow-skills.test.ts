@@ -64,6 +64,14 @@ describe("repository-managed agent workflow skills", () => {
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
   });
 
+  test("inbox resolves registered sender IDs without hiding unsigned same-name traffic", () => {
+    const result = spawnSync("bash", ["agent-skills/inbox/tests/test_registered_sender_id.sh"], {
+      cwd: ROOT,
+      encoding: "utf8",
+    });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  });
+
   test("merge-pr guard passes its raw-fixture behavior suite", () => {
     const result = spawnSync(
       "python3",
