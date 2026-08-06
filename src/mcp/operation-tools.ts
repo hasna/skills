@@ -29,6 +29,7 @@ import {
   completeSkillRun,
   createSkillRun,
   findSkillRun,
+  skillRunEnv,
   updateSkillRun,
   writeRunLogs,
 } from "../lib/run-state.js";
@@ -345,11 +346,7 @@ export function registerOperationTools(server: McpServer): void {
 
     const result = await runSkill(skillName, runArgs, {
       stdio: "pipe",
-      env: {
-        SKILLS_RUN_ID: runContext.record.id,
-        SKILLS_RUN_DIR: runContext.runDir,
-        SKILLS_EXPORT_DIR: runContext.exportDir,
-      },
+      env: skillRunEnv(runContext),
     });
     writeRunLogs(runContext, result.stdout ?? "", result.stderr ?? result.error ?? "");
     const localRun = completeSkillRun(runContext, {

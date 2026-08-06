@@ -21,6 +21,7 @@ import {
   findSkillRun,
   getRunExportDir,
   listSkillRuns,
+  skillRunEnv,
   updateSkillRun,
   writeRunLogs,
 } from "../../lib/run-state.js";
@@ -375,11 +376,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
 
   const result = await runSkill(name, args, {
     stdio: "pipe",
-    env: {
-      SKILLS_RUN_ID: runContext.record.id,
-      SKILLS_RUN_DIR: runContext.runDir,
-      SKILLS_EXPORT_DIR: runContext.exportDir,
-    },
+    env: skillRunEnv(runContext),
   });
   writeRunLogs(runContext, result.stdout ?? "", result.stderr ?? result.error ?? "");
   const completed = completeSkillRun(runContext, {
