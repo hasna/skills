@@ -47,122 +47,32 @@
  * and this file. Do not weaken it to a range or a `toBeGreaterThan` — a loosened
  * assertion still looks green while it has stopped checking the thing it exists
  * for, which is strictly worse than an honest absence.
+ *
+ * WHERE THE MACHINERY WENT, AND WHY
+ *
+ * The parser and the derivation now live in `doc-derived-counts.ts`, because this
+ * guard being scoped to one hard-coded path was itself a defect: README.md carried
+ * `202+` — the very number named above as the thing that rotted — for weeks after
+ * this table was corrected to 85. The number was guarded in one file and hand-copied
+ * into another. `readme-derived-counts.test.ts` is the sibling that closes it, and
+ * it shares this file's code so a third document costs two lines rather than a
+ * duplicated parser that can drift on its own.
  */
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
-import pkg from "../../package.json" with { type: "json" };
-import { buildServer } from "../mcp/server.js";
-import { SKILLS } from "./registry.js";
-import { CATEGORIES } from "./registry-types.js";
+import { deriveCounts, readDocumentedCounts } from "./doc-derived-counts.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
 
 const CLAUDE_MD_PATH = join(import.meta.dir, "..", "..", "CLAUDE.md");
-const TABLE_HEADING = "### Derived counts";
-
-/**
- * Parse the `### Derived counts` table into {label -> value}.
- *
- * Scoped to the section rather than the whole file so an unrelated markdown
- * table elsewhere in CLAUDE.md cannot inject rows. Throws rather than returning
- * empty when the section is missing: an empty map would make every assertion
- * below pass or fail for the wrong reason.
- *
- * The three tolerances below are not incidental — each one is a way this guard
- * could have failed for a reason that has nothing to do with doc drift, and a
- * doc test that cries wolf is a doc test that gets deleted:
- *
- *   - Up to three leading spaces before `|`. GFM permits them, so an editor
- *     that indents the table would otherwise yield zero rows and a diff that
- *     looks like catastrophic drift.
- *   - A delimiter row of ANY dash count, with or without alignment colons.
- *     `|-|-|-|` is legal GFM; an earlier `-{2,}` test let it through as a data
- *     row named "-".
- *   - The header is dropped BY POSITION (first row), not by matching the
- *     literal "Count". Renaming that cell to "Metric" must not break the guard.
- */
-function readDocumentedCounts(): Record<string, string> {
-  const text = readFileSync(CLAUDE_MD_PATH, "utf8");
-  const start = text.indexOf(TABLE_HEADING);
-  if (start === -1) {
-    throw new Error(
-      `CLAUDE.md has no "${TABLE_HEADING}" section. It is the table this test re-derives; ` +
-        "restore it rather than deleting the guard.",
-    );
-  }
-  // Stop at the next heading of any level so the table cannot swallow later sections.
-  const section = text.slice(start + TABLE_HEADING.length).split(/\n#{1,6} /)[0];
-
-  const rows: Array<[string, string]> = [];
-  for (const line of section.split("\n")) {
-    if (/^ {0,3}\|[\s:|-]*$/.test(line)) continue; // delimiter row, any dash count
-    const cells = line.match(/^ {0,3}\|([^|]*)\|([^|]*)\|/);
-    if (!cells) continue;
-    const label = cells[1].trim();
-    if (!label) continue;
-    rows.push([label, cells[2].trim()]);
-  }
-
-  return Object.fromEntries(rows.slice(1)); // drop the header row by position
-}
-
-/**
- * Ask the live MCP server what it registered, over the SDK's own client API.
- *
- * Deliberately not a grep for `registerTool(` and not a read of the private
- * `_registeredTools` field: the first misses the five tools registered through
- * the older positional `server.tool()` form in resource-meta-tools.ts, and the
- * second breaks silently on an SDK upgrade. `tools/list` is what an agent
- * actually sees, which is what CLAUDE.md is describing.
- */
-async function liveMcpSurface(): Promise<{ tools: number; resources: number }> {
-  // Caveat, stated so a future failure is diagnosable: this is the one assertion
-  // sensitive to something outside the repo. An @modelcontextprotocol/sdk bump
-  // that registers a built-in tool or resource moves these numbers with no
-  // source change here, and the diff will not say so.
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const server = buildServer();
-  const client = new Client({ name: "claude-md-guard", version: "0.0.0" }, { capabilities: {} });
-  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-  try {
-    const tools = await client.listTools();
-    const resources = await client.listResources();
-    const templates = await client.listResourceTemplates();
-    // Static resources and resource templates are two MCP list endpoints but one
-    // user-visible concept, and CLAUDE.md documents them as one number.
-    return {
-      tools: tools.tools.length,
-      resources: resources.resources.length + templates.resourceTemplates.length,
-    };
-  } finally {
-    await client.close();
-    await server.close();
-  }
-}
-
-async function deriveCounts(): Promise<Record<string, string>> {
-  const mcp = await liveMcpSurface();
-  return {
-    "Catalog skills": String(SKILLS.length),
-    "Instruction-kind skills": String(SKILLS.filter((skill) => skill.kind === "instruction").length),
-    Categories: String(CATEGORIES.length),
-    "MCP tools": String(mcp.tools),
-    "MCP resources": String(mcp.resources),
-    "Published bins": String(Object.keys(pkg.bin).length),
-    "bun build invocations": String((pkg.scripts.build.match(/bun build /g) ?? []).length),
-  };
-}
 
 describe("CLAUDE.md derived counts", () => {
   test("every guarded count matches the tree it describes", async () => {
     const derived = await deriveCounts();
-    const documented = readDocumentedCounts();
+    const documented = readDocumentedCounts(CLAUDE_MD_PATH);
 
     // One comparison rather than a loop: a whole-object diff names the drifted
     // row and prints documented-vs-derived side by side, which is what makes
@@ -178,6 +88,6 @@ describe("CLAUDE.md derived counts", () => {
     // nothing worth checking. Deriving the expected size here means legitimately
     // removing a row cannot leave this test failing on an unexplained constant.
     const expected = Object.keys(await deriveCounts()).length;
-    expect(Object.keys(readDocumentedCounts()).length).toBe(expected);
+    expect(Object.keys(readDocumentedCounts(CLAUDE_MD_PATH)).length).toBe(expected);
   });
 });
