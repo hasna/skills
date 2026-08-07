@@ -162,6 +162,30 @@ export function findSkillRun(runId: string, targetDir: string = process.cwd()): 
   return null;
 }
 
+/**
+ * Environment handed to a skill child process so it writes into the project's
+ * `.skills` tree instead of its own installation directory.
+ *
+ * Skills are spawned with `cwd` set to the installed skill package, so every
+ * cwd-relative fallback (`process.env.SKILLS_EXPORTS_DIR || "."`,
+ * `process.env.SKILLS_OUTPUT_DIR || join(process.cwd(), ".skills")`) resolves
+ * inside node_modules unless these are set. The catalog reads three names:
+ * SKILLS_OUTPUT_DIR (the `.skills` root, from which skills derive
+ * `exports/<skill>` and `logs/<skill>`), plus SKILLS_EXPORTS_DIR and
+ * SKILLS_LOGS_DIR (already-resolved directories). SKILLS_EXPORT_DIR is kept
+ * for back-compat with anything reading the singular CLI-side name.
+ */
+export function skillRunEnv(context: SkillRunContext): Record<string, string> {
+  return {
+    SKILLS_RUN_ID: context.record.id,
+    SKILLS_RUN_DIR: context.runDir,
+    SKILLS_OUTPUT_DIR: getProjectStateDir(context.targetDir),
+    SKILLS_EXPORTS_DIR: context.exportDir,
+    SKILLS_LOGS_DIR: context.logsDir,
+    SKILLS_EXPORT_DIR: context.exportDir,
+  };
+}
+
 export function getRunExportDir(runId: string, skill: string, targetDir: string = process.cwd()): string {
   return join(getProjectStateDir(targetDir), "exports", normalizeSkillName(skill), runId);
 }

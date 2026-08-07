@@ -1,9 +1,10 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { INSTALLED_SKILLS_DIRNAME } from "./config";
 import { runSkill } from "./skillinfo";
+import { completeSkillRun, createSkillRun, skillRunEnv } from "./run-state";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
 
@@ -107,14 +108,78 @@ source: private
     try {
       const result = await runSkill("lorem-generator", ["--help"], {
         stdio: "pipe",
-        env: {
-          SKILLS_RUN_ID: "run_test",
-          SKILLS_RUN_DIR: join(testDir, ".skills", "runs", "today", "run_test"),
-          SKILLS_EXPORT_DIR: join(testDir, ".skills", "exports", "lorem-generator", "run_test"),
-        },
+        env: skillRunEnv(
+          createSkillRun({ skill: "lorem-generator", args: ["--help"] }, testDir),
+        ),
       });
       expect(result.exitCode).toBe(0);
       expect(result.error).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env["HASNA_SKILLS_DIR"];
+      else process.env["HASNA_SKILLS_DIR"] = previous;
+      const { rmSync } = require("fs");
+      rmSync(corpusRoot, { recursive: true, force: true });
+    }
+  });
+
+  // A skill that writes through the catalog's own env-var conventions. The
+  // fallbacks are copied verbatim from the shipped skills: the plural variant
+  // falls back to "." (cwd, i.e. the installed skill directory) and the root
+  // variant falls back to join(process.cwd(), ".skills"). Both must be
+  // overridden by the CLI-supplied environment.
+  function writeCorpusWriter(): string {
+    const corpusRoot = mkdtempSync(join(tmpdir(), "runskill-writer-"));
+    const skillDir = join(corpusRoot, "custom", "lorem-writer");
+    mkdirSync(join(skillDir, "src"), { recursive: true });
+    writeFileSync(
+      join(skillDir, "package.json"),
+      JSON.stringify({ name: "lorem-writer", bin: { "lorem-writer": "src/index.ts" } }),
+    );
+    writeFileSync(
+      join(skillDir, "src", "index.ts"),
+      [
+        'import { mkdirSync, writeFileSync } from "fs";',
+        'import { join } from "path";',
+        'const exportsDir = process.env.SKILLS_EXPORTS_DIR || ".";',
+        'mkdirSync(exportsDir, { recursive: true });',
+        'writeFileSync(join(exportsDir, "artifact.txt"), "exported");',
+        'const root = process.env.SKILLS_OUTPUT_DIR || join(process.cwd(), ".skills");',
+        'const derived = join(root, "exports", "lorem-writer");',
+        'mkdirSync(derived, { recursive: true });',
+        'writeFileSync(join(derived, "derived.txt"), "derived");',
+        'const logsDir = process.env.SKILLS_LOGS_DIR || join(process.cwd(), ".skills", "logs");',
+        'mkdirSync(logsDir, { recursive: true });',
+        'writeFileSync(join(logsDir, "skill.log"), "logged");',
+      ].join("\n"),
+    );
+    return corpusRoot;
+  }
+
+  test("run environment makes the skill write into the project, never into its own directory", async () => {
+    const corpusRoot = writeCorpusWriter();
+    const skillDir = join(corpusRoot, "custom", "lorem-writer");
+    const previous = process.env["HASNA_SKILLS_DIR"];
+    process.env["HASNA_SKILLS_DIR"] = corpusRoot;
+    try {
+      const context = createSkillRun({ skill: "lorem-writer", args: [] }, testDir);
+      const result = await runSkill("lorem-writer", [], { stdio: "pipe", env: skillRunEnv(context) });
+      expect(result.exitCode).toBe(0);
+
+      // The child wrote where it was told, under the temp project dir.
+      expect(existsSync(join(context.exportDir, "artifact.txt"))).toBe(true);
+      expect(existsSync(join(context.logsDir, "skill.log"))).toBe(true);
+      expect(existsSync(join(testDir, ".skills", "exports", "lorem-writer", "derived.txt"))).toBe(true);
+
+      // Nothing was created under the resolved skill directory.
+      expect(readdirSync(skillDir).sort()).toEqual(["package.json", "src"]);
+      expect(existsSync(join(skillDir, ".skills"))).toBe(false);
+      expect(existsSync(join(skillDir, "artifact.txt"))).toBe(false);
+      expect(existsSync(join(skillDir, "src", "artifact.txt"))).toBe(false);
+
+      const artifacts = completeSkillRun(context, { status: "completed" }).artifacts;
+      expect(artifacts.map((a) => a.path)).toContain(
+        join(".skills", "exports", "lorem-writer", context.record.id, "artifact.txt"),
+      );
     } finally {
       if (previous === undefined) delete process.env["HASNA_SKILLS_DIR"];
       else process.env["HASNA_SKILLS_DIR"] = previous;
