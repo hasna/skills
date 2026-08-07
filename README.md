@@ -259,7 +259,7 @@ Endpoints: `GET /health` → `{"status":"ok","name":"skills"}`, MCP at `/mcp`.
 Uses stateless `StreamableHTTPServerTransport` (shared process, many clients).
 `skills-mcp` without flags still uses stdio (unchanged).
 
-The MCP server exposes 20+ tools including `list_skills`, `search_skills`,
+The MCP server's tools include `list_skills`, `search_skills`,
 `scaffold_skill`, `port_skill`, `pin_skill`, `unpin_skill`, `pin_category`,
 `list_pinned_skills`, `get_skill_info`, `get_skill_docs`, `get_requirements`,
 `run_skill`, `get_run_status`, `schedule_skill`, `detect_project_skills`,
@@ -396,9 +396,10 @@ storage.
 ```
 src/
 ├── cli/index.tsx           # Commander.js CLI + Ink TUI
-├── mcp/index.ts            # MCP server (stdio) with ~20 tools
+├── mcp/index.ts            # MCP server (stdio)
 ├── lib/
-│   ├── registry.ts          # 202+ entries, search, categories, tags
+│   ├── registry-data/       # The catalogue entries themselves, one file per category
+│   ├── registry.ts          # Registry API over registry-data: search, categories, tags
 │   ├── installer.ts         # Project pins and disabled source-copy paths
 │   ├── project-state.ts     # .skills/project.json preferences
 │   ├── run-state.ts         # .skills/runs and .skills/exports metadata
@@ -409,10 +410,25 @@ src/
 ├── index.ts                 # Library re-exports (npm package entry)
 └── *.test.ts                # Test files
 
-skills/                      # 202+ public skill contracts and local OSS skills
+skills/                      # Public skill contracts and local OSS skills
 ├── _common/                 # Shared utilities
 └── */                       # Local skills include src/; server-executed skills expose metadata/contracts
 ```
+
+### Derived counts
+
+| Count | Value | Derived from |
+|---|---|---|
+| Catalog skills | 85 | `SKILLS.length` (`src/lib/registry-data/`) |
+| Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
+| MCP tools | 37 | `tools/list` against a live `buildServer()` |
+
+Every number in this table is re-derived from the source tree on each test run by
+`src/lib/readme-derived-counts.test.ts`, so a drifted figure fails a test rather
+than sitting on the front page. Counts are stated here and nowhere else in this
+file for the same reason: this README advertised `202+` skills for weeks after the
+catalogue was cut to 85, because the figure was hand-written in prose that nothing
+checked.
 
 ## Project Runtime State
 
@@ -447,7 +463,8 @@ bun run typecheck          # TypeScript type checking
 ## Adding a New Skill
 
 1. Create `skills/{name}/` with `src/index.ts`, `package.json`, `tsconfig.json`, `SKILL.md`
-2. Add an entry to the `SKILLS` array in `src/lib/registry.ts`
+2. Add an entry to the category file it belongs to under `src/lib/registry-data/`
+   (`src/lib/registry.ts` re-exports `SKILLS` from there; it holds no entries itself)
 3. Run `skills validate <name> --json` to check package metadata, portable
    manifests, bin entries, docs, and SKILL.md frontmatter
 4. Run `bun test` to verify registry-wide validation passes
