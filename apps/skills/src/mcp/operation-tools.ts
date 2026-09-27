@@ -1,0 +1,621 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { existsSync, readdirSync, statSync } from "fs";
+import { join } from "path";
+import { z } from "zod";
+import pkg from "../../package.json" with { type: "json" };
+
+import {
+  CATEGORIES,
+  clearRegistryCache,
+  getSkill,
+  getSkillsByCategory,
+  findSimilarSkills,
+  type Category,
+} from "../lib/registry.js";
+import { getBrowseRegistry, requireSkillsReadAccess } from "../lib/read-access.js";
+import { describeCredentialState } from "../lib/credential-state.js";
+import {
+  installSkill,
+  getInstalledSkills,
+  removeSkill,
+  resolveAgents,
+  getSkillPath,
+  getAgentSkillsDir,
+  AGENT_TARGETS,
+  AGENT_LABELS,
+  type AgentTarget,
+} from "../lib/installer.js";
+import { getSkillRequirements, runSkill } from "../lib/skillinfo.js";
+import {
+  completeSkillRun,
+  createSkillRun,
+  findSkillRun,
+  skillRunEnv,
+  updateSkillRun,
+  writeRunLogs,
+} from "../lib/run-state.js";
+import {
+  portPortableSkill,
+  scaffoldPortableSkill,
+  validatePortableSkillDirectory,
+} from "../lib/portable-skills.js";
+import {
+  compactRemoteRun,
+  compactRunRecord,
+  previewText,
+} from "../lib/compact-output.js";
+import { cacheClear, mcpError, mcpJson, readSurface, remoteRunNextActions } from "./helpers.js";
+import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../lib/remote-run-contract.js";
+import { resolveConfiguredRunRouting } from "../lib/run-routing.js";
+import { requiresCliSkillLoading } from "../lib/managed-policy.js";
+import { pinSelectedSkillVersion, selectedSkillRequirements } from "../lib/selection-resolver.js";
+import { selectedProfileId } from "../cli/commands/context.js";
+import { SkillSelectionError } from "../lib/selection-cache.js";
+
+export function registerOperationTools(server: McpServer): void {
+  server.registerTool("cloud_skill_eligibility", {
+    title: "Cloud Skill Eligibility",
+    description: "Inspect the authenticated workspace's exact reviewed cloud contract. Does not execute or admit a skill.",
+    inputSchema: { name: z.string(), version: z.string(), bundleDigest: z.string().optional() },
+  }, async ({ name, version, bundleDigest }) => {
+    try { const { CloudExecutionClient } = await import("../lib/cloud-executions.js");
+      return mcpJson(await (await CloudExecutionClient.configured()).eligibility(name, version, bundleDigest));
+    } catch (error) { return mcpError("CLOUD_ELIGIBILITY_FAILED", (error as Error).message); }
+  });
+  server.registerTool("scaffold_skill", {
+    title: "Scaffold Skill",
+    description: "Create a portable skill folder under ~/.hasna/skills/installed/<name> with SKILL.md, skill.json, AGENTS.md, package.json, and src/index.ts.",
+    inputSchema: {
+      name: z.string(),
+      description: z.string().optional(),
+      overwrite: z.boolean().optional(),
+    },
+  }, async ({ name, description, overwrite }) => {
+    try {
+      const result = scaffoldPortableSkill(name, { description, overwrite });
+      clearRegistryCache();
+      cacheClear();
+      return mcpJson(result);
+    } catch (err) {
+      return mcpError("SCAFFOLD_FAILED", (err as Error).message);
+    }
+  });
+
+  server.registerTool("port_skill", {
+    title: "Port Skill",
+    description: "Import an existing skill folder into the portable ~/.hasna/skills/installed/<name> standard and add missing standard files.",
+    inputSchema: {
+      path: z.string(),
+      name: z.string().optional(),
+      overwrite: z.boolean().optional(),
+      allowShadow: z.boolean().optional(),
+    },
+  }, async ({ path, name, overwrite, allowShadow }) => {
+    try {
+      const result = portPortableSkill(path, { name, overwrite, allowShadow });
+      const validation = validatePortableSkillDirectory(result.name, result.path);
+      clearRegistryCache();
+      cacheClear();
+      return {
+        content: [{ type: "text", text: JSON.stringify({ ...result, valid: validation.valid, issues: validation.issues, warnings: validation.warnings }, null, 2) }],
+        isError: !validation.valid,
+      };
+    } catch (err) {
+      return mcpError("PORT_FAILED", (err as Error).message);
+    }
+  });
+
+  server.registerTool("pin_skill", {
+    title: "Pin Skill",
+    description: "Pin a skill to .skills/project.json. Agent skill-folder installs are disabled; use skills render.",
+    inputSchema: {
+      name: z.string(),
+      for: z.string().optional(),
+      scope: z.string().optional(),
+    },
+  }, async ({ name, for: agentArg, scope }) => {
+    if (requiresCliSkillLoading()) {
+      if (agentArg) return mcpError("NATIVE_SKILL_EXPORT_DISABLED", "This station loads skills through the Skills CLI. Use skills sync --selection-profile <id>.");
+      try {
+        const result = await pinSelectedSkillVersion(name, selectedProfileId(), { projectDir: process.cwd() });
+        return mcpJson({ success: true, skill: result.selection.slug, version: result.selection.version, source: "remote", ...result });
+      } catch (error) { return selectedToolError(error); }
+    }
+    if (agentArg) {
+      let agents: AgentTarget[];
+      try {
+        agents = resolveAgents(agentArg);
+      } catch (err) {
+        return mcpError("INVALID_AGENT", (err as Error).message, [...AGENT_TARGETS, "all"]);
+      }
+
+      const results = agents.map(a => ({
+        skill: name,
+        success: false,
+        agent: a,
+        scope: (scope as "global" | "project") || "global",
+        error: "Direct agent skill-folder installs are disabled. Render skills into native agent folders instead: skills render",
+      }));
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
+        isError: results.some(r => !r.success),
+      };
+    }
+
+    const result = installSkill(name);
+    if (result.success) cacheClear();
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      isError: !result.success,
+    };
+  });
+
+  server.registerTool("pin_category", {
+    title: "Pin Category",
+    description: "Pin all skills in a category. Agent skill-folder installs are disabled.",
+    inputSchema: {
+      category: z.string(),
+      for: z.string().optional(),
+      scope: z.string().optional(),
+    },
+  }, async ({ category, for: agentArg, scope }) => {
+    if (requiresCliSkillLoading()) return mcpError("SELECTION_PROFILE_REQUIRED", "Managed station pins come from selection profiles. Use skills sync --selection-profile <id>.");
+    // Validate category
+    const matchedCategory = CATEGORIES.find(
+      (c) => c.toLowerCase() === category.toLowerCase()
+    );
+    if (!matchedCategory) {
+      return {
+        ...mcpError("UNKNOWN_CATEGORY", `Unknown category: ${category}`, CATEGORIES.slice()),
+      };
+    }
+
+    const categorySkills = getSkillsByCategory(matchedCategory as Category);
+    const names = categorySkills.map((s) => s.name);
+
+    if (agentArg) {
+      let agents: AgentTarget[];
+      try {
+        agents = resolveAgents(agentArg);
+      } catch (err) {
+        return mcpError("INVALID_AGENT", (err as Error).message, [...AGENT_TARGETS, "all"]);
+      }
+
+      const results = [];
+      for (const name of names) {
+        for (const a of agents) {
+          const r = {
+            skill: name,
+            success: false,
+            error: "Direct agent skill-folder installs are disabled. Render skills into native agent folders instead: skills render",
+          };
+          results.push({ ...r, agent: a, scope: scope || "global" });
+        }
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({ category: matchedCategory, count: names.length, results }, null, 2) }],
+        isError: results.some(r => !r.success),
+      };
+    }
+
+    const results = names.map(name => installSkill(name));
+    return {
+      content: [{ type: "text", text: JSON.stringify({ category: matchedCategory, count: names.length, results }, null, 2) }],
+      isError: results.some(r => !r.success),
+    };
+  });
+
+  server.registerTool("unpin_skill", {
+    title: "Unpin Skill",
+    description: "Unpin a skill from .skills/project.json. Agent skill folders are unmanaged.",
+    inputSchema: {
+      name: z.string(),
+      for: z.string().optional(),
+      scope: z.string().optional(),
+    },
+  }, async ({ name, for: agentArg, scope }) => {
+    if (agentArg) {
+      let agents: AgentTarget[];
+      try {
+        agents = resolveAgents(agentArg);
+      } catch (err) {
+        return mcpError("INVALID_AGENT", (err as Error).message, [...AGENT_TARGETS, "all"]);
+      }
+
+      const results = agents.map(a => ({
+        skill: name,
+        agent: a,
+        removed: false,
+        error: "Agent skill folders are unmanaged. Render skills into native agent folders instead: skills render",
+      }));
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
+      };
+    }
+
+    const removed = removeSkill(name);
+    if (removed) cacheClear();
+    return {
+      content: [{ type: "text", text: JSON.stringify({ skill: name, removed }, null, 2) }],
+    };
+  });
+
+  // The three DATA tools below run the same fail-closed preamble as the CLI's
+  // `categories` / `tags` / `requires` (lib/read-access.ts): AUTH_REQUIRED
+  // instead of the bundled catalog when the ladder refuses (#1720 validation).
+  server.registerTool("list_categories", {
+    title: "List Categories",
+    description: "List all 17 skill categories with skill counts.",
+  }, async () => readSurface(async () => {
+    const registry = await getBrowseRegistry({ all: true });
+    const extras = Array.from(new Set(registry.map((skill) => skill.category)))
+      .filter((category) => !CATEGORIES.includes(category as Category))
+      .sort();
+    const cats = [...CATEGORIES, ...extras].map(category => ({
+      name: category,
+      count: registry.filter((skill) => skill.category === category).length,
+    }));
+    return { content: [{ type: "text" as const, text: JSON.stringify(cats, null, 2) }] };
+  }));
+
+  server.registerTool("list_tags", {
+    title: "List Tags",
+    description: "List all unique skill tags with occurrence counts.",
+  }, async () => readSurface(async () => {
+    const tagCounts = new Map<string, number>();
+    for (const skill of await getBrowseRegistry({ all: true })) {
+      for (const tag of skill.tags) {
+        tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+      }
+    }
+    const sorted = Array.from(tagCounts.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, count]) => ({ name, count }));
+    return { content: [{ type: "text" as const, text: JSON.stringify(sorted, null, 2) }] };
+  }));
+
+  server.registerTool("get_requirements", {
+    title: "Get Requirements",
+    description: "Get env vars, system deps, and npm dependencies for a skill.",
+    inputSchema: {
+      name: z.string(),
+    },
+  }, async ({ name }) => readSurface(async () => {
+    await requireSkillsReadAccess();
+    if (requiresCliSkillLoading()) return mcpJson(await selectedSkillRequirements(name, selectedProfileId(), { projectDir: process.cwd() }));
+    const reqs = getSkillRequirements(name);
+    if (!reqs) {
+      return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
+    }
+    return { content: [{ type: "text" as const, text: JSON.stringify(reqs, null, 2) }] };
+  }));
+
+  server.registerTool("run_skill", {
+    title: "Run Skill",
+    description: "Run a skill by name with optional arguments.",
+    inputSchema: {
+      name: z.string(),
+      input: z.record(z.string(), z.unknown()).optional(),
+      args: z.array(z.string()).optional(),
+      detail: z.boolean().optional(),
+      maxCostCents: z.number().int().min(0).max(2_147_483_647).optional().describe("Maximum integer credits explicitly approved by the user for a remote run; omitted permits only free runs"),
+      maxCredits: z.number().int().min(0).max(2_147_483_647).optional(),
+      quoteReceipt: z.string().min(1).max(4096).refine(value => Buffer.byteLength(value, "utf8") <= 4096, "Quote receipt exceeds 4096 UTF-8 bytes").optional().describe("Opaque receipt from the approved quote; send unchanged with the same input, args and files. Never refresh after confirmation."),
+      remote: z.boolean().optional().describe("Use the configured server catalog, including skills not installed locally"),
+      target: z.enum(["local", "cloud"]).optional().describe("Execution target for an exact profile-selected skill on a managed station"),
+      idempotency_key: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/).optional().describe("Reuse for the same approved submission after an interrupted response"),
+      files: z.array(z.object({ name: z.string(), base64: z.string().max(1_398_104), contentType: z.string().optional() })).max(10).optional().describe("Inline remote inputs, at most 1 MiB combined; use CLI or SDK for larger files"),
+    },
+  }, async ({ name, input, args, detail, maxCostCents, maxCredits, quoteReceipt, remote, target, idempotency_key, files }) => {
+    let managed: boolean;
+    try { managed = requiresCliSkillLoading(); }
+    catch (error) { return selectedToolError(error); }
+    if (remote && target) return mcpError("CONFLICTING_EXECUTION_MODES", "Use remote for the configured server catalog and quote, or target for selected execution, not both.");
+    if (managed && !remote) {
+      try {
+        const { resolveSelectedRun, executeSelectedLocal } = await import("../lib/selected-run.js");
+        const resolved = await resolveSelectedRun(name, selectedProfileId(), { projectDir: process.cwd() });
+        if (resolved.kind === "instruction") return mcpError("INSTRUCTION_SKILL", "This selected skill contains instructions. Load it with skills load instead of running it.");
+        if (files?.length) return mcpError("SELECTED_INPUT_REQUIRED", "Selected executions require their declared JSON input; use the CLI cloud execution input contract for files.");
+        if (target === "cloud") {
+          if (args?.length || quoteReceipt || maxCredits !== undefined || maxCostCents !== undefined) return mcpError("SELECTED_INPUT_REQUIRED", "The selected cloud execution contract accepts declared JSON input, not legacy run arguments or quote receipts.");
+          const { CloudExecutionClient } = await import("../lib/cloud-executions.js");
+          const client = await CloudExecutionClient.configured();
+          const selection = resolved.selection;
+          const run = await client.submit(selection.slug, selection.version, input ?? {}, idempotency_key ?? crypto.randomUUID(), selection);
+          return mcpJson({ selection, remote: true, run });
+        }
+        const result = await executeSelectedLocal(resolved, { args, input, cwd: process.cwd() });
+        return { ...mcpJson(result), isError: result.exitCode !== 0 };
+      } catch (error) { return selectedToolError(error); }
+    }
+    const skill = remote ? { name, serverOwned: true } : getSkill(name);
+    if (!skill) {
+      return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
+    }
+
+    const {
+      ARTICLE_GENERATION_SLUG,
+      validateBlogArticleRunOptions,
+    } = await import("../lib/blog-article.js");
+    const skillName = skill.name;
+    const runInput = input || {};
+    const runArgs = args || [];
+    if (!remote && skillName === ARTICLE_GENERATION_SLUG) {
+      const validation = validateBlogArticleRunOptions(runInput, runArgs, { requireTopic: true });
+      if (!validation.ok) {
+        return mcpError("INVALID_BLOG_ARTICLE_OPTIONS", validation.errors.join(" "));
+      }
+    }
+
+    const routing = await resolveConfiguredRunRouting(skill);
+    if (files?.length && routing.route !== "remote") return mcpError("REMOTE_REQUIRED", "Inline inputs require a remote run");
+    let inputFiles;
+    try { inputFiles = (await import("../lib/remote-files.js")).decodeRemoteFiles(files ?? []); }
+    catch (error) { return mcpError("INVALID_INPUT_FILES", (error as Error).message); }
+
+    if (routing.route === "error") {
+      // Refused before it started: no run record. Writing
+      // .skills/runs/<day>/<id>/{run.json,events.ndjson,artifacts.json} for a
+      // run the credential ladder turned away was a local write from a refusal
+      // that is supposed to touch nothing (#1720 validation). The record exists
+      // only for runs that actually start (below).
+      const suggestions = routing.code === "REMOTE_REQUIRES_ORIGIN"
+        ? ["skills setup --api-url <url>", "skills auth login"]
+        : ["skills auth login"];
+      return mcpError(routing.code, routing.error, suggestions);
+    }
+
+    const runContext = createSkillRun({
+      skill: skillName,
+      args: runArgs,
+      remote: routing.route === "remote",
+      ...(routing.route === "remote" ? { remoteApiOrigin: routing.apiOrigin } : {}),
+    });
+
+    if (routing.route === "remote") {
+      try {
+        const { RemoteSkillsClient } = await import("../lib/remote-client.js");
+        const client = new RemoteSkillsClient(routing.apiKey, routing.apiOrigin);
+        const run = await client.submitQuotedRunWithFiles(skillName, runInput, runArgs, inputFiles, { maxCredits, maxCostCents, quoteReceipt, idempotencyKey: idempotency_key ?? runContext.record.id });
+        if (run.error) {
+          writeRunLogs(runContext, "", String(run.error) + "\n");
+          const localRun = completeSkillRun(runContext, { status: "failed", error: String(run.error) });
+          return mcpError("RUN_FAILED", `${run.error}. Local run metadata: ${localRun.paths.runDir}/run.json`);
+        }
+        const localRun = updateSkillRun(runContext, {
+          status: run.status === "running" || run.status === "completed" || run.status === "failed" ? run.status : "queued",
+          remoteRunId: typeof run.id === "string" ? run.id : undefined,
+        });
+        writeRunLogs(runContext, "", "");
+        const remoteRunId = typeof run.id === "string" ? run.id : undefined;
+        const payload = {
+          contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION,
+          id: run.id,
+          localRunId: localRun.id,
+          skill: skillName,
+          status: run.status,
+          correlationId: run.correlationId,
+          remote: true,
+          remoteRun: run,
+          run: localRun,
+          nextActions: remoteRunNextActions(remoteRunId),
+        };
+        return mcpJson(detail ? payload : compactRunToolPayload(payload, "Call run_skill again with detail:true for full remote/local run records."));
+      } catch (err) {
+        const error = `Hosted skill ${skillName} requires API access: ${(err as Error).message}`;
+        writeRunLogs(runContext, "", error + "\n");
+        const localRun = completeSkillRun(runContext, { status: "failed", error });
+        return mcpError("PLATFORM_ERROR", `${error}. Local run metadata: ${localRun.paths.runDir}/run.json`);
+      }
+    }
+
+    const result = await runSkill(skillName, runArgs, {
+      stdio: "pipe",
+      env: skillRunEnv(runContext),
+    });
+    writeRunLogs(runContext, result.stdout ?? "", result.stderr ?? result.error ?? "");
+    const localRun = completeSkillRun(runContext, {
+      status: result.exitCode === 0 ? "completed" : "failed",
+      error: result.error,
+      exitCode: result.exitCode,
+    });
+    const payload = { exitCode: result.exitCode, skill: skillName, stdout: result.stdout, stderr: result.stderr, run: localRun };
+    if (result.error) {
+      return {
+        content: [{ type: "text", text: JSON.stringify(detail ? { ...payload, error: result.error } : compactRunToolPayload({ ...payload, error: result.error }, "Call run_skill again with detail:true for full stdout/stderr and run metadata.")) }],
+        isError: true,
+      };
+    }
+    return mcpJson(detail ? payload : compactRunToolPayload(payload, "Call run_skill again with detail:true for full stdout/stderr and run metadata."));
+  });
+
+  server.registerTool("get_run_status", {
+    title: "Get Run Status",
+    description: "Fetch remote run status. Accepts a remote run id or a local run id linked to a remote run.",
+    inputSchema: {
+      run_id: z.string(),
+      detail: z.boolean().optional(),
+    },
+  }, async ({ run_id, detail }) => {
+    const { skillsCredentialOrReason } = await import("../lib/fleet-credentials.js");
+    const { apiKey, apiOrigin, reason } = await skillsCredentialOrReason();
+    if (!apiKey) {
+      // A configured authority with no credential carries the ladder's own
+      // message. It is still a refusal — this tool never answers locally.
+      return mcpError(
+        "AUTH_REQUIRED",
+        reason ?? "Remote run status requires API access. Run: skills auth login",
+        ["skills auth login"],
+      );
+    }
+
+    const localRun = findSkillRun(run_id);
+    const remoteRunId = localRun?.remoteRunId || run_id;
+    if (localRun && !localRun.remoteRunId) {
+      return mcpError("LOCAL_RUN", `Run '${run_id}' is local and has no remote run id`);
+    }
+
+    try {
+      const { RemoteSkillsClient } = await import("../lib/remote-client.js");
+      if (localRun?.remoteApiOrigin && localRun.remoteApiOrigin !== apiOrigin) return mcpError("INSTANCE_MISMATCH", "This run belongs to another Skills instance; select its credential profile");
+      const client = new RemoteSkillsClient(apiKey, apiOrigin!);
+      const run = await client.getRun(remoteRunId);
+      if (!run) return mcpError("RUN_NOT_FOUND", `Remote run '${remoteRunId}' not found`);
+      const payload = {
+        contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION,
+        runId: remoteRunId,
+        ...(localRun ? { localRunId: localRun.id } : {}),
+        run,
+        nextActions: remoteRunNextActions(remoteRunId),
+      };
+      return mcpJson(detail ? payload : {
+        contractVersion: payload.contractVersion,
+        runId: payload.runId,
+        ...(localRun ? { localRunId: localRun.id } : {}),
+        run: compactRemoteRun(run),
+        nextActions: payload.nextActions,
+        detailHint: "Call get_run_status with detail:true for the complete remote run payload.",
+      });
+    } catch (err) {
+      return mcpError("SKILLS_MD_ERROR", (err as Error).message);
+    }
+  });
+
+  server.registerTool("export_skills", {
+    title: "Export Pinned Skills",
+    description: "Export pinned skills as a JSON payload for import elsewhere.",
+  }, async () => {
+    const skills = getInstalledSkills();
+    const payload = {
+      version: 1,
+      skills,
+      timestamp: new Date().toISOString(),
+    };
+    return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
+  });
+
+  server.registerTool("import_skills", {
+    title: "Import Pinned Skills",
+    description: "Pin skills from an export payload. Supports MCP setup guidance via 'for'.",
+    inputSchema: {
+      skills: z.array(z.string()),
+      for: z.string().optional(),
+      scope: z.string().optional(),
+    },
+  }, async ({ skills: skillList, for: agentArg, scope }) => {
+    if (!skillList || skillList.length === 0) {
+      return { content: [{ type: "text", text: JSON.stringify({ imported: 0, results: [] }, null, 2) }] };
+    }
+
+    const results: Array<{ skill: string; success: boolean; error?: string }> = [];
+
+    if (agentArg) {
+      let agents: AgentTarget[];
+      try {
+        agents = resolveAgents(agentArg);
+      } catch (err) {
+        return mcpError("INVALID_AGENT", (err as Error).message, [...AGENT_TARGETS, "all"]);
+      }
+
+      for (const name of skillList) {
+        results.push({
+          skill: name,
+          success: false,
+          error: "Direct agent skill-folder installs are disabled. Render skills into native agent folders instead: skills render",
+        });
+      }
+    } else {
+      for (const name of skillList) {
+        const result = installSkill(name);
+        results.push({ skill: result.skill, success: result.success, ...(result.error ? { error: result.error } : {}) });
+      }
+    }
+
+    const imported = results.filter((r) => r.success).length;
+    const hasErrors = results.some((r) => !r.success);
+
+    return {
+      content: [{ type: "text", text: JSON.stringify({ imported, total: skillList.length, results }, null, 2) }],
+      isError: hasErrors,
+    };
+  });
+
+  server.registerTool("whoami", {
+    title: "Skills Whoami",
+    description: "Show setup summary: version, pinned skills, agent configs, cwd, and the credential/transport SOURCES (never values).",
+  }, async () => {
+    const version = pkg.version;
+    const cwd = process.cwd();
+    // Same block `skills setup-info` reports: mode, authority, and the SOURCE of
+    // the credential (an env key name, a Keychain reference, a path) so an
+    // agent can see over MCP which tier is deciding — never a value.
+    const credential = describeCredentialState();
+
+    const installed = getInstalledSkills();
+
+    const agents: Array<{ agent: string; label: string; path: string; exists: boolean; skillCount: number }> = [];
+    for (const agent of AGENT_TARGETS) {
+      const agentSkillsPath = getAgentSkillsDir(agent, "global");
+      const exists = existsSync(agentSkillsPath);
+      let skillCount = 0;
+      if (exists) {
+        try {
+          skillCount = readdirSync(agentSkillsPath).filter((f) => {
+            const full = join(agentSkillsPath, f);
+            return !f.startsWith(".") && statSync(full).isDirectory();
+          }).length;
+        } catch {}
+      }
+      agents.push({ agent, label: AGENT_LABELS[agent], path: agentSkillsPath, exists, skillCount });
+    }
+
+    const skillsDir = getSkillPath("image").replace(/[/\\][^/\\]*$/, "");
+
+    const result = {
+      version,
+      installedCount: installed.length,
+      installed,
+      agents,
+      skillsDir,
+      cwd,
+      credential,
+    };
+
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  });
+
+}
+
+function selectedToolError(error: unknown) {
+  return mcpError(error instanceof SkillSelectionError ? error.code : "SELECTED_SKILL_FAILED", error instanceof SkillSelectionError ? error.message : "The selected skill operation failed. Check authentication, profile selection and execution capabilities.");
+}
+
+function compactRunToolPayload(payload: Record<string, any>, detailHint: string): Record<string, unknown> {
+  const stdout = previewText(payload.stdout ?? "");
+  const stderr = previewText(payload.stderr ?? "");
+  return {
+    ...(payload.contractVersion !== undefined ? { contractVersion: payload.contractVersion } : {}),
+    ...(payload.id !== undefined ? { id: payload.id } : {}),
+    ...(payload.localRunId !== undefined ? { localRunId: payload.localRunId } : {}),
+    ...(payload.exitCode !== undefined ? { exitCode: payload.exitCode } : {}),
+    skill: payload.skill,
+    ...(payload.status !== undefined ? { status: payload.status } : {}),
+    ...(payload.remote !== undefined ? { remote: payload.remote } : {}),
+    ...(payload.correlationId !== undefined ? { correlationId: payload.correlationId } : {}),
+    ...(payload.error !== undefined ? { error: payload.error } : {}),
+    ...(payload.remoteRun !== undefined ? { remoteRun: compactRemoteRun(payload.remoteRun) } : {}),
+    run: compactRunRecord(payload.run),
+    stdoutPreview: stdout,
+    stderrPreview: stderr,
+    stdoutChars: stdout.length,
+    stderrChars: stderr.length,
+    stdoutTruncated: stdout.truncated,
+    stderrTruncated: stderr.truncated,
+    ...(payload.nextActions !== undefined ? { nextActions: payload.nextActions } : {}),
+    detailHint,
+  };
+}

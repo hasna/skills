@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hasna.dev/schemas/skill.v1.json",
+  "title": "hasna.skill.v1 portable skill manifest",
+  "description": "The machine-readable manifest for a portable Hasna skill. Portable metadata lives in skill.json; SKILL.md frontmatter stays minimal (name + description).",
+  "type": "object",
+  "required": ["standard", "name", "description", "version"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "const": "https://hasna.dev/schemas/skill.v1.json"
+    },
+    "standard": {
+      "type": "string",
+      "const": "hasna.skill.v1"
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$",
+      "description": "Lowercase slug: letters, numbers, dots, underscores, hyphens. Matches the folder name."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What this skill does and when to use it."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
+      "description": "Semantic version. Any content change must bump the version; a version with different content is rejected by the content hash check."
+    },
+    "displayName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "category": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["executable", "instruction"]
+    },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "type"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "type": { "type": "string", "minLength": 1 },
+          "required": { "type": "boolean" },
+          "description": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+          "description": { "type": "string" },
+          "entry": { "type": "string", "minLength": 1 },
+          "command": { "type": "string", "minLength": 1 },
+          "args": { "type": "array", "items": { "type": "string" } }
+        },
+        "additionalProperties": true
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "description": "Runtime contract: how this skill is executed and what it may touch.",
+      "required": ["runtime"],
+      "properties": {
+        "runtime": {
+          "type": "string",
+          "enum": ["bun", "node", "python3"],
+          "description": "Execution runtime. 'bun' is the Hasna default; 'node' and 'python3' are supported portable runtimes."
+        },
+        "version": {
+          "type": "string",
+          "description": "Optional runtime version requirement (e.g. '22', '>=3.12'). Free-form constraint string."
+        },
+        "entrypoint": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Relative path to the runnable entrypoint. Defaults to commands[0].entry."
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 900,
+          "default": 900,
+          "description": "Maximum execution time in seconds, capped at 900."
+        },
+        "needs_network": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether execution requires network egress."
+        },
+        "env": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z0-9_]+$"
+          },
+          "description": "Secret REFERENCE names (vault keys / env var names), never values. Uppercase identifiers only."
+        },
+        "sandbox": {
+          "type": "string",
+          "enum": ["readonly-fs", "workspace-write", "full"],
+          "default": "readonly-fs",
+          "description": "Filesystem access granted to execution. Default 'readonly-fs'."
+        },
+        "system_deps": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "ffmpeg",
+              "ffprobe",
+              "imagemagick",
+              "convert",
+              "curl",
+              "wget",
+              "git",
+              "gh",
+              "jq",
+              "python3",
+              "pip3",
+              "node",
+              "bun",
+              "npm",
+              "rsync",
+              "pdftotext",
+              "tesseract",
+              "7z",
+              "unzip",
+              "zip"
+            ]
+          },
+          "description": "Allowlisted system binaries the skill requires at execution time."
+        },
+        "artifacts": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Glob patterns of artifacts the skill may produce (e.g. 'out/**', '*.pdf')."
+        }
+      },
+      "additionalProperties": true
+    },
+    "provenance": {
+      "type": "object",
+      "description": "Provenance and integrity fields. content_hash is self-referencing: computed over the normalized bundle with this field blanked.",
+      "properties": {
+        "source_commit": {
+          "type": "string",
+          "description": "Git SHA of the source revision this skill was built from, or 'unknown' for locally scaffolded skills."
+        },
+        "content_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "SHA-256 of the normalized skill bundle (manifest without content_hash, line endings normalized, files sorted). See docs/skill-standard.md."
+        },
+        "changelog": {
+          "type": "string",
+          "description": "Pointer to changelog or release notes (relative path or URL)."
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

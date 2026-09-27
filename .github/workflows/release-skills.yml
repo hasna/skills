@@ -1,0 +1,256 @@
+name: Release skills to npm
+
+# The only path that may publish @hasna/skills. It refuses to reach npm unless an
+# independent reviewer's GO, recorded in git-prs for this exact candidate, and
+# the git-publishing intent thread are linked in the annotated release tag with the SHA-256 of
+# the tarball this exact checkout packs.
+#
+# This replaces apps/skills/.github/workflows/publish.yml, which GitHub Actions
+# never ran (workflows are discovered only from the repository root) and which
+# published on a bare `v*` tag with no review linkage at all.
+#
+# workflow_dispatch is the dry run: pass the release tag to exercise every step,
+# including the review-linkage preflight, without publishing. It never publishes.
+on:
+  push:
+    tags:
+      - "npm/skills/v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to dry-run, e.g. npm/skills/v0.10.7 (nothing is published)"
+        required: false
+
+concurrency:
+  group: hasna-skills-npm-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.repository == 'hasna/skills'
+    runs-on: ubuntu-latest
+    # Skills-only environment: the first-time creation of this environment and
+    # its required-reviewer protection is a repository configuration step owned
+    # by the chief engineering seat. The workflow names it; it does not create it.
+    environment: npm-release-skills
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NODE_OPTIONS: --max-old-space-size=14336
+      # On a tag push this is the release tag. On a dispatch dry run it is the
+      # `tag` input; without it the tag-dependent steps are skipped and nothing
+      # can publish, because every publish step also requires a push event.
+      RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # A dispatch dry run of a tag checks out that tag; a push uses its own
+          # event SHA, which the next step requires to be the tag's commit.
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require the exact release commit on protected main
+        if: github.event_name == 'push'
+        env:
+          GH_READ_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_TYPE" = tag
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" = tag
+          test "$(git rev-parse "refs/tags/$GITHUB_REF_NAME^{commit}")" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
+          node --input-type=module -e '
+            const response = await fetch(`https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/branches/main`, {
+              headers: {
+                Authorization: `Bearer ${process.env.GH_READ_TOKEN}`,
+                Accept: "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+              },
+              signal: AbortSignal.timeout(30000),
+            });
+            if (!response.ok) throw new Error(`main branch protection lookup failed: HTTP ${response.status}`);
+            const branch = await response.json();
+            if (branch.name !== "main" || branch.protected !== true) {
+              throw new Error("main is not protected at release time");
+            }
+          '
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install and verify the CI npm toolchain
+        run: |
+          set -euo pipefail
+          npm_prefix="$(mktemp -d "$RUNNER_TEMP/npm-toolchain.XXXXXX")"
+          npm install --global --prefix "$npm_prefix" npm@11.19.0
+          test "$("$npm_prefix/bin/npm" --version)" = 11.19.0
+          echo "$npm_prefix/bin" >> "$GITHUB_PATH"
+
+      - name: Bind the release tag to the skills manifest
+        id: version
+        if: env.RELEASE_TAG != ''
+        run: |
+          set -euo pipefail
+          node --input-type=module -e '
+            const { appendFileSync, readFileSync } = await import("node:fs");
+            const tag = process.env.RELEASE_TAG;
+            const prefix = "npm/skills/v";
+            if (!tag.startsWith(prefix)) throw new Error("the release tag must use the " + prefix + "<semver> form");
+            const version = tag.slice(prefix.length);
+            if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error("the release tag must carry a semver version");
+            const manifest = JSON.parse(readFileSync("apps/skills/package.json", "utf8"));
+            if (manifest.name !== "@hasna/skills") throw new Error("apps/skills/package.json must declare @hasna/skills");
+            if (manifest.publishConfig?.registry !== "https://registry.npmjs.org" || manifest.publishConfig?.access !== "public") {
+              throw new Error("apps/skills must publish publicly to the npm registry");
+            }
+            if (manifest.version !== version) {
+              throw new Error("the release tag must carry apps/skills/package.json version " + manifest.version);
+            }
+            appendFileSync(process.env.GITHUB_OUTPUT, "version=" + version + "\n");
+          '
+
+      - name: Reject an already-published version or an inconclusive registry lookup
+        if: env.RELEASE_TAG != ''
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          node --input-type=module -e '
+            const version = process.env.RELEASE_VERSION;
+            const url = "https://registry.npmjs.org/@hasna%2Fskills/" + encodeURIComponent(version);
+            const response = await fetch(url, { signal: AbortSignal.timeout(30000) });
+            if (response.status === 404) {
+              console.log("@hasna/skills@" + version + " is not published");
+            } else if (response.ok) {
+              throw new Error("@hasna/skills@" + version + " is already published");
+            } else {
+              throw new Error("Registry lookup failed: HTTP " + response.status);
+            }
+          '
+
+      # This source checkout is standalone; its pinned graph belongs to apps/skills.
+      - name: Install locked standalone Skills dependencies
+        working-directory: apps/skills
+        run: bun install --frozen-lockfile --ignore-scripts --backend copyfile
+
+      - name: Verify the standalone Skills producer graph
+        working-directory: apps/skills
+        run: |
+          set -euo pipefail
+          bun run verify:producer > "$RUNNER_TEMP/skills-producer-receipt.json"
+          node --input-type=module -e '
+            const { readFileSync } = await import("node:fs");
+            const receipt = JSON.parse(readFileSync(process.env.RUNNER_TEMP + "/skills-producer-receipt.json", "utf8"));
+            if (receipt.status !== "verified" || receipt.package?.name !== "@hasna/skills") {
+              throw new Error("standalone Skills producer graph verification did not pass");
+            }
+            console.log(`Verified standalone Skills producer graph: ${receipt.nodeCount} nodes, ${receipt.edgeCount} edges`);
+          '
+
+      - name: Typecheck
+        working-directory: apps/skills
+        run: bun run typecheck
+
+      - name: Build
+        working-directory: apps/skills
+        run: bun run build
+
+      - name: Test
+        working-directory: apps/skills
+        run: bun test
+
+      - name: Verify generated artifacts are reproducible
+        working-directory: apps/skills
+        run: bun run verify:generated
+
+      - name: Verify package consumer types
+        working-directory: apps/skills
+        run: bun run verify:consumer-types
+
+      - name: Exercise the skills release guard without publishing
+        working-directory: apps/skills
+        run: bun run verify:release
+
+      # The gate. It reads the annotated tag's linkage fields, packs this exact
+      # checkout and refuses unless the recorded Packed-SHA256 matches. The
+      # publish step below cannot run unless this step succeeded.
+      #
+      # The resolved release tag is passed explicitly. The preflight falls back to
+      # GITHUB_REF_NAME, which on a workflow_dispatch dry run is the dispatch ref
+      # (the branch), so without this argument a documented dry run would fail on
+      # refs/tags/<branch> instead of checking the tag under review. Push runs
+      # pass github.ref_name; dry runs pass the `tag` input. An empty value cannot
+      # silently fall back: the preflight refuses a `--tag` with no value.
+      - name: Verify the linked independent release review for the release tag
+        id: review
+        if: env.RELEASE_TAG != ''
+        working-directory: apps/skills
+        run: |
+          set -euo pipefail
+          receipt="$(bun run verify:release-review --tag "$RELEASE_TAG")"
+          printf '%s\n' "$receipt"
+          REVIEW_RECEIPT="$receipt" node --input-type=module -e '
+            const { appendFileSync } = await import("node:fs");
+            const receipt = JSON.parse(process.env.REVIEW_RECEIPT.split("\n")[0]);
+            if (receipt.schema !== "hasna.skills.release-review-linkage.v1"
+              || typeof receipt.packed_integrity !== "string"
+              || !receipt.packed_integrity.startsWith("sha512-")) {
+              throw new Error("the reviewed archive has no sha512 integrity");
+            }
+            appendFileSync(process.env.GITHUB_OUTPUT, `integrity=${receipt.packed_integrity}\n`);
+          '
+
+      - name: Publish via OIDC and the package-owned prepublishOnly gate
+        if: github.event_name == 'push' && steps.review.outcome == 'success'
+        working-directory: apps/skills
+        run: npm publish --provenance --access public
+
+      - name: Verify the published version, integrity and provenance attestations
+        if: github.event_name == 'push' && steps.review.outcome == 'success'
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          EXPECTED_INTEGRITY: ${{ steps.review.outputs.integrity }}
+        run: |
+          set -euo pipefail
+          spec="@hasna/skills@$RELEASE_VERSION"
+          for attempt in 1 2 3 4 5; do
+            if resolved="$(npm view "$spec" version 2>/dev/null)"; then
+              test "$resolved" = "$RELEASE_VERSION"
+              published="$(npm view "$spec" version dist.integrity dist.attestations --json)"
+              RELEASE_VERSION="$RELEASE_VERSION" PUBLISHED="$published" node --input-type=module -e '
+                const published = JSON.parse(process.env.PUBLISHED);
+                const version = process.env.RELEASE_VERSION;
+                if (published.version !== version) throw new Error("the registry reports a different version");
+                if (published["dist.integrity"] !== process.env.EXPECTED_INTEGRITY) {
+                  throw new Error("the published archive integrity differs from the reviewed archive");
+                }
+                const attestations = published["dist.attestations"];
+                const provenance = attestations?.provenance;
+                if (!attestations?.url || provenance?.predicateType !== "https://slsa.dev/provenance/v1") {
+                  throw new Error("the published version carries no npm provenance attestation");
+                }
+                console.log(`Verified ${version}: registry integrity matches reviewed archive; npm provenance present`);
+              '
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::$spec did not become visible after publish"
+          exit 1
