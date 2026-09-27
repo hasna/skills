@@ -149,6 +149,8 @@ describe("exact-version copyfile runtime update", () => {
   test("refuses non-exact versions and registry integrity mismatch before switching launchers", async () => {
     const f = fixtureHome();
     await expect(updateCopyfileRuntime("latest", { homeDir: f.home, pathValue: `${f.localBin}${delimiter}${f.bunBin}` })).rejects.toThrow("EXACT_VERSION_REQUIRED");
+    await expect(updateCopyfileRuntime("0.10.9-beta.1", { homeDir: f.home, pathValue: `${f.localBin}${delimiter}${f.bunBin}` })).rejects.toThrow("EXACT_STABLE_VERSION_REQUIRED");
+    await expect(updateCopyfileRuntime("0.10.9+build.1", { homeDir: f.home, pathValue: `${f.localBin}${delimiter}${f.bunBin}` })).rejects.toThrow("EXACT_STABLE_VERSION_REQUIRED");
     const fixture = await serverWithArtifact();
     const brokenFetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const response = await fetch(input, init);
@@ -174,6 +176,25 @@ describe("exact-version copyfile runtime update", () => {
       symlinkSync(".skills-target-chain", skillLauncher);
       await expect(updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue: `${f.localBin}${delimiter}${f.bunBin}` })).rejects.toThrow("LAUNCHER_SYMLINK_CHAIN_UNSUPPORTED");
       expect(existsSync(`${skillLauncher}.skills-prev-test`)).toBe(false);
+    } finally { fixture.server.stop(true); }
+  });
+
+  test("a failure after the first launcher switch rolls back the resolved target binding", async () => {
+    const f = fixtureHome();
+    const fixture = await serverWithArtifact();
+    try {
+      await expect(updateCopyfileRuntime("0.10.8", {
+        homeDir: f.home,
+        pathValue: `${f.localBin}${delimiter}${f.bunBin}`,
+        registryOrigin: fixture.server.url.origin,
+        onLauncherSwitched: () => { throw new Error("SYNTHETIC_POST_SWITCH_FAILURE"); },
+      })).rejects.toThrow("UPDATE_FAILED_ROLLED_BACK");
+      for (const name of Object.keys(BIN)) {
+        expect(realpathSync(join(f.localBin, name))).toBe(join(f.oldPackage, BIN[name as keyof typeof BIN]));
+        expect(realpathSync(join(f.bunBin, name))).toBe(join(f.oldPackage, BIN[name as keyof typeof BIN]));
+      }
+      const receiptPath = join(f.runtime, "0.10.8-copyfile", "rollout-receipt.json");
+      expect(JSON.parse(readFileSync(receiptPath, "utf8")).state).toBe("rolled-back");
     } finally { fixture.server.stop(true); }
   });
 

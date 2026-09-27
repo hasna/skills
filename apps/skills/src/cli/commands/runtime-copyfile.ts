@@ -10,6 +10,7 @@ import { SEMVER_PATTERN } from "../../lib/skill-contract.js";
 
 const PACKAGE_NAME = "@hasna/skills";
 const REGISTRY_ORIGIN = "https://registry.npmjs.org";
+const STABLE_SEMVER_PATTERN = /^\d+\.\d+\.\d+$/;
 const MAX_TARBALL_BYTES = 100 * 1024 * 1024;
 const MAX_TARBALL_EXPANDED_BYTES = 256 * 1024 * 1024;
 const MAX_TARBALL_ENTRIES = 20_000;
@@ -530,8 +531,9 @@ function persistReceipt(path: string, value: CopyfileReceipt): void {
   atomicJson(path, value);
 }
 
-export async function updateCopyfileRuntime(version: string, options: { homeDir?: string; pathValue?: string; registryOrigin?: string; fetcher?: typeof fetch } = {}): Promise<JsonObject> {
+export async function updateCopyfileRuntime(version: string, options: { homeDir?: string; pathValue?: string; registryOrigin?: string; fetcher?: typeof fetch; onLauncherSwitched?: (path: string) => void } = {}): Promise<JsonObject> {
   if (!new RegExp(SEMVER_PATTERN).test(version)) throw new Error("EXACT_VERSION_REQUIRED");
+  if (!STABLE_SEMVER_PATTERN.test(version)) throw new Error("EXACT_STABLE_VERSION_REQUIRED");
   const home = resolve(options.homeDir ?? process.env.HOME ?? "");
   if (!home || !existsSync(home)) throw new Error("HOME_NOT_FOUND");
   const layout = resolveRuntimeLayout(home, options.pathValue ?? process.env.PATH ?? "");
@@ -546,6 +548,7 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
   const releaseLock = acquireRuntimeLock(layout.runtimeRoot);
   const stagePath = join(layout.runtimeRoot, `.stage-${version}-${id}`);
   const finalPath = join(layout.runtimeRoot, `${version}-copyfile`);
+  const launchers = layout.launchers.map(item => ({ ...item, newTarget: join(finalPath, "node_modules", "@hasna", "skills", layout.bin[basename(item.path)]) }));
   let switched: string[] = [];
   let moved = false;
   try {
@@ -582,7 +585,6 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
     }
     assertConfigUnchanged(configPreimages);
     const targetPackageRoot = join(finalPath, "node_modules", "@hasna", "skills");
-    const launchers = layout.launchers.map(item => ({ ...item, newTarget: join(targetPackageRoot, layout.bin[basename(item.path)]) }));
     const preimageSha256 = writePreimageManifest(stagePath, configPreimages, launchers);
     const receipt: CopyfileReceipt = {
       schema: "skills.copyfile-runtime-receipt.v1", id, state: "prepared", package: PACKAGE_NAME,
@@ -620,6 +622,7 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
         throw new Error("LAUNCHER_SWITCH_READBACK_MISMATCH");
       }
       switched.push(item.path);
+      options.onLauncherSwitched?.(item.path);
     }
     receipt.state = "switched";
     persistReceipt(join(finalPath, "rollout-receipt.json"), receipt);
@@ -627,7 +630,7 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
   } catch (error) {
     if (switched.length > 0 || moved) {
       let rollbackFailed = false;
-      for (const item of [...layout.launchers].reverse()) {
+      for (const item of [...launchers].reverse()) {
         try {
           const currentTarget = realpathSync(item.path);
           if (currentTarget === item.oldTarget && readlinkSync(item.path) === item.oldLinkTarget) continue;
