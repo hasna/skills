@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.10
+
+Accept repeated directories in PATH when discovering copyfile runtime launchers, while retaining one guarded switch per distinct launcher. The npm release workflow also waits for the published version and provenance to become visible before completing its registry readback.
+
 ## 0.10.9
 
 Add an exact-version, receipt-backed copyfile runtime update and rollback path for Skills CLI installations across Linux and macOS. The updater validates the npm archive and active launchers before switching, preserves configuration and launcher preimages, and records each recovery transition.

@@ -168,8 +168,11 @@ function resolveRuntimeLayout(homeInput: string, pathInput: string): RuntimeLayo
     throw new Error("ACTIVE_RUNTIME_ENTRYPOINT_MISMATCH");
   }
   const launchers: RuntimeLayout["launchers"] = [];
+  const seenDirectories = new Set<string>();
   for (const rawDir of pathInput.split(delimiter).filter(Boolean)) {
     const dir = resolve(rawDir);
+    if (seenDirectories.has(dir)) continue;
+    seenDirectories.add(dir);
     for (const [name, target] of Object.entries(current.bins)) {
       const path = join(dir, name);
       if (!existsSync(path)) continue;
