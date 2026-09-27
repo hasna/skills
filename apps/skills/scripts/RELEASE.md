@@ -13,7 +13,7 @@ EXACTLY once each; the linkage namespace is closed, so an extra
 `Release-Review-*`, `Git-Publishing-*` or `Packed-*` field is a failure:
 
 ```
-@hasna/skills 0.10.7
+@hasna/skills 0.10.9
 
 <release notes>
 

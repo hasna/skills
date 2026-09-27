@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to dry-run, e.g. npm/skills/v0.10.7 (nothing is published)"
+        description: "Release tag to dry-run, e.g. npm/skills/v0.10.9 (nothing is published)"
         required: false
 
 concurrency:

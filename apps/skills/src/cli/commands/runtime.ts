@@ -48,6 +48,7 @@ import { RemoteSkillsClient } from "../../lib/remote-client.js";
 import { execute as executeRemote } from "./remote-account.js";
 import { describeRemoteFiles, type RemoteInputFile } from "../../lib/remote-files.js";
 import { optionPrefix } from "../option-boundary.js";
+import { rollbackCopyfileRuntime, updateCopyfileRuntime } from "./runtime-copyfile.js";
 
 export function registerRuntime(parent: Command) {
   // Run
@@ -212,7 +213,38 @@ export function registerRuntime(parent: Command) {
     .command("self-update")
     .description("Update @hasna/skills to the latest version")
     .option("--json", "Output result as JSON", false)
-    .action(async (options: { json: boolean }) => {
+    .option("--version <version>", "Install this exact @hasna/skills version as a staged copyfile runtime")
+    .option("--rollback <receipt-id>", "Restore launcher links from an exact copyfile rollout receipt")
+    .action(async (options: { json: boolean; version?: string; rollback?: string }) => {
+      if (options.version && options.rollback) {
+        console.error(JSON.stringify({ error: "UPDATE_AND_ROLLBACK_ARE_MUTUALLY_EXCLUSIVE" }));
+        process.exitCode = 1;
+        return;
+      }
+      if (options.version) {
+        try {
+          const result = await updateCopyfileRuntime(options.version);
+          if (options.json) console.log(JSON.stringify(result));
+          else console.log(chalk.green(`Updated @hasna/skills to exact version ${options.version} via copyfile runtime.`));
+        } catch (error) {
+          const message = error instanceof Error && /^[A-Z0-9_]+$/.test(error.message) ? error.message : "COPYFILE_UPDATE_FAILED";
+          console.error(JSON.stringify({ updated: false, error: message }));
+          process.exitCode = 1;
+        }
+        return;
+      }
+      if (options.rollback) {
+        try {
+          const result = rollbackCopyfileRuntime(options.rollback);
+          if (options.json) console.log(JSON.stringify(result));
+          else console.log(chalk.green(`Restored Skills runtime launchers to ${String(result.restoredVersion)}.`));
+        } catch (error) {
+          const message = error instanceof Error && /^[A-Z0-9_]+$/.test(error.message) ? error.message : "COPYFILE_ROLLBACK_FAILED";
+          console.error(JSON.stringify({ rolledBack: false, error: message }));
+          process.exitCode = 1;
+        }
+        return;
+      }
       if (process.env.SKILLS_TEST_MODE === "1") {
         if (options.json) console.log(JSON.stringify({ updated: false, error: "Self-update disabled in test mode" }));
         else console.error(chalk.yellow("Self-update disabled in test mode"));
