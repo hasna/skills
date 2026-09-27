@@ -64,6 +64,34 @@ function canonicalAgentPath(path: string, aliases: AgentRootAlias[]): string {
   return binding ? join(binding.target, relative(binding.alias, absolute)) : absolute;
 }
 
+function disabledCodexSkillPaths(config: { skills?: { config?: Array<{ path?: string; name?: string; enabled?: boolean }> } }, aliases: AgentRootAlias[]): string[] {
+  const skills = config.skills;
+  if (!skills || typeof skills !== "object" || Array.isArray(skills)) return [];
+  const rows = skills.config;
+  if (!Array.isArray(rows)) return [];
+  // A malformed row can invalidate Codex's whole SkillsConfig layer. Never
+  // treat a disable in that layer as native proof in that case.
+  if (rows.some(entry => !entry || typeof entry !== "object" || Array.isArray(entry)
+    || typeof entry.enabled !== "boolean"
+    || (entry.path !== undefined && (typeof entry.path !== "string" || !isAbsolute(entry.path)))
+    || (entry.name !== undefined && typeof entry.name !== "string"))) return [];
+  // Codex applies name rules after path rules in the same ordered list. Without
+  // the parsed skill name, a name rule could re-enable a path we thought inert.
+  if (rows.some(entry => entry.name !== undefined)) return [];
+  const settings = new Map<string, boolean[]>();
+  for (const entry of rows) {
+    if (typeof entry.path !== "string" || !isAbsolute(entry.path)) continue;
+    // Native Codex canonicalizes the document selector, so a `latest` path
+    // and its versioned path are the same rule. Only an existing exact document
+    // is evidence that the native skill is disabled; a directory is not.
+    let document: string;
+    try { document = realpathSync(canonicalAgentPath(entry.path, aliases)); } catch { continue; }
+    if (!document.endsWith(`${sep}SKILL.md`)) continue;
+    settings.set(document, [...(settings.get(document) ?? []), entry.enabled === false]);
+  }
+  return [...settings].filter(([, values]) => values.length === 1 && values[0] === true).map(([document]) => dirname(document));
+}
+
 function recheckRootAliases(aliases: AgentRootAlias[]): void {
   for (const binding of aliases) {
     if (!["claude", "codex"].includes(binding.agent) || binding.alias !== join(binding.home, `.${binding.agent}`)) throw new Error("Invalid agent root alias binding");
@@ -183,8 +211,10 @@ function projectAncestorDirectories(projects: string[]): string[] {
   return [...directories];
 }
 
-export function inventoryNativeSkills(home = homedir(), options: { includeVendor?: boolean; guardHermes?: boolean; projectDir?: string; projectDirs?: string[]; agents?: readonly IntegrationAgent[]; agentRoots?: Array<{ agent: string; path: string }>; configured?: boolean; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean; reviewedCacheAlias?: string } = {}): NativeSkillEntry[] {
+export function inventoryNativeSkills(home = homedir(), options: { includeVendor?: boolean; guardHermes?: boolean; projectDir?: string; projectDirs?: string[]; agents?: readonly IntegrationAgent[]; agentRoots?: Array<{ agent: string; path: string }>; configured?: boolean; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean; reviewedCacheAlias?: string; disabledVendorPaths?: readonly string[] } = {}): NativeSkillEntry[] {
   if (options.reviewedCacheAlias !== undefined && (!options.includeVendor || !isAbsolute(options.reviewedCacheAlias) || resolve(options.reviewedCacheAlias) !== options.reviewedCacheAlias)) throw new Error("A reviewed cache alias requires vendor inventory and an exact absolute path");
+  if (options.disabledVendorPaths?.some(path => !isAbsolute(path) || resolve(path) !== path)) throw new Error("Disabled vendor paths must be exact absolute paths");
+  const disabledVendorPaths = new Set(options.disabledVendorPaths ?? []);
   const aliases = rootAliases(home, options.allowRootAliases);
   const selectedAgents = options.agents ? new Set(options.agents) : undefined;
   const includesAgent = (agent: string) => !selectedAgents || selectedAgents.has(agent as IntegrationAgent);
@@ -206,7 +236,7 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
     if (discoveryPathBytes > 4 * 1024 * 1024) throw new Error("Native skill discovery metadata limit exceeded");
   }
   let reviewedCacheAliasFound = false;
-  function verifiedSiblingCacheAlias(path: string, parent: string): boolean {
+  function verifiedSiblingCacheAlias(agent: string, path: string, parent: string): boolean {
     const link = readlinkSync(path), target = resolve(parent, link);
     // A lexical normalization must not conceal an intermediate symlink escape.
     if (dirname(target) !== parent || (isAbsolute(link) ? link !== target : dirname(link) !== ".")) return false;
@@ -214,6 +244,11 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
     const scan = cacheScans.get(target);
     if (!scan?.complete || scan.entries > maxAliasProofEntries) return false;
     if (scan.hasSkills) {
+      // A native plugin may retain a `latest` link after Skills has disabled
+      // every real skill below its fully inventoried version. The link adds no
+      // discovery in that case. A new or enabled skill still fails closed.
+      const targetSkills = entries.filter(entry => entry.agent === agent && entry.vendor && (entry.path === target || entry.path.startsWith(target + sep)));
+      if (agent === "codex" && targetSkills.length > 0 && targetSkills.every(entry => disabledVendorPaths.has(entry.path))) return true;
       // A plugin's `latest` link may point at a fully inventoried version.
       // Only migration opts in to that exact link so it can archive the real
       // SKILL.md; ordinary hook checks continue to refuse the native copy.
@@ -263,7 +298,7 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
       // link. Real skills return through treeHash above, which refuses all links.
       if (isVendor && lstatSync(child, { throwIfNoEntry: false })?.isSymbolicLink()) {
         const target = statSync(child, { throwIfNoEntry: false });
-        if (target?.isFile() || (pluginCache && target?.isDirectory() && verifiedSiblingCacheAlias(child, path))) {
+        if (target?.isFile() || (pluginCache && target?.isDirectory() && verifiedSiblingCacheAlias(agent, child, path))) {
           scan.entries++; continue;
         }
       }
@@ -433,7 +468,8 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     }
     return resolveAgentDiscovery({ home, agent, reviewed: options.discoveryInputs, retainedReview, canonical: path => canonicalAgentPath(path, aliases) });
   });
-  const nativeSkills = inventoryNativeSkills(home, { includeVendor: true, guardHermes: options.agents.includes("hermes"), agents: options.agents, projectDir: options.projectDir, agentRoots: discoveries.flatMap(binding => binding.roots.map(path => ({ agent: binding.agent, path }))), allowRootAliases: options.allowRootAliases });
+  const codexConfig = options.agents.includes("codex") ? Bun.TOML.parse(readOptional(canonicalAgentPath(join(home, ".codex", "config.toml"), aliases)) ?? "") as { skills?: { config?: Array<{ path?: string; enabled?: boolean }> } } : {};
+  const nativeSkills = inventoryNativeSkills(home, { includeVendor: true, guardHermes: options.agents.includes("hermes"), agents: options.agents, projectDir: options.projectDir, agentRoots: discoveries.flatMap(binding => binding.roots.map(path => ({ agent: binding.agent, path }))), allowRootAliases: options.allowRootAliases, disabledVendorPaths: disabledCodexSkillPaths(codexConfig, aliases) });
   const changes: AgentConfigChange[] = [];
   for (const agent of [...new Set(options.agents)]) {
     if (!INTEGRATION_AGENTS.includes(agent)) throw new Error(`Unsupported agent: ${agent}`);
@@ -864,7 +900,7 @@ export function assertManagedAgentBridge(agent: IntegrationAgent, options: { hom
       if (JSON.stringify(current) !== JSON.stringify(discovery)) throw new Error("Configured native discovery roots changed");
     }
   } catch (error) { throw new Error(`NATIVE_SKILL_DRIFT: ${(error as Error).message}`); }
-  const inventory = inventoryNativeSkills(home, { includeVendor: true, guardHermes: agent === "hermes", agents: [agent], projectDirs: [...roots], agentRoots: discovery.roots.map(path => ({ agent, path })), allowRootAliases: aliases.length > 0 });
+  const inventory = inventoryNativeSkills(home, { includeVendor: true, guardHermes: agent === "hermes", agents: [agent], projectDirs: [...roots], agentRoots: discovery.roots.map(path => ({ agent, path })), allowRootAliases: aliases.length > 0, disabledVendorPaths: agent === "codex" ? disabledCodexSkillPaths(codexConfig, aliases) : [] });
   const unexpected = inventory.filter(entry => visible(entry) && !entry.bridge && !disabledVendorSkill(entry));
   if (unexpected.length) {
     // Show filenames only: never read payloads into diagnostics. Escape control

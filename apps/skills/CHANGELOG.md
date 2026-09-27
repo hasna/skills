@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.11
+
+Accept a Codex plugin cache's `latest` alias when its fully inventoried version contains only skills disabled by exact native configuration. A newly added or enabled native skill still fails closed.
+
 ## 0.10.10
 
 Accept repeated directories in PATH when discovering copyfile runtime launchers, while retaining one guarded switch per distinct launcher. The npm release workflow also waits for the published version and provenance to become visible before completing its registry readback.
