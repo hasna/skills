@@ -65,12 +65,22 @@ function canonicalAgentPath(path: string, aliases: AgentRootAlias[]): string {
 }
 
 function disabledCodexSkillPaths(config: { skills?: { config?: Array<{ path?: string; name?: string; enabled?: boolean }> } }, aliases: AgentRootAlias[]): string[] {
+  const skills = config.skills;
+  if (!skills || typeof skills !== "object" || Array.isArray(skills)) return [];
+  const rows = skills.config;
+  if (!Array.isArray(rows)) return [];
+  // A malformed row can invalidate Codex's whole SkillsConfig layer. Never
+  // treat a disable in that layer as native proof in that case.
+  if (rows.some(entry => !entry || typeof entry !== "object" || Array.isArray(entry)
+    || typeof entry.enabled !== "boolean"
+    || (entry.path !== undefined && (typeof entry.path !== "string" || !isAbsolute(entry.path)))
+    || (entry.name !== undefined && typeof entry.name !== "string"))) return [];
   // Codex applies name rules after path rules in the same ordered list. Without
   // the parsed skill name, a name rule could re-enable a path we thought inert.
-  if (config.skills?.config?.some(entry => entry.name !== undefined)) return [];
+  if (rows.some(entry => entry.name !== undefined)) return [];
   const settings = new Map<string, boolean[]>();
-  for (const entry of config.skills?.config ?? []) {
-    if (typeof entry.path !== "string" || !isAbsolute(entry.path) || !entry.path.endsWith(`${sep}SKILL.md`)) continue;
+  for (const entry of rows) {
+    if (typeof entry.path !== "string" || !isAbsolute(entry.path)) continue;
     // Native Codex canonicalizes the document selector, so a `latest` path
     // and its versioned path are the same rule. Only an existing exact document
     // is evidence that the native skill is disabled; a directory is not.

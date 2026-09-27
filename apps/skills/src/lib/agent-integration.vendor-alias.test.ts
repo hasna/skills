@@ -67,9 +67,30 @@ test("a later enabled alias selector overrides the versioned disable", () => {
   expect(() => planAgentIntegration({ home, dataDir: join(home, ".hasna", "skills"), agents: ["codex"], command: "skills", profileId: "fleet", projectDir: home })).toThrow("Refusing symlink path");
 });
 
+test("a selector with another lexical name may still enable the canonical document", () => {
+  const { home, skill } = vendorAlias();
+  const selector = join(home, "enabled-selector.md");
+  symlinkSync(join(skill, "SKILL.md"), selector);
+  writeFileSync(join(home, ".codex", "config.toml"), `[[skills.config]]\npath = "${join(skill, "SKILL.md")}"\nenabled = false\n[[skills.config]]\npath = "${selector}"\nenabled = true\n`);
+  expect(() => planAgentIntegration({ home, dataDir: join(home, ".hasna", "skills"), agents: ["codex"], command: "skills", profileId: "fleet", projectDir: home })).toThrow("Refusing symlink path");
+});
+
+test("a relative selector may resolve to the same native document", () => {
+  const { home, skill } = vendorAlias();
+  const relativeAlias = "plugins/cache/openai-bundled/chrome/latest/skills/control-chrome/SKILL.md";
+  writeFileSync(join(home, ".codex", "config.toml"), `[[skills.config]]\npath = "${join(skill, "SKILL.md")}"\nenabled = false\n[[skills.config]]\npath = "${relativeAlias}"\nenabled = true\n`);
+  expect(() => planAgentIntegration({ home, dataDir: join(home, ".hasna", "skills"), agents: ["codex"], command: "skills", profileId: "fleet", projectDir: home })).toThrow("Refusing symlink path");
+});
+
 test("a native name selector may re-enable the skill", () => {
   const { home, skill } = vendorAlias();
   writeFileSync(join(home, ".codex", "config.toml"), `[[skills.config]]\npath = "${join(skill, "SKILL.md")}"\nenabled = false\n[[skills.config]]\nname = "control-chrome"\nenabled = true\n`);
+  expect(() => planAgentIntegration({ home, dataDir: join(home, ".hasna", "skills"), agents: ["codex"], command: "skills", profileId: "fleet", projectDir: home })).toThrow("Refusing symlink path");
+});
+
+test("a malformed selector row cannot prove that the native layer disables a skill", () => {
+  const { home, skill } = vendorAlias();
+  writeFileSync(join(home, ".codex", "config.toml"), `[[skills.config]]\npath = "${join(skill, "SKILL.md")}"\nenabled = false\n[[skills.config]]\npath = "${join(home, "unused", "SKILL.md")}"\n`);
   expect(() => planAgentIntegration({ home, dataDir: join(home, ".hasna", "skills"), agents: ["codex"], command: "skills", profileId: "fleet", projectDir: home })).toThrow("Refusing symlink path");
 });
 
