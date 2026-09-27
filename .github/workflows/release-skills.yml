@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to dry-run, e.g. npm/skills/v0.10.9 (nothing is published)"
+        description: "Release tag to dry-run, e.g. npm/skills/v0.10.10 (nothing is published)"
         required: false
 
 concurrency:
@@ -229,28 +229,45 @@ jobs:
           EXPECTED_INTEGRITY: ${{ steps.review.outputs.integrity }}
         run: |
           set -euo pipefail
-          spec="@hasna/skills@$RELEASE_VERSION"
-          for attempt in 1 2 3 4 5; do
-            if resolved="$(npm view "$spec" version 2>/dev/null)"; then
-              test "$resolved" = "$RELEASE_VERSION"
-              published="$(npm view "$spec" version dist.integrity dist.attestations --json)"
-              RELEASE_VERSION="$RELEASE_VERSION" PUBLISHED="$published" node --input-type=module -e '
-                const published = JSON.parse(process.env.PUBLISHED);
-                const version = process.env.RELEASE_VERSION;
-                if (published.version !== version) throw new Error("the registry reports a different version");
-                if (published["dist.integrity"] !== process.env.EXPECTED_INTEGRITY) {
-                  throw new Error("the published archive integrity differs from the reviewed archive");
+          node --input-type=module -e '
+            const version = process.env.RELEASE_VERSION;
+            const expectedIntegrity = process.env.EXPECTED_INTEGRITY;
+            const base = `https://registry.npmjs.org/@hasna%2Fskills/${encodeURIComponent(version)}`;
+            let last = "no registry response";
+            // The registry accepted 0.10.9 before its version endpoint became visible.
+            // A nonce avoids a cached 404 while the immutable version propagates.
+            for (let attempt = 1; attempt <= 40; attempt++) {
+              let response;
+              try {
+                response = await fetch(`${base}?verify=${Date.now()}-${attempt}`, {
+                  headers: { Accept: "application/json", "Cache-Control": "no-cache" },
+                  signal: AbortSignal.timeout(30000),
+                });
+              } catch {
+                last = "registry transport failure";
+              }
+              if (response) {
+                if (response.status === 404 || response.status >= 500) {
+                  last = `HTTP ${response.status}`;
+                } else if (!response.ok) {
+                  throw new Error(`registry lookup refused: HTTP ${response.status}`);
+                } else {
+                  const published = await response.json();
+                  if (published.name !== "@hasna/skills" || published.version !== version) {
+                    throw new Error("the registry reports a different package or version");
+                  }
+                  if (published.dist?.integrity !== expectedIntegrity) {
+                    throw new Error("the published archive integrity differs from the reviewed archive");
+                  }
+                  const attestations = published.dist?.attestations;
+                  if (attestations?.url && attestations.provenance?.predicateType === "https://slsa.dev/provenance/v1") {
+                    console.log(`Verified ${version}: registry integrity matches reviewed archive; npm provenance present`);
+                    process.exit(0);
+                  }
+                  last = "provenance attestation not visible yet";
                 }
-                const attestations = published["dist.attestations"];
-                const provenance = attestations?.provenance;
-                if (!attestations?.url || provenance?.predicateType !== "https://slsa.dev/provenance/v1") {
-                  throw new Error("the published version carries no npm provenance attestation");
-                }
-                console.log(`Verified ${version}: registry integrity matches reviewed archive; npm provenance present`);
-              '
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "::error::$spec did not become visible after publish"
-          exit 1
+              }
+              if (attempt < 40) await new Promise(resolve => setTimeout(resolve, 15000));
+            }
+            throw new Error(`@hasna/skills@${version} was not fully visible after ten minutes (${last})`);
+          '

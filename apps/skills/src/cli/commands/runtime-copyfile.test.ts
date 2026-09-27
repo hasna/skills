@@ -198,6 +198,31 @@ describe("exact-version copyfile runtime update", () => {
     } finally { fixture.server.stop(true); }
   });
 
+  test("repeated and lexically equivalent PATH directories produce one launcher entry each", async () => {
+    const f = fixtureHome();
+    const fixture = await serverWithArtifact();
+    try {
+      const pathValue = [
+        ...Array.from({ length: 12 }, () => f.localBin),
+        join(f.localBin, "."),
+        f.bunBin,
+        f.externalBin,
+      ].join(delimiter);
+      const result = await updateCopyfileRuntime("0.10.8", {
+        homeDir: f.home,
+        pathValue,
+        registryOrigin: fixture.server.url.origin,
+      });
+      expect(result).toMatchObject({ updated: true, launcherCount: 21 });
+      const receipt = JSON.parse(readFileSync(join(f.runtime, "0.10.8-copyfile", "rollout-receipt.json"), "utf8"));
+      const paths = receipt.launchers.map((item: { path: string }) => item.path);
+      expect(paths).toHaveLength(21);
+      expect(new Set(paths).size).toBe(21);
+      expect(paths.filter((path: string) => path.startsWith(f.localBin + "/"))).toHaveLength(Object.keys(BIN).length);
+      expect(realpathSync(join(f.localBin, "skills"))).toBe(join(f.runtime, "0.10.8-copyfile", "node_modules", "@hasna", "skills", BIN.skills));
+    } finally { fixture.server.stop(true); }
+  });
+
   test("streams registry responses under a hard byte cap", async () => {
     const response = new Response(new ReadableStream({
       start(controller) { controller.enqueue(new Uint8Array([1, 2, 3])); controller.enqueue(new Uint8Array([4, 5, 6])); controller.close(); },
