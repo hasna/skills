@@ -64,15 +64,22 @@ function canonicalAgentPath(path: string, aliases: AgentRootAlias[]): string {
   return binding ? join(binding.target, relative(binding.alias, absolute)) : absolute;
 }
 
-function disabledCodexSkillPaths(config: { skills?: { config?: Array<{ path?: string; enabled?: boolean }> } }, aliases: AgentRootAlias[]): string[] {
+function disabledCodexSkillPaths(config: { skills?: { config?: Array<{ path?: string; name?: string; enabled?: boolean }> } }, aliases: AgentRootAlias[]): string[] {
+  // Codex applies name rules after path rules in the same ordered list. Without
+  // the parsed skill name, a name rule could re-enable a path we thought inert.
+  if (config.skills?.config?.some(entry => entry.name !== undefined)) return [];
   const settings = new Map<string, boolean[]>();
   for (const entry of config.skills?.config ?? []) {
-    if (typeof entry.path !== "string" || !isAbsolute(entry.path)) continue;
-    const path = canonicalAgentPath(entry.path, aliases);
-    const skill = path.endsWith(`${sep}SKILL.md`) ? dirname(path) : path;
-    settings.set(skill, [...(settings.get(skill) ?? []), entry.enabled === false]);
+    if (typeof entry.path !== "string" || !isAbsolute(entry.path) || !entry.path.endsWith(`${sep}SKILL.md`)) continue;
+    // Native Codex canonicalizes the document selector, so a `latest` path
+    // and its versioned path are the same rule. Only an existing exact document
+    // is evidence that the native skill is disabled; a directory is not.
+    let document: string;
+    try { document = realpathSync(canonicalAgentPath(entry.path, aliases)); } catch { continue; }
+    if (!document.endsWith(`${sep}SKILL.md`)) continue;
+    settings.set(document, [...(settings.get(document) ?? []), entry.enabled === false]);
   }
-  return [...settings].filter(([, values]) => values.length === 1 && values[0] === true).map(([path]) => path);
+  return [...settings].filter(([, values]) => values.length === 1 && values[0] === true).map(([document]) => dirname(document));
 }
 
 function recheckRootAliases(aliases: AgentRootAlias[]): void {

@@ -59,3 +59,22 @@ test("disabled paths cannot be relative or refer to a different skill", () => {
   expect(() => inventoryNativeSkills(home, { agents: ["codex"], includeVendor: true, disabledVendorPaths: ["control-chrome"] })).toThrow("Disabled vendor paths must be exact absolute paths");
   expect(() => inventoryNativeSkills(home, { agents: ["codex"], includeVendor: true, disabledVendorPaths: [`${skill}-other`] })).toThrow("Refusing symlink path");
 });
+
+test("a later enabled alias selector overrides the versioned disable", () => {
+  const { home, skill } = vendorAlias();
+  const alias = join(home, ".codex", "plugins", "cache", "openai-bundled", "chrome", "latest", "skills", "control-chrome", "SKILL.md");
+  writeFileSync(join(home, ".codex", "config.toml"), `[[skills.config]]\npath = "${join(skill, "SKILL.md")}"\nenabled = false\n[[skills.config]]\npath = "${alias}"\nenabled = true\n`);
+  expect(() => planAgentIntegration({ home, dataDir: join(home, ".hasna", "skills"), agents: ["codex"], command: "skills", profileId: "fleet", projectDir: home })).toThrow("Refusing symlink path");
+});
+
+test("a native name selector may re-enable the skill", () => {
+  const { home, skill } = vendorAlias();
+  writeFileSync(join(home, ".codex", "config.toml"), `[[skills.config]]\npath = "${join(skill, "SKILL.md")}"\nenabled = false\n[[skills.config]]\nname = "control-chrome"\nenabled = true\n`);
+  expect(() => planAgentIntegration({ home, dataDir: join(home, ".hasna", "skills"), agents: ["codex"], command: "skills", profileId: "fleet", projectDir: home })).toThrow("Refusing symlink path");
+});
+
+test("a directory selector does not disable the native skill document", () => {
+  const { home, skill } = vendorAlias();
+  writeFileSync(join(home, ".codex", "config.toml"), `[[skills.config]]\npath = "${skill}"\nenabled = false\n`);
+  expect(() => planAgentIntegration({ home, dataDir: join(home, ".hasna", "skills"), agents: ["codex"], command: "skills", profileId: "fleet", projectDir: home })).toThrow("Refusing symlink path");
+});
