@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { Command } from "commander";
 import { createStore } from "./store.js";
 import { validOperatorScopeEnrollmentInput, validOperatorScopeList, type OperatorScopeEnrollmentInput } from "./types.js";
+import { EnrollmentInspectionError, inspectEnrollment, type EnrollmentInspectionInput } from "./enrollment-inspection.js";
 
 type EnrollmentManifest = OperatorScopeEnrollmentInput & {
   operation: "enroll-publish";
@@ -15,6 +16,22 @@ type VerifiedOperatorReceipt = Pick<OperatorScopeEnrollmentInput, "operatorJobId
   taskDefinitionArn: string;
   verifiedAt: string;
 };
+
+type InspectionManifest = EnrollmentInspectionInput & {
+  app: "skills";
+  operation: "inspect-enrollment";
+  manifestVersion: 1;
+  operationId: string;
+  stationId: string;
+  expiresAt: string;
+  manifestDigest: string;
+};
+
+class InspectionInputError extends Error {
+  constructor(readonly code: "INVALID_INSPECTION_MANIFEST" | "INVALID_OPERATOR_RECEIPT") {
+    super(code);
+  }
+}
 
 const MAX_MANIFEST_BYTES = 32 * 1024;
 
@@ -48,6 +65,17 @@ function readBoundedJson(path: string): { value: Record<string, unknown>; bytesS
   }
 }
 
+function verifyOperatorReceipt(
+  manifestInput: ReturnType<typeof readBoundedJson>,
+  receipt: Partial<VerifiedOperatorReceipt>,
+): Pick<OperatorScopeEnrollmentInput, "operatorJobId" | "operatorTaskArn"> {
+  if (typeof receipt.operatorJobId !== "string" || !receipt.operatorJobId.trim() || typeof receipt.operatorTaskArn !== "string" || !receipt.operatorTaskArn.trim()) throw new Error("verified operator receipt is incomplete");
+  if (typeof receipt.manifestBytesSha256 !== "string" || !/^[a-f0-9]{64}$/.test(receipt.manifestBytesSha256)) throw new Error("verified operator receipt digest is invalid");
+  if (manifestInput.bytesSha256 !== receipt.manifestBytesSha256) throw new Error("manifest bytes are not the bytes verified by the operator wrapper");
+  if (typeof receipt.taskDefinitionArn !== "string" || !receipt.taskDefinitionArn.trim() || typeof receipt.verifiedAt !== "string" || !Number.isFinite(Date.parse(receipt.verifiedAt))) throw new Error("verified operator receipt provenance is invalid");
+  return { operatorJobId: receipt.operatorJobId, operatorTaskArn: receipt.operatorTaskArn };
+}
+
 function readManifest(path: string, receiptPath: string): EnrollmentManifest {
   const manifestInput = readBoundedJson(path);
   const receiptInput = readBoundedJson(receiptPath);
@@ -66,15 +94,69 @@ function readManifest(path: string, receiptPath: string): EnrollmentManifest {
   if (!Number.isFinite(expiry) || expiry <= Date.now()) throw new Error("maintenance manifest has an invalid or expired expiry");
   if (!/^[a-f0-9]{64}$/.test(parsed.manifestDigest!)) throw new Error("maintenance manifest digest must be SHA-256");
   if (sha256(canonical(parsed)) !== parsed.manifestDigest) throw new Error("maintenance manifest digest does not match its bytes");
-  if (typeof receipt.operatorJobId !== "string" || !receipt.operatorJobId.trim() || typeof receipt.operatorTaskArn !== "string" || !receipt.operatorTaskArn.trim()) throw new Error("verified operator receipt is incomplete");
-  if (typeof receipt.manifestBytesSha256 !== "string" || !/^[a-f0-9]{64}$/.test(receipt.manifestBytesSha256)) throw new Error("verified operator receipt digest is invalid");
-  if (manifestInput.bytesSha256 !== receipt.manifestBytesSha256) throw new Error("manifest bytes are not the bytes verified by the operator wrapper");
-  if (typeof receipt.taskDefinitionArn !== "string" || !receipt.taskDefinitionArn.trim() || typeof receipt.verifiedAt !== "string" || !Number.isFinite(Date.parse(receipt.verifiedAt))) throw new Error("verified operator receipt provenance is invalid");
-  return { ...parsed, operatorJobId: receipt.operatorJobId, operatorTaskArn: receipt.operatorTaskArn } as EnrollmentManifest;
+  return { ...parsed, ...verifyOperatorReceipt(manifestInput, receipt) } as EnrollmentManifest;
+}
+
+/** Inspection has its own authorization; a failed enrollment manifest cannot authorize it. */
+export function readInspectionManifest(path: string, receiptPath: string): InspectionManifest {
+  let input: ReturnType<typeof readBoundedJson>;
+  let parsed: InspectionManifest;
+  try {
+    input = readBoundedJson(path);
+    const value = input.value;
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
+    const fields = ["app", "operation", "manifestVersion", "operationId", "stationId", "keyId", "orgId", "enrollmentOperationId", "enrollmentManifestDigest", "expiresAt", "manifestDigest"];
+    if (Object.keys(value).length !== fields.length || fields.some((field) => !Object.hasOwn(value, field))) throw new Error();
+    if (value.app !== "skills" || value.operation !== "inspect-enrollment" || value.manifestVersion !== 1) throw new Error();
+    for (const field of ["operationId", "stationId", "keyId", "orgId", "enrollmentOperationId"] as const) {
+      const item = value[field];
+      if (typeof item !== "string" || item.trim().length === 0 || item.length > 256 || /[\u0000-\u001f\u007f]/.test(item)) throw new Error();
+    }
+    if (value.operationId === value.enrollmentOperationId) throw new Error();
+    for (const field of ["manifestDigest", "enrollmentManifestDigest"] as const) {
+      if (typeof value[field] !== "string" || !/^[a-f0-9]{64}$/.test(value[field])) throw new Error();
+    }
+    if (typeof value.expiresAt !== "string" || value.expiresAt.length > 64 || !Number.isFinite(Date.parse(value.expiresAt)) || Date.parse(value.expiresAt) <= Date.now()) throw new Error();
+    if (sha256(canonical(value)) !== value.manifestDigest) throw new Error();
+    parsed = value as unknown as InspectionManifest;
+  } catch {
+    throw new InspectionInputError("INVALID_INSPECTION_MANIFEST");
+  }
+  try {
+    verifyOperatorReceipt(input, readBoundedJson(receiptPath).value as Partial<VerifiedOperatorReceipt>);
+  } catch {
+    throw new InspectionInputError("INVALID_OPERATOR_RECEIPT");
+  }
+  return parsed;
 }
 
 export function registerMaintenance(parent: Command): void {
   const maintenance = parent.command("maintenance").description("Run protected, metadata-only Skills maintenance operations");
+  maintenance.command("inspect-enrollment")
+    .description("Inspect one enrollment with a database-enforced read-only snapshot")
+    .requiredOption("--manifest <path>", "Fresh inspection authorization supplied by the protected task wrapper")
+    .requiredOption("--operator-receipt <path>", "Verified actor receipt written by the protected task wrapper")
+    .option("--json", "Output a safe JSON receipt", false)
+    .action(async (options: { manifest: string; operatorReceipt: string; json?: boolean }) => {
+      try {
+        const manifest = readInspectionManifest(options.manifest, options.operatorReceipt);
+        const result = await inspectEnrollment(process.env.HASNA_SKILLS_DATABASE_URL ?? "", manifest);
+        console.log(JSON.stringify({
+          ...result,
+          operationId: manifest.operationId,
+          enrollmentOperationId: manifest.enrollmentOperationId,
+          enrollmentManifestDigest: manifest.enrollmentManifestDigest,
+          keyId: manifest.keyId,
+          orgId: manifest.orgId,
+          stationId: manifest.stationId,
+        }));
+      } catch (error) {
+        const code = error instanceof InspectionInputError || error instanceof EnrollmentInspectionError ? error.code : "INSPECTION_FAILED";
+        if (options.json || !process.stdout.isTTY) console.log(JSON.stringify({ status: "failed", code }));
+        else console.error(code);
+        process.exitCode = 1;
+      }
+    });
   maintenance.command("enroll-publish")
     .requiredOption("--manifest <path>", "Bounded target manifest supplied by the protected task wrapper")
     .requiredOption("--operator-receipt <path>", "Verified actor receipt written by the protected task wrapper")
