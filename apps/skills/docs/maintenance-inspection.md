@@ -31,3 +31,11 @@ Invalid input, database refusal or malformed stored metadata exits nonzero with
 a fixed error code. A failed or ambiguous inspection does not authorize an
 enrollment retry. Review the result and use the deployment's normal protected
 authorization process for any subsequent change.
+
+Publication enrollment likewise requires an explicit PostgreSQL target. Its
+maintenance connection exposes only the existing target inspection and atomic
+scope-update/audit operations. It never runs application-store connectivity
+initialization, schema migrations, registry backfills or bootstrap-key setup.
+A dry run only reads target metadata. The connection uses a single pooled
+connection, a five-second statement timeout and a one-second lock timeout.
+Recognized database refusals produce fixed error codes without driver text.
