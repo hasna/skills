@@ -819,10 +819,12 @@ export class PostgresSkillsStore implements SkillsProductStore {
   private async casUpdateApiKeyScopes(tx: SqlTag, keyId: string, orgId: string, expectedScopes: string[], addScopes: string[]): Promise<Record<string, unknown>[]> {
     const current = expectedScopes;
     const scopes = [...current, ...addScopes.filter((scope) => !current.includes(scope))];
+    const expectedScopesJson = JSON.stringify(expectedScopes);
     return tx`
       UPDATE api_keys SET scopes_json = ${JSON.stringify(scopes)}::text::jsonb
       WHERE id = ${keyId} AND org_id = ${orgId} AND revoked_at IS NULL
-        AND scopes_json = ${JSON.stringify(expectedScopes)}::text::jsonb
+        AND (scopes_json = ${expectedScopesJson}::text::jsonb
+          OR scopes_json = to_jsonb(${expectedScopesJson}::text))
       RETURNING scopes_json
     `;
   }
