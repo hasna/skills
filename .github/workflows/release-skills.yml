@@ -32,6 +32,20 @@ jobs:
   publish:
     if: github.repository == 'hasna/skills'
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: maintenance_fixture
+          POSTGRES_DB: skills_maintenance_fixture
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U maintenance_fixture -d skills_maintenance_fixture"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     # Skills-only environment: the first-time creation of this environment and
     # its required-reviewer protection is a repository configuration step owned
     # by the chief engineering seat. The workflow names it; it does not create it.
@@ -174,7 +188,26 @@ jobs:
 
       - name: Test
         working-directory: apps/skills
-        run: bun test
+        env:
+          HASNA_SKILLS_MAINTENANCE_TEST_DATABASE_URL: postgres://maintenance_fixture@127.0.0.1:5432/skills_maintenance_fixture
+          HASNA_SKILLS_INSPECTION_TEST_DATABASE_URL: postgres://inspection_fixture@127.0.0.1:5432/skills_inspection_fixture
+          NO_COLOR: "1"
+        run: |
+          set -euo pipefail
+          bun -e '
+            import { SQL } from "bun";
+            const sql = new SQL(process.env.HASNA_SKILLS_MAINTENANCE_TEST_DATABASE_URL, { max: 1 });
+            try {
+              await sql.unsafe("CREATE ROLE inspection_fixture LOGIN");
+              await sql.unsafe("CREATE DATABASE skills_inspection_fixture OWNER inspection_fixture");
+            } finally {
+              await sql.close();
+            }
+          '
+          test_log="$RUNNER_TEMP/skills-test.log"
+          bun test 2>&1 | tee "$test_log"
+          grep -F '(pass) PostgreSQL enrollment has no initialization writes and retains atomic CAS, audit, replay and rollback' "$test_log"
+          grep -F '(pass) isolated PostgreSQL inspection is bounded, ordered, sanitized and enforced read-only' "$test_log"
 
       - name: Verify generated artifacts are reproducible
         working-directory: apps/skills

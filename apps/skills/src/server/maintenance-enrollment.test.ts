@@ -96,8 +96,26 @@ test.skipIf(!url)("PostgreSQL enrollment has no initialization writes and retain
     expect(race.map(x => x.result.status).sort()).toEqual(["stale", "updated"]);
     expect(await sql`SELECT * FROM skills_audit_events WHERE target_id = 'race-key'`).toHaveLength(1);
 
+    // Older writes may have stored the serialized array as a JSON string. Accept that exact
+    // prior representation for CAS, then normalize the successful write to a native JSON array.
+    await sql`INSERT INTO api_keys VALUES ('legacy-operator-key', 'fixture-org', 'fixture', ${JSON.stringify(scopes)}::jsonb, NULL)`;
+    expect((await sql`SELECT jsonb_typeof(scopes_json) AS kind FROM api_keys WHERE id = 'legacy-operator-key'`)[0].kind).toBe("string");
+    const legacyInput = inputs("legacy-apply", "legacy-operator-key");
+    const legacyApply = await invoke(legacyInput, true);
+    expect(legacyApply.result.status).toBe("updated");
+    expect(legacyApply.result.scopes).toEqual([...scopes, "skills:publish"]);
+    expect((await sql`SELECT jsonb_typeof(scopes_json) AS kind, scopes_json FROM api_keys WHERE id = 'legacy-operator-key'`)[0]).toEqual({
+      kind: "array", scopes_json: [...scopes, "skills:publish"],
+    });
+    const legacyAudit = await sql`SELECT jsonb_typeof(metadata_json) AS kind, metadata_json FROM skills_audit_events WHERE target_id = 'legacy-operator-key'`;
+    expect(legacyAudit).toHaveLength(1);
+    expect(legacyAudit[0].kind).toBe("object");
+    expect((await invoke(legacyInput, true)).result.status).toBe("already_applied");
+
     // The authenticated update path shares the same CAS; it must retain an object audit too.
     await sql`INSERT INTO api_keys VALUES ('admin-key', 'fixture-org', 'fixture', ${JSON.stringify(scopes)}::text::jsonb, NULL)`;
+    await sql`INSERT INTO api_keys VALUES ('legacy-admin-key', 'fixture-org', 'fixture', ${JSON.stringify(scopes)}::jsonb, NULL)`;
+    expect((await sql`SELECT jsonb_typeof(scopes_json) AS kind FROM api_keys WHERE id = 'legacy-admin-key'`)[0].kind).toBe("string");
     const admin = new PostgresSkillsStore(url!, { max: 1, connection: { statement_timeout: "5s", lock_timeout: "1s" } });
     try {
       const actor = { orgId: "fixture-org", userId: "fixture-admin", apiKeyId: "fixture-admin-key" } as ApiPrincipal;
@@ -107,6 +125,16 @@ test.skipIf(!url)("PostgreSQL enrollment has no initialization writes and retain
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({ user_id: actor.userId, api_key_id: actor.apiKeyId, operator_operation_id: null });
       expect(rows[0].metadata_json).toEqual({ added: ["skills:publish"], scopes: [...scopes, "skills:publish"] });
+      expect(await admin.updateApiKeyScopes(actor, "legacy-admin-key", scopes, ["skills:publish"])).toEqual({ kind: "updated", scopes: [...scopes, "skills:publish"] });
+      expect((await sql`SELECT jsonb_typeof(scopes_json) AS kind, scopes_json FROM api_keys WHERE id = 'legacy-admin-key'`)[0]).toEqual({
+        kind: "array", scopes_json: [...scopes, "skills:publish"],
+      });
+      const legacyAdminAudit = await sql`SELECT jsonb_typeof(metadata_json) AS kind, metadata_json FROM skills_audit_events WHERE target_id = 'legacy-admin-key'`;
+      expect(legacyAdminAudit).toHaveLength(1);
+      expect(legacyAdminAudit[0].kind).toBe("object");
+      expect(legacyAdminAudit[0].metadata_json).toEqual({ added: ["skills:publish"], scopes: [...scopes, "skills:publish"] });
+      expect(await admin.updateApiKeyScopes(actor, "legacy-admin-key", scopes, ["skills:publish"])).toMatchObject({ kind: "stale" });
+      expect(await sql`SELECT * FROM skills_audit_events WHERE target_id = 'legacy-admin-key'`).toHaveLength(1);
     } finally { await admin.close(); }
 
     await sql`INSERT INTO api_keys VALUES ('rollback-key', 'fixture-org', 'fixture', ${JSON.stringify(scopes)}::text::jsonb, NULL)`;
