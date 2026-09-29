@@ -379,6 +379,9 @@ function readTree(root: string, includeModes: boolean): TreeRecord {
 }
 
 function normalizeModes(root: string): void {
+  const rootStat = lstatSync(root);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error("RUNTIME_ENTRY_TYPE_UNSUPPORTED");
+  chmodSync(root, rootStat.mode & 0o755);
   const walk = (dir: string) => {
     for (const item of readdirSync(dir)) {
       const path = join(dir, item);

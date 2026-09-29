@@ -81,14 +81,23 @@ describe("exact-version copyfile runtime update", () => {
     const { server, integrity } = await serverWithArtifact();
     try {
       const pathValue = `${f.externalBin}${delimiter}${f.localBin}${delimiter}${f.bunBin}`;
-      const result = await updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue, registryOrigin: server.url.origin });
+      const priorUmask = process.umask(0o002);
+      let result: Awaited<ReturnType<typeof updateCopyfileRuntime>>;
+      try {
+        result = await updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue, registryOrigin: server.url.origin });
+      } finally {
+        process.umask(priorUmask);
+      }
       expect(result).toMatchObject({ updated: true, version: "0.10.8", currentVersion: "0.10.6", launcherCount: 21, configCount: 4, tarballIntegrity: integrity });
       const targetRoot = join(f.runtime, "0.10.8-copyfile");
       const targetPackage = join(targetRoot, "node_modules", "@hasna", "skills");
+      const nodeModulesRoot = join(targetRoot, "node_modules");
       expect(realpathSync(join(f.localBin, "skills"))).toBe(join(targetPackage, BIN.skills));
       expect(realpathSync(join(f.bunBin, "skills"))).toBe(join(targetPackage, BIN.skills));
       expect(JSON.parse(readFileSync(join(targetPackage, "package.json"), "utf8")).version).toBe("0.10.8");
       expect(lstatSync(targetRoot).mode & 0o077).toBe(0);
+      expect(lstatSync(nodeModulesRoot).isDirectory()).toBe(true);
+      expect(lstatSync(nodeModulesRoot).mode & 0o022).toBe(0);
       const receipt = JSON.parse(readFileSync(join(targetRoot, "rollout-receipt.json"), "utf8"));
       expect(receipt).toMatchObject({ state: "switched", targetVersion: "0.10.8", tarballIntegrity: integrity, tarballBytes: expect.any(Number) });
       expect(receipt.launchers).toHaveLength(21);
@@ -103,11 +112,11 @@ describe("exact-version copyfile runtime update", () => {
         for (const name of readdirSync(dir)) {
           const path = join(dir, name), stat = lstatSync(path);
           if (stat.isSymbolicLink()) continue;
-          if (stat.isDirectory()) walk(path);
+          if (stat.isDirectory()) { expect(stat.mode & 0o022).toBe(0); walk(path); }
           else if (stat.isFile()) expect(stat.mode & 0o022).toBe(0);
         }
       };
-      walk(join(targetRoot, "node_modules"));
+      walk(nodeModulesRoot);
       for (const [path, content] of f.configs) {
         expect(readFileSync(path, "utf8")).toBe(content);
         const relativePath = path.slice(f.home.length + 1);
