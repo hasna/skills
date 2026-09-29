@@ -25,9 +25,17 @@ Packed-SHA256: <64 lowercase hex>
 
 `Packed-SHA256` is the SHA-256 of the tarball the release toolchain packs at the
 exact release commit. Produce it in a clean checkout of that commit, with the
-toolchain the workflow selects (node 24.18.0 / npm 11.19.0), after the build:
+toolchain the workflow selects (node 24.18.0 / npm 11.19.0), after the build.
+Create the isolated checkout and build with umask `022`, retaining Git's tracked
+file modes (`0644` or `0755`). Keep its enclosing scratch directory private.
+An existing private copy with `0600`/`0700` files is not equivalent: npm includes
+those mode bits in the archive, even when every file's contents match. Changing
+umask only at pack time does not repair permissions of existing build outputs.
+
+In that clean checkout:
 
 ```sh
+umask 022
 cd apps/skills
 bun run build
 destination="$(mktemp -d)"

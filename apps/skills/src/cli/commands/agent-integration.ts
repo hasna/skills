@@ -95,6 +95,7 @@ export function registerAgentIntegration(parent: Command): void {
     .option("--selection-profile <id>", "Selection profile (preserves existing binding; new agents use default)")
     .option("--include-vendor", "Retained for compatibility; vendor system skills are always inventoried and disabled", false)
     .option("--discovery-inputs <file>", "Advanced reviewed active plugin roots and source hashes for unsupported registrations")
+    .option("--reviewed-cache-alias <path>", "Exact skill-containing vendor cache alias reviewed for this hook plan")
     .option("--allow-root-aliases", "Allow home .claude/.codex aliases to existing directories within this home", false)
     .option("--apply", "Apply the plan, preserving prior configuration in private backups", false)
     .option("--json", "Output a receipt as JSON", false)
@@ -102,7 +103,7 @@ export function registerAgentIntegration(parent: Command): void {
     .action(async (options) => {
       try {
         const discoveryInputs: ReviewedDiscoveryInputs | undefined = options.discoveryInputs ? JSON.parse(readFileSync(options.discoveryInputs, "utf8")) : undefined;
-        const plan = planAgentIntegration({ agents: agents(options.agent), command: options.command, profileId: options.selectionProfile, includeVendor: options.includeVendor, discoveryInputs, allowRootAliases: options.allowRootAliases });
+        const plan = planAgentIntegration({ agents: agents(options.agent), command: options.command, profileId: options.selectionProfile, includeVendor: options.includeVendor, discoveryInputs, allowRootAliases: options.allowRootAliases, reviewedCacheAlias: options.reviewedCacheAlias });
         const result = options.apply ? applyAgentIntegration(plan) : { changed: [], backups: [] };
         // Configuration contents can include credentials. Only paths/counts leave this command.
         const receipt = { applied: options.apply, planned: plan.changes.map(change => change.path), ...result, rootAliases: plan.rootAliases ?? [], discovery: plan.discoveryAfter, nativeSkills: plan.nativeSkills.map(entry => ({ agent: entry.agent, path: entry.path, managed: entry.managed, vendor: entry.vendor, system: entry.system === true, bridge: entry.bridge === true })), requiresNativeRetirement: plan.nativeSkills.some(entry => !entry.bridge && !entry.system) };

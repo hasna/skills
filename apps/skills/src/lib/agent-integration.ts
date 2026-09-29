@@ -8,7 +8,7 @@ import { requiresCliSkillLoading, readManagedSkillPolicySnapshot, serializeManag
 import { CLI_BRIDGE_NAME, CLI_BRIDGE_FILES, CLI_BRIDGE_DIGEST, CLI_BRIDGE_VERSION, isOwnedCliBridge } from "./agent-bridge.js";
 import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, rebindAgentDiscovery, type AgentDiscoveryBinding, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderAgentHookCommand, renderOpenCodePlugin, type IntegrationAgent } from "./agent-adapters.js";
-import { assertCodexPathConfigEditable, CODEX_SKILL_CONFIG_SECTIONS, disableCodexBundledSkills } from "./agent-codex.js";
+import { assertCodexPathConfigEditable, CODEX_SKILL_CONFIG_SECTIONS, disableCodexBundledSkills, normalizeCodexInlinePathConfig } from "./agent-codex.js";
 
 import { HERMES_OPT_OUT, parseHermesConfig, configureHermesHooks, assertHermesProtection, renderHermesSupervisor, assertNoHermesLegacyShadow, type HermesSupervisorBinding } from "./agent-hermes.js";
 import type { CodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery.js";
@@ -248,12 +248,12 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
       // every real skill below its fully inventoried version. The link adds no
       // discovery in that case. A new or enabled skill still fails closed.
       const targetSkills = entries.filter(entry => entry.agent === agent && entry.vendor && (entry.path === target || entry.path.startsWith(target + sep)));
+      if (path === options.reviewedCacheAlias && targetSkills.length > 0) reviewedCacheAliasFound = true;
       if (agent === "codex" && targetSkills.length > 0 && targetSkills.every(entry => disabledVendorPaths.has(entry.path))) return true;
       // A plugin's `latest` link may point at a fully inventoried version.
       // Only migration opts in to that exact link so it can archive the real
       // SKILL.md; ordinary hook checks continue to refuse the native copy.
       if (path !== options.reviewedCacheAlias) return false;
-      reviewedCacheAliasFound = true;
     }
     return true;
   }
@@ -413,7 +413,7 @@ function configureHooks(config: Record<string, any>, agent: IntegrationAgent, co
 
 function disableCodexSkills(text: string, skills: NativeSkillEntry[], aliases: AgentRootAlias[], bridgePath: string): string {
   const bundled = disableCodexBundledSkills(text);
-  let result = bundled;
+  let result = normalizeCodexInlinePathConfig(bundled);
   const bridgeSelector = (entry: { path?: string; name?: string }) => (typeof entry.name === "string" && entry.name.trim() === CLI_BRIDGE_NAME) || (typeof entry.path === "string" && [resolve(bridgePath), resolve(join(bridgePath, "SKILL.md"))].includes(canonicalAgentPath(entry.path, aliases)));
   const previousConfig = (Bun.TOML.parse(bundled) as { skills?: { config?: Array<{ path?: string; name?: string; enabled?: boolean }> } }).skills?.config;
   if (previousConfig !== undefined && (!Array.isArray(previousConfig) || previousConfig.some(entry => !entry || typeof entry !== "object" || (entry.path !== undefined && entry.name !== undefined)))) throw new Error("Codex skill controls require one path or name selector per [[skills.config]] entry; review ambiguous entries before running skills hook install");
@@ -435,7 +435,7 @@ function disableCodexSkills(text: string, skills: NativeSkillEntry[], aliases: A
 }
 
 /** Planning is read-only; credentials and unrelated settings never appear in CLI output. */
-export function planAgentIntegration(options: { home?: string; dataDir?: string; agents: IntegrationAgent[]; command?: string; profileId?: string; includeVendor?: boolean; projectDir?: string; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean }): AgentIntegrationPlan {
+export function planAgentIntegration(options: { home?: string; dataDir?: string; agents: IntegrationAgent[]; command?: string; profileId?: string; includeVendor?: boolean; projectDir?: string; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean; reviewedCacheAlias?: string }): AgentIntegrationPlan {
   const home = options.home ?? homedir(), dataDir = options.dataDir ?? getDataDirReadOnly();
   const aliases = rootAliases(home, options.allowRootAliases);
   const policyPath = join(dataDir, "agent-policy.json"); assertSafePath(policyPath);
@@ -469,7 +469,7 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     return resolveAgentDiscovery({ home, agent, reviewed: options.discoveryInputs, retainedReview, canonical: path => canonicalAgentPath(path, aliases) });
   });
   const codexConfig = options.agents.includes("codex") ? Bun.TOML.parse(readOptional(canonicalAgentPath(join(home, ".codex", "config.toml"), aliases)) ?? "") as { skills?: { config?: Array<{ path?: string; enabled?: boolean }> } } : {};
-  const nativeSkills = inventoryNativeSkills(home, { includeVendor: true, guardHermes: options.agents.includes("hermes"), agents: options.agents, projectDir: options.projectDir, agentRoots: discoveries.flatMap(binding => binding.roots.map(path => ({ agent: binding.agent, path }))), allowRootAliases: options.allowRootAliases, disabledVendorPaths: disabledCodexSkillPaths(codexConfig, aliases) });
+  const nativeSkills = inventoryNativeSkills(home, { includeVendor: true, guardHermes: options.agents.includes("hermes"), agents: options.agents, projectDir: options.projectDir, agentRoots: discoveries.flatMap(binding => binding.roots.map(path => ({ agent: binding.agent, path }))), allowRootAliases: options.allowRootAliases, reviewedCacheAlias: options.reviewedCacheAlias, disabledVendorPaths: disabledCodexSkillPaths(codexConfig, aliases) });
   const changes: AgentConfigChange[] = [];
   for (const agent of [...new Set(options.agents)]) {
     if (!INTEGRATION_AGENTS.includes(agent)) throw new Error(`Unsupported agent: ${agent}`);
