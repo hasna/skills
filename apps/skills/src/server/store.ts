@@ -118,6 +118,28 @@ export async function createStore(options: StoreOptions = {}): Promise<SkillsPro
   return store;
 }
 
+export type OperatorScopeMaintenanceStore = Required<Pick<SkillsProductStore,
+  "inspectOperatorScopeTarget" | "enrollPublishScopeByOperator" | "close">>;
+
+/** Open only the existing scope-maintenance surface; never initialize or backfill the application store. */
+export function openOperatorScopeMaintenance(databaseUrl: string): OperatorScopeMaintenanceStore {
+  try {
+    const url = new URL(databaseUrl);
+    if (!["postgres:", "postgresql:"].includes(url.protocol) || !url.hostname) throw new Error();
+  } catch {
+    throw new Error("maintenance requires an explicit Postgres database");
+  }
+  const store = new PostgresSkillsStore(databaseUrl, {
+    max: 1, connectionTimeout: 5, idleTimeout: 5,
+    connection: { statement_timeout: "5s", lock_timeout: "1s" },
+  });
+  return {
+    inspectOperatorScopeTarget: (keyId, orgId) => store.inspectOperatorScopeTarget(keyId, orgId),
+    enrollPublishScopeByOperator: (input) => store.enrollPublishScopeByOperator(input),
+    close: () => store.close(),
+  };
+}
+
 function instantiateStore(target: DatabaseTarget, sqliteOptions?: SqliteStoreOptions): SkillsProductStore {
   switch (target.kind) {
     case "postgres":
@@ -651,9 +673,11 @@ export class PostgresSkillsStore implements SkillsProductStore {
   readonly backend: StoreBackendInfo = { kind: "postgres", durable: true, label: "postgres" };
   private sql: SqlTag;
 
-  constructor(databaseUrl: string) {
-    const bunWithSql = Bun as unknown as { SQL: new (url: string, options?: { max?: number }) => SqlTag };
-    this.sql = new bunWithSql.SQL(databaseUrl, { max: resolvePoolMax() });
+  constructor(databaseUrl: string, connectionOptions: {
+    max?: number; connectionTimeout?: number; idleTimeout?: number; connection?: Record<string, string>;
+  } = {}) {
+    const bunWithSql = Bun as unknown as { SQL: new (url: string, options?: typeof connectionOptions) => SqlTag };
+    this.sql = new bunWithSql.SQL(databaseUrl, { max: resolvePoolMax(), ...connectionOptions });
   }
 
   /**
@@ -786,7 +810,7 @@ export class PostgresSkillsStore implements SkillsProductStore {
       }
       await tx`
         INSERT INTO skills_audit_events (org_id, user_id, api_key_id, action, target_type, target_id, metadata_json)
-        VALUES (${actor.orgId}, ${actor.userId}, ${actor.apiKeyId}, ${"api_key_scopes_added"}, ${"api_key"}, ${keyId}, ${JSON.stringify({ added: addScopes, scopes: parseJsonArray(updated[0].scopes_json) })}::jsonb)
+        VALUES (${actor.orgId}, ${actor.userId}, ${actor.apiKeyId}, ${"api_key_scopes_added"}, ${"api_key"}, ${keyId}, ${JSON.stringify({ added: addScopes, scopes: parseJsonArray(updated[0].scopes_json) })}::text::jsonb)
       `;
       return { kind: "updated", scopes: parseJsonArray(updated[0].scopes_json) };
     });
@@ -796,9 +820,9 @@ export class PostgresSkillsStore implements SkillsProductStore {
     const current = expectedScopes;
     const scopes = [...current, ...addScopes.filter((scope) => !current.includes(scope))];
     return tx`
-      UPDATE api_keys SET scopes_json = ${JSON.stringify(scopes)}::jsonb
+      UPDATE api_keys SET scopes_json = ${JSON.stringify(scopes)}::text::jsonb
       WHERE id = ${keyId} AND org_id = ${orgId} AND revoked_at IS NULL
-        AND scopes_json = ${JSON.stringify(expectedScopes)}::jsonb
+        AND scopes_json = ${JSON.stringify(expectedScopes)}::text::jsonb
       RETURNING scopes_json
     `;
   }
@@ -846,7 +870,7 @@ export class PostgresSkillsStore implements SkillsProductStore {
         VALUES (${input.orgId}, NULL, NULL, ${"api_key_scopes_added"}, ${"api_key"}, ${input.keyId}, ${input.operationId}, ${JSON.stringify({
           added: ["skills:publish"], scopes, operator_operation_id: input.operationId, operator_job_id: input.operatorJobId,
           operator_task_arn: input.operatorTaskArn, target_manifest_digest: input.manifestDigest, station_id: input.stationId,
-        })}::jsonb)
+        })}::text::jsonb)
       `;
       return { kind: "updated", scopes };
     });

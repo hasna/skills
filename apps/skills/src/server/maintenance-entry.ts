@@ -1,7 +1,8 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { Command } from "commander";
-import { createStore } from "./store.js";
+import { SQL } from "bun";
+import { openOperatorScopeMaintenance, type OperatorScopeMaintenanceStore } from "./store.js";
 import { validOperatorScopeEnrollmentInput, validOperatorScopeList, type OperatorScopeEnrollmentInput } from "./types.js";
 import { EnrollmentInspectionError, inspectEnrollment, type EnrollmentInspectionInput } from "./enrollment-inspection.js";
 
@@ -164,14 +165,14 @@ export function registerMaintenance(parent: Command): void {
     .option("--json", "Output a safe JSON receipt", false)
     .action(async (options: { manifest: string; operatorReceipt: string; apply?: boolean; json?: boolean }) => {
       let manifest: EnrollmentManifest;
-      let store: Awaited<ReturnType<typeof createStore>> | undefined;
+      let store: OperatorScopeMaintenanceStore | undefined;
       try {
         manifest = readManifest(options.manifest, options.operatorReceipt);
         if (!validOperatorScopeEnrollmentInput(manifest)) throw new Error("maintenance manifest fields are invalid or unbounded");
         const databaseUrl = process.env.HASNA_SKILLS_DATABASE_URL;
         if (!databaseUrl) throw new Error("maintenance requires HASNA_SKILLS_DATABASE_URL");
-        store = await createStore({ databaseUrl });
-        const snapshot = await store.inspectOperatorScopeTarget?.(manifest.keyId, manifest.orgId);
+        store = openOperatorScopeMaintenance(databaseUrl);
+        const snapshot = await store.inspectOperatorScopeTarget(manifest.keyId, manifest.orgId);
         if (!snapshot) throw new Error("configured store does not support operator maintenance");
         if (snapshot.kind !== "found") throw new Error(`operator target ${snapshot.kind}`);
         if (!validOperatorScopeList(snapshot.scopes)) throw new Error("store returned invalid scope metadata");
@@ -180,7 +181,7 @@ export function registerMaintenance(parent: Command): void {
           console.log(JSON.stringify(base));
           return;
         }
-        const result = await store.enrollPublishScopeByOperator?.(manifest);
+        const result = await store.enrollPublishScopeByOperator(manifest);
         if (!result) throw new Error("configured store does not support operator maintenance");
         if ("scopes" in result && !validOperatorScopeList(result.scopes)) throw new Error("store returned invalid scope metadata");
         console.log(JSON.stringify({ ...base, status: result.kind, scopes: "scopes" in result ? result.scopes : undefined }));
@@ -188,12 +189,23 @@ export function registerMaintenance(parent: Command): void {
         process.exitCode = 1;
       } catch (error) {
         const message = error instanceof Error ? error.message : "";
-        const code = message.includes("expired") || message.includes("expiry") ? "INVALID_EXPIRY" : message.includes("receipt") || message.includes("operator") ? "INVALID_OPERATOR_RECEIPT" : message.includes("manifest") || message.includes("input") ? "INVALID_MANIFEST" : message.includes("database") || message.includes("store") ? "STORE_UNAVAILABLE" : "MAINTENANCE_FAILED";
+        // A driver's message, query and connection URL are never diagnostic output.
+        const state = error instanceof SQL.PostgresError ? error.errno : undefined;
+        const code = state === "42P01" || state === "42703" ? "MAINTENANCE_SCHEMA_UNAVAILABLE"
+          : state === "42501" ? "MAINTENANCE_ACCESS_DENIED"
+          : state === "25006" ? "MAINTENANCE_WRITE_REFUSED"
+          : state === "57014" || state === "55P03" ? "MAINTENANCE_TIMEOUT"
+          : ["08000", "08001", "08003", "08004", "08006", "08007", "08P01", "28000", "28P01", "57P03"].includes(state ?? "") ? "MAINTENANCE_CONNECTION_FAILED"
+          : message.includes("expired") || message.includes("expiry") ? "INVALID_EXPIRY" : message.includes("receipt") || message.includes("operator") ? "INVALID_OPERATOR_RECEIPT" : message.includes("manifest") || message.includes("input") ? "INVALID_MANIFEST" : message.includes("database") || message.includes("store") ? "STORE_UNAVAILABLE" : "MAINTENANCE_FAILED";
         if (options.json || !process.stdout.isTTY) console.log(JSON.stringify({ status: "failed", code }));
         else console.error(code);
         process.exitCode = 1;
       } finally {
-        await store?.close?.();
+        try { await store?.close(); }
+        catch {
+          console.log(JSON.stringify({ status: "failed", code: "MAINTENANCE_CLOSE_FAILED" }));
+          process.exitCode = 1;
+        }
       }
     });
 }
