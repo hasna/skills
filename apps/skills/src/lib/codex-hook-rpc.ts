@@ -3,7 +3,7 @@ import { realpathSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { promisify } from "node:util";
 
-export const SUPPORTED_CODEX_HOOK_VERSIONS = ["codex-cli 0.153.0", "codex-cli 0.154.0", "codex-cli 0.155.0", "codex-cli 0.155.1", "codex-cli 0.156.1", "codex-cli 0.157.0", "codex-cli 0.157.1"] as const;
+export const SUPPORTED_CODEX_HOOK_VERSIONS = ["codex-cli 0.153.0", "codex-cli 0.154.0", "codex-cli 0.155.0", "codex-cli 0.155.1", "codex-cli 0.156.1", "codex-cli 0.157.0", "codex-cli 0.157.1", "codex-cli 0.158.0"] as const;
 
 export interface CodexHookRpc {
   version: string;
