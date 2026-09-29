@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.15
+
+Normalize the installed `node_modules` root permissions during copyfile runtime updates, preventing group or other write access under permissive umasks.
+
 ## 0.10.11
 
 Accept a Codex plugin cache's `latest` alias when its fully inventoried version contains only skills disabled by exact native configuration. A newly added or enabled native skill still fails closed.

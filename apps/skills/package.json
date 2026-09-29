@@ -1,6 +1,6 @@
 {
   "name": "@hasna/skills",
-  "version": "0.10.14",
+  "version": "0.10.15",
   "description": "Skills library for AI coding agents",
   "type": "module",
   "bin": {
