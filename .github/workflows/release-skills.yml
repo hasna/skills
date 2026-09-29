@@ -126,6 +126,17 @@ jobs:
             appendFileSync(process.env.GITHUB_OUTPUT, "version=" + version + "\n");
           '
 
+      # The public monorepo still checks its member manifests against npm. A
+      # standalone release must not make protected hasna/apps main stale.
+      - name: Test the public monorepo synchronization guard
+        run: bun test ./.github/scripts/verify-apps-sync.test.ts
+
+      - name: Require protected hasna/apps main to include this release
+        if: env.RELEASE_TAG != ''
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: bun .github/scripts/verify-apps-sync.ts
+
       - name: Reject an already-published version or an inconclusive registry lookup
         if: env.RELEASE_TAG != ''
         env:

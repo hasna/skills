@@ -6,7 +6,7 @@ import { connectCodexHookRpc } from "./codex-hook-rpc.js";
 
 // These fixtures exercise the transport's admission rules. Compatibility with
 // a real native release is verified separately in a credential-free HOME.
-for (const version of ["0.157.1", "0.158.0"]) {
+for (const version of ["0.157.1", "0.158.0", "0.159.0"]) {
   test(`native transport accepts ${version} envelopes`, async () => {
     const home = mkdtempSync(join(tmpdir(), "skills-native-rpc-"));
     const command = join(home, "codex");
