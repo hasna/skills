@@ -307,8 +307,13 @@ describe("exact-version copyfile runtime update", () => {
         const pathValue = `${f.localBin}${delimiter}${f.bunBin}`;
         await updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue, registryOrigin: fixture.server.url.origin });
         const packageLink = join(f.home, ".local", "lib", "node_modules", "@hasna", "skills");
+        const wrongPackage = join(f.home, ".bun", "install", "global", "node_modules", "@hasna", "skills");
         mkdirSync(join(packageLink, ".."), { recursive: true, mode: 0o700 });
-        symlinkSync(relative(join(packageLink, ".."), cause === "wrong-root" ? join(f.home, ".bun", "install", "global", "node_modules", "@hasna", "skills") : cause === "cycle" ? packageLink : f.oldPackage), packageLink);
+        if (cause === "wrong-root") {
+          mkdirSync(join(wrongPackage, "bin"), { recursive: true, mode: 0o700 });
+          writeFileSync(join(wrongPackage, BIN["skills-server"]), "synthetic wrong-root binary\n", { mode: 0o755 });
+        }
+        symlinkSync(relative(join(packageLink, ".."), cause === "wrong-root" ? wrongPackage : cause === "cycle" ? packageLink : f.oldPackage), packageLink);
         if (cause === "writable-parent") chmodSync(join(packageLink, ".."), 0o775);
         const alias = join(f.localBin, "skills-server");
         renameSync(alias, `${alias}.synthetic-prior`);
