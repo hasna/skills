@@ -48,7 +48,7 @@ import { RemoteSkillsClient } from "../../lib/remote-client.js";
 import { execute as executeRemote } from "./remote-account.js";
 import { describeRemoteFiles, type RemoteInputFile } from "../../lib/remote-files.js";
 import { optionPrefix } from "../option-boundary.js";
-import { rollbackCopyfileRuntime, updateCopyfileRuntime } from "./runtime-copyfile.js";
+import { adoptCopyfileAliases, rollbackCopyfileAliases, rollbackCopyfileRuntime, updateCopyfileRuntime } from "./runtime-copyfile.js";
 
 export function registerRuntime(parent: Command) {
   // Run
@@ -215,10 +215,36 @@ export function registerRuntime(parent: Command) {
     .option("--json", "Output result as JSON", false)
     .option("--version <version>", "Install this exact @hasna/skills version as a staged copyfile runtime")
     .option("--rollback <receipt-id>", "Restore launcher links from an exact copyfile rollout receipt")
-    .action(async (options: { json: boolean; version?: string; rollback?: string }) => {
-      if (options.version && options.rollback) {
-        console.error(JSON.stringify({ error: "UPDATE_AND_ROLLBACK_ARE_MUTUALLY_EXCLUSIVE" }));
+    .option("--adopt-aliases", "Switch verified legacy @hasna/skills aliases to the active copyfile runtime")
+    .option("--rollback-aliases <receipt-id>", "Restore aliases from an exact adoption receipt")
+    .action(async (options: { json: boolean; version?: string; rollback?: string; adoptAliases?: boolean; rollbackAliases?: string }) => {
+      if ([options.version, options.rollback, options.adoptAliases, options.rollbackAliases].filter(Boolean).length > 1) {
+        console.error(JSON.stringify({ error: "SELF_UPDATE_OPERATIONS_ARE_MUTUALLY_EXCLUSIVE" }));
         process.exitCode = 1;
+        return;
+      }
+      if (options.adoptAliases) {
+        try {
+          const result = adoptCopyfileAliases();
+          if (options.json) console.log(JSON.stringify(result));
+          else console.log(chalk.green(`Adopted ${String(result.aliasCount)} verified Skills aliases into the active copyfile runtime.`));
+        } catch (error) {
+          const message = error instanceof Error && /^[A-Z0-9_]+$/.test(error.message) ? error.message : "ALIAS_ADOPTION_FAILED";
+          console.error(JSON.stringify({ adopted: false, error: message }));
+          process.exitCode = 1;
+        }
+        return;
+      }
+      if (options.rollbackAliases) {
+        try {
+          const result = rollbackCopyfileAliases(options.rollbackAliases);
+          if (options.json) console.log(JSON.stringify(result));
+          else console.log(chalk.green(`Restored ${String(result.restoredAliasCount)} Skills aliases from the adoption receipt.`));
+        } catch (error) {
+          const message = error instanceof Error && /^[A-Z0-9_]+$/.test(error.message) ? error.message : "ALIAS_ROLLBACK_FAILED";
+          console.error(JSON.stringify({ rolledBack: false, error: message }));
+          process.exitCode = 1;
+        }
         return;
       }
       if (options.version) {

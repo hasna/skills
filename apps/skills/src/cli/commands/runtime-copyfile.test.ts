@@ -4,7 +4,7 @@ import { gzipSync } from "node:zlib";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, delimiter, join, relative } from "node:path";
 import { tmpdir } from "node:os";
-import { preflightTarball, readBodyCapped, rollbackCopyfileRuntime, updateCopyfileRuntime } from "./runtime-copyfile.js";
+import { adoptCopyfileAliases, preflightTarball, readBodyCapped, rollbackCopyfileAliases, rollbackCopyfileRuntime, updateCopyfileRuntime } from "./runtime-copyfile.js";
 import { useDefaultTestTimeout } from "../../test-preload.js";
 
 useDefaultTestTimeout();
@@ -229,6 +229,68 @@ describe("exact-version copyfile runtime update", () => {
       expect(new Set(paths).size).toBe(21);
       expect(paths.filter((path: string) => path.startsWith(f.localBin + "/"))).toHaveLength(Object.keys(BIN).length);
       expect(realpathSync(join(f.localBin, "skills"))).toBe(join(f.runtime, "0.10.8-copyfile", "node_modules", "@hasna", "skills", BIN.skills));
+    } finally { fixture.server.stop(true); }
+  });
+
+  test("adopts verified legacy package aliases with exact backups and restores them from a receipt", async () => {
+    const f = fixtureHome();
+    const fixture = await serverWithArtifact();
+    try {
+      const pathValue = `${f.localBin}${delimiter}${f.bunBin}`;
+      await updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue, registryOrigin: fixture.server.url.origin });
+      const legacy = join(f.home, ".bun", "install", "global", "node_modules", "@hasna", "skills");
+      mkdirSync(join(legacy, "bin"), { recursive: true, mode: 0o700 });
+      writeFileSync(join(legacy, "package.json"), JSON.stringify({ name: "@hasna/skills", version: "0.10.6", bin: BIN }), { mode: 0o600 });
+      for (const target of new Set(Object.values(BIN))) writeFileSync(join(legacy, target), "legacy fixture\n", { mode: 0o755 });
+      chmodSync(join(legacy, BIN["skills-mcp"]), 0o777);
+      const oldMcp = join(f.bunBin, "skills-mcp"), oldServer = join(f.localBin, "skills-server");
+      renameSync(oldMcp, `${oldMcp}.synthetic-prior`);
+      renameSync(oldServer, `${oldServer}.synthetic-prior`);
+      symlinkSync(relative(f.bunBin, join(legacy, BIN["skills-mcp"])), oldMcp);
+      symlinkSync(relative(f.localBin, join(legacy, BIN["skills-server"])), oldServer);
+      const priorMcpLink = readlinkSync(oldMcp), priorServerLink = readlinkSync(oldServer);
+      const result = adoptCopyfileAliases({ homeDir: f.home, pathValue });
+      expect(result).toMatchObject({ adopted: true, version: "0.10.8", aliasCount: 2 });
+      const receiptPath = join(f.runtime, "0.10.8-copyfile", "alias-adoptions", `${result.receiptId}.json`);
+      const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
+      expect(receipt.state).toBe("switched");
+      expect(receipt.aliases).toHaveLength(2);
+      for (const item of receipt.aliases) {
+        expect(realpathSync(item.path)).toBe(item.newTarget);
+        expect(readlinkSync(item.backupPath)).toBe(item.oldLinkTarget);
+        expect(realpathSync(item.backupPath)).toBe(item.oldTarget);
+      }
+      const rolled = rollbackCopyfileAliases(String(result.receiptId), { homeDir: f.home, pathValue });
+      expect(rolled).toMatchObject({ rolledBack: true, restoredAliasCount: 2 });
+      expect(readlinkSync(oldMcp)).toBe(priorMcpLink);
+      expect(readlinkSync(oldServer)).toBe(priorServerLink);
+      expect(realpathSync(oldMcp)).toBe(join(legacy, BIN["skills-mcp"]));
+      expect(realpathSync(oldServer)).toBe(join(legacy, BIN["skills-server"]));
+    } finally { fixture.server.stop(true); }
+  });
+
+  test("a failure during alias adoption restores prior bindings from verified backups", async () => {
+    const f = fixtureHome();
+    const fixture = await serverWithArtifact();
+    try {
+      const pathValue = `${f.localBin}${delimiter}${f.bunBin}`;
+      await updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue, registryOrigin: fixture.server.url.origin });
+      const legacy = join(f.home, ".bun", "install", "global", "node_modules", "@hasna", "skills");
+      mkdirSync(join(legacy, "bin"), { recursive: true, mode: 0o700 });
+      writeFileSync(join(legacy, "package.json"), JSON.stringify({ name: "@hasna/skills", version: "0.10.6", bin: BIN }), { mode: 0o600 });
+      for (const target of new Set(Object.values(BIN))) writeFileSync(join(legacy, target), "legacy fixture\n", { mode: 0o755 });
+      const aliases = [join(f.bunBin, "skills-mcp"), join(f.bunBin, "skills-server")];
+      for (const path of aliases) {
+        renameSync(path, `${path}.synthetic-prior`);
+        symlinkSync(relative(f.bunBin, join(legacy, BIN[basename(path) as keyof typeof BIN])), path);
+      }
+      const originals = aliases.map(path => readlinkSync(path));
+      expect(() => adoptCopyfileAliases({ homeDir: f.home, pathValue, onAliasSwitched: () => { throw new Error("SYNTHETIC_FAILURE"); } }))
+        .toThrow("ALIAS_ADOPTION_ROLLED_BACK");
+      for (let i = 0; i < aliases.length; i++) {
+        expect(readlinkSync(aliases[i]!)).toBe(originals[i]);
+        expect(realpathSync(aliases[i]!)).toBe(join(legacy, BIN[basename(aliases[i]!) as keyof typeof BIN]));
+      }
     } finally { fixture.server.stop(true); }
   });
 
