@@ -21,8 +21,8 @@ function parents(path: string): Array<[string, BigIntStats]> {
     if (at === dirname(at)) return result;
   }
 }
-function readSettings(path: string, budget: ClaudeSettingsWitnessBudget): string {
-  absolutePath(path); need(basename(path) === "settings.json", "requires settings.json");
+export function readNativeSettingsWitnessFile(path: string, budget: ClaudeSettingsWitnessBudget, filename: "settings.json" | "config.toml" = "settings.json"): string {
+  absolutePath(path); need(basename(path) === filename, `requires ${filename}`);
   need(Number.isSafeInteger(budget.remaining) && budget.remaining >= 0, "has an invalid byte budget");
   const ancestors = parents(path), initial = lstatSync(path, { bigint: true });
   need(initial.isFile() && !initial.isSymbolicLink() && initial.size <= BigInt(CLAUDE_SETTINGS_WITNESS_LIMITS.bytes), "is not a bounded regular file");
@@ -233,12 +233,12 @@ export function hashClaudeSettingsReplacement(text: string, budget: ClaudeSettin
 }
 /** Explicit capture never converts a stored legacy raw witness or changes settings. */
 export function captureClaudeSettings(path: string, budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }): { path: string; hashMode: "claude-settings-v1"; sha256: string } {
-  return { path, hashMode: "claude-settings-v1", sha256: settingsDigest(readSettings(path, budget)) };
+  return { path, hashMode: "claude-settings-v1", sha256: settingsDigest(readNativeSettingsWitnessFile(path, budget)) };
 }
 
 /** A new explicit review is required; v1 witnesses retain their old meaning. */
 export function captureClaudeSettingsV2(path: string, budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }): { path: string; hashMode: "claude-settings-v2"; sha256: string } {
-  return { path, hashMode: "claude-settings-v2", sha256: settingsDigest(readSettings(path, budget), 2) };
+  return { path, hashMode: "claude-settings-v2", sha256: settingsDigest(readNativeSettingsWitnessFile(path, budget), 2) };
 }
 export function hashClaudeSettingsReplacementV2(text: string, budget: ClaudeSettingsWitnessBudget): string {
   need(typeof text === "string", "requires settings text");
@@ -250,7 +250,7 @@ export function hashClaudeSettingsReplacementV2(text: string, budget: ClaudeSett
 
 /** Explicit review of model-independent effort preferences; v1/v2 stay exact. */
 export function captureClaudeSettingsV3(path: string, budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }): { path: string; hashMode: "claude-settings-v3"; sha256: string } {
-  return { path, hashMode: "claude-settings-v3", sha256: settingsDigest(readSettings(path, budget), 3) };
+  return { path, hashMode: "claude-settings-v3", sha256: settingsDigest(readNativeSettingsWitnessFile(path, budget), 3) };
 }
 export function hashClaudeSettingsReplacementV3(text: string, budget: ClaudeSettingsWitnessBudget): string {
   need(typeof text === "string", "requires settings text");
@@ -264,14 +264,27 @@ export function hashClaudeSettingsReplacementV3(text: string, budget: ClaudeSett
  * proves every non-preference setting is unchanged; it never refreshes drift.
  * Both files are bounded regular settings.json files, read without symlinks.
  */
-export function upgradeClaudeSettingsWitness(previous: { path: string; hashMode: "claude-settings-v1" | "claude-settings-v2"; sha256: string }, reviewedSettingsPath: string): ReturnType<typeof captureClaudeSettingsV3> {
+export function upgradeClaudeSettingsWitness(previous: { path: string; hashMode?: "bytes" | "claude-settings-v1" | "claude-settings-v2"; sha256: string }, reviewedSettingsPath: string): ReturnType<typeof captureClaudeSettingsV3> {
   need(previous && Object.keys(previous).every(key => ["path", "hashMode", "sha256"].includes(key))
-    && (previous.hashMode === "claude-settings-v1" || previous.hashMode === "claude-settings-v2")
+    && (previous.hashMode === undefined || previous.hashMode === "bytes" || previous.hashMode === "claude-settings-v1" || previous.hashMode === "claude-settings-v2")
     && typeof previous.sha256 === "string" && /^[a-f0-9]{64}$/.test(previous.sha256), "requires an exact legacy settings witness");
   const budget = { remaining: 2 * CLAUDE_SETTINGS_WITNESS_LIMITS.bytes };
-  const before = readSettings(reviewedSettingsPath, budget), current = readSettings(previous.path, budget);
-  need(settingsDigest(before, previous.hashMode === "claude-settings-v1" ? 1 : 2) === previous.sha256, "reviewed preimage does not match the legacy witness");
+  const before = readNativeSettingsWitnessFile(reviewedSettingsPath, budget), current = readNativeSettingsWitnessFile(previous.path, budget);
+  const beforeDigest = previous.hashMode === undefined || previous.hashMode === "bytes" ? createHash("sha256").update(before).digest("hex") : settingsDigest(before, previous.hashMode === "claude-settings-v1" ? 1 : 2);
+  need(beforeDigest === previous.sha256, "reviewed preimage does not match the legacy witness");
   const sha256 = settingsDigest(current, 3);
   need(settingsDigest(before, 3) === sha256, "non-preference settings changed; explicit discovery review required");
   return { path: previous.path, hashMode: "claude-settings-v3", sha256 };
+}
+
+/** Strict bounded JSON control witness; metadata exclusion must be explicit. */
+export function hashNativeJsonControls(text: string, excludedMetadata?: "version"): string {
+  need(Buffer.byteLength(text) <= CLAUDE_SETTINGS_WITNESS_LIMITS.bytes, "exceeds its byte limit");
+  const value = parse(text);
+  value.entries = value.entries.filter(([key, child]) => {
+    if (key !== excludedMetadata) return true;
+    need(child.kind === "string" && child.value.length <= 128, "has invalid version metadata");
+    return false;
+  });
+  return createHash("sha256").update("hasna.skills.native-json-controls.v1\0").update(JSON.stringify(canonical(value))).digest("hex");
 }

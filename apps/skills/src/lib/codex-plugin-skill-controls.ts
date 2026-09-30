@@ -1,0 +1,117 @@
+/** Reviewed native identity continuity; never starts a native consumer. */
+import { hashNativeJsonControls } from "./claude-settings-witness.js";
+import { dirname, join, resolve, sep } from "node:path";
+import { lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
+import { isCodexNativeSkillDisabled, projectCodexNativeSkillCatalog, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
+export interface CodexPluginSkillControl { name:string; pluginId:string; namespace:string; pluginParent:string; manifestSha256:string; appSha256?:string }
+const identifier = (v:unknown):v is string => typeof v === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(v);
+function refuse():never { throw new Error("CODEX_NATIVE_SKILL_IDENTITY_UNSUPPORTED: review native plugin names and hook controls"); }
+type Read = (path:string) => string;
+function appControls(path:string, read:Read):string {
+  const text=read(path);
+  let value:any, sha256:string; try { sha256=hashNativeJsonControls(text); value=JSON.parse(text); } catch { refuse(); }
+  const object=(v:any):boolean => Boolean(v && typeof v==="object" && !Array.isArray(v));
+  if (!object(value) || Object.keys(value).length!==1 || !object(value.apps)) refuse();
+  const apps=Object.entries(value.apps);
+  if (!apps.length || apps.length>256) refuse();
+  for (const [name, entry] of apps as [string,any][]) {
+    if (!identifier(name) || !object(entry) || !Object.keys(entry).every(key=>["id","category","required"].includes(key))
+      || typeof entry.id!=="string" || !/^[A-Za-z0-9_-]{1,256}$/.test(entry.id)
+      || (entry.category!==undefined && (typeof entry.category!=="string" || !entry.category.trim() || entry.category.length>256 || /[\x00-\x1f\x7f]/.test(entry.category)))
+      || (entry.required!==undefined && typeof entry.required!=="boolean")) refuse();
+  }
+  return sha256;
+}
+function rootControls(root:string, read:Read): { namespace:string; manifestSha256:string; appSha256?:string } {
+  const manifestPath=join(root,".codex-plugin/plugin.json"), manifestFile=lstatSync(manifestPath,{throwIfNoEntry:false});
+  if (!lstatSync(join(root,".codex-plugin"),{throwIfNoEntry:false})?.isDirectory() || !manifestFile?.isFile() || manifestFile.size>1024*1024) refuse();
+  let manifest:any, manifestSha256:string;
+  try { const text=read(manifestPath); manifestSha256=hashNativeJsonControls(text,"version"); manifest=JSON.parse(text); } catch { refuse(); }
+  if (!manifest || typeof manifest!=="object" || Array.isArray(manifest) || !identifier(manifest.name)) refuse();
+  // Exact name controls suppress Skills bodies, not other capabilities.
+  // Reviewed app declarations preserve connector availability and native hints;
+  // their entire content and presence stay bound across cache versions.
+  if (manifest.hooks!==undefined || manifest.mcpServers!==undefined || manifest.commands!==undefined
+    || (manifest.apps!==undefined && manifest.apps!=="./.app.json")
+    || ["hooks", ".mcp.json"].some(path=>lstatSync(join(root,path),{throwIfNoEntry:false}))) refuse();
+  const app=join(root,".app.json"), present=lstatSync(app,{throwIfNoEntry:false});
+  if (present && (!present.isFile() || present.isSymbolicLink() || present.size>1024*1024)) refuse();
+  if (manifest.apps!==undefined && !present) refuse();
+  const appSha256=present ? appControls(app,read) : undefined;
+  return {namespace:manifest.name,manifestSha256,...(appSha256 ? {appSha256} : {})};
+}
+function identity(document:string, cache:string, read:Read): { name:string; namespace:string; pluginParent:string; manifestSha256:string; appSha256?:string } {
+  if (!document.startsWith(cache+sep) || !document.endsWith(sep+"SKILL.md")) refuse();
+  const text = read(document);
+  if (Buffer.byteLength(text)>1024*1024) refuse();
+  const lines = text.split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") refuse();
+  const end = lines.findIndex((line,i) => i>0 && line.trim()==="---");
+  if (end<2) refuse();
+  const yaml = lines.slice(1,end).join("\n");
+  // This deliberately bounded YAML subset excludes aliases, tags, merge keys,
+  // duplicate name fields and native repair/fallback. It never guesses a name.
+  if (/(?:^|\s)[&*!]|<<\s*:/.test(yaml) || lines.slice(1,end).filter(line => /^name\s*:/.test(line)).length!==1) refuse();
+  let front:any; try { front=Bun.YAML.parse(yaml); } catch { refuse(); }
+  if (!front || typeof front!=="object" || !identifier(front.name) || typeof front.description!=="string" || !front.description.trim()) refuse();
+  for (let root=dirname(document), depth=0; root.startsWith(cache+sep) && depth<12; root=dirname(root),depth++) {
+    const path=join(root,".codex-plugin","plugin.json");
+    if (!lstatSync(path,{throwIfNoEntry:false})) continue;
+    const controls=rootControls(root,read);
+    return {name:`${controls.namespace}:${front.name}`,pluginParent:dirname(root),...controls};
+  }
+  refuse();
+}
+/** Capability controls remain bound even after every native Skill body disappears. */
+export function reviewedCodexPluginCapabilitiesUnchanged(cache:string, controls:CodexPluginSkillControl[], read:Read):boolean {
+  if (!Array.isArray(controls) || controls.length>4096) return false;
+  let entries=0;
+  try {
+    for (const parent of new Set(controls.map(control=>control.pluginParent))) {
+      if (!parent.startsWith(cache+sep) || !lstatSync(parent,{throwIfNoEntry:false})?.isDirectory()) return false;
+      const names=readdirSync(parent); entries+=names.length; if (entries>4096) return false;
+      for (const name of names) {
+        let root=join(parent,name), stat=lstatSync(root);
+        if (stat.isSymbolicLink()) {
+          const target=resolve(parent,readlinkSync(root));
+          if (name!=="latest" || dirname(target)!==parent || !lstatSync(target).isDirectory() || realpathSync(target)!==target) return false;
+          root=target; stat=lstatSync(root);
+        }
+        if (!stat.isDirectory() || ![".codex-plugin/plugin.json",".app.json","hooks",".mcp.json"].some(path=>lstatSync(join(root,path),{throwIfNoEntry:false}))) continue;
+        const parsed=rootControls(root,read);
+        if (!controls.some(control=>control.pluginParent===parent && control.namespace===parsed.namespace && control.manifestSha256===parsed.manifestSha256 && control.appSha256===parsed.appSha256)) return false;
+      }
+    }
+    return true;
+  } catch { return false; }
+}
+export function reviewCodexPluginSkillControls(catalog:CodexNativeSkillCatalog, documents:string[], cache:string, cwd:string, read:Read):CodexPluginSkillControl[] {
+  if (catalog?.version!=="codex-cli 0.159.2" || catalog.cwd!==cwd) refuse();
+  const skills=projectCodexNativeSkillCatalog({data:[{cwd,errors:[],skills:catalog.skills}]},cwd);
+  const allowed=new Set(documents), result:CodexPluginSkillControl[]=[];
+  for (const skill of skills) {
+    if (!allowed.has(skill.path) || !skill.path.startsWith(cache+sep)) continue;
+    if (skills.filter(other=>other.name===skill.name).length!==1) refuse();
+    if (!skill.pluginId || skill.name==="skills-cli" || skill.name.endsWith(":skills-cli")) refuse();
+    const parsed=identity(skill.path,cache,read);
+    if (parsed.name!==skill.name) refuse();
+    result.push({...parsed,pluginId:skill.pluginId});
+  }
+  if (!result.length || new Set(result.map(item=>item.name)).size!==result.length) refuse();
+  return result;
+}
+export function isReviewedCodexPluginSkillDisabled(document:string, cache:string, controls:CodexPluginSkillControl[], rules:unknown, read:Read):boolean {
+  if (!document.startsWith(cache+sep) || !Array.isArray(controls) || controls.length>4096) return false;
+  let parsed:ReturnType<typeof identity>; try { parsed=identity(document,cache,read); } catch { return false; }
+  const reviewed=controls.find(item=>item.name===parsed.name && item.namespace===parsed.namespace && item.pluginParent===parsed.pluginParent && item.manifestSha256===parsed.manifestSha256 && item.appSha256===parsed.appSha256);
+  if (!reviewed) return false;
+  return isCodexNativeSkillDisabled({name:parsed.name,path:document,pluginId:reviewed.pluginId,enabled:true},rules);
+}
+export function disableReviewedCodexPluginNames(text:string, controls:CodexPluginSkillControl[]):string {
+  const rules=(Bun.TOML.parse(text) as any).skills?.config??[];
+  for (const control of controls) {
+    if (rules.some((rule:any)=>rule.name===control.name && rule.enabled!==false)) throw new Error("CODEX_NATIVE_SKILL_NAME_CONFLICT: review an existing native name enable rule");
+    if (!rules.some((rule:any)=>rule.name===control.name && rule.enabled===false)) text+=`\n[[skills.config]]\nname = ${JSON.stringify(control.name)}\nenabled = false\n`;
+  }
+  return text;
+}

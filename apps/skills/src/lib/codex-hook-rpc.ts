@@ -3,7 +3,7 @@ import { realpathSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { promisify } from "node:util";
 
-export const SUPPORTED_CODEX_HOOK_VERSIONS = ["codex-cli 0.153.0", "codex-cli 0.154.0", "codex-cli 0.155.0", "codex-cli 0.155.1", "codex-cli 0.156.1", "codex-cli 0.157.0", "codex-cli 0.157.1", "codex-cli 0.158.0", "codex-cli 0.159.0"] as const;
+export const SUPPORTED_CODEX_HOOK_VERSIONS = ["codex-cli 0.153.0", "codex-cli 0.154.0", "codex-cli 0.155.0", "codex-cli 0.155.1", "codex-cli 0.156.1", "codex-cli 0.157.0", "codex-cli 0.157.1", "codex-cli 0.158.0", "codex-cli 0.159.0", "codex-cli 0.159.2"] as const;
 
 export interface CodexHookRpc {
   version: string;
@@ -13,14 +13,16 @@ export interface CodexHookRpc {
 }
 
 /** An owned, short-lived native client. It cannot reload other app servers. */
-export async function connectCodexHookRpc(options: { command: string; home: string; codexHome?: string }): Promise<CodexHookRpc> {
+export async function connectCodexHookRpc(options: { command: string; home: string; codexHome?: string; timeoutMs?: number }): Promise<CodexHookRpc> {
+  const timeoutMs = options.timeoutMs ?? 20_000;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 20_000) throw new Error("CODEX_HOOK_TRUST_INVALID_TIMEOUT");
   const found = isAbsolute(options.command) ? options.command : Bun.which(options.command, { PATH: process.env.PATH });
   if (!found) throw new Error("CODEX_HOOK_TRUST_NATIVE_UNAVAILABLE: install Codex or pass --codex-command");
   const binary = realpathSync(found), stat = statSync(binary);
   if (!stat.isFile() || (stat.mode & 0o022) !== 0) throw new Error("CODEX_HOOK_TRUST_UNSAFE_EXECUTABLE");
   let version: string;
   try {
-    const output = await promisify(execFile)(binary, ["--version"], { timeout: 5000, maxBuffer: 4096 });
+    const output = await promisify(execFile)(binary, ["--version"], { timeout: Math.min(5000, timeoutMs), maxBuffer: 4096 });
     version = output.stdout.trim();
   } catch { throw new Error("CODEX_HOOK_TRUST_NATIVE_UNAVAILABLE"); }
   // Enrollment is allowed only for native releases whose protocol and native
@@ -71,7 +73,7 @@ export async function connectCodexHookRpc(options: { command: string; home: stri
       if (stopped) return Promise.reject(new Error("CODEX_HOOK_TRUST_NATIVE_RPC_CLOSED"));
       return new Promise((resolve, reject) => {
         const id = nextId++;
-        const timer = setTimeout(() => { fail(); child.kill(); }, 20_000);
+        const timer = setTimeout(() => { fail(); child.kill(); }, timeoutMs);
         pending.set(id, { resolve, reject, timer });
         child.stdin.write(JSON.stringify({ id, method, params }) + "\n");
       });
@@ -86,7 +88,9 @@ export async function connectCodexHookRpc(options: { command: string; home: stri
     },
   };
   try {
-    await rpc.request("initialize", { clientInfo: { name: "skills-native-hook-enrollment", version: "1" }, capabilities: { experimentalApi: true } });
+    const initialized = await rpc.request("initialize", { clientInfo: { name: "skills-native-hook-enrollment", version: "1" }, capabilities: { experimentalApi: true } });
+    const nativeVersion = version.slice("codex-cli ".length);
+    if (typeof initialized?.userAgent !== "string" || !(initialized.userAgent === `skills-native-hook-enrollment/${nativeVersion}` || initialized.userAgent.startsWith(`skills-native-hook-enrollment/${nativeVersion} `))) throw new Error("CODEX_HOOK_TRUST_NATIVE_VERSION_MISMATCH");
     child.stdin.write('{"method":"initialized"}\n');
     return rpc;
   } catch { await rpc.close(); throw new Error("CODEX_HOOK_TRUST_NATIVE_UNSUPPORTED: native hooks/list and versioned config writes are required"); }

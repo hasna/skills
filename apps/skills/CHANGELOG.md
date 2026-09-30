@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.16
+
+### Patch Changes
+
+- Keep verified native prompts usable without Skill payload when owned context delivery is unavailable, while preserving strict load/run, session integrity and native authority controls.
+- Add explicit preimage-checked Claude and Codex settings witness upgrades that permit typed preferences without relaxing native controls.
+- Preserve native document-path disables and add reviewed qualified Codex plugin-name disables so known disabled identities survive versioned cache regeneration without native startup on prompts.
+
 ## 0.10.15
 
 Normalize the installed `node_modules` root permissions during copyfile runtime updates, preventing group or other write access under permissive umasks.

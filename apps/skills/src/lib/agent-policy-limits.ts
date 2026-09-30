@@ -22,6 +22,12 @@ export function assertAgentPolicyCollections(policy: Record<string, any>): void 
   if (bridge.rootAliases !== undefined) for (const alias of array(bridge.rootAliases, AGENT_POLICY_LIMITS.rootAliases)) {
     requireBound(object(alias)); for (const key of ["agent", "home", "alias", "target", "link", "aliasIdentity", "targetIdentity"]) text(alias[key]);
   }
+  if (bridge.codexPluginSkills !== undefined) for (const control of array(bridge.codexPluginSkills, 4096)) {
+    requireBound(object(control) && Object.keys(control).every(key=>["name","pluginId","namespace","pluginParent","manifestSha256","appSha256"].includes(key)));
+    text(control.name,129); text(control.pluginId,1024); text(control.namespace,64); text(control.pluginParent);
+    requireBound(isAbsolute(control.pluginParent) && resolve(control.pluginParent) === control.pluginParent && /^[a-f0-9]{64}$/.test(control.manifestSha256));
+    if (control.appSha256 !== undefined) requireBound(typeof control.appSha256 === "string" && /^[a-f0-9]{64}$/.test(control.appSha256));
+  }
   if (bridge.disabledBuiltins !== undefined) for (const builtin of array(bridge.disabledBuiltins, AGENT_POLICY_LIMITS.builtinNames)) { requireBound(object(builtin)); text(builtin.path); text(builtin.hash, 64); }
   if (bridge.discovery === undefined) return;
   for (const [agent, value] of Object.entries(record(bridge.discovery, AGENT_POLICY_LIMITS.agents))) {
@@ -30,7 +36,8 @@ export function assertAgentPolicyCollections(policy: Record<string, any>): void 
     for (const source of array(value.sources, AGENT_POLICY_LIMITS.discoverySources)) {
       requireBound(object(source)); text(source.path);
       requireBound(source.sha256 === null || typeof source.sha256 === "string" && /^[a-f0-9]{64}$/.test(source.sha256));
-      if (source.hashMode !== undefined) requireBound(["bytes", "path-bytes", "claude-plugin-registry", "claude-marketplace-registry", "claude-settings-v1", "claude-settings-v2", "claude-settings-v3", "claude-marketplace-registry-v2"].includes(source.hashMode) && source.format === undefined && source.fields === undefined && (source.hashMode === "bytes" || source.sha256 !== null));
+      if (source.hashMode !== undefined) requireBound(["bytes", "path-bytes", "claude-plugin-registry", "claude-marketplace-registry", "claude-settings-v1", "claude-settings-v2", "claude-settings-v3", "claude-marketplace-registry-v2", "codex-settings-v1"].includes(source.hashMode) && source.format === undefined && source.fields === undefined && (source.hashMode === "bytes" || source.sha256 !== null));
+      if (source.hashMode === "codex-settings-v1") requireBound(agent === "codex" && value.agent === "codex" && value.method === "reviewed" && !/[\x00-\x1f\x7f]/.test(source.path) && isAbsolute(source.path) && resolve(source.path) === source.path && basename(source.path) === "config.toml");
       if ((source.hashMode === "claude-settings-v1" || source.hashMode === "claude-settings-v2" || source.hashMode === "claude-settings-v3")) requireBound(agent === "claude" && value.agent === "claude" && value.method === "reviewed" && !/[\x00-\x1f\x7f]/.test(source.path) && isAbsolute(source.path) && resolve(source.path) === source.path && basename(source.path) === "settings.json");
       if ((source.hashMode === "claude-marketplace-registry" || source.hashMode === "claude-marketplace-registry-v2")) requireBound(agent === "claude" && value.agent === "claude" && value.method === "reviewed" && !/[\x00-\x1f\x7f]/.test(source.path) && isAbsolute(source.path) && resolve(source.path) === source.path && basename(source.path) === "known_marketplaces.json");
       if (source.hashMode === "claude-plugin-registry") {

@@ -518,7 +518,7 @@ export type { SkillSelection, SkillProfile, ResolvedSkillSelection, ResolvedSkil
 export { buildSkillContext } from "./lib/skill-context.js";
 export { syncSelectionProfile } from "./lib/selection-resolver.js";
 export { inspectSkillSession, reconcileSkillSession, type SessionReconciliationInput, type SessionReconciliationOptions } from "./lib/session-reconciliation.js";
-export { planAgentIntegration, planClaudeStopHookUpdate, planClaudePreToolUseHookUpdate, planClaudeHookEventsUpdate, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills } from "./lib/agent-integration.js";
+export { planAgentIntegration, planClaudeStopHookUpdate, planClaudePreToolUseHookUpdate, planClaudeHookEventsUpdate, planAgentSettingsWitnessUpgrade, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills } from "./lib/agent-integration.js";
 export { captureDiscoveryDirectories, captureDiscoveryByteSources, captureDiscoveryPathSources, type DiscoveryDirectory, type DiscoverySource } from "./lib/agent-discovery.js";
 export { captureClaudeMarketplaceRegistry, captureClaudeMarketplaceRegistryV2 } from "./lib/claude-marketplace-registry.js";
 export { captureClaudeSettings, captureClaudeSettingsV2, captureClaudeSettingsV3, upgradeClaudeSettingsWitness } from "./lib/claude-settings-witness.js";
@@ -531,3 +531,6 @@ export type { RemoteCreditCheckoutOptions, RemoteCreditCheckout, RemoteCreditChe
 export { assertPortableAuthoringPath, type PortableAuthoringPathOptions } from "./lib/authoring-path.js";
 
 export { CLAUDE_COORDINATED_HOOK_EVENTS, type ClaudeCoordinatedHookEvent } from "./lib/claude-settings-witness.js";
+
+export { captureCodexSettings, upgradeCodexSettingsWitness } from "./lib/codex-settings-witness.js";
+export { projectCodexNativeSkillCatalog, captureCodexNativeSkillCatalog, isCodexNativeSkillDisabled, type CodexNativeSkillCatalog, type CodexNativeSkill } from "./lib/codex-native-skill-catalog.js";

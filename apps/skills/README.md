@@ -450,6 +450,41 @@ Settings and policy are separate files: this is a guarded sequence with
 compensation, not a cross-file atomic commit. A concurrent hook can fail closed
 during installation. A successful update does not reload an existing session.
 
+Legacy full-file settings witnesses remain strict until explicitly upgraded:
+
+```bash
+skills hook rebind-settings --agent codex \
+  --reviewed-preimage /private/preserved/config.toml \
+  --expected-policy-sha256 <current-policy-sha256> \
+  --expected-settings-sha256 <current-settings-sha256> --json
+```
+
+The plan proves the preserved original matches the old witness, permits only
+supported preference differences, and labels the replacement witness. `--apply`
+preserves and reads back the original policy before writing. Claude upgrades to
+`claude-settings-v3`; Codex uses `codex-settings-v1` for typed model, effort and
+verbosity preferences. Provider mappings, environment, hooks, plugins, skill rules
+and all unknown settings stay bound. Runtime hooks never silently upgrade a witness.
+
+A reviewed Codex 0.159.2 native `skills/list` receipt can be passed to `hook install`
+with `--codex-native-catalog <file>`. Its safe shape is `{version,cwd,skills}`;
+each skill has `{name,path,enabled,pluginId}`. The installer matches the native
+qualified name against a bounded explicit frontmatter name and owning plugin
+manifest. It preserves path disables and adds exact qualified name disables.
+Known skill identities remain disabled across versioned plugin cache relocation,
+even when their disabled bodies change. Unknown names, conflicting enables,
+changed plugin controls, native hooks and unsupported name syntax still refuse.
+Only manifest version metadata may vary. Reviewed app declarations use the implicit
+`.app.json` or explicit `./.app.json`, with a bounded `apps` map containing connector
+`id`, optional `category`, and optional boolean `required`. The entire canonical app
+file and its presence stay bound; it preserves existing connector availability and
+native capability hints. Changed or unknown app fields, custom references, native
+hooks, commands and MCP controls refuse. Name controls suppress Skills, not every
+plugin capability. No prompt hook starts an app server to obtain this receipt: native
+startup can maintain caches. Capture it through an authorized isolated consumer.
+Neither a receipt nor a config write proves an existing session adopted new rules;
+use the actual native session's supported acceptance path separately.
+
 At session start, the hook authenticates and refreshes the profile. Prompt hooks
 select complete skill instructions from that verified cache using explicit
 `$skill` references, profile keywords, paths and always-required selections.
@@ -461,10 +496,20 @@ receipt expires, the hook authenticates the current profile. If every loaded
 selection still has identical metadata and bundle digest, it archives the old
 receipt and advances that session to the current profile under an exact receipt
 precondition. Unloaded selections may be added or removed. If a loaded selection
-changed or disappeared, the hook blocks and requires the explicit reconciliation
-below. A missing cache may be recovered through authenticated context.
-Authentication, integrity and native discovery failures still block; they do
-not silently switch to a local catalog.
+changed or disappeared, no instructions are delivered until the explicit
+reconciliation below. A missing cache may be recovered through authenticated context.
+
+After verifying the native bridge and input, ordinary lifecycle hooks continue
+without skill payload on typed hosted authentication/refusal/availability failures,
+context timeouts, valid concurrent writers, context CAS conflicts, or required
+session reconciliation. They emit a fixed warning that Skills-dependent actions
+are unavailable; previously loaded instructions are not an authorization fallback.
+The hook does not rewrite a session pin or remove another writer’s lock to bypass these refusals. Explicit `skills
+load`, `skills context`, and `skills run` still refuse unavailable or unauthorized
+instructions. Native skill tool guards still deny unmanaged payloads. Invalid
+input/receipts, integrity or authority mismatches, unknown failures, and native
+discovery/control violations remain blocking. No failure silently switches to a
+local catalog, native skill or stale bundle.
 
 An intentional change to a loaded selection or profile identity for an already
 running session uses a separate reviewed operation. `sync` and hook

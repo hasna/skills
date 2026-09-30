@@ -1,3 +1,7 @@
+import { reviewCodexPluginSkillControls, isReviewedCodexPluginSkillDisabled, reviewedCodexPluginCapabilitiesUnchanged, disableReviewedCodexPluginNames, type CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
+import { projectCodexNativeSkillCatalog, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
+import { upgradeCodexSettingsWitness } from "./codex-settings-witness.js";
+import { upgradeClaudeSettingsWitness } from "./claude-settings-witness.js";
 import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, statSync, mkdirSync, readFileSync, readdirSync, opendirSync, readlinkSync, realpathSync, renameSync, rmdirSync, writeFileSync, unlinkSync, chmodSync, openSync, closeSync, fsyncSync, fstatSync, readSync, constants, linkSync, type Dirent } from "node:fs";
@@ -21,7 +25,7 @@ export interface NativeSkillEntry { agent: string; path: string; hash: string; m
 export interface NativeMigrationTarget { agent: string; projectRoot: string; path: string; treeSha256: string; vendor?: true }
 export interface NativeMigrationTargetManifest { schema: "hasna.skills-native-migration-targets.v1"; targets: NativeMigrationTarget[]; digest: string }
 export interface AgentConfigChange { path: string; before: string | null; after: string }
-export interface AgentIntegrationPlan { dataDir: string; profileId: string; changes: AgentConfigChange[]; nativeSkills: NativeSkillEntry[]; observedPolicy?: { path: string; before: string | null }; discoveryBefore?: AgentDiscoveryBinding[]; discoveryAfter?: AgentDiscoveryBinding[]; rootAliases?: AgentRootAlias[]; managedAgentChecks?: { home: string; agents: IntegrationAgent[] }; retainedReviewChecks?: { home: string; projectDir: string; agents: IntegrationAgent[] } }
+export interface AgentIntegrationPlan { observedNativeSources?: Array<{ path: string; sha256: string }>; codexPluginSkillReview?: { version: string; cwd: string; catalogSha256: string; configSha256: string | null }; observedSettings?: { path: string; before: string }; settingsWitnessUpgrade?: { agent: "claude" | "codex"; path: string; fromHashMode: string; fromSha256: string; toHashMode: string; toSha256: string; reviewedPreimage: string; currentSettingsSha256: string }; dataDir: string; profileId: string; changes: AgentConfigChange[]; nativeSkills: NativeSkillEntry[]; observedPolicy?: { path: string; before: string | null }; discoveryBefore?: AgentDiscoveryBinding[]; discoveryAfter?: AgentDiscoveryBinding[]; rootAliases?: AgentRootAlias[]; managedAgentChecks?: { home: string; agents: IntegrationAgent[] }; retainedReviewChecks?: { home: string; projectDir: string; agents: IntegrationAgent[] } }
 
 const sha = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
 const HOOK_EVENTS: readonly ContextHookEvent[] = ["UserPromptSubmit", "SessionStart", "SubagentStart"];
@@ -73,11 +77,12 @@ function disabledCodexSkillPaths(config: { skills?: { config?: Array<{ path?: st
   // treat a disable in that layer as native proof in that case.
   if (rows.some(entry => !entry || typeof entry !== "object" || Array.isArray(entry)
     || typeof entry.enabled !== "boolean"
+    || (entry.path !== undefined) === (entry.name !== undefined)
     || (entry.path !== undefined && (typeof entry.path !== "string" || !isAbsolute(entry.path)))
-    || (entry.name !== undefined && typeof entry.name !== "string"))) return [];
+    || (entry.name !== undefined && (typeof entry.name !== "string" || !entry.name.trim())))) return [];
   // Codex applies name rules after path rules in the same ordered list. Without
   // the parsed skill name, a name rule could re-enable a path we thought inert.
-  if (rows.some(entry => entry.name !== undefined)) return [];
+  if (rows.some(entry => entry.name !== undefined && entry.enabled !== false)) return [];
   const settings = new Map<string, boolean[]>();
   for (const entry of rows) {
     if (typeof entry.path !== "string" || !isAbsolute(entry.path)) continue;
@@ -111,8 +116,8 @@ function readNativeBytes(path: string, maximum = 64 * 1024 * 1024): Buffer {
     if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== before.size) throw new Error("Native skill file changed while reading");
     const bytes = Buffer.allocUnsafe(before.size + 1); let length = 0;
     while (length < bytes.length) { const count = readSync(descriptor, bytes, length, bytes.length - length, null); if (!count) break; length += count; }
-    const after = fstatSync(descriptor);
-    if (length !== before.size || after.size !== before.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs) throw new Error("Native skill file changed while reading");
+    const after = fstatSync(descriptor), current = lstatSync(path);
+    if (current.dev !== opened.dev || current.ino !== opened.ino || current.size !== after.size || current.mtimeMs !== after.mtimeMs || current.ctimeMs !== after.ctimeMs || length !== before.size || after.size !== before.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs) throw new Error("Native skill file changed while reading");
     return bytes.subarray(0, length);
   } finally { closeSync(descriptor); }
 }
@@ -211,7 +216,7 @@ function projectAncestorDirectories(projects: string[]): string[] {
   return [...directories];
 }
 
-export function inventoryNativeSkills(home = homedir(), options: { includeVendor?: boolean; guardHermes?: boolean; projectDir?: string; projectDirs?: string[]; agents?: readonly IntegrationAgent[]; agentRoots?: Array<{ agent: string; path: string }>; configured?: boolean; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean; reviewedCacheAlias?: string; disabledVendorPaths?: readonly string[] } = {}): NativeSkillEntry[] {
+export function inventoryNativeSkills(home = homedir(), options: { includeVendor?: boolean; guardHermes?: boolean; projectDir?: string; projectDirs?: string[]; agents?: readonly IntegrationAgent[]; agentRoots?: Array<{ agent: string; path: string }>; configured?: boolean; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean; reviewedCacheAlias?: string; disabledVendorPaths?: readonly string[]; disabledVendorSkill?: (entry: NativeSkillEntry) => boolean } = {}): NativeSkillEntry[] {
   if (options.reviewedCacheAlias !== undefined && (!options.includeVendor || !isAbsolute(options.reviewedCacheAlias) || resolve(options.reviewedCacheAlias) !== options.reviewedCacheAlias)) throw new Error("A reviewed cache alias requires vendor inventory and an exact absolute path");
   if (options.disabledVendorPaths?.some(path => !isAbsolute(path) || resolve(path) !== path)) throw new Error("Disabled vendor paths must be exact absolute paths");
   const disabledVendorPaths = new Set(options.disabledVendorPaths ?? []);
@@ -249,7 +254,7 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
       // discovery in that case. A new or enabled skill still fails closed.
       const targetSkills = entries.filter(entry => entry.agent === agent && entry.vendor && (entry.path === target || entry.path.startsWith(target + sep)));
       if (path === options.reviewedCacheAlias && targetSkills.length > 0) reviewedCacheAliasFound = true;
-      if (agent === "codex" && targetSkills.length > 0 && targetSkills.every(entry => disabledVendorPaths.has(entry.path))) return true;
+      if (agent === "codex" && targetSkills.length > 0 && targetSkills.every(entry => disabledVendorPaths.has(entry.path) || options.disabledVendorSkill?.(entry) === true)) return true;
       // A plugin's `latest` link may point at a fully inventoried version.
       // Only migration opts in to that exact link so it can archive the real
       // SKILL.md; ordinary hook checks continue to refuse the native copy.
@@ -435,7 +440,7 @@ function disableCodexSkills(text: string, skills: NativeSkillEntry[], aliases: A
 }
 
 /** Planning is read-only; credentials and unrelated settings never appear in CLI output. */
-export function planAgentIntegration(options: { home?: string; dataDir?: string; agents: IntegrationAgent[]; command?: string; profileId?: string; includeVendor?: boolean; projectDir?: string; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean; reviewedCacheAlias?: string }): AgentIntegrationPlan {
+export function planAgentIntegration(options: { home?: string; dataDir?: string; agents: IntegrationAgent[]; command?: string; profileId?: string; includeVendor?: boolean; projectDir?: string; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean; reviewedCacheAlias?: string; codexNativeCatalog?: CodexNativeSkillCatalog }): AgentIntegrationPlan {
   const home = options.home ?? homedir(), dataDir = options.dataDir ?? getDataDirReadOnly();
   const aliases = rootAliases(home, options.allowRootAliases);
   const policyPath = join(dataDir, "agent-policy.json"); assertSafePath(policyPath);
@@ -470,6 +475,10 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
   });
   const codexConfig = options.agents.includes("codex") ? Bun.TOML.parse(readOptional(canonicalAgentPath(join(home, ".codex", "config.toml"), aliases)) ?? "") as { skills?: { config?: Array<{ path?: string; enabled?: boolean }> } } : {};
   const nativeSkills = inventoryNativeSkills(home, { includeVendor: true, guardHermes: options.agents.includes("hermes"), agents: options.agents, projectDir: options.projectDir, agentRoots: discoveries.flatMap(binding => binding.roots.map(path => ({ agent: binding.agent, path }))), allowRootAliases: options.allowRootAliases, reviewedCacheAlias: options.reviewedCacheAlias, disabledVendorPaths: disabledCodexSkillPaths(codexConfig, aliases) });
+  const observedNativeSources: Array<{ path: string; sha256: string }> = [];
+  const codexPluginSkills: CodexPluginSkillControl[] = options.codexNativeCatalog
+    ? reviewCodexPluginSkillControls(options.codexNativeCatalog, nativeSkills.filter(entry=>entry.agent==="codex" && entry.vendor).map(entry=>join(entry.path,"SKILL.md")), canonicalAgentPath(join(home,".codex/plugins/cache"),aliases), resolve(options.projectDir ?? home), path=>{const bytes=readNativeBytes(path,1024*1024); observedNativeSources.push({path,sha256:sha(bytes)}); return new TextDecoder("utf-8",{fatal:true}).decode(bytes); })
+    : policy.bridge?.codexPluginSkills ?? [];
   const changes: AgentConfigChange[] = [];
   for (const agent of [...new Set(options.agents)]) {
     if (!INTEGRATION_AGENTS.includes(agent)) throw new Error(`Unsupported agent: ${agent}`);
@@ -514,7 +523,7 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     if (before !== after) changes.push({ path, before, after });
     if (agent === "codex") {
       const configPath = canonicalAgentPath(join(home, ".codex", "config.toml"), aliases), previous = readOptional(configPath);
-      const next = disableCodexSkills(previous ?? "", nativeSkills, aliases, bridgePath);
+      const next = disableReviewedCodexPluginNames(disableCodexSkills(previous ?? "", nativeSkills, aliases, bridgePath), codexPluginSkills);
       if (next !== (previous ?? "")) changes.push({ path: configPath, before: previous, after: next });
     }
   }
@@ -529,12 +538,13 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     profiles: Object.fromEntries([...new Set<IntegrationAgent>([...priorAgents, ...options.agents])].sort().map(agent => [agent, bindings.get(agent)?.profileId ?? policy.bridge?.profiles?.[agent] ?? policy.profileId])),
     disabledBuiltins: options.agents.includes("codex") ? nativeSkills.filter(entry => entry.agent === "codex" && entry.vendor && entry.path.startsWith(canonicalAgentPath(join(home, ".codex", "skills", ".system"), aliases) + sep)).map(entry => ({ path: entry.path, hash: entry.hash })) : (policy.bridge?.disabledBuiltins ?? []),
     rootAliases: aliases,
+    ...(codexPluginSkills.length ? { codexPluginSkills, codexPluginSkillReview: options.codexNativeCatalog ? { version: options.codexNativeCatalog.version, cwd: options.codexNativeCatalog.cwd, catalogSha256: sha(JSON.stringify({version:options.codexNativeCatalog.version,cwd:options.codexNativeCatalog.cwd,skills:projectCodexNativeSkillCatalog({data:[{cwd:options.codexNativeCatalog.cwd,errors:[],skills:options.codexNativeCatalog.skills}]},options.codexNativeCatalog.cwd)})), configSha256: changes.find(change=>change.path===canonicalAgentPath(join(home,".codex/config.toml"),aliases))?.before === null ? null : sha(readOptional(canonicalAgentPath(join(home,".codex/config.toml"),aliases)) ?? "") } : policy.bridge?.codexPluginSkillReview } : {}),
     discovery: { ...policy.bridge?.discovery, ...Object.fromEntries(discoveryAfter.map(binding => [binding.agent, binding])) },
   } };
   const serializedPolicy = serializeManagedSkillPolicy(nextPolicy);
   if (JSON.stringify(policy) !== JSON.stringify(nextPolicy)) changes.push({ path: policyPath, before: previousPolicy, after: serializedPolicy });
   recheckRootAliases(aliases);
-  return { dataDir, profileId, changes, nativeSkills, observedPolicy: { path: policyPath, before: previousPolicy }, discoveryBefore: discoveries, discoveryAfter, ...(aliases.length ? { rootAliases: aliases } : {}), ...(retainedAgents.length ? { retainedReviewChecks: { home, projectDir: options.projectDir ?? home, agents: retainedAgents } } : {}) };
+  return { dataDir, profileId, changes, nativeSkills, ...(observedNativeSources.length ? { observedNativeSources } : {}), ...(nextPolicy.bridge.codexPluginSkillReview ? { codexPluginSkillReview: nextPolicy.bridge.codexPluginSkillReview } : {}), observedPolicy: { path: policyPath, before: previousPolicy }, discoveryBefore: discoveries, discoveryAfter, ...(aliases.length ? { rootAliases: aliases } : {}), ...(retainedAgents.length ? { retainedReviewChecks: { home, projectDir: options.projectDir ?? home, agents: retainedAgents } } : {}) };
 }
 
 /** Plan an explicitly authorized Stop hook replacement without adopting drift.
@@ -657,7 +667,39 @@ function atomicWrite(path: string, content: string): void {
   finally { if (existsSync(temporary)) unlinkSync(temporary); }
 }
 
+/** Explicitly rebind one legacy review after exact preimage and semantic comparison.
+ * Runtime readers never relax the old witness. All other discovery sources,
+ * unknown settings, native controls and policy bytes remain guarded.
+ */
+export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "codex"; reviewedPreimage: string; home?: string; dataDir?: string; projectDir?: string; expectedPolicySha256: string; expectedSettingsSha256: string }): AgentIntegrationPlan {
+  const home = resolve(options.home ?? homedir()), dataDir = options.dataDir ?? getDataDirReadOnly();
+  const snapshot = readManagedSkillPolicySnapshot(dataDir);
+  if (!snapshot || sha(snapshot.text) !== options.expectedPolicySha256) throw new Error("Managed policy preimage changed");
+  const policy = snapshot.value, aliases: AgentRootAlias[] = policy.bridge?.rootAliases ?? [];
+  recheckRootAliases(aliases);
+  const binding: AgentDiscoveryBinding | undefined = policy.bridge?.discovery?.[options.agent];
+  if (!binding || binding.agent !== options.agent || binding.method !== "reviewed") throw new Error("Settings witness upgrade requires an existing reviewed native binding");
+  const configPath = canonicalAgentPath(join(home, options.agent === "claude" ? ".claude/settings.json" : ".codex/config.toml"), aliases);
+  const settings = readOptional(configPath);
+  if (settings === null || sha(settings) !== options.expectedSettingsSha256) throw new Error("Native settings preimage changed");
+  const sources = binding.sources.filter(source => source.path === configPath && source.format === undefined && source.fields === undefined);
+  if (sources.length !== 1) throw new Error("Settings witness upgrade requires one exact settings source");
+  const previous = sources[0]!;
+  if (typeof previous.sha256 !== "string") throw new Error("Settings witness upgrade requires a preserved settings preimage");
+  const next = options.agent === "claude"
+    ? upgradeClaudeSettingsWitness(previous as Parameters<typeof upgradeClaudeSettingsWitness>[0], options.reviewedPreimage)
+    : upgradeCodexSettingsWitness(previous as Parameters<typeof upgradeCodexSettingsWitness>[0], options.reviewedPreimage);
+  const replacement: AgentDiscoveryBinding = { ...binding, sources: binding.sources.map(source => source === previous ? next : source) };
+  // A proved semantic replacement is explicit in this plan. Verify every
+  // unrelated source without rebinding it to whatever happens to be on disk.
+  verifyAgentDiscovery(replacement);
+  const after = serializeManagedSkillPolicy({ ...policy, bridge: { ...policy.bridge, discovery: { ...policy.bridge.discovery, [options.agent]: replacement } } });
+  return { dataDir, profileId: policy.profileId, changes: [{ path: join(dataDir, "agent-policy.json"), before: snapshot.text, after }], nativeSkills: [], observedPolicy: { path: join(dataDir, "agent-policy.json"), before: snapshot.text }, observedSettings: { path: configPath, before: settings }, discoveryBefore: [replacement], discoveryAfter: [replacement], rootAliases: aliases, managedAgentChecks: { home, agents: [options.agent] }, settingsWitnessUpgrade: { agent: options.agent, path: configPath, fromHashMode: previous.hashMode ?? "bytes", fromSha256: previous.sha256, toHashMode: next.hashMode, toSha256: next.sha256, reviewedPreimage: options.reviewedPreimage, currentSettingsSha256: options.expectedSettingsSha256 } };
+}
+
 export function applyAgentIntegration(plan: AgentIntegrationPlan): { changed: string[]; backups: string[]; rootAliases?: AgentRootAlias[] } {
+  for (const source of plan.observedNativeSources ?? []) if (sha(readNativeBytes(source.path,1024*1024)) !== source.sha256) throw new Error("Native identity source changed after planning");
+  if (plan.observedSettings && readOptional(plan.observedSettings.path) !== plan.observedSettings.before) throw new Error("Native settings changed after witness planning");
   // Refuse an unusable policy before creating backups or changing native config.
   const policyPath = join(plan.dataDir, "agent-policy.json"); assertSafePath(policyPath);
   const currentText = (path: string) => resolve(path) === resolve(policyPath) ? readManagedSkillPolicySnapshot(plan.dataDir)?.text ?? null : readOptional(path);
@@ -668,7 +710,15 @@ export function applyAgentIntegration(plan: AgentIntegrationPlan): { changed: st
   // Verify the old trust before writing. An explicit command/profile change
   // still uses the ordinary native approval flow for its newly installed hook.
   for (const agent of plan.retainedReviewChecks?.agents ?? []) assertManagedAgentBridge(agent, { ...plan.retainedReviewChecks!, dataDir: plan.dataDir });
-  for (const agent of plan.managedAgentChecks?.agents ?? []) assertManagedAgentBridge(agent, { home: plan.managedAgentChecks!.home, dataDir: plan.dataDir, projectDir: plan.managedAgentChecks!.home });
+  let provenDiscovery: AgentDiscoveryBinding | undefined;
+  if (plan.settingsWitnessUpgrade) {
+    const upgrade = plan.settingsWitnessUpgrade;
+    if (!plan.managedAgentChecks || !plan.observedPolicy?.before) throw new Error("Invalid settings witness upgrade plan");
+    const verified = planAgentSettingsWitnessUpgrade({ agent: upgrade.agent, reviewedPreimage: upgrade.reviewedPreimage, home: plan.managedAgentChecks.home, dataDir: plan.dataDir, expectedPolicySha256: sha(plan.observedPolicy.before), expectedSettingsSha256: upgrade.currentSettingsSha256 });
+    if (JSON.stringify(verified.changes) !== JSON.stringify(plan.changes) || JSON.stringify(verified.settingsWitnessUpgrade) !== JSON.stringify(upgrade)) throw new Error("Settings witness upgrade plan changed");
+    provenDiscovery = verified.discoveryBefore![0];
+  }
+  for (const agent of plan.managedAgentChecks?.agents ?? []) assertManagedAgentBridgeWithDiscovery(agent, { home: plan.managedAgentChecks!.home, dataDir: plan.dataDir, projectDir: plan.managedAgentChecks!.home }, provenDiscovery?.agent === agent ? provenDiscovery : undefined);
   for (const binding of plan.discoveryBefore ?? []) {
     if (plan.managedAgentChecks) verifyCoordinatedDiscovery(binding, plan.managedAgentChecks.home, aliases);
     else verifyAgentDiscovery(binding);
@@ -683,7 +733,9 @@ export function applyAgentIntegration(plan: AgentIntegrationPlan): { changed: st
   assertSafePath(backupRoot); mkdirSync(backupRoot, { recursive: true, mode: 0o700 }); chmodSync(backupRoot, 0o700);
   for (const [index, change] of plan.changes.entries()) if (change.before !== null) {
     const backup = join(backupRoot, `${index}-${sha(change.path).slice(0, 12)}.backup`);
-    writeFileSync(backup, change.before, { mode: 0o600, flag: "wx" }); backups.push(backup);
+    writeFileSync(backup, change.before, { mode: 0o600, flag: "wx" });
+    if (readFileSync(backup, "utf8") !== change.before) throw new Error("Native configuration preservation readback failed");
+    backups.push(backup);
   }
   try {
     for (const change of plan.changes) {
@@ -694,6 +746,8 @@ export function applyAgentIntegration(plan: AgentIntegrationPlan): { changed: st
       atomicWrite(change.path, after); written.push({ path: change.path, before: change.before, after });
     }
     recheckRootAliases(aliases);
+    for (const source of plan.observedNativeSources ?? []) if (sha(readNativeBytes(source.path,1024*1024)) !== source.sha256) throw new Error("Native identity source changed during application");
+    if (plan.observedSettings && readOptional(plan.observedSettings.path) !== plan.observedSettings.before) throw new Error("Native settings changed during witness application");
     for (const binding of plan.discoveryAfter ?? []) {
       if (plan.managedAgentChecks) verifyCoordinatedDiscovery(binding, plan.managedAgentChecks.home, aliases);
       else verifyAgentDiscovery(binding);
@@ -827,6 +881,10 @@ export function archiveNativeSkills(inventory: NativeSkillEntry[], options: { da
 /** Run before any prompt context load. Missing ownership or reappearing native
  * discovery files require repair; verified cache availability is not an override. */
 export function assertManagedAgentBridge(agent: IntegrationAgent, options: { home?: string; dataDir?: string; projectDir?: string; projectDirs?: string[]; profileId?: string; codexDiscoveryRecovery?: CodexHookDiscoveryRecovery } = {}): void {
+  assertManagedAgentBridgeWithDiscovery(agent, options);
+}
+
+function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options: { home?: string; dataDir?: string; projectDir?: string; projectDirs?: string[]; profileId?: string; codexDiscoveryRecovery?: CodexHookDiscoveryRecovery } = {}, provenDiscovery?: AgentDiscoveryBinding): void {
   const home = resolve(options.home ?? homedir()), dataDir = options.dataDir ?? getDataDirReadOnly();
   assertSafePath(join(dataDir, "agent-policy.json"));
   const snapshot = readManagedSkillPolicySnapshot(dataDir);
@@ -840,7 +898,7 @@ export function assertManagedAgentBridge(agent: IntegrationAgent, options: { hom
   if (!isOwnedCliBridge(expected, [expected])) throw new Error("NATIVE_SKILL_DRIFT: the native Skills bridge is missing or modified; repair it before continuing");
   const roots = projectAncestorDirectories([options.projectDir ?? process.cwd(), ...(options.projectDirs ?? []), ...(agent === "hermes" && process.env.TERMINAL_CWD ? [process.cwd()] : [])]);
   const visible = (entry: NativeSkillEntry) => entry.agent === agent || (["codex", "gemini", "opencode", "hermes"].includes(agent) && entry.path.includes(`${sep}.agents${sep}skills${sep}`)) || (agent === "opencode" && entry.agent === "claude");
-  const discovery: AgentDiscoveryBinding | undefined = binding.discovery?.[agent];
+  const discovery: AgentDiscoveryBinding | undefined = provenDiscovery ?? binding.discovery?.[agent];
   assertProjectDiscovery(agent, [...roots], home, path => canonicalAgentPath(path, aliases), discovery);
   const configPath = canonicalAgentPath(join(home, AGENT_ADAPTERS[agent].config), aliases), config = agent === "hermes" ? parseHermesConfig(readOptional(configPath)) : jsonObject(readOptional(configPath), configPath);
   const command = binding.commands?.[agent], profile = binding.profiles?.[agent];
@@ -867,10 +925,14 @@ export function assertManagedAgentBridge(agent: IntegrationAgent, options: { hom
   if (agent === "codex" && codexConfig.skills?.bundled?.enabled !== false) throw new Error("NATIVE_SKILL_DRIFT: Codex bundled skill reseeding is not disabled (skills.bundled.enabled); run skills hook install");
   const setting = (path: string) => (codexConfig.skills?.config ?? []).filter(entry => typeof entry.path === "string" && [path, join(path, "SKILL.md")].includes(canonicalAgentPath(entry.path, aliases)));
   if (agent === "codex" && [...setting(expected), ...(codexConfig.skills?.config ?? []).filter(entry => typeof entry.name === "string" && entry.name.trim() === CLI_BRIDGE_NAME)].some(entry => entry.enabled === false)) throw new Error("NATIVE_SKILL_DRIFT: the Codex CLI bridge is disabled; run skills hook install");
+  if (agent === "codex" && !reviewedCodexPluginCapabilitiesUnchanged(canonicalAgentPath(join(home,".codex/plugins/cache"),aliases),binding.codexPluginSkills ?? [],path=>new TextDecoder("utf-8",{fatal:true}).decode(readNativeBytes(path,1024*1024)))) throw new Error("NATIVE_SKILL_DRIFT: reviewed native plugin capability controls changed; run skills hook install with a fresh discovery review");
+  const disabledPlugin = (entry: NativeSkillEntry): boolean => agent === "codex" && entry.vendor && isReviewedCodexPluginSkillDisabled(join(entry.path,"SKILL.md"), canonicalAgentPath(join(home,".codex/plugins/cache"),aliases), binding.codexPluginSkills ?? [], codexConfig.skills?.config, path=>new TextDecoder("utf-8",{fatal:true}).decode(readNativeBytes(path,1024*1024)));
+  const disabledPaths = new Set(disabledCodexSkillPaths(codexConfig, aliases));
   const disabledVendorSkill = (entry: NativeSkillEntry): boolean => {
     if (agent !== "codex" || !entry.vendor) return false;
-    const settings = setting(entry.path);
-    if (settings.length !== 1 || settings[0]?.enabled !== false) return false;
+    if ((binding.codexPluginSkills ?? []).some((control: CodexPluginSkillControl) => entry.path.startsWith(control.pluginParent + sep))) return disabledPlugin(entry);
+    if (disabledPlugin(entry)) return true;
+    if (!disabledPaths.has(entry.path)) return false;
     // Codex can refresh plugin caches after Skills archives their discovery
     // documents. Its exact per-skill disable setting prevents those files from
     // becoming native instructions when they reappear. The config is covered
@@ -900,7 +962,7 @@ export function assertManagedAgentBridge(agent: IntegrationAgent, options: { hom
       if (JSON.stringify(current) !== JSON.stringify(discovery)) throw new Error("Configured native discovery roots changed");
     }
   } catch (error) { throw new Error(`NATIVE_SKILL_DRIFT: ${(error as Error).message}`); }
-  const inventory = inventoryNativeSkills(home, { includeVendor: true, guardHermes: agent === "hermes", agents: [agent], projectDirs: [...roots], agentRoots: discovery.roots.map(path => ({ agent, path })), allowRootAliases: aliases.length > 0, disabledVendorPaths: agent === "codex" ? disabledCodexSkillPaths(codexConfig, aliases) : [] });
+  const inventory = inventoryNativeSkills(home, { includeVendor: true, guardHermes: agent === "hermes", agents: [agent], projectDirs: [...roots], agentRoots: discovery.roots.map(path => ({ agent, path })), allowRootAliases: aliases.length > 0, disabledVendorPaths: agent === "codex" ? disabledCodexSkillPaths(codexConfig, aliases) : [], disabledVendorSkill: disabledPlugin });
   const unexpected = inventory.filter(entry => visible(entry) && !entry.bridge && !disabledVendorSkill(entry));
   if (unexpected.length) {
     // Show filenames only: never read payloads into diagnostics. Escape control
