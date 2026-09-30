@@ -1,5 +1,6 @@
 /** Only owned codes and fixed advice may cross the child-process hook boundary. */
 const CONTEXT_ERROR_CODES = new Set([
+  "SKILLS_API_CREDENTIAL_UNAVAILABLE", "SKILLS_API_UNAVAILABLE", "SKILLS_API_UNAUTHORIZED", "SKILLS_API_FORBIDDEN", "SKILLS_API_RESOURCE_UNAVAILABLE", "SESSION_WRITE_BUSY",
   "SKILLS_CONTEXT_FAILED", "SKILLS_STORAGE_FULL", "PROFILE_LOCK_MISMATCH", "PROFILE_IDENTITY_MISMATCH",
   "PROFILE_APPLIED_REPORT_FAILED", "CACHED_AUTHORITY_REQUIRED", "CACHED_PROFILE_EXPIRED",
   "CACHED_PROFILE_MISSING", "CACHED_BUNDLE_MISSING", "INVALID_CONTEXT_INPUT",
@@ -10,7 +11,7 @@ const CONTEXT_ERROR_CODES = new Set([
   "SESSION_PARENT_NOT_FOUND", "SESSION_NOT_FOUND", "SESSION_GENERATION_CHANGED",
   "SESSION_GENERATION_EXHAUSTED", "SESSION_PARENT_CHANGED", "SESSION_RECEIPT_CHANGED",
   "SESSION_RECONCILIATION_REQUIRED",
-  "SESSION_RECONCILIATION_INCOMPLETE", "SESSION_WRITE_LOCKED", "SESSION_WRITE_LOCK_CHANGED", "SESSION_LOCK_RECOVERY_INCOMPLETE",
+  "SESSION_CONTEXT_CONFLICT", "SESSION_RECONCILIATION_INCOMPLETE", "SESSION_WRITE_LOCKED", "SESSION_WRITE_LOCK_CHANGED", "SESSION_LOCK_RECOVERY_INCOMPLETE",
 ]);
 
 export class HookDiagnosticError extends Error {
@@ -52,4 +53,21 @@ export function hookFailureReason(error: unknown, profileId?: string): string {
   }
   const selected = profile ?? "<id>";
   return `${prefix} Run skills sync --selection-profile ${selected} --json, then diagnose with skills context --stdin --json --cached --selection-profile ${selected} using the same hook session and working-directory fields. Do not include credentials in diagnostic input.`;
+}
+
+/** Delivery refusals are not permission to run Skills. After native controls and
+ * input have been verified, an ordinary prompt can continue without payload.
+ * Unknown failures, malformed state and native discovery violations stay hard.
+ */
+const OPTIONAL_CONTEXT_FAILURES = new Set([
+  "SKILLS_API_CREDENTIAL_UNAVAILABLE", "SKILLS_API_UNAVAILABLE", "SKILLS_API_UNAUTHORIZED", "SKILLS_API_FORBIDDEN", "SKILLS_API_RESOURCE_UNAVAILABLE",
+  "CACHED_PROFILE_EXPIRED", "CACHED_PROFILE_MISSING", "CACHED_BUNDLE_MISSING",
+  "SESSION_RECONCILIATION_REQUIRED", "SESSION_WRITE_BUSY",
+  "SESSION_PARENT_CHANGED", "SESSION_CONTEXT_CONFLICT", "SKILLS_HOOK_TIMEOUT",
+]);
+export function isOptionalHookContextFailure(error: unknown): error is HookDiagnosticError {
+  return error instanceof HookDiagnosticError && OPTIONAL_CONTEXT_FAILURES.has(error.code);
+}
+export function hookUnavailableContext(error: HookDiagnosticError, profileId?: string): string {
+  return `${hookFailureReason(error, profileId)} No Skills instructions were delivered by this hook. Ordinary work may continue. Do not perform actions that depend on unavailable Skills instructions, including previously loaded instructions. Explicit skills load, context and run still require verification. Do not substitute native, unmanaged or stale payloads.`;
 }

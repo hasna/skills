@@ -6,11 +6,12 @@ import { type ReviewedDiscoveryInputs } from "../../lib/agent-discovery.js";
 import { normalizeHermesHookInput, assertHermesTool } from "../../lib/agent-hermes.js";
 import { parseSkillContextInput, selectedProfileId } from "./context.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, normalizeAgentHookEvent } from "../../lib/agent-adapters.js";
-import { planAgentIntegration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, hookContextOutput, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, type IntegrationAgent } from "../../lib/agent-integration.js";
+import { planAgentIntegration, planAgentSettingsWitnessUpgrade, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, hookContextOutput, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, type IntegrationAgent } from "../../lib/agent-integration.js";
 import { enrollCodexNativeHooks, reconcileCodexNativeHooks } from "../../lib/agent-codex-trust.js";
-import { HookDiagnosticError, hookChildError, hookFailureReason } from "../../lib/hook-diagnostics.js";
+import { HookDiagnosticError, hookChildError, hookFailureReason, isOptionalHookContextFailure, hookUnavailableContext } from "../../lib/hook-diagnostics.js";
 import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib/selection-cache.js";
 import { captureClaudeSettingsV2, captureClaudeSettingsV3 } from "../../lib/claude-settings-witness.js";
+import { captureCodexSettings } from "../../lib/codex-settings-witness.js";
 import { captureClaudeMarketplaceRegistryV2 } from "../../lib/claude-marketplace-registry.js";
 
 const RECOVERABLE_CONTEXT_CACHE_ERRORS = new Set(["CACHED_PROFILE_EXPIRED", "CACHED_PROFILE_MISSING", "CACHED_BUNDLE_MISSING"]);
@@ -75,17 +76,35 @@ function agents(value: string): IntegrationAgent[] {
 export function registerAgentIntegration(parent: Command): void {
   const hook = parent.command("hook").description("Load selected Skills context through agent lifecycle hooks");
   hook.command("witness")
-    .requiredOption("--kind <kind>", "claude-settings-v3, claude-settings-v2 or claude-marketplace-registry-v2")
+    .requiredOption("--kind <kind>", "claude-settings-v3, claude-settings-v2, codex-settings-v1 or claude-marketplace-registry-v2")
     .requiredOption("--path <path>", "Canonical absolute path to the reviewed settings or registry file")
     .option("--json", "Output the discovery witness as JSON", false)
     .description("Capture an explicit versioned review witness without installing it")
     .action(async (options: {kind: string; path: string}) => {
-      const capture = options.kind === "claude-settings-v3" ? captureClaudeSettingsV3
+      const capture = options.kind === "codex-settings-v1" ? captureCodexSettings : options.kind === "claude-settings-v3" ? captureClaudeSettingsV3
         : options.kind === "claude-settings-v2" ? captureClaudeSettingsV2
         : options.kind === "claude-marketplace-registry-v2" ? captureClaudeMarketplaceRegistryV2 : null;
-      if (!capture) throw new Error("Unsupported witness kind; select claude-settings-v3, claude-settings-v2 or claude-marketplace-registry-v2");
+      if (!capture) throw new Error("Unsupported witness kind; select claude-settings-v3, claude-settings-v2, codex-settings-v1 or claude-marketplace-registry-v2");
       await writeCliOutput(JSON.stringify(capture(options.path), null, 2));
     });
+  hook.command("rebind-settings")
+    .requiredOption("--agent <agent>", "claude or codex")
+    .requiredOption("--reviewed-preimage <path>", "Exact preserved legacy settings.json or config.toml")
+    .requiredOption("--expected-policy-sha256 <sha256>", "Exact current managed policy bytes")
+    .requiredOption("--expected-settings-sha256 <sha256>", "Exact current native settings bytes")
+    .option("--apply", "Apply the explicit semantic witness upgrade with preservation and readback", false)
+    .option("--json", "Return the metadata-only plan or receipt", false)
+    .description("Explicitly migrate a legacy native settings witness after proving only known preferences changed")
+    .action(async (options) => {
+      try {
+        if (!["claude", "codex"].includes(options.agent)) throw new Error("Settings witness rebind accepts claude or codex");
+        const plan = planAgentSettingsWitnessUpgrade({ agent: options.agent, reviewedPreimage: options.reviewedPreimage, expectedPolicySha256: options.expectedPolicySha256, expectedSettingsSha256: options.expectedSettingsSha256 });
+        const result = options.apply ? applyAgentIntegration(plan) : { changed: [], backups: [] };
+        const receipt = { applied: options.apply, settingsWitnessUpgrade: plan.settingsWitnessUpgrade, ...result };
+        await writeCliOutput(options.json ? JSON.stringify(receipt) : `Settings witness ${options.apply ? "upgraded" : "planned"} for ${options.agent}. Native configuration was not changed.`);
+      } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
+    });
+
   hook.command("agents").option("--json", "Output the adapter capability inventory", false)
     .description("Show maintained native adapters and explicit coverage limits")
     .action(async () => { await writeCliOutput(JSON.stringify({ agents: INTEGRATION_AGENTS.map(agent => ({ agent, bridge: true, ...AGENT_ADAPTERS[agent] })), inventoryOnly: ["codewith", "windsurf", "pi", "amp", "cline", "roo", "copilot"], limitations: ["Cursor prompt hooks gate submission; selected context is injected at session start only.", "Native discovery checks cover known home roots and current project ancestors. External plugin hook injection and arbitrary added directories require separate review.", "Hermes injects selected prompt context, but native pre_llm_call fails open. Exact native hook trust, bundled reseeding opt-out, native payload retirement and a supervised pre-tool guard are required. Child failures block explicitly; native host/supervisor death is not a universal fail-closed guarantee.", "Restart agents and use their normal hook trust controls after installation."] }, null, 2)); });
@@ -95,6 +114,7 @@ export function registerAgentIntegration(parent: Command): void {
     .option("--selection-profile <id>", "Selection profile (preserves existing binding; new agents use default)")
     .option("--include-vendor", "Retained for compatibility; vendor system skills are always inventoried and disabled", false)
     .option("--discovery-inputs <file>", "Advanced reviewed active plugin roots and source hashes for unsupported registrations")
+    .option("--codex-native-catalog <file>", "Reviewed native0.159.2 skills/list receipt for exact qualified plugin-name disables")
     .option("--reviewed-cache-alias <path>", "Exact skill-containing vendor cache alias reviewed for this hook plan")
     .option("--allow-root-aliases", "Allow home .claude/.codex aliases to existing directories within this home", false)
     .option("--apply", "Apply the plan, preserving prior configuration in private backups", false)
@@ -103,10 +123,10 @@ export function registerAgentIntegration(parent: Command): void {
     .action(async (options) => {
       try {
         const discoveryInputs: ReviewedDiscoveryInputs | undefined = options.discoveryInputs ? JSON.parse(readFileSync(options.discoveryInputs, "utf8")) : undefined;
-        const plan = planAgentIntegration({ agents: agents(options.agent), command: options.command, profileId: options.selectionProfile, includeVendor: options.includeVendor, discoveryInputs, allowRootAliases: options.allowRootAliases, reviewedCacheAlias: options.reviewedCacheAlias });
+        const plan = planAgentIntegration({ projectDir: process.cwd(), agents: agents(options.agent), command: options.command, profileId: options.selectionProfile, includeVendor: options.includeVendor, discoveryInputs, allowRootAliases: options.allowRootAliases, reviewedCacheAlias: options.reviewedCacheAlias, codexNativeCatalog: options.codexNativeCatalog ? JSON.parse(readFileSync(options.codexNativeCatalog, "utf8")) : undefined });
         const result = options.apply ? applyAgentIntegration(plan) : { changed: [], backups: [] };
         // Configuration contents can include credentials. Only paths/counts leave this command.
-        const receipt = { applied: options.apply, planned: plan.changes.map(change => change.path), ...result, rootAliases: plan.rootAliases ?? [], discovery: plan.discoveryAfter, nativeSkills: plan.nativeSkills.map(entry => ({ agent: entry.agent, path: entry.path, managed: entry.managed, vendor: entry.vendor, system: entry.system === true, bridge: entry.bridge === true })), requiresNativeRetirement: plan.nativeSkills.some(entry => !entry.bridge && !entry.system) };
+        const receipt = { codexPluginSkillReview: plan.codexPluginSkillReview, codexPluginSkills: plan.changes.filter(change=>change.path.endsWith("agent-policy.json")).map(change=>JSON.parse(change.after).bridge?.codexPluginSkills ?? []).flat(), applied: options.apply, planned: plan.changes.map(change => change.path), ...result, rootAliases: plan.rootAliases ?? [], discovery: plan.discoveryAfter, nativeSkills: plan.nativeSkills.map(entry => ({ agent: entry.agent, path: entry.path, managed: entry.managed, vendor: entry.vendor, system: entry.system === true, bridge: entry.bridge === true })), requiresNativeRetirement: plan.nativeSkills.some(entry => !entry.bridge && !entry.system) };
         if (options.json) await writeCliOutput(JSON.stringify(receipt));
         else await writeCliOutput(`${options.apply ? "Configured" : "Planned"} ${plan.changes.length} agent configuration change(s).${options.apply ? " Restart the agent and trust the installed hook configuration." : " Use --apply to install."}`);
       } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
@@ -176,13 +196,15 @@ export function registerAgentIntegration(parent: Command): void {
       // The installed blocking event must survive malformed JSON/input too.
       let event = options.agent === "hermes" && options.event === "pre_tool_call" ? "pre_tool_call" : "UserPromptSubmit";
       let selectionProfile: string | undefined;
+      let verifiedContextBoundary = false;
+      let nativeEvent = event;
       try {
         if (agents(options.agent).length !== 1) throw new Error("A hook invocation requires one agent");
         const inputText = readFileSync(0, "utf8");
         if (inputText.length > 1024 * 1024) throw new Error("Hook input is too large");
         let input = JSON.parse(inputText);
         if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Expected hook input object");
-        const nativeEvent = options.event ?? input.hook_event_name ?? event;
+        nativeEvent = options.event ?? input.hook_event_name ?? event;
         if (options.agent === "hermes") input = normalizeHermesHookInput({ ...input, hook_event_name: nativeEvent });
         event = options.agent === "hermes" ? input.hook_event_name : normalizeAgentHookEvent(options.agent, nativeEvent);
         input.hook_event_name = event;
@@ -215,6 +237,10 @@ export function registerAgentIntegration(parent: Command): void {
         hookContextOutput(event, { context: "" });
         assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile });
         if (typeof input.prompt === "string") input.prompt = normalizeAgentHookPrompt(options.agent, nativeEvent, input.prompt);
+        // Validate every context field before a timeout or API refusal can be
+        // classified as optional delivery failure. No unchecked input continues.
+        parseSkillContextInput(JSON.stringify(input));
+        verifiedContextBoundary = true;
         if (event === "SessionStart") {
           // Station reporting is telemetry, not profile authorization. Keep
           // it on explicit sync, outside the blocking lifecycle path. Reserve
@@ -246,6 +272,19 @@ export function registerAgentIntegration(parent: Command): void {
           await writeCliOutput(JSON.stringify(output));
         }
       } catch (error) {
+        if (verifiedContextBoundary && isOptionalHookContextFailure(error)) {
+          const unavailable = hookUnavailableContext(error, selectionProfile);
+          // These envelopes contain a fixed diagnostic only, never a child
+          // payload or a receipt. Native skill tool checks are outside this path.
+          if (options.agent === "cursor") await writeCliOutput(JSON.stringify({ continue: true, user_message: unavailable }));
+          else if (options.agent === "hermes") await writeCliOutput(JSON.stringify({ context: unavailable }));
+          else {
+            const output = hookContextOutput(event, { context: unavailable }) as any;
+            if (options.agent === "gemini" && output.hookSpecificOutput) output.hookSpecificOutput.hookEventName = nativeEvent ?? event;
+            await writeCliOutput(JSON.stringify({ systemMessage: unavailable, ...output }));
+          }
+          return;
+        }
         const reason = error instanceof Error && error.message.startsWith("NATIVE_SKILL_DRIFT:")
           ? error.message
           : hookFailureReason(error, selectionProfile);

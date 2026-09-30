@@ -1,6 +1,8 @@
+import { SkillSelectionError } from "./selection-cache.js";
 import pkg from "../../package.json" with { type: "json" };
 import {
   resolveSkillsConnection,
+  isSkillsFleetCredentialError,
   normalizeSkillsApiOrigin,
   skillsApiRequestUrl,
 } from "./fleet-credentials.js";
@@ -102,10 +104,11 @@ export class HttpProfileClient implements ProfileClient {
     route: string,
     init: RequestInit = {},
   ): Promise<Response> {
+    const requestUrl = skillsApiRequestUrl(this.origin, route);
     let response: Response;
     try {
       response = await fetch(
-        skillsApiRequestUrl(this.origin, route),
+        requestUrl,
         {
           ...init,
           redirect: "error",
@@ -120,10 +123,15 @@ export class HttpProfileClient implements ProfileClient {
         },
       );
     } catch {
-      throw new Error("Unable to reach the configured Skills API");
+      throw new SkillSelectionError("SKILLS_API_UNAVAILABLE", "Unable to reach the configured Skills API");
     }
     if (!response.ok) {
       void response.body?.cancel().catch(() => {});
+      const code = response.status === 401 ? "SKILLS_API_UNAUTHORIZED"
+        : response.status === 403 ? "SKILLS_API_FORBIDDEN"
+        : [404, 410].includes(response.status) ? "SKILLS_API_RESOURCE_UNAVAILABLE"
+        : response.status === 429 || response.status >= 500 ? "SKILLS_API_UNAVAILABLE" : undefined;
+      if (code) throw new SkillSelectionError(code, `Skills API request failed (HTTP ${response.status})`);
       throw new Error(`Skills API request failed (HTTP ${response.status})`);
     }
     return response;
@@ -251,7 +259,14 @@ export class HttpProfileClient implements ProfileClient {
   }
 }
 export async function createProfileClient(): Promise<ProfileClient> {
-  const connection = await resolveSkillsConnection();
+  let connection;
+  try { connection = await resolveSkillsConnection(); }
+  catch (error) {
+    if (isSkillsFleetCredentialError(error) && error.code === "MISSING_API_CREDENTIAL") {
+      throw new SkillSelectionError("SKILLS_API_CREDENTIAL_UNAVAILABLE", "The configured Skills authority has no usable credential. Sign in through the configured credential resolver; no payload was delivered.");
+    }
+    throw error;
+  }
   if (!connection)
     throw new Error("Selection profiles require a configured Skills API");
   return new HttpProfileClient(connection.apiKey, connection.apiOrigin);

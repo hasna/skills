@@ -211,7 +211,9 @@ export function assertFreshCachedProfile(receipt: CachedSelectionProfile, option
   validateSelectionReceipt(receipt);
   const age = (options.now ?? Date.now)() - Date.parse(receipt.verifiedAt);
   const maximum = options.maxAgeMs ?? MAX_CACHED_PROFILE_AGE_MS;
-  if (!Number.isFinite(maximum) || maximum <= 0 || maximum > MAX_CACHED_PROFILE_AGE_MS || age < 0 || age > maximum) {
+  if (!Number.isFinite(maximum) || maximum <= 0 || maximum > MAX_CACHED_PROFILE_AGE_MS) throw new SkillSelectionError("INVALID_CONTEXT_BUDGET", "The cached profile maximum age must be positive and within the supported bound.");
+  if (!Number.isFinite(age) || age < 0) throw new SkillSelectionError("INVALID_RECEIPT", "The cached profile verification timestamp is invalid or in the future.");
+  if (age > maximum) {
     throw new SkillSelectionError("CACHED_PROFILE_EXPIRED", "The cached Skills profile has expired; authenticate and sync it again.");
   }
 }
@@ -332,12 +334,12 @@ function readSessionLock(sessionId: string, options: SelectionCacheOptions): Ses
   const path = `${sessionReceiptPath(sessionId, options)}.write-lock`;
   const before = lstatSync(path, { throwIfNoEntry: false });
   if (!before) return null;
-  if (!before.isFile() || before.nlink !== 1 || (process.getuid && before.uid !== process.getuid())) {
+  if (!before.isFile() || before.nlink !== 1 || (before.mode & 0o077) !== 0 || (process.getuid && before.uid !== process.getuid())) {
     throw new SkillSelectionError("SESSION_WRITE_LOCKED", "The session lock is not a private regular file; recovery requires review.");
   }
   const bytes = readRegularFile(path, SESSION_LOCK_MAX_BYTES);
   const after = lstatSync(path, { throwIfNoEntry: false });
-  if (!bytes || !after?.isFile() || before.dev !== after.dev || before.ino !== after.ino || before.mtimeMs !== after.mtimeMs) {
+  if (!bytes || !after?.isFile() || before.dev !== after.dev || before.ino !== after.ino || before.mtimeMs !== after.mtimeMs || before.mode !== after.mode || before.uid !== after.uid || before.gid !== after.gid || before.nlink !== after.nlink) {
     throw new SkillSelectionError("SESSION_WRITE_LOCKED", "The session lock changed during inspection; recovery requires review.");
   }
   let marker: SessionLockMarker;
@@ -465,7 +467,12 @@ function withSessionWriteLocks<T>(sessionIds: string[], options: SelectionCacheO
         }
         try { fd = openSync(lock.path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
         catch (retryError) {
-          if ((retryError as NodeJS.ErrnoException).code === "EEXIST") throw new SkillSelectionError("SESSION_WRITE_LOCKED", "Another Skills process owns a required session write lock; retry after it completes. A surviving legacy lock requires explicit recovery review.");
+          if ((retryError as NodeJS.ErrnoException).code === "EEXIST") {
+            // Only a readable, structurally valid lock is a delivery conflict.
+            // Symlinks, malformed ownership and changing markers remain hard.
+            if (!readSessionLock(lock.sessionId, options)) throw new SkillSelectionError("SESSION_WRITE_LOCK_CHANGED", "The session lock changed during acquisition.");
+            throw new SkillSelectionError("SESSION_WRITE_BUSY", "Another Skills process owns a required session write lock; retry after it completes. A surviving legacy lock requires explicit recovery review.");
+          }
           throw retryError;
         }
       }
@@ -509,7 +516,7 @@ export function writeSkillSession(receipt: SkillSessionReceipt, expected: SkillS
   withSessionWriteLocks(lockIds, options, assertOwned => {
     const current = readSkillSessionSnapshotIfExists(receipt.sessionId, options);
     if (!sameSnapshot(current, expected.current) || (current && !isDeepStrictEqual(current.receipt.profile, receipt.profile))) {
-      throw new SkillSelectionError("SESSION_RECEIPT_CHANGED", "The Skills session receipt changed while context was loading; resolve context again without replacing the current pin.");
+      throw new SkillSelectionError("SESSION_CONTEXT_CONFLICT", "The Skills session receipt changed while context was loading; resolve context again without replacing the current pin.");
     }
     let parent: SkillSessionSnapshot | null = null;
     if (expected.parent) {

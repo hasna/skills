@@ -59,7 +59,7 @@ export async function reconcileSkillSessionIfSafe(sessionId: string, profileId: 
   const now = (options.now ?? Date.now)();
   const age = now - Date.parse(old.verifiedAt);
   if (age >= 0 && age <= MAX_CACHED_PROFILE_AGE_MS) return false;
-  if (age < 0) throw new SkillSelectionError("SESSION_RECONCILIATION_REQUIRED", "The session receipt has a future timestamp; inspect it before changing its pin.");
+  if (age < 0) throw new SkillSelectionError("INVALID_RECEIPT", "The session receipt has a future timestamp; inspect it before changing its pin.");
   const client = options.client ?? await createProfileClient();
   const target = structuredClone(await client.resolveProfile(profileId));
   validateResolvedProfile(target, client.authority);

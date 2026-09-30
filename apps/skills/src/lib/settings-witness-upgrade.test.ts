@@ -1,0 +1,55 @@
+import { useDefaultTestTimeout } from "../test-preload.js";
+import { test, expect, afterEach } from "bun:test";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
+import { planAgentIntegration, applyAgentIntegration, assertManagedAgentBridge, planAgentSettingsWitnessUpgrade } from "./agent-integration.js";
+import { hashCodexSettingsReplacement } from "./codex-settings-witness.js";
+useDefaultTestTimeout();
+const sha = (s:string) => createHash("sha256").update(s).digest("hex");
+const roots:string[] = [];
+afterEach(() => { for (const root of roots.splice(0)) rmSync(root, {recursive:true,force:true}); });
+for (const agent of ["claude", "codex"] as const) test(`${agent} explicit raw review upgrade preserves original and permits only preferences`, () => {
+  const home = mkdtempSync(join(tmpdir(), "skills-witness-")); roots.push(home);
+  const dataDir = join(home, "data"), config = join(home, agent === "claude" ? ".claude/settings.json" : ".codex/config.toml");
+  const f = {home, dataDir, projectDir:home};
+  applyAgentIntegration(planAgentIntegration({...f,agents:[agent]}));
+  const before = readFileSync(config,"utf8"), policyPath = join(dataDir,"agent-policy.json");
+  const binding = JSON.parse(readFileSync(policyPath,"utf8")).bridge.discovery[agent];
+  const source = {path:config,hashMode:"bytes" as const,sha256:sha(before)};
+  const reviewed = {version:1 as const,agents:[{agent,roots:binding.roots,sources:binding.sources.map((s:any) => s.path === config ? source : s),pluginHooks:"reviewed-no-skill-injection" as const}]};
+  applyAgentIntegration(planAgentIntegration({...f,agents:[agent],discoveryInputs:reviewed}));
+  const exact = readFileSync(config,"utf8"), originalPolicy = readFileSync(policyPath,"utf8");
+  const original = join(home,"preserved",agent === "claude" ? "settings.json" : "config.toml"); mkdirSync(join(home,"preserved")); writeFileSync(original,exact);
+  expect(readFileSync(original,"utf8")).toBe(exact);
+  const changed = agent === "claude" ? JSON.stringify({...JSON.parse(exact),model:"sonnet",showTurnDuration:true}) : `model = "gpt-6.1"\nmodel_reasoning_effort = "high"\nmodel_verbosity = "low"\n${exact}`;
+  writeFileSync(config,changed);
+  expect(() => assertManagedAgentBridge(agent,f)).toThrow("Native discovery input changed");
+  const options = {...f,agent,reviewedPreimage:original,expectedPolicySha256:sha(originalPolicy),expectedSettingsSha256:sha(changed)};
+  const plan = planAgentSettingsWitnessUpgrade(options);
+  expect(plan.settingsWitnessUpgrade?.fromHashMode).toBe("bytes");
+  const applied = applyAgentIntegration(plan);
+  expect(readFileSync(config,"utf8")).toBe(changed);
+  expect(readFileSync(applied.backups[0]!,"utf8")).toBe(originalPolicy);
+  expect(() => assertManagedAgentBridge(agent,f)).not.toThrow();
+  const again = agent === "claude" ? JSON.stringify({...JSON.parse(changed),model:"opus",showTurnDuration:false}) : changed.replace("gpt-6.1","gpt-6").replace('effort = "high"','effort = "low"');
+  writeFileSync(config,again); expect(() => assertManagedAgentBridge(agent,f)).not.toThrow();
+  const unsafe = agent === "claude" ? JSON.stringify({...JSON.parse(again),enabledPlugins:{"unknown@market":true}}) : `${again}\n[plugins."unknown@market"]\nenabled = true\n`;
+  writeFileSync(config,unsafe); expect(() => assertManagedAgentBridge(agent,f)).toThrow("Native discovery input changed");
+  writeFileSync(config,changed);
+  expect(() => planAgentSettingsWitnessUpgrade({...options,expectedPolicySha256:"0".repeat(64)})).toThrow("policy preimage");
+});
+test("Codex semantic witness binds provider, native controls, unknown fields and numeric syntax", () => {
+  const baseline = 'model = "gpt-6"\nmodel_reasoning_effort = "low"\nunknown = 1\n';
+  expect(hashCodexSettingsReplacement(baseline)).toBe(hashCodexSettingsReplacement(baseline.replace("gpt-6","gpt-6.1").replace('effort = "low"','effort = "high"')));
+  for (const tail of ['model_provider = "custom"\n','[skills.bundled]\nenabled = true\n','[hooks]\nenabled = false\n','unknown = 2\n']) {
+    const changed = tail.startsWith("unknown") ? baseline.replace("unknown = 1",tail.trim()) : baseline+tail;
+    expect(hashCodexSettingsReplacement(changed)).not.toBe(hashCodexSettingsReplacement(baseline));
+  }
+  expect(hashCodexSettingsReplacement(baseline.replace("unknown = 1","unknown = 1.0"))).not.toBe(hashCodexSettingsReplacement(baseline));
+  expect(hashCodexSettingsReplacement('unknown=1\nalternate={number="1"}\n')).not.toBe(hashCodexSettingsReplacement('unknown={number="1"}\nalternate=1\n'));
+  expect(() => hashCodexSettingsReplacement('model = "../instructions"\n')).toThrow();
+  expect(() => hashCodexSettingsReplacement('model_reasoning_effort = "malformed"\n')).toThrow();
+  expect(() => hashCodexSettingsReplacement(`[${"a.".repeat(40)}z]\nx = 1`)).toThrow();
+});
