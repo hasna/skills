@@ -73,9 +73,14 @@ interface AliasReceipt {
   targetVersion: string;
   targetPackageRoot: string;
   rolloutReceiptId: string;
-  aliases: Array<{ path: string; oldTarget: string; oldLinkTarget: string; oldVersion: string; oldBinarySha256: string; newTarget: string; backupPath: string }>;
+  aliases: Array<{ path: string; oldTarget: string; oldLinkTarget: string; oldVersion: string; oldBinarySha256: string; newTarget: string; backupPath: string; chain?: AliasPackageChain }>;
   switchedAliases: string[];
   rollbackCompletedAliases: string[];
+}
+
+interface AliasPackageChain {
+  packageLinkPath: string;
+  packageLinkTarget: string;
 }
 
 function object(value: unknown, code: string): JsonObject {
@@ -510,12 +515,12 @@ function comparePackageTrees(expectedRoot: string, installedRoot: string): strin
   return expected.digest;
 }
 
-function replaceLink(path: string, target: string, backupPath: string, oldLinkTarget: string): void {
+function replaceLink(path: string, target: string, backupPath: string, oldLinkTarget: string, oldTarget = resolve(dirname(path), oldLinkTarget)): void {
   const stat = lstatSync(path);
   if (!stat.isSymbolicLink() || entryExists(backupPath)) throw new Error("LAUNCHER_PREIMAGE_DRIFT");
   const temp = `${path}.skills-next-${randomUUID()}`;
   symlinkSync(oldLinkTarget, backupPath);
-  if (readlinkSync(backupPath) !== oldLinkTarget || realpathSync(backupPath) !== resolve(dirname(path), oldLinkTarget)) throw new Error("LAUNCHER_BACKUP_READBACK_MISMATCH");
+  if (readlinkSync(backupPath) !== oldLinkTarget || realpathSync(backupPath) !== oldTarget) throw new Error("LAUNCHER_BACKUP_READBACK_MISMATCH");
   symlinkSync(target, temp);
   if (realpathSync(temp) !== target) throw new Error("LAUNCHER_NEW_LINK_READBACK_MISMATCH");
   renameSync(temp, path);
@@ -598,6 +603,49 @@ function aliasDirs(home: string): string[] {
   return [join(home, ".local", "bin"), join(home, ".bun", "bin"), "/opt/homebrew/bin", "/usr/local/bin"];
 }
 
+function aliasPackageLink(home: string, aliasPath: string): string | null {
+  const dir = dirname(aliasPath);
+  if (dir === join(home, ".local", "bin")) return join(home, ".local", "lib", "node_modules", "@hasna", "skills");
+  if (dir === "/opt/homebrew/bin") return "/opt/homebrew/lib/node_modules/@hasna/skills";
+  if (dir === "/usr/local/bin") return "/usr/local/lib/node_modules/@hasna/skills";
+  return null;
+}
+
+// npm/Homebrew may leave a public bin link pointing through exactly one
+// package-root link. Admit only the fixed public package location and an
+// owned, non-writable one-hop link to an old verified copyfile runtime.
+function inspectAliasPackageChain(
+  home: string, aliasPath: string, oldLinkTarget: string, oldTarget: string, bin: string,
+  expected?: AliasPackageChain, verify = false,
+): AliasPackageChain | undefined {
+  const immediate = resolve(dirname(aliasPath), oldLinkTarget);
+  if (immediate === oldTarget) {
+    if (expected !== undefined) throw new Error("ALIAS_LINK_CHAIN_DRIFT");
+    return undefined;
+  }
+  const packageLinkPath = aliasPackageLink(home, aliasPath);
+  const physicalPackage = dirname(dirname(oldTarget));
+  if (!packageLinkPath || immediate !== join(packageLinkPath, bin)
+      || !isWithin(join(home, ".hasna", "skills", "runtime"), physicalPackage)) {
+    throw new Error("ALIAS_LINK_CHAIN_UNSUPPORTED");
+  }
+  assertOwnedSafePath(dirname(packageLinkPath), home);
+  let stat: ReturnType<typeof lstatSync>, packageLinkTarget: string, resolved: string;
+  try {
+    stat = lstatSync(packageLinkPath);
+    packageLinkTarget = readlinkSync(packageLinkPath);
+    resolved = realpathSync(packageLinkPath);
+  } catch { throw new Error("ALIAS_LINK_CHAIN_UNSUPPORTED"); }
+  if (expected !== undefined && (expected.packageLinkPath !== packageLinkPath
+      || expected.packageLinkTarget !== packageLinkTarget)) throw new Error("ALIAS_LINK_CHAIN_DRIFT");
+  if (!stat.isSymbolicLink() || stat.uid !== (process.getuid?.() ?? -1)
+      || resolve(dirname(packageLinkPath), packageLinkTarget) !== physicalPackage
+      || resolved !== physicalPackage) throw new Error("ALIAS_LINK_CHAIN_UNSUPPORTED");
+  const chain = { packageLinkPath, packageLinkTarget };
+  if (verify && expected === undefined) throw new Error("ALIAS_LINK_CHAIN_DRIFT");
+  return chain;
+}
+
 function validateAliasSource(home: string, name: string, actual: string): { version: string; packageRoot: string; binarySha256: string } {
   const packageRoot = dirname(dirname(actual));
   const roots = [join(home, ".hasna", "skills", "runtime"), join(home, ".bun", "install"), join(home, ".local", "lib", "node_modules")];
@@ -638,14 +686,15 @@ export function adoptCopyfileAliases(options: { homeDir?: string; pathValue?: st
         const stat = lstatSync(path);
         if (!stat.isSymbolicLink() || stat.uid !== (process.getuid?.() ?? -1)) throw new Error("ALIAS_LINK_NOT_OWNED");
         const oldLinkTarget = readlinkSync(path);
-        const actual = realpathSync(path);
-        if (resolve(dirname(path), oldLinkTarget) !== actual) throw new Error("ALIAS_LINK_CHAIN_UNSUPPORTED");
+        let actual: string;
+        try { actual = realpathSync(path); } catch { throw new Error("ALIAS_LINK_CHAIN_UNSUPPORTED"); }
         const newTarget = join(layout.currentPackageRoot, target);
         if (actual === newTarget) continue;
+        const chain = inspectAliasPackageChain(home, path, oldLinkTarget, actual, target);
         const source = validateAliasSource(home, name, actual);
         const backupPath = `${path}.skills-alias-prev-${id}`;
         if (entryExists(backupPath)) throw new Error("ALIAS_BACKUP_COLLISION");
-        aliases.push({ path, oldTarget: actual, oldLinkTarget, oldVersion: source.version, oldBinarySha256: source.binarySha256, newTarget, backupPath });
+        aliases.push({ path, oldTarget: actual, oldLinkTarget, oldVersion: source.version, oldBinarySha256: source.binarySha256, newTarget, backupPath, ...(chain ? { chain } : {}) });
       }
     }
     if (!aliases.length) return { adopted: true, version: layout.currentVersion, aliasCount: 0 };
@@ -660,14 +709,20 @@ export function adoptCopyfileAliases(options: { homeDir?: string; pathValue?: st
     writeJsonPrivate(receiptPath, receipt);
     for (const item of aliases) {
       if (readlinkSync(item.path) !== item.oldLinkTarget || realpathSync(item.path) !== item.oldTarget) throw new Error("ALIAS_CHANGED_BEFORE_SWITCH");
+      inspectAliasPackageChain(home, item.path, item.oldLinkTarget, item.oldTarget, layout.bin[basename(item.path)]!, item.chain, true);
       const source = validateAliasSource(home, basename(item.path), item.oldTarget);
       if (source.version !== item.oldVersion || source.binarySha256 !== item.oldBinarySha256) throw new Error("ALIAS_SOURCE_DRIFT");
       receipt.state = "switching";
       receipt.switchedAliases = [...receipt.switchedAliases, item.path];
       persistAliasReceipt(receiptPath, receipt);
-      replaceLink(item.path, item.newTarget, item.backupPath, item.oldLinkTarget);
+      replaceLink(item.path, item.newTarget, item.backupPath, item.oldLinkTarget, item.oldTarget);
       if (realpathSync(item.path) !== item.newTarget || realpathSync(item.backupPath) !== item.oldTarget) throw new Error("ALIAS_SWITCH_READBACK_MISMATCH");
+      inspectAliasPackageChain(home, item.path, item.oldLinkTarget, item.oldTarget, layout.bin[basename(item.path)]!, item.chain, true);
       options.onAliasSwitched?.(item.path);
+    }
+    for (const item of aliases) {
+      inspectAliasPackageChain(home, item.path, item.oldLinkTarget, item.oldTarget, layout.bin[basename(item.path)]!, item.chain, true);
+      if (readlinkSync(item.backupPath) !== item.oldLinkTarget || realpathSync(item.backupPath) !== item.oldTarget) throw new Error("ALIAS_BACKUP_DRIFT");
     }
     receipt.state = "switched";
     persistAliasReceipt(receiptPath, receipt);
@@ -678,12 +733,14 @@ export function adoptCopyfileAliases(options: { homeDir?: string; pathValue?: st
       for (const item of [...aliases].reverse()) {
         try {
           if (!entryExists(item.backupPath)) {
+            inspectAliasPackageChain(home, item.path, item.oldLinkTarget, item.oldTarget, layout.bin[basename(item.path)]!, item.chain, true);
             const source = validateAliasSource(home, basename(item.path), item.oldTarget);
             if (!entryExists(item.path) || readlinkSync(item.path) !== item.oldLinkTarget || realpathSync(item.path) !== item.oldTarget
                 || source.version !== item.oldVersion || source.binarySha256 !== item.oldBinarySha256) failed = true;
             continue;
           }
           if (readlinkSync(item.backupPath) !== item.oldLinkTarget || realpathSync(item.backupPath) !== item.oldTarget) throw new Error("ALIAS_BACKUP_DRIFT");
+          inspectAliasPackageChain(home, item.path, item.oldLinkTarget, item.oldTarget, layout.bin[basename(item.path)]!, item.chain, true);
           const source = validateAliasSource(home, basename(item.path), item.oldTarget);
           if (source.version !== item.oldVersion || source.binarySha256 !== item.oldBinarySha256) throw new Error("ALIAS_SOURCE_DRIFT");
           if (realpathSync(item.path) === item.oldTarget && readlinkSync(item.path) === item.oldLinkTarget) continue;
@@ -731,7 +788,11 @@ export function rollbackCopyfileAliases(receiptId: string, options: { homeDir?: 
       if (!target || seen.has(item.path) || !aliasDirs(home).includes(dirname(item.path))
           || item.newTarget !== join(layout.currentPackageRoot, target)
           || item.backupPath !== `${item.path}.skills-alias-prev-${receiptId}`
-          || resolve(dirname(item.path), item.oldLinkTarget) !== item.oldTarget) throw new Error("ALIAS_RECEIPT_LAUNCHER_INVALID");
+          || (item.chain !== undefined && (!item.chain || typeof item.chain !== "object"
+              || typeof item.chain.packageLinkPath !== "string" || typeof item.chain.packageLinkTarget !== "string"))) {
+        throw new Error("ALIAS_RECEIPT_LAUNCHER_INVALID");
+      }
+      inspectAliasPackageChain(home, item.path, item.oldLinkTarget, item.oldTarget, target, item.chain, true);
       seen.add(item.path);
       assertOwnedSafePath(dirname(item.path), home, true);
       const source = validateAliasSource(home, name, item.oldTarget);
@@ -765,6 +826,9 @@ export function rollbackCopyfileAliases(receiptId: string, options: { homeDir?: 
       receipt.rollbackCompletedAliases = [...new Set([...receipt.rollbackCompletedAliases, item.path])];
       persistAliasReceipt(receiptPath, receipt);
       restored++;
+    }
+    for (const item of receipt.aliases) {
+      inspectAliasPackageChain(home, item.path, item.oldLinkTarget, item.oldTarget, layout.bin[basename(item.path)]!, item.chain, true);
     }
     receipt.state = "rolled-back";
     persistAliasReceipt(receiptPath, receipt);

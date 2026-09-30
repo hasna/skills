@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.18
+
+### Patch Changes
+
+- Adopt guarded one-hop npm and Homebrew Skills aliases that point through an owned package-root link to a verified older copyfile runtime. Preserve the intermediate link preimage and refuse chain drift, cycles and unsafe ancestors before switching or rollback.
+
 ## 0.10.17
 
 ### Patch Changes

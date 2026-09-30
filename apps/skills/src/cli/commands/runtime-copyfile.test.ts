@@ -269,6 +269,134 @@ describe("exact-version copyfile runtime update", () => {
     } finally { fixture.server.stop(true); }
   });
 
+  test("adopts the observed one-hop package-root alias and restores its exact public link", async () => {
+    const f = fixtureHome();
+    const fixture = await serverWithArtifact();
+    try {
+      const pathValue = `${f.localBin}${delimiter}${f.bunBin}`;
+      await updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue, registryOrigin: fixture.server.url.origin });
+      const packageLink = join(f.home, ".local", "lib", "node_modules", "@hasna", "skills");
+      mkdirSync(join(packageLink, ".."), { recursive: true, mode: 0o700 });
+      symlinkSync(relative(join(packageLink, ".."), f.oldPackage), packageLink);
+      const packageLinkText = readlinkSync(packageLink);
+      const alias = join(f.localBin, "skills-server");
+      renameSync(alias, `${alias}.synthetic-prior`);
+      symlinkSync(relative(f.localBin, join(packageLink, BIN["skills-server"])), alias);
+      const oldLinkText = readlinkSync(alias);
+      const result = adoptCopyfileAliases({ homeDir: f.home, pathValue });
+      expect(result).toMatchObject({ adopted: true, aliasCount: 1 });
+      const receipt = JSON.parse(readFileSync(join(f.runtime, "0.10.8-copyfile", "alias-adoptions", `${result.receiptId}.json`), "utf8"));
+      expect(receipt.aliases[0].chain).toEqual({ packageLinkPath: packageLink, packageLinkTarget: packageLinkText });
+      expect(readlinkSync(packageLink)).toBe(packageLinkText);
+      expect(readlinkSync(receipt.aliases[0].backupPath)).toBe(oldLinkText);
+      expect(realpathSync(receipt.aliases[0].backupPath)).toBe(join(f.oldPackage, BIN["skills-server"]));
+      expect(realpathSync(alias)).toBe(receipt.aliases[0].newTarget);
+      expect(rollbackCopyfileAliases(String(result.receiptId), { homeDir: f.home, pathValue }))
+        .toMatchObject({ rolledBack: true, restoredAliasCount: 1 });
+      expect(readlinkSync(alias)).toBe(oldLinkText);
+      expect(realpathSync(alias)).toBe(join(f.oldPackage, BIN["skills-server"]));
+      expect(readlinkSync(packageLink)).toBe(packageLinkText);
+    } finally { fixture.server.stop(true); }
+  });
+
+  test("refuses unsafe, wrong-root and cyclic package-link chains before making backups", async () => {
+    for (const cause of ["writable-parent", "wrong-root", "cycle"]) {
+      const f = fixtureHome();
+      const fixture = await serverWithArtifact();
+      try {
+        const pathValue = `${f.localBin}${delimiter}${f.bunBin}`;
+        await updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue, registryOrigin: fixture.server.url.origin });
+        const packageLink = join(f.home, ".local", "lib", "node_modules", "@hasna", "skills");
+        mkdirSync(join(packageLink, ".."), { recursive: true, mode: 0o700 });
+        symlinkSync(relative(join(packageLink, ".."), cause === "wrong-root" ? join(f.home, ".bun", "install", "global", "node_modules", "@hasna", "skills") : cause === "cycle" ? packageLink : f.oldPackage), packageLink);
+        if (cause === "writable-parent") chmodSync(join(packageLink, ".."), 0o775);
+        const alias = join(f.localBin, "skills-server");
+        renameSync(alias, `${alias}.synthetic-prior`);
+        symlinkSync(relative(f.localBin, join(packageLink, BIN["skills-server"])), alias);
+        const original = readlinkSync(alias);
+        expect(() => adoptCopyfileAliases({ homeDir: f.home, pathValue })).toThrow(
+          cause === "writable-parent" ? "ALIAS_PATH_UNSAFE" : "ALIAS_LINK_CHAIN_UNSUPPORTED",
+        );
+        expect(readlinkSync(alias)).toBe(original);
+        expect(readdirSync(f.localBin).some(name => name.includes("skills-alias-prev-"))).toBe(false);
+        expect(existsSync(join(f.runtime, "0.10.8-copyfile", "alias-adoptions"))).toBe(false);
+      } finally { fixture.server.stop(true); }
+    }
+  });
+
+  test("a changed package-root link leaves a partial adoption recoverable only after its preimage returns", async () => {
+    const f = fixtureHome();
+    const fixture = await serverWithArtifact();
+    try {
+      const pathValue = `${f.localBin}${delimiter}${f.bunBin}`;
+      await updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue, registryOrigin: fixture.server.url.origin });
+      const packageLink = join(f.home, ".local", "lib", "node_modules", "@hasna", "skills");
+      mkdirSync(join(packageLink, ".."), { recursive: true, mode: 0o700 });
+      symlinkSync(relative(join(packageLink, ".."), f.oldPackage), packageLink);
+      const originalPackageText = readlinkSync(packageLink);
+      const aliases = [join(f.localBin, "skills-mcp"), join(f.localBin, "skills-server")];
+      for (const alias of aliases) {
+        renameSync(alias, `${alias}.synthetic-prior`);
+        symlinkSync(relative(f.localBin, join(packageLink, BIN[basename(alias) as keyof typeof BIN])), alias);
+      }
+      const originals = aliases.map(alias => readlinkSync(alias));
+      expect(() => adoptCopyfileAliases({ homeDir: f.home, pathValue, onAliasSwitched: () => {
+        renameSync(packageLink, `${packageLink}.synthetic-held`);
+        symlinkSync(relative(join(packageLink, ".."), join(f.runtime, "0.10.8-copyfile", "node_modules", "@hasna", "skills")), packageLink);
+      } })).toThrow("ALIAS_ADOPTION_ROLLBACK_REQUIRED");
+      const adoptionRoot = join(f.runtime, "0.10.8-copyfile", "alias-adoptions");
+      const receiptName = readdirSync(adoptionRoot).find(name => name.endsWith(".json"))!;
+      const receipt = JSON.parse(readFileSync(join(adoptionRoot, receiptName), "utf8"));
+      expect(receipt.state).toBe("rollback-required");
+      expect(receipt.aliases.every((item: { chain: { packageLinkTarget: string } }) => item.chain.packageLinkTarget === originalPackageText)).toBe(true);
+      expect(() => rollbackCopyfileAliases(receipt.id, { homeDir: f.home, pathValue })).toThrow("LAUNCHER_SYMLINK_CHAIN_UNSUPPORTED");
+      renameSync(packageLink, `${packageLink}.synthetic-failed-link`);
+      renameSync(`${packageLink}.synthetic-held`, packageLink);
+      expect(rollbackCopyfileAliases(receipt.id, { homeDir: f.home, pathValue }))
+        .toMatchObject({ rolledBack: true, restoredAliasCount: 1 });
+      for (let i = 0; i < aliases.length; i++) {
+        expect(readlinkSync(aliases[i]!)).toBe(originals[i]);
+        expect(realpathSync(aliases[i]!)).toBe(join(f.oldPackage, BIN[basename(aliases[i]!) as keyof typeof BIN]));
+      }
+      expect(readlinkSync(packageLink)).toBe(originalPackageText);
+    } finally { fixture.server.stop(true); }
+  });
+
+  test("a last-switch package-link text change fails even when it still resolves to the same binary", async () => {
+    const f = fixtureHome();
+    const fixture = await serverWithArtifact();
+    try {
+      const pathValue = `${f.localBin}${delimiter}${f.bunBin}`;
+      await updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue, registryOrigin: fixture.server.url.origin });
+      const packageLink = join(f.home, ".local", "lib", "node_modules", "@hasna", "skills");
+      mkdirSync(join(packageLink, ".."), { recursive: true, mode: 0o700 });
+      symlinkSync(relative(join(packageLink, ".."), f.oldPackage), packageLink);
+      const originalPackageText = readlinkSync(packageLink);
+      const alias = join(f.localBin, "skills-server");
+      renameSync(alias, `${alias}.synthetic-prior`);
+      symlinkSync(relative(f.localBin, join(packageLink, BIN["skills-server"])), alias);
+      const oldAliasText = readlinkSync(alias);
+      expect(() => adoptCopyfileAliases({ homeDir: f.home, pathValue, onAliasSwitched: () => {
+        renameSync(packageLink, `${packageLink}.synthetic-held`);
+        symlinkSync(f.oldPackage, packageLink);
+      } })).toThrow("ALIAS_ADOPTION_ROLLBACK_REQUIRED");
+      const adoptionRoot = join(f.runtime, "0.10.8-copyfile", "alias-adoptions");
+      const receiptName = readdirSync(adoptionRoot).find(name => name.endsWith(".json"))!;
+      const receipt = JSON.parse(readFileSync(join(adoptionRoot, receiptName), "utf8"));
+      expect(receipt.state).toBe("rollback-required");
+      expect(realpathSync(packageLink)).toBe(f.oldPackage);
+      expect(readlinkSync(packageLink)).not.toBe(originalPackageText);
+      expect(() => rollbackCopyfileAliases(receipt.id, { homeDir: f.home, pathValue })).toThrow("ALIAS_LINK_CHAIN_DRIFT");
+      renameSync(packageLink, `${packageLink}.synthetic-failed-link`);
+      renameSync(`${packageLink}.synthetic-held`, packageLink);
+      expect(rollbackCopyfileAliases(receipt.id, { homeDir: f.home, pathValue }))
+        .toMatchObject({ rolledBack: true, restoredAliasCount: 1 });
+      expect(readlinkSync(alias)).toBe(oldAliasText);
+      expect(realpathSync(alias)).toBe(join(f.oldPackage, BIN["skills-server"]));
+      expect(readlinkSync(packageLink)).toBe(originalPackageText);
+    } finally { fixture.server.stop(true); }
+  });
+
   test("a failure during alias adoption restores prior bindings from verified backups", async () => {
     const f = fixtureHome();
     const fixture = await serverWithArtifact();
