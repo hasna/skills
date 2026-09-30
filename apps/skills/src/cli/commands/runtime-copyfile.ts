@@ -677,7 +677,12 @@ export function adoptCopyfileAliases(options: { homeDir?: string; pathValue?: st
       let failed = false;
       for (const item of [...aliases].reverse()) {
         try {
-          if (!entryExists(item.backupPath)) continue;
+          if (!entryExists(item.backupPath)) {
+            const source = validateAliasSource(home, basename(item.path), item.oldTarget);
+            if (!entryExists(item.path) || readlinkSync(item.path) !== item.oldLinkTarget || realpathSync(item.path) !== item.oldTarget
+                || source.version !== item.oldVersion || source.binarySha256 !== item.oldBinarySha256) failed = true;
+            continue;
+          }
           if (readlinkSync(item.backupPath) !== item.oldLinkTarget || realpathSync(item.backupPath) !== item.oldTarget) throw new Error("ALIAS_BACKUP_DRIFT");
           const source = validateAliasSource(home, basename(item.path), item.oldTarget);
           if (source.version !== item.oldVersion || source.binarySha256 !== item.oldBinarySha256) throw new Error("ALIAS_SOURCE_DRIFT");
@@ -731,13 +736,18 @@ export function rollbackCopyfileAliases(receiptId: string, options: { homeDir?: 
       assertOwnedSafePath(dirname(item.path), home, true);
       const source = validateAliasSource(home, name, item.oldTarget);
       if (source.version !== item.oldVersion || source.binarySha256 !== item.oldBinarySha256) throw new Error("ALIAS_PREIMAGE_DRIFT");
-      const backup = lstatSync(item.backupPath);
-      if (!backup.isSymbolicLink() || readlinkSync(item.backupPath) !== item.oldLinkTarget || realpathSync(item.backupPath) !== item.oldTarget) throw new Error("ALIAS_PREIMAGE_DRIFT");
       const stat = lstatSync(item.path);
       if (!stat.isSymbolicLink() || stat.uid !== (process.getuid?.() ?? -1)) throw new Error("ALIAS_LINK_DRIFT");
       const current = realpathSync(item.path);
       if (current !== item.newTarget && (current !== item.oldTarget || readlinkSync(item.path) !== item.oldLinkTarget)) throw new Error("ALIAS_TARGET_DRIFT");
+      if (entryExists(item.backupPath)) {
+        const backup = lstatSync(item.backupPath);
+        if (!backup.isSymbolicLink() || readlinkSync(item.backupPath) !== item.oldLinkTarget || realpathSync(item.backupPath) !== item.oldTarget) throw new Error("ALIAS_PREIMAGE_DRIFT");
+      } else if (current !== item.oldTarget) {
+        throw new Error("ALIAS_BACKUP_MISSING_FOR_SWITCH");
+      }
     }
+    let restored = 0;
     for (const item of [...receipt.aliases].reverse()) {
       if (realpathSync(item.path) === item.oldTarget && readlinkSync(item.path) === item.oldLinkTarget) continue;
       receipt.state = "rollback-required";
@@ -754,10 +764,11 @@ export function rollbackCopyfileAliases(receiptId: string, options: { homeDir?: 
       if (readlinkSync(item.path) !== item.oldLinkTarget || realpathSync(item.path) !== item.oldTarget) throw new Error("ALIAS_ROLLBACK_READBACK_MISMATCH");
       receipt.rollbackCompletedAliases = [...new Set([...receipt.rollbackCompletedAliases, item.path])];
       persistAliasReceipt(receiptPath, receipt);
+      restored++;
     }
     receipt.state = "rolled-back";
     persistAliasReceipt(receiptPath, receipt);
-    return { rolledBack: true, receiptId, restoredAliasCount: receipt.aliases.length };
+    return { rolledBack: true, receiptId, restoredAliasCount: restored };
   } finally {
     releaseLock();
   }
