@@ -66,6 +66,18 @@ interface CopyfileReceipt {
   rollbackCompletedLaunchers: string[];
 }
 
+interface AliasReceipt {
+  schema: "skills.copyfile-alias-adoption.v1";
+  id: string;
+  state: "prepared" | "switching" | "switched" | "rolled-back" | "rollback-required";
+  targetVersion: string;
+  targetPackageRoot: string;
+  rolloutReceiptId: string;
+  aliases: Array<{ path: string; oldTarget: string; oldLinkTarget: string; oldVersion: string; oldBinarySha256: string; newTarget: string; backupPath: string }>;
+  switchedAliases: string[];
+  rollbackCompletedAliases: string[];
+}
+
 function object(value: unknown, code: string): JsonObject {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(code);
   return value as JsonObject;
@@ -535,6 +547,231 @@ function persistReceipt(path: string, value: CopyfileReceipt): void {
     if (!readFileSync(historyPath).equals(priorBytes)) throw new Error("RECEIPT_HISTORY_READBACK_MISMATCH");
   }
   atomicJson(path, value);
+}
+
+function persistAliasReceipt(path: string, value: AliasReceipt): void {
+  if (entryExists(path)) {
+    const priorBytes = readFileSync(path);
+    const prior = object(JSON.parse(priorBytes.toString("utf8")), "ALIAS_RECEIPT_INVALID");
+    if (prior.schema !== value.schema || prior.id !== value.id || typeof prior.state !== "string") throw new Error("ALIAS_RECEIPT_DRIFT");
+    const nextBytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+    if (priorBytes.equals(nextBytes)) return;
+    const history = join(dirname(path), "history");
+    if (!entryExists(history)) mkdirSync(history, { mode: 0o700 });
+    const historyStat = lstatSync(history);
+    if (!historyStat.isDirectory() || historyStat.isSymbolicLink() || (historyStat.mode & 0o077) !== 0) throw new Error("ALIAS_RECEIPT_HISTORY_UNSAFE");
+    const saved = join(history, `${value.id}-${String(prior.state)}-${randomUUID()}.json`);
+    writeFileSync(saved, priorBytes, { flag: "wx", mode: 0o400 });
+    chmodSync(saved, 0o400);
+    if (!readFileSync(saved).equals(priorBytes)) throw new Error("ALIAS_RECEIPT_HISTORY_READBACK_MISMATCH");
+  }
+  atomicJson(path, value);
+}
+
+function assertOwnedSafePath(path: string, home: string, requireWritable = false): void {
+  assertNoSymlinkAncestors(path);
+  for (let current = path;; current = dirname(current)) {
+    const stat = lstatSync(current);
+    if (!stat.isDirectory() || ![0, process.getuid?.() ?? -1].includes(stat.uid) || (stat.mode & 0o022)) throw new Error("ALIAS_PATH_UNSAFE");
+    if (current === path && requireWritable && (stat.uid !== (process.getuid?.() ?? -1) || (stat.mode & 0o200) === 0)) throw new Error("ALIAS_DIRECTORY_NOT_OWNED");
+    if (current === dirname(current) || current === home) break;
+  }
+}
+
+function activeAliasRuntime(home: string, pathValue: string): { layout: RuntimeLayout; rollout: CopyfileReceipt } {
+  const layout = resolveRuntimeLayout(home, pathValue);
+  const runtimePath = dirname(dirname(dirname(layout.currentPackageRoot)));
+  const receiptPath = join(runtimePath, "rollout-receipt.json");
+  const rollout = object(JSON.parse(readFileSync(receiptPath, "utf8")), "ROLLOUT_RECEIPT_INVALID") as unknown as CopyfileReceipt;
+  if (rollout.schema !== "skills.copyfile-runtime-receipt.v1" || rollout.state !== "switched"
+      || rollout.targetPackageRoot !== layout.currentPackageRoot || rollout.targetVersion !== layout.currentVersion
+      || rollout.runtimeRoot !== layout.runtimeRoot || rollout.package !== PACKAGE_NAME
+      || hash(readFileSync(join(runtimePath, "verified-package.tgz"))) !== rollout.tarballSha256
+      || readTree(join(runtimePath, "node_modules"), true).digest !== rollout.runtimeTreeSha256) {
+    throw new Error("ACTIVE_RUNTIME_RECEIPT_DRIFT");
+  }
+  verifyPreimageManifest(runtimePath, rollout, home);
+  return { layout, rollout };
+}
+
+function aliasDirs(home: string): string[] {
+  return [join(home, ".local", "bin"), join(home, ".bun", "bin"), "/opt/homebrew/bin", "/usr/local/bin"];
+}
+
+function validateAliasSource(home: string, name: string, actual: string): { version: string; packageRoot: string; binarySha256: string } {
+  const packageRoot = dirname(dirname(actual));
+  const roots = [join(home, ".hasna", "skills", "runtime"), join(home, ".bun", "install"), join(home, ".local", "lib", "node_modules")];
+  if (basename(packageRoot) !== "skills" || basename(dirname(packageRoot)) !== "@hasna" || !roots.some(root => isWithin(root, packageRoot))) {
+    throw new Error("ALIAS_SOURCE_ROOT_UNSUPPORTED");
+  }
+  assertOwnedSafePath(packageRoot, home);
+  const manifestPath = join(packageRoot, "package.json");
+  const manifestStat = lstatSync(manifestPath), binaryStat = lstatSync(actual);
+  if (!manifestStat.isFile() || manifestStat.isSymbolicLink() || !binaryStat.isFile() || binaryStat.isSymbolicLink()
+      || ![0, process.getuid?.() ?? -1].includes(manifestStat.uid) || ![0, process.getuid?.() ?? -1].includes(binaryStat.uid)
+      || (manifestStat.mode & 0o022)) throw new Error("ALIAS_SOURCE_UNSAFE");
+  const pkg = readPackage(manifestPath);
+  if (!pkg.bins[name] || actual !== join(packageRoot, pkg.bins[name])) throw new Error("ALIAS_SOURCE_BIN_MISMATCH");
+  return { version: pkg.version, packageRoot, binarySha256: hash(readFileSync(actual)) };
+}
+
+export function adoptCopyfileAliases(options: { homeDir?: string; pathValue?: string; onAliasSwitched?: (path: string) => void } = {}): JsonObject {
+  const home = realpathSync(resolve(options.homeDir ?? process.env.HOME ?? ""));
+  const pathValue = options.pathValue ?? process.env.PATH ?? "";
+  const { layout, rollout } = activeAliasRuntime(home, pathValue);
+  const releaseLock = acquireRuntimeLock(layout.runtimeRoot);
+  const id = randomUUID();
+  const aliases: AliasReceipt["aliases"] = [];
+  const currentRuntime = dirname(dirname(dirname(layout.currentPackageRoot)));
+  const receiptDir = join(currentRuntime, "alias-adoptions");
+  const receiptPath = join(receiptDir, `${id}.json`);
+  let receipt: AliasReceipt | undefined;
+  try {
+    const locked = activeAliasRuntime(home, pathValue);
+    if (locked.layout.currentPackageRoot !== layout.currentPackageRoot || locked.rollout.id !== rollout.id) throw new Error("ACTIVE_RUNTIME_CHANGED_BEFORE_ALIAS_ADOPTION");
+    for (const dir of aliasDirs(home)) {
+      if (!entryExists(dir)) continue;
+      for (const [name, target] of Object.entries(layout.bin)) {
+        const path = join(dir, name);
+        if (!entryExists(path)) continue;
+        assertOwnedSafePath(dir, home, true);
+        const stat = lstatSync(path);
+        if (!stat.isSymbolicLink() || stat.uid !== (process.getuid?.() ?? -1)) throw new Error("ALIAS_LINK_NOT_OWNED");
+        const oldLinkTarget = readlinkSync(path);
+        const actual = realpathSync(path);
+        if (resolve(dirname(path), oldLinkTarget) !== actual) throw new Error("ALIAS_LINK_CHAIN_UNSUPPORTED");
+        const newTarget = join(layout.currentPackageRoot, target);
+        if (actual === newTarget) continue;
+        const source = validateAliasSource(home, name, actual);
+        const backupPath = `${path}.skills-alias-prev-${id}`;
+        if (entryExists(backupPath)) throw new Error("ALIAS_BACKUP_COLLISION");
+        aliases.push({ path, oldTarget: actual, oldLinkTarget, oldVersion: source.version, oldBinarySha256: source.binarySha256, newTarget, backupPath });
+      }
+    }
+    if (!aliases.length) return { adopted: true, version: layout.currentVersion, aliasCount: 0 };
+    mkdirSync(receiptDir, { recursive: true, mode: 0o700 });
+    const receiptDirStat = lstatSync(receiptDir);
+    if (!receiptDirStat.isDirectory() || receiptDirStat.isSymbolicLink() || (receiptDirStat.mode & 0o077)) throw new Error("ALIAS_RECEIPT_DIRECTORY_UNSAFE");
+    receipt = {
+      schema: "skills.copyfile-alias-adoption.v1", id, state: "prepared",
+      targetVersion: layout.currentVersion, targetPackageRoot: layout.currentPackageRoot, rolloutReceiptId: rollout.id,
+      aliases, switchedAliases: [], rollbackCompletedAliases: [],
+    };
+    writeJsonPrivate(receiptPath, receipt);
+    for (const item of aliases) {
+      if (readlinkSync(item.path) !== item.oldLinkTarget || realpathSync(item.path) !== item.oldTarget) throw new Error("ALIAS_CHANGED_BEFORE_SWITCH");
+      const source = validateAliasSource(home, basename(item.path), item.oldTarget);
+      if (source.version !== item.oldVersion || source.binarySha256 !== item.oldBinarySha256) throw new Error("ALIAS_SOURCE_DRIFT");
+      receipt.state = "switching";
+      receipt.switchedAliases = [...receipt.switchedAliases, item.path];
+      persistAliasReceipt(receiptPath, receipt);
+      replaceLink(item.path, item.newTarget, item.backupPath, item.oldLinkTarget);
+      if (realpathSync(item.path) !== item.newTarget || realpathSync(item.backupPath) !== item.oldTarget) throw new Error("ALIAS_SWITCH_READBACK_MISMATCH");
+      options.onAliasSwitched?.(item.path);
+    }
+    receipt.state = "switched";
+    persistAliasReceipt(receiptPath, receipt);
+    return { adopted: true, version: layout.currentVersion, receiptId: id, aliasCount: aliases.length };
+  } catch (error) {
+    if (receipt) {
+      let failed = false;
+      for (const item of [...aliases].reverse()) {
+        try {
+          if (!entryExists(item.backupPath)) {
+            const source = validateAliasSource(home, basename(item.path), item.oldTarget);
+            if (!entryExists(item.path) || readlinkSync(item.path) !== item.oldLinkTarget || realpathSync(item.path) !== item.oldTarget
+                || source.version !== item.oldVersion || source.binarySha256 !== item.oldBinarySha256) failed = true;
+            continue;
+          }
+          if (readlinkSync(item.backupPath) !== item.oldLinkTarget || realpathSync(item.backupPath) !== item.oldTarget) throw new Error("ALIAS_BACKUP_DRIFT");
+          const source = validateAliasSource(home, basename(item.path), item.oldTarget);
+          if (source.version !== item.oldVersion || source.binarySha256 !== item.oldBinarySha256) throw new Error("ALIAS_SOURCE_DRIFT");
+          if (realpathSync(item.path) === item.oldTarget && readlinkSync(item.path) === item.oldLinkTarget) continue;
+          if (realpathSync(item.path) !== item.newTarget) throw new Error("ALIAS_CHANGED_DURING_ROLLBACK");
+          const after = `${item.path}.skills-alias-after-${id}`;
+          if (entryExists(after)) throw new Error("ALIAS_AFTER_COLLISION");
+          symlinkSync(item.newTarget, after);
+          const temp = `${item.path}.skills-alias-rollback-${randomUUID()}`;
+          symlinkSync(item.oldLinkTarget, temp);
+          renameSync(temp, item.path);
+          if (readlinkSync(item.path) !== item.oldLinkTarget) throw new Error("ALIAS_ROLLBACK_READBACK_MISMATCH");
+          receipt.rollbackCompletedAliases = [...receipt.rollbackCompletedAliases, item.path];
+          persistAliasReceipt(receiptPath, receipt);
+        } catch { failed = true; }
+      }
+      receipt.state = failed ? "rollback-required" : "rolled-back";
+      try { persistAliasReceipt(receiptPath, receipt); } catch { failed = true; }
+      throw new Error(failed ? "ALIAS_ADOPTION_ROLLBACK_REQUIRED" : "ALIAS_ADOPTION_ROLLED_BACK");
+    }
+    throw error instanceof Error ? error : new Error("ALIAS_ADOPTION_FAILED");
+  } finally {
+    releaseLock();
+  }
+}
+
+export function rollbackCopyfileAliases(receiptId: string, options: { homeDir?: string; pathValue?: string } = {}): JsonObject {
+  if (!/^[0-9a-f-]{36}$/.test(receiptId)) throw new Error("ALIAS_RECEIPT_ID_INVALID");
+  const home = realpathSync(resolve(options.homeDir ?? process.env.HOME ?? ""));
+  const pathValue = options.pathValue ?? process.env.PATH ?? "";
+  const { layout, rollout } = activeAliasRuntime(home, pathValue);
+  const runtimePath = dirname(dirname(dirname(layout.currentPackageRoot)));
+  const receiptPath = join(runtimePath, "alias-adoptions", `${receiptId}.json`);
+  const releaseLock = acquireRuntimeLock(layout.runtimeRoot);
+  try {
+    const locked = activeAliasRuntime(home, pathValue);
+    if (locked.layout.currentPackageRoot !== layout.currentPackageRoot || locked.rollout.id !== rollout.id) throw new Error("ACTIVE_RUNTIME_CHANGED_BEFORE_ALIAS_ROLLBACK");
+    const receipt = object(JSON.parse(readFileSync(receiptPath, "utf8")), "ALIAS_RECEIPT_INVALID") as unknown as AliasReceipt;
+    if (receipt.schema !== "skills.copyfile-alias-adoption.v1" || receipt.id !== receiptId
+        || !["switched", "switching", "rollback-required"].includes(receipt.state)
+        || receipt.targetPackageRoot !== layout.currentPackageRoot || receipt.targetVersion !== layout.currentVersion
+        || receipt.rolloutReceiptId !== rollout.id || !Array.isArray(receipt.aliases)) throw new Error("ALIAS_RECEIPT_BINDING_INVALID");
+    const seen = new Set<string>();
+    for (const item of receipt.aliases) {
+      const name = basename(item.path), target = layout.bin[name];
+      if (!target || seen.has(item.path) || !aliasDirs(home).includes(dirname(item.path))
+          || item.newTarget !== join(layout.currentPackageRoot, target)
+          || item.backupPath !== `${item.path}.skills-alias-prev-${receiptId}`
+          || resolve(dirname(item.path), item.oldLinkTarget) !== item.oldTarget) throw new Error("ALIAS_RECEIPT_LAUNCHER_INVALID");
+      seen.add(item.path);
+      assertOwnedSafePath(dirname(item.path), home, true);
+      const source = validateAliasSource(home, name, item.oldTarget);
+      if (source.version !== item.oldVersion || source.binarySha256 !== item.oldBinarySha256) throw new Error("ALIAS_PREIMAGE_DRIFT");
+      const stat = lstatSync(item.path);
+      if (!stat.isSymbolicLink() || stat.uid !== (process.getuid?.() ?? -1)) throw new Error("ALIAS_LINK_DRIFT");
+      const current = realpathSync(item.path);
+      if (current !== item.newTarget && (current !== item.oldTarget || readlinkSync(item.path) !== item.oldLinkTarget)) throw new Error("ALIAS_TARGET_DRIFT");
+      if (entryExists(item.backupPath)) {
+        const backup = lstatSync(item.backupPath);
+        if (!backup.isSymbolicLink() || readlinkSync(item.backupPath) !== item.oldLinkTarget || realpathSync(item.backupPath) !== item.oldTarget) throw new Error("ALIAS_PREIMAGE_DRIFT");
+      } else if (current !== item.oldTarget) {
+        throw new Error("ALIAS_BACKUP_MISSING_FOR_SWITCH");
+      }
+    }
+    let restored = 0;
+    for (const item of [...receipt.aliases].reverse()) {
+      if (realpathSync(item.path) === item.oldTarget && readlinkSync(item.path) === item.oldLinkTarget) continue;
+      receipt.state = "rollback-required";
+      persistAliasReceipt(receiptPath, receipt);
+      const after = `${item.path}.skills-alias-after-${receiptId}`;
+      if (!entryExists(after)) {
+        symlinkSync(item.newTarget, after);
+        if (realpathSync(after) !== item.newTarget) throw new Error("ALIAS_AFTER_READBACK_MISMATCH");
+      } else if (realpathSync(after) !== item.newTarget) throw new Error("ALIAS_AFTER_DRIFT");
+      if (realpathSync(item.path) !== item.newTarget) throw new Error("ALIAS_TARGET_DRIFT");
+      const temp = `${item.path}.skills-alias-rollback-${randomUUID()}`;
+      symlinkSync(item.oldLinkTarget, temp);
+      renameSync(temp, item.path);
+      if (readlinkSync(item.path) !== item.oldLinkTarget || realpathSync(item.path) !== item.oldTarget) throw new Error("ALIAS_ROLLBACK_READBACK_MISMATCH");
+      receipt.rollbackCompletedAliases = [...new Set([...receipt.rollbackCompletedAliases, item.path])];
+      persistAliasReceipt(receiptPath, receipt);
+      restored++;
+    }
+    receipt.state = "rolled-back";
+    persistAliasReceipt(receiptPath, receipt);
+    return { rolledBack: true, receiptId, restoredAliasCount: restored };
+  } finally {
+    releaseLock();
+  }
 }
 
 export async function updateCopyfileRuntime(version: string, options: { homeDir?: string; pathValue?: string; registryOrigin?: string; fetcher?: typeof fetch; onLauncherSwitched?: (path: string) => void } = {}): Promise<JsonObject> {

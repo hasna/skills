@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.17
+
+### Patch Changes
+
+- Add guarded adoption and receipt-backed rollback for legacy public Skills aliases outside the active copyfile launcher set, preserving exact link and binary preimages and refusing unsafe paths.
+
 ## 0.10.16
 
 ### Patch Changes
