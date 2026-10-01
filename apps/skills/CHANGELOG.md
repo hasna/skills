@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.20
+
+### Patch Changes
+
+- Review a Codex plugin skill omitted from native `skills/list` only when its exact path is already disabled and its cache version, manifest, and installed plugin identity agree; enroll the stable qualified name without changing the existing path rule.
+- Deliver complete selected instructions through managed prompt hooks by default, including documents larger than the former 8,000-character limit; keep a character budget only when the caller explicitly requests one.
+
 ## 0.10.19
 
 ### Patch Changes

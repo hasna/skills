@@ -37,9 +37,11 @@ export async function buildSkillContext(input: SkillContextInput, options: Skill
   if (prompt.length > 128 * 1024 || (input.paths?.length ?? 0) > 100 || (input.skills?.length ?? 0) > 100) {
     throw new SkillSelectionError("CONTEXT_INPUT_TOO_LARGE", "The Skills context input exceeds its size limit.");
   }
-  const maxChars = options.maxChars ?? 8000;
+  // Native model capacity belongs to the provider. Only an explicit caller
+  // budget may omit an otherwise selected instruction body.
+  const maxChars = options.maxChars;
   const maxSkills = options.maxSkills ?? 3;
-  if (!Number.isInteger(maxChars) || maxChars < 512 || maxChars > 64_000 || !Number.isInteger(maxSkills) || maxSkills < 1 || maxSkills > 20) {
+  if ((maxChars !== undefined && (!Number.isInteger(maxChars) || maxChars < 512 || maxChars > 64_000)) || !Number.isInteger(maxSkills) || maxSkills < 1 || maxSkills > 20) {
     throw new SkillSelectionError("INVALID_CONTEXT_BUDGET", "Context limits must be 512–64000 characters and 1–20 skills.");
   }
   const profileId = input.profileId ?? "default";
@@ -90,7 +92,7 @@ export async function buildSkillContext(input: SkillContextInput, options: Skill
     const entries = await readSelectedEntries(selection, resolved, resolverOptions);
     const { content } = readSelectedDocument(entries);
     const section = `Skill ${selection.slug}@${selection.version} (${selection.bundleDigest}; ${reason})\n${content}`;
-    if (chars + section.length + (sections.length ? 2 : 0) > maxChars) {
+    if (maxChars !== undefined && chars + section.length + (sections.length ? 2 : 0) > maxChars) {
       omitted.push({ slug: selection.slug, version: selection.version, reason: "context-budget", loadCommand });
       continue;
     }

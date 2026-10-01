@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import type { CodexHookRpc } from "./codex-hook-rpc.js";
-import { captureCodexNativeSkillCatalog, isCodexNativeSkillDisabled, projectCodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
+import { captureCodexNativeSkillCatalog, isCodexNativeSkillDisabled, projectCodexInstalledPlugins, projectCodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
 
 useDefaultTestTimeout();
 
@@ -9,6 +9,7 @@ const cwd = "/synthetic/project";
 const vendor = { name: "vendor:deploy", path: "/synthetic/cache/vendor/3.0.0/skills/deploy/SKILL.md", enabled: false, pluginId: "vendor@probe" };
 const bridge = { name: "skills-cli", path: "/synthetic/skills-cli/SKILL.md", enabled: true, pluginId: null };
 const response = (skills: unknown[] = [vendor, bridge]) => ({ data: [{ cwd, skills, errors: [] }] });
+const installed = { marketplaces: [{ name: "probe", plugins: [{ id: "vendor@probe", name: "vendor", installed: true, enabled: true, localVersion: "3.0.0" }] }], marketplaceLoadErrors: [] };
 
 test("native projection preserves qualified identities and enabled states but omits opaque fields", () => {
   const raw = response([{ ...vendor, description: "untrusted diagnostic", interface: { iconLargeUrl: "untrusted" } }, bridge]);
@@ -31,16 +32,25 @@ test("native projection refuses incomplete, wrong-population, malformed, or unbo
   }
 });
 
+test("installed plugin projection binds only complete exact local plugin identities", () => {
+  expect(projectCodexInstalledPlugins(installed)).toEqual([{ id: "vendor@probe", name: "vendor", installed: true, enabled: true, localVersion: "3.0.0" }]);
+  for (const value of [null, {}, { ...installed, marketplaceLoadErrors: [{}] },
+    { marketplaces: [{ name: "probe", plugins: [{ ...installed.marketplaces[0]!.plugins[0]!, id: "other@probe" }] }], marketplaceLoadErrors: [] },
+    { marketplaces: [{ name: "probe", plugins: [{ ...installed.marketplaces[0]!.plugins[0]!, enabled: "true" }] }], marketplaceLoadErrors: [] }]) {
+    expect(() => projectCodexInstalledPlugins(value)).toThrow("CODEX_NATIVE_SKILL_CATALOG_INVALID");
+  }
+});
+
 test("native capture sends only the bounded read request and releases its child", async () => {
   const calls: Array<[string, unknown]> = [];
   let closed = 0;
-  const rpc: CodexHookRpc = { version: "codex-cli 0.159.2", request: async (method, params) => { calls.push([method, params]); return response(); }, close: async () => { closed++; } };
+  const rpc: CodexHookRpc = { version: "codex-cli 0.159.2", request: async (method, params) => { calls.push([method, params]); return method === "skills/list" ? response() : installed; }, close: async () => { closed++; } };
   const options = { command: "codex", home: "/synthetic/home", cwd, timeoutMs: 3000 };
   let connected: unknown;
   const result = await captureCodexNativeSkillCatalog(options, async value => { connected = value; return rpc; });
   expect(connected).toEqual({ command: "codex", home: "/synthetic/home", timeoutMs: 3000 });
-  expect(calls).toEqual([["skills/list", { cwds: [cwd], forceReload: true }]]);
-  expect(result).toEqual({ version: "codex-cli 0.159.2", cwd, skills: [vendor, bridge] });
+  expect(calls).toEqual([["skills/list", { cwds: [cwd], forceReload: true }], ["plugin/installed", { cwds: [cwd] }]]);
+  expect(result).toEqual({ version: "codex-cli 0.159.2", cwd, skills: [vendor, bridge], plugins: [{ id: "vendor@probe", name: "vendor", installed: true, enabled: true, localVersion: "3.0.0" }] });
   expect(closed).toBe(1);
 });
 
@@ -50,7 +60,7 @@ test("native capture closes on refused requests, validation failures, and unsupp
     const rpc: CodexHookRpc = { version: mode === "version" ? "codex-cli 0.999.0" : mode === "unmeasuredVersion" ? "codex-cli 0.159.0" : "codex-cli 0.159.2", request: async () => { requested++; if (mode === "request") throw new Error("NATIVE_RPC_REFUSED"); return null; }, close: async () => { closed++; } };
     await expect(captureCodexNativeSkillCatalog({ command: "codex", home: "/synthetic/home", cwd }, async () => rpc)).rejects.toThrow();
     expect(closed).toBe(1);
-    expect(requested).toBe(mode === "version" || mode === "unmeasuredVersion" ? 0 : 1);
+    expect(requested).toBe(mode === "version" || mode === "unmeasuredVersion" ? 0 : mode === "request" ? 1 : 2);
   }
 });
 

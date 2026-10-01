@@ -95,7 +95,7 @@ export function registerContextCommands(parent: Command): void {
     .option("--auto-reconcile-safe", "For managed hooks, archive and renew an expired session only when all loaded selections are unchanged", false)
     .option("--session <id>", "Keep the same skill versions across this session")
     .option("--restore", "Re-emit loaded session context after compaction or resume", false)
-    .option("--max-chars <count>", "Maximum injected characters", "8000")
+    .option("--max-chars <count>", "Optional maximum injected characters")
     .option("--max-skills <count>", "Maximum loaded skills", "3")
     .option("--json", "Return context and selection receipts as JSON", false)
     .action(async (prompt: string | undefined, options: ContextCommandOptions) => {
@@ -106,7 +106,7 @@ export function registerContextCommands(parent: Command): void {
         input.cwd ??= process.cwd();
         input.sessionId = options.session ?? input.sessionId;
         input.restore ||= options.restore;
-        const resolverOptions = { ...contextResolverOptions(options), maxChars: Number(options.maxChars), maxSkills: Number(options.maxSkills) };
+        const resolverOptions = { ...contextResolverOptions(options), ...(options.maxChars === undefined ? {} : { maxChars: Number(options.maxChars) }), maxSkills: Number(options.maxSkills) };
         let result;
         try { result = await buildSkillContext(input, resolverOptions); }
         catch (error) {

@@ -14,11 +14,23 @@ export interface CodexNativeSkillCatalog {
   version: string;
   cwd: string;
   skills: CodexNativeSkill[];
+  /** Added in 0.10.20; older reviewed skills/list receipts remain valid for listed skills. */
+  plugins?: CodexInstalledPlugin[];
+}
+
+/** Safe installed-plugin identity needed when Codex hides a path-disabled skill. */
+export interface CodexInstalledPlugin {
+  id: string;
+  name: string;
+  installed: boolean;
+  enabled: boolean;
+  localVersion: string | null;
 }
 
 const MAX_SKILLS = 4096;
 const MAX_NAME_BYTES = 1024;
 const MAX_PATH_BYTES = 16384;
+const MAX_PLUGIN_ID_BYTES = 1024;
 const SUPPORTED_NAME_CONTROL_VERSIONS = new Set(["codex-cli 0.159.2"]);
 function refuse(): never { throw new Error("CODEX_NATIVE_SKILL_CATALOG_INVALID"); }
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -45,6 +57,40 @@ export function projectCodexNativeSkillCatalog(response: unknown, cwd: string): 
   });
 }
 
+/** Project only the installed plugin identity needed to bind cache inventory.
+ * Marketplace errors fail closed because an incomplete inventory cannot prove
+ * that an absent skill belongs to the one measured installed plugin. */
+export function projectCodexInstalledPlugins(response: unknown): CodexInstalledPlugin[] {
+  if (!object(response) || !Array.isArray(response.marketplaces) || !Array.isArray(response.marketplaceLoadErrors)
+    || response.marketplaceLoadErrors.length !== 0 || response.marketplaces.length > MAX_SKILLS) refuse();
+  const plugins: unknown[] = [];
+  for (const marketplace of response.marketplaces) {
+    if (!object(marketplace) || !scalar(marketplace.name, MAX_NAME_BYTES) || !Array.isArray(marketplace.plugins)
+      || marketplace.plugins.length > MAX_SKILLS) refuse();
+    for (const value of marketplace.plugins) {
+      if (!object(value) || !scalar(value.id, MAX_PLUGIN_ID_BYTES) || !scalar(value.name, MAX_NAME_BYTES)
+        || value.id !== `${value.name}@${marketplace.name}`) refuse();
+      plugins.push({ ...value, marketplace: marketplace.name });
+    }
+  }
+  return projectCodexInstalledPluginEntries(plugins);
+}
+
+/** Validate the bounded stored projection when it is consumed by a review. */
+export function projectCodexInstalledPluginEntries(value: unknown): CodexInstalledPlugin[] {
+  if (!Array.isArray(value) || value.length > MAX_SKILLS) refuse();
+  const ids = new Set<string>();
+  return value.map((item: unknown) => {
+    if (!object(item) || !scalar(item.id, MAX_PLUGIN_ID_BYTES) || !scalar(item.name, MAX_NAME_BYTES)
+      || typeof item.installed !== "boolean" || typeof item.enabled !== "boolean"
+      || (item.localVersion !== null && !scalar(item.localVersion, MAX_NAME_BYTES))) refuse();
+    const at = item.id.lastIndexOf("@");
+    if (at < 1 || item.id.slice(0, at) !== item.name || at === item.id.length - 1 || ids.has(item.id)) refuse();
+    ids.add(item.id);
+    return { id: item.id, name: item.name, installed: item.installed, enabled: item.enabled, localVersion: item.localVersion ?? null };
+  });
+}
+
 /** Read one consumer's catalog through an owned, bounded native client. The RPC
  * transport owns request deadlines and child shutdown. Native discovery can
  * maintain its own caches; callers must constrain writes when requiring isolation. */
@@ -59,7 +105,9 @@ export async function captureCodexNativeSkillCatalog(
   try {
     if (!SUPPORTED_NAME_CONTROL_VERSIONS.has(rpc.version)) throw new Error("CODEX_NATIVE_SKILL_CATALOG_UNSUPPORTED_VERSION");
     const response: unknown = await rpc.request("skills/list", { cwds: [options.cwd], forceReload: true });
-    return { version: rpc.version, cwd: options.cwd, skills: projectCodexNativeSkillCatalog(response, options.cwd) };
+    const installed: unknown = await rpc.request("plugin/installed", { cwds: [options.cwd] });
+    return { version: rpc.version, cwd: options.cwd, skills: projectCodexNativeSkillCatalog(response, options.cwd),
+      plugins: projectCodexInstalledPlugins(installed) };
   } finally {
     await rpc.close();
   }
