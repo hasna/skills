@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.19
+
+### Patch Changes
+
+- Capture Codex 0.159.2 native skill identities through the package-owned CLI into an exclusive private catalog file for reviewed, update-safe hook enrollment.
+
 ## 0.10.18
 
 ### Patch Changes
