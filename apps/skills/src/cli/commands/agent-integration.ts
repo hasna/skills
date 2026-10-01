@@ -1,6 +1,8 @@
 import { writeCliOutput } from "../output.js";
 import type { Command } from "commander";
-import { readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import { isAbsolute } from "node:path";
 import { type ReviewedDiscoveryInputs } from "../../lib/agent-discovery.js";
 import { normalizeHermesHookInput, assertHermesTool } from "../../lib/agent-hermes.js";
@@ -13,6 +15,7 @@ import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib
 import { captureClaudeSettingsV2, captureClaudeSettingsV3 } from "../../lib/claude-settings-witness.js";
 import { captureCodexSettings } from "../../lib/codex-settings-witness.js";
 import { captureClaudeMarketplaceRegistryV2 } from "../../lib/claude-marketplace-registry.js";
+import { captureCodexNativeSkillCatalog } from "../../lib/codex-native-skill-catalog.js";
 
 const RECOVERABLE_CONTEXT_CACHE_ERRORS = new Set(["CACHED_PROFILE_EXPIRED", "CACHED_PROFILE_MISSING", "CACHED_BUNDLE_MISSING"]);
 
@@ -75,6 +78,40 @@ function agents(value: string): IntegrationAgent[] {
 
 export function registerAgentIntegration(parent: Command): void {
   const hook = parent.command("hook").description("Load selected Skills context through agent lifecycle hooks");
+  hook.command("native-catalog")
+    .requiredOption("--cwd <path>", "Absolute project directory observed by native Codex skills/list")
+    .requiredOption("--output <file>", "New private file for the projected native catalog")
+    .option("--codex-command <path>", "Installed Codex executable used by the native client", "codex")
+    .option("--json", "Output bounded capture metadata as JSON", false)
+    .description("Capture a reviewed Codex native skill catalog for exact hook enrollment")
+    .action(async (options: { cwd: string; output: string; codexCommand: string; json: boolean }) => {
+      try {
+        if (!isAbsolute(options.cwd) || !isAbsolute(options.output)) throw new Error("CODEX_NATIVE_SKILL_CATALOG_ABSOLUTE_PATH_REQUIRED");
+        if (existsSync(options.output)) throw new Error("CODEX_NATIVE_SKILL_CATALOG_OUTPUT_EXISTS");
+        const catalog = await captureCodexNativeSkillCatalog({
+          command: options.codexCommand, home: homedir(),
+          ...(process.env.CODEX_HOME === undefined ? {} : { codexHome: process.env.CODEX_HOME }),
+          cwd: options.cwd,
+        });
+        const bytes = JSON.stringify(catalog, null, 2) + "\n";
+        try { writeFileSync(options.output, bytes, { flag: "wx", mode: 0o600 }); }
+        catch (error) {
+          if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw new Error("CODEX_NATIVE_SKILL_CATALOG_OUTPUT_EXISTS");
+          throw error;
+        }
+        const written = lstatSync(options.output);
+        if (!written.isFile() || written.isSymbolicLink() || (written.mode & 0o077) !== 0
+          || readFileSync(options.output, "utf8") !== bytes) throw new Error("CODEX_NATIVE_SKILL_CATALOG_READBACK_FAILED");
+        const receipt = { version: catalog.version, cwd: catalog.cwd, skillCount: catalog.skills.length,
+          output: options.output, bytes: Buffer.byteLength(bytes), sha256: createHash("sha256").update(bytes).digest("hex") };
+        await writeCliOutput(options.json ? JSON.stringify(receipt) : `Captured ${receipt.skillCount} native Codex skill(s) in ${receipt.output}.`);
+      } catch (error) {
+        const message = error instanceof Error && /^[A-Z][A-Z0-9_]{2,120}$/.test(error.message)
+          ? error.message : "CODEX_NATIVE_SKILL_CATALOG_CAPTURE_FAILED";
+        console.error(message);
+        process.exitCode = 1;
+      }
+    });
   hook.command("witness")
     .requiredOption("--kind <kind>", "claude-settings-v3, claude-settings-v2, codex-settings-v1 or claude-marketplace-registry-v2")
     .requiredOption("--path <path>", "Canonical absolute path to the reviewed settings or registry file")

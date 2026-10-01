@@ -466,8 +466,18 @@ preserves and reads back the original policy before writing. Claude upgrades to
 verbosity preferences. Provider mappings, environment, hooks, plugins, skill rules
 and all unknown settings stay bound. Runtime hooks never silently upgrade a witness.
 
-A reviewed Codex 0.159.2 native `skills/list` receipt can be passed to `hook install`
-with `--codex-native-catalog <file>`. Its safe shape is `{version,cwd,skills}`;
+A Codex 0.159.2 native `skills/list` receipt can be captured through the
+package-owned client into a new private file, then reviewed and passed to
+`hook install` with `--codex-native-catalog <file>`:
+
+```bash
+skills hook native-catalog --cwd /absolute/project --output /private/catalog.json --json
+skills hook install --agent codex --codex-native-catalog /private/catalog.json --json
+```
+
+The capture refuses an existing output file, writes mode `0600`, verifies the
+exact bytes, and reports only version, directory, count, file path and SHA-256.
+Its safe catalog shape is `{version,cwd,skills}`;
 each skill has `{name,path,enabled,pluginId}`. The installer matches the native
 qualified name against a bounded explicit frontmatter name and owning plugin
 manifest. It preserves path disables and adds exact qualified name disables.
@@ -480,8 +490,9 @@ Only manifest version metadata may vary. Reviewed app declarations use the impli
 file and its presence stay bound; it preserves existing connector availability and
 native capability hints. Changed or unknown app fields, custom references, native
 hooks, commands and MCP controls refuse. Name controls suppress Skills, not every
-plugin capability. No prompt hook starts an app server to obtain this receipt: native
-startup can maintain caches. Capture it through an authorized isolated consumer.
+plugin capability. No prompt hook starts an app server to obtain this receipt:
+native startup can maintain caches. The explicit capture starts and closes only its
+own bounded native client; it does not reload an existing agent session.
 Neither a receipt nor a config write proves an existing session adopted new rules;
 use the actual native session's supported acceptance path separately.
 
