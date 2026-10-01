@@ -139,6 +139,36 @@ test("built CLI flushes a complete large skill document through a pipe", async (
   } finally { await f.close(); }
 });
 
+test("configured prompt hook delivers both selected bodies when one exceeds the old default character budget", async () => {
+  const f = await fixture();
+  try {
+    const slug = "synthetic-ios", version = "0.2.0", source = join(f.root, slug);
+    const skillMd = `---\nname: ${slug}\ndescription: Synthetic iOS guidance\nkind: instruction\n---\n${"Synthetic iOS instruction line.\n".repeat(600)}`;
+    expect(skillMd.length).toBeGreaterThan(16_000);
+    put(join(source, "SKILL.md"), skillMd);
+    put(join(source, "package.json"), JSON.stringify({ name: slug, version, skills: { kind: "instruction" } }));
+    const bundle = packSkillBundle(source);
+    await f.store.publishSkill({ principal: f.principal, slug, displayName: "Synthetic iOS", description: "Large context fixture", category: "Development Tools", tags: [], source: "custom", kind: "instruction", version, skillMd, bundle: { sha256: bundle.sha256, byteSize: bundle.bytes.length, contentType: "application/gzip", storageKind: "db", bytes: bundle.bytes } });
+    const profile = join(f.root, "two-selected-large-profile.json");
+    put(profile, JSON.stringify({ selections: [f.versions[0]!.selection, { slug, version, bundleDigest: `sha256:${bundle.sha256}`, triggers: { keywords: ["ios"] } }] }));
+    await f.a.install();
+    await f.a.ok(["profiles", "set", "engineering", "--file", profile, "--json"]);
+    await f.a.ok(["sync", "--selection-profile", "engineering", "--json"]);
+    const hook = await f.a.hook("claude", "UserPromptSubmit", { prompt: "review ios" });
+    const context = hook.hookSpecificOutput.additionalContext as string;
+    expect(context).toContain(f.versions[0]!.skillMd);
+    expect(context).toContain(skillMd);
+    expect(context).not.toContain("Additional selected skill");
+    const receipt = await f.a.ok(["context", "--stdin", "--cached", "--json"], { stdin: { session_id: "fresh-large-context", prompt: "review ios" } });
+    expect(receipt.selections.map((selection: any) => selection.slug).sort()).toEqual(["review-code", slug].sort());
+    expect(receipt.omitted).toEqual([]);
+    expect(receipt.context).toContain(skillMd);
+    const capped = await f.a.ok(["context", "--stdin", "--cached", "--max-chars", "8000", "--json"], { stdin: { session_id: "fresh-explicit-budget", prompt: "review ios" } });
+    expect(capped.context).not.toContain(skillMd);
+    expect(capped.omitted).toContainEqual(expect.objectContaining({ slug, version, reason: "context-budget" }));
+  } finally { await f.close(); }
+});
+
 test("built CLI flushes large profile, sync and station receipts through pipes", async () => {
   const f = await fixture();
   try {
@@ -487,12 +517,13 @@ test("built Gemini hook selects the user's request after its native SessionStart
     // Arbitrary hook context still participates in keyword selection; it is not erased.
     const arbitrary = await invoke(`<hook_context>skills skill authoring workspace</hook_context>\n\n${user.replace("backup-verify", "backup verify")}`);
     expect(arbitrary.hookSpecificOutput.additionalContext).toContain("name: skills-author");
-    expect(arbitrary.hookSpecificOutput.additionalContext).not.toContain("name: backup-verify");
+    expect(arbitrary.hookSpecificOutput.additionalContext).toContain("name: backup-verify");
+    expect(arbitrary.hookSpecificOutput.additionalContext.indexOf("Skill skills-author@")).toBeLessThan(arbitrary.hookSpecificOutput.additionalContext.indexOf("Skill backup-verify@"));
     // A complete name takes priority even when other context matches more keywords.
     const named = await invoke(`<hook_context>skills skill authoring workspace</hook_context>\n\n${user}`);
     expect(named.hookSpecificOutput.additionalContext).toContain("name: backup-verify");
-    expect(named.hookSpecificOutput.additionalContext).not.toContain("name: skills-author");
-    expect(named.hookSpecificOutput.additionalContext).toContain("skills load skills-author@1.0.0");
+    expect(named.hookSpecificOutput.additionalContext).toContain("name: skills-author");
+    expect(named.hookSpecificOutput.additionalContext.indexOf("Skill backup-verify@")).toBeLessThan(named.hookSpecificOutput.additionalContext.indexOf("Skill skills-author@"));
     expect(f.requests).toHaveLength(requestsBefore);
   } finally { await f.close(); }
 });
@@ -795,7 +826,7 @@ test("installed Codex prompt continues after reviewed Pages app and qualified sk
   const app='{"apps":{"pages":{"id":"synthetic_pages_connector","required":true}}}';
   const add=(version:string,skills=names)=>{const root=join(parent,version);put(join(root,".codex-plugin/plugin.json"),JSON.stringify({name:"pages",version,apps:"./.app.json"}));put(join(root,".app.json"),app);for(const name of skills)put(join(root,"skills",name,"SKILL.md"),`---\nname: ${name}\ndescription: Synthetic native fixture\n---\nUNMANAGED_NATIVE_PAYLOAD\n`);return root;};
   const original=add("1.0.0"), file=join(f.root,"native-review.json");
-  put(file,JSON.stringify({version:"codex-cli 0.159.2",cwd:f.a.project,skills:names.map(name=>({name:`pages:${name}`,path:join(original,"skills",name,"SKILL.md"),enabled:true,pluginId:"pages@probe"}))}));
+  put(file,JSON.stringify({version:"codex-cli 0.159.2",cwd:f.a.project,skills:names.map(name=>({name:`pages:${name}`,path:join(original,"skills",name,"SKILL.md"),enabled:true,pluginId:"pages@probe"})),plugins:[{id:"pages@probe",name:"pages",installed:true,enabled:true,localVersion:"1.0.0"}]}));
   const receipt=await f.a.ok(["hook","install","--agent","codex","--codex-native-catalog",file,"--apply","--json"]);
   expect(receipt.codexPluginSkills).toHaveLength(4);expect(receipt.codexPluginSkills[0].name).toBe("pages:maintain-space");expect(receipt.codexPluginSkills[0].appSha256).toMatch(/^[a-f0-9]{64}$/);expect(receipt.codexPluginSkillReview.version).toBe("codex-cli 0.159.2");
   for (const version of ["3.0.0","4.0.0"]) {

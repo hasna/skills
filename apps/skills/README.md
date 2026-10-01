@@ -466,7 +466,7 @@ preserves and reads back the original policy before writing. Claude upgrades to
 verbosity preferences. Provider mappings, environment, hooks, plugins, skill rules
 and all unknown settings stay bound. Runtime hooks never silently upgrade a witness.
 
-A Codex 0.159.2 native `skills/list` receipt can be captured through the
+A Codex 0.159.2 native skill and installed-plugin receipt can be captured through the
 package-owned client into a new private file, then reviewed and passed to
 `hook install` with `--codex-native-catalog <file>`:
 
@@ -477,10 +477,15 @@ skills hook install --agent codex --codex-native-catalog /private/catalog.json -
 
 The capture refuses an existing output file, writes mode `0600`, verifies the
 exact bytes, and reports only version, directory, count, file path and SHA-256.
-Its safe catalog shape is `{version,cwd,skills}`;
-each skill has `{name,path,enabled,pluginId}`. The installer matches the native
-qualified name against a bounded explicit frontmatter name and owning plugin
-manifest. It preserves path disables and adds exact qualified name disables.
+Its safe catalog shape is `{version,cwd,skills,plugins}`; skills have
+`{name,path,enabled,pluginId}` and plugins have
+`{id,name,installed,enabled,localVersion}`. Older reviewed catalogs without
+`plugins` remain valid for skills present in `skills/list`. The installer matches the native
+qualified name against bounded frontmatter and the owning plugin manifest.
+If Codex omits a skill from `skills/list` because its exact path is already
+disabled, the installer derives that identity only when the exact installed
+and enabled plugin row matches the cache marketplace, manifest name and
+local version. It preserves path disables and adds exact qualified name disables.
 Known skill identities remain disabled across versioned plugin cache relocation,
 even when their disabled bodies change. Unknown names, conflicting enables,
 changed plugin controls, native hooks and unsupported name syntax still refuse.

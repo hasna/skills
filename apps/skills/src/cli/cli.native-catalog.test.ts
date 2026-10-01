@@ -34,7 +34,8 @@ if (process.argv[2] === "--version") { console.log("codex-cli ${version}"); proc
 for await (const line of createInterface({ input: process.stdin })) {
   const request = JSON.parse(line);
   if (request.method === "initialize") console.log(JSON.stringify({ id: request.id, result: { userAgent: "skills-native-hook-enrollment/${version} synthetic" } }));
-  if (request.method === "skills/list") console.log(JSON.stringify({ id: request.id, result: { data: [{ cwd: request.params.cwds[0], errors: [], skills: [{ name: "example:review", path: ${JSON.stringify(document)}, enabled: true, pluginId: "example" }] }] } }));
+  if (request.method === "skills/list") console.log(JSON.stringify({ id: request.id, result: { data: [{ cwd: request.params.cwds[0], errors: [], skills: [{ name: "example:review", path: ${JSON.stringify(document)}, enabled: true, pluginId: "example@probe" }] }] } }));
+  if (request.method === "plugin/installed") console.log(JSON.stringify({ id: request.id, result: { marketplaces: [{ name: "probe", plugins: [{ id: "example@probe", name: "example", installed: true, enabled: true, localVersion: "1.0.0" }] }], marketplaceLoadErrors: [] } }));
 }
 `, { mode: 0o700 });
   chmodSync(command, 0o700);
@@ -52,7 +53,8 @@ test("built CLI captures only projected native catalog into a new private file a
     bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") });
   expect(statSync(output).mode & 0o777).toBe(0o600);
   expect(JSON.parse(bytes.toString())).toEqual({ version: "codex-cli 0.159.2", cwd: root,
-    skills: [{ name: "example:review", path: document, enabled: true, pluginId: "example" }] });
+    skills: [{ name: "example:review", path: document, enabled: true, pluginId: "example@probe" }],
+    plugins: [{ id: "example@probe", name: "example", installed: true, enabled: true, localVersion: "1.0.0" }] });
 });
 
 test("built CLI refuses an existing catalog without replacing its bytes", async () => {

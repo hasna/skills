@@ -1,10 +1,11 @@
 /** Reviewed native identity continuity; never starts a native consumer. */
 import { hashNativeJsonControls } from "./claude-settings-witness.js";
-import { dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
-import { isCodexNativeSkillDisabled, projectCodexNativeSkillCatalog, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
+import { isCodexNativeSkillDisabled, projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
 export interface CodexPluginSkillControl { name:string; pluginId:string; namespace:string; pluginParent:string; manifestSha256:string; appSha256?:string }
 const identifier = (v:unknown):v is string => typeof v === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(v);
+const CODEX_DEFAULT_AGENT_PLUGIN_VERSION = "1.0.0";
 function refuse():never { throw new Error("CODEX_NATIVE_SKILL_IDENTITY_UNSUPPORTED: review native plugin names and hook controls"); }
 type Read = (path:string) => string;
 function appControls(path:string, read:Read):string {
@@ -28,6 +29,10 @@ function rootControls(root:string, read:Read): { namespace:string; manifestSha25
   let manifest:any, manifestSha256:string;
   try { const text=read(manifestPath); manifestSha256=hashNativeJsonControls(text,"version"); manifest=JSON.parse(text); } catch { refuse(); }
   if (!manifest || typeof manifest!=="object" || Array.isArray(manifest) || !identifier(manifest.name)) refuse();
+  const cacheVersion=basename(root), declaredVersion=manifest.version === undefined ? "" : typeof manifest.version === "string" ? manifest.version.trim() : null;
+  // Codex 0.159.2 treats a missing/blank Agent Plugin version as 1.0.0;
+  // any declared version must agree with the exact installed cache directory.
+  if (declaredVersion === null || (declaredVersion ? declaredVersion !== cacheVersion : cacheVersion !== CODEX_DEFAULT_AGENT_PLUGIN_VERSION)) refuse();
   // Exact name controls suppress Skills bodies, not other capabilities.
   // Reviewed app declarations preserve connector availability and native hints;
   // their entire content and presence stay bound across cache versions.
@@ -85,17 +90,41 @@ export function reviewedCodexPluginCapabilitiesUnchanged(cache:string, controls:
     return true;
   } catch { return false; }
 }
-export function reviewCodexPluginSkillControls(catalog:CodexNativeSkillCatalog, documents:string[], cache:string, cwd:string, read:Read):CodexPluginSkillControl[] {
+export function reviewCodexPluginSkillControls(catalog:CodexNativeSkillCatalog, documents:string[], cache:string, cwd:string, read:Read, rules:unknown):CodexPluginSkillControl[] {
   if (catalog?.version!=="codex-cli 0.159.2" || catalog.cwd!==cwd) refuse();
   const skills=projectCodexNativeSkillCatalog({data:[{cwd,errors:[],skills:catalog.skills}]},cwd);
   const allowed=new Set(documents), result:CodexPluginSkillControl[]=[];
-  for (const skill of skills) {
-    if (!allowed.has(skill.path) || !skill.path.startsWith(cache+sep)) continue;
-    if (skills.filter(other=>other.name===skill.name).length!==1) refuse();
-    if (!skill.pluginId || skill.name==="skills-cli" || skill.name.endsWith(":skills-cli")) refuse();
-    const parsed=identity(skill.path,cache,read);
-    if (parsed.name!==skill.name) refuse();
-    result.push({...parsed,pluginId:skill.pluginId});
+  let installedPlugins:ReturnType<typeof projectCodexInstalledPluginEntries>;
+  try { installedPlugins=projectCodexInstalledPluginEntries(catalog.plugins ?? []); } catch { refuse(); }
+  // Legacy 0.10.19 receipts contained only skills/list. They can review listed
+  // entries, but never establish the identity of a skill omitted from that list.
+  const candidates=catalog.plugins === undefined ? skills.map(skill=>skill.path).filter(path=>allowed.has(path)) : allowed;
+  for (const document of candidates) {
+    if (!document.startsWith(cache+sep)) continue;
+    const parsed=identity(document,cache,read);
+    if (parsed.name==="skills-cli" || parsed.name.endsWith(":skills-cli")) refuse();
+    const cacheParts=relative(cache,parsed.pluginParent).split(sep);
+    if (cacheParts.length!==2 || cacheParts.some(part=>!identifier(part))) refuse();
+    const [marketplace,pluginName]=cacheParts;
+    if (pluginName!==parsed.namespace) refuse();
+    const expectedPluginId=`${pluginName}@${marketplace}`;
+    const listed=skills.filter(skill=>skill.path===document);
+    if (listed.length>1) refuse();
+    if (listed.length===1) {
+      if (listed[0]!.name!==parsed.name || listed[0]!.pluginId!==expectedPluginId) refuse();
+    } else {
+      const installed=installedPlugins.filter(plugin=>plugin.id===expectedPluginId && plugin.name===pluginName);
+      if (installed.length!==1 || !installed[0]!.installed || !installed[0]!.enabled || !installed[0]!.localVersion) refuse();
+      // Cache versions can coexist. An omitted skill is reviewable only at the
+      // exact installed version; historical materializations are ignored.
+      if (installed[0]!.localVersion!==basename(dirname(dirname(dirname(document))))) continue;
+      // Codex omits a path-disabled skill from skills/list. Its absence is
+      // reviewable only when the exact current path is explicitly denied and
+      // that rule set still evaluates the derived qualified name as disabled.
+      const exactPathDeny=Array.isArray(rules) && rules.some((rule:any)=>rule?.path===document && rule?.enabled===false);
+      if (!exactPathDeny || !isCodexNativeSkillDisabled({name:parsed.name,path:document,pluginId:expectedPluginId,enabled:true},rules)) refuse();
+    }
+    result.push({...parsed,pluginId:expectedPluginId});
   }
   if (!result.length || new Set(result.map(item=>item.name)).size!==result.length) refuse();
   return result;
