@@ -431,6 +431,12 @@ directory within your home, add `--allow-root-aliases` to hook installation and
 native migration. The plan records and rechecks the exact link and target;
 links inside skill contents or configuration files remain refused.
 
+On macOS, the OS-owned `/var`, `/tmp` and `/etc` aliases into `/private` are
+accepted only while their exact targets and protected parent directories verify.
+The protection check refuses extended ACLs and unavailable native ACL inspection.
+Inventory reports canonical paths and deduplicates their alias spellings. This
+does not permit other root-owned links or user-controlled ancestor links.
+
 Cooperating installers can use the root package's
 `planClaudeStopHookUpdate({ expectedSettingsSha256, replacement })`, then
 `applyAgentIntegration(plan)`, to write an explicitly authorized Claude settings

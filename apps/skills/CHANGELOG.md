@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Accept verified macOS system-root aliases in native skill inventory and migration while rejecting writable or ACL-replaceable roots, unsafe links, and changed identities.
+
 ## 0.10.22
 
 - Release the reviewed Codex compatibility and witness updates with canonical package file modes; 0.10.21 was not published after its archive linkage check refused the author pack.
