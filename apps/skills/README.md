@@ -2246,3 +2246,9 @@ assertPortableAuthoringPath(destination, { homeDir: accountHome });
 ```
 
 `homeDir` defaults to the current account home. Missing destination descendants are supported. The check reads configuration without loading plugins, fetching skills, or creating directories; it throws on refusal. It is a pre-write check, not a reservation against concurrent configuration or symlink changes. Call it again immediately before each later write. Native inventory and migration remain available for preserving existing copies.
+
+Remote Codex plugins can report no installed release version. Fresh discovery can
+review a cached skill only when its native installed/enabled plugin ID matches
+Codex's local remote install receipt, its manifest and capability controls are
+bound, and its exact path is already effectively disabled. This reviews a denied
+materialization; it does not infer the installed version or enable cached skills.

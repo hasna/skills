@@ -23,9 +23,10 @@ export function assertAgentPolicyCollections(policy: Record<string, any>): void 
     requireBound(object(alias)); for (const key of ["agent", "home", "alias", "target", "link", "aliasIdentity", "targetIdentity"]) text(alias[key]);
   }
   if (bridge.codexPluginSkills !== undefined) for (const control of array(bridge.codexPluginSkills, 4096)) {
-    requireBound(object(control) && Object.keys(control).every(key=>["name","pluginId","namespace","pluginParent","manifestSha256","appSha256"].includes(key)));
+    requireBound(object(control) && Object.keys(control).every(key=>["name","pluginId","namespace","pluginParent","manifestSha256","appSha256","remotePluginId"].includes(key)));
     text(control.name,129); text(control.pluginId,1024); text(control.namespace,64); text(control.pluginParent);
     requireBound(isAbsolute(control.pluginParent) && resolve(control.pluginParent) === control.pluginParent && /^[a-f0-9]{64}$/.test(control.manifestSha256));
+    if (control.remotePluginId !== undefined) requireBound(typeof control.remotePluginId === "string" && /^[A-Za-z0-9_~-]{1,1024}$/.test(control.remotePluginId));
     if (control.appSha256 !== undefined) requireBound(typeof control.appSha256 === "string" && /^[a-f0-9]{64}$/.test(control.appSha256));
   }
   if (bridge.disabledBuiltins !== undefined) for (const builtin of array(bridge.disabledBuiltins, AGENT_POLICY_LIMITS.builtinNames)) { requireBound(object(builtin)); text(builtin.path); text(builtin.hash, 64); }
