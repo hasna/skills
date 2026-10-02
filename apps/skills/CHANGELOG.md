@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.10.21
+## 0.10.22
+
+- Release the reviewed Codex compatibility and witness updates with canonical package file modes; 0.10.21 was not published after its archive linkage check refused the author pack.
+
+## 0.10.21 (not published)
 
 - Review already disabled remote plugin skills with missing native installed versions using the exact native remote ID and Codex install receipt; retain refusal for unsafe or ambiguous materializations.
 
