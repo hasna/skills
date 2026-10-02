@@ -41,26 +41,26 @@ test("installed plugin projection binds only complete exact local plugin identit
   }
 });
 
-test("native capture sends only the bounded read request and releases its child", async () => {
+for (const nativeVersion of ["codex-cli 0.159.2", "codex-cli 0.160.0"]) test(`native ${nativeVersion} capture sends only bounded reads and releases its child`, async () => {
   const calls: Array<[string, unknown]> = [];
   let closed = 0;
-  const rpc: CodexHookRpc = { version: "codex-cli 0.159.2", request: async (method, params) => { calls.push([method, params]); return method === "skills/list" ? response() : installed; }, close: async () => { closed++; } };
+  const rpc: CodexHookRpc = { version: nativeVersion, request: async (method, params) => { calls.push([method, params]); return method === "skills/list" ? response() : installed; }, close: async () => { closed++; } };
   const options = { command: "codex", home: "/synthetic/home", cwd, timeoutMs: 3000 };
   let connected: unknown;
   const result = await captureCodexNativeSkillCatalog(options, async value => { connected = value; return rpc; });
   expect(connected).toEqual({ command: "codex", home: "/synthetic/home", timeoutMs: 3000 });
   expect(calls).toEqual([["skills/list", { cwds: [cwd], forceReload: true }], ["plugin/installed", { cwds: [cwd] }]]);
-  expect(result).toEqual({ version: "codex-cli 0.159.2", cwd, skills: [vendor, bridge], plugins: [{ id: "vendor@probe", name: "vendor", installed: true, enabled: true, localVersion: "3.0.0" }] });
+  expect(result).toEqual({ version: nativeVersion, cwd, skills: [vendor, bridge], plugins: [{ id: "vendor@probe", name: "vendor", installed: true, enabled: true, localVersion: "3.0.0" }] });
   expect(closed).toBe(1);
 });
 
 test("native capture closes on refused requests, validation failures, and unsupported versions", async () => {
-  for (const mode of ["request", "projection", "version", "unmeasuredVersion"]) {
+  for (const mode of ["request", "projection", "version", "unmeasuredVersion", "unmeasuredFutureVersion"]) {
     let closed = 0, requested = 0;
-    const rpc: CodexHookRpc = { version: mode === "version" ? "codex-cli 0.999.0" : mode === "unmeasuredVersion" ? "codex-cli 0.159.0" : "codex-cli 0.159.2", request: async () => { requested++; if (mode === "request") throw new Error("NATIVE_RPC_REFUSED"); return null; }, close: async () => { closed++; } };
+    const rpc: CodexHookRpc = { version: mode === "version" ? "codex-cli 0.999.0" : mode === "unmeasuredVersion" ? "codex-cli 0.159.0" : mode === "unmeasuredFutureVersion" ? "codex-cli 0.160.1" : "codex-cli 0.159.2", request: async () => { requested++; if (mode === "request") throw new Error("NATIVE_RPC_REFUSED"); return null; }, close: async () => { closed++; } };
     await expect(captureCodexNativeSkillCatalog({ command: "codex", home: "/synthetic/home", cwd }, async () => rpc)).rejects.toThrow();
     expect(closed).toBe(1);
-    expect(requested).toBe(mode === "version" || mode === "unmeasuredVersion" ? 0 : mode === "request" ? 1 : 2);
+    expect(requested).toBe(["version", "unmeasuredVersion", "unmeasuredFutureVersion"].includes(mode) ? 0 : mode === "request" ? 1 : 2);
   }
 });
 

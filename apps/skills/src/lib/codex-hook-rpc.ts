@@ -2,8 +2,9 @@ import { execFile, spawn } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { promisify } from "node:util";
+import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
 
-export const SUPPORTED_CODEX_HOOK_VERSIONS = ["codex-cli 0.153.0", "codex-cli 0.154.0", "codex-cli 0.155.0", "codex-cli 0.155.1", "codex-cli 0.156.1", "codex-cli 0.157.0", "codex-cli 0.157.1", "codex-cli 0.158.0", "codex-cli 0.159.0", "codex-cli 0.159.2"] as const;
+export { SUPPORTED_CODEX_HOOK_VERSIONS } from "./codex-native-compatibility.js";
 
 export interface CodexHookRpc {
   version: string;
@@ -27,7 +28,7 @@ export async function connectCodexHookRpc(options: { command: string; home: stri
   } catch { throw new Error("CODEX_HOOK_TRUST_NATIVE_UNAVAILABLE"); }
   // Enrollment is allowed only for native releases whose protocol and native
   // dispatch have been verified; future versions require a compatibility test.
-  if (!(SUPPORTED_CODEX_HOOK_VERSIONS as readonly string[]).includes(version)) throw new Error("CODEX_HOOK_TRUST_NATIVE_UNSUPPORTED_VERSION");
+  if (!supportsCodexNativeCapability(version, "hooks")) throw new Error("CODEX_HOOK_TRUST_NATIVE_UNSUPPORTED_VERSION");
   const current = statSync(binary);
   if (realpathSync(found) !== binary || ["dev", "ino", "size", "mtimeMs", "ctimeMs"].some(k => stat[k as keyof typeof stat] !== current[k as keyof typeof current])) throw new Error("CODEX_HOOK_TRUST_NATIVE_EXECUTABLE_CHANGED");
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: options.home, NO_COLOR: "1" };
