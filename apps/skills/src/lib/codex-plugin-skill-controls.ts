@@ -2,6 +2,7 @@
 import { hashNativeJsonControls } from "./claude-settings-witness.js";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
+import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
 import { isCodexNativeSkillDisabled, projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
 export interface CodexPluginSkillControl { name:string; pluginId:string; namespace:string; pluginParent:string; manifestSha256:string; appSha256?:string }
 const identifier = (v:unknown):v is string => typeof v === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(v);
@@ -91,7 +92,7 @@ export function reviewedCodexPluginCapabilitiesUnchanged(cache:string, controls:
   } catch { return false; }
 }
 export function reviewCodexPluginSkillControls(catalog:CodexNativeSkillCatalog, documents:string[], cache:string, cwd:string, read:Read, rules:unknown):CodexPluginSkillControl[] {
-  if (catalog?.version!=="codex-cli 0.159.2" || catalog.cwd!==cwd) refuse();
+  if (!supportsCodexNativeCapability(catalog?.version, "qualified-skill-catalog") || catalog.cwd!==cwd) refuse();
   const skills=projectCodexNativeSkillCatalog({data:[{cwd,errors:[],skills:catalog.skills}]},cwd);
   const allowed=new Set(documents), result:CodexPluginSkillControl[]=[];
   let installedPlugins:ReturnType<typeof projectCodexInstalledPluginEntries>;

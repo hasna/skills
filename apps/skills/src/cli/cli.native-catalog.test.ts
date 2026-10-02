@@ -42,17 +42,17 @@ for await (const line of createInterface({ input: process.stdin })) {
   return { command, document };
 }
 
-test("built CLI captures only projected native catalog into a new private file and reads it back", async () => {
-  const root = mkdtempSync(join(scratch, "case-")), { command, document } = native(root);
+for (const nativeVersion of ["0.159.2", "0.160.0"]) test(`built CLI captures the ${nativeVersion} native catalog privately with exact readback`, async () => {
+  const root = mkdtempSync(join(scratch, "case-")), { command, document } = native(root, nativeVersion);
   const output = join(root, "catalog.json");
   const result = await run(root, ["hook", "native-catalog", "--cwd", root, "--output", output, "--codex-command", command, "--json"]);
   expect(result.exitCode).toBe(0);
   expect(result.stderr).toBe("");
   const receipt = JSON.parse(result.stdout), bytes = readFileSync(output);
-  expect(receipt).toEqual({ version: "codex-cli 0.159.2", cwd: root, skillCount: 1, output,
+  expect(receipt).toEqual({ version: `codex-cli ${nativeVersion}`, cwd: root, skillCount: 1, output,
     bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") });
   expect(statSync(output).mode & 0o777).toBe(0o600);
-  expect(JSON.parse(bytes.toString())).toEqual({ version: "codex-cli 0.159.2", cwd: root,
+  expect(JSON.parse(bytes.toString())).toEqual({ version: `codex-cli ${nativeVersion}`, cwd: root,
     skills: [{ name: "example:review", path: document, enabled: true, pluginId: "example@probe" }],
     plugins: [{ id: "example@probe", name: "example", installed: true, enabled: true, localVersion: "1.0.0" }] });
 });

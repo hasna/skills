@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.21
+
+### Patch Changes
+
+- Qualify Codex 0.160.0 native hook dispatch and skill catalog/name-denial semantics through one shared compatibility registry; retain trust guards and refuse unmeasured versions.
+
 ## 0.10.20
 
 ### Patch Changes

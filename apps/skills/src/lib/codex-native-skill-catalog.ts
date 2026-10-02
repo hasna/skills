@@ -1,6 +1,7 @@
 import { realpathSync } from "node:fs";
 import { isAbsolute, normalize } from "node:path";
 import { connectCodexHookRpc, type CodexHookRpc } from "./codex-hook-rpc.js";
+import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
 
 export interface CodexNativeSkill {
   /** Native qualified name, not a directory name or plugin identifier. */
@@ -31,7 +32,6 @@ const MAX_SKILLS = 4096;
 const MAX_NAME_BYTES = 1024;
 const MAX_PATH_BYTES = 16384;
 const MAX_PLUGIN_ID_BYTES = 1024;
-const SUPPORTED_NAME_CONTROL_VERSIONS = new Set(["codex-cli 0.159.2"]);
 function refuse(): never { throw new Error("CODEX_NATIVE_SKILL_CATALOG_INVALID"); }
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const scalar = (value: unknown, max: number): value is string => typeof value === "string"
@@ -103,7 +103,7 @@ export async function captureCodexNativeSkillCatalog(
     ...(options.codexHome === undefined ? {} : { codexHome: options.codexHome }),
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }) });
   try {
-    if (!SUPPORTED_NAME_CONTROL_VERSIONS.has(rpc.version)) throw new Error("CODEX_NATIVE_SKILL_CATALOG_UNSUPPORTED_VERSION");
+    if (!supportsCodexNativeCapability(rpc.version, "qualified-skill-catalog")) throw new Error("CODEX_NATIVE_SKILL_CATALOG_UNSUPPORTED_VERSION");
     const response: unknown = await rpc.request("skills/list", { cwds: [options.cwd], forceReload: true });
     const installed: unknown = await rpc.request("plugin/installed", { cwds: [options.cwd] });
     return { version: rpc.version, cwd: options.cwd, skills: projectCodexNativeSkillCatalog(response, options.cwd),

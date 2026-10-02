@@ -143,7 +143,7 @@ test("native app controls refuse unsupported schema, references and newly appear
   }
 });
 
-test("path-disabled Codex plugin omission enrolls an exact stable name and survives the next cache version", () => {
+for (const nativeVersion of ["codex-cli 0.159.2", "codex-cli 0.160.0"]) test(`path-disabled ${nativeVersion} plugin omission enrolls a stable name across cache versions`, () => {
   const home=mkdtempSync(join(tmpdir(),"skills-disabled-plugin-omission-")); roots.push(home);
   const f={home,dataDir:join(home,"data"),projectDir:home}, cache=join(home,".codex/plugins/cache");
   const parent=join(cache,"openai-curated-remote/codex-browser-recorder"), old=join(parent,"0.4.0");
@@ -152,7 +152,7 @@ test("path-disabled Codex plugin omission enrolls an exact stable name and survi
   const add=(version:string)=>{const root=join(parent,version);put(join(root,".codex-plugin/plugin.json"),JSON.stringify({name:"codex-browser-recorder",version}));put(join(root,"skills/record-browser/SKILL.md"),payload);return root;};
   add("0.4.0");
   put(config,`[[skills.config]]\npath = ${JSON.stringify(document)}\nenabled = false\n`);
-  const catalog={version:"codex-cli 0.159.2",cwd:home,skills:[],plugins:[{id:"codex-browser-recorder@openai-curated-remote",name:"codex-browser-recorder",installed:true,enabled:true,localVersion:"0.4.0"}]};
+  const catalog={version:nativeVersion,cwd:home,skills:[],plugins:[{id:"codex-browser-recorder@openai-curated-remote",name:"codex-browser-recorder",installed:true,enabled:true,localVersion:"0.4.0"}]};
   const read=(path:string)=>readFileSync(path,"utf8");
   const plan=planAgentIntegration({...f,agents:["codex"],codexNativeCatalog:catalog});
   applyAgentIntegration(plan);
@@ -180,6 +180,6 @@ test("path-disabled Codex plugin omission enrolls an exact stable name and survi
   const defaultRoot=join(cache,"probe/default-plugin/1.0.0"), defaultPath=join(defaultRoot,"skills/default-skill/SKILL.md");
   put(join(defaultRoot,".codex-plugin/plugin.json"),JSON.stringify({name:"default-plugin"}));
   put(defaultPath,"---\nname: default-skill\ndescription: Default version compatibility\n---\nFixture\n");
-  const defaultControls=reviewCodexPluginSkillControls({version:"codex-cli 0.159.2",cwd:home,skills:[],plugins:[{id:"default-plugin@probe",name:"default-plugin",installed:true,enabled:true,localVersion:"1.0.0"}]},[defaultPath],cache,home,read,[{path:defaultPath,enabled:false}]);
+  const defaultControls=reviewCodexPluginSkillControls({version:nativeVersion,cwd:home,skills:[],plugins:[{id:"default-plugin@probe",name:"default-plugin",installed:true,enabled:true,localVersion:"1.0.0"}]},[defaultPath],cache,home,read,[{path:defaultPath,enabled:false}]);
   expect(defaultControls.map(control=>control.name)).toEqual(["default-plugin:default-skill"]);
 });

@@ -151,7 +151,7 @@ export function registerAgentIntegration(parent: Command): void {
     .option("--selection-profile <id>", "Selection profile (preserves existing binding; new agents use default)")
     .option("--include-vendor", "Retained for compatibility; vendor system skills are always inventoried and disabled", false)
     .option("--discovery-inputs <file>", "Advanced reviewed active plugin roots and source hashes for unsupported registrations")
-    .option("--codex-native-catalog <file>", "Reviewed Codex 0.159.2 skill and installed-plugin receipt for exact qualified-name disables")
+    .option("--codex-native-catalog <file>", "Reviewed supported Codex skill and installed-plugin receipt for exact qualified-name disables")
     .option("--reviewed-cache-alias <path>", "Exact skill-containing vendor cache alias reviewed for this hook plan")
     .option("--allow-root-aliases", "Allow home .claude/.codex aliases to existing directories within this home", false)
     .option("--apply", "Apply the plan, preserving prior configuration in private backups", false)

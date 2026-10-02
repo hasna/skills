@@ -466,7 +466,7 @@ preserves and reads back the original policy before writing. Claude upgrades to
 verbosity preferences. Provider mappings, environment, hooks, plugins, skill rules
 and all unknown settings stay bound. Runtime hooks never silently upgrade a witness.
 
-A Codex 0.159.2 native skill and installed-plugin receipt can be captured through the
+A supported Codex native skill and installed-plugin receipt can be captured through the
 package-owned client into a new private file, then reviewed and passed to
 `hook install` with `--codex-native-catalog <file>`:
 
@@ -474,6 +474,11 @@ package-owned client into a new private file, then reviewed and passed to
 skills hook native-catalog --cwd /absolute/project --output /private/catalog.json --json
 skills hook install --agent codex --codex-native-catalog /private/catalog.json --json
 ```
+
+Codex 0.159.2 and 0.160.0 have measured qualified-name catalog support. Native
+transport, capture and review use one capability registry. Unmeasured releases
+refuse until the native catalog/name-denial and hook-dispatch acceptance tests
+pass; an RPC handshake alone does not establish those semantics.
 
 The capture refuses an existing output file, writes mode `0600`, verifies the
 exact bytes, and reports only version, directory, count, file path and SHA-256.
