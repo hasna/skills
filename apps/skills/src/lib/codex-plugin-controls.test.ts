@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { planAgentIntegration, applyAgentIntegration, assertManagedAgentBridge } from "./agent-integration.js";
 import { reviewCodexPluginSkillControls, isReviewedCodexPluginSkillDisabled, reviewedCodexPluginCapabilitiesUnchanged } from "./codex-plugin-skill-controls.js";
+import { assertAgentPolicyCollections } from "./agent-policy-limits.js";
 useDefaultTestTimeout();
 const roots:string[]=[]; afterEach(()=>{for(const root of roots.splice(0)) rmSync(root,{recursive:true,force:true});});
 const put=(p:string,s:string)=>{mkdirSync(join(p,".."),{recursive:true});writeFileSync(p,s);};
@@ -232,4 +233,92 @@ test("remote null-version denied materialization binds the native installation r
  expect(reviewedCodexPluginCapabilitiesUnchanged(cache,controls,read)).toBe(false);
  expect(isReviewedCodexPluginSkillDisabled(document,cache,controls,rules,read)).toBe(false);
  expect(()=>reviewCodexPluginSkillControls(catalog,[document],cache,home,read,rules)).toThrow("IDENTITY_UNSUPPORTED");
+});
+
+
+test("native review accepts an empty plugin cache while preserving catalog and cached-identity refusals", () => {
+ const home=mkdtempSync(join(tmpdir(),"skills-empty-plugin-cache-")); roots.push(home);
+ const cache=join(home,".codex/plugins/cache"), bridge=join(home,".codex/skills/skills-cli/SKILL.md"), system=join(home,".codex/skills/.system/probe/SKILL.md");
+ applyAgentIntegration(planAgentIntegration({home,dataDir:join(home,"data"),projectDir:home,agents:["codex"]}));
+ put(system,"---\nname: probe\ndescription: Synthetic system skill\n---\nFixture");
+ const catalog={version:"codex-cli 0.160.0",cwd:home,skills:[{name:"skills-cli",path:bridge,enabled:true,pluginId:null}],plugins:[]};
+ const read=(path:string)=>readFileSync(path,"utf8");
+ expect(reviewCodexPluginSkillControls(catalog,[],cache,home,read,[])).toEqual([]);
+ expect(reviewCodexPluginSkillControls(catalog,[bridge,system],cache,home,read,[])).toEqual([]);
+ // An installed plugin need not supply skill documents.
+ expect(reviewCodexPluginSkillControls({...catalog,plugins:[{id:"vendor@probe",name:"vendor",installed:true,enabled:true,localVersion:"1.0.0"}]},[system],cache,home,read,[])).toEqual([]);
+ expect(()=>planAgentIntegration({home,dataDir:join(home,"data"),projectDir:home,agents:["codex"],codexNativeCatalog:catalog})).not.toThrow();
+ expect(()=>reviewCodexPluginSkillControls({...catalog,version:"codex-cli 0.161.0"},[],cache,home,read,[])).toThrow("IDENTITY_UNSUPPORTED");
+ expect(()=>reviewCodexPluginSkillControls({...catalog,cwd:join(home,"other")},[],cache,home,read,[])).toThrow("IDENTITY_UNSUPPORTED");
+ expect(()=>reviewCodexPluginSkillControls({...catalog,skills:[{...catalog.skills[0]!,enabled:"true" as any}]},[],cache,home,read,[])).toThrow("CATALOG_INVALID");
+ expect(()=>reviewCodexPluginSkillControls({...catalog,plugins:[{id:"vendor@probe",name:"vendor",installed:"true" as any,enabled:true,localVersion:"1.0.0"}]},[],cache,home,read,[])).toThrow("IDENTITY_UNSUPPORTED");
+ const documents=["1.0.0","2.0.0"].map(version=>{
+  const root=join(cache,"probe/vendor",version), document=join(root,"skills/deploy/SKILL.md");
+  put(join(root,".codex-plugin/plugin.json"),JSON.stringify({name:"vendor",version}));
+  put(document,"---\nname: deploy\ndescription: Synthetic cached identity\n---\nFixture");
+  return document;
+ });
+ expect(()=>reviewCodexPluginSkillControls(catalog,[documents[0]!],cache,home,read,[])).toThrow("IDENTITY_UNSUPPORTED");
+ expect(()=>reviewCodexPluginSkillControls({...catalog,plugins:undefined},[documents[0]!],cache,home,read,[])).toThrow("IDENTITY_UNSUPPORTED");
+ const listed={...catalog,skills:documents.map(path=>({name:"vendor:deploy",path,enabled:false,pluginId:"vendor@probe"}))};
+ expect(()=>reviewCodexPluginSkillControls(listed,documents,cache,home,read,[])).toThrow("IDENTITY_UNSUPPORTED");
+});
+
+
+test("reviewed stdio MCP capabilities stay available and bound when only the native skill name is denied", () => {
+ const home=mkdtempSync(join(tmpdir(),"skills-mcp-controls-")); roots.push(home);
+ const cache=join(home,".codex/plugins/cache"), parent=join(cache,"probe/vendor"), root=join(parent,"1.0.0"), document=join(root,"skills/deploy/SKILL.md"), mcp=join(root,".mcp.json"), manifest=join(root,".codex-plugin/plugin.json");
+ const manifestText=JSON.stringify({name:"vendor",version:"1.0.0",mcpServers:"./.mcp.json"});
+ const mcpText=JSON.stringify({mcpServers:{probe:{command:"synthetic-never-executed",args:["--fixture"],cwd:"${CODEX_PLUGIN_ROOT}",env_vars:["SKILLS_SYNTHETIC_NAME"]}}});
+ const add=(r:string,version:string)=>{
+  put(join(r,".codex-plugin/plugin.json"),JSON.stringify({name:"vendor",version,mcpServers:"./.mcp.json"}));
+  put(join(r,".mcp.json"),mcpText);
+  put(join(r,"skills/deploy/SKILL.md"),"---\nname: deploy\ndescription: Synthetic MCP skill fixture\n---\nDisabled body");
+ };
+ add(root,"1.0.0");
+ const read=(path:string)=>readFileSync(path,"utf8"), catalog={version:"codex-cli 0.160.0",cwd:home,skills:[{name:"vendor:deploy",path:document,enabled:false,pluginId:"vendor@probe"}],plugins:[{id:"vendor@probe",name:"vendor",installed:true,enabled:true,localVersion:"1.0.0"}]};
+ const controls=reviewCodexPluginSkillControls(catalog,[document],cache,home,read,[]);
+ expect(controls[0]?.mcpSha256).toMatch(/^[a-f0-9]{64}$/);
+ expect(()=>assertAgentPolicyCollections({bridge:{codexPluginSkills:controls}})).not.toThrow();
+ expect(()=>assertAgentPolicyCollections({bridge:{codexPluginSkills:[{...controls[0],mcpSha256:"invalid"}]}})).toThrow();
+ const f={home,dataDir:join(home,"data"),projectDir:home};
+ const plan=planAgentIntegration({...f,agents:["codex"],codexNativeCatalog:catalog});
+ expect(read(mcp)).toBe(mcpText);
+ expect(plan.changes.some(file=>file.path===mcp || file.path===manifest)).toBe(false);
+ applyAgentIntegration(plan);
+ expect(read(mcp)).toBe(mcpText);expect(read(manifest)).toBe(manifestText);
+ expect(read(join(home,".codex/config.toml"))).toContain('name = "vendor:deploy"');
+ expect(()=>assertManagedAgentBridge("codex",f)).not.toThrow();
+ const next=join(parent,"2.0.0"), nextDocument=join(next,"skills/deploy/SKILL.md");add(next,"2.0.0");
+ const rules=[{name:"vendor:deploy",enabled:false}];
+ expect(isReviewedCodexPluginSkillDisabled(nextDocument,cache,controls,rules,read)).toBe(true);
+ for(const changed of [mcpText.replace("--fixture","--changed"),JSON.stringify({mcpServers:{probe:{command:"synthetic-never-executed",args:[]}}}),JSON.stringify({mcpServers:{probe:{command:"synthetic-never-executed"},extra:{command:"other"}}})]) {
+  put(join(next,".mcp.json"),changed);
+  expect(isReviewedCodexPluginSkillDisabled(nextDocument,cache,controls,rules,read)).toBe(false);
+  expect(reviewedCodexPluginCapabilitiesUnchanged(cache,controls,read)).toBe(false);
+  expect(()=>assertManagedAgentBridge("codex",f)).toThrow("NATIVE_SKILL_DRIFT");
+ }
+ put(join(next,".mcp.json"),mcpText);
+ rmSync(join(next,".mcp.json"));expect(isReviewedCodexPluginSkillDisabled(nextDocument,cache,controls,rules,read)).toBe(false);expect(reviewedCodexPluginCapabilitiesUnchanged(cache,controls,read)).toBe(false);
+ put(join(next,".mcp.json"),mcpText);
+ const stale=planAgentIntegration({...f,agents:["codex"],codexNativeCatalog:catalog});
+ put(mcp,mcpText.replace("--fixture","--stale"));expect(()=>applyAgentIntegration(stale)).toThrow();put(mcp,mcpText);
+ const review=()=>reviewCodexPluginSkillControls(catalog,[document],cache,home,read,[]);
+ for(const invalid of [
+  '{"mcpServers":{"probe":{"command":"first","command":"second"}}}',
+  '{"mcpServers":{"probe":{"command":"synthetic-never-executed"}},"unknown":true}',
+  JSON.stringify({mcpServers:{probe:{url:"https://example.invalid/mcp"}}}),
+  ...["hooks","instructions","auth","oauth","unknown"].map(key=>JSON.stringify({mcpServers:{probe:{command:"synthetic-never-executed",[key]:"unsupported"}}})),
+  JSON.stringify({mcpServers:{probe:{command:12}}}),JSON.stringify({mcpServers:{probe:{command:"synthetic-never-executed",args:[12]}}}),
+  JSON.stringify({mcpServers:{probe:{command:"synthetic-never-executed",cwd:null}}}),JSON.stringify({mcpServers:{probe:{command:"synthetic-never-executed",env_vars:["INVALID-NAME"]}}}),
+ ]) {put(mcp,invalid);expect(review).toThrow("IDENTITY_UNSUPPORTED");}
+ put(mcp,mcpText);
+ for(const reference of ["other.json","./../outside.json","/absolute.json"]) {put(manifest,JSON.stringify({name:"vendor",version:"1.0.0",mcpServers:reference}));expect(review).toThrow("IDENTITY_UNSUPPORTED");}
+ put(manifest,manifestText);
+ const external=join(home,"external-mcp.json");put(external,mcpText);rmSync(mcp);symlinkSync(external,mcp);expect(review).toThrow("IDENTITY_UNSUPPORTED");
+ rmSync(mcp);put(mcp,mcpText);put(manifest,JSON.stringify({name:"vendor",version:"1.0.0"}));expect(review).toThrow("IDENTITY_UNSUPPORTED");
+ rmSync(mcp);const beforeMcp=review();
+ put(mcp,mcpText);put(manifest,manifestText);
+ expect(isReviewedCodexPluginSkillDisabled(document,cache,beforeMcp,rules,read)).toBe(false);
+ expect(reviewedCodexPluginCapabilitiesUnchanged(cache,beforeMcp,read)).toBe(false);
 });

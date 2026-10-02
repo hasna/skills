@@ -4,6 +4,12 @@
 
 - Accept verified macOS system-root aliases in native skill inventory and migration while rejecting writable or ACL-replaceable roots, unsafe links, and changed identities.
 
+## 0.10.23
+
+- Preserve reviewed local stdio MCP declarations while denying plugin Skill names, with exact capability fingerprints and refusal on unsupported or changed declarations.
+
+- Accept a validated native Codex catalog with no plugin-cache skill documents; retain refusals for cached identity mismatches and duplicate qualified names.
+
 ## 0.10.22
 
 - Release the reviewed Codex compatibility and witness updates with canonical package file modes; 0.10.21 was not published after its archive linkage check refused the author pack.
