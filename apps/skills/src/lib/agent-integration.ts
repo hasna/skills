@@ -5,7 +5,7 @@ import { upgradeClaudeSettingsWitness } from "./claude-settings-witness.js";
 import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { existsSync, lstatSync, statSync, mkdirSync, readFileSync, readdirSync, opendirSync, readlinkSync, realpathSync, renameSync, rmdirSync, writeFileSync, unlinkSync, chmodSync, openSync, closeSync, fsyncSync, fstatSync, readSync, constants, linkSync, type Dirent } from "node:fs";
+import { existsSync, lstatSync, statSync, mkdirSync, readFileSync, readdirSync, opendirSync, readlinkSync, realpathSync, renameSync, rmdirSync, writeFileSync, unlinkSync, chmodSync, openSync, closeSync, fsyncSync, fstatSync, readSync, constants, linkSync, type BigIntStats, type Dirent } from "node:fs";
 import { dirname, join, resolve, relative, isAbsolute, sep } from "node:path";
 import { homedir } from "node:os";
 import { getDataDir, getDataDirReadOnly } from "./config.js";
@@ -32,10 +32,73 @@ const sha = (data: string | Buffer) => createHash("sha256").update(data).digest(
 const HOOK_EVENTS: readonly ContextHookEvent[] = ["UserPromptSubmit", "SessionStart", "SubagentStart"];
 const ROOTS = NATIVE_SKILL_ROOTS;
 
+/** Darwin acl_get_fd reports an absent extended ACL as NULL/ENOENT. The
+ * descriptor is already bound to a verified directory, so ENOENT cannot mean
+ * a missing pathname. Any ACL (including another principal's), unsupported
+ * capability, or other error is refused. The native module is loaded only in
+ * this Darwin-only path; canonical paths and other platforms do not need it.
+ * Contract: Apple Libc posix1e/acl_file.c and gen/filesec.c (FILESEC_ACL). */
+function hasNoDarwinAcl(fd: number): boolean {
+  try {
+    const { dlopen, read } = require("bun:ffi") as typeof import("bun:ffi");
+    const library = dlopen("/usr/lib/libSystem.B.dylib", {
+      acl_get_fd: { args: ["i32"], returns: "ptr" },
+      acl_free: { args: ["ptr"], returns: "i32" },
+      __error: { args: [], returns: "ptr" },
+    });
+    try {
+      const errno = library.symbols.__error();
+      if (!errno) return false;
+      const acl = library.symbols.acl_get_fd(fd);
+      if (acl) { library.symbols.acl_free(acl); return false; }
+      return (acl === null || acl === 0) && read.i32(errno) === 2; // ENOENT in Darwin's sys/errno.h.
+    } finally { library.close(); }
+  } catch { return false; }
+}
+
+/** macOS installs exactly these aliases. Ownership alone never admits a link:
+ * its spelling, target and both containing directories must also be trusted. */
+function isSystemRootAlias(path: string): boolean {
+  if (process.platform !== "darwin" || !["/var", "/tmp", "/etc"].includes(path)) return false;
+  const target = `/private${path}`, link = `private${path}`;
+  const identity = (stat: BigIntStats) => `${stat.dev}:${stat.ino}:${stat.ctimeNs}:${stat.uid}:${stat.mode}`;
+  try {
+    const before = lstatSync(path, { bigint: true });
+    if (!before.isSymbolicLink() || before.uid !== 0n || readlinkSync(path) !== link) return false;
+    const directories = ["/", "/private", target].map(directory => {
+      const stat = lstatSync(directory, { bigint: true });
+      if (!stat.isDirectory() || stat.uid !== 0n) throw new Error("Untrusted system alias directory");
+      // /private/tmp is intentionally writable; its sticky bit protects its
+      // children. The alias itself is replaceable only through /, and its
+      // destination only through /private, neither of which may be writable.
+      if (directory !== "/private/tmp") {
+        if ((stat.mode & 0o022n) !== 0n) throw new Error("Writable system alias directory");
+      } else if ((stat.mode & 0o1000n) === 0n) throw new Error("Unprotected system temporary directory");
+      const fd = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      try {
+        if (identity(fstatSync(fd, { bigint: true })) !== identity(stat) || !hasNoDarwinAcl(fd)
+          || identity(fstatSync(fd, { bigint: true })) !== identity(stat)) throw new Error("Unverified system alias directory ACL");
+      } finally { closeSync(fd); }
+      return { directory, identity: identity(stat) };
+    });
+    return realpathSync(path) === target && readlinkSync(path) === link
+      && identity(lstatSync(path, { bigint: true })) === identity(before)
+      && directories.every(item => identity(lstatSync(item.directory, { bigint: true })) === item.identity);
+  } catch { return false; }
+}
+
+/** Normalize only the verified OS prefix, never hide user-controlled links. */
+function canonicalSystemPath(path: string): string {
+  const absolute = resolve(path), root = `/${absolute.split(sep)[1]}`;
+  if (process.platform !== "darwin" || !["/var", "/tmp", "/etc"].includes(root) || !lstatSync(root, { throwIfNoEntry: false })?.isSymbolicLink()) return absolute;
+  if (!isSystemRootAlias(root)) throw new Error(`Refusing symlink path: ${root}`);
+  return `/private${absolute}`;
+}
+
 function assertSafePath(path: string): void {
   let cursor = resolve(path);
   while (true) {
-    if (lstatSync(cursor, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error(`Refusing symlink path: ${cursor}`);
+    if (lstatSync(cursor, { throwIfNoEntry: false })?.isSymbolicLink() && !isSystemRootAlias(cursor)) throw new Error(`Refusing symlink path: ${cursor}`);
     const parent = dirname(cursor); if (parent === cursor) return; cursor = parent;
   }
 }
@@ -65,7 +128,7 @@ function rootAliases(home: string, allowed = false): AgentRootAlias[] {
 }
 
 function canonicalAgentPath(path: string, aliases: AgentRootAlias[]): string {
-  const absolute = resolve(path), binding = aliases.find(item => absolute === item.alias || absolute.startsWith(item.alias + sep));
+  const absolute = canonicalSystemPath(path), binding = aliases.find(item => absolute === item.alias || absolute.startsWith(item.alias + sep));
   return binding ? join(binding.target, relative(binding.alias, absolute)) : absolute;
 }
 
@@ -159,14 +222,15 @@ export function parseNativeMigrationTargetManifest(input: string | Buffer): Nati
     // Migration covers recognized native roots, including inventory-only agents
     // whose historical copies need retirement without adding hook support.
     if (!ROOTS.some(([agent]) => agent === item.agent)) throw new Error(`Unsupported native migration target agent: ${item.agent}`);
-    const projectRoot = resolve(item.projectRoot);
-    if (!isAbsolute(item.projectRoot) || projectRoot !== item.projectRoot || !existsSync(projectRoot) || !lstatSync(projectRoot).isDirectory()) throw new Error(`Native migration target project root must be an existing absolute directory: ${item.projectRoot}`);
+    if (!isAbsolute(item.projectRoot) || resolve(item.projectRoot) !== item.projectRoot) throw new Error(`Native migration target project root must be an existing absolute directory: ${item.projectRoot}`);
+    const projectRoot = canonicalSystemPath(item.projectRoot);
+    if (!existsSync(projectRoot) || !lstatSync(projectRoot).isDirectory()) throw new Error(`Native migration target project root must be an existing absolute directory: ${item.projectRoot}`);
     assertSafePath(projectRoot);
     if (isAbsolute(item.path) || item.path.includes("\\") || item.path.length === 0 || item.path.includes("\0")) throw new Error(`Native migration target path must be normalized and project-relative: ${item.path}`);
     const resolved = resolve(projectRoot, item.path), normalized = relative(projectRoot, resolved);
     if (!normalized || normalized === ".." || normalized.startsWith(`..${sep}`) || isAbsolute(normalized) || normalized !== item.path) throw new Error(`Native migration target path escapes or is not normalized: ${item.path}`);
     if (!/^[0-9a-f]{64}$/.test(item.treeSha256)) throw new Error(`Invalid native migration tree digest for ${item.path}`);
-    const identity = `${item.agent}\0${projectRoot}\0${normalized}`;
+    const identity = `${item.agent}\0${canonicalSystemPath(projectRoot)}\0${normalized}`;
     if (identities.has(identity)) throw new Error(`Duplicate native migration target: ${item.path}`);
     identities.add(identity);
     targets.push({ agent: item.agent, projectRoot, path: normalized, treeSha256: item.treeSha256, ...(item.vendor === true ? { vendor: true as const } : {}) });
@@ -186,14 +250,15 @@ export function selectNativeMigrationTargets(inventory: NativeSkillEntry[], mani
   const identities = new Set<string>();
   const selected: NativeSkillEntry[] = [];
   for (const target of manifest.targets) {
-    const projectRoot = resolve(target.projectRoot), normalized = relative(projectRoot, resolve(projectRoot, target.path));
-    if (!isAbsolute(target.projectRoot) || projectRoot !== target.projectRoot || !existsSync(projectRoot) || !lstatSync(projectRoot).isDirectory()) throw new Error(`Native migration target project root must be an existing absolute directory: ${target.projectRoot}`);
+    if (!isAbsolute(target.projectRoot) || resolve(target.projectRoot) !== target.projectRoot) throw new Error(`Native migration target project root must be an existing absolute directory: ${target.projectRoot}`);
+    const projectRoot = canonicalSystemPath(target.projectRoot), normalized = relative(projectRoot, resolve(projectRoot, target.path));
+    if (!existsSync(projectRoot) || !lstatSync(projectRoot).isDirectory()) throw new Error(`Native migration target project root must be an existing absolute directory: ${target.projectRoot}`);
     assertSafePath(projectRoot);
     if (isAbsolute(target.path) || target.path.includes("\\") || target.path.includes("\0") || !normalized || normalized === ".." || normalized.startsWith(`..${sep}`) || normalized !== target.path || !/^[0-9a-f]{64}$/.test(target.treeSha256)) throw new Error(`Invalid native migration target: ${target.path}`);
-    const identity = `${target.agent}\0${projectRoot}\0${normalized}`;
+    const identity = `${target.agent}\0${canonicalSystemPath(projectRoot)}\0${normalized}`;
     if (identities.has(identity)) throw new Error(`Duplicate native migration target: ${target.path}`);
     identities.add(identity);
-    const expected = resolve(target.projectRoot, target.path);
+    const expected = canonicalSystemPath(resolve(target.projectRoot, target.path));
     const matches = inventory.filter(entry => entry.agent === target.agent && resolve(entry.path) === expected);
     if (matches.length !== 1) throw new Error(`Native migration target was not found exactly once: ${target.agent} ${target.projectRoot}/${target.path}`);
     const entry = matches[0]!;
@@ -208,7 +273,7 @@ export function selectNativeMigrationTargets(inventory: NativeSkillEntry[], mani
 function projectAncestorDirectories(projects: string[]): string[] {
   const directories = new Set<string>();
   for (const project of projects) {
-    for (let path = resolve(project), depth = 0; ; depth++) {
+    for (let path = canonicalSystemPath(project), depth = 0; ; depth++) {
       if (depth >= 100) throw new Error("NATIVE_SKILL_DRIFT: project ancestor discovery limit exceeded");
       directories.add(path);
       const parent = dirname(path); if (parent === path) break; path = parent;
@@ -218,9 +283,11 @@ function projectAncestorDirectories(projects: string[]): string[] {
 }
 
 export function inventoryNativeSkills(home = homedir(), options: { includeVendor?: boolean; guardHermes?: boolean; projectDir?: string; projectDirs?: string[]; agents?: readonly IntegrationAgent[]; agentRoots?: Array<{ agent: string; path: string }>; configured?: boolean; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean; reviewedCacheAlias?: string; disabledVendorPaths?: readonly string[]; disabledVendorSkill?: (entry: NativeSkillEntry) => boolean } = {}): NativeSkillEntry[] {
+  home = canonicalSystemPath(home);
   if (options.reviewedCacheAlias !== undefined && (!options.includeVendor || !isAbsolute(options.reviewedCacheAlias) || resolve(options.reviewedCacheAlias) !== options.reviewedCacheAlias)) throw new Error("A reviewed cache alias requires vendor inventory and an exact absolute path");
   if (options.disabledVendorPaths?.some(path => !isAbsolute(path) || resolve(path) !== path)) throw new Error("Disabled vendor paths must be exact absolute paths");
-  const disabledVendorPaths = new Set(options.disabledVendorPaths ?? []);
+  const reviewedCacheAlias = options.reviewedCacheAlias === undefined ? undefined : canonicalSystemPath(options.reviewedCacheAlias);
+  const disabledVendorPaths = new Set((options.disabledVendorPaths ?? []).map(canonicalSystemPath));
   const aliases = rootAliases(home, options.allowRootAliases);
   const selectedAgents = options.agents ? new Set(options.agents) : undefined;
   const includesAgent = (agent: string) => !selectedAgents || selectedAgents.has(agent as IntegrationAgent);
@@ -243,9 +310,11 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
   }
   let reviewedCacheAliasFound = false;
   function verifiedSiblingCacheAlias(agent: string, path: string, parent: string): boolean {
-    const link = readlinkSync(path), target = resolve(parent, link);
+    const link = readlinkSync(path), lexicalTarget = resolve(parent, link);
     // A lexical normalization must not conceal an intermediate symlink escape.
-    if (dirname(target) !== parent || (isAbsolute(link) ? link !== target : dirname(link) !== ".")) return false;
+    if (isAbsolute(link) ? link !== lexicalTarget : dirname(link) !== ".") return false;
+    const target = canonicalSystemPath(lexicalTarget);
+    if (dirname(target) !== parent) return false;
     if (!lstatSync(target, { throwIfNoEntry: false })?.isDirectory()) return false;
     const scan = cacheScans.get(target);
     if (!scan?.complete || scan.entries > maxAliasProofEntries) return false;
@@ -254,12 +323,12 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
       // every real skill below its fully inventoried version. The link adds no
       // discovery in that case. A new or enabled skill still fails closed.
       const targetSkills = entries.filter(entry => entry.agent === agent && entry.vendor && (entry.path === target || entry.path.startsWith(target + sep)));
-      if (path === options.reviewedCacheAlias && targetSkills.length > 0) reviewedCacheAliasFound = true;
+      if (path === reviewedCacheAlias && targetSkills.length > 0) reviewedCacheAliasFound = true;
       if (agent === "codex" && targetSkills.length > 0 && targetSkills.every(entry => disabledVendorPaths.has(entry.path) || options.disabledVendorSkill?.(entry) === true)) return true;
       // A plugin's `latest` link may point at a fully inventoried version.
       // Only migration opts in to that exact link so it can archive the real
       // SKILL.md; ordinary hook checks continue to refuse the native copy.
-      if (path !== options.reviewedCacheAlias) return false;
+      if (path !== reviewedCacheAlias) return false;
     }
     return true;
   }

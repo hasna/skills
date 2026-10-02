@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Accept verified macOS system-root aliases in native skill inventory and migration while rejecting writable or ACL-replaceable roots, unsafe links, and changed identities.
+
 ## 0.10.23
 
 - Preserve reviewed local stdio MCP declarations while denying plugin Skill names, with exact capability fingerprints and refusal on unsupported or changed declarations.
