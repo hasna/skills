@@ -3,12 +3,27 @@ import { hashNativeJsonControls } from "./claude-settings-witness.js";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
 import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
-import { isCodexNativeSkillDisabled, projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
-export interface CodexPluginSkillControl { name:string; pluginId:string; namespace:string; pluginParent:string; manifestSha256:string; appSha256?:string }
+import { isCodexNativeSkillDisabled, projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, remotePluginIdentifier, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
+export interface CodexPluginSkillControl { name:string; pluginId:string; namespace:string; pluginParent:string; manifestSha256:string; appSha256?:string; remotePluginId?:string }
 const identifier = (v:unknown):v is string => typeof v === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(v);
 const CODEX_DEFAULT_AGENT_PLUGIN_VERSION = "1.0.0";
 function refuse():never { throw new Error("CODEX_NATIVE_SKILL_IDENTITY_UNSUPPORTED: review native plugin names and hook controls"); }
 type Read = (path:string) => string;
+/** Codex's schema-1 receipt identifies a remote installation, not its current
+ * version. It can support review of an explicitly denied cache materialization;
+ * it never establishes that the materialization is the native selected root. */
+function remoteInstallationMatches(parent:string, remotePluginId:string, read:Read):boolean {
+  try {
+    if (!remotePluginIdentifier(remotePluginId) || !lstatSync(parent).isDirectory() || realpathSync(parent)!==parent) return false;
+    const path=join(parent,".codex-remote-plugin-install.json"), stat=lstatSync(path,{throwIfNoEntry:false});
+    if (!stat?.isFile() || stat.isSymbolicLink() || stat.size>16384) return false;
+    const text=read(path);
+    hashNativeJsonControls(text); // Reject duplicate decoded keys as Codex serde does.
+    const value=JSON.parse(text);
+    return Boolean(value && typeof value==="object" && !Array.isArray(value)
+      && Object.keys(value).length===2 && value.schema_version===1 && value.remote_plugin_id===remotePluginId);
+  } catch { return false; }
+}
 function appControls(path:string, read:Read):string {
   const text=read(path);
   let value:any, sha256:string; try { sha256=hashNativeJsonControls(text); value=JSON.parse(text); } catch { refuse(); }
@@ -75,6 +90,9 @@ export function reviewedCodexPluginCapabilitiesUnchanged(cache:string, controls:
   try {
     for (const parent of new Set(controls.map(control=>control.pluginParent))) {
       if (!parent.startsWith(cache+sep) || !lstatSync(parent,{throwIfNoEntry:false})?.isDirectory()) return false;
+      for (const control of controls.filter(control=>control.pluginParent===parent)) {
+        if (control.remotePluginId !== undefined && !remoteInstallationMatches(parent,control.remotePluginId,read)) return false;
+      }
       const names=readdirSync(parent); entries+=names.length; if (entries>4096) return false;
       for (const name of names) {
         let root=join(parent,name), stat=lstatSync(root);
@@ -111,21 +129,33 @@ export function reviewCodexPluginSkillControls(catalog:CodexNativeSkillCatalog, 
     const expectedPluginId=`${pluginName}@${marketplace}`;
     const listed=skills.filter(skill=>skill.path===document);
     if (listed.length>1) refuse();
+    let remotePluginId:string|undefined;
     if (listed.length===1) {
       if (listed[0]!.name!==parsed.name || listed[0]!.pluginId!==expectedPluginId) refuse();
     } else {
       const installed=installedPlugins.filter(plugin=>plugin.id===expectedPluginId && plugin.name===pluginName);
-      if (installed.length!==1 || !installed[0]!.installed || !installed[0]!.enabled || !installed[0]!.localVersion) refuse();
-      // Cache versions can coexist. An omitted skill is reviewable only at the
-      // exact installed version; historical materializations are ignored.
-      if (installed[0]!.localVersion!==basename(dirname(dirname(dirname(document))))) continue;
+      if (installed.length!==1 || !installed[0]!.installed || !installed[0]!.enabled) refuse();
+      const plugin=installed[0]!;
+      if (plugin.localVersion !== null) {
+        // A measured installed version excludes historical materializations.
+        if (plugin.localVersion!==basename(dirname(dirname(dirname(document))))) continue;
+      } else {
+        // Remote 0.160 inventories may omit the installed release version, and
+        // plugin/read exposes no local root. Do not infer either from latest or
+        // advertised metadata. Review only an already denied materialization,
+        // tied to the exact native remote installation and bound capabilities.
+        if (plugin.sourceType!=="remote" || !plugin.remotePluginId
+          || !remoteInstallationMatches(parsed.pluginParent,plugin.remotePluginId,read)
+          || !lstatSync(document).isFile() || realpathSync(document)!==document) refuse();
+        remotePluginId=plugin.remotePluginId;
+      }
       // Codex omits a path-disabled skill from skills/list. Its absence is
       // reviewable only when the exact current path is explicitly denied and
       // that rule set still evaluates the derived qualified name as disabled.
       const exactPathDeny=Array.isArray(rules) && rules.some((rule:any)=>rule?.path===document && rule?.enabled===false);
       if (!exactPathDeny || !isCodexNativeSkillDisabled({name:parsed.name,path:document,pluginId:expectedPluginId,enabled:true},rules)) refuse();
     }
-    result.push({...parsed,pluginId:expectedPluginId});
+    result.push({...parsed,pluginId:expectedPluginId,...(remotePluginId ? {remotePluginId} : {})});
   }
   if (!result.length || new Set(result.map(item=>item.name)).size!==result.length) refuse();
   return result;
@@ -134,7 +164,7 @@ export function isReviewedCodexPluginSkillDisabled(document:string, cache:string
   if (!document.startsWith(cache+sep) || !Array.isArray(controls) || controls.length>4096) return false;
   let parsed:ReturnType<typeof identity>; try { parsed=identity(document,cache,read); } catch { return false; }
   const reviewed=controls.find(item=>item.name===parsed.name && item.namespace===parsed.namespace && item.pluginParent===parsed.pluginParent && item.manifestSha256===parsed.manifestSha256 && item.appSha256===parsed.appSha256);
-  if (!reviewed) return false;
+  if (!reviewed || (reviewed.remotePluginId !== undefined && !remoteInstallationMatches(reviewed.pluginParent,reviewed.remotePluginId,read))) return false;
   return isCodexNativeSkillDisabled({name:parsed.name,path:document,pluginId:reviewed.pluginId,enabled:true},rules);
 }
 export function disableReviewedCodexPluginNames(text:string, controls:CodexPluginSkillControl[]):string {

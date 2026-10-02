@@ -26,6 +26,9 @@ export interface CodexInstalledPlugin {
   installed: boolean;
   enabled: boolean;
   localVersion: string | null;
+  /** Native remote identity; never a guessed installed cache version. */
+  remotePluginId?: string;
+  sourceType?: "remote";
 }
 
 const MAX_SKILLS = 4096;
@@ -37,6 +40,8 @@ const object = (value: unknown): value is Record<string, unknown> => value !== n
 const scalar = (value: unknown, max: number): value is string => typeof value === "string"
   && value.length > 0 && value.trim() === value && Buffer.byteLength(value, "utf8") <= max
   && !/[\u0000-\u001f\u007f]/u.test(value);
+export const remotePluginIdentifier = (value: unknown): value is string => typeof value === "string"
+  && /^[A-Za-z0-9_~-]{1,1024}$/.test(value);
 const absolutePath = (value: unknown): value is string => scalar(value, MAX_PATH_BYTES) && isAbsolute(value);
 
 /** Project the measured native skills/list contract without retaining descriptions,
@@ -70,7 +75,8 @@ export function projectCodexInstalledPlugins(response: unknown): CodexInstalledP
     for (const value of marketplace.plugins) {
       if (!object(value) || !scalar(value.id, MAX_PLUGIN_ID_BYTES) || !scalar(value.name, MAX_NAME_BYTES)
         || value.id !== `${value.name}@${marketplace.name}`) refuse();
-      plugins.push({ ...value, marketplace: marketplace.name });
+      plugins.push({ ...value, marketplace: marketplace.name,
+        sourceType: object(value.source) && value.source.type === "remote" ? "remote" : undefined });
     }
   }
   return projectCodexInstalledPluginEntries(plugins);
@@ -83,11 +89,15 @@ export function projectCodexInstalledPluginEntries(value: unknown): CodexInstall
   return value.map((item: unknown) => {
     if (!object(item) || !scalar(item.id, MAX_PLUGIN_ID_BYTES) || !scalar(item.name, MAX_NAME_BYTES)
       || typeof item.installed !== "boolean" || typeof item.enabled !== "boolean"
-      || (item.localVersion !== null && !scalar(item.localVersion, MAX_NAME_BYTES))) refuse();
+      || (item.localVersion !== null && !scalar(item.localVersion, MAX_NAME_BYTES))
+      || (item.remotePluginId !== undefined && item.remotePluginId !== null && !remotePluginIdentifier(item.remotePluginId))
+      || (item.sourceType !== undefined && item.sourceType !== "remote")) refuse();
     const at = item.id.lastIndexOf("@");
     if (at < 1 || item.id.slice(0, at) !== item.name || at === item.id.length - 1 || ids.has(item.id)) refuse();
     ids.add(item.id);
-    return { id: item.id, name: item.name, installed: item.installed, enabled: item.enabled, localVersion: item.localVersion ?? null };
+    return { id: item.id, name: item.name, installed: item.installed, enabled: item.enabled, localVersion: item.localVersion ?? null,
+      ...(item.sourceType === "remote" ? { sourceType: "remote" as const } : {}),
+      ...(item.remotePluginId == null ? {} : { remotePluginId: item.remotePluginId }) };
   });
 }
 

@@ -83,3 +83,16 @@ test("rule projection refuses ambiguous controls instead of claiming effective n
   }
   expect(isCodexNativeSkillDisabled(vendor, undefined)).toBe(false);
 });
+
+
+test("remote inventory retains only native installation identity and never advertised release or source URLs", () => {
+ const remotePluginId="plugins~Plugin_00000000000000000000000000000001";
+ const plugin={id:"pages@openai-curated-remote",name:"pages",installed:true,enabled:true,localVersion:null,remotePluginId,source:{type:"remote",url:"opaque"},version:"99.0.0",description:"opaque",shareUrl:"opaque"};
+ const inventory=(value:unknown)=>({marketplaces:[{name:"openai-curated-remote",plugins:[value]}],marketplaceLoadErrors:[]});
+ expect(projectCodexInstalledPlugins(inventory(plugin))).toEqual([{id:plugin.id,name:plugin.name,installed:true,enabled:true,localVersion:null,remotePluginId,sourceType:"remote"}]);
+ expect(JSON.stringify(projectCodexInstalledPlugins(inventory(plugin)))).not.toContain("opaque");
+ expect(JSON.stringify(projectCodexInstalledPlugins(inventory(plugin)))).not.toContain("99.0.0");
+ expect(projectCodexInstalledPlugins(inventory({...plugin,source:{type:"git"},sourceType:"remote"}))[0]?.sourceType).toBeUndefined();
+ for (const remotePluginId of ["bad.identity", "https://opaque.example/identity", "bad\nidentity", {}, "", "x".repeat(1025)])
+  expect(()=>projectCodexInstalledPlugins(inventory({...plugin,remotePluginId}))).toThrow("CATALOG_INVALID");
+});

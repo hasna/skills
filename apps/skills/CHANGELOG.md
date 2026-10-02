@@ -2,6 +2,8 @@
 
 ## 0.10.21
 
+- Review already disabled remote plugin skills with missing native installed versions using the exact native remote ID and Codex install receipt; retain refusal for unsafe or ambiguous materializations.
+
 ### Patch Changes
 
 - Qualify Codex 0.160.0 native hook dispatch and skill catalog/name-denial semantics through one shared compatibility registry; retain trust guards and refuse unmeasured versions.
