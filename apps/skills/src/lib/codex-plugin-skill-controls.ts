@@ -4,7 +4,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
 import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
 import { isCodexNativeSkillDisabled, projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, remotePluginIdentifier, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
-export interface CodexPluginSkillControl { name:string; pluginId:string; namespace:string; pluginParent:string; manifestSha256:string; appSha256?:string; remotePluginId?:string }
+export interface CodexPluginSkillControl { name:string; pluginId:string; namespace:string; pluginParent:string; manifestSha256:string; appSha256?:string; mcpSha256?:string; remotePluginId?:string }
 const identifier = (v:unknown):v is string => typeof v === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(v);
 const CODEX_DEFAULT_AGENT_PLUGIN_VERSION = "1.0.0";
 function refuse():never { throw new Error("CODEX_NATIVE_SKILL_IDENTITY_UNSUPPORTED: review native plugin names and hook controls"); }
@@ -39,7 +39,37 @@ function appControls(path:string, read:Read):string {
   }
   return sha256;
 }
-function rootControls(root:string, read:Read): { namespace:string; manifestSha256:string; appSha256?:string } {
+/** Only the measured local stdio declaration is reviewable here. The complete
+ * declaration is fingerprinted; this code never starts a command or resolves env. */
+function mcpControls(path:string, read:Read):string {
+  const text=read(path);
+  let value:any, sha256:string; try { sha256=hashNativeJsonControls(text); value=JSON.parse(text); } catch { refuse(); }
+  const object=(v:any):boolean => Boolean(v && typeof v==="object" && !Array.isArray(v));
+  const textField=(v:any,empty=false):boolean => typeof v==="string" && (empty || Boolean(v.trim()))
+    && Buffer.byteLength(v)<=16384 && !/[\x00-\x1f\x7f]/.test(v);
+  const envName=(v:any):boolean => typeof v==="string" && /^[A-Za-z_][A-Za-z0-9_]{0,255}$/.test(v);
+  if (!object(value) || Object.keys(value).length!==1 || !object(value.mcpServers)) refuse();
+  const servers=Object.entries(value.mcpServers);
+  if (!servers.length || servers.length>256) refuse();
+  for (const [name, server] of servers as [string,any][]) {
+    if (!identifier(name) || !object(server) || !Object.keys(server).every(key=>["command","args","cwd","env_vars"].includes(key))
+      || !textField(server.command)
+      || (server.args!==undefined && (!Array.isArray(server.args) || server.args.length>256 || !server.args.every((arg:any)=>textField(arg,true))))
+      || (server.cwd!==undefined && !textField(server.cwd))) refuse();
+    if (server.env_vars!==undefined) {
+      if (!Array.isArray(server.env_vars) || server.env_vars.length>256) refuse();
+      const names=server.env_vars.map((entry:any)=>{
+        if (envName(entry)) return entry;
+        if (!object(entry) || !Object.keys(entry).every(key=>["name","source"].includes(key)) || !envName(entry.name)
+          || (entry.source!==undefined && entry.source!=="local")) refuse();
+        return entry.name;
+      });
+      if (new Set(names).size!==names.length) refuse();
+    }
+  }
+  return sha256;
+}
+function rootControls(root:string, read:Read): { namespace:string; manifestSha256:string; appSha256?:string; mcpSha256?:string } {
   const manifestPath=join(root,".codex-plugin/plugin.json"), manifestFile=lstatSync(manifestPath,{throwIfNoEntry:false});
   if (!lstatSync(join(root,".codex-plugin"),{throwIfNoEntry:false})?.isDirectory() || !manifestFile?.isFile() || manifestFile.size>1024*1024) refuse();
   let manifest:any, manifestSha256:string;
@@ -52,16 +82,21 @@ function rootControls(root:string, read:Read): { namespace:string; manifestSha25
   // Exact name controls suppress Skills bodies, not other capabilities.
   // Reviewed app declarations preserve connector availability and native hints;
   // their entire content and presence stay bound across cache versions.
-  if (manifest.hooks!==undefined || manifest.mcpServers!==undefined || manifest.commands!==undefined
+  if (manifest.hooks!==undefined || manifest.commands!==undefined
+    || (manifest.mcpServers!==undefined && manifest.mcpServers!=="./.mcp.json")
     || (manifest.apps!==undefined && manifest.apps!=="./.app.json")
-    || ["hooks", ".mcp.json"].some(path=>lstatSync(join(root,path),{throwIfNoEntry:false}))) refuse();
+    || lstatSync(join(root,"hooks"),{throwIfNoEntry:false})) refuse();
+  const mcp=join(root,".mcp.json"), mcpPresent=lstatSync(mcp,{throwIfNoEntry:false});
+  if (mcpPresent && (!mcpPresent.isFile() || mcpPresent.isSymbolicLink() || mcpPresent.size>1024*1024 || realpathSync(mcp)!==mcp)) refuse();
+  if (Boolean(mcpPresent)!==(manifest.mcpServers!==undefined)) refuse();
+  const mcpSha256=mcpPresent ? mcpControls(mcp,read) : undefined;
   const app=join(root,".app.json"), present=lstatSync(app,{throwIfNoEntry:false});
   if (present && (!present.isFile() || present.isSymbolicLink() || present.size>1024*1024)) refuse();
   if (manifest.apps!==undefined && !present) refuse();
   const appSha256=present ? appControls(app,read) : undefined;
-  return {namespace:manifest.name,manifestSha256,...(appSha256 ? {appSha256} : {})};
+  return {namespace:manifest.name,manifestSha256,...(appSha256 ? {appSha256} : {}),...(mcpSha256 ? {mcpSha256} : {})};
 }
-function identity(document:string, cache:string, read:Read): { name:string; namespace:string; pluginParent:string; manifestSha256:string; appSha256?:string } {
+function identity(document:string, cache:string, read:Read): { name:string; namespace:string; pluginParent:string; manifestSha256:string; appSha256?:string; mcpSha256?:string } {
   if (!document.startsWith(cache+sep) || !document.endsWith(sep+"SKILL.md")) refuse();
   const text = read(document);
   if (Buffer.byteLength(text)>1024*1024) refuse();
@@ -103,7 +138,7 @@ export function reviewedCodexPluginCapabilitiesUnchanged(cache:string, controls:
         }
         if (!stat.isDirectory() || ![".codex-plugin/plugin.json",".app.json","hooks",".mcp.json"].some(path=>lstatSync(join(root,path),{throwIfNoEntry:false}))) continue;
         const parsed=rootControls(root,read);
-        if (!controls.some(control=>control.pluginParent===parent && control.namespace===parsed.namespace && control.manifestSha256===parsed.manifestSha256 && control.appSha256===parsed.appSha256)) return false;
+        if (!controls.some(control=>control.pluginParent===parent && control.namespace===parsed.namespace && control.manifestSha256===parsed.manifestSha256 && control.appSha256===parsed.appSha256 && control.mcpSha256===parsed.mcpSha256)) return false;
       }
     }
     return true;
@@ -157,13 +192,14 @@ export function reviewCodexPluginSkillControls(catalog:CodexNativeSkillCatalog, 
     }
     result.push({...parsed,pluginId:expectedPluginId,...(remotePluginId ? {remotePluginId} : {})});
   }
-  if (!result.length || new Set(result.map(item=>item.name)).size!==result.length) refuse();
+  if ((!result.length && documents.some(document=>document.startsWith(cache+sep)))
+    || new Set(result.map(item=>item.name)).size!==result.length) refuse();
   return result;
 }
 export function isReviewedCodexPluginSkillDisabled(document:string, cache:string, controls:CodexPluginSkillControl[], rules:unknown, read:Read):boolean {
   if (!document.startsWith(cache+sep) || !Array.isArray(controls) || controls.length>4096) return false;
   let parsed:ReturnType<typeof identity>; try { parsed=identity(document,cache,read); } catch { return false; }
-  const reviewed=controls.find(item=>item.name===parsed.name && item.namespace===parsed.namespace && item.pluginParent===parsed.pluginParent && item.manifestSha256===parsed.manifestSha256 && item.appSha256===parsed.appSha256);
+  const reviewed=controls.find(item=>item.name===parsed.name && item.namespace===parsed.namespace && item.pluginParent===parsed.pluginParent && item.manifestSha256===parsed.manifestSha256 && item.appSha256===parsed.appSha256 && item.mcpSha256===parsed.mcpSha256);
   if (!reviewed || (reviewed.remotePluginId !== undefined && !remoteInstallationMatches(reviewed.pluginParent,reviewed.remotePluginId,read))) return false;
   return isCodexNativeSkillDisabled({name:parsed.name,path:document,pluginId:reviewed.pluginId,enabled:true},rules);
 }
