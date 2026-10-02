@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.10.24
+
+- Review supported Codex local stdio MCP tool, approval, timeout and environment metadata while retaining exact capability fingerprints and refusal on remote, authentication, unknown or changed controls.
 
 - Accept verified macOS system-root aliases in native skill inventory and migration while rejecting writable or ACL-replaceable roots, unsafe links, and changed identities.
 

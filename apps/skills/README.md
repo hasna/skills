@@ -525,8 +525,12 @@ Only manifest version metadata may vary. Reviewed app declarations use the impli
 `id`, optional `category`, and optional boolean `required`. The entire canonical app
 file and its presence stay bound; it preserves existing connector availability and
 native capability hints. Changed or unknown app fields, custom references, native
-hooks, commands and MCP controls refuse. Name controls suppress Skills, not every
-plugin capability. No prompt hook starts an app server to obtain this receipt:
+hooks, commands and unsupported MCP controls refuse. Referenced own-root
+`./.mcp.json` declarations may preserve local stdio servers with Codex's typed
+tool, approval, timeout and environment metadata. Their complete fingerprints
+and presence remain bound; review never executes commands or resolves environment
+values. Name controls suppress Skills, not every plugin capability.
+No prompt hook starts an app server to obtain this receipt:
 native startup can maintain caches. The explicit capture starts and closes only its
 own bounded native client; it does not reload an existing agent session.
 Neither a receipt nor a config write proves an existing session adopted new rules;

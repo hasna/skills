@@ -310,7 +310,7 @@ test("reviewed stdio MCP capabilities stay available and bound when only the nat
   JSON.stringify({mcpServers:{probe:{url:"https://example.invalid/mcp"}}}),
   ...["hooks","instructions","auth","oauth","unknown"].map(key=>JSON.stringify({mcpServers:{probe:{command:"synthetic-never-executed",[key]:"unsupported"}}})),
   JSON.stringify({mcpServers:{probe:{command:12}}}),JSON.stringify({mcpServers:{probe:{command:"synthetic-never-executed",args:[12]}}}),
-  JSON.stringify({mcpServers:{probe:{command:"synthetic-never-executed",cwd:null}}}),JSON.stringify({mcpServers:{probe:{command:"synthetic-never-executed",env_vars:["INVALID-NAME"]}}}),
+  JSON.stringify({mcpServers:{probe:{command:"synthetic-never-executed",cwd:12}}}),JSON.stringify({mcpServers:{probe:{command:"synthetic-never-executed",env_vars:["INVALID-NAME"]}}}),
  ]) {put(mcp,invalid);expect(review).toThrow("IDENTITY_UNSUPPORTED");}
  put(mcp,mcpText);
  for(const reference of ["other.json","./../outside.json","/absolute.json"]) {put(manifest,JSON.stringify({name:"vendor",version:"1.0.0",mcpServers:reference}));expect(review).toThrow("IDENTITY_UNSUPPORTED");}
@@ -321,4 +321,44 @@ test("reviewed stdio MCP capabilities stay available and bound when only the nat
  put(mcp,mcpText);put(manifest,manifestText);
  expect(isReviewedCodexPluginSkillDisabled(document,cache,beforeMcp,rules,read)).toBe(false);
  expect(reviewedCodexPluginCapabilitiesUnchanged(cache,beforeMcp,read)).toBe(false);
+});
+
+test("Codex stdio tool metadata preserves capabilities during exact skill denial", () => {
+ const home=mkdtempSync(join(tmpdir(),"skills-mcp-tool-metadata-")); roots.push(home);
+ const f={home,dataDir:join(home,"data"),projectDir:home}, cache=join(home,".codex/plugins/cache"), parent=join(cache,"probe/vendor"), root=join(parent,"1.0.0"), document=join(root,"skills/deploy/SKILL.md"), mcp=join(root,".mcp.json");
+ const server={command:"synthetic-never-executed",args:["--fixture"],cwd:"${CODEX_PLUGIN_ROOT}",env:{},env_vars:["SKILLS_SYNTHETIC_NAME"],enabled:false,default_tools_approval_mode:"approve",omit_tools_from:["deferred"],startup_timeout_sec:30,tool_timeout_sec:60,tools:{synthetic_tool:{approval_mode:"prompt"}}};
+ const text=JSON.stringify({mcpServers:{probe:server}}), read=(path:string)=>readFileSync(path,"utf8");
+ const add=(dir:string,version:string)=>{put(join(dir,".codex-plugin/plugin.json"),JSON.stringify({name:"vendor",version,mcpServers:"./.mcp.json"}));put(join(dir,".mcp.json"),text);put(join(dir,"skills/deploy/SKILL.md"),"---\nname: deploy\ndescription: Synthetic tool metadata\n---\nDisabled body");};
+ add(root,"1.0.0");
+ const catalog={version:"codex-cli 0.160.0",cwd:home,skills:[{name:"vendor:deploy",path:document,enabled:false,pluginId:"vendor@probe"}],plugins:[{id:"vendor@probe",name:"vendor",installed:true,enabled:true,localVersion:"1.0.0"}]};
+ const review=()=>reviewCodexPluginSkillControls(catalog,[document],cache,home,read,[]), controls=review();
+ const plan=planAgentIntegration({...f,agents:["codex"],codexNativeCatalog:catalog});
+ expect(plan.changes.some(change=>change.path===mcp)).toBe(false);
+ applyAgentIntegration(plan);expect(read(mcp)).toBe(text);expect(()=>assertManagedAgentBridge("codex",f)).not.toThrow();
+ expect(read(join(home,".codex/config.toml"))).toContain('name = "vendor:deploy"');
+ const next=join(parent,"2.0.0"), nextDocument=join(next,"skills/deploy/SKILL.md"), rules=[{name:"vendor:deploy",enabled:false}];add(next,"2.0.0");
+ expect(isReviewedCodexPluginSkillDisabled(nextDocument,cache,controls,rules,read)).toBe(true);
+ for (const changed of [
+  {...server,enabled:true},{...server,env:{SKILLS_SYNTHETIC_VALUE:"public-fixture"}},
+  {...server,default_tools_approval_mode:"prompt"},{...server,omit_tools_from:["direct"]},
+  {...server,startup_timeout_sec:31},{...server,tool_timeout_sec:61},
+  {...server,tools:{synthetic_tool:{approval_mode:"writes",output_token_limit:100}}},
+  {...server,enabled_tools:["synthetic_tool"]},{...server,tools:{}},
+ ]) {put(join(next,".mcp.json"),JSON.stringify({mcpServers:{probe:changed}}));expect(isReviewedCodexPluginSkillDisabled(nextDocument,cache,controls,rules,read)).toBe(false);expect(reviewedCodexPluginCapabilitiesUnchanged(cache,controls,read)).toBe(false);}
+ put(join(next,".mcp.json"),text);
+ const stale=planAgentIntegration({...f,agents:["codex"],codexNativeCatalog:catalog});
+ put(mcp,JSON.stringify({mcpServers:{probe:{...server,tools:{}}}}));expect(()=>applyAgentIntegration(stale)).toThrow();put(mcp,text);
+ for (const metadata of [
+  {args:null,cwd:null,env:null,env_vars:null,enabled:null,required:null,tools:null,default_tools_approval_mode:null,omit_tools_from:null,startup_timeout_sec:null,tool_timeout_sec:null},
+  {env:{SKILLS_SYNTHETIC_VALUE:"public-fixture"},enabled_tools:[],disabled_tools:["synthetic_tool"],required:false,startup_readiness:"catalog",environment_id:"local",supports_parallel_tool_calls:true,tool_input_schema_max_bytes:100,startup_timeout_ms:0,tools:{synthetic_tool:{approval_mode:"auto",output_token_limit:100}}},
+ ]) {put(mcp,JSON.stringify({mcpServers:{probe:{...server,...metadata}}}));expect(review).not.toThrow();}
+ for (const invalid of [
+  {enabled:"false"},{env:{SKILLS_SYNTHETIC_VALUE:12}},{env:["unsupported"]},{environment_id:"remote"},
+  {default_tools_approval_mode:"always"},{startup_timeout_sec:-1},{tool_timeout_sec:"60"},{startup_timeout_ms:0.5},
+  {omit_tools_from:["unknown"]},{enabled_tools:[12]},{disabled_tools:"synthetic_tool"},
+  {tools:{synthetic_tool:{approval_mode:"unknown"}}},{tools:{synthetic_tool:{output_token_limit:0}}},{tools:{synthetic_tool:{instructions:"unsupported"}}},
+  {tools:{synthetic_tool:"unsupported"}},{auth:"oauth"},{url:"https://example.invalid/mcp"},{oauth:{}},{http_headers:{}},
+  {hooks:{}},{instructions:"unreviewed"},{env_vars:[{name:"SKILLS_SYNTHETIC_NAME",source:"remote"}]},
+ ]) {put(mcp,JSON.stringify({mcpServers:{probe:{...server,...invalid}}}));expect(review).toThrow("IDENTITY_UNSUPPORTED");}
+ put(mcp,'{"mcpServers":{"probe":{"command":"synthetic-never-executed","tools":{"synthetic_tool":{"approval_mode":"auto","approval_mode":"approve"}}}}}');expect(review).toThrow("IDENTITY_UNSUPPORTED");
 });
