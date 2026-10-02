@@ -1,16 +1,17 @@
 import { reviewCodexPluginSkillControls, isReviewedCodexPluginSkillDisabled, reviewedCodexPluginCapabilitiesUnchanged, disableReviewedCodexPluginNames, type CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
 import { projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
-import { upgradeCodexSettingsWitness } from "./codex-settings-witness.js";
+import { upgradeCodexSettingsWitness, readCodexSettingsPreimage, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
 import { upgradeClaudeSettingsWitness } from "./claude-settings-witness.js";
 import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { existsSync, lstatSync, statSync, mkdirSync, readFileSync, readdirSync, opendirSync, readlinkSync, realpathSync, renameSync, rmdirSync, writeFileSync, unlinkSync, chmodSync, openSync, closeSync, fsyncSync, fstatSync, readSync, constants, linkSync, type Dirent } from "node:fs";
 import { dirname, join, resolve, relative, isAbsolute, sep } from "node:path";
 import { homedir } from "node:os";
 import { getDataDir, getDataDirReadOnly } from "./config.js";
 import { requiresCliSkillLoading, readManagedSkillPolicySnapshot, serializeManagedSkillPolicy, parseManagedSkillPolicy } from "./managed-policy.js";
 import { CLI_BRIDGE_NAME, CLI_BRIDGE_FILES, CLI_BRIDGE_DIGEST, CLI_BRIDGE_VERSION, isOwnedCliBridge } from "./agent-bridge.js";
-import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, rebindAgentDiscovery, type AgentDiscoveryBinding, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
+import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, rebindAgentDiscovery, projectNativeDiscoveryFields, type AgentDiscoveryBinding, type DiscoverySource, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderAgentHookCommand, renderOpenCodePlugin, type IntegrationAgent } from "./agent-adapters.js";
 import { assertCodexPathConfigEditable, CODEX_SKILL_CONFIG_SECTIONS, disableCodexBundledSkills, normalizeCodexInlinePathConfig } from "./agent-codex.js";
 
@@ -25,7 +26,7 @@ export interface NativeSkillEntry { agent: string; path: string; hash: string; m
 export interface NativeMigrationTarget { agent: string; projectRoot: string; path: string; treeSha256: string; vendor?: true }
 export interface NativeMigrationTargetManifest { schema: "hasna.skills-native-migration-targets.v1"; targets: NativeMigrationTarget[]; digest: string }
 export interface AgentConfigChange { path: string; before: string | null; after: string }
-export interface AgentIntegrationPlan { observedNativeSources?: Array<{ path: string; sha256: string }>; codexPluginSkillReview?: { version: string; cwd: string; catalogSha256: string; configSha256: string | null }; observedSettings?: { path: string; before: string }; settingsWitnessUpgrade?: { agent: "claude" | "codex"; path: string; fromHashMode: string; fromSha256: string; toHashMode: string; toSha256: string; reviewedPreimage: string; currentSettingsSha256: string }; dataDir: string; profileId: string; changes: AgentConfigChange[]; nativeSkills: NativeSkillEntry[]; observedPolicy?: { path: string; before: string | null }; discoveryBefore?: AgentDiscoveryBinding[]; discoveryAfter?: AgentDiscoveryBinding[]; rootAliases?: AgentRootAlias[]; managedAgentChecks?: { home: string; agents: IntegrationAgent[] }; retainedReviewChecks?: { home: string; projectDir: string; agents: IntegrationAgent[] } }
+export interface AgentIntegrationPlan { observedNativeSources?: Array<{ path: string; sha256: string }>; codexPluginSkillReview?: { version: string; cwd: string; catalogSha256: string; configSha256: string | null }; observedSettings?: { path: string; before: string }; settingsWitnessUpgrade?: { agent: "claude" | "codex"; path: string; fromHashMode: string; fromSha256: string; toHashMode: string; toSha256: string; reviewedPreimage: string; currentSettingsSha256: string; replacedWitnesses: Array<{ hashMode: string; sha256: string }> }; dataDir: string; profileId: string; changes: AgentConfigChange[]; nativeSkills: NativeSkillEntry[]; observedPolicy?: { path: string; before: string | null }; discoveryBefore?: AgentDiscoveryBinding[]; discoveryAfter?: AgentDiscoveryBinding[]; rootAliases?: AgentRootAlias[]; managedAgentChecks?: { home: string; agents: IntegrationAgent[] }; retainedReviewChecks?: { home: string; projectDir: string; agents: IntegrationAgent[] } }
 
 const sha = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
 const HOOK_EVENTS: readonly ContextHookEvent[] = ["UserPromptSubmit", "SessionStart", "SubagentStart"];
@@ -686,15 +687,37 @@ export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "co
   if (sources.length !== 1) throw new Error("Settings witness upgrade requires one exact settings source");
   const previous = sources[0]!;
   if (typeof previous.sha256 !== "string") throw new Error("Settings witness upgrade requires a preserved settings preimage");
+  // A typed Codex witness replaces every witness of the same file: the exact
+  // reviewed source and the automatic TOML projection, which is order-sensitive
+  // and therefore stops matching as soon as Codex re-serializes the file it owns.
+  const replaced: DiscoverySource[] = [previous];
+  if (options.agent === "codex") {
+    if (previous.hashMode !== undefined && previous.hashMode !== "bytes" && previous.hashMode !== "codex-settings-v1") throw new Error("Codex settings witness upgrade requires a preserved raw or codex-settings-v1 configuration witness");
+    const preimage = readCodexSettingsPreimage(options.reviewedPreimage);
+    for (const source of binding.sources) {
+      if (source === previous || source.path !== configPath) continue;
+      const fields = source.fields;
+      if (source.hashMode !== undefined || source.format !== "toml" || !Array.isArray(fields) || !isDeepStrictEqual(fields, [...CODEX_DISCOVERY_PROJECTION_FIELDS]) || typeof source.sha256 !== "string") throw new Error("Codex settings witness upgrade found an unrecognized configuration witness");
+      // The preserved preimage must explain the narrower witness as well, so a
+      // projection can only be dropped when the review provably covered it.
+      if (projectNativeDiscoveryFields(preimage, "toml", fields, configPath) !== source.sha256) throw new Error("Reviewed preimage does not explain the Codex discovery projection witness");
+      replaced.push(source);
+    }
+  }
   const next = options.agent === "claude"
     ? upgradeClaudeSettingsWitness(previous as Parameters<typeof upgradeClaudeSettingsWitness>[0], options.reviewedPreimage)
     : upgradeCodexSettingsWitness(previous as Parameters<typeof upgradeCodexSettingsWitness>[0], options.reviewedPreimage);
-  const replacement: AgentDiscoveryBinding = { ...binding, sources: binding.sources.map(source => source === previous ? next : source) };
+  const rebound: DiscoverySource[] = [];
+  for (const source of binding.sources) {
+    if (!replaced.includes(source)) { rebound.push(source); continue; }
+    if (source === replaced[0]) rebound.push(next);
+  }
+  const replacement: AgentDiscoveryBinding = { ...binding, sources: rebound };
   // A proved semantic replacement is explicit in this plan. Verify every
   // unrelated source without rebinding it to whatever happens to be on disk.
   verifyAgentDiscovery(replacement);
   const after = serializeManagedSkillPolicy({ ...policy, bridge: { ...policy.bridge, discovery: { ...policy.bridge.discovery, [options.agent]: replacement } } });
-  return { dataDir, profileId: policy.profileId, changes: [{ path: join(dataDir, "agent-policy.json"), before: snapshot.text, after }], nativeSkills: [], observedPolicy: { path: join(dataDir, "agent-policy.json"), before: snapshot.text }, observedSettings: { path: configPath, before: settings }, discoveryBefore: [replacement], discoveryAfter: [replacement], rootAliases: aliases, managedAgentChecks: { home, agents: [options.agent] }, settingsWitnessUpgrade: { agent: options.agent, path: configPath, fromHashMode: previous.hashMode ?? "bytes", fromSha256: previous.sha256, toHashMode: next.hashMode, toSha256: next.sha256, reviewedPreimage: options.reviewedPreimage, currentSettingsSha256: options.expectedSettingsSha256 } };
+  return { dataDir, profileId: policy.profileId, changes: [{ path: join(dataDir, "agent-policy.json"), before: snapshot.text, after }], nativeSkills: [], observedPolicy: { path: join(dataDir, "agent-policy.json"), before: snapshot.text }, observedSettings: { path: configPath, before: settings }, discoveryBefore: [replacement], discoveryAfter: [replacement], rootAliases: aliases, managedAgentChecks: { home, agents: [options.agent] }, settingsWitnessUpgrade: { agent: options.agent, path: configPath, fromHashMode: previous.hashMode ?? "bytes", fromSha256: previous.sha256, toHashMode: next.hashMode, toSha256: next.sha256, reviewedPreimage: options.reviewedPreimage, currentSettingsSha256: options.expectedSettingsSha256, replacedWitnesses: replaced.map(source => ({ hashMode: source.hashMode ?? "bytes", sha256: source.sha256! })) } };
 }
 
 export function applyAgentIntegration(plan: AgentIntegrationPlan): { changed: string[]; backups: string[]; rootAliases?: AgentRootAlias[] } {

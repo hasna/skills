@@ -1,13 +1,53 @@
-/** Explicit semantic witness for Codex display/inference preferences. */
+/** Explicit semantic witness for Codex inference preferences and native-owned state.
+ *
+ * The reviewed witness binds the complete `config.toml` apart from four
+ * documented classes that are not discovery inputs, and that Codex or the
+ * installer rewrites on their own:
+ *
+ *   1. `hooks.state` — the native hook-trust ledger (`enabled`, `trusted_hash`
+ *      per hook key). Codex writes it whenever it (re)trusts a hook, and
+ *      `skills hook trust` writes it too. Every hook *declaration* stays bound:
+ *      `hooks` keys other than `state`, project `.codex/config.toml` layers and
+ *      the managed `hooks.json` inventory are witnessed separately, so a new or
+ *      changed hook command still refuses.
+ *   2. Table/block order and other serialization-only differences — TOML table
+ *      order carries no meaning, so the projection is canonicalized and the
+ *      numeric-token binding is order-insensitive.
+ *   3. `[[skills.config]]` registrations that only disable a skill. An explicit
+ *      `enabled = false` entry cannot add a discovery input, and the installer
+ *      writes those entries itself for every native copy it retires. Any entry
+ *      that can enable something — `enabled = true`, a missing or non-boolean
+ *      `enabled`, an unknown key, or an entry without an unambiguous selector —
+ *      stays bound.
+ *   4. Inference selections (`model`, `model_reasoning_effort`,
+ *      `model_verbosity`) at the document root and inside `[profiles.*]`. They
+ *      select a model, never a file, root, hook or provider route. Unknown or
+ *      malformed values still refuse, and every other key — including
+ *      `model_provider`, `[model_providers.*]`, `plugins`, `marketplaces`,
+ *      `skills.bundled`, `[projects.*]` trust, `[mcp_servers.*]`, environment and
+ *      unknown fields — stays fully bound.
+ */
+import { hashCodexSettingsReplacement as hashCodexSettingsReplacementV1 } from "./codex-settings-witness-v1.js";
+export { captureCodexSettings, hashCodexSettingsReplacement } from "./codex-settings-witness-v1.js";
 import { createHash } from "node:crypto";
 import { readNativeSettingsWitnessFile, type ClaudeSettingsWitnessBudget } from "./claude-settings-witness.js";
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 const EFFORT = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
 const VERBOSITY = new Set(["low", "medium", "high"]);
+const MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+/** The Codex discovery fields the automatic TOML projection witnesses. A typed
+ * `codex-settings-v2` witness binds strictly more of the same file, so it
+ * supersedes this projection instead of coexisting with it. */
+export const CODEX_DISCOVERY_PROJECTION_FIELDS = ["plugins", "marketplaces", "skills"] as const;
+const INFERENCE = ["model", "model_reasoning_effort", "model_verbosity"] as const;
 function need(value: unknown): asserts value { if (!value) throw new Error("Invalid Codex settings witness"); }
+function isRecord(value: unknown): value is Record<string, any> { return Boolean(value && typeof value === "object" && !Array.isArray(value)); }
+function isDate(value: unknown): value is Date { return value instanceof Date; }
 // Preserve unknown number/date spelling as well as parsed values. TOML parsers
-// can otherwise collapse integer/float or large-number representations. This
-// conservatively binds token order while ignoring comments and quoted strings.
+// can otherwise collapse integer/float or large-number representations. The
+// tokens are compared as an order-insensitive multiset: the canonical structure
+// already binds each value to its key, so re-serialization cannot make an
+// unchanged file look changed.
 function numericTokens(text: string): string[] {
   const result: string[] = [];
   for (let at = 0; at < text.length;) {
@@ -29,7 +69,7 @@ function numericTokens(text: string): string[] {
     }
     at++;
   }
-  return result;
+  return result.sort();
 }
 function canonical(value: unknown, depth = 0, budget = { remaining: 65536 }): unknown {
   need(depth <= 32 && --budget.remaining >= 0);
@@ -37,36 +77,74 @@ function canonical(value: unknown, depth = 0, budget = { remaining: 65536 }): un
   if (typeof value === "string") return ["string", value];
   if (typeof value === "boolean") return ["boolean", value];
   if (typeof value === "number") { need(Number.isFinite(value)); return ["number", String(value)]; }
-  if (value instanceof Date) { need(Number.isFinite(value.getTime())); return ["date", value.toISOString()]; }
+  if (isDate(value)) { need(Number.isFinite(value.getTime())); return ["date", value.toISOString()]; }
   if (Array.isArray(value)) return ["array", value.map(child => canonical(child, depth + 1, budget))];
-  need(value && typeof value === "object");
+  need(isRecord(value));
   return ["object", Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, child]) => [key, canonical(child, depth + 1, budget)])];
 }
-export function hashCodexSettingsReplacement(text: string, budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }): string {
-  need(Buffer.byteLength(text) <= 1024 * 1024 && budget.remaining >= Buffer.byteLength(text)); budget.remaining -= Buffer.byteLength(text);
+/** Remove only the documented non-discovery classes. Malformed values for an
+ * otherwise-normalized key refuse instead of being adopted silently. */
+function normalize(config: Record<string, any>): void {
+  if (isRecord(config.hooks)) {
+    delete config.hooks.state;
+    // An empty `[hooks]` table means the same as no hooks configuration at all.
+    if (!Object.keys(config.hooks).length) delete config.hooks;
+  }
+  if (isRecord(config.skills) && Array.isArray(config.skills.config)) {
+    const skills = config.skills;
+    const retained = skills.config.filter((entry: unknown) => !disablesOneSkill(entry));
+    if (retained.length !== skills.config.length) {
+      if (retained.length) skills.config = retained;
+      else delete skills.config;
+    }
+    if (!Object.keys(skills).length) delete config.skills;
+  }
+  inference(config);
+  if (isRecord(config.profiles)) for (const profile of Object.values(config.profiles)) if (isRecord(profile)) inference(profile);
+}
+/** A registration that cannot enable anything: one unambiguous selector and an
+ * explicit `enabled = false`, with no other key to reinterpret. */
+function disablesOneSkill(entry: unknown): boolean {
+  if (!isRecord(entry) || entry.enabled !== false) return false;
+  const keys = Object.keys(entry);
+  if (!keys.every(key => key === "path" || key === "name" || key === "enabled")) return false;
+  const selector = (["path", "name"] as const).filter(key => Object.hasOwn(entry, key));
+  return selector.length === 1 && typeof entry[selector[0]!] === "string" && entry[selector[0]!].length > 0;
+}
+function inference(target: Record<string, any>): void {
+  for (const key of INFERENCE) if (Object.hasOwn(target, key)) {
+    const value = target[key];
+    if (key === "model") need(typeof value === "string" && MODEL.test(value));
+    else need(typeof value === "string" && (key === "model_reasoning_effort" ? EFFORT.has(value) : VERBOSITY.has(value)));
+    delete target[key];
+  }
+}
+function settingsDigest(text: string): string {
   let config: any;
   try { config = Bun.TOML.parse(text); } catch { throw new Error("Invalid Codex settings witness"); }
-  need(config && typeof config === "object" && !Array.isArray(config));
-  if (Object.hasOwn(config, "model")) {
-    need(typeof config.model === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(config.model)); delete config.model;
-  }
-  for (const [key, values] of [["model_reasoning_effort", EFFORT], ["model_verbosity", VERBOSITY]] as const) if (Object.hasOwn(config, key)) {
-    need(typeof config[key] === "string" && values.has(config[key])); delete config[key];
-  }
-  // All plugin, hook, skills, provider, project trust, environment and unknown
-  // fields remain bound. Legacy raw witnesses are never interpreted here.
-  return sha(`hasna.skills.codex-settings.v1\0${JSON.stringify([canonical(config), numericTokens(text)])}`);
+  need(isRecord(config));
+  normalize(config);
+  return sha(`hasna.skills.codex-settings.v2\0${JSON.stringify([canonical(config), numericTokens(text)])}`);
 }
-export function captureCodexSettings(path: string, budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }): { path: string; hashMode: "codex-settings-v1"; sha256: string } {
+export function hashCodexSettingsReplacementV2(text: string, budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }): string {
+  need(Buffer.byteLength(text) <= 1024 * 1024 && budget.remaining >= Buffer.byteLength(text)); budget.remaining -= Buffer.byteLength(text);
+  return settingsDigest(text);
+}
+export function captureCodexSettingsV2(path: string, budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }): { path: string; hashMode: "codex-settings-v2"; sha256: string } {
   const text = readNativeSettingsWitnessFile(path, budget, "config.toml");
-  return { path, hashMode: "codex-settings-v1", sha256: hashCodexSettingsReplacement(text) };
+  return { path, hashMode: "codex-settings-v2", sha256: settingsDigest(text) };
 }
-export function upgradeCodexSettingsWitness(previous: { path: string; hashMode?: "bytes"; sha256: string }, reviewedSettingsPath: string): ReturnType<typeof captureCodexSettings> {
-  need(previous && Object.keys(previous).every(key => ["path", "hashMode", "sha256"].includes(key)) && (previous.hashMode === undefined || previous.hashMode === "bytes") && /^[a-f0-9]{64}$/.test(previous.sha256));
+/** Read one preserved review preimage under the exact witness file rules, so a
+ * caller can prove additional legacy witnesses against the same bytes. */
+export function readCodexSettingsPreimage(path: string, budget: ClaudeSettingsWitnessBudget = { remaining: 2 * 1024 * 1024 }): string {
+  return readNativeSettingsWitnessFile(path, budget, "config.toml");
+}
+export function upgradeCodexSettingsWitness(previous: { path: string; hashMode?: "bytes" | "codex-settings-v1"; sha256: string }, reviewedSettingsPath: string): ReturnType<typeof captureCodexSettingsV2> {
+  need(previous && Object.keys(previous).every(key => ["path", "hashMode", "sha256"].includes(key)) && (previous.hashMode === undefined || previous.hashMode === "bytes" || previous.hashMode === "codex-settings-v1") && /^[a-f0-9]{64}$/.test(previous.sha256));
   const budget = { remaining: 2 * 1024 * 1024 };
   const before = readNativeSettingsWitnessFile(reviewedSettingsPath, budget, "config.toml"), current = readNativeSettingsWitnessFile(previous.path, budget, "config.toml");
-  need(sha(before) === previous.sha256);
-  const sha256 = hashCodexSettingsReplacement(current);
-  if (hashCodexSettingsReplacement(before) !== sha256) throw new Error("Codex non-preference settings changed; explicit discovery review required");
-  return { path: previous.path, hashMode: "codex-settings-v1", sha256 };
+  need((previous.hashMode === "codex-settings-v1" ? hashCodexSettingsReplacementV1(before) : sha(before)) === previous.sha256);
+  const sha256 = settingsDigest(current);
+  if (settingsDigest(before) !== sha256) throw new Error("Codex non-preference settings changed; explicit discovery review required");
+  return { path: previous.path, hashMode: "codex-settings-v2", sha256 };
 }

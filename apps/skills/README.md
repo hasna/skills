@@ -459,12 +459,32 @@ skills hook rebind-settings --agent codex \
   --expected-settings-sha256 <current-settings-sha256> --json
 ```
 
-The plan proves the preserved original matches the old witness, permits only
-supported preference differences, and labels the replacement witness. `--apply`
-preserves and reads back the original policy before writing. Claude upgrades to
-`claude-settings-v3`; Codex uses `codex-settings-v1` for typed model, effort and
-verbosity preferences. Provider mappings, environment, hooks, plugins, skill rules
-and all unknown settings stay bound. Runtime hooks never silently upgrade a witness.
+The plan proves the preserved original matches every witness being replaced,
+permits only the documented non-discovery differences, and labels the replacement
+witness (the JSON receipt lists them under `replacedWitnesses`). `--apply`
+preserves and reads back the original policy before writing, and never writes the
+native configuration. Claude upgrades to `claude-settings-v3`; Codex uses
+`codex-settings-v2`, which also replaces the narrower automatic
+`plugins`/`marketplaces`/`skills` projection of the same file once the preserved
+original is proved to explain it. That projection is order-sensitive, so it keeps
+failing after Codex re-serializes the file it owns.
+
+Existing `codex-settings-v1` witnesses retain their original verifier. New reviews
+use `skills hook witness --kind codex-settings-v2 --path <config.toml> --json`.
+The guarded rebind accepts a raw or v1 witness only when the exact preserved
+configuration proves its original digest and any automatic projection. Without
+that preimage, capture a fresh native catalog and explicitly review all discovery
+inputs before installing a v2 binding; runtime never adopts drift automatically.
+
+The Codex v2 witness binds the whole configuration apart from native-owned state
+that is not a discovery input: the `hooks.state` trust ledger Codex rewrites when
+it trusts a hook, table order and other serialization-only differences, retired
+`[[skills.config]]` entries that explicitly disable one skill, and `model`,
+`model_reasoning_effort` and `model_verbosity` at the root or in `[profiles.*]`.
+Every hook declaration, provider mapping, plugin, skill source or enablement,
+project-trust entry, environment setting and unknown field stays bound, and a
+malformed inference selection refuses instead of being adopted. Runtime hooks
+never silently upgrade a witness.
 
 A supported Codex native skill and installed-plugin receipt can be captured through the
 package-owned client into a new private file, then reviewed and passed to
