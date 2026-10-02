@@ -6,6 +6,8 @@
 
 - Qualify Codex 0.160.0 native hook dispatch and skill catalog/name-denial semantics through one shared compatibility registry; retain trust guards and refuse unmeasured versions.
 
+- Preserve existing Codex v1 witnesses and add explicit v2 reviews plus exact-preimage guarded rebind for benign hook-trust, serialization and disabled-skill changes; retain discovery-change refusals.
+
 ## 0.10.20
 
 ### Patch Changes

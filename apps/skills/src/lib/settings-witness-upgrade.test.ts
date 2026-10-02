@@ -1,6 +1,6 @@
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { test, expect, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -11,7 +11,7 @@ const sha = (s:string) => createHash("sha256").update(s).digest("hex");
 const roots:string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, {recursive:true,force:true}); });
 for (const agent of ["claude", "codex"] as const) test(`${agent} explicit raw review upgrade preserves original and permits only preferences`, () => {
-  const home = mkdtempSync(join(tmpdir(), "skills-witness-")); roots.push(home);
+  const home = mkdtempSync(join(realpathSync(tmpdir()), "skills-witness-")); roots.push(home);
   const dataDir = join(home, "data"), config = join(home, agent === "claude" ? ".claude/settings.json" : ".codex/config.toml");
   const f = {home, dataDir, projectDir:home};
   applyAgentIntegration(planAgentIntegration({...f,agents:[agent]}));

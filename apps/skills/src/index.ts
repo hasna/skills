@@ -532,5 +532,5 @@ export { assertPortableAuthoringPath, type PortableAuthoringPathOptions } from "
 
 export { CLAUDE_COORDINATED_HOOK_EVENTS, type ClaudeCoordinatedHookEvent } from "./lib/claude-settings-witness.js";
 
-export { captureCodexSettings, upgradeCodexSettingsWitness } from "./lib/codex-settings-witness.js";
+export { captureCodexSettings, captureCodexSettingsV2, upgradeCodexSettingsWitness } from "./lib/codex-settings-witness.js";
 export { projectCodexNativeSkillCatalog, projectCodexInstalledPlugins, projectCodexInstalledPluginEntries, captureCodexNativeSkillCatalog, isCodexNativeSkillDisabled, type CodexNativeSkillCatalog, type CodexNativeSkill, type CodexInstalledPlugin } from "./lib/codex-native-skill-catalog.js";

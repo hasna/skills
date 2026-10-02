@@ -13,7 +13,7 @@ import { enrollCodexNativeHooks, reconcileCodexNativeHooks } from "../../lib/age
 import { HookDiagnosticError, hookChildError, hookFailureReason, isOptionalHookContextFailure, hookUnavailableContext } from "../../lib/hook-diagnostics.js";
 import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib/selection-cache.js";
 import { captureClaudeSettingsV2, captureClaudeSettingsV3 } from "../../lib/claude-settings-witness.js";
-import { captureCodexSettings } from "../../lib/codex-settings-witness.js";
+import { captureCodexSettings, captureCodexSettingsV2 } from "../../lib/codex-settings-witness.js";
 import { captureClaudeMarketplaceRegistryV2 } from "../../lib/claude-marketplace-registry.js";
 import { captureCodexNativeSkillCatalog } from "../../lib/codex-native-skill-catalog.js";
 
@@ -113,15 +113,15 @@ export function registerAgentIntegration(parent: Command): void {
       }
     });
   hook.command("witness")
-    .requiredOption("--kind <kind>", "claude-settings-v3, claude-settings-v2, codex-settings-v1 or claude-marketplace-registry-v2")
+    .requiredOption("--kind <kind>", "claude-settings-v3, claude-settings-v2, codex-settings-v2, codex-settings-v1 or claude-marketplace-registry-v2")
     .requiredOption("--path <path>", "Canonical absolute path to the reviewed settings or registry file")
     .option("--json", "Output the discovery witness as JSON", false)
     .description("Capture an explicit versioned review witness without installing it")
     .action(async (options: {kind: string; path: string}) => {
-      const capture = options.kind === "codex-settings-v1" ? captureCodexSettings : options.kind === "claude-settings-v3" ? captureClaudeSettingsV3
+      const capture = options.kind === "codex-settings-v2" ? captureCodexSettingsV2 : options.kind === "codex-settings-v1" ? captureCodexSettings : options.kind === "claude-settings-v3" ? captureClaudeSettingsV3
         : options.kind === "claude-settings-v2" ? captureClaudeSettingsV2
         : options.kind === "claude-marketplace-registry-v2" ? captureClaudeMarketplaceRegistryV2 : null;
-      if (!capture) throw new Error("Unsupported witness kind; select claude-settings-v3, claude-settings-v2, codex-settings-v1 or claude-marketplace-registry-v2");
+      if (!capture) throw new Error("Unsupported witness kind; select claude-settings-v3, claude-settings-v2, codex-settings-v2, codex-settings-v1 or claude-marketplace-registry-v2");
       await writeCliOutput(JSON.stringify(capture(options.path), null, 2));
     });
   hook.command("rebind-settings")

@@ -4,10 +4,11 @@ import type { AgentDiscoveryBinding, DiscoverySource } from "./agent-discovery.j
 import { need, unchanged, type snapshot } from "./codex-hook-trust-files.js";
 import { codexTrustReconcileWitness, codexTrustUnmanagedSemantic } from "./codex-hook-trust-layout.js";
 import { readReviewedAdditionTrustStates, type ReviewedNativeHookAdditions } from "./codex-hook-additions-review.js";
+import { CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
 
 type Snapshot = ReturnType<typeof snapshot>;
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
-const fields = ["plugins", "marketplaces", "skills"];
+const fields = [...CODEX_DISCOVERY_PROJECTION_FIELDS];
 const structure = (text: string): any => JSON.parse(JSON.stringify(Bun.TOML.parse(text)));
 
 /** A receipt projection, not an override supplied by a CLI caller. Only this
