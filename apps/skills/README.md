@@ -2276,7 +2276,8 @@ materialization; it does not infer the installed version or enable cached skills
 
 ### Reviewing Codex inference and local MCP settings
 
-`codex-settings-v3` reviews tolerate model/effort/verbosity/service-tier changes
+`codex-settings-v3` reviews tolerate model/effort/verbosity/service-tier changes,
+and root/profile `personality` values `none`, `friendly`, or `pragmatic`,
 and typed ordinary local stdio MCP configuration updates. The local MCP catalog
 is separate from native skill discovery; MCP servers can still supply tool
 context and instructions. This witness does not authenticate server responses.
@@ -2284,6 +2285,11 @@ Provider/auth/cloud routing, instruction files, context limits, native
 skills/plugins/hooks, reserved Apps MCP servers and unknown fields stay bound.
 HTTP, OAuth, remote-environment and unsupported MCP layouts retain their full
 witness. V1/V2 reviews retain their original digest meaning.
+
+The personality extension leaves existing V3 digests without that field unchanged.
+A stored review that included personality requires a fresh explicit review before
+its changed digest can be adopted. Unknown values and other personality fields
+(including `features.personality`) remain refused or bound.
 
 Capture a new review with `skills hook witness --kind codex-settings-v3 --path
 /absolute/path/config.toml`. To migrate an existing raw, V1 or V2 review, preserve

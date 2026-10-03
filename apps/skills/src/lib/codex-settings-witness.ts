@@ -28,7 +28,7 @@
  *      unknown fields — stays fully bound.
  *
  * V3 is explicitly selected and preserves V1/V2 digest meanings. It adds
- * service-tier and model-advertised plan/reasoning effort selections plus the
+ * service-tier, native personality and model-advertised plan/reasoning effort selections plus the
  * schema-validated ordinary local stdio MCP projection. Reserved Apps, remote,
  * auth, HTTP, unknown and unsupported MCP contracts remain fully bound.
  */
@@ -118,10 +118,13 @@ function disablesOneSkill(entry: unknown): boolean {
   return selector.length === 1 && typeof entry[selector[0]!] === "string" && entry[selector[0]!].length > 0;
 }
 function inference(target: Record<string, any>, version: 2 | 3): void {
-  const keys = version === 3 ? [...INFERENCE, "service_tier", "plan_mode_reasoning_effort"] : INFERENCE;
+  const keys = version === 3 ? [...INFERENCE, "service_tier", "plan_mode_reasoning_effort", "personality"] : INFERENCE;
   for (const key of keys) if (Object.hasOwn(target, key)) {
     const value = target[key];
     if (key === "model") need(typeof value === "string" && MODEL.test(value));
+    // Codex 0.160's deprecated native enum only selects/removes model-catalog
+    // styling. It cannot name an external instruction file or discovery root.
+    else if (key === "personality") need(typeof value === "string" && ["none", "friendly", "pragmatic"].includes(value));
     else if (version === 3 && key !== "model_verbosity") {
       // Codex 0.160: request ids are strings; effort is model-advertised, not a
       // fixed enum. Bound scalar text, never routes, instructions or paths.
