@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.26
+
+- Keep attested Codex plugin installation inputs inert when reviewed discovery starts in a descendant skills directory; retain installed-cache and native-root checks.
+
 ## 0.10.25
 
 - Keep positively attested, config-disabled Codex local plugin caches inert across version refreshes, without relaxing active hook or capability review.
