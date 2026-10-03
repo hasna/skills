@@ -11,6 +11,7 @@ import { inventoryNativeSkills } from "./agent-integration.js";
 import { reviewedCodexPluginSourceRoots } from "./codex-plugin-skill-controls.js";
 import { assertAgentPolicyCollections } from "./agent-policy-limits.js";
 import { captureDiscoveryDirectories } from "./agent-discovery.js";
+import { parseManagedSkillPolicy } from "./managed-policy.js";
 useDefaultTestTimeout();
 const roots:string[]=[]; afterEach(()=>{for(const root of roots.splice(0)) rmSync(root,{recursive:true,force:true});});
 const put=(p:string,s:string)=>{mkdirSync(join(p,".."),{recursive:true});writeFileSync(p,s);};
@@ -319,7 +320,7 @@ test("inert disabled plugin documents do not block qualified review while active
  expect(()=>assertManagedAgentBridge("codex",f)).toThrow("NATIVE_SKILL_DRIFT");
 });
 
-test("native local installation inputs remain inventoried for evidence but are not loaded skill roots", () => {
+for (const rootKind of ["plugin", "skills"] as const) test(`native local installation inputs remain inventory-only with a configured ${rootKind} root`, () => {
  const home=mkdtempSync(join(tmpdir(),"skills-native-install-input-"));roots.push(home);
  const cache=join(home,".codex/plugins/cache"), installedRoot=join(cache,"probe/vendor/1.0.0"), sourceRoot=join(home,"installation-input/vendor");
  const installedDoc=join(installedRoot,"skills/deploy/SKILL.md"), sourceDoc=join(sourceRoot,"skills/deploy/SKILL.md"), sourceManifest=join(sourceRoot,".codex-plugin/plugin.json");
@@ -336,28 +337,41 @@ test("native local installation inputs remain inventoried for evidence but are n
  const inventoryOptions={includeVendor:true,agents:["codex" as const],agentRoots:[{agent:"codex",path:sourceRoot}]};
  expect(inventoryNativeSkills(home,inventoryOptions).filter(entry=>!entry.bridge)).toHaveLength(2);
  expect(inventoryNativeSkills(home,{...inventoryOptions,codexInstallationInputRoots:sourceRoots}).filter(entry=>!entry.bridge).map(entry=>entry.path)).toEqual([dirname(installedDoc)]);
- const f={home,dataDir:join(home,"data"),projectDir:home,agents:["codex" as const],codexNativeCatalog:catalog,discoveryInputs:{version:1 as const,agents:[{agent:"codex" as const,roots:[sourceRoot],sources:[config,sourceManifest,sourceDoc].map(path=>({path,sha256:hash(path)})),directories:captureDiscoveryDirectories([dirname(sourceRoot),sourceRoot]),pluginHooks:"reviewed-no-skill-injection" as const}]}};
+ const configuredRoot=rootKind === "skills" ? join(sourceRoot,"skills") : sourceRoot;
+ const f={home,dataDir:join(home,"data"),projectDir:home,agents:["codex" as const],codexNativeCatalog:catalog,discoveryInputs:{version:1 as const,agents:[{agent:"codex" as const,roots:[configuredRoot],sources:[config,sourceManifest,sourceDoc].map(path=>({path,sha256:hash(path)})),directories:captureDiscoveryDirectories([dirname(sourceRoot),sourceRoot]),pluginHooks:"reviewed-no-skill-injection" as const}]}};
  const plan=planAgentIntegration(f);applyAgentIntegration(plan);
- expect(()=>assertManagedAgentBridge("codex",f)).not.toThrow();
- const stored=JSON.parse(read(join(f.dataDir,"agent-policy.json"))).bridge.discovery.codex;
+ const policyText=read(join(f.dataDir,"agent-policy.json"));
+ const stored=JSON.parse(policyText).bridge.discovery.codex;
+ const rehydrated=parseManagedSkillPolicy(policyText).bridge?.discovery?.codex;
+ expect(rehydrated).toEqual(stored);
+ expect(rehydrated?.codexInstallationInputs?.plugins).toHaveLength(1);
+ expect(rehydrated?.codexInstallationInputs?.plugins[0]?.sourceRoot).toBe(sourceRoot);
+ expect(rehydrated?.roots).toEqual([configuredRoot]);
+ // Exercise the persisted policy, without a new native catalog or input envelope.
+ const runtime={home,dataDir:f.dataDir,projectDir:home};
+ expect(()=>assertManagedAgentBridge("codex",runtime)).not.toThrow();
+ expect(inventoryNativeSkills(home,{...inventoryOptions,agentRoots:[{agent:"codex",path:configuredRoot}],codexInstallationInputRoots:sourceRoots}).filter(entry=>!entry.bridge).map(entry=>entry.path)).toEqual([dirname(installedDoc)]);
  // Input-body and recursive membership churn never changes native loaded roots.
  put(sourceDoc,'---\nname: deploy\ndescription: Updated installation input\n---\nChanged upstream template');
  put(join(sourceRoot,"skills/new-template/SKILL.md"),'---\nname: template-only\ndescription: Synthetic template addition\n---\nNew input directory');
- expect(()=>assertManagedAgentBridge("codex",f)).not.toThrow();
+ expect(()=>assertManagedAgentBridge("codex",runtime)).not.toThrow();
  expect(()=>planAgentIntegration({home,dataDir:f.dataDir,projectDir:home,agents:["codex"]})).not.toThrow();
  expect(JSON.parse(read(join(f.dataDir,"agent-policy.json"))).bridge.discovery.codex).toEqual(stored);
  // Installation identity and installed capabilities remain witnessed.
  const beforeSourceManifest=read(sourceManifest);
  put(sourceManifest,'{"name":"different","version":"2.0.0"}');
- expect(()=>assertManagedAgentBridge("codex",f)).toThrow("NATIVE_SKILL_DRIFT");
+ expect(()=>assertManagedAgentBridge("codex",runtime)).toThrow("NATIVE_SKILL_DRIFT");
  put(sourceManifest,beforeSourceManifest);
  const beforeManifest=read(join(installedRoot,".codex-plugin/plugin.json"));
  put(join(installedRoot,".codex-plugin/plugin.json"),'{"name":"vendor","version":"1.0.0","hooks":{}}');
  expect(reviewedCodexPluginCapabilitiesUnchanged(cache,review.skills,read)).toBe(false);
- expect(()=>assertManagedAgentBridge("codex",f)).toThrow("NATIVE_SKILL_DRIFT");
+ expect(()=>assertManagedAgentBridge("codex",runtime)).toThrow("NATIVE_SKILL_DRIFT");
  put(join(installedRoot,".codex-plugin/plugin.json"),beforeManifest);
  put(join(dirname(sourceRoot),"unmapped/SKILL.md"),'---\nname: unmapped\ndescription: Synthetic unrelated root\n---\nUnreviewed input');
- expect(()=>assertManagedAgentBridge("codex",f)).toThrow("NATIVE_SKILL_DRIFT");
+ expect(()=>assertManagedAgentBridge("codex",runtime)).toThrow("NATIVE_SKILL_DRIFT");
+ const prefixSibling=join(sourceRoot+"-other","skills/unreviewed/SKILL.md");
+ put(prefixSibling,'---\nname: prefix-sibling\ndescription: Synthetic sibling\n---\nUnreviewed body');
+ expect(inventoryNativeSkills(home,{...inventoryOptions,agentRoots:[{agent:"codex",path:dirname(dirname(prefixSibling))}],codexInstallationInputRoots:sourceRoots}).some(entry=>entry.path===dirname(prefixSibling))).toBe(true);
  // A template is not admitted by pathname, shared bytes, or missing provenance.
  expect(()=>reviewedCodexPluginSourceRoots(cache,[{...review.sourceInputs[0]!,sourceRoot:installedRoot}],read)).toThrow();
  expect(()=>reviewedCodexPluginSourceRoots(cache,[...review.sourceInputs,...review.sourceInputs],read)).toThrow();

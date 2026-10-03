@@ -338,7 +338,7 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
     if (!admitted) admit(path);
     const scan: Scan = { complete: true, hasSkills: false, entries: 1 };
     assertSafePath(path);
-    if (configuredRoot && agent === "codex" && installationInputs.includes(path)) return scan;
+    if (configuredRoot && agent === "codex" && installationInputs.some(root => path === root || path.startsWith(`${root}${sep}`))) return scan;
     if (!existsSync(path)) return scan;
     const stat = lstatSync(path);
     if (stat.isFile()) return scan;
