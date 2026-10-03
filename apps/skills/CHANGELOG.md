@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.28
+
+- Tolerate Codex's typed root/profile personality preference changes in V3 settings reviews while preserving native instruction, discovery and provider controls.
+- Keep existing V3 digests without personality unchanged; require explicit review for stored witnesses that included that field.
+
 ## 0.10.27
 
 - Add explicitly reviewed Codex V3 settings witnesses that tolerate inference preferences and supported ordinary local stdio MCP upgrades without changing native discovery guards.
