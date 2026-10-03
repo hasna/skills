@@ -164,6 +164,10 @@ jobs:
         working-directory: apps/skills
         run: bun install --frozen-lockfile --ignore-scripts --backend copyfile
 
+      - name: Scan changed source lines for credentials
+        working-directory: apps/skills
+        run: bun run scripts/scan-changed-secrets.ts refs/remotes/origin/main
+
       - name: Verify the standalone Skills producer graph
         working-directory: apps/skills
         run: |
