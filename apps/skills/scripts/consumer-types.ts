@@ -77,6 +77,7 @@ const categoryRecords: Array<(typeof callerCatalog)[number]> = getSkillsByCatego
 const tagRecords: Array<(typeof callerCatalog)[number]> = getSkillsByTag("writ", callerCatalog);
 const exactCredits: 7 = categoryRecords[0]!.productMetadata.credits;
 const callerTags: string[] = getAllTags(callerCatalog);
+const inlineCallerTags: string[] = getAllTags([{ category: "Caller category", tags: ["Writing"], productMetadata: { credits: 7 } }]);
 const defaultCategoryRecords: SkillMeta[] = getSkillsByCategory("Content Generation");
 const defaultTagRecords: SkillMeta[] = getSkillsByTag("writing");
 const undefinedCategoryRecords: SkillMeta[] = getSkillsByCategory("Content Generation", undefined);
@@ -86,6 +87,7 @@ const emptyTagRecords: never[] = getSkillsByTag("writing", [] as const);
 const emptyTags: string[] = getAllTags([] as const);
 declare const optionalCatalog: typeof callerCatalog | undefined;
 const optionalCategoryRecords: Array<(typeof callerCatalog)[number] | SkillMeta> = getSkillsByCategory("Content Generation", optionalCatalog);
+const optionalCustomCategoryRecords: Array<(typeof callerCatalog)[number] | SkillMeta> = getSkillsByCategory("Caller category", optionalCatalog);
 const optionalTagRecords: Array<(typeof callerCatalog)[number] | SkillMeta> = getSkillsByTag("writing", optionalCatalog);
 // @ts-expect-error Caller catalogs retain readonly tags and product metadata.
 categoryRecords[0]!.tags.push("mutated");

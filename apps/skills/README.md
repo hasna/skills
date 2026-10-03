@@ -2295,3 +2295,26 @@ review a cached skill only when its native installed/enabled plugin ID matches
 Codex's local remote install receipt, its manifest and capability controls are
 bound, and its exact path is already effectively disabled. This reviews a denied
 materialization; it does not infer the installed version or enable cached skills.
+
+### Reviewing Codex inference and local MCP settings
+
+`codex-settings-v3` reviews tolerate model/effort/verbosity/service-tier changes
+and typed ordinary local stdio MCP configuration updates. The local MCP catalog
+is separate from native skill discovery; MCP servers can still supply tool
+context and instructions. This witness does not authenticate server responses.
+Provider/auth/cloud routing, instruction files, context limits, native
+skills/plugins/hooks, reserved Apps MCP servers and unknown fields stay bound.
+HTTP, OAuth, remote-environment and unsupported MCP layouts retain their full
+witness. V1/V2 reviews retain their original digest meaning.
+
+Capture a new review with `skills hook witness --kind codex-settings-v3 --path
+/absolute/path/config.toml`. To migrate an existing raw, V1 or V2 review, preserve
+and read back its exact reviewed configuration, then use `skills hook
+rebind-settings --agent codex --codex-witness-version 3 --reviewed-preimage
+/absolute/preserved/config.toml --expected-policy-sha256 <current-policy-hash>
+--expected-settings-sha256 <current-config-hash>`; add `--apply` after reviewing
+the plan. The legacy target remains V2 when the version option is omitted.
+Migration compares the original witness before projecting the new contract,
+refuses native discovery or unknown control changes, and changes policy only.
+After explicit migration, ordinary supported local MCP updates require no
+coordinated policy write.

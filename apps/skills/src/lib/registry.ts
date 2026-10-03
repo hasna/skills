@@ -162,7 +162,7 @@ export function clearRegistryCache(): void {
 /** Query a caller catalog without reading configuration; omitted catalogs use the local registry. */
 export function getSkillsByCategory(category: Category, catalog?: undefined): SkillMeta[];
 export function getSkillsByCategory<T extends { readonly category: string }>(category: string, catalog: readonly T[]): T[];
-export function getSkillsByCategory<T extends { readonly category: string }>(category: Category, catalog: readonly T[] | undefined): Array<T | SkillMeta>;
+export function getSkillsByCategory<T extends { readonly category: string }>(category: string, catalog: readonly T[] | undefined): Array<T | SkillMeta>;
 export function getSkillsByCategory(category: string, catalog?: readonly { readonly category: string }[]): { readonly category: string }[] {
   return (catalog ?? loadRegistry()).filter((s) => s.category === category);
 }
@@ -187,7 +187,7 @@ export function getSkillsByTag(tag: string, catalog?: readonly { readonly tags: 
 }
 
 /** Lowercase, deduplicate and sort tags from the explicit catalog or local registry. */
-export function getAllTags(catalog?: readonly { readonly tags: readonly string[] }[]): string[] {
+export function getAllTags<T extends { readonly tags: readonly string[] }>(catalog?: readonly T[]): string[] {
   const tagSet = new Set<string>();
   for (const skill of catalog ?? loadRegistry()) {
     for (const tag of skill.tags) tagSet.add(tag.toLowerCase());
