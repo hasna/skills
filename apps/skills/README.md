@@ -1214,6 +1214,28 @@ Stable command shapes:
 - MCP registration: `mcp --register <agent> --json` returns
   `{ "registered": number, "results": [...] }`.
 
+## Query a caller-owned catalog
+
+The package root exports category and tag helpers that accept a readonly catalog:
+
+```ts
+import { getSkillsByCategory, getSkillsByTag, getAllTags } from "@hasna/skills";
+
+const catalog = [
+  { name: "write-brief", category: "Writing", tags: ["Research", "Writing"], credits: 5 },
+] as const;
+
+const writing = getSkillsByCategory("Writing", catalog);
+const research = getSkillsByTag("search", catalog);
+const tags = getAllTags(catalog); // ["research", "writing"]
+```
+
+An explicit catalog, including `[]`, is queried without loading local configuration
+or installed skills. Category matching is exact; tag matching is a case-insensitive
+substring search. An empty tag query matches records with at least one tag.
+Filtered arrays keep the original record references, types and extra fields.
+Omitting the catalog, or passing `undefined`, retains the configured local registry.
+
 ## Remote Registry
 
 The npm package ships no skill corpus. Authenticated discovery reads the

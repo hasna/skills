@@ -159,8 +159,12 @@ export function clearRegistryCache(): void {
   registryCacheKey = null;
 }
 
-export function getSkillsByCategory(category: Category): SkillMeta[] {
-  return loadRegistry().filter((s) => s.category === category);
+/** Query a caller catalog without reading configuration; omitted catalogs use the local registry. */
+export function getSkillsByCategory(category: Category, catalog?: undefined): SkillMeta[];
+export function getSkillsByCategory<T extends { readonly category: string }>(category: string, catalog: readonly T[]): T[];
+export function getSkillsByCategory<T extends { readonly category: string }>(category: string, catalog: readonly T[] | undefined): Array<T | SkillMeta>;
+export function getSkillsByCategory(category: string, catalog?: readonly { readonly category: string }[]): { readonly category: string }[] {
+  return (catalog ?? loadRegistry()).filter((s) => s.category === category);
 }
 
 /* ---- search, tag logic moved to separate files ---- */
@@ -173,14 +177,19 @@ export function getSkill(name: string): SkillMeta | undefined {
     ?? registry.find((s) => s.name === resolveSkillAlias(slug));
 }
 
-export function getSkillsByTag(tag: string): SkillMeta[] {
+/** Match tag substrings without changing caller records or their readonly tags. */
+export function getSkillsByTag(tag: string, catalog?: undefined): SkillMeta[];
+export function getSkillsByTag<T extends { readonly tags: readonly string[] }>(tag: string, catalog: readonly T[]): T[];
+export function getSkillsByTag<T extends { readonly tags: readonly string[] }>(tag: string, catalog: readonly T[] | undefined): Array<T | SkillMeta>;
+export function getSkillsByTag(tag: string, catalog?: readonly { readonly tags: readonly string[] }[]): { readonly tags: readonly string[] }[] {
   const needle = tag.toLowerCase();
-  return loadRegistry().filter((s) => s.tags.some((t) => t.toLowerCase().includes(needle)));
+  return (catalog ?? loadRegistry()).filter((s) => s.tags.some((t) => t.toLowerCase().includes(needle)));
 }
 
-export function getAllTags(): string[] {
+/** Lowercase, deduplicate and sort tags from the explicit catalog or local registry. */
+export function getAllTags<T extends { readonly tags: readonly string[] }>(catalog?: readonly T[]): string[] {
   const tagSet = new Set<string>();
-  for (const skill of loadRegistry()) {
+  for (const skill of catalog ?? loadRegistry()) {
     for (const tag of skill.tags) tagSet.add(tag.toLowerCase());
   }
   return Array.from(tagSet).sort();

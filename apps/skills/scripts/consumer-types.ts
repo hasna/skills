@@ -71,6 +71,32 @@ try {
 import { createRunService, runAdmissionSchema, runTerminalSchema, type SkillsProductStore, RemoteCapabilityUnavailableError, RemoteRequestError } from "@hasna/skills/sdk";
 import { RemoteSkillsClient as CheckoutClient, RemoteCreditCheckoutError, type RemoteCreditCheckoutOptions, type RemoteCreditCheckout } from "@hasna/skills/sdk";
 import { RemoteCreditCheckoutError as RootCheckoutError, type RemoteCreditCheckoutOptions as RootCheckoutOptions } from "@hasna/skills";
+import { getSkillsByCategory, getSkillsByTag, getAllTags, type SkillMeta } from "@hasna/skills";
+const callerCatalog = [{ category: "Caller category", tags: ["Writing"], productMetadata: { credits: 7 } }] as const;
+const categoryRecords: Array<(typeof callerCatalog)[number]> = getSkillsByCategory("Caller category", callerCatalog);
+const tagRecords: Array<(typeof callerCatalog)[number]> = getSkillsByTag("writ", callerCatalog);
+const exactCredits: 7 = categoryRecords[0]!.productMetadata.credits;
+const callerTags: string[] = getAllTags(callerCatalog);
+const inlineCallerTags: string[] = getAllTags([{ category: "Caller category", tags: ["Writing"], productMetadata: { credits: 7 } }]);
+const defaultCategoryRecords: SkillMeta[] = getSkillsByCategory("Content Generation");
+const defaultTagRecords: SkillMeta[] = getSkillsByTag("writing");
+const undefinedCategoryRecords: SkillMeta[] = getSkillsByCategory("Content Generation", undefined);
+const undefinedTagRecords: SkillMeta[] = getSkillsByTag("writing", undefined);
+const emptyCategoryRecords: never[] = getSkillsByCategory("Caller category", [] as const);
+const emptyTagRecords: never[] = getSkillsByTag("writing", [] as const);
+const emptyTags: string[] = getAllTags([] as const);
+declare const optionalCatalog: typeof callerCatalog | undefined;
+const optionalCategoryRecords: Array<(typeof callerCatalog)[number] | SkillMeta> = getSkillsByCategory("Content Generation", optionalCatalog);
+const optionalCustomCategoryRecords: Array<(typeof callerCatalog)[number] | SkillMeta> = getSkillsByCategory("Caller category", optionalCatalog);
+const optionalTagRecords: Array<(typeof callerCatalog)[number] | SkillMeta> = getSkillsByTag("writing", optionalCatalog);
+// @ts-expect-error Caller catalogs retain readonly tags and product metadata.
+categoryRecords[0]!.tags.push("mutated");
+// @ts-expect-error Category records must have a string category.
+getSkillsByCategory("Content Generation", [{ category: 123 }]);
+// @ts-expect-error Tag records must have string tags.
+getSkillsByTag("writing", [{ tags: [123] }]);
+// @ts-expect-error All-tags queries require a tags field.
+getAllTags([{ category: "Content Generation" }]);
 import { planClaudeHookEventsUpdate, planClaudePreToolUseHookUpdate, CLAUDE_COORDINATED_HOOK_EVENTS,
   type ClaudeCoordinatedHookEvent } from "@hasna/skills";
 const coordinatedEvents: readonly ClaudeCoordinatedHookEvent[] = CLAUDE_COORDINATED_HOOK_EVENTS;
