@@ -1,6 +1,6 @@
 /** Explicit semantic witness for Codex inference preferences and native-owned state.
  *
- * The reviewed witness binds the complete `config.toml` apart from four
+ * The V2 reviewed witness binds the complete `config.toml` apart from four
  * documented classes that are not discovery inputs, and that Codex or the
  * installer rewrites on their own:
  *
@@ -26,9 +26,15 @@
  *      `model_provider`, `[model_providers.*]`, `plugins`, `marketplaces`,
  *      `skills.bundled`, `[projects.*]` trust, `[mcp_servers.*]`, environment and
  *      unknown fields — stays fully bound.
+ *
+ * V3 is explicitly selected and preserves V1/V2 digest meanings. It adds
+ * service-tier and model-advertised plan/reasoning effort selections plus the
+ * schema-validated ordinary local stdio MCP projection. Reserved Apps, remote,
+ * auth, HTTP, unknown and unsupported MCP contracts remain fully bound.
  */
 import { hashCodexSettingsReplacement as hashCodexSettingsReplacementV1 } from "./codex-settings-witness-v1.js";
 export { captureCodexSettings, hashCodexSettingsReplacement } from "./codex-settings-witness-v1.js";
+import { projectRegularCodexMcp } from "./codex-mcp-discovery-projection.js";
 import { createHash } from "node:crypto";
 import { readNativeSettingsWitnessFile, type ClaudeSettingsWitnessBudget } from "./claude-settings-witness.js";
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -84,7 +90,7 @@ function canonical(value: unknown, depth = 0, budget = { remaining: 65536 }): un
 }
 /** Remove only the documented non-discovery classes. Malformed values for an
  * otherwise-normalized key refuse instead of being adopted silently. */
-function normalize(config: Record<string, any>): void {
+function normalize(config: Record<string, any>, version: 2 | 3 = 2): void {
   if (isRecord(config.hooks)) {
     delete config.hooks.state;
     // An empty `[hooks]` table means the same as no hooks configuration at all.
@@ -99,8 +105,8 @@ function normalize(config: Record<string, any>): void {
     }
     if (!Object.keys(skills).length) delete config.skills;
   }
-  inference(config);
-  if (isRecord(config.profiles)) for (const profile of Object.values(config.profiles)) if (isRecord(profile)) inference(profile);
+  inference(config, version);
+  if (isRecord(config.profiles)) for (const profile of Object.values(config.profiles)) if (isRecord(profile)) inference(profile, version);
 }
 /** A registration that cannot enable anything: one unambiguous selector and an
  * explicit `enabled = false`, with no other key to reinterpret. */
@@ -111,20 +117,27 @@ function disablesOneSkill(entry: unknown): boolean {
   const selector = (["path", "name"] as const).filter(key => Object.hasOwn(entry, key));
   return selector.length === 1 && typeof entry[selector[0]!] === "string" && entry[selector[0]!].length > 0;
 }
-function inference(target: Record<string, any>): void {
-  for (const key of INFERENCE) if (Object.hasOwn(target, key)) {
+function inference(target: Record<string, any>, version: 2 | 3): void {
+  const keys = version === 3 ? [...INFERENCE, "service_tier", "plan_mode_reasoning_effort"] : INFERENCE;
+  for (const key of keys) if (Object.hasOwn(target, key)) {
     const value = target[key];
     if (key === "model") need(typeof value === "string" && MODEL.test(value));
-    else need(typeof value === "string" && (key === "model_reasoning_effort" ? EFFORT.has(value) : VERBOSITY.has(value)));
+    else if (version === 3 && key !== "model_verbosity") {
+      // Codex 0.160: request ids are strings; effort is model-advertised, not a
+      // fixed enum. Bound scalar text, never routes, instructions or paths.
+      need(typeof value === "string" && value.length <= 128 && !/[\x00-\x1f\x7f]/.test(value));
+      if (key !== "service_tier") need(value.length > 0);
+    } else need(typeof value === "string" && (key === "model_reasoning_effort" ? EFFORT.has(value) : VERBOSITY.has(value)));
     delete target[key];
   }
 }
-function settingsDigest(text: string): string {
+function settingsDigest(text: string, version: 2 | 3 = 2): string {
   let config: any;
   try { config = Bun.TOML.parse(text); } catch { throw new Error("Invalid Codex settings witness"); }
   need(isRecord(config));
-  normalize(config);
-  return sha(`hasna.skills.codex-settings.v2\0${JSON.stringify([canonical(config), numericTokens(text)])}`);
+  const projected = version === 3 ? projectRegularCodexMcp(config, text) : { config, numericSource: text };
+  normalize(projected.config, version);
+  return sha(`hasna.skills.codex-settings.v${version}\0${JSON.stringify([canonical(projected.config), numericTokens(projected.numericSource)])}`);
 }
 export function hashCodexSettingsReplacementV2(text: string, budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }): string {
   need(Buffer.byteLength(text) <= 1024 * 1024 && budget.remaining >= Buffer.byteLength(text)); budget.remaining -= Buffer.byteLength(text);
@@ -147,4 +160,26 @@ export function upgradeCodexSettingsWitness(previous: { path: string; hashMode?:
   const sha256 = settingsDigest(current);
   if (settingsDigest(before) !== sha256) throw new Error("Codex non-preference settings changed; explicit discovery review required");
   return { path: previous.path, hashMode: "codex-settings-v2", sha256 };
+}
+
+/** Opt-in v3 adds service-tier, plan-mode effort and typed ordinary local MCP selections. V2 retains its
+ * exact digest meaning. Provider/native/auth/cloud/reserved/unknown controls remain bound. */
+export function hashCodexSettingsReplacementV3(text: string, budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }): string {
+  need(Buffer.byteLength(text) <= 1024 * 1024 && budget.remaining >= Buffer.byteLength(text)); budget.remaining -= Buffer.byteLength(text);
+  return settingsDigest(text, 3);
+}
+export function captureCodexSettingsV3(path: string, budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }): { path: string; hashMode: "codex-settings-v3"; sha256: string } {
+  return { path, hashMode: "codex-settings-v3", sha256: settingsDigest(readNativeSettingsWitnessFile(path, budget, "config.toml"), 3) };
+}
+/** Preserve the original mode's meaning and prove its preimage before explicitly
+ * changing the review contract. Never use v3 to verify an existing v2 digest. */
+export function upgradeCodexSettingsWitnessV3(previous: { path: string; hashMode?: "bytes" | "codex-settings-v1" | "codex-settings-v2"; sha256: string }, reviewedSettingsPath: string): ReturnType<typeof captureCodexSettingsV3> {
+  need(previous && Object.keys(previous).every(key => ["path", "hashMode", "sha256"].includes(key)) && (previous.hashMode === undefined || ["bytes", "codex-settings-v1", "codex-settings-v2"].includes(previous.hashMode)) && /^[a-f0-9]{64}$/.test(previous.sha256));
+  const budget = { remaining: 2 * 1024 * 1024 };
+  const before = readNativeSettingsWitnessFile(reviewedSettingsPath, budget, "config.toml"), current = readNativeSettingsWitnessFile(previous.path, budget, "config.toml");
+  const original = previous.hashMode === "codex-settings-v2" ? settingsDigest(before) : previous.hashMode === "codex-settings-v1" ? hashCodexSettingsReplacementV1(before) : sha(before);
+  need(original === previous.sha256);
+  const sha256 = settingsDigest(current, 3);
+  if (settingsDigest(before, 3) !== sha256) throw new Error("Codex settings outside the reviewed V3 contract changed; explicit discovery review required");
+  return { path: previous.path, hashMode: "codex-settings-v3", sha256 };
 }
