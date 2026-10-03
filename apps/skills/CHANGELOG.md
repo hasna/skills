@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.27
+
+- Add explicitly reviewed Codex V3 settings witnesses that tolerate inference preferences and supported ordinary local stdio MCP upgrades without changing native discovery guards.
+- Preserve V1/V2 witness meanings and require an exact preserved-preimage proof for V3 migration; retain reserved Apps, auth/cloud/HTTP, unknown and unsupported MCP contracts.
+- Reuse the existing native local stdio metadata validator while preserving full plugin capability fingerprints.
+
 ## 0.10.26
 
 - Keep attested Codex plugin installation inputs inert when reviewed discovery starts in a descendant skills directory; retain installed-cache and native-root checks.

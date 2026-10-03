@@ -13,7 +13,7 @@ import { enrollCodexNativeHooks, reconcileCodexNativeHooks } from "../../lib/age
 import { HookDiagnosticError, hookChildError, hookFailureReason, isOptionalHookContextFailure, hookUnavailableContext } from "../../lib/hook-diagnostics.js";
 import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib/selection-cache.js";
 import { captureClaudeSettingsV2, captureClaudeSettingsV3 } from "../../lib/claude-settings-witness.js";
-import { captureCodexSettings, captureCodexSettingsV2 } from "../../lib/codex-settings-witness.js";
+import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3 } from "../../lib/codex-settings-witness.js";
 import { captureClaudeMarketplaceRegistryV2 } from "../../lib/claude-marketplace-registry.js";
 import { captureCodexNativeSkillCatalog } from "../../lib/codex-native-skill-catalog.js";
 
@@ -113,15 +113,15 @@ export function registerAgentIntegration(parent: Command): void {
       }
     });
   hook.command("witness")
-    .requiredOption("--kind <kind>", "claude-settings-v3, claude-settings-v2, codex-settings-v2, codex-settings-v1 or claude-marketplace-registry-v2")
+    .requiredOption("--kind <kind>", "claude-settings-v3, claude-settings-v2, codex-settings-v3, codex-settings-v2, codex-settings-v1 or claude-marketplace-registry-v2")
     .requiredOption("--path <path>", "Canonical absolute path to the reviewed settings or registry file")
     .option("--json", "Output the discovery witness as JSON", false)
     .description("Capture an explicit versioned review witness without installing it")
     .action(async (options: {kind: string; path: string}) => {
-      const capture = options.kind === "codex-settings-v2" ? captureCodexSettingsV2 : options.kind === "codex-settings-v1" ? captureCodexSettings : options.kind === "claude-settings-v3" ? captureClaudeSettingsV3
+      const capture = options.kind === "codex-settings-v3" ? captureCodexSettingsV3 : options.kind === "codex-settings-v2" ? captureCodexSettingsV2 : options.kind === "codex-settings-v1" ? captureCodexSettings : options.kind === "claude-settings-v3" ? captureClaudeSettingsV3
         : options.kind === "claude-settings-v2" ? captureClaudeSettingsV2
         : options.kind === "claude-marketplace-registry-v2" ? captureClaudeMarketplaceRegistryV2 : null;
-      if (!capture) throw new Error("Unsupported witness kind; select claude-settings-v3, claude-settings-v2, codex-settings-v2, codex-settings-v1 or claude-marketplace-registry-v2");
+      if (!capture) throw new Error("Unsupported witness kind; select claude-settings-v3, claude-settings-v2, codex-settings-v3, codex-settings-v2, codex-settings-v1 or claude-marketplace-registry-v2");
       await writeCliOutput(JSON.stringify(capture(options.path), null, 2));
     });
   hook.command("rebind-settings")
@@ -129,13 +129,15 @@ export function registerAgentIntegration(parent: Command): void {
     .requiredOption("--reviewed-preimage <path>", "Exact preserved legacy settings.json or config.toml")
     .requiredOption("--expected-policy-sha256 <sha256>", "Exact current managed policy bytes")
     .requiredOption("--expected-settings-sha256 <sha256>", "Exact current native settings bytes")
+    .option("--codex-witness-version <version>", "Explicit target: 2 (legacy default) or 3 (service tier and model-advertised effort)")
     .option("--apply", "Apply the explicit semantic witness upgrade with preservation and readback", false)
     .option("--json", "Return the metadata-only plan or receipt", false)
     .description("Explicitly migrate a legacy native settings witness after proving only known preferences changed")
     .action(async (options) => {
       try {
         if (!["claude", "codex"].includes(options.agent)) throw new Error("Settings witness rebind accepts claude or codex");
-        const plan = planAgentSettingsWitnessUpgrade({ agent: options.agent, reviewedPreimage: options.reviewedPreimage, expectedPolicySha256: options.expectedPolicySha256, expectedSettingsSha256: options.expectedSettingsSha256 });
+        if (options.codexWitnessVersion !== undefined && !["2", "3"].includes(options.codexWitnessVersion)) throw new Error("Codex witness version accepts 2 or 3");
+        const plan = planAgentSettingsWitnessUpgrade({ ...(options.codexWitnessVersion !== undefined ? { targetCodexVersion: Number(options.codexWitnessVersion) as 2 | 3 } : {}), agent: options.agent, reviewedPreimage: options.reviewedPreimage, expectedPolicySha256: options.expectedPolicySha256, expectedSettingsSha256: options.expectedSettingsSha256 });
         const result = options.apply ? applyAgentIntegration(plan) : { changed: [], backups: [] };
         const receipt = { applied: options.apply, settingsWitnessUpgrade: plan.settingsWitnessUpgrade, ...result };
         await writeCliOutput(options.json ? JSON.stringify(receipt) : `Settings witness ${options.apply ? "upgraded" : "planned"} for ${options.agent}. Native configuration was not changed.`);
