@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.25
+
+- Keep positively attested, config-disabled Codex local plugin caches inert across version refreshes, without relaxing active hook or capability review.
+- Distinguish witnessed native local installation inputs from installed skill-loading roots; retain complete migration inventory and strict identity, source and configuration guards.
+
 ## 0.10.24
 
 - Review supported Codex local stdio MCP tool, approval, timeout and environment metadata while retaining exact capability fingerprints and refusal on remote, authentication, unknown or changed controls.

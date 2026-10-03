@@ -1,4 +1,4 @@
-import { reviewCodexPluginSkillControls, isReviewedCodexPluginSkillDisabled, reviewedCodexPluginCapabilitiesUnchanged, disableReviewedCodexPluginNames, type CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
+import { reviewCodexPluginControls, reviewedCodexPluginSourceRoots, isReviewedCodexPluginInactive, isReviewedCodexPluginSkillDisabled, reviewedCodexPluginCapabilitiesUnchanged, disableReviewedCodexPluginNames, type CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
 import { projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
 import { upgradeCodexSettingsWitness, readCodexSettingsPreimage, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
 import { upgradeClaudeSettingsWitness } from "./claude-settings-witness.js";
@@ -11,7 +11,7 @@ import { homedir } from "node:os";
 import { getDataDir, getDataDirReadOnly } from "./config.js";
 import { requiresCliSkillLoading, readManagedSkillPolicySnapshot, serializeManagedSkillPolicy, parseManagedSkillPolicy } from "./managed-policy.js";
 import { CLI_BRIDGE_NAME, CLI_BRIDGE_FILES, CLI_BRIDGE_DIGEST, CLI_BRIDGE_VERSION, isOwnedCliBridge } from "./agent-bridge.js";
-import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, rebindAgentDiscovery, projectNativeDiscoveryFields, type AgentDiscoveryBinding, type DiscoverySource, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
+import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, rebindAgentDiscovery, captureDiscoveryDirectories, projectNativeDiscoveryFields, type AgentDiscoveryBinding, type DiscoverySource, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderAgentHookCommand, renderOpenCodePlugin, type IntegrationAgent } from "./agent-adapters.js";
 import { assertCodexPathConfigEditable, CODEX_SKILL_CONFIG_SECTIONS, disableCodexBundledSkills, normalizeCodexInlinePathConfig } from "./agent-codex.js";
 
@@ -282,7 +282,7 @@ function projectAncestorDirectories(projects: string[]): string[] {
   return [...directories];
 }
 
-export function inventoryNativeSkills(home = homedir(), options: { includeVendor?: boolean; guardHermes?: boolean; projectDir?: string; projectDirs?: string[]; agents?: readonly IntegrationAgent[]; agentRoots?: Array<{ agent: string; path: string }>; configured?: boolean; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean; reviewedCacheAlias?: string; disabledVendorPaths?: readonly string[]; disabledVendorSkill?: (entry: NativeSkillEntry) => boolean } = {}): NativeSkillEntry[] {
+export function inventoryNativeSkills(home = homedir(), options: { includeVendor?: boolean; guardHermes?: boolean; projectDir?: string; projectDirs?: string[]; agents?: readonly IntegrationAgent[]; agentRoots?: Array<{ agent: string; path: string }>; configured?: boolean; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean; reviewedCacheAlias?: string; disabledVendorPaths?: readonly string[]; disabledVendorSkill?: (entry: NativeSkillEntry) => boolean; codexInstallationInputRoots?: readonly string[] } = {}): NativeSkillEntry[] {
   home = canonicalSystemPath(home);
   if (options.reviewedCacheAlias !== undefined && (!options.includeVendor || !isAbsolute(options.reviewedCacheAlias) || resolve(options.reviewedCacheAlias) !== options.reviewedCacheAlias)) throw new Error("A reviewed cache alias requires vendor inventory and an exact absolute path");
   if (options.disabledVendorPaths?.some(path => !isAbsolute(path) || resolve(path) !== path)) throw new Error("Disabled vendor paths must be exact absolute paths");
@@ -299,6 +299,8 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
   for (const project of projectAncestorDirectories([...(options.projectDirs ?? []), ...(options.projectDir ? [options.projectDir] : [])])) {
     for (const [agent, path] of rootDefinitions) roots.push([agent, canonicalAgentPath(join(project, path), aliases)]);
   }
+  const installationInputs=options.codexInstallationInputRoots ?? [];
+  if (installationInputs.some(input=>resolve(input)!==input || realpathSync(input)!==input || roots.some(([agent,path])=>agent==="codex" && (path===input || path.startsWith(input+sep) || input.startsWith(path+sep))))) throw new Error("Native installation input overlaps an unconditional skill-loading root");
   const entries: NativeSkillEntry[] = [], seen = new Set<string>();
   type Scan = { complete: boolean; hasSkills: boolean; entries: number };
   const cacheScans = new Map<string, Scan>(), maxAliasProofEntries = 10000;
@@ -332,10 +334,11 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
     }
     return true;
   }
-  function visit(agent: string, path: string, vendor = false, depth = 0, pluginCache = false, admitted = false): Scan {
+  function visit(agent: string, path: string, vendor = false, depth = 0, pluginCache = false, admitted = false, configuredRoot = false): Scan {
     if (!admitted) admit(path);
     const scan: Scan = { complete: true, hasSkills: false, entries: 1 };
     assertSafePath(path);
+    if (configuredRoot && agent === "codex" && installationInputs.includes(path)) return scan;
     if (!existsSync(path)) return scan;
     const stat = lstatSync(path);
     if (stat.isFile()) return scan;
@@ -377,15 +380,15 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
           scan.entries++; continue;
         }
       }
-      const childScan = visit(agent, child, isVendor, depth + 1, pluginCache, true);
+      const childScan = visit(agent, child, isVendor, depth + 1, pluginCache, true, configuredRoot);
       scan.complete &&= childScan.complete; scan.hasSkills ||= childScan.hasSkills; scan.entries += childScan.entries;
     }
     if (pluginCache) cacheScans.set(path, scan);
     return scan;
   }
-  function scanRoot(agent: string, path: string, vendor = false, pluginCache = false): void {
+  function scanRoot(agent: string, path: string, vendor = false, pluginCache = false, configuredRoot = false): void {
     if (agent === "hermes" || (options.guardHermes && `${path}${sep}`.includes(`${sep}.agents${sep}skills${sep}`))) assertNoHermesLegacyShadow(path);
-    if (!visit(agent, path, vendor, 0, pluginCache).complete) throw new Error(`Native skill discovery limit exceeded; review this root before continuing: ${path}`);
+    if (!visit(agent, path, vendor, 0, pluginCache, false, configuredRoot).complete) throw new Error(`Native skill discovery limit exceeded; review this root before continuing: ${path}`);
   }
   for (const [agent, path] of roots) scanRoot(agent, path);
   if (options.includeVendor) {
@@ -394,7 +397,7 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
     if (includesAgent("gemini")) scanRoot("gemini", join(home, ".gemini", "extensions"), true);
   }
   const configured = options.configured ? INTEGRATION_AGENTS.filter(includesAgent).flatMap(agent => resolveAgentDiscovery({ home, agent, reviewed: options.discoveryInputs, canonical: path => canonicalAgentPath(path, aliases) }).roots.map(path => ({ agent, path }))) : [];
-  for (const root of [...(options.agentRoots ?? []), ...configured]) if (includesAgent(root.agent)) scanRoot(root.agent, canonicalAgentPath(root.path, aliases), true);
+  for (const root of [...(options.agentRoots ?? []), ...configured]) if (includesAgent(root.agent)) scanRoot(root.agent, canonicalAgentPath(root.path, aliases), true, false, true);
   if (options.reviewedCacheAlias !== undefined && !reviewedCacheAliasFound) throw new Error("Reviewed cache alias was not an inventoried skill-containing sibling alias");
   recheckRootAliases(aliases);
   return entries;
@@ -509,6 +512,11 @@ function disableCodexSkills(text: string, skills: NativeSkillEntry[], aliases: A
   Bun.TOML.parse(result); return result;
 }
 
+function assertCodexInstallationInputs(home:string, projectDirs:string[], inputs:string[]):void {
+  const nativeRoots=[home,...projectAncestorDirectories(projectDirs)].flatMap(directory=>ROOTS.filter(([agent])=>agent==="codex").map(([,path])=>resolve(directory,path)));
+  if (inputs.some(input=>nativeRoots.some(root=>root===input || root.startsWith(input+sep) || input.startsWith(root+sep)))) throw new Error("Native installation input overlaps an unconditional skill-loading root");
+}
+
 /** Planning is read-only; credentials and unrelated settings never appear in CLI output. */
 export function planAgentIntegration(options: { home?: string; dataDir?: string; agents: IntegrationAgent[]; command?: string; profileId?: string; includeVendor?: boolean; projectDir?: string; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean; reviewedCacheAlias?: string; codexNativeCatalog?: CodexNativeSkillCatalog }): AgentIntegrationPlan {
   const home = options.home ?? homedir(), dataDir = options.dataDir ?? getDataDirReadOnly();
@@ -543,12 +551,19 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     }
     return resolveAgentDiscovery({ home, agent, reviewed: options.discoveryInputs, retainedReview, canonical: path => canonicalAgentPath(path, aliases) });
   });
-  const codexConfig = options.agents.includes("codex") ? Bun.TOML.parse(readOptional(canonicalAgentPath(join(home, ".codex", "config.toml"), aliases)) ?? "") as { skills?: { config?: Array<{ path?: string; enabled?: boolean }> } } : {};
+  const codexConfig = options.agents.includes("codex") ? Bun.TOML.parse(readOptional(canonicalAgentPath(join(home, ".codex", "config.toml"), aliases)) ?? "") as { plugins?: unknown; skills?: { config?: Array<{ path?: string; enabled?: boolean }> } } : {};
   const nativeSkills = inventoryNativeSkills(home, { includeVendor: true, guardHermes: options.agents.includes("hermes"), agents: options.agents, projectDir: options.projectDir, agentRoots: discoveries.flatMap(binding => binding.roots.map(path => ({ agent: binding.agent, path }))), allowRootAliases: options.allowRootAliases, reviewedCacheAlias: options.reviewedCacheAlias, disabledVendorPaths: disabledCodexSkillPaths(codexConfig, aliases) });
   const observedNativeSources: Array<{ path: string; sha256: string }> = [];
-  const codexPluginSkills: CodexPluginSkillControl[] = options.codexNativeCatalog
-    ? reviewCodexPluginSkillControls(options.codexNativeCatalog, nativeSkills.filter(entry=>entry.agent==="codex" && entry.vendor).map(entry=>join(entry.path,"SKILL.md")), canonicalAgentPath(join(home,".codex/plugins/cache"),aliases), resolve(options.projectDir ?? home), path=>{const bytes=readNativeBytes(path,1024*1024); observedNativeSources.push({path,sha256:sha(bytes)}); return new TextDecoder("utf-8",{fatal:true}).decode(bytes); }, codexConfig.skills?.config ?? [])
-    : policy.bridge?.codexPluginSkills ?? [];
+  const codexPluginControls: ReturnType<typeof reviewCodexPluginControls> = options.codexNativeCatalog
+    ? reviewCodexPluginControls(options.codexNativeCatalog, nativeSkills.filter(entry=>entry.agent==="codex" && entry.vendor).map(entry=>join(entry.path,"SKILL.md")), canonicalAgentPath(join(home,".codex/plugins/cache"),aliases), resolve(options.projectDir ?? home), path=>{const bytes=readNativeBytes(path,1024*1024); observedNativeSources.push({path,sha256:sha(bytes)}); return new TextDecoder("utf-8",{fatal:true}).decode(bytes); }, codexConfig.skills?.config ?? [], codexConfig.plugins)
+    : {skills:policy.bridge?.codexPluginSkills ?? [],inactivePlugins:policy.bridge?.codexInactivePlugins ?? [],sourceInputs:policy.bridge?.discovery?.codex?.codexInstallationInputs?.plugins ?? []};
+  const codexPluginSkills: CodexPluginSkillControl[] = codexPluginControls.skills;
+  const codexInactivePlugins = codexPluginControls.inactivePlugins;
+  const codexDiscovery=discoveries.find(binding=>binding.agent==="codex");
+  const codexPluginSourceInputs = codexPluginControls.sourceInputs.filter(input=>codexDiscovery?.method==="reviewed"
+    && codexDiscovery.roots.some(root=>root===input.sourceRoot || root.startsWith(input.sourceRoot+sep) || input.sourceRoot.startsWith(root+sep))
+    && codexDiscovery.sources.some(source=>source.path===join(input.sourceRoot,".codex-plugin/plugin.json") && source.sha256!==null && source.format===undefined && source.fields===undefined));
+  assertCodexInstallationInputs(home,[options.projectDir ?? home],codexPluginSourceInputs.map(input=>input.sourceRoot));
   const changes: AgentConfigChange[] = [];
   for (const agent of [...new Set(options.agents)]) {
     if (!INTEGRATION_AGENTS.includes(agent)) throw new Error(`Unsupported agent: ${agent}`);
@@ -597,7 +612,15 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
       if (next !== (previous ?? "")) changes.push({ path: configPath, before: previous, after: next });
     }
   }
-  const discoveryAfter = discoveries.map(binding => rebindAgentDiscovery(binding, new Map(changes.map(change => [change.path, change.after]))));
+  const codexPluginSkillReview = options.codexNativeCatalog ? { version: options.codexNativeCatalog.version, cwd: options.codexNativeCatalog.cwd, catalogSha256: sha(JSON.stringify({version:options.codexNativeCatalog.version,cwd:options.codexNativeCatalog.cwd,skills:projectCodexNativeSkillCatalog({data:[{cwd:options.codexNativeCatalog.cwd,errors:[],skills:options.codexNativeCatalog.skills}]},options.codexNativeCatalog.cwd),...(options.codexNativeCatalog.plugins === undefined ? {} : {plugins:projectCodexInstalledPluginEntries(options.codexNativeCatalog.plugins)})})), configSha256: changes.find(change=>change.path===canonicalAgentPath(join(home,".codex/config.toml"),aliases))?.before === null ? null : sha(readOptional(canonicalAgentPath(join(home,".codex/config.toml"),aliases)) ?? "") } : policy.bridge?.codexPluginSkillReview;
+  const discoveryAfter = discoveries.map(binding => {
+    const rebound=rebindAgentDiscovery(binding, new Map(changes.map(change => [change.path, change.after])));
+    if (binding.agent!=="codex") return rebound;
+    const {codexInstallationInputs:previousInputs,...current}=rebound;
+    const inputs=codexPluginSourceInputs.map(input=>input.sourceRoot);
+    const directories=options.codexNativeCatalog || !previousInputs ? captureDiscoveryDirectories((binding.directories ?? []).filter(directory=>inputs.some(root=>root.startsWith(directory.path+sep))).map(directory=>directory.path),inputs) : previousInputs.directories;
+    return codexPluginSourceInputs.length ? {...current,codexInstallationInputs:{version:"codex-cli 0.160.0" as const,catalogSha256:codexPluginSkillReview.catalogSha256,plugins:codexPluginSourceInputs,...(directories?.length ? {directories} : {})}} : current;
+  });
   const nextPolicy = { ...policy, version: 1, loading: "cli", profileId, bridge: {
     ...policy.bridge,
     version: CLI_BRIDGE_VERSION, digest: CLI_BRIDGE_DIGEST,
@@ -608,7 +631,7 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     profiles: Object.fromEntries([...new Set<IntegrationAgent>([...priorAgents, ...options.agents])].sort().map(agent => [agent, bindings.get(agent)?.profileId ?? policy.bridge?.profiles?.[agent] ?? policy.profileId])),
     disabledBuiltins: options.agents.includes("codex") ? nativeSkills.filter(entry => entry.agent === "codex" && entry.vendor && entry.path.startsWith(canonicalAgentPath(join(home, ".codex", "skills", ".system"), aliases) + sep)).map(entry => ({ path: entry.path, hash: entry.hash })) : (policy.bridge?.disabledBuiltins ?? []),
     rootAliases: aliases,
-    ...(codexPluginSkills.length ? { codexPluginSkills, codexPluginSkillReview: options.codexNativeCatalog ? { version: options.codexNativeCatalog.version, cwd: options.codexNativeCatalog.cwd, catalogSha256: sha(JSON.stringify({version:options.codexNativeCatalog.version,cwd:options.codexNativeCatalog.cwd,skills:projectCodexNativeSkillCatalog({data:[{cwd:options.codexNativeCatalog.cwd,errors:[],skills:options.codexNativeCatalog.skills}]},options.codexNativeCatalog.cwd),...(options.codexNativeCatalog.plugins === undefined ? {} : {plugins:projectCodexInstalledPluginEntries(options.codexNativeCatalog.plugins)})})), configSha256: changes.find(change=>change.path===canonicalAgentPath(join(home,".codex/config.toml"),aliases))?.before === null ? null : sha(readOptional(canonicalAgentPath(join(home,".codex/config.toml"),aliases)) ?? "") } : policy.bridge?.codexPluginSkillReview } : {}),
+    ...(options.codexNativeCatalog || codexPluginSkills.length || codexInactivePlugins.length || codexPluginSourceInputs.length ? { codexPluginSkills, codexInactivePlugins, codexPluginSkillReview } : {}),
     discovery: { ...policy.bridge?.discovery, ...Object.fromEntries(discoveryAfter.map(binding => [binding.agent, binding])) },
   } };
   const serializedPolicy = serializeManagedSkillPolicy(nextPolicy);
@@ -1013,12 +1036,17 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
   }
   const codexPath = canonicalAgentPath(join(home, ".codex", "config.toml"), aliases);
   if (options.codexDiscoveryRecovery && (agent !== "codex" || options.codexDiscoveryRecovery.configPath !== codexPath)) throw new Error("NATIVE_SKILL_DRIFT: Codex trust recovery names a different configuration root");
-  const codexConfig = agent === "codex" ? Bun.TOML.parse(readOptional(codexPath) ?? "") as { skills?: { bundled?: { enabled?: boolean }; config?: Array<{ path?: string; name?: string; enabled?: boolean }> } } : {};
+  const codexConfig = agent === "codex" ? Bun.TOML.parse(readOptional(codexPath) ?? "") as { plugins?: unknown; skills?: { bundled?: { enabled?: boolean }; config?: Array<{ path?: string; name?: string; enabled?: boolean }> } } : {};
   if (agent === "codex" && codexConfig.skills?.bundled?.enabled !== false) throw new Error("NATIVE_SKILL_DRIFT: Codex bundled skill reseeding is not disabled (skills.bundled.enabled); run skills hook install");
   const setting = (path: string) => (codexConfig.skills?.config ?? []).filter(entry => typeof entry.path === "string" && [path, join(path, "SKILL.md")].includes(canonicalAgentPath(entry.path, aliases)));
   if (agent === "codex" && [...setting(expected), ...(codexConfig.skills?.config ?? []).filter(entry => typeof entry.name === "string" && entry.name.trim() === CLI_BRIDGE_NAME)].some(entry => entry.enabled === false)) throw new Error("NATIVE_SKILL_DRIFT: the Codex CLI bridge is disabled; run skills hook install");
   if (agent === "codex" && !reviewedCodexPluginCapabilitiesUnchanged(canonicalAgentPath(join(home,".codex/plugins/cache"),aliases),binding.codexPluginSkills ?? [],path=>new TextDecoder("utf-8",{fatal:true}).decode(readNativeBytes(path,1024*1024)))) throw new Error("NATIVE_SKILL_DRIFT: reviewed native plugin capability controls changed; run skills hook install with a fresh discovery review");
-  const disabledPlugin = (entry: NativeSkillEntry): boolean => agent === "codex" && entry.vendor && isReviewedCodexPluginSkillDisabled(join(entry.path,"SKILL.md"), canonicalAgentPath(join(home,".codex/plugins/cache"),aliases), binding.codexPluginSkills ?? [], codexConfig.skills?.config, path=>new TextDecoder("utf-8",{fatal:true}).decode(readNativeBytes(path,1024*1024)));
+  const disabledPlugin = (entry: NativeSkillEntry): boolean => {
+    if (agent !== "codex" || !entry.vendor) return false;
+    const document=join(entry.path,"SKILL.md"), cache=canonicalAgentPath(join(home,".codex/plugins/cache"),aliases), read=(path:string)=>new TextDecoder("utf-8",{fatal:true}).decode(readNativeBytes(path,1024*1024));
+    return isReviewedCodexPluginInactive(document,cache,binding.codexInactivePlugins ?? [],codexConfig.plugins,codexConfig.skills?.config ?? [],read)
+      || isReviewedCodexPluginSkillDisabled(document,cache,binding.codexPluginSkills ?? [],codexConfig.skills?.config,read);
+  };
   const disabledPaths = new Set(disabledCodexSkillPaths(codexConfig, aliases));
   const disabledVendorSkill = (entry: NativeSkillEntry): boolean => {
     if (agent !== "codex" || !entry.vendor) return false;
@@ -1054,7 +1082,13 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
       if (JSON.stringify(current) !== JSON.stringify(discovery)) throw new Error("Configured native discovery roots changed");
     }
   } catch (error) { throw new Error(`NATIVE_SKILL_DRIFT: ${(error as Error).message}`); }
-  const inventory = inventoryNativeSkills(home, { includeVendor: true, guardHermes: agent === "hermes", agents: [agent], projectDirs: [...roots], agentRoots: discovery.roots.map(path => ({ agent, path })), allowRootAliases: aliases.length > 0, disabledVendorPaths: agent === "codex" ? disabledCodexSkillPaths(codexConfig, aliases) : [], disabledVendorSkill: disabledPlugin });
+  let installationInputRoots:string[]=[];
+  if (agent==="codex") {
+    try {
+      installationInputRoots=reviewedCodexPluginSourceRoots(canonicalAgentPath(join(home,".codex/plugins/cache"),aliases),discovery.codexInstallationInputs?.plugins ?? [],path=>new TextDecoder("utf-8",{fatal:true}).decode(readNativeBytes(path,1024*1024))); }
+    catch { throw new Error("NATIVE_SKILL_DRIFT: native installation input identity changed; review discovery and catalog"); }
+  }
+  const inventory = inventoryNativeSkills(home, { includeVendor: true, guardHermes: agent === "hermes", agents: [agent], projectDirs: [...roots], agentRoots: discovery.roots.map(path => ({ agent, path })), allowRootAliases: aliases.length > 0, disabledVendorPaths: agent === "codex" ? disabledCodexSkillPaths(codexConfig, aliases) : [], disabledVendorSkill: disabledPlugin, codexInstallationInputRoots: installationInputRoots });
   const unexpected = inventory.filter(entry => visible(entry) && !entry.bridge && !disabledVendorSkill(entry));
   if (unexpected.length) {
     // Show filenames only: never read payloads into diagnostics. Escape control

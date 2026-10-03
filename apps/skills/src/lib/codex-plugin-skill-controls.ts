@@ -3,8 +3,12 @@ import { hashNativeJsonControls } from "./claude-settings-witness.js";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
 import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
-import { isCodexNativeSkillDisabled, projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, remotePluginIdentifier, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
+import { codexPluginSourceIsConfigControlled, isCodexNativeSkillDisabled, projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, remotePluginIdentifier, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
 export interface CodexPluginSkillControl { name:string; pluginId:string; namespace:string; pluginParent:string; manifestSha256:string; appSha256?:string; mcpSha256?:string; remotePluginId?:string }
+/** A native nonremote installation disabled by the witnessed configuration.
+ * Its cache is inert; this makes no claim about reviewed hook capabilities. */
+export interface CodexInactivePluginControl { pluginId:string; namespace:string; pluginParent:string; sourceType:"local"|"git"|"npm"; sourceSha256:string }
+export interface CodexPluginSourceInput { pluginId:string; namespace:string; pluginParent:string; sourceRoot:string; sourceSha256:string }
 const identifier = (v:unknown):v is string => typeof v === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(v);
 const CODEX_DEFAULT_AGENT_PLUGIN_VERSION = "1.0.0";
 function refuse():never { throw new Error("CODEX_NATIVE_SKILL_IDENTITY_UNSUPPORTED: review native plugin names and hook controls"); }
@@ -122,7 +126,7 @@ function rootControls(root:string, read:Read): { namespace:string; manifestSha25
   const appSha256=present ? appControls(app,read) : undefined;
   return {namespace:manifest.name,manifestSha256,...(appSha256 ? {appSha256} : {}),...(mcpSha256 ? {mcpSha256} : {})};
 }
-function identity(document:string, cache:string, read:Read): { name:string; namespace:string; pluginParent:string; manifestSha256:string; appSha256?:string; mcpSha256?:string } {
+function documentIdentity(document:string, cache:string, read:Read): { name:string; namespace:string; pluginParent:string; root:string } {
   if (!document.startsWith(cache+sep) || !document.endsWith(sep+"SKILL.md")) refuse();
   const text = read(document);
   if (Buffer.byteLength(text)>1024*1024) refuse();
@@ -139,10 +143,22 @@ function identity(document:string, cache:string, read:Read): { name:string; name
   for (let root=dirname(document), depth=0; root.startsWith(cache+sep) && depth<12; root=dirname(root),depth++) {
     const path=join(root,".codex-plugin","plugin.json");
     if (!lstatSync(path,{throwIfNoEntry:false})) continue;
-    const controls=rootControls(root,read);
-    return {name:`${controls.namespace}:${front.name}`,pluginParent:dirname(root),...controls};
+    const manifestFile=lstatSync(path);
+    if (!lstatSync(join(root,".codex-plugin")).isDirectory() || !manifestFile.isFile() || manifestFile.size>1024*1024) refuse();
+    let manifest:any;
+    try { const text=read(path); hashNativeJsonControls(text); manifest=JSON.parse(text); } catch { refuse(); }
+    if (!manifest || typeof manifest!=="object" || Array.isArray(manifest) || !identifier(manifest.name)) refuse();
+    const declaredVersion=manifest.version === undefined ? "" : typeof manifest.version === "string" ? manifest.version.trim() : null;
+    if (declaredVersion === null || (declaredVersion ? declaredVersion!==basename(root) : basename(root)!==CODEX_DEFAULT_AGENT_PLUGIN_VERSION)) refuse();
+    return {name:`${manifest.name}:${front.name}`,namespace:manifest.name,pluginParent:dirname(root),root};
   }
   refuse();
+}
+function identity(document:string, cache:string, read:Read): { name:string; namespace:string; pluginParent:string; manifestSha256:string; appSha256?:string; mcpSha256?:string } {
+  const parsed=documentIdentity(document,cache,read);
+  const controls=rootControls(parsed.root,read);
+  if (controls.namespace!==parsed.namespace) refuse();
+  return {name:parsed.name,pluginParent:parsed.pluginParent,...controls};
 }
 /** Capability controls remain bound even after every native Skill body disappears. */
 export function reviewedCodexPluginCapabilitiesUnchanged(cache:string, controls:CodexPluginSkillControl[], read:Read):boolean {
@@ -170,10 +186,12 @@ export function reviewedCodexPluginCapabilitiesUnchanged(cache:string, controls:
     return true;
   } catch { return false; }
 }
-export function reviewCodexPluginSkillControls(catalog:CodexNativeSkillCatalog, documents:string[], cache:string, cwd:string, read:Read, rules:unknown):CodexPluginSkillControl[] {
+export function reviewCodexPluginControls(catalog:CodexNativeSkillCatalog, documents:string[], cache:string, cwd:string, read:Read, rules:unknown, pluginSettings?:unknown): { skills:CodexPluginSkillControl[]; inactivePlugins:CodexInactivePluginControl[]; sourceInputs:CodexPluginSourceInput[] } {
   if (!supportsCodexNativeCapability(catalog?.version, "qualified-skill-catalog") || catalog.cwd!==cwd) refuse();
   const skills=projectCodexNativeSkillCatalog({data:[{cwd,errors:[],skills:catalog.skills}]},cwd);
-  const allowed=new Set(documents), result:CodexPluginSkillControl[]=[];
+  const allowed=new Set(documents), result:CodexPluginSkillControl[]=[], inertDocuments=new Set<string>();
+  const inactivePlugins=new Map<string,CodexInactivePluginControl>();
+  const sourceInputs=new Map<string,CodexPluginSourceInput>();
   let installedPlugins:ReturnType<typeof projectCodexInstalledPluginEntries>;
   try { installedPlugins=projectCodexInstalledPluginEntries(catalog.plugins ?? []); } catch { refuse(); }
   // Legacy 0.10.19 receipts contained only skills/list. They can review listed
@@ -181,20 +199,56 @@ export function reviewCodexPluginSkillControls(catalog:CodexNativeSkillCatalog, 
   const candidates=catalog.plugins === undefined ? skills.map(skill=>skill.path).filter(path=>allowed.has(path)) : allowed;
   for (const document of candidates) {
     if (!document.startsWith(cache+sep)) continue;
-    const parsed=identity(document,cache,read);
-    if (parsed.name==="skills-cli" || parsed.name.endsWith(":skills-cli")) refuse();
-    const cacheParts=relative(cache,parsed.pluginParent).split(sep);
+    const located=documentIdentity(document,cache,read);
+    if (located.name==="skills-cli" || located.name.endsWith(":skills-cli")) refuse();
+    const cacheParts=relative(cache,located.pluginParent).split(sep);
     if (cacheParts.length!==2 || cacheParts.some(part=>!identifier(part))) refuse();
     const [marketplace,pluginName]=cacheParts;
-    if (pluginName!==parsed.namespace) refuse();
+    if (pluginName!==located.namespace) refuse();
     const expectedPluginId=`${pluginName}@${marketplace}`;
     const listed=skills.filter(skill=>skill.path===document);
     if (listed.length>1) refuse();
+    const installed=installedPlugins.filter(plugin=>plugin.id===expectedPluginId && plugin.name===pluginName);
+    // The native loader reads an installed cache root, never this declared
+    // Local installation input. Keep a separate, positively attested role;
+    // shared bytes or a temporary-directory name do not establish that role.
+    if (catalog.version==="codex-cli 0.160.0" && installed.length===1 && installed[0]!.installed
+      && installed[0]!.localVersion===basename(located.root) && installed[0]!.sourceType==="local"
+      && codexPluginSourceIsConfigControlled(installed[0]!)) {
+      const plugin=installed[0]!, input={pluginId:expectedPluginId,namespace:located.namespace,pluginParent:located.pluginParent,sourceRoot:plugin.sourcePath!,sourceSha256:plugin.sourceSha256!};
+      if (input.sourceRoot!==located.root && !input.sourceRoot.startsWith(cache+sep)
+        && (lstatSync(input.sourceRoot,{throwIfNoEntry:false}) || documents.some(path=>path.startsWith(input.sourceRoot+sep)))) {
+        if (skills.some(skill=>skill.path===input.sourceRoot || skill.path.startsWith(input.sourceRoot+sep)) || !sourceInputUnchanged(input,cache,read)) refuse();
+        sourceInputs.set(expectedPluginId,input);
+      }
+    }
+    // Codex 0.160 returns before loading any capability of a disabled plugin.
+    // This is an inert cache document, not a reviewed qualified-name control.
+    // The caller supplies the current config covered by its discovery witness;
+    // a catalog snapshot alone cannot establish continuing disablement.
+    const settings=pluginSettings && typeof pluginSettings==="object" && !Array.isArray(pluginSettings) ? pluginSettings as Record<string,any> : undefined;
+    if (catalog.version==="codex-cli 0.160.0" && !listed.length && !skills.some(skill=>skill.pluginId===expectedPluginId) && installed.length===1 && installed[0]!.installed && !installed[0]!.enabled
+      && codexPluginSourceIsConfigControlled(installed[0]!)
+      && settings && Object.hasOwn(settings,expectedPluginId) && settings[expectedPluginId]?.enabled===false) {
+      if (!Array.isArray(rules)) refuse();
+      const exactPathDeny=rules.some((rule:any)=>rule?.path===document && rule?.enabled===false);
+      if (!lstatSync(document).isFile() || realpathSync(document)!==document || realpathSync(located.root)!==located.root || realpathSync(located.pluginParent)!==located.pluginParent
+        || realpathSync(join(located.root,".codex-plugin/plugin.json"))!==join(located.root,".codex-plugin/plugin.json")
+        || !exactPathDeny || rules.some((rule:any)=>typeof rule?.name==="string" && rule.name.trim()===located.name && rule?.enabled!==false)
+        || !isCodexNativeSkillDisabled({name:located.name,path:document,pluginId:expectedPluginId,enabled:true},rules)) refuse();
+      inertDocuments.add(document);
+      const plugin=installed[0]!;
+      // Remote enablement can override local config in Codex's loader. Only a
+      // positively declared nonremote source establishes config-owned state.
+      inactivePlugins.set(expectedPluginId,{pluginId:expectedPluginId,namespace:located.namespace,pluginParent:located.pluginParent,sourceType:plugin.sourceType as CodexInactivePluginControl["sourceType"],sourceSha256:plugin.sourceSha256!});
+      continue;
+    }
+    const parsed={name:located.name,pluginParent:located.pluginParent,...rootControls(located.root,read)};
+    if (parsed.namespace!==located.namespace) refuse();
     let remotePluginId:string|undefined;
     if (listed.length===1) {
       if (listed[0]!.name!==parsed.name || listed[0]!.pluginId!==expectedPluginId) refuse();
     } else {
-      const installed=installedPlugins.filter(plugin=>plugin.id===expectedPluginId && plugin.name===pluginName);
       if (installed.length!==1 || !installed[0]!.installed || !installed[0]!.enabled) refuse();
       const plugin=installed[0]!;
       if (plugin.localVersion !== null) {
@@ -218,9 +272,50 @@ export function reviewCodexPluginSkillControls(catalog:CodexNativeSkillCatalog, 
     }
     result.push({...parsed,pluginId:expectedPluginId,...(remotePluginId ? {remotePluginId} : {})});
   }
-  if ((!result.length && documents.some(document=>document.startsWith(cache+sep)))
+  if ((!result.length && documents.some(document=>document.startsWith(cache+sep) && !inertDocuments.has(document)))
     || new Set(result.map(item=>item.name)).size!==result.length) refuse();
-  return result;
+  return {skills:result,inactivePlugins:[...inactivePlugins.values()],sourceInputs:[...sourceInputs.values()]};
+}
+function sourceInputUnchanged(input:CodexPluginSourceInput, cache:string, read:Read):boolean {
+  try {
+    const parts=relative(cache,input.pluginParent).split(sep);
+    if (parts.length!==2 || parts.some(part=>!identifier(part)) || parts[1]!==input.namespace || input.pluginId!==`${parts[1]}@${parts[0]}`
+      || !codexPluginSourceIsConfigControlled({id:input.pluginId,sourceType:"local",sourceSha256:input.sourceSha256})
+      || input.sourceSha256!==hashNativeJsonControls(JSON.stringify({type:"local",path:input.sourceRoot}))
+      || resolve(input.sourceRoot)!==input.sourceRoot || !lstatSync(input.sourceRoot).isDirectory() || realpathSync(input.sourceRoot)!==input.sourceRoot
+      || input.sourceRoot===cache || input.sourceRoot.startsWith(cache+sep) || cache.startsWith(input.sourceRoot+sep)) return false;
+    const path=join(input.sourceRoot,".codex-plugin/plugin.json"), stat=lstatSync(path);
+    if (!stat.isFile() || stat.size>1024*1024 || realpathSync(path)!==path) return false;
+    const text=read(path);hashNativeJsonControls(text);const manifest=JSON.parse(text);
+    return Boolean(manifest && typeof manifest==="object" && !Array.isArray(manifest) && manifest.name===input.namespace);
+  } catch { return false; }
+}
+/** Validate installation-input roles before omitting them from runtime inventory.
+ * Discovery witnesses still cover the sources; migration inventory stays full. */
+export function reviewedCodexPluginSourceRoots(cache:string, inputs:CodexPluginSourceInput[], read:Read):string[] {
+  if (!Array.isArray(inputs) || inputs.length>4096 || new Set(inputs.map(input=>input.pluginId)).size!==inputs.length
+    || new Set(inputs.map(input=>input.sourceRoot)).size!==inputs.length || inputs.some(input=>!sourceInputUnchanged(input,cache,read))) refuse();
+  const roots=inputs.map(input=>input.sourceRoot);
+  if (roots.some(root=>roots.some(other=>root!==other && root.startsWith(other+sep)))) refuse();
+  return roots;
+}
+export function reviewCodexPluginSkillControls(catalog:CodexNativeSkillCatalog, documents:string[], cache:string, cwd:string, read:Read, rules:unknown, pluginSettings?:unknown):CodexPluginSkillControl[] {
+  return reviewCodexPluginControls(catalog,documents,cache,cwd,read,rules,pluginSettings).skills;
+}
+/** Cache refresh cannot reactivate a config-controlled disabled installation.
+ * The caller verifies discovery/config witnesses before consuming this result. */
+export function isReviewedCodexPluginInactive(document:string, cache:string, controls:CodexInactivePluginControl[], pluginSettings:unknown, rules:unknown, read:Read):boolean {
+  if (!Array.isArray(controls) || controls.length>4096 || !pluginSettings || typeof pluginSettings!=="object" || Array.isArray(pluginSettings) || !Array.isArray(rules)) return false;
+  try {
+    const parsed=documentIdentity(document,cache,read), matches=controls.filter(control=>control.pluginParent===parsed.pluginParent && control.namespace===parsed.namespace);
+    if (matches.length!==1 || !lstatSync(document).isFile() || realpathSync(document)!==document || realpathSync(parsed.root)!==parsed.root || realpathSync(parsed.pluginParent)!==parsed.pluginParent
+      || realpathSync(join(parsed.root,".codex-plugin/plugin.json"))!==join(parsed.root,".codex-plugin/plugin.json")) return false;
+    const control=matches[0]!, parts=relative(cache,parsed.pluginParent).split(sep);
+    if (parts.length!==2 || parts.some(part=>!identifier(part)) || parts[1]!==parsed.namespace || control.pluginId!==`${parts[1]}@${parts[0]}`
+      || !codexPluginSourceIsConfigControlled({...control,id:control.pluginId})
+      || !Object.hasOwn(pluginSettings,control.pluginId) || (pluginSettings as Record<string,any>)[control.pluginId]?.enabled!==false) return false;
+    return !rules.some((rule:any)=>(rule?.path===document || typeof rule?.name==="string" && rule.name.trim()===parsed.name) && rule?.enabled!==false);
+  } catch { return false; }
 }
 export function isReviewedCodexPluginSkillDisabled(document:string, cache:string, controls:CodexPluginSkillControl[], rules:unknown, read:Read):boolean {
   if (!document.startsWith(cache+sep) || !Array.isArray(controls) || controls.length>4096) return false;
