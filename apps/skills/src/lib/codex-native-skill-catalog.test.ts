@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import type { CodexHookRpc } from "./codex-hook-rpc.js";
-import { captureCodexNativeSkillCatalog, isCodexNativeSkillDisabled, projectCodexInstalledPlugins, projectCodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
+import { codexPluginSourceIsConfigControlled, captureCodexNativeSkillCatalog, isCodexNativeSkillDisabled, projectCodexInstalledPlugins, projectCodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
 
 useDefaultTestTimeout();
 
@@ -38,6 +38,27 @@ test("installed plugin projection binds only complete exact local plugin identit
     { marketplaces: [{ name: "probe", plugins: [{ ...installed.marketplaces[0]!.plugins[0]!, id: "other@probe" }] }], marketplaceLoadErrors: [] },
     { marketplaces: [{ name: "probe", plugins: [{ ...installed.marketplaces[0]!.plugins[0]!, enabled: "true" }] }], marketplaceLoadErrors: [] }]) {
     expect(() => projectCodexInstalledPlugins(value)).toThrow("CODEX_NATIVE_SKILL_CATALOG_INVALID");
+  }
+});
+
+test("positive native source provenance distinguishes config-owned inactivity from remote overrides", () => {
+  const plugin=installed.marketplaces[0]!.plugins[0]!;
+  const inventory=(value:unknown,marketplace="probe")=>({marketplaces:[{name:marketplace,plugins:[value]}],marketplaceLoadErrors:[]});
+  for (const source of [{type:"local",path:"/synthetic/source"},{type:"git",url:"https://example.test/synthetic.git",path:null,refName:null,sha:null},{type:"npm",package:"synthetic-plugin",version:null,registry:null}]) {
+    const projected=projectCodexInstalledPlugins(inventory({...plugin,enabled:false,source}))[0]!;
+    expect(projected.sourceType as string).toBe(source.type);
+    expect(projected.sourceSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(codexPluginSourceIsConfigControlled(projected)).toBe(true);
+    if (source.type==="local") expect(projected.sourcePath).toBe("/synthetic/source");
+    else expect(projected.sourcePath).toBeUndefined();
+    expect(JSON.stringify(projected)).not.toContain("example.test");
+    expect(codexPluginSourceIsConfigControlled({...projected,remotePluginId:"remote_identity"})).toBe(false);
+    for (const realm of ["openai-curated-remote","created-by-me-remote","workspace-directory","workspace-shared-with-me","workspace-shared-with-me-private","workspace-shared-with-me-unlisted"])
+      expect(codexPluginSourceIsConfigControlled({...projected,id:`vendor@${realm}`})).toBe(false);
+  }
+  for (const source of [undefined,{type:"unknown"},{type:"local",path:"relative"},{type:"git"},{type:"remote"}]) {
+    const projected=projectCodexInstalledPlugins(inventory({...plugin,enabled:false,source,sourceType:"local",sourceSha256:"a".repeat(64)}))[0]!;
+    expect(codexPluginSourceIsConfigControlled(projected)).toBe(false);
   }
 });
 

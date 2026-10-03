@@ -14,10 +14,12 @@ import { captureClaudeMarketplaceRegistry, captureClaudeMarketplaceRegistryV2 } 
 import { captureClaudeSettings, captureClaudeSettingsV2, captureClaudeSettingsV3, hashClaudeSettingsReplacement, hashClaudeSettingsReplacementV2, hashClaudeSettingsReplacementV3 } from "./claude-settings-witness.js";
 import { assertCodexHookDiscoveryRecovery, verifiesCodexHookDiscoverySource, type CodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery.js";
 import { captureCodexSettings, captureCodexSettingsV2, hashCodexSettingsReplacement, hashCodexSettingsReplacementV2, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
+import { reviewedCodexPluginSourceRoots, type CodexPluginSourceInput } from "./codex-plugin-skill-controls.js";
+import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
 export { captureDiscoveryDirectories, type DiscoveryDirectory } from "./agent-discovery-directories.js";
 
 export interface DiscoverySource { path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes" | "claude-plugin-registry" | "claude-marketplace-registry" | "claude-settings-v1" | "claude-settings-v2" | "claude-settings-v3" | "claude-marketplace-registry-v2" | "codex-settings-v1" | "codex-settings-v2"; managedPlugins?: ManagedPluginRegistrationWitness[]; format?: "json" | "toml" | "yaml"; fields?: string[] }
-export interface AgentDiscoveryBinding { agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; method: "automatic" | "reviewed"; builtinNames?: string[] }
+export interface AgentDiscoveryBinding { agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; method: "automatic" | "reviewed"; builtinNames?: string[]; codexInstallationInputs?: { version:"codex-cli 0.160.0"; catalogSha256:string; plugins:CodexPluginSourceInput[]; directories?:DiscoveryDirectory[] } }
 export interface ReviewedDiscoveryInputs { version: 1; agents: Array<{ agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; pluginHooks: "reviewed-no-skill-injection" }> }
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 function parseConfig(text: string, path: string, toml = false): any {
@@ -102,17 +104,42 @@ export function verifyAgentDiscovery(binding: AgentDiscoveryBinding, codexRecove
   if (codexRecovery) assertCodexHookDiscoveryRecovery(binding, codexRecovery);
   if (!binding || !Array.isArray(binding.sources) || !Array.isArray(binding.roots) || binding.sources.length > AGENT_POLICY_LIMITS.discoverySources || binding.roots.length > AGENT_POLICY_LIMITS.discoveryRoots) throw new Error("Invalid native discovery binding");
   if (binding.agent === "hermes" && !binding.directories?.length) throw new Error("Hermes discovery requires directory membership coverage; run skills hook install with a fresh discovery review");
-  if (binding.directories !== undefined) verifyDiscoveryDirectories(binding.directories);
+  const installationRoots=codexInstallationRoots(binding);
+  const installationInput=(path:string)=>installationRoots.some(root=>path===root || path.startsWith(root+sep));
+  if (binding.directories !== undefined) {
+    const projected=binding.codexInstallationInputs?.directories ?? [];
+    const ancestors=binding.directories.filter(directory=>installationRoots.some(root=>root.startsWith(directory.path+sep)));
+    if (projected.length!==ancestors.length || projected.some(directory=>!ancestors.some(original=>original.path===directory.path))) throw new Error("Missing installation input directory projection");
+    verifyDiscoveryDirectories(binding.directories.filter(directory=>!installationInput(directory.path) && !ancestors.includes(directory)));
+    verifyDiscoveryDirectories(projected,installationRoots);
+  }
   const budget = discoveryByteBudget();
   for (const source of binding.sources) {
     assertMarketplaceBinding(binding, source);
     if (source.hashMode === "claude-plugin-registry" && binding.agent !== "claude") throw new Error("Managed Claude registry witnesses cannot apply to another agent");
     if (source.format !== undefined && (!["json", "toml", "yaml"].includes(source.format) || !Array.isArray(source.fields) || !source.fields.length || source.fields.length > 64 || source.fields.some(field => typeof field !== "string" || !field))) throw new Error("Invalid native discovery projection");
     if (source.sha256 !== null && !/^[a-f0-9]{64}$/.test(source.sha256)) throw new Error("Invalid native discovery digest");
+    // Preserve the original full inventory witness as evidence, while the
+    // positively attested installation role binds current source identity.
+    // These bodies/directories are not native loading inputs.
+    if (installationInput(source.path)) { safe(source.path); continue; }
     const current = projected(source, undefined, budget);
     if (current !== source.sha256 && !verifiesCodexHookDiscoverySource(binding, source, current, codexRecovery)) throw new Error(`Native discovery input changed; run skills hook install with a fresh discovery review: ${source.path}`);
   }
   for (const root of binding.roots) safe(root);
+}
+function codexInstallationRoots(binding:AgentDiscoveryBinding):string[] {
+  const proof=binding.codexInstallationInputs;
+  if (proof===undefined) return [];
+  if (binding.agent!=="codex" || binding.method!=="reviewed" || proof.version!=="codex-cli 0.160.0" || !/^[a-f0-9]{64}$/.test(proof.catalogSha256) || !Array.isArray(proof.plugins) || !proof.plugins.length) throw new Error("Invalid native installation input proof");
+  const cache=dirname(dirname(proof.plugins[0]!.pluginParent));
+  const config=join(dirname(dirname(cache)),"config.toml"), home=dirname(dirname(dirname(cache)));
+  const configSource=binding.sources.find(source=>source.path===config && source.sha256!==null && (!source.format || source.format==="toml" && source.fields?.includes("plugins")));
+  const nativeRoots=NATIVE_SKILL_ROOTS.filter(([agent])=>agent==="codex").map(([,path])=>join(home,path));
+  if (!configSource || proof.plugins.some(input=>nativeRoots.some(root=>root===input.sourceRoot || root.startsWith(input.sourceRoot+sep) || input.sourceRoot.startsWith(root+sep))
+    || binding.sources.some(source=>basename(source.path)==="config.toml" && (source.path===input.sourceRoot || source.path.startsWith(input.sourceRoot+sep))))) throw new Error("Native installation input overlaps configuration or loading roots");
+  if (proof.plugins.some(input=>dirname(dirname(input.pluginParent))!==cache || !binding.sources.some(source=>source.path===join(input.sourceRoot,".codex-plugin/plugin.json") && source.sha256!==null && source.format===undefined && source.fields===undefined))) throw new Error("Missing native installation input source witness");
+  return reviewedCodexPluginSourceRoots(cache,proof.plugins,path=>{const text=read(path);if(text===null) throw new Error("Missing native installation input");return text;});
 }
 function assertMarketplaceBinding(binding: AgentDiscoveryBinding, source: DiscoverySource): void {
   if ((source.hashMode === "codex-settings-v1" || source.hashMode === "codex-settings-v2") && (binding.agent !== "codex" || binding.method !== "reviewed" || basename(source.path) !== "config.toml")) throw new Error("Codex settings witnesses require explicit reviewed Codex configuration");
@@ -121,8 +148,10 @@ function assertMarketplaceBinding(binding: AgentDiscoveryBinding, source: Discov
 }
 export function rebindAgentDiscovery(binding: AgentDiscoveryBinding, changes: Map<string, string>): AgentDiscoveryBinding {
   const budget = discoveryByteBudget();
+  const installationRoots=codexInstallationRoots(binding);
   return { ...binding, sources: binding.sources.map(source => {
     assertMarketplaceBinding(binding, source);
+    if (!changes.has(source.path) && installationRoots.some(root=>source.path.startsWith(root+sep))) return source;
     const sha256 = projected(source, changes, budget);
     // Only a planned write may change its witness. Do not adopt source drift
     // between initial validation and hook rendering, including raw witnesses.

@@ -530,6 +530,17 @@ hooks, commands and unsupported MCP controls refuse. Referenced own-root
 tool, approval, timeout and environment metadata. Their complete fingerprints
 and presence remain bound; review never executes commands or resolves environment
 values. Name controls suppress Skills, not every plugin capability.
+A Codex 0.160 catalog may also prove a nonremote plugin is installed but disabled.
+With an exact current path deny and explicit witnessed plugin disable, its cache
+can remain inert across versions; re-enable, ambiguous identity, conflicting
+controls and unsafe paths refuse. This does not approve its hook declarations.
+Remote-controlled, missing or unknown source identities do not qualify.
+
+The catalog retains local source paths separately from installed cache identities.
+When a reviewed discovery witness binds a positively mapped installation input,
+runtime checks omit that input from plugin skill loading. Default home/project
+roots and installed caches are still checked, and migration inventory remains
+complete. Overlapping, linked, missing or contradictory mappings refuse.
 No prompt hook starts an app server to obtain this receipt:
 native startup can maintain caches. The explicit capture starts and closes only its
 own bounded native client; it does not reload an existing agent session.

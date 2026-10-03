@@ -17,7 +17,7 @@ function safe(path: string): void {
 function same(before: Stats, after: Stats | undefined): boolean {
   return Boolean(after && after.isDirectory() && before.dev === after.dev && before.ino === after.ino && before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs);
 }
-function capture(path: string, budget: Budget): DiscoveryDirectory {
+function capture(path: string, budget: Budget, excludedRoots: readonly string[]): DiscoveryDirectory {
   safe(path);
   const root = lstatSync(path, { throwIfNoEntry: false });
   if (!root) return { path, sha256: null };
@@ -42,7 +42,7 @@ function capture(path: string, budget: Budget): DiscoveryDirectory {
       budget.bytes += Buffer.byteLength(row);
       need(budget.bytes <= AGENT_POLICY_LIMITS.discoveryDirectoryBytes, "Native discovery directory metadata limit exceeded");
       hash.update(row);
-      if (stat.isDirectory()) walk(child, childRelative, stat, depth + 1);
+      if (stat.isDirectory() && !excludedRoots.includes(child)) walk(child, childRelative, stat, depth + 1);
     }
     need(same(before, lstatSync(current, { throwIfNoEntry: false })), "Native discovery directory changed while reading");
   }
@@ -51,14 +51,15 @@ function capture(path: string, budget: Budget): DiscoveryDirectory {
   return { path, sha256: hash.digest("hex") };
 }
 /** Read-only capture; callers must review both membership and source bytes. */
-export function captureDiscoveryDirectories(paths: string[]): DiscoveryDirectory[] {
+export function captureDiscoveryDirectories(paths: string[], excludedRoots: readonly string[] = []): DiscoveryDirectory[] {
   need(Array.isArray(paths) && paths.length <= AGENT_POLICY_LIMITS.discoveryDirectories && new Set(paths).size === paths.length, "Invalid native discovery directory collection");
   const budget: Budget = { entries: 0, bytes: 0 };
-  return paths.map(path => capture(path, budget));
+  for (const root of excludedRoots) safe(root);
+  return paths.map(path => capture(path, budget, excludedRoots));
 }
-export function verifyDiscoveryDirectories(directories: DiscoveryDirectory[]): void {
+export function verifyDiscoveryDirectories(directories: DiscoveryDirectory[], excludedRoots: readonly string[] = []): void {
   need(Array.isArray(directories) && directories.length <= AGENT_POLICY_LIMITS.discoveryDirectories, "Invalid native discovery directory collection");
   for (const directory of directories) need(directory && typeof directory === "object" && (directory.sha256 === null || typeof directory.sha256 === "string" && /^[a-f0-9]{64}$/.test(directory.sha256)), "Invalid native discovery directory digest");
-  const current = captureDiscoveryDirectories(directories.map(directory => directory.path));
+  const current = captureDiscoveryDirectories(directories.map(directory => directory.path), excludedRoots);
   for (let i = 0; i < directories.length; i++) need(current[i]!.sha256 === directories[i]!.sha256, `Native discovery directory membership changed; run skills hook install with a fresh discovery review: ${directories[i]!.path}`);
 }

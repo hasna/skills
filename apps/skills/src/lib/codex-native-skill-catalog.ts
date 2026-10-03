@@ -2,6 +2,7 @@ import { realpathSync } from "node:fs";
 import { isAbsolute, normalize } from "node:path";
 import { connectCodexHookRpc, type CodexHookRpc } from "./codex-hook-rpc.js";
 import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
+import { hashNativeJsonControls } from "./claude-settings-witness.js";
 
 export interface CodexNativeSkill {
   /** Native qualified name, not a directory name or plugin identifier. */
@@ -28,7 +29,21 @@ export interface CodexInstalledPlugin {
   localVersion: string | null;
   /** Native remote identity; never a guessed installed cache version. */
   remotePluginId?: string;
-  sourceType?: "remote";
+  sourceType?: "remote" | "local" | "git" | "npm";
+  /** Fingerprint of the complete native nonremote source declaration. */
+  sourceSha256?: string;
+  /** Declared local installation input, distinct from the loaded cache root. */
+  sourcePath?: string;
+}
+
+/** Codex 0.160 derives remote installed keys from these native scope realms.
+ * A nonremote declaration in one of them cannot prove config-owned enablement:
+ * remote reconciliation may replace enabled even while config stays disabled. */
+export function codexPluginSourceIsConfigControlled(plugin: Pick<CodexInstalledPlugin,"id"|"sourceType"|"sourceSha256"|"remotePluginId">): boolean {
+  const remoteRealms=["openai-curated-remote","created-by-me-remote","workspace-directory","workspace-shared-with-me","workspace-shared-with-me-private","workspace-shared-with-me-unlisted"];
+  return Boolean(plugin.sourceType && ["local","git","npm"].includes(plugin.sourceType)
+    && plugin.sourceSha256 && /^[a-f0-9]{64}$/.test(plugin.sourceSha256) && !plugin.remotePluginId
+    && !remoteRealms.includes(plugin.id.slice(plugin.id.lastIndexOf("@")+1)));
 }
 
 const MAX_SKILLS = 4096;
@@ -43,6 +58,19 @@ const scalar = (value: unknown, max: number): value is string => typeof value ==
 export const remotePluginIdentifier = (value: unknown): value is string => typeof value === "string"
   && /^[A-Za-z0-9_~-]{1,1024}$/.test(value);
 const absolutePath = (value: unknown): value is string => scalar(value, MAX_PATH_BYTES) && isAbsolute(value);
+
+/** Keep positive source provenance without retaining URLs or other opaque text.
+ * Missing/unknown source metadata never implies local configuration control. */
+function projectPluginSource(source: unknown): Pick<CodexInstalledPlugin,"sourceType"|"sourceSha256"|"sourcePath"> {
+  if (!object(source)) return {};
+  if (source.type === "remote") return { sourceType: "remote" };
+  const optionalText = (value: unknown) => value === undefined || value === null || scalar(value,MAX_PATH_BYTES);
+  const valid = source.type === "local" ? Object.keys(source).every(key=>["type","path"].includes(key)) && absolutePath(source.path)
+    : source.type === "git" ? Object.keys(source).every(key=>["type","url","path","refName","sha"].includes(key)) && scalar(source.url,MAX_PATH_BYTES) && [source.path,source.refName,source.sha].every(optionalText)
+    : source.type === "npm" ? Object.keys(source).every(key=>["type","package","version","registry"].includes(key)) && scalar(source.package,MAX_NAME_BYTES) && [source.version,source.registry].every(optionalText)
+    : false;
+  return valid ? { sourceType: source.type as "local"|"git"|"npm", sourceSha256: hashNativeJsonControls(JSON.stringify(source)), ...(source.type==="local" ? {sourcePath:source.path as string} : {}) } : {};
+}
 
 /** Project the measured native skills/list contract without retaining descriptions,
  * links, interfaces, errors, or any other untrusted native text. */
@@ -75,8 +103,8 @@ export function projectCodexInstalledPlugins(response: unknown): CodexInstalledP
     for (const value of marketplace.plugins) {
       if (!object(value) || !scalar(value.id, MAX_PLUGIN_ID_BYTES) || !scalar(value.name, MAX_NAME_BYTES)
         || value.id !== `${value.name}@${marketplace.name}`) refuse();
-      plugins.push({ ...value, marketplace: marketplace.name,
-        sourceType: object(value.source) && value.source.type === "remote" ? "remote" : undefined });
+      plugins.push({ ...value, marketplace: marketplace.name, sourceType: undefined, sourceSha256: undefined, sourcePath: undefined,
+        ...projectPluginSource(value.source) });
     }
   }
   return projectCodexInstalledPluginEntries(plugins);
@@ -91,12 +119,17 @@ export function projectCodexInstalledPluginEntries(value: unknown): CodexInstall
       || typeof item.installed !== "boolean" || typeof item.enabled !== "boolean"
       || (item.localVersion !== null && !scalar(item.localVersion, MAX_NAME_BYTES))
       || (item.remotePluginId !== undefined && item.remotePluginId !== null && !remotePluginIdentifier(item.remotePluginId))
-      || (item.sourceType !== undefined && item.sourceType !== "remote")) refuse();
+      || (item.sourceType !== undefined && !["remote","local","git","npm"].includes(item.sourceType as string))
+      || (["local","git","npm"].includes(item.sourceType as string) ? typeof item.sourceSha256!=="string" || !/^[a-f0-9]{64}$/.test(item.sourceSha256) : item.sourceSha256!==undefined)
+      || (item.sourceType==="local" ? !absolutePath(item.sourcePath) || normalize(item.sourcePath)!==item.sourcePath
+        || item.sourceSha256!==hashNativeJsonControls(JSON.stringify({type:"local",path:item.sourcePath})) : item.sourcePath!==undefined)) refuse();
     const at = item.id.lastIndexOf("@");
     if (at < 1 || item.id.slice(0, at) !== item.name || at === item.id.length - 1 || ids.has(item.id)) refuse();
     ids.add(item.id);
     return { id: item.id, name: item.name, installed: item.installed, enabled: item.enabled, localVersion: item.localVersion ?? null,
-      ...(item.sourceType === "remote" ? { sourceType: "remote" as const } : {}),
+      ...(item.sourceType === undefined ? {} : { sourceType: item.sourceType as CodexInstalledPlugin["sourceType"] }),
+      ...(item.sourceSha256 === undefined ? {} : { sourceSha256: item.sourceSha256 as string }),
+      ...(item.sourcePath === undefined ? {} : { sourcePath: item.sourcePath as string }),
       ...(item.remotePluginId == null ? {} : { remotePluginId: item.remotePluginId }) };
   });
 }

@@ -1,11 +1,16 @@
 import { test, expect, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { planAgentIntegration, applyAgentIntegration, assertManagedAgentBridge } from "./agent-integration.js";
-import { reviewCodexPluginSkillControls, isReviewedCodexPluginSkillDisabled, reviewedCodexPluginCapabilitiesUnchanged } from "./codex-plugin-skill-controls.js";
+import { reviewCodexPluginControls, isReviewedCodexPluginInactive, reviewCodexPluginSkillControls, isReviewedCodexPluginSkillDisabled, reviewedCodexPluginCapabilitiesUnchanged } from "./codex-plugin-skill-controls.js";
+import { createHash } from "node:crypto";
+import { hashNativeJsonControls } from "./claude-settings-witness.js";
+import { inventoryNativeSkills } from "./agent-integration.js";
+import { reviewedCodexPluginSourceRoots } from "./codex-plugin-skill-controls.js";
 import { assertAgentPolicyCollections } from "./agent-policy-limits.js";
+import { captureDiscoveryDirectories } from "./agent-discovery.js";
 useDefaultTestTimeout();
 const roots:string[]=[]; afterEach(()=>{for(const root of roots.splice(0)) rmSync(root,{recursive:true,force:true});});
 const put=(p:string,s:string)=>{mkdirSync(join(p,".."),{recursive:true});writeFileSync(p,s);};
@@ -235,6 +240,134 @@ test("remote null-version denied materialization binds the native installation r
  expect(()=>reviewCodexPluginSkillControls(catalog,[document],cache,home,read,rules)).toThrow("IDENTITY_UNSUPPORTED");
 });
 
+
+test("inert disabled plugin documents do not block qualified review while active hook controls still refuse", () => {
+ const home=mkdtempSync(join(tmpdir(),"skills-inert-plugin-review-")); roots.push(home);
+ const cache=join(home,".codex/plugins/cache"), inactiveRoot=join(cache,"probe/inactive/1.0.0"), activeRoot=join(cache,"probe/active/1.0.0");
+ const inactive=join(inactiveRoot,"skills/inert-skill/SKILL.md"), active=join(activeRoot,"skills/active-skill/SKILL.md");
+ put(join(inactiveRoot,".codex-plugin/plugin.json"),JSON.stringify({name:"inactive",version:"1.0.0",hooks:{SessionStart:[{hooks:[{type:"command",command:"synthetic-never-executed"}]}]}}));
+ put(join(home,"source/inactive/.codex-plugin/plugin.json"),JSON.stringify({name:"inactive",version:"1.0.0"}));
+ put(inactive,"---\nname: inert-skill\ndescription: Synthetic inactive plugin fixture\n---\nFixture\n");
+ put(join(activeRoot,".codex-plugin/plugin.json"),JSON.stringify({name:"active",version:"1.0.0"}));
+ put(active,"---\nname: active-skill\ndescription: Synthetic active plugin fixture\n---\nFixture\n");
+ const catalog={version:"codex-cli 0.160.0",cwd:home,skills:[{name:"active:active-skill",path:active,enabled:true,pluginId:"active@probe"}],plugins:[
+   {id:"inactive@probe",name:"inactive",installed:true,enabled:false,localVersion:"1.0.0",sourceType:"local" as const,sourceSha256:hashNativeJsonControls(JSON.stringify({type:"local",path:join(home,"source/inactive")})),sourcePath:join(home,"source/inactive")},
+   {id:"active@probe",name:"active",installed:true,enabled:true,localVersion:"1.0.0"}]};
+ const read=(path:string)=>readFileSync(path,"utf8"), rules=[{path:inactive,enabled:false}], settings={"inactive@probe":{enabled:false}};
+ const review=(snapshot=catalog,config:unknown=settings,denials:unknown=rules)=>reviewCodexPluginSkillControls(snapshot,[inactive,active],cache,home,read,denials,config);
+ expect(review().map(control=>control.name)).toEqual(["active:active-skill"]);
+ const reviewed=reviewCodexPluginControls(catalog,[inactive,active],cache,home,read,rules,settings);
+ expect(reviewed.inactivePlugins).toHaveLength(1);
+ const inert=(path=inactive,config:unknown=settings,denials:unknown=rules)=>isReviewedCodexPluginInactive(path,cache,reviewed.inactivePlugins,config,denials,read);
+ expect(inert()).toBe(true);
+ for (const source of [{sourceType:undefined,sourceSha256:undefined,sourcePath:undefined},{sourceType:"remote" as const,sourceSha256:undefined,sourcePath:undefined},{sourceType:"local" as const,sourceSha256:hashNativeJsonControls(JSON.stringify({type:"local",path:join(home,"source/inactive")})),sourcePath:join(home,"source/inactive"),remotePluginId:"remote_identity"}]) {
+   const snapshot={...catalog,plugins:catalog.plugins.map(plugin=>plugin.id==="inactive@probe" ? {...plugin,...source} : plugin)};
+   expect(()=>reviewCodexPluginControls(snapshot,[inactive,active],cache,home,read,rules,settings)).toThrow("IDENTITY_UNSUPPORTED");
+ }
+ expect(inert(inactive,{"inactive@probe":{enabled:true}})).toBe(false);
+ expect(inert(inactive,settings,[...rules,{name:"inactive:inert-skill",enabled:true}])).toBe(false);
+ expect(inert(inactive,settings,[...rules,{path:inactive,enabled:true}])).toBe(false);
+ expect(isReviewedCodexPluginInactive(inactive,cache,[...reviewed.inactivePlugins,...reviewed.inactivePlugins],settings,rules,read)).toBe(false);
+ expect(()=>assertAgentPolicyCollections({bridge:{codexInactivePlugins:reviewed.inactivePlugins}})).toThrow();
+ expect(()=>assertAgentPolicyCollections({bridge:{codexInactivePlugins:reviewed.inactivePlugins,codexPluginSkillReview:{version:"codex-cli 0.160.0",catalogSha256:"b".repeat(64)}}})).not.toThrow();
+
+ expect(reviewCodexPluginSkillControls({...catalog,skills:[]},[inactive],cache,home,read,rules,settings)).toEqual([]);
+ // A native snapshot alone never proves continuing disablement.
+ expect(()=>reviewCodexPluginSkillControls(catalog,[inactive,active],cache,home,read,rules)).toThrow("IDENTITY_UNSUPPORTED");
+ expect(()=>review(catalog,{"inactive@probe":{enabled:true}})).toThrow("IDENTITY_UNSUPPORTED");
+ expect(()=>review({...catalog,plugins:catalog.plugins.map(plugin=>({...plugin,enabled:true}))})).toThrow("IDENTITY_UNSUPPORTED");
+ expect(()=>review(catalog,settings,[])).toThrow("IDENTITY_UNSUPPORTED");
+ expect(()=>review(catalog,settings,[...rules,{name:"inactive:inert-skill",enabled:true}])).toThrow("IDENTITY_UNSUPPORTED");
+ expect(()=>review(catalog,settings,[...rules,{path:inactive,enabled:true}])).toThrow("IDENTITY_UNSUPPORTED");
+ expect(()=>review({...catalog,skills:[...catalog.skills,{name:"inactive:inert-skill",path:inactive,enabled:false,pluginId:"inactive@probe"}]})).toThrow("IDENTITY_UNSUPPORTED");
+ const config=join(home,".codex/config.toml"), initial=`[plugins."inactive@probe"]\nenabled = false\n\n[[skills.config]]\npath = ${JSON.stringify(inactive)}\nenabled = false\n`;
+ put(config,initial);
+ const f={home,dataDir:join(home,"data"),projectDir:home,agents:["codex" as const],codexNativeCatalog:catalog};
+ const stale=planAgentIntegration(f);
+ put(config,initial.replace("enabled = false","enabled = true"));
+ expect(()=>applyAgentIntegration(stale)).toThrow();
+ put(config,initial);
+ const plan=planAgentIntegration(f); applyAgentIntegration(plan);
+ expect(read(config)).toContain('name = "active:active-skill"');
+ expect(read(config)).not.toContain('name = "inactive:inert-skill"');
+ expect(()=>assertManagedAgentBridge("codex",f)).not.toThrow();
+ const activeNext=join(cache,"probe/active/2.0.0");
+ put(join(activeNext,".codex-plugin/plugin.json"),JSON.stringify({name:"active",version:"2.0.0"}));
+ put(join(activeNext,"skills/active-skill/SKILL.md"),read(active));
+ // The enrolled active plugin keeps its qualified denial across cache versions.
+ expect(()=>assertManagedAgentBridge("codex",f)).not.toThrow();
+ const nextRoot=join(cache,"probe/inactive/2.0.0"), next=join(nextRoot,"skills/inert-skill/SKILL.md");
+ put(join(nextRoot,".codex-plugin/plugin.json"),JSON.stringify({name:"inactive",version:"2.0.0",hooks:{}}));put(next,read(inactive));
+ // A fresh review still needs the current exact path denial; the persisted
+ // config-owned inactive proof survives a regular cache version refresh.
+ expect(()=>reviewCodexPluginSkillControls(catalog,[next],cache,home,read,rules,settings)).toThrow("IDENTITY_UNSUPPORTED");
+ expect(()=>assertManagedAgentBridge("codex",f)).not.toThrow();
+ expect(inert(next,settings,[])).toBe(true);
+ const refreshedSettings={"inactive@probe":{enabled:false}};
+ expect(inert(next,refreshedSettings,[{path:next,enabled:true}])).toBe(false);
+ expect(inert(next,{},[])).toBe(false);
+ const sourceMissing={...catalog,plugins:catalog.plugins.map(plugin=>plugin.id==="inactive@probe" ? {...plugin,sourceType:undefined,sourceSha256:undefined,sourcePath:undefined} : plugin)};
+ expect(()=>reviewCodexPluginControls(sourceMissing,[inactive,active],cache,home,read,rules,settings)).toThrow("IDENTITY_UNSUPPORTED");
+
+ const alias=join(nextRoot,"skills/alias/SKILL.md");mkdirSync(dirname(alias),{recursive:true});symlinkSync(next,alias);
+ expect(inert(alias,settings,[])).toBe(false);
+ const malformed=join(cache,"probe/inactive/3.0.0");
+ put(join(malformed,".codex-plugin/plugin.json"),JSON.stringify({name:"different",version:"3.0.0",hooks:{}}));
+ const malformedDoc=join(malformed,"skills/inert-skill/SKILL.md");put(malformedDoc,read(inactive));
+ expect(inert(malformedDoc,settings,[])).toBe(false);
+ put(config,read(config).replace("enabled = false","enabled = true"));
+ expect(()=>assertManagedAgentBridge("codex",f)).toThrow("NATIVE_SKILL_DRIFT");
+});
+
+test("native local installation inputs remain inventoried for evidence but are not loaded skill roots", () => {
+ const home=mkdtempSync(join(tmpdir(),"skills-native-install-input-"));roots.push(home);
+ const cache=join(home,".codex/plugins/cache"), installedRoot=join(cache,"probe/vendor/1.0.0"), sourceRoot=join(home,"installation-input/vendor");
+ const installedDoc=join(installedRoot,"skills/deploy/SKILL.md"), sourceDoc=join(sourceRoot,"skills/deploy/SKILL.md"), sourceManifest=join(sourceRoot,".codex-plugin/plugin.json");
+ put(join(installedRoot,".codex-plugin/plugin.json"),'{"name":"vendor","version":"1.0.0"}');
+ put(sourceManifest,'{"name":"vendor","version":"2.0.0","hooks":{}}');
+ put(installedDoc,'---\nname: deploy\ndescription: Synthetic installed fixture\n---\nInstalled body');
+ put(sourceDoc,'---\nname: deploy\ndescription: Synthetic installation input\n---\nDifferent input body');
+ const config=join(home,".codex/config.toml");put(config,"");
+ const read=(path:string)=>readFileSync(path,"utf8"), hash=(path:string)=>createHash("sha256").update(read(path)).digest("hex");
+ const catalog={version:"codex-cli 0.160.0",cwd:home,skills:[{name:"vendor:deploy",path:installedDoc,enabled:true,pluginId:"vendor@probe"}],plugins:[{id:"vendor@probe",name:"vendor",installed:true,enabled:true,localVersion:"1.0.0",sourceType:"local" as const,sourcePath:sourceRoot,sourceSha256:hashNativeJsonControls(JSON.stringify({type:"local",path:sourceRoot}))}]};
+ const review=reviewCodexPluginControls(catalog,[installedDoc,sourceDoc],cache,home,read,[]);
+ expect(review.skills).toHaveLength(1);expect(review.sourceInputs).toHaveLength(1);
+ const sourceRoots=reviewedCodexPluginSourceRoots(cache,review.sourceInputs,read);
+ const inventoryOptions={includeVendor:true,agents:["codex" as const],agentRoots:[{agent:"codex",path:sourceRoot}]};
+ expect(inventoryNativeSkills(home,inventoryOptions).filter(entry=>!entry.bridge)).toHaveLength(2);
+ expect(inventoryNativeSkills(home,{...inventoryOptions,codexInstallationInputRoots:sourceRoots}).filter(entry=>!entry.bridge).map(entry=>entry.path)).toEqual([dirname(installedDoc)]);
+ const f={home,dataDir:join(home,"data"),projectDir:home,agents:["codex" as const],codexNativeCatalog:catalog,discoveryInputs:{version:1 as const,agents:[{agent:"codex" as const,roots:[sourceRoot],sources:[config,sourceManifest,sourceDoc].map(path=>({path,sha256:hash(path)})),directories:captureDiscoveryDirectories([dirname(sourceRoot),sourceRoot]),pluginHooks:"reviewed-no-skill-injection" as const}]}};
+ const plan=planAgentIntegration(f);applyAgentIntegration(plan);
+ expect(()=>assertManagedAgentBridge("codex",f)).not.toThrow();
+ const stored=JSON.parse(read(join(f.dataDir,"agent-policy.json"))).bridge.discovery.codex;
+ // Input-body and recursive membership churn never changes native loaded roots.
+ put(sourceDoc,'---\nname: deploy\ndescription: Updated installation input\n---\nChanged upstream template');
+ put(join(sourceRoot,"skills/new-template/SKILL.md"),'---\nname: template-only\ndescription: Synthetic template addition\n---\nNew input directory');
+ expect(()=>assertManagedAgentBridge("codex",f)).not.toThrow();
+ expect(()=>planAgentIntegration({home,dataDir:f.dataDir,projectDir:home,agents:["codex"]})).not.toThrow();
+ expect(JSON.parse(read(join(f.dataDir,"agent-policy.json"))).bridge.discovery.codex).toEqual(stored);
+ // Installation identity and installed capabilities remain witnessed.
+ const beforeSourceManifest=read(sourceManifest);
+ put(sourceManifest,'{"name":"different","version":"2.0.0"}');
+ expect(()=>assertManagedAgentBridge("codex",f)).toThrow("NATIVE_SKILL_DRIFT");
+ put(sourceManifest,beforeSourceManifest);
+ const beforeManifest=read(join(installedRoot,".codex-plugin/plugin.json"));
+ put(join(installedRoot,".codex-plugin/plugin.json"),'{"name":"vendor","version":"1.0.0","hooks":{}}');
+ expect(reviewedCodexPluginCapabilitiesUnchanged(cache,review.skills,read)).toBe(false);
+ expect(()=>assertManagedAgentBridge("codex",f)).toThrow("NATIVE_SKILL_DRIFT");
+ put(join(installedRoot,".codex-plugin/plugin.json"),beforeManifest);
+ put(join(dirname(sourceRoot),"unmapped/SKILL.md"),'---\nname: unmapped\ndescription: Synthetic unrelated root\n---\nUnreviewed input');
+ expect(()=>assertManagedAgentBridge("codex",f)).toThrow("NATIVE_SKILL_DRIFT");
+ // A template is not admitted by pathname, shared bytes, or missing provenance.
+ expect(()=>reviewedCodexPluginSourceRoots(cache,[{...review.sourceInputs[0]!,sourceRoot:installedRoot}],read)).toThrow();
+ expect(()=>reviewedCodexPluginSourceRoots(cache,[...review.sourceInputs,...review.sourceInputs],read)).toThrow();
+ expect(()=>reviewCodexPluginControls({...catalog,skills:[...catalog.skills,{name:"vendor:deploy",path:sourceDoc,enabled:true,pluginId:"vendor@probe"}]},[installedDoc,sourceDoc],cache,home,read,[])).toThrow("IDENTITY_UNSUPPORTED");
+ const link=join(home,"source-link");symlinkSync(sourceRoot,link);
+ expect(()=>reviewedCodexPluginSourceRoots(cache,[{...review.sourceInputs[0]!,sourceRoot:link}],read)).toThrow();
+ expect(()=>inventoryNativeSkills(home,{...inventoryOptions,codexInstallationInputRoots:[home]})).toThrow("unconditional skill-loading root");
+ const nestedNative=join(home,".codex/skills/nested-input");mkdirSync(nestedNative,{recursive:true});
+ expect(()=>inventoryNativeSkills(home,{...inventoryOptions,codexInstallationInputRoots:[nestedNative]})).toThrow("unconditional skill-loading root");
+});
 
 test("native review accepts an empty plugin cache while preserving catalog and cached-identity refusals", () => {
  const home=mkdtempSync(join(tmpdir(),"skills-empty-plugin-cache-")); roots.push(home);

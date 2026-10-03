@@ -30,10 +30,36 @@ export function assertAgentPolicyCollections(policy: Record<string, any>): void 
     if (control.mcpSha256 !== undefined) requireBound(typeof control.mcpSha256 === "string" && /^[a-f0-9]{64}$/.test(control.mcpSha256));
     if (control.appSha256 !== undefined) requireBound(typeof control.appSha256 === "string" && /^[a-f0-9]{64}$/.test(control.appSha256));
   }
+  if (bridge.codexInactivePlugins !== undefined) {
+    const controls=array(bridge.codexInactivePlugins,4096), ids=new Set<string>();
+    requireBound(controls.length===0 || object(bridge.codexPluginSkillReview) && bridge.codexPluginSkillReview.version==="codex-cli 0.160.0" && typeof bridge.codexPluginSkillReview.catalogSha256==="string" && /^[a-f0-9]{64}$/.test(bridge.codexPluginSkillReview.catalogSha256));
+    for (const control of controls) {
+      requireBound(object(control) && Object.keys(control).every(key=>["pluginId","namespace","pluginParent","sourceType","sourceSha256"].includes(key)));
+      text(control.pluginId,1024); text(control.namespace,64); text(control.pluginParent);
+      requireBound(!ids.has(control.pluginId) && isAbsolute(control.pluginParent) && resolve(control.pluginParent)===control.pluginParent
+        && ["local","git","npm"].includes(control.sourceType) && typeof control.sourceSha256==="string" && /^[a-f0-9]{64}$/.test(control.sourceSha256));
+      ids.add(control.pluginId);
+    }
+  }
   if (bridge.disabledBuiltins !== undefined) for (const builtin of array(bridge.disabledBuiltins, AGENT_POLICY_LIMITS.builtinNames)) { requireBound(object(builtin)); text(builtin.path); text(builtin.hash, 64); }
   if (bridge.discovery === undefined) return;
   for (const [agent, value] of Object.entries(record(bridge.discovery, AGENT_POLICY_LIMITS.agents))) {
     text(agent, 128); requireBound(object(value)); text(value.agent, 128);
+    if (value.codexInstallationInputs!==undefined) {
+      const proof=record(value.codexInstallationInputs,4), inputs=array(proof.plugins,4096), ids=new Set<string>();
+      requireBound(agent==="codex" && value.agent==="codex" && value.method==="reviewed" && proof.version==="codex-cli 0.160.0" && typeof proof.catalogSha256==="string" && /^[a-f0-9]{64}$/.test(proof.catalogSha256)
+        && inputs.length>0 && object(bridge.codexPluginSkillReview) && bridge.codexPluginSkillReview.version===proof.version && bridge.codexPluginSkillReview.catalogSha256===proof.catalogSha256);
+      for (const input of inputs) {
+        requireBound(object(input) && Object.keys(input).every(key=>["pluginId","namespace","pluginParent","sourceRoot","sourceSha256"].includes(key)));
+        text(input.pluginId,1024);text(input.namespace,64);text(input.pluginParent);text(input.sourceRoot);
+        requireBound(!ids.has(input.pluginId) && [input.pluginParent,input.sourceRoot].every(path=>isAbsolute(path) && resolve(path)===path) && typeof input.sourceSha256==="string" && /^[a-f0-9]{64}$/.test(input.sourceSha256));
+        ids.add(input.pluginId);
+      }
+      if (proof.directories!==undefined) for (const directory of array(proof.directories,AGENT_POLICY_LIMITS.discoveryDirectories)) {
+        requireBound(object(directory));text(directory.path);
+        requireBound(directory.sha256===null || typeof directory.sha256==="string" && /^[a-f0-9]{64}$/.test(directory.sha256));
+      }
+    }
     for (const root of array(value.roots, AGENT_POLICY_LIMITS.discoveryRoots)) text(root);
     for (const source of array(value.sources, AGENT_POLICY_LIMITS.discoverySources)) {
       requireBound(object(source)); text(source.path);
