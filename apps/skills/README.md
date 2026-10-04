@@ -247,6 +247,21 @@ validates the complete resulting policy before writing configuration or backups;
 the same limits apply when reading and guarding native context. A rejected plan
 leaves the previous policy intact.
 
+Sumi uses its native V2 plugin API, independently of OpenCode. Its managed
+`plugins/skills-cli.js` plugin validates prompt admission and adds selected
+instructions to transient request context. Real native session IDs and parent
+IDs bind exact inherited pins; native agent definitions are not Hasna identities.
+Native payload tool calls and prompt attachments are refused except for the
+`skills-cli` bridge. The supported configuration resolver honors `SUMI_CONFIG_DIR`,
+`XDG_CONFIG_HOME` and `SUMI_HOME` without performing native home adoption.
+
+Sumi integration refuses unresolved JSONC, inline/additional config, remote or
+relative skill sources, flat Markdown skills and foreign plugin packages.
+Resolve or review these sources before applying integration. The adapter was
+checked against Sumi 0.2.52. That release watches plugin sources for hot reload;
+installation alone does not prove an existing session adopted the plugin.
+Verify actual prompt consumption on each target after installation.
+
 Hermes 0.20.5 uses `pre_llm_call` to add selected context and `pre_tool_call`
 with `fail_closed: true` and a small owned supervisor to guard tool calls. The
 supervisor maps Skills child failures, timeouts and missing/invalid directives

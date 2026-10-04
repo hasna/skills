@@ -15,6 +15,7 @@ import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, re
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderAgentHookCommand, renderOpenCodePlugin, type IntegrationAgent } from "./agent-adapters.js";
 import { assertCodexPathConfigEditable, CODEX_SKILL_CONFIG_SECTIONS, disableCodexBundledSkills, normalizeCodexInlinePathConfig } from "./agent-codex.js";
 
+import { sumiConfigDirectory, sumiConfigPath, sumiBridgeRoot, renderSumiPlugin, SUMI_SKILL_PERMISSIONS } from "./agent-sumi.js";
 import { HERMES_OPT_OUT, parseHermesConfig, configureHermesHooks, assertHermesProtection, renderHermesSupervisor, assertNoHermesLegacyShadow, type HermesSupervisorBinding } from "./agent-hermes.js";
 import type { CodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery.js";
 import { assertClaudeHookEventsReplacement, type ClaudeCoordinatedHookEvent } from "./claude-settings-witness.js";
@@ -295,9 +296,10 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
     ? ROOTS.filter(([agent, path]) => selectedAgents.has(agent as IntegrationAgent) || (selectedAgents.has("hermes") && agent === "codex" && path === ".agents/skills"))
     : ROOTS;
   const roots: Array<readonly [string, string]> = rootDefinitions.map(([agent, path]) => [agent, canonicalAgentPath(join(home, path), aliases)]);
-  const bridgePaths = Object.values(AGENT_ADAPTERS).map(adapter => canonicalAgentPath(join(home, adapter.root, CLI_BRIDGE_NAME), aliases));
+  const bridgePaths = Object.entries(AGENT_ADAPTERS).filter(([agent]) => agent !== "sumi" || includesAgent("sumi")).map(([agent, adapter]) => canonicalAgentPath(join(agent === "sumi" ? sumiBridgeRoot(home) : join(home, adapter.root), CLI_BRIDGE_NAME), aliases));
   for (const project of projectAncestorDirectories([...(options.projectDirs ?? []), ...(options.projectDir ? [options.projectDir] : [])])) {
     for (const [agent, path] of rootDefinitions) roots.push([agent, canonicalAgentPath(join(project, path), aliases)]);
+    if (selectedAgents?.has("sumi")) for (const directory of [".claude", ".agents"]) for (const name of ["skill", "skills"]) roots.push(["sumi", canonicalAgentPath(join(project, directory, name), aliases)]);
   }
   const installationInputs=options.codexInstallationInputRoots ?? [];
   if (installationInputs.some(input=>resolve(input)!==input || realpathSync(input)!==input || roots.some(([agent,path])=>agent==="codex" && (path===input || path.startsWith(input+sep) || input.startsWith(path+sep))))) throw new Error("Native installation input overlaps an unconditional skill-loading root");
@@ -341,7 +343,7 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
     if (configuredRoot && agent === "codex" && installationInputs.some(root => path === root || path.startsWith(`${root}${sep}`))) return scan;
     if (!existsSync(path)) return scan;
     const stat = lstatSync(path);
-    if (stat.isFile()) return scan;
+    if (stat.isFile()) { if (agent === "sumi" && depth === 1 && path.endsWith(".md")) throw new Error("NATIVE_SKILL_DRIFT: flat Sumi skill documents require a dedicated migration adapter"); return scan; }
     if (!stat.isDirectory()) throw new Error(`Unsupported native discovery entry: ${path}`);
     if (existsSync(join(path, "SKILL.md"))) {
       scan.hasSkills = true;
@@ -349,11 +351,11 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
       let managed = false;
       const marker = join(path, ".hasna-skills.json");
       if (existsSync(marker)) { try { managed = JSON.parse(readFileSync(marker, "utf8")).managedBy === "@hasna/skills"; } catch { /* Unrecognized markers grant no ownership. */ } }
-      const bridge = !vendor && isOwnedCliBridge(path, bridgePaths);
+      const bridge = (!vendor || agent === "sumi") && isOwnedCliBridge(path, bridgePaths);
       const rootAlias = aliases.find(item => path === item.target || path.startsWith(item.target + sep));
       entries.push({ agent, path, hash: treeHash(path), managed, vendor, ...(agent === "codex" && path.startsWith(canonicalAgentPath(join(home, ".codex", "skills", ".system"), aliases) + sep) ? { system: true } : {}), ...(bridge ? { bridge: true, bridgeHome: resolve(home) } : {}), ...(rootAlias ? { rootAlias } : {}) }); return scan;
     }
-    if (depth > (vendor ? 32 : 3)) return { ...scan, complete: false };
+    if (depth > (agent === "sumi" ? 32 : vendor ? 32 : 3)) return { ...scan, complete: false };
     // Retired vendor documents leave their shared assets in place. Bound the
     // entire discovery walk before retaining or sorting directory entries.
     const children: Dirent[] = [], directory = opendirSync(path);
@@ -367,7 +369,7 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
     if (pluginCache) children.sort((a, b) => Number(a.isSymbolicLink()) - Number(b.isSymbolicLink()));
     for (const { name } of children) {
       if (name === "node_modules") continue;
-      if (name.startsWith(".") && name !== ".system" && agent !== "hermes" && !(options.guardHermes && `${path}${sep}`.includes(`${sep}.agents${sep}skills${sep}`))) continue;
+      if (name.startsWith(".") && name !== ".system" && agent !== "hermes" && agent !== "sumi" && !(options.guardHermes && `${path}${sep}`.includes(`${sep}.agents${sep}skills${sep}`))) continue;
       const isVendor = vendor || name === ".system";
       if (isVendor && !options.includeVendor) continue;
       const child = join(path, name);
@@ -569,14 +571,14 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     if (!INTEGRATION_AGENTS.includes(agent)) throw new Error(`Unsupported agent: ${agent}`);
     const { command, profileId } = bindings.get(agent)!;
     const adapter = AGENT_ADAPTERS[agent];
-    const bridgePath = canonicalAgentPath(join(home, adapter.root, CLI_BRIDGE_NAME), aliases);
+    const bridgePath = canonicalAgentPath(join(agent === "sumi" ? sumiBridgeRoot(home) : join(home, adapter.root), CLI_BRIDGE_NAME), aliases);
     assertSafePath(bridgePath);
     if (existsSync(bridgePath) && !isOwnedCliBridge(bridgePath, [bridgePath])) throw new Error(`Refusing to overwrite an unrecognized or modified Skills bridge: ${bridgePath}`);
     for (const [name, after] of Object.entries(CLI_BRIDGE_FILES)) {
       const path = join(bridgePath, name), before = readOptional(path);
       if (before !== after) changes.push({ path, before, after });
     }
-    const path = canonicalAgentPath(join(home, adapter.config), aliases);
+    const path = canonicalAgentPath(agent === "sumi" ? sumiConfigPath(home) : join(home, adapter.config), aliases);
     const before = readOptional(path);
     if (agent === "hermes") {
       const supervisorPath = join(dataDir, "agent-hooks", "hermes.js"), supervisorBefore = readOptional(supervisorPath), supervisorAfter = renderHermesSupervisor(command, profileId);
@@ -592,7 +594,15 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
       continue;
     }
     const config = jsonObject(before, path);
-    if (agent === "opencode") {
+    if (agent === "sumi") {
+      if (config.permissions !== undefined && (!Array.isArray(config.permissions) || config.permissions.some((rule: any) => !rule || typeof rule.action !== "string" || typeof rule.resource !== "string" || !["allow", "deny", "ask"].includes(rule.effect)))) throw new Error("Expected Sumi native permission rules");
+      config.permissions = [...(config.permissions ?? []).filter((rule: any) => rule.action !== "skill"), ...SUMI_SKILL_PERMISSIONS];
+      const pluginPath = join(sumiConfigDirectory(home), "plugins", "skills-cli.js"), pluginBefore = readOptional(pluginPath);
+      const pluginAfter = renderSumiPlugin(command, profileId);
+      const priorCommand = policy.bridge?.commands?.sumi, priorProfile = policy.bridge?.profiles?.sumi ?? policy.profileId;
+      if (pluginBefore !== null && pluginBefore !== pluginAfter && !(typeof priorCommand === "string" && typeof priorProfile === "string" && pluginBefore === renderSumiPlugin(priorCommand, priorProfile))) throw new Error("Refusing to overwrite a modified Sumi Skills plugin; preserve and review it first");
+      if (pluginBefore !== pluginAfter) changes.push({ path: pluginPath, before: pluginBefore, after: pluginAfter });
+    } else if (agent === "opencode") {
       const permission = config.permission ?? {};
       if (!permission || typeof permission !== "object" || Array.isArray(permission)) throw new Error("Expected OpenCode permission object");
       config.permission = { ...permission, skill: { "*": "deny", [CLI_BRIDGE_NAME]: "allow" } };
@@ -921,7 +931,7 @@ export function archiveNativeSkills(inventory: NativeSkillEntry[], options: { da
   // flag must not protect subsequently modified native instructions.
   for (const entry of inventory.filter(entry => entry.bridge)) {
     const adapter = AGENT_ADAPTERS[entry.agent as IntegrationAgent];
-    const expected = adapter && entry.bridgeHome ? canonicalAgentPath(join(entry.bridgeHome, adapter.root, CLI_BRIDGE_NAME), aliases) : undefined;
+    const expected = adapter && entry.bridgeHome ? canonicalAgentPath(join(entry.agent === "sumi" ? sumiBridgeRoot(entry.bridgeHome) : join(entry.bridgeHome, adapter.root), CLI_BRIDGE_NAME), aliases) : undefined;
     if (!expected || treeHash(entry.path) !== entry.hash || !isOwnedCliBridge(entry.path, [expected])) throw new Error(`Skills bridge changed after planning: ${entry.path}`);
   }
   const selected = options.targetManifest
@@ -1012,13 +1022,13 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
   const aliases: AgentRootAlias[] = binding.rootAliases ?? [];
   if (!Array.isArray(aliases)) throw new Error("NATIVE_SKILL_DRIFT: invalid root alias binding");
   recheckRootAliases(aliases);
-  const expected = canonicalAgentPath(join(home, AGENT_ADAPTERS[agent].root, CLI_BRIDGE_NAME), aliases);
+  const expected = canonicalAgentPath(join(agent === "sumi" ? sumiBridgeRoot(home) : join(home, AGENT_ADAPTERS[agent].root), CLI_BRIDGE_NAME), aliases);
   if (!isOwnedCliBridge(expected, [expected])) throw new Error("NATIVE_SKILL_DRIFT: the native Skills bridge is missing or modified; repair it before continuing");
   const roots = projectAncestorDirectories([options.projectDir ?? process.cwd(), ...(options.projectDirs ?? []), ...(agent === "hermes" && process.env.TERMINAL_CWD ? [process.cwd()] : [])]);
-  const visible = (entry: NativeSkillEntry) => entry.agent === agent || (["codex", "gemini", "opencode", "hermes"].includes(agent) && entry.path.includes(`${sep}.agents${sep}skills${sep}`)) || (agent === "opencode" && entry.agent === "claude");
+  const visible = (entry: NativeSkillEntry) => entry.agent === agent || (["codex", "gemini", "opencode", "hermes", "sumi"].includes(agent) && entry.path.includes(`${sep}.agents${sep}skills${sep}`)) || (["opencode", "sumi"].includes(agent) && entry.agent === "claude");
   const discovery: AgentDiscoveryBinding | undefined = provenDiscovery ?? binding.discovery?.[agent];
   assertProjectDiscovery(agent, [...roots], home, path => canonicalAgentPath(path, aliases), discovery);
-  const configPath = canonicalAgentPath(join(home, AGENT_ADAPTERS[agent].config), aliases), config = agent === "hermes" ? parseHermesConfig(readOptional(configPath)) : jsonObject(readOptional(configPath), configPath);
+  const configPath = canonicalAgentPath(agent === "sumi" ? sumiConfigPath(home) : join(home, AGENT_ADAPTERS[agent].config), aliases), config = agent === "hermes" ? parseHermesConfig(readOptional(configPath)) : jsonObject(readOptional(configPath), configPath);
   const command = binding.commands?.[agent], profile = binding.profiles?.[agent];
   if (typeof command !== "string" || typeof profile !== "string") throw new Error("NATIVE_SKILL_DRIFT: the native hook command/profile binding is missing");
   if (options.profileId !== undefined && options.profileId !== profile) throw new Error("NATIVE_SKILL_DRIFT: the hook selection profile differs from its managed binding; restart the native client after reviewing skills hook install");
@@ -1026,6 +1036,8 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
     const supervisor = binding.supervisors?.hermes;
     if (supervisor?.path !== join(dataDir, "agent-hooks", "hermes.js") || supervisor?.sha256 !== sha(renderHermesSupervisor(command, profile))) throw new Error("NATIVE_SKILL_DRIFT: Hermes supervisor binding changed; run skills hook install");
     assertHermesProtection(home, config, command, profile, supervisor);
+  } else if (agent === "sumi") {
+    if (JSON.stringify(config.permissions?.filter((rule: any) => rule.action === "skill")) !== JSON.stringify(SUMI_SKILL_PERMISSIONS) || readOptional(join(sumiConfigDirectory(home), "plugins", "skills-cli.js")) !== renderSumiPlugin(command, profile)) throw new Error("NATIVE_SKILL_DRIFT: Sumi bridge protection changed; run skills hook install");
   } else if (agent === "opencode") {
     if (JSON.stringify(config.permission?.skill) !== JSON.stringify({ "*": "deny", [CLI_BRIDGE_NAME]: "allow" }) || readOptional(join(home, ".config", "opencode", "plugins", "skills-cli.js")) !== renderOpenCodePlugin(command, profile)) throw new Error("NATIVE_SKILL_DRIFT: OpenCode bridge protection changed; run skills hook install");
   } else {
@@ -1080,6 +1092,7 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
   if (agent === "gemini" && !discovery.builtinNames?.every(name => config.skills.disabled.includes(name))) throw new Error("NATIVE_SKILL_DRIFT: an installed Gemini builtin is not disabled");
   try {
     verifyAgentDiscovery(discovery, options.codexDiscoveryRecovery);
+    if (agent === "sumi" && discovery.method === "reviewed") resolveAgentDiscovery({ home, agent, retainedReview: discovery, canonical: path => canonicalAgentPath(path, aliases) });
     if (discovery.method === "automatic") {
       const current = resolveAgentDiscovery({ home, agent, canonical: path => canonicalAgentPath(path, aliases) });
       if (JSON.stringify(current) !== JSON.stringify(discovery)) throw new Error("Configured native discovery roots changed");

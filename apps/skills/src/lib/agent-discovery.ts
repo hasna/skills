@@ -15,6 +15,7 @@ import { captureClaudeSettings, captureClaudeSettingsV2, captureClaudeSettingsV3
 import { assertCodexHookDiscoveryRecovery, verifiesCodexHookDiscoverySource, type CodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery.js";
 import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, hashCodexSettingsReplacement, hashCodexSettingsReplacementV2, hashCodexSettingsReplacementV3, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
 import { reviewedCodexPluginSourceRoots, type CodexPluginSourceInput } from "./codex-plugin-skill-controls.js";
+import { sumiConfigDirectory, sumiConfigPath } from "./agent-sumi.js";
 import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
 export { captureDiscoveryDirectories, type DiscoveryDirectory } from "./agent-discovery-directories.js";
 
@@ -182,11 +183,12 @@ export function assertProjectDiscovery(agent: IntegrationAgent, directories: str
   for (const directory of directories) {
     const isHome = resolve(directory) === resolve(home);
     if (agent === "hermes") { assertHermesEnvironment(home); continue; }
-    if (isHome && agent !== "claude") continue;
+    if (isHome && agent !== "claude" && agent !== "sumi") continue;
     const paths = agent === "claude" ? [...(isHome ? [] : [".claude/settings.json"]), ".claude/settings.local.json"]
       : agent === "codex" ? [".codex/config.toml"]
       : agent === "gemini" ? [".gemini/settings.json"]
       : agent === "opencode" ? ["opencode.json", "opencode.jsonc", ".opencode/opencode.json", ".opencode/opencode.jsonc"]
+      : agent === "sumi" ? ["sumi.json", "sumi.jsonc", ".sumi/sumi.json", ".sumi/sumi.jsonc"]
       : [".cursor/hooks.json"];
     for (const suffix of paths) {
       const path = canonical(join(directory, suffix)), raw = read(path); if (raw === null) continue;
@@ -203,7 +205,7 @@ export function assertProjectDiscovery(agent: IntegrationAgent, directories: str
       const keys = agent === "claude" ? ["enabledPlugins", "extraKnownMarketplaces", "skillOverrides"]
         : agent === "codex" ? ["plugins", "marketplaces", "skills"]
         : agent === "gemini" ? ["skills", "extensions"]
-        : agent === "opencode" ? ["plugin", "skills"] : ["hooks"];
+        : agent === "opencode" ? ["plugin", "skills"] : agent === "sumi" ? ["plugins", "skills", "permissions"] : ["hooks"];
       let admittedPlugins = false;
       if (agent === "claude" && reviewed?.agent === agent && reviewed.method === "reviewed" && config.enabledPlugins && typeof config.enabledPlugins === "object" && !Array.isArray(config.enabledPlugins)) {
         const exact = reviewed.sources.find(source => source.path === path && source.format === undefined && source.fields === undefined && (source.hashMode === undefined || source.hashMode === "bytes"));
@@ -215,6 +217,10 @@ export function assertProjectDiscovery(agent: IntegrationAgent, directories: str
       }
       if (keys.some(key => config[key] !== undefined && !(key === "enabledPlugins" && admittedPlugins)) || config.disableAllHooks === true || config.disableBundledSkills === false || config.hooksConfig?.enabled === false || config.permission?.skill !== undefined || config.permissions?.deny?.some((rule: unknown) => typeof rule === "string" && /^Skill(?:\(|$)/.test(rule))) throw new Error(`NATIVE_SKILL_DRIFT: higher-precedence project skill or hook configuration requires review: ${path}`);
     }
+    if (agent === "sumi") for (const name of ["plugin", "plugins"]) {
+      const path = canonical(join(directory, ".sumi", name)); safe(path);
+      if (lstatSync(path, { throwIfNoEntry: false })?.isDirectory() && readdirSync(path).length) throw new Error(`NATIVE_SKILL_DRIFT: project Sumi plugins require a dedicated discovery review: ${path}`);
+    }
     if (agent === "claude") {
       const commands = canonical(join(directory, ".claude/commands")); safe(commands);
       if (lstatSync(commands, { throwIfNoEntry: false })?.isDirectory() && readdirSync(commands).length) throw new Error("NATIVE_SKILL_DRIFT: legacy project command discovery requires a dedicated format adapter");
@@ -225,6 +231,7 @@ export function assertProjectDiscovery(agent: IntegrationAgent, directories: str
 /** Resolve configured plugin discovery without starting an agent or loading a plugin.
  * Unknown runtime registrations require explicit reviewed inputs, never a cache guess. */
 export function agentDiscoveryConfigPath(home: string, agent: IntegrationAgent): string {
+  if (agent === "sumi") return sumiConfigPath(home);
   return join(home, agent === "hermes" ? ".hermes/config.yaml" : agent === "opencode" ? ".config/opencode/opencode.json" : `.${agent}/${agent === "codex" ? "config.toml" : agent === "cursor" ? "hooks.json" : "settings.json"}`);
 }
 
@@ -237,9 +244,31 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
   };
   if (agent === "hermes") assertHermesEnvironment(home);
   const configPath = agentDiscoveryConfigPath(home, agent);
-  const configText = witness(configPath, agent === "hermes" ? "yaml" : agent === "codex" ? "toml" : "json", agent === "hermes" ? ["skills", "plugins", "hooks"] : agent === "claude" ? ["enabledPlugins", "extraKnownMarketplaces"] : agent === "codex" ? [...CODEX_DISCOVERY_PROJECTION_FIELDS] : agent === "gemini" ? ["skills", "extensions", "security"] : agent === "opencode" ? ["plugin", "skills"] : ["version"]);
+  const configText = witness(configPath, agent === "hermes" ? "yaml" : agent === "codex" ? "toml" : "json", agent === "hermes" ? ["skills", "plugins", "hooks"] : agent === "claude" ? ["enabledPlugins", "extraKnownMarketplaces"] : agent === "codex" ? [...CODEX_DISCOVERY_PROJECTION_FIELDS] : agent === "gemini" ? ["skills", "extensions", "security"] : agent === "opencode" ? ["plugin", "skills"] : agent === "sumi" ? ["skills", "plugins", "permissions"] : ["version"]);
   const config: any = configText === null ? {} : agent === "hermes" ? parseHermesConfig(configText) : parseConfig(configText, configPath, agent === "codex");
   const unresolved = (detail: string): never => { throw new Error(`Native discovery is unresolved (${agent}: ${detail}); provide a reviewed --discovery-inputs file`); };
+  if (agent === "sumi") {
+    const directory = sumiConfigDirectory(home);
+    if (witness(join(directory, "sumi.jsonc")) !== null) unresolved("JSONC configuration requires a supported format adapter");
+    for (const root of [directory, join(home, ".claude"), join(home, ".agents")]) for (const name of ["skill", "skills"]) roots.add(join(root, name));
+    if (config.skills !== undefined && (!Array.isArray(config.skills) || config.skills.some((path: unknown) => typeof path !== "string"))) unresolved("skills must be a string array");
+    for (const value of config.skills ?? []) {
+      if (typeof value !== "string" || /[\0$]/.test(value) || !value || !(isAbsolute(value) || value.startsWith("~/"))) unresolved("remote or relative skill sources need a dedicated discovery adapter");
+      roots.add(value.startsWith("~/") ? join(home, value.slice(2)) : value);
+    }
+    if (config.plugins !== undefined && !Array.isArray(config.plugins)) unresolved("plugins must be an array");
+    const plugins = [join(directory, "plugin"), join(directory, "plugins")];
+    for (const path of plugins) { safe(path); if (lstatSync(path, { throwIfNoEntry: false })?.isDirectory()) for (const name of readdirSync(path).sort()) {
+      if (name === "skills-cli.js" && path === plugins[1]) continue;
+      const target = join(path, name);
+      if (!lstatSync(target).isFile()) unresolved("local plugin packages need a dedicated discovery adapter");
+      witness(target);
+    } }
+    for (const root of roots) {
+      safe(root);
+      if (lstatSync(root, { throwIfNoEntry: false })?.isDirectory() && readdirSync(root).some(name => name.endsWith(".md"))) unresolved("flat markdown skills require a dedicated native migration adapter");
+    }
+  }
   if (agent === "hermes") {
     const profile = witness(join(home, ".hermes/active_profile"));
     if (profile?.trim() && profile.trim() !== "default") unresolved("a non-default profile is active");
@@ -364,6 +393,8 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
     for (const path of config.skills?.paths ?? []) { if (typeof path !== "string" || !isAbsolute(path)) unresolved("relative or malformed added skill root"); roots.add(path); }
     const localPlugins = join(home, ".config/opencode/plugins"); safe(localPlugins);
     if (lstatSync(localPlugins, { throwIfNoEntry: false }) && readdirSync(localPlugins).some(name => name !== "skills-cli.js")) unresolved("additional local plugin hooks require review");
+  } else if (agent === "sumi") {
+    if ((config.plugins?.length ?? 0) > 0 || sources.some(source => source.path !== canonical(configPath) && source.path !== canonical(join(sumiConfigDirectory(home), "sumi.jsonc")) && source.sha256 !== null)) unresolved("external or foreign local plugins require review");
   } else if (agent === "hermes") {
     // Python entry points and bundled plugins may register prompt sections or
     // namespaced skills. Do not import them to guess their effective behavior.

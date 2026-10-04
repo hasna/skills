@@ -170,9 +170,15 @@ export function parseSkillContextInput(raw: string): SkillContextInput {
   };
   const event = string("hookEventName", "hook_event_name");
   const source = string("source");
+  const parent = Object.hasOwn(value, "parentSessionId") ? value.parentSessionId : value.parent_session_id;
+  const hasParent = Object.hasOwn(value, "parentSessionId") || Object.hasOwn(value, "parent_session_id");
+  if (hasParent && parent !== null && typeof parent !== "string") throw new SkillSelectionError("INVALID_CONTEXT_INPUT", "The Skills hook field parentSessionId must be a string or null.");
+  const sessionId = string("sessionId", "session_id"), agentId = string("agentId", "agent_id");
+  if (hasParent && (!sessionId || agentId !== undefined || parent === sessionId || typeof parent === "string" && !parent.trim())) throw new SkillSelectionError("INVALID_CONTEXT_INPUT", "Native session custody requires its own session id and a distinct parent, without a legacy agent id.");
   return {
-    prompt: string("prompt"), cwd: string("cwd"), sessionId: string("sessionId", "session_id"),
-    agentId: string("agentId", "agent_id"), profileId: string("profileId", "profile_id"),
+    prompt: string("prompt"), cwd: string("cwd"), sessionId,
+    agentId, profileId: string("profileId", "profile_id"),
+    ...(hasParent ? { parentSessionId: parent as string | null } : {}),
     skills: strings("skills"), paths: strings("paths"),
     restore: value.restore === true || (event === "SessionStart" && ["compact", "resume"].includes(source ?? "")),
   };

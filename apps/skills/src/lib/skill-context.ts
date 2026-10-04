@@ -14,6 +14,8 @@ export interface SkillContextInput {
   profileId?: string;
   restore?: boolean;
   agentId?: string;
+  /** Exact native session custody; null explicitly declares a root. */
+  parentSessionId?: string | null;
   skills?: string[];
   paths?: string[];
 }
@@ -46,7 +48,10 @@ export async function buildSkillContext(input: SkillContextInput, options: Skill
   }
   const profileId = input.profileId ?? "default";
   const sessionId = input.sessionId ? (input.agentId ? `${input.sessionId}:${input.agentId}` : input.sessionId) : undefined;
-  const resolverOptions = { ...options, projectDir: input.cwd ?? options.projectDir, sessionId, parentSessionId: input.agentId ? input.sessionId : undefined };
+  if (input.parentSessionId !== undefined) {
+    if (input.agentId !== undefined || !sessionId || input.parentSessionId === sessionId || (input.parentSessionId !== null && (typeof input.parentSessionId !== "string" || !input.parentSessionId.trim()))) throw new SkillSelectionError("INVALID_SESSION", "Native session custody requires its own session id and a distinct parent, without a legacy agent id.");
+  }
+  const resolverOptions = { ...options, projectDir: input.cwd ?? options.projectDir, sessionId, nativeParentSessionId: input.parentSessionId, parentSessionId: input.parentSessionId ?? (input.agentId ? input.sessionId : undefined) };
   const resolved = await resolveSelectionContext(profileId, resolverOptions);
   const profile = resolved.receipt.profile;
   const explicit = new Set((input.skills ?? []).map((spec) => selectionKey(exactProfileSelection(spec, profile))));

@@ -22,6 +22,7 @@ export interface SelectionResolverOptions extends SelectionCacheOptions {
   sessionId?: string;
   /** A newly spawned subagent inherits the parent's pinned snapshot, never its dedup state. */
   parentSessionId?: string;
+  nativeParentSessionId?: string | null;
 }
 export interface SyncSelectionProfileOptions extends SelectionCacheOptions {
   client?: ProfileClient;
@@ -73,6 +74,7 @@ export interface ResolvedSelectionContext {
 export async function resolveSelectionContext(profileId: string, options: SelectionResolverOptions = {}): Promise<ResolvedSelectionContext> {
   const sessionState = options.sessionId ? readSkillSessionSnapshotIfExists(options.sessionId, options) : null;
   const session = sessionState?.receipt ?? null;
+  if (options.nativeParentSessionId !== undefined && session && (session.parent?.sessionId ?? null) !== options.nativeParentSessionId) throw new SkillSelectionError("SESSION_PARENT_MISMATCH", "The native session id is already bound to different parent custody.");
   const parentState = !session && options.parentSessionId ? readSkillSessionSnapshotIfExists(options.parentSessionId, options) : null;
   if (!session && options.parentSessionId && !parentState) {
     throw new SkillSelectionError("SESSION_PARENT_NOT_FOUND", "A child Skills session requires an existing parent receipt so its inherited pin can be bound exactly.");
