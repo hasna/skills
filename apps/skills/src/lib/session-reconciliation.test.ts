@@ -1,5 +1,6 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
+import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
 import { existsSync, lstatSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
@@ -188,13 +189,25 @@ test("a busy session lock refuses both reconciliation and ordinary context write
   expect(readFileSync(sessionReceiptPath("root", f))).toEqual(f.before);
 });
 
-function staleLock(cacheDir: string, marker: Record<string, unknown>): { path: string; bytes: Buffer } {
+function staleLock(cacheDir: string, marker: Record<string, unknown>) {
   const path = `${sessionReceiptPath("root", { cacheDir })}.write-lock`;
   const bytes = Buffer.from(`${JSON.stringify(marker)}\n`);
   writeFileSync(path, bytes, { mode: 0o600 });
   const old = new Date(Date.now() - 60_000);
   utimesSync(path, old, old);
   return { path, bytes };
+}
+
+// The Darwin ps executable cannot run inside a write-confined macOS sandbox.
+// Model only the exact synthetic absent PID; every other subprocess stays real.
+function absentWriterProbe(pid: number) {
+  const spawn = childProcess.spawnSync;
+  return spyOn(childProcess, "spawnSync").mockImplementation(((command, args, options) => {
+    if (process.platform === "darwin" && command === "/bin/ps" && JSON.stringify(args) === JSON.stringify(["-p", String(pid), "-o", "lstart="])) {
+      return { pid: 0, status: 1, signal: null, output: [null, "", ""], stdout: "", stderr: "" };
+    }
+    return spawn(command, args, options);
+  }) as typeof childProcess.spawnSync);
 }
 
 test("reviewed legacy recovery archives only a dead local writer lock and preserves receipt bytes", () => {
@@ -213,6 +226,179 @@ test("reviewed legacy recovery archives only a dead local writer lock and preser
   const current = readSkillSessionSnapshot("root", f);
   writeSkillSession(f.old, { current: skillSessionSnapshotBinding(current) }, f);
   expect(readSkillSessionSnapshot("root", f).generation).toBe(1);
+});
+
+test("session lock becomes visible only with complete ownership and retains its descriptor through release", () => {
+  const f = fixture(false), path = `${sessionReceiptPath("root", f)}.write-lock`;
+  const open = fs.openSync, link = fs.linkSync, unlink = fs.unlinkSync, close = fs.closeSync;
+  const visible: number[] = [], descriptors = new Set<number>();
+  let releasedWithDescriptor = false;
+  const a = spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
+    const fd = open(...args); descriptors.add(fd);
+    if (args[0] === path && existsSync(path)) visible.push(readFileSync(path).length);
+    return fd;
+  }) as typeof fs.openSync);
+  const b = spyOn(fs, "linkSync").mockImplementation((source, destination) => {
+    link(source, destination);
+    if (destination === path) {
+      visible.push(readFileSync(path).length);
+      expect(inspectSessionWriteLock("root", f).pid).toBe(process.pid);
+      // A contender sees a complete live owner and cannot overwrite it.
+      expect(() => writeSkillSession(f.old, { current: skillSessionSnapshotBinding(readSkillSessionSnapshot("root", f)) }, f))
+        .toThrow(expect.objectContaining({ code: "SESSION_WRITE_BUSY" }));
+    }
+  });
+  const c = spyOn(fs, "closeSync").mockImplementation(fd => { descriptors.delete(fd); close(fd); });
+  const d = spyOn(fs, "unlinkSync").mockImplementation(target => {
+    if (target === path) {
+      const ino = lstatSync(path).ino;
+      releasedWithDescriptor = [...descriptors].some(fd => { try { return fs.fstatSync(fd).ino === ino; } catch { return false; } });
+    }
+    unlink(target);
+  });
+  const rename = fs.renameSync;
+  const e = spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+    if (destination === sessionReceiptPath("root", f)) {
+      // 0.10.31's ordinary lock reader requires one link. The new staging
+      // witness must be retired before entering the protected write action.
+      expect(lstatSync(path).nlink).toBe(1);
+    }
+    rename(source, destination);
+  });
+  try {
+    writeSkillSession(f.old, { current: skillSessionSnapshotBinding(readSkillSessionSnapshot("root", f)) }, f);
+    expect(visible.length).toBeGreaterThan(0);
+    expect(visible.every(bytes => bytes > 0)).toBe(true);
+    expect(releasedWithDescriptor).toBe(true);
+    expect(existsSync(path)).toBe(false);
+  } finally { a.mockRestore(); b.mockRestore(); c.mockRestore(); d.mockRestore(); e.mockRestore(); }
+});
+
+test("failed marker write or durability never publishes a lock or leaves its staging inode", () => {
+  for (const failure of ["partial-write", "fsync"]) {
+    const f = fixture(false), path = `${sessionReceiptPath("root", f)}.write-lock`;
+    const before = readdirSync(join(path, "..")), write = fs.writeFileSync;
+    const hook = failure === "fsync"
+      ? spyOn(fs, "fsyncSync").mockImplementation(() => { throw new Error("synthetic marker failure"); })
+      : spyOn(fs, "writeFileSync").mockImplementation(((file, data, options) => {
+        if (typeof file === "number") { write(file, "{"); throw new Error("synthetic marker failure"); }
+        write(file, data, options);
+      }) as typeof fs.writeFileSync);
+    try {
+      expect(() => writeSkillSession(f.old, { current: skillSessionSnapshotBinding(readSkillSessionSnapshot("root", f)) }, f))
+        .toThrow("synthetic marker failure");
+      expect(existsSync(path)).toBe(false);
+      expect(readdirSync(join(path, ".."))).toEqual(before);
+      expect(readFileSync(sessionReceiptPath("root", f))).toEqual(f.before);
+    } finally { hook.mockRestore(); }
+  }
+});
+
+test("empty and nonempty malformed locks remain protected without rewriting ownership", () => {
+  for (const text of ["", "{", "null", "[]"]) {
+    const f = fixture(false), path = `${sessionReceiptPath("root", f)}.write-lock`;
+    writeFileSync(path, text, { mode: 0o600 });
+    const original = lstatSync(path), names = readdirSync(join(path, ".."));
+    expect(() => inspectSessionWriteLock("root", f)).toThrow(expect.objectContaining({ code: "SESSION_WRITE_LOCKED" }));
+    expect(() => writeSkillSession(f.old, { current: skillSessionSnapshotBinding(readSkillSessionSnapshot("root", f)) }, f))
+      .toThrow(expect.objectContaining({ code: "SESSION_WRITE_LOCKED" }));
+    expect(readFileSync(path, "utf8")).toBe(text);
+    expect(lstatSync(path).ino).toBe(original.ino);
+    expect(readdirSync(join(path, ".."))).toEqual(names);
+    expect(readFileSync(sessionReceiptPath("root", f))).toEqual(f.before);
+  }
+});
+
+test("interrupted publication accepts only the exact private staging inode and archives both links", () => {
+  const f = fixture(false), operationId = randomUUID();
+  const marker = { schemaVersion: 1, operationId, sessionId: "root", pid: 99_999_999, publication: "hard-link-v1" };
+  const lock = staleLock(f.cacheDir, marker), prepared = `${lock.path}.${operationId}.prepared`;
+  const unrelated = join(f.cacheDir, "unrelated-link");
+  fs.linkSync(lock.path, unrelated);
+  expect(() => inspectSessionWriteLock("root", f)).toThrow(expect.objectContaining({ code: "SESSION_WRITE_LOCKED" }));
+  fs.renameSync(unrelated, prepared);
+  const review = inspectSessionWriteLock("root", f);
+  expect(review.pid).toBe(marker.pid);
+  fs.linkSync(lock.path, unrelated);
+  expect(() => inspectSessionWriteLock("root", f)).toThrow(expect.objectContaining({ code: "SESSION_WRITE_LOCKED" }));
+  rmSync(unrelated);
+  const ownerProbe = absentWriterProbe(marker.pid);
+  let archive: string;
+  try { archive = recoverSessionWriteLock("root", review.reviewDigest, f); }
+  finally { ownerProbe.mockRestore(); }
+  expect(readFileSync(archive)).toEqual(lock.bytes);
+  expect(readFileSync(join(archive, "..", "publication.write-lock"))).toEqual(lock.bytes);
+  expect(existsSync(lock.path)).toBe(false); expect(existsSync(prepared)).toBe(false);
+  expect(readFileSync(sessionReceiptPath("root", f))).toEqual(f.before);
+});
+
+for (const change of ["different-bytes", "same-bytes-new-inode", "missing", "extra-link"] as const) {
+  test(`reviewed recovery rejects changed publication witnesses: ${change}`, () => {
+    const f = fixture(false), operationId = randomUUID();
+    const marker = { schemaVersion: 1, operationId, sessionId: "root", pid: 99_999_999, publication: "hard-link-v1" };
+    const lock = staleLock(f.cacheDir, marker), prepared = `${lock.path}.${operationId}.prepared`;
+    fs.linkSync(lock.path, prepared);
+    const review = inspectSessionWriteLock("root", f);
+    const replacement = join(f.cacheDir, "replacement-witness"), preserved = join(f.cacheDir, "preserved-witness");
+    const replacementBytes = change === "same-bytes-new-inode" ? lock.bytes : Buffer.from("unrelated synthetic witness\n");
+    if (change === "different-bytes" || change === "same-bytes-new-inode") writeFileSync(replacement, replacementBytes, { mode: 0o600 });
+    if (change === "same-bytes-new-inode") {
+      const original = lstatSync(lock.path);
+      utimesSync(replacement, original.atime, original.mtime);
+    }
+    const rename = fs.renameSync;
+    let archive: string | undefined;
+    const hook = spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+      rename(source, destination);
+      if (source !== lock.path) return;
+      archive = String(destination);
+      if (change === "missing") rename(prepared, preserved);
+      else if (change === "extra-link") fs.linkSync(prepared, preserved);
+      else if (change === "same-bytes-new-inode") {
+        // Both inodes retain two links and identical bytes: only exact inode
+        // continuity distinguishes the replacement from the reviewed owner.
+        rename(prepared, preserved);
+        rename(replacement, prepared);
+        fs.linkSync(prepared, replacement);
+        const original = lstatSync(String(destination)), substituted = lstatSync(prepared);
+        for (const field of ["dev", "size", "mtimeMs", "mode", "uid", "gid", "nlink"] as const) {
+          expect(substituted[field]).toBe(original[field]);
+        }
+        expect(readFileSync(prepared)).toEqual(lock.bytes);
+        expect(substituted.ino).not.toBe(original.ino);
+      }
+      else rename(replacement, prepared);
+    });
+    const ownerProbe = absentWriterProbe(marker.pid);
+    try {
+      expect(() => recoverSessionWriteLock("root", review.reviewDigest, f))
+        .toThrow(expect.objectContaining({ code: "SESSION_LOCK_RECOVERY_INCOMPLETE" }));
+    } finally { hook.mockRestore(); ownerProbe.mockRestore(); }
+    expect(archive).toBeDefined();
+    expect(readFileSync(archive!)).toEqual(lock.bytes);
+    const companion = join(archive!, "..", "publication.write-lock");
+    if (change === "missing") expect(readFileSync(preserved)).toEqual(lock.bytes);
+    else expect(readFileSync(companion)).toEqual(change === "extra-link" ? lock.bytes : replacementBytes);
+    expect(JSON.parse(readFileSync(join(archive!, "..", "recovery.json"), "utf8")).status).toBe("prepared");
+    expect(readFileSync(sessionReceiptPath("root", f))).toEqual(f.before);
+    expect(readSkillSessionSnapshot("root", f).generation).toBe(0);
+  });
+}
+
+test("publication failure after linking releases only its initialized inode", () => {
+  const f = fixture(false), path = `${sessionReceiptPath("root", f)}.write-lock`;
+  const sync = fs.fsyncSync;
+  let linked = false;
+  const hook = spyOn(fs, "fsyncSync").mockImplementation(fd => {
+    if (existsSync(path)) { linked = true; expect(JSON.parse(readFileSync(path, "utf8")).sessionId).toBe("root"); throw new Error("synthetic publication sync failure"); }
+    sync(fd);
+  });
+  try {
+    expect(() => writeSkillSession(f.old, { current: skillSessionSnapshotBinding(readSkillSessionSnapshot("root", f)) }, f)).toThrow("synthetic publication sync failure");
+    expect(linked).toBe(true); expect(existsSync(path)).toBe(false);
+    expect(readdirSync(join(path, "..")).filter(name => name.includes("write-lock"))).toEqual([]);
+    expect(readFileSync(sessionReceiptPath("root", f))).toEqual(f.before);
+  } finally { hook.mockRestore(); }
 });
 
 test("legacy lock recovery refuses a live PID and a changed reviewed receipt", () => {
