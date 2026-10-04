@@ -110,8 +110,9 @@ function annotate(name: string, message: string): void {
   git("tag", "--force", "--annotate", name, "--message", message, releaseCommit);
 }
 
-function verify(name = tag) {
-  return spawnSync(process.execPath, [join(packageDirectory, "scripts/verify-release-review.ts"), "--tag", name], {
+function verify(name = tag, destination?: string) {
+  return spawnSync(process.execPath, [join(packageDirectory, "scripts/verify-release-review.ts"), "--tag", name,
+    ...(destination ? ["--pack-destination", destination] : [])], {
     cwd: packageDirectory,
     env: spawnEnvironment(),
     encoding: "utf8",
@@ -121,6 +122,16 @@ function verify(name = tag) {
 const { sha256: expectedSha256, integrity: expectedIntegrity } = packedDigests();
 
 describe("skills release review preflight against a real checkout", () => {
+  test("an explicit destination retains the exact reviewed archive for the installed consumer and publisher", () => {
+    annotate(tag, releaseTagMessage(expectedSha256));
+    const destination = mkdtempSync(join(home, "tmp/retained-"));
+    const result = verify(tag, destination);
+    expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: "" });
+    const summary = JSON.parse(result.stdout.trim().split("\n")[0]!);
+    const retained = readFileSync(join(destination, summary.packed_filename));
+    expect(createHash("sha256").update(retained).digest("hex")).toBe(summary.packed_sha256);
+    expect(`sha512-${createHash("sha512").update(retained).digest("base64")}`).toBe(summary.packed_integrity);
+  });
   test("a fully linked annotated tag is accepted and reports the bound digest", () => {
     annotate(tag, releaseTagMessage(expectedSha256));
     const result = verify();

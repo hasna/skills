@@ -38,6 +38,8 @@ In that clean checkout:
 umask 022
 cd apps/skills
 bun run build
+bun run prepublishOnly
+bun run prepack
 destination="$(mktemp -d)"
 npm pack --ignore-scripts --json --pack-destination "$destination"
 shasum -a 256 "$destination/hasna-skills-<version>.tgz"
@@ -56,6 +58,33 @@ on any missing, duplicated, malformed or mismatched field. It runs with no
 fallback path, it is fail-closed, and the workflow's `npm publish` step cannot run
 unless this step succeeded. An unpublished version must also not already exist in
 the registry.
+
+The workflow runs the unchanged `prepublishOnly` and `prepack` package gates
+before sealing the reviewed archive. It retains that archive with
+`verify:release-review --pack-destination <absolute-directory>`, then runs the
+complete installed consumer fixture against those exact bytes:
+
+```sh
+bun run verify:consumer-types --archive /absolute/hasna-skills-<version>.tgz \
+  --sha256 <reviewed-sha256> --receipt /absolute/consumer-archive.json
+```
+
+The fixture checks the installed package name, version and all four exports,
+runs the strict type and runtime/CLI checks (including actual `./storage` export
+loading and pure configuration/URL checks without database or provider access),
+and emits a passed receipt only
+after both the original archive and its installed input still match. Its
+temporary install is removed; the reviewed original and external receipt remain.
+Without arguments, the fixture still packs its own archive for normal `prepack`.
+
+Immediately before publication, `scripts/publish-reviewed-archive.ts` requires
+the tag-push context, review and consumer receipts, package/version, complete
+check set and current archive hashes to agree. It passes the same file to
+`npm publish <archive> --provenance --access public`; there is no repack or build
+after acceptance. npm does not run package lifecycle hooks for this file input,
+which is why the workflow runs them explicitly before sealing. Dispatches cannot
+reach publication. Registry readback must match the accepted SHA-512 integrity
+and include provenance.
 
 For a dry run, dispatch `Release skills to npm` with the `tag` input: every step
 except publishing runs against that tag. The old

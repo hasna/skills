@@ -209,21 +209,15 @@ jobs:
             }
           '
           test_log="$RUNNER_TEMP/skills-test.log"
-          bun test 2>&1 | tee "$test_log"
+          # File publication does not invoke package lifecycle hooks. Run the
+          # unchanged package-owned gate here, before the archive is sealed.
+          bun run prepublishOnly 2>&1 | tee "$test_log"
           grep -F '(pass) PostgreSQL enrollment has no initialization writes and retains atomic CAS, audit, replay and rollback' "$test_log"
           grep -F '(pass) isolated PostgreSQL inspection is bounded, ordered, sanitized and enforced read-only' "$test_log"
 
-      - name: Verify generated artifacts are reproducible
+      - name: Run package-owned prepack gates before sealing the archive
         working-directory: apps/skills
-        run: bun run verify:generated
-
-      - name: Verify package consumer types
-        working-directory: apps/skills
-        run: bun run verify:consumer-types
-
-      - name: Exercise the skills release guard without publishing
-        working-directory: apps/skills
-        run: bun run verify:release
+        run: bun run prepack
 
       # The gate. It reads the annotated tag's linkage fields, packs this exact
       # checkout and refuses unless the recorded Packed-SHA256 matches. The
@@ -241,26 +235,49 @@ jobs:
         working-directory: apps/skills
         run: |
           set -euo pipefail
-          receipt="$(bun run verify:release-review --tag "$RELEASE_TAG")"
-          printf '%s\n' "$receipt"
-          REVIEW_RECEIPT="$receipt" node --input-type=module -e '
-            const { appendFileSync } = await import("node:fs");
-            const receipt = JSON.parse(process.env.REVIEW_RECEIPT.split("\n")[0]);
+          archive_dir="$(mktemp -d "$RUNNER_TEMP/skills-reviewed-archive.XXXXXX")"
+          review_log="$RUNNER_TEMP/skills-release-review.log"
+          bun run verify:release-review --tag "$RELEASE_TAG" --pack-destination "$archive_dir" > "$review_log"
+          ARCHIVE_DIR="$archive_dir" REVIEW_LOG="$review_log" node --input-type=module -e '
+            const { appendFileSync, readFileSync, writeFileSync } = await import("node:fs");
+            const { join } = await import("node:path");
+            const receipt = JSON.parse(readFileSync(process.env.REVIEW_LOG, "utf8").split("\n")[0]);
             if (receipt.schema !== "hasna.skills.release-review-linkage.v1"
+              || !/^hasna-skills-\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\.tgz$/.test(receipt.packed_filename)
+              || !/^[a-f0-9]{64}$/.test(receipt.packed_sha256)
               || typeof receipt.packed_integrity !== "string"
               || !receipt.packed_integrity.startsWith("sha512-")) {
-              throw new Error("the reviewed archive has no sha512 integrity");
+              throw new Error("the reviewed archive receipt is invalid");
             }
-            appendFileSync(process.env.GITHUB_OUTPUT, `integrity=${receipt.packed_integrity}\n`);
+            const receiptPath = join(process.env.RUNNER_TEMP, "skills-release-review.json");
+            writeFileSync(receiptPath, JSON.stringify(receipt) + "\n", { flag: "wx", mode: 0o600 });
+            appendFileSync(process.env.GITHUB_OUTPUT, `integrity=${receipt.packed_integrity}\nsha256=${receipt.packed_sha256}\narchive=${join(process.env.ARCHIVE_DIR, receipt.packed_filename)}\nreceipt=${receiptPath}\n`);
+            console.log(JSON.stringify(receipt));
           '
 
-      - name: Publish via OIDC and the package-owned prepublishOnly gate
-        if: github.event_name == 'push' && steps.review.outcome == 'success'
+      - name: Verify the exact retained release archive as an installed consumer
+        id: consumer
+        if: env.RELEASE_TAG != '' && steps.review.outcome == 'success'
         working-directory: apps/skills
-        run: npm publish --provenance --access public
+        env:
+          REVIEWED_ARCHIVE: ${{ steps.review.outputs.archive }}
+          REVIEWED_SHA256: ${{ steps.review.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          bun run verify:consumer-types --archive "$REVIEWED_ARCHIVE" --sha256 "$REVIEWED_SHA256" --receipt "$RUNNER_TEMP/skills-consumer-archive.json"
+
+      - name: Publish the accepted archive via OIDC
+        if: github.event_name == 'push' && steps.review.outcome == 'success' && steps.consumer.outcome == 'success'
+        working-directory: apps/skills
+        env:
+          REVIEWED_ARCHIVE: ${{ steps.review.outputs.archive }}
+          REVIEW_RECEIPT: ${{ steps.review.outputs.receipt }}
+        run: |
+          set -euo pipefail
+          bun run scripts/publish-reviewed-archive.ts --archive "$REVIEWED_ARCHIVE" --review-receipt "$REVIEW_RECEIPT" --consumer-receipt "$RUNNER_TEMP/skills-consumer-archive.json"
 
       - name: Verify the published version, integrity and provenance attestations
-        if: github.event_name == 'push' && steps.review.outcome == 'success'
+        if: github.event_name == 'push' && steps.review.outcome == 'success' && steps.consumer.outcome == 'success'
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
           EXPECTED_INTEGRITY: ${{ steps.review.outputs.integrity }}
