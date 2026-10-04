@@ -56,6 +56,32 @@ function mcpControls(path:string, read:Read):string {
   for (const [name, server] of servers) if (!isCodexLocalStdioMcpServer(name, server)) refuse();
   return sha256;
 }
+/** Verified subset of Codex 0.159.2/0.160.0 plugin/src/bundled_hooks.rs.
+ * These native cleanup calls use structured event values, never executable text.
+ * The entire inline declaration remains included in manifestSha256. This is
+ * capability review, not plugin signing, enablement or native hook trust. */
+function isBundledCleanupHooks(root:string, namespace:string, value:unknown):boolean {
+  const object=(v:unknown):v is Record<string,unknown> => Boolean(v && typeof v==="object" && !Array.isArray(v));
+  const exactKeys=(v:Record<string,unknown>, keys:string[]) => Object.keys(v).length===keys.length && keys.every(key=>Object.hasOwn(v,key));
+  if (basename(dirname(root))!==namespace || basename(dirname(dirname(root)))!=="openai-bundled") return false;
+  const server=namespace==="unified-computer-use" ? "cua_repl"
+    : ["browser","chrome","chrome-dev","chrome-internal","computer-use"].includes(namespace) ? "node_repl" : undefined;
+  if (!server || !object(value) || !exactKeys(value,["hooks"]) || !object(value.hooks)) return false;
+  const events=Object.entries(value.hooks);
+  if (!events.length || events.length>3) return false;
+  for (const [event,groups] of events) {
+    if (!["Interrupt","SubagentStop","Stop"].includes(event) || !Array.isArray(groups) || groups.length!==1) return false;
+    const group=groups[0];
+    if (!object(group) || !exactKeys(group,["hooks"]) || !Array.isArray(group.hooks) || group.hooks.length!==1) return false;
+    const handler=group.hooks[0];
+    if (!object(handler) || !exactKeys(handler,["type","server","tool","input"])
+      || handler.type!=="mcp_tool" || handler.server!==server || handler.tool!=="turn_ended"
+      || !object(handler.input) || !exactKeys(handler.input,["hook_event_name","session_id","turn_id"])
+      || handler.input.hook_event_name!=="${hook_event_name}" || handler.input.turn_id!=="${turn_id}"
+      || handler.input.session_id!==(event==="SubagentStop" ? "${agent_id}" : "${session_id}")) return false;
+  }
+  return true;
+}
 function rootControls(root:string, read:Read): { namespace:string; manifestSha256:string; appSha256?:string; mcpSha256?:string } {
   const manifestPath=join(root,".codex-plugin/plugin.json"), manifestFile=lstatSync(manifestPath,{throwIfNoEntry:false});
   if (!lstatSync(join(root,".codex-plugin"),{throwIfNoEntry:false})?.isDirectory() || !manifestFile?.isFile() || manifestFile.size>1024*1024) refuse();
@@ -69,11 +95,14 @@ function rootControls(root:string, read:Read): { namespace:string; manifestSha25
   // Exact name controls suppress Skills bodies, not other capabilities.
   // Reviewed app declarations preserve connector availability and native hints;
   // their entire content and presence stay bound across cache versions.
-  if (manifest.hooks!==undefined || manifest.commands!==undefined
+  if ((manifest.hooks!==undefined && !isBundledCleanupHooks(root,manifest.name,manifest.hooks)) || manifest.commands!==undefined
     || (manifest.mcpServers!==undefined && manifest.mcpServers!=="./.mcp.json")
     || (manifest.apps!==undefined && manifest.apps!=="./.app.json")
     || lstatSync(join(root,"hooks"),{throwIfNoEntry:false})) refuse();
   const mcp=join(root,".mcp.json"), mcpPresent=lstatSync(mcp,{throwIfNoEntry:false});
+  // Cleanup support proves only the builtin target. Do not admit a plugin MCP
+  // declaration alongside it, even when that declaration is otherwise valid.
+  if (manifest.hooks!==undefined && (manifest.mcpServers!==undefined || mcpPresent)) refuse();
   if (mcpPresent && (!mcpPresent.isFile() || mcpPresent.isSymbolicLink() || mcpPresent.size>1024*1024 || realpathSync(mcp)!==mcp)) refuse();
   if (Boolean(mcpPresent)!==(manifest.mcpServers!==undefined)) refuse();
   const mcpSha256=mcpPresent ? mcpControls(mcp,read) : undefined;

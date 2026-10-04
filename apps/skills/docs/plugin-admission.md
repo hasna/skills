@@ -364,3 +364,24 @@ their exact witnesses and trust state; they must still pass their own consumer
 checks before use. The plan's `managedAgentChecks.agents` and `nativeSkills`
 describe this scoped runtime check, not a fleet health result. A path-identity
 witness intersecting the write still refuses instead of adopting a new inode.
+
+## Codex bundled cleanup controls
+
+Qualified native skill review supports a narrow subset of Codex 0.159.2 and
+0.160.0's bundled cleanup hooks. The identities `browser`, `chrome`, `chrome-dev`,
+`chrome-internal` and `computer-use` in `openai-bundled` may call
+`node_repl.turn_ended`; `unified-computer-use` may call `cua_repl.turn_ended`.
+Only `Interrupt`, `SubagentStop` and `Stop` are accepted, with one group and one
+MCP handler per event. Inputs are the exact native event, turn and session
+placeholders; `SubagentStop` uses the child `agent_id` for its session value.
+Commands, matchers, other arguments, external hook files and a plugin MCP
+declaration alongside these hooks remain refused. Apps cleanup routing requires
+connector identity from a native tool catalog and is not admitted by this path.
+
+The complete inline hooks stay in the manifest fingerprint across cache versions,
+including after all native skill bodies disappear. A changed hook fails guarded
+apply and subsequent discovery checks. This review preserves native cleanup;
+it neither enables plugins nor grants hook trust, browser authority or signing.
+The upstream contracts are
+[0.159.2 bundled hooks](https://github.com/openai/codex/blob/ff6aec96948b70d94983af2641a6b67c94faeff5/codex-rs/plugin/src/bundled_hooks.rs)
+and [0.160.0 bundled hooks](https://github.com/openai/codex/blob/a956835d020762cb2b570053af06f643a11c0ecc/codex-rs/plugin/src/bundled_hooks.rs).
