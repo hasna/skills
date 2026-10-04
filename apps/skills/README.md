@@ -623,6 +623,18 @@ on this same host. The exact lock bytes and a metadata record remain under
 by recovery. A live, recent, malformed or different-host lock still blocks the
 write. A recovery guard serializes competing recoverers.
 
+Writers gather identity before publishing the lock. A private, fully written and
+synced staging inode is linked into the live path atomically without replacing
+an existing lock; the staging name is then removed before the protected write.
+The writer keeps its descriptor open through lock release. An interruption at
+the brief two-link publication boundary leaves a complete marker and its exact
+operation-bound staging witness. Recovery accepts that pair only when both names
+identify the same private inode and the existing stale-owner checks pass.
+Readers from 0.10.31 and earlier refuse this interrupted two-link state; inspect
+and recover it with an updated installation. Ordinary held locks have one link.
+This prevents new empty locks; it does not recover historical empty or malformed
+locks, whose ownership remains unknown and which must stay protected.
+
 Older PID-only locks require a local review because they do not identify their
 host. On the host that created the lock, inspect the receipt and lock, verify
 the recorded PID belongs to no live writer, then apply the exact reviewed lock:

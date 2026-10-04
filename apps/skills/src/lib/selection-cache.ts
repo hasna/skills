@@ -1,7 +1,7 @@
 /** Immutable, credential-authority/workspace scoped objects. Authoring corpus is never read or written. */
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, readSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, readSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname, join, parse, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -270,14 +270,16 @@ export function skillSessionSnapshotBinding(snapshot: SkillSessionSnapshot): Ski
   return { sessionId: snapshot.sessionId, generation: snapshot.generation, receiptSha256: snapshot.receiptSha256 };
 }
 
-interface OwnedSessionLock { path: string; fd: number; dev: number; ino: number }
+interface OwnedSessionLock { path: string; stagingPath: string; fd: number; dev: number; ino: number }
 interface SessionLockMarker {
   schemaVersion: 1 | 2; operationId: string; sessionId: string; pid: number;
   host?: string; bootId?: string; pidNamespace?: string; processStart?: string;
+  publication?: "hard-link-v1";
 }
 interface SessionLockSnapshot {
   path: string; bytes: Uint8Array; marker: SessionLockMarker; sha256: string;
   dev: number; ino: number; mtimeMs: number;
+  stagingPath?: string;
 }
 const SESSION_LOCK_MAX_BYTES = 4096;
 const SESSION_LOCK_MIN_AGE_MS = 30_000;
@@ -334,7 +336,7 @@ function readSessionLock(sessionId: string, options: SelectionCacheOptions): Ses
   const path = `${sessionReceiptPath(sessionId, options)}.write-lock`;
   const before = lstatSync(path, { throwIfNoEntry: false });
   if (!before) return null;
-  if (!before.isFile() || before.nlink !== 1 || (before.mode & 0o077) !== 0 || (process.getuid && before.uid !== process.getuid())) {
+  if (!before.isFile() || ![1, 2].includes(before.nlink) || (before.mode & 0o077) !== 0 || (process.getuid && before.uid !== process.getuid())) {
     throw new SkillSelectionError("SESSION_WRITE_LOCKED", "The session lock is not a private regular file; recovery requires review.");
   }
   const bytes = readRegularFile(path, SESSION_LOCK_MAX_BYTES);
@@ -347,11 +349,61 @@ function readSessionLock(sessionId: string, options: SelectionCacheOptions): Ses
   catch { throw new SkillSelectionError("SESSION_WRITE_LOCKED", "The session lock is unreadable; recovery requires review."); }
   if (!marker || ![1, 2].includes(marker.schemaVersion) || marker.sessionId !== sessionId
       || !/^[a-f0-9-]{36}$/i.test(marker.operationId) || !Number.isSafeInteger(marker.pid) || marker.pid <= 0
+      || (marker.publication !== undefined && marker.publication !== "hard-link-v1")
       || (marker.schemaVersion === 2 && (!marker.host || !marker.bootId || !marker.processStart
         || (process.platform === "linux" && !marker.pidNamespace)))) {
     throw new SkillSelectionError("SESSION_WRITE_LOCKED", "The session lock has invalid ownership metadata; recovery requires review.");
   }
-  return { path, bytes, marker, sha256: sha256Hex(bytes), dev: after.dev, ino: after.ino, mtimeMs: after.mtimeMs };
+  // A second link is valid only for this writer's exact initialized staging
+  // inode. An interruption before staged-name cleanup can leave this pair.
+  let stagingPath: string | undefined;
+  if (after.nlink === 2) {
+    stagingPath = `${path}.${marker.operationId}.prepared`;
+    assertRegularPath(stagingPath);
+    const staged = lstatSync(stagingPath, { throwIfNoEntry: false });
+    if (marker.publication !== "hard-link-v1" || !staged?.isFile() || staged.dev !== after.dev || staged.ino !== after.ino
+      || staged.nlink !== 2 || staged.mode !== after.mode || staged.uid !== after.uid || staged.gid !== after.gid) {
+      throw new SkillSelectionError("SESSION_WRITE_LOCKED", "The session lock has an unbound publication link; recovery requires review.");
+    }
+  }
+  return { path, bytes, marker, sha256: sha256Hex(bytes), dev: after.dev, ino: after.ino, mtimeMs: after.mtimeMs, stagingPath };
+}
+
+/** Publish complete ownership with atomic no-replace semantics. The
+ * descriptor remains owned until release; a crash never exposes an
+ * empty marker, and an existing lock is never overwritten. */
+function publishSessionLock(path: string, marker: SessionLockMarker): OwnedSessionLock {
+  const stagingPath = `${path}.${marker.operationId}.prepared`;
+  const bytes = Buffer.from(`${JSON.stringify({ ...marker, publication: "hard-link-v1" })}\n`);
+  const fd = openSync(stagingPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  const stat = fstatSync(fd);
+  let published = false, handedOff = false;
+  try {
+    writeFileSync(fd, bytes);
+    fsyncSync(fd);
+    linkSync(stagingPath, path);
+    published = true;
+    syncDirectory(dirname(path));
+    // Keep ordinary held locks compatible with existing single-link readers.
+    // A crash before this removal leaves the exact publication witness above.
+    const staged = lstatSync(stagingPath);
+    if (!staged.isFile() || staged.dev !== stat.dev || staged.ino !== stat.ino) {
+      throw new SkillSelectionError("SESSION_WRITE_LOCK_CHANGED", "The initialized lock staging inode changed before publication completed.");
+    }
+    unlinkSync(stagingPath);
+    syncDirectory(dirname(path));
+    handedOff = true;
+    return { path, stagingPath, fd, dev: stat.dev, ino: stat.ino };
+  } finally {
+    if (!handedOff) {
+      try {
+        for (const target of [...(published ? [path] : []), stagingPath]) {
+          const current = lstatSync(target, { throwIfNoEntry: false });
+          if (current?.isFile() && current.dev === stat.dev && current.ino === stat.ino) unlinkSync(target);
+        }
+      } finally { closeSync(fd); }
+    }
+  }
 }
 
 function writerIsGone(lock: SessionLockSnapshot, explicitLocalHost: boolean): boolean {
@@ -410,6 +462,7 @@ function archiveSessionLock(lock: SessionLockSnapshot, receipt: SkillSessionSnap
     try {
       renameSync(lock.path, archivePath);
       moved = true;
+      if (finalLock.stagingPath) renameSync(finalLock.stagingPath, join(directory, "publication.write-lock"));
       syncDirectory(directory); syncDirectory(dirname(lock.path));
       if (sha256Hex(readRegularFile(archivePath, SESSION_LOCK_MAX_BYTES)!) !== lock.sha256) {
         throw new Error("Archived lock bytes changed");
@@ -437,6 +490,8 @@ export function recoverSessionWriteLock(sessionId: string, reviewDigest: string,
 }
 function withSessionWriteLocks<T>(sessionIds: string[], options: SelectionCacheOptions, action: (assertOwned: () => void) => T): T {
   const operationId = randomUUID();
+  // Native identity probes can block. Finish them before creating any lock.
+  const identity = localLockIdentity();
   const locks = [...new Set(sessionIds)].map(sessionId => ({ sessionId, path: `${sessionReceiptPath(sessionId, options)}.write-lock` }))
     .sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
   const owned: OwnedSessionLock[] = [];
@@ -451,8 +506,9 @@ function withSessionWriteLocks<T>(sessionIds: string[], options: SelectionCacheO
   try {
     for (const lock of locks) {
       assertRegularPath(lock.path, true);
-      let fd: number;
-      try { fd = openSync(lock.path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
+      const marker: SessionLockMarker = { schemaVersion: identity ? 2 : 1, operationId, sessionId: lock.sessionId, pid: process.pid, ...identity };
+      let acquired: OwnedSessionLock;
+      try { acquired = publishSessionLock(lock.path, marker); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
         try {
@@ -465,7 +521,7 @@ function withSessionWriteLocks<T>(sessionIds: string[], options: SelectionCacheO
           // A failed or ambiguous recovery never grants permission to replace the lock.
           if (recoveryError instanceof SkillSelectionError && recoveryError.code === "SESSION_LOCK_RECOVERY_INCOMPLETE") throw recoveryError;
         }
-        try { fd = openSync(lock.path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
+        try { acquired = publishSessionLock(lock.path, marker); }
         catch (retryError) {
           if ((retryError as NodeJS.ErrnoException).code === "EEXIST") {
             // Only a readable, structurally valid lock is a delivery conflict.
@@ -476,17 +532,17 @@ function withSessionWriteLocks<T>(sessionIds: string[], options: SelectionCacheO
           throw retryError;
         }
       }
-      const stat = fstatSync(fd);
-      owned.push({ path: lock.path, fd, dev: stat.dev, ino: stat.ino });
-      const identity = localLockIdentity();
-      writeFileSync(fd, `${JSON.stringify({ schemaVersion: identity ? 2 : 1, operationId, sessionId: lock.sessionId, pid: process.pid, ...identity })}\n`);
+      owned.push(acquired);
     }
     return action(assertOwned);
   } finally {
     for (const lock of owned.reverse()) {
-      closeSync(lock.fd);
-      const current = lstatSync(lock.path, { throwIfNoEntry: false });
-      if (current?.isFile() && current.dev === lock.dev && current.ino === lock.ino) unlinkSync(lock.path);
+      try {
+        for (const path of [lock.path, lock.stagingPath]) {
+          const current = lstatSync(path, { throwIfNoEntry: false });
+          if (current?.isFile() && current.dev === lock.dev && current.ino === lock.ino) unlinkSync(path);
+        }
+      } finally { closeSync(lock.fd); }
     }
   }
 }
