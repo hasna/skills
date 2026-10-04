@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { Command } from "commander";
+import { registerRuntime } from "./runtime.js";
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -52,9 +54,9 @@ function fixtureHome() {
   return { home, runtime, oldPackage, localBin, bunBin, externalBin, configs };
 }
 
-async function serverWithArtifact() {
+async function serverWithArtifact(dependencies: Record<string, string> = {}) {
   const artifact = await new Bun.Archive({
-    "package/package.json": JSON.stringify({ name: "@hasna/skills", version: "0.10.8", bin: BIN, dependencies: {} }),
+    "package/package.json": JSON.stringify({ name: "@hasna/skills", version: "0.10.8", bin: BIN, dependencies }),
     "package/README.md": "Synthetic package fixture.\n",
     ...Object.fromEntries(Object.entries(BIN).map(([name, file]) => [`package/${file}`, `#!/usr/bin/env bun\nconsole.log("0.10.8 ${name}");\n`])),
   }, { compress: "gzip" }).bytes();
@@ -76,6 +78,134 @@ async function serverWithArtifact() {
 }
 
 describe("exact-version copyfile runtime update", () => {
+  test("explicit age policy reaches npm resolution and ci without inherited settings, including transitive dependencies", async () => {
+    const f = fixtureHome();
+    const fixture = await serverWithArtifact({ "is-odd": "3.0.1" });
+    const originalPath = process.env.PATH;
+    const originalAge = process.env.NPM_CONFIG_MIN_RELEASE_AGE;
+    const originalExclude = process.env.NPM_CONFIG_MIN_RELEASE_AGE_EXCLUDE;
+    const npm = Bun.which("npm")!;
+    const spyBin = join(f.home, "npm-spy");
+    mkdirSync(spyBin, { mode: 0o700 });
+    const log = join(f.home, "npm-invocations.jsonl");
+    writeFileSync(join(spyBin, "npm"), `#!/usr/bin/env bun
+import { appendFileSync, lstatSync } from "node:fs";
+const args = process.argv.slice(2);
+if (args[0] === "install" || args[0] === "ci") {
+  const probe = Bun.spawn([${JSON.stringify(npm)}, "config", "list", "--json"], { env: process.env, stdout: "pipe", stderr: "ignore" });
+  const config = JSON.parse(await new Response(probe.stdout).text());
+  if (await probe.exited !== 0) process.exit(81);
+  appendFileSync(${JSON.stringify(log)}, JSON.stringify({ command: args[0], age: config["min-release-age"], exclusions: config["min-release-age-exclude"], inheritedAge: Object.hasOwn(process.env, "NPM_CONFIG_MIN_RELEASE_AGE"), inheritedExclusions: Object.hasOwn(process.env, "NPM_CONFIG_MIN_RELEASE_AGE_EXCLUDE"), userConfigMode: lstatSync(process.env.NPM_CONFIG_USERCONFIG).mode & 511 }) + "\\n");
+}
+const child = Bun.spawn([${JSON.stringify(npm)}, ...args], { env: process.env, stdin: "ignore", stdout: "inherit", stderr: "inherit" });
+process.exit(await child.exited);
+`, { mode: 0o755 });
+    const exclusions = ["@hasna/*", "@hasna-internal/*", "@openai/*", "@anthropic-ai/*", "openai"];
+    try {
+      process.env.PATH = `${spyBin}${delimiter}${originalPath}`;
+      process.env.NPM_CONFIG_MIN_RELEASE_AGE = "0";
+      process.env.NPM_CONFIG_MIN_RELEASE_AGE_EXCLUDE = "*";
+      const result = await updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue: `${f.localBin}${delimiter}${f.bunBin}`, registryOrigin: fixture.server.url.origin, minReleaseAge: 7, minReleaseAgeExclude: exclusions });
+      const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      expect(calls.map(row => row.command)).toEqual(["install", "ci"]);
+      expect(calls.every(row => row.age === 7 && JSON.stringify(row.exclusions) === JSON.stringify(exclusions) && !row.inheritedAge && !row.inheritedExclusions && row.userConfigMode === 0o600)).toBe(true);
+      const targetRoot = join(f.runtime, "0.10.8-copyfile");
+      const lock = JSON.parse(readFileSync(join(targetRoot, "install-lock.json"), "utf8"));
+      expect(lock.packages["node_modules/is-odd"].version).toBe("3.0.1");
+      expect(lock.packages["node_modules/is-number"].version).toBe("6.0.0");
+      expect(result.dependencyPolicy).toMatchObject({ minReleaseAge: 7, minReleaseAgeExclude: exclusions, npmVersion: "11.19.0" });
+      for (const [path, content] of f.configs) expect(readFileSync(path, "utf8")).toBe(content);
+      expect(realpathSync(join(f.localBin, "skills"))).toBe(join(targetRoot, "node_modules", "@hasna", "skills", BIN.skills));
+      expect(rollbackCopyfileRuntime(String(result.receiptId), { homeDir: f.home })).toMatchObject({ rolledBack: true, restoredVersion: "0.10.6" });
+      expect(realpathSync(join(f.localBin, "skills"))).toBe(join(f.oldPackage, BIN.skills));
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath;
+      if (originalAge === undefined) delete process.env.NPM_CONFIG_MIN_RELEASE_AGE; else process.env.NPM_CONFIG_MIN_RELEASE_AGE = originalAge;
+      if (originalExclude === undefined) delete process.env.NPM_CONFIG_MIN_RELEASE_AGE_EXCLUDE; else process.env.NPM_CONFIG_MIN_RELEASE_AGE_EXCLUDE = originalExclude;
+      fixture.server.stop(true);
+    }
+  });
+
+  test("unsupported npm and missing release-age capability refuse before dependency installation or launcher changes", async () => {
+    const originalPath = process.env.PATH;
+    for (const [version, config] of [["11.16.0", {}], ["11.19.0", { "min-release-age": null }]] as const) {
+      const f = fixtureHome();
+      const fixture = await serverWithArtifact();
+      const bin = join(f.home, "npm-probe");
+      mkdirSync(bin, { mode: 0o700 });
+      const log = join(f.home, "unexpected-install");
+      writeFileSync(join(bin, "npm"), `#!/usr/bin/env bun
+import { writeFileSync } from "node:fs";
+if (process.argv[2] === "--version") console.log(${JSON.stringify(version)});
+else if (process.argv[2] === "config") console.log(${JSON.stringify(JSON.stringify(config))});
+else { writeFileSync(${JSON.stringify(log)}, "unexpected"); process.exit(83); }
+`, { mode: 0o755 });
+      try {
+        process.env.PATH = `${bin}${delimiter}${originalPath}`;
+        await expect(updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue: `${f.localBin}${delimiter}${f.bunBin}`, registryOrigin: fixture.server.url.origin, minReleaseAge: 7 })).rejects.toThrow("NPM_RELEASE_AGE_UNSUPPORTED");
+        expect(existsSync(log)).toBe(false);
+        expect(realpathSync(join(f.localBin, "skills"))).toBe(join(f.oldPackage, BIN.skills));
+        expect(existsSync(join(f.runtime, "0.10.8-copyfile"))).toBe(false);
+        for (const [path, content] of f.configs) expect(readFileSync(path, "utf8")).toBe(content);
+      } finally { process.env.PATH = originalPath; fixture.server.stop(true); }
+    }
+  });
+
+  test("CLI age options refuse the legacy updater and rollback or adoption operations before side effects", async () => {
+    const priorExitCode = process.exitCode;
+    const priorTestMode = process.env.SKILLS_TEST_MODE;
+    const priorError = console.error, priorLog = console.log;
+    const cases = [
+      ["--min-release-age", "7"],
+      ["--min-release-age-exclude", "@hasna/*"],
+      ["--version", "0.10.8", "--min-release-age", "7", "--rollback", "synthetic-receipt"],
+      ["--min-release-age", "7", "--adopt-aliases"],
+      ["--min-release-age", "7", "--rollback-aliases", "synthetic-receipt"],
+    ];
+    try {
+      process.env.SKILLS_TEST_MODE = "1";
+      for (const args of cases) {
+        const output: string[] = [];
+        console.error = (...values) => output.push(values.join(" "));
+        console.log = (...values) => output.push(values.join(" "));
+        process.exitCode = 0;
+        const program = new Command().enablePositionalOptions().exitOverride();
+        registerRuntime(program);
+        await program.parseAsync(["self-update", "--json", ...args], { from: "user" });
+        expect(process.exitCode).toBe(1);
+        expect(output.map(line => JSON.parse(line))).toEqual([{ error: "RELEASE_AGE_POLICY_REQUIRES_EXACT_VERSION" }]);
+      }
+      const program = new Command().enablePositionalOptions().exitOverride();
+      registerRuntime(program);
+      const command = program.commands.find(command => command.name() === "self-update")!;
+      command.parseOptions(["--version", "0.10.8", "--min-release-age", "7", "--min-release-age-exclude", "@hasna/*", "--min-release-age-exclude", "openai"]);
+      expect(command.opts()).toMatchObject({ version: "0.10.8", minReleaseAge: "7", minReleaseAgeExclude: ["@hasna/*", "openai"] });
+      for (const age of ["0", "-1", "1.5", "Infinity", "9007199254740992"]) {
+        const output: string[] = [];
+        console.error = (...values) => output.push(values.join(" "));
+        process.exitCode = 0;
+        const invalid = new Command().enablePositionalOptions().exitOverride();
+        registerRuntime(invalid);
+        await invalid.parseAsync(["self-update", "--json", "--version", "0.10.8", "--min-release-age", age], { from: "user" });
+        expect(process.exitCode).toBe(1);
+        expect(output.map(line => JSON.parse(line))).toEqual([{ updated: false, error: "MIN_RELEASE_AGE_INVALID" }]);
+      }
+    } finally {
+      console.error = priorError; console.log = priorLog; process.exitCode = priorExitCode ?? 0;
+      if (priorTestMode === undefined) delete process.env.SKILLS_TEST_MODE; else process.env.SKILLS_TEST_MODE = priorTestMode;
+    }
+  });
+
+  test("age and exclusion inputs reject unsafe values before reading a runtime or fetching an artifact", async () => {
+    for (const minReleaseAge of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+      await expect(updateCopyfileRuntime("0.10.8", { homeDir: "/missing-synthetic-home", minReleaseAge })).rejects.toThrow("MIN_RELEASE_AGE_INVALID");
+    }
+    await expect(updateCopyfileRuntime("0.10.8", { homeDir: "/missing-synthetic-home", minReleaseAgeExclude: ["@hasna/*"] })).rejects.toThrow("MIN_RELEASE_AGE_REQUIRED_FOR_EXCLUSIONS");
+    for (const pattern of ["", "@hasna/*\nregistry=https://example.invalid", "--registry", "openai=0", "openai "]) {
+      await expect(updateCopyfileRuntime("0.10.8", { homeDir: "/missing-synthetic-home", minReleaseAge: 7, minReleaseAgeExclude: [pattern] })).rejects.toThrow("MIN_RELEASE_AGE_EXCLUDE_INVALID");
+    }
+  });
+
   test("verifies the exact artifact, switches physical runtime launchers, preserves config and rolls back", async () => {
     const f = fixtureHome();
     const { server, integrity } = await serverWithArtifact();

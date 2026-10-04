@@ -1148,6 +1148,32 @@ semantic version. If discovery or verification fails, it exits nonzero and
 explains that installation may already have completed. It does not automatically
 reinstall or change your PATH.
 
+### Exact-version runtime updates
+
+`skills self-update --version 0.10.34` installs a verified package into a retained
+copyfile runtime, preserves configuration and launcher preimages, and keeps the
+previous runtime available for receipt-bound rollback.
+
+To require a minimum dependency age, pass a positive integer number of days and
+repeat the exclusion option for package names or package globs:
+
+```bash
+skills self-update --version 0.10.34 --min-release-age 7 \
+  --min-release-age-exclude '@hasna/*' \
+  --min-release-age-exclude '@hasna-internal/*' \
+  --min-release-age-exclude '@openai/*' \
+  --min-release-age-exclude '@anthropic-ai/*' \
+  --min-release-age-exclude openai
+```
+
+The policy reaches both dependency lock resolution and `npm ci` through private
+npm configuration. Exemptions match each dependency's own package identity;
+unrelated transitive dependencies retain the minimum age. These options require
+an exact version and npm 11.19.0 or newer with both age capabilities. They are
+refused for rollback, alias adoption or the no-argument updater. Existing ambient
+npm settings and credentials are not forwarded. Omitting the policy preserves
+existing exact-version update behavior.
+
 ### Local environment assignments
 
 `skills env-check --set 'KEY=value'` writes one literal value to the current
