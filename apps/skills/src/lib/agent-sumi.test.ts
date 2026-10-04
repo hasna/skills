@@ -1,9 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { renderSumiPlugin, sumiConfigDirectory } from "./agent-sumi.js";
 import { applyAgentIntegration, assertManagedAgentBridge, planAgentIntegration } from "./agent-integration.js";
+import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
 
 // Native V2 boundary fixture bound to Sumi 0.2.52, Harnesses e6776271ca8065a3a091eacedebd6fd7ef47ccd3,
 // upstream 06b6c916a564c9c88af36cbd19817ba3d4ac4476. These are mutable
@@ -60,6 +62,37 @@ test("native plugin directory aliases cannot hide an unwitnessed plugin", () => 
   put(config, "{}"); put(join(external, "foreign.js"), "export default {};");
   symlinkSync(external, join(dirname(config), "plugins"));
   expect(() => planAgentIntegration({ home, dataDir: join(home, "skills-data"), agents: ["sumi"] })).toThrow();
+});
+
+test("legacy singular Sumi plugin registrations require the same review as native plugins", () => {
+  for (const plugin of [["foreign-plugin"], [["foreign-plugin", { enabled: true }]], "foreign-plugin"]) {
+    const home = fixture(), config = join(home, ".hasna-internal/sumi/config/sumi.json");
+    put(config, JSON.stringify({ plugin }));
+    expect(() => resolveAgentDiscovery({ home, agent: "sumi" })).toThrow();
+  }
+  const home = fixture(), config = join(home, ".hasna-internal/sumi/config/sumi.json");
+  put(config, JSON.stringify({ plugin: [], experimental: { enabled: true } }));
+  const plan = planAgentIntegration({ home, dataDir: join(home, "skills-data"), agents: ["sumi"] });
+  applyAgentIntegration(plan);
+  expect(JSON.parse(readFileSync(config, "utf8")).plugin).toEqual([]);
+  expect(() => assertManagedAgentBridge("sumi", { home, dataDir: join(home, "skills-data"), projectDir: home })).not.toThrow();
+  for (const name of ["sumi.json", ".sumi/sumi.json"]) {
+    const project = join(home, name === "sumi.json" ? "project-flat" : "project-directory");
+    put(join(project, name), JSON.stringify({ plugin: ["foreign-plugin"] }));
+    expect(() => assertProjectDiscovery("sumi", [project], home)).toThrow("higher-precedence");
+  }
+});
+
+test("legacy Sumi plugin changes invalidate automatic and retained reviewed witnesses", () => {
+  const home = fixture(), config = join(home, ".hasna-internal/sumi/config/sumi.json");
+  const raw = JSON.stringify({ plugin: [] }); put(config, raw);
+  const automatic = resolveAgentDiscovery({ home, agent: "sumi" });
+  expect(automatic.sources.find(source => source.path === config)?.fields).toContain("plugin");
+  const reviewed: ReviewedDiscoveryInputs = { version: 1, agents: [{ agent: "sumi", roots: [], pluginHooks: "reviewed-no-skill-injection", sources: [{ path: config, sha256: createHash("sha256").update(raw).digest("hex") }] }] };
+  const binding = resolveAgentDiscovery({ home, agent: "sumi", reviewed });
+  put(config, JSON.stringify({ plugin: ["foreign-plugin"] }));
+  expect(() => verifyAgentDiscovery(automatic)).toThrow();
+  expect(() => resolveAgentDiscovery({ home, agent: "sumi", retainedReview: binding })).toThrow();
 });
 
 test("native prompt and request hooks preserve actual root, child and nested custody", async () => {

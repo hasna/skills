@@ -205,7 +205,7 @@ export function assertProjectDiscovery(agent: IntegrationAgent, directories: str
       const keys = agent === "claude" ? ["enabledPlugins", "extraKnownMarketplaces", "skillOverrides"]
         : agent === "codex" ? ["plugins", "marketplaces", "skills"]
         : agent === "gemini" ? ["skills", "extensions"]
-        : agent === "opencode" ? ["plugin", "skills"] : agent === "sumi" ? ["plugins", "skills", "permissions"] : ["hooks"];
+        : agent === "opencode" ? ["plugin", "skills"] : agent === "sumi" ? ["plugin", "plugins", "skills", "permissions"] : ["hooks"];
       let admittedPlugins = false;
       if (agent === "claude" && reviewed?.agent === agent && reviewed.method === "reviewed" && config.enabledPlugins && typeof config.enabledPlugins === "object" && !Array.isArray(config.enabledPlugins)) {
         const exact = reviewed.sources.find(source => source.path === path && source.format === undefined && source.fields === undefined && (source.hashMode === undefined || source.hashMode === "bytes"));
@@ -244,7 +244,7 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
   };
   if (agent === "hermes") assertHermesEnvironment(home);
   const configPath = agentDiscoveryConfigPath(home, agent);
-  const configText = witness(configPath, agent === "hermes" ? "yaml" : agent === "codex" ? "toml" : "json", agent === "hermes" ? ["skills", "plugins", "hooks"] : agent === "claude" ? ["enabledPlugins", "extraKnownMarketplaces"] : agent === "codex" ? [...CODEX_DISCOVERY_PROJECTION_FIELDS] : agent === "gemini" ? ["skills", "extensions", "security"] : agent === "opencode" ? ["plugin", "skills"] : agent === "sumi" ? ["skills", "plugins", "permissions"] : ["version"]);
+  const configText = witness(configPath, agent === "hermes" ? "yaml" : agent === "codex" ? "toml" : "json", agent === "hermes" ? ["skills", "plugins", "hooks"] : agent === "claude" ? ["enabledPlugins", "extraKnownMarketplaces"] : agent === "codex" ? [...CODEX_DISCOVERY_PROJECTION_FIELDS] : agent === "gemini" ? ["skills", "extensions", "security"] : agent === "opencode" ? ["plugin", "skills"] : agent === "sumi" ? ["skills", "plugin", "plugins", "permissions"] : ["version"]);
   const config: any = configText === null ? {} : agent === "hermes" ? parseHermesConfig(configText) : parseConfig(configText, configPath, agent === "codex");
   const unresolved = (detail: string): never => { throw new Error(`Native discovery is unresolved (${agent}: ${detail}); provide a reviewed --discovery-inputs file`); };
   if (agent === "sumi") {
@@ -256,7 +256,7 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
       if (typeof value !== "string" || /[\0$]/.test(value) || !value || !(isAbsolute(value) || value.startsWith("~/"))) unresolved("remote or relative skill sources need a dedicated discovery adapter");
       roots.add(value.startsWith("~/") ? join(home, value.slice(2)) : value);
     }
-    if (config.plugins !== undefined && !Array.isArray(config.plugins)) unresolved("plugins must be an array");
+    for (const key of ["plugin", "plugins"]) if (config[key] !== undefined && !Array.isArray(config[key])) unresolved(`${key} must be an array`);
     const plugins = [join(directory, "plugin"), join(directory, "plugins")];
     for (const path of plugins) { safe(path); if (lstatSync(path, { throwIfNoEntry: false })?.isDirectory()) for (const name of readdirSync(path).sort()) {
       if (name === "skills-cli.js" && path === plugins[1]) continue;
@@ -394,7 +394,7 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
     const localPlugins = join(home, ".config/opencode/plugins"); safe(localPlugins);
     if (lstatSync(localPlugins, { throwIfNoEntry: false }) && readdirSync(localPlugins).some(name => name !== "skills-cli.js")) unresolved("additional local plugin hooks require review");
   } else if (agent === "sumi") {
-    if ((config.plugins?.length ?? 0) > 0 || sources.some(source => source.path !== canonical(configPath) && source.path !== canonical(join(sumiConfigDirectory(home), "sumi.jsonc")) && source.sha256 !== null)) unresolved("external or foreign local plugins require review");
+    if ((config.plugin?.length ?? 0) > 0 || (config.plugins?.length ?? 0) > 0 || sources.some(source => source.path !== canonical(configPath) && source.path !== canonical(join(sumiConfigDirectory(home), "sumi.jsonc")) && source.sha256 !== null)) unresolved("external or foreign local plugins require review");
   } else if (agent === "hermes") {
     // Python entry points and bundled plugins may register prompt sections or
     // namespaced skills. Do not import them to guess their effective behavior.
