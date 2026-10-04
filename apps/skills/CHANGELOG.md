@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.29
+
+- Query caller-owned readonly skill catalogs through the category, tag and tag-list helpers while preserving caller item types and avoiding local configuration reads.
+- Publish the same sealed npm archive accepted by installed-consumer checks, including strict types and all four runtime exports; retain the package lifecycle gates, review linkage and registry integrity verification.
+
 ## 0.10.28
 
 - Tolerate Codex's typed root/profile personality preference changes in V3 settings reviews while preserving native instruction, discovery and provider controls.
