@@ -54,6 +54,40 @@ test("independent canonical and legacy config stores are refused", () => {
   expect(() => sumiConfigDirectory(home, {})).toThrow("conflict");
 });
 
+test("Sumi-only integration canonicalizes reviewed home aliases before discovery guards", () => {
+  const home = fixture(), dataDir = join(home, "skills-data"), workspace = join(home, "projects/workspace");
+  const claude = join(workspace, ".claude"), codex = join(workspace, ".codex");
+  mkdirSync(claude, { recursive: true }); mkdirSync(codex, { recursive: true });
+  symlinkSync(claude, join(home, ".claude")); symlinkSync(codex, join(home, ".codex"));
+  const canonical = join(home, ".hasna-internal/sumi/config"), legacy = join(home, ".config/sumi");
+  const config = join(legacy, "sumi.json");
+  put(config, JSON.stringify({ skills: [join(home, ".claude/skills")] }));
+  mkdirSync(dirname(canonical), { recursive: true }); symlinkSync(legacy, canonical);
+  const options = { home, dataDir, agents: ["sumi"] as const, projectDir: workspace };
+  expect(() => planAgentIntegration({ ...options, agents: [...options.agents] })).toThrow("symlink");
+  const plan = planAgentIntegration({ ...options, agents: [...options.agents], allowRootAliases: true });
+  expect(plan.discoveryBefore![0]!.roots).toContain(join(claude, "skill"));
+  expect(plan.discoveryBefore![0]!.roots).toContain(join(claude, "skills"));
+  expect(plan.discoveryBefore![0]!.roots.some(path => path.startsWith(join(home, ".claude") + "/"))).toBe(false);
+  expect(plan.changes.some(change => change.path === join(legacy, "plugins/skills-cli.js"))).toBe(true);
+  expect(plan.changes.some(change => change.path.startsWith(claude + "/") || change.path.startsWith(codex + "/"))).toBe(false);
+  expect(existsSync(join(legacy, "plugins/skills-cli.js"))).toBe(false);
+  applyAgentIntegration(plan);
+  expect(() => assertManagedAgentBridge("sumi", { home, dataDir, projectDir: workspace })).not.toThrow();
+  const repeated = planAgentIntegration({ ...options, agents: [...options.agents], allowRootAliases: true });
+  expect(repeated.changes).toEqual([]);
+});
+
+test("Sumi reviewed home aliases still refuse outside-home and nested symlink roots", () => {
+  const home = fixture(), outside = fixture(), dataDir = join(home, "skills-data");
+  symlinkSync(outside, join(home, ".claude"));
+  expect(() => planAgentIntegration({ home, dataDir, agents: ["sumi"], allowRootAliases: true })).toThrow("inside the real home");
+  const nestedHome = fixture(), target = join(nestedHome, "project/.claude"), nestedTarget = join(nestedHome, "native-skills");
+  mkdirSync(target, { recursive: true }); mkdirSync(nestedTarget, { recursive: true });
+  symlinkSync(target, join(nestedHome, ".claude")); symlinkSync(nestedTarget, join(target, "skills"));
+  expect(() => planAgentIntegration({ home: nestedHome, dataDir: join(nestedHome, "skills-data"), agents: ["sumi"], allowRootAliases: true })).toThrow("symlink");
+});
+
 test("Sumi installation owns only its native plugin, config and bridge and guards reappearing sources", () => {
   const home = fixture(), dataDir = join(home, "skills-data"), config = join(home, ".hasna-internal/sumi/config/sumi.json");
   put(config, JSON.stringify({ experimental: { enabled: true }, permissions: [{ action: "shell", resource: "*", effect: "ask" }] }));

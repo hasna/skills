@@ -250,11 +250,11 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
   if (agent === "sumi") {
     const directory = sumiConfigDirectory(home);
     if (witness(join(directory, "sumi.jsonc")) !== null) unresolved("JSONC configuration requires a supported format adapter");
-    for (const root of [directory, join(home, ".claude"), join(home, ".agents")]) for (const name of ["skill", "skills"]) roots.add(join(root, name));
+    for (const root of [directory, join(home, ".claude"), join(home, ".agents")]) for (const name of ["skill", "skills"]) roots.add(canonical(join(root, name)));
     if (config.skills !== undefined && (!Array.isArray(config.skills) || config.skills.some((path: unknown) => typeof path !== "string"))) unresolved("skills must be a string array");
     for (const value of config.skills ?? []) {
       if (typeof value !== "string" || /[\0$]/.test(value) || !value || !(isAbsolute(value) || value.startsWith("~/"))) unresolved("remote or relative skill sources need a dedicated discovery adapter");
-      roots.add(value.startsWith("~/") ? join(home, value.slice(2)) : value);
+      roots.add(canonical(value.startsWith("~/") ? join(home, value.slice(2)) : value));
     }
     for (const key of ["plugin", "plugins"]) if (config[key] !== undefined && !Array.isArray(config[key])) unresolved(`${key} must be an array`);
     const plugins = [join(directory, "plugin"), join(directory, "plugins")];
