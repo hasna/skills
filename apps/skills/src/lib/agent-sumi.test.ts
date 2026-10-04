@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
@@ -11,7 +11,27 @@ import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, ty
 // upstream 06b6c916a564c9c88af36cbd19817ba3d4ac4476. These are mutable
 // SessionPrompt/SessionContext and promise Plugin shapes, not OpenCode hooks.
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+const configSelectors = ["SUMI_CONFIG_DIR", "XDG_CONFIG_HOME", "SUMI_HOME", "SUMI_CONFIG", "SUMI_CONFIG_CONTENT"] as const;
+const inheritedSelectors = new Map(configSelectors.map(key => [key, process.env[key]]));
+const originalSelectors = new Map<string, string | undefined>();
+beforeEach(() => {
+  for (const key of configSelectors) {
+    originalSelectors.set(key, process.env[key]);
+    delete process.env[key];
+  }
+});
+afterEach(() => {
+  try { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); }
+  finally {
+    for (const key of configSelectors) {
+      const value = originalSelectors.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    originalSelectors.clear();
+  }
+});
+afterAll(() => { expect(configSelectors.every(key => process.env[key] === inheritedSelectors.get(key))).toBe(true); });
 function fixture() { const root = mkdtempSync(join(tmpdir(), "skills-sumi-native-")); roots.push(root); return root; }
 function put(path: string, text: string) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text); }
 
