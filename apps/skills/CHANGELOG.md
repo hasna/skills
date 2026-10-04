@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.34
+
+- Allow exact-version runtime updates to require a minimum dependency release age and explicit package exclusions in isolated npm lock resolution and installation.
+- Refuse unsupported npm capabilities, invalid policy inputs and policy flags on other update operations; preserve default isolation, runtime preimages and rollback.
+
 ## 0.10.33
 
 - Resolve explicitly reviewed native root aliases before Sumi skill discovery checks, allowing Sumi-only integration when Claude and Codex roots use reviewed aliases.

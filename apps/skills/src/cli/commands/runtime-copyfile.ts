@@ -41,6 +41,11 @@ interface ConfigPreimage {
   byteSize?: number;
 }
 
+interface NpmReleaseAgePolicy {
+  minReleaseAge: number;
+  minReleaseAgeExclude: string[];
+}
+
 interface CopyfileReceipt {
   schema: "skills.copyfile-runtime-receipt.v1";
   id: string;
@@ -62,6 +67,7 @@ interface CopyfileReceipt {
   configs: ConfigPreimage[];
   preimageSha256: string;
   launchers: RuntimeLayout["launchers"];
+  dependencyPolicy?: NpmReleaseAgePolicy & { npmVersion: string };
   switchedLaunchers: string[];
   rollbackCompletedLaunchers: string[];
 }
@@ -484,10 +490,41 @@ function assertConfigUnchanged(configs: ConfigPreimage[]): void {
   }
 }
 
-async function runNpm(args: string[], cwd: string, home: string, staging: string): Promise<void> {
+function releaseAgePolicy(options: { minReleaseAge?: number; minReleaseAgeExclude?: string[] }): NpmReleaseAgePolicy | undefined {
+  if (options.minReleaseAgeExclude !== undefined && !Array.isArray(options.minReleaseAgeExclude)) throw new Error("MIN_RELEASE_AGE_EXCLUDE_INVALID");
+  if (options.minReleaseAge === undefined) {
+    if (options.minReleaseAgeExclude?.length) throw new Error("MIN_RELEASE_AGE_REQUIRED_FOR_EXCLUSIONS");
+    return undefined;
+  }
+  if (!Number.isSafeInteger(options.minReleaseAge) || options.minReleaseAge < 1) throw new Error("MIN_RELEASE_AGE_INVALID");
+  const exclusions = options.minReleaseAgeExclude ?? [];
+  if (!Array.isArray(exclusions) || exclusions.some(pattern => typeof pattern !== "string" || pattern.length > 214 || !/^(?:@[a-z0-9*?][a-z0-9._*?-]*\/)?[a-z0-9*?][a-z0-9._*?-]*$/.test(pattern))) {
+    throw new Error("MIN_RELEASE_AGE_EXCLUDE_INVALID");
+  }
+  return { minReleaseAge: options.minReleaseAge, minReleaseAgeExclude: [...new Set(exclusions)] };
+}
+
+async function npmReleaseAgeCapability(cwd: string, env: Record<string, string>): Promise<string> {
+  try {
+    const versionProbe = Bun.spawn(["npm", "--version"], { cwd, env, stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+    const [versionText, versionStatus] = await Promise.all([new Response(versionProbe.stdout).text(), versionProbe.exited]);
+    const version = versionText.trim();
+    const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+    if (versionStatus !== 0 || !match || Number(match[1]) < 11 || (Number(match[1]) === 11 && Number(match[2]) < 19)) throw new Error("NPM_RELEASE_AGE_UNSUPPORTED");
+    // Probe the isolated registry-only config BEFORE adding policy keys. Unknown
+    // user settings can appear in npm config output without implementing them.
+    const configProbe = Bun.spawn(["npm", "config", "list", "--json"], { cwd, env, stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+    const [configText, configStatus] = await Promise.all([new Response(configProbe.stdout).text(), configProbe.exited]);
+    const config = object(JSON.parse(configText), "NPM_RELEASE_AGE_UNSUPPORTED");
+    if (configStatus !== 0 || !Object.hasOwn(config, "min-release-age") || !Object.hasOwn(config, "min-release-age-exclude") || !Array.isArray(config["min-release-age-exclude"])) throw new Error("NPM_RELEASE_AGE_UNSUPPORTED");
+    return version;
+  } catch { throw new Error("NPM_RELEASE_AGE_UNSUPPORTED"); }
+}
+
+async function runNpm(args: string[], cwd: string, home: string, staging: string, policy?: NpmReleaseAgePolicy): Promise<string | undefined> {
   const userNpmrc = join(staging, "npm-user.npmrc"), globalNpmrc = join(staging, "npm-global.npmrc");
-  if (!existsSync(userNpmrc)) writeFileSync(userNpmrc, `registry=${REGISTRY_ORIGIN}/\nignore-scripts=true\n`, { mode: 0o600, flag: "wx" });
-  if (!existsSync(globalNpmrc)) writeFileSync(globalNpmrc, `registry=${REGISTRY_ORIGIN}/\nignore-scripts=true\n`, { mode: 0o600, flag: "wx" });
+  const baseConfig = `registry=${REGISTRY_ORIGIN}/\nignore-scripts=true\n`;
+  if (!existsSync(globalNpmrc)) writeFileSync(globalNpmrc, baseConfig, { mode: 0o600, flag: "wx" });
   const env = {
     PATH: process.env.PATH ?? "",
     HOME: home,
@@ -501,11 +538,19 @@ async function runNpm(args: string[], cwd: string, home: string, staging: string
     NPM_CONFIG_REGISTRY: `${REGISTRY_ORIGIN}/`,
     NPM_CONFIG_IGNORE_SCRIPTS: "true",
   };
+  const capabilityNpmrc = join(staging, "npm-capability.npmrc");
+  if (policy && !existsSync(capabilityNpmrc)) writeFileSync(capabilityNpmrc, baseConfig, { mode: 0o600, flag: "wx" });
+  if (policy && readFileSync(capabilityNpmrc, "utf8") !== baseConfig) throw new Error("NPM_ISOLATED_CONFIG_DRIFT");
+  const npmVersion = policy ? await npmReleaseAgeCapability(cwd, { ...env, NPM_CONFIG_USERCONFIG: capabilityNpmrc }) : undefined;
+  const config = baseConfig + (policy ? `min-release-age=${policy.minReleaseAge}\n${policy.minReleaseAgeExclude.map(pattern => `min-release-age-exclude[]=${pattern}\n`).join("")}` : "");
+  if (!existsSync(userNpmrc)) writeFileSync(userNpmrc, config, { mode: 0o600, flag: "wx" });
+  if (readFileSync(userNpmrc, "utf8") !== config || readFileSync(globalNpmrc, "utf8") !== baseConfig) throw new Error("NPM_ISOLATED_CONFIG_DRIFT");
   const proc = Bun.spawn(["npm", ...args, "--registry", `${REGISTRY_ORIGIN}/`, "--ignore-scripts", "--no-audit", "--no-fund"], {
     cwd, env, stdin: "ignore", stdout: "ignore", stderr: "ignore",
   });
   const exitCode = await proc.exited;
   if (exitCode !== 0) throw new Error("DEPENDENCY_GRAPH_INSTALL_FAILED");
+  return npmVersion;
 }
 
 function comparePackageTrees(expectedRoot: string, installedRoot: string): string {
@@ -838,9 +883,10 @@ export function rollbackCopyfileAliases(receiptId: string, options: { homeDir?: 
   }
 }
 
-export async function updateCopyfileRuntime(version: string, options: { homeDir?: string; pathValue?: string; registryOrigin?: string; fetcher?: typeof fetch; onLauncherSwitched?: (path: string) => void } = {}): Promise<JsonObject> {
+export async function updateCopyfileRuntime(version: string, options: { homeDir?: string; pathValue?: string; registryOrigin?: string; fetcher?: typeof fetch; minReleaseAge?: number; minReleaseAgeExclude?: string[]; onLauncherSwitched?: (path: string) => void } = {}): Promise<JsonObject> {
   if (!new RegExp(SEMVER_PATTERN).test(version)) throw new Error("EXACT_VERSION_REQUIRED");
   if (!STABLE_SEMVER_PATTERN.test(version)) throw new Error("EXACT_STABLE_VERSION_REQUIRED");
+  const policy = releaseAgePolicy(options);
   const home = resolve(options.homeDir ?? process.env.HOME ?? "");
   if (!home || !existsSync(home)) throw new Error("HOME_NOT_FOUND");
   const layout = resolveRuntimeLayout(home, options.pathValue ?? process.env.PATH ?? "");
@@ -872,8 +918,9 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
     mkdirSync(stagePackage, { mode: 0o700 });
     copyFileSync(artifact.tarballPath, join(stagePackage, "verified.tgz"));
     writeFileSync(join(stagePackage, "package.json"), JSON.stringify({ private: true, dependencies: { [PACKAGE_NAME]: "file:./verified.tgz" } }, null, 2), { mode: 0o600, flag: "wx" });
-    await runNpm(["install", "--package-lock-only", "--prefix", stagePackage], stagePackage, home, stagePath);
-    await runNpm(["ci", "--prefix", stagePackage], stagePackage, home, stagePath);
+    const npmVersion = await runNpm(["install", "--package-lock-only", "--prefix", stagePackage], stagePackage, home, stagePath, policy);
+    const ciNpmVersion = await runNpm(["ci", "--prefix", stagePackage], stagePackage, home, stagePath, policy);
+    if (npmVersion !== ciNpmVersion) throw new Error("NPM_VERSION_DRIFT_DURING_UPDATE");
     const lockBytes = readFileSync(join(stagePackage, "package-lock.json"));
     const installedPackage = join(stagePackage, "node_modules", "@hasna", "skills");
     const installed = readPackage(join(installedPackage, "package.json"));
@@ -900,6 +947,7 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
       tarballBytes: artifact.byteSize, packageTreeSha256, installLockSha256: hash(lockBytes),
       runtimeTreeSha256: runtimeTree.digest, runtimeRoot: layout.runtimeRoot,
       currentPackageRoot: layout.currentPackageRoot, targetPackageRoot, configs: configPreimages, preimageSha256,
+      ...(policy ? { dependencyPolicy: { ...policy, npmVersion: npmVersion! } } : {}),
       launchers, switchedLaunchers: [], rollbackCompletedLaunchers: [],
     };
     writeJsonPrivate(join(stagePath, "rollout-receipt.json"), receipt);
@@ -933,7 +981,7 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
     }
     receipt.state = "switched";
     persistReceipt(join(finalPath, "rollout-receipt.json"), receipt);
-    return { updated: true, version, currentVersion: layout.currentVersion, receiptId: id, runtimeRoot: finalPath, tarballSha256: artifact.sha256, tarballIntegrity: artifact.integrity, runtimeTreeSha256: stagedTree.digest, launcherCount: launchers.length, configCount: configPreimages.length };
+    return { updated: true, version, currentVersion: layout.currentVersion, receiptId: id, runtimeRoot: finalPath, tarballSha256: artifact.sha256, tarballIntegrity: artifact.integrity, runtimeTreeSha256: stagedTree.digest, launcherCount: launchers.length, configCount: configPreimages.length, ...(policy ? { dependencyPolicy: { ...policy, npmVersion: npmVersion! } } : {}) };
   } catch (error) {
     if (switched.length > 0 || moved) {
       let rollbackFailed = false;
