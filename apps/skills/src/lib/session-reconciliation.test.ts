@@ -189,7 +189,7 @@ test("a busy session lock refuses both reconciliation and ordinary context write
   expect(readFileSync(sessionReceiptPath("root", f))).toEqual(f.before);
 });
 
-function staleLock(cacheDir: string, marker: Record<string, unknown>): { path: string; bytes: Buffer } {
+function staleLock(cacheDir: string, marker: Record<string, unknown>) {
   const path = `${sessionReceiptPath("root", { cacheDir })}.write-lock`;
   const bytes = Buffer.from(`${JSON.stringify(marker)}\n`);
   writeFileSync(path, bytes, { mode: 0o600 });
@@ -331,6 +331,59 @@ test("interrupted publication accepts only the exact private staging inode and a
   expect(existsSync(lock.path)).toBe(false); expect(existsSync(prepared)).toBe(false);
   expect(readFileSync(sessionReceiptPath("root", f))).toEqual(f.before);
 });
+
+for (const change of ["different-bytes", "same-bytes-new-inode", "missing", "extra-link"] as const) {
+  test(`reviewed recovery rejects changed publication witnesses: ${change}`, () => {
+    const f = fixture(false), operationId = randomUUID();
+    const marker = { schemaVersion: 1, operationId, sessionId: "root", pid: 99_999_999, publication: "hard-link-v1" };
+    const lock = staleLock(f.cacheDir, marker), prepared = `${lock.path}.${operationId}.prepared`;
+    fs.linkSync(lock.path, prepared);
+    const review = inspectSessionWriteLock("root", f);
+    const replacement = join(f.cacheDir, "replacement-witness"), preserved = join(f.cacheDir, "preserved-witness");
+    const replacementBytes = change === "same-bytes-new-inode" ? lock.bytes : Buffer.from("unrelated synthetic witness\n");
+    if (change === "different-bytes" || change === "same-bytes-new-inode") writeFileSync(replacement, replacementBytes, { mode: 0o600 });
+    if (change === "same-bytes-new-inode") {
+      const original = lstatSync(lock.path);
+      utimesSync(replacement, original.atime, original.mtime);
+    }
+    const rename = fs.renameSync;
+    let archive: string | undefined;
+    const hook = spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+      rename(source, destination);
+      if (source !== lock.path) return;
+      archive = String(destination);
+      if (change === "missing") rename(prepared, preserved);
+      else if (change === "extra-link") fs.linkSync(prepared, preserved);
+      else if (change === "same-bytes-new-inode") {
+        // Both inodes retain two links and identical bytes: only exact inode
+        // continuity distinguishes the replacement from the reviewed owner.
+        rename(prepared, preserved);
+        rename(replacement, prepared);
+        fs.linkSync(prepared, replacement);
+        const original = lstatSync(String(destination)), substituted = lstatSync(prepared);
+        for (const field of ["dev", "size", "mtimeMs", "mode", "uid", "gid", "nlink"] as const) {
+          expect(substituted[field]).toBe(original[field]);
+        }
+        expect(readFileSync(prepared)).toEqual(lock.bytes);
+        expect(substituted.ino).not.toBe(original.ino);
+      }
+      else rename(replacement, prepared);
+    });
+    const ownerProbe = absentWriterProbe(marker.pid);
+    try {
+      expect(() => recoverSessionWriteLock("root", review.reviewDigest, f))
+        .toThrow(expect.objectContaining({ code: "SESSION_LOCK_RECOVERY_INCOMPLETE" }));
+    } finally { hook.mockRestore(); ownerProbe.mockRestore(); }
+    expect(archive).toBeDefined();
+    expect(readFileSync(archive!)).toEqual(lock.bytes);
+    const companion = join(archive!, "..", "publication.write-lock");
+    if (change === "missing") expect(readFileSync(preserved)).toEqual(lock.bytes);
+    else expect(readFileSync(companion)).toEqual(change === "extra-link" ? lock.bytes : replacementBytes);
+    expect(JSON.parse(readFileSync(join(archive!, "..", "recovery.json"), "utf8")).status).toBe("prepared");
+    expect(readFileSync(sessionReceiptPath("root", f))).toEqual(f.before);
+    expect(readSkillSessionSnapshot("root", f).generation).toBe(0);
+  });
+}
 
 test("publication failure after linking releases only its initialized inode", () => {
   const f = fixture(false), path = `${sessionReceiptPath("root", f)}.write-lock`;

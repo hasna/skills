@@ -462,10 +462,27 @@ function archiveSessionLock(lock: SessionLockSnapshot, receipt: SkillSessionSnap
     try {
       renameSync(lock.path, archivePath);
       moved = true;
-      if (finalLock.stagingPath) renameSync(finalLock.stagingPath, join(directory, "publication.write-lock"));
+      const archivedPaths = [archivePath];
+      if (finalLock.stagingPath) {
+        const publicationPath = join(directory, "publication.write-lock");
+        renameSync(finalLock.stagingPath, publicationPath);
+        archivedPaths.push(publicationPath);
+      }
       syncDirectory(directory); syncDirectory(dirname(lock.path));
-      if (sha256Hex(readRegularFile(archivePath, SESSION_LOCK_MAX_BYTES)!) !== lock.sha256) {
-        throw new Error("Archived lock bytes changed");
+      // The staging path can change after the final live-path inspection.
+      // Verify both archived names before reporting recovery as complete.
+      for (const path of archivedPaths) {
+        const before = lstatSync(path, { throwIfNoEntry: false });
+        const bytes = readRegularFile(path, SESSION_LOCK_MAX_BYTES);
+        const after = lstatSync(path, { throwIfNoEntry: false });
+        if (!before?.isFile() || before.dev !== lock.dev || before.ino !== lock.ino
+            || before.nlink !== archivedPaths.length || before.mtimeMs !== lock.mtimeMs
+            || (before.mode & 0o077) !== 0 || (process.getuid && before.uid !== process.getuid())
+            || !bytes || sha256Hex(bytes) !== lock.sha256 || !after?.isFile()
+            || before.dev !== after.dev || before.ino !== after.ino || before.mtimeMs !== after.mtimeMs
+            || before.mode !== after.mode || before.uid !== after.uid || before.gid !== after.gid || before.nlink !== after.nlink) {
+          throw new Error("Archived lock ownership or bytes changed");
+        }
       }
     } catch (error) {
       if (moved) throw new SkillSelectionError("SESSION_LOCK_RECOVERY_INCOMPLETE", "The lock moved, but durable recovery could not be confirmed; inspect the preserved recovery directory and session receipt.");

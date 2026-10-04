@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.32
+
+- Publish fully initialized session write locks atomically after process identity checks, so interrupted hooks cannot leave new empty locks.
+- Keep the writer descriptor open until release and bind interrupted hard-link publication recovery to the exact preserved inode and bytes. Historical empty or malformed locks still require review.
+
 ## 0.10.31
 
 - Admit the exact bundled browser and computer-use MCP cleanup hook contracts for Codex 0.159.2 and 0.160.0 during qualified native skill review.
