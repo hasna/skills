@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.31
+
+- Admit the exact bundled browser and computer-use MCP cleanup hook contracts for Codex 0.159.2 and 0.160.0 during qualified native skill review.
+- Keep inline cleanup hooks in plugin fingerprints after skill bodies disappear; refuse unsupported handlers, arguments, external hook files and companion plugin MCP declarations.
+
 ## 0.10.30
 
 - Add a separate Sumi native V2 plugin bridge that supplies selected Skills context to prompts without native Skill payload fallback.
