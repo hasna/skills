@@ -2,11 +2,13 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { assertInstalledIdentity, completeConsumerArchive, parseConsumerArguments, stageConsumerArchive } from "./consumer-archive.js";
 
 // Check the public distribution against its declared dependencies, independently
 // of workspace overrides and skipLibCheck. npm's lifecycle is disabled in the
 // inner pack so this can safely run from prepack without recursive builds.
 const root = resolve(import.meta.dir, "..");
+const options = parseConsumerArguments(process.argv.slice(2));
 const workspace = await mkdtemp(join(tmpdir(), "skills-consumer-types-"));
 const env = { PATH: `${dirname(process.execPath)}:${process.env.PATH ?? "/usr/bin:/bin"}`,
   HOME: workspace, TMPDIR: workspace, NO_COLOR: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
@@ -25,10 +27,17 @@ async function run(command: string[], cwd: string, extraEnv: Record<string, stri
 }
 
 try {
-  const packed = JSON.parse(await run(["npm", "pack", "--ignore-scripts", "--json", "--pack-destination", workspace], root));
-  const filename = packed[0]?.filename;
-  if (typeof filename !== "string" || filename !== "hasna-skills-" + packed[0]?.version + ".tgz") throw new Error("Unexpected Skills package archive");
   const metadata = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+  let sourceArchive = options.archive;
+  if (!sourceArchive) {
+    const packed = JSON.parse(await run(["npm", "pack", "--ignore-scripts", "--json", "--pack-destination", workspace], root));
+    if (!Array.isArray(packed) || packed.length !== 1 || packed[0]?.name !== "@hasna/skills"
+      || packed[0]?.version !== metadata.version || packed[0]?.filename !== `hasna-skills-${metadata.version}.tgz`) {
+      throw new Error("Unexpected Skills package archive");
+    }
+    sourceArchive = join(workspace, packed[0].filename);
+  }
+  const archive = await stageConsumerArchive(sourceArchive, workspace, options.sha256);
   const checkedExports = [".", "./storage", "./sdk", "./admin-contract"];
   if (JSON.stringify(Object.keys(metadata.exports).sort()) !== JSON.stringify(checkedExports.sort())) {
     throw new Error("Update the installed consumer fixture to check every public package export.");
@@ -59,7 +68,7 @@ try {
     }
   }
   await writeFile(join(workspace, "package.json"), JSON.stringify({ private: true, type: "module",
-    dependencies: { "@hasna/skills": `file:${join(workspace, filename)}` },
+    dependencies: { "@hasna/skills": `file:${archive.installedFrom}` },
     devDependencies: { typescript: "5.9.3", ...typePins },
     overrides: typePins,
   }));
@@ -628,6 +637,7 @@ console.log("Installed bundle SDK runtime: 17 assertions passed.");
   const installConfig = join(workspace, "install.bunfig.toml");
   await writeFile(installConfig, `[install]\nregistry = "https://registry.npmjs.org"\nminimumReleaseAge = 604800\nminimumReleaseAgeExcludes = ["@hasna/skills", "@hasna/events", "@hasna/secrets"]\n`, { mode: 0o600 });
   await run([process.execPath, "--no-env-file", "install", "--ignore-scripts", `--config=${installConfig}`], workspace);
+  assertInstalledIdentity(JSON.parse(await readFile(join(workspace, "node_modules/@hasna/skills/package.json"), "utf8")), metadata.version);
   // Prove the pins held before tsc runs: a floating resolution must fail here
   // with a resolution message, never as a TS2694 inside node_modules/bun-types
   // that reads like a Skills distribution defect (BUG-0042).
@@ -703,4 +713,7 @@ console.log("Installed quote error root/SDK runtime: 14 assertions passed.");
   });
   console.log("Installed CLI routing: explicit remote approval, isolated profiles, target conflicts and managed defaults passed.");
   console.log(`Consumer types: @hasna/skills@${metadata.version} passed strict installed-package checking for all four exports (skipLibCheck=false).`);
+  const receipt = await completeConsumerArchive(archive, metadata.version);
+  if (options.receipt) await writeFile(options.receipt, JSON.stringify(receipt) + "\n", { flag: "wx", mode: 0o600 });
+  console.log(JSON.stringify(receipt));
 } finally { await rm(workspace, { recursive: true, force: true }); }
