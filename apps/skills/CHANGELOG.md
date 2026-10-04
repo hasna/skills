@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.30
+
+- Add a separate Sumi native V2 plugin bridge that supplies selected Skills context to prompts without native Skill payload fallback.
+- Bind native discovery to reviewed Sumi configuration and local plugins, including legacy plugin aliases; retain permissions and compatibility-root checks.
+- Preserve root and child session selection custody using exact native parent session identity and generation checks.
+- Isolate Sumi test configuration selectors from inherited station and CI environments.
+
 ## 0.10.28
 
 - Tolerate Codex's typed root/profile personality preference changes in V3 settings reviews while preserving native instruction, discovery and provider controls.
