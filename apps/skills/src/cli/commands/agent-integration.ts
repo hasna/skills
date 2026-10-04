@@ -27,7 +27,8 @@ function pinnedHookProfile(input: unknown, configuredProfile: string): string {
     // Match buildSkillContext's native identity and parent derivation exactly.
     const sessionId = parsed.agentId ? `${parsed.sessionId}:${parsed.agentId}` : parsed.sessionId;
     const session = readSkillSessionSnapshotIfExists(sessionId);
-    const parent = !session && parsed.agentId ? readSkillSessionSnapshotIfExists(parsed.sessionId) : null;
+    const parentId = parsed.parentSessionId ?? (parsed.agentId ? parsed.sessionId : undefined);
+    const parent = !session && parentId ? readSkillSessionSnapshotIfExists(parentId) : null;
     // This selects the profile, not the payload. The context subprocess rereads
     // and validates the receipt, project conflicts, authority and generation.
     // A named missing parent still fails in the ordinary context resolver.
