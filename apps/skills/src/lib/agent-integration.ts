@@ -19,6 +19,7 @@ import { sumiConfigDirectory, sumiConfigPath, sumiBridgeRoot, renderSumiPlugin, 
 import { HERMES_OPT_OUT, parseHermesConfig, configureHermesHooks, assertHermesProtection, renderHermesSupervisor, assertNoHermesLegacyShadow, type HermesSupervisorBinding } from "./agent-hermes.js";
 import type { CodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery.js";
 import { assertClaudeHookEventsReplacement, type ClaudeCoordinatedHookEvent } from "./claude-settings-witness.js";
+import { snapshot as hookFileSnapshot, unchanged as hookFileUnchanged } from "./codex-hook-trust-files.js";
 
 export type { IntegrationAgent } from "./agent-adapters.js";
 export type ContextHookEvent = "UserPromptSubmit" | "SessionStart" | "SubagentStart";
@@ -34,24 +35,45 @@ const HOOK_EVENTS: readonly ContextHookEvent[] = ["UserPromptSubmit", "SessionSt
 const ROOTS = NATIVE_SKILL_ROOTS;
 
 /** Darwin acl_get_fd reports an absent extended ACL as NULL/ENOENT. The
- * descriptor is already bound to a verified directory, so ENOENT cannot mean
- * a missing pathname. Any ACL (including another principal's), unsupported
- * capability, or other error is refused. The native module is loaded only in
- * this Darwin-only path; canonical paths and other platforms do not need it.
- * Contract: Apple Libc posix1e/acl_file.c and gen/filesec.c (FILESEC_ACL). */
-function hasNoDarwinAcl(fd: number): boolean {
+ * descriptor is already bound to a verified object, so ENOENT cannot mean a
+ * missing pathname. System aliases require no ACL. Package projection also
+ * permits deny-only ACLs (such as the standard home-directory delete denial);
+ * these cannot grant another principal access. All allow entries, unknown
+ * tags, unsupported capabilities and errors refuse. No shell text is parsed.
+ * Contract: Apple Libc posix1e/acl_file.c, gen/filesec.c and sys/acl.h. */
+function hasTrustedDarwinAcl(fd: number, allowDenyOnly = false): boolean {
   try {
-    const { dlopen, read } = require("bun:ffi") as typeof import("bun:ffi");
+    const { dlopen, read, ptr } = require("bun:ffi") as typeof import("bun:ffi");
     const library = dlopen("/usr/lib/libSystem.B.dylib", {
       acl_get_fd: { args: ["i32"], returns: "ptr" },
       acl_free: { args: ["ptr"], returns: "i32" },
+      acl_valid: { args: ["ptr"], returns: "i32" },
+      acl_get_entry: { args: ["ptr", "i32", "ptr"], returns: "i32" },
+      acl_get_tag_type: { args: ["ptr", "ptr"], returns: "i32" },
       __error: { args: [], returns: "ptr" },
     });
     try {
       const errno = library.symbols.__error();
       if (!errno) return false;
       const acl = library.symbols.acl_get_fd(fd);
-      if (acl) { library.symbols.acl_free(acl); return false; }
+      if (acl) {
+        try {
+          if (!allowDenyOnly || library.symbols.acl_valid(acl) !== 0) return false;
+          const entry = new BigUint64Array(1), tag = new Int32Array(1);
+          // Darwin uses 0/-1 for first/next, and -1/EINVAL at exhaustion.
+          // Bound enumeration by the SDK's ACL_MAX_ENTRIES (128).
+          for (let count = 0; count <= 128; count++) {
+            const status = library.symbols.acl_get_entry(acl, count === 0 ? 0 : -1, ptr(entry));
+            if (status !== 0) {
+              return status === -1 && read.i32(errno) === 22 && library.symbols.acl_valid(acl) === 0;
+            }
+            const value = read.ptr(ptr(entry));
+            if (count === 128 || !value || library.symbols.acl_get_tag_type(value as import("bun:ffi").Pointer, ptr(tag)) !== 0
+              || tag[0] !== 2 /* ACL_EXTENDED_DENY */) return false;
+          }
+          return false;
+        } finally { library.symbols.acl_free(acl); }
+      }
       return (acl === null || acl === 0) && read.i32(errno) === 2; // ENOENT in Darwin's sys/errno.h.
     } finally { library.close(); }
   } catch { return false; }
@@ -77,7 +99,7 @@ function isSystemRootAlias(path: string): boolean {
       } else if ((stat.mode & 0o1000n) === 0n) throw new Error("Unprotected system temporary directory");
       const fd = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
       try {
-        if (identity(fstatSync(fd, { bigint: true })) !== identity(stat) || !hasNoDarwinAcl(fd)
+        if (identity(fstatSync(fd, { bigint: true })) !== identity(stat) || !hasTrustedDarwinAcl(fd)
           || identity(fstatSync(fd, { bigint: true })) !== identity(stat)) throw new Error("Unverified system alias directory ACL");
       } finally { closeSync(fd); }
       return { directory, identity: identity(stat) };
@@ -648,6 +670,154 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
   if (JSON.stringify(policy) !== JSON.stringify(nextPolicy)) changes.push({ path: policyPath, before: previousPolicy, after: serializedPolicy });
   recheckRootAliases(aliases);
   return { dataDir, profileId, changes, nativeSkills, ...(observedNativeSources.length ? { observedNativeSources } : {}), ...(nextPolicy.bridge.codexPluginSkillReview ? { codexPluginSkillReview: nextPolicy.bridge.codexPluginSkillReview } : {}), observedPolicy: { path: policyPath, before: previousPolicy }, discoveryBefore: discoveries, discoveryAfter, ...(aliases.length ? { rootAliases: aliases } : {}), ...(retainedAgents.length ? { retainedReviewChecks: { home, projectDir: options.projectDir ?? home, agents: retainedAgents } } : {}) };
+}
+
+export interface ClaudeManagedHookProjection {
+  schema: "hasna.claude-managed-hook-projection.v1";
+  targetSha256: string;
+  sourceSha256: string;
+  replacements: Array<{ event: string; groupIndex: number; hookIndex: number; beforeSha256: string; command: string }>;
+}
+
+export interface ClaudeManagedHookProjectionOptions {
+  home?: string;
+  dataDir?: string;
+  projectDir?: string;
+  /** Exact caller-owned bytes, never a new native home or a path to be written. */
+  targetSettings: string;
+  expectedTargetSha256: string;
+  /** Supply the preceding plan's source witness when checking it before use. */
+  expectedSourceSha256?: string;
+}
+
+function hookProjectionRefusal(reason: string): never {
+  throw new Error(`CLAUDE_MANAGED_HOOK_${reason}`);
+}
+
+/** Reuse the native ACL reader on a descriptor bound to the observed path.
+ * File snapshots and parent identities remain the authority for bytes/modes. */
+function projectedHookAcl(path: string, observed: BigIntStats): void {
+  if (process.platform !== "darwin") return;
+  const identity = (stat: BigIntStats) => `${stat.dev}:${stat.ino}:${stat.ctimeNs}:${stat.uid}:${stat.mode}:${stat.nlink}:${stat.size}:${stat.mtimeNs}`;
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
+    | (observed.isDirectory() ? constants.O_DIRECTORY : 0));
+  try {
+    if (identity(fstatSync(fd, { bigint: true })) !== identity(observed) || !hasTrustedDarwinAcl(fd, true)
+      || identity(fstatSync(fd, { bigint: true })) !== identity(observed)
+      || identity(lstatSync(path, { bigint: true })) !== identity(observed)) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
+  } finally { closeSync(fd); }
+}
+
+/** Only the final command leaf may be an alias. Bind its parent permissions,
+ * link identity and exact resolved package bytes using the existing file guard. */
+function projectedHookExecutable(command: string, expectedResolved?: string) {
+  try {
+    if (!isAbsolute(command) || /[\0\r\n]/.test(command) || resolve(command) !== command) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
+    command = canonicalSystemPath(command);
+    const parents = (file = command) => {
+      const result: string[] = [];
+      for (let path = dirname(file); ; path = dirname(path)) {
+        const stat = lstatSync(path, { bigint: true });
+        if (!stat.isDirectory() || ((stat.mode & 0o022n) !== 0n && !(stat.uid === 0n && (stat.mode & 0o1000n) !== 0n))) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
+        projectedHookAcl(path, stat);
+        result.push(`${path}:${stat.dev}:${stat.ino}:${stat.uid}:${stat.mode}`);
+        if (dirname(path) === path) break;
+      }
+      return result;
+    };
+    const parentIdentity = parents(), link = lstatSync(command, { bigint: true });
+    if (link.uid !== BigInt(process.getuid!()) || (!link.isFile() && !link.isSymbolicLink())) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
+    const linkIdentity = (stat: BigIntStats) => `${stat.dev}:${stat.ino}:${stat.mode}:${stat.uid}:${stat.ctimeNs}`;
+    const resolved = realpathSync(command);
+    // Reject an unrelated target before opening any of its contents.
+    if (expectedResolved !== undefined && resolved !== expectedResolved) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
+    const resolvedParentIdentity = parents(resolved);
+    const manifest = hookFileSnapshot(join(dirname(dirname(resolved)), "package.json"), false, { readOnlyPackage: true });
+    projectedHookAcl(manifest.file, manifest.stat);
+    const pkg = JSON.parse(manifest.text);
+    if (pkg.name !== "@hasna/skills" || !/^\d+\.\d+\.\d+$/.test(pkg.version) || pkg.bin?.skills !== "bin/index.js"
+      || resolved !== join(dirname(manifest.file), "bin/index.js")) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
+    const cli = hookFileSnapshot(resolved, false, { readOnlyPackage: true });
+    projectedHookAcl(cli.file, cli.stat);
+    if ((cli.stat.mode & 0o100n) === 0n) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
+    const recheck = () => {
+      try {
+        if (realpathSync(command) !== resolved || linkIdentity(lstatSync(command, { bigint: true })) !== linkIdentity(link)
+          || !isDeepStrictEqual(parents(), parentIdentity)
+          || !isDeepStrictEqual(parents(resolved), resolvedParentIdentity)) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
+        projectedHookAcl(cli.file, cli.stat); projectedHookAcl(manifest.file, manifest.stat);
+        hookFileUnchanged(cli); hookFileUnchanged(manifest);
+      } catch { hookProjectionRefusal("EXECUTABLE_UNVERIFIED"); }
+    };
+    recheck();
+    return { resolved, sha256: cli.sha256, manifestSha256: manifest.sha256, recheck };
+  } catch { hookProjectionRefusal("EXECUTABLE_UNVERIFIED"); }
+}
+
+/** Read-only projection for a copied Claude configuration. This does not install
+ * hooks, adopt target discovery, change policy, or confer write/admission authority.
+ * The caller must preserve the full target, hold its owning writer lease, replan
+ * against both witnesses, CAS the full bytes and revalidate after application. */
+export function planClaudeManagedHookProjection(options: ClaudeManagedHookProjectionOptions): ClaudeManagedHookProjection {
+  if (typeof options.targetSettings !== "string" || Buffer.byteLength(options.targetSettings) > 1024 * 1024) hookProjectionRefusal("TARGET_INVALID");
+  const targetSha256 = sha(options.targetSettings);
+  if (!/^[a-f0-9]{64}$/.test(options.expectedTargetSha256) || options.expectedTargetSha256 !== targetSha256) hookProjectionRefusal("TARGET_CHANGED");
+  let target: Record<string, any>;
+  try { target = jsonObject(options.targetSettings, "target"); } catch { hookProjectionRefusal("TARGET_INVALID"); }
+  const home = resolve(options.home ?? homedir()), dataDir = options.dataDir ?? getDataDirReadOnly();
+  const policyPath = join(dataDir, "agent-policy.json");
+  let policyBytes: Buffer, settingsBytes: Buffer, settingsPath: string, command: string, profile: string;
+  try {
+    policyBytes = readNativeBytes(policyPath, 1024 * 1024);
+    const snapshot = readManagedSkillPolicySnapshot(dataDir);
+    if (!snapshot || snapshot.text !== policyBytes.toString("utf8")) hookProjectionRefusal("SOURCE_UNVERIFIED");
+    const binding = snapshot.value.bridge;
+    settingsPath = canonicalAgentPath(join(home, AGENT_ADAPTERS.claude.config), binding?.rootAliases ?? []);
+    settingsBytes = readNativeBytes(settingsPath, 1024 * 1024);
+    command = binding?.commands?.claude; profile = binding?.profiles?.claude;
+    if (typeof command !== "string" || typeof profile !== "string") hookProjectionRefusal("SOURCE_UNVERIFIED");
+    assertManagedAgentBridge("claude", { home, dataDir, projectDir: options.projectDir, profileId: profile });
+  } catch { hookProjectionRefusal("SOURCE_UNVERIFIED"); }
+  const executable = projectedHookExecutable(command);
+  const sourceSha256 = sha(JSON.stringify({ home, policyPath, policy: sha(policyBytes), settingsPath, settings: sha(settingsBytes),
+    executable: { path: executable.resolved, sha256: executable.sha256, manifestSha256: executable.manifestSha256 } }));
+  if (options.expectedSourceSha256 !== undefined && options.expectedSourceSha256 !== sourceSha256) hookProjectionRefusal("SOURCE_CHANGED");
+  const replacements: ClaudeManagedHookProjection["replacements"] = [];
+  const observed = [executable];
+  if (target.hooks !== undefined) {
+    if (!target.hooks || typeof target.hooks !== "object" || Array.isArray(target.hooks)) hookProjectionRefusal("TARGET_INVALID");
+    for (const event of [...AGENT_ADAPTERS.claude.events, "PreToolUse"]) {
+      const groups = target.hooks[event];
+      if (groups === undefined) continue;
+      if (!Array.isArray(groups)) hookProjectionRefusal("TARGET_INVALID");
+      let recognized = 0;
+      for (const [groupIndex, group] of groups.entries()) {
+        if (!group || !Array.isArray(group.hooks)) hookProjectionRefusal("TARGET_INVALID");
+        for (const [hookIndex, hook] of group.hooks.entries()) {
+          if (hook?.type !== "command" || typeof hook.command !== "string") continue;
+          // This marker can only cause refusal, never establish ownership.
+          if (!hook.command.includes("hook user-prompt --agent claude")) continue;
+          const match = /^('(?:[^']|'\\'')*') hook user-prompt --agent claude --selection-profile ([A-Za-z0-9][A-Za-z0-9._-]{0,127}) --event ([A-Za-z]+)$/.exec(hook.command);
+          if (!match || match[3] !== event) hookProjectionRefusal("UNRECOGNIZED");
+          const oldCommand = match[1]!.slice(1, -1).replaceAll("'\\''", "'");
+          let rendered: string;
+          try { rendered = renderAgentHookCommand(oldCommand, "claude", match[2]!, event); } catch { hookProjectionRefusal("UNRECOGNIZED"); }
+          if (rendered !== hook.command) hookProjectionRefusal("UNRECOGNIZED");
+          const legacy = projectedHookExecutable(oldCommand, executable.resolved);
+          if (legacy.resolved !== executable.resolved || legacy.sha256 !== executable.sha256 || legacy.manifestSha256 !== executable.manifestSha256) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
+          observed.push(legacy);
+          if (++recognized > 1) hookProjectionRefusal("AMBIGUOUS");
+          const replacement = renderAgentHookCommand(command, "claude", profile, event);
+          if (replacement !== hook.command) replacements.push({ event, groupIndex, hookIndex, beforeSha256: sha(hook.command), command: replacement });
+        }
+      }
+    }
+  }
+  try {
+    if (!readNativeBytes(policyPath, 1024 * 1024).equals(policyBytes) || !readNativeBytes(settingsPath, 1024 * 1024).equals(settingsBytes)) hookProjectionRefusal("SOURCE_CHANGED");
+  } catch { hookProjectionRefusal("SOURCE_CHANGED"); }
+  for (const item of observed) item.recheck();
+  return { schema: "hasna.claude-managed-hook-projection.v1", targetSha256, sourceSha256, replacements };
 }
 
 /** Plan an explicitly authorized Stop hook replacement without adopting drift.

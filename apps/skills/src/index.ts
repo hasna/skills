@@ -518,7 +518,8 @@ export type { SkillSelection, SkillProfile, ResolvedSkillSelection, ResolvedSkil
 export { buildSkillContext } from "./lib/skill-context.js";
 export { syncSelectionProfile } from "./lib/selection-resolver.js";
 export { inspectSkillSession, reconcileSkillSession, type SessionReconciliationInput, type SessionReconciliationOptions } from "./lib/session-reconciliation.js";
-export { planAgentIntegration, planClaudeStopHookUpdate, planClaudePreToolUseHookUpdate, planClaudeHookEventsUpdate, planAgentSettingsWitnessUpgrade, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills } from "./lib/agent-integration.js";
+export { planAgentIntegration, planClaudeStopHookUpdate, planClaudePreToolUseHookUpdate, planClaudeHookEventsUpdate, planClaudeManagedHookProjection, planAgentSettingsWitnessUpgrade, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills } from "./lib/agent-integration.js";
+export type { ClaudeManagedHookProjection, ClaudeManagedHookProjectionOptions } from "./lib/agent-integration.js";
 export { captureDiscoveryDirectories, captureDiscoveryByteSources, captureDiscoveryPathSources, type DiscoveryDirectory, type DiscoverySource } from "./lib/agent-discovery.js";
 export { captureClaudeMarketplaceRegistry, captureClaudeMarketplaceRegistryV2 } from "./lib/claude-marketplace-registry.js";
 export { captureClaudeSettings, captureClaudeSettingsV2, captureClaudeSettingsV3, upgradeClaudeSettingsWitness } from "./lib/claude-settings-witness.js";
