@@ -214,10 +214,17 @@ export function registerRuntime(parent: Command) {
     .description("Update @hasna/skills to the latest version")
     .option("--json", "Output result as JSON", false)
     .option("--version <version>", "Install this exact @hasna/skills version as a staged copyfile runtime")
+    .option("--min-release-age <days>", "Require a positive integer dependency release age in days for an exact-version update")
+    .option("--min-release-age-exclude <pattern>", "Exclude matching package identities from the release-age policy (repeatable)", (pattern: string, prior: string[]) => [...prior, pattern], [])
     .option("--rollback <receipt-id>", "Restore launcher links from an exact copyfile rollout receipt")
     .option("--adopt-aliases", "Switch verified legacy @hasna/skills aliases to the active copyfile runtime")
     .option("--rollback-aliases <receipt-id>", "Restore aliases from an exact adoption receipt")
-    .action(async (options: { json: boolean; version?: string; rollback?: string; adoptAliases?: boolean; rollbackAliases?: string }) => {
+    .action(async (options: { json: boolean; version?: string; rollback?: string; adoptAliases?: boolean; rollbackAliases?: string; minReleaseAge?: string; minReleaseAgeExclude: string[] }) => {
+      if ((options.minReleaseAge !== undefined || options.minReleaseAgeExclude.length > 0) && (!options.version || options.rollback || options.adoptAliases || options.rollbackAliases)) {
+        console.error(JSON.stringify({ error: "RELEASE_AGE_POLICY_REQUIRES_EXACT_VERSION" }));
+        process.exitCode = 1;
+        return;
+      }
       if ([options.version, options.rollback, options.adoptAliases, options.rollbackAliases].filter(Boolean).length > 1) {
         console.error(JSON.stringify({ error: "SELF_UPDATE_OPERATIONS_ARE_MUTUALLY_EXCLUSIVE" }));
         process.exitCode = 1;
@@ -249,7 +256,8 @@ export function registerRuntime(parent: Command) {
       }
       if (options.version) {
         try {
-          const result = await updateCopyfileRuntime(options.version);
+          const minReleaseAge = options.minReleaseAge === undefined ? undefined : /^\d+$/.test(options.minReleaseAge) ? Number(options.minReleaseAge) : NaN;
+          const result = await updateCopyfileRuntime(options.version, { minReleaseAge, minReleaseAgeExclude: options.minReleaseAgeExclude });
           if (options.json) console.log(JSON.stringify(result));
           else console.log(chalk.green(`Updated @hasna/skills to exact version ${options.version} via copyfile runtime.`));
         } catch (error) {
