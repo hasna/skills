@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.33
+
+- Resolve explicitly reviewed native root aliases before Sumi skill discovery checks, allowing Sumi-only integration when Claude and Codex roots use reviewed aliases.
+- Preserve refusal of unreviewed, outside-home and nested skill symlinks.
+
 ## 0.10.32
 
 - Publish fully initialized session write locks atomically after process identity checks, so interrupted hooks cannot leave new empty locks.
