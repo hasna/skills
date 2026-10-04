@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.34
+
+- Add a read-only SDK and stdin CLI projection for Skills-managed Claude hook commands in copied settings, preserving account metadata, local hooks and explicit empty overrides.
+- Require canonical policy/discovery and exact package identity, including descriptor-bound macOS ACL checks, before returning replacements. Configuration owners still control preservation, writer leases and application.
+
 ## 0.10.33
 
 - Resolve explicitly reviewed native root aliases before Sumi skill discovery checks, allowing Sumi-only integration when Claude and Codex roots use reviewed aliases.

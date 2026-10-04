@@ -1,6 +1,6 @@
 import { writeCliOutput } from "../output.js";
 import type { Command } from "commander";
-import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { isAbsolute } from "node:path";
@@ -8,7 +8,7 @@ import { type ReviewedDiscoveryInputs } from "../../lib/agent-discovery.js";
 import { normalizeHermesHookInput, assertHermesTool } from "../../lib/agent-hermes.js";
 import { parseSkillContextInput, selectedProfileId } from "./context.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, normalizeAgentHookEvent } from "../../lib/agent-adapters.js";
-import { planAgentIntegration, planAgentSettingsWitnessUpgrade, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, hookContextOutput, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, type IntegrationAgent } from "../../lib/agent-integration.js";
+import { planAgentIntegration, planClaudeManagedHookProjection, planAgentSettingsWitnessUpgrade, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, hookContextOutput, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, type IntegrationAgent } from "../../lib/agent-integration.js";
 import { enrollCodexNativeHooks, reconcileCodexNativeHooks } from "../../lib/agent-codex-trust.js";
 import { HookDiagnosticError, hookChildError, hookFailureReason, isOptionalHookContextFailure, hookUnavailableContext } from "../../lib/hook-diagnostics.js";
 import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib/selection-cache.js";
@@ -79,6 +79,29 @@ function agents(value: string): IntegrationAgent[] {
 
 export function registerAgentIntegration(parent: Command): void {
   const hook = parent.command("hook").description("Load selected Skills context through agent lifecycle hooks");
+  hook.command("project-claude-settings")
+    .requiredOption("--expected-target-sha256 <sha256>", "SHA-256 of the exact target settings bytes supplied on stdin")
+    .option("--expected-source-sha256 <sha256>", "Source witness from the preceding projection, for revalidation")
+    .option("--json", "Return only command-leaf replacements and content witnesses", false)
+    .description("Read-only projection of verified Skills hooks into copied Claude settings supplied on stdin")
+    .action(async (options: { expectedTargetSha256: string; expectedSourceSha256?: string }) => {
+      try {
+        const bytes = Buffer.alloc(1024 * 1024 + 1); let length = 0;
+        while (length < bytes.length) {
+          const count = readSync(0, bytes, length, bytes.length - length, null);
+          if (!count) break; length += count;
+        }
+        if (length > 1024 * 1024) throw new Error("CLAUDE_MANAGED_HOOK_TARGET_INVALID");
+        const targetSettings = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, length));
+        const plan = planClaudeManagedHookProjection({ targetSettings, expectedTargetSha256: options.expectedTargetSha256,
+          expectedSourceSha256: options.expectedSourceSha256, projectDir: process.cwd() });
+        await writeCliOutput(JSON.stringify(plan));
+      } catch (error) {
+        const code = error instanceof Error && /^CLAUDE_MANAGED_HOOK_[A-Z_]+$/.test(error.message)
+          ? error.message : "CLAUDE_MANAGED_HOOK_PROJECTION_FAILED";
+        console.error(code); process.exitCode = 1;
+      }
+    });
   hook.command("native-catalog")
     .requiredOption("--cwd <path>", "Absolute project directory observed by native Codex skills/list")
     .requiredOption("--output <file>", "New private file for the projected native catalog")
