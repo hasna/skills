@@ -25,13 +25,14 @@ async function command(args: string[], cwd: string): Promise<string> {
   } finally { clearTimeout(timer); }
 }
 
-async function packed(overrides: Record<string, unknown> = {}) {
+async function packed(overrides: Record<string, unknown> = {}, files: Record<string, string> = {}) {
   const source = join(root, `source-${sequence++}`), destination = join(root, `pack-${sequence++}`);
   await mkdir(source); await mkdir(destination);
-  const manifest = { name: "@hasna/skills", version, type: "module", files: ["index.js"],
+  const manifest = { name: "@hasna/skills", version, type: "module", files: ["index.js", ...Object.keys(files)],
     exports: Object.fromEntries(archiveApi.CONSUMER_EXPORTS.map((key: string) => [key, "./index.js"])), ...overrides };
   await writeFile(join(source, "package.json"), JSON.stringify(manifest));
   await writeFile(join(source, "index.js"), "export const accepted = true;\n");
+  for (const [name, content] of Object.entries(files)) await writeFile(join(source, name), content);
   const rows = JSON.parse(await command(["npm", "pack", "--ignore-scripts", "--json", "--pack-destination", destination], source));
   expect(rows).toHaveLength(1);
   return { source, archive: join(destination, rows[0].filename) };
@@ -66,6 +67,29 @@ test("a real retained tarball is staged byte-for-byte and its original survives 
   expect(receipt).toMatchObject({ ...value.before, status: "passed", exports: archiveApi.CONSUMER_EXPORTS, checks: archiveApi.CONSUMER_CHECKS });
   await rm(value.workspace, { recursive: true });
   expect(archiveApi.digestArchive(await readFile(archive))).toEqual(value.before);
+});
+
+for (const brokenRuntime of [false, true]) test(`installed storage runtime ${brokenRuntime ? "rejects a broken runtime target despite valid declarations" : "loads and checks its pure API"}`, async () => {
+  const exports = Object.fromEntries(archiveApi.CONSUMER_EXPORTS.map((key: string) => [key, "./index.js"])) as Record<string, unknown>;
+  exports["./storage"] = { types: "./storage.d.ts", import: brokenRuntime ? "./missing-storage.js" : "./storage.js" };
+  const { archive } = await packed({ exports }, {
+    "storage.d.ts": 'export declare const SKILLS_NATIVE_STORAGE_ENV: { readonly databaseUrl: "HASNA_SKILLS_DATABASE_URL" };\n',
+    "storage.js": `export const SKILLS_NATIVE_STORAGE_ENV = { databaseUrl: "HASNA_SKILLS_DATABASE_URL" };
+export const storageCapabilities = { version: 1, values: ["SKILLS_NATIVE_STORAGE_ENV", "storageCapabilities", "resolveSkillsNativeStorageConfig", "buildSkillsS3ObjectUrl"] };
+export const resolveSkillsNativeStorageConfig = env => ({ syncBatchSize: Number(env.HASNA_SKILLS_SYNC_BATCH_SIZE), dryRun: env.HASNA_SKILLS_SYNC_DRY_RUN === "true" });
+export const buildSkillsS3ObjectUrl = ({ bucket, key, endpoint }) => endpoint + "/" + bucket + "/" + key.split("/").map(encodeURIComponent).join("/");\n`,
+  });
+  const value = await accepted(archive);
+  await writeFile(join(value.workspace, "package.json"), JSON.stringify({ private: true, type: "module", dependencies: { "@hasna/skills": `file:${value.staged.installedFrom}` } }));
+  await command([process.execPath, "--no-env-file", "--no-global-config", "--no-bunfig", "install", "--ignore-scripts"], value.workspace);
+  await writeFile(join(value.workspace, "consumer.ts"), 'import { SKILLS_NATIVE_STORAGE_ENV } from "@hasna/skills/storage"; const name: "HASNA_SKILLS_DATABASE_URL" = SKILLS_NATIVE_STORAGE_ENV.databaseUrl;\n');
+  await writeFile(join(value.workspace, "tsconfig.json"), JSON.stringify({ compilerOptions: { strict: true, skipLibCheck: false, noEmit: true, moduleResolution: "Bundler", module: "ESNext", target: "ES2022", types: [] }, files: ["consumer.ts"] }));
+  // The negative control must still compile: only its runtime export is broken.
+  await command([process.execPath, resolve(import.meta.dir, "../../node_modules/typescript/bin/tsc"), "-p", "tsconfig.json"], value.workspace);
+  const args = [process.execPath, "--no-env-file", resolve(import.meta.dir, "../../scripts/consumer-storage.ts"), value.workspace];
+  if (brokenRuntime) await expect(command(args, value.workspace)).rejects.toThrow();
+  else expect(await command(args, value.workspace)).toContain("Installed storage runtime:");
+  expect(archiveApi.CONSUMER_CHECKS).toContain("storage-runtime");
 });
 
 test("a different archive is rejected before installation and leaves its original intact", async () => {
@@ -138,13 +162,14 @@ test("the actual publishing CLI refuses a dispatch before starting npm", async (
   expect(await Bun.file(called).exists()).toBe(false);
 });
 
-for (const mismatch of ["archive", "review-digest", "consumer-digest", "checks", "exports", "version"] as const) test(`${mismatch} mutation is inert before publication`, async () => {
+for (const mismatch of ["archive", "review-digest", "consumer-digest", "checks", "storage-runtime", "exports", "version"] as const) test(`${mismatch} mutation is inert before publication`, async () => {
   const { archive } = await packed();
   const value = await publication(archive); let calls = 0;
   if (mismatch === "archive") await writeFile(archive, "changed after acceptance");
   if (mismatch === "review-digest") value.review.packed_sha256 = "b".repeat(64);
   if (mismatch === "consumer-digest") value.consumer.sha256 = "b".repeat(64);
   if (mismatch === "checks") value.consumer.checks = value.consumer.checks.slice(1);
+  if (mismatch === "storage-runtime") value.consumer.checks = value.consumer.checks.filter((check: string) => check !== "storage-runtime");
   if (mismatch === "exports") value.consumer.exports = value.consumer.exports.slice(1);
   if (mismatch === "version") value.consumer.package.version = "1.2.4";
   await writeFile(value.input.reviewReceipt, JSON.stringify(value.review));

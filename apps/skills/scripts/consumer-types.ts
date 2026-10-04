@@ -648,6 +648,7 @@ console.log("Installed bundle SDK runtime: 17 assertions passed.");
     }
   }
   await run([process.execPath, "node_modules/typescript/bin/tsc", "-p", "tsconfig.json"], workspace);
+  console.log((await run([process.execPath, "--no-env-file", resolve(root, "scripts/consumer-storage.ts"), workspace], workspace)).trim());
   console.log((await run([process.execPath, "--no-env-file", "admin-list-runtime.ts"], workspace)).trim());
   console.log((await run([process.execPath, "--no-env-file", "bundle-runtime.ts"], workspace)).trim());
   await writeFile(join(workspace, "content-hash-runtime.ts"), `

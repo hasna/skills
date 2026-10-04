@@ -4,7 +4,7 @@ import { isAbsolute, join } from "node:path";
 
 export const CONSUMER_EXPORTS = [".", "./admin-contract", "./sdk", "./storage"] as const;
 export const CONSUMER_CHECKS = [
-  "strict-types", "admin-list-runtime", "bundle-runtime", "content-hash-revision-runtime",
+  "strict-types", "storage-runtime", "admin-list-runtime", "bundle-runtime", "content-hash-revision-runtime",
   "quote-error-runtime", "cli-polling", "cli-remote-routing",
 ] as const;
 

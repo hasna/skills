@@ -70,7 +70,9 @@ bun run verify:consumer-types --archive /absolute/hasna-skills-<version>.tgz \
 ```
 
 The fixture checks the installed package name, version and all four exports,
-runs the strict type and runtime/CLI checks, and emits a passed receipt only
+runs the strict type and runtime/CLI checks (including actual `./storage` export
+loading and pure configuration/URL checks without database or provider access),
+and emits a passed receipt only
 after both the original archive and its installed input still match. Its
 temporary install is removed; the reviewed original and external receipt remain.
 Without arguments, the fixture still packs its own archive for normal `prepack`.
