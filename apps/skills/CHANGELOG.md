@@ -3,7 +3,7 @@
 ## 0.10.38
 
 - Retain denied remote skill identities and reviewed inactive Claude graphs when an entire retired cache materialization disappears, while still refusing active missing hooks and unsafe reappearance.
-- Preserve planner-reviewed body-free remote version cleanup beneath a surviving Codex parent with exact source and directory projections; keep active versions, receipts, direct hooks and unrelated membership guarded.
+- Preserve planner-reviewed body-free remote version and whole disabled parent cleanup with exact source and directory inventories; keep active versions, receipts, direct hooks and unrelated membership guarded.
 - Plan explicit reviewed denials for newly named omitted remote Codex skill materializations using fresh native installation and manifest evidence, preserving existing disables and transactional checks.
 
 ## 0.10.37

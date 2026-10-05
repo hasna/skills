@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { parseHermesConfig, assertHermesEnvironment } from "./agent-hermes.js";
 import type { IntegrationAgent } from "./agent-adapters.js";
-import { captureDiscoveryDirectories, captureDiscoveryDirectoryProjection, verifyDiscoveryDirectories, type DiscoveryDirectory } from "./agent-discovery-directories.js";
+import { captureDiscoveryDirectories, captureDiscoveryDirectoryProjection, verifyDiscoveryDirectoryProjection, verifyDiscoveryDirectories, type DiscoveryDirectory, type DiscoveryDirectoryProjection } from "./agent-discovery-directories.js";
 import { discoveryByteBudget, hashRawDiscoveryFile } from "./agent-discovery-bytes.js";
 import { hashDiscoveryPathFile } from "./agent-discovery-path-bytes.js";
 import { hashManagedPluginRegistry, type ManagedPluginRegistrationWitness } from "./plugin-discovery.js";
@@ -14,13 +14,13 @@ import { captureClaudeMarketplaceRegistry, captureClaudeMarketplaceRegistryV2 } 
 import { hashNativeJsonControls, captureClaudeSettings, captureClaudeSettingsV2, captureClaudeSettingsV3, hashClaudeSettingsReplacement, hashClaudeSettingsReplacementV2, hashClaudeSettingsReplacementV3 } from "./claude-settings-witness.js";
 import { assertCodexHookDiscoveryRecovery, verifiesCodexHookDiscoverySource, type CodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery.js";
 import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, hashCodexSettingsReplacement, hashCodexSettingsReplacementV2, hashCodexSettingsReplacementV3, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
-import { absentDisabledCodexPluginParent, reviewedRetiredCodexRoot, reviewedCodexPluginSourceRoots, type CodexPluginSkillControl, type CodexPluginSourceInput } from "./codex-plugin-skill-controls.js";
+import { absentDisabledCodexPluginParent, reviewedDisabledCodexPluginParent, reviewedRetiredCodexRoot, reviewedCodexPluginCapabilitiesUnchanged, reviewedCodexPluginSourceRoots, type CodexPluginSkillControl, type CodexPluginSourceInput } from "./codex-plugin-skill-controls.js";
 import { sumiConfigDirectory, sumiConfigPath } from "./agent-sumi.js";
 import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
 export { captureDiscoveryDirectories, type DiscoveryDirectory } from "./agent-discovery-directories.js";
 
 export interface DiscoverySource { path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes" | "claude-plugin-registry" | "claude-marketplace-registry" | "claude-settings-v1" | "claude-settings-v2" | "claude-settings-v3" | "claude-marketplace-registry-v2" | "codex-settings-v1" | "codex-settings-v2" | "codex-settings-v3"; managedPlugins?: ManagedPluginRegistrationWitness[]; format?: "json" | "toml" | "yaml"; fields?: string[] }
-export interface AgentDiscoveryBinding { agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; method: "automatic" | "reviewed"; builtinNames?: string[]; codexDisabledPluginSkills?: CodexPluginSkillControl[]; codexRetiredMaterializations?: { roots:string[]; directories:DiscoveryDirectory[] }; codexInstallationInputs?: { version:"codex-cli 0.160.0"; catalogSha256:string; plugins:CodexPluginSourceInput[]; directories?:DiscoveryDirectory[] } }
+export interface AgentDiscoveryBinding { agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; method: "automatic" | "reviewed"; builtinNames?: string[]; codexDisabledPluginSkills?: CodexPluginSkillControl[]; codexRetiredMaterializations?: { roots:string[]; parents?:string[]; directories:Array<DiscoveryDirectory & {entries?:string[]}> }; codexInstallationInputs?: { version:"codex-cli 0.160.0"; catalogSha256:string; plugins:CodexPluginSourceInput[]; directories?:DiscoveryDirectory[] } }
 export interface ReviewedDiscoveryInputs { version: 1; agents: Array<{ agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; pluginHooks: "reviewed-no-skill-injection" }> }
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 function parseConfig(text: string, path: string, toml = false): any {
@@ -123,11 +123,15 @@ function retiredCodexRoots(binding:AgentDiscoveryBinding):string[] {
   if(proof===undefined) return [];
   const controls=binding.codexDisabledPluginSkills;
   if(binding.agent!=="codex" || binding.method!=="reviewed" || !Array.isArray(controls) || !controls.length
-    || !Array.isArray(proof.roots) || !proof.roots.length || proof.roots.length>AGENT_POLICY_LIMITS.discoveryRoots || new Set(proof.roots).size!==proof.roots.length || !Array.isArray(proof.directories)) throw new Error("Invalid retired Codex materialization proof");
+    || !Array.isArray(proof.roots) || proof.roots.length>AGENT_POLICY_LIMITS.discoveryRoots || new Set(proof.roots).size!==proof.roots.length || !Array.isArray(proof.directories)
+    || proof.parents!==undefined && (!Array.isArray(proof.parents) || proof.parents.length>AGENT_POLICY_LIMITS.discoveryRoots || new Set(proof.parents).size!==proof.parents.length)
+    || !proof.roots.length && !proof.parents?.length) throw new Error("Invalid retired Codex materialization proof");
   const cache=dirname(dirname(controls[0]!.pluginParent)),config=join(dirname(dirname(cache)),"config.toml");
   const source=binding.sources.find(source=>source.path===config && source.sha256!==null && source.format===undefined && source.fields===undefined);
   if(!source || projected(source)!==source.sha256) throw new Error("Missing current retired Codex configuration witness");
   const rules=(Bun.TOML.parse(read(config)!) as any).skills?.config ?? [];
+  if((proof.parents ?? []).some(parent=>codexDirectHookSelects(cache,parent) || !reviewedDisabledCodexPluginParent(cache,parent,controls,rules))
+    || !reviewedCodexPluginCapabilitiesUnchanged(cache,controls,path=>read(path)!,rules)) throw new Error("Retired Codex parent capabilities changed");
   for(const root of proof.roots) {
     const manifest=binding.sources.find(source=>source.path===join(root,".codex-plugin/plugin.json") && source.sha256!==null && source.format===undefined && source.fields===undefined && [undefined,"bytes"].includes(source.hashMode));
     if(!manifest || codexDirectHookSelects(cache,root) || !reviewedRetiredCodexRoot(cache,root,controls,rules,path=>read(path)!,true)) throw new Error("Retired Codex materialization changed");
@@ -141,11 +145,18 @@ export function captureRetiredCodexDiscovery(binding:AgentDiscoveryBinding, cont
   const cache=dirname(dirname(controls[0]!.pluginParent));
   const candidates=binding.sources.filter(source=>source.path.endsWith(sep+".codex-plugin/plugin.json") && source.sha256!==null && source.format===undefined && source.fields===undefined && [undefined,"bytes"].includes(source.hashMode)).map(source=>dirname(dirname(source.path)));
   const roots=[...new Set(candidates)].filter(root=>!codexDirectHookSelects(cache,root) && reviewedRetiredCodexRoot(cache,root,controls,rules,path=>read(path)!,binding.codexRetiredMaterializations?.roots.includes(root) ?? false)).sort();
+  const parents=reviewedCodexPluginCapabilitiesUnchanged(cache,controls,path=>read(path)!,rules)
+    ? [...new Set(controls.map(control=>control.pluginParent))].filter(parent=>!codexDirectHookSelects(cache,parent) && reviewedDisabledCodexPluginParent(cache,parent,controls,rules)).sort() : [];
   const {codexRetiredMaterializations:previous,...current}=binding;
-  if(!roots.length) return current;
+  if(!roots.length && !parents.length) return current;
   const installation=codexInstallationRoots(binding);
   const directories=(binding.directories ?? []).filter(directory=>!installation.some(root=>directory.path===root || directory.path.startsWith(root+sep) || root.startsWith(directory.path+sep)));
-  return {...current,codexRetiredMaterializations:{roots,directories:captureDiscoveryDirectoryProjection(directories.map(item=>item.path),roots)}};
+  // A retained review keeps the original membership inventory across cleanup.
+  // Recapturing after absence would discard the evidence needed to validate
+  // an exact returning graph and would silently adopt a different inventory.
+  if(previous && isDeepStrictEqual(previous.roots,roots) && isDeepStrictEqual(previous.parents,parents)
+    && isDeepStrictEqual(previous.directories.map(item=>item.path),directories.map(item=>item.path))) return {...current,codexRetiredMaterializations:previous};
+  return {...current,codexRetiredMaterializations:{roots,parents,directories:captureDiscoveryDirectoryProjection(directories.map(item=>item.path),roots)}};
 }
 /** Retain historical bytes only when the entire old Claude version is absent
  * and unchanged native settings/registry select a different extant user root.
@@ -197,11 +208,16 @@ export function verifyAgentDiscovery(binding: AgentDiscoveryBinding, codexRecove
     const ancestors=binding.directories.filter(directory=>installationRoots.some(root=>root.startsWith(directory.path+sep)));
     if (projected.length!==ancestors.length || projected.some(directory=>!ancestors.some(original=>original.path===directory.path))) throw new Error("Missing installation input directory projection");
     const ordinary=binding.directories.filter(directory=>!installationInput(directory.path) && !ancestors.includes(directory));
-    if(retiredRoots.length) {
+    if(binding.codexRetiredMaterializations) {
       const projection=binding.codexRetiredMaterializations!.directories;
       if(projection.length!==ordinary.length || projection.some((item,index)=>item.path!==ordinary[index]?.path)) throw new Error("Missing retired Codex directory projection");
-      const current=captureDiscoveryDirectoryProjection(ordinary.map(item=>item.path),retiredRoots);
-      if(!isDeepStrictEqual(current,projection)) throw new Error("Native discovery directory membership changed outside retired Codex roots");
+      const omitted=[...retiredRoots,...(binding.codexRetiredMaterializations.parents ?? []).filter(parent=>!lstatSync(parent,{throwIfNoEntry:false}))];
+      if(projection.every(item=>Array.isArray(item.entries))) verifyDiscoveryDirectoryProjection(projection as DiscoveryDirectoryProjection[],omitted);
+      else {
+        if(omitted.some(root=>!retiredRoots.includes(root))) throw new Error("Missing reviewed directory membership inventory; provide a fresh discovery review");
+        const current=captureDiscoveryDirectoryProjection(ordinary.map(item=>item.path),retiredRoots).map(({entries,...item})=>item);
+        if(!isDeepStrictEqual(current,projection)) throw new Error("Native discovery directory membership changed outside retired Codex roots");
+      }
     } else verifyDiscoveryDirectories(ordinary);
     verifyDiscoveryDirectories(projected,installationRoots);
   }

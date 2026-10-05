@@ -548,11 +548,19 @@ identity and capability checks. App/MCP declarations and active hooks do not
 receive this absence exception; the saved review must explicitly establish the
 skills-only role. The planner can also retain an already body-free historical
 remote version whose capabilities match the reviewed disabled identity. It
-records a separate directory projection for that exact inactive root, keeping
-membership and source guards on the active version, receipt and other paths.
+records bounded membership rows matching their original directory fingerprints.
+Only exact reviewed inactive roots or wholly absent disabled skills-only parents
+are projected out; surviving versions, receipts and unrelated members stay bound.
 Direct user hook references, returning skill bodies and capability changes
 still refuse. Older directory witnesses without this projection need a fresh
 review; their historical hashes are never silently weakened.
+Updating the binary preserves existing policy and does not enroll this proof.
+Preview `skills hook install` with fresh `--discovery-inputs` and the genuine
+`--codex-native-catalog`, then apply the same reviewed inputs with `--apply`.
+Preserve the exact policy/configuration/hook preimages and compare them before
+application. The apply invocation replans and checks its observed preconditions;
+the preview is not an apply token. Keep typed V3 settings witnesses, existing
+disables, command/profile choices and session pins unchanged.
 A retired Claude cache version may likewise
 remain absent only while unchanged native settings and registrations select a
 different extant, witnessed user version. Individual missing files, current

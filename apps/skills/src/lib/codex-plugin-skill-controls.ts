@@ -148,9 +148,9 @@ function identity(document:string, cache:string, read:Read): { name:string; name
   if (controls.namespace!==parsed.namespace) refuse();
   return {name:parsed.name,pluginParent:parsed.pluginParent,...controls};
 }
-/** Only a whole absent, already denied remote skills-only parent is inert.
+/** Establish the reviewed denial/skills-only role for an exact remote parent.
  * Walk every ancestor: a dangling alias or non-directory is never absence. */
-export function absentDisabledCodexPluginParent(cache:string, parent:string, controls:CodexPluginSkillControl[], rules:unknown):boolean {
+export function reviewedDisabledCodexPluginParent(cache:string, parent:string, controls:CodexPluginSkillControl[], rules:unknown):boolean {
   try {
     const parts=relative(cache,parent).split(sep), enrolled=controls.filter(control=>control.pluginParent===parent);
     if (resolve(parent)!==parent || parts.length!==2 || parts.some(part=>!identifier(part)) || !enrolled.length || !Array.isArray(rules)) return false;
@@ -159,13 +159,15 @@ export function absentDisabledCodexPluginParent(cache:string, parent:string, con
       if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) return false;
       if (dirname(cursor)===cursor) break;
     }
-    if (lstatSync(parent,{throwIfNoEntry:false})) return false;
     return enrolled.every(control=>control.namespace===parts[1] && control.pluginId===`${parts[1]}@${parts[0]}`
       && remotePluginIdentifier(control.remotePluginId) && control.skillsOnly===true && !control.appSha256 && !control.mcpSha256
       && control.name.startsWith(control.namespace+":") && /^[a-f0-9]{64}$/.test(control.manifestSha256)
       && rules.some((rule:any)=>typeof rule?.name==="string" && rule.name.trim()===control.name && rule.enabled===false)
       && !rules.some((rule:any)=>(typeof rule?.name==="string" && rule.name.trim()===control.name || typeof rule?.path==="string" && (rule.path===parent || rule.path.startsWith(parent+sep))) && rule.enabled!==false));
   } catch { return false; }
+}
+export function absentDisabledCodexPluginParent(cache:string, parent:string, controls:CodexPluginSkillControl[], rules:unknown):boolean {
+  return reviewedDisabledCodexPluginParent(cache,parent,controls,rules) && !lstatSync(parent,{throwIfNoEntry:false});
 }
 /** A body-free historical remote version has no remaining native skill entry.
  * Bind its capability-identical, skills-only identity before projecting it. */

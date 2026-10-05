@@ -47,11 +47,13 @@ export function assertAgentPolicyCollections(policy: Record<string, any>): void 
   for (const [agent, value] of Object.entries(record(bridge.discovery, AGENT_POLICY_LIMITS.agents))) {
     text(agent, 128); requireBound(object(value)); text(value.agent, 128);
     if(value.codexRetiredMaterializations!==undefined) {
-      const proof=record(value.codexRetiredMaterializations,2),roots=array(proof.roots,AGENT_POLICY_LIMITS.discoveryRoots);
-      requireBound(agent==="codex" && value.agent==="codex" && value.method==="reviewed" && Object.keys(proof).every(key=>["roots","directories"].includes(key)) && roots.length>0 && new Set(roots).size===roots.length);
+      const proof=record(value.codexRetiredMaterializations,3),roots=array(proof.roots,AGENT_POLICY_LIMITS.discoveryRoots),parents=proof.parents===undefined ? [] : array(proof.parents,AGENT_POLICY_LIMITS.discoveryRoots);
+      requireBound(agent==="codex" && value.agent==="codex" && value.method==="reviewed" && Object.keys(proof).every(key=>["roots","parents","directories"].includes(key)) && roots.length+parents.length>0 && new Set(roots).size===roots.length && new Set(parents).size===parents.length);
       for(const root of roots) {text(root);requireBound(isAbsolute(root) && resolve(root)===root);}
+      for(const parent of parents) {text(parent);requireBound(isAbsolute(parent) && resolve(parent)===parent);}
       for(const directory of array(proof.directories,AGENT_POLICY_LIMITS.discoveryDirectories)) {
         requireBound(object(directory));text(directory.path);requireBound(directory.sha256===null || typeof directory.sha256==="string" && /^[a-f0-9]{64}$/.test(directory.sha256));
+        if(directory.entries!==undefined) for(const entry of array(directory.entries,AGENT_POLICY_LIMITS.discoveryDirectoryEntries)) text(entry,AGENT_POLICY_LIMITS.pathCharacters*6+100);
       }
     }
     if (value.codexInstallationInputs!==undefined) {
