@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.40
+
+- Accept skills that the Codex app materializes under exactly `~/.codex/plugins/cache/openai-curated-remote/` in the native skill guard, by lexical and real-path containment with the root's on-disk spelling, and record each acceptance in `agent-hooks/codex-vendor-cache-acceptance.json`. Every other path, including sibling caches, lookalike names and links escaping the tree, still refuses.
+
 ## 0.10.39
 
 - Compare installed Skills payload bytes separately from npm-created nested dependencies; reject bundled dependency payloads and retain complete runtime integrity, symlink and rollback checks.
