@@ -21,6 +21,7 @@ import { HERMES_OPT_OUT, parseHermesConfig, configureHermesHooks, assertHermesPr
 import type { CodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery.js";
 import { assertClaudeHookEventsReplacement, type ClaudeCoordinatedHookEvent } from "./claude-settings-witness.js";
 import { snapshot as hookFileSnapshot, unchanged as hookFileUnchanged } from "./codex-hook-trust-files.js";
+import { codexVendorCacheRoot, isAcceptedCodexVendorCacheSkill, recordCodexVendorCacheAcceptance, type CodexVendorCacheSkill } from "./codex-vendor-cache.js";
 
 export type { IntegrationAgent } from "./agent-adapters.js";
 export type ContextHookEvent = "UserPromptSubmit" | "SessionStart" | "SubagentStart";
@@ -1342,7 +1343,17 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
     catch { throw new Error("NATIVE_SKILL_DRIFT: native installation input identity changed; review discovery and catalog"); }
   }
   const inventory = inventoryNativeSkills(home, { includeVendor: true, guardHermes: agent === "hermes", agents: [agent], projectDirs: [...roots], agentRoots: discovery.roots.map(path => ({ agent, path })), allowRootAliases: aliases.length > 0, disabledVendorPaths: agent === "codex" ? disabledCodexSkillPaths(codexConfig, aliases) : [], disabledVendorSkill: disabledPlugin, codexInstallationInputRoots: installationInputRoots });
-  const unexpected = inventory.filter(entry => visible(entry) && !entry.bridge && !disabledVendorSkill(entry));
+  // Owner-accepted vendor cache (incident 806379): skills the Codex app itself
+  // materializes under exactly ~/.codex/plugins/cache/openai-curated-remote/
+  // are accepted, with a provenance receipt, after every reviewed disable
+  // control above has had its say. Any other path still fails closed.
+  const vendorCacheRoot = agent === "codex" ? codexVendorCacheRoot(home, path => canonicalAgentPath(path, aliases)) : undefined;
+  const acceptedVendorCache: CodexVendorCacheSkill[] = [];
+  const unexpected = inventory.filter(entry => {
+    if (!visible(entry) || entry.bridge || disabledVendorSkill(entry)) return false;
+    if (vendorCacheRoot !== undefined && isAcceptedCodexVendorCacheSkill(entry, vendorCacheRoot)) { acceptedVendorCache.push({ path: entry.path, hash: entry.hash }); return false; }
+    return true;
+  });
   if (unexpected.length) {
     // Show filenames only: never read payloads into diagnostics. Escape control
     // characters and cap both path count and length for native hook output.
@@ -1353,6 +1364,12 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
     });
     const remaining = unexpected.length - paths.length;
     throw new Error(`NATIVE_SKILL_DRIFT: ${unexpected.length} unexpected native skill copies were found: ${paths.join(", ")}${remaining ? `; ${remaining} more` : ""}. Review skills migrate native --project <working-directory> --include-unmanaged --include-vendor --json before continuing; it inventories that directory and its ancestors. Use --apply after reviewing the archive plan.`);
+  }
+  if (acceptedVendorCache.length) {
+    // Acceptance is only as good as its record: an unrecorded acceptance
+    // stops the session like any other drift.
+    try { recordCodexVendorCacheAcceptance(dataDir, vendorCacheRoot!, acceptedVendorCache); }
+    catch (error) { throw new Error(`NATIVE_SKILL_DRIFT: ${acceptedVendorCache.length} Codex vendor cache skills could not be accepted because their provenance receipt was not recorded: ${(error as Error).message}`); }
   }
   recheckRootAliases(aliases);
 }
