@@ -25,7 +25,7 @@ import { snapshot as hookFileSnapshot, unchanged as hookFileUnchanged } from "./
 export type { IntegrationAgent } from "./agent-adapters.js";
 export type ContextHookEvent = "UserPromptSubmit" | "SessionStart" | "SubagentStart";
 export interface AgentRootAlias { agent: IntegrationAgent; home: string; alias: string; target: string; link: string; aliasIdentity: string; targetIdentity: string }
-export interface NativeSkillEntry { agent: string; path: string; hash: string; managed: boolean; vendor: boolean; system?: boolean; bridge?: boolean; bridgeHome?: string; rootAlias?: AgentRootAlias }
+export interface NativeSkillEntry { agent: string; path: string; hash: string; managed: boolean; vendor: boolean; system?: boolean; bridge?: boolean; bridgeHome?: string; rootAlias?: AgentRootAlias; codexHome?: string }
 export interface NativeMigrationTarget { agent: string; projectRoot: string; path: string; treeSha256: string; vendor?: true }
 export interface NativeMigrationTargetManifest { schema: "hasna.skills-native-migration-targets.v1"; targets: NativeMigrationTarget[]; digest: string }
 export interface AgentConfigChange { path: string; before: string | null; after: string }
@@ -306,6 +306,14 @@ function projectAncestorDirectories(projects: string[]): string[] {
   return [...directories];
 }
 
+/** Shared native discovery participates regardless of the selecting adapter. */
+function isCodexSkillDiscoveryInput(path: string): boolean {
+  for (let cursor = canonicalSystemPath(path); cursor !== dirname(cursor); cursor = dirname(cursor)) {
+    if (ROOTS.some(([agent, root]) => agent === "codex" && cursor.endsWith(join(sep, root)))) return true;
+  }
+  return false;
+}
+
 export function inventoryNativeSkills(home = homedir(), options: { includeVendor?: boolean; guardHermes?: boolean; projectDir?: string; projectDirs?: string[]; agents?: readonly IntegrationAgent[]; agentRoots?: Array<{ agent: string; path: string }>; configured?: boolean; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean; reviewedCacheAlias?: string; disabledVendorPaths?: readonly string[]; disabledVendorSkill?: (entry: NativeSkillEntry) => boolean; codexInstallationInputRoots?: readonly string[] } = {}): NativeSkillEntry[] {
   home = canonicalSystemPath(home);
   if (options.reviewedCacheAlias !== undefined && (!options.includeVendor || !isAbsolute(options.reviewedCacheAlias) || resolve(options.reviewedCacheAlias) !== options.reviewedCacheAlias)) throw new Error("A reviewed cache alias requires vendor inventory and an exact absolute path");
@@ -376,7 +384,7 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
       if (existsSync(marker)) { try { managed = JSON.parse(readFileSync(marker, "utf8")).managedBy === "@hasna/skills"; } catch { /* Unrecognized markers grant no ownership. */ } }
       const bridge = (!vendor || agent === "sumi") && isOwnedCliBridge(path, bridgePaths);
       const rootAlias = aliases.find(item => path === item.target || path.startsWith(item.target + sep));
-      entries.push({ agent, path, hash: treeHash(path), managed, vendor, ...(agent === "codex" && path.startsWith(canonicalAgentPath(join(home, ".codex", "skills", ".system"), aliases) + sep) ? { system: true } : {}), ...(bridge ? { bridge: true, bridgeHome: resolve(home) } : {}), ...(rootAlias ? { rootAlias } : {}) }); return scan;
+      entries.push({ agent, path, hash: treeHash(path), managed, vendor, ...(agent === "codex" || isCodexSkillDiscoveryInput(path) ? { codexHome: process.env.CODEX_HOME ?? join(home, ".codex") } : {}), ...(agent === "codex" && path.startsWith(canonicalAgentPath(join(home, ".codex", "skills", ".system"), aliases) + sep) ? { system: true } : {}), ...(bridge ? { bridge: true, bridgeHome: resolve(home) } : {}), ...(rootAlias ? { rootAlias } : {}) }); return scan;
     }
     if (depth > (agent === "sumi" ? 32 : vendor ? 32 : 3)) return { ...scan, complete: false };
     // Retired vendor documents leave their shared assets in place. Bound the
@@ -1107,10 +1115,14 @@ function writeArchiveJournal(path: string, value: unknown): void {
 export function archiveNativeSkills(inventory: NativeSkillEntry[], options: CodexCorpusWriteOptions & { dataDir?: string; includeUnmanaged?: boolean; includeVendor?: boolean; allowRootAliases?: boolean; targetManifest?: NativeMigrationTargetManifest }): { entries: Array<{ source: string; archive: string; hash: string; discoveryOnly?: boolean }>; receiptPath?: string; rootAliases?: AgentRootAlias[]; targetManifest?: { schema: string; digest: string; targetCount: number } } {
   const selected = options.targetManifest ? selectNativeMigrationTargets(inventory, options.targetManifest)
     : inventory.filter(entry => !entry.bridge && !entry.system && (entry.vendor ? options.includeVendor : entry.managed || options.includeUnmanaged));
-  const roots = selected.filter(entry => entry.agent === "codex").map(entry => {
-    const root = entry.rootAlias?.alias ?? codexCorpusRootForPath(entry.path) ?? (entry.bridgeHome ? join(entry.bridgeHome, ".codex") : undefined);
-    if (!root) throw new Error("CODEX_CORPUS_ROOT_UNVERIFIED");
-    return root;
+  const roots = selected.flatMap(entry => {
+    // Codex also reads HOME/project .agents/skills directly. Inventory binds
+    // those external inputs to the native home instead of exempting the write.
+    // A protected physical path remains guarded regardless of its agent label.
+    const root = (entry.rootAlias?.agent === "codex" ? entry.rootAlias.alias : undefined) ?? codexCorpusRootForPath(entry.path);
+    const owner = entry.codexHome ?? (entry.agent === "codex" && entry.bridgeHome ? join(entry.bridgeHome, ".codex") : undefined);
+    if (!root && !owner && (entry.agent === "codex" || isCodexSkillDiscoveryInput(entry.path))) throw new Error("CODEX_CORPUS_ROOT_UNVERIFIED");
+    return [...new Set([root, owner].filter((value): value is string => value !== undefined))];
   });
   return withCodexCorpusWrite(roots, (assertCurrent) => archiveNativeSkillsUnlocked(inventory, options, assertCurrent), options);
 }

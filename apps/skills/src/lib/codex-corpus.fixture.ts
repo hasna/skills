@@ -42,10 +42,15 @@ export function admitCorpusFixture(root: string): void {
   mkdirSync(root,{recursive:true,mode:0o700});
   new KernelLock(root,".native-corpus-admission").close();
 }
-export function installCorpusInspectorFixture(): () => void {
-  const f=corpusFixture(false), before=process.env.PATH;
+/** An explicit PATH component for children that deliberately replace their environment. */
+export function corpusInspectorPathFixture(): string {
+  const f=corpusFixture(false);
   renameSync(f.command,join(f.home,"codex"));
-  process.env.PATH=f.home+":"+(before??"");
+  return f.home;
+}
+export function installCorpusInspectorFixture(): () => void {
+  const before=process.env.PATH;
+  process.env.PATH=corpusInspectorPathFixture()+":"+(before??"");
   return ()=>{if(before===undefined)delete process.env.PATH;else process.env.PATH=before;};
 }
 

@@ -11,6 +11,8 @@ import { SqliteGovernanceStore } from "../sdk/governance-store.js";
 import { createSkillsFetchHandler, type SkillsFetchHandler } from "../server/app.js";
 import { publicPrincipal } from "../server/auth.js";
 import { packSkillBundle } from "../lib/skill-bundle.js";
+import { admitCorpusFixture, corpusInspectorPathFixture } from "../lib/codex-corpus.fixture.js";
+import { KernelLock } from "@hasna/contracts/kernel-lock";
 
 useDefaultTestTimeout();
 const scratch = mkdtempSync(join(tmpdir(), "skills-profile-hooks-cli-")), binary = join(scratch, "skills.js"), executable = join(scratch, "skills");
@@ -25,7 +27,7 @@ function objectHashes(path: string): string[] {
   if (!existsSync(path)) return [];
   return readdirSync(path, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? objectHashes(join(path, entry.name)) : entry.name.endsWith(".tar.gz") ? [createHash("sha256").update(readFileSync(join(path, entry.name))).digest("hex")] : []).sort();
 }
-async function fixture(documentSuffix = "") {
+async function fixture(documentSuffix = "", enrolled = true) {
   const root = mkdtempSync(join(scratch, "case-")), database = join(root, "server.sqlite"), token = randomUUID();
   const store = new SqliteSkillsStore(database), governanceStore = new SqliteGovernanceStore(database);
   const principal = publicPrincipal({ orgId: "workspace_e2e", orgSlug: "e2e", userId: "actor_e2e", apiKeyId: "key_e2e" });
@@ -51,8 +53,10 @@ async function fixture(documentSuffix = "") {
   handler = await createSkillsFetchHandler({ store, governanceStore, runtime: null, config: { publicBaseUrl: origin } });
   function station(id: string) {
     const home = join(root, id, "home"), data = join(home, ".hasna", "skills"), project = join(root, id, "project");
-    const env = { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, USERPROFILE: home, HASNA_HOME: join(home, ".hasna"), HASNA_SKILLS_DIR: data, HASNA_SKILLS_API_KEY: token, HASNA_SKILLS_API_URL: origin, HASNA_STATION: id, NO_COLOR: "1", TERM: "dumb", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", TMPDIR: join(root, id, "tmp") };
+    // Bind the synthetic HTTP credential explicitly; never consult a station Keychain.
+    const env = { PATH: `${corpusInspectorPathFixture()}:${dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, USERPROFILE: home, HASNA_HOME: join(home, ".hasna"), HASNA_SKILLS_DIR: data, HASNA_SKILLS_API_KEY_OVERRIDE: token, HASNA_SKILLS_API_URL: origin, HASNA_STATION: id, NO_COLOR: "1", TERM: "dumb", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", TMPDIR: join(root, id, "tmp") };
     for (const path of [home, data, project, env.TMPDIR]) mkdirSync(path, { recursive: true });
+    if (enrolled) admitCorpusFixture(join(home, ".codex"));
     async function run(args: string[], options: { stdin?: unknown; env?: Record<string, string>; cwd?: string; shellCommand?: string; slowPipe?: boolean } = {}) {
       const command = [process.execPath, "--no-env-file", binary, ...args];
       // A shell creates a kernel pipe, unlike Bun.spawn's socket-backed capture.
@@ -74,6 +78,79 @@ async function fixture(documentSuffix = "") {
   }
   return { root, store, principal, versions, requests, refuseProfile: (status: number) => { profileResponseStatus = status; }, rejectStationReports: () => { rejectStationReport = true; }, a: station("station-a"), b: station("station-b"), close: async () => { server.stop(true); await handler?.close(); await governanceStore.close(); await store.close(); } };
 }
+
+for (const state of ["unenrolled", "exclusive"] as const) test(`built hook installation refuses ${state} corpus without changing configuration`, async () => {
+  const f = await fixture("", state !== "unenrolled");
+  const corpus = join(f.a.home, ".codex"), config = join(corpus, "config.toml");
+  const original = 'model = "synthetic-preserved-model"\n';
+  put(config, original);
+  const blocker = state === "exclusive" ? new KernelLock(corpus, ".native-corpus-admission", { existingOnly: true }) : undefined;
+  try {
+    if (blocker) expect(blocker.trySync(1000)).toBe(true);
+    const result = await f.a.run(["hook", "install", "--agent", "codex", "--selection-profile", "engineering", "--command", executable, "--apply", "--json"]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("CODEX_CORPUS_ADMISSION_REQUIRED");
+    expect(readFileSync(config, "utf8")).toBe(original);
+    expect(existsSync(join(corpus, "skills", "skills-cli"))).toBe(false);
+    expect(existsSync(join(f.a.data, "agent-policy.json"))).toBe(false);
+    if (state === "unenrolled") expect(existsSync(join(corpus, ".native-corpus-admission.flock-v1"))).toBe(false);
+  } finally { blocker?.close(); await f.close(); }
+});
+
+for (const location of ["home", "project"] as const) for (const state of ["unenrolled", "exclusive", "admitted"] as const) {
+  test(`alternate-agent CLI migration guards ${location} shared discovery (${state})`, async () => {
+    const f = await fixture("", state !== "unenrolled");
+    const directory = location === "home" ? f.a.home : f.a.project;
+    const skill = join(directory, ".agents", "skills", "shared"), corpus = join(f.a.home, ".codex");
+    const bytes = "---\nname: shared\ndescription: Synthetic shared input\n---\nExact preserved body\n";
+    put(join(skill, "SKILL.md"), bytes);
+    const publication = state === "exclusive" ? new KernelLock(corpus, ".native-corpus-admission", { existingOnly: true }) : undefined;
+    try {
+      if (publication) expect(publication.trySync(1000)).toBe(true);
+      const result = await f.a.run(["migrate", "native", "--agent", "sumi", "--include-unmanaged", "--apply", "--json"], { cwd: directory });
+      if (state === "admitted") {
+        expect(result.stderr).toBe(""); expect(result.exitCode).toBe(0);
+        const value = JSON.parse(result.stdout); expect(value.entries).toHaveLength(1);
+        expect(value.inventory[0].agent).toBe("sumi"); expect(value.inventory[0].codexHome).toBe(corpus);
+        expect(readFileSync(join(value.entries[0].archive, "SKILL.md"), "utf8")).toBe(bytes);
+        expect(existsSync(skill)).toBe(false);
+      } else {
+        expect(result.exitCode).toBe(1); expect(result.stderr).toContain("CODEX_CORPUS_ADMISSION_REQUIRED");
+        expect(readFileSync(join(skill, "SKILL.md"), "utf8")).toBe(bytes);
+        expect(existsSync(join(f.a.data, "migration"))).toBe(false);
+        if (state === "unenrolled") expect(existsSync(join(corpus, ".native-corpus-admission.flock-v1"))).toBe(false);
+      }
+    } finally { publication?.close(); await f.close(); }
+  });
+}
+
+test("alternate-agent CLI migration binds shared input to the selected custom Codex home", async () => {
+  const f = await fixture(), corpus = join(f.a.home, "selected-codex");
+  admitCorpusFixture(corpus);
+  const skill = join(f.a.project, ".agents", "skills", "shared"), bytes = "Synthetic custom-home input\n";
+  put(join(skill, "SKILL.md"), bytes);
+  const publication = new KernelLock(corpus, ".native-corpus-admission", { existingOnly: true });
+  try {
+    expect(publication.trySync(1000)).toBe(true);
+    const result = await f.a.run(["migrate", "native", "--agent", "sumi", "--include-unmanaged", "--apply", "--json"], { env: { CODEX_HOME: corpus } });
+    expect(result.exitCode).toBe(1); expect(result.stderr).toContain("CODEX_CORPUS_ADMISSION_REQUIRED");
+    expect(readFileSync(join(skill, "SKILL.md"), "utf8")).toBe(bytes);
+    expect(existsSync(join(f.a.data, "migration"))).toBe(false);
+  } finally { publication.close(); await f.close(); }
+});
+
+for (const relativeRoot of [".sumi/skills", ".agents/skill"]) test(`alternate-agent CLI leaves unrelated ${relativeRoot} migration usable without Codex enrollment`, async () => {
+  const f = await fixture("", false), skill = join(f.a.project, relativeRoot, "unrelated"), bytes = "Synthetic unrelated input\n";
+  put(join(skill, "SKILL.md"), bytes);
+  try {
+    const result = await f.a.run(["migrate", "native", "--agent", "sumi", "--include-unmanaged", "--apply", "--json"]);
+    expect(result.stderr).toBe(""); expect(result.exitCode).toBe(0);
+    const value = JSON.parse(result.stdout); expect(value.entries).toHaveLength(1);
+    expect(readFileSync(join(value.entries[0].archive, "SKILL.md"), "utf8")).toBe(bytes);
+    expect(value.inventory[0].codexHome).toBeUndefined();
+    expect(existsSync(join(f.a.home, ".codex", ".native-corpus-admission.flock-v1"))).toBe(false);
+  } finally { await f.close(); }
+});
 
 test("lifecycle sync authenticates and verifies bundles without station-report availability", async () => {
   const f = await fixture();
@@ -287,13 +364,13 @@ test("built CLI refuses revoked HTTP access without silent cache fallback and co
   const f = await fixture();
   try {
     await f.a.install(); await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]); await f.a.ok(["sync", "--json"]);
-    const before = objectHashes(join(f.a.data, "selection-cache")), invalid = { HASNA_SKILLS_API_KEY: "revoked-fixture-credential" };
+    const before = objectHashes(join(f.a.data, "selection-cache")), invalid = { HASNA_SKILLS_API_KEY_OVERRIDE: "revoked-fixture-credential" };
     const refused = await f.a.run(["load", "review-code@1.0.0", "--json"], { env: invalid }); expect(refused.exitCode).toBe(1); expect(refused.stdout).not.toContain("Published 1.0.0"); expect(refused.stdout).toContain("SKILLS_API_UNAUTHORIZED");
     const context = await f.a.run(["context", "review this patch", "--json"], { env: invalid }); expect(context.exitCode).toBe(1); expect(context.stdout).not.toContain("Published 1.0.0");
     const denied = await f.a.hook("claude", "SessionStart", { source: "startup" }, invalid); expect(denied.continue).not.toBe(false); expect(denied.systemMessage).toContain("unavailable");
     expect(denied.systemMessage).toContain("[SKILLS_API_UNAUTHORIZED]");
     expect(denied.systemMessage).toContain("profile=engineering");
-    expect(denied.systemMessage).not.toContain(invalid.HASNA_SKILLS_API_KEY);
+    expect(denied.systemMessage).not.toContain(invalid.HASNA_SKILLS_API_KEY_OVERRIDE);
     // Prompt hooks explicitly request verified cached mode; auth is checked at session refresh.
     const cached = await f.a.hook("claude", "UserPromptSubmit", { prompt: "review this patch" }, invalid); expect(cached.hookSpecificOutput.additionalContext).toContain("Published 1.0.0");
     expect(objectHashes(join(f.a.data, "selection-cache"))).toEqual(before);
@@ -379,7 +456,7 @@ for (const [savedProfile, configuredProfile] of [["fleet", "default"], ["default
       const expired = json(receiptPath); expired.verifiedAt = new Date(0).toISOString();
       put(receiptPath, JSON.stringify(expired));
       const expiredBytes = readFileSync(receiptPath, "utf8");
-      const denied = await f.a.hook("claude", "UserPromptSubmit", { prompt: "$review-code" }, { HASNA_SKILLS_API_KEY: "revoked-fixture-credential" });
+      const denied = await f.a.hook("claude", "UserPromptSubmit", { prompt: "$review-code" }, { HASNA_SKILLS_API_KEY_OVERRIDE: "revoked-fixture-credential" });
       expect(denied.decision).toBeUndefined();
       expect(denied.systemMessage).toContain("[SKILLS_API_UNAUTHORIZED]");
       expect(denied.systemMessage).toContain(`profile=${savedProfile}`);
@@ -461,7 +538,7 @@ test("expired hook sessions continue without payload when hosted authentication 
     const receipt = json(receiptPath); receipt.verifiedAt = new Date(0).toISOString();
     put(receiptPath, JSON.stringify(receipt));
     const before = readFileSync(receiptPath, "utf8"), requests = f.requests.length;
-    const denied = await f.a.hook("claude", "UserPromptSubmit", { prompt: "$review-code" }, { HASNA_SKILLS_API_KEY: "revoked-fixture-credential" });
+    const denied = await f.a.hook("claude", "UserPromptSubmit", { prompt: "$review-code" }, { HASNA_SKILLS_API_KEY_OVERRIDE: "revoked-fixture-credential" });
     expect(denied.decision).toBeUndefined();
     expect(denied.systemMessage).toContain("[SKILLS_API_UNAUTHORIZED]");
     expect(denied.systemMessage).toContain("profile=engineering");
@@ -806,10 +883,10 @@ test("missing owned credential denies delivery without blocking prompts and futu
   try {
     await f.a.install(); await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]); await f.a.ok(["sync", "--json"]);
     for (const agent of ["claude", "codex"] as const) {
-      const unavailable = await f.a.hook(agent, "SessionStart", {session_id:`missing-${agent}`}, {HASNA_SKILLS_API_KEY:""});
+      const unavailable = await f.a.hook(agent, "SessionStart", {session_id:`missing-${agent}`}, {HASNA_SKILLS_API_KEY_OVERRIDE:""});
       expect(unavailable.decision).toBeUndefined(); expect(unavailable.systemMessage).toContain("SKILLS_API_CREDENTIAL_UNAVAILABLE"); expect(JSON.stringify(unavailable)).not.toContain("Published");
     }
-    const direct = await f.a.run(["load", "review-code", "--selection-profile", "engineering", "--json"], {env:{HASNA_SKILLS_API_KEY:""}}); expect(direct.exitCode).toBe(1); expect(direct.stdout).not.toContain("Published");
+    const direct = await f.a.run(["load", "review-code", "--selection-profile", "engineering", "--json"], {env:{HASNA_SKILLS_API_KEY_OVERRIDE:""}}); expect(direct.exitCode).toBe(1); expect(direct.stdout).not.toContain("Published");
     await f.a.hook("claude","UserPromptSubmit",{prompt:"$review-code"});
     const sessions=join(f.a.data,"selection-cache","sessions"), path=join(sessions,readdirSync(sessions)[0]!);
     const receipt=json(path); receipt.verifiedAt=new Date(Date.now()+3600000).toISOString(); put(path,JSON.stringify(receipt)); const before=readFileSync(path);

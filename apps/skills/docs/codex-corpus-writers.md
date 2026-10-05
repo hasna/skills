@@ -8,4 +8,8 @@ The native executable defaults to `codex` on the caller's selected PATH; SDK wri
 
 Read-only previews do not authorize a later mutation. Ordinary non-Codex targets remain usable. Instructions' explicit Codex project renderer (`codexProject`) also remains usable for project `AGENTS.md` outside the native corpus.
 
+Codex also discovers home and project `.agents/skills` directly. Native migration inventory binds these inputs to the selected `CODEX_HOME`, or the inventoried home's `.codex` when unset. Archival holds that home's admission too; an external discovery path is not an exemption. Protected paths keep their own lock even if an inventory entry carries another agent label.
+
 Contracts is a runtime dependency. Keep `@hasna/contracts/kernel-lock` external when bundling so the package resolves its descriptor-bound native helper from its own installed assets.
+
+Shared discovery is classified by its native input path, independently of the selected adapter. For example, `migrate native --agent sumi` still requires the selected/home Codex admission when it archives `.agents/skills`. An external shared input without its inventoried Codex home fails closed; unrelated `.sumi/skills` and `.agents/skill` inputs do not acquire a Codex lease.

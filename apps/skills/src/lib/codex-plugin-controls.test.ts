@@ -1,4 +1,4 @@
-import { test, expect, afterEach } from "bun:test";
+import { test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -12,11 +12,15 @@ import { reviewedCodexPluginSourceRoots } from "./codex-plugin-skill-controls.js
 import { assertAgentPolicyCollections } from "./agent-policy-limits.js";
 import { captureDiscoveryDirectories } from "./agent-discovery.js";
 import { parseManagedSkillPolicy } from "./managed-policy.js";
+import { admitCorpusFixture, installCorpusInspectorFixture } from "./codex-corpus.fixture.js";
 useDefaultTestTimeout();
+let restoreInspector: () => void;
+beforeEach(() => { restoreInspector = installCorpusInspectorFixture(); });
+afterEach(() => { restoreInspector(); });
 const roots:string[]=[]; afterEach(()=>{for(const root of roots.splice(0)) rmSync(root,{recursive:true,force:true});});
 const put=(p:string,s:string)=>{mkdirSync(join(p,".."),{recursive:true});writeFileSync(p,s);};
 test("reviewed qualified native plugin name remains denied after cache version regeneration",()=>{
- const home=mkdtempSync(join(tmpdir(),"skills-plugin-continuity-")); roots.push(home);
+ const home=mkdtempSync(join(tmpdir(),"skills-plugin-continuity-")); roots.push(home); admitCorpusFixture(join(home, ".codex"));
  const f={home,dataDir:join(home,"data"),projectDir:home};
  const parent=join(home,".codex/plugins/cache/probe/vendor"), old=join(parent,"1.0.0"), next=join(parent,"3.0.0");
  const payload='---\nname: deploy\ndescription: Synthetic review fixture\n---\nSynthetic native instructions\n';
@@ -41,7 +45,7 @@ test("reviewed qualified native plugin name remains denied after cache version r
  put(config,before+'\n[[skills.config]]\nname = "vendor:deploy"\nenabled = true\n');expect(()=>assertManagedAgentBridge("codex",f)).toThrow("NATIVE_SKILL_DRIFT");
 });
 test("legacy listed catalog remains valid without plugins while omitted identity refuses",()=>{
- const home=mkdtempSync(join(tmpdir(),"skills-plugin-legacy-catalog-")); roots.push(home);
+ const home=mkdtempSync(join(tmpdir(),"skills-plugin-legacy-catalog-")); roots.push(home); admitCorpusFixture(join(home, ".codex"));
  const cache=join(home,".codex/plugins/cache"), root=join(cache,"probe/vendor/1.0.0"), document=join(root,"skills/deploy/SKILL.md");
  put(join(root,".codex-plugin/plugin.json"),'{"name":"vendor","version":"1.0.0"}');
  put(document,'---\nname: deploy\ndescription: Synthetic legacy catalog\n---\nFixture');
@@ -51,7 +55,7 @@ test("legacy listed catalog remains valid without plugins while omitted identity
  expect(()=>reviewCodexPluginSkillControls({...catalog,skills:[]},[document],cache,home,read,rules)).toThrow("IDENTITY_UNSUPPORTED");
 });
 test("reviewed native names reject bare names, unexpected namespace and conflicting enable",()=>{
- const home=mkdtempSync(join(tmpdir(),"skills-plugin-boundary-")); roots.push(home); const f={home,dataDir:join(home,"data"),projectDir:home};
+ const home=mkdtempSync(join(tmpdir(),"skills-plugin-boundary-")); roots.push(home); admitCorpusFixture(join(home, ".codex")); const f={home,dataDir:join(home,"data"),projectDir:home};
  const root=join(home,".codex/plugins/cache/probe/vendor/1.0.0"),document=join(root,"skills/deploy/SKILL.md");
  put(join(root,".codex-plugin/plugin.json"),'{"name":"vendor","version":"1.0.0"}');put(document,'---\nname: deploy\ndescription: Synthetic\n---\nfixture');
  const catalog={version:"codex-cli 0.159.2",cwd:home,skills:[{name:"deploy",path:document,enabled:true,pluginId:"vendor@probe"}],plugins:[{id:"vendor@probe",name:"vendor",installed:true,enabled:true,localVersion:"1.0.0"}]};
@@ -61,7 +65,7 @@ test("reviewed native names reject bare names, unexpected namespace and conflict
 });
 
 test("reviewed Pages app declarations stay exactly bound across plugin cache versions", () => {
-  const home=mkdtempSync(join(tmpdir(),"skills-pages-controls-")); roots.push(home);
+  const home=mkdtempSync(join(tmpdir(),"skills-pages-controls-")); roots.push(home); admitCorpusFixture(join(home, ".codex"));
   const cache=join(home,".codex/plugins/cache"), parent=join(cache,"probe/pages");
   const names=["maintain-space","manage-schedules","organize-space","write-page"];
   const app='{"apps":{"pages":{"id":"synthetic_pages_connector","required":true}}}';
@@ -110,7 +114,7 @@ test("reviewed Pages app declarations stay exactly bound across plugin cache ver
 });
 
 test("native app controls refuse unsupported schema, references and newly appearing capabilities", () => {
-  const home=mkdtempSync(join(tmpdir(),"skills-app-boundaries-")); roots.push(home);
+  const home=mkdtempSync(join(tmpdir(),"skills-app-boundaries-")); roots.push(home); admitCorpusFixture(join(home, ".codex"));
   const cache=join(home,".codex/plugins/cache"), root=join(cache,"probe/pages/1.0.0"), document=join(root,"skills/write-page/SKILL.md");
   const manifest=join(root,".codex-plugin/plugin.json"), appPath=join(root,".app.json"), app='{"apps":{"pages":{"id":"synthetic_pages_connector","required":true}}}';
   put(manifest,'{"name":"pages","version":"1.0.0"}');
@@ -151,7 +155,7 @@ test("native app controls refuse unsupported schema, references and newly appear
 });
 
 for (const nativeVersion of ["codex-cli 0.159.2", "codex-cli 0.160.0"]) test(`path-disabled ${nativeVersion} plugin omission enrolls a stable name across cache versions`, () => {
-  const home=mkdtempSync(join(tmpdir(),"skills-disabled-plugin-omission-")); roots.push(home);
+  const home=mkdtempSync(join(tmpdir(),"skills-disabled-plugin-omission-")); roots.push(home); admitCorpusFixture(join(home, ".codex"));
   const f={home,dataDir:join(home,"data"),projectDir:home}, cache=join(home,".codex/plugins/cache");
   const parent=join(cache,"openai-curated-remote/codex-browser-recorder"), old=join(parent,"0.4.0");
   const document=join(old,"skills/record-browser/SKILL.md"), config=join(home,".codex/config.toml");
@@ -193,7 +197,7 @@ for (const nativeVersion of ["codex-cli 0.159.2", "codex-cli 0.160.0"]) test(`pa
 
 
 test("remote null-version denied materialization binds the native installation receipt without guessing a cache version", () => {
- const home=mkdtempSync(join(tmpdir(),"skills-remote-null-version-")); roots.push(home);
+ const home=mkdtempSync(join(tmpdir(),"skills-remote-null-version-")); roots.push(home); admitCorpusFixture(join(home, ".codex"));
  const cache=join(home,".codex/plugins/cache"), parent=join(cache,"openai-curated-remote/pages"), root=join(parent,"0.1.18"), document=join(root,"skills/write-page/SKILL.md");
  put(join(root,".codex-plugin/plugin.json"),JSON.stringify({name:"pages",version:"0.1.18"}));
  put(document,"---\nname: write-page\ndescription: Synthetic denied Pages fixture\n---\nFixture\n");
@@ -243,7 +247,7 @@ test("remote null-version denied materialization binds the native installation r
 
 
 test("inert disabled plugin documents do not block qualified review while active hook controls still refuse", () => {
- const home=mkdtempSync(join(tmpdir(),"skills-inert-plugin-review-")); roots.push(home);
+ const home=mkdtempSync(join(tmpdir(),"skills-inert-plugin-review-")); roots.push(home); admitCorpusFixture(join(home, ".codex"));
  const cache=join(home,".codex/plugins/cache"), inactiveRoot=join(cache,"probe/inactive/1.0.0"), activeRoot=join(cache,"probe/active/1.0.0");
  const inactive=join(inactiveRoot,"skills/inert-skill/SKILL.md"), active=join(activeRoot,"skills/active-skill/SKILL.md");
  put(join(inactiveRoot,".codex-plugin/plugin.json"),JSON.stringify({name:"inactive",version:"1.0.0",hooks:{SessionStart:[{hooks:[{type:"command",command:"synthetic-never-executed"}]}]}}));
@@ -321,7 +325,7 @@ test("inert disabled plugin documents do not block qualified review while active
 });
 
 for (const rootKind of ["plugin", "skills"] as const) test(`native local installation inputs remain inventory-only with a configured ${rootKind} root`, () => {
- const home=mkdtempSync(join(tmpdir(),"skills-native-install-input-"));roots.push(home);
+ const home=mkdtempSync(join(tmpdir(),"skills-native-install-input-"));roots.push(home); admitCorpusFixture(join(home, ".codex"));
  const cache=join(home,".codex/plugins/cache"), installedRoot=join(cache,"probe/vendor/1.0.0"), sourceRoot=join(home,"installation-input/vendor");
  const installedDoc=join(installedRoot,"skills/deploy/SKILL.md"), sourceDoc=join(sourceRoot,"skills/deploy/SKILL.md"), sourceManifest=join(sourceRoot,".codex-plugin/plugin.json");
  put(join(installedRoot,".codex-plugin/plugin.json"),'{"name":"vendor","version":"1.0.0"}');
@@ -384,7 +388,7 @@ for (const rootKind of ["plugin", "skills"] as const) test(`native local install
 });
 
 test("native review accepts an empty plugin cache while preserving catalog and cached-identity refusals", () => {
- const home=mkdtempSync(join(tmpdir(),"skills-empty-plugin-cache-")); roots.push(home);
+ const home=mkdtempSync(join(tmpdir(),"skills-empty-plugin-cache-")); roots.push(home); admitCorpusFixture(join(home, ".codex"));
  const cache=join(home,".codex/plugins/cache"), bridge=join(home,".codex/skills/skills-cli/SKILL.md"), system=join(home,".codex/skills/.system/probe/SKILL.md");
  applyAgentIntegration(planAgentIntegration({home,dataDir:join(home,"data"),projectDir:home,agents:["codex"]}));
  put(system,"---\nname: probe\ndescription: Synthetic system skill\n---\nFixture");
@@ -413,7 +417,7 @@ test("native review accepts an empty plugin cache while preserving catalog and c
 
 
 test("reviewed stdio MCP capabilities stay available and bound when only the native skill name is denied", () => {
- const home=mkdtempSync(join(tmpdir(),"skills-mcp-controls-")); roots.push(home);
+ const home=mkdtempSync(join(tmpdir(),"skills-mcp-controls-")); roots.push(home); admitCorpusFixture(join(home, ".codex"));
  const cache=join(home,".codex/plugins/cache"), parent=join(cache,"probe/vendor"), root=join(parent,"1.0.0"), document=join(root,"skills/deploy/SKILL.md"), mcp=join(root,".mcp.json"), manifest=join(root,".codex-plugin/plugin.json");
  const manifestText=JSON.stringify({name:"vendor",version:"1.0.0",mcpServers:"./.mcp.json"});
  const mcpText=JSON.stringify({mcpServers:{probe:{command:"synthetic-never-executed",args:["--fixture"],cwd:"${CODEX_PLUGIN_ROOT}",env_vars:["SKILLS_SYNTHETIC_NAME"]}}});
@@ -471,7 +475,7 @@ test("reviewed stdio MCP capabilities stay available and bound when only the nat
 });
 
 test("Codex stdio tool metadata preserves capabilities during exact skill denial", () => {
- const home=mkdtempSync(join(tmpdir(),"skills-mcp-tool-metadata-")); roots.push(home);
+ const home=mkdtempSync(join(tmpdir(),"skills-mcp-tool-metadata-")); roots.push(home); admitCorpusFixture(join(home, ".codex"));
  const f={home,dataDir:join(home,"data"),projectDir:home}, cache=join(home,".codex/plugins/cache"), parent=join(cache,"probe/vendor"), root=join(parent,"1.0.0"), document=join(root,"skills/deploy/SKILL.md"), mcp=join(root,".mcp.json");
  const server={command:"synthetic-never-executed",args:["--fixture"],cwd:"${CODEX_PLUGIN_ROOT}",env:{},env_vars:["SKILLS_SYNTHETIC_NAME"],enabled:false,default_tools_approval_mode:"approve",omit_tools_from:["deferred"],startup_timeout_sec:30,tool_timeout_sec:60,tools:{synthetic_tool:{approval_mode:"prompt"}}};
  const text=JSON.stringify({mcpServers:{probe:server}}), read=(path:string)=>readFileSync(path,"utf8");

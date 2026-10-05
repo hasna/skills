@@ -216,7 +216,10 @@ test("reviewed legacy recovery archives only a dead local writer lock and preser
   const review = inspectSessionWriteLock("root", f);
   expect(review.schemaVersion).toBe(1);
   expect(review.hostBound).toBe(false);
-  const archive = recoverSessionWriteLock("root", review.reviewDigest, f);
+  const probe = absentWriterProbe(99_999_999);
+  let archive: string;
+  try { archive = recoverSessionWriteLock("root", review.reviewDigest, f); }
+  finally { probe.mockRestore(); }
   expect(existsSync(lock.path)).toBe(false);
   expect(readFileSync(archive, "utf8")).toBe(lock.bytes.toString("utf8"));
   expect(readFileSync(sessionReceiptPath("root", f))).toEqual(f.before);
