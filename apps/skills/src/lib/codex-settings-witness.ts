@@ -142,6 +142,8 @@ function inference(target: Record<string, any>, version: 2 | 3 | 4): void {
  */
 function projectModelAvailabilityNux(config: Record<string, any>, text: string): { config: Record<string, any>; numericSource: string } {
   const tui = config.tui, counts = isRecord(tui) ? tui.model_availability_nux : undefined;
+  // Empty native TUI tables carry no field: the first count must not alter V4.
+  if (isRecord(tui) && !Object.keys(tui).length) { delete config.tui; return { config, numericSource: text }; }
   if (!isRecord(counts) || Object.keys(counts).length > 256 || !Object.values(counts).every(value => typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 0xffffffff)) return { config, numericSource: text };
   const expected = structuredClone(config);
   delete expected.tui.model_availability_nux;
@@ -150,6 +152,29 @@ function projectModelAvailabilityNux(config: Record<string, any>, text: string):
   const headers: Array<{ start: number; end: number }> = [];
   const spans: Array<{ start: number; end: number }> = [];
   const integer = /^(?:\+?\d(?:_?\d)*|0x[0-9a-fA-F](?:_?[0-9a-fA-F])*|0o[0-7](?:_?[0-7])*|0b[01](?:_?[01])*)$/;
+  const counterIntegers = (span: string): boolean => {
+    let values = 0;
+    for (let at = 0; at < span.length;) {
+      const char = span[at]!;
+      if (char === "#") { while (at < span.length && span[at] !== "\n") at++; continue; }
+      if (char === '\"' || char === "'") {
+        const quote = char; at++;
+        while (at < span.length) {
+          if (quote === '\"' && span[at] === "\\") { at += 2; continue; }
+          if (span[at++] === quote) break;
+        }
+        continue;
+      }
+      if (char !== "=") { at++; continue; }
+      at++; while (at < span.length && /\s/.test(span[at]!)) at++;
+      if (span[at] === "{") { at++; continue; }
+      const start = at;
+      while (at < span.length && !/[\s,\]{}#]/.test(span[at]!)) at++;
+      if (!integer.test(span.slice(start, at))) return false;
+      values++;
+    }
+    return values === Object.keys(counts).length;
+  };
   // A successful prefix parse distinguishes real headers/assignments from
   // lookalikes inside multiline strings. Bound parser work independently.
   let attempts = 0;
@@ -174,8 +199,9 @@ function projectModelAvailabilityNux(config: Record<string, any>, text: string):
     if (realPrefix(end)) spans.push({ start, end });
   }
   for (const { start, end } of spans) {
-    // Bun parses 3.0 as number 3; retain spelling to avoid admitting floats.
-    if (!numericTokens(text.slice(start, end)).every(token => integer.test(token))) continue;
+    // Bun parses 3.0 as number 3; inspect only value literals, never the
+    // digits/hyphens in bare model keys such as gpt-5 and o4-mini.
+    if (!counterIntegers(text.slice(start, end))) continue;
     const remaining = text.slice(0, start) + text.slice(end);
     let parsed: any;
     try { parsed = Bun.TOML.parse(remaining); } catch { continue; }
