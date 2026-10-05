@@ -1,4 +1,5 @@
 /** Reviewed native identity continuity; never starts a native consumer. */
+import { createHash } from "node:crypto";
 import { isCodexLocalStdioMcpServer } from "./codex-local-mcp-controls.js";
 import { hashNativeJsonControls } from "./claude-settings-witness.js";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
@@ -9,6 +10,7 @@ export interface CodexPluginSkillControl { name:string; pluginId:string; namespa
 /** A native nonremote installation disabled by the witnessed configuration.
  * Its cache is inert; this makes no claim about reviewed hook capabilities. */
 export interface CodexInactivePluginControl { pluginId:string; namespace:string; pluginParent:string; sourceType:"local"|"git"|"npm"; sourceSha256:string }
+export interface ReviewedCodexSkillDenial { name:string; path:string; sha256:string }
 export interface CodexPluginSourceInput { pluginId:string; namespace:string; pluginParent:string; sourceRoot:string; sourceSha256:string }
 const identifier = (v:unknown):v is string => typeof v === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(v);
 const CODEX_DEFAULT_AGENT_PLUGIN_VERSION = "1.0.0";
@@ -146,13 +148,33 @@ function identity(document:string, cache:string, read:Read): { name:string; name
   if (controls.namespace!==parsed.namespace) refuse();
   return {name:parsed.name,pluginParent:parsed.pluginParent,...controls};
 }
+/** Only a whole absent, already denied remote skills-only parent is inert.
+ * Walk every ancestor: a dangling alias or non-directory is never absence. */
+export function absentDisabledCodexPluginParent(cache:string, parent:string, controls:CodexPluginSkillControl[], rules:unknown):boolean {
+  try {
+    const parts=relative(cache,parent).split(sep), enrolled=controls.filter(control=>control.pluginParent===parent);
+    if (resolve(parent)!==parent || parts.length!==2 || parts.some(part=>!identifier(part)) || !enrolled.length || !Array.isArray(rules)) return false;
+    for (let cursor=parent;;cursor=dirname(cursor)) {
+      const stat=lstatSync(cursor,{throwIfNoEntry:false});
+      if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) return false;
+      if (dirname(cursor)===cursor) break;
+    }
+    if (lstatSync(parent,{throwIfNoEntry:false})) return false;
+    return enrolled.every(control=>control.namespace===parts[1] && control.pluginId===`${parts[1]}@${parts[0]}`
+      && remotePluginIdentifier(control.remotePluginId) && !control.appSha256 && !control.mcpSha256
+      && control.name.startsWith(control.namespace+":") && /^[a-f0-9]{64}$/.test(control.manifestSha256)
+      && rules.some((rule:any)=>typeof rule?.name==="string" && rule.name.trim()===control.name && rule.enabled===false)
+      && !rules.some((rule:any)=>(typeof rule?.name==="string" && rule.name.trim()===control.name || typeof rule?.path==="string" && (rule.path===parent || rule.path.startsWith(parent+sep))) && rule.enabled!==false));
+  } catch { return false; }
+}
 /** Capability controls remain bound even after every native Skill body disappears. */
-export function reviewedCodexPluginCapabilitiesUnchanged(cache:string, controls:CodexPluginSkillControl[], read:Read):boolean {
+export function reviewedCodexPluginCapabilitiesUnchanged(cache:string, controls:CodexPluginSkillControl[], read:Read, rules?:unknown):boolean {
   if (!Array.isArray(controls) || controls.length>4096) return false;
   let entries=0;
   try {
     for (const parent of new Set(controls.map(control=>control.pluginParent))) {
-      if (!parent.startsWith(cache+sep) || !lstatSync(parent,{throwIfNoEntry:false})?.isDirectory()) return false;
+      if (absentDisabledCodexPluginParent(cache,parent,controls,rules)) continue;
+      if (!parent.startsWith(cache+sep) || !lstatSync(parent,{throwIfNoEntry:false})?.isDirectory() || realpathSync(parent)!==parent) return false;
       for (const control of controls.filter(control=>control.pluginParent===parent)) {
         if (control.remotePluginId !== undefined && !remoteInstallationMatches(parent,control.remotePluginId,read)) return false;
       }
@@ -172,8 +194,11 @@ export function reviewedCodexPluginCapabilitiesUnchanged(cache:string, controls:
     return true;
   } catch { return false; }
 }
-export function reviewCodexPluginControls(catalog:CodexNativeSkillCatalog, documents:string[], cache:string, cwd:string, read:Read, rules:unknown, pluginSettings?:unknown, plannedRules?:unknown): { skills:CodexPluginSkillControl[]; inactivePlugins:CodexInactivePluginControl[]; sourceInputs:CodexPluginSourceInput[] } {
+export function reviewCodexPluginControls(catalog:CodexNativeSkillCatalog, documents:string[], cache:string, cwd:string, read:Read, rules:unknown, pluginSettings?:unknown, plannedRules?:unknown, denials:ReviewedCodexSkillDenial[]=[]): { skills:CodexPluginSkillControl[]; inactivePlugins:CodexInactivePluginControl[]; sourceInputs:CodexPluginSourceInput[] } {
   if (!supportsCodexNativeCapability(catalog?.version, "qualified-skill-catalog") || catalog.cwd!==cwd) refuse();
+  if (!Array.isArray(denials) || denials.length>4096 || new Set(denials.map(item=>item?.path)).size!==denials.length
+    || denials.some(item=>!item || Object.keys(item).sort().join(",")!=="name,path,sha256" || typeof item.name!=="string" || typeof item.path!=="string" || !/^[a-f0-9]{64}$/.test(item.sha256))) refuse();
+  const usedDenials=new Set<string>();
   const skills=projectCodexNativeSkillCatalog({data:[{cwd,errors:[],skills:catalog.skills}]},cwd);
   const allowed=new Set(documents), result:CodexPluginSkillControl[]=[], inertDocuments=new Set<string>();
   const inactivePlugins=new Map<string,CodexInactivePluginControl>();
@@ -258,15 +283,23 @@ export function reviewCodexPluginControls(catalog:CodexNativeSkillCatalog, docum
       // deny before Skills has added a deny for the new cache path. Admit only
       // that stronger planned control, with the current name still disabled.
       // Never use planned denies to manufacture an inactive/unknown identity.
+      const denial=denials.find(item=>item.path===document);
+      const explicitDeny=denial!==undefined && remotePluginId!==undefined && catalog.version==="codex-cli 0.160.0"
+        && denial.name===parsed.name && denial.sha256===createHash("sha256").update(read(document)).digest("hex")
+        && Array.isArray(rules) && !rules.some((rule:any)=>(rule?.path===document || typeof rule?.name==="string" && rule.name.trim()===parsed.name) && rule.enabled!==false)
+        && Array.isArray(plannedRules) && plannedRules.some((rule:any)=>rule?.path===document && rule.enabled===false);
+      if (denial && !explicitDeny) refuse();
+      if (explicitDeny) usedDenials.add(document);
       const plannedPathDeny=catalog.version==="codex-cli 0.160.0" && remotePluginId!==undefined
         && Array.isArray(rules) && rules.some((rule:any)=>typeof rule?.name==="string" && rule.name.trim()===parsed.name && rule.enabled===false)
         && !rules.some((rule:any)=>(rule?.path===document || typeof rule?.name==="string" && rule.name.trim()===parsed.name) && rule.enabled!==false)
         && Array.isArray(plannedRules) && plannedRules.some((rule:any)=>rule?.path===document && rule.enabled===false)
         && isCodexNativeSkillDisabled(nativeSkill,plannedRules);
-      if ((!exactPathDeny && !plannedPathDeny) || !isCodexNativeSkillDisabled(nativeSkill,rules)) refuse();
+      if (!explicitDeny && ((!exactPathDeny && !plannedPathDeny) || !isCodexNativeSkillDisabled(nativeSkill,rules))) refuse();
     }
     result.push({...parsed,pluginId:expectedPluginId,...(remotePluginId ? {remotePluginId} : {})});
   }
+  if (usedDenials.size!==denials.length) refuse();
   if ((!result.length && documents.some(document=>document.startsWith(cache+sep) && !inertDocuments.has(document)))
     || new Set(result.map(item=>item.name)).size!==result.length) refuse();
   return {skills:result,inactivePlugins:[...inactivePlugins.values()],sourceInputs:[...sourceInputs.values()]};

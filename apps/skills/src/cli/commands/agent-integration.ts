@@ -177,6 +177,7 @@ export function registerAgentIntegration(parent: Command): void {
     .option("--selection-profile <id>", "Selection profile (preserves existing binding; new agents use default)")
     .option("--include-vendor", "Retained for compatibility; vendor system skills are always inventoried and disabled", false)
     .option("--discovery-inputs <file>", "Advanced reviewed active plugin roots and source hashes for unsupported registrations")
+    .option("--codex-skill-denials <file>", "Explicit reviewed remote skill denials: array of exact name, path and document sha256; requires fresh catalog and discovery inputs")
     .option("--codex-native-catalog <file>", "Reviewed supported Codex skill and installed-plugin receipt for exact qualified-name disables")
     .option("--reviewed-cache-alias <path>", "Exact skill-containing vendor cache alias reviewed for this hook plan")
     .option("--allow-root-aliases", "Allow home .claude/.codex aliases to existing directories within this home", false)
@@ -186,7 +187,7 @@ export function registerAgentIntegration(parent: Command): void {
     .action(async (options) => {
       try {
         const discoveryInputs: ReviewedDiscoveryInputs | undefined = options.discoveryInputs ? JSON.parse(readFileSync(options.discoveryInputs, "utf8")) : undefined;
-        const plan = planAgentIntegration({ projectDir: process.cwd(), agents: agents(options.agent), command: options.command, profileId: options.selectionProfile, includeVendor: options.includeVendor, discoveryInputs, allowRootAliases: options.allowRootAliases, reviewedCacheAlias: options.reviewedCacheAlias, codexNativeCatalog: options.codexNativeCatalog ? JSON.parse(readFileSync(options.codexNativeCatalog, "utf8")) : undefined });
+        const plan = planAgentIntegration({ projectDir: process.cwd(), agents: agents(options.agent), command: options.command, profileId: options.selectionProfile, includeVendor: options.includeVendor, discoveryInputs, allowRootAliases: options.allowRootAliases, reviewedCacheAlias: options.reviewedCacheAlias, codexSkillDenials: options.codexSkillDenials ? JSON.parse(readFileSync(options.codexSkillDenials,"utf8")) : undefined, codexNativeCatalog: options.codexNativeCatalog ? JSON.parse(readFileSync(options.codexNativeCatalog, "utf8")) : undefined });
         const result = options.apply ? applyAgentIntegration(plan) : { changed: [], backups: [] };
         // Configuration contents can include credentials. Only paths/counts leave this command.
         const receipt = { codexPluginSkillReview: plan.codexPluginSkillReview, codexPluginSkills: plan.changes.filter(change=>change.path.endsWith("agent-policy.json")).map(change=>JSON.parse(change.after).bridge?.codexPluginSkills ?? []).flat(), applied: options.apply, planned: plan.changes.map(change => change.path), ...result, rootAliases: plan.rootAliases ?? [], discovery: plan.discoveryAfter, nativeSkills: plan.nativeSkills.map(entry => ({ agent: entry.agent, path: entry.path, managed: entry.managed, vendor: entry.vendor, system: entry.system === true, bridge: entry.bridge === true })), requiresNativeRetirement: plan.nativeSkills.some(entry => !entry.bridge && !entry.system) };

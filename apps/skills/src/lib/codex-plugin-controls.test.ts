@@ -1,5 +1,5 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { useDefaultTestTimeout } from "../test-preload.js";
@@ -587,4 +587,60 @@ test("Codex stdio tool metadata preserves capabilities during exact skill denial
   {hooks:{}},{instructions:"unreviewed"},{env_vars:[{name:"SKILLS_SYNTHETIC_NAME",source:"remote"}]},
  ]) {put(mcp,JSON.stringify({mcpServers:{probe:{...server,...invalid}}}));expect(review).toThrow("IDENTITY_UNSUPPORTED");}
  put(mcp,'{"mcpServers":{"probe":{"command":"synthetic-never-executed","tools":{"synthetic_tool":{"approval_mode":"auto","approval_mode":"approve"}}}}}');expect(review).toThrow("IDENTITY_UNSUPPORTED");
+});
+
+
+test("an absent remote skills-only parent retains its disabled identity and refuses unsafe reappearance",()=>{
+ const {f,cache,parent,config,options,catalog}=remoteNameDisabledRefresh();
+ applyAgentIntegration(planAgentIntegration(options()));
+ const before=readFileSync(config,"utf8"), saved=join(f.home,"preserved-parent");
+ const enrolled=parseManagedSkillPolicy(readFileSync(join(f.dataDir,"agent-policy.json"),"utf8")).bridge.codexPluginSkills;
+ renameSync(parent,saved);
+ const rules=(Bun.TOML.parse(before) as any).skills.config, read=(path:string)=>readFileSync(path,"utf8");
+ expect(reviewedCodexPluginCapabilitiesUnchanged(cache,enrolled,read,rules)).toBe(true);
+ for(const delta of [{remotePluginId:undefined},{appSha256:"a".repeat(64)},{mcpSha256:"b".repeat(64)},{namespace:"other"},{pluginId:"other@openai-curated-remote"}]) expect(reviewedCodexPluginCapabilitiesUnchanged(cache,enrolled.map((control:any)=>({...control,...delta})),read,rules)).toBe(false);
+ expect(reviewedCodexPluginCapabilitiesUnchanged(cache,enrolled,read,[])).toBe(false);
+ expect(reviewedCodexPluginCapabilitiesUnchanged(cache,enrolled,read,[...rules,{path:join(parent,"0.4.1/skills/record-browser/SKILL.md"),enabled:true}])).toBe(false);
+ expect(()=>assertManagedAgentBridge("codex",f)).not.toThrow();
+ expect(()=>planAgentIntegration({...f,agents:["codex"]})).not.toThrow();
+ expect(readFileSync(config,"utf8")).toBe(before);
+ const refreshed={...f,agents:["codex" as const],codexNativeCatalog:{...catalog,plugins:[]},discoveryInputs:{version:1 as const,agents:[{agent:"codex" as const,roots:[cache],sources:[captureCodexSettingsV3(config)],pluginHooks:"reviewed-no-skill-injection" as const}]}};
+ const plan=planAgentIntegration(refreshed);applyAgentIntegration(plan);
+ expect(parseManagedSkillPolicy(readFileSync(join(f.dataDir,"agent-policy.json"),"utf8")).bridge.codexPluginSkills.some((control:any)=>control.name==="recorder:record-browser")).toBe(true);
+ put(config,before+'\n[[skills.config]]\nname = "recorder:record-browser"\nenabled = true\n');expect(()=>assertManagedAgentBridge("codex",f)).toThrow();put(config,before);
+ symlinkSync(saved,parent);
+ expect(()=>assertManagedAgentBridge("codex",f)).toThrow("NATIVE_SKILL_DRIFT");
+ rmSync(parent);renameSync(saved,parent);
+ put(join(parent,"0.4.1/.codex-plugin/plugin.json"),'{"name":"recorder","version":"0.4.1","description":"Changed capabilities"}');
+ expect(()=>assertManagedAgentBridge("codex",f)).toThrow("NATIVE_SKILL_DRIFT");
+});
+
+test("explicit reviewed denial binds a new omitted remote qualified name to its document and genuine installation",()=>{
+ const {f,config,document,manifest,catalog,options}=remoteNameDisabledRefresh();
+ const text=readFileSync(document,"utf8").replace("name: record-browser","name: newly-named");put(document,text);
+ const denial={name:"recorder:newly-named",path:document,sha256:createHash("sha256").update(text).digest("hex")};
+ expect(()=>planAgentIntegration(options())).toThrow("IDENTITY_UNSUPPORTED");
+ const input={...options(),codexSkillDenials:[denial]};
+ const before=readFileSync(config,"utf8"), plan=planAgentIntegration(input);
+ expect(readFileSync(config,"utf8")).toBe(before);expect(catalog.skills.map(skill=>skill.name)).toEqual(["skills-cli"]);
+ applyAgentIntegration(plan);
+ const rules=(Bun.TOML.parse(readFileSync(config,"utf8")) as any).skills.config;
+ expect(rules).toContainEqual({name:"recorder:record-browser",enabled:false});expect(rules).toContainEqual({name:denial.name,enabled:false});expect(rules).toContainEqual({path:document,enabled:false});
+ expect(()=>assertManagedAgentBridge("codex",f)).not.toThrow();
+ for (const bad of [{...denial,name:"recorder:other"},{...denial,sha256:"0".repeat(64)},{...denial,path:manifest}]) expect(()=>planAgentIntegration({...input,codexSkillDenials:[bad]})).toThrow();
+ expect(()=>planAgentIntegration({...input,codexNativeCatalog:undefined})).toThrow();
+ expect(()=>planAgentIntegration({...input,discoveryInputs:undefined})).toThrow();
+ expect(()=>planAgentIntegration({...input,discoveryInputs:{version:1,agents:[{...options().discoveryInputs.agents[0]!,sources:[captureCodexSettingsV3(config)]}]}})).toThrow("full manifest and capability");
+ const newCapability=planAgentIntegration(input), hooks=join(dirname(dirname(manifest)),"hooks");put(join(hooks,"hooks.json"),"{}");expect(()=>applyAgentIntegration(newCapability)).toThrow();rmSync(hooks,{recursive:true});
+ const stale=planAgentIntegration(input);put(document,text+"Changed after planning");expect(()=>applyAgentIntegration(stale)).toThrow("Native identity source changed");put(document,text);
+ for(const name of ["recorder:newly-named"," recorder:newly-named "]) {
+   const conflicting=before+`\n[[skills.config]]\nname = ${JSON.stringify(name)}\nenabled = true\n`;
+   put(config,conflicting);expect(()=>planAgentIntegration({...input,discoveryInputs:options().discoveryInputs})).toThrow();expect(readFileSync(config,"utf8")).toBe(conflicting);
+ }
+ put(config,before);
+ const app=join(dirname(dirname(manifest)),".app.json"), manifestText=readFileSync(manifest,"utf8");
+ put(manifest,JSON.stringify({...JSON.parse(manifestText),apps:"./.app.json"}));put(app,'{"apps":{"synthetic":{"id":"synthetic_connector","required":true}}}');
+ const withoutApp={...options(),codexSkillDenials:[denial]};expect(()=>planAgentIntegration(withoutApp)).toThrow("capability discovery witnesses");
+ const withApp={...withoutApp,discoveryInputs:{version:1 as const,agents:[{...withoutApp.discoveryInputs.agents[0]!,sources:[...withoutApp.discoveryInputs.agents[0]!.sources,{path:app,sha256:createHash("sha256").update(readFileSync(app)).digest("hex")}]}]}};
+ const appPlan=planAgentIntegration(withApp);put(app,'{"apps":{"synthetic":{"id":"unreviewed_connector","required":true}}}');expect(()=>applyAgentIntegration(appPlan)).toThrow("Native identity source changed");
 });

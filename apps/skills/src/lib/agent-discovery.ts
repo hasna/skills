@@ -11,16 +11,16 @@ import { hashDiscoveryPathFile } from "./agent-discovery-path-bytes.js";
 import { hashManagedPluginRegistry, type ManagedPluginRegistrationWitness } from "./plugin-discovery.js";
 import { readPluginBinding } from "./plugin-admission.js";
 import { captureClaudeMarketplaceRegistry, captureClaudeMarketplaceRegistryV2 } from "./claude-marketplace-registry.js";
-import { captureClaudeSettings, captureClaudeSettingsV2, captureClaudeSettingsV3, hashClaudeSettingsReplacement, hashClaudeSettingsReplacementV2, hashClaudeSettingsReplacementV3 } from "./claude-settings-witness.js";
+import { hashNativeJsonControls, captureClaudeSettings, captureClaudeSettingsV2, captureClaudeSettingsV3, hashClaudeSettingsReplacement, hashClaudeSettingsReplacementV2, hashClaudeSettingsReplacementV3 } from "./claude-settings-witness.js";
 import { assertCodexHookDiscoveryRecovery, verifiesCodexHookDiscoverySource, type CodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery.js";
 import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, hashCodexSettingsReplacement, hashCodexSettingsReplacementV2, hashCodexSettingsReplacementV3, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
-import { reviewedCodexPluginSourceRoots, type CodexPluginSourceInput } from "./codex-plugin-skill-controls.js";
+import { absentDisabledCodexPluginParent, reviewedCodexPluginSourceRoots, type CodexPluginSkillControl, type CodexPluginSourceInput } from "./codex-plugin-skill-controls.js";
 import { sumiConfigDirectory, sumiConfigPath } from "./agent-sumi.js";
 import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
 export { captureDiscoveryDirectories, type DiscoveryDirectory } from "./agent-discovery-directories.js";
 
 export interface DiscoverySource { path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes" | "claude-plugin-registry" | "claude-marketplace-registry" | "claude-settings-v1" | "claude-settings-v2" | "claude-settings-v3" | "claude-marketplace-registry-v2" | "codex-settings-v1" | "codex-settings-v2" | "codex-settings-v3"; managedPlugins?: ManagedPluginRegistrationWitness[]; format?: "json" | "toml" | "yaml"; fields?: string[] }
-export interface AgentDiscoveryBinding { agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; method: "automatic" | "reviewed"; builtinNames?: string[]; codexInstallationInputs?: { version:"codex-cli 0.160.0"; catalogSha256:string; plugins:CodexPluginSourceInput[]; directories?:DiscoveryDirectory[] } }
+export interface AgentDiscoveryBinding { agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; method: "automatic" | "reviewed"; builtinNames?: string[]; codexDisabledPluginSkills?: CodexPluginSkillControl[]; codexInstallationInputs?: { version:"codex-cli 0.160.0"; catalogSha256:string; plugins:CodexPluginSourceInput[]; directories?:DiscoveryDirectory[] } }
 export interface ReviewedDiscoveryInputs { version: 1; agents: Array<{ agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; pluginHooks: "reviewed-no-skill-injection" }> }
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 function parseConfig(text: string, path: string, toml = false): any {
@@ -101,6 +101,55 @@ function projected(source: DiscoverySource, changes?: Map<string, string>, budge
   if (!source.format) return digest(text);
   return projectNativeDiscoveryFields(text, source.format, source.fields ?? [], source.path);
 }
+function absentCodexSkillRoots(binding:AgentDiscoveryBinding):string[] {
+  const controls=binding.codexDisabledPluginSkills;
+  if (controls===undefined || Array.isArray(controls) && !controls.length) return [];
+  if (binding.agent!=="codex" || !Array.isArray(controls) || controls.length>4096) throw new Error("Invalid disabled Codex discovery proof");
+  if (binding.method!=="reviewed" || controls.every(control=>lstatSync(control.pluginParent,{throwIfNoEntry:false}))) return [];
+  const cache=dirname(dirname(controls[0]!.pluginParent)), config=join(dirname(dirname(cache)),"config.toml");
+  const source=binding.sources.find(source=>source.path===config && source.sha256!==null && source.format===undefined && source.fields===undefined);
+  if (!source || projected(source)!==source.sha256) throw new Error("Missing current disabled Codex configuration witness");
+  const rules=(Bun.TOML.parse(read(config)!) as any).skills?.config ?? [];
+  return [...new Set(controls.map(control=>control.pluginParent))].filter(parent=>absentDisabledCodexPluginParent(cache,parent,controls,rules));
+}
+/** Retain historical bytes only when the entire old Claude version is absent
+ * and unchanged native settings/registry select a different extant user root.
+ * No individual missing hook or currently registered root is exempt. */
+function absentRetiredClaudeRoots(binding:AgentDiscoveryBinding):string[] {
+  if (binding.agent!=="claude" || binding.method!=="reviewed") return [];
+  const result=new Set<string>();
+  for (const source of binding.sources) {
+    if (source.format!==undefined || source.fields!==undefined || source.managedPlugins!==undefined || ![undefined,"bytes"].includes(source.hashMode) || source.sha256===null) continue;
+    const marker=sep+".claude"+sep+"plugins"+sep+"cache"+sep, at=source.path.indexOf(marker);
+    if (at<0 || source.path.indexOf(marker,at+1)>=0) continue;
+    const cache=source.path.slice(0,at+marker.length-1), parts=source.path.slice(at+marker.length).split(sep);
+    if (parts.length<4 || parts.slice(0,3).some(part=>!part || part==="." || part==="..")) continue;
+    const root=join(cache,...parts.slice(0,3)); safe(root);
+    if (lstatSync(root,{throwIfNoEntry:false})) continue;
+    const claude=dirname(dirname(cache)), settings=join(claude,"settings.json"), registry=join(claude,"plugins/installed_plugins.json");
+    const full=(path:string)=>binding.sources.find(item=>item.path===path && item.sha256!==null && item.format===undefined && item.fields===undefined);
+    const configSource=full(settings), registrySource=full(registry);
+    if (!configSource || !registrySource || projected(configSource)!==configSource.sha256 || projected(registrySource)!==registrySource.sha256) continue;
+    const settingsText=read(settings)!, registryText=read(registry)!;
+    hashNativeJsonControls(settingsText);hashNativeJsonControls(registryText);
+    const config=JSON.parse(settingsText), installed=JSON.parse(registryText), id=`${parts[1]}@${parts[0]}`;
+    if (installed.version!==2 || !installed.plugins || typeof installed.plugins!=="object" || Array.isArray(installed.plugins) || config.enabledPlugins?.[id]!==true) continue;
+    // A direct user hook can still select a retired version independently of
+    // plugin registration. Keep that active path under the ordinary guard.
+    if (JSON.stringify(config.hooks ?? {}).includes(root)) continue;
+    const rows=installed.plugins[id];
+    if (!Array.isArray(rows) || rows.length!==1 || rows[0]?.scope!=="user" || typeof rows[0]?.installPath!=="string") continue;
+    const active=rows[0].installPath;
+    if (rows[0].version!==basename(active) || resolve(active)!==active || dirname(active)!==dirname(root) || active===root || !lstatSync(active,{throwIfNoEntry:false})?.isDirectory() || realpathSync(active)!==active) continue;
+    const activeManifest=full(join(active,".claude-plugin/plugin.json"));
+    if (!activeManifest || projected(activeManifest)!==activeManifest.sha256) continue;
+    // Any registration selecting the missing graph keeps it active, regardless
+    // of plugin label or scope. Malformed registration shapes fail closed.
+    if (Object.values(installed.plugins).some(value=>!Array.isArray(value) || value.some(row=>!row || typeof row.installPath!=="string" || row.installPath===root || row.installPath.startsWith(root+sep) || root.startsWith(row.installPath+sep)))) continue;
+    result.add(root);
+  }
+  return [...result];
+}
 export function verifyAgentDiscovery(binding: AgentDiscoveryBinding, codexRecovery?: CodexHookDiscoveryRecovery): void {
   if (codexRecovery) assertCodexHookDiscoveryRecovery(binding, codexRecovery);
   if (!binding || !Array.isArray(binding.sources) || !Array.isArray(binding.roots) || binding.sources.length > AGENT_POLICY_LIMITS.discoverySources || binding.roots.length > AGENT_POLICY_LIMITS.discoveryRoots) throw new Error("Invalid native discovery binding");
@@ -114,6 +163,7 @@ export function verifyAgentDiscovery(binding: AgentDiscoveryBinding, codexRecove
     verifyDiscoveryDirectories(binding.directories.filter(directory=>!installationInput(directory.path) && !ancestors.includes(directory)));
     verifyDiscoveryDirectories(projected,installationRoots);
   }
+  const absentRoots=[...absentCodexSkillRoots(binding),...absentRetiredClaudeRoots(binding)];
   const budget = discoveryByteBudget();
   for (const source of binding.sources) {
     assertMarketplaceBinding(binding, source);
@@ -124,10 +174,12 @@ export function verifyAgentDiscovery(binding: AgentDiscoveryBinding, codexRecove
     // positively attested installation role binds current source identity.
     // These bodies/directories are not native loading inputs.
     if (installationInput(source.path)) { safe(source.path); continue; }
+    if (absentRoots.some(root=>source.path.startsWith(root+sep)) && source.format===undefined && source.fields===undefined && source.managedPlugins===undefined && [undefined,"bytes"].includes(source.hashMode)) { safe(source.path); continue; }
     const current = projected(source, undefined, budget);
     if (current !== source.sha256 && !verifiesCodexHookDiscoverySource(binding, source, current, codexRecovery)) throw new Error(`Native discovery input changed; run skills hook install with a fresh discovery review: ${source.path}`);
   }
   for (const root of binding.roots) safe(root);
+  for (const root of absentRoots) { safe(root); if (lstatSync(root,{throwIfNoEntry:false})) throw new Error("Retired native materialization changed during discovery verification"); }
 }
 function codexInstallationRoots(binding:AgentDiscoveryBinding):string[] {
   const proof=binding.codexInstallationInputs;
@@ -149,16 +201,18 @@ function assertMarketplaceBinding(binding: AgentDiscoveryBinding, source: Discov
 }
 export function rebindAgentDiscovery(binding: AgentDiscoveryBinding, changes: Map<string, string>): AgentDiscoveryBinding {
   const budget = discoveryByteBudget();
-  const installationRoots=codexInstallationRoots(binding);
-  return { ...binding, sources: binding.sources.map(source => {
+  const installationRoots=codexInstallationRoots(binding), absentRoots=[...absentCodexSkillRoots(binding),...absentRetiredClaudeRoots(binding)];
+  const rebound={ ...binding, sources: binding.sources.map(source => {
     assertMarketplaceBinding(binding, source);
-    if (!changes.has(source.path) && installationRoots.some(root=>source.path.startsWith(root+sep))) return source;
+    if (!changes.has(source.path) && (installationRoots.some(root=>source.path.startsWith(root+sep)) || absentRoots.some(root=>source.path.startsWith(root+sep)) && source.format===undefined && source.fields===undefined && source.managedPlugins===undefined && [undefined,"bytes"].includes(source.hashMode))) return source;
     const sha256 = projected(source, changes, budget);
     // Only a planned write may change its witness. Do not adopt source drift
     // between initial validation and hook rendering, including raw witnesses.
     if (!changes.has(source.path) && sha256 !== source.sha256) throw new Error(`Native discovery input changed; run skills hook install with a fresh discovery review: ${source.path}`);
     return { ...source, sha256 };
   }) };
+  for (const root of absentRoots) { safe(root); if (lstatSync(root,{throwIfNoEntry:false})) throw new Error("Retired native materialization changed during discovery rebinding"); }
+  return rebound;
 }
 
 /** Capture full byte witnesses for reviewed source or executable files; never import or execute them. */

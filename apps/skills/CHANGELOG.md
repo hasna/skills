@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Retain denied remote skill identities and reviewed inactive Claude graphs when an entire retired cache materialization disappears, while still refusing active missing hooks and unsafe reappearance.
+- Plan explicit reviewed denials for newly named omitted remote Codex skill materializations using fresh native installation and manifest evidence, preserving existing disables and transactional checks.
+
 ## 0.10.37
 
 - Coordinate Skills writes to a shared Codex corpus through existing native admission and shared leases, retaining custody through rollback and child-process completion.
