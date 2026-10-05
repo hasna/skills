@@ -216,10 +216,17 @@ export function registerRuntime(parent: Command) {
     .option("--version <version>", "Install this exact @hasna/skills version as a staged copyfile runtime")
     .option("--min-release-age <days>", "Require a positive integer dependency release age in days for an exact-version update")
     .option("--min-release-age-exclude <pattern>", "Exclude matching package identities from the release-age policy (repeatable)", (pattern: string, prior: string[]) => [...prior, pattern], [])
+    .option("--reviewed-lock <path>", "Install from this private absolute package-lock.json path without resolving dependency ranges")
+    .option("--reviewed-lock-sha256 <sha256>", "Exact reviewed SHA-256 of the supplied package-lock.json")
     .option("--rollback <receipt-id>", "Restore launcher links from an exact copyfile rollout receipt")
     .option("--adopt-aliases", "Switch verified legacy @hasna/skills aliases to the active copyfile runtime")
     .option("--rollback-aliases <receipt-id>", "Restore aliases from an exact adoption receipt")
-    .action(async (options: { json: boolean; version?: string; rollback?: string; adoptAliases?: boolean; rollbackAliases?: string; minReleaseAge?: string; minReleaseAgeExclude: string[] }) => {
+    .action(async (options: { json: boolean; version?: string; rollback?: string; adoptAliases?: boolean; rollbackAliases?: string; minReleaseAge?: string; minReleaseAgeExclude: string[]; reviewedLock?: string; reviewedLockSha256?: string }) => {
+      if ((options.reviewedLock !== undefined || options.reviewedLockSha256 !== undefined) && (!options.version || options.rollback || options.adoptAliases || options.rollbackAliases)) {
+        console.error(JSON.stringify({ error: "REVIEWED_LOCK_REQUIRES_EXACT_VERSION" }));
+        process.exitCode = 1;
+        return;
+      }
       if ((options.minReleaseAge !== undefined || options.minReleaseAgeExclude.length > 0) && (!options.version || options.rollback || options.adoptAliases || options.rollbackAliases)) {
         console.error(JSON.stringify({ error: "RELEASE_AGE_POLICY_REQUIRES_EXACT_VERSION" }));
         process.exitCode = 1;
@@ -257,7 +264,7 @@ export function registerRuntime(parent: Command) {
       if (options.version) {
         try {
           const minReleaseAge = options.minReleaseAge === undefined ? undefined : /^\d+$/.test(options.minReleaseAge) ? Number(options.minReleaseAge) : NaN;
-          const result = await updateCopyfileRuntime(options.version, { minReleaseAge, minReleaseAgeExclude: options.minReleaseAgeExclude });
+          const result = await updateCopyfileRuntime(options.version, { minReleaseAge, minReleaseAgeExclude: options.minReleaseAgeExclude, reviewedLock: options.reviewedLock, reviewedLockSha256: options.reviewedLockSha256 });
           if (options.json) console.log(JSON.stringify(result));
           else console.log(chalk.green(`Updated @hasna/skills to exact version ${options.version} via copyfile runtime.`));
         } catch (error) {

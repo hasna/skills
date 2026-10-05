@@ -2418,3 +2418,29 @@ Migration compares the original witness before projecting the new contract,
 refuses native discovery or unknown control changes, and changes policy only.
 After explicit migration, ordinary supported local MCP updates require no
 coordinated policy write.
+
+### Reproduce a reviewed runtime dependency closure
+
+For an exact-version copyfile update, supply an owner-private absolute npm
+lockfile path and its reviewed SHA-256 together:
+
+```sh
+skills self-update --version <version> --reviewed-lock /absolute/package-lock.json \
+  --reviewed-lock-sha256 <sha256> --min-release-age 7 --json
+```
+
+Use the same lock for a separately reviewed bootstrap. The lock must describe
+the verified package archive as `file:./verified.tgz`, use lockfile format 3,
+and bind its version, integrity and dependency declarations. Registry packages
+must have exact versions and SHA-512 integrity at the configured npm registry.
+The updater verifies each frozen version against current registry metadata
+and the requested age policy, runs `npm ci` without re-resolving ranges, then
+checks lock byte continuity and the actual required dependency closure with
+`npm sbom --sbom-format=cyclonedx --package-lock-only=false`. This forces
+installed-manifest inspection; ordinary `npm ls` can trust a hidden lockfile.
+Existing publisher exemptions remain available through the repeatable
+`--min-release-age-exclude` option. The receipt records the reviewed lock hash.
+
+A reviewed lock does not authorize native skill loading, profile changes,
+credential provisioning or session reconciliation. Without this optional input,
+the existing update flow continues to resolve its dependency lock normally.
