@@ -64,7 +64,7 @@ async function metadata(name: string, context: ReviewedRuntimeLockContext): Prom
 
 /** Validate the immutable install input without resolving any version ranges.
  * npm ci subsequently verifies archive bytes and package/root range agreement;
- * npm ls validates the real installed required closure, including optional peers.
+ * npm sbom forceActual validates the installed required closure, including optional peers.
  */
 export async function validateReviewedRuntimeLock(bytes: Uint8Array, sha256: string, context: ReviewedRuntimeLockContext): Promise<void> {
   if (!/^[a-f0-9]{64}$/.test(sha256)) throw new Error("REVIEWED_LOCK_SHA256_INVALID");

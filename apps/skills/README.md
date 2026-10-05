@@ -2447,7 +2447,9 @@ and bind its version, integrity and dependency declarations. Registry packages
 must have exact versions and SHA-512 integrity at the configured npm registry.
 The updater verifies each frozen version against current registry metadata
 and the requested age policy, runs `npm ci` without re-resolving ranges, then
-checks lock byte continuity and the actual required dependency closure.
+checks lock byte continuity and the actual required dependency closure with
+`npm sbom --sbom-format=cyclonedx --package-lock-only=false`. This forces
+installed-manifest inspection; ordinary `npm ls` can trust a hidden lockfile.
 Existing publisher exemptions remain available through the repeatable
 `--min-release-age-exclude` option. The receipt records the reviewed lock hash.
 

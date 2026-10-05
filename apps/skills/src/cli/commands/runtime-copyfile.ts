@@ -939,7 +939,7 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
     const stagePackage = join(stagePath, "install");
     mkdirSync(stagePackage, { mode: 0o700 });
     copyFileSync(artifact.tarballPath, join(stagePackage, "verified.tgz"));
-    writeFileSync(join(stagePackage, "package.json"), JSON.stringify({ private: true, dependencies: { [PACKAGE_NAME]: "file:./verified.tgz" } }, null, 2), { mode: 0o600, flag: "wx" });
+    writeFileSync(join(stagePackage, "package.json"), JSON.stringify({ name: "skills-runtime-install", version: "0.0.0", private: true, dependencies: { [PACKAGE_NAME]: "file:./verified.tgz" } }, null, 2), { mode: 0o600, flag: "wx" });
     let npmVersion: string | undefined;
     if (reviewedLockBytes) {
       await validateReviewedRuntimeLock(reviewedLockBytes, options.reviewedLockSha256!, {
@@ -958,7 +958,10 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
     const lockBytes = readFileSync(join(stagePackage, "package-lock.json"));
     if (reviewedLockBytes) {
       if (!lockBytes.equals(reviewedLockBytes)) throw new Error("REVIEWED_LOCK_DRIFT_DURING_INSTALL");
-      const treeNpmVersion = await runNpm(["ls", "--all", "--omit=dev", "--prefix", stagePackage], stagePackage, home, stagePath, policy);
+      // npm ls may accept the hidden node_modules lock instead of reading
+      // installed manifests. SBOM forceActual checks actual required edges,
+      // including missing/invalid dependencies, while honoring optional peers.
+      const treeNpmVersion = await runNpm(["sbom", "--sbom-format=cyclonedx", "--package-lock-only=false", "--omit=dev", "--prefix", stagePackage], stagePackage, home, stagePath, policy);
       if (treeNpmVersion !== npmVersion) throw new Error("NPM_VERSION_DRIFT_DURING_UPDATE");
       if (!readFileSync(join(stagePackage, "package-lock.json")).equals(reviewedLockBytes)) throw new Error("REVIEWED_LOCK_DRIFT_DURING_INSTALL");
     }
