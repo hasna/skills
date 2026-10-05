@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.39
+
+- Compare installed Skills payload bytes separately from npm-created nested dependencies; reject bundled dependency payloads and retain complete runtime integrity, symlink and rollback checks.
+
 ## 0.10.38
 
 - Retain denied remote skill identities and reviewed inactive Claude graphs when an entire retired cache materialization disappears, while still refusing active missing hooks and unsafe reappearance.

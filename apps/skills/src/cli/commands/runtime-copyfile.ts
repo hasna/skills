@@ -288,6 +288,7 @@ export async function preflightTarball(bytes: Uint8Array, limits: { maxExpandedB
     const rawPath = `${prefix ? `${prefix}/` : ""}${name}`.replace(/\/$/, "");
     const pathParts = rawPath.split("/");
     if ((rawPath !== "package" && !rawPath.startsWith("package/")) || rawPath.startsWith("/") || rawPath.includes("\\") || pathParts.some(part => !part || part === "." || part === "..")) throw new Error("TARBALL_PATH_INVALID");
+    if (pathParts[1] === "node_modules") throw new Error("TARBALL_BUNDLED_DEPENDENCIES_UNSUPPORTED");
     if (paths.has(rawPath)) throw new Error("TARBALL_DUPLICATE_PATH");
     paths.add(rawPath);
     const flag = block[156] === 0 ? "0" : String.fromCharCode(block[156]!);
@@ -371,7 +372,7 @@ export async function readBodyCapped(response: Response, limit: number, errorCod
 
 interface TreeRecord { digest: string; entries: Array<{ path: string; kind: string; sha256?: string; target?: string; mode?: number }> }
 
-function readTree(root: string, includeModes: boolean): TreeRecord {
+function readTree(root: string, includeModes: boolean, excludeNpmDependencies = false): TreeRecord {
   const base = realpathSync(root);
   const entries: TreeRecord["entries"] = [];
   const walk = (dir: string, prefix = "") => {
@@ -379,6 +380,12 @@ function readTree(root: string, includeModes: boolean): TreeRecord {
       const path = join(dir, item);
       const rel = prefix ? `${prefix}/${item}` : item;
       const stat = lstatSync(path);
+      // Only the installed package payload comparison excludes npm's own root
+      // dependency directory. The complete runtime tree still walks and binds it.
+      if (excludeNpmDependencies && !prefix && item === "node_modules") {
+        if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("INSTALLED_DEPENDENCY_DIRECTORY_UNSAFE");
+        continue;
+      }
       if (stat.isSymbolicLink()) {
         const link = readlinkSync(path);
         const resolved = resolve(dirname(path), link);
@@ -554,8 +561,9 @@ async function runNpm(args: string[], cwd: string, home: string, staging: string
 }
 
 function comparePackageTrees(expectedRoot: string, installedRoot: string): string {
+  if (entryExists(join(expectedRoot, "node_modules"))) throw new Error("TARBALL_BUNDLED_DEPENDENCIES_UNSUPPORTED");
   const expected = readTree(expectedRoot, false);
-  const installed = readTree(installedRoot, false);
+  const installed = readTree(installedRoot, false, true);
   if (JSON.stringify(expected.entries) !== JSON.stringify(installed.entries)) throw new Error("INSTALLED_PACKAGE_BYTES_MISMATCH");
   return expected.digest;
 }
