@@ -78,6 +78,80 @@ async function serverWithArtifact(dependencies: Record<string, string> = {}) {
 }
 
 describe("exact-version copyfile runtime update", () => {
+  test("real npm conflicting Hasna dependency versions retain nested closure without changing archive payload", async () => {
+    const f = fixtureHome();
+    const fixture = await serverWithArtifact({ "@hasna/contracts": "1.3.5", "@hasna/secrets": "0.4.2" });
+    try {
+      const result = await updateCopyfileRuntime("0.10.8", {
+        homeDir: f.home, pathValue: `${f.localBin}${delimiter}${f.bunBin}`,
+        registryOrigin: fixture.server.url.origin, minReleaseAge: 7,
+        minReleaseAgeExclude: ["@hasna/contracts", "@hasna/secrets"],
+      });
+      const target = join(f.runtime, "0.10.8-copyfile");
+      const packageRoot = join(target, "node_modules", "@hasna", "skills");
+      const nestedSecrets = join(packageRoot, "node_modules", "@hasna", "secrets");
+      expect(JSON.parse(readFileSync(join(nestedSecrets, "package.json"), "utf8")).version).toBe("0.4.2");
+      expect(lstatSync(join(packageRoot, "node_modules", ".bin", "secrets")).isSymbolicLink()).toBe(true);
+      const lock = JSON.parse(readFileSync(join(target, "install-lock.json"), "utf8"));
+      expect(lock.packages["node_modules/@hasna/skills/node_modules/@hasna/secrets"].version).toBe("0.4.2");
+      const receipt = JSON.parse(readFileSync(join(target, "rollout-receipt.json"), "utf8"));
+      expect(receipt.tarballIntegrity).toBe(fixture.integrity);
+      expect(receipt.runtimeTreeSha256).toMatch(/^[a-f0-9]{64}$/);
+      for (const [path, content] of f.configs) expect(readFileSync(path, "utf8")).toBe(content);
+      expect(realpathSync(join(f.localBin, "skills"))).toBe(join(packageRoot, BIN.skills));
+      const original = readFileSync(join(nestedSecrets, "package.json"));
+      writeFileSync(join(nestedSecrets, "package.json"), Buffer.concat([original, Buffer.from("\n ")]));
+      expect(() => rollbackCopyfileRuntime(String(result.receiptId), { homeDir: f.home })).toThrow("ACTIVE_RUNTIME_TREE_DRIFT");
+      writeFileSync(join(nestedSecrets, "package.json"), original);
+      expect(rollbackCopyfileRuntime(String(result.receiptId), { homeDir: f.home })).toMatchObject({ rolledBack: true });
+    } finally { fixture.server.stop(true); }
+  }, 120_000);
+
+  test("archive-supplied dependency payload is refused before installation", async () => {
+    const archive = await new Bun.Archive({ "package/package.json": "{}", "package/node_modules/foreign/index.js": "unreviewed" }, { compress: "gzip" }).bytes();
+    await expect(preflightTarball(archive)).rejects.toThrow("TARBALL_BUNDLED_DEPENDENCIES_UNSUPPORTED");
+  });
+
+  test("npm-added dependency projection preserves payload tamper and unsafe dependency refusals", async () => {
+    const npm = Bun.which("npm")!;
+    for (const [attack, expected] of [
+      ["extra", "INSTALLED_PACKAGE_BYTES_MISMATCH"], ["changed", "INSTALLED_PACKAGE_BYTES_MISMATCH"],
+      ["missing", "INSTALLED_PACKAGE_BYTES_MISMATCH"], ["root-symlink", "INSTALLED_DEPENDENCY_DIRECTORY_UNSAFE"],
+      ["nested-symlink", "TREE_SYMLINK_ESCAPES_ROOT"],
+    ] as const) {
+      const f = fixtureHome(); const fixture = await serverWithArtifact();
+      const priorPath = process.env.PATH; const spyBin = join(f.home, "npm-spy");
+      mkdirSync(spyBin, { mode: 0o700 });
+      writeFileSync(join(spyBin, "npm"), `#!/usr/bin/env bun
+import { mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
+import { join } from "node:path";
+const args = process.argv.slice(2);
+const child = Bun.spawn([${JSON.stringify(npm)}, ...args], { env: process.env, stdin: "ignore", stdout: "inherit", stderr: "inherit" });
+const status = await child.exited;
+if (status === 0 && args[0] === "ci") {
+ const root = join(process.cwd(), "node_modules", "@hasna", "skills");
+ const attack = ${JSON.stringify(attack)};
+ if (attack === "extra") writeFileSync(join(root, "unreviewed.js"), "payload");
+ if (attack === "changed") writeFileSync(join(root, "README.md"), "changed");
+ if (attack === "missing") rmSync(join(root, "README.md"));
+ if (attack === "root-symlink") symlinkSync(${JSON.stringify(f.home)}, join(root, "node_modules"));
+ if (attack === "nested-symlink") { mkdirSync(join(root, "node_modules")); symlinkSync(${JSON.stringify(f.home)}, join(root, "node_modules", "escape")); }
+}
+process.exit(status);
+`, { mode: 0o755 });
+      try {
+        process.env.PATH = `${spyBin}${delimiter}${priorPath}`;
+        await expect(updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue: `${f.localBin}${delimiter}${f.bunBin}`, registryOrigin: fixture.server.url.origin })).rejects.toThrow(expected);
+        expect(realpathSync(join(f.localBin, "skills"))).toBe(join(f.oldPackage, BIN.skills));
+        expect(existsSync(join(f.runtime, "0.10.8-copyfile"))).toBe(false);
+        for (const [path, content] of f.configs) expect(readFileSync(path, "utf8")).toBe(content);
+      } finally {
+        if (priorPath === undefined) delete process.env.PATH; else process.env.PATH = priorPath;
+        fixture.server.stop(true);
+      }
+    }
+  }, 120_000);
+
   test("explicit age policy reaches npm resolution and ci without inherited settings, including transitive dependencies", async () => {
     const f = fixtureHome();
     const fixture = await serverWithArtifact({ "is-odd": "3.0.1" });
