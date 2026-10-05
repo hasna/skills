@@ -65,4 +65,43 @@ describe("reviewed dependency lock", () => {
       return Response.json(data);
     }) as unknown as typeof fetch }))).rejects.toThrow("REVIEWED_LOCK_METADATA_IDENTITY_MISMATCH");
   });
+  test.each([
+    ["accepted full metadata", undefined, undefined],
+    ["recent exact version", "recent", "REVIEWED_LOCK_RELEASE_AGE_REFUSED"],
+    ["changed exact integrity", "integrity", "REVIEWED_LOCK_METADATA_IDENTITY_MISMATCH"],
+  ])("large registry history still checks %s", async (_name, mutation, error) => {
+    const { bytes, sha } = input(fixture()), base = context();
+    const large = context({ fetcher: (async (url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      const data = await (await base.fetcher!(url, init)).json();
+      // Full packuments retain timestamps but can exceed the lockfile size.
+      data.readme = "x".repeat(13_350_501);
+      if (mutation === "recent") data.time["1.0.0"] = "2026-10-05T00:00:00Z";
+      if (mutation === "integrity") data.versions["1.0.0"].dist.integrity = sri;
+      return Response.json(data);
+    }) as unknown as typeof fetch });
+    if (error) await expect(validateReviewedRuntimeLock(bytes, sha, large)).rejects.toThrow(error);
+    else await validateReviewedRuntimeLock(bytes, sha, large);
+  });
+  test("oversized registry stream is cancelled before reading the whole body", async () => {
+    const { bytes, sha } = input(fixture());
+    let reads = 0, cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) { reads++; controller.enqueue(new Uint8Array(1024 * 1024)); },
+      cancel() { cancelled = true; },
+    }, { highWaterMark: 0 });
+    await expect(validateReviewedRuntimeLock(bytes, sha, context({
+      fetcher: (async () => new Response(stream)) as unknown as typeof fetch,
+    }))).rejects.toThrow("REVIEWED_LOCK_METADATA_TOO_LARGE");
+    expect(cancelled).toBe(true);
+    expect(reads).toBe(33);
+  });
+  test("larger registry allowance does not raise the lockfile limit", async () => {
+    const bytes = Buffer.alloc(8 * 1024 * 1024 + 1, 32);
+    const sha = createHash("sha256").update(bytes).digest("hex");
+    let reads = 0;
+    await expect(validateReviewedRuntimeLock(bytes, sha, context({
+      fetcher: (async () => { reads++; return new Response(); }) as unknown as typeof fetch,
+    }))).rejects.toThrow("REVIEWED_LOCK_HASH_MISMATCH");
+    expect(reads).toBe(0);
+  });
 });

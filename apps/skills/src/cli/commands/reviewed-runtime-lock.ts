@@ -16,7 +16,11 @@ const PACKAGE = "@hasna/skills";
 const NAME = /^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/;
 const VERSION = /^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?(?:\+[a-zA-Z0-9.-]+)?$/;
 const INTEGRITY = /^sha512-[A-Za-z0-9+/]{86}==$/;
-const MAX_BYTES = 8 * 1024 * 1024;
+const MAX_LOCK_BYTES = 8 * 1024 * 1024;
+// Full registry history supplies publish timestamps omitted by abbreviated
+// packuments. Its size is independent of the reviewed lock (es-toolkit's
+// history exceeds 13 MB). Keep a separate finite streaming response bound.
+const MAX_METADATA_BYTES = 32 * 1024 * 1024;
 
 function row(value: unknown): Row {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("REVIEWED_LOCK_SHAPE_INVALID");
@@ -54,7 +58,7 @@ async function metadata(name: string, context: ReviewedRuntimeLockContext): Prom
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > MAX_BYTES) { await reader.cancel(); throw new Error("REVIEWED_LOCK_METADATA_TOO_LARGE"); }
+      if (size > MAX_METADATA_BYTES) { await reader.cancel(); throw new Error("REVIEWED_LOCK_METADATA_TOO_LARGE"); }
       chunks.push(value);
     }
   } finally { reader.releaseLock(); }
@@ -68,7 +72,7 @@ async function metadata(name: string, context: ReviewedRuntimeLockContext): Prom
  */
 export async function validateReviewedRuntimeLock(bytes: Uint8Array, sha256: string, context: ReviewedRuntimeLockContext): Promise<void> {
   if (!/^[a-f0-9]{64}$/.test(sha256)) throw new Error("REVIEWED_LOCK_SHA256_INVALID");
-  if (bytes.byteLength > MAX_BYTES || createHash("sha256").update(bytes).digest("hex") !== sha256) throw new Error("REVIEWED_LOCK_HASH_MISMATCH");
+  if (bytes.byteLength > MAX_LOCK_BYTES || createHash("sha256").update(bytes).digest("hex") !== sha256) throw new Error("REVIEWED_LOCK_HASH_MISMATCH");
   if (!Number.isSafeInteger(context.minReleaseAge) || context.minReleaseAge < 1) throw new Error("REVIEWED_LOCK_RELEASE_AGE_REQUIRED");
   let lock: Row;
   try { lock = row(JSON.parse(Buffer.from(bytes).toString("utf8"))); }
