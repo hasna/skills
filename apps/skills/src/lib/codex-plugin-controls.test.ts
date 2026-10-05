@@ -13,6 +13,7 @@ import { assertAgentPolicyCollections } from "./agent-policy-limits.js";
 import { captureDiscoveryDirectories } from "./agent-discovery.js";
 import { parseManagedSkillPolicy } from "./managed-policy.js";
 import { admitCorpusFixture, installCorpusInspectorFixture } from "./codex-corpus.fixture.js";
+import { captureCodexSettingsV3 } from "./codex-settings-witness.js";
 useDefaultTestTimeout();
 let restoreInspector: () => void;
 beforeEach(() => { restoreInspector = installCorpusInspectorFixture(); });
@@ -243,6 +244,80 @@ test("remote null-version denied materialization binds the native installation r
  expect(reviewedCodexPluginCapabilitiesUnchanged(cache,controls,read)).toBe(false);
  expect(isReviewedCodexPluginSkillDisabled(document,cache,controls,rules,read)).toBe(false);
  expect(()=>reviewCodexPluginSkillControls(catalog,[document],cache,home,read,rules)).toThrow("IDENTITY_UNSUPPORTED");
+});
+
+function remoteNameDisabledRefresh() {
+ const home=mkdtempSync(join(tmpdir(),"skills-remote-name-refresh-")); roots.push(home); admitCorpusFixture(join(home, ".codex"));
+ const cache=join(home,".codex/plugins/cache"), parent=join(cache,"openai-curated-remote/recorder");
+ const old=join(parent,"0.4.0"), current=join(parent,"0.4.1"), config=join(home,".codex/config.toml");
+ const oldDocument=join(old,"skills/record-browser/SKILL.md"), document=join(current,"skills/record-browser/SKILL.md");
+ const manifest=join(current,".codex-plugin/plugin.json"), receipt=join(parent,".codex-remote-plugin-install.json");
+ const remotePluginId="plugins~Plugin_00000000000000000000000000000003";
+ const payload="---\nname: record-browser\ndescription: Synthetic recorder fixture\n---\nFixture\n";
+ const add=(root:string,version:string,description:string)=>{put(join(root,".codex-plugin/plugin.json"),JSON.stringify({name:"recorder",version,description}));put(join(root,"skills/record-browser/SKILL.md"),payload);};
+ add(old,"0.4.0","Original metadata");
+ put(receipt,JSON.stringify({schema_version:1,remote_plugin_id:remotePluginId}));
+ put(config,`model = "synthetic"\n[plugins."recorder@openai-curated-remote"]\nenabled = true\n[[skills.config]]\npath = ${JSON.stringify(oldDocument)}\nenabled = false\n[[skills.config]]\nname = "recorder:record-browser"\nenabled = false\n`);
+ const f={home,dataDir:join(home,"data"),projectDir:home};
+ const plugin={id:"recorder@openai-curated-remote",name:"recorder",installed:true,enabled:true,localVersion:null,remotePluginId,sourceType:"remote" as const};
+ const catalog={version:"codex-cli 0.160.0",cwd:home,skills:[] as Array<{name:string;path:string;enabled:boolean;pluginId:string|null}>,plugins:[plugin]};
+ const freshReview=()=>({version:1 as const,agents:[{agent:"codex" as const,roots:[cache],sources:[captureCodexSettingsV3(config),{path:manifest,sha256:createHash("sha256").update(readFileSync(manifest)).digest("hex")}],pluginHooks:"reviewed-no-skill-injection" as const}]});
+ // Enroll the original, then simulate Codex replacing its synthetic cache.
+ const originalReview={version:1 as const,agents:[{agent:"codex" as const,roots:[cache],sources:[captureCodexSettingsV3(config)],pluginHooks:"reviewed-no-skill-injection" as const}]};
+ applyAgentIntegration(planAgentIntegration({...f,agents:["codex"],codexNativeCatalog:catalog,discoveryInputs:originalReview}));
+ rmSync(old,{recursive:true}); add(current,"0.4.1","Reviewed refreshed metadata");
+ catalog.skills=[{name:"skills-cli",path:join(home,".codex/skills/skills-cli/SKILL.md"),enabled:true,pluginId:null}];
+ const options=()=>({...f,agents:["codex" as const],codexNativeCatalog:catalog,discoveryInputs:freshReview()});
+ return {f,cache,parent,old,oldDocument,current,document,manifest,receipt,config,catalog,options};
+}
+
+test("fresh review plans the exact new path for a remote skill already omitted by its qualified-name deny",()=>{
+ const fixture=remoteNameDisabledRefresh(), {f,config,document,oldDocument,options,catalog}=fixture;
+ const before=readFileSync(config,"utf8");
+ expect(()=>assertManagedAgentBridge("codex",f)).toThrow("NATIVE_SKILL_DRIFT");
+ const plan=planAgentIntegration(options());
+ expect(readFileSync(config,"utf8")).toBe(before);
+ expect(catalog.skills.map(skill=>skill.name)).toEqual(["skills-cli"]);
+ const change=plan.changes.find(change=>change.path===config)!;
+ expect(change.before).toBe(before);
+ expect(change.after).toBe(`${before.trimEnd()}\n\n[[skills.config]]\npath = ${JSON.stringify(document)}\nenabled = false\n`);
+ const parsed=Bun.TOML.parse(change.after) as any;
+ expect(parsed.skills.config).toEqual([{path:oldDocument,enabled:false},{name:"recorder:record-browser",enabled:false},{path:document,enabled:false}]);
+ expect(parsed.plugins).toEqual((Bun.TOML.parse(before) as any).plugins);
+ const applied=applyAgentIntegration(plan);
+ expect(applied.backups.some(path=>readFileSync(path,"utf8")===before)).toBe(true);
+ expect(readFileSync(config,"utf8")).toBe(change.after);
+ expect(()=>assertManagedAgentBridge("codex",f)).not.toThrow();
+ expect(planAgentIntegration(options()).changes.some(change=>change.path===config)).toBe(false);
+});
+
+test("planned remote refresh deny never substitutes for fresh identity, existing name disablement or reviewed capabilities",()=>{
+ const {f,config,document,manifest,receipt,current,parent,catalog,options}=remoteNameDisabledRefresh();
+ const before=readFileSync(config,"utf8");
+ const unchanged=()=>expect(readFileSync(config,"utf8")).toBe(before);
+ expect(()=>planAgentIntegration({...options(),codexNativeCatalog:undefined})).toThrow("NATIVE_SKILL_DRIFT"); unchanged();
+ const read=(path:string)=>readFileSync(path,"utf8"), rules=(Bun.TOML.parse(before) as any).skills.config;
+ expect(()=>reviewCodexPluginControls(catalog,[document],join(f.home,".codex/plugins/cache"),f.home,read,rules)).toThrow("IDENTITY_UNSUPPORTED");
+ for(const plugin of [{...catalog.plugins[0]!,installed:false},{...catalog.plugins[0]!,enabled:false},{...catalog.plugins[0]!,remotePluginId:undefined},{...catalog.plugins[0]!,remotePluginId:"plugins~Plugin_00000000000000000000000000000004"},{...catalog.plugins[0]!,localVersion:"0.4.1"},{...catalog.plugins[0]!,sourceType:undefined}]) {
+   expect(()=>planAgentIntegration({...options(),codexNativeCatalog:{...catalog,plugins:[plugin]}})).toThrow("IDENTITY_UNSUPPORTED"); unchanged();
+ }
+ expect(()=>planAgentIntegration({...options(),codexNativeCatalog:{...catalog,plugins:[catalog.plugins[0]!,catalog.plugins[0]!]}})).toThrow("IDENTITY_UNSUPPORTED"); unchanged();
+ for(const extra of ['[[skills.config]]\nname = "recorder:record-browser"\nenabled = true\n',`[[skills.config]]\npath = ${JSON.stringify(document)}\nenabled = true\n`]) {
+   put(config,before+"\n"+extra);
+   expect(()=>planAgentIntegration(options())).toThrow("IDENTITY_UNSUPPORTED");
+   expect(readFileSync(config,"utf8")).toBe(before+"\n"+extra);put(config,before);
+ }
+ put(config,before.replace('name = "recorder:record-browser"','name = "recorder:other"'));
+ expect(()=>planAgentIntegration(options())).toThrow("IDENTITY_UNSUPPORTED"); put(config,before);
+ const unknown=join(current,"skills/unknown/SKILL.md");put(unknown,"---\nname: unknown\ndescription: Synthetic unknown skill\n---\nFixture\n");
+ expect(()=>planAgentIntegration(options())).toThrow("IDENTITY_UNSUPPORTED"); unchanged();rmSync(join(current,"skills/unknown"),{recursive:true});
+ put(join(current,"hooks/hooks.json"),"{}");expect(()=>planAgentIntegration(options())).toThrow("IDENTITY_UNSUPPORTED");unchanged();rmSync(join(current,"hooks"),{recursive:true});
+ const originalManifest=read(manifest);put(manifest,JSON.stringify({name:"other",version:"0.4.1"}));
+ expect(()=>planAgentIntegration(options())).toThrow("IDENTITY_UNSUPPORTED");unchanged();put(manifest,originalManifest);
+ const duplicate=join(parent,"0.4.2");put(join(duplicate,".codex-plugin/plugin.json"),JSON.stringify({name:"recorder",version:"0.4.2",description:"Reviewed refreshed metadata"}));put(join(duplicate,"skills/record-browser/SKILL.md"),read(document));
+ expect(()=>planAgentIntegration(options())).toThrow("IDENTITY_UNSUPPORTED");unchanged();rmSync(duplicate,{recursive:true});
+ const stale=planAgentIntegration(options());put(receipt,JSON.stringify({schema_version:1,remote_plugin_id:"plugins~Plugin_00000000000000000000000000000004"}));
+ expect(()=>applyAgentIntegration(stale)).toThrow("Native identity source changed after planning");unchanged();
 });
 
 
