@@ -8,7 +8,7 @@ import { planAgentIntegration, applyAgentIntegration, assertManagedAgentBridge, 
 import { admitCorpusFixture, installCorpusInspectorFixture } from "./codex-corpus.fixture.js";
 import { readManagedSkillPolicySnapshot, serializeManagedSkillPolicy } from "./managed-policy.js";
 import { CLI_BRIDGE_DIGEST, CLI_BRIDGE_FILES } from "./agent-bridge.js";
-import { verifyCodexNativeSkillPolicy, verifyCodexNativeAncestry, verifyCodexNativeBridgeDocument, parseCodexNativePolicyTrust, recordCodexNativePolicyAcceptance, codexNativePolicyReceiptPath, darwinProcessInspector, defaultProcessInspector, CODEX_NATIVE_POLICY_ANCESTRY_SAFETY_HOPS, CODEX_NATIVE_POLICY_RECEIPT_SCHEMA, type ProcessInspector, type CodexNativeHookEnvelope, type CodexNativePolicyVerification } from "./codex-native-skill-policy.js";
+import { verifyCodexNativeSkillPolicy, verifyCodexNativeAncestry, verifyCodexNativeBridgeDocument, parseCodexNativePolicyTrust, recordCodexNativePolicyAcceptance, codexNativePolicyReceiptPath, codexNativeHookEnvelopeFromInput, darwinProcessInspector, defaultProcessInspector, CODEX_NATIVE_POLICY_ANCESTRY_SAFETY_HOPS, CODEX_NATIVE_POLICY_RECEIPT_SCHEMA, type ProcessInspector, type CodexNativeHookEnvelope, type CodexNativePolicyVerification } from "./codex-native-skill-policy.js";
 useDefaultTestTimeout();
 let restoreInspector: () => void;
 beforeEach(() => { restoreInspector = installCorpusInspectorFixture(); });
@@ -114,6 +114,7 @@ describe("envelope validation", () => {
     ["turn_id present on SessionStart", s => envelope(s, { event: "SessionStart" }), /^NATIVE_SKILL_POLICY_INVALID: SessionStart input carries no turn_id/],
     ["unsupported event", s => envelope(s, { event: "SubagentStart" as never }), /^NATIVE_SKILL_POLICY_INVALID: native policy is only carried by SessionStart and UserPromptSubmit/],
     ["hook input digest malformed", s => envelope(s, { hookInputSha256: "abc" }), /^NATIVE_SKILL_POLICY_INVALID: hook input digest must be lowercase SHA-256 hex/],
+    ["inherited descriptor malformed", s => envelope(s, { inheritedFd: -1 }), /^NATIVE_SKILL_POLICY_INVALID: the inherited channel descriptor must be a non-negative integer/],
   ];
   for (const [name, build, expected] of cases) test(`${name} refuses and writes no receipt`, () => {
     const s = station();
@@ -121,6 +122,56 @@ describe("envelope validation", () => {
     const message = guard(s, { ...build(s), inspector: fakeInspector(s) });
     expect(message).toMatch(DRIFT); expect(message).toMatch(expected.source.replace(/^\^/, "").replace(/\\\./g, "."));
     expect(existsSync(s.receipt)).toBe(false);
+  });
+});
+
+/** The six native hook rows of the reviewed proof (internal-apps #1475 run
+ * 37379158142, native-skill-policy-proof/hook-inputs.jsonl; Files f_vtmq3HBqZa,
+ * sha256 61e55917…). Same keys, order, spacing and values; only the proof's
+ * runner paths and pid are substituted. The proof's allowlist names the bridge
+ * under its synthetic home's .agents/skills, not the .codex/skills bridge this
+ * package installs for Codex, which the adapter refuses by design. */
+function nativeProofRows(allowedHostPath: string, cwd: string, processId: number): string[] {
+  const unrestricted = `{"capability": "host-path-allowlist-v1", "mode": "unrestricted", "allowedHostPaths": null, "nonHostSources": "unchanged", "processId": ${processId}, "effectiveConfigDigest": "81e681238f1466311f87480d5a7f8eeaeeb9dca1d490b4d53f3a0344fc70d6aa"}`;
+  const restricted = `{"capability": "host-path-allowlist-v1", "mode": "restricted", "allowedHostPaths": [${JSON.stringify(allowedHostPath)}], "nonHostSources": "disabled", "processId": ${processId}, "effectiveConfigDigest": "84fc7be4c841159225cc6f060169368e080d863e6948272e3d8f6b9d6298daf7"}`;
+  const start = (policy: string, session: string) => `{"native_skill_policy": ${policy}, "session_id": "${session}", "transcript_path": null, "cwd": ${JSON.stringify(cwd)}, "hook_event_name": "SessionStart", "model": "gpt-5.4", "permission_mode": "bypassPermissions", "source": "startup"}`;
+  const prompt = (policy: string, session: string, turn: string, text: string) => `{"native_skill_policy": ${policy}, "session_id": "${session}", "turn_id": "${turn}", "transcript_path": null, "cwd": ${JSON.stringify(cwd)}, "hook_event_name": "UserPromptSubmit", "model": "gpt-5.4", "permission_mode": "bypassPermissions", "prompt": ${JSON.stringify(text)}}`;
+  return [
+    start(unrestricted, "01a10e2d-8d38-7b42-aac9-cae4992ddac6"),
+    prompt(unrestricted, "01a10e2d-8d38-7b42-aac9-cae4992ddac6", "01a10e2d-8d7d-7730-a602-32cad50ec95d", "Use $native-policy-ordinary and $sample:build."),
+    start(restricted, "01a10e2d-8d78-72f3-9210-78cc6082fb4c"),
+    prompt(restricted, "01a10e2d-8d78-72f3-9210-78cc6082fb4c", "01a10e2d-8df1-7632-9704-cb575ee2b98d", "Use $native-policy-ordinary and $sample:build and $skills-cli and $sample:skills-cli."),
+    start(restricted, "01a10e2d-8e29-79b0-91fd-08c22aea18ac"),
+    prompt(restricted, "01a10e2d-8e29-79b0-91fd-08c22aea18ac", "01a10e2d-8e2c-7c11-9fcf-808fc9dde676", "Use $sample:build and $sample:novel and $sample:skills-cli and $skills-cli."),
+  ];
+}
+
+describe("native proof rows through the hook input path", () => {
+  test("each row maps exactly as the Codex hook does and refuses as expected", () => {
+    const s = station(), cwd = join(s.home, "project");
+    for (const line of nativeProofRows(join(s.home, ".agents", "skills", "skills-cli", "SKILL.md"), cwd, CONSUMER_PID)) {
+      const input = JSON.parse(line), mapped = codexNativeHookEnvelopeFromInput(input, input.hook_event_name, line)!;
+      expect(mapped.event).toBe(input.hook_event_name);
+      expect(mapped.hookInputSha256).toBe(sha(line));
+      expect(mapped.sessionId).toBe(input.session_id);
+      expect("turnId" in mapped).toBe(input.hook_event_name === "UserPromptSubmit");
+      expect(verify(s, mapped)).toMatch(input.native_skill_policy.mode === "unrestricted" ? /^NATIVE_SKILL_POLICY_UNSUPPORTED: native skill policy is not restricted/ : /^NATIVE_SKILL_POLICY_BRIDGE_UNVERIFIED: the allowed host path is not the Skills bridge document/);
+      const message = guard(s, { ...mapped, inspector: fakeInspector(s) });
+      expect(message).toMatch(DRIFT); expect(message).toMatch(/Native policy adapter refused: NATIVE_SKILL_POLICY_/);
+    }
+    // With the allowlist naming the Codex bridge this package installs, the
+    // restricted rows pass every check up to the channel-binding gate.
+    for (const line of nativeProofRows(s.bridgeDocument, cwd, CONSUMER_PID).slice(2)) {
+      const input = JSON.parse(line), mapped = codexNativeHookEnvelopeFromInput(input, input.hook_event_name, line)!;
+      expect(verify(s, mapped)).toMatch(/^NATIVE_SKILL_POLICY_UNAUTHENTICATED: /);
+    }
+    expect(existsSync(s.receipt)).toBe(false);
+  });
+  test("inputs without native policy, or on other events, map to no envelope", () => {
+    expect(codexNativeHookEnvelopeFromInput({ session_id: SESSION, hook_event_name: "SessionStart" }, "SessionStart", "{}")).toBeUndefined();
+    expect(codexNativeHookEnvelopeFromInput({ native_skill_policy: {}, session_id: SESSION }, "SubagentStart", "{}")).toBeUndefined();
+    expect(codexNativeHookEnvelopeFromInput({ native_skill_policy: {}, session_id: SESSION }, "SessionStart", "{}", "7")).toMatchObject({ event: "SessionStart", inheritedFd: 7, hookInputSha256: sha("{}") });
+    expect(codexNativeHookEnvelopeFromInput({ native_skill_policy: {}, session_id: SESSION }, "SessionStart", "{}", "x")).toMatchObject({ inheritedFd: "x" });
   });
 });
 

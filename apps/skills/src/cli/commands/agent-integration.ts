@@ -10,7 +10,7 @@ import { parseSkillContextInput, selectedProfileId } from "./context.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, normalizeAgentHookEvent } from "../../lib/agent-adapters.js";
 import { planAgentIntegration, planClaudeManagedHookProjection, planAgentSettingsWitnessUpgrade, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, hookContextOutput, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, type IntegrationAgent } from "../../lib/agent-integration.js";
 import { enrollCodexNativeHooks, reconcileCodexNativeHooks } from "../../lib/agent-codex-trust.js";
-import type { CodexNativeHookEvent } from "../../lib/codex-native-skill-policy.js";
+import { codexNativeHookEnvelopeFromInput } from "../../lib/codex-native-skill-policy.js";
 import { HookDiagnosticError, hookChildError, hookFailureReason, isOptionalHookContextFailure, hookUnavailableContext } from "../../lib/hook-diagnostics.js";
 import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib/selection-cache.js";
 import { captureClaudeSettingsV2, captureClaudeSettingsV3 } from "../../lib/claude-settings-witness.js";
@@ -303,9 +303,8 @@ export function registerAgentIntegration(parent: Command): void {
         // A patched Codex reports its effective native skill policy on these two
         // events. Hand the exact native fields and the stdin digest to the guard's
         // adapter; every other agent, event and guard call keeps today's behaviour.
-        const codexNativePolicy = options.agent === "codex" && (event === "SessionStart" || event === "UserPromptSubmit") && Object.hasOwn(input, "native_skill_policy")
-          ? { event: event as CodexNativeHookEvent, policy: input.native_skill_policy, sessionId: input.session_id, ...(Object.hasOwn(input, "turn_id") ? { turnId: input.turn_id } : {}), hookInputSha256: createHash("sha256").update(inputText, "utf8").digest("hex") }
-          : undefined;
+        // The inherited channel descriptor is added once the native contract names it.
+        const codexNativePolicy = options.agent === "codex" ? codexNativeHookEnvelopeFromInput(input, event, inputText) : undefined;
         assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile, ...(codexNativePolicy ? { codexNativePolicy } : {}) });
         if (typeof input.prompt === "string") input.prompt = normalizeAgentHookPrompt(options.agent, nativeEvent, input.prompt);
         // Validate every context field before a timeout or API refusal can be

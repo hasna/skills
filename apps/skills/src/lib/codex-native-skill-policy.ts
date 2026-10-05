@@ -53,6 +53,24 @@ export interface CodexNativeHookEnvelope {
   turnId?: unknown;
   /** SHA-256 of the exact hook stdin bytes, for the authenticated channel binding. */
   hookInputSha256?: unknown;
+  /** Inherited read end of the per-hook socketpair Codex passes to the hook
+   * child, for the authenticated channel binding. Not yet named by the native
+   * contract, so the hook does not supply it today. */
+  inheritedFd?: unknown;
+}
+
+/** Map one native hook input object to the adapter envelope, exactly as the
+ * Codex `hook user-prompt` path does. Undefined means the input carries no
+ * native policy or is not a SessionStart/UserPromptSubmit input, so the guard
+ * keeps today's behaviour. `inputText` is the exact stdin text. */
+export function codexNativeHookEnvelopeFromInput(input: Record<string, unknown>, event: string, inputText: string, inheritedFd?: string): CodexNativeHookEnvelope | undefined {
+  if ((event !== "SessionStart" && event !== "UserPromptSubmit") || !Object.hasOwn(input, "native_skill_policy")) return undefined;
+  return {
+    event, policy: input.native_skill_policy, sessionId: input.session_id,
+    ...(Object.hasOwn(input, "turn_id") ? { turnId: input.turn_id } : {}),
+    hookInputSha256: createHash("sha256").update(inputText, "utf8").digest("hex"),
+    ...(inheritedFd !== undefined ? { inheritedFd: /^(0|[1-9]\d{0,9})$/.test(inheritedFd) ? Number(inheritedFd) : inheritedFd } : {}),
+  };
 }
 /** Injectable so tests can supply fake lineages; production uses the OS. */
 export interface ProcessInspector {
@@ -101,7 +119,7 @@ export function parseCodexNativePolicyTrust(value: unknown): CodexNativePolicyTr
 
 /** Strict envelope parsing. Unknown keys, unknown capability, unrestricted mode
  * and anything but the exact bridge document refuse. */
-export function parseCodexNativeHookEnvelope(envelope: CodexNativeHookEnvelope, bridgeDocument: string): { policy: CodexNativeSkillPolicy; sessionId: string; turnId: string | null; hookInputSha256: string | null } {
+export function parseCodexNativeHookEnvelope(envelope: CodexNativeHookEnvelope, bridgeDocument: string): { policy: CodexNativeSkillPolicy; sessionId: string; turnId: string | null; hookInputSha256: string | null; inheritedFd: number | null } {
   if (envelope.event !== "SessionStart" && envelope.event !== "UserPromptSubmit") refuse("NATIVE_SKILL_POLICY_INVALID", "native policy is only carried by SessionStart and UserPromptSubmit");
   const value = envelope.policy;
   if (!object(value)) refuse("NATIVE_SKILL_POLICY_INVALID", "native_skill_policy must be an object");
@@ -125,7 +143,12 @@ export function parseCodexNativeHookEnvelope(envelope: CodexNativeHookEnvelope, 
     if (typeof envelope.hookInputSha256 !== "string" || !HEX_DIGEST.test(envelope.hookInputSha256)) refuse("NATIVE_SKILL_POLICY_INVALID", "hook input digest must be lowercase SHA-256 hex");
     hookInputSha256 = envelope.hookInputSha256;
   }
-  return { policy: { capability: CODEX_NATIVE_POLICY_CAPABILITY, mode: "restricted", allowedHostPaths: [allowed[0]], nonHostSources: "disabled", processId: value.processId, effectiveConfigDigest: value.effectiveConfigDigest }, sessionId, turnId, hookInputSha256 };
+  let inheritedFd: number | null = null;
+  if (envelope.inheritedFd !== undefined) {
+    if (typeof envelope.inheritedFd !== "number" || !Number.isSafeInteger(envelope.inheritedFd) || envelope.inheritedFd < 0) refuse("NATIVE_SKILL_POLICY_INVALID", "the inherited channel descriptor must be a non-negative integer");
+    inheritedFd = envelope.inheritedFd;
+  }
+  return { policy: { capability: CODEX_NATIVE_POLICY_CAPABILITY, mode: "restricted", allowedHostPaths: [allowed[0]], nonHostSources: "disabled", processId: value.processId, effectiveConfigDigest: value.effectiveConfigDigest }, sessionId, turnId, hookInputSha256, inheritedFd };
 }
 
 function readBounded(path: string, maximum: number, what: string): Buffer {
@@ -214,14 +237,20 @@ export function verifyCodexNativeExecutable(inspector: ProcessInspector, process
   return { platform, startTime: before, executablePath, executableSha256 };
 }
 
-/** Required acceptance gate. The authenticated channel binding is a bounded
- * readback socket served by the actual Codex process plus a read-only verifier
- * that proves the kernel peer pid, the exact hook stdin hash and the actual
- * policy. That verifier is not delivered yet, so this always refuses: the
- * earlier checks cannot distinguish the consumer's envelope from one forged by
- * a descendant process. The interface already takes the inputs the verifier
- * needs so it can slot in without reshaping the parser. */
-export function assertAuthenticatedChannelBinding(_binding: { processId: number; hookInputSha256: string | null; verification: CodexNativePolicyVerification }): void {
+/** Required acceptance gate. The authenticated channel binding, as designed by
+ * the native author and still under review: Codex creates a per-hook Unix
+ * socketpair and passes one read descriptor to the hook child (no named daemon
+ * or socket); a read-only verifier, `codex debug verify-hook-policy`, runs
+ * before config/auth and proves the kernel peer pid, the exact raw stdin SHA-256
+ * and the actual policy, and an unrestricted real parent attests
+ * "unrestricted" even when a descendant forges the JSON. Neither the contract
+ * nor the verifier is delivered, so this always refuses: the earlier checks
+ * cannot distinguish the consumer's envelope from one forged by a descendant
+ * process. The interface already takes the inputs the verifier needs (stdin
+ * digest, claimed pid, inherited descriptor) so it can slot in without
+ * reshaping the parser. The reviewed Darwin artifact GO covers enforcement
+ * only, not this binding. */
+export function assertAuthenticatedChannelBinding(_binding: { processId: number; hookInputSha256: string | null; inheritedFd: number | null; verification: CodexNativePolicyVerification }): void {
   refuse("NATIVE_SKILL_POLICY_UNAUTHENTICATED", "the native hook transport has no authenticated channel binding yet; a forged envelope from a descendant process is indistinguishable from the consumer's own, so no native policy is accepted");
 }
 
@@ -235,7 +264,7 @@ export function verifyCodexNativeSkillPolicy(options: { envelope: CodexNativeHoo
   const ancestry = verifyCodexNativeAncestry(inspector, parsed.policy.processId);
   const executable = verifyCodexNativeExecutable(inspector, parsed.policy.processId, trust);
   const verification: CodexNativePolicyVerification = { event: options.envelope.event, sessionId: parsed.sessionId, turnId: parsed.turnId, policy: parsed.policy, platform: executable.platform, ancestryHops: ancestry.hops, processStartTime: executable.startTime, executablePath: executable.executablePath, executableSha256: executable.executableSha256, bridge };
-  assertAuthenticatedChannelBinding({ processId: parsed.policy.processId, hookInputSha256: parsed.hookInputSha256, verification });
+  assertAuthenticatedChannelBinding({ processId: parsed.policy.processId, hookInputSha256: parsed.hookInputSha256, inheritedFd: parsed.inheritedFd, verification });
   return verification;
 }
 
