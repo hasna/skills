@@ -129,6 +129,25 @@ remains unchanged because synced plugins can also provide hooks, MCP servers,
 and language servers. A later plugin download that restores a skill document
 will trigger another drift refusal and require review.
 
+A patched Codex that enforces an exact native host-path allowlist reports its
+effective policy to the Skills SessionStart and UserPromptSubmit hooks as
+`native_skill_policy`. The guard's adapter parses that envelope strictly
+(capability `host-path-allowlist-v1`, restricted mode, non-host sources disabled,
+the sole allowed path equal to the Skills bridge document, a lowercase SHA-256
+`effectiveConfigDigest`, the consumer's `processId`, `session_id`, and `turn_id`
+on UserPromptSubmit only), re-verifies the bridge document on every hook, walks
+the hook's real parent chain to find the claimed consumer, binds its start time
+and the digest of its executable to the reviewed digests stored under
+`bridge.codexNativePolicy.executableDigests` in the managed policy (an absent set
+refuses; Linux is unqualified), and then requires an authenticated channel
+binding over the hook transport. That binding's verifier does not exist yet, so
+the adapter refuses every envelope today: no plugin-cache copy becomes inert and
+no receipt is written. Once it exists, only package-classified installed-plugin
+documents under `~/.codex/plugins/cache` that the verified policy cannot load can
+become inert, with a receipt at `agent-hooks/codex-native-policy-acceptance.json`;
+user, repository and project copies still refuse, and format or digest checks
+never prove the runtime policy on their own.
+
 Native hook invocations must use their installed adapter's selection profile.
 An old client command or environment override naming another profile refuses
 before synchronization or context loading. Review the hook installation and

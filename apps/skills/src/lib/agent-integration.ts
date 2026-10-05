@@ -1,5 +1,6 @@
 import { codexCorpusRootForPath, withCodexCorpusWrite, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
-import { reviewCodexPluginControls, reviewedCodexPluginSourceRoots, isReviewedCodexPluginInactive, isReviewedCodexPluginSkillDisabled, reviewedCodexPluginCapabilitiesUnchanged, disableReviewedCodexPluginNames, absentDisabledCodexPluginParent, type ReviewedCodexSkillDenial, type CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
+import { reviewCodexPluginControls, reviewedCodexPluginSourceRoots, isReviewedCodexPluginInactive, isReviewedCodexPluginSkillDisabled, reviewedCodexPluginCapabilitiesUnchanged, disableReviewedCodexPluginNames, absentDisabledCodexPluginParent, classifyCodexPluginCacheDocument, type ReviewedCodexSkillDenial, type CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
+import { verifyCodexNativeSkillPolicy, recordCodexNativePolicyAcceptance, type CodexNativeHookEnvelope, type ProcessInspector } from "./codex-native-skill-policy.js";
 import { projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
 import { upgradeCodexSettingsWitness, upgradeCodexSettingsWitnessV3, upgradeCodexSettingsWitnessV4, readCodexSettingsPreimage, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
 import { upgradeClaudeSettingsWitness } from "./claude-settings-witness.js";
@@ -1245,13 +1246,39 @@ function archiveNativeSkillsUnlocked(inventory: NativeSkillEntry[], options: Cod
   return { entries: entries.map(({ status, conflict, ...entry }) => entry), receiptPath, ...(targetManifest ? { targetManifest } : {}), ...(aliases.length ? { rootAliases: aliases } : {}) };
 }
 
+/** Native hook input for the Codex policy adapter. Only the Codex hook paths that
+ * receive native SessionStart/UserPromptSubmit input supply it; install-time and
+ * other guard calls never do. `inspector` is a test seam for process lineage. */
+export interface CodexNativePolicyGuardInput extends CodexNativeHookEnvelope { inspector?: ProcessInspector }
+interface ManagedBridgeOptions { home?: string; dataDir?: string; projectDir?: string; projectDirs?: string[]; profileId?: string; codexDiscoveryRecovery?: CodexHookDiscoveryRecovery; codexNativePolicy?: CodexNativePolicyGuardInput }
+
+/** Package-classified installed-plugin content below the Codex plugin cache that
+ * a verified restricted policy cannot load. Classification is the existing plugin
+ * manifest identity and real-path binding, never a path prefix; user, repo and
+ * project copies, unclassified cache files and any allowed host path refuse. */
+export function isInertCodexPluginCacheCopy(entry: NativeSkillEntry, cache: string, allowedHostPaths: readonly string[], read: (path: string) => string): boolean {
+  try {
+    if (entry.agent !== "codex" || !entry.vendor || entry.bridge || entry.system) return false;
+    const document = join(entry.path, "SKILL.md");
+    const inside = relative(cache, entry.path);
+    if (!inside || isAbsolute(inside) || inside.split(sep).some(segment => segment === "..")) return false;
+    assertSafePath(entry.path);
+    if (!lstatSync(cache).isDirectory() || !lstatSync(entry.path).isDirectory() || !lstatSync(document).isFile()) return false;
+    if (realpathSync.native(cache) !== cache || realpathSync.native(entry.path) !== entry.path || realpathSync.native(document) !== document) return false;
+    if (!classifyCodexPluginCacheDocument(document, cache, read)) return false;
+    // The runtime policy must be unable to load it: the canonical document is not an allowed host path.
+    if (allowedHostPaths.includes(document)) return false;
+    return treeHash(entry.path) === entry.hash;
+  } catch { return false; }
+}
+
 /** Run before any prompt context load. Missing ownership or reappearing native
  * discovery files require repair; verified cache availability is not an override. */
-export function assertManagedAgentBridge(agent: IntegrationAgent, options: { home?: string; dataDir?: string; projectDir?: string; projectDirs?: string[]; profileId?: string; codexDiscoveryRecovery?: CodexHookDiscoveryRecovery } = {}): void {
+export function assertManagedAgentBridge(agent: IntegrationAgent, options: ManagedBridgeOptions = {}): void {
   assertManagedAgentBridgeWithDiscovery(agent, options);
 }
 
-function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options: { home?: string; dataDir?: string; projectDir?: string; projectDirs?: string[]; profileId?: string; codexDiscoveryRecovery?: CodexHookDiscoveryRecovery } = {}, provenDiscovery?: AgentDiscoveryBinding): void {
+function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options: ManagedBridgeOptions = {}, provenDiscovery?: AgentDiscoveryBinding): void {
   const home = resolve(options.home ?? homedir()), dataDir = options.dataDir ?? getDataDirReadOnly();
   assertSafePath(join(dataDir, "agent-policy.json"));
   const snapshot = readManagedSkillPolicySnapshot(dataDir);
@@ -1345,7 +1372,24 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
   }
   const inventory = inventoryNativeSkills(home, { includeVendor: true, guardHermes: agent === "hermes", agents: [agent], projectDirs: [...roots], agentRoots: discovery.roots.map(path => ({ agent, path })), allowRootAliases: aliases.length > 0, disabledVendorPaths: agent === "codex" ? disabledCodexSkillPaths(codexConfig, aliases) : [], disabledVendorSkill: disabledPlugin, codexInstallationInputRoots: installationInputRoots });
   const unexpected = inventory.filter(entry => visible(entry) && !entry.bridge && !disabledVendorSkill(entry));
-  if (unexpected.length) {
+  // Codex native policy adapter: consulted only when a Codex hook supplied native
+  // policy input and the guard would otherwise refuse. A verified restricted
+  // policy from the actual calling Codex can make package-classified plugin-cache
+  // copies inert; everything else, and any adapter failure, keeps today's refusal.
+  // Acceptance is gated on the authenticated channel binding, which refuses
+  // unconditionally until its verifier exists, so no receipt is written today.
+  let adapterRefusal: string | undefined, inert: NativeSkillEntry[] = [];
+  if (agent === "codex" && unexpected.length && options.codexNativePolicy) {
+    const { inspector, ...envelope } = options.codexNativePolicy;
+    const cache = canonicalAgentPath(join(home, ".codex", "plugins", "cache"), aliases), read = (path: string) => new TextDecoder("utf-8", { fatal: true }).decode(readNativeBytes(path, 1024 * 1024));
+    try {
+      const verification = verifyCodexNativeSkillPolicy({ envelope, bridgeDocument: join(expected, "SKILL.md"), expectedBridgeContent: CLI_BRIDGE_FILES["SKILL.md"]!, expectedBridgeSha256: CLI_BRIDGE_DIGEST, trust: binding.codexNativePolicy, ...(inspector ? { inspector } : {}) });
+      inert = unexpected.filter(entry => isInertCodexPluginCacheCopy(entry, cache, verification.policy.allowedHostPaths, read));
+      if (inert.length !== unexpected.length) { inert = []; adapterRefusal = "native copies outside the classified Codex plugin cache remain"; }
+      else recordCodexNativePolicyAcceptance(dataDir, verification, inert.map(entry => ({ path: entry.path, treeSha256: entry.hash })));
+    } catch (error) { inert = []; adapterRefusal = (error as Error).message; }
+  }
+  if (unexpected.length > inert.length) {
     // Show filenames only: never read payloads into diagnostics. Escape control
     // characters and cap both path count and length for native hook output.
     const paths = unexpected.slice(0, 3).map(entry => {
@@ -1354,7 +1398,7 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
       return escaped.length > 768 ? `${escaped.slice(0, 384)}...${escaped.slice(-381)}` : escaped;
     });
     const remaining = unexpected.length - paths.length;
-    throw new Error(`NATIVE_SKILL_DRIFT: ${unexpected.length} unexpected native skill copies were found: ${paths.join(", ")}${remaining ? `; ${remaining} more` : ""}. Review skills migrate native --project <working-directory> --include-unmanaged --include-vendor --json before continuing; it inventories that directory and its ancestors. Use --apply after reviewing the archive plan.`);
+    throw new Error(`NATIVE_SKILL_DRIFT: ${unexpected.length} unexpected native skill copies were found: ${paths.join(", ")}${remaining ? `; ${remaining} more` : ""}. Review skills migrate native --project <working-directory> --include-unmanaged --include-vendor --json before continuing; it inventories that directory and its ancestors. Use --apply after reviewing the archive plan.${adapterRefusal ? ` Native policy adapter refused: ${adapterRefusal}` : ""}`);
   }
   recheckRootAliases(aliases);
 }
