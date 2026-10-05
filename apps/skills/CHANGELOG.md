@@ -1,8 +1,12 @@
 # Changelog
 
-## 0.10.40
+## 0.10.41
 
-- Accept skills that the Codex app materializes under exactly `~/.codex/plugins/cache/openai-curated-remote/` in the native skill guard, by lexical and real-path containment with the root's on-disk spelling, and record each acceptance in `agent-hooks/codex-vendor-cache-acceptance.json`. Every other path, including sibling caches, lookalike names and links escaping the tree, still refuses.
+- Remove the Codex plugin cache allowance prepared for 0.10.40. The native skill guard again refuses skill copies under `~/.codex/plugins/cache/openai-curated-remote/` like any other unmanaged native copy, because skill payloads reach agents only through the Skills CLI, with no native fallback. A regression test keeps that tree refused and confirms no acceptance receipt is written.
+
+## 0.10.40 (not published)
+
+- Prepared an allowance for skills the Codex app materializes under `~/.codex/plugins/cache/openai-curated-remote/`. It was withdrawn before publication because it conflicted with the no-native-fallback boundary; 0.10.41 removes it.
 
 ## 0.10.39
 
