@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.37
+
+- Coordinate Skills writes to a shared Codex corpus through existing native admission and shared leases, retaining custody through rollback and child-process completion.
+- Apply the same protection to alternate adapters, archive adoption and pruning, remote plugin refresh, and configuration updates; refuse unenrolled or conflicting corpus state before mutation.
+
 ## 0.10.36
 
 - Plan an exact disabled path for a refreshed remote Codex plugin skill when the installed identity, current manifest and existing qualified-name deny are explicitly reviewed. Preserve previous denies and native trust controls.
