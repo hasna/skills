@@ -172,7 +172,7 @@ export function reviewedCodexPluginCapabilitiesUnchanged(cache:string, controls:
     return true;
   } catch { return false; }
 }
-export function reviewCodexPluginControls(catalog:CodexNativeSkillCatalog, documents:string[], cache:string, cwd:string, read:Read, rules:unknown, pluginSettings?:unknown): { skills:CodexPluginSkillControl[]; inactivePlugins:CodexInactivePluginControl[]; sourceInputs:CodexPluginSourceInput[] } {
+export function reviewCodexPluginControls(catalog:CodexNativeSkillCatalog, documents:string[], cache:string, cwd:string, read:Read, rules:unknown, pluginSettings?:unknown, plannedRules?:unknown): { skills:CodexPluginSkillControl[]; inactivePlugins:CodexInactivePluginControl[]; sourceInputs:CodexPluginSourceInput[] } {
   if (!supportsCodexNativeCapability(catalog?.version, "qualified-skill-catalog") || catalog.cwd!==cwd) refuse();
   const skills=projectCodexNativeSkillCatalog({data:[{cwd,errors:[],skills:catalog.skills}]},cwd);
   const allowed=new Set(documents), result:CodexPluginSkillControl[]=[], inertDocuments=new Set<string>();
@@ -250,11 +250,20 @@ export function reviewCodexPluginControls(catalog:CodexNativeSkillCatalog, docum
           || !lstatSync(document).isFile() || realpathSync(document)!==document) refuse();
         remotePluginId=plugin.remotePluginId;
       }
-      // Codex omits a path-disabled skill from skills/list. Its absence is
-      // reviewable only when the exact current path is explicitly denied and
-      // that rule set still evaluates the derived qualified name as disabled.
+      // Codex omits disabled skills from skills/list. The current rules must
+      // still evaluate the derived qualified name as disabled.
       const exactPathDeny=Array.isArray(rules) && rules.some((rule:any)=>rule?.path===document && rule?.enabled===false);
-      if (!exactPathDeny || !isCodexNativeSkillDisabled({name:parsed.name,path:document,pluginId:expectedPluginId,enabled:true},rules)) refuse();
+      const nativeSkill={name:parsed.name,path:document,pluginId:expectedPluginId,enabled:true};
+      // A fresh remote version can already be omitted by its qualified-name
+      // deny before Skills has added a deny for the new cache path. Admit only
+      // that stronger planned control, with the current name still disabled.
+      // Never use planned denies to manufacture an inactive/unknown identity.
+      const plannedPathDeny=catalog.version==="codex-cli 0.160.0" && remotePluginId!==undefined
+        && Array.isArray(rules) && rules.some((rule:any)=>typeof rule?.name==="string" && rule.name.trim()===parsed.name && rule.enabled===false)
+        && !rules.some((rule:any)=>(rule?.path===document || typeof rule?.name==="string" && rule.name.trim()===parsed.name) && rule.enabled!==false)
+        && Array.isArray(plannedRules) && plannedRules.some((rule:any)=>rule?.path===document && rule.enabled===false)
+        && isCodexNativeSkillDisabled(nativeSkill,plannedRules);
+      if ((!exactPathDeny && !plannedPathDeny) || !isCodexNativeSkillDisabled(nativeSkill,rules)) refuse();
     }
     result.push({...parsed,pluginId:expectedPluginId,...(remotePluginId ? {remotePluginId} : {})});
   }

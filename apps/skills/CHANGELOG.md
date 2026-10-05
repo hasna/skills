@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.36
+
+- Plan an exact disabled path for a refreshed remote Codex plugin skill when the installed identity, current manifest and existing qualified-name deny are explicitly reviewed. Preserve previous denies and native trust controls.
+- Refuse retained plugin reviews without a fresh native catalog when capabilities change, including during preview.
+
 ## 0.10.35
 
 - Add a read-only SDK and stdin CLI projection for Skills-managed Claude hook commands in copied settings, preserving account metadata, local hooks and explicit empty overrides.
