@@ -139,14 +139,24 @@ on UserPromptSubmit only), re-verifies the bridge document on every hook, walks
 the hook's real parent chain to find the claimed consumer, binds its start time
 and the digest of its executable to the reviewed digests stored under
 `bridge.codexNativePolicy.executableDigests` in the managed policy (an absent set
-refuses; Linux is unqualified), and then requires an authenticated channel
-binding over the hook transport. That binding's verifier does not exist yet, so
-the adapter refuses every envelope today: no plugin-cache copy becomes inert and
-no receipt is written. Once it exists, only package-classified installed-plugin
-documents under `~/.codex/plugins/cache` that the verified policy cannot load can
-become inert, with a receipt at `agent-hooks/codex-native-policy-acceptance.json`;
-user, repository and project copies still refuse, and format or digest checks
-never prove the runtime policy on their own.
+refuses; Linux is unqualified; only the file's identity to digest mapping is
+cached, in `agent-hooks/codex-native-policy-executable-cache.json`), and then
+requires an authenticated channel binding over the hook transport. The draft
+binding, implemented against the native author's draft contract and not yet
+adopted: Codex passes the read end of a per-hook socketpair in
+`CODEX_NATIVE_SKILL_POLICY_FD`; the hook forwards it as fd 3 to the qualified
+ancestor's own executable, `debug verify-hook-policy --fd 3
+--expected-process-id <pid> --input-sha256 <raw stdin SHA-256>`, which creates a
+fresh challenge, verifies the actual writer and prints one
+`native-hook-policy-peer-v1` attestation that must name that pid, that raw stdin
+digest and exactly the emitted policy; it runs once per invocation and is never
+cached. Until native patch 0026 and its platform proof are frozen, the gate
+refuses every envelope: no plugin-cache copy becomes inert and no receipt is
+written. Once adopted, only package-classified installed-plugin documents under
+`~/.codex/plugins/cache` that the verified policy cannot load can become inert,
+with a receipt at `agent-hooks/codex-native-policy-acceptance.json`; user,
+repository and project copies still refuse, and format or digest checks never
+prove the runtime policy on their own.
 
 Native hook invocations must use their installed adapter's selection profile.
 An old client command or environment override naming another profile refuses

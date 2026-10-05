@@ -1,5 +1,5 @@
 import { test, expect, beforeEach, afterEach, describe } from "bun:test";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash, randomBytes } from "node:crypto";
@@ -8,7 +8,7 @@ import { planAgentIntegration, applyAgentIntegration, assertManagedAgentBridge, 
 import { admitCorpusFixture, installCorpusInspectorFixture } from "./codex-corpus.fixture.js";
 import { readManagedSkillPolicySnapshot, serializeManagedSkillPolicy } from "./managed-policy.js";
 import { CLI_BRIDGE_DIGEST, CLI_BRIDGE_FILES } from "./agent-bridge.js";
-import { verifyCodexNativeSkillPolicy, verifyCodexNativeAncestry, verifyCodexNativeBridgeDocument, parseCodexNativePolicyTrust, recordCodexNativePolicyAcceptance, codexNativePolicyReceiptPath, codexNativeHookEnvelopeFromInput, darwinProcessInspector, defaultProcessInspector, CODEX_NATIVE_POLICY_ANCESTRY_SAFETY_HOPS, CODEX_NATIVE_POLICY_RECEIPT_SCHEMA, type ProcessInspector, type CodexNativeHookEnvelope, type CodexNativePolicyVerification } from "./codex-native-skill-policy.js";
+import { verifyCodexNativeSkillPolicy, verifyCodexNativeAncestry, verifyCodexNativeBridgeDocument, verifyCodexNativeChannelBinding, verifyCodexNativeExecutable, qualifiedExecutableSha256, executableWitness, executableCachePath, assertExecutableWitnessStat, runCodexNativePolicyHelper, parseCodexNativePolicyTrust, recordCodexNativePolicyAcceptance, codexNativePolicyReceiptPath, codexNativeHookEnvelopeFromInput, darwinProcessInspector, defaultProcessInspector, CODEX_NATIVE_POLICY_PEER_SCHEMA, CODEX_NATIVE_POLICY_EXECUTABLE_CACHE_SCHEMA, type NativePolicyHelperRunner, type NativePolicyHelperRequest, CODEX_NATIVE_POLICY_ANCESTRY_SAFETY_HOPS, CODEX_NATIVE_POLICY_RECEIPT_SCHEMA, type ProcessInspector, type CodexNativeHookEnvelope, type CodexNativePolicyVerification } from "./codex-native-skill-policy.js";
 useDefaultTestTimeout();
 let restoreInspector: () => void;
 beforeEach(() => { restoreInspector = installCorpusInspectorFixture(); });
@@ -150,7 +150,7 @@ describe("native proof rows through the hook input path", () => {
   test("each row maps exactly as the Codex hook does and refuses as expected", () => {
     const s = station(), cwd = join(s.home, "project");
     for (const line of nativeProofRows(join(s.home, ".agents", "skills", "skills-cli", "SKILL.md"), cwd, CONSUMER_PID)) {
-      const input = JSON.parse(line), mapped = codexNativeHookEnvelopeFromInput(input, input.hook_event_name, line)!;
+      const input = JSON.parse(line), mapped = codexNativeHookEnvelopeFromInput(input, input.hook_event_name, Buffer.from(line, "utf8"))!;
       expect(mapped.event).toBe(input.hook_event_name);
       expect(mapped.hookInputSha256).toBe(sha(line));
       expect(mapped.sessionId).toBe(input.session_id);
@@ -162,16 +162,20 @@ describe("native proof rows through the hook input path", () => {
     // With the allowlist naming the Codex bridge this package installs, the
     // restricted rows pass every check up to the channel-binding gate.
     for (const line of nativeProofRows(s.bridgeDocument, cwd, CONSUMER_PID).slice(2)) {
-      const input = JSON.parse(line), mapped = codexNativeHookEnvelopeFromInput(input, input.hook_event_name, line)!;
+      const input = JSON.parse(line), mapped = codexNativeHookEnvelopeFromInput(input, input.hook_event_name, Buffer.from(line, "utf8"))!;
       expect(verify(s, mapped)).toMatch(/^NATIVE_SKILL_POLICY_UNAUTHENTICATED: /);
     }
     expect(existsSync(s.receipt)).toBe(false);
   });
   test("inputs without native policy, or on other events, map to no envelope", () => {
-    expect(codexNativeHookEnvelopeFromInput({ session_id: SESSION, hook_event_name: "SessionStart" }, "SessionStart", "{}")).toBeUndefined();
-    expect(codexNativeHookEnvelopeFromInput({ native_skill_policy: {}, session_id: SESSION }, "SubagentStart", "{}")).toBeUndefined();
-    expect(codexNativeHookEnvelopeFromInput({ native_skill_policy: {}, session_id: SESSION }, "SessionStart", "{}", "7")).toMatchObject({ event: "SessionStart", inheritedFd: 7, hookInputSha256: sha("{}") });
-    expect(codexNativeHookEnvelopeFromInput({ native_skill_policy: {}, session_id: SESSION }, "SessionStart", "{}", "x")).toMatchObject({ inheritedFd: "x" });
+    const raw = Buffer.from("{}", "utf8");
+    expect(codexNativeHookEnvelopeFromInput({ session_id: SESSION, hook_event_name: "SessionStart" }, "SessionStart", raw)).toBeUndefined();
+    expect(codexNativeHookEnvelopeFromInput({ native_skill_policy: {}, session_id: SESSION }, "SubagentStart", raw)).toBeUndefined();
+    expect(codexNativeHookEnvelopeFromInput({ native_skill_policy: {}, session_id: SESSION }, "SessionStart", raw, "7")).toMatchObject({ event: "SessionStart", inheritedFd: 7, hookInputSha256: sha(raw) });
+    expect(codexNativeHookEnvelopeFromInput({ native_skill_policy: {}, session_id: SESSION }, "SessionStart", raw, "x")).toMatchObject({ inheritedFd: "x" });
+    // The digest covers the raw bytes, not a decoded or re-serialized form.
+    const invalid = Buffer.concat([Buffer.from('{"native_skill_policy": {}, "session_id": "'), Buffer.from([0xff]), Buffer.from('"}')]);
+    expect(codexNativeHookEnvelopeFromInput({ native_skill_policy: {}, session_id: "x" }, "SessionStart", invalid)!.hookInputSha256).toBe(sha(invalid));
   });
 });
 
@@ -325,5 +329,196 @@ describe("real process inspector", () => {
     expect(inspector.parentOf(0x7ffffff0)).toBeNull();
     expect(inspector.executablePath(0x7ffffff0)).toBeNull();
     expect(defaultProcessInspector().parentOf(process.pid)).toBe(process.ppid);
+  });
+});
+
+/** A readable channel descriptor: a FIFO opened non-blocking for reading, with
+ * an optional payload written through a writer end. Stands in for the native
+ * socketpair's read end; tests have no socketpair API. */
+function channelFixture(s: Station, payload?: string): number {
+  const path = join(s.home, `chan-${randomBytes(4).toString("hex")}`);
+  const made = Bun.spawnSync(["/usr/bin/mkfifo", path]);
+  if (made.exitCode !== 0) throw new Error("mkfifo failed");
+  const reader = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  if (payload !== undefined) { const writer = openSync(path, constants.O_WRONLY | constants.O_NONBLOCK); writeSync(writer, payload); closeSync(writer); }
+  roots.push(path);
+  return reader;
+}
+const RAW_INPUT = Buffer.from('{"native_skill_policy": {}}', "utf8"), RAW_SHA = sha(RAW_INPUT);
+function attestation(s: Station, overrides: Record<string, unknown> = {}, remove: string[] = []): string {
+  const value: Record<string, unknown> = { schema: CODEX_NATIVE_POLICY_PEER_SCHEMA, peerProcessId: CONSUMER_PID, stdinSha256: RAW_SHA, policy: policy(s), ...overrides };
+  for (const key of remove) delete value[key];
+  return JSON.stringify(value);
+}
+function fakeRunner(output: string | Buffer, result: Partial<NativePolicyHelperResult> = {}, seen: NativePolicyHelperRequest[] = []): NativePolicyHelperRunner {
+  return request => { seen.push(request); return { exitCode: 0, stdout: Buffer.isBuffer(output) ? output : Buffer.from(output, "utf8"), timedOut: false, oversized: false, ...result }; };
+}
+function bind(s: Station, fd: number | null, runner: NativePolicyHelperRunner, overrides: Partial<Parameters<typeof verifyCodexNativeChannelBinding>[0]> = {}): string {
+  try {
+    const result = verifyCodexNativeChannelBinding({ executablePath: s.executable, inheritedFd: fd, expectedProcessId: CONSUMER_PID, expectedStartTime: "1700000000.123456", inputSha256: RAW_SHA, emittedPolicy: policy(s), inspector: fakeInspector(s), runner, ...overrides });
+    return `ACCEPTED ${JSON.stringify(result)}`;
+  } catch (error) { return (error as Error).message; }
+}
+type NativePolicyHelperResult = ReturnType<NativePolicyHelperRunner>;
+
+describe("draft authenticated channel binding (not wired into acceptance)", () => {
+  test("a matching attestation from the fake helper passes and the helper receives the verified binary, fd 3 and the raw digest", () => {
+    const s = station(), seen: NativePolicyHelperRequest[] = [];
+    expect(bind(s, channelFixture(s), fakeRunner(attestation(s), {}, seen))).toBe(`ACCEPTED ${JSON.stringify({ schema: CODEX_NATIVE_POLICY_PEER_SCHEMA, peerProcessId: CONSUMER_PID })}`);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ executablePath: s.executable, expectedProcessId: CONSUMER_PID, inputSha256: RAW_SHA, timeoutMs: 5000, maxOutputBytes: 65536 });
+    expect(seen[0]!.fd).toBeGreaterThan(2);
+  });
+  test("forged descendant: the real parent attests unrestricted, so the restricted claim refuses", () => {
+    const s = station();
+    const realParent = policy(s, { mode: "unrestricted", allowedHostPaths: null, nonHostSources: "unchanged", effectiveConfigDigest: "81e681238f1466311f87480d5a7f8eeaeeb9dca1d490b4d53f3a0344fc70d6aa" });
+    expect(bind(s, channelFixture(s), fakeRunner(attestation(s, { policy: realParent })))).toMatch(/^NATIVE_SKILL_POLICY_UNAUTHENTICATED: the attested policy differs from the emitted native_skill_policy/);
+    // Or the real writer is another process than the one the forged envelope names.
+    expect(bind(s, channelFixture(s), fakeRunner(attestation(s, { peerProcessId: 3000 })))).toMatch(/^NATIVE_SKILL_POLICY_UNAUTHENTICATED: the attested peer process is not the qualified consumer/);
+  });
+  test("the proof is never cached: every call runs the helper again, SessionStart included", () => {
+    const s = station(), seen: NativePolicyHelperRequest[] = [], runner = fakeRunner(attestation(s), {}, seen);
+    for (let index = 0; index < 3; index++) expect(bind(s, channelFixture(s), runner)).toMatch(/^ACCEPTED /);
+    expect(seen).toHaveLength(3);
+  });
+  const refusals: Array<[string, (s: Station) => [number | null, NativePolicyHelperRunner, Partial<Parameters<typeof verifyCodexNativeChannelBinding>[0]>?], RegExp]> = [
+    ["env/FD missing", s => [null, fakeRunner(attestation(s))], /CODEX_NATIVE_SKILL_POLICY_FD is not set/],
+    ["FD closed", s => { const fd = channelFixture(s); closeSync(fd); return [fd, fakeRunner(attestation(s))]; }, /the inherited channel descriptor is closed or not inheritable/],
+    ["FD is a regular file, not a channel", s => [openSync(s.executable, constants.O_RDONLY), fakeRunner(attestation(s))], /the inherited channel descriptor is not a socket or pipe/],
+    ["raw input digest missing", s => [channelFixture(s), fakeRunner(attestation(s)), { inputSha256: null }], /the raw hook input digest is missing/],
+    ["helper non-zero exit", s => [channelFixture(s), fakeRunner(attestation(s), { exitCode: 2 })], /the native policy helper exited with status 2/],
+    ["helper killed by signal", s => [channelFixture(s), fakeRunner(attestation(s), { exitCode: null })], /the native policy helper exited with a signal/],
+    ["helper timeout", s => [channelFixture(s), fakeRunner(attestation(s), { timedOut: true })], /the native policy helper timed out/],
+    ["oversized output flag", s => [channelFixture(s), fakeRunner(attestation(s), { oversized: true })], /the native policy helper output exceeded its bound/],
+    ["oversized output bytes", s => [channelFixture(s), fakeRunner(Buffer.alloc(65537, 0x20))], /the native policy helper output exceeded its bound/],
+    ["malformed JSON", s => [channelFixture(s), fakeRunner("{not json")], /the native policy helper output is not JSON/],
+    ["invalid UTF-8", s => [channelFixture(s), fakeRunner(Buffer.from([0xff, 0xfe]))], /the native policy helper output is not JSON/],
+    ["not an object", s => [channelFixture(s), fakeRunner("[]")], /the native policy helper output is not an object/],
+    ["unknown key", s => [channelFixture(s), fakeRunner(attestation(s, { challenge: "x" }))], /the native policy attestation has missing or unknown fields/],
+    ["missing key", s => [channelFixture(s), fakeRunner(attestation(s, {}, ["stdinSha256"]))], /the native policy attestation has missing or unknown fields/],
+    ["schema mismatch", s => [channelFixture(s), fakeRunner(attestation(s, { schema: "native-hook-policy-peer-v2" }))], /unknown native policy attestation schema/],
+    ["wrong peerProcessId", s => [channelFixture(s), fakeRunner(attestation(s, { peerProcessId: HOOK_PID }))], /the attested peer process is not the qualified consumer/],
+    ["peerProcessId as string", s => [channelFixture(s), fakeRunner(attestation(s, { peerProcessId: String(CONSUMER_PID) }))], /the attested peer process is not the qualified consumer/],
+    ["wrong stdinSha256", s => [channelFixture(s), fakeRunner(attestation(s, { stdinSha256: sha("other") }))], /the attested hook input digest differs from the raw stdin digest/],
+    ["policy digest mismatch", s => [channelFixture(s), fakeRunner(attestation(s, { policy: policy(s, { effectiveConfigDigest: sha("other") }) }))], /the attested policy differs from the emitted native_skill_policy/],
+    ["policy extra field", s => [channelFixture(s), fakeRunner(attestation(s, { policy: policy(s, { originator: "codex" }) }))], /the attested policy differs from the emitted native_skill_policy/],
+    ["policy field missing", s => [channelFixture(s), fakeRunner(attestation(s, { policy: policy(s, {}, ["processId"]) }))], /the attested policy differs from the emitted native_skill_policy/],
+    ["consumer restarted while the helper ran", s => [channelFixture(s), fakeRunner(attestation(s)), { expectedStartTime: "1600000000.0" }], /the consumer process changed while the helper ran/],
+  ];
+  for (const [name, build, expected] of refusals) test(`${name} refuses`, () => {
+    const s = station(), [fd, runner, overrides] = build(s);
+    expect(bind(s, fd, runner, overrides)).toMatch(new RegExp(`^NATIVE_SKILL_POLICY_UNAUTHENTICATED: ${expected.source}`));
+  });
+});
+
+describe("production helper runner", () => {
+  // A stand-in binary that behaves like `debug verify-hook-policy`: it reads the
+  // forwarded descriptor 3, echoes the argv it received and prints an
+  // attestation. It proves the FD forwarding and the bounds, not the native helper.
+  function helperFixture(s: Station, body: string): string {
+    const script = join(s.home, "helper.ts"), launcher = join(s.home, "helper");
+    writeFileSync(script, body);
+    writeFileSync(launcher, `#!${process.execPath}\nimport "${script}";\n`, { mode: 0o700 });
+    return launcher;
+  }
+  test("forwards the inherited descriptor as fd 3, passes the exact argv, clears the env and bounds the run", () => {
+    const s = station(), fd = channelFixture(s, "challenge-bytes");
+    const helper = helperFixture(s, `import { readFileSync, fstatSync } from "node:fs";
+const channel = readFileSync(3).toString("utf8"), fifo = fstatSync(3).isFIFO();
+console.log(JSON.stringify({ argv: process.argv.slice(2), channel, fifo, env: Object.keys(process.env), cwd: process.cwd() }));`);
+    const result = runCodexNativePolicyHelper({ executablePath: helper, fd, expectedProcessId: CONSUMER_PID, inputSha256: RAW_SHA, timeoutMs: 10_000, maxOutputBytes: 65536 });
+    expect(result).toMatchObject({ exitCode: 0, timedOut: false, oversized: false });
+    expect(JSON.parse(result.stdout.toString("utf8"))).toEqual({ argv: ["debug", "verify-hook-policy", "--fd", "3", "--expected-process-id", String(CONSUMER_PID), "--input-sha256", RAW_SHA], channel: "challenge-bytes", fifo: true, env: [], cwd: "/" });
+  });
+  test("a helper that prints a matching attestation passes end to end through the real runner", () => {
+    const s = station(), fd = channelFixture(s, "challenge");
+    const helper = helperFixture(s, `import { readFileSync } from "node:fs"; readFileSync(3);
+const pid = Number(process.argv[process.argv.indexOf("--expected-process-id") + 1]), digest = process.argv[process.argv.indexOf("--input-sha256") + 1];
+console.log(JSON.stringify({ schema: "native-hook-policy-peer-v1", peerProcessId: pid, stdinSha256: digest, policy: ${JSON.stringify(policy(s))} }));`);
+    expect(bind(s, fd, runCodexNativePolicyHelper, { executablePath: helper, timeoutMs: 10_000 })).toBe(`ACCEPTED ${JSON.stringify({ schema: CODEX_NATIVE_POLICY_PEER_SCHEMA, peerProcessId: CONSUMER_PID })}`);
+  });
+  test("a hanging helper is killed at the timeout and an oversized one at the output bound", () => {
+    const s = station();
+    const hanging = helperFixture(s, `await new Promise(resolve => setTimeout(resolve, 60_000));`);
+    const timedOut = runCodexNativePolicyHelper({ executablePath: hanging, fd: channelFixture(s), expectedProcessId: CONSUMER_PID, inputSha256: RAW_SHA, timeoutMs: 1_500, maxOutputBytes: 65536 });
+    expect(timedOut.timedOut).toBe(true);
+    expect(bind(s, channelFixture(s), runCodexNativePolicyHelper, { executablePath: hanging, timeoutMs: 1_500 })).toMatch(/^NATIVE_SKILL_POLICY_UNAUTHENTICATED: the native policy helper timed out/);
+    const noisy = helperFixture(s, `process.stdout.write("x".repeat(300_000)); await new Promise(resolve => setTimeout(resolve, 60_000));`);
+    const oversized = runCodexNativePolicyHelper({ executablePath: noisy, fd: channelFixture(s), expectedProcessId: CONSUMER_PID, inputSha256: RAW_SHA, timeoutMs: 10_000, maxOutputBytes: 4096 });
+    expect(oversized.oversized || oversized.timedOut).toBe(true);
+    expect(bind(s, channelFixture(s), runCodexNativePolicyHelper, { executablePath: noisy, timeoutMs: 10_000, maxOutputBytes: 4096 })).toMatch(/^NATIVE_SKILL_POLICY_UNAUTHENTICATED: the native policy helper (output exceeded its bound|timed out)/);
+  });
+});
+
+describe("artifact-identity cache for the qualified executable", () => {
+  const counting = () => { const calls: string[] = []; return { calls, hasher: (path: string) => { calls.push(path); return sha(readFileSync(path)); } }; };
+  test("an unchanged witness hits the in-process and file caches; the file holds only identity to digest mappings", () => {
+    const s = station(), { calls, hasher } = counting();
+    const first = qualifiedExecutableSha256(s.executable, { dataDir: s.dataDir, hasher });
+    expect(first).toMatchObject({ sha256: s.executableSha256, cached: false });
+    expect(qualifiedExecutableSha256(s.executable, { dataDir: s.dataDir, hasher })).toMatchObject({ sha256: s.executableSha256, cached: true });
+    expect(calls).toHaveLength(1);
+    const file = executableCachePath(s.dataDir);
+    expect(lstatSync(file).mode & 0o777).toBe(0o600);
+    const value = JSON.parse(readFileSync(file, "utf8"));
+    expect(value.schema).toBe(CODEX_NATIVE_POLICY_EXECUTABLE_CACHE_SCHEMA);
+    expect(value.entries).toEqual([{ path: s.executable, ...first.witness, sha256: s.executableSha256 }]);
+    expect(Object.keys(value.entries[0]).sort()).toEqual(["ctimeNs", "dev", "ino", "mtimeNs", "path", "sha256", "size", "uid"]);
+    // A second verification through the guard path re-uses the file entry rather than re-hashing.
+    const trust = readManagedSkillPolicySnapshot(s.dataDir)!.value.bridge.codexNativePolicy;
+    expect(verifyCodexNativeExecutable(fakeInspector(s), CONSUMER_PID, parseCodexNativePolicyTrust(trust), { dataDir: s.dataDir, hasher }).executableSha256).toBe(s.executableSha256);
+    expect(calls).toHaveLength(1);
+  });
+  test("each changed witness field misses and re-hashes", () => {
+    const s = station(), { calls, hasher } = counting(), options = { dataDir: s.dataDir, hasher };
+    qualifiedExecutableSha256(s.executable, options); expect(calls).toHaveLength(1);
+    // mtime
+    utimesSync(s.executable, new Date(1_600_000_000_000), new Date(1_600_000_000_000));
+    expect(qualifiedExecutableSha256(s.executable, options).cached).toBe(false); expect(calls).toHaveLength(2);
+    expect(qualifiedExecutableSha256(s.executable, options).cached).toBe(true); expect(calls).toHaveLength(2);
+    // ctime (a mode change leaves size and mtime alone)
+    chmodSync(s.executable, 0o500);
+    expect(qualifiedExecutableSha256(s.executable, options).cached).toBe(false); expect(calls).toHaveLength(3);
+    chmodSync(s.executable, 0o700);
+    expect(qualifiedExecutableSha256(s.executable, options).cached).toBe(false); expect(calls).toHaveLength(4);
+    // size and content
+    writeFileSync(s.executable, randomBytes(8192), { mode: 0o700 });
+    const rehashed = qualifiedExecutableSha256(s.executable, options); expect(rehashed.cached).toBe(false); expect(calls).toHaveLength(5);
+    expect(rehashed.sha256).toBe(sha(readFileSync(s.executable)));
+    // inode: a replacement file at the same path with the same bytes
+    const replacement = join(s.home, "replacement"); writeFileSync(replacement, readFileSync(s.executable), { mode: 0o700 }); renameSync(replacement, s.executable);
+    expect(qualifiedExecutableSha256(s.executable, options).cached).toBe(false); expect(calls).toHaveLength(6);
+    // A cache row for another path never serves this one.
+    const other = join(s.home, "other-binary"); writeFileSync(other, readFileSync(s.executable), { mode: 0o700 });
+    expect(qualifiedExecutableSha256(other, options).cached).toBe(false); expect(calls).toHaveLength(7);
+  });
+  test("a witness that changes during hashing refuses", () => {
+    const s = station();
+    expect(() => qualifiedExecutableSha256(s.executable, { dataDir: s.dataDir, hasher: path => { writeFileSync(path, randomBytes(100), { mode: 0o700 }); return sha("x"); } })).toThrow(/the consumer executable changed while hashing/);
+  });
+  test("a symlinked path, a linked component, a group-writable file and a wrong owner each refuse", () => {
+    const s = station();
+    const link = join(s.home, "linked-binary"); symlinkSync(s.executable, link);
+    expect(() => executableWitness(link)).toThrow(/the consumer executable is not a regular file/);
+    const linkedDir = join(s.home, "linked-dir"); symlinkSync(s.home, linkedDir);
+    expect(() => executableWitness(join(linkedDir, "codex-fixture-binary"))).toThrow(/missing, linked or unexpected component/);
+    expect(() => executableWitness(join(s.home, "missing-binary"))).toThrow(/the consumer executable is missing/);
+    chmodSync(s.executable, 0o720);
+    expect(() => executableWitness(s.executable)).toThrow(/group- or world-writable/);
+    chmodSync(s.executable, 0o702);
+    expect(() => executableWitness(s.executable)).toThrow(/group- or world-writable/);
+    chmodSync(s.executable, 0o700);
+    const stat = lstatSync(s.executable, { bigint: true });
+    expect(() => assertExecutableWitnessStat(stat, Number(stat.uid) + 1)).toThrow(/owned by another user/);
+    expect(assertExecutableWitnessStat({ ...stat, uid: 0n, isFile: () => true, isSymbolicLink: () => false }, Number(stat.uid) + 1).uid).toBe("0");
+    expect(() => verifyCodexNativeExecutable(fakeInspector(s, { executablePath: () => link }), CONSUMER_PID, parseCodexNativePolicyTrust(readManagedSkillPolicySnapshot(s.dataDir)!.value.bridge.codexNativePolicy))).toThrow(/NATIVE_SKILL_POLICY_PROCESS_UNBOUND: the consumer executable is not a regular file/);
+  });
+  test("an unreadable or malformed cache file is a miss, never a refusal", () => {
+    const s = station(), { calls, hasher } = counting();
+    mkdirSync(join(s.dataDir, "agent-hooks"), { recursive: true });
+    writeFileSync(executableCachePath(s.dataDir), "{not json");
+    expect(qualifiedExecutableSha256(s.executable, { dataDir: s.dataDir, hasher }).cached).toBe(false);
+    writeFileSync(executableCachePath(s.dataDir), JSON.stringify({ schema: CODEX_NATIVE_POLICY_EXECUTABLE_CACHE_SCHEMA, entries: [{ path: s.executable, sha256: "0".repeat(64), dev: "1", ino: "1", size: "1", mtimeNs: "1", ctimeNs: "1", uid: "1", extra: true }] }));
+    expect(calls).toHaveLength(1);
   });
 });

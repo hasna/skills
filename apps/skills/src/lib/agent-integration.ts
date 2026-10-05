@@ -1383,7 +1383,7 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
     const { inspector, ...envelope } = options.codexNativePolicy;
     const cache = canonicalAgentPath(join(home, ".codex", "plugins", "cache"), aliases), read = (path: string) => new TextDecoder("utf-8", { fatal: true }).decode(readNativeBytes(path, 1024 * 1024));
     try {
-      const verification = verifyCodexNativeSkillPolicy({ envelope, bridgeDocument: join(expected, "SKILL.md"), expectedBridgeContent: CLI_BRIDGE_FILES["SKILL.md"]!, expectedBridgeSha256: CLI_BRIDGE_DIGEST, trust: binding.codexNativePolicy, ...(inspector ? { inspector } : {}) });
+      const verification = verifyCodexNativeSkillPolicy({ envelope, bridgeDocument: join(expected, "SKILL.md"), expectedBridgeContent: CLI_BRIDGE_FILES["SKILL.md"]!, expectedBridgeSha256: CLI_BRIDGE_DIGEST, trust: binding.codexNativePolicy, dataDir, ...(inspector ? { inspector } : {}) });
       inert = unexpected.filter(entry => isInertCodexPluginCacheCopy(entry, cache, verification.policy.allowedHostPaths, read));
       if (inert.length !== unexpected.length) { inert = []; adapterRefusal = "native copies outside the classified Codex plugin cache remain"; }
       else recordCodexNativePolicyAcceptance(dataDir, verification, inert.map(entry => ({ path: entry.path, treeSha256: entry.hash })));

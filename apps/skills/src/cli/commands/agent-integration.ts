@@ -10,7 +10,7 @@ import { parseSkillContextInput, selectedProfileId } from "./context.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, normalizeAgentHookEvent } from "../../lib/agent-adapters.js";
 import { planAgentIntegration, planClaudeManagedHookProjection, planAgentSettingsWitnessUpgrade, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, hookContextOutput, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, type IntegrationAgent } from "../../lib/agent-integration.js";
 import { enrollCodexNativeHooks, reconcileCodexNativeHooks } from "../../lib/agent-codex-trust.js";
-import { codexNativeHookEnvelopeFromInput } from "../../lib/codex-native-skill-policy.js";
+import { codexNativeHookEnvelopeFromInput, CODEX_NATIVE_POLICY_FD_ENV } from "../../lib/codex-native-skill-policy.js";
 import { HookDiagnosticError, hookChildError, hookFailureReason, isOptionalHookContextFailure, hookUnavailableContext } from "../../lib/hook-diagnostics.js";
 import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib/selection-cache.js";
 import { captureClaudeSettingsV2, captureClaudeSettingsV3 } from "../../lib/claude-settings-witness.js";
@@ -265,8 +265,10 @@ export function registerAgentIntegration(parent: Command): void {
       let nativeEvent = event;
       try {
         if (agents(options.agent).length !== 1) throw new Error("A hook invocation requires one agent");
-        const inputText = readFileSync(0, "utf8");
-        if (inputText.length > 1024 * 1024) throw new Error("Hook input is too large");
+        // Keep the exact raw stdin bytes: the native policy adapter hashes them
+        // before any decoding, and the input is parsed from those same bytes.
+        const inputBytes = readFileSync(0), inputText = inputBytes.toString("utf8");
+        if (inputBytes.length > 1024 * 1024 || inputText.length > 1024 * 1024) throw new Error("Hook input is too large");
         let input = JSON.parse(inputText);
         if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Expected hook input object");
         nativeEvent = options.event ?? input.hook_event_name ?? event;
@@ -303,8 +305,7 @@ export function registerAgentIntegration(parent: Command): void {
         // A patched Codex reports its effective native skill policy on these two
         // events. Hand the exact native fields and the stdin digest to the guard's
         // adapter; every other agent, event and guard call keeps today's behaviour.
-        // The inherited channel descriptor is added once the native contract names it.
-        const codexNativePolicy = options.agent === "codex" ? codexNativeHookEnvelopeFromInput(input, event, inputText) : undefined;
+        const codexNativePolicy = options.agent === "codex" ? codexNativeHookEnvelopeFromInput(input, event, inputBytes, process.env[CODEX_NATIVE_POLICY_FD_ENV]) : undefined;
         assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile, ...(codexNativePolicy ? { codexNativePolicy } : {}) });
         if (typeof input.prompt === "string") input.prompt = normalizeAgentHookPrompt(options.agent, nativeEvent, input.prompt);
         // Validate every context field before a timeout or API refusal can be
