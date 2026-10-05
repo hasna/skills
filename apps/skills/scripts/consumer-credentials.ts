@@ -69,7 +69,8 @@ try {
   await writeFile(join(workspace, "package.json"), JSON.stringify({ private: true,
     dependencies: { "@hasna/skills": `file:${archive}` } }));
   const bunfig = join(workspace, "bunfig.toml");
-  await writeFile(bunfig, `[install]\nregistry = "https://registry.npmjs.org"\nminimumReleaseAge = 604800\nminimumReleaseAgeExcludes = ["@hasna/skills", "@hasna/secrets"]\n`);
+  // Exact Hasna package names are publisher-exempt; unrelated packages retain the seven-day gate.
+  await writeFile(bunfig, `[install]\nregistry = "https://registry.npmjs.org"\nminimumReleaseAge = 604800\nminimumReleaseAgeExcludes = ["@hasna/skills", "@hasna/contracts", "@hasna/events", "@hasna/secrets"]\n`);
   const installed = await run([process.execPath, "--no-env-file", "install", "--production", "--ignore-scripts",
     "--backend=copyfile", "--linker=hoisted", `--config=${bunfig}`], workspace, env);
   assert.equal(installed.status, 0, "Production-only consumer installation failed");

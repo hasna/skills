@@ -1,5 +1,6 @@
+import { admitCorpusFixture, installCorpusInspectorFixture } from "./codex-corpus.fixture.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
-import { afterEach, expect, test } from "bun:test";
+import { beforeEach, afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,7 +22,7 @@ function station() {
   const home = mkdtempSync(join(realpathSync(tmpdir()), "skills-codex-witness-"));
   homes.push(home);
   const dataDir = join(home, "data"), configPath = join(home, ".codex/config.toml"), projectDir = home;
-  mkdirSync(join(home, ".codex"), { recursive: true });
+  admitCorpusFixture(join(home, ".codex"));
   writeFileSync(configPath, SEED, { mode: 0o600 });
   const fixture = { home, dataDir, projectDir };
   applyAgentIntegration(planAgentIntegration({ ...fixture, agents: ["codex"] }));
@@ -213,3 +214,7 @@ test("v1 migration refuses missing or tampered preimages, real changes and stale
   writeFileSync(preimage, before + '[unknown]\nenabled = true\n');
   refused(() => applyAgentIntegration(plan));
 });
+
+let restoreInspector: (()=>void)|undefined;
+beforeEach(()=>{restoreInspector=installCorpusInspectorFixture();});
+afterEach(()=>{restoreInspector?.();});

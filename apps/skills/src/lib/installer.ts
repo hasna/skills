@@ -1,3 +1,4 @@
+import { codexCorpusRootForPath, withCodexCorpusWrite, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
 /**
  * Skill setup and project preferences.
  *
@@ -313,7 +314,7 @@ export function resolveAgents(agentArg: string): AgentTarget[] {
   return [agent];
 }
 
-export interface AgentInstallOptions {
+export interface AgentInstallOptions extends CodexCorpusWriteOptions {
   agent: AgentTarget;
   scope?: AgentScope;
   projectDir?: string;
@@ -369,6 +370,7 @@ export function installSkillForAgent(
     skill: canonicalName,
     dryRun: options.dryRun,
     force: options.overwrite,
+    codexCommand: options.codexCommand, codexSha256: options.codexSha256,
   });
   if (result.action === "skip") {
     return { skill: canonicalName, success: false, error: result.reason ?? "skipped", path: result.path };
@@ -377,6 +379,12 @@ export function installSkillForAgent(
 }
 
 export function removeSkillForAgent(name: string, options: AgentInstallOptions): boolean {
+  const dir = getAgentSkillPath(name, options.agent, options.scope ?? "global", options.projectDir);
+  const root = codexCorpusRootForPath(dir);
+  return withCodexCorpusWrite(root ? [root] : [], () => removeSkillForAgentUnlocked(name, options), options);
+}
+
+function removeSkillForAgentUnlocked(name: string, options: AgentInstallOptions): boolean {
   const canonicalName = getCanonicalSkillName(name);
   const scope = options.scope ?? "global";
   const dir = getAgentSkillPath(canonicalName, options.agent, scope, options.projectDir);

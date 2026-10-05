@@ -1,5 +1,6 @@
+import { admitCorpusFixture, installCorpusInspectorFixture } from "./codex-corpus.fixture.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
-import { afterEach, expect, test } from "bun:test";
+import { beforeEach, afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,7 +16,7 @@ const LOCAL = '[mcp_servers.workflows]\ncommand = "/runtime/0.2.0/workflows"\nar
 function station(version: 2 | 3 = 3) {
   const home = mkdtempSync(join(realpathSync(tmpdir()), "skills-codex-local-mcp-")); homes.push(home);
   const dataDir = join(home, "data"), configPath = join(home, ".codex/config.toml"), policyPath = join(dataDir, "agent-policy.json");
-  mkdirSync(join(home, ".codex")); writeFileSync(configPath, BASE + LOCAL);
+  admitCorpusFixture(join(home, ".codex")); writeFileSync(configPath, BASE + LOCAL);
   const f = { home, dataDir, projectDir: home, configPath, policyPath };
   applyAgentIntegration(planAgentIntegration({ ...f, agents: ["codex"] }));
   applyAgentIntegration(planAgentIntegration({ ...f, agents: ["codex"], discoveryInputs: { version: 1, agents: [{ agent: "codex", roots: [], sources: [(version === 3 ? captureCodexSettingsV3 : captureCodexSettingsV2)(configPath)], pluginHooks: "reviewed-no-skill-injection" }] } }));
@@ -89,3 +90,7 @@ test("v2-to-v3 proves legacy bytes then permits only newly irrelevant changes, w
   expect(() => assertManagedAgentBridge("codex", f)).not.toThrow();
   writeFileSync(f.configPath, changed.replaceAll("0.2.1", "0.2.2")); expect(() => assertManagedAgentBridge("codex", f)).not.toThrow();
 });
+
+let restoreInspector: (()=>void)|undefined;
+beforeEach(()=>{restoreInspector=installCorpusInspectorFixture();});
+afterEach(()=>{restoreInspector?.();});

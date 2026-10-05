@@ -1,3 +1,5 @@
+import { acquireCodexCorpusWrite } from "./codex-corpus-write.js";
+import { join } from "node:path";
 import { execFile, spawn } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
@@ -36,11 +38,14 @@ export async function connectCodexHookRpc(options: { command: string; home: stri
   // path remains lexical. Preserve absence instead of manufacturing an override.
   if (options.codexHome === undefined) delete env.CODEX_HOME;
   else env.CODEX_HOME = options.codexHome;
+  const corpusLease = acquireCodexCorpusWrite([options.codexHome ?? join(options.home, ".codex")], { codexCommand: binary });
   const child = spawn(binary, ["app-server", "--strict-config", "--stdio"], {
     cwd: options.home,
     env,
     stdio: ["pipe", "pipe", "pipe"],
   });
+  let childClosed = false;
+  const actualClose = new Promise<void>(resolve => child.once("close", () => { childClosed = true; corpusLease.close(); resolve(); }));
   const pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   let nextId = 1, buffer = Buffer.alloc(0), stopped = false, diagnosticBytes = 0;
   const fail = () => {
@@ -81,10 +86,11 @@ export async function connectCodexHookRpc(options: { command: string; home: stri
     },
     async close() {
       fail(); child.stdin.end();
-      if (child.exitCode !== null || child.signalCode !== null) return;
-      await new Promise<void>(resolve => {
-        const timer = setTimeout(() => { child.kill(); resolve(); }, 1000);
-        child.once("exit", () => { clearTimeout(timer); resolve(); });
+      if (childClosed) return;
+      await new Promise<void>((resolve, reject) => {
+        const terminate = setTimeout(() => { child.kill(); }, 1000);
+        const deadline = setTimeout(() => { clearTimeout(terminate); reject(new Error("CODEX_HOOK_TRUST_NATIVE_CLOSE_UNCONFIRMED")); }, 5000);
+        actualClose.then(() => { clearTimeout(terminate); clearTimeout(deadline); resolve(); });
       });
     },
   };

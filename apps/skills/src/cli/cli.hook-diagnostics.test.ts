@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { buildCliFixture } from "./cli-build.fixture.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
+import { admitCorpusFixture, corpusInspectorPathFixture } from "../lib/codex-corpus.fixture.js";
 
 useDefaultTestTimeout();
 const scratch = mkdtempSync(join(tmpdir(), "skills-hook-diagnostics-"));
@@ -33,7 +34,8 @@ afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 async function fixture() {
   const home = mkdtempSync(join(scratch, "home-")), data = join(home, ".hasna", "skills");
   mkdirSync(data, { recursive: true });
-  const env = { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, USERPROFILE: home, HASNA_HOME: join(home, ".hasna"), HASNA_SKILLS_DIR: data, NO_COLOR: "1", TMPDIR: scratch };
+  admitCorpusFixture(join(home, ".codex"));
+  const env = { PATH: `${corpusInspectorPathFixture()}:${dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, USERPROFILE: home, HASNA_HOME: join(home, ".hasna"), HASNA_SKILLS_DIR: data, NO_COLOR: "1", TMPDIR: scratch };
   async function run(args: string[], childEnv: Record<string, string> = {}, input: unknown = {}) {
     const child = Bun.spawn([process.execPath, "--no-env-file", binary, ...args], { cwd: home, env: { ...env, ...childEnv }, stdin: new Blob([JSON.stringify(input)]), stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);

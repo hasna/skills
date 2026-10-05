@@ -1,3 +1,4 @@
+import { codexCorpusRootForPath, withCodexCorpusWrite, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
 /**
  * `skills sync` — the last mile: write skills from this machine's corpus
  * (the migrated owner-layout cache ~/.hasna/skills/skills/<name>/, or the
@@ -184,7 +185,7 @@ export interface AgentSyncAction {
   reason?: string;
 }
 
-export interface SyncSkillsOptions {
+export interface SyncSkillsOptions extends CodexCorpusWriteOptions {
   /** Specific skills to sync. When empty, every corpus skill is synced. */
   names?: string[];
   /** Explicit; the default when no names are given is already "all". */
@@ -365,6 +366,7 @@ export function syncSkillsToAgents(options: SyncSkillsOptions = {}): SyncSkillsR
         homeDir,
         dryRun: options.dryRun,
         force: options.force,
+        codexCommand: options.codexCommand, codexSha256: options.codexSha256,
       }));
     }
   }
@@ -372,7 +374,7 @@ export function syncSkillsToAgents(options: SyncSkillsOptions = {}): SyncSkillsR
   return { actions };
 }
 
-export interface WriteManagedAgentSkillParams {
+export interface WriteManagedAgentSkillParams extends CodexCorpusWriteOptions {
   skill: string;
   agent: SyncAgent;
   skillMd: string;
@@ -402,6 +404,7 @@ export function writeManagedAgentSkill(params: WriteManagedAgentSkillParams): Ag
     resourceDir: params.resourceDir,
     dryRun: params.dryRun,
     force: params.force,
+    codexCommand: params.codexCommand, codexSha256: params.codexSha256,
   });
   return {
     skill: params.skill,
@@ -418,7 +421,7 @@ export interface ManagedDirWriteResult {
   reason?: string;
 }
 
-export interface ManagedDirWriteOptions {
+export interface ManagedDirWriteOptions extends CodexCorpusWriteOptions {
   skill: string;
   source?: string;
   resourceDir?: string;
@@ -439,6 +442,11 @@ export function writeManagedSkillDir(
   skillMd: string,
   options: ManagedDirWriteOptions,
 ): ManagedDirWriteResult {
+  const root = options.dryRun ? undefined : codexCorpusRootForPath(dir);
+  return withCodexCorpusWrite(root ? [root] : [], (assertCurrent) => writeManagedSkillDirUnlocked(dir, skillMd, options, assertCurrent), options);
+}
+
+function writeManagedSkillDirUnlocked(dir: string, skillMd: string, options: ManagedDirWriteOptions, assertCurrent: () => void): ManagedDirWriteResult {
   const skillMdPath = join(dir, "SKILL.md");
   const markerPath = join(dir, SYNC_MARKER_FILE);
   const dirExists = existsSync(dir);
@@ -514,14 +522,19 @@ export function writeManagedSkillDir(
     writeFileSync(candidateSkillMdPath, skillMd.endsWith("\n") ? skillMd : `${skillMd}\n`);
     writeFileSync(candidateMarkerPath, `${JSON.stringify(marker, null, 2)}\n`);
 
+    assertCurrent();
     if (dirExists) {
       originalMoved = true;
       renameDirectory(dir, backupDir);
     }
+    assertCurrent();
     renameDirectory(candidateDir, dir);
+    assertCurrent();
+    if (readFileSync(skillMdPath, "utf8") !== (skillMd.endsWith("\n") ? skillMd : `${skillMd}\n`)) throw new Error("Managed skill readback failed");
   } catch (error) {
     if (originalMoved && existsSync(backupDir)) {
       try {
+        assertCurrent();
         if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
         renameDirectory(backupDir, dir);
         originalMoved = false;
@@ -537,6 +550,7 @@ export function writeManagedSkillDir(
   } finally {
     if (!preserveTransaction) {
       try {
+        assertCurrent();
         rmSync(transactionDir, { recursive: true, force: true });
       } catch {
         // The target is already correct (or restored); a hidden staging directory
@@ -552,7 +566,13 @@ export function writeManagedSkillDir(
  * did not write (no valid Skills ownership marker). Foreign or malformed markers
  * grant no deletion authority, and removal has no force override.
  */
-export function removeManagedAgentSkill(skill: string, agent: SyncAgent, homeDir: string = homedir()): boolean {
+export function removeManagedAgentSkill(skill: string, agent: SyncAgent, homeDir: string = homedir(), options: CodexCorpusWriteOptions = {}): boolean {
+  const dir = join(agentGlobalSkillsDir(agent, homeDir), skill);
+  const root = codexCorpusRootForPath(dir);
+  return withCodexCorpusWrite(root ? [root] : [], () => removeManagedAgentSkillUnlocked(skill, agent, homeDir, options), options);
+}
+
+function removeManagedAgentSkillUnlocked(skill: string, agent: SyncAgent, homeDir: string = homedir(), options: CodexCorpusWriteOptions = {}): boolean {
   const dir = join(agentGlobalSkillsDir(agent, homeDir), skill);
   if (!hasSkillsOwnershipMarker(dir)) return false;
   rmSync(dir, { recursive: true, force: true });

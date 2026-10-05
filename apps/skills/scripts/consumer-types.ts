@@ -635,7 +635,8 @@ assert.equal((await inspectSkillBundle(packed.bytes)).sha256, packed.sha256);
 console.log("Installed bundle SDK runtime: 17 assertions passed.");
 `);
   const installConfig = join(workspace, "install.bunfig.toml");
-  await writeFile(installConfig, `[install]\nregistry = "https://registry.npmjs.org"\nminimumReleaseAge = 604800\nminimumReleaseAgeExcludes = ["@hasna/skills", "@hasna/events", "@hasna/secrets"]\n`, { mode: 0o600 });
+  // Exact Hasna package names are publisher-exempt; unrelated packages retain the seven-day gate.
+  await writeFile(installConfig, `[install]\nregistry = "https://registry.npmjs.org"\nminimumReleaseAge = 604800\nminimumReleaseAgeExcludes = ["@hasna/skills", "@hasna/contracts", "@hasna/events", "@hasna/secrets"]\n`, { mode: 0o600 });
   await run([process.execPath, "--no-env-file", "install", "--ignore-scripts", `--config=${installConfig}`], workspace);
   assertInstalledIdentity(JSON.parse(await readFile(join(workspace, "node_modules/@hasna/skills/package.json"), "utf8")), metadata.version);
   // Prove the pins held before tsc runs: a floating resolution must fail here

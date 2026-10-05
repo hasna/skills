@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { buildCliFixture } from "./cli-build.fixture.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
+import { admitCorpusFixture, wrapNativeInspectionFixture } from "../lib/codex-corpus.fixture.js";
+import { KernelLock } from "@hasna/contracts/kernel-lock";
 
 useDefaultTestTimeout();
 const scratch = mkdtempSync(join(tmpdir(), "skills-native-catalog-cli-"));
@@ -26,10 +28,12 @@ async function run(root: string, args: string[]) {
   return { stdout, stderr, exitCode };
 }
 
-function native(root: string, version = "0.159.2") {
+function native(root: string, version = "0.159.2", options: { enrolled?: boolean; observeClose?: boolean } = {}) {
+  if (options.enrolled !== false) admitCorpusFixture(join(root, "home", ".codex"));
   const command = join(root, "codex"), document = join(root, "plugin", "SKILL.md");
-  writeFileSync(command, `#!/usr/bin/env bun
+  writeFileSync(command, wrapNativeInspectionFixture(`#!/usr/bin/env bun
 import { createInterface } from "node:readline";
+import { writeFileSync } from "node:fs";
 if (process.argv[2] === "--version") { console.log("codex-cli ${version}"); process.exit(0); }
 for await (const line of createInterface({ input: process.stdin })) {
   const request = JSON.parse(line);
@@ -37,7 +41,10 @@ for await (const line of createInterface({ input: process.stdin })) {
   if (request.method === "skills/list") console.log(JSON.stringify({ id: request.id, result: { data: [{ cwd: request.params.cwds[0], errors: [], skills: [{ name: "example:review", path: ${JSON.stringify(document)}, enabled: true, pluginId: "example@probe" }] }] } }));
   if (request.method === "plugin/installed") console.log(JSON.stringify({ id: request.id, result: { marketplaces: [{ name: "probe", plugins: [{ id: "example@probe", name: "example", installed: true, enabled: true, localVersion: "1.0.0" }] }], marketplaceLoadErrors: [] } }));
 }
-`, { mode: 0o700 });
+${options.observeClose ? `writeFileSync(${JSON.stringify(join(root, "closing"))}, "closing");
+await new Promise(resolve => setTimeout(resolve, 750));
+writeFileSync(${JSON.stringify(join(root, "closed"))}, "closed");` : ""}
+`), { mode: 0o700 });
   chmodSync(command, 0o700);
   return { command, document };
 }
@@ -76,4 +83,44 @@ test("built CLI refuses a native version without qualified-name control support"
   expect(result.stdout).toBe("");
   expect(result.stderr.trim()).toBe("CODEX_NATIVE_SKILL_CATALOG_UNSUPPORTED_VERSION");
   expect(existsSync(output)).toBe(false);
+});
+
+for (const state of ["unenrolled", "pending", "exclusive"] as const) test(`built CLI catalog refuses ${state} admission without publishing output`, async () => {
+  const root = mkdtempSync(join(scratch, "case-"));
+  const { command } = native(root, "0.160.0", { enrolled: state !== "unenrolled" });
+  const corpus = join(root, "home", ".codex"), output = join(root, "catalog.json");
+  const blocker = state === "exclusive" ? new KernelLock(corpus, ".native-corpus-admission", { existingOnly: true }) : undefined;
+  if (state === "pending") writeFileSync(join(corpus, "fixture-mode"), "pending");
+  try {
+    if (blocker) expect(blocker.trySync(1000)).toBe(true);
+    const result = await run(root, ["hook", "native-catalog", "--cwd", root, "--output", output, "--codex-command", command, "--json"]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("CODEX_NATIVE_SKILL_CATALOG_CAPTURE_FAILED");
+    expect(existsSync(output)).toBe(false);
+    if (state === "unenrolled") expect(existsSync(corpus)).toBe(false);
+  } finally { blocker?.close(); }
+});
+
+test("built CLI retains shared admission until the native catalog child closes", async () => {
+  const root = mkdtempSync(join(scratch, "case-"));
+  const { command } = native(root, "0.160.0", { observeClose: true });
+  const output = join(root, "catalog.json");
+  const pending = run(root, ["hook", "native-catalog", "--cwd", root, "--output", output, "--codex-command", command, "--json"]);
+  try {
+    const deadline = performance.now() + 5000;
+    while (!existsSync(join(root, "closing")) && performance.now() < deadline) await Bun.sleep(10);
+    expect(existsSync(join(root, "closing"))).toBe(true);
+    expect(existsSync(join(root, "closed"))).toBe(false);
+    expect(existsSync(output)).toBe(false);
+    const publisher = new KernelLock(join(root, "home", ".codex"), ".native-corpus-admission", { existingOnly: true });
+    try {
+      expect(publisher.trySync(100)).toBe(false);
+      const result = await pending;
+      expect(result.exitCode).toBe(0); expect(result.stderr).toBe("");
+      expect(existsSync(join(root, "closed"))).toBe(true);
+      expect(existsSync(output)).toBe(true);
+      expect(publisher.trySync(1000)).toBe(true);
+    } finally { publisher.close(); }
+  } finally { await pending; }
 });

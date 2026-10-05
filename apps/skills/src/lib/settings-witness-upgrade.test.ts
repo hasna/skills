@@ -1,19 +1,24 @@
 import { useDefaultTestTimeout } from "../test-preload.js";
-import { test, expect, afterEach } from "bun:test";
+import { test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { planAgentIntegration, applyAgentIntegration, assertManagedAgentBridge, planAgentSettingsWitnessUpgrade } from "./agent-integration.js";
 import { hashCodexSettingsReplacement } from "./codex-settings-witness.js";
+import { admitCorpusFixture, installCorpusInspectorFixture } from "./codex-corpus.fixture.js";
 useDefaultTestTimeout();
 const sha = (s:string) => createHash("sha256").update(s).digest("hex");
 const roots:string[] = [];
+let restoreInspector: () => void;
+beforeEach(() => { restoreInspector = installCorpusInspectorFixture(); });
+afterEach(() => { restoreInspector(); });
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, {recursive:true,force:true}); });
 for (const agent of ["claude", "codex"] as const) test(`${agent} explicit raw review upgrade preserves original and permits only preferences`, () => {
   const home = mkdtempSync(join(realpathSync(tmpdir()), "skills-witness-")); roots.push(home);
   const dataDir = join(home, "data"), config = join(home, agent === "claude" ? ".claude/settings.json" : ".codex/config.toml");
   const f = {home, dataDir, projectDir:home};
+  if (agent === "codex") admitCorpusFixture(join(home, ".codex"));
   applyAgentIntegration(planAgentIntegration({...f,agents:[agent]}));
   const before = readFileSync(config,"utf8"), policyPath = join(dataDir,"agent-policy.json");
   const binding = JSON.parse(readFileSync(policyPath,"utf8")).bridge.discovery[agent];
