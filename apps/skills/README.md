@@ -141,18 +141,16 @@ and the digest of its executable to the reviewed digests stored under
 `bridge.codexNativePolicy.executableDigests` in the managed policy (an absent set
 refuses; Linux is unqualified; only the file's identity to digest mapping is
 cached, in `agent-hooks/codex-native-policy-executable-cache.json`), and then
-requires an authenticated channel binding over the hook transport. The draft
-binding, implemented against the native author's draft contract and not yet
-adopted: Codex passes the read end of a per-hook socketpair in
-`CODEX_NATIVE_SKILL_POLICY_FD`; the hook forwards it as fd 3 to the qualified
-ancestor's own executable, `debug verify-hook-policy --fd 3
---expected-process-id <pid> --input-sha256 <raw stdin SHA-256>`, which creates a
-fresh challenge, verifies the actual writer and prints one
-`native-hook-policy-peer-v1` attestation that must name that pid, that raw stdin
-digest and exactly the emitted policy; it runs once per invocation and is never
-cached. Until native patch 0026 and its platform proof are frozen, the gate
-refuses every envelope: no plugin-cache copy becomes inert and no receipt is
-written. Once adopted, only package-classified installed-plugin documents under
+requires the authenticated channel binding of native patch 0026: Codex passes
+the read end of a per-hook socketpair in `CODEX_NATIVE_SKILL_POLICY_FD`; the hook
+forwards it as fd 3 to the qualified ancestor's own executable, `debug
+verify-hook-policy --fd 3 --expected-process-id <pid> --input-sha256 <raw stdin
+SHA-256>`, which sends a fresh challenge, verifies the actual writer and prints
+one `native-hook-policy-peer-v1` attestation that must name that pid, that raw
+stdin digest and exactly the emitted policy; it runs once per invocation and is
+never cached. The managed trust default is empty, so no envelope is accepted
+until an operator records reviewed executable digests; with none, the helper is
+never run. Then only package-classified installed-plugin documents under
 `~/.codex/plugins/cache` that the verified policy cannot load can become inert,
 with a receipt at `agent-hooks/codex-native-policy-acceptance.json`; user,
 repository and project copies still refuse, and format or digest checks never

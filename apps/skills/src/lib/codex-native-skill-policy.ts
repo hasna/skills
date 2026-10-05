@@ -9,17 +9,20 @@
  * bridge, binds the claimed process to the hook's real ancestor chain and to a
  * reviewed executable digest, and prepares a provenance receipt.
  *
- * What these checks do not prove: the hook input is written by whichever
- * process invokes the hook. A descendant of a trusted Codex can invoke this
- * hook with a forged envelope that names its unrestricted ancestor, and the
- * envelope, ancestry, start-time and digest checks all pass in that case.
- * Format and digest checks therefore never establish the runtime policy.
- * Acceptance is gated on an authenticated channel binding over the hook
- * transport (a bounded readback socket served by the actual Codex process,
- * proving the kernel peer pid, the exact hook stdin hash and the actual
- * policy). Its verifier is not delivered yet. Until it is,
- * `assertAuthenticatedChannelBinding` refuses every envelope, nothing becomes
- * inert through this adapter and no receipt is written.
+ * What the format, lineage, start-time and digest checks do not prove: the
+ * hook input is written by whichever process invokes the hook, so a descendant
+ * of a trusted Codex can invoke this hook with a forged envelope naming its
+ * unrestricted ancestor and pass all of them. Acceptance is therefore gated on
+ * the authenticated channel binding of native patch 0026 (internal-apps
+ * c4a83048, 0026-native-hook-policy-peer.patch, sha256 5a40773f…): the native
+ * hook runner creates a per-invocation Unix socketpair, forwards the receiver
+ * to the hook child and names it in CODEX_NATIVE_SKILL_POLICY_FD; the hook
+ * forwards that descriptor to the qualified ancestor's own executable, whose
+ * `debug verify-hook-policy` sends a fresh challenge over it and accepts only
+ * the kernel-authenticated reply of that process carrying the exact raw stdin
+ * digest and the policy it actually emitted. Acceptance also needs reviewed
+ * executable digests in the managed policy; that trust default is empty, so
+ * nothing passes until an operator configures them.
  *
  * Hashing the file at the executable path is not code-signature identity
  * either: the file can be replaced after exec, and the running image is never
@@ -350,15 +353,38 @@ export function runCodexNativePolicyHelper(request: NativePolicyHelperRequest): 
 
 function channelRefusal(detail: string): never { refuse("NATIVE_SKILL_POLICY_UNAUTHENTICATED", detail); }
 
-/** Draft authenticated channel binding (native author's draft contract; not
- * frozen until patch 0026 and its platform proof). The hook forwards the
- * inherited descriptor to the QUALIFIED ancestor's executable as fd 3 and runs
- * `debug verify-hook-policy`, which reads no config, auth or session, creates
- * a fresh challenge internally, verifies the actual writer's credentials and
- * prints one attestation. A creator-pid-only binding was rejected (NO_GO:
- * pre-exec forgery reproduced); the fresh challenge plus actual-writer
- * verification is the correction. The proof is never cached: once per
- * invocation, SessionStart included. Not wired into acceptance yet. */
+/** Authenticated channel binding, against the frozen native source
+ * (internal-apps c4a83048, 0026-native-hook-policy-peer.patch; "patch line"
+ * numbers below index that patch file):
+ * - the hook runner creates a Unix socketpair per invocation (line 296),
+ *   forwards the receiver to the hook child (line 171) and names it in
+ *   CODEX_NATIVE_SKILL_POLICY_FD (lines 172-175, constant at line 264);
+ * - the verifier is `<codex> debug verify-hook-policy --fd <i32>
+ *   --expected-process-id <u32> --input-sha256 <hex>` (lines 88-97, dispatch
+ *   lines 102-103), dispatched in main before config, auth-home or session
+ *   setup (lines 55-58); it requires fd > 2 (line 449), a positive pid
+ *   (line 450) and a lowercase 64-hex digest (line 456);
+ * - success writes one compact JSON object to stdout followed by a newline and
+ *   exits 0 (lines 56-58): {"schema":"native-hook-policy-peer-v1",
+ *   "peerProcessId":<kernel peer pid>,"stdinSha256":<the digest>,
+ *   "policy":<the native_skill_policy the producer emitted>} (lines 546-550,
+ *   schema at line 263); any failure returns an error from main, so the
+ *   process exits non-zero with the message on stderr and nothing on stdout;
+ * - the producer hashes the exact bytes it wrote to the hook's stdin,
+ *   lowercase hex (lines 286-288), and the verifier compares it with
+ *   --input-sha256 (line 536), so the hook must hash its raw stdin bytes;
+ * - the verifier checks the kernel peer before and after a fresh random
+ *   challenge (lines 466-469, 490-491, 517-519, 526-528); Linux also
+ *   authenticates every response chunk's writer through SCM_CREDENTIALS.
+ *   A creator-pid-only binding was rejected (NO_GO: pre-exec forgery
+ *   reproduced); the fresh challenge plus actual-writer verification is the
+ *   correction.
+ * The hook forwards the descriptor to the QUALIFIED ancestor's own executable
+ * (the digest-verified path, never PATH) as fd 3, with no shell, an empty
+ * environment, cwd `/` and bounded time and output, and accepts the
+ * attestation only when every field matches. The proof is never cached:
+ * once per invocation, SessionStart included. The channel pre-check here is
+ * fstat only; the socket semantics are enforced by the verifier itself. */
 export function verifyCodexNativeChannelBinding(options: { executablePath: string; inheritedFd: number | null; expectedProcessId: number; expectedStartTime: string; inputSha256: string | null; emittedPolicy: unknown; inspector: ProcessInspector; runner?: NativePolicyHelperRunner; timeoutMs?: number; maxOutputBytes?: number }): CodexNativePolicyAttestation {
   if (options.inheritedFd === null) channelRefusal(`${CODEX_NATIVE_POLICY_FD_ENV} is not set; no inherited channel descriptor`);
   if (options.inputSha256 === null) channelRefusal("the raw hook input digest is missing");
@@ -384,20 +410,17 @@ export function verifyCodexNativeChannelBinding(options: { executablePath: strin
   return { schema: CODEX_NATIVE_POLICY_PEER_SCHEMA, peerProcessId: options.expectedProcessId };
 }
 
-/** Required acceptance gate. It still refuses unconditionally: the draft
- * binding above (verifyCodexNativeChannelBinding) is implemented and tested
- * against the native author's DRAFT contract, but wiring it here is a later,
- * separately reviewed change made once native patch 0026 and its platform
- * proof are frozen. The earlier checks cannot distinguish the consumer's
- * envelope from one forged by a descendant process, and the reviewed Darwin
- * artifact GO covers enforcement only, not this binding. */
-export function assertAuthenticatedChannelBinding(_binding: { processId: number; hookInputSha256: string | null; inheritedFd: number | null; verification: CodexNativePolicyVerification }): void {
-  refuse("NATIVE_SKILL_POLICY_UNAUTHENTICATED", "the native hook transport's authenticated channel binding is not adopted yet; a forged envelope from a descendant process is indistinguishable from the consumer's own, so no native policy is accepted");
+/** Required acceptance gate: the authenticated channel binding of patch 0026,
+ * run with the qualified ancestor's verified executable, its start time, the
+ * raw stdin digest, the inherited descriptor and the emitted policy. */
+export function assertAuthenticatedChannelBinding(binding: { processId: number; hookInputSha256: string | null; inheritedFd: number | null; verification: CodexNativePolicyVerification; emittedPolicy: unknown; inspector: ProcessInspector; runner?: NativePolicyHelperRunner }): CodexNativePolicyAttestation {
+  return verifyCodexNativeChannelBinding({ executablePath: binding.verification.executablePath, inheritedFd: binding.inheritedFd, expectedProcessId: binding.processId, expectedStartTime: binding.verification.processStartTime, inputSha256: binding.hookInputSha256, emittedPolicy: binding.emittedPolicy, inspector: binding.inspector, runner: binding.runner });
 }
 
-/** Full adapter verification. Every step refuses with a reason; today the
- * final channel-binding gate refuses unconditionally. */
-export function verifyCodexNativeSkillPolicy(options: { envelope: CodexNativeHookEnvelope; bridgeDocument: string; expectedBridgeContent: string; expectedBridgeSha256: string; trust?: unknown; inspector?: ProcessInspector; dataDir?: string; executableHasher?: (path: string) => string }): CodexNativePolicyVerification {
+/** Full adapter verification. Every step refuses with a reason. Order: trust
+ * configuration, envelope, bridge, ancestry, executable digest (reviewed trust),
+ * then the authenticated channel binding, once per invocation. */
+export function verifyCodexNativeSkillPolicy(options: { envelope: CodexNativeHookEnvelope; bridgeDocument: string; expectedBridgeContent: string; expectedBridgeSha256: string; trust?: unknown; inspector?: ProcessInspector; dataDir?: string; executableHasher?: (path: string) => string; helperRunner?: NativePolicyHelperRunner }): CodexNativePolicyVerification {
   const trust = parseCodexNativePolicyTrust(options.trust);
   const parsed = parseCodexNativeHookEnvelope(options.envelope, options.bridgeDocument);
   const bridge = verifyCodexNativeBridgeDocument(options.bridgeDocument, options.expectedBridgeContent, options.expectedBridgeSha256);
@@ -405,7 +428,9 @@ export function verifyCodexNativeSkillPolicy(options: { envelope: CodexNativeHoo
   const ancestry = verifyCodexNativeAncestry(inspector, parsed.policy.processId);
   const executable = verifyCodexNativeExecutable(inspector, parsed.policy.processId, trust, { dataDir: options.dataDir, hasher: options.executableHasher });
   const verification: CodexNativePolicyVerification = { event: options.envelope.event, sessionId: parsed.sessionId, turnId: parsed.turnId, policy: parsed.policy, platform: executable.platform, ancestryHops: ancestry.hops, processStartTime: executable.startTime, executablePath: executable.executablePath, executableSha256: executable.executableSha256, bridge };
-  assertAuthenticatedChannelBinding({ processId: parsed.policy.processId, hookInputSha256: parsed.hookInputSha256, inheritedFd: parsed.inheritedFd, verification });
+  // The trust check above runs first: with no reviewed digest for this
+  // platform, the helper is never spawned.
+  verification.attestation = assertAuthenticatedChannelBinding({ processId: parsed.policy.processId, hookInputSha256: parsed.hookInputSha256, inheritedFd: parsed.inheritedFd, verification, emittedPolicy: options.envelope.policy, inspector, runner: options.helperRunner });
   return verification;
 }
 

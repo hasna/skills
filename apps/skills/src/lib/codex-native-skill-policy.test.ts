@@ -64,10 +64,10 @@ function policy(s: Station, overrides: Record<string, unknown> = {}, remove: str
   return value;
 }
 function envelope(s: Station, overrides: Partial<CodexNativeHookEnvelope> = {}, policyOverrides: Record<string, unknown> = {}, remove: string[] = []): CodexNativeHookEnvelope {
-  return { event: "UserPromptSubmit", policy: policy(s, policyOverrides, remove), sessionId: SESSION, turnId: TURN, hookInputSha256: sha("{}"), ...overrides };
+  return { event: "UserPromptSubmit", policy: policy(s, policyOverrides, remove), sessionId: SESSION, turnId: TURN, hookInputSha256: RAW_SHA, ...overrides };
 }
-function verify(s: Station, input: CodexNativeHookEnvelope, inspector = fakeInspector(s), trust: unknown = readManagedSkillPolicySnapshot(s.dataDir)!.value.bridge.codexNativePolicy): string {
-  try { verifyCodexNativeSkillPolicy({ envelope: input, bridgeDocument: s.bridgeDocument, expectedBridgeContent: CLI_BRIDGE_FILES["SKILL.md"]!, expectedBridgeSha256: CLI_BRIDGE_DIGEST, trust, inspector }); return "ACCEPTED"; }
+function verify(s: Station, input: CodexNativeHookEnvelope, inspector = fakeInspector(s), trust: unknown = readManagedSkillPolicySnapshot(s.dataDir)!.value.bridge.codexNativePolicy, helperRunner?: NativePolicyHelperRunner): string {
+  try { verifyCodexNativeSkillPolicy({ envelope: input, bridgeDocument: s.bridgeDocument, expectedBridgeContent: CLI_BRIDGE_FILES["SKILL.md"]!, expectedBridgeSha256: CLI_BRIDGE_DIGEST, trust, inspector, dataDir: s.dataDir, helperRunner }); return "ACCEPTED"; }
   catch (error) { return (error as Error).message; }
 }
 function guard(s: Station, input?: CodexNativePolicyGuardInput): string {
@@ -75,31 +75,80 @@ function guard(s: Station, input?: CodexNativePolicyGuardInput): string {
   catch (error) { return (error as Error).message; }
 }
 const DRIFT = /^NATIVE_SKILL_DRIFT: 4 unexpected native skill copies were found/;
+/** A readable channel descriptor: a FIFO opened non-blocking for reading, with
+ * an optional payload written through a writer end. Stands in for the native
+ * socketpair's read end; tests have no socketpair API, and the socket semantics
+ * are the verifier's own job. */
+function channelFixture(s: Station, payload?: string): number {
+  const path = join(s.home, `chan-${randomBytes(4).toString("hex")}`);
+  const made = Bun.spawnSync(["/usr/bin/mkfifo", path]);
+  if (made.exitCode !== 0) throw new Error("mkfifo failed");
+  const reader = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  if (payload !== undefined) { const writer = openSync(path, constants.O_WRONLY | constants.O_NONBLOCK); writeSync(writer, payload); closeSync(writer); }
+  roots.push(path);
+  return reader;
+}
+const RAW_INPUT = Buffer.from('{"native_skill_policy": {}}', "utf8"), RAW_SHA = sha(RAW_INPUT);
+/** What the native verifier prints for this station's envelope (patch 0026 lines 546-550). */
+function attestationFor(s: Station, overrides: Record<string, unknown> = {}, remove: string[] = []): string {
+  const value: Record<string, unknown> = { schema: CODEX_NATIVE_POLICY_PEER_SCHEMA, peerProcessId: CONSUMER_PID, stdinSha256: RAW_SHA, policy: policy(s), ...overrides };
+  for (const key of remove) delete value[key];
+  return `${JSON.stringify(value)}\n`;
+}
+type NativePolicyHelperResult = ReturnType<NativePolicyHelperRunner>;
+function fakeRunner(output: string | Buffer, result: Partial<NativePolicyHelperResult> = {}, seen: NativePolicyHelperRequest[] = []): NativePolicyHelperRunner {
+  return request => { seen.push(request); return { exitCode: 0, stdout: Buffer.isBuffer(output) ? output : Buffer.from(output, "utf8"), timedOut: false, oversized: false, ...result }; };
+}
 
-describe("adversarial: the acceptance path cannot pass yet", () => {
-  test("a forged descendant hook naming a trusted, pinned ancestor with a restricted claim refuses without an authenticated channel binding", () => {
-    // The fake inspector reports a valid ancestor, a stable start time and a
-    // pinned executable digest; the envelope is well formed and names the exact
-    // bridge. Nothing here proves the ancestor actually runs restricted, so the
-    // adapter must still refuse and the guard must still stop the session.
-    const s = station();
-    expect(verify(s, envelope(s))).toMatch(/^NATIVE_SKILL_POLICY_UNAUTHENTICATED: /);
-    const message = guard(s, { ...envelope(s), inspector: fakeInspector(s) });
-    expect(message).toMatch(DRIFT);
-    expect(message).toMatch(/Native policy adapter refused: NATIVE_SKILL_POLICY_UNAUTHENTICATED/);
+describe("wired acceptance path (patch 0026 channel binding; trust default empty)", () => {
+  const fdStation = (options: Parameters<typeof station>[0] = {}) => { const s = station(options); return { s, fd: channelFixture(s) }; };
+  test("empty trust refuses before the helper is ever run, even with a valid channel and a well-formed envelope", () => {
+    const { s, fd } = fdStation({ pin: false }), seen: NativePolicyHelperRequest[] = [], runner = fakeRunner(attestationFor(s), {}, seen);
+    expect(readManagedSkillPolicySnapshot(s.dataDir)!.value.bridge.codexNativePolicy).toBeUndefined();
+    expect(verify(s, envelope(s, { inheritedFd: fd }), fakeInspector(s), undefined, runner)).toMatch(/^NATIVE_SKILL_POLICY_EXECUTABLE_UNPINNED: no reviewed Codex executable digest is configured for darwin-arm64/);
+    const message = guard(s, { ...envelope(s, { inheritedFd: fd }), inspector: fakeInspector(s), helperRunner: runner });
+    expect(message).toMatch(DRIFT); expect(message).toMatch(/NATIVE_SKILL_POLICY_EXECUTABLE_UNPINNED/);
+    expect(seen).toHaveLength(0);
     expect(existsSync(s.receipt)).toBe(false);
   });
-  test("a SessionStart envelope (session_id, no turn_id) reaches the same gate", () => {
-    const s = station();
-    expect(verify(s, envelope(s, { event: "SessionStart", turnId: undefined }))).toMatch(/^NATIVE_SKILL_POLICY_UNAUTHENTICATED: /);
+  test("with reviewed trust, a valid channel and a matching attestation, the sites 0.1.75 cache copies pass and the receipt records the attestation", () => {
+    const { s, fd } = fdStation(), seen: NativePolicyHelperRequest[] = [], runner = fakeRunner(attestationFor(s), {}, seen);
+    expect(verify(s, envelope(s, { inheritedFd: fd }), fakeInspector(s), undefined, runner)).toBe("ACCEPTED");
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ executablePath: s.executable, fd, expectedProcessId: CONSUMER_PID, inputSha256: RAW_SHA });
+    expect(guard(s, { ...envelope(s, { inheritedFd: channelFixture(s) }), inspector: fakeInspector(s), helperRunner: runner })).toBe("ACCEPTED");
+    expect(seen).toHaveLength(2);
+    const receipt = JSON.parse(readFileSync(s.receipt, "utf8"));
+    expect(lstatSync(s.receipt).mode & 0o777).toBe(0o600);
+    expect(receipt).toMatchObject({ schema: CODEX_NATIVE_POLICY_RECEIPT_SCHEMA, event: "UserPromptSubmit", sessionId: SESSION, turnId: TURN, process: { id: CONSUMER_PID, startTime: "1700000000.123456", executablePath: s.executable, executableSha256: s.executableSha256, platform: "darwin-arm64" }, effectiveConfigDigest: DIGEST, bridge: { path: s.bridgeDocument, sha256: CLI_BRIDGE_DIGEST }, attestation: { schema: CODEX_NATIVE_POLICY_PEER_SCHEMA, peerProcessId: CONSUMER_PID } });
+    expect(receipt.acceptedCache.map((entry: { path: string }) => entry.path)).toEqual(SITES_SKILLS.map(name => join(realpathSync(s.plugin), "0.1.75", "skills", name)).sort());
+    for (const entry of receipt.acceptedCache) expect(entry.treeSha256).toMatch(/^[0-9a-f]{64}$/);
+    // A SessionStart envelope (no turn_id) passes the same way and runs the helper again: no proof is reused.
+    expect(verify(s, envelope(s, { event: "SessionStart", turnId: undefined, inheritedFd: channelFixture(s) }), fakeInspector(s), undefined, runner)).toBe("ACCEPTED");
+    expect(seen).toHaveLength(3);
+  });
+  test("forged descendant: a valid ancestor, stable start, pinned digest and restricted claim still refuse when the real producer attests unrestricted or is another process", () => {
+    const { s, fd } = fdStation();
+    const realParent = policy(s, { mode: "unrestricted", allowedHostPaths: null, nonHostSources: "unchanged", effectiveConfigDigest: "81e681238f1466311f87480d5a7f8eeaeeb9dca1d490b4d53f3a0344fc70d6aa" });
+    expect(verify(s, envelope(s, { inheritedFd: fd }), fakeInspector(s), undefined, fakeRunner(attestationFor(s, { policy: realParent })))).toMatch(/^NATIVE_SKILL_POLICY_UNAUTHENTICATED: the attested policy differs from the emitted native_skill_policy/);
+    const message = guard(s, { ...envelope(s, { inheritedFd: channelFixture(s) }), inspector: fakeInspector(s), helperRunner: fakeRunner(attestationFor(s, { peerProcessId: 3000 })) });
+    expect(message).toMatch(DRIFT); expect(message).toMatch(/Native policy adapter refused: NATIVE_SKILL_POLICY_UNAUTHENTICATED: the attested peer process is not the qualified consumer/);
     expect(existsSync(s.receipt)).toBe(false);
+  });
+  test("without the inherited channel, a fully qualified envelope refuses at the binding", () => {
+    const s = station();
+    expect(verify(s, envelope(s))).toMatch(/^NATIVE_SKILL_POLICY_UNAUTHENTICATED: CODEX_NATIVE_SKILL_POLICY_FD is not set/);
+    const message = guard(s, { ...envelope(s), inspector: fakeInspector(s) });
+    expect(message).toMatch(DRIFT); expect(message).toMatch(/Native policy adapter refused: NATIVE_SKILL_POLICY_UNAUTHENTICATED/);
+    expect(existsSync(s.receipt)).toBe(false);
+    expect(verify(s, envelope(s, { event: "SessionStart", turnId: undefined }))).toMatch(/^NATIVE_SKILL_POLICY_UNAUTHENTICATED: /);
   });
   test("the walk to root follows a deep real chain with no fixed depth limit", () => {
     const s = station(), parents: Record<number, number> = {};
     for (let pid = HOOK_PID; pid > 5000 - 20; pid--) parents[pid] = pid - 1;
     parents[5000 - 20] = 1;
     expect(verifyCodexNativeAncestry(fakeInspector(s, { parents }), 5000 - 15).hops).toBe(15);
-    expect(verify(s, envelope(s, {}, { processId: 5000 - 15 }), fakeInspector(s, { parents }))).toMatch(/^NATIVE_SKILL_POLICY_UNAUTHENTICATED: /);
+    expect(verify(s, envelope(s, { inheritedFd: channelFixture(s) }, { processId: 5000 - 15 }), fakeInspector(s, { parents }), undefined, fakeRunner(attestationFor(s, { peerProcessId: 5000 - 15, policy: policy(s, { processId: 5000 - 15 }) })))).toBe("ACCEPTED");
   });
 });
 
@@ -168,10 +217,11 @@ describe("native proof rows through the hook input path", () => {
       expect(message).toMatch(DRIFT); expect(message).toMatch(/Native policy adapter refused: NATIVE_SKILL_POLICY_/);
     }
     // With the allowlist naming the Codex bridge this package installs, the
-    // restricted rows pass every check up to the channel-binding gate.
+    // restricted rows pass every check up to the channel binding, which has no
+    // descriptor here.
     for (const line of nativeProofRows(s.bridgeDocument, cwd, CONSUMER_PID).slice(2)) {
       const input = JSON.parse(line), mapped = codexNativeHookEnvelopeFromInput(input, input.hook_event_name, Buffer.from(line, "utf8"))!;
-      expect(verify(s, mapped)).toMatch(/^NATIVE_SKILL_POLICY_UNAUTHENTICATED: /);
+      expect(verify(s, mapped)).toMatch(/^NATIVE_SKILL_POLICY_UNAUTHENTICATED: CODEX_NATIVE_SKILL_POLICY_FD is not set/);
     }
     expect(existsSync(s.receipt)).toBe(false);
   });
@@ -340,39 +390,17 @@ describe("real process inspector", () => {
   });
 });
 
-/** A readable channel descriptor: a FIFO opened non-blocking for reading, with
- * an optional payload written through a writer end. Stands in for the native
- * socketpair's read end; tests have no socketpair API. */
-function channelFixture(s: Station, payload?: string): number {
-  const path = join(s.home, `chan-${randomBytes(4).toString("hex")}`);
-  const made = Bun.spawnSync(["/usr/bin/mkfifo", path]);
-  if (made.exitCode !== 0) throw new Error("mkfifo failed");
-  const reader = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
-  if (payload !== undefined) { const writer = openSync(path, constants.O_WRONLY | constants.O_NONBLOCK); writeSync(writer, payload); closeSync(writer); }
-  roots.push(path);
-  return reader;
-}
-const RAW_INPUT = Buffer.from('{"native_skill_policy": {}}', "utf8"), RAW_SHA = sha(RAW_INPUT);
-function attestation(s: Station, overrides: Record<string, unknown> = {}, remove: string[] = []): string {
-  const value: Record<string, unknown> = { schema: CODEX_NATIVE_POLICY_PEER_SCHEMA, peerProcessId: CONSUMER_PID, stdinSha256: RAW_SHA, policy: policy(s), ...overrides };
-  for (const key of remove) delete value[key];
-  return JSON.stringify(value);
-}
-function fakeRunner(output: string | Buffer, result: Partial<NativePolicyHelperResult> = {}, seen: NativePolicyHelperRequest[] = []): NativePolicyHelperRunner {
-  return request => { seen.push(request); return { exitCode: 0, stdout: Buffer.isBuffer(output) ? output : Buffer.from(output, "utf8"), timedOut: false, oversized: false, ...result }; };
-}
 function bind(s: Station, fd: number | null, runner: NativePolicyHelperRunner, overrides: Partial<Parameters<typeof verifyCodexNativeChannelBinding>[0]> = {}): string {
   try {
     const result = verifyCodexNativeChannelBinding({ executablePath: s.executable, inheritedFd: fd, expectedProcessId: CONSUMER_PID, expectedStartTime: "1700000000.123456", inputSha256: RAW_SHA, emittedPolicy: policy(s), inspector: fakeInspector(s), runner, ...overrides });
     return `ACCEPTED ${JSON.stringify(result)}`;
   } catch (error) { return (error as Error).message; }
 }
-type NativePolicyHelperResult = ReturnType<NativePolicyHelperRunner>;
 
-describe("draft authenticated channel binding (not wired into acceptance)", () => {
+describe("channel binding verifier against patch 0026", () => {
   test("a matching attestation from the fake helper passes and the helper receives the verified binary, fd 3 and the raw digest", () => {
     const s = station(), seen: NativePolicyHelperRequest[] = [];
-    expect(bind(s, channelFixture(s), fakeRunner(attestation(s), {}, seen))).toBe(`ACCEPTED ${JSON.stringify({ schema: CODEX_NATIVE_POLICY_PEER_SCHEMA, peerProcessId: CONSUMER_PID })}`);
+    expect(bind(s, channelFixture(s), fakeRunner(attestationFor(s), {}, seen))).toBe(`ACCEPTED ${JSON.stringify({ schema: CODEX_NATIVE_POLICY_PEER_SCHEMA, peerProcessId: CONSUMER_PID })}`);
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatchObject({ executablePath: s.executable, expectedProcessId: CONSUMER_PID, inputSha256: RAW_SHA, timeoutMs: 5000, maxOutputBytes: 65536 });
     expect(seen[0]!.fd).toBeGreaterThan(2);
@@ -380,38 +408,38 @@ describe("draft authenticated channel binding (not wired into acceptance)", () =
   test("forged descendant: the real parent attests unrestricted, so the restricted claim refuses", () => {
     const s = station();
     const realParent = policy(s, { mode: "unrestricted", allowedHostPaths: null, nonHostSources: "unchanged", effectiveConfigDigest: "81e681238f1466311f87480d5a7f8eeaeeb9dca1d490b4d53f3a0344fc70d6aa" });
-    expect(bind(s, channelFixture(s), fakeRunner(attestation(s, { policy: realParent })))).toMatch(/^NATIVE_SKILL_POLICY_UNAUTHENTICATED: the attested policy differs from the emitted native_skill_policy/);
+    expect(bind(s, channelFixture(s), fakeRunner(attestationFor(s, { policy: realParent })))).toMatch(/^NATIVE_SKILL_POLICY_UNAUTHENTICATED: the attested policy differs from the emitted native_skill_policy/);
     // Or the real writer is another process than the one the forged envelope names.
-    expect(bind(s, channelFixture(s), fakeRunner(attestation(s, { peerProcessId: 3000 })))).toMatch(/^NATIVE_SKILL_POLICY_UNAUTHENTICATED: the attested peer process is not the qualified consumer/);
+    expect(bind(s, channelFixture(s), fakeRunner(attestationFor(s, { peerProcessId: 3000 })))).toMatch(/^NATIVE_SKILL_POLICY_UNAUTHENTICATED: the attested peer process is not the qualified consumer/);
   });
   test("the proof is never cached: every call runs the helper again, SessionStart included", () => {
-    const s = station(), seen: NativePolicyHelperRequest[] = [], runner = fakeRunner(attestation(s), {}, seen);
+    const s = station(), seen: NativePolicyHelperRequest[] = [], runner = fakeRunner(attestationFor(s), {}, seen);
     for (let index = 0; index < 3; index++) expect(bind(s, channelFixture(s), runner)).toMatch(/^ACCEPTED /);
     expect(seen).toHaveLength(3);
   });
   const refusals: Array<[string, (s: Station) => [number | null, NativePolicyHelperRunner, Partial<Parameters<typeof verifyCodexNativeChannelBinding>[0]>?], RegExp]> = [
-    ["env/FD missing", s => [null, fakeRunner(attestation(s))], /CODEX_NATIVE_SKILL_POLICY_FD is not set/],
-    ["FD closed", s => { const fd = channelFixture(s); closeSync(fd); return [fd, fakeRunner(attestation(s))]; }, /the inherited channel descriptor is closed or not inheritable/],
-    ["FD is a regular file, not a channel", s => [openSync(s.executable, constants.O_RDONLY), fakeRunner(attestation(s))], /the inherited channel descriptor is not a socket or pipe/],
-    ["raw input digest missing", s => [channelFixture(s), fakeRunner(attestation(s)), { inputSha256: null }], /the raw hook input digest is missing/],
-    ["helper non-zero exit", s => [channelFixture(s), fakeRunner(attestation(s), { exitCode: 2 })], /the native policy helper exited with status 2/],
-    ["helper killed by signal", s => [channelFixture(s), fakeRunner(attestation(s), { exitCode: null })], /the native policy helper exited with a signal/],
-    ["helper timeout", s => [channelFixture(s), fakeRunner(attestation(s), { timedOut: true })], /the native policy helper timed out/],
-    ["oversized output flag", s => [channelFixture(s), fakeRunner(attestation(s), { oversized: true })], /the native policy helper output exceeded its bound/],
+    ["env/FD missing", s => [null, fakeRunner(attestationFor(s))], /CODEX_NATIVE_SKILL_POLICY_FD is not set/],
+    ["FD closed", s => { const fd = channelFixture(s); closeSync(fd); return [fd, fakeRunner(attestationFor(s))]; }, /the inherited channel descriptor is closed or not inheritable/],
+    ["FD is a regular file, not a channel", s => [openSync(s.executable, constants.O_RDONLY), fakeRunner(attestationFor(s))], /the inherited channel descriptor is not a socket or pipe/],
+    ["raw input digest missing", s => [channelFixture(s), fakeRunner(attestationFor(s)), { inputSha256: null }], /the raw hook input digest is missing/],
+    ["helper non-zero exit", s => [channelFixture(s), fakeRunner(attestationFor(s), { exitCode: 2 })], /the native policy helper exited with status 2/],
+    ["helper killed by signal", s => [channelFixture(s), fakeRunner(attestationFor(s), { exitCode: null })], /the native policy helper exited with a signal/],
+    ["helper timeout", s => [channelFixture(s), fakeRunner(attestationFor(s), { timedOut: true })], /the native policy helper timed out/],
+    ["oversized output flag", s => [channelFixture(s), fakeRunner(attestationFor(s), { oversized: true })], /the native policy helper output exceeded its bound/],
     ["oversized output bytes", s => [channelFixture(s), fakeRunner(Buffer.alloc(65537, 0x20))], /the native policy helper output exceeded its bound/],
     ["malformed JSON", s => [channelFixture(s), fakeRunner("{not json")], /the native policy helper output is not JSON/],
     ["invalid UTF-8", s => [channelFixture(s), fakeRunner(Buffer.from([0xff, 0xfe]))], /the native policy helper output is not JSON/],
     ["not an object", s => [channelFixture(s), fakeRunner("[]")], /the native policy helper output is not an object/],
-    ["unknown key", s => [channelFixture(s), fakeRunner(attestation(s, { challenge: "x" }))], /the native policy attestation has missing or unknown fields/],
-    ["missing key", s => [channelFixture(s), fakeRunner(attestation(s, {}, ["stdinSha256"]))], /the native policy attestation has missing or unknown fields/],
-    ["schema mismatch", s => [channelFixture(s), fakeRunner(attestation(s, { schema: "native-hook-policy-peer-v2" }))], /unknown native policy attestation schema/],
-    ["wrong peerProcessId", s => [channelFixture(s), fakeRunner(attestation(s, { peerProcessId: HOOK_PID }))], /the attested peer process is not the qualified consumer/],
-    ["peerProcessId as string", s => [channelFixture(s), fakeRunner(attestation(s, { peerProcessId: String(CONSUMER_PID) }))], /the attested peer process is not the qualified consumer/],
-    ["wrong stdinSha256", s => [channelFixture(s), fakeRunner(attestation(s, { stdinSha256: sha("other") }))], /the attested hook input digest differs from the raw stdin digest/],
-    ["policy digest mismatch", s => [channelFixture(s), fakeRunner(attestation(s, { policy: policy(s, { effectiveConfigDigest: sha("other") }) }))], /the attested policy differs from the emitted native_skill_policy/],
-    ["policy extra field", s => [channelFixture(s), fakeRunner(attestation(s, { policy: policy(s, { originator: "codex" }) }))], /the attested policy differs from the emitted native_skill_policy/],
-    ["policy field missing", s => [channelFixture(s), fakeRunner(attestation(s, { policy: policy(s, {}, ["processId"]) }))], /the attested policy differs from the emitted native_skill_policy/],
-    ["consumer restarted while the helper ran", s => [channelFixture(s), fakeRunner(attestation(s)), { expectedStartTime: "1600000000.0" }], /the consumer process changed while the helper ran/],
+    ["unknown key", s => [channelFixture(s), fakeRunner(attestationFor(s, { challenge: "x" }))], /the native policy attestation has missing or unknown fields/],
+    ["missing key", s => [channelFixture(s), fakeRunner(attestationFor(s, {}, ["stdinSha256"]))], /the native policy attestation has missing or unknown fields/],
+    ["schema mismatch", s => [channelFixture(s), fakeRunner(attestationFor(s, { schema: "native-hook-policy-peer-v2" }))], /unknown native policy attestation schema/],
+    ["wrong peerProcessId", s => [channelFixture(s), fakeRunner(attestationFor(s, { peerProcessId: HOOK_PID }))], /the attested peer process is not the qualified consumer/],
+    ["peerProcessId as string", s => [channelFixture(s), fakeRunner(attestationFor(s, { peerProcessId: String(CONSUMER_PID) }))], /the attested peer process is not the qualified consumer/],
+    ["wrong stdinSha256", s => [channelFixture(s), fakeRunner(attestationFor(s, { stdinSha256: sha("other") }))], /the attested hook input digest differs from the raw stdin digest/],
+    ["policy digest mismatch", s => [channelFixture(s), fakeRunner(attestationFor(s, { policy: policy(s, { effectiveConfigDigest: sha("other") }) }))], /the attested policy differs from the emitted native_skill_policy/],
+    ["policy extra field", s => [channelFixture(s), fakeRunner(attestationFor(s, { policy: policy(s, { originator: "codex" }) }))], /the attested policy differs from the emitted native_skill_policy/],
+    ["policy field missing", s => [channelFixture(s), fakeRunner(attestationFor(s, { policy: policy(s, {}, ["processId"]) }))], /the attested policy differs from the emitted native_skill_policy/],
+    ["consumer restarted while the helper ran", s => [channelFixture(s), fakeRunner(attestationFor(s)), { expectedStartTime: "1600000000.0" }], /the consumer process changed while the helper ran/],
   ];
   for (const [name, build, expected] of refusals) test(`${name} refuses`, () => {
     const s = station(), [fd, runner, overrides] = build(s);
