@@ -1,7 +1,7 @@
 import { codexCorpusRootForPath, withCodexCorpusWrite, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
 import { reviewCodexPluginControls, reviewedCodexPluginSourceRoots, isReviewedCodexPluginInactive, isReviewedCodexPluginSkillDisabled, reviewedCodexPluginCapabilitiesUnchanged, disableReviewedCodexPluginNames, absentDisabledCodexPluginParent, type ReviewedCodexSkillDenial, type CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
 import { projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
-import { upgradeCodexSettingsWitness, upgradeCodexSettingsWitnessV3, readCodexSettingsPreimage, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
+import { upgradeCodexSettingsWitness, upgradeCodexSettingsWitnessV3, upgradeCodexSettingsWitnessV4, readCodexSettingsPreimage, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
 import { upgradeClaudeSettingsWitness } from "./claude-settings-witness.js";
 import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -986,8 +986,8 @@ function atomicWrite(path: string, content: string): void {
  * Runtime readers never relax the old witness. All other discovery sources,
  * unknown settings, native controls and policy bytes remain guarded.
  */
-export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "codex"; targetCodexVersion?: 2 | 3; reviewedPreimage: string; home?: string; dataDir?: string; projectDir?: string; expectedPolicySha256: string; expectedSettingsSha256: string }): AgentIntegrationPlan {
-  if (options.targetCodexVersion !== undefined && (options.agent !== "codex" || ![2, 3].includes(options.targetCodexVersion))) throw new Error("Invalid Codex witness target version");
+export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "codex"; targetCodexVersion?: 2 | 3 | 4; reviewedPreimage: string; home?: string; dataDir?: string; projectDir?: string; expectedPolicySha256: string; expectedSettingsSha256: string }): AgentIntegrationPlan {
+  if (options.targetCodexVersion !== undefined && (options.agent !== "codex" || ![2, 3, 4].includes(options.targetCodexVersion))) throw new Error("Invalid Codex witness target version");
   const home = resolve(options.home ?? homedir()), dataDir = options.dataDir ?? getDataDirReadOnly();
   const snapshot = readManagedSkillPolicySnapshot(dataDir);
   if (!snapshot || sha(snapshot.text) !== options.expectedPolicySha256) throw new Error("Managed policy preimage changed");
@@ -1007,7 +1007,7 @@ export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "co
   // and therefore stops matching as soon as Codex re-serializes the file it owns.
   const replaced: DiscoverySource[] = [previous];
   if (options.agent === "codex") {
-    if (previous.hashMode !== undefined && previous.hashMode !== "bytes" && previous.hashMode !== "codex-settings-v1" && !(options.targetCodexVersion === 3 && previous.hashMode === "codex-settings-v2")) throw new Error("Codex settings witness upgrade requires an eligible preserved configuration witness");
+    if (previous.hashMode !== undefined && previous.hashMode !== "bytes" && previous.hashMode !== "codex-settings-v1" && !((options.targetCodexVersion === 3 || options.targetCodexVersion === 4) && previous.hashMode === "codex-settings-v2") && !(options.targetCodexVersion === 4 && previous.hashMode === "codex-settings-v3")) throw new Error("Codex settings witness upgrade requires an eligible preserved configuration witness");
     const preimage = readCodexSettingsPreimage(options.reviewedPreimage);
     for (const source of binding.sources) {
       if (source === previous || source.path !== configPath) continue;
@@ -1021,6 +1021,8 @@ export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "co
   }
   const next = options.agent === "claude"
     ? upgradeClaudeSettingsWitness(previous as Parameters<typeof upgradeClaudeSettingsWitness>[0], options.reviewedPreimage)
+    : options.targetCodexVersion === 4
+      ? upgradeCodexSettingsWitnessV4(previous as Parameters<typeof upgradeCodexSettingsWitnessV4>[0], options.reviewedPreimage)
     : options.targetCodexVersion === 3
       ? upgradeCodexSettingsWitnessV3(previous as Parameters<typeof upgradeCodexSettingsWitnessV3>[0], options.reviewedPreimage)
       : upgradeCodexSettingsWitness(previous as Parameters<typeof upgradeCodexSettingsWitness>[0], options.reviewedPreimage);
@@ -1063,7 +1065,7 @@ function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: Code
   if (plan.settingsWitnessUpgrade) {
     const upgrade = plan.settingsWitnessUpgrade;
     if (!plan.managedAgentChecks || !plan.observedPolicy?.before) throw new Error("Invalid settings witness upgrade plan");
-    const verified = planAgentSettingsWitnessUpgrade({ agent: upgrade.agent, ...(upgrade.agent === "codex" ? { targetCodexVersion: upgrade.toHashMode === "codex-settings-v3" ? 3 as const : 2 as const } : {}), reviewedPreimage: upgrade.reviewedPreimage, home: plan.managedAgentChecks.home, dataDir: plan.dataDir, expectedPolicySha256: sha(plan.observedPolicy.before), expectedSettingsSha256: upgrade.currentSettingsSha256 });
+    const verified = planAgentSettingsWitnessUpgrade({ agent: upgrade.agent, ...(upgrade.agent === "codex" ? { targetCodexVersion: upgrade.toHashMode === "codex-settings-v4" ? 4 as const : upgrade.toHashMode === "codex-settings-v3" ? 3 as const : 2 as const } : {}), reviewedPreimage: upgrade.reviewedPreimage, home: plan.managedAgentChecks.home, dataDir: plan.dataDir, expectedPolicySha256: sha(plan.observedPolicy.before), expectedSettingsSha256: upgrade.currentSettingsSha256 });
     if (JSON.stringify(verified.changes) !== JSON.stringify(plan.changes) || JSON.stringify(verified.settingsWitnessUpgrade) !== JSON.stringify(upgrade)) throw new Error("Settings witness upgrade plan changed");
     provenDiscovery = verified.discoveryBefore![0];
   }
