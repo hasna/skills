@@ -17,8 +17,9 @@ function safe(path: string): void {
 function same(before: Stats, after: Stats | undefined): boolean {
   return Boolean(after && after.isDirectory() && before.dev === after.dev && before.ino === after.ino && before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs);
 }
-function capture(path: string, budget: Budget, excludedRoots: readonly string[]): DiscoveryDirectory {
+function capture(path: string, budget: Budget, excludedRoots: readonly string[], omittedRoots: readonly string[] = []): DiscoveryDirectory {
   safe(path);
+  if (omittedRoots.some(root=>path===root || path.startsWith(root+"/"))) return {path,sha256:null};
   const root = lstatSync(path, { throwIfNoEntry: false });
   if (!root) return { path, sha256: null };
   need(root.isDirectory(), "Unsupported native discovery directory input");
@@ -35,6 +36,7 @@ function capture(path: string, budget: Budget, excludedRoots: readonly string[])
     need(new Set(names).size === names.length, "Ambiguous native discovery directory names");
     for (const name of names.sort()) {
       const child = join(current, name), childRelative = relative ? `${relative}/${name}` : name;
+      if (omittedRoots.includes(child)) continue;
       need(child.length <= AGENT_POLICY_LIMITS.pathCharacters, "Native discovery directory path limit exceeded");
       const stat = lstatSync(child);
       need(stat.isFile() || stat.isDirectory(), "Refusing symlink or special native discovery directory member");
@@ -49,6 +51,15 @@ function capture(path: string, budget: Budget, excludedRoots: readonly string[])
   walk(path, "", root, 0);
   safe(path);
   return { path, sha256: hash.digest("hex") };
+}
+/** A separate planner-created projection retains membership outside exact
+ * reviewed inactive roots. It never replaces a historical full witness. */
+export function captureDiscoveryDirectoryProjection(paths:string[], omittedRoots:readonly string[]):DiscoveryDirectory[] {
+  need(Array.isArray(paths) && paths.length<=AGENT_POLICY_LIMITS.discoveryDirectories && new Set(paths).size===paths.length, "Invalid projected discovery directory collection");
+  need(omittedRoots.length<=AGENT_POLICY_LIMITS.discoveryRoots && new Set(omittedRoots).size===omittedRoots.length,"Invalid inactive discovery roots");
+  for (const root of omittedRoots) safe(root);
+  const budget:Budget={entries:0,bytes:0};
+  return paths.map(path=>capture(path,budget,[],omittedRoots));
 }
 /** Read-only capture; callers must review both membership and source bytes. */
 export function captureDiscoveryDirectories(paths: string[], excludedRoots: readonly string[] = []): DiscoveryDirectory[] {

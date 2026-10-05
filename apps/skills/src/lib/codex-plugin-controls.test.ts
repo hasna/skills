@@ -598,7 +598,7 @@ test("an absent remote skills-only parent retains its disabled identity and refu
  renameSync(parent,saved);
  const rules=(Bun.TOML.parse(before) as any).skills.config, read=(path:string)=>readFileSync(path,"utf8");
  expect(reviewedCodexPluginCapabilitiesUnchanged(cache,enrolled,read,rules)).toBe(true);
- for(const delta of [{remotePluginId:undefined},{appSha256:"a".repeat(64)},{mcpSha256:"b".repeat(64)},{namespace:"other"},{pluginId:"other@openai-curated-remote"}]) expect(reviewedCodexPluginCapabilitiesUnchanged(cache,enrolled.map((control:any)=>({...control,...delta})),read,rules)).toBe(false);
+ for(const delta of [{remotePluginId:undefined},{skillsOnly:undefined},{appSha256:"a".repeat(64)},{mcpSha256:"b".repeat(64)},{namespace:"other"},{pluginId:"other@openai-curated-remote"}]) expect(reviewedCodexPluginCapabilitiesUnchanged(cache,enrolled.map((control:any)=>({...control,...delta})),read,rules)).toBe(false);
  expect(reviewedCodexPluginCapabilitiesUnchanged(cache,enrolled,read,[])).toBe(false);
  expect(reviewedCodexPluginCapabilitiesUnchanged(cache,enrolled,read,[...rules,{path:join(parent,"0.4.1/skills/record-browser/SKILL.md"),enabled:true}])).toBe(false);
  expect(()=>assertManagedAgentBridge("codex",f)).not.toThrow();

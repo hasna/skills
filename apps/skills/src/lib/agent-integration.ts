@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { getDataDir, getDataDirReadOnly } from "./config.js";
 import { requiresCliSkillLoading, readManagedSkillPolicySnapshot, serializeManagedSkillPolicy, parseManagedSkillPolicy } from "./managed-policy.js";
 import { CLI_BRIDGE_NAME, CLI_BRIDGE_FILES, CLI_BRIDGE_DIGEST, CLI_BRIDGE_VERSION, isOwnedCliBridge } from "./agent-bridge.js";
-import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, rebindAgentDiscovery, captureDiscoveryDirectories, projectNativeDiscoveryFields, type AgentDiscoveryBinding, type DiscoverySource, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
+import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, rebindAgentDiscovery, captureDiscoveryDirectories, captureRetiredCodexDiscovery, projectNativeDiscoveryFields, type AgentDiscoveryBinding, type DiscoverySource, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderAgentHookCommand, renderOpenCodePlugin, type IntegrationAgent } from "./agent-adapters.js";
 import { assertCodexPathConfigEditable, CODEX_SKILL_CONFIG_SECTIONS, disableCodexBundledSkills, normalizeCodexInlinePathConfig } from "./agent-codex.js";
 
@@ -692,7 +692,8 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     const {codexInstallationInputs:previousInputs,...current}=rebound;
     const inputs=codexPluginSourceInputs.map(input=>input.sourceRoot);
     const directories=options.codexNativeCatalog || !previousInputs ? captureDiscoveryDirectories((binding.directories ?? []).filter(directory=>inputs.some(root=>root.startsWith(directory.path+sep))).map(directory=>directory.path),inputs) : previousInputs.directories;
-    return codexPluginSourceInputs.length ? {...current,codexInstallationInputs:{version:"codex-cli 0.160.0" as const,catalogSha256:codexPluginSkillReview.catalogSha256,plugins:codexPluginSourceInputs,...(directories?.length ? {directories} : {})}} : current;
+    const installed=codexPluginSourceInputs.length ? {...current,codexInstallationInputs:{version:"codex-cli 0.160.0" as const,catalogSha256:codexPluginSkillReview.catalogSha256,plugins:codexPluginSourceInputs,...(directories?.length ? {directories} : {})}} : current;
+    return captureRetiredCodexDiscovery(installed,codexPluginSkills,(Bun.TOML.parse(changes.find(change=>change.path===canonicalAgentPath(join(home,".codex/config.toml"),aliases))?.after ?? codexConfigBefore ?? "") as any).skills?.config ?? []);
   });
   const nextPolicy = { ...policy, version: 1, loading: "cli", profileId, bridge: {
     ...policy.bridge,

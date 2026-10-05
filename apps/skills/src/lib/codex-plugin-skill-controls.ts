@@ -6,7 +6,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
 import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
 import { codexPluginSourceIsConfigControlled, isCodexNativeSkillDisabled, projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, remotePluginIdentifier, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
-export interface CodexPluginSkillControl { name:string; pluginId:string; namespace:string; pluginParent:string; manifestSha256:string; appSha256?:string; mcpSha256?:string; remotePluginId?:string }
+export interface CodexPluginSkillControl { name:string; pluginId:string; namespace:string; pluginParent:string; manifestSha256:string; appSha256?:string; mcpSha256?:string; remotePluginId?:string; skillsOnly?:true }
 /** A native nonremote installation disabled by the witnessed configuration.
  * Its cache is inert; this makes no claim about reviewed hook capabilities. */
 export interface CodexInactivePluginControl { pluginId:string; namespace:string; pluginParent:string; sourceType:"local"|"git"|"npm"; sourceSha256:string }
@@ -161,11 +161,43 @@ export function absentDisabledCodexPluginParent(cache:string, parent:string, con
     }
     if (lstatSync(parent,{throwIfNoEntry:false})) return false;
     return enrolled.every(control=>control.namespace===parts[1] && control.pluginId===`${parts[1]}@${parts[0]}`
-      && remotePluginIdentifier(control.remotePluginId) && !control.appSha256 && !control.mcpSha256
+      && remotePluginIdentifier(control.remotePluginId) && control.skillsOnly===true && !control.appSha256 && !control.mcpSha256
       && control.name.startsWith(control.namespace+":") && /^[a-f0-9]{64}$/.test(control.manifestSha256)
       && rules.some((rule:any)=>typeof rule?.name==="string" && rule.name.trim()===control.name && rule.enabled===false)
       && !rules.some((rule:any)=>(typeof rule?.name==="string" && rule.name.trim()===control.name || typeof rule?.path==="string" && (rule.path===parent || rule.path.startsWith(parent+sep))) && rule.enabled!==false));
   } catch { return false; }
+}
+/** A body-free historical remote version has no remaining native skill entry.
+ * Bind its capability-identical, skills-only identity before projecting it. */
+export function reviewedRetiredCodexRoot(cache:string, root:string, controls:CodexPluginSkillControl[], rules:unknown, read:Read, allowAbsent=false):boolean {
+  try {
+    const parent=dirname(root),parts=relative(cache,parent).split(sep),enrolled=controls.filter(control=>control.pluginParent===parent);
+    if (resolve(root)!==root || parts.length!==2 || parts.some(part=>!identifier(part)) || !basename(root) || basename(root)==="latest" || !enrolled.length || !Array.isArray(rules)) return false;
+    for(let cursor=root;;cursor=dirname(cursor)) {
+      const stat=lstatSync(cursor,{throwIfNoEntry:false});
+      if(stat && (!stat.isDirectory() || stat.isSymbolicLink())) return false;
+      if(dirname(cursor)===cursor) break;
+    }
+    if (!enrolled.every(control=>control.namespace===parts[1] && control.pluginId===`${parts[1]}@${parts[0]}`
+      && remotePluginIdentifier(control.remotePluginId) && control.skillsOnly===true && !control.appSha256 && !control.mcpSha256
+      && control.name.startsWith(control.namespace+":") && /^[a-f0-9]{64}$/.test(control.manifestSha256)
+      && rules.some((rule:any)=>typeof rule?.name==="string" && rule.name.trim()===control.name && rule.enabled===false)
+      && !rules.some((rule:any)=>(typeof rule?.name==="string" && rule.name.trim()===control.name || typeof rule?.path==="string" && (rule.path===parent || rule.path===root || rule.path.startsWith(root+sep))) && rule.enabled!==false))) return false;
+    if (!lstatSync(root,{throwIfNoEntry:false})) return allowAbsent && (lstatSync(parent,{throwIfNoEntry:false})
+      ? enrolled.every(control=>remoteInstallationMatches(parent,control.remotePluginId!,read))
+      : absentDisabledCodexPluginParent(cache,parent,controls,rules));
+    if (!enrolled.every(control=>remoteInstallationMatches(parent,control.remotePluginId!,read))) return false;
+    const parsed=rootControls(root,read);
+    if(JSON.parse(read(join(root,".codex-plugin/plugin.json"))).hooks!==undefined) return false;
+    if (!enrolled.some(control=>control.namespace===parsed.namespace && control.manifestSha256===parsed.manifestSha256 && !parsed.appSha256 && !parsed.mcpSha256)) return false;
+    let entries=0;
+    const emptySkills=(directory:string,depth:number):boolean=>depth<=64 && readdirSync(directory).every(name=>{
+      if(++entries>4096 || name==="SKILL.md") return false;
+      const path=join(directory,name),stat=lstatSync(path);
+      return !stat.isSymbolicLink() && (stat.isFile() || stat.isDirectory() && emptySkills(path,depth+1));
+    });
+    return emptySkills(root,0);
+  } catch {return false;}
 }
 /** Capability controls remain bound even after every native Skill body disappears. */
 export function reviewedCodexPluginCapabilitiesUnchanged(cache:string, controls:CodexPluginSkillControl[], read:Read, rules?:unknown):boolean {
@@ -297,7 +329,8 @@ export function reviewCodexPluginControls(catalog:CodexNativeSkillCatalog, docum
         && isCodexNativeSkillDisabled(nativeSkill,plannedRules);
       if (!explicitDeny && ((!exactPathDeny && !plannedPathDeny) || !isCodexNativeSkillDisabled(nativeSkill,rules))) refuse();
     }
-    result.push({...parsed,pluginId:expectedPluginId,...(remotePluginId ? {remotePluginId} : {})});
+    const skillsOnly=!parsed.appSha256 && !parsed.mcpSha256 && JSON.parse(read(join(located.root,".codex-plugin/plugin.json"))).hooks===undefined;
+    result.push({...parsed,pluginId:expectedPluginId,...(remotePluginId ? {remotePluginId} : {}),...(skillsOnly ? {skillsOnly:true as const} : {})});
   }
   if (usedDenials.size!==denials.length) refuse();
   if ((!result.length && documents.some(document=>document.startsWith(cache+sep) && !inertDocuments.has(document)))

@@ -23,10 +23,11 @@ export function assertAgentPolicyCollections(policy: Record<string, any>): void 
     requireBound(object(alias)); for (const key of ["agent", "home", "alias", "target", "link", "aliasIdentity", "targetIdentity"]) text(alias[key]);
   }
   if (bridge.codexPluginSkills !== undefined) for (const control of array(bridge.codexPluginSkills, 4096)) {
-    requireBound(object(control) && Object.keys(control).every(key=>["name","pluginId","namespace","pluginParent","manifestSha256","appSha256","mcpSha256","remotePluginId"].includes(key)));
+    requireBound(object(control) && Object.keys(control).every(key=>["name","pluginId","namespace","pluginParent","manifestSha256","appSha256","mcpSha256","remotePluginId","skillsOnly"].includes(key)));
     text(control.name,129); text(control.pluginId,1024); text(control.namespace,64); text(control.pluginParent);
     requireBound(isAbsolute(control.pluginParent) && resolve(control.pluginParent) === control.pluginParent && /^[a-f0-9]{64}$/.test(control.manifestSha256));
     if (control.remotePluginId !== undefined) requireBound(typeof control.remotePluginId === "string" && /^[A-Za-z0-9_~-]{1,1024}$/.test(control.remotePluginId));
+    if(control.skillsOnly!==undefined) requireBound(control.skillsOnly===true && control.appSha256===undefined && control.mcpSha256===undefined);
     if (control.mcpSha256 !== undefined) requireBound(typeof control.mcpSha256 === "string" && /^[a-f0-9]{64}$/.test(control.mcpSha256));
     if (control.appSha256 !== undefined) requireBound(typeof control.appSha256 === "string" && /^[a-f0-9]{64}$/.test(control.appSha256));
   }
@@ -45,6 +46,14 @@ export function assertAgentPolicyCollections(policy: Record<string, any>): void 
   if (bridge.discovery === undefined) return;
   for (const [agent, value] of Object.entries(record(bridge.discovery, AGENT_POLICY_LIMITS.agents))) {
     text(agent, 128); requireBound(object(value)); text(value.agent, 128);
+    if(value.codexRetiredMaterializations!==undefined) {
+      const proof=record(value.codexRetiredMaterializations,2),roots=array(proof.roots,AGENT_POLICY_LIMITS.discoveryRoots);
+      requireBound(agent==="codex" && value.agent==="codex" && value.method==="reviewed" && Object.keys(proof).every(key=>["roots","directories"].includes(key)) && roots.length>0 && new Set(roots).size===roots.length);
+      for(const root of roots) {text(root);requireBound(isAbsolute(root) && resolve(root)===root);}
+      for(const directory of array(proof.directories,AGENT_POLICY_LIMITS.discoveryDirectories)) {
+        requireBound(object(directory));text(directory.path);requireBound(directory.sha256===null || typeof directory.sha256==="string" && /^[a-f0-9]{64}$/.test(directory.sha256));
+      }
+    }
     if (value.codexInstallationInputs!==undefined) {
       const proof=record(value.codexInstallationInputs,4), inputs=array(proof.plugins,4096), ids=new Set<string>();
       requireBound(agent==="codex" && value.agent==="codex" && value.method==="reviewed" && proof.version==="codex-cli 0.160.0" && typeof proof.catalogSha256==="string" && /^[a-f0-9]{64}$/.test(proof.catalogSha256)

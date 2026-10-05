@@ -545,7 +545,15 @@ It never synthesizes a native catalog row or enables a capability.
 A wholly absent remote skills-only parent with retained qualified-name denies
 keeps its reviewed fingerprints. A returning parent must satisfy the same
 identity and capability checks. App/MCP declarations and active hooks do not
-receive this absence exception. A retired Claude cache version may likewise
+receive this absence exception; the saved review must explicitly establish the
+skills-only role. The planner can also retain an already body-free historical
+remote version whose capabilities match the reviewed disabled identity. It
+records a separate directory projection for that exact inactive root, keeping
+membership and source guards on the active version, receipt and other paths.
+Direct user hook references, returning skill bodies and capability changes
+still refuse. Older directory witnesses without this projection need a fresh
+review; their historical hashes are never silently weakened.
+A retired Claude cache version may likewise
 remain absent only while unchanged native settings and registrations select a
 different extant, witnessed user version. Individual missing files, current
 registered roots, aliases and registration changes still refuse; historical
