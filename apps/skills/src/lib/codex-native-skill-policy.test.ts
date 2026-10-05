@@ -25,11 +25,19 @@ const PARENTS: Record<number, number> = { 5000: 4000, 4000: 3000, 3000: 2000, 20
 const HOOK_PID = 5000, CONSUMER_PID = 4000;
 
 interface Station { home: string; dataDir: string; projectDir: string; plugin: string; bridgeDocument: string; executable: string; executableSha256: string; receipt: string }
-function station(options: { materialize?: boolean; pin?: boolean | string } = {}): Station {
-  const home = mkdtempSync(join(tmpdir(), "skills-native-policy-")); roots.push(home); admitCorpusFixture(join(home, ".codex"));
+function station(options: { materialize?: boolean; pin?: boolean | string; alias?: boolean } = {}): Station {
+  const home = mkdtempSync(join(tmpdir(), "skills-native-policy-")); roots.push(home);
+  // A reviewed root alias: ~/.codex (and ~/.claude) are symlinks into a
+  // workspace, as on station02; the plan records their identities.
+  const codexRoot = options.alias ? join(home, "projects", "workspace", ".codex") : join(home, ".codex");
+  if (options.alias) {
+    mkdirSync(codexRoot, { recursive: true }); mkdirSync(join(home, "projects", "workspace", ".claude"), { recursive: true });
+    symlinkSync(codexRoot, join(home, ".codex")); symlinkSync(join(home, "projects", "workspace", ".claude"), join(home, ".claude"));
+  }
+  admitCorpusFixture(codexRoot);
   const f = { home, dataDir: join(home, "data"), projectDir: home };
-  applyAgentIntegration(planAgentIntegration({ ...f, agents: ["codex"] }));
-  const plugin = join(home, ".codex", "plugins", "cache", "openai-curated-remote", "sites");
+  applyAgentIntegration(planAgentIntegration({ ...f, agents: ["codex"], ...(options.alias ? { allowRootAliases: true } : {}) }));
+  const plugin = join(codexRoot, "plugins", "cache", "openai-curated-remote", "sites");
   if (options.materialize !== false) {
     // Materialize the plugin the way the Codex app does on station04 (sites 0.1.75).
     put(join(plugin, "0.1.75", ".codex-plugin", "plugin.json"), JSON.stringify({ name: "sites", version: "0.1.75", description: "Synthetic plugin" }));
@@ -44,7 +52,7 @@ function station(options: { materialize?: boolean; pin?: boolean | string } = {}
     snapshot.value.bridge.codexNativePolicy = { executableDigests: { "darwin-arm64": [typeof options.pin === "string" ? options.pin : executableSha256] } };
     writeFileSync(join(f.dataDir, "agent-policy.json"), serializeManagedSkillPolicy(snapshot.value));
   }
-  return { ...f, plugin, bridgeDocument: realpathSync(join(home, ".codex", "skills", "skills-cli", "SKILL.md")), executable, executableSha256, receipt: codexNativePolicyReceiptPath(f.dataDir) };
+  return { ...f, plugin, bridgeDocument: realpathSync(join(codexRoot, "skills", "skills-cli", "SKILL.md")), executable, executableSha256, receipt: codexNativePolicyReceiptPath(f.dataDir) };
 }
 function fakeInspector(s: Station, overrides: Partial<ProcessInspector> & { parents?: Record<number, number>; starts?: (pid: number) => string | null } = {}): ProcessInspector {
   const parents = overrides.parents ?? PARENTS;
@@ -520,5 +528,43 @@ describe("artifact-identity cache for the qualified executable", () => {
     expect(qualifiedExecutableSha256(s.executable, { dataDir: s.dataDir, hasher }).cached).toBe(false);
     writeFileSync(executableCachePath(s.dataDir), JSON.stringify({ schema: CODEX_NATIVE_POLICY_EXECUTABLE_CACHE_SCHEMA, entries: [{ path: s.executable, sha256: "0".repeat(64), dev: "1", ino: "1", size: "1", mtimeNs: "1", ctimeNs: "1", uid: "1", extra: true }] }));
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("reviewed root aliases (station02 layout: ~/.codex is a symlink into a workspace)", () => {
+  const lexical = (s: Station) => join(realpathSync(s.home), ".codex", "skills", "skills-cli", "SKILL.md");
+  test("a reviewed ~/.codex alias with allowedHostPaths naming the canonical target bridge passes the bridge and policy checks and stops only at the binding stub", () => {
+    const s = station({ alias: true });
+    expect(lstatSync(join(s.home, ".codex")).isSymbolicLink()).toBe(true);
+    expect(s.bridgeDocument).not.toBe(lexical(s));
+    expect(readManagedSkillPolicySnapshot(s.dataDir)!.value.bridge.rootAliases.map((alias: { agent: string }) => alias.agent).sort()).toEqual(["claude", "codex"]);
+    expect(verify(s, envelope(s))).toMatch(/^NATIVE_SKILL_POLICY_UNAUTHENTICATED: /);
+    const message = guard(s, { ...envelope(s), inspector: fakeInspector(s) });
+    expect(message).toMatch(DRIFT); expect(message).toMatch(/Native policy adapter refused: NATIVE_SKILL_POLICY_UNAUTHENTICATED/);
+    expect(existsSync(s.receipt)).toBe(false);
+  });
+  test("allowedHostPaths naming the lexical alias path instead of the canonical one refuses", () => {
+    const s = station({ alias: true });
+    expect(verify(s, envelope(s, {}, { allowedHostPaths: [lexical(s)] }))).toMatch(/^NATIVE_SKILL_POLICY_BRIDGE_UNVERIFIED: the allowed host path is not the Skills bridge document/);
+    const message = guard(s, { ...envelope(s, {}, { allowedHostPaths: [lexical(s)] }), inspector: fakeInspector(s) });
+    expect(message).toMatch(DRIFT); expect(message).toMatch(/NATIVE_SKILL_POLICY_BRIDGE_UNVERIFIED/);
+    // The adapter never accepts the lexical alias form as the bridge document either.
+    expect(() => verifyCodexNativeBridgeDocument(lexical(s), CLI_BRIDGE_FILES["SKILL.md"]!, CLI_BRIDGE_DIGEST)).toThrow(/missing, linked or unexpected component/);
+    expect(existsSync(s.receipt)).toBe(false);
+  });
+  test("an alias whose recorded identity changed refuses before the adapter", () => {
+    const s = station({ alias: true }), alias = join(s.home, ".codex"), target = realpathSync(alias);
+    rmSync(alias); symlinkSync(target, alias); // same target, new link inode and ctime
+    const message = guard(s, { ...envelope(s), inspector: fakeInspector(s) });
+    expect(message).toMatch(/Agent root alias changed after planning/);
+    expect(existsSync(s.receipt)).toBe(false);
+  });
+  test("an unreviewed ~/.codex symlink refuses", () => {
+    const s = station(), moved = join(s.home, "moved-codex"), alias = join(s.home, ".codex");
+    renameSync(alias, moved); symlinkSync(moved, alias);
+    expect(readManagedSkillPolicySnapshot(s.dataDir)!.value.bridge.rootAliases).toEqual([]);
+    expect(() => assertManagedAgentBridge("codex", { home: s.home, dataDir: s.dataDir, projectDir: s.projectDir, codexNativePolicy: { ...envelope(s, {}, { allowedHostPaths: [realpathSync(join(moved, "skills", "skills-cli", "SKILL.md"))] }), inspector: fakeInspector(s) } })).toThrow();
+    expect(() => verifyCodexNativeBridgeDocument(lexical(s), CLI_BRIDGE_FILES["SKILL.md"]!, CLI_BRIDGE_DIGEST)).toThrow(/missing, linked or unexpected component/);
+    expect(existsSync(s.receipt)).toBe(false);
   });
 });
