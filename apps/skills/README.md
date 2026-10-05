@@ -142,18 +142,6 @@ older scripts. Hook planning always inventories and disables discovered vendor
 system skills; use `migrate native --include-vendor` when retiring their
 discovery files.
 
-One vendor tree is accepted without review: skills that the Codex app itself
-materializes under exactly `~/.codex/plugins/cache/openai-curated-remote/`.
-Codex refreshes that cache on its own schedule, so a refreshed station would
-otherwise refuse every Codex session. A skill is accepted only when its
-directory is a real directory below that root by lexical and real-path
-containment, with no symlink anywhere between the two and the root spelled
-exactly that way on disk. Each acceptance is recorded in
-`<data-dir>/agent-hooks/codex-vendor-cache-acceptance.json` with the accepted
-paths and tree hashes; an acceptance that cannot be recorded refuses like any
-other drift. Nothing else widens: other `~/.codex` trees, other plugin caches,
-sibling or lookalike directories, and links escaping the tree still refuse.
-
 Restart the agent after applying the hooks. In Codex, review and grant normal
 trust to the installed hook definitions before starting a new session. Then
 request a selected skill in a prompt, for example `Use $pdf-generate to create
