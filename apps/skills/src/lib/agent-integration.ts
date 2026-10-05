@@ -575,13 +575,25 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     }
     return resolveAgentDiscovery({ home, agent, reviewed: options.discoveryInputs, retainedReview, canonical: path => canonicalAgentPath(path, aliases) });
   });
-  const codexConfig = options.agents.includes("codex") ? Bun.TOML.parse(readOptional(canonicalAgentPath(join(home, ".codex", "config.toml"), aliases)) ?? "") as { plugins?: unknown; skills?: { config?: Array<{ path?: string; enabled?: boolean }> } } : {};
+  const codexConfigBefore = options.agents.includes("codex") ? readOptional(canonicalAgentPath(join(home, ".codex", "config.toml"), aliases)) : null;
+  const codexConfig = Bun.TOML.parse(codexConfigBefore ?? "") as { plugins?: unknown; skills?: { config?: Array<{ path?: string; enabled?: boolean }> } };
   const nativeSkills = inventoryNativeSkills(home, { includeVendor: true, guardHermes: options.agents.includes("hermes"), agents: options.agents, projectDir: options.projectDir, agentRoots: discoveries.flatMap(binding => binding.roots.map(path => ({ agent: binding.agent, path }))), allowRootAliases: options.allowRootAliases, reviewedCacheAlias: options.reviewedCacheAlias, disabledVendorPaths: disabledCodexSkillPaths(codexConfig, aliases) });
+  // Review an omitted, already name-disabled remote materialization against
+  // both current controls and the exact path denies this transaction will add.
+  // Planning these bytes never changes native configuration or catalog rows.
+  const codexPathConfig = options.agents.includes("codex")
+    ? disableCodexSkills(codexConfigBefore ?? "", nativeSkills, aliases, canonicalAgentPath(join(home, ".codex/skills", CLI_BRIDGE_NAME), aliases))
+    : undefined;
+  const plannedCodexRules = codexPathConfig === undefined ? undefined : (Bun.TOML.parse(codexPathConfig) as any).skills?.config ?? [];
   const observedNativeSources: Array<{ path: string; sha256: string }> = [];
   const codexPluginControls: ReturnType<typeof reviewCodexPluginControls> = options.codexNativeCatalog
-    ? reviewCodexPluginControls(options.codexNativeCatalog, nativeSkills.filter(entry=>entry.agent==="codex" && entry.vendor).map(entry=>join(entry.path,"SKILL.md")), canonicalAgentPath(join(home,".codex/plugins/cache"),aliases), resolve(options.projectDir ?? home), path=>{const bytes=readNativeBytes(path,1024*1024); observedNativeSources.push({path,sha256:sha(bytes)}); return new TextDecoder("utf-8",{fatal:true}).decode(bytes); }, codexConfig.skills?.config ?? [], codexConfig.plugins)
+    ? reviewCodexPluginControls(options.codexNativeCatalog, nativeSkills.filter(entry=>entry.agent==="codex" && entry.vendor).map(entry=>join(entry.path,"SKILL.md")), canonicalAgentPath(join(home,".codex/plugins/cache"),aliases), resolve(options.projectDir ?? home), path=>{const bytes=readNativeBytes(path,1024*1024); observedNativeSources.push({path,sha256:sha(bytes)}); return new TextDecoder("utf-8",{fatal:true}).decode(bytes); }, codexConfig.skills?.config ?? [], codexConfig.plugins, plannedCodexRules)
     : {skills:policy.bridge?.codexPluginSkills ?? [],inactivePlugins:policy.bridge?.codexInactivePlugins ?? [],sourceInputs:policy.bridge?.discovery?.codex?.codexInstallationInputs?.plugins ?? []};
   const codexPluginSkills: CodexPluginSkillControl[] = codexPluginControls.skills;
+  if (options.agents.includes("codex") && !options.codexNativeCatalog && codexPluginSkills.length
+    && !reviewedCodexPluginCapabilitiesUnchanged(canonicalAgentPath(join(home,".codex/plugins/cache"),aliases),codexPluginSkills,path=>new TextDecoder("utf-8",{fatal:true}).decode(readNativeBytes(path,1024*1024)))) {
+    throw new Error("NATIVE_SKILL_DRIFT: reviewed native plugin capability controls changed; provide a fresh native catalog and discovery review");
+  }
   const codexInactivePlugins = codexPluginControls.inactivePlugins;
   const codexDiscovery=discoveries.find(binding=>binding.agent==="codex");
   const codexPluginSourceInputs = codexPluginControls.sourceInputs.filter(input=>codexDiscovery?.method==="reviewed"
@@ -640,7 +652,8 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     if (before !== after) changes.push({ path, before, after });
     if (agent === "codex") {
       const configPath = canonicalAgentPath(join(home, ".codex", "config.toml"), aliases), previous = readOptional(configPath);
-      const next = disableReviewedCodexPluginNames(disableCodexSkills(previous ?? "", nativeSkills, aliases, bridgePath), codexPluginSkills);
+      if (previous !== codexConfigBefore) throw new Error(`Configuration changed during planning: ${configPath}`);
+      const next = disableReviewedCodexPluginNames(codexPathConfig!, codexPluginSkills);
       if (next !== (previous ?? "")) changes.push({ path: configPath, before: previous, after: next });
     }
   }

@@ -532,6 +532,12 @@ If Codex omits a skill from `skills/list` because its exact path is already
 disabled, the installer derives that identity only when the exact installed
 and enabled plugin row matches the cache marketplace, manifest name and
 local version. It preserves path disables and adds exact qualified name disables.
+For a Codex 0.160.0 remote refresh omitted by an existing qualified-name disable,
+a fresh native catalog and discovery review can plan the new exact path disable
+in the same transaction. The remote installation receipt, namespace and capability
+controls must match; conflicting enable rules, unknown names and ambiguous
+materializations refuse. Changed plugin capability controls require a fresh
+native catalog even when a new discovery review is supplied.
 Known skill identities remain disabled across versioned plugin cache relocation,
 even when their disabled bodies change. Unknown names, conflicting enables,
 changed plugin controls, native hooks and unsupported name syntax still refuse.
