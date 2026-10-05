@@ -1,4 +1,5 @@
-import { afterEach, expect, test } from "bun:test";
+import { admitCorpusFixture, installCorpusInspectorFixture } from "./codex-corpus.fixture.js";
+import { beforeEach, afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -18,7 +19,7 @@ const cleanup = (server = "node_repl") => ({ hooks: Object.fromEntries(["Interru
 }] }]])) });
 
 function fixture(namespace = "chrome", marketplace = "openai-bundled", server = "node_repl") {
-  const home = mkdtempSync(join(tmpdir(), "skills-bundled-cleanup-")); roots.push(home);
+  const home = mkdtempSync(join(tmpdir(), "skills-bundled-cleanup-")); roots.push(home); admitCorpusFixture(join(home,".codex"));
   const cache = join(home, ".codex/plugins/cache"), parent = join(cache, marketplace, namespace), root = join(parent, "26.908.70816");
   const document = join(root, "skills/browse/SKILL.md"), manifestPath = join(root, ".codex-plugin/plugin.json");
   const manifest = { name: namespace, version: "26.908.70816", hooks: cleanup(server) };
@@ -113,3 +114,7 @@ test("builtin cleanup refuses plugin MCP declarations and external hook controls
   rmSync(join(f.root, "hooks"), { recursive: true });
   put(f.manifestPath, JSON.stringify({ ...f.manifest, commands: "./commands" })); expect(f.review).toThrow("IDENTITY_UNSUPPORTED");
 });
+
+let restoreInspector: (()=>void)|undefined;
+beforeEach(()=>{restoreInspector=installCorpusInspectorFixture();});
+afterEach(()=>{restoreInspector?.();});

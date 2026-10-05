@@ -1,3 +1,4 @@
+import { withCodexCorpusWriteAsync } from "./codex-corpus-write.js";
 import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -197,6 +198,11 @@ export async function reconcileCodexNativeHooks(options: CodexNativeHookReconcil
 /** Deliberately separate from filesystem hook installation: native trust is an
  * explicit authorization of exact owned commands, never a broad trust bypass. */
 export async function enrollCodexNativeHooks(options: CodexNativeHookTrustOptions = {}, connect: Connect = connectCodexHookRpc) {
+  const home = resolve(options.home ?? homedir());
+  return withCodexCorpusWriteAsync([join(home, ".codex")], () => enrollCodexNativeHooksUnlocked(options, connect), options);
+}
+
+async function enrollCodexNativeHooksUnlocked(options: CodexNativeHookTrustOptions, connect: Connect) {
   let rpc: CodexHookRpc | undefined, journal: string | undefined;
   try {
     const home = resolve(options.home ?? homedir()), dataDir = resolve(options.dataDir ?? getDataDirReadOnly());

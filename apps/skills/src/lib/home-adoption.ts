@@ -35,6 +35,7 @@ import { resolveCorpusRoot } from "./home-migration.js";
 import { hashSkillMarkdownFile } from "./skill-hash.js";
 import type { PortableSkillOptions } from "./portable-skills.js";
 import { normalizePortableSkillName } from "./portable-skills-files.js";
+import { codexCorpusRootForPath, withCodexCorpusWrite, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
 
 export const CONFLICTS_LEDGER_FILE = "conflicts.json";
 export const ROLLBACK_DIRNAME = "rollback";
@@ -68,7 +69,7 @@ export interface AdoptionScan {
   managed: number;
 }
 
-export interface AdoptionOptions extends PortableSkillOptions {
+export interface AdoptionOptions extends PortableSkillOptions, CodexCorpusWriteOptions {
   agents?: SyncAgent[];
   /** Optional selected home/corpus names; omitted means all names. */
   names?: string[];
@@ -279,24 +280,40 @@ export function adoptUnmarkedHomes(options: AdoptionOptions = {}): AdoptionResul
   }
 
   const appDir = options.homeDir ? join(options.homeDir, ".hasna", "skills") : getDataDir();
-  const markers: RollbackMarker[] = scan.adoptable.map((entry) => {
-    const marker: SyncMarker = {
-      managedBy: SYNC_MARKER_MANAGED_BY,
-      skill: entry.skill,
-      source: "adopted",
-      syncedAt: new Date().toISOString(),
-    };
-    writeFileSync(join(entry.path, SYNC_MARKER_FILE), `${JSON.stringify(marker, null, 2)}\n`);
-    return { agent: entry.agent, skill: entry.skill, path: entry.path, hash: entry.hash, marker };
-  });
-
-  appendConflictsLedger(appDir, scan.conflicts);
-
-  let rollbackFile: string | undefined;
-  if (markers.length > 0) {
-    rollbackFile = writeRollbackRecord("adopt", markers, appDir);
-  }
-  return { ...scan, applied: true, rollbackFile };
+  const roots = scan.adoptable.map(entry => codexCorpusRootForPath(entry.path)).filter((root): root is string => !!root);
+  return withCodexCorpusWrite(roots, (assertCurrent) => {
+    assertCurrent();
+    const canonical = indexCanonicalCorpus(resolveCorpusRoot(options));
+    const markers: RollbackMarker[] = scan.adoptable.map((entry) => {
+      const root = codexCorpusRootForPath(entry.path);
+      if ((root && !roots.includes(root)) || !lstatSync(entry.path).isDirectory()
+        || existsSync(join(entry.path, SYNC_MARKER_FILE))
+        || hashSkillMarkdownFile(join(entry.path, "SKILL.md")) !== entry.hash
+        || canonical.get(entry.skill) !== entry.hash) throw new Error("Skill adoption target changed before apply");
+      const marker: SyncMarker = {
+        managedBy: SYNC_MARKER_MANAGED_BY,
+        skill: entry.skill,
+        source: "adopted",
+        syncedAt: new Date().toISOString(),
+      };
+      return { agent: entry.agent, skill: entry.skill, path: entry.path, hash: entry.hash, marker };
+    });
+    assertCurrent();
+    let rollbackFile: string | undefined;
+    if (markers.length > 0) {
+      rollbackFile = writeRollbackRecord("adopt", markers, appDir);
+    }
+    for (const entry of markers) {
+      assertCurrent();
+      const markerPath = join(entry.path, SYNC_MARKER_FILE), bytes = `${JSON.stringify(entry.marker, null, 2)}\n`;
+      writeFileSync(markerPath, bytes, { flag: "wx" });
+      assertCurrent();
+      if (readFileSync(markerPath, "utf8") !== bytes) throw new Error("Skill adoption readback failed");
+    }
+    assertCurrent();
+    appendConflictsLedger(appDir, scan.conflicts);
+    return { ...scan, applied: true, rollbackFile };
+  }, options);
 }
 
 /**
@@ -378,16 +395,28 @@ export function pruneStrayHomes(options: AdoptionOptions = {}): PruneResult {
   }
 
   const appDir = options.homeDir ? join(options.homeDir, ".hasna", "skills") : getDataDir();
-  const rollbackFile = writeRollbackRecord(
-    "prune",
-    candidates.map(({ agent, skill, path, hash, marker }) => ({ agent, skill, path, hash, marker })),
-    appDir,
-  );
-  let pruned = 0;
-  for (const candidate of candidates) {
-    if (pruneOwnership(candidate.path)?.identity !== ownership.get(candidate.path)) continue;
-    rmSync(candidate.path, { recursive: true, force: true });
-    pruned++;
-  }
-  return { candidates, pruned, dryRun: false, rollbackFile };
+  const roots = candidates.map(candidate => codexCorpusRootForPath(candidate.path)).filter((root): root is string => !!root);
+  return withCodexCorpusWrite(roots, (assertCurrent) => {
+    assertCurrent();
+    const rollbackFile = writeRollbackRecord(
+      "prune",
+      candidates.map(({ agent, skill, path, hash, marker }) => ({ agent, skill, path, hash, marker })),
+      appDir,
+    );
+    let pruned = 0;
+    for (const candidate of candidates) {
+      assertCurrent();
+      const root = codexCorpusRootForPath(candidate.path);
+      if (root && !roots.includes(root)) throw new Error("CODEX_CORPUS_ADMISSION_REQUIRED: prune target changed");
+      if (pruneOwnership(candidate.path)?.identity !== ownership.get(candidate.path)) continue;
+      if (indexCanonicalCorpus(corpusRoot).has(candidate.skill)) continue;
+      const skillMd = join(candidate.path, "SKILL.md");
+      if ((existsSync(skillMd) ? hashSkillMarkdownFile(skillMd) : "") !== candidate.hash) continue;
+      rmSync(candidate.path, { recursive: true, force: true });
+      assertCurrent();
+      if (existsSync(candidate.path)) throw new Error("Skill prune readback failed");
+      pruned++;
+    }
+    return { candidates, pruned, dryRun: false, rollbackFile };
+  }, options);
 }

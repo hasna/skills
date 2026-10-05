@@ -1,4 +1,5 @@
-import { afterEach, expect, test } from "bun:test";
+import { admitCorpusFixture, installCorpusInspectorFixture } from "./codex-corpus.fixture.js";
+import { beforeEach, afterEach, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,6 +40,7 @@ function vendorAlias() {
   mkdirSync(skill, { recursive: true, mode: 0o700 });
   writeFileSync(join(skill, "SKILL.md"), "---\nname: control-chrome\n---\nSynthetic vendor skill.\n");
   symlinkSync(version, join(chrome, "latest"));
+  admitCorpusFixture(join(home,".codex"));
   return { home, skill, version };
 }
 
@@ -198,8 +200,8 @@ test("hook install CLI forwards the exact reviewed cache alias and keeps unrevie
   writeFileSync(configPath, `[[skills.config]]\npath = "${join(skill, "SKILL.md")}"\nenabled = true\n[skills.bundled]\nenabled = false\n`);
 
   const run = async (withAlias: boolean) => {
-    const args = [process.execPath, "run", "src/cli/index.tsx", "hook", "install", "--agent", "codex", ...(withAlias ? ["--reviewed-cache-alias", cacheAlias] : []), "--json"];
-    const child = Bun.spawn(args, { cwd: process.cwd(), env: { ...process.env, HOME: home, [DATA_DIR_ENV]: dataDir }, stdout: "pipe", stderr: "pipe" });
+    const args = [process.execPath, "--no-env-file", "run", join(process.cwd(), "src/cli/index.tsx"), "hook", "install", "--agent", "codex", ...(withAlias ? ["--reviewed-cache-alias", cacheAlias] : []), "--json"];
+    const child = Bun.spawn(args, { cwd: home, env: { ...process.env, HOME: home, USERPROFILE: home, [DATA_DIR_ENV]: dataDir }, stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     return { stdout, stderr, exitCode };
   };
@@ -211,3 +213,7 @@ test("hook install CLI forwards the exact reviewed cache alias and keeps unrevie
   expect(refused.exitCode).toBe(1);
   expect(refused.stderr).toContain("Refusing symlink path");
 });
+
+let restoreInspector: (()=>void)|undefined;
+beforeEach(()=>{restoreInspector=installCorpusInspectorFixture();});
+afterEach(()=>{restoreInspector?.();});
