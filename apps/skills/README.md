@@ -532,6 +532,41 @@ If Codex omits a skill from `skills/list` because its exact path is already
 disabled, the installer derives that identity only when the exact installed
 and enabled plugin row matches the cache marketplace, manifest name and
 local version. It preserves path disables and adds exact qualified name disables.
+For a newly named remote materialization omitted from the native list, use
+`--codex-skill-denials <file>` together with a fresh native catalog and explicit
+`--discovery-inputs`. The denial file is an array of exact
+`{name,path,sha256}` document reviews. The discovery review must also bind the
+current full plugin manifest and each declared app/MCP control file. This plans
+only exact false path/name rules;
+it requires the real installed remote identity and receipt, rejects conflicting
+enables, and rechecks consulted files and configuration before application.
+It never synthesizes a native catalog row or enables a capability.
+
+A wholly absent remote skills-only parent with retained qualified-name denies
+keeps its reviewed fingerprints. A returning parent must satisfy the same
+identity and capability checks. App/MCP declarations and active hooks do not
+receive this absence exception; the saved review must explicitly establish the
+skills-only role. The planner can also retain an already body-free historical
+remote version whose capabilities match the reviewed disabled identity. It
+records bounded membership rows matching their original directory fingerprints.
+Only exact reviewed inactive roots or wholly absent disabled skills-only parents
+are projected out; surviving versions, receipts and unrelated members stay bound.
+Direct user hook references, returning skill bodies and capability changes
+still refuse. Older directory witnesses without this projection need a fresh
+review; their historical hashes are never silently weakened.
+Updating the binary preserves existing policy and does not enroll this proof.
+Preview `skills hook install` with fresh `--discovery-inputs` and the genuine
+`--codex-native-catalog`, then apply the same reviewed inputs with `--apply`.
+Preserve the exact policy/configuration/hook preimages and compare them before
+application. The apply invocation replans and checks its observed preconditions;
+the preview is not an apply token. Keep typed V3 settings witnesses, existing
+disables, command/profile choices and session pins unchanged.
+A retired Claude cache version may likewise
+remain absent only while unchanged native settings and registrations select a
+different extant, witnessed user version. Individual missing files, current
+registered roots, aliases and registration changes still refuse; historical
+source hashes and typed settings witnesses remain intact.
+
 For a Codex 0.160.0 remote refresh omitted by an existing qualified-name disable,
 a fresh native catalog and discovery review can plan the new exact path disable
 in the same transaction. The remote installation receipt, namespace and capability
