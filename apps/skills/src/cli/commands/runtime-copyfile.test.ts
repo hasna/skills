@@ -78,6 +78,78 @@ async function serverWithArtifact(dependencies: Record<string, string> = {}) {
 }
 
 describe("exact-version copyfile runtime update", () => {
+  test("reviewed lock skips registry resolution and preserves exact bytes through real npm ci", async () => {
+    const reviewed = fixtureHome(), consumer = fixtureHome();
+    const fixture = await serverWithArtifact();
+    const originalPath = process.env.PATH;
+    const npm = Bun.which("npm")!;
+    try {
+      await updateCopyfileRuntime("0.10.8", { homeDir: reviewed.home, pathValue: `${reviewed.localBin}${delimiter}${reviewed.bunBin}`, registryOrigin: fixture.server.url.origin });
+      const lockBytes = readFileSync(join(reviewed.runtime, "0.10.8-copyfile", "install-lock.json"));
+      const lockPath = join(consumer.home, "reviewed-lock.json");
+      writeFileSync(lockPath, lockBytes, { mode: 0o600 });
+      const sha256 = createHash("sha256").update(lockBytes).digest("hex");
+      const spyBin = join(consumer.home, "npm-spy"), calls = join(consumer.home, "npm-calls");
+      mkdirSync(spyBin, { mode: 0o700 });
+      writeFileSync(join(spyBin, "npm"), `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+if (process.argv[2] === "install") process.exit(82);
+const child = Bun.spawn([${JSON.stringify(npm)}, ...process.argv.slice(2)], { env: process.env, stdin: "ignore", stdout: "inherit", stderr: "inherit" });
+process.exit(await child.exited);
+`, { mode: 0o755 });
+      process.env.PATH = `${spyBin}${delimiter}${originalPath}`;
+      const result = await updateCopyfileRuntime("0.10.8", { homeDir: consumer.home, pathValue: `${consumer.localBin}${delimiter}${consumer.bunBin}`, registryOrigin: fixture.server.url.origin, minReleaseAge: 7, reviewedLock: lockPath, reviewedLockSha256: sha256 });
+      const commands = readFileSync(calls, "utf8").trim().split("\n").map(line => JSON.parse(line)[0]);
+      expect(commands.filter((command: string) => ["ci", "ls", "install"].includes(command))).toEqual(["ci", "ls"]);
+      expect(readFileSync(join(consumer.runtime, "0.10.8-copyfile", "install-lock.json")).equals(lockBytes)).toBe(true);
+      expect(result.reviewedLockSha256).toBe(sha256);
+      for (const [path, content] of consumer.configs) expect(readFileSync(path, "utf8")).toBe(content);
+      expect(rollbackCopyfileRuntime(String(result.receiptId), { homeDir: consumer.home })).toMatchObject({ rolledBack: true });
+    } finally { process.env.PATH = originalPath; fixture.server.stop(true); }
+  });
+
+  test("reviewed lock drift caused during npm ci refuses before launcher switch", async () => {
+    const reviewed = fixtureHome(), consumer = fixtureHome();
+    const fixture = await serverWithArtifact();
+    const originalPath = process.env.PATH, npm = Bun.which("npm")!;
+    try {
+      await updateCopyfileRuntime("0.10.8", { homeDir: reviewed.home, pathValue: `${reviewed.localBin}${delimiter}${reviewed.bunBin}`, registryOrigin: fixture.server.url.origin });
+      const lockBytes = readFileSync(join(reviewed.runtime, "0.10.8-copyfile", "install-lock.json"));
+      const lockPath = join(consumer.home, "reviewed-lock.json");
+      writeFileSync(lockPath, lockBytes, { mode: 0o600 });
+      const spyBin = join(consumer.home, "npm-spy"); mkdirSync(spyBin, { mode: 0o700 });
+      writeFileSync(join(spyBin, "npm"), `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+const child = Bun.spawn([${JSON.stringify(npm)}, ...args], { env: process.env, stdin: "ignore", stdout: "inherit", stderr: "inherit" });
+const code = await child.exited;
+if (code === 0 && args[0] === "ci") appendFileSync(args[args.indexOf("--prefix") + 1] + "/package-lock.json", "\\n ");
+process.exit(code);
+`, { mode: 0o755 });
+      process.env.PATH = `${spyBin}${delimiter}${originalPath}`;
+      await expect(updateCopyfileRuntime("0.10.8", { homeDir: consumer.home, pathValue: `${consumer.localBin}${delimiter}${consumer.bunBin}`, registryOrigin: fixture.server.url.origin, minReleaseAge: 7, reviewedLock: lockPath, reviewedLockSha256: createHash("sha256").update(lockBytes).digest("hex") })).rejects.toThrow("REVIEWED_LOCK_DRIFT_DURING_INSTALL");
+      expect(realpathSync(join(consumer.localBin, "skills"))).toBe(join(consumer.oldPackage, BIN.skills));
+      expect(existsSync(join(consumer.runtime, "0.10.8-copyfile"))).toBe(false);
+      for (const [path, content] of consumer.configs) expect(readFileSync(path, "utf8")).toBe(content);
+    } finally { process.env.PATH = originalPath; fixture.server.stop(true); }
+  });
+
+  test("incomplete reviewed closure is refused by real npm before switching", async () => {
+    const f = fixtureHome(), fixture = await serverWithArtifact({ "is-odd": "^3.0.1" });
+    try {
+      const lockBytes = Buffer.from(JSON.stringify({ lockfileVersion: 3, requires: true, packages: {
+        "": { dependencies: { "@hasna/skills": "file:./verified.tgz" } },
+        "node_modules/@hasna/skills": { version: "0.10.8", resolved: "file:verified.tgz", integrity: fixture.integrity, dependencies: { "is-odd": "^3.0.1" } },
+      } }));
+      const path = join(f.home, "incomplete-lock.json"); writeFileSync(path, lockBytes, { mode: 0o600 });
+      await expect(updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue: `${f.localBin}${delimiter}${f.bunBin}`, registryOrigin: fixture.server.url.origin, minReleaseAge: 7, reviewedLock: path, reviewedLockSha256: createHash("sha256").update(lockBytes).digest("hex") })).rejects.toThrow("DEPENDENCY_GRAPH_INSTALL_FAILED");
+      expect(realpathSync(join(f.localBin, "skills"))).toBe(join(f.oldPackage, BIN.skills));
+      expect(existsSync(join(f.runtime, "0.10.8-copyfile"))).toBe(false);
+      for (const [path, content] of f.configs) expect(readFileSync(path, "utf8")).toBe(content);
+    } finally { fixture.server.stop(true); }
+  });
+
   test("real npm conflicting Hasna dependency versions retain nested closure without changing archive payload", async () => {
     const f = fixtureHome();
     const fixture = await serverWithArtifact({ "@hasna/contracts": "1.3.5", "@hasna/secrets": "0.4.2" });

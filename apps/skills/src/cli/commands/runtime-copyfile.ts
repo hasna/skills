@@ -7,6 +7,7 @@ import {
 } from "node:fs";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { SEMVER_PATTERN } from "../../lib/skill-contract.js";
+import { validateReviewedRuntimeLock } from "./reviewed-runtime-lock.js";
 
 const PACKAGE_NAME = "@hasna/skills";
 const REGISTRY_ORIGIN = "https://registry.npmjs.org";
@@ -68,6 +69,7 @@ interface CopyfileReceipt {
   preimageSha256: string;
   launchers: RuntimeLayout["launchers"];
   dependencyPolicy?: NpmReleaseAgePolicy & { npmVersion: string };
+  reviewedLockSha256?: string;
   switchedLaunchers: string[];
   rollbackCompletedLaunchers: string[];
 }
@@ -891,10 +893,22 @@ export function rollbackCopyfileAliases(receiptId: string, options: { homeDir?: 
   }
 }
 
-export async function updateCopyfileRuntime(version: string, options: { homeDir?: string; pathValue?: string; registryOrigin?: string; fetcher?: typeof fetch; minReleaseAge?: number; minReleaseAgeExclude?: string[]; onLauncherSwitched?: (path: string) => void } = {}): Promise<JsonObject> {
+export async function updateCopyfileRuntime(version: string, options: { homeDir?: string; pathValue?: string; registryOrigin?: string; fetcher?: typeof fetch; minReleaseAge?: number; minReleaseAgeExclude?: string[]; reviewedLock?: string; reviewedLockSha256?: string; onLauncherSwitched?: (path: string) => void } = {}): Promise<JsonObject> {
   if (!new RegExp(SEMVER_PATTERN).test(version)) throw new Error("EXACT_VERSION_REQUIRED");
   if (!STABLE_SEMVER_PATTERN.test(version)) throw new Error("EXACT_STABLE_VERSION_REQUIRED");
   const policy = releaseAgePolicy(options);
+  let reviewedLockBytes: Buffer | undefined;
+  if (options.reviewedLock !== undefined || options.reviewedLockSha256 !== undefined) {
+    if (!options.reviewedLock || !options.reviewedLockSha256) throw new Error("REVIEWED_LOCK_INPUT_PAIR_REQUIRED");
+    if (!policy) throw new Error("REVIEWED_LOCK_RELEASE_AGE_REQUIRED");
+    if (!isAbsolute(options.reviewedLock)) throw new Error("REVIEWED_LOCK_ABSOLUTE_PATH_REQUIRED");
+    assertNoSymlinkAncestors(dirname(options.reviewedLock));
+    const stat = lstatSync(options.reviewedLock);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.uid !== process.getuid?.() || (stat.mode & 0o077) || stat.size > 8 * 1024 * 1024) throw new Error("REVIEWED_LOCK_FILE_UNSAFE");
+    reviewedLockBytes = readFileSync(options.reviewedLock);
+    if (!/^[a-f0-9]{64}$/.test(options.reviewedLockSha256)) throw new Error("REVIEWED_LOCK_SHA256_INVALID");
+    if (hash(reviewedLockBytes) !== options.reviewedLockSha256) throw new Error("REVIEWED_LOCK_HASH_MISMATCH");
+  }
   const home = resolve(options.homeDir ?? process.env.HOME ?? "");
   if (!home || !existsSync(home)) throw new Error("HOME_NOT_FOUND");
   const layout = resolveRuntimeLayout(home, options.pathValue ?? process.env.PATH ?? "");
@@ -926,10 +940,28 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
     mkdirSync(stagePackage, { mode: 0o700 });
     copyFileSync(artifact.tarballPath, join(stagePackage, "verified.tgz"));
     writeFileSync(join(stagePackage, "package.json"), JSON.stringify({ private: true, dependencies: { [PACKAGE_NAME]: "file:./verified.tgz" } }, null, 2), { mode: 0o600, flag: "wx" });
-    const npmVersion = await runNpm(["install", "--package-lock-only", "--prefix", stagePackage], stagePackage, home, stagePath, policy);
+    let npmVersion: string | undefined;
+    if (reviewedLockBytes) {
+      await validateReviewedRuntimeLock(reviewedLockBytes, options.reviewedLockSha256!, {
+        version, archiveIntegrity: artifact.integrity,
+        packageManifest: object(JSON.parse(readFileSync(join(stagePath, "verified-archive", "package", "package.json"), "utf8")), "PACKAGE_MANIFEST_INVALID"),
+        registryOrigin: REGISTRY_ORIGIN, ...policy!, fetcher,
+      });
+      writeFileSync(join(stagePackage, "package-lock.json"), reviewedLockBytes, { mode: 0o600, flag: "wx" });
+      if (!readFileSync(join(stagePackage, "package-lock.json")).equals(reviewedLockBytes)) throw new Error("REVIEWED_LOCK_COPY_MISMATCH");
+    } else {
+      npmVersion = await runNpm(["install", "--package-lock-only", "--prefix", stagePackage], stagePackage, home, stagePath, policy);
+    }
     const ciNpmVersion = await runNpm(["ci", "--prefix", stagePackage], stagePackage, home, stagePath, policy);
-    if (npmVersion !== ciNpmVersion) throw new Error("NPM_VERSION_DRIFT_DURING_UPDATE");
+    if (!reviewedLockBytes && npmVersion !== ciNpmVersion) throw new Error("NPM_VERSION_DRIFT_DURING_UPDATE");
+    npmVersion = ciNpmVersion;
     const lockBytes = readFileSync(join(stagePackage, "package-lock.json"));
+    if (reviewedLockBytes) {
+      if (!lockBytes.equals(reviewedLockBytes)) throw new Error("REVIEWED_LOCK_DRIFT_DURING_INSTALL");
+      const treeNpmVersion = await runNpm(["ls", "--all", "--omit=dev", "--prefix", stagePackage], stagePackage, home, stagePath, policy);
+      if (treeNpmVersion !== npmVersion) throw new Error("NPM_VERSION_DRIFT_DURING_UPDATE");
+      if (!readFileSync(join(stagePackage, "package-lock.json")).equals(reviewedLockBytes)) throw new Error("REVIEWED_LOCK_DRIFT_DURING_INSTALL");
+    }
     const installedPackage = join(stagePackage, "node_modules", "@hasna", "skills");
     const installed = readPackage(join(installedPackage, "package.json"));
     if (installed.version !== version || JSON.stringify(Object.entries(installed.bins).sort()) !== JSON.stringify(Object.entries(layout.bin).sort())) {
@@ -956,6 +988,7 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
       runtimeTreeSha256: runtimeTree.digest, runtimeRoot: layout.runtimeRoot,
       currentPackageRoot: layout.currentPackageRoot, targetPackageRoot, configs: configPreimages, preimageSha256,
       ...(policy ? { dependencyPolicy: { ...policy, npmVersion: npmVersion! } } : {}),
+      ...(reviewedLockBytes ? { reviewedLockSha256: options.reviewedLockSha256 } : {}),
       launchers, switchedLaunchers: [], rollbackCompletedLaunchers: [],
     };
     writeJsonPrivate(join(stagePath, "rollout-receipt.json"), receipt);
@@ -989,7 +1022,7 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
     }
     receipt.state = "switched";
     persistReceipt(join(finalPath, "rollout-receipt.json"), receipt);
-    return { updated: true, version, currentVersion: layout.currentVersion, receiptId: id, runtimeRoot: finalPath, tarballSha256: artifact.sha256, tarballIntegrity: artifact.integrity, runtimeTreeSha256: stagedTree.digest, launcherCount: launchers.length, configCount: configPreimages.length, ...(policy ? { dependencyPolicy: { ...policy, npmVersion: npmVersion! } } : {}) };
+    return { updated: true, version, currentVersion: layout.currentVersion, receiptId: id, runtimeRoot: finalPath, tarballSha256: artifact.sha256, tarballIntegrity: artifact.integrity, runtimeTreeSha256: stagedTree.digest, launcherCount: launchers.length, configCount: configPreimages.length, ...(policy ? { dependencyPolicy: { ...policy, npmVersion: npmVersion! } } : {}), ...(reviewedLockBytes ? { reviewedLockSha256: options.reviewedLockSha256 } : {}) };
   } catch (error) {
     if (switched.length > 0 || moved) {
       let rollbackFailed = false;
