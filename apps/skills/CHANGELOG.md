@@ -2,6 +2,8 @@
 
 ## 0.10.43
 
+- Accept ordinary email sign-in codes through bounded stdin and mask interactive code input. Preserve workspace enrollment and legacy sign-in options.
+- Make the declared maintenance executable directly runnable and check every installed package binary's executable mode and Bun shebang during release verification.
 - Request the established hosted CLI scope set when returning sign-in creates a profile key, including billing access. Preserve generic SDK key defaults, preissued keys and origin binding.
 - Retain an independently inspectable, installed-consumer-verified archive from tagless release validation. Publication still requires the separately reviewed annotated release tag.
 

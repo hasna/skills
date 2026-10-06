@@ -1,4 +1,5 @@
 import { loginWorkspace } from "./workspace-selection.js";
+import { promptCode, readCode } from "./customer-verification.js";
 import { captureProfileWorkspace } from "../../lib/workspace-profile.js";
 import { Command } from "commander";
 import chalk from "chalk";
@@ -324,12 +325,12 @@ async function doLogin(email: string, code: string | undefined, json: boolean | 
 
     if (!json) console.log(chalk.green("✓ Code sent to " + email));
 
-    if (json || !isTTY) {
-      console.log(JSON.stringify({ status: "code_sent", email, message: `Check email for 6-digit code, then run: skills login --email ${email} --code <CODE>${targetFlag(target)}` }));
+    if (json || !isTTY || !process.stderr.isTTY) {
+      console.log(JSON.stringify({ status: "code_sent", email, message: `Supply the fresh six-digit code on stdin to: skills login --email ${email} --code-stdin${targetFlag(target)}` }));
       return;
     }
 
-    const answer = await prompt(chalk.bold("Code: "));
+    const answer = await promptCode();
     if (answer === null) return;
     code = answer;
   }
@@ -556,6 +557,7 @@ interface LoginOptions {
   url?: string;
   email?: string;
   code?: string;
+  codeStdin?: boolean;
   apiKey?: string | true;
   device?: boolean;
   open?: boolean;
@@ -570,6 +572,10 @@ interface LoginOptions {
  * email code, `--api-key` for a key read from stdin.
  */
 async function runLogin(options: LoginOptions): Promise<void> {
+  if (options.codeStdin && (!options.email || options.code !== undefined || options.apiKey !== undefined || options.device || options.poll)) {
+    writeCommandError(new Error("--code-stdin requires --email and cannot be combined with --code, --api-key, --device or --poll"), "Invalid login options", options.json);
+    return;
+  }
   if (options.apiKey !== undefined && (options.device || options.poll || options.email || options.code)) {
     writeCommandError(new Error("--api-key cannot be combined with --device, --poll, --email or --code"), "Invalid login options", options.json);
     return;
@@ -612,7 +618,12 @@ async function runLogin(options: LoginOptions): Promise<void> {
     return;
   }
 
-  await doLogin(email, options.code, options.json, target);
+  let code = options.code;
+  if (options.codeStdin) {
+    try { code = await readCode(); }
+    catch (error) { writeCommandError(error, "Could not read the verification code", options.json); return; }
+  }
+  await doLogin(email, code, options.json, target);
 }
 
 /**
@@ -701,8 +712,9 @@ async function runWhoami(options: { json?: boolean }): Promise<void> {
 function withLoginOptions(command: Command): Command {
   return command
     .option("--url <origin>", "Sign in to this Skills server instead of the default (your own instance)")
-    .option("--email <email>", "Sign in with an email code (non-interactive with --code)")
-    .option("--code <code>", "Verification code from the sign-in email")
+    .option("--email <email>", "Sign in with an email code (non-interactive with --code-stdin)")
+    .option("--code <code>", "Legacy verification code argument; prefer --code-stdin to keep it out of shell history")
+    .option("--code-stdin", "Read a previously requested six-digit verification code from stdin")
     .option("--api-key [key]", "Verify and store an API key; with no value, read it from stdin")
     .option("--device", "Print a code to approve on another device; do not open a browser", false)
     .option("--no-open", "Do not open a browser")
@@ -786,16 +798,14 @@ export function registerAuth(parent: Command) {
   withLoginOptions(auth
     .command("login")
     .description("Sign in with browser/device code, email code or an API key (same as `skills login`)")
-    .option("--membership-id <id>", "Enroll an exact workspace membership into an explicit HASNA_PROFILE")
-    .option("--code-stdin", "Read a fresh six-digit code for workspace enrollment from stdin"))
-    .action(async (options: LoginOptions & { membershipId?: string; codeStdin?: boolean }) => {
+    .option("--membership-id <id>", "Enroll an exact workspace membership into an explicit HASNA_PROFILE"))
+    .action(async (options: LoginOptions & { membershipId?: string }) => {
       if (options.membershipId !== undefined) {
         if (options.apiKey || options.device || options.code || options.poll || options.url) {
           writeCommandError(new Error("Workspace login uses email and --code-stdin; do not combine it with device, API key, --url or --code login."), "Invalid login options", options.json); return;
         }
         await loginWorkspace({ email: options.email, codeStdin: options.codeStdin, json: options.json, membershipId: options.membershipId }); return;
       }
-      if (options.codeStdin) { writeCommandError(new Error("--code-stdin requires --membership-id for this login flow."), "Invalid login options", options.json); return; }
       await runLogin(options);
     });
 

@@ -69,6 +69,26 @@ test("a real retained tarball is staged byte-for-byte and its original survives 
   expect(archiveApi.digestArchive(await readFile(archive))).toEqual(value.before);
 });
 
+for (const shebang of [true, false]) test(`packed executable ${shebang ? "retains its runnable entrypoint" : "without a shebang is refused after install"}`, async () => {
+  const bins = { "skills-maintenance": "maintenance.js" };
+  const { archive } = await packed({ bin: bins }, {
+    "maintenance.js": `${shebang ? "#!/usr/bin/env bun\n" : ""}throw Error('inspection must never execute maintenance');\n`,
+  });
+  const value = await accepted(archive);
+  await writeFile(join(value.workspace, "package.json"), JSON.stringify({ private: true,
+    dependencies: { "@hasna/skills": `file:${value.staged.installedFrom}` } }));
+  await command([process.execPath, "--no-env-file", "--no-global-config", "--no-bunfig", "install", "--ignore-scripts"], value.workspace);
+  const installed = join(value.workspace, "node_modules/@hasna/skills");
+  if (!shebang) await expect(archiveApi.assertInstalledBinaries(installed, bins)).rejects.toThrow("shebang");
+  else {
+    await archiveApi.assertInstalledBinaries(installed, bins);
+    await expect(archiveApi.assertInstalledBinaries(installed, { ...bins, "missing-bin": "missing.js" })).rejects.toThrow("manifest");
+    await chmod(join(installed, "maintenance.js"), 0o600);
+    await expect(archiveApi.assertInstalledBinaries(installed, bins)).rejects.toThrow("executable");
+  }
+  expect(archiveApi.CONSUMER_CHECKS).toContain("bin-entrypoints");
+});
+
 for (const brokenRuntime of [false, true]) test(`installed storage runtime ${brokenRuntime ? "rejects a broken runtime target despite valid declarations" : "loads and checks its pure API"}`, async () => {
   const exports = Object.fromEntries(archiveApi.CONSUMER_EXPORTS.map((key: string) => [key, "./index.js"])) as Record<string, unknown>;
   exports["./storage"] = { types: "./storage.d.ts", import: brokenRuntime ? "./missing-storage.js" : "./storage.js" };

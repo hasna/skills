@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 import { Command } from "commander";
 import { registerMaintenance } from "./maintenance-entry.js";
 
