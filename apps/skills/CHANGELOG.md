@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.42
+
+- Add explicit `codex-settings-v4` reviews and a preserved-preimage upgrade for native model-availability tooltip counters. Normal counter advances, unquoted model names and the first count in an empty TUI table preserve the witness; invalid literals and unrelated discovery controls remain guarded. Existing witness versions, configuration, root aliases and session pins retain their meanings and custody.
+
 ## 0.10.41
 
 - Remove the Codex plugin cache allowance prepared for 0.10.40. The native skill guard again refuses skill copies under `~/.codex/plugins/cache/openai-curated-remote/` like any other unmanaged native copy, because skill payloads reach agents only through the Skills CLI, with no native fallback. A regression test keeps that tree refused and confirms no acceptance receipt is written.
