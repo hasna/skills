@@ -194,8 +194,9 @@ describe("skills hook trust-native: end to end with the adapter", () => {
 describe("skills hook trust-native: command line", () => {
   test("without --apply the command writes nothing and its receipt says applied:false", async () => {
     const s = station(), before = s.text(), tree = snapshotTree(s.dataDir), homeTree = snapshotTree(join(s.home, ".codex"));
+    const { FORCE_COLOR: _forceColor, ...baseEnv } = process.env;
     const args = [process.execPath, "--no-env-file", "run", join(process.cwd(), "src/cli/index.tsx"), "hook", "trust-native", "--platform", "darwin-arm64", "--digest", D1, "--digest", D2, "--expected-policy-sha256", sha(before), "--json"];
-    const child = Bun.spawn(args, { cwd: s.home, env: { ...process.env, HOME: s.home, USERPROFILE: s.home, [DATA_DIR_ENV]: s.dataDir, NO_COLOR: "1" }, stdout: "pipe", stderr: "pipe" });
+    const child = Bun.spawn(args, { cwd: s.home, env: { ...baseEnv, HOME: s.home, USERPROFILE: s.home, [DATA_DIR_ENV]: s.dataDir, NO_COLOR: "1" }, stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     expect(stderr).toBe(""); expect(exitCode).toBe(0);
     const receipt = JSON.parse(stdout);
@@ -205,7 +206,7 @@ describe("skills hook trust-native: command line", () => {
     expect(snapshotTree(s.dataDir)).toBe(tree);
     expect(snapshotTree(join(s.home, ".codex"))).toBe(homeTree);
     // A wrong expected SHA refuses through the command as well, still writing nothing.
-    const refused = Bun.spawn([...args.slice(0, -3), sha("other"), "--json"], { cwd: s.home, env: { ...process.env, HOME: s.home, USERPROFILE: s.home, [DATA_DIR_ENV]: s.dataDir, NO_COLOR: "1" }, stdout: "pipe", stderr: "pipe" });
+    const refused = Bun.spawn([...args.slice(0, -2), sha("other"), "--json"], { cwd: s.home, env: { ...baseEnv, HOME: s.home, USERPROFILE: s.home, [DATA_DIR_ENV]: s.dataDir, NO_COLOR: "1" }, stdout: "pipe", stderr: "pipe" });
     const [refusedOut, refusedErr, refusedCode] = await Promise.all([new Response(refused.stdout).text(), new Response(refused.stderr).text(), refused.exited]);
     expect(refusedCode).toBe(1); expect(refusedOut).toBe("");
     expect(refusedErr).toContain("NATIVE_SKILL_POLICY_TRUST_REFUSED: the managed policy bytes differ from --expected-policy-sha256");
