@@ -157,7 +157,23 @@ stdin digest and exactly the emitted policy; it runs once per invocation and is
 never cached. The managed trust default is empty, so no envelope is accepted
 until an operator records reviewed executable digests; with none, the helper is
 never run, and the hook's remaining deadline bounds both the first-use executable
-hash and the helper. Inertness rests on that authenticated restricted policy;
+hash and the helper. Operators bind those digests through the package, never by
+editing the policy by hand:
+
+```bash
+skills hook trust-native --platform darwin-arm64 --digest <sha256> --expected-policy-sha256 <sha256> --json
+skills hook trust-native --platform darwin-arm64 --digest <sha256> --expected-policy-sha256 <sha256> --apply --json
+```
+
+Preview comes first and writes nothing. Each `--digest` must be the SHA-256 of an
+independently verified final native artifact, taken from its own review, never
+from a fetch; the command accepts digests only from its arguments. `--apply`
+requires the exact current policy SHA-256, re-checks it immediately before the
+atomic 0600 replace, preserves the pre-change bytes in the usual migration backup
+and reads the backup and the result back before it reports; it sets exactly the
+given set for that one platform and carries every other field through unchanged.
+A pre-existing group- or world-writable data directory (for example 0775) refuses
+both this command and the adapter until its mode is corrected. Inertness rests on that authenticated restricted policy;
 plugin classification proves nothing by itself and only narrows the scope to
 installed-plugin documents under `~/.codex/plugins/cache` that the verified policy
 cannot load. Those are checked before any hash or helper run, and the acceptance

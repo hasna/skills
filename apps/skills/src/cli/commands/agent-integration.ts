@@ -11,6 +11,7 @@ import { AGENT_ADAPTERS, INTEGRATION_AGENTS, normalizeAgentHookEvent } from "../
 import { planAgentIntegration, planClaudeManagedHookProjection, planAgentSettingsWitnessUpgrade, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, hookContextOutput, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, type IntegrationAgent } from "../../lib/agent-integration.js";
 import { enrollCodexNativeHooks, reconcileCodexNativeHooks } from "../../lib/agent-codex-trust.js";
 import { codexNativeHookEnvelopeFromInput, CODEX_NATIVE_POLICY_FD_ENV } from "../../lib/codex-native-skill-policy.js";
+import { planCodexNativeTrust, applyCodexNativeTrust, previewCodexNativeTrust } from "../../lib/codex-native-trust.js";
 import { HookDiagnosticError, hookChildError, hookFailureReason, isOptionalHookContextFailure, hookUnavailableContext } from "../../lib/hook-diagnostics.js";
 import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib/selection-cache.js";
 import { captureClaudeSettingsV2, captureClaudeSettingsV3 } from "../../lib/claude-settings-witness.js";
@@ -166,6 +167,22 @@ export function registerAgentIntegration(parent: Command): void {
         const result = options.apply ? applyAgentIntegration(plan) : { changed: [], backups: [] };
         const receipt = { applied: options.apply, settingsWitnessUpgrade: plan.settingsWitnessUpgrade, ...result };
         await writeCliOutput(options.json ? JSON.stringify(receipt) : `Settings witness ${options.apply ? "upgraded" : "planned"} for ${options.agent}. Native configuration was not changed.`);
+      } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
+    });
+
+  hook.command("trust-native")
+    .requiredOption("--platform <platform>", "Native consumer platform key: darwin-arm64, darwin-x64, linux-arm64 or linux-x64")
+    .requiredOption("--digest <sha256>", "SHA-256 of an independently verified final native Codex executable; repeat for several", (value: string, previous?: string[]) => [...(previous ?? []), value])
+    .requiredOption("--expected-policy-sha256 <sha256>", "Exact current managed policy bytes")
+    .option("--apply", "Write the trust with exact-bytes compare-and-swap, preservation and readback", false)
+    .option("--json", "Return the preview or apply receipt as JSON", false)
+    .description("Bind reviewed native Codex executable digests for one platform in the managed policy; digests come only from these arguments, never from a fetch")
+    .action(async (options) => {
+      try {
+        const plan = planCodexNativeTrust({ platform: options.platform, digests: options.digest, expectedPolicySha256: options.expectedPolicySha256 });
+        const receipt = options.apply ? applyCodexNativeTrust(plan, options.expectedPolicySha256) : previewCodexNativeTrust(plan);
+        if (options.json) await writeCliOutput(JSON.stringify(receipt));
+        else await writeCliOutput(`${options.apply ? "Bound" : "Planned"} ${receipt.digestsAfter.length} reviewed native executable digest(s) for ${receipt.platform} (before: ${receipt.digestsBefore.length}). Policy SHA-256 ${receipt.policySha256Before} -> ${receipt.policySha256After}.${options.apply ? receipt.backup ? ` Original preserved at ${receipt.backup.path} and read back.` : " No bytes changed." : " Use --apply with the same --expected-policy-sha256 to write."}`);
       } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
     });
 

@@ -745,3 +745,23 @@ describe("trust-bearing cache read and directory trust", () => {
     expect(existsSync(s.receipt)).toBe(false);
   });
 });
+
+describe("cache size bound", () => {
+  test("a cache file over 64 KiB is a miss that re-hashes, and one within the bound is a hit", () => {
+    const s = station(), calls: string[] = [], hasher = (path: string) => { calls.push(path); return sha(readFileSync(path)); };
+    const binary = join(s.home, "bounded-binary"); writeFileSync(binary, randomBytes(1024), { mode: 0o700 });
+    const entry = { path: binary, ...executableWitness(binary), sha256: sha(readFileSync(binary)) };
+    mkdirSync(join(s.dataDir, "agent-hooks"), { recursive: true, mode: 0o700 });
+    const file = executableCachePath(s.dataDir);
+    writeFileSync(file, JSON.stringify({ schema: CODEX_NATIVE_POLICY_EXECUTABLE_CACHE_SCHEMA, entries: [entry], pad: "x".repeat(64 * 1024) })); chmodSync(file, 0o600);
+    expect(lstatSync(file).size).toBeGreaterThan(64 * 1024);
+    expect(qualifiedExecutableSha256(binary, { dataDir: s.dataDir, hasher })).toMatchObject({ sha256: entry.sha256, cached: false });
+    expect(calls).toEqual([binary]);
+    const second = join(s.home, "bounded-binary-2"); writeFileSync(second, randomBytes(1024), { mode: 0o700 });
+    const entry2 = { path: second, ...executableWitness(second), sha256: sha(readFileSync(second)) };
+    writeFileSync(file, JSON.stringify({ schema: CODEX_NATIVE_POLICY_EXECUTABLE_CACHE_SCHEMA, entries: [entry2] })); chmodSync(file, 0o600);
+    expect(lstatSync(file).size).toBeLessThanOrEqual(64 * 1024);
+    expect(qualifiedExecutableSha256(second, { dataDir: s.dataDir, hasher })).toMatchObject({ sha256: entry2.sha256, cached: true });
+    expect(calls).toEqual([binary]);
+  });
+});
