@@ -275,8 +275,9 @@ describe("process binding", () => {
     expect(() => verifyCodexNativeAncestry(fakeInspector(s, { parents }), HOOK_PID - CODEX_NATIVE_POLICY_ANCESTRY_SAFETY_HOPS - 2)).toThrow(/exceeded the walk safety bound/);
   });
   test("a start time that changes between reads refuses as pid reuse", () => {
+    // The ancestry-walk read and the pre-hash read agree; the post-hash read differs.
     const s = station(); let reads = 0;
-    expect(verify(s, envelope(s), fakeInspector(s, { starts: () => `1700000000.${++reads}` }))).toMatch(/^NATIVE_SKILL_POLICY_PROCESS_UNBOUND: the consumer process changed while its executable was hashed/);
+    expect(verify(s, envelope(s), fakeInspector(s, { starts: () => reads++ < 2 ? "1700000000.1" : "1700000000.2" }))).toMatch(/^NATIVE_SKILL_POLICY_PROCESS_UNBOUND: the consumer process changed while its executable was hashed/);
     expect(existsSync(s.receipt)).toBe(false);
   });
   test("an executable digest that is not pinned refuses", () => {
@@ -627,6 +628,7 @@ describe("review fixes: lifecycle, trust root and hook budget", () => {
     expect(() => assertOperatorTrustRoot(s.dataDir)).not.toThrow();
     rmSync(join(s.dataDir, "agent-hooks"), { recursive: true });
     chmodSync(policyFile, 0o664);
+    expect(lstatSync(policyFile).mode & 0o022).toBe(0o020);
     expect(verify(s, envelope(s, { inheritedFd: channelFixture(s) }), fakeInspector(s), trust, fakeRunner(attestationFor(s)))).toMatch(/^NATIVE_SKILL_POLICY_TRUST_INVALID: the managed policy is group- or world-writable/);
     const message = guard(s, { ...envelope(s, { inheritedFd: channelFixture(s) }), inspector: fakeInspector(s), helperRunner: fakeRunner(attestationFor(s)) });
     expect(message).toMatch(DRIFT); expect(message).toMatch(/NATIVE_SKILL_POLICY_TRUST_INVALID/);
@@ -634,8 +636,17 @@ describe("review fixes: lifecycle, trust root and hook budget", () => {
     renameSync(policyFile, `${policyFile}.real`); symlinkSync(`${policyFile}.real`, policyFile);
     expect(verify(s, envelope(s, { inheritedFd: channelFixture(s) }), fakeInspector(s), trust, fakeRunner(attestationFor(s)))).toMatch(/^NATIVE_SKILL_POLICY_TRUST_INVALID: the managed policy is not a regular file/);
     rmSync(policyFile); renameSync(`${policyFile}.real`, policyFile);
-    mkdirSync(join(s.dataDir, "agent-hooks"), { recursive: true }); writeFileSync(executableCachePath(s.dataDir), "{}", { mode: 0o666 });
+    // writeFileSync's mode is subject to the umask, so set the mode explicitly
+    // and prove it before expecting the refusal.
+    mkdirSync(join(s.dataDir, "agent-hooks"), { recursive: true }); writeFileSync(executableCachePath(s.dataDir), "{}"); chmodSync(executableCachePath(s.dataDir), 0o666);
+    expect(lstatSync(executableCachePath(s.dataDir)).mode & 0o022).toBe(0o022);
     expect(() => assertOperatorTrustRoot(s.dataDir)).toThrow(/the executable identity cache is group- or world-writable/);
+    chmodSync(executableCachePath(s.dataDir), 0o620);
+    expect(() => assertOperatorTrustRoot(s.dataDir)).toThrow(/the executable identity cache is group- or world-writable/);
+    chmodSync(executableCachePath(s.dataDir), 0o602);
+    expect(() => assertOperatorTrustRoot(s.dataDir)).toThrow(/the executable identity cache is group- or world-writable/);
+    chmodSync(executableCachePath(s.dataDir), 0o644);
+    expect(() => assertOperatorTrustRoot(s.dataDir)).not.toThrow();
     rmSync(executableCachePath(s.dataDir)); rmSync(join(s.dataDir, "agent-hooks"), { recursive: true }); symlinkSync(s.home, join(s.dataDir, "agent-hooks"));
     expect(() => assertOperatorTrustRoot(s.dataDir)).toThrow(/the executable identity cache has a linked or unexpected path component/);
     // The writer never writes through a linked agent-hooks directory: a fresh
