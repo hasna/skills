@@ -176,7 +176,7 @@ export function registerAgentIntegration(parent: Command): void {
     .requiredOption("--expected-policy-sha256 <sha256>", "Exact current managed policy bytes")
     .option("--apply", "Write the trust with exact-bytes compare-and-swap, preservation and readback", false)
     .option("--json", "Return the preview or apply receipt as JSON", false)
-    .description("Bind reviewed native Codex executable digests for one platform in the managed policy; digests come only from these arguments, never from a fetch")
+    .description("Bind reviewed native Codex executable digests for one platform in the managed policy; other fields are preserved (values identical; the file is re-serialized with the package formatter); digests come only from these arguments, never from a fetch")
     .action(async (options) => {
       try {
         const plan = planCodexNativeTrust({ platform: options.platform, digests: options.digest, expectedPolicySha256: options.expectedPolicySha256 });

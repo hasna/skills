@@ -9,7 +9,8 @@
  * path (exact-bytes compare-and-swap, 0600 atomic replace, pre-change backup
  * with readback, compensation on failure) and a post-write readback that must
  * show exactly the intended digest set. Every other field of the policy is
- * carried through unchanged.
+ * preserved: values identical, the file re-serialized with the package
+ * formatter.
  */
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -64,7 +65,7 @@ export function planCodexNativeTrust(options: { dataDir?: string; platform: stri
   const policy = snapshot.value;
   if (!policy.bridge || typeof policy.bridge !== "object" || Array.isArray(policy.bridge)) refuse("the managed policy has no bridge binding; run skills hook install first");
   const current = parseCodexNativePolicyTrust(policy.bridge.codexNativePolicy);
-  // Exactly the given set for this platform; every other platform carried through.
+  // Exactly the given set for this platform; every other platform preserved.
   const trust = parseCodexNativePolicyTrust({ executableDigests: { ...current.executableDigests, [platform]: [...digests] } });
   const executableDigests = Object.fromEntries(Object.entries(trust.executableDigests).map(([key, value]) => [key, [...value]]));
   const next = { ...policy, bridge: { ...policy.bridge, codexNativePolicy: { executableDigests } } };

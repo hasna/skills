@@ -1,5 +1,6 @@
 import { test, expect, beforeEach, afterEach, describe } from "bun:test";
-import { chmodSync, constants, existsSync, lstatSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, constants, lstatSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { DATA_DIR_ENV } from "./config.js";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash, randomBytes } from "node:crypto";
@@ -29,6 +30,22 @@ function station() {
 }
 type Station = ReturnType<typeof station>;
 const attempt = (fn: () => unknown): string => { try { fn(); return "OK"; } catch (error) { return (error as Error).message; } };
+/** Every entry below a directory with its type, mode, size and content hash, so
+ * "wrote nothing" means "unchanged since before the step", not "absent": the
+ * fixture's own bridge installation already leaves migration backups behind. */
+function snapshotTree(root: string): string {
+  const rows: string[] = [];
+  const visit = (path: string) => {
+    for (const name of readdirSync(path).sort()) {
+      const child = join(path, name), stat = lstatSync(child);
+      if (stat.isDirectory()) { rows.push(`d ${child.slice(root.length)} ${(stat.mode & 0o7777).toString(8)}`); visit(child); }
+      else if (stat.isSymbolicLink()) rows.push(`l ${child.slice(root.length)}`);
+      else rows.push(`f ${child.slice(root.length)} ${(stat.mode & 0o7777).toString(8)} ${stat.size} ${sha(readFileSync(child))}`);
+    }
+  };
+  visit(root);
+  return rows.join("\n");
+}
 /** Every policy key except the trust, serialized, so unrelated fields can be compared byte for byte. */
 function otherKeys(text: string): string {
   const value = JSON.parse(text), { codexNativePolicy, ...bridge } = value.bridge;
@@ -37,11 +54,11 @@ function otherKeys(text: string): string {
 
 describe("skills hook trust-native: plan and preview", () => {
   test("preview writes nothing and reports the before and after sets", () => {
-    const s = station(), before = s.text(), plan = planCodexNativeTrust({ dataDir: s.dataDir, platform: "darwin-arm64", digests: [D1, D2], expectedPolicySha256: s.sha() });
+    const s = station(), before = s.text(), tree = snapshotTree(s.dataDir), plan = planCodexNativeTrust({ dataDir: s.dataDir, platform: "darwin-arm64", digests: [D1, D2], expectedPolicySha256: s.sha() });
     const receipt = previewCodexNativeTrust(plan);
     expect(receipt).toEqual({ schema: CODEX_NATIVE_TRUST_RECEIPT_SCHEMA, applied: false, platform: "darwin-arm64", digestsBefore: [], digestsAfter: [D1, D2], policySha256Before: sha(before), policySha256After: plan.policySha256After, changes: [s.policyPath] });
     expect(s.text()).toBe(before);
-    expect(existsSync(join(s.dataDir, "migration"))).toBe(false);
+    expect(snapshotTree(s.dataDir)).toBe(tree);
     expect(plan.plan.changes[0]!.before).toBe(before);
     expect(JSON.parse(plan.plan.changes[0]!.after).bridge.codexNativePolicy).toEqual({ executableDigests: { "darwin-arm64": [D1, D2] } });
   });
@@ -56,10 +73,10 @@ describe("skills hook trust-native: plan and preview", () => {
     ["malformed expected SHA", s => ({ dataDir: s.dataDir, platform: "darwin-arm64", digests: [D1], expectedPolicySha256: "abc" }), /--expected-policy-sha256 must be lowercase SHA-256 hex/],
   ];
   for (const [name, build, expected] of refusals) test(`${name} refuses with no write`, () => {
-    const s = station(), before = s.text();
+    const s = station(), before = s.text(), tree = snapshotTree(s.dataDir);
     expect(attempt(() => planCodexNativeTrust(build(s)))).toMatch(new RegExp(`^NATIVE_SKILL_POLICY_TRUST_REFUSED: ${expected.source}`));
     expect(s.text()).toBe(before);
-    expect(existsSync(join(s.dataDir, "migration"))).toBe(false);
+    expect(snapshotTree(s.dataDir)).toBe(tree);
   });
   test("a group-writable or symlinked policy refuses before any plan", () => {
     const s = station(), before = s.text();
@@ -111,29 +128,37 @@ describe("skills hook trust-native: apply", () => {
     expect(same.changes).toEqual([]); expect(same.backup).toBeUndefined(); expect(same.readback!.digests).toEqual([D3]);
   });
   test("a policy changed between plan and apply refuses with no write", () => {
-    const s = station(), expected = s.sha();
+    const s = station(), original = s.text(), expected = sha(original);
     const plan = planCodexNativeTrust({ dataDir: s.dataDir, platform: "darwin-arm64", digests: [D1], expectedPolicySha256: expected });
-    const changed = `${s.text().trimEnd().slice(0, -1)},\n  "note": "changed"\n}\n`; writeFileSync(s.policyPath, changed);
+    const changed = `${original.trimEnd().slice(0, -1)},\n  "note": "changed"\n}\n`; writeFileSync(s.policyPath, changed);
+    const tree = snapshotTree(s.dataDir);
     expect(attempt(() => applyCodexNativeTrust(plan, expected))).toMatch(/^NATIVE_SKILL_POLICY_TRUST_REFUSED: the managed policy changed since planning; nothing was written/);
     expect(s.text()).toBe(changed);
-    expect(existsSync(join(s.dataDir, "migration"))).toBe(false);
+    expect(snapshotTree(s.dataDir)).toBe(tree);
     // A plan made for other bytes refuses as well, and a wrong SHA at apply time refuses.
     expect(attempt(() => applyCodexNativeTrust(plan, sha(changed)))).toMatch(/^NATIVE_SKILL_POLICY_TRUST_REFUSED: the plan was made for different managed policy bytes/);
-    writeFileSync(s.policyPath, plan.plan.observedPolicy!.before);
+    expect(snapshotTree(s.dataDir)).toBe(tree);
+    writeFileSync(s.policyPath, original);
+    const restored = snapshotTree(s.dataDir);
     expect(attempt(() => applyCodexNativeTrust(plan, sha("other")))).toMatch(/^NATIVE_SKILL_POLICY_TRUST_REFUSED: the plan was made for different managed policy bytes/);
-    expect(s.text()).toBe(plan.plan.observedPolicy!.before);
+    expect(s.text()).toBe(original);
+    expect(snapshotTree(s.dataDir)).toBe(restored);
   });
   test("a policy that turned group-writable or linked before apply refuses with no write", () => {
-    const s = station(), expected = s.sha(), before = s.text();
+    const s = station(), expected = s.sha(), before = s.text(), tree = snapshotTree(s.dataDir);
     const plan = planCodexNativeTrust({ dataDir: s.dataDir, platform: "darwin-arm64", digests: [D1], expectedPolicySha256: expected });
     chmodSync(s.policyPath, 0o666);
+    const loose = snapshotTree(s.dataDir);
     expect(attempt(() => applyCodexNativeTrust(plan, expected))).toMatch(/^NATIVE_SKILL_POLICY_TRUST_INVALID: the managed policy is group- or world-writable/);
+    expect(snapshotTree(s.dataDir)).toBe(loose);
     chmodSync(s.policyPath, 0o600);
     renameSync(s.policyPath, `${s.policyPath}.real`); symlinkSync(`${s.policyPath}.real`, s.policyPath);
+    const linked = snapshotTree(s.dataDir);
     expect(attempt(() => applyCodexNativeTrust(plan, expected))).toMatch(/^NATIVE_SKILL_POLICY_TRUST_INVALID: the managed policy is not a regular file/);
+    expect(snapshotTree(s.dataDir)).toBe(linked);
     rmSync(s.policyPath); renameSync(`${s.policyPath}.real`, s.policyPath);
     expect(s.text()).toBe(before);
-    expect(existsSync(join(s.dataDir, "migration"))).toBe(false);
+    expect(snapshotTree(s.dataDir)).toBe(tree);
   });
 });
 
@@ -163,5 +188,27 @@ describe("skills hook trust-native: end to end with the adapter", () => {
     // The trust-native write left the station's bridge and migration backups intact.
     expect(readdirSync(join(s.dataDir, "migration")).length).toBeGreaterThanOrEqual(1);
     expect(() => assertManagedAgentBridge("codex", { home: s.home, dataDir: s.dataDir, projectDir: s.projectDir })).not.toThrow();
+  });
+});
+
+describe("skills hook trust-native: command line", () => {
+  test("without --apply the command writes nothing and its receipt says applied:false", async () => {
+    const s = station(), before = s.text(), tree = snapshotTree(s.dataDir), homeTree = snapshotTree(join(s.home, ".codex"));
+    const args = [process.execPath, "--no-env-file", "run", join(process.cwd(), "src/cli/index.tsx"), "hook", "trust-native", "--platform", "darwin-arm64", "--digest", D1, "--digest", D2, "--expected-policy-sha256", sha(before), "--json"];
+    const child = Bun.spawn(args, { cwd: s.home, env: { ...process.env, HOME: s.home, USERPROFILE: s.home, [DATA_DIR_ENV]: s.dataDir, NO_COLOR: "1" }, stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(stderr).toBe(""); expect(exitCode).toBe(0);
+    const receipt = JSON.parse(stdout);
+    expect(receipt).toMatchObject({ schema: CODEX_NATIVE_TRUST_RECEIPT_SCHEMA, applied: false, platform: "darwin-arm64", digestsBefore: [], digestsAfter: [D1, D2], policySha256Before: sha(before), changes: [s.policyPath] });
+    expect(receipt.backup).toBeUndefined(); expect(receipt.readback).toBeUndefined();
+    expect(s.text()).toBe(before);
+    expect(snapshotTree(s.dataDir)).toBe(tree);
+    expect(snapshotTree(join(s.home, ".codex"))).toBe(homeTree);
+    // A wrong expected SHA refuses through the command as well, still writing nothing.
+    const refused = Bun.spawn([...args.slice(0, -3), sha("other"), "--json"], { cwd: s.home, env: { ...process.env, HOME: s.home, USERPROFILE: s.home, [DATA_DIR_ENV]: s.dataDir, NO_COLOR: "1" }, stdout: "pipe", stderr: "pipe" });
+    const [refusedOut, refusedErr, refusedCode] = await Promise.all([new Response(refused.stdout).text(), new Response(refused.stderr).text(), refused.exited]);
+    expect(refusedCode).toBe(1); expect(refusedOut).toBe("");
+    expect(refusedErr).toContain("NATIVE_SKILL_POLICY_TRUST_REFUSED: the managed policy bytes differ from --expected-policy-sha256");
+    expect(snapshotTree(s.dataDir)).toBe(tree);
   });
 });

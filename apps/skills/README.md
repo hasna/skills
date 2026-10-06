@@ -171,7 +171,8 @@ from a fetch; the command accepts digests only from its arguments. `--apply`
 requires the exact current policy SHA-256, re-checks it immediately before the
 atomic 0600 replace, preserves the pre-change bytes in the usual migration backup
 and reads the backup and the result back before it reports; it sets exactly the
-given set for that one platform and carries every other field through unchanged.
+given set for that one platform and preserves every other field (values
+identical; the file is re-serialized with the package formatter).
 A pre-existing group- or world-writable data directory (for example 0775) refuses
 both this command and the adapter until its mode is corrected. Inertness rests on that authenticated restricted policy;
 plugin classification proves nothing by itself and only narrows the scope to
