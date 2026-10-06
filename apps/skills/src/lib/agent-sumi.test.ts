@@ -181,7 +181,8 @@ test("native prompt and request hooks preserve actual root, child and nested cus
   };
   const skills = [{ id: "skills-cli", name: "skills-cli" }, { id: "foreign", name: "skills-cli" }, { id: "other", name: "other" }];
   const removed: string[] = [];
-  const cleanup = await plugin.setup({ tool: { hook: async (name: string, callback: (event: any) => Promise<void>) => { hooks.set(name, callback); return { dispose: async () => hooks.delete(name) }; } }, session: { get: async ({ sessionID }: { sessionID: string }) => sessions[sessionID], hook: async (name: string, callback: (event: any) => Promise<void>) => { hooks.set(name, callback); return { dispose: async () => hooks.delete(name) }; } }, skill: { transform: async (callback: (editor: any) => void) => { callback({ list: () => skills, remove: (id: string) => removed.push(id) }); return { dispose: async () => {} }; } } });
+  let failNativeRead = false;
+  const cleanup = await plugin.setup({ tool: { hook: async (name: string, callback: (event: any) => Promise<void>) => { hooks.set(name, callback); return { dispose: async () => hooks.delete(name) }; } }, session: { get: async ({ sessionID }: { sessionID: string }) => { if (failNativeRead) throw new Error("UNTRUSTED_HOST_DETAIL /private/custody"); return sessions[sessionID]; }, hook: async (name: string, callback: (event: any) => Promise<void>) => { hooks.set(name, callback); return { dispose: async () => hooks.delete(name) }; } }, skill: { transform: async (callback: (editor: any) => void) => { callback({ list: () => skills, remove: (id: string) => removed.push(id) }); return { dispose: async () => {} }; } } });
   expect(removed).toEqual(["foreign", "other"]);
   for (const sessionID of ["root", "child", "nested"]) {
     const event = { sessionID, messageID: "message", prompt: { text: "review" }, delivery: "steer" };
@@ -196,7 +197,8 @@ test("native prompt and request hooks preserve actual root, child and nested cus
     ["SessionStart", "root", null], ["UserPromptSubmit", "root", null], ["SubagentStart", "child", "root"], ["UserPromptSubmit", "child", "root"], ["SubagentStart", "nested", "child"], ["UserPromptSubmit", "nested", "child"],
   ]);
   expect(calls.every(call => call.agent_id === undefined && call.restore === true)).toBe(true);
-  for (const text of ["refuse", "malformed"]) {
+  for (const text of ["refuse", "malformed", "native-error"]) {
+    failNativeRead = text === "native-error";
     let refusal: any;
     try { await hooks.get("prompt")!({ sessionID: "root", prompt: { text } }); } catch (error) { refusal = error; }
     expect(refusal?.name).toBe("SkillsHookRefusal");
@@ -205,6 +207,7 @@ test("native prompt and request hooks preserve actual root, child and nested cus
     expect(JSON.stringify(refusal)).not.toContain("UNTRUSTED");
     expect(refusal?.cause).toBeUndefined();
   }
+  failNativeRead = false;
   await expect(hooks.get("prompt")!({ sessionID: "root", prompt: { text: "malformed" } })).rejects.toThrow();
   const request = { sessionID: "root", system: [] as Array<{ type: string; text: string }>, messages: [{ role: "user", content: [{ type: "text", text: "optional" }] }] };
   await hooks.get("context")!(request);

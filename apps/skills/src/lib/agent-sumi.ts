@@ -85,7 +85,7 @@ export default {
     const sessions = new Set();
     async function input(sessionID, prompt, first) {
       // The Promise adapter unwraps single-data endpoint responses.
-      const session = await ctx.session.get({ sessionID });
+      ${legacy ? "const session = await ctx.session.get({ sessionID });" : "let session;\n      try { session = await ctx.session.get({ sessionID }); } catch { throw refusal(); }"}
       if (!session || session.id !== sessionID || typeof session.location?.directory !== "string" || (session.parentID !== undefined && typeof session.parentID !== "string") || session.parentID === sessionID) throw ${failure("Invalid Sumi session custody")};
       return { hook_event_name: first ? session.parentID ? "SubagentStart" : "SessionStart" : "UserPromptSubmit", cwd: session.location.directory, session_id: sessionID, parent_session_id: session.parentID ?? null, prompt, restore: true };
     }
