@@ -117,3 +117,15 @@ test("the first native startup count preserves absent and empty TUI representati
   expect(witness(empty+'unknown=1\n')).not.toBe(witness(empty+count));
   expect(hashCodexSettingsReplacementV3(empty)).not.toBe(hashCodexSettingsReplacementV3(empty+count));
 });
+
+test("invalid leading-zero TOML counts retain the witness while native integer spellings pass", () => {
+  for (const value of ["01", "+01", "0_1", "0_0", "+0_1"]) {
+    for (const text of [`[tui]\nmodel_availability_nux={gpt-5=${value}}\n`, `[tui.model_availability_nux]\no4-mini=${value}\n`]) {
+      try { expect(witness(text)).not.toBe(witness("")); }
+      catch (error) { expect(String(error)).toContain("Invalid Codex settings witness"); }
+    }
+  }
+  for (const value of ["0", "+0", "1", "+1", "1_000", "0xff", "0o17", "0b101"]) {
+    expect(witness(`[tui]\nmodel_availability_nux={gpt-5=${value}}\n`)).toBe(witness(""));
+  }
+});

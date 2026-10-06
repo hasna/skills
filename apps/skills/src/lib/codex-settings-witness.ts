@@ -151,7 +151,7 @@ function projectModelAvailabilityNux(config: Record<string, any>, text: string):
   stripEmptyTui(expected);
   const headers: Array<{ start: number; end: number }> = [];
   const spans: Array<{ start: number; end: number }> = [];
-  const integer = /^(?:\+?\d(?:_?\d)*|0x[0-9a-fA-F](?:_?[0-9a-fA-F])*|0o[0-7](?:_?[0-7])*|0b[01](?:_?[01])*)$/;
+  const integer = /^(?:\+?(?:0|[1-9](?:_?\d)*)|0x[0-9a-fA-F](?:_?[0-9a-fA-F])*|0o[0-7](?:_?[0-7])*|0b[01](?:_?[01])*)$/;
   const counterIntegers = (span: string): boolean => {
     let values = 0;
     for (let at = 0; at < span.length;) {
