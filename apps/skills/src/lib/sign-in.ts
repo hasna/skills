@@ -35,6 +35,18 @@ type Env = Record<string, string | undefined>;
 /** The CLI's device-authorization client label, recorded by the server. */
 export const SKILLS_CLI_DEVICE_CLIENT = "skills-cli";
 
+// Match the hosted grant issued directly by device and first-login flows.
+// Generic API-key creation keeps its separate, narrower server default.
+const HOSTED_CLI_API_KEY_SCOPES = [
+  "skills:read",
+  "skills:run",
+  "runs:read",
+  "connectors:read",
+  "connectors:write",
+  "billing:read",
+  "billing:write",
+] as const;
+
 /** RFC 8628 §3.5: every slow_down adds five seconds to the polling interval. */
 export const SLOW_DOWN_INCREMENT_MS = 5_000;
 
@@ -361,7 +373,7 @@ export async function persistSignIn(
     const created = await new RemoteSkillsAuthClient(origin).request("/api/auth/keys", {
       method: "POST",
       headers: { Authorization: `Bearer ${result.token}` },
-      body: JSON.stringify({ name: "cli" }),
+      body: JSON.stringify({ name: "cli", scopes: HOSTED_CLI_API_KEY_SCOPES }),
     });
     apiKey = isRecord(created) && typeof created.key === "string" && created.key.trim() ? created.key : undefined;
   }
