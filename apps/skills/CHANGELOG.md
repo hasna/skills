@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.45
+
+- Preserve the exact Codex TOML text when Skills native configuration is already semantically current. Comment-only and formatting-only differences no longer rewrite managed configuration or invalidate its accepted witness; required configuration changes still apply.
+
 ## 0.10.44
 
 - Add a caller-bound Codex native skill policy adapter to the native skill guard. In a Codex `SessionStart` or `UserPromptSubmit` hook that carries `native_skill_policy` (capability `host-path-allowlist-v1`), Codex plugin-cache copies count as inert only when everything below holds:
