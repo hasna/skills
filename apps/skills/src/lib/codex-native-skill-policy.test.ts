@@ -648,14 +648,14 @@ describe("review fixes: lifecycle, trust root and hook budget", () => {
     chmodSync(executableCachePath(s.dataDir), 0o644);
     expect(() => assertOperatorTrustRoot(s.dataDir)).not.toThrow();
     rmSync(executableCachePath(s.dataDir)); rmSync(join(s.dataDir, "agent-hooks"), { recursive: true }); symlinkSync(s.home, join(s.dataDir, "agent-hooks"));
-    expect(() => assertOperatorTrustRoot(s.dataDir)).toThrow(/the executable identity cache has a linked or unexpected path component/);
+    expect(() => assertOperatorTrustRoot(s.dataDir)).toThrow(/the agent-hooks directory is not a real directory/);
     // The writer never writes through a linked agent-hooks directory: a fresh
     // binary misses every cache and still leaves no file behind the link.
     const fresh = join(s.home, "fresh-binary"); writeFileSync(fresh, randomBytes(2048), { mode: 0o700 });
     expect(qualifiedExecutableSha256(fresh, { dataDir: s.dataDir }).cached).toBe(false);
     expect(existsSync(join(s.home, "codex-native-policy-executable-cache.json"))).toBe(false);
     rmSync(join(s.dataDir, "agent-hooks"));
-    expect(() => assertOperatorTrustRoot(join(s.home, "no-such-data"))).toThrow(/the managed policy has a missing path component/);
+    expect(() => assertOperatorTrustRoot(join(s.home, "no-such-data"))).toThrow(/the Skills data directory is missing/);
     expect(existsSync(s.receipt)).toBe(false);
   });
   test("C6: the hook deadline bounds the first-use hash and the helper, and a short budget refuses before spawning", () => {
@@ -677,5 +677,71 @@ describe("review fixes: lifecycle, trust root and hook budget", () => {
     const late = guard(s, { ...envelope(s, { inheritedFd: channelFixture(s) }), inspector: fakeInspector(s), helperRunner: runner, deadlineMs: Date.now() + 1_200 });
     expect(late).toMatch(DRIFT); expect(late).toMatch(/insufficient hook budget for the native policy helper/);
     expect(seen).toHaveLength(2);
+  });
+});
+
+describe("trust-bearing cache read and directory trust", () => {
+  const counting = () => { const calls: string[] = []; return { calls, hasher: (path: string) => { calls.push(path); return sha(readFileSync(path)); } }; };
+  function primedEntry(s: Station, name: string): { binary: string; entry: Record<string, string> } {
+    const binary = join(s.home, name); writeFileSync(binary, randomBytes(1024), { mode: 0o700 });
+    return { binary, entry: { path: binary, ...executableWitness(binary), sha256: sha(readFileSync(binary)) } };
+  }
+  function writeCache(s: Station, entries: Record<string, string>[]): string {
+    mkdirSync(join(s.dataDir, "agent-hooks"), { recursive: true, mode: 0o700 });
+    const file = executableCachePath(s.dataDir); writeFileSync(file, JSON.stringify({ schema: CODEX_NATIVE_POLICY_EXECUTABLE_CACHE_SCHEMA, entries })); chmodSync(file, 0o600);
+    return file;
+  }
+  test("a cache file that turned group-writable or foreign-owned after the trust check is a miss, never a hit", () => {
+    const s = station(), { calls, hasher } = counting();
+    const sound = primedEntry(s, "sound-binary"), file = writeCache(s, [sound.entry]);
+    expect(() => assertOperatorTrustRoot(s.dataDir)).not.toThrow();
+    expect(qualifiedExecutableSha256(sound.binary, { dataDir: s.dataDir, hasher })).toMatchObject({ sha256: sound.entry.sha256, cached: true });
+    expect(calls).toHaveLength(0);
+    // Group-writable between the trust check and the read: the entry is ignored and the binary re-hashed.
+    const loose = primedEntry(s, "loose-binary"); writeCache(s, [sound.entry, loose.entry]); chmodSync(file, 0o660);
+    expect(lstatSync(file).mode & 0o022).toBe(0o020);
+    expect(qualifiedExecutableSha256(loose.binary, { dataDir: s.dataDir, hasher })).toMatchObject({ sha256: loose.entry.sha256, cached: false });
+    expect(calls).toEqual([loose.binary]);
+    chmodSync(file, 0o606);
+    const world = primedEntry(s, "world-binary"); writeCache(s, [sound.entry, world.entry]); chmodSync(file, 0o606);
+    expect(qualifiedExecutableSha256(world.binary, { dataDir: s.dataDir, hasher })).toMatchObject({ cached: false });
+    expect(calls).toEqual([loose.binary, world.binary]);
+    // Foreign-owned (simulated through the owner seam): a miss as well.
+    const foreign = primedEntry(s, "foreign-binary"); writeCache(s, [sound.entry, foreign.entry]);
+    expect(qualifiedExecutableSha256(foreign.binary, { dataDir: s.dataDir, hasher, cacheOwnerUid: process.getuid!() + 1 })).toMatchObject({ cached: false });
+    expect(calls).toEqual([loose.binary, world.binary, foreign.binary]);
+    // The same entry is a hit again once the file is sound.
+    const again = primedEntry(s, "again-binary"); writeCache(s, [sound.entry, again.entry]);
+    expect(qualifiedExecutableSha256(again.binary, { dataDir: s.dataDir, hasher })).toMatchObject({ sha256: again.entry.sha256, cached: true });
+    expect(calls).toHaveLength(3);
+  });
+  test("a group-writable agent-hooks directory refuses the trust root and is never written into", () => {
+    const s = station(), hooks = join(s.dataDir, "agent-hooks");
+    mkdirSync(hooks, { recursive: true, mode: 0o700 }); chmodSync(hooks, 0o770);
+    expect(lstatSync(hooks).mode & 0o022).toBe(0o020);
+    expect(() => assertOperatorTrustRoot(s.dataDir)).toThrow(/^NATIVE_SKILL_POLICY_TRUST_INVALID: the agent-hooks directory is group- or world-writable/);
+    const fresh = primedEntry(s, "fresh-binary");
+    expect(qualifiedExecutableSha256(fresh.binary, { dataDir: s.dataDir }).cached).toBe(false);
+    expect(existsSync(executableCachePath(s.dataDir))).toBe(false);
+    chmodSync(hooks, 0o700);
+    expect(() => assertOperatorTrustRoot(s.dataDir)).not.toThrow();
+    expect(qualifiedExecutableSha256(primedEntry(s, "second-binary").binary, { dataDir: s.dataDir }).cached).toBe(false);
+    expect(existsSync(executableCachePath(s.dataDir))).toBe(true);
+    const trust = readManagedSkillPolicySnapshot(s.dataDir)!.value.bridge.codexNativePolicy;
+    chmodSync(hooks, 0o707);
+    expect(verify(s, envelope(s, { inheritedFd: channelFixture(s) }), fakeInspector(s), trust, fakeRunner(attestationFor(s)))).toMatch(/^NATIVE_SKILL_POLICY_TRUST_INVALID: the agent-hooks directory is group- or world-writable/);
+  });
+  test("a group-writable Skills data directory refuses the trust root", () => {
+    const s = station(), trust = readManagedSkillPolicySnapshot(s.dataDir)!.value.bridge.codexNativePolicy;
+    chmodSync(s.dataDir, 0o775);
+    expect(lstatSync(s.dataDir).mode & 0o022).toBe(0o020);
+    expect(() => assertOperatorTrustRoot(s.dataDir)).toThrow(/^NATIVE_SKILL_POLICY_TRUST_INVALID: the Skills data directory is group- or world-writable/);
+    const message = guard(s, { ...envelope(s, { inheritedFd: channelFixture(s) }), inspector: fakeInspector(s), helperRunner: fakeRunner(attestationFor(s)) });
+    expect(message).toMatch(DRIFT); expect(message).toMatch(/the Skills data directory is group- or world-writable/);
+    expect(verify(s, envelope(s, { inheritedFd: channelFixture(s) }), fakeInspector(s), trust, fakeRunner(attestationFor(s)))).toMatch(/^NATIVE_SKILL_POLICY_TRUST_INVALID: the Skills data directory is group- or world-writable/);
+    chmodSync(s.dataDir, 0o700);
+    expect(() => assertOperatorTrustRoot(s.dataDir)).not.toThrow();
+    expect(() => assertOperatorTrustRoot(join(s.home, "no-such-data"))).toThrow(/the Skills data directory is missing/);
+    expect(existsSync(s.receipt)).toBe(false);
   });
 });

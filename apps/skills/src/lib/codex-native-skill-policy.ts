@@ -282,11 +282,33 @@ const witnessKey = (path: string, witness: ExecutableWitness) => JSON.stringify(
 const executableDigestMemory = new Map<string, string>();
 export function executableCachePath(dataDir: string): string { return join(resolve(dataDir), "agent-hooks", "codex-native-policy-executable-cache.json"); }
 type CacheEntry = ExecutableWitness & { path: string; sha256: string };
-function readExecutableCache(dataDir: string): CacheEntry[] {
+const currentUid = () => process.getuid?.() ?? -1;
+/** Trust-bearing read: the cache is consulted only through a descriptor that
+ * fstat shows to be a regular file owned by uid 0 or the given uid, writable
+ * by neither group nor world, with the same dev/ino as the no-follow lstat
+ * before and after. Anything else is null, which the caller treats as a miss. */
+function readTrustedCacheBytes(path: string, ownerUid: number): Buffer | null {
+  const before = lstatSync(path, { throwIfNoEntry: false, bigint: true });
+  if (!before || before.isSymbolicLink() || !before.isFile() || before.size > 64n * 1024n) return null;
+  let descriptor: number | undefined;
   try {
-    const path = executableCachePath(dataDir);
-    if (lstatSync(path, { throwIfNoEntry: false })?.isFile() !== true) return [];
-    const value = JSON.parse(readBounded(path, 64 * 1024, "the executable cache").toString("utf8"));
+    descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | constants.O_NONBLOCK);
+    const opened = fstatSync(descriptor, { bigint: true });
+    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== before.size) return null;
+    if (opened.uid !== 0n && opened.uid !== BigInt(ownerUid)) return null;
+    if ((opened.mode & 0o022n) !== 0n) return null;
+    const bytes = Buffer.allocUnsafe(Number(opened.size) + 1); let length = 0;
+    while (length < bytes.length) { const count = readSync(descriptor, bytes, length, bytes.length - length, null); if (!count) break; length += count; }
+    const after = fstatSync(descriptor, { bigint: true });
+    if (BigInt(length) !== opened.size || after.size !== opened.size || after.dev !== opened.dev || after.ino !== opened.ino || after.uid !== opened.uid || after.mode !== opened.mode || after.mtimeNs !== opened.mtimeNs || after.ctimeNs !== opened.ctimeNs) return null;
+    return bytes.subarray(0, length);
+  } catch { return null; } finally { if (descriptor !== undefined) closeSync(descriptor); }
+}
+function readExecutableCache(dataDir: string, ownerUid = currentUid()): CacheEntry[] {
+  try {
+    const bytes = readTrustedCacheBytes(executableCachePath(dataDir), ownerUid);
+    if (bytes === null) return [];
+    const value = JSON.parse(bytes.toString("utf8"));
     if (!object(value) || value.schema !== CODEX_NATIVE_POLICY_EXECUTABLE_CACHE_SCHEMA || !Array.isArray(value.entries) || value.entries.length > 16) return [];
     const fields = ["path", "sha256", "dev", "ino", "size", "mtimeNs", "ctimeNs", "uid"];
     return value.entries.filter((entry: unknown): entry is CacheEntry => object(entry) && Object.keys(entry).length === fields.length && fields.every(field => typeof entry[field] === "string")
@@ -305,6 +327,10 @@ function writeExecutableCache(dataDir: string, entries: CacheEntry[]): void {
     const existing = lstatSync(directory, { throwIfNoEntry: false });
     if (!existing) mkdirSync(directory, { mode: 0o700 });
     else if (existing.isSymbolicLink() || !existing.isDirectory()) return;
+    // Re-check the directory that will hold the temp file: a real directory
+    // owned by this user and writable by neither group nor world.
+    const holder = lstatSync(directory, { throwIfNoEntry: false, bigint: true });
+    if (!holder || holder.isSymbolicLink() || !holder.isDirectory() || holder.uid !== BigInt(currentUid()) || (holder.mode & 0o022n) !== 0n) return;
     if (lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink()) return;
     descriptor = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
     writeFileSync(descriptor, `${JSON.stringify({ schema: CODEX_NATIVE_POLICY_EXECUTABLE_CACHE_SCHEMA, entries: entries.slice(-16) })}\n`); fsyncSync(descriptor); closeSync(descriptor); descriptor = undefined;
@@ -320,9 +346,9 @@ function writeExecutableCache(dataDir: string, entries: CacheEntry[]): void {
  * process and optionally in a 0600 file under the Skills data dir. A witness
  * that changes between before and after, or differs from the cached key, is
  * re-hashed. Policy, attestation, session and turn results are never cached. */
-export function qualifiedExecutableSha256(path: string, options: { dataDir?: string; hasher?: (path: string) => string; deadlineMs?: number } = {}): { sha256: string; witness: ExecutableWitness; cached: boolean } {
+export function qualifiedExecutableSha256(path: string, options: { dataDir?: string; hasher?: (path: string) => string; deadlineMs?: number; /** Test seam: the uid the cache file must be owned by (besides root). */ cacheOwnerUid?: number } = {}): { sha256: string; witness: ExecutableWitness; cached: boolean } {
   const before = executableWitness(path), key = witnessKey(path, before);
-  const fileEntries = options.dataDir ? readExecutableCache(options.dataDir) : [];
+  const fileEntries = options.dataDir ? readExecutableCache(options.dataDir, options.cacheOwnerUid) : [];
   const cached = executableDigestMemory.get(key) ?? fileEntries.find(entry => witnessKey(entry.path, entry) === key)?.sha256;
   if (cached !== undefined && witnessKey(path, executableWitness(path)) === key) {
     executableDigestMemory.set(key, cached);
@@ -380,9 +406,20 @@ export function assertOperatorTrustRoot(dataDir: string): void {
     const stat = lstatSync(path, { throwIfNoEntry: false, bigint: true });
     if (!stat) { if (required) refuse("NATIVE_SKILL_POLICY_TRUST_INVALID", `${what} is missing`); return; }
     if (stat.isSymbolicLink() || !stat.isFile()) refuse("NATIVE_SKILL_POLICY_TRUST_INVALID", `${what} is not a regular file`);
-    if (stat.uid !== 0n && stat.uid !== BigInt(process.getuid?.() ?? -1)) refuse("NATIVE_SKILL_POLICY_TRUST_INVALID", `${what} is owned by another user`);
+    if (stat.uid !== 0n && stat.uid !== BigInt(currentUid())) refuse("NATIVE_SKILL_POLICY_TRUST_INVALID", `${what} is owned by another user`);
     if ((stat.mode & 0o022n) !== 0n) refuse("NATIVE_SKILL_POLICY_TRUST_INVALID", `${what} is group- or world-writable`);
   };
+  // The directories that hold the trust files: a real directory owned by uid 0
+  // or this user, writable by neither group nor world. agent-hooks/ may be absent.
+  const checkDirectory = (path: string, what: string, required: boolean) => {
+    const stat = lstatSync(path, { throwIfNoEntry: false, bigint: true });
+    if (!stat) { if (required) refuse("NATIVE_SKILL_POLICY_TRUST_INVALID", `${what} is missing`); return; }
+    if (stat.isSymbolicLink() || !stat.isDirectory()) refuse("NATIVE_SKILL_POLICY_TRUST_INVALID", `${what} is not a real directory`);
+    if (stat.uid !== 0n && stat.uid !== BigInt(currentUid())) refuse("NATIVE_SKILL_POLICY_TRUST_INVALID", `${what} is owned by another user`);
+    if ((stat.mode & 0o022n) !== 0n) refuse("NATIVE_SKILL_POLICY_TRUST_INVALID", `${what} is group- or world-writable`);
+  };
+  checkDirectory(resolve(dataDir), "the Skills data directory", true);
+  checkDirectory(dirname(executableCachePath(dataDir)), "the agent-hooks directory", false);
   check(join(resolve(dataDir), "agent-policy.json"), "the managed policy", true);
   check(executableCachePath(dataDir), "the executable identity cache", false);
 }
