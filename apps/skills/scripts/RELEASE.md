@@ -7,6 +7,16 @@ The only publish path is the repository-root workflow
 `npm/skills/v<version>` and publishes with npm provenance over OIDC in the
 skills-only `npm-release-skills` environment. There is no npm token on that path.
 
+A dispatch without a `tag` runs the source and package gates, packs the built
+checkout with the workflow's pinned npm, and verifies that exact archive with
+the installed consumer fixture. It uploads `skills-candidate-<commit>-<attempt>`
+for seven days: the npm tarball plus source/toolchain/digest and consumer
+receipts. Download the artifact and verify the retained tarball digest before
+independent release review. Its tarball preserves the member modes; the upload
+container's file modes do not establish package modes. This inspection artifact
+does not authorize publishing. The annotated release tag must still bind the
+independently reviewed archive digest, and the tag workflow must reproduce it.
+
 A release is refused, before the registry is touched, unless the annotated tag
 message carries the linkage for the candidate. The four fields are required
 EXACTLY once each; the linkage namespace is closed, so an extra

@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { lstat, readFile, writeFile } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 export const CONSUMER_EXPORTS = [".", "./admin-contract", "./sdk", "./storage"] as const;
 export const CONSUMER_CHECKS = [
   "strict-types", "storage-runtime", "admin-list-runtime", "bundle-runtime", "content-hash-revision-runtime",
-  "quote-error-runtime", "cli-polling", "cli-remote-routing",
+  "quote-error-runtime", "cli-polling", "cli-remote-routing", "bin-entrypoints",
 ] as const;
 
 export type ArchiveDigest = { bytes: number; sha256: string; integrity: string };
@@ -69,6 +69,23 @@ export function assertInstalledIdentity(value: unknown, expectedVersion: string)
   if (!installed.exports || typeof installed.exports !== "object" || Array.isArray(installed.exports)
     || JSON.stringify(Object.keys(installed.exports).sort()) !== JSON.stringify(CONSUMER_EXPORTS)) {
     throw new Error("The installed archive must expose every checked public package export");
+  }
+}
+
+/** Inspect installed bytes without starting servers, workers or maintenance. */
+export async function assertInstalledBinaries(root: string, expected: Record<string, string>): Promise<void> {
+  const installed = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+  if (!installed.bin || typeof installed.bin !== "object" || Array.isArray(installed.bin)
+    || JSON.stringify(Object.entries(installed.bin).sort()) !== JSON.stringify(Object.entries(expected).sort())
+    || Object.keys(expected).length === 0) throw new Error("The installed binary manifest differs from the producer");
+  for (const path of new Set(Object.values(expected))) {
+    if (typeof path !== "string" || isAbsolute(path) || relative(root, resolve(root, path)).startsWith("..")) {
+      throw new Error("The installed binary path is invalid");
+    }
+    const file = join(root, path);
+    const stat = await lstat(file);
+    if (!stat.isFile() || (stat.mode & 0o111) === 0) throw new Error("An installed binary is not an executable regular file");
+    if (!(await readFile(file, "utf8")).startsWith("#!/usr/bin/env bun\n")) throw new Error("An installed binary lacks its Bun shebang");
   }
 }
 

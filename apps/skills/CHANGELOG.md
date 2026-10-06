@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.43
+
+- Accept ordinary email sign-in codes through bounded stdin and mask interactive code input. Preserve workspace enrollment and legacy sign-in options.
+- Make the declared maintenance executable directly runnable and check every installed package binary's executable mode and Bun shebang during release verification.
+- Request the established hosted CLI scope set when returning sign-in creates a profile key, including billing access. Preserve generic SDK key defaults, preissued keys and origin binding.
+- Retain an independently inspectable, installed-consumer-verified archive from tagless release validation. Publication still requires the separately reviewed annotated release tag.
+
 ## 0.10.42
 
 - Add explicit `codex-settings-v4` reviews and a preserved-preimage upgrade for native model-availability tooltip counters. Normal counter advances, unquoted model names and the first count in an empty TUI table preserve the witness; invalid literals and unrelated discovery controls remain guarded. Existing witness versions, configuration, root aliases and session pins retain their meanings and custody.

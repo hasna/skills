@@ -2,7 +2,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { assertInstalledIdentity, completeConsumerArchive, parseConsumerArguments, stageConsumerArchive } from "./consumer-archive.js";
+import { assertInstalledBinaries, assertInstalledIdentity, completeConsumerArchive, parseConsumerArguments, stageConsumerArchive } from "./consumer-archive.js";
 
 // Check the public distribution against its declared dependencies, independently
 // of workspace overrides and skipLibCheck. npm's lifecycle is disabled in the
@@ -639,6 +639,7 @@ console.log("Installed bundle SDK runtime: 17 assertions passed.");
   await writeFile(installConfig, `[install]\nregistry = "https://registry.npmjs.org"\nminimumReleaseAge = 604800\nminimumReleaseAgeExcludes = ["@hasna/skills", "@hasna/contracts", "@hasna/events", "@hasna/secrets"]\n`, { mode: 0o600 });
   await run([process.execPath, "--no-env-file", "install", "--ignore-scripts", `--config=${installConfig}`], workspace);
   assertInstalledIdentity(JSON.parse(await readFile(join(workspace, "node_modules/@hasna/skills/package.json"), "utf8")), metadata.version);
+  await assertInstalledBinaries(join(workspace, "node_modules/@hasna/skills"), metadata.bin);
   // Prove the pins held before tsc runs: a floating resolution must fail here
   // with a resolution message, never as a TS2694 inside node_modules/bun-types
   // that reads like a Skills distribution defect (BUG-0042).

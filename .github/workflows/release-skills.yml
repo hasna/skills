@@ -188,7 +188,9 @@ jobs:
 
       - name: Build
         working-directory: apps/skills
-        run: bun run build
+        run: |
+          umask 022
+          bun run build
 
       - name: Test
         working-directory: apps/skills
@@ -218,6 +220,27 @@ jobs:
       - name: Run package-owned prepack gates before sealing the archive
         working-directory: apps/skills
         run: bun run prepack
+
+      - name: Retain the verified candidate archive for independent review
+        if: github.event_name == 'workflow_dispatch' && env.RELEASE_TAG == ''
+        working-directory: apps/skills
+        run: |
+          set -euo pipefail
+          umask 022
+          bun run scripts/retain-candidate-archive.ts --destination "$RUNNER_TEMP/skills-candidate-archive"
+
+      - name: Upload only the verified candidate archive and receipts
+        if: github.event_name == 'workflow_dispatch' && env.RELEASE_TAG == ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: skills-candidate-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/skills-candidate-archive/hasna-skills-*.tgz
+            ${{ runner.temp }}/skills-candidate-archive/candidate-receipt.json
+            ${{ runner.temp }}/skills-candidate-archive/consumer-receipt.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
 
       # The gate. It reads the annotated tag's linkage fields, packs this exact
       # checkout and refuses unless the recorded Packed-SHA256 matches. The

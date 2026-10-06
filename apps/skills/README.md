@@ -56,6 +56,11 @@ changes), when the profile holds a credential `skills login` did not store
 - An API key you already have: `printenv MY_SKILLS_KEY | skills login --api-key`
   reads it from stdin, verifies it and stores it. Nothing is echoed.
 - An email code instead of the browser: `skills login --email you@example.com`.
+  Interactive code input is masked. For an agent or headless terminal, first
+  request a code with `skills login --email you@example.com --json`, then send
+  the fresh code through stdin to `skills login --email you@example.com
+  --code-stdin --json`. This finishes the same sign-in without requesting another
+  code. Keep the code out of shell commands, arguments and logs.
 - Running `skills` in a terminal opens the interactive browser. It also works
   signed out and has the same account commands: `/login`, `/logout`, `/whoami`.
 
