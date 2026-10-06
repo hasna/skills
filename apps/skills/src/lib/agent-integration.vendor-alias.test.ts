@@ -119,7 +119,7 @@ test("a directory selector does not disable the native skill document", () => {
   expect(() => planAgentIntegration({ home, dataDir: join(home, ".hasna", "skills"), agents: ["codex"], command: "skills", profileId: "fleet", projectDir: home })).toThrow("Refusing symlink path");
 });
 
-test("the native app-server inline skills array plans and applies without rewriting unrelated TOML", () => {
+test("the native app-server inline skills array plans and applies without rewriting equivalent TOML", () => {
   const { home, skill } = vendorAlias();
   const dataDir = join(home, ".hasna", "skills");
   const configPath = join(home, ".codex", "config.toml");
@@ -131,18 +131,11 @@ test("the native app-server inline skills array plans and applies without rewrit
   const plan = planAgentIntegration({ home, dataDir, agents: ["codex"], command: "skills", profileId: "fleet", projectDir: home });
   expect(plan.nativeSkills.filter(entry => entry.vendor).map(entry => entry.path)).toEqual([skill]);
   const configChange = plan.changes.find(change => change.path === configPath);
-  expect(configChange).toBeDefined();
-  expect(configChange?.after).toContain("# preserved header");
-  expect(configChange?.after).toContain('keep_this = "preserved value"');
-  expect(configChange?.after).toContain('mode = "preserved tool mode"');
-  expect(configChange?.after).not.toContain("config= [{");
-  const planned = Bun.TOML.parse(configChange!.after!) as Record<string, any>;
-  expect(planned.model).toBe("gpt-5.5");
-  expect(planned.skills.keep_this).toBe("preserved value");
-  expect(planned.tools.mode).toBe("preserved tool mode");
-  expect(planned.skills.config).toContainEqual({ path: skillPath, enabled: false });
+  expect(configChange).toBeUndefined();
+  expect(plan.observedSettings).toEqual({ path: configPath, before: original });
 
-  applyAgentIntegration(plan);
+  expect(applyAgentIntegration(plan).changed).not.toContain(configPath);
+  expect(readFileSync(configPath, "utf8")).toBe(original);
   const applied = Bun.TOML.parse(readFileSync(configPath, "utf8")) as Record<string, any>;
   expect(applied.model).toBe("gpt-5.5");
   expect(applied.skills.keep_this).toBe("preserved value");
@@ -168,17 +161,24 @@ test("hook planning refuses an explicit empty inline config without writing the 
   expect(readFileSync(configPath, "utf8")).toBe(original);
 });
 
-test("a native inline path array converts without losing later skills-table assignments", () => {
+test("inline path normalization preserves later assignments while integration retains equivalent bytes", () => {
   const { home, skill } = vendorAlias();
   const configPath = join(home, ".codex", "config.toml");
   const cacheAlias = join(home, ".codex", "plugins", "cache", "openai-bundled", "chrome", "latest");
-  writeFileSync(configPath, `[skills]\nconfig = [{ path = "${join(skill, "SKILL.md")}", enabled = false }]\nkeep_this = "must stay under skills"\n[skills.bundled]\nenabled = false\n`);
-  const plan = planAgentIntegration({ home, dataDir: join(home, ".hasna", "skills"), agents: ["codex"], command: "skills", profileId: "fleet", projectDir: home });
-  const configChange = plan.changes.find(change => change.path === configPath);
-  expect(configChange).toBeDefined();
-  const parsed = Bun.TOML.parse(configChange!.after!) as Record<string, any>;
+  const original = `[skills]\nconfig = [{ path = "${join(skill, "SKILL.md")}", enabled = false }]\nkeep_this = "must stay under skills"\n[skills.bundled]\nenabled = false\n`;
+  writeFileSync(configPath, original);
+  const normalized = normalizeCodexInlinePathConfig(original);
+  expect(normalized).not.toContain("config = [{");
+  const parsed = Bun.TOML.parse(normalized) as Record<string, any>;
+  expect(parsed).toEqual(Bun.TOML.parse(original));
   expect(parsed.skills.keep_this).toBe("must stay under skills");
   expect(parsed.skills.config).toContainEqual({ path: join(skill, "SKILL.md"), enabled: false });
+  const plan = planAgentIntegration({ home, dataDir: join(home, ".hasna", "skills"), agents: ["codex"], command: "skills", profileId: "fleet", projectDir: home });
+  const configChange = plan.changes.find(change => change.path === configPath);
+  expect(configChange).toBeUndefined();
+  expect(plan.observedSettings).toEqual({ path: configPath, before: original });
+  expect(applyAgentIntegration(plan).changed).not.toContain(configPath);
+  expect(readFileSync(configPath, "utf8")).toBe(original);
 });
 
 test("hook planning accepts only the exact reviewed sibling cache alias", () => {
