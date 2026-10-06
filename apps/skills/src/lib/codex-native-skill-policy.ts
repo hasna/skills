@@ -299,9 +299,13 @@ function writeExecutableCache(dataDir: string, entries: CacheEntry[]): void {
   const path = executableCachePath(dataDir), directory = dirname(path), temporary = `${path}.skills-${randomUUID()}`;
   let descriptor: number | undefined;
   try {
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    const stat = lstatSync(directory);
-    if (stat.isSymbolicLink() || !stat.isDirectory() || lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink()) return;
+    // Create agent-hooks/ here, mode 0700, and never write through a link.
+    const parent = lstatSync(dirname(directory), { throwIfNoEntry: false });
+    if (!parent || parent.isSymbolicLink() || !parent.isDirectory()) return;
+    const existing = lstatSync(directory, { throwIfNoEntry: false });
+    if (!existing) mkdirSync(directory, { mode: 0o700 });
+    else if (existing.isSymbolicLink() || !existing.isDirectory()) return;
+    if (lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink()) return;
     descriptor = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
     writeFileSync(descriptor, `${JSON.stringify({ schema: CODEX_NATIVE_POLICY_EXECUTABLE_CACHE_SCHEMA, entries: entries.slice(-16) })}\n`); fsyncSync(descriptor); closeSync(descriptor); descriptor = undefined;
     renameSync(temporary, path);
@@ -361,11 +365,16 @@ export function verifyCodexNativeExecutable(inspector: ProcessInspector, process
  * fails the adapter closed. A writer with the same uid is outside this
  * boundary. */
 export function assertOperatorTrustRoot(dataDir: string): void {
+  // The managed policy is required. The cache is optional: on first use neither
+  // the file nor its agent-hooks directory exists yet, so a missing file or a
+  // missing ancestor is fine, while any component that exists as a symlink,
+  // or an existing file that fails the checks, still refuses.
   const check = (path: string, what: string, required: boolean) => {
     if (!isAbsolute(path) || resolve(path) !== path) refuse("NATIVE_SKILL_POLICY_TRUST_INVALID", `${what} path is not an exact absolute path`);
     for (let cursor = dirname(path); ; cursor = dirname(cursor)) {
       const stat = lstatSync(cursor, { throwIfNoEntry: false });
-      if (!stat || stat.isSymbolicLink() || !stat.isDirectory()) refuse("NATIVE_SKILL_POLICY_TRUST_INVALID", `${what} has a missing, linked or unexpected path component: ${cursor}`);
+      if (!stat) { if (required) refuse("NATIVE_SKILL_POLICY_TRUST_INVALID", `${what} has a missing path component: ${cursor}`); }
+      else if (stat.isSymbolicLink() || !stat.isDirectory()) refuse("NATIVE_SKILL_POLICY_TRUST_INVALID", `${what} has a linked or unexpected path component: ${cursor}`);
       if (dirname(cursor) === cursor) break;
     }
     const stat = lstatSync(path, { throwIfNoEntry: false, bigint: true });

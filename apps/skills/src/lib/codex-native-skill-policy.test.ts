@@ -617,7 +617,15 @@ describe("review fixes: lifecycle, trust root and hook budget", () => {
   });
   test("S3: a group-writable, linked or foreign-owned managed policy or cache file fails the adapter closed", () => {
     const s = station(), policyFile = join(s.dataDir, "agent-policy.json"), trust = readManagedSkillPolicySnapshot(s.dataDir)!.value.bridge.codexNativePolicy;
+    // First use: no cache file and no agent-hooks directory yet; both are optional.
+    expect(existsSync(join(s.dataDir, "agent-hooks"))).toBe(false);
     expect(() => assertOperatorTrustRoot(s.dataDir)).not.toThrow();
+    // The cache writer creates agent-hooks/ itself, mode 0700, and the check still passes.
+    expect(qualifiedExecutableSha256(s.executable, { dataDir: s.dataDir }).cached).toBe(false);
+    expect(lstatSync(join(s.dataDir, "agent-hooks")).mode & 0o777).toBe(0o700);
+    expect(lstatSync(executableCachePath(s.dataDir)).mode & 0o777).toBe(0o600);
+    expect(() => assertOperatorTrustRoot(s.dataDir)).not.toThrow();
+    rmSync(join(s.dataDir, "agent-hooks"), { recursive: true });
     chmodSync(policyFile, 0o664);
     expect(verify(s, envelope(s, { inheritedFd: channelFixture(s) }), fakeInspector(s), trust, fakeRunner(attestationFor(s)))).toMatch(/^NATIVE_SKILL_POLICY_TRUST_INVALID: the managed policy is group- or world-writable/);
     const message = guard(s, { ...envelope(s, { inheritedFd: channelFixture(s) }), inspector: fakeInspector(s), helperRunner: fakeRunner(attestationFor(s)) });
@@ -629,8 +637,12 @@ describe("review fixes: lifecycle, trust root and hook budget", () => {
     mkdirSync(join(s.dataDir, "agent-hooks"), { recursive: true }); writeFileSync(executableCachePath(s.dataDir), "{}", { mode: 0o666 });
     expect(() => assertOperatorTrustRoot(s.dataDir)).toThrow(/the executable identity cache is group- or world-writable/);
     rmSync(executableCachePath(s.dataDir)); rmSync(join(s.dataDir, "agent-hooks"), { recursive: true }); symlinkSync(s.home, join(s.dataDir, "agent-hooks"));
-    expect(() => assertOperatorTrustRoot(s.dataDir)).toThrow(/the executable identity cache has a missing, linked or unexpected path component/);
-    expect(() => assertOperatorTrustRoot(join(s.home, "no-such-data"))).toThrow(/the managed policy is missing/);
+    expect(() => assertOperatorTrustRoot(s.dataDir)).toThrow(/the executable identity cache has a linked or unexpected path component/);
+    // The writer never writes through a linked agent-hooks directory.
+    expect(qualifiedExecutableSha256(join(s.home, "codex-fixture-binary"), { dataDir: s.dataDir }).cached).toBe(false);
+    expect(existsSync(join(s.home, "codex-native-policy-executable-cache.json"))).toBe(false);
+    rmSync(join(s.dataDir, "agent-hooks"));
+    expect(() => assertOperatorTrustRoot(join(s.home, "no-such-data"))).toThrow(/the managed policy has a missing path component/);
     expect(existsSync(s.receipt)).toBe(false);
   });
   test("C6: the hook deadline bounds the first-use hash and the helper, and a short budget refuses before spawning", () => {
