@@ -2444,3 +2444,18 @@ Existing publisher exemptions remain available through the repeatable
 A reviewed lock does not authorize native skill loading, profile changes,
 credential provisioning or session reconciliation. Without this optional input,
 the existing update flow continues to resolve its dependency lock normally.
+
+`codex-settings-v4` is an explicit successor to V3. It additionally ignores
+only Codex's `tui.model_availability_nux` startup-tooltip count map when every
+value is an integer in the native uint32 range. Ordinary native tables and
+single-line inline maps are supported; unsupported layouts and malformed
+values remain witnessed. Other TUI fields, numeric spelling and all discovery
+controls stay bound. Existing byte/V1/V2/V3 reviews retain their original meaning.
+
+Capture with `skills hook witness --kind codex-settings-v4 --path <config.toml>`.
+Upgrade an existing review with `skills hook rebind-settings --agent codex
+--codex-witness-version 4 --reviewed-preimage <preserved-config.toml>
+--expected-policy-sha256 <policy-hash> --expected-settings-sha256 <settings-hash>`.
+Review the plan before adding `--apply`; the original review preimage must match
+its original mode, and unrelated changes refuse. This preserves the native
+configuration, root aliases, other witnesses and active session pins.
