@@ -1,3 +1,4 @@
+import { captureSumiSettings, hashSumiSettingsReplacement, SUMI_DISCOVERY_PROJECTION_FIELDS } from "./sumi-settings-witness.js";
 import { AGENT_POLICY_LIMITS } from "./agent-policy-limits.js";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
@@ -19,7 +20,7 @@ import { sumiConfigDirectory, sumiConfigPath } from "./agent-sumi.js";
 import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
 export { captureDiscoveryDirectories, type DiscoveryDirectory } from "./agent-discovery-directories.js";
 
-export interface DiscoverySource { path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes" | "claude-plugin-registry" | "claude-marketplace-registry" | "claude-settings-v1" | "claude-settings-v2" | "claude-settings-v3" | "claude-marketplace-registry-v2" | "codex-settings-v1" | "codex-settings-v2" | "codex-settings-v3" | "codex-settings-v4"; managedPlugins?: ManagedPluginRegistrationWitness[]; format?: "json" | "toml" | "yaml"; fields?: string[] }
+export interface DiscoverySource { path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes" | "claude-plugin-registry" | "claude-marketplace-registry" | "claude-settings-v1" | "claude-settings-v2" | "claude-settings-v3" | "claude-marketplace-registry-v2" | "codex-settings-v1" | "codex-settings-v2" | "codex-settings-v3" | "codex-settings-v4" | "sumi-settings-v1"; managedPlugins?: ManagedPluginRegistrationWitness[]; format?: "json" | "toml" | "yaml"; fields?: string[] }
 export interface AgentDiscoveryBinding { agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; method: "automatic" | "reviewed"; builtinNames?: string[]; codexDisabledPluginSkills?: CodexPluginSkillControl[]; codexRetiredMaterializations?: { roots:string[]; parents?:string[]; directories:Array<DiscoveryDirectory & {entries?:string[]}> }; codexInstallationInputs?: { version:"codex-cli 0.160.0"; catalogSha256:string; plugins:CodexPluginSourceInput[]; directories?:DiscoveryDirectory[] } }
 export interface ReviewedDiscoveryInputs { version: 1; agents: Array<{ agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; pluginHooks: "reviewed-no-skill-injection" }> }
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -53,18 +54,26 @@ export function projectNativeDiscoveryFields(text: string, format: "json" | "tom
   if (!object || typeof object !== "object" || Array.isArray(object)) throw new Error("Expected native discovery configuration object");
   return digest(JSON.stringify(Object.fromEntries(fields.map(field => [field, (object as Record<string, unknown>)[field] ?? null]))));
 }
-/** A typed Codex settings witness binds the whole configuration file apart from
+/** A typed settings witness binds the whole configuration file apart from
  * the documented native-owned classes, so it replaces the narrower automatic
  * TOML field projection of the same path. The narrower projection is
  * order-sensitive and therefore not a durable witness for a file Codex itself
  * re-serializes. `resolveAgentDiscovery` must not require it alongside one. */
-function isSupersededCodexProjection(agent: IntegrationAgent, configPath: string, source: DiscoverySource): boolean {
+function isSupersededSettingsProjection(agent: IntegrationAgent, configPath: string, source: DiscoverySource): boolean {
+  if (agent === "sumi") return source.path === configPath && source.format === "json" && isDeepStrictEqual(source.fields, [...SUMI_DISCOVERY_PROJECTION_FIELDS]);
   return agent === "codex" && source.path === configPath && source.format === "toml" && isDeepStrictEqual(source.fields, [...CODEX_DISCOVERY_PROJECTION_FIELDS]);
 }
-function supersedesCodexProjection(sources: DiscoverySource[], configPath: string): boolean {
-  return sources.some(source => source.path === configPath && (source.hashMode === "codex-settings-v2" || (source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4")));
+function supersedesSettingsProjection(agent: IntegrationAgent, sources: DiscoverySource[], configPath: string): boolean {
+  if (agent === "sumi") return sources.some(source => source.path === configPath && source.hashMode === "sumi-settings-v1");
+  return agent === "codex" && sources.some(source => source.path === configPath && (source.hashMode === "codex-settings-v2" || (source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4")));
 }
 function projected(source: DiscoverySource, changes?: Map<string, string>, budget = discoveryByteBudget()): string | null {
+  if (source.hashMode === "sumi-settings-v1") {
+    if (source.format !== undefined || source.fields !== undefined || source.managedPlugins !== undefined || typeof source.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(source.sha256)) throw new Error("Sumi settings witnesses require exact typed metadata");
+    const current = captureSumiSettings(source.path, budget).sha256;
+    if (current !== source.sha256) throw new Error(`Native discovery input changed; run skills hook install with a fresh discovery review: ${source.path}`);
+    return changes?.has(source.path) ? hashSumiSettingsReplacement(changes.get(source.path)!, budget) : current;
+  }
   if ((source.hashMode === "codex-settings-v1" || source.hashMode === "codex-settings-v2" || (source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4"))) {
     if (source.format !== undefined || source.fields !== undefined || source.managedPlugins !== undefined || typeof source.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(source.sha256)) throw new Error("Codex settings witnesses require exact typed metadata");
     const current = (source.hashMode === "codex-settings-v4" ? captureCodexSettingsV4 : source.hashMode === "codex-settings-v3" ? captureCodexSettingsV3 : source.hashMode === "codex-settings-v2" ? captureCodexSettingsV2 : captureCodexSettings)(source.path, budget).sha256;
@@ -253,6 +262,7 @@ function codexInstallationRoots(binding:AgentDiscoveryBinding):string[] {
   return reviewedCodexPluginSourceRoots(cache,proof.plugins,path=>{const text=read(path);if(text===null) throw new Error("Missing native installation input");return text;});
 }
 function assertMarketplaceBinding(binding: AgentDiscoveryBinding, source: DiscoverySource): void {
+  if (source.hashMode === "sumi-settings-v1" && (binding.agent !== "sumi" || binding.method !== "reviewed" || basename(source.path) !== "sumi.json")) throw new Error("Sumi settings witnesses require explicit reviewed Sumi configuration");
   if ((source.hashMode === "codex-settings-v1" || source.hashMode === "codex-settings-v2" || (source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4")) && (binding.agent !== "codex" || binding.method !== "reviewed" || basename(source.path) !== "config.toml")) throw new Error("Codex settings witnesses require explicit reviewed Codex configuration");
   if ((source.hashMode === "claude-settings-v1" || source.hashMode === "claude-settings-v2" || source.hashMode === "claude-settings-v3") && (binding.agent !== "claude" || binding.method !== "reviewed" || basename(source.path) !== "settings.json")) throw new Error("Claude settings witnesses require explicit reviewed Claude configuration");
   if ((source.hashMode === "claude-marketplace-registry" || source.hashMode === "claude-marketplace-registry-v2") && (binding.agent !== "claude" || binding.method !== "reviewed")) throw new Error("Claude marketplace witnesses require explicit reviewed Claude discovery");
@@ -356,7 +366,7 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
   };
   if (agent === "hermes") assertHermesEnvironment(home);
   const configPath = agentDiscoveryConfigPath(home, agent);
-  const configText = witness(configPath, agent === "hermes" ? "yaml" : agent === "codex" ? "toml" : "json", agent === "hermes" ? ["skills", "plugins", "hooks"] : agent === "claude" ? ["enabledPlugins", "extraKnownMarketplaces"] : agent === "codex" ? [...CODEX_DISCOVERY_PROJECTION_FIELDS] : agent === "gemini" ? ["skills", "extensions", "security"] : agent === "opencode" ? ["plugin", "skills"] : agent === "sumi" ? ["skills", "plugin", "plugins", "permissions"] : ["version"]);
+  const configText = witness(configPath, agent === "hermes" ? "yaml" : agent === "codex" ? "toml" : "json", agent === "hermes" ? ["skills", "plugins", "hooks"] : agent === "claude" ? ["enabledPlugins", "extraKnownMarketplaces"] : agent === "codex" ? [...CODEX_DISCOVERY_PROJECTION_FIELDS] : agent === "gemini" ? ["skills", "extensions", "security"] : agent === "opencode" ? ["plugin", "skills"] : agent === "sumi" ? [...SUMI_DISCOVERY_PROJECTION_FIELDS] : ["version"]);
   const config: any = configText === null ? {} : agent === "hermes" ? parseHermesConfig(configText) : parseConfig(configText, configPath, agent === "codex");
   const unresolved = (detail: string): never => { throw new Error(`Native discovery is unresolved (${agent}: ${detail}); provide a reviewed --discovery-inputs file`); };
   if (agent === "sumi") {
@@ -425,12 +435,12 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
     if (retained.agent !== agent || retained.method !== "reviewed") unresolved("invalid retained review");
     verifyAgentDiscovery(retained);
     if (!retained.sources.some(source => source.path === canonical(configPath) && source.format === undefined && source.fields === undefined)) unresolved("retained review is missing the full agent configuration source");
-    if (retained.sources.some(source => (source.hashMode === "claude-settings-v1" || source.hashMode === "claude-settings-v2" || (source.hashMode === "claude-settings-v3" || (source.hashMode === "codex-settings-v1" || source.hashMode === "codex-settings-v2" || (source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4")))) && source.path !== canonical(configPath))) unresolved("retained settings witness names another configuration source");
-    // A retained typed Codex witness already binds this file more strongly than
+    if (retained.sources.some(source => (source.hashMode === "sumi-settings-v1" || source.hashMode === "claude-settings-v1" || source.hashMode === "claude-settings-v2" || (source.hashMode === "claude-settings-v3" || (source.hashMode === "codex-settings-v1" || source.hashMode === "codex-settings-v2" || (source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4")))) && source.path !== canonical(configPath))) unresolved("retained settings witness names another configuration source");
+    // A retained typed witness already binds this file more strongly than
     // the order-sensitive TOML projection, so it replaces that projection
     // instead of requiring it again.
-    const covered = supersedesCodexProjection(retained.sources, canonical(configPath))
-      ? sources.filter(source => !isSupersededCodexProjection(agent, canonical(configPath), source))
+    const covered = supersedesSettingsProjection(agent, retained.sources, canonical(configPath))
+      ? sources.filter(source => !isSupersededSettingsProjection(agent, canonical(configPath), source))
       : sources;
     if (covered.some(source => !retained.sources.some(saved => isDeepStrictEqual(saved, source)))
       || [...roots].some(root => !retained.roots.includes(root))
@@ -444,12 +454,12 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
     const supplied = { agent, roots: review.roots, sources: review.sources, ...(review.directories !== undefined ? { directories: review.directories } : {}), method: "reviewed" as const };
     if (review.sources.some(source => source.format !== undefined || source.fields !== undefined)) throw new Error("Explicit discovery reviews require full source-file hashes");
     verifyAgentDiscovery(supplied);
-    if (review.sources.some(source => (source.hashMode === "claude-settings-v1" || source.hashMode === "claude-settings-v2" || (source.hashMode === "claude-settings-v3" || (source.hashMode === "codex-settings-v1" || source.hashMode === "codex-settings-v2" || (source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4")))) && source.path !== canonical(configPath))) throw new Error("Semantic settings witnesses must name the configured Claude configuration source");
+    if (review.sources.some(source => (source.hashMode === "sumi-settings-v1" || source.hashMode === "claude-settings-v1" || source.hashMode === "claude-settings-v2" || (source.hashMode === "claude-settings-v3" || (source.hashMode === "codex-settings-v1" || source.hashMode === "codex-settings-v2" || (source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4")))) && source.path !== canonical(configPath))) throw new Error("Semantic settings witnesses must name the configured agent configuration source");
     if (!review.sources.some(source => source.path === canonical(configPath))) throw new Error("Discovery review must include the agent configuration source");
-    // One witness per file: a reviewed typed Codex witness replaces the
+    // One witness per file: a reviewed typed witness replaces the
     // automatic projection of the same path rather than being shadowed by it.
-    const reviewedSources = supersedesCodexProjection(review.sources, canonical(configPath))
-      ? sources.filter(source => !isSupersededCodexProjection(agent, canonical(configPath), source))
+    const reviewedSources = supersedesSettingsProjection(agent, review.sources, canonical(configPath))
+      ? sources.filter(source => !isSupersededSettingsProjection(agent, canonical(configPath), source))
       : sources;
     return { ...supplied, roots: [...new Set([...roots, ...supplied.roots])].sort(), sources: [...reviewedSources, ...review.sources], ...(agent === "gemini" ? { builtinNames } : {}) };
   }
