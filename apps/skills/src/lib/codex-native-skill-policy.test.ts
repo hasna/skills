@@ -638,8 +638,10 @@ describe("review fixes: lifecycle, trust root and hook budget", () => {
     expect(() => assertOperatorTrustRoot(s.dataDir)).toThrow(/the executable identity cache is group- or world-writable/);
     rmSync(executableCachePath(s.dataDir)); rmSync(join(s.dataDir, "agent-hooks"), { recursive: true }); symlinkSync(s.home, join(s.dataDir, "agent-hooks"));
     expect(() => assertOperatorTrustRoot(s.dataDir)).toThrow(/the executable identity cache has a linked or unexpected path component/);
-    // The writer never writes through a linked agent-hooks directory.
-    expect(qualifiedExecutableSha256(join(s.home, "codex-fixture-binary"), { dataDir: s.dataDir }).cached).toBe(false);
+    // The writer never writes through a linked agent-hooks directory: a fresh
+    // binary misses every cache and still leaves no file behind the link.
+    const fresh = join(s.home, "fresh-binary"); writeFileSync(fresh, randomBytes(2048), { mode: 0o700 });
+    expect(qualifiedExecutableSha256(fresh, { dataDir: s.dataDir }).cached).toBe(false);
     expect(existsSync(join(s.home, "codex-native-policy-executable-cache.json"))).toBe(false);
     rmSync(join(s.dataDir, "agent-hooks"));
     expect(() => assertOperatorTrustRoot(join(s.home, "no-such-data"))).toThrow(/the managed policy has a missing path component/);
