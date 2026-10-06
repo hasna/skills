@@ -1,6 +1,6 @@
 import { codexCorpusRootForPath, withCodexCorpusWrite, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
 import { reviewCodexPluginControls, reviewedCodexPluginSourceRoots, isReviewedCodexPluginInactive, isReviewedCodexPluginSkillDisabled, reviewedCodexPluginCapabilitiesUnchanged, disableReviewedCodexPluginNames, absentDisabledCodexPluginParent, classifyCodexPluginCacheDocument, type ReviewedCodexSkillDenial, type CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
-import { verifyCodexNativeSkillPolicy, recordCodexNativePolicyAcceptance, type CodexNativeHookEnvelope, type ProcessInspector, type NativePolicyHelperRunner } from "./codex-native-skill-policy.js";
+import { verifyCodexNativeSkillPolicy, parseCodexNativeHookEnvelope, recordCodexNativePolicyAcceptance, type CodexNativeHookEnvelope, type ProcessInspector, type NativePolicyHelperRunner } from "./codex-native-skill-policy.js";
 import { projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
 import { upgradeCodexSettingsWitness, upgradeCodexSettingsWitnessV3, upgradeCodexSettingsWitnessV4, readCodexSettingsPreimage, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
 import { upgradeClaudeSettingsWitness } from "./claude-settings-witness.js";
@@ -1249,7 +1249,7 @@ function archiveNativeSkillsUnlocked(inventory: NativeSkillEntry[], options: Cod
 /** Native hook input for the Codex policy adapter. Only the Codex hook paths that
  * receive native SessionStart/UserPromptSubmit input supply it; install-time and
  * other guard calls never do. `inspector` is a test seam for process lineage. */
-export interface CodexNativePolicyGuardInput extends CodexNativeHookEnvelope { inspector?: ProcessInspector; helperRunner?: NativePolicyHelperRunner }
+export interface CodexNativePolicyGuardInput extends CodexNativeHookEnvelope { inspector?: ProcessInspector; helperRunner?: NativePolicyHelperRunner; /** Absolute epoch ms by which the hook must answer; bounds the hash and helper. */ deadlineMs?: number }
 interface ManagedBridgeOptions { home?: string; dataDir?: string; projectDir?: string; projectDirs?: string[]; profileId?: string; codexDiscoveryRecovery?: CodexHookDiscoveryRecovery; codexNativePolicy?: CodexNativePolicyGuardInput }
 
 /** Package-classified installed-plugin content below the Codex plugin cache that
@@ -1376,18 +1376,23 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
   // policy input and the guard would otherwise refuse. A verified restricted
   // policy from the actual calling Codex can make package-classified plugin-cache
   // copies inert; everything else, and any adapter failure, keeps today's refusal.
-  // Acceptance is gated on the authenticated channel binding of native patch
-  // 0026 and on reviewed executable digests in the managed policy; the trust
-  // default is empty, so nothing passes until an operator configures them.
+  // Acceptance is gated on the authenticated channel binding of the native
+  // contract and on reviewed executable digests in the managed policy; the
+  // trust default is empty, so nothing passes until an operator configures them.
   let adapterRefusal: string | undefined, inert: NativeSkillEntry[] = [];
   if (agent === "codex" && unexpected.length && options.codexNativePolicy) {
-    const { inspector, helperRunner, ...envelope } = options.codexNativePolicy;
-    const cache = canonicalAgentPath(join(home, ".codex", "plugins", "cache"), aliases), read = (path: string) => new TextDecoder("utf-8", { fatal: true }).decode(readNativeBytes(path, 1024 * 1024));
+    const { inspector, helperRunner, deadlineMs, ...envelope } = options.codexNativePolicy;
+    const cache = canonicalAgentPath(join(home, ".codex", "plugins", "cache"), aliases), read = (path: string) => new TextDecoder("utf-8", { fatal: true }).decode(readNativeBytes(path, 1024 * 1024)), bridgeDocument = join(expected, "SKILL.md");
     try {
-      const verification = verifyCodexNativeSkillPolicy({ envelope, bridgeDocument: join(expected, "SKILL.md"), expectedBridgeContent: CLI_BRIDGE_FILES["SKILL.md"]!, expectedBridgeSha256: CLI_BRIDGE_DIGEST, trust: binding.codexNativePolicy, dataDir, ...(inspector ? { inspector } : {}), ...(helperRunner ? { helperRunner } : {}) });
-      inert = unexpected.filter(entry => isInertCodexPluginCacheCopy(entry, cache, verification.policy.allowedHostPaths, read));
-      if (inert.length !== unexpected.length) { inert = []; adapterRefusal = "native copies outside the classified Codex plugin cache remain"; }
-      else recordCodexNativePolicyAcceptance(dataDir, verification, inert.map(entry => ({ path: entry.path, treeSha256: entry.hash })));
+      // Scope first, with no hashing and no helper: every unexpected entry must
+      // be a classified plugin-cache copy that the claimed policy cannot load,
+      // or the guard refuses without spawning anything. Classification only
+      // narrows scope; inertness rests on the authenticated restricted policy.
+      const claimed = parseCodexNativeHookEnvelope(envelope, bridgeDocument).policy;
+      inert = unexpected.filter(entry => isInertCodexPluginCacheCopy(entry, cache, claimed.allowedHostPaths, read));
+      if (inert.length !== unexpected.length) throw new Error("native copies outside the classified Codex plugin cache remain");
+      const verification = verifyCodexNativeSkillPolicy({ envelope, bridgeDocument, expectedBridgeContent: CLI_BRIDGE_FILES["SKILL.md"]!, expectedBridgeSha256: CLI_BRIDGE_DIGEST, trust: binding.codexNativePolicy, dataDir, ...(inspector ? { inspector } : {}), ...(helperRunner ? { helperRunner } : {}), ...(deadlineMs !== undefined ? { deadlineMs } : {}) });
+      recordCodexNativePolicyAcceptance(dataDir, verification, inert.map(entry => ({ path: entry.path, treeSha256: entry.hash })));
     } catch (error) { inert = []; adapterRefusal = (error as Error).message; }
   }
   if (unexpected.length > inert.length) {

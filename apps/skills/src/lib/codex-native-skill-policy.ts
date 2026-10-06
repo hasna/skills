@@ -1,7 +1,7 @@
 /**
  * Codex native skill policy adapter.
  *
- * A patched Codex (internal-apps #1475 @ 5d1968c9, patch 0025) can restrict its
+ * A Codex build implementing the native contract host-path-allowlist-v1 can restrict its
  * native skill injection to an exact host-path allowlist and reports that
  * effective policy to its SessionStart and UserPromptSubmit hooks as
  * `native_skill_policy`, together with its own process id. This module parses
@@ -13,9 +13,8 @@
  * hook input is written by whichever process invokes the hook, so a descendant
  * of a trusted Codex can invoke this hook with a forged envelope naming its
  * unrestricted ancestor and pass all of them. Acceptance is therefore gated on
- * the authenticated channel binding of native patch 0026 (internal-apps
- * c4a83048, 0026-native-hook-policy-peer.patch, sha256 5a40773f…): the native
- * hook runner creates a per-invocation Unix socketpair, forwards the receiver
+ * the authenticated channel binding of the native contract
+ * native-hook-policy-peer-v1: the native hook runner creates a per-invocation Unix socketpair, forwards the receiver
  * to the hook child and names it in CODEX_NATIVE_SKILL_POLICY_FD; the hook
  * forwards that descriptor to the qualified ancestor's own executable, whose
  * `debug verify-hook-policy` sends a fresh challenge over it and accepts only
@@ -99,6 +98,8 @@ export interface CodexNativePolicyAttestation { schema: typeof CODEX_NATIVE_POLI
 export interface CodexNativePolicyVerification {
   event: CodexNativeHookEvent; sessionId: string; turnId: string | null; policy: CodexNativeSkillPolicy;
   platform: string; ancestryHops: number; processStartTime: string; executablePath: string; executableSha256: string;
+  /** No-follow identity of the qualified executable taken before hashing; re-taken after the helper. */
+  executableWitness: ExecutableWitness;
   bridge: { path: string; sha256: string };
   attestation?: CodexNativePolicyAttestation;
 }
@@ -113,6 +114,12 @@ export interface CodexNativePolicyAcceptance {
 export const CODEX_NATIVE_POLICY_PEER_SCHEMA = "native-hook-policy-peer-v1";
 export const CODEX_NATIVE_POLICY_HELPER_TIMEOUT_MS = 5_000;
 export const CODEX_NATIVE_POLICY_HELPER_MAX_OUTPUT_BYTES = 64 * 1024;
+/** Hook-deadline bounds: the helper gets min(5 s, remaining minus the margin);
+ * a first-run executable hash needs this much budget; below the minimum the
+ * adapter refuses fast instead of spawning anything. */
+export const CODEX_NATIVE_POLICY_DEADLINE_MARGIN_MS = 1_000;
+export const CODEX_NATIVE_POLICY_HELPER_MIN_TIMEOUT_MS = 500;
+export const CODEX_NATIVE_POLICY_FIRST_HASH_BUDGET_MS = 3_000;
 export interface NativePolicyHelperRequest { executablePath: string; fd: number; expectedProcessId: number; inputSha256: string; timeoutMs: number; maxOutputBytes: number }
 export interface NativePolicyHelperResult { exitCode: number | null; stdout: Buffer; timedOut: boolean; oversized: boolean }
 /** Injectable so tests can fake the helper; production spawns the verified binary. */
@@ -211,7 +218,7 @@ export function verifyCodexNativeBridgeDocument(path: string, expectedContent: s
  * the walk; the expected launch-chain shape (which wrappers may sit between
  * Codex and this hook) is pending from the native author and plugs in here as
  * a predicate over the walked chain. */
-export function verifyCodexNativeAncestry(inspector: ProcessInspector, processId: number): { hops: number; chain: number[] } {
+export function verifyCodexNativeAncestry(inspector: ProcessInspector, processId: number): { hops: number; chain: number[]; startTime: string } {
   if (!Number.isSafeInteger(inspector.pid) || inspector.pid <= 0) refuse("NATIVE_SKILL_POLICY_PROCESS_UNBOUND", "the hook process id is unknown");
   if (processId === inspector.pid) refuse("NATIVE_SKILL_POLICY_PROCESS_UNBOUND", "the claimed consumer is the hook process itself");
   const chain: number[] = [], visited = new Set<number>([inspector.pid]);
@@ -221,7 +228,13 @@ export function verifyCodexNativeAncestry(inspector: ProcessInspector, processId
     if (parent === null || !Number.isSafeInteger(parent) || parent <= 0) break;
     if (visited.has(parent)) refuse("NATIVE_SKILL_POLICY_PROCESS_UNBOUND", "the parent chain loops");
     visited.add(parent); chain.push(parent);
-    if (parent === processId) return { hops, chain };
+    if (parent === processId) {
+      // Bind the ancestor found by the walk to one incarnation: the same start
+      // time must be read again before hashing and after the helper.
+      const startTime = inspector.startTime(processId);
+      if (typeof startTime !== "string" || !startTime || startTime.length > 128) refuse("NATIVE_SKILL_POLICY_PROCESS_UNBOUND", "the consumer start time is unreadable");
+      return { hops, chain, startTime };
+    }
     if (parent === 1) break;
     current = parent;
   }
@@ -303,7 +316,7 @@ function writeExecutableCache(dataDir: string, entries: CacheEntry[]): void {
  * process and optionally in a 0600 file under the Skills data dir. A witness
  * that changes between before and after, or differs from the cached key, is
  * re-hashed. Policy, attestation, session and turn results are never cached. */
-export function qualifiedExecutableSha256(path: string, options: { dataDir?: string; hasher?: (path: string) => string } = {}): { sha256: string; witness: ExecutableWitness; cached: boolean } {
+export function qualifiedExecutableSha256(path: string, options: { dataDir?: string; hasher?: (path: string) => string; deadlineMs?: number } = {}): { sha256: string; witness: ExecutableWitness; cached: boolean } {
   const before = executableWitness(path), key = witnessKey(path, before);
   const fileEntries = options.dataDir ? readExecutableCache(options.dataDir) : [];
   const cached = executableDigestMemory.get(key) ?? fileEntries.find(entry => witnessKey(entry.path, entry) === key)?.sha256;
@@ -311,6 +324,7 @@ export function qualifiedExecutableSha256(path: string, options: { dataDir?: str
     executableDigestMemory.set(key, cached);
     return { sha256: cached, witness: before, cached: true };
   }
+  if (options.deadlineMs !== undefined && options.deadlineMs - Date.now() < CODEX_NATIVE_POLICY_FIRST_HASH_BUDGET_MS) refuse("NATIVE_SKILL_POLICY_PROCESS_UNBOUND", "insufficient hook budget to hash the consumer executable on first use");
   const sha256 = (options.hasher ?? hashExecutableFile)(path);
   const after = executableWitness(path);
   if (witnessKey(path, after) !== key) refuse("NATIVE_SKILL_POLICY_PROCESS_UNBOUND", "the consumer executable changed while hashing");
@@ -324,19 +338,44 @@ export function qualifiedExecutableSha256(path: string, options: { dataDir?: str
  * this platform means the platform is unqualified and refuses. Linux stays
  * unqualified until its artifact is reviewed. The helper cannot attest that it
  * is itself reviewed, so this trust stays in the managed policy. */
-export function verifyCodexNativeExecutable(inspector: ProcessInspector, processId: number, trust: CodexNativePolicyTrust, cache: { dataDir?: string; hasher?: (path: string) => string } = {}): { platform: string; startTime: string; executablePath: string; executableSha256: string } {
+export function verifyCodexNativeExecutable(inspector: ProcessInspector, processId: number, trust: CodexNativePolicyTrust, cache: { dataDir?: string; hasher?: (path: string) => string; deadlineMs?: number } = {}, expectations: { ancestryStartTime?: string } = {}): { platform: string; startTime: string; executablePath: string; executableSha256: string; witness: ExecutableWitness } {
   const platform = `${inspector.platform}-${inspector.arch}`;
   const pinned = PLATFORM_KEY.test(platform) ? trust.executableDigests[platform] ?? [] : [];
   if (!pinned.length) refuse("NATIVE_SKILL_POLICY_EXECUTABLE_UNPINNED", `no reviewed Codex executable digest is configured for ${platform}`);
   const before = inspector.startTime(processId);
   if (typeof before !== "string" || !before || before.length > 128) refuse("NATIVE_SKILL_POLICY_PROCESS_UNBOUND", "the consumer start time is unreadable");
+  if (expectations.ancestryStartTime !== undefined && before !== expectations.ancestryStartTime) refuse("NATIVE_SKILL_POLICY_PROCESS_UNBOUND", "the consumer start time changed after the ancestry walk");
   const executablePath = inspector.executablePath(processId);
   if (typeof executablePath !== "string" || !executablePath) refuse("NATIVE_SKILL_POLICY_PROCESS_UNBOUND", "the consumer executable path is unreadable");
-  const executableSha256 = qualifiedExecutableSha256(executablePath, cache).sha256;
+  const { sha256: executableSha256, witness } = qualifiedExecutableSha256(executablePath, cache);
   // The same pid with another start time is a reused pid, not the consumer.
   if (inspector.startTime(processId) !== before) refuse("NATIVE_SKILL_POLICY_PROCESS_UNBOUND", "the consumer process changed while its executable was hashed");
   if (!pinned.includes(executableSha256)) refuse("NATIVE_SKILL_POLICY_EXECUTABLE_UNPINNED", "the consumer executable digest is not a reviewed Codex artifact");
-  return { platform, startTime: before, executablePath, executableSha256 };
+  return { platform, startTime: before, executablePath, executableSha256, witness };
+}
+
+/** The Skills data directory is the operator trust root: the managed policy
+ * that carries the reviewed executable digests, and the executable identity
+ * cache, must each be a regular file reached through no symlink, owned by the
+ * current user or root and writable by neither group nor world. Anything else
+ * fails the adapter closed. A writer with the same uid is outside this
+ * boundary. */
+export function assertOperatorTrustRoot(dataDir: string): void {
+  const check = (path: string, what: string, required: boolean) => {
+    if (!isAbsolute(path) || resolve(path) !== path) refuse("NATIVE_SKILL_POLICY_TRUST_INVALID", `${what} path is not an exact absolute path`);
+    for (let cursor = dirname(path); ; cursor = dirname(cursor)) {
+      const stat = lstatSync(cursor, { throwIfNoEntry: false });
+      if (!stat || stat.isSymbolicLink() || !stat.isDirectory()) refuse("NATIVE_SKILL_POLICY_TRUST_INVALID", `${what} has a missing, linked or unexpected path component: ${cursor}`);
+      if (dirname(cursor) === cursor) break;
+    }
+    const stat = lstatSync(path, { throwIfNoEntry: false, bigint: true });
+    if (!stat) { if (required) refuse("NATIVE_SKILL_POLICY_TRUST_INVALID", `${what} is missing`); return; }
+    if (stat.isSymbolicLink() || !stat.isFile()) refuse("NATIVE_SKILL_POLICY_TRUST_INVALID", `${what} is not a regular file`);
+    if (stat.uid !== 0n && stat.uid !== BigInt(process.getuid?.() ?? -1)) refuse("NATIVE_SKILL_POLICY_TRUST_INVALID", `${what} is owned by another user`);
+    if ((stat.mode & 0o022n) !== 0n) refuse("NATIVE_SKILL_POLICY_TRUST_INVALID", `${what} is group- or world-writable`);
+  };
+  check(join(resolve(dataDir), "agent-policy.json"), "the managed policy", true);
+  check(executableCachePath(dataDir), "the executable identity cache", false);
 }
 
 /** Production helper runner: the verified binary, no shell, an allowlisted
@@ -354,8 +393,8 @@ export function runCodexNativePolicyHelper(request: NativePolicyHelperRequest): 
 function channelRefusal(detail: string): never { refuse("NATIVE_SKILL_POLICY_UNAUTHENTICATED", detail); }
 
 /** Authenticated channel binding, against the frozen native source
- * (internal-apps c4a83048, 0026-native-hook-policy-peer.patch; "patch line"
- * numbers below index that patch file):
+ * (native-hook-policy-peer-v1; "line" numbers below index the native
+ * producer's hook-policy-peer patch as reviewed):
  * - the hook runner creates a Unix socketpair per invocation (line 296),
  *   forwards the receiver to the hook child (line 171) and names it in
  *   CODEX_NATIVE_SKILL_POLICY_FD (lines 172-175, constant at line 264);
@@ -385,19 +424,27 @@ function channelRefusal(detail: string): never { refuse("NATIVE_SKILL_POLICY_UNA
  * attestation only when every field matches. The proof is never cached:
  * once per invocation, SessionStart included. The channel pre-check here is
  * fstat only; the socket semantics are enforced by the verifier itself. */
-export function verifyCodexNativeChannelBinding(options: { executablePath: string; inheritedFd: number | null; expectedProcessId: number; expectedStartTime: string; inputSha256: string | null; emittedPolicy: unknown; inspector: ProcessInspector; runner?: NativePolicyHelperRunner; timeoutMs?: number; maxOutputBytes?: number }): CodexNativePolicyAttestation {
+export function verifyCodexNativeChannelBinding(options: { executablePath: string; inheritedFd: number | null; expectedProcessId: number; expectedStartTime: string; expectedWitness?: ExecutableWitness; inputSha256: string | null; emittedPolicy: unknown; inspector: ProcessInspector; runner?: NativePolicyHelperRunner; timeoutMs?: number; maxOutputBytes?: number; deadlineMs?: number }): CodexNativePolicyAttestation {
   if (options.inheritedFd === null) channelRefusal(`${CODEX_NATIVE_POLICY_FD_ENV} is not set; no inherited channel descriptor`);
   if (options.inputSha256 === null) channelRefusal("the raw hook input digest is missing");
   let kind: Stats;
   try { kind = fstatSync(options.inheritedFd); } catch { channelRefusal("the inherited channel descriptor is closed or not inheritable"); }
   if (!kind.isSocket() && !kind.isFIFO()) channelRefusal("the inherited channel descriptor is not a socket or pipe");
+  let timeoutMs = options.timeoutMs ?? CODEX_NATIVE_POLICY_HELPER_TIMEOUT_MS;
+  if (options.deadlineMs !== undefined) {
+    const remaining = options.deadlineMs - Date.now() - CODEX_NATIVE_POLICY_DEADLINE_MARGIN_MS;
+    if (remaining < CODEX_NATIVE_POLICY_HELPER_MIN_TIMEOUT_MS) channelRefusal("insufficient hook budget for the native policy helper");
+    timeoutMs = Math.min(timeoutMs, remaining);
+  }
   const runner = options.runner ?? runCodexNativePolicyHelper;
-  const result = runner({ executablePath: options.executablePath, fd: options.inheritedFd, expectedProcessId: options.expectedProcessId, inputSha256: options.inputSha256, timeoutMs: options.timeoutMs ?? CODEX_NATIVE_POLICY_HELPER_TIMEOUT_MS, maxOutputBytes: options.maxOutputBytes ?? CODEX_NATIVE_POLICY_HELPER_MAX_OUTPUT_BYTES });
+  const result = runner({ executablePath: options.executablePath, fd: options.inheritedFd, expectedProcessId: options.expectedProcessId, inputSha256: options.inputSha256, timeoutMs, maxOutputBytes: options.maxOutputBytes ?? CODEX_NATIVE_POLICY_HELPER_MAX_OUTPUT_BYTES });
   if (result.timedOut) channelRefusal("the native policy helper timed out");
   if (result.oversized || result.stdout.length > (options.maxOutputBytes ?? CODEX_NATIVE_POLICY_HELPER_MAX_OUTPUT_BYTES)) channelRefusal("the native policy helper output exceeded its bound");
   if (result.exitCode !== 0) channelRefusal(`the native policy helper exited with ${result.exitCode === null ? "a signal" : `status ${result.exitCode}`}`);
-  // The consumer must still be the process whose executable was qualified.
+  // The consumer must still be the process whose executable was qualified,
+  // and the file that was run must still be the file that was hashed.
   if (options.inspector.startTime(options.expectedProcessId) !== options.expectedStartTime) channelRefusal("the consumer process changed while the helper ran");
+  if (options.expectedWitness !== undefined && witnessKey(options.executablePath, executableWitness(options.executablePath)) !== witnessKey(options.executablePath, options.expectedWitness)) channelRefusal("the consumer executable changed while the helper ran");
   let value: unknown;
   try { value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(result.stdout)); } catch { channelRefusal("the native policy helper output is not JSON"); }
   if (!object(value)) channelRefusal("the native policy helper output is not an object");
@@ -410,27 +457,29 @@ export function verifyCodexNativeChannelBinding(options: { executablePath: strin
   return { schema: CODEX_NATIVE_POLICY_PEER_SCHEMA, peerProcessId: options.expectedProcessId };
 }
 
-/** Required acceptance gate: the authenticated channel binding of patch 0026,
- * run with the qualified ancestor's verified executable, its start time, the
- * raw stdin digest, the inherited descriptor and the emitted policy. */
-export function assertAuthenticatedChannelBinding(binding: { processId: number; hookInputSha256: string | null; inheritedFd: number | null; verification: CodexNativePolicyVerification; emittedPolicy: unknown; inspector: ProcessInspector; runner?: NativePolicyHelperRunner }): CodexNativePolicyAttestation {
-  return verifyCodexNativeChannelBinding({ executablePath: binding.verification.executablePath, inheritedFd: binding.inheritedFd, expectedProcessId: binding.processId, expectedStartTime: binding.verification.processStartTime, inputSha256: binding.hookInputSha256, emittedPolicy: binding.emittedPolicy, inspector: binding.inspector, runner: binding.runner });
+/** Required acceptance gate: the authenticated channel binding of the native
+ * contract, run with the qualified ancestor's verified executable and its
+ * witness, its start time, the raw stdin digest, the inherited descriptor, the
+ * emitted policy and the remaining hook budget. */
+export function assertAuthenticatedChannelBinding(binding: { processId: number; hookInputSha256: string | null; inheritedFd: number | null; verification: CodexNativePolicyVerification; emittedPolicy: unknown; inspector: ProcessInspector; runner?: NativePolicyHelperRunner; deadlineMs?: number }): CodexNativePolicyAttestation {
+  return verifyCodexNativeChannelBinding({ executablePath: binding.verification.executablePath, inheritedFd: binding.inheritedFd, expectedProcessId: binding.processId, expectedStartTime: binding.verification.processStartTime, expectedWitness: binding.verification.executableWitness, inputSha256: binding.hookInputSha256, emittedPolicy: binding.emittedPolicy, inspector: binding.inspector, runner: binding.runner, deadlineMs: binding.deadlineMs });
 }
 
 /** Full adapter verification. Every step refuses with a reason. Order: trust
  * configuration, envelope, bridge, ancestry, executable digest (reviewed trust),
  * then the authenticated channel binding, once per invocation. */
-export function verifyCodexNativeSkillPolicy(options: { envelope: CodexNativeHookEnvelope; bridgeDocument: string; expectedBridgeContent: string; expectedBridgeSha256: string; trust?: unknown; inspector?: ProcessInspector; dataDir?: string; executableHasher?: (path: string) => string; helperRunner?: NativePolicyHelperRunner }): CodexNativePolicyVerification {
+export function verifyCodexNativeSkillPolicy(options: { envelope: CodexNativeHookEnvelope; bridgeDocument: string; expectedBridgeContent: string; expectedBridgeSha256: string; trust?: unknown; inspector?: ProcessInspector; dataDir?: string; executableHasher?: (path: string) => string; helperRunner?: NativePolicyHelperRunner; deadlineMs?: number }): CodexNativePolicyVerification {
+  if (options.dataDir !== undefined) assertOperatorTrustRoot(options.dataDir);
   const trust = parseCodexNativePolicyTrust(options.trust);
   const parsed = parseCodexNativeHookEnvelope(options.envelope, options.bridgeDocument);
   const bridge = verifyCodexNativeBridgeDocument(options.bridgeDocument, options.expectedBridgeContent, options.expectedBridgeSha256);
   const inspector = options.inspector ?? defaultProcessInspector();
   const ancestry = verifyCodexNativeAncestry(inspector, parsed.policy.processId);
-  const executable = verifyCodexNativeExecutable(inspector, parsed.policy.processId, trust, { dataDir: options.dataDir, hasher: options.executableHasher });
-  const verification: CodexNativePolicyVerification = { event: options.envelope.event, sessionId: parsed.sessionId, turnId: parsed.turnId, policy: parsed.policy, platform: executable.platform, ancestryHops: ancestry.hops, processStartTime: executable.startTime, executablePath: executable.executablePath, executableSha256: executable.executableSha256, bridge };
+  const executable = verifyCodexNativeExecutable(inspector, parsed.policy.processId, trust, { dataDir: options.dataDir, hasher: options.executableHasher, deadlineMs: options.deadlineMs }, { ancestryStartTime: ancestry.startTime });
+  const verification: CodexNativePolicyVerification = { event: options.envelope.event, sessionId: parsed.sessionId, turnId: parsed.turnId, policy: parsed.policy, platform: executable.platform, ancestryHops: ancestry.hops, processStartTime: executable.startTime, executablePath: executable.executablePath, executableSha256: executable.executableSha256, executableWitness: executable.witness, bridge };
   // The trust check above runs first: with no reviewed digest for this
   // platform, the helper is never spawned.
-  verification.attestation = assertAuthenticatedChannelBinding({ processId: parsed.policy.processId, hookInputSha256: parsed.hookInputSha256, inheritedFd: parsed.inheritedFd, verification, emittedPolicy: options.envelope.policy, inspector, runner: options.helperRunner });
+  verification.attestation = assertAuthenticatedChannelBinding({ processId: parsed.policy.processId, hookInputSha256: parsed.hookInputSha256, inheritedFd: parsed.inheritedFd, verification, emittedPolicy: options.envelope.policy, inspector, runner: options.helperRunner, deadlineMs: options.deadlineMs });
   return verification;
 }
 

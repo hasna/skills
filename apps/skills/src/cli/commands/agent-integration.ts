@@ -268,7 +268,7 @@ export function registerAgentIntegration(parent: Command): void {
         // Keep the exact raw stdin bytes: the native policy adapter hashes them
         // before any decoding, and the input is parsed from those same bytes.
         const inputBytes = readFileSync(0), inputText = inputBytes.toString("utf8");
-        if (inputBytes.length > 1024 * 1024 || inputText.length > 1024 * 1024) throw new Error("Hook input is too large");
+        if (inputText.length > 1024 * 1024) throw new Error("Hook input is too large");
         let input = JSON.parse(inputText);
         if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Expected hook input object");
         nativeEvent = options.event ?? input.hook_event_name ?? event;
@@ -306,7 +306,7 @@ export function registerAgentIntegration(parent: Command): void {
         // events. Hand the exact native fields and the stdin digest to the guard's
         // adapter; every other agent, event and guard call keeps today's behaviour.
         const codexNativePolicy = options.agent === "codex" ? codexNativeHookEnvelopeFromInput(input, event, inputBytes, process.env[CODEX_NATIVE_POLICY_FD_ENV]) : undefined;
-        assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile, ...(codexNativePolicy ? { codexNativePolicy } : {}) });
+        assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile, ...(codexNativePolicy ? { codexNativePolicy: { ...codexNativePolicy, deadlineMs: deadline } } : {}) });
         if (typeof input.prompt === "string") input.prompt = normalizeAgentHookPrompt(options.agent, nativeEvent, input.prompt);
         // Validate every context field before a timeout or API refusal can be
         // classified as optional delivery failure. No unchecked input continues.

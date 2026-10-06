@@ -139,9 +139,15 @@ on UserPromptSubmit only), re-verifies the bridge document on every hook, walks
 the hook's real parent chain to find the claimed consumer, binds its start time
 and the digest of its executable to the reviewed digests stored under
 `bridge.codexNativePolicy.executableDigests` in the managed policy (an absent set
-refuses; Linux is unqualified; only the file's identity to digest mapping is
-cached, in `agent-hooks/codex-native-policy-executable-cache.json`), and then
-requires the authenticated channel binding of native patch 0026: Codex passes
+refuses; Linux has no reviewed digest by default, so the adapter refuses there
+unless an operator pins one after its own review; only the file's identity to
+digest mapping is cached, in `agent-hooks/codex-native-policy-executable-cache.json`).
+The Skills data directory is the operator trust root: the managed policy and the
+cache file must be regular files reached through no symlink, owned by the current
+user or root and writable by neither group nor world, or the adapter fails closed;
+a writer with the same uid is outside this boundary. The adapter then requires
+the authenticated channel binding of the native hook-policy peer contract
+(`native-hook-policy-peer-v1`): Codex passes
 the read end of a per-hook socketpair in `CODEX_NATIVE_SKILL_POLICY_FD`; the hook
 forwards it as fd 3 to the qualified ancestor's own executable, `debug
 verify-hook-policy --fd 3 --expected-process-id <pid> --input-sha256 <raw stdin
@@ -150,9 +156,12 @@ one `native-hook-policy-peer-v1` attestation that must name that pid, that raw
 stdin digest and exactly the emitted policy; it runs once per invocation and is
 never cached. The managed trust default is empty, so no envelope is accepted
 until an operator records reviewed executable digests; with none, the helper is
-never run. Then only package-classified installed-plugin documents under
-`~/.codex/plugins/cache` that the verified policy cannot load can become inert,
-with a receipt at `agent-hooks/codex-native-policy-acceptance.json`; user,
+never run, and the hook's remaining deadline bounds both the first-use executable
+hash and the helper. Inertness rests on that authenticated restricted policy;
+plugin classification proves nothing by itself and only narrows the scope to
+installed-plugin documents under `~/.codex/plugins/cache` that the verified policy
+cannot load. Those are checked before any hash or helper run, and the acceptance
+is recorded at `agent-hooks/codex-native-policy-acceptance.json`; user,
 repository and project copies still refuse, and format or digest checks never
 prove the runtime policy on their own.
 

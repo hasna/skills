@@ -8,7 +8,7 @@ import { planAgentIntegration, applyAgentIntegration, assertManagedAgentBridge, 
 import { admitCorpusFixture, installCorpusInspectorFixture } from "./codex-corpus.fixture.js";
 import { readManagedSkillPolicySnapshot, serializeManagedSkillPolicy } from "./managed-policy.js";
 import { CLI_BRIDGE_DIGEST, CLI_BRIDGE_FILES } from "./agent-bridge.js";
-import { verifyCodexNativeSkillPolicy, verifyCodexNativeAncestry, verifyCodexNativeBridgeDocument, verifyCodexNativeChannelBinding, verifyCodexNativeExecutable, qualifiedExecutableSha256, executableWitness, executableCachePath, assertExecutableWitnessStat, runCodexNativePolicyHelper, parseCodexNativePolicyTrust, recordCodexNativePolicyAcceptance, codexNativePolicyReceiptPath, codexNativeHookEnvelopeFromInput, darwinProcessInspector, defaultProcessInspector, CODEX_NATIVE_POLICY_PEER_SCHEMA, CODEX_NATIVE_POLICY_EXECUTABLE_CACHE_SCHEMA, type NativePolicyHelperRunner, type NativePolicyHelperRequest, CODEX_NATIVE_POLICY_ANCESTRY_SAFETY_HOPS, CODEX_NATIVE_POLICY_RECEIPT_SCHEMA, type ProcessInspector, type CodexNativeHookEnvelope, type CodexNativePolicyVerification } from "./codex-native-skill-policy.js";
+import { verifyCodexNativeSkillPolicy, verifyCodexNativeAncestry, verifyCodexNativeBridgeDocument, verifyCodexNativeChannelBinding, verifyCodexNativeExecutable, qualifiedExecutableSha256, executableWitness, executableCachePath, assertExecutableWitnessStat, runCodexNativePolicyHelper, parseCodexNativePolicyTrust, recordCodexNativePolicyAcceptance, codexNativePolicyReceiptPath, codexNativeHookEnvelopeFromInput, darwinProcessInspector, defaultProcessInspector, assertOperatorTrustRoot, CODEX_NATIVE_POLICY_PEER_SCHEMA, CODEX_NATIVE_POLICY_EXECUTABLE_CACHE_SCHEMA, CODEX_NATIVE_POLICY_HELPER_TIMEOUT_MS, CODEX_NATIVE_POLICY_FIRST_HASH_BUDGET_MS, type NativePolicyHelperRunner, type NativePolicyHelperRequest, CODEX_NATIVE_POLICY_ANCESTRY_SAFETY_HOPS, CODEX_NATIVE_POLICY_RECEIPT_SCHEMA, type ProcessInspector, type CodexNativeHookEnvelope, type CodexNativePolicyVerification } from "./codex-native-skill-policy.js";
 useDefaultTestTimeout();
 let restoreInspector: () => void;
 beforeEach(() => { restoreInspector = installCorpusInspectorFixture(); });
@@ -26,9 +26,10 @@ const HOOK_PID = 5000, CONSUMER_PID = 4000;
 
 interface Station { home: string; dataDir: string; projectDir: string; plugin: string; bridgeDocument: string; executable: string; executableSha256: string; receipt: string }
 function station(options: { materialize?: boolean; pin?: boolean | string; alias?: boolean } = {}): Station {
-  const home = mkdtempSync(join(tmpdir(), "skills-native-policy-")); roots.push(home);
+  // Real path: macOS maps /tmp and /var to /private, and the adapter compares real paths.
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "skills-native-policy-"))); roots.push(home);
   // A reviewed root alias: ~/.codex (and ~/.claude) are symlinks into a
-  // workspace, as on station02; the plan records their identities.
+  // workspace; the plan records their identities.
   const codexRoot = options.alias ? join(home, "projects", "workspace", ".codex") : join(home, ".codex");
   if (options.alias) {
     mkdirSync(codexRoot, { recursive: true }); mkdirSync(join(home, "projects", "workspace", ".claude"), { recursive: true });
@@ -39,7 +40,7 @@ function station(options: { materialize?: boolean; pin?: boolean | string; alias
   applyAgentIntegration(planAgentIntegration({ ...f, agents: ["codex"], ...(options.alias ? { allowRootAliases: true } : {}) }));
   const plugin = join(codexRoot, "plugins", "cache", "openai-curated-remote", "sites");
   if (options.materialize !== false) {
-    // Materialize the plugin the way the Codex app does on station04 (sites 0.1.75).
+    // Materialize the plugin the way the Codex app does (sites 0.1.75).
     put(join(plugin, "0.1.75", ".codex-plugin", "plugin.json"), JSON.stringify({ name: "sites", version: "0.1.75", description: "Synthetic plugin" }));
     put(join(plugin, ".codex-remote-plugin-install.json"), JSON.stringify({ schema_version: 1, remote_plugin_id: `plugins~Plugin_${"sites".padEnd(32, "0")}` }));
     for (const name of SITES_SKILLS) put(join(plugin, "0.1.75", "skills", name, "SKILL.md"), payload(name));
@@ -66,8 +67,8 @@ function policy(s: Station, overrides: Record<string, unknown> = {}, remove: str
 function envelope(s: Station, overrides: Partial<CodexNativeHookEnvelope> = {}, policyOverrides: Record<string, unknown> = {}, remove: string[] = []): CodexNativeHookEnvelope {
   return { event: "UserPromptSubmit", policy: policy(s, policyOverrides, remove), sessionId: SESSION, turnId: TURN, hookInputSha256: RAW_SHA, ...overrides };
 }
-function verify(s: Station, input: CodexNativeHookEnvelope, inspector = fakeInspector(s), trust: unknown = readManagedSkillPolicySnapshot(s.dataDir)!.value.bridge.codexNativePolicy, helperRunner?: NativePolicyHelperRunner): string {
-  try { verifyCodexNativeSkillPolicy({ envelope: input, bridgeDocument: s.bridgeDocument, expectedBridgeContent: CLI_BRIDGE_FILES["SKILL.md"]!, expectedBridgeSha256: CLI_BRIDGE_DIGEST, trust, inspector, dataDir: s.dataDir, helperRunner }); return "ACCEPTED"; }
+function verify(s: Station, input: CodexNativeHookEnvelope, inspector = fakeInspector(s), trust: unknown = readManagedSkillPolicySnapshot(s.dataDir)!.value.bridge.codexNativePolicy, helperRunner?: NativePolicyHelperRunner, extra: { deadlineMs?: number; executableHasher?: (path: string) => string } = {}): string {
+  try { verifyCodexNativeSkillPolicy({ envelope: input, bridgeDocument: s.bridgeDocument, expectedBridgeContent: CLI_BRIDGE_FILES["SKILL.md"]!, expectedBridgeSha256: CLI_BRIDGE_DIGEST, trust, inspector, dataDir: s.dataDir, helperRunner, ...extra }); return "ACCEPTED"; }
   catch (error) { return (error as Error).message; }
 }
 function guard(s: Station, input?: CodexNativePolicyGuardInput): string {
@@ -89,7 +90,7 @@ function channelFixture(s: Station, payload?: string): number {
   return reader;
 }
 const RAW_INPUT = Buffer.from('{"native_skill_policy": {}}', "utf8"), RAW_SHA = sha(RAW_INPUT);
-/** What the native verifier prints for this station's envelope (patch 0026 lines 546-550). */
+/** What the native verifier prints for this fixture's envelope (native-hook-policy-peer-v1). */
 function attestationFor(s: Station, overrides: Record<string, unknown> = {}, remove: string[] = []): string {
   const value: Record<string, unknown> = { schema: CODEX_NATIVE_POLICY_PEER_SCHEMA, peerProcessId: CONSUMER_PID, stdinSha256: RAW_SHA, policy: policy(s), ...overrides };
   for (const key of remove) delete value[key];
@@ -100,7 +101,7 @@ function fakeRunner(output: string | Buffer, result: Partial<NativePolicyHelperR
   return request => { seen.push(request); return { exitCode: 0, stdout: Buffer.isBuffer(output) ? output : Buffer.from(output, "utf8"), timedOut: false, oversized: false, ...result }; };
 }
 
-describe("wired acceptance path (patch 0026 channel binding; trust default empty)", () => {
+describe("wired acceptance path (native-hook-policy-peer-v1 channel binding; trust default empty)", () => {
   const fdStation = (options: Parameters<typeof station>[0] = {}) => { const s = station(options); return { s, fd: channelFixture(s) }; };
   test("empty trust refuses before the helper is ever run, even with a valid channel and a well-formed envelope", () => {
     const { s, fd } = fdStation({ pin: false }), seen: NativePolicyHelperRequest[] = [], runner = fakeRunner(attestationFor(s), {}, seen);
@@ -182,10 +183,9 @@ describe("envelope validation", () => {
   });
 });
 
-/** The six native hook rows of the reviewed proof (internal-apps #1475 run
- * 37379158142, native-skill-policy-proof/hook-inputs.jsonl; Files f_vtmq3HBqZa,
- * sha256 61e55917…). Same keys, order, spacing and values; only the proof's
- * runner paths and pid are substituted. The proof's allowlist names the bridge
+/** The six native hook rows of the reviewed native proof (host-path-allowlist-v1
+ * SessionStart and UserPromptSubmit inputs). Same keys, order, spacing and
+ * values; only the proof's runner paths and pid are substituted. The proof's allowlist names the bridge
  * under its synthetic home's .agents/skills, not the .codex/skills bridge this
  * package installs for Codex, which the adapter refuses by design. */
 function nativeProofRows(allowedHostPath: string, cwd: string, processId: number): string[] {
@@ -314,12 +314,15 @@ describe("guard scope", () => {
     expect(message).toMatch(DRIFT); expect(message).not.toMatch(/Native policy adapter/);
     expect(existsSync(s.receipt)).toBe(false);
   });
-  test("a non-cache native copy beside the plugin cache refuses even with a well-formed policy", () => {
-    const s = station();
+  test("a non-cache native copy beside the plugin cache refuses before any hash or helper, even with a well-formed policy and channel", () => {
+    const s = station(), seen: NativePolicyHelperRequest[] = [], hashes: string[] = [];
     put(join(s.home, ".codex", "skills", "x", "SKILL.md"), payload("x"));
-    const message = guard(s, { ...envelope(s), inspector: fakeInspector(s) });
+    const message = guard(s, { ...envelope(s, { inheritedFd: channelFixture(s) }), inspector: fakeInspector(s, { executablePath: () => { hashes.push("read"); return s.executable; } }), helperRunner: fakeRunner(attestationFor(s), {}, seen) });
     expect(message).toMatch(/^NATIVE_SKILL_DRIFT: 5 unexpected native skill copies were found/);
+    expect(message).toMatch(/native copies outside the classified Codex plugin cache remain/);
+    expect(seen).toHaveLength(0); expect(hashes).toHaveLength(0);
     expect(existsSync(s.receipt)).toBe(false);
+    expect(existsSync(executableCachePath(s.dataDir))).toBe(false);
   });
   test("the adapter is not consulted when nothing is unexpected", () => {
     const s = station({ materialize: false });
@@ -349,7 +352,7 @@ describe("guard scope", () => {
 });
 
 describe("receipt", () => {
-  const verification = (s: Station): CodexNativePolicyVerification => ({ event: "UserPromptSubmit", sessionId: SESSION, turnId: TURN, policy: { capability: "host-path-allowlist-v1", mode: "restricted", allowedHostPaths: [s.bridgeDocument], nonHostSources: "disabled", processId: CONSUMER_PID, effectiveConfigDigest: DIGEST }, platform: "darwin-arm64", ancestryHops: 1, processStartTime: "1700000000.123456", executablePath: s.executable, executableSha256: s.executableSha256, bridge: { path: s.bridgeDocument, sha256: CLI_BRIDGE_DIGEST } });
+  const verification = (s: Station): CodexNativePolicyVerification => ({ event: "UserPromptSubmit", sessionId: SESSION, turnId: TURN, policy: { capability: "host-path-allowlist-v1", mode: "restricted", allowedHostPaths: [s.bridgeDocument], nonHostSources: "disabled", processId: CONSUMER_PID, effectiveConfigDigest: DIGEST }, platform: "darwin-arm64", ancestryHops: 1, processStartTime: "1700000000.123456", executablePath: s.executable, executableSha256: s.executableSha256, executableWitness: executableWitness(s.executable), bridge: { path: s.bridgeDocument, sha256: CLI_BRIDGE_DIGEST } });
   test("records the accepted hook with mode 0600 and sorted cache entries", () => {
     const s = station(), entries = SITES_SKILLS.map(name => ({ path: join(s.plugin, "0.1.75", "skills", name), treeSha256: sha(name) })).reverse();
     expect(recordCodexNativePolicyAcceptance(s.dataDir, verification(s), entries)).toBe(s.receipt);
@@ -397,7 +400,7 @@ function bind(s: Station, fd: number | null, runner: NativePolicyHelperRunner, o
   } catch (error) { return (error as Error).message; }
 }
 
-describe("channel binding verifier against patch 0026", () => {
+describe("channel binding verifier against native-hook-policy-peer-v1", () => {
   test("a matching attestation from the fake helper passes and the helper receives the verified binary, fd 3 and the raw digest", () => {
     const s = station(), seen: NativePolicyHelperRequest[] = [];
     expect(bind(s, channelFixture(s), fakeRunner(attestationFor(s), {}, seen))).toBe(`ACCEPTED ${JSON.stringify({ schema: CODEX_NATIVE_POLICY_PEER_SCHEMA, peerProcessId: CONSUMER_PID })}`);
@@ -559,7 +562,7 @@ describe("artifact-identity cache for the qualified executable", () => {
   });
 });
 
-describe("reviewed root aliases (station02 layout: ~/.codex is a symlink into a workspace)", () => {
+describe("reviewed root aliases (~/.codex is a symlink into a workspace)", () => {
   const lexical = (s: Station) => join(realpathSync(s.home), ".codex", "skills", "skills-cli", "SKILL.md");
   test("a reviewed ~/.codex alias with allowedHostPaths naming the canonical target bridge passes the bridge and policy checks and stops only at the binding stub", () => {
     const s = station({ alias: true });
@@ -594,5 +597,60 @@ describe("reviewed root aliases (station02 layout: ~/.codex is a symlink into a 
     expect(() => assertManagedAgentBridge("codex", { home: s.home, dataDir: s.dataDir, projectDir: s.projectDir, codexNativePolicy: { ...envelope(s, {}, { allowedHostPaths: [realpathSync(join(moved, "skills", "skills-cli", "SKILL.md"))] }), inspector: fakeInspector(s) } })).toThrow();
     expect(() => verifyCodexNativeBridgeDocument(lexical(s), CLI_BRIDGE_FILES["SKILL.md"]!, CLI_BRIDGE_DIGEST)).toThrow(/missing, linked or unexpected component/);
     expect(existsSync(s.receipt)).toBe(false);
+  });
+});
+
+describe("review fixes: lifecycle, trust root and hook budget", () => {
+  test("S1: the executable changing while the helper ran refuses after the attestation", () => {
+    const s = station(), fd = channelFixture(s);
+    const runner: NativePolicyHelperRunner = request => { writeFileSync(s.executable, readFileSync(s.executable), { mode: 0o700 }); return fakeRunner(attestationFor(s))(request); };
+    expect(verify(s, envelope(s, { inheritedFd: fd }), fakeInspector(s), undefined, runner)).toMatch(/^NATIVE_SKILL_POLICY_UNAUTHENTICATED: the consumer executable changed while the helper ran/);
+    expect(existsSync(s.receipt)).toBe(false);
+  });
+  test("S2: the start time read during the ancestry walk must match the reads before hashing and after the helper", () => {
+    const s = station(); let reads = 0;
+    expect(verify(s, envelope(s, { inheritedFd: channelFixture(s) }), fakeInspector(s, { starts: () => reads++ === 0 ? "1700000000.1" : "1700000000.2" }), undefined, fakeRunner(attestationFor(s)))).toMatch(/^NATIVE_SKILL_POLICY_PROCESS_UNBOUND: the consumer start time changed after the ancestry walk/);
+    expect(verifyCodexNativeAncestry(fakeInspector(s), CONSUMER_PID).startTime).toBe("1700000000.123456");
+    expect(() => verifyCodexNativeAncestry(fakeInspector(s, { starts: () => null }), CONSUMER_PID)).toThrow(/the consumer start time is unreadable/);
+    let late = 0;
+    expect(verify(s, envelope(s, { inheritedFd: channelFixture(s) }), fakeInspector(s, { starts: () => late++ < 3 ? "1700000000.1" : "1700000000.9" }), undefined, fakeRunner(attestationFor(s)))).toMatch(/^NATIVE_SKILL_POLICY_UNAUTHENTICATED: the consumer process changed while the helper ran/);
+  });
+  test("S3: a group-writable, linked or foreign-owned managed policy or cache file fails the adapter closed", () => {
+    const s = station(), policyFile = join(s.dataDir, "agent-policy.json"), trust = readManagedSkillPolicySnapshot(s.dataDir)!.value.bridge.codexNativePolicy;
+    expect(() => assertOperatorTrustRoot(s.dataDir)).not.toThrow();
+    chmodSync(policyFile, 0o664);
+    expect(verify(s, envelope(s, { inheritedFd: channelFixture(s) }), fakeInspector(s), trust, fakeRunner(attestationFor(s)))).toMatch(/^NATIVE_SKILL_POLICY_TRUST_INVALID: the managed policy is group- or world-writable/);
+    const message = guard(s, { ...envelope(s, { inheritedFd: channelFixture(s) }), inspector: fakeInspector(s), helperRunner: fakeRunner(attestationFor(s)) });
+    expect(message).toMatch(DRIFT); expect(message).toMatch(/NATIVE_SKILL_POLICY_TRUST_INVALID/);
+    chmodSync(policyFile, 0o600);
+    renameSync(policyFile, `${policyFile}.real`); symlinkSync(`${policyFile}.real`, policyFile);
+    expect(verify(s, envelope(s, { inheritedFd: channelFixture(s) }), fakeInspector(s), trust, fakeRunner(attestationFor(s)))).toMatch(/^NATIVE_SKILL_POLICY_TRUST_INVALID: the managed policy is not a regular file/);
+    rmSync(policyFile); renameSync(`${policyFile}.real`, policyFile);
+    mkdirSync(join(s.dataDir, "agent-hooks"), { recursive: true }); writeFileSync(executableCachePath(s.dataDir), "{}", { mode: 0o666 });
+    expect(() => assertOperatorTrustRoot(s.dataDir)).toThrow(/the executable identity cache is group- or world-writable/);
+    rmSync(executableCachePath(s.dataDir)); rmSync(join(s.dataDir, "agent-hooks"), { recursive: true }); symlinkSync(s.home, join(s.dataDir, "agent-hooks"));
+    expect(() => assertOperatorTrustRoot(s.dataDir)).toThrow(/the executable identity cache has a missing, linked or unexpected path component/);
+    expect(() => assertOperatorTrustRoot(join(s.home, "no-such-data"))).toThrow(/the managed policy is missing/);
+    expect(existsSync(s.receipt)).toBe(false);
+  });
+  test("C6: the hook deadline bounds the first-use hash and the helper, and a short budget refuses before spawning", () => {
+    const s = station(), seen: NativePolicyHelperRequest[] = [], runner = fakeRunner(attestationFor(s), {}, seen), hashes: string[] = [];
+    const hasher = (path: string) => { hashes.push(path); return sha(readFileSync(path)); };
+    // Uncached binary with less than the first-hash budget left: refuse without hashing or spawning.
+    expect(verify(s, envelope(s, { inheritedFd: channelFixture(s) }), fakeInspector(s), undefined, runner, { deadlineMs: Date.now() + CODEX_NATIVE_POLICY_FIRST_HASH_BUDGET_MS - 500, executableHasher: hasher })).toMatch(/^NATIVE_SKILL_POLICY_PROCESS_UNBOUND: insufficient hook budget to hash the consumer executable on first use/);
+    expect(hashes).toHaveLength(0); expect(seen).toHaveLength(0);
+    // Enough budget: the helper timeout is min(5 s, remaining minus the margin).
+    expect(verify(s, envelope(s, { inheritedFd: channelFixture(s) }), fakeInspector(s), undefined, runner, { deadlineMs: Date.now() + 4_000, executableHasher: hasher })).toBe("ACCEPTED");
+    expect(hashes).toHaveLength(1); expect(seen).toHaveLength(1);
+    expect(seen[0]!.timeoutMs).toBeLessThanOrEqual(3_000); expect(seen[0]!.timeoutMs).toBeGreaterThan(2_000);
+    expect(verify(s, envelope(s, { inheritedFd: channelFixture(s) }), fakeInspector(s), undefined, runner, { deadlineMs: Date.now() + 60_000, executableHasher: hasher })).toBe("ACCEPTED");
+    expect(seen[1]!.timeoutMs).toBe(CODEX_NATIVE_POLICY_HELPER_TIMEOUT_MS);
+    // Cached binary but no budget left for the helper: refuse before spawning.
+    expect(verify(s, envelope(s, { inheritedFd: channelFixture(s) }), fakeInspector(s), undefined, runner, { deadlineMs: Date.now() + 1_200, executableHasher: hasher })).toMatch(/^NATIVE_SKILL_POLICY_UNAUTHENTICATED: insufficient hook budget for the native policy helper/);
+    expect(hashes).toHaveLength(1); expect(seen).toHaveLength(2);
+    // The guard passes the deadline through.
+    const late = guard(s, { ...envelope(s, { inheritedFd: channelFixture(s) }), inspector: fakeInspector(s), helperRunner: runner, deadlineMs: Date.now() + 1_200 });
+    expect(late).toMatch(DRIFT); expect(late).toMatch(/insufficient hook budget for the native policy helper/);
+    expect(seen).toHaveLength(2);
   });
 });
