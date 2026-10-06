@@ -630,6 +630,7 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     && codexDiscovery.sources.some(source=>source.path===join(input.sourceRoot,".codex-plugin/plugin.json") && source.sha256!==null && source.format===undefined && source.fields===undefined));
   assertCodexInstallationInputs(home,[options.projectDir ?? home],codexPluginSourceInputs.map(input=>input.sourceRoot));
   const changes: AgentConfigChange[] = [];
+  let observedSettings: AgentIntegrationPlan["observedSettings"];
   for (const agent of [...new Set(options.agents)]) {
     if (!INTEGRATION_AGENTS.includes(agent)) throw new Error(`Unsupported agent: ${agent}`);
     const { command, profileId } = bindings.get(agent)!;
@@ -683,7 +684,14 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
       const configPath = canonicalAgentPath(join(home, ".codex", "config.toml"), aliases), previous = readOptional(configPath);
       if (previous !== codexConfigBefore) throw new Error(`Configuration changed during planning: ${configPath}`);
       const next = disableReviewedCodexPluginNames(codexPathConfig!, codexPluginSkills);
-      if (next !== (previous ?? "")) changes.push({ path: configPath, before: previous, after: next });
+      if (next !== (previous ?? "")) {
+        if (previous !== null && isDeepStrictEqual(Bun.TOML.parse(previous), Bun.TOML.parse(next))) {
+          // Native config writers may use inline tables. Preserve equivalent
+          // bytes instead of requiring corpus admission for formatting alone,
+          // but retain the exact preimage check through application.
+          observedSettings = { path: configPath, before: previous };
+        } else changes.push({ path: configPath, before: previous, after: next });
+      }
     }
   }
   const codexPluginSkillReview = options.codexNativeCatalog ? { version: options.codexNativeCatalog.version, cwd: options.codexNativeCatalog.cwd, catalogSha256: sha(JSON.stringify({version:options.codexNativeCatalog.version,cwd:options.codexNativeCatalog.cwd,skills:projectCodexNativeSkillCatalog({data:[{cwd:options.codexNativeCatalog.cwd,errors:[],skills:options.codexNativeCatalog.skills}]},options.codexNativeCatalog.cwd),...(options.codexNativeCatalog.plugins === undefined ? {} : {plugins:projectCodexInstalledPluginEntries(options.codexNativeCatalog.plugins)})})), configSha256: changes.find(change=>change.path===canonicalAgentPath(join(home,".codex/config.toml"),aliases))?.before === null ? null : sha(readOptional(canonicalAgentPath(join(home,".codex/config.toml"),aliases)) ?? "") } : policy.bridge?.codexPluginSkillReview;
@@ -712,7 +720,7 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
   const serializedPolicy = serializeManagedSkillPolicy(nextPolicy);
   if (JSON.stringify(policy) !== JSON.stringify(nextPolicy)) changes.push({ path: policyPath, before: previousPolicy, after: serializedPolicy });
   recheckRootAliases(aliases);
-  return { dataDir, profileId, changes, nativeSkills, ...(observedNativeSources.length ? { observedNativeSources } : {}), ...(nextPolicy.bridge.codexPluginSkillReview ? { codexPluginSkillReview: nextPolicy.bridge.codexPluginSkillReview } : {}), observedPolicy: { path: policyPath, before: previousPolicy }, discoveryBefore: discoveries, discoveryAfter, ...(aliases.length ? { rootAliases: aliases } : {}), ...(retainedAgents.length ? { retainedReviewChecks: { home, projectDir: options.projectDir ?? home, agents: retainedAgents } } : {}) };
+  return { dataDir, profileId, changes, nativeSkills, ...(observedSettings ? { observedSettings } : {}), ...(observedNativeSources.length ? { observedNativeSources } : {}), ...(nextPolicy.bridge.codexPluginSkillReview ? { codexPluginSkillReview: nextPolicy.bridge.codexPluginSkillReview } : {}), observedPolicy: { path: policyPath, before: previousPolicy }, discoveryBefore: discoveries, discoveryAfter, ...(aliases.length ? { rootAliases: aliases } : {}), ...(retainedAgents.length ? { retainedReviewChecks: { home, projectDir: options.projectDir ?? home, agents: retainedAgents } } : {}) };
 }
 
 export interface ClaudeManagedHookProjection {
