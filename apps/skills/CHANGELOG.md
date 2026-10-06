@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.10.44
+
+- Add a caller-bound Codex native skill policy adapter to the native skill guard. In a Codex `SessionStart` or `UserPromptSubmit` hook that carries `native_skill_policy` (capability `host-path-allowlist-v1`), Codex plugin-cache copies count as inert only when everything below holds:
+  - the policy is restricted to exactly the owned bridge, with non-host sources disabled;
+  - the bridge bytes verify on every hook;
+  - the claimed process is a real ancestor with a stable start time;
+  - its executable digest is pinned in the managed policy (`bridge.codexNativePolicy.executableDigests`);
+  - the native `debug verify-hook-policy` helper, over the inherited `CODEX_NATIVE_SKILL_POLICY_FD`, attests the same peer, raw stdin digest and policy (`native-hook-policy-peer-v1`).
+  Anything missing, unknown or forged refuses as before. User and repository native copies always refuse. With no pinned digest (the default), the adapter refuses before running the helper.
+- Add `skills hook trust-native` to pin reviewed native executable digests through a guarded, preview-first write:
+  - an exact expected policy SHA-256;
+  - validated digests for one platform;
+  - every other field preserved;
+  - the backup and the result read back.
+
 ## 0.10.43
 
 - Accept ordinary email sign-in codes through bounded stdin and mask interactive code input. Preserve workspace enrollment and legacy sign-in options.

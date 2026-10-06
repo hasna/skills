@@ -129,6 +129,59 @@ remains unchanged because synced plugins can also provide hooks, MCP servers,
 and language servers. A later plugin download that restores a skill document
 will trigger another drift refusal and require review.
 
+A patched Codex that enforces an exact native host-path allowlist reports its
+effective policy to the Skills SessionStart and UserPromptSubmit hooks as
+`native_skill_policy`. The guard's adapter parses that envelope strictly
+(capability `host-path-allowlist-v1`, restricted mode, non-host sources disabled,
+the sole allowed path equal to the Skills bridge document, a lowercase SHA-256
+`effectiveConfigDigest`, the consumer's `processId`, `session_id`, and `turn_id`
+on UserPromptSubmit only), re-verifies the bridge document on every hook, walks
+the hook's real parent chain to find the claimed consumer, binds its start time
+and the digest of its executable to the reviewed digests stored under
+`bridge.codexNativePolicy.executableDigests` in the managed policy (an absent set
+refuses; Linux has no reviewed digest by default, so the adapter refuses there
+unless an operator pins one after its own review; only the file's identity to
+digest mapping is cached, in `agent-hooks/codex-native-policy-executable-cache.json`).
+The Skills data directory is the operator trust root: the managed policy and the
+cache file must be regular files reached through no symlink, owned by the current
+user or root and writable by neither group nor world, or the adapter fails closed;
+a writer with the same uid is outside this boundary. The adapter then requires
+the authenticated channel binding of the native hook-policy peer contract
+(`native-hook-policy-peer-v1`): Codex passes
+the read end of a per-hook socketpair in `CODEX_NATIVE_SKILL_POLICY_FD`; the hook
+forwards it as fd 3 to the qualified ancestor's own executable, `debug
+verify-hook-policy --fd 3 --expected-process-id <pid> --input-sha256 <raw stdin
+SHA-256>`, which sends a fresh challenge, verifies the actual writer and prints
+one `native-hook-policy-peer-v1` attestation that must name that pid, that raw
+stdin digest and exactly the emitted policy; it runs once per invocation and is
+never cached. The managed trust default is empty, so no envelope is accepted
+until an operator records reviewed executable digests; with none, the helper is
+never run, and the hook's remaining deadline bounds both the first-use executable
+hash and the helper. Operators bind those digests through the package, never by
+editing the policy by hand:
+
+```bash
+skills hook trust-native --platform darwin-arm64 --digest <sha256> --expected-policy-sha256 <sha256> --json
+skills hook trust-native --platform darwin-arm64 --digest <sha256> --expected-policy-sha256 <sha256> --apply --json
+```
+
+Preview comes first and writes nothing. Each `--digest` must be the SHA-256 of an
+independently verified final native artifact, taken from its own review, never
+from a fetch; the command accepts digests only from its arguments. `--apply`
+requires the exact current policy SHA-256, re-checks it immediately before the
+atomic 0600 replace, preserves the pre-change bytes in the usual migration backup
+and reads the backup and the result back before it reports; it sets exactly the
+given set for that one platform and preserves every other field (values
+identical; the file is re-serialized with the package formatter).
+A pre-existing group- or world-writable data directory (for example 0775) refuses
+both this command and the adapter until its mode is corrected. Inertness rests on that authenticated restricted policy;
+plugin classification proves nothing by itself and only narrows the scope to
+installed-plugin documents under `~/.codex/plugins/cache` that the verified policy
+cannot load. Those are checked before any hash or helper run, and the acceptance
+is recorded at `agent-hooks/codex-native-policy-acceptance.json`; user,
+repository and project copies still refuse, and format or digest checks never
+prove the runtime policy on their own.
+
 Native hook invocations must use their installed adapter's selection profile.
 An old client command or environment override naming another profile refuses
 before synchronization or context loading. Review the hook installation and

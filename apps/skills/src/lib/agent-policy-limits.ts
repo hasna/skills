@@ -43,6 +43,12 @@ export function assertAgentPolicyCollections(policy: Record<string, any>): void 
     }
   }
   if (bridge.disabledBuiltins !== undefined) for (const builtin of array(bridge.disabledBuiltins, AGENT_POLICY_LIMITS.builtinNames)) { requireBound(object(builtin)); text(builtin.path); text(builtin.hash, 64); }
+  // Reviewed Codex native policy trust: exact per-platform executable digests. Its
+  // semantic validation lives with the adapter; this keeps the stored bytes bounded.
+  if (bridge.codexNativePolicy !== undefined) {
+    const trust = record(bridge.codexNativePolicy, 1);
+    for (const [platform, digests] of Object.entries(record(trust.executableDigests, 8))) { text(platform, 32); for (const digest of array(digests, 16)) text(digest, 64); }
+  }
   if (bridge.discovery === undefined) return;
   for (const [agent, value] of Object.entries(record(bridge.discovery, AGENT_POLICY_LIMITS.agents))) {
     text(agent, 128); requireBound(object(value)); text(value.agent, 128);

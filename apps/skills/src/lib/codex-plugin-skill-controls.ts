@@ -148,6 +148,22 @@ function identity(document:string, cache:string, read:Read): { name:string; name
   if (controls.namespace!==parsed.namespace) refuse();
   return {name:parsed.name,pluginParent:parsed.pluginParent,...controls};
 }
+export interface CodexPluginCacheDocumentIdentity { name:string; namespace:string; pluginId:string; pluginParent:string; root:string; manifestSha256:string }
+/** Classify one cache document as installed-plugin content through the same
+ * manifest identity, capability review and real-path binding the reviewed
+ * predicates use. This is identity only: it consults no enable rule, reviewed
+ * control or native catalog, and it never admits anything by itself. */
+export function classifyCodexPluginCacheDocument(document:string, cache:string, read:Read):CodexPluginCacheDocumentIdentity|null {
+  if (!document.startsWith(cache+sep)) return null;
+  try {
+    const located=documentIdentity(document,cache,read), parsed=identity(document,cache,read);
+    if (!lstatSync(document).isFile() || realpathSync(document)!==document || realpathSync(located.root)!==located.root || realpathSync(located.pluginParent)!==located.pluginParent
+      || realpathSync(join(located.root,".codex-plugin/plugin.json"))!==join(located.root,".codex-plugin/plugin.json")) return null;
+    const parts=relative(cache,parsed.pluginParent).split(sep);
+    if (parts.length!==2 || parts.some(part=>!identifier(part)) || parts[1]!==parsed.namespace) return null;
+    return {name:parsed.name,namespace:parsed.namespace,pluginId:`${parts[1]}@${parts[0]}`,pluginParent:parsed.pluginParent,root:located.root,manifestSha256:parsed.manifestSha256};
+  } catch { return null; }
+}
 /** Establish the reviewed denial/skills-only role for an exact remote parent.
  * Walk every ancestor: a dangling alias or non-directory is never absence. */
 export function reviewedDisabledCodexPluginParent(cache:string, parent:string, controls:CodexPluginSkillControl[], rules:unknown):boolean {
