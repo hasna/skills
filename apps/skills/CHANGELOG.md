@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.46
+
+- Add explicitly reviewed Sumi settings witnesses that permit known display changes while preserving executable, plugin, permission and unknown configuration controls. Upgrade legacy reviews only with the exact preserved preimage and guarded policy readback.
+- Emit a fixed, versioned Skills refusal from the Sumi plugin without exposing hook stderr or arbitrary reasons. Recognize the exact previous managed plugin for a guarded update; modified plugins remain refused.
+
 ## 0.10.45
 
 - Preserve the exact Codex TOML text when Skills native configuration is already semantically current. Comment-only and formatting-only differences no longer rewrite managed configuration or invalidate its accepted witness; required configuration changes still apply.

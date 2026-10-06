@@ -538,6 +538,23 @@ skills hook rebind-settings --agent codex \
   --expected-settings-sha256 <current-settings-sha256> --json
 ```
 
+For Sumi, use `--agent sumi` and the exact preserved `sumi.json`. A fresh
+review can capture `skills hook witness --kind sumi-settings-v1 --path
+<absolute-sumi.json> --json` and include that witness in its discovery inputs.
+The versioned witness permits JSON whitespace and changes to `$schema`,
+`username`, `experimental.statusline` and `experimental.compact_tools` only.
+All other fields, unknown controls, nested plugin options, permission-map order
+and array order remain protected. Foreign plugin source witnesses and the
+explicit hook review remain required. Missing preserved bytes require a fresh
+review; the runtime never upgrades a stale review automatically.
+
+The Sumi plugin emits a fixed `SkillsHookRefusal` error with the own data property
+`skillsHookRefusal: { version: 1, code: "SKILLS_HOOK_REFUSED" }`. Its remediation
+is fixed; child stderr and arbitrary hook reasons are never copied into the
+error. A compatible Sumi adapter can present this refusal without turning it
+into an untyped server error. Regenerate the managed plugin with the normal
+guarded `skills hook install --agent sumi` flow after updating Skills.
+
 The plan proves the preserved original matches every witness being replaced,
 permits only the documented non-discovery differences, and labels the replacement
 witness (the JSON receipt lists them under `replacedWitnesses`). `--apply`

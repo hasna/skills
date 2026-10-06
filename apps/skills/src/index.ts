@@ -535,3 +535,5 @@ export { CLAUDE_COORDINATED_HOOK_EVENTS, type ClaudeCoordinatedHookEvent } from 
 
 export { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4, upgradeCodexSettingsWitness, upgradeCodexSettingsWitnessV3, upgradeCodexSettingsWitnessV4 } from "./lib/codex-settings-witness.js";
 export { projectCodexNativeSkillCatalog, projectCodexInstalledPlugins, projectCodexInstalledPluginEntries, captureCodexNativeSkillCatalog, isCodexNativeSkillDisabled, type CodexNativeSkillCatalog, type CodexNativeSkill, type CodexInstalledPlugin } from "./lib/codex-native-skill-catalog.js";
+
+export { captureSumiSettings, upgradeSumiSettingsWitness } from "./lib/sumi-settings-witness.js";

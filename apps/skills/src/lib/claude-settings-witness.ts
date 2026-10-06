@@ -21,7 +21,7 @@ function parents(path: string): Array<[string, BigIntStats]> {
     if (at === dirname(at)) return result;
   }
 }
-export function readNativeSettingsWitnessFile(path: string, budget: ClaudeSettingsWitnessBudget, filename: "settings.json" | "config.toml" = "settings.json"): string {
+export function readNativeSettingsWitnessFile(path: string, budget: ClaudeSettingsWitnessBudget, filename: "settings.json" | "config.toml" | "sumi.json" = "settings.json"): string {
   absolutePath(path); need(basename(path) === filename, `requires ${filename}`);
   need(Number.isSafeInteger(budget.remaining) && budget.remaining >= 0, "has an invalid byte budget");
   const ancestors = parents(path), initial = lstatSync(path, { bigint: true });
@@ -287,4 +287,29 @@ export function hashNativeJsonControls(text: string, excludedMetadata?: "version
     return false;
   });
   return createHash("sha256").update("hasna.skills.native-json-controls.v1\0").update(JSON.stringify(canonical(value))).digest("hex");
+}
+
+/** Sumi's versioned review uses the same strict JSON parser and bounded syntax
+ * tree. Unknown fields, permissions, routing and executable inputs stay bound.
+ * Only schema/display strings and two presentation-only booleans may vary. */
+export function hashSumiNativeJsonControls(text: string): string {
+  need(Buffer.byteLength(text) <= CLAUDE_SETTINGS_WITNESS_LIMITS.bytes, "exceeds its byte limit");
+  const value = parse(text);
+  value.entries = value.entries.filter(([key, child]) => {
+    if (key === "$schema" || key === "username") {
+      need(child.kind === "string", "has invalid Sumi display metadata");
+      return false;
+    }
+    if (key !== "experimental") return true;
+    need(child.kind === "object", "requires Sumi experimental controls to be an object");
+    child.entries = child.entries.filter(([name, option]) => {
+      if (name !== "statusline" && name !== "compact_tools") return true;
+      need(option.kind === "literal" && (option.value === "true" || option.value === "false"), "has invalid Sumi display preference");
+      return false;
+    });
+    return child.entries.length > 0;
+  });
+  // Sumi normalizes legacy permission maps with Object.entries: their order is
+  // authority, not formatting. Retain all control-key and array ordering.
+  return createHash("sha256").update("hasna.skills.sumi-settings.v1\0").update(JSON.stringify(value)).digest("hex");
 }

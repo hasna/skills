@@ -1,3 +1,4 @@
+import { upgradeSumiSettingsWitness, readSumiSettingsPreimage, SUMI_DISCOVERY_PROJECTION_FIELDS } from "./sumi-settings-witness.js";
 import { codexCorpusRootForPath, withCodexCorpusWrite, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
 import { reviewCodexPluginControls, reviewedCodexPluginSourceRoots, isReviewedCodexPluginInactive, isReviewedCodexPluginSkillDisabled, reviewedCodexPluginCapabilitiesUnchanged, disableReviewedCodexPluginNames, absentDisabledCodexPluginParent, classifyCodexPluginCacheDocument, type ReviewedCodexSkillDenial, type CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
 import { verifyCodexNativeSkillPolicy, parseCodexNativeHookEnvelope, recordCodexNativePolicyAcceptance, type CodexNativeHookEnvelope, type ProcessInspector, type NativePolicyHelperRunner } from "./codex-native-skill-policy.js";
@@ -17,7 +18,7 @@ import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, re
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderAgentHookCommand, renderOpenCodePlugin, type IntegrationAgent } from "./agent-adapters.js";
 import { assertCodexPathConfigEditable, CODEX_SKILL_CONFIG_SECTIONS, disableCodexBundledSkills, normalizeCodexInlinePathConfig } from "./agent-codex.js";
 
-import { sumiConfigDirectory, sumiConfigPath, sumiBridgeRoot, renderSumiPlugin, SUMI_SKILL_PERMISSIONS } from "./agent-sumi.js";
+import { sumiConfigDirectory, sumiConfigPath, sumiBridgeRoot, renderSumiPlugin, isManagedSumiPlugin, SUMI_SKILL_PERMISSIONS } from "./agent-sumi.js";
 import { HERMES_OPT_OUT, parseHermesConfig, configureHermesHooks, assertHermesProtection, renderHermesSupervisor, assertNoHermesLegacyShadow, type HermesSupervisorBinding } from "./agent-hermes.js";
 import type { CodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery.js";
 import { assertClaudeHookEventsReplacement, type ClaudeCoordinatedHookEvent } from "./claude-settings-witness.js";
@@ -30,7 +31,7 @@ export interface NativeSkillEntry { agent: string; path: string; hash: string; m
 export interface NativeMigrationTarget { agent: string; projectRoot: string; path: string; treeSha256: string; vendor?: true }
 export interface NativeMigrationTargetManifest { schema: "hasna.skills-native-migration-targets.v1"; targets: NativeMigrationTarget[]; digest: string }
 export interface AgentConfigChange { path: string; before: string | null; after: string }
-export interface AgentIntegrationPlan { observedNativeSources?: Array<{ path: string; sha256: string | null }>; codexPluginSkillReview?: { version: string; cwd: string; catalogSha256: string; configSha256: string | null }; observedSettings?: { path: string; before: string }; settingsWitnessUpgrade?: { agent: "claude" | "codex"; path: string; fromHashMode: string; fromSha256: string; toHashMode: string; toSha256: string; reviewedPreimage: string; currentSettingsSha256: string; replacedWitnesses: Array<{ hashMode: string; sha256: string }> }; dataDir: string; profileId: string; changes: AgentConfigChange[]; nativeSkills: NativeSkillEntry[]; observedPolicy?: { path: string; before: string | null }; discoveryBefore?: AgentDiscoveryBinding[]; discoveryAfter?: AgentDiscoveryBinding[]; rootAliases?: AgentRootAlias[]; managedAgentChecks?: { home: string; agents: IntegrationAgent[] }; retainedReviewChecks?: { home: string; projectDir: string; agents: IntegrationAgent[] } }
+export interface AgentIntegrationPlan { observedNativeSources?: Array<{ path: string; sha256: string | null }>; codexPluginSkillReview?: { version: string; cwd: string; catalogSha256: string; configSha256: string | null }; observedSettings?: { path: string; before: string }; settingsWitnessUpgrade?: { agent: "claude" | "codex" | "sumi"; path: string; fromHashMode: string; fromSha256: string; toHashMode: string; toSha256: string; reviewedPreimage: string; currentSettingsSha256: string; replacedWitnesses: Array<{ hashMode: string; sha256: string }> }; dataDir: string; profileId: string; changes: AgentConfigChange[]; nativeSkills: NativeSkillEntry[]; observedPolicy?: { path: string; before: string | null }; discoveryBefore?: AgentDiscoveryBinding[]; discoveryAfter?: AgentDiscoveryBinding[]; rootAliases?: AgentRootAlias[]; managedAgentChecks?: { home: string; agents: IntegrationAgent[] }; retainedReviewChecks?: { home: string; projectDir: string; agents: IntegrationAgent[] } }
 
 const sha = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
 const HOOK_EVENTS: readonly ContextHookEvent[] = ["UserPromptSubmit", "SessionStart", "SubagentStart"];
@@ -664,7 +665,7 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
       const pluginPath = join(sumiConfigDirectory(home), "plugins", "skills-cli.js"), pluginBefore = readOptional(pluginPath);
       const pluginAfter = renderSumiPlugin(command, profileId);
       const priorCommand = policy.bridge?.commands?.sumi, priorProfile = policy.bridge?.profiles?.sumi ?? policy.profileId;
-      if (pluginBefore !== null && pluginBefore !== pluginAfter && !(typeof priorCommand === "string" && typeof priorProfile === "string" && pluginBefore === renderSumiPlugin(priorCommand, priorProfile))) throw new Error("Refusing to overwrite a modified Sumi Skills plugin; preserve and review it first");
+      if (pluginBefore !== null && pluginBefore !== pluginAfter && !(typeof priorCommand === "string" && typeof priorProfile === "string" && isManagedSumiPlugin(pluginBefore, priorCommand, priorProfile))) throw new Error("Refusing to overwrite a modified Sumi Skills plugin; preserve and review it first");
       if (pluginBefore !== pluginAfter) changes.push({ path: pluginPath, before: pluginBefore, after: pluginAfter });
     } else if (agent === "opencode") {
       const permission = config.permission ?? {};
@@ -995,7 +996,7 @@ function atomicWrite(path: string, content: string): void {
  * Runtime readers never relax the old witness. All other discovery sources,
  * unknown settings, native controls and policy bytes remain guarded.
  */
-export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "codex"; targetCodexVersion?: 2 | 3 | 4; reviewedPreimage: string; home?: string; dataDir?: string; projectDir?: string; expectedPolicySha256: string; expectedSettingsSha256: string }): AgentIntegrationPlan {
+export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "codex" | "sumi"; targetCodexVersion?: 2 | 3 | 4; reviewedPreimage: string; home?: string; dataDir?: string; projectDir?: string; expectedPolicySha256: string; expectedSettingsSha256: string }): AgentIntegrationPlan {
   if (options.targetCodexVersion !== undefined && (options.agent !== "codex" || ![2, 3, 4].includes(options.targetCodexVersion))) throw new Error("Invalid Codex witness target version");
   const home = resolve(options.home ?? homedir()), dataDir = options.dataDir ?? getDataDirReadOnly();
   const snapshot = readManagedSkillPolicySnapshot(dataDir);
@@ -1004,7 +1005,7 @@ export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "co
   recheckRootAliases(aliases);
   const binding: AgentDiscoveryBinding | undefined = policy.bridge?.discovery?.[options.agent];
   if (!binding || binding.agent !== options.agent || binding.method !== "reviewed") throw new Error("Settings witness upgrade requires an existing reviewed native binding");
-  const configPath = canonicalAgentPath(join(home, options.agent === "claude" ? ".claude/settings.json" : ".codex/config.toml"), aliases);
+  const configPath = canonicalAgentPath(options.agent === "sumi" ? sumiConfigPath(home) : join(home, options.agent === "claude" ? ".claude/settings.json" : ".codex/config.toml"), aliases);
   const settings = readOptional(configPath);
   if (settings === null || sha(settings) !== options.expectedSettingsSha256) throw new Error("Native settings preimage changed");
   const sources = binding.sources.filter(source => source.path === configPath && source.format === undefined && source.fields === undefined);
@@ -1028,7 +1029,18 @@ export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "co
       replaced.push(source);
     }
   }
-  const next = options.agent === "claude"
+  if (options.agent === "sumi") {
+    const preimage = readSumiSettingsPreimage(options.reviewedPreimage);
+    for (const source of binding.sources) {
+      if (source === previous || source.path !== configPath) continue;
+      if (source.hashMode !== undefined || source.format !== "json" || !isDeepStrictEqual(source.fields, [...SUMI_DISCOVERY_PROJECTION_FIELDS]) || typeof source.sha256 !== "string") throw new Error("Sumi settings witness upgrade found an unrecognized configuration witness");
+      if (projectNativeDiscoveryFields(preimage, "json", source.fields!, configPath) !== source.sha256) throw new Error("Reviewed preimage does not explain the Sumi discovery projection witness");
+      replaced.push(source);
+    }
+  }
+  const next = options.agent === "sumi"
+    ? upgradeSumiSettingsWitness(previous as Parameters<typeof upgradeSumiSettingsWitness>[0], options.reviewedPreimage)
+    : options.agent === "claude"
     ? upgradeClaudeSettingsWitness(previous as Parameters<typeof upgradeClaudeSettingsWitness>[0], options.reviewedPreimage)
     : options.targetCodexVersion === 4
       ? upgradeCodexSettingsWitnessV4(previous as Parameters<typeof upgradeCodexSettingsWitnessV4>[0], options.reviewedPreimage)
@@ -1311,7 +1323,7 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
     if (supervisor?.path !== join(dataDir, "agent-hooks", "hermes.js") || supervisor?.sha256 !== sha(renderHermesSupervisor(command, profile))) throw new Error("NATIVE_SKILL_DRIFT: Hermes supervisor binding changed; run skills hook install");
     assertHermesProtection(home, config, command, profile, supervisor);
   } else if (agent === "sumi") {
-    if (JSON.stringify(config.permissions?.filter((rule: any) => rule.action === "skill")) !== JSON.stringify(SUMI_SKILL_PERMISSIONS) || readOptional(join(sumiConfigDirectory(home), "plugins", "skills-cli.js")) !== renderSumiPlugin(command, profile)) throw new Error("NATIVE_SKILL_DRIFT: Sumi bridge protection changed; run skills hook install");
+    if (JSON.stringify(config.permissions?.filter((rule: any) => rule.action === "skill")) !== JSON.stringify(SUMI_SKILL_PERMISSIONS) || !isManagedSumiPlugin(readOptional(join(sumiConfigDirectory(home), "plugins", "skills-cli.js")), command, profile)) throw new Error("NATIVE_SKILL_DRIFT: Sumi bridge protection changed; run skills hook install");
   } else if (agent === "opencode") {
     if (JSON.stringify(config.permission?.skill) !== JSON.stringify({ "*": "deny", [CLI_BRIDGE_NAME]: "allow" }) || readOptional(join(home, ".config", "opencode", "plugins", "skills-cli.js")) !== renderOpenCodePlugin(command, profile)) throw new Error("NATIVE_SKILL_DRIFT: OpenCode bridge protection changed; run skills hook install");
   } else {

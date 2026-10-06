@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { renderSumiPlugin, sumiConfigDirectory } from "./agent-sumi.js";
+import { renderSumiPlugin, isManagedSumiPlugin, sumiConfigDirectory } from "./agent-sumi.js";
 import { applyAgentIntegration, assertManagedAgentBridge, planAgentIntegration } from "./agent-integration.js";
 import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
 
@@ -34,6 +34,25 @@ afterEach(() => {
 afterAll(() => { expect(configSelectors.every(key => process.env[key] === inheritedSelectors.get(key))).toBe(true); });
 function fixture() { const root = mkdtempSync(join(tmpdir(), "skills-sumi-native-")); roots.push(root); return root; }
 function put(path: string, text: string) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text); }
+
+test("exact previous managed Sumi plugin upgrades with preservation; modified bytes stay refused", () => {
+  const legacy = readFileSync(new URL("./fixtures/sumi-plugin-v1.js", import.meta.url), "utf8");
+  // Exact output shipped before the branded-refusal contract, independent of
+  // the current renderer's compatibility implementation.
+  expect(createHash("sha256").update(legacy).digest("hex")).toBe("19e3798e4924ef9ef4004ace2addfc581d7fdd60172825cf1dbdc0a8e881de7c");
+  expect(isManagedSumiPlugin(legacy, "skills", "default")).toBe(true);
+  expect(isManagedSumiPlugin(legacy + "\n", "skills", "default")).toBe(false);
+  const home = fixture(), dataDir = join(home, "skills-data");
+  const options = { home, dataDir, agents: ["sumi" as const], command: "skills", profileId: "default" };
+  applyAgentIntegration(planAgentIntegration(options));
+  const plugin = join(sumiConfigDirectory(home), "plugins/skills-cli.js"); put(plugin, legacy);
+  expect(() => assertManagedAgentBridge("sumi", { home, dataDir, projectDir: home })).not.toThrow();
+  const result = applyAgentIntegration(planAgentIntegration(options));
+  expect(result.backups.some(path => readFileSync(path, "utf8") === legacy)).toBe(true);
+  expect(readFileSync(plugin, "utf8")).toBe(renderSumiPlugin("skills", "default"));
+  put(plugin, legacy + "\n");
+  expect(() => planAgentIntegration(options)).toThrow("modified Sumi");
+});
 
 test("read-only Sumi resolver honors native selectors and adopted roots without creating state", () => {
   const home = fixture(), canonical = join(home, ".hasna-internal/sumi/config"), legacy = join(home, ".config/sumi");
@@ -151,7 +170,7 @@ test("legacy Sumi plugin changes invalidate automatic and retained reviewed witn
 
 test("native prompt and request hooks preserve actual root, child and nested custody", async () => {
   const root = fixture(), log = join(root, "calls.jsonl"), command = join(root, "fixture-skills"), pluginPath = join(root, "plugin.js");
-  put(command, `#!${process.execPath}\nimport {appendFileSync} from "node:fs";\nconst input = await Bun.stdin.json(); appendFileSync(${JSON.stringify(log)}, JSON.stringify(input)+"\\n");\nif (input.prompt === "refuse") console.log(JSON.stringify({decision:"block"}));\nelse if (input.prompt === "malformed") console.log("invalid");\nelse console.log(JSON.stringify({hookSpecificOutput:{hookEventName:input.hook_event_name,additionalContext:input.prompt === "optional" ? "No Skills instructions were delivered by this hook. Ordinary work may continue." : "Verified fixture instructions"}}));\n`); chmodSync(command, 0o700);
+  put(command, `#!${process.execPath}\nimport {appendFileSync} from "node:fs";\nconst input = await Bun.stdin.json(); appendFileSync(${JSON.stringify(log)}, JSON.stringify(input)+"\\n");\nif (input.prompt === "refuse") console.log(JSON.stringify({decision:"block",stopReason:"UNTRUSTED_STOP_REASON /private/path",message:"UNTRUSTED_MESSAGE"}));\nelse if (input.prompt === "malformed") console.log("invalid");\nelse console.log(JSON.stringify({hookSpecificOutput:{hookEventName:input.hook_event_name,additionalContext:input.prompt === "optional" ? "No Skills instructions were delivered by this hook. Ordinary work may continue." : "Verified fixture instructions"}}));\n`); chmodSync(command, 0o700);
   put(pluginPath, renderSumiPlugin(command, "engineering"));
   const plugin = (await import(pluginPath)).default;
   const hooks = new Map<string, (event: any) => Promise<void>>();
@@ -177,14 +196,22 @@ test("native prompt and request hooks preserve actual root, child and nested cus
     ["SessionStart", "root", null], ["UserPromptSubmit", "root", null], ["SubagentStart", "child", "root"], ["UserPromptSubmit", "child", "root"], ["SubagentStart", "nested", "child"], ["UserPromptSubmit", "nested", "child"],
   ]);
   expect(calls.every(call => call.agent_id === undefined && call.restore === true)).toBe(true);
-  await expect(hooks.get("prompt")!({ sessionID: "root", prompt: { text: "refuse" } })).rejects.toThrow("refused");
+  for (const text of ["refuse", "malformed"]) {
+    let refusal: any;
+    try { await hooks.get("prompt")!({ sessionID: "root", prompt: { text } }); } catch (error) { refusal = error; }
+    expect(refusal?.name).toBe("SkillsHookRefusal");
+    expect(Object.getOwnPropertyDescriptor(refusal, "skillsHookRefusal")?.value).toEqual({ version: 1, code: "SKILLS_HOOK_REFUSED" });
+    expect(refusal?.message).toBe("Skills verification blocked this request. Review the Sumi Skills hook configuration, then retry.");
+    expect(JSON.stringify(refusal)).not.toContain("UNTRUSTED");
+    expect(refusal?.cause).toBeUndefined();
+  }
   await expect(hooks.get("prompt")!({ sessionID: "root", prompt: { text: "malformed" } })).rejects.toThrow();
   const request = { sessionID: "root", system: [] as Array<{ type: string; text: string }>, messages: [{ role: "user", content: [{ type: "text", text: "optional" }] }] };
   await hooks.get("context")!(request);
   expect(JSON.stringify(request.system)).toContain("Ordinary work may continue");
-  await expect(hooks.get("prompt")!({ sessionID: "root", prompt: { text: "review", skills: [{ id: "foreign" }] } })).rejects.toThrow("attachment refused");
-  expect(() => hooks.get("execute.before")!({ tool: "skill", input: { id: "foreign" } })).toThrow("payload refused");
-  expect(() => hooks.get("execute.before")!({ tool: "skill", input: { name: "skills-cli" } })).toThrow("payload refused");
+  await expect(hooks.get("prompt")!({ sessionID: "root", prompt: { text: "review", skills: [{ id: "foreign" }] } })).rejects.toThrow("Skills verification blocked");
+  expect(() => hooks.get("execute.before")!({ tool: "skill", input: { id: "foreign" } })).toThrow("Skills verification blocked");
+  expect(() => hooks.get("execute.before")!({ tool: "skill", input: { name: "skills-cli" } })).toThrow("Skills verification blocked");
   await hooks.get("execute.before")!({ tool: "skill", input: { id: "skills-cli" } });
   await hooks.get("execute.before")!({ tool: "read", input: {} });
   await cleanup(); expect(hooks.size).toBe(0);
