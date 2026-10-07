@@ -522,7 +522,7 @@ export { planAgentIntegration, planClaudeStopHookUpdate, planClaudePreToolUseHoo
 export type { ClaudeManagedHookProjection, ClaudeManagedHookProjectionOptions } from "./lib/agent-integration.js";
 export { captureDiscoveryDirectories, captureDiscoveryByteSources, captureDiscoveryPathSources, type DiscoveryDirectory, type DiscoverySource } from "./lib/agent-discovery.js";
 export { captureClaudeMarketplaceRegistry, captureClaudeMarketplaceRegistryV2 } from "./lib/claude-marketplace-registry.js";
-export { captureClaudeSettings, captureClaudeSettingsV2, captureClaudeSettingsV3, upgradeClaudeSettingsWitness } from "./lib/claude-settings-witness.js";
+export { captureClaudeSettings, captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4, upgradeClaudeSettingsWitness, upgradeClaudeSettingsWitnessV4 } from "./lib/claude-settings-witness.js";
 export { buildPluginProjection, pluginTreeDigest, type PluginProjectionManifest, type PluginPayloadMapping, type PluginFileWitness } from "./lib/plugin-projection.js";
 export { planPluginAdmission, admitPlugin, resolveAdmittedPlugin, pluginResolverCommand, type PluginAdmissionTarget, type PluginAdmissionBinding, type PluginAdmissionPrincipal, type PluginAdmissionPlan, type PluginAdmissionIdentity, type PluginBundleIdentity, type PluginRoutingIdentity, type PluginAdmissionReceipt } from "./lib/plugin-admission.js";
 export { captureManagedPluginRegistry, type ManagedPluginRegistrationWitness } from "./lib/plugin-discovery.js";
