@@ -499,7 +499,7 @@ test("expired native hooks safely reconcile unchanged loaded selections on promp
   } finally { await f.close(); }
 });
 
-test("expired native hooks continue without payload when a loaded selection changed", async () => {
+test("expired native hooks retain authorized historical bodies after a selected version upgrade", async () => {
   const f = await fixture();
   try {
     await f.a.install();
@@ -517,12 +517,15 @@ test("expired native hooks continue without payload when a loaded selection chan
       const result = await f.a.hook(agent, event, event === "SessionStart" ? { source: "resume" } : { prompt: "$review-code" });
       expect(result.decision).toBeUndefined();
       expect(result.continue).not.toBe(false);
-      expect(result.hookSpecificOutput.additionalContext).toContain("Do not perform actions that depend on unavailable Skills instructions");
-      expect(JSON.stringify(result)).not.toContain("Published");
-      expect(JSON.stringify(result)).toContain("SESSION_RECONCILIATION_REQUIRED");
-      expect(readFileSync(receiptPath)).toEqual(before);
+      expect(JSON.stringify(result)).not.toContain("SESSION_RECONCILIATION_REQUIRED");
+      expect(JSON.stringify(result)).not.toContain("Published 2.0.0");
+      if (event === "SessionStart") expect(result.hookSpecificOutput.additionalContext).toContain("Published 1.0.0");
+      expect(json(receiptPath).profile).toEqual(expired.profile);
+      expect(json(receiptPath).loaded).toEqual(expired.loaded);
     }
-    expect(existsSync(join(f.a.data, "selection-cache", "session-reconciliations"))).toBe(false);
+    const archives = join(f.a.data, "selection-cache", "session-reconciliations");
+    expect(readFileSync(join(archives, readdirSync(archives)[0]!, "original.json"))).toEqual(before);
+    expect(f.requests).toContain("GET /api/v1/skills/review-code/versions/1.0.0/bundle");
   } finally { await f.close(); }
 });
 
@@ -913,4 +916,59 @@ test("installed Codex prompt continues after reviewed Pages app and qualified sk
   put(appPath,app.replace("true","false"));const changed=await f.a.hook("codex","UserPromptSubmit",{prompt:"ordinary coding"});expect(changed.decision).toBe("block");expect(changed.reason).toContain("NATIVE_SKILL_DRIFT");expect(changed.hookSpecificOutput).toBeUndefined();
   put(appPath,app);add("4.0.0",["unknown"]); const unsafe=await f.a.hook("codex","UserPromptSubmit",{prompt:"$review-code"});expect(unsafe.decision).toBe("block");expect(unsafe.reason).toContain("NATIVE_SKILL_DRIFT");expect(unsafe.hookSpecificOutput).toBeUndefined();
  } finally { await f.close(); }
+});
+
+// Exercise the exact public context command used by managed hooks, with a real
+// authenticated HTTP store and complete old/current profiles. No native process.
+test("public expired cached hook context renews the old complete pin after routine upgrade", async () => {
+  const f = await fixture("", false);
+  try {
+    const first = await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+    await f.a.ok(["sync", "--selection-profile", "engineering", "--json"]);
+    const command = ["context", "review", "--session", "parent-session", "--selection-profile", "engineering", "--cached", "--auto-reconcile-safe", "--restore", "--json"];
+    expect((await f.a.ok(command)).context).toContain("Published 1.0.0");
+    const sessions = join(f.a.data, "selection-cache", "sessions"), receiptPath = join(sessions, readdirSync(sessions)[0]!);
+    const old = json(receiptPath); old.verifiedAt = new Date(0).toISOString(); put(receiptPath, JSON.stringify(old));
+    const before = readFileSync(receiptPath);
+    await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[1]!.file, "--if-match", first.revision, "--json"]);
+    const result = await f.a.ok(command);
+    expect(result.context).toContain("Published 1.0.0"); expect(result.context).not.toContain("Published 2.0.0");
+    const current = json(receiptPath);
+    expect(current.profile).toEqual(old.profile); expect(current.loaded).toEqual(old.loaded);
+    expect(Date.parse(current.verifiedAt)).toBeGreaterThan(Date.parse(old.verifiedAt));
+    const archives = join(f.a.data, "selection-cache", "session-reconciliations");
+    expect(readFileSync(join(archives, readdirSync(archives)[0]!, "original.json"))).toEqual(before);
+    expect(f.requests).toContain("GET /api/v1/skills/review-code/versions/1.0.0/bundle");
+  } finally { await f.close(); }
+});
+
+for (const change of ["removed", "revived", "legacy-upgrade", "corrupt-old-bundle"] as const) test(`public expired cached hook renewal refuses ${change} without receipt or body leakage`, async () => {
+  const f = await fixture("", false);
+  try {
+    const first = await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+    await f.a.ok(["sync", "--selection-profile", "engineering", "--json"]);
+    const command = ["context", "review", "--session", "parent-session", "--selection-profile", "engineering", "--cached", "--auto-reconcile-safe", "--restore", "--json"];
+    expect((await f.a.ok(command)).context).toContain("Published 1.0.0");
+    const sessions = join(f.a.data, "selection-cache", "sessions"), receiptPath = join(sessions, readdirSync(sessions)[0]!);
+    const old = json(receiptPath); old.verifiedAt = new Date(0).toISOString();
+    if (change === "legacy-upgrade") for (const selection of old.profile.selections) delete selection.authorizationEpoch;
+    put(receiptPath, JSON.stringify(old)); const before = readFileSync(receiptPath);
+    if (change === "revived") {
+      const prior = (await f.store.getSkill(f.principal, "review-code"))!;
+      await f.store.deleteSkill(f.principal, "review-code", 60_000);
+      await f.store.publishSkill({ principal: f.principal, slug: prior.slug, displayName: prior.displayName, description: prior.description, category: prior.category, tags: prior.tags, source: prior.source, kind: prior.kind, version: "3.0.0" });
+      // Leave the current profile at exactly the original selected bytes. Epoch alone refuses revival.
+    } else {
+      const file = change === "removed" ? join(f.root, "empty.json") : f.versions[1]!.file;
+      if (change === "removed") put(file, JSON.stringify({ selections: [] }));
+      await f.a.ok(["profiles", "set", "engineering", "--file", file, "--if-match", first.revision, "--json"]);
+    }
+    if (change === "corrupt-old-bundle") f.store.database.query("UPDATE skills_bundles SET body_blob = ? WHERE org_id = ? AND sha256 = ?").run(new Uint8Array([0]), f.principal.orgId, f.versions[0]!.selection.bundleDigest.slice(7));
+    const result = await f.a.run(command);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout + result.stderr).not.toContain("Published 1.0.0");
+    expect(result.stdout + result.stderr).not.toContain("Published 2.0.0");
+    expect(readFileSync(receiptPath)).toEqual(before);
+    expect(existsSync(join(f.a.data, "selection-cache", "session-reconciliations"))).toBe(false);
+  } finally { await f.close(); }
 });

@@ -21,6 +21,8 @@ export interface ProfileClient {
   /** Stable whoami subject; raw credential/key identities are intentionally excluded. */
   resolvePrincipal?(): Promise<AuthenticatedProfilePrincipal>;
   resolveProfile(id: string): Promise<ResolvedSkillProfile>;
+  /** Optional on older authorities/embedders; absence never authorizes old versions. */
+  supportsPinRenewal?(): Promise<boolean>;
   recordStation(
     id: string,
     state: StationSkillStateInput,
@@ -92,6 +94,7 @@ export class HttpProfileClient implements ProfileClient {
   constructor(
     private key: string,
     origin: string,
+    private signal?: AbortSignal,
   ) {
     if (!key.trim()) throw new Error("A Skills credential is required");
     this.origin = normalizeSkillsApiOrigin(origin);
@@ -113,7 +116,7 @@ export class HttpProfileClient implements ProfileClient {
           ...init,
           redirect: "error",
           credentials: "omit",
-          signal: AbortSignal.timeout(15_000),
+          signal: this.signal ? AbortSignal.any([this.signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
           headers: {
             "Content-Type": "application/json",
             "User-Agent": `hasna-skills/${pkg.version}`,
@@ -143,12 +146,17 @@ export class HttpProfileClient implements ProfileClient {
     try {
       return JSON.parse(
         new TextDecoder().decode(
-          await readBoundedResponse(response, limit),
+          await readBoundedResponse(response, limit, this.signal),
         ),
       );
     } catch {
       invalid();
     }
+  }
+  async supportsPinRenewal(): Promise<boolean> {
+    const result = await this.read(await this.request("/capabilities"));
+    if (!object(result) || !Array.isArray(result.capabilities)) invalid();
+    return result.capabilities.includes("skills.session-pin-renewal");
   }
   async resolveProfile(id: string): Promise<ResolvedSkillProfile> {
     if (!identifier(id)) throw new Error("Invalid selection profile id");
@@ -171,6 +179,7 @@ export class HttpProfileClient implements ProfileClient {
       validateSelection(entry);
       const item = entry as SkillSelection & Record<string, unknown>;
       if (
+        (item.authorizationEpoch !== undefined && (typeof item.authorizationEpoch !== "string" || !/^[a-f0-9]{32}$/.test(item.authorizationEpoch))) ||
         seen.has(item.slug) ||
         item.authority !== this.authority ||
         item.workspaceId !== result.workspaceId ||
@@ -258,7 +267,7 @@ export class HttpProfileClient implements ProfileClient {
     );
   }
 }
-export async function createProfileClient(): Promise<ProfileClient> {
+export async function createProfileClient(signal?: AbortSignal): Promise<ProfileClient> {
   let connection;
   try { connection = await resolveSkillsConnection(); }
   catch (error) {
@@ -269,5 +278,5 @@ export async function createProfileClient(): Promise<ProfileClient> {
   }
   if (!connection)
     throw new Error("Selection profiles require a configured Skills API");
-  return new HttpProfileClient(connection.apiKey, connection.apiOrigin);
+  return new HttpProfileClient(connection.apiKey, connection.apiOrigin, signal);
 }

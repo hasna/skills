@@ -23,7 +23,7 @@ export function describeRemoteFiles(files: RemoteInputFile[]): RemoteInputFileDe
 
 export function sha256(bytes: Uint8Array): string { return createHash("sha256").update(bytes).digest("hex"); }
 
-export async function readBoundedResponse(response: Response, maximum: number): Promise<Uint8Array> {
+export async function readBoundedResponse(response: Response, maximum: number, signal?: AbortSignal): Promise<Uint8Array> {
   if (!Number.isSafeInteger(maximum) || maximum < 0 || maximum > MAX_REMOTE_FILE_BYTES) throw new Error("Invalid artifact size limit");
   const length = response.headers.get("content-length");
   if (length && (!/^\d+$/.test(length) || Number(length) > maximum)) {
@@ -32,18 +32,23 @@ export async function readBoundedResponse(response: Response, maximum: number): 
   }
   const reader = response.body?.getReader();
   if (!reader) return new Uint8Array();
+  signal?.throwIfAborted();
+  const abort = () => { void reader.cancel().catch(() => {}); };
+  signal?.addEventListener("abort", abort, { once: true });
   const chunks: Uint8Array[] = [];
   let size = 0;
   try {
     while (true) {
+      signal?.throwIfAborted();
       const next = await reader.read();
+      signal?.throwIfAborted();
       if (next.done) break;
       size += next.value.byteLength;
       if (size > maximum) throw new Error("Artifact exceeds its declared size limit");
       chunks.push(next.value);
     }
   } catch (error) { await reader.cancel().catch(() => {}); throw error; }
-  finally { reader.releaseLock(); }
+  finally { signal?.removeEventListener("abort", abort); reader.releaseLock(); }
   const bytes = new Uint8Array(size);
   let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }

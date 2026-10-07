@@ -1,0 +1,50 @@
+# Renewing immutable session pins
+
+Managed cached context expires after 24 hours. A renewal checks the authenticated
+profile again; it does not automatically migrate the session to newly selected
+skill versions. When the server advertises `skills.session-pin-renewal`, a pin
+with a verified authorization epoch can retain its complete old profile across
+ordinary version upgrades. Every old selection must still be selected with the
+same policy and lifecycle epoch. Historical bundles must pass authenticated
+exact-version, epoch, digest and archive verification. A final profile read and
+the local receipt's existing generation/hash guard reject concurrent changes.
+The whole authorization shares a four-second deadline; failed authorization
+never refreshes the receipt or writes downloaded bundles into its cache.
+
+Removing a selection, changing its aliases or triggers, deleting or archiving
+a skill, losing access, or failing integrity checks still refuses renewal.
+Deletion and archive transitions rotate the server's per-skill epoch. Restoring
+or recreating a skill can authorize new sessions, but cannot silently revive a
+known older epoch. Ordinary publishing leaves the epoch unchanged.
+
+## Compatibility and intentional migration
+
+Existing clients and servers keep the exact-current-selection path. An older
+receipt without epochs can acquire genuine current epochs only if every old
+selection still matches the authoritative current version, digest and policy.
+This is fresh authorization now, not evidence of historical continuity. A
+legacy receipt whose selected version has already changed requires one reviewed
+migration. No bulk receipt rewrite is needed; new sessions acquire current
+epochs normally. Known epoch mismatches always require intentional migration,
+even when the selected bytes match again.
+
+Use `skills sessions show <session-id> --json`, then plan with
+`skills sessions reconcile <session-id> --from-profile <old-id>
+--from-revision <old-revision> --receipt-sha256 <old-sha256>
+--selection-profile <target-id> --profile-revision <target-revision>`.
+Review the loaded selections retained or retired. Apply only that unchanged
+plan with `--apply --plan-digest <digest> --plan-issued-at <time>
+--plan-expires-at <time>` within its five-minute window. The supported operation
+preserves the original receipt and records the replacement; it does not rewrite
+other sessions, running processes, project locks or shared profiles.
+
+## Server migration
+
+Migration `0011_skill_authorization_epoch` adds a current baseline to each
+registry row and lifecycle triggers for SQLite and PostgreSQL. It does not
+rewrite immutable version rows, profiles or local session receipts. Preserve
+and verify the existing store before using the owning migration command. Deploy
+the migrated server before relying on historical-pin renewal. A server that does
+not advertise the capability never grants relaxed historical renewal; missing
+advertised epochs fail closed. Store rollback must restore the preserved store
+as a unit, not manufacture prior epochs.

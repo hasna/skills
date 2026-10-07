@@ -262,6 +262,8 @@ export interface ServerSkillRecord {
    */
   tombstonedAt?: string;
   tombstonePurgeAfter?: string;
+  /** Changes on lifecycle breaks, not ordinary immutable-version publication. */
+  authorizationEpoch?: string;
   /** Catalog lifecycle state. Archived rows retain versions and bundles for explicit reads. */
   lifecycle: "active" | "archived";
   archivedAt?: string;
@@ -337,7 +339,7 @@ export interface PublishedSkillSelection {
 
 /** Metadata only: bundle availability means its tenant-owned storage row exists. */
 export interface PublishedSkillSelectionState extends PublishedSkillSelection {
-  current: Pick<ServerSkillRecord, "lifecycle" | "tombstonedAt"> | null;
+  current: Pick<ServerSkillRecord, "lifecycle" | "tombstonedAt" | "authorizationEpoch"> | null;
   versionBundleSha256: string | null;
   bundleAvailable: boolean;
 }

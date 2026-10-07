@@ -44,6 +44,7 @@ test("safe hook reconciliation archives an expired pin and preserves loaded skil
   const before = readFileSync(sessionReceiptPath("root", f));
   const target = { ...oldProfile, profileRevision: "new-revision", selections: [
     { ...oldProfile.selections[0]!, profileRevision: "new-revision" },
+    { ...unselected, profileRevision: "new-revision" },
     { ...unselected, slug: "new-skill", profileRevision: "new-revision" },
   ] };
   const client = { ...f.client, resolveProfile: async () => target };
@@ -57,12 +58,11 @@ test("safe hook reconciliation archives an expired pin and preserves loaded skil
 });
 
 test("safe hook reconciliation refuses changed loaded skills, changed identity and ambiguous concurrent writes", async () => {
-  for (const change of ["removed", "trigger", "version", "workspace", "profile", "concurrent"] as const) {
+  for (const change of ["removed", "trigger", "workspace", "profile", "concurrent"] as const) {
     const f = fixture();
     const target = { ...f.old.profile, profileRevision: "new-revision", selections: f.old.profile.selections.map(selection => ({ ...selection, profileRevision: "new-revision" })) };
     if (change === "removed") target.selections = [];
     if (change === "trigger") target.selections[0] = { ...target.selections[0]!, triggers: { always: true } };
-    if (change === "version") target.selections[0] = { ...target.selections[0]!, version: "2.0.0" };
     if (change === "workspace") {
       target.workspaceId = "other-workspace";
       target.selections[0] = { ...target.selections[0]!, workspaceId: "other-workspace" };

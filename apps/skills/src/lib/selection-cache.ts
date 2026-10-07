@@ -43,6 +43,7 @@ export function validateSelection(selection: ResolvedSkillSelection): void {
   if (!selection || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(selection.slug)
       || !isValidSkillVersion(selection.version) || !/^sha256:[a-f0-9]{64}$/.test(selection.bundleDigest)
       || typeof selection.workspaceId !== "string" || !selection.workspaceId.trim()
+      || (selection.authorizationEpoch !== undefined && (typeof selection.authorizationEpoch !== "string" || !/^[a-f0-9]{32}$/.test(selection.authorizationEpoch)))
       || typeof selection.profileRevision !== "string" || !selection.profileRevision.trim()) {
     throw new SkillSelectionError("INVALID_SELECTION", "A skill selection must carry an exact version, digest, workspace and profile revision.");
   }
@@ -142,9 +143,12 @@ export function readSelectionJson<T>(path: string): T | null {
   catch { throw new SkillSelectionError("INVALID_RECEIPT", "The Skills selection receipt is unreadable; sync the profile again."); }
 }
 
-async function verifiedEntries(selection: ResolvedSkillSelection, bytes: Uint8Array): Promise<SkillBundleEntry[]> {
+async function verifiedEntries(selection: ResolvedSkillSelection, bytes: Uint8Array, signal?: AbortSignal, deadline?: number): Promise<SkillBundleEntry[]> {
   if (`sha256:${sha256Hex(bytes)}` !== selection.bundleDigest) throw new SkillSelectionError("BUNDLE_DIGEST_MISMATCH", "The skill bundle does not match its selected digest.");
-  const bundle = await inspectSkillBundle(bytes);
+  const remaining = deadline === undefined ? undefined : Math.floor(deadline - performance.now());
+  signal?.throwIfAborted();
+  if (remaining !== undefined && remaining <= 0) throw new SkillSelectionError("SKILLS_API_UNAVAILABLE", "Skills session authorization deadline exceeded.");
+  const bundle = await inspectSkillBundle(bytes, { signal, ...(remaining === undefined ? {} : { limits: { timeoutMs: remaining } }) });
   // Executable versions can ship README.md/CLAUDE.md, or only runtime files.
   // Cache validity is archive safety and exact identity; document reads decide
   // which documentation is available without executing the package.
@@ -154,7 +158,8 @@ export async function readCachedSelection(selection: ResolvedSkillSelection, opt
   const bytes = readRegularFile(selectionBundlePath(selection, options), SKILL_BUNDLE_INSPECTION_LIMITS.compressedBytes);
   return bytes ? verifiedEntries(selection, bytes) : null;
 }
-export async function cacheSelectionBundle(selection: ResolvedSkillSelection, response: Response | null, options: SelectionCacheOptions = {}): Promise<SkillBundleEntry[]> {
+/** Verify an authenticated exact-version response without changing any cache or receipt. */
+export async function verifySelectionBundleResponse(selection: ResolvedSkillSelection, response: Response | null, signal?: AbortSignal, deadline?: number): Promise<{ bytes: Uint8Array; entries: SkillBundleEntry[] }> {
   validateSelection(selection);
   if (!response?.ok) throw new SkillSelectionError("BUNDLE_UNAVAILABLE", `The selected skill bundle is unavailable${response ? ` (HTTP ${response.status})` : ""}.`);
   const declared = response.headers.get("X-Skill-Bundle-Sha256");
@@ -163,25 +168,40 @@ export async function cacheSelectionBundle(selection: ResolvedSkillSelection, re
     await response.body?.cancel();
     throw new SkillSelectionError("BUNDLE_IDENTITY_MISMATCH", "The returned bundle does not match the selected version and digest.");
   }
+  const epoch = response.headers.get("X-Skill-Authorization-Epoch");
+  if (selection.authorizationEpoch !== undefined && epoch !== selection.authorizationEpoch) {
+    void response.body?.cancel().catch(() => {});
+    throw new SkillSelectionError("SESSION_RECONCILIATION_REQUIRED", "The selected bundle lifecycle authorization changed or is unavailable.");
+  }
   const maximum = SKILL_BUNDLE_INSPECTION_LIMITS.compressedBytes;
   const reader = response.body?.getReader();
   if (!reader) throw new SkillSelectionError("BUNDLE_UNAVAILABLE", "The selected bundle response has no body.");
+  signal?.throwIfAborted();
+  const abort = () => { void reader.cancel().catch(() => {}); };
+  signal?.addEventListener("abort", abort, { once: true });
   const chunks: Uint8Array[] = [];
   let length = 0;
   try {
     while (true) {
+      signal?.throwIfAborted();
       const next = await reader.read();
+      signal?.throwIfAborted();
       if (next.done) break;
       length += next.value.byteLength;
       if (length > maximum) throw new SkillSelectionError("BUNDLE_TOO_LARGE", "The selected bundle exceeds the cache size limit.");
       chunks.push(next.value);
     }
-  } catch (error) { await reader.cancel().catch(() => {}); throw error; }
-  finally { reader.releaseLock(); }
+  } catch (error) { void reader.cancel().catch(() => {}); throw error; }
+  finally { signal?.removeEventListener("abort", abort); reader.releaseLock(); }
   const bytes = new Uint8Array(length);
   let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-  const entries = await verifiedEntries(selection, bytes);
+  const entries = await verifiedEntries(selection, bytes, signal, deadline);
+  return { bytes, entries };
+}
+export async function cacheSelectionBundle(selection: ResolvedSkillSelection, response: Response | null, options: SelectionCacheOptions = {}): Promise<SkillBundleEntry[]> {
+  const { bytes, entries } = await verifySelectionBundleResponse(selection, response);
+  const maximum = SKILL_BUNDLE_INSPECTION_LIMITS.compressedBytes;
   const path = selectionBundlePath(selection, options);
   const existing = readRegularFile(path, maximum);
   if (existing) await verifiedEntries(selection, existing);
