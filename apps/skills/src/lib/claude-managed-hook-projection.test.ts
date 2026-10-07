@@ -1,10 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import * as integration from "./agent-integration.js";
 import { renderAgentHookCommand } from "./agent-adapters.js";
+import { renderPinnedLauncher } from "../cli/commands/runtime-launcher.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
@@ -13,14 +14,16 @@ const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const events = ["UserPromptSubmit", "SessionStart", "SubagentStart", "PreToolUse"] as const;
 
-function fixture() {
+function fixture(commandShape: "symlink" | "pinned" = "symlink") {
   const home = mkdtempSync(join(realpathSync(tmpdir()), "skills-hook-projection-")); roots.push(home);
   const dataDir = join(home, "data"), executable = join(home, "runtime", "bin", "index.js");
   mkdirSync(join(home, "runtime", "bin"), { recursive: true, mode: 0o700 });
   writeFileSync(join(home, "runtime", "package.json"), JSON.stringify({ name: "@hasna/skills", version: "0.10.32", bin: { skills: "bin/index.js" } }), { mode: 0o600 });
   writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
   const command = join(home, "current-skills"), legacy = join(home, "legacy-skills");
-  symlinkSync(executable, command); symlinkSync(executable, legacy);
+  if (commandShape === "pinned") writeFileSync(command, renderPinnedLauncher({ runtime: realpathSync(process.execPath), cwd: join(home, "runtime"), entry: executable }), { mode: 0o755 });
+  else symlinkSync(executable, command);
+  symlinkSync(executable, legacy);
   const source = { home, dataDir, projectDir: home };
   integration.applyAgentIntegration(integration.planAgentIntegration({ ...source, agents: ["claude"], command: legacy, profileId: "default" }));
   const settings = join(home, ".claude/settings.json"), policy = join(dataDir, "agent-policy.json");
@@ -105,6 +108,16 @@ test("shell wrappers, extra arguments and mismatched events are never adopted", 
     f.target.hooks.SessionStart[0].hooks[0].command = command;
     expect(() => f.plan()).toThrow("UNRECOGNIZED");
   }
+});
+
+test("a managed pinned launcher is a trusted command alias, bound by its exact launcher bytes", () => {
+  const f = fixture("pinned");
+  expect(lstatSync(f.command).isSymbolicLink()).toBe(false);
+  const plan = f.plan();
+  expect(plan.replacements).toHaveLength(4);
+  for (const item of plan.replacements) expect(item.command).toBe(renderAgentHookCommand(f.command, "claude", "fleet", item.event));
+  appendFileSync(f.command, "# edited\n");
+  expect(() => f.plan()).toThrow("EXECUTABLE_UNVERIFIED");
 });
 
 test("a lookalike command in another executable is not Skills ownership", () => {

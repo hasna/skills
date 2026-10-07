@@ -1270,6 +1270,40 @@ reinstall or change your PATH.
 copyfile runtime, preserves configuration and launcher preimages, and keeps the
 previous runtime available for receipt-bound rollback.
 
+Every launcher the updater switches (`skills`, `skills-mcp`, `skills-serve`,
+`skills-server`, `skills-worker`, `skills-maintenance` and `skills-migrate`, in each
+PATH directory it manages, and every alias `--adopt-aliases` switches) is written as a
+pinned launcher, not a bare symlink. It is a `#!/bin/sh -p` file: the shell ignores
+exported functions and `SHELLOPTS`-style settings from your environment, and the
+updater refuses with `LAUNCHER_SHELL_UNSUPPORTED` before writing anything when
+`/bin/sh` does not accept `-p` (for example dash older than 0.5.11). The launcher
+execs the exact Bun binary that ran the update with
+`--config=/dev/null --no-env-file --no-macros --no-install --cwd=<runtime version root>`
+on the exact entry, through `env -i` with an explicit environment allowlist:
+`HOME`, `PATH`, `TMPDIR`, `USER`, `LOGNAME`, `SHELL`, `TZ`, `LANG`, terminal names
+(`TERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `COLORTERM`, `COLUMNS`, `LINES`),
+`NO_COLOR`, `FORCE_COLOR`, `CI`, `EDITOR`, `VISUAL`, `PAGER`, `SSH_AUTH_SOCK`,
+`DATABASE_URL`, the server settings `HOST`, `PORT`, `NODE_ENV`, `AGENT_ID` and
+`ECS_CONTAINER_METADATA_URI_V4`, the agent names `TERMINAL_CWD`, `CODEX_HOME`,
+`HERMES_HOME` and `HERMES_ENABLE_PROJECT_PLUGINS`, and every name starting with
+`HASNA_`, `SKILLS_`, `SKILL_`, `MCP_`, `XDG_`, `LC_` or `AWS_`. Your `LC_ALL` passes
+through unchanged. Everything else never reaches the runtime, including `BUN_*`,
+`NODE_OPTIONS`, `DYLD_*`, `LD_*`, `NODE_EXTRA_CA_CERTS` and the proxy variables
+(`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`). A `bunfig.toml`, `.env` or `tsconfig.json`
+in the directory you run a command from is never read.
+
+Each of those entries (the CLI, the MCP server, the API server, the worker,
+maintenance and migrate) returns to your directory before anything else runs, so
+relative paths keep working, including a relative `HASNA_SKILLS_DATABASE_URL`. When
+the CLI starts another copy of itself (the hook's context lookup and its
+`SessionStart` sync), the child gets the same Bun flags, the runtime version root as
+its working directory and the same environment allowlist, and also returns to your
+directory first. The receipt records the old and new launcher shape of every path,
+the backup keeps the exact previous launcher (symlink text or pinned bytes), and
+`--rollback` restores it byte for byte. Codex hook trust, the Claude settings
+projection and `skills self-update` read a managed pinned launcher as the exact
+entry it runs and bind the launcher's own bytes as well.
+
 To require a minimum dependency age, pass a positive integer number of days and
 repeat the exclusion option for package names or package globs:
 

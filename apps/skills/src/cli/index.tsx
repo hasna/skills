@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import "../lib/launch-cwd-apply.js";
 import { writeCliOutput } from "./output.js";
 import React from "react";
 import { render } from "ink";

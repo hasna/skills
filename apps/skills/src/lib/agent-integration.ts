@@ -23,6 +23,7 @@ import { HERMES_OPT_OUT, parseHermesConfig, configureHermesHooks, assertHermesPr
 import type { CodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery.js";
 import { assertClaudeHookEventsReplacement, type ClaudeCoordinatedHookEvent } from "./claude-settings-witness.js";
 import { snapshot as hookFileSnapshot, unchanged as hookFileUnchanged } from "./codex-hook-trust-files.js";
+import { assertPinnedLauncherRuntimeSafe, resolveLauncherCommand } from "../cli/commands/runtime-launcher.js";
 
 export type { IntegrationAgent } from "./agent-adapters.js";
 export type ContextHookEvent = "UserPromptSubmit" | "SessionStart" | "SubagentStart";
@@ -761,7 +762,10 @@ function projectedHookAcl(path: string, observed: BigIntStats): void {
 }
 
 /** Only the final command leaf may be an alias. Bind its parent permissions,
- * link identity and exact resolved package bytes using the existing file guard. */
+ * link identity and exact resolved package bytes using the existing file guard.
+ * The alias is a symlink, or a managed pinned launcher written by the copyfile
+ * updater: its exact template text binds the entry it runs, the launcher file
+ * is bound like a package file, and its pinned Bun must be a safe file. */
 function projectedHookExecutable(command: string, expectedResolved?: string) {
   try {
     if (!isAbsolute(command) || /[\0\r\n]/.test(command) || resolve(command) !== command) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
@@ -780,9 +784,17 @@ function projectedHookExecutable(command: string, expectedResolved?: string) {
     const parentIdentity = parents(), link = lstatSync(command, { bigint: true });
     if (link.uid !== BigInt(process.getuid!()) || (!link.isFile() && !link.isSymbolicLink())) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
     const linkIdentity = (stat: BigIntStats) => `${stat.dev}:${stat.ino}:${stat.mode}:${stat.uid}:${stat.ctimeNs}`;
-    const resolved = realpathSync(command);
+    const target = resolveLauncherCommand(command), resolved = target.entry;
     // Reject an unrelated target before opening any of its contents.
     if (expectedResolved !== undefined && resolved !== expectedResolved) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
+    let launcher: ReturnType<typeof hookFileSnapshot> | undefined, launcherParentIdentity: string[] | undefined;
+    if (target.pinned) {
+      launcherParentIdentity = parents(target.physical);
+      launcher = hookFileSnapshot(target.physical, false);
+      projectedHookAcl(launcher.file, launcher.stat);
+      if (launcher.sha256 !== target.pinned.sha256 || (launcher.stat.mode & 0o100n) === 0n) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
+      assertPinnedLauncherRuntimeSafe(target.pinned.runtime);
+    }
     const resolvedParentIdentity = parents(resolved);
     const manifest = hookFileSnapshot(join(dirname(dirname(resolved)), "package.json"), false, { readOnlyPackage: true });
     projectedHookAcl(manifest.file, manifest.stat);
@@ -794,9 +806,14 @@ function projectedHookExecutable(command: string, expectedResolved?: string) {
     if ((cli.stat.mode & 0o100n) === 0n) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
     const recheck = () => {
       try {
-        if (realpathSync(command) !== resolved || linkIdentity(lstatSync(command, { bigint: true })) !== linkIdentity(link)
+        const again = resolveLauncherCommand(command);
+        if (again.entry !== resolved || again.physical !== target.physical || linkIdentity(lstatSync(command, { bigint: true })) !== linkIdentity(link)
           || !isDeepStrictEqual(parents(), parentIdentity)
           || !isDeepStrictEqual(parents(resolved), resolvedParentIdentity)) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
+        if (launcher) {
+          if (!isDeepStrictEqual(parents(target.physical), launcherParentIdentity)) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
+          projectedHookAcl(launcher.file, launcher.stat); hookFileUnchanged(launcher);
+        }
         projectedHookAcl(cli.file, cli.stat); projectedHookAcl(manifest.file, manifest.stat);
         hookFileUnchanged(cli); hookFileUnchanged(manifest);
       } catch { hookProjectionRefusal("EXECUTABLE_UNVERIFIED"); }

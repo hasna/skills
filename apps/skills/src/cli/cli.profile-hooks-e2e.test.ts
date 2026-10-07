@@ -1,10 +1,11 @@
 /** Release-compiled CLI over real HTTP/SQLite; every station/config mutation is confined to fixture homes. */
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 import { buildCliFixture } from "./cli-build.fixture.js";
+import { renderPinnedLauncher } from "./commands/runtime-launcher.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { SqliteSkillsStore } from "../server/sqlite-store.js";
 import { SqliteGovernanceStore } from "../sdk/governance-store.js";
@@ -174,6 +175,37 @@ test("lifecycle sync authenticates and verifies bundles without station-report a
     expect(explicit.stationReported).toBe(false);
     expect(explicit.downloaded).toBe(0);
     expect(f.requests.some(route => route.startsWith("PUT /api/v1/stations/"))).toBe(false);
+  } finally { await f.close(); }
+});
+
+test("hook children started from a hostile directory read no bunfig.toml or .env there (context and SessionStart sync)", async () => {
+  const f = await fixture();
+  try {
+    // The hook command is a pinned launcher, as the copyfile updater writes it, so
+    // the top-level hook process is already clean; the children are under test.
+    const pinned = join(f.root, "skills-pinned");
+    writeFileSync(pinned, renderPinnedLauncher({ runtime: realpathSync(process.execPath), cwd: realpathSync(scratch), entry: realpathSync(binary) }), { mode: 0o700 });
+    await f.a.ok(["hook", "install", "--agent", "all", "--selection-profile", "engineering", "--command", pinned, "--apply", "--json"]);
+    await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+    const hostile = join(f.root, "station-a", "hostile"), marker = join(hostile, "preload-marker");
+    mkdirSync(hostile, { recursive: true });
+    put(join(hostile, "preload.js"), `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "ran\\n", { flag: "a" });\n`);
+    put(join(hostile, "bunfig.toml"), `preload = [${JSON.stringify(join(hostile, "preload.js"))}]\n`);
+    put(join(hostile, ".env"), "HASNA_SKILLS_API_URL=http://127.0.0.1:9\n");
+    const settings = json(join(f.a.home, ".claude", "settings.json"));
+    const command = (event: string) => settings.hooks[event].flatMap((entry: any) => entry.hooks).find((entry: any) => entry.command.includes("hook user-prompt"))?.command as string;
+    expect(command("SessionStart")).toContain(pinned);
+    // The rendered hook text is unchanged by pinned launchers; the hooks lane detects it by this pattern.
+    for (const event of ["SessionStart", "UserPromptSubmit"]) expect(command(event)).toMatch(/(?:^|\s)hook user-prompt --agent (claude|codex|gemini)(?:\s|$)/);
+    const codexHooks = json(join(f.a.home, ".codex", "hooks.json"));
+    const codexCommand = codexHooks.hooks.UserPromptSubmit.flatMap((entry: any) => entry.hooks).find((entry: any) => entry.command.includes("hook user-prompt"))?.command as string;
+    expect(codexCommand).toContain(pinned);
+    expect(codexCommand).toMatch(/(?:^|\s)hook user-prompt --agent (claude|codex|gemini)(?:\s|$)/);
+    const started = await f.a.ok([], { cwd: hostile, shellCommand: command("SessionStart"), stdin: { cwd: f.a.project, session_id: "hostile-cwd", hook_event_name: "SessionStart", source: "startup", prompt: "$review-code" } });
+    const prompt = await f.a.ok([], { cwd: hostile, shellCommand: command("UserPromptSubmit"), stdin: { cwd: f.a.project, session_id: "hostile-cwd", hook_event_name: "UserPromptSubmit", prompt: "$review-code" } });
+    expect(started.continue).not.toBe(false);
+    expect(prompt.hookSpecificOutput?.additionalContext ?? started.hookSpecificOutput?.additionalContext).toContain("Published 1.0.0");
+    expect(existsSync(marker)).toBe(false);
   } finally { await f.close(); }
 });
 
