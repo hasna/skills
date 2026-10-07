@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { save, snapshot } from "./codex-hook-trust-files.js";
+import { directAliasTarget, save, snapshot } from "./codex-hook-trust-files.js";
 import { pretendOwner } from "./foreign-owner.fixture.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
@@ -40,3 +40,30 @@ for (const level of ["parent", "grandparent", "fixture root"] as const) {
     expect(existsSync(written)).toBe(false);
   });
 }
+
+// The only alias a trust walk admits names its target directly: leading `..`
+// steps out of the link's own directory, then plain names; nothing else.
+test("directAliasTarget admits only direct link texts", () => {
+  const f = fixture(), links = join(f.root, "links"), up = `../${basename(f.root)}`;
+  mkdirSync(links, { mode: 0o700 });
+  const target = (name: string, text: string) => { const link = join(links, name); symlinkSync(text, link); return directAliasTarget(link); };
+  const admitted: Record<string, string> = {
+    absolute: f.file,
+    "plain names": "../package/bin/index.js",
+    "leading .. then names": `../${up}/package/bin/index.js`,
+  };
+  for (const [name, text] of Object.entries(admitted)) expect(target(name, text), name).toBe(f.file);
+  const refused: Record<string, string> = {
+    "absolute //": `/${f.file}`,
+    "inner //": f.file.replace("/package/", "/package//"),
+    "relative //": "../package//bin/index.js",
+    "trailing /": `${f.file}/`,
+    "bare ..": "..",
+    "./a": "./index.js",
+    "..//a": "..//package/bin/index.js",
+    ". after a name": "../package/./bin/index.js",
+    ".. after a name": "../package/../package/bin/index.js",
+    "empty": "/",
+  };
+  for (const [name, text] of Object.entries(refused)) expect(target(name.replace(/[^a-z]/g, "_"), text), name).toBeUndefined();
+});

@@ -7,7 +7,10 @@
 import * as fs from "node:fs";
 import { spyOn } from "bun:test";
 
-export function pretendOwner(path: string, uid: number): () => void {
+/** `install` is the spy factory; only this fixture's own test replaces it, to
+ * make a later spy fail. Spies already installed are then restored before the
+ * error propagates, so no reader is left disguised. */
+export function pretendOwner(path: string, uid: number, install: typeof spyOn = spyOn): () => void {
   const target = fs.lstatSync(path, { bigint: true }), key = `${target.dev}:${target.ino}`;
   const disguise = (stat: unknown) => {
     const value = stat as { dev?: unknown; ino?: unknown; uid?: unknown } | undefined;
@@ -17,7 +20,12 @@ export function pretendOwner(path: string, uid: number): () => void {
     return copy;
   };
   const real = { lstatSync: fs.lstatSync, statSync: fs.statSync, fstatSync: fs.fstatSync };
-  const spies = (["lstatSync", "statSync", "fstatSync"] as const).map(name =>
-    spyOn(fs, name).mockImplementation(((...args: unknown[]) => disguise((real[name] as (...input: unknown[]) => unknown)(...args))) as never));
-  return () => { for (const spy of spies) spy.mockRestore(); };
+  const spies: Array<{ mockRestore(): void }> = [];
+  const restore = () => { for (const spy of spies.splice(0).reverse()) spy.mockRestore(); };
+  try {
+    for (const name of ["lstatSync", "statSync", "fstatSync"] as const) {
+      spies.push(install(fs, name).mockImplementation(((...args: unknown[]) => disguise((real[name] as (...input: unknown[]) => unknown)(...args))) as never));
+    }
+  } catch (error) { restore(); throw error; }
+  return restore;
 }
