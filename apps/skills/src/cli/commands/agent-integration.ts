@@ -5,7 +5,7 @@ import { existsSync, lstatSync, readFileSync, readSync, writeFileSync } from "no
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { isAbsolute } from "node:path";
-import { type ReviewedDiscoveryInputs } from "../../lib/agent-discovery.js";
+import { isDiscoveryRootUnresolved, type ReviewedDiscoveryInputs } from "../../lib/agent-discovery.js";
 import { normalizeHermesHookInput, assertHermesTool } from "../../lib/agent-hermes.js";
 import { parseSkillContextInput, selectedProfileId } from "./context.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, normalizeAgentHookEvent } from "../../lib/agent-adapters.js";
@@ -390,7 +390,9 @@ export function registerAgentIntegration(parent: Command): void {
           }
           return;
         }
-        const reason = error instanceof Error && error.message.startsWith("NATIVE_SKILL_DRIFT:")
+        // Native discovery refusals carry their own fixed text. An unresolvable
+        // runtime keeps its distinct code so it is not mistaken for drift.
+        const reason = error instanceof Error && (error.message.startsWith("NATIVE_SKILL_DRIFT:") || isDiscoveryRootUnresolved(error))
           ? error.message
           : hookFailureReason(error, selectionProfile);
         if (options.agent === "hermes") {

@@ -1,20 +1,46 @@
-import { closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readSync, writeFileSync, type BigIntStats } from "node:fs";
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readlinkSync, readSync, writeFileSync, type BigIntStats } from "node:fs";
 import { createHash } from "node:crypto";
-import { dirname } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 
 export function need(value: unknown, code: string): asserts value {
   if (!value) throw new Error(`CODEX_HOOK_TRUST_${code}`);
 }
 const sameStat = (a: BigIntStats, b: BigIntStats) => ["dev", "ino", "uid", "nlink", "mode", "size", "mtimeNs", "ctimeNs"].every(key => a[key as keyof BigIntStats] === b[key as keyof BigIntStats]);
-function safeParents(file: string): void {
+/** The owner of a directory can rename or replace its entries whatever its
+ * mode, so an ancestor must belong to root or the current user. There is no
+ * allowlist: a prefix such as /opt/homebrew passes only when one of them owns it. */
+export function trustedAncestorOwner(uid: number | bigint): boolean {
+  return BigInt(uid) === 0n || BigInt(uid) === BigInt(process.getuid!());
+}
+/** Every ancestor directory of `file`: a real directory, owned by root or the
+ * current user, and writable by neither group nor others unless it is a
+ * root-owned sticky directory. Throws CODEX_HOOK_TRUST_UNSAFE_PARENT. */
+export function safeParents(file: string): void {
   for (let p = dirname(file); ; p = dirname(p)) {
     const s = lstatSync(p);
-    need(s.isDirectory() && !s.isSymbolicLink(), "UNSAFE_PARENT");
+    need(s.isDirectory() && !s.isSymbolicLink() && trustedAncestorOwner(s.uid), "UNSAFE_PARENT");
     // A system temporary directory is safe only with the sticky bit. Every
     // other ancestor must prevent replacement by another account.
     need((s.mode & 0o022) === 0 || (s.uid === 0 && (s.mode & 0o1000) !== 0), "UNSAFE_PARENT");
     if (dirname(p) === p) break;
   }
+}
+/** The path a symbolic link names, when that text cannot pass through another
+ * link: an absolute text of plain names, or a relative text that leaves the
+ * link's own directory only through leading `..` components and then names
+ * plain entries. Undefined for any other text. The caller has verified the
+ * link's directory chain as real directories, so the leading `..` steps stay
+ * on verified directories, and requires the result to equal realpath, which
+ * proves that no named component is itself a link: the command leaf is then
+ * the only alias in the chain. */
+export function directAliasTarget(link: string): string | undefined {
+  const text = readlinkSync(link), parts = text.split("/");
+  let first = 0;
+  if (isAbsolute(text)) first = 1;
+  else while (parts[first] === "..") first++;
+  const names = parts.slice(first);
+  if (!names.length || names.some(part => part === "" || part === "." || part === "..")) return undefined;
+  return resolve(dirname(link), text);
 }
 // Bun may hardlink installed package artifacts to its cache. Only explicitly
 // admitted read-only package witnesses allow this; private state stays single-link.

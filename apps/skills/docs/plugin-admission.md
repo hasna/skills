@@ -173,6 +173,74 @@ new loaders still require their dedicated review. API failure refuses an update;
 stale projection as synchronized. Claude may retain its previous installation
 after a refused update, whose existing local drift checks continue to apply.
 
+## Reviewed plugin-hook attestation scope
+
+A reviewed discovery input carries `pluginHooks: "reviewed-no-skill-injection"`.
+That value is the reviewer's statement; Skills does not inspect hook behavior.
+What the software currently enforces is narrower:
+
+- It is point-in-time. It binds the listed sources as they were when the review
+  was applied, apart from the manifest projection described here and the
+  retired-root exemption described below. A manifest listed as a plain byte
+  witness with a non-null `sha256` is stored as a `claude-plugin-manifest-v1`
+  projection that ignores the descriptive fields `description`, `version`,
+  `author`, `homepage`, `repository`, `license` and `keywords`. The projection
+  also normalises whitespace and JSON string escaping; key order stays bound.
+  Every other manifest field, including `hooks`, `skills`, `commands` and
+  unknown fields, stays bound.
+- It enforces one coupling only, and only for a Claude
+  `.claude-plugin/plugin.json` listed as a plain byte witness (`hashMode`
+  omitted or `"bytes"`) with a non-null `sha256`. The review must then also list
+  that plugin's `hooks/hooks.json` (when the file exists at review time) and any
+  string `hooks` target in the manifest, each as a plain byte witness with a
+  non-null hash. A non-string `hooks` value and a `hooks` target outside the
+  plugin root are refused. A manifest listed as `claude-plugin-manifest-v1`
+  (the form Skills writes into the stored policy) or as `path-bytes` triggers
+  no hook-file requirement. Nothing else is required.
+- A `hooks/hooks.json` that is absent at review time and appears later is
+  detected if the review pins it with `sha256: null` or covers it with a
+  reviewed `directories` membership witness on the plugin root or its `hooks/`
+  directory. Such a witness, from `captureDiscoveryDirectories(paths)`, binds
+  the recursive path and type of every member, so every check detects added or
+  removed files and directories under it, but not content changes.
+- For plugins not covered by a `claude-plugin-registry` admission witness (see
+  [Discovery transition contract](#discovery-transition-contract)):
+  - other plugin files, such as hook modules (`register.ts`, `runtime.ts` and
+    their imports), `bin/` files and `package.json`, are bound only if the
+    review lists them. A content change to an unlisted file is not detected,
+    and an added or removed file is detected only under a reviewed
+    `directories` witness that covers it;
+  - the review is not anchored to the roots registered in
+    `~/.claude/plugins/installed_plugins.json`. When a review is present, the
+    enabled-plugin walk does not run, so Skills does not check that the listed
+    plugin roots are the registered ones or that every enabled plugin is listed.
+- A `claude-plugin-registry` witness covers its admitted, receipt-backed
+  plugins on every check. It re-reads `installed_plugins.json`, requires each
+  managed row's `installPath` to be `cache/<marketplace>/<plugin>/<version>`,
+  checks every file in every retained cache version against the admission
+  receipts without the review listing them, and binds unmanaged rows exactly.
+- An entirely absent retired Claude version root exempts only its plain byte
+  sources (`hashMode` omitted or `"bytes"`, with no `format`, `fields` or
+  `managedPlugins`). Such a source with a non-null `sha256` is also the only
+  thing that identifies the root, and the root qualifies only while it stays
+  entirely absent and the reviewed settings and registry select a different,
+  verified version. Every other source under that root is re-hashed as usual,
+  and one whose file existed at review no longer matches its hash, so the
+  check refuses. That includes the plugin manifest in the
+  `claude-plugin-manifest-v1` form Skills stores, so a stored review that lists
+  the retired version's manifest refuses until a fresh review replaces it. A
+  `directories` witness that covers the retired root is not exempt either. If
+  the root reappears, its sources are checked again.
+- It is detection-only. Later checks re-hash the stored sources and re-walk any
+  reviewed `directories` witnesses. Drift makes the
+  Skills hooks refuse with `NATIVE_SKILL_DRIFT`; it does not stop, unload or
+  sandbox plugin code, which the native client keeps running.
+- It is a tripwire, not a security boundary. A process running as the same user
+  can rewrite the plugin files and the managed policy that holds the witnesses.
+
+For plugins outside receipt-backed admission, a stronger witness anchored to the
+registered plugin roots is planned and not yet implemented.
+
 ## Marketplace registry timestamps
 
 For an explicitly reviewed `known_marketplaces.json`,

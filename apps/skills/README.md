@@ -468,6 +468,34 @@ start. The hook excludes that exact leading policy from skill selection, so it
 does not displace the user's requested skill. Other hook context and user text
 remain part of the selection input.
 
+Gemini discovery also covers the installed `@google/gemini-cli` package and its
+bundled builtin skills. `skills hook install` finds the package through the
+`gemini` command on its PATH and records the resolved executable and its
+realpath target in the managed policy (`bridge.discoveryExecutables.gemini`).
+Later checks always verify that recorded path, and also look `gemini` up on the
+caller's PATH, because what PATH resolves is what that process would run:
+
+- If PATH resolves a `gemini` whose realpath differs from the recorded target,
+  that runtime shadows the reviewed one, and the check refuses with
+  `NATIVE_SKILL_DRIFT`, naming both targets. Another launcher for the same
+  target is not a shadow.
+- If PATH resolves no `gemini` at all (a narrower PATH such as
+  `env -i PATH=/usr/bin:/bin` or a launchd unit), the recorded path is the only
+  witness, so a Claude hook update or a Gemini hook still verifies the reviewed
+  runtime.
+- A changed recorded target, package or builtin set refuses with
+  `NATIVE_SKILL_DRIFT`.
+- When the recorded executable no longer resolves, or a policy written before
+  this record cannot find `gemini` on the caller's PATH, and nothing else in
+  the reviewed discovery changed, the refusal is `DISCOVERY_ROOT_UNRESOLVED`,
+  naming the agent and the command. That is an environment gap rather than
+  drift, and it still blocks. Any other change is still `NATIVE_SKILL_DRIFT`.
+
+An install treats a recorded executable that no longer resolves as no record.
+Run `skills hook install` from the reviewing environment to record or refresh
+the path. The SDK exports `DISCOVERY_ROOT_UNRESOLVED` and
+`isDiscoveryRootUnresolved` for callers that classify refusals.
+
 Known local plugin registrations are resolved automatically. Plugins with
 instruction-injecting hooks, unresolved runtime registrations, unsupported
 legacy command formats, and higher-precedence project discovery settings need
@@ -483,6 +511,29 @@ unknown native file format or make unreviewed plugin behavior safe. Managed
 system configuration, process-specific overrides, and alternate agent home
 directories are outside automatic coverage and require their own integration
 review before declaring a station migrated.
+
+The `pluginHooks` attestation is the reviewer's point-in-time statement; Skills
+does not inspect hook behavior. When a Claude `.claude-plugin/plugin.json` is
+listed as a plain byte witness (`hashMode` omitted or `"bytes"`) with a
+non-null `sha256`, Skills also requires plain byte witnesses for that plugin's
+`hooks/hooks.json` (when present) and any string `hooks` target in the
+manifest. A manifest listed as `claude-plugin-manifest-v1` (the form Skills
+writes into the stored policy) or as `path-bytes` triggers no such requirement.
+For plugins outside receipt-backed admission (a `claude-plugin-registry`
+witness, see the
+[discovery transition contract](docs/plugin-admission.md#discovery-transition-contract)),
+other plugin files such as hook modules, `bin/` files and `package.json` are
+bound only if the review lists them (a reviewed `directories` membership witness
+detects only added or removed files, not content changes), and the review is not
+checked against the roots registered in
+`~/.claude/plugins/installed_plugins.json`. Later checks
+re-hash the stored sources, and drift makes the Skills hooks refuse with
+`NATIVE_SKILL_DRIFT`; this detects a change but does not stop plugin code from
+running. A process running as the same user can rewrite the plugin files and
+the managed policy, so the witness is a tripwire, not a security boundary. See
+[the full scope](docs/plugin-admission.md#reviewed-plugin-hook-attestation-scope).
+A stronger witness for plugins outside receipt-backed admission is planned and
+not yet implemented.
 
 When `hook install` omits `--discovery-inputs`, it reuses an existing reviewed
 binding only after rechecking its sources, directory membership, configuration

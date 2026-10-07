@@ -1,11 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
 import { appendFileSync, chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import * as integration from "./agent-integration.js";
 import { renderAgentHookCommand } from "./agent-adapters.js";
 import { renderPinnedLauncher } from "../cli/commands/runtime-launcher.js";
+import { pretendOwner } from "./foreign-owner.fixture.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
@@ -14,14 +15,21 @@ const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const events = ["UserPromptSubmit", "SessionStart", "SubagentStart", "PreToolUse"] as const;
 
-function fixture(commandShape: "symlink" | "pinned" = "symlink") {
+// `runtime` names a synthetic pinned Bun created inside the fixture; the
+// projection checks it as a file and never runs it.
+function fixture(commandShape: "symlink" | "pinned" = "symlink", runtime?: string) {
   const home = mkdtempSync(join(realpathSync(tmpdir()), "skills-hook-projection-")); roots.push(home);
   const dataDir = join(home, "data"), executable = join(home, "runtime", "bin", "index.js");
   mkdirSync(join(home, "runtime", "bin"), { recursive: true, mode: 0o700 });
   writeFileSync(join(home, "runtime", "package.json"), JSON.stringify({ name: "@hasna/skills", version: "0.10.32", bin: { skills: "bin/index.js" } }), { mode: 0o600 });
   writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
   const command = join(home, "current-skills"), legacy = join(home, "legacy-skills");
-  if (commandShape === "pinned") writeFileSync(command, renderPinnedLauncher({ runtime: realpathSync(process.execPath), cwd: join(home, "runtime"), entry: executable }), { mode: 0o755 });
+  if (runtime !== undefined) {
+    runtime = join(home, runtime);
+    mkdirSync(dirname(runtime), { recursive: true, mode: 0o700 });
+    writeFileSync(runtime, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+  }
+  if (commandShape === "pinned") writeFileSync(command, renderPinnedLauncher({ runtime: runtime ?? realpathSync(process.execPath), cwd: join(home, "runtime"), entry: executable }), { mode: 0o755 });
   else symlinkSync(executable, command);
   symlinkSync(executable, legacy);
   const source = { home, dataDir, projectDir: home };
@@ -40,7 +48,7 @@ function fixture(commandShape: "symlink" | "pinned" = "symlink") {
     const targetSettings = JSON.stringify(value);
     return integration.planClaudeManagedHookProjection({ ...source, targetSettings, expectedTargetSha256: sha(targetSettings), ...extra });
   }
-  return { ...source, settings, policy, target, command, legacy, executable, before, plan };
+  return { ...source, settings, policy, target, command, legacy, executable, runtime, before, plan };
 }
 
 test("a copied profile follows the changed managed selection without replacing unrelated hooks or settings", () => {
@@ -204,6 +212,179 @@ test.skipIf(process.platform !== "darwin")("an alias-parent ACL grant during pro
   expect(lstatSync(f.home).mode & 0o022).toBe(0);
   expect(readFileSync(f.settings, "utf8")).toBe(f.before.settings);
   expect(readFileSync(f.policy, "utf8")).toBe(f.before.policy);
+});
+
+// A separate process adds and removes its own entries in one directory, as
+// unrelated processes do in a shared TMPDIR or home directory. It stops at its
+// own deadline, far beyond this test, in case the runner dies before killing it.
+const CHURN = `const fs = require("node:fs"), path = require("node:path"), deadline = Date.now() + 120000; let n = 0; fs.writeSync(1, "ready\\n");
+while (Date.now() < deadline) { const file = path.join(process.env.CHURN_DIR, ".churn-" + (n++ % 32)); fs.closeSync(fs.openSync(file, "wx", 0o600)); fs.unlinkSync(file); if (n % 8 === 0) Bun.sleepSync(1); }`;
+
+test.skipIf(process.platform !== "darwin")("unrelated entry churn in an ancestor directory never refuses, while a grant there still does", async () => {
+  const f = fixture();
+  const churn = Bun.spawn([process.execPath, "--no-env-file", "-e", CHURN], { env: { PATH: "/usr/bin:/bin", CHURN_DIR: f.home }, stdout: "pipe", stderr: "pipe" });
+  try {
+    const ready = churn.stdout.getReader(); await ready.read(); ready.releaseLock();
+    const refusals: string[] = [], homeBefore = lstatSync(f.home, { bigint: true }).mtimeNs;
+    // Eight plans are enough: at the base, every one refused under this churn.
+    for (let round = 0; round < 8; round++) {
+      try { if (f.plan().replacements.length !== 4) refusals.push("unexpected replacements"); }
+      catch (error) { refusals.push(String(error)); }
+    }
+    // The churn overlapped the projections (the home changed during them), and
+    // the process is still running once an event-loop turn updates its status,
+    // so "never refuses" cannot pass vacuously.
+    expect(lstatSync(f.home, { bigint: true }).mtimeNs).not.toBe(homeBefore);
+    await Bun.sleep(10); expect(churn.exitCode).toBeNull();
+    expect(refusals).toEqual([]);
+    const grant = Bun.spawnSync(["/bin/chmod", "+a", "everyone allow add_file,delete_child", f.home], { stdout: "pipe", stderr: "pipe" });
+    expect(grant.exitCode).toBe(0); expect(lstatSync(f.home).mode & 0o022).toBe(0);
+    try { expect(() => f.plan()).toThrow("EXECUTABLE_UNVERIFIED"); }
+    finally { expect(Bun.spawnSync(["/bin/chmod", "-N", f.home], { stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0); }
+    // Control: with the grant removed, the same churned ancestor projects again.
+    expect(f.plan().replacements).toHaveLength(4);
+    await Bun.sleep(10); expect(churn.exitCode).toBeNull();
+  } finally { churn.kill("SIGKILL"); await churn.exited; }
+  expect(readFileSync(f.settings, "utf8")).toBe(f.before.settings);
+  expect(readFileSync(f.policy, "utf8")).toBe(f.before.policy);
+});
+
+test("an executable ancestor owned by another non-root account refuses the projection; own or root ancestors do not", () => {
+  const f = fixture(), other = process.getuid!() + 1000;
+  expect(f.plan().replacements).toHaveLength(4);
+  for (const ancestor of [join(f.home, "runtime", "bin"), join(f.home, "runtime"), f.home]) {
+    let restore = pretendOwner(ancestor, other);
+    try { expect(() => f.plan(), ancestor).toThrow("EXECUTABLE_UNVERIFIED"); } finally { restore(); }
+    restore = pretendOwner(ancestor, 0);
+    try { expect(f.plan().replacements, ancestor).toHaveLength(4); } finally { restore(); }
+  }
+  expect(readFileSync(f.settings, "utf8")).toBe(f.before.settings);
+  expect(readFileSync(f.policy, "utf8")).toBe(f.before.policy);
+});
+
+// M1: the command's own directory is walked only by the projection's own
+// ancestor check, so this pins that check (the package-file guard never sees it).
+test("a command alias whose own directory is owned by another non-root account refuses; own or root does not", () => {
+  const f = fixture(), aliases = join(f.home, "aliases"), alias = join(aliases, "skills"), other = process.getuid!() + 1000;
+  mkdirSync(aliases, { mode: 0o700 }); symlinkSync(f.executable, alias);
+  f.target.hooks.SessionStart[0].hooks[0].command = renderAgentHookCommand(alias, "claude", "default", "SessionStart");
+  expect(f.plan().replacements).toHaveLength(4);
+  let restore = pretendOwner(aliases, other);
+  try { expect(() => f.plan()).toThrow("EXECUTABLE_UNVERIFIED"); } finally { restore(); }
+  restore = pretendOwner(aliases, 0);
+  try { expect(f.plan().replacements).toHaveLength(4); } finally { restore(); }
+  expect(readFileSync(f.settings, "utf8")).toBe(f.before.settings);
+  expect(readFileSync(f.policy, "utf8")).toBe(f.before.policy);
+});
+
+// N2: only the command leaf may be an alias, and it must name its target directly.
+test("a command alias that reaches the executable through another link refuses; a direct alias does not", () => {
+  const f = fixture(), aliases = join(f.home, "aliases"), hops = join(f.home, "hops"), other = process.getuid!() + 1000;
+  mkdirSync(aliases, { mode: 0o700 }); mkdirSync(hops, { mode: 0o700 });
+  symlinkSync(f.executable, join(hops, "skills"));
+  symlinkSync(join(f.home, "runtime"), join(f.home, "runtime-link"));
+  const shapes: Record<string, string> = {
+    "a second file link": join(hops, "skills"),
+    "a linked directory": join(f.home, "runtime-link", "bin", "index.js"),
+    "a relative link through a linked directory": "../runtime-link/bin/index.js",
+    "a name stepped back over with ..": "../runtime-link/../runtime/bin/index.js",
+    "a current-directory step": "./../runtime/bin/index.js",
+  };
+  const project = (name: string, text: string) => {
+    const alias = join(aliases, name); symlinkSync(text, alias);
+    f.target.hooks.SessionStart[0].hooks[0].command = renderAgentHookCommand(alias, "claude", "default", "SessionStart");
+    return () => f.plan();
+  };
+  // Controls: an absolute and a relative direct alias still project.
+  expect(project("absolute", f.executable)().replacements).toHaveLength(4);
+  expect(project("relative", "../runtime/bin/index.js")().replacements).toHaveLength(4);
+  for (const [index, [shape, text]] of Object.entries(shapes).entries()) {
+    expect(project(`chain-${index}`, text), shape).toThrow("EXECUTABLE_UNVERIFIED");
+  }
+  // The reviewed probe: the hop sits in a directory another account owns.
+  const probe = project("probe", join(hops, "skills")), restore = pretendOwner(hops, other);
+  try { expect(probe).toThrow("EXECUTABLE_UNVERIFIED"); } finally { restore(); }
+  expect(readFileSync(f.settings, "utf8")).toBe(f.before.settings);
+  expect(readFileSync(f.policy, "utf8")).toBe(f.before.policy);
+});
+
+// N1: the pinned Bun's directories are trust inputs like the entry's.
+test("a pinned Bun whose directory chain another account owns, or others can write, refuses; root-owned does not", () => {
+  const f = fixture("pinned", "pinned-bun/bin/bun"), runtime = f.runtime!, other = process.getuid!() + 1000;
+  expect(f.plan().replacements).toHaveLength(4);
+  for (const ancestor of [dirname(runtime), dirname(dirname(runtime))]) {
+    let restore = pretendOwner(ancestor, other);
+    try { expect(() => f.plan(), ancestor).toThrow("EXECUTABLE_UNVERIFIED"); } finally { restore(); }
+    restore = pretendOwner(ancestor, 0);
+    try { expect(f.plan().replacements, ancestor).toHaveLength(4); } finally { restore(); }
+    chmodSync(ancestor, 0o770);
+    try { expect(() => f.plan(), ancestor).toThrow("EXECUTABLE_UNVERIFIED"); } finally { chmodSync(ancestor, 0o700); }
+  }
+  expect(f.plan().replacements).toHaveLength(4);
+  expect(readFileSync(f.settings, "utf8")).toBe(f.before.settings);
+  expect(readFileSync(f.policy, "utf8")).toBe(f.before.policy);
+});
+
+test("a pinned Bun directory that changes owner during projection is refused by the final recheck", () => {
+  const f = fixture("pinned", "pinned-bun/bin/bun"), before = JSON.parse;
+  let restore: (() => void) | undefined;
+  // Inject after the initial runtime walk, while the entry's manifest is read.
+  JSON.parse = ((text: string, ...args: unknown[]) => {
+    const value = before(text, ...args as []);
+    if (!restore && value?.name === "@hasna/skills") restore = pretendOwner(dirname(f.runtime!), process.getuid!() + 1000);
+    return value;
+  }) as typeof JSON.parse;
+  try { expect(() => f.plan()).toThrow("EXECUTABLE_UNVERIFIED"); }
+  finally { JSON.parse = before; restore?.(); }
+  expect(restore).toBeDefined();
+  expect(f.plan().replacements).toHaveLength(4);
+});
+
+for (const subject of ["file", "directory"] as const) {
+  test.skipIf(process.platform !== "darwin")(`a Darwin ACL write grant on the pinned Bun ${subject} refuses the projection`, () => {
+    const f = fixture("pinned", "pinned-bun/bin/bun"), path = subject === "file" ? f.runtime! : dirname(f.runtime!);
+    expect(f.plan().replacements).toHaveLength(4);
+    const grant = subject === "file" ? "everyone allow write,append" : "everyone allow add_file,delete_child";
+    const acl = Bun.spawnSync(["/bin/chmod", "+a", grant, path], { stdout: "pipe", stderr: "pipe" });
+    expect(acl.exitCode).toBe(0); expect(lstatSync(path).mode & 0o022).toBe(0);
+    try { expect(() => f.plan()).toThrow("EXECUTABLE_UNVERIFIED"); }
+    finally { expect(Bun.spawnSync(["/bin/chmod", "-N", path], { stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0); }
+    expect(f.plan().replacements).toHaveLength(4);
+  });
+}
+
+// Runtime spellings the #73 security review probed: only the exact physical path of the Bun is admitted.
+test("a launcher pinned to any spelling of its Bun but the exact physical path refuses the projection", () => {
+  const f = fixture("pinned", "pinned-bun/bin/bun"), physical = f.runtime!, base = dirname(dirname(physical));
+  mkdirSync(join(base, "x"), { mode: 0o700 });
+  symlinkSync(base, `${base}-link`);
+  symlinkSync(physical, join(dirname(physical), "bun-link"));
+  const spellings: Record<string, string> = {
+    "x/../bin": `${base}/x/../bin/bun`, "repeated slash": `${base}//bin/bun`, "dot step": `${base}/./bin/bun`, "trailing slash": `${physical}/`,
+    "linked directory": `${base}-link/bin/bun`, "linked leaf": join(dirname(physical), "bun-link"),
+  };
+  if (process.platform === "darwin" && physical.startsWith("/private/var/")) spellings["/var alias"] = physical.replace(/^\/private\/var\//, "/var/");
+  expect(Object.keys(spellings).length).toBeGreaterThanOrEqual(process.platform === "darwin" ? 7 : 6);
+  const pin = (runtime: string) => writeFileSync(f.command, renderPinnedLauncher({ runtime, cwd: join(f.home, "runtime"), entry: f.executable }));
+  for (const [name, spelled] of Object.entries(spellings)) {
+    pin(spelled);
+    expect(() => f.plan(), name).toThrow("EXECUTABLE_UNVERIFIED");
+  }
+  // Control: the exact physical path projects again.
+  pin(physical);
+  expect(f.plan().replacements).toHaveLength(4);
+  expect(readFileSync(f.policy, "utf8")).toBe(f.before.policy);
+});
+
+// Parity with the Codex path (B1): a command spelled with .. after a linked directory is refused.
+test("a command spelled with .. after a linked directory refuses the projection; its normalized spelling does not", () => {
+  const f = fixture(), foreign = join(f.home, "foreign"), trusted = join(f.home, "trusted");
+  mkdirSync(join(foreign, "sub"), { recursive: true, mode: 0o700 }); mkdirSync(trusted, { mode: 0o700 });
+  symlinkSync(f.executable, join(foreign, "skills")); symlinkSync(join(foreign, "sub"), join(trusted, "link")); symlinkSync(f.executable, join(trusted, "skills"));
+  f.target.hooks.SessionStart[0].hooks[0].command = renderAgentHookCommand(`${trusted}/link/../skills`, "claude", "default", "SessionStart");
+  expect(() => f.plan()).toThrow("EXECUTABLE_UNVERIFIED");
+  f.target.hooks.SessionStart[0].hooks[0].command = renderAgentHookCommand(join(trusted, "skills"), "claude", "default", "SessionStart");
+  expect(f.plan().replacements).toHaveLength(4);
 });
 
 test("single quotes in a trusted executable path round trip through the owning renderer", () => {
