@@ -495,8 +495,10 @@ For plugins outside receipt-backed admission (a `claude-plugin-registry`
 witness, see the
 [discovery transition contract](docs/plugin-admission.md#discovery-transition-contract)),
 other plugin files such as hook modules, `bin/` files and `package.json` are
-bound only if the review lists them, and the review is not checked against the
-roots registered in `~/.claude/plugins/installed_plugins.json`. Later checks
+bound only if the review lists them (a reviewed `directories` membership witness
+detects only added or removed files, not content changes), and the review is not
+checked against the roots registered in
+`~/.claude/plugins/installed_plugins.json`. Later checks
 re-hash the stored sources, and drift makes the Skills hooks refuse with
 `NATIVE_SKILL_DRIFT`; this detects a change but does not stop plugin code from
 running. A process running as the same user can rewrite the plugin files and
