@@ -2602,3 +2602,14 @@ Upgrade an existing review with `skills hook rebind-settings --agent claude
 --expected-policy-sha256 <policy-hash> --expected-settings-sha256 <settings-hash>`.
 Review the plan before adding `--apply`. See
 [built-in theme reviews](docs/plugin-admission.md#explicit-v4-built-in-theme-reviews).
+
+`claude-marketplace-entry-v1` witnesses one plugin entry of a Claude
+`marketplace.json` instead of the whole catalog, so Claude's own marketplace
+refreshes do not invalidate a review of a plugin declared only by its entry.
+It binds the marketplace name, `metadata.pluginRoot` and the entry's identity,
+source and every component or command-bearing field; display metadata such as
+`description` and `version` is omitted. Unknown keys, a missing, duplicated or
+renamed entry, and unparsable JSON refuse. Capture with `skills hook witness
+--kind claude-marketplace-entry-v1 --path <.claude-plugin/marketplace.json>
+--marketplace <name> --plugin <name>`. See
+[marketplace plugin entry witness](docs/plugin-admission.md#marketplace-plugin-entry-witness).
