@@ -5,6 +5,7 @@ import { SQL } from "bun";
 import { openOperatorScopeMaintenance, type OperatorScopeMaintenanceStore } from "./store.js";
 import { validOperatorScopeEnrollmentInput, validOperatorScopeList, type OperatorScopeEnrollmentInput } from "./types.js";
 import { EnrollmentInspectionError, inspectEnrollment, type EnrollmentInspectionInput } from "./enrollment-inspection.js";
+import { inspectSchemaCensus, SchemaCensusError } from "./schema-census.js";
 
 type EnrollmentManifest = OperatorScopeEnrollmentInput & {
   operation: "enroll-publish";
@@ -28,8 +29,27 @@ type InspectionManifest = EnrollmentInspectionInput & {
   manifestDigest: string;
 };
 
+/** The schema census has its own authorization; no enrollment or inspection manifest can authorize it. */
+type SchemaCensusManifest = {
+  app: "skills";
+  operation: "inspect-schema";
+  manifestVersion: 1;
+  operationId: string;
+  stationId: string;
+  keyId: string;
+  orgId: string;
+  expiresAt: string;
+  manifestDigest: string;
+};
+
 class InspectionInputError extends Error {
   constructor(readonly code: "INVALID_INSPECTION_MANIFEST" | "INVALID_OPERATOR_RECEIPT") {
+    super(code);
+  }
+}
+
+class SchemaCensusInputError extends Error {
+  constructor(readonly code: "INVALID_CENSUS_MANIFEST" | "INVALID_OPERATOR_RECEIPT") {
     super(code);
   }
 }
@@ -131,6 +151,36 @@ export function readInspectionManifest(path: string, receiptPath: string): Inspe
   return parsed;
 }
 
+/** The census has its own authorization; a failed enrollment or inspection manifest cannot authorize it. */
+export function readSchemaCensusManifest(path: string, receiptPath: string): SchemaCensusManifest {
+  let input: ReturnType<typeof readBoundedJson>;
+  let parsed: SchemaCensusManifest;
+  try {
+    input = readBoundedJson(path);
+    const value = input.value;
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
+    const fields = ["app", "operation", "manifestVersion", "operationId", "stationId", "keyId", "orgId", "expiresAt", "manifestDigest"];
+    if (Object.keys(value).length !== fields.length || fields.some((field) => !Object.hasOwn(value, field))) throw new Error();
+    if (value.app !== "skills" || value.operation !== "inspect-schema" || value.manifestVersion !== 1) throw new Error();
+    for (const field of ["operationId", "stationId", "keyId", "orgId"] as const) {
+      const item = value[field];
+      if (typeof item !== "string" || item.trim().length === 0 || item.length > 256 || /[\u0000-\u001f\u007f]/.test(item)) throw new Error();
+    }
+    if (typeof value.expiresAt !== "string" || value.expiresAt.length > 64 || !Number.isFinite(Date.parse(value.expiresAt)) || Date.parse(value.expiresAt) <= Date.now()) throw new Error();
+    if (typeof value.manifestDigest !== "string" || !/^[a-f0-9]{64}$/.test(value.manifestDigest)) throw new Error();
+    if (sha256(canonical(value)) !== value.manifestDigest) throw new Error();
+    parsed = value as unknown as SchemaCensusManifest;
+  } catch {
+    throw new SchemaCensusInputError("INVALID_CENSUS_MANIFEST");
+  }
+  try {
+    verifyOperatorReceipt(input, readBoundedJson(receiptPath).value as Partial<VerifiedOperatorReceipt>);
+  } catch {
+    throw new SchemaCensusInputError("INVALID_OPERATOR_RECEIPT");
+  }
+  return parsed;
+}
+
 export function registerMaintenance(parent: Command): void {
   const maintenance = parent.command("maintenance").description("Run protected, metadata-only Skills maintenance operations");
   maintenance.command("inspect-enrollment")
@@ -153,6 +203,29 @@ export function registerMaintenance(parent: Command): void {
         }));
       } catch (error) {
         const code = error instanceof InspectionInputError || error instanceof EnrollmentInspectionError ? error.code : "INSPECTION_FAILED";
+        if (options.json || !process.stdout.isTTY) console.log(JSON.stringify({ status: "failed", code }));
+        else console.error(code);
+        process.exitCode = 1;
+      }
+    });
+  maintenance.command("inspect-schema")
+    .description("Census the fixed Skills schema and migration ledger with a database-enforced read-only snapshot")
+    .requiredOption("--manifest <path>", "Fresh census authorization supplied by the protected task wrapper")
+    .requiredOption("--operator-receipt <path>", "Verified actor receipt written by the protected task wrapper")
+    .option("--json", "Output a safe JSON receipt", false)
+    .action(async (options: { manifest: string; operatorReceipt: string; json?: boolean }) => {
+      try {
+        const manifest = readSchemaCensusManifest(options.manifest, options.operatorReceipt);
+        const census = await inspectSchemaCensus(process.env.HASNA_SKILLS_DATABASE_URL ?? "");
+        console.log(JSON.stringify({
+          ...census,
+          operationId: manifest.operationId,
+          keyId: manifest.keyId,
+          orgId: manifest.orgId,
+          stationId: manifest.stationId,
+        }));
+      } catch (error) {
+        const code = error instanceof SchemaCensusInputError || error instanceof SchemaCensusError ? error.code : "CENSUS_FAILED";
         if (options.json || !process.stdout.isTTY) console.log(JSON.stringify({ status: "failed", code }));
         else console.error(code);
         process.exitCode = 1;
