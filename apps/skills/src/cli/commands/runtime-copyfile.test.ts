@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { adoptCopyfileAliases, preflightTarball, readBodyCapped, rollbackCopyfileAliases, rollbackCopyfileRuntime, updateCopyfileRuntime } from "./runtime-copyfile.js";
 import { inspectLauncher, launcherTarget, parsePinnedLauncher, renderPinnedLauncher } from "./runtime-launcher.js";
 import * as launcherModule from "./runtime-launcher.js";
+import * as nodeFs from "node:fs";
 import { useDefaultTestTimeout } from "../../test-preload.js";
 
 useDefaultTestTimeout();
@@ -110,6 +111,47 @@ function hostileDirectory() {
     return { code: run.exitCode, stdout: run.stdout.toString("utf8"), stderr: run.stderr.toString("utf8") };
   };
   return { dir, marker, markers, launch };
+}
+
+// Every managed launcher path of a fixture: each bin in ~/.local/bin and ~/.bun/bin.
+function binPaths(f: { localBin: string; bunBin: string }): string[] {
+  return [f.localBin, f.bunBin].flatMap(dir => Object.keys(BIN).map(name => join(dir, name)));
+}
+
+// The exact shape and identity of each launcher: symlink text or file text, and inode.
+function launcherSnapshot(paths: Iterable<string>) {
+  return new Map([...paths].map(path => {
+    const stat = lstatSync(path);
+    return [path, { symlink: stat.isSymbolicLink(), text: stat.isSymbolicLink() ? readlinkSync(path) : readFileSync(path, "utf8"), ino: stat.ino }] as const;
+  }));
+}
+
+// The state an updater from before pinned launchers (0.10.48) leaves after it
+// installs a newer runtime: every launcher it switched is a bare absolute symlink
+// to the new runtime's entry, and its rollout receipt and preimage manifest carry
+// no launcher shape fields. This rewrites a fresh rollout into exactly that state
+// and returns each launcher's link text.
+function asPrePinnedRollout(targetRoot: string): Map<string, string> {
+  const receiptPath = join(targetRoot, "rollout-receipt.json");
+  const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
+  const links = new Map<string, string>();
+  receipt.launchers = receipt.launchers.map((item: Record<string, string>) => {
+    expect(inspectLauncher(item.path!).kind).toBe("pinned");
+    const temp = `${item.path}.synthetic-pre-pinned`;
+    symlinkSync(item.newTarget!, temp);
+    renameSync(temp, item.path!);
+    links.set(item.path!, item.newTarget!);
+    return { path: item.path, oldTarget: item.oldTarget, oldLinkTarget: item.oldLinkTarget, newTarget: item.newTarget, backupPath: item.backupPath };
+  });
+  const manifestPath = join(targetRoot, "preimage", "manifest.json");
+  const manifest = Buffer.from(`${JSON.stringify({ schema: "skills.copyfile-preimage.v1", configs: receipt.configs, launchers: receipt.launchers }, null, 2)}\n`);
+  chmodSync(manifestPath, 0o600);
+  writeFileSync(manifestPath, manifest);
+  chmodSync(manifestPath, 0o400);
+  receipt.preimageSha256 = createHash("sha256").update(manifest).digest("hex");
+  writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+  for (const [path, text] of links) expect(inspectLauncher(path)).toEqual({ kind: "symlink", linkTarget: text, target: text });
+  return links;
 }
 
 describe("exact-version copyfile runtime update", () => {
@@ -1045,6 +1087,246 @@ else { writeFileSync(${JSON.stringify(log)}, "unexpected"); process.exit(83); }
         expect(existsSync(join(f.runtime, "0.10.8-copyfile", "alias-adoptions"))).toBe(false);
       } finally { fixture.server.stop(true); }
     }
+  });
+
+  test("adopt-aliases pins pre-pinned bare symlinks to the current runtime: a hostile cwd bunfig.toml, .env and BUN_OPTIONS then reach nothing", async () => {
+    const f = fixtureHome();
+    const fixture = await serverWithArtifact({}, {}, name => `console.log(JSON.stringify({ name: ${JSON.stringify(name)}, dotenv: process.env.HOSTILE_DOTENV ?? null, bunOptions: process.env.BUN_OPTIONS ?? null, nodeOptions: process.env.NODE_OPTIONS ?? null, cwd: process.cwd(), launchCwd: process.env.HASNA_SKILLS_LAUNCH_CWD ?? null, argv: process.argv.slice(2) }));`);
+    const hostile = hostileDirectory();
+    try {
+      const pathValue = `${f.localBin}${delimiter}${f.bunBin}`;
+      await updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue, registryOrigin: fixture.server.url.origin });
+      const targetRoot = join(f.runtime, "0.10.8-copyfile");
+      const links = asPrePinnedRollout(targetRoot);
+      expect([...links.keys()].sort()).toEqual(binPaths(f).sort());
+      const result = adoptCopyfileAliases({ homeDir: f.home, pathValue });
+      expect(result).toMatchObject({ adopted: true, version: "0.10.8", aliasCount: 14 });
+      const receipt = JSON.parse(readFileSync(join(targetRoot, "alias-adoptions", `${result.receiptId}.json`), "utf8"));
+      expect(receipt).toMatchObject({ state: "switched", targetVersion: "0.10.8", targetPackageRoot: join(targetRoot, "node_modules", "@hasna", "skills") });
+      expect(receipt.aliases.map((item: { path: string }) => item.path).sort()).toEqual([...links.keys()].sort());
+      const runtime = realpathSync(process.execPath);
+      for (const item of receipt.aliases) {
+        // The same record as any adopted alias: the old symlink, its exact text and backup, and the new pinned shape.
+        expect(item).toMatchObject({
+          oldShape: "symlink", oldTarget: item.newTarget, oldLinkTarget: links.get(item.path), oldVersion: "0.10.8",
+          newShape: "pinned", newRuntime: runtime, newCwd: targetRoot, backupPath: `${item.path}.skills-alias-prev-${result.receiptId}`,
+        });
+        expect([item.oldRuntime, item.oldCwd, item.oldSha256, item.chain]).toEqual([undefined, undefined, undefined, undefined]);
+        expect(pinnedTarget(item.path)).toBe(item.newTarget);
+        expect(readFileSync(item.path, "utf8")).toBe(renderPinnedLauncher({ runtime, cwd: targetRoot, entry: item.newTarget }));
+        expect(lstatSync(item.backupPath).isSymbolicLink()).toBe(true);
+        expect(readlinkSync(item.backupPath)).toBe(links.get(item.path)!);
+      }
+      // Positive control: the preserved pre-pinned launcher, run from the hostile
+      // directory, loads that directory's bunfig.toml preload and .env.
+      const control = hostile.launch(`${join(f.localBin, "skills")}.skills-alias-prev-${result.receiptId}`);
+      expect(control.code).toBe(0);
+      expect(hostile.markers()).toBe(1);
+      expect(JSON.parse(control.stdout)).toMatchObject({ name: "skills", dotenv: "leaked" });
+      for (const path of [join(f.localBin, "skills"), join(f.bunBin, "skills-mcp")]) {
+        const pinned = hostile.launch(path, { BUN_OPTIONS: `--preload=${join(hostile.dir, "preload.js")}`, NODE_OPTIONS: `--require=${join(hostile.dir, "preload.js")}` });
+        expect(pinned.stderr).toBe("");
+        expect(pinned.code).toBe(0);
+        expect(JSON.parse(pinned.stdout)).toEqual({
+          name: basename(path), dotenv: null, bunOptions: null, nodeOptions: null, cwd: targetRoot, launchCwd: realpathSync(hostile.dir), argv: ["probe-arg"],
+        });
+      }
+      expect(hostile.markers()).toBe(1);
+      expect(existsSync(join(f.runtime, ".copyfile-update-lock"))).toBe(false);
+    } finally { fixture.server.stop(true); }
+  });
+
+  test("adopt-aliases leaves launchers already pinned to the current runtime untouched and pins only the bare symlinks beside them", async () => {
+    const f = fixtureHome();
+    const fixture = await serverWithArtifact();
+    try {
+      const pathValue = `${f.localBin}${delimiter}${f.bunBin}`;
+      await updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue, registryOrigin: fixture.server.url.origin });
+      const paths = binPaths(f);
+      const updated = launcherSnapshot(paths);
+      expect([...updated.values()].every(item => !item.symlink)).toBe(true);
+      // A mixed station: two launchers are back in the pre-pinned shape (a bare
+      // absolute symlink to the current entry); twelve are pinned to the current runtime.
+      const bare = [join(f.bunBin, "skills-mcp"), join(f.localBin, "skills-server")];
+      for (const path of bare) {
+        const temp = `${path}.synthetic-bare`;
+        symlinkSync(pinnedTarget(path), temp);
+        renameSync(temp, path);
+      }
+      const first = adoptCopyfileAliases({ homeDir: f.home, pathValue });
+      expect(first).toMatchObject({ adopted: true, version: "0.10.8", aliasCount: 2 });
+      const adoptions = join(f.runtime, "0.10.8-copyfile", "alias-adoptions");
+      const receipt = JSON.parse(readFileSync(join(adoptions, `${first.receiptId}.json`), "utf8"));
+      expect(receipt.aliases.map((item: { path: string }) => item.path).sort()).toEqual([...bare].sort());
+      const adopted = launcherSnapshot(paths);
+      for (const path of paths) {
+        // Every launcher is now pinned with exactly the text the update wrote for it.
+        expect(adopted.get(path)).toMatchObject({ symlink: false, text: updated.get(path)!.text });
+        // The ones already pinned were never rewritten.
+        if (!bare.includes(path)) expect(adopted.get(path)!.ino).toBe(updated.get(path)!.ino);
+      }
+      // Already pinned to the current runtime: a no-op, with no receipt and no backup.
+      expect(adoptCopyfileAliases({ homeDir: f.home, pathValue })).toEqual({ adopted: true, version: "0.10.8", aliasCount: 0 });
+      expect(launcherSnapshot(paths)).toEqual(adopted);
+      expect(readdirSync(adoptions).filter(name => name.endsWith(".json"))).toEqual([`${first.receiptId}.json`]);
+      expect([f.localBin, f.bunBin].flatMap(dir => readdirSync(dir).filter(name => name.includes(".skills-alias-prev-"))).sort())
+        .toEqual(bare.map(path => `${basename(path)}.skills-alias-prev-${first.receiptId}`).sort());
+      expect(existsSync(join(f.runtime, ".copyfile-update-lock"))).toBe(false);
+    } finally { fixture.server.stop(true); }
+  });
+
+  test("alias rollback restores the exact pre-pinned symlinks, and refuses while a launcher pinned in place has lost its backup", async () => {
+    const f = fixtureHome();
+    const fixture = await serverWithArtifact();
+    const lock = join(f.runtime, ".copyfile-update-lock");
+    try {
+      const pathValue = `${f.localBin}${delimiter}${f.bunBin}`;
+      await updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue, registryOrigin: fixture.server.url.origin });
+      const targetRoot = join(f.runtime, "0.10.8-copyfile");
+      const links = asPrePinnedRollout(targetRoot);
+      const result = adoptCopyfileAliases({ homeDir: f.home, pathValue });
+      expect(result).toMatchObject({ adopted: true, aliasCount: 14 });
+      const receiptPath = join(targetRoot, "alias-adoptions", `${result.receiptId}.json`);
+      const adopted = launcherSnapshot(links.keys());
+      // The old and new entry are the same file here, so the target alone cannot
+      // show the launcher is still in its old state: without its backup, refuse.
+      const backup = `${join(f.bunBin, "skills-mcp")}.skills-alias-prev-${result.receiptId}`;
+      renameSync(backup, `${backup}.held`);
+      expect(() => rollbackCopyfileAliases(String(result.receiptId), { homeDir: f.home, pathValue })).toThrow("ALIAS_BACKUP_MISSING_FOR_SWITCH");
+      expect(launcherSnapshot(links.keys())).toEqual(adopted);
+      expect(JSON.parse(readFileSync(receiptPath, "utf8")).state).toBe("switched");
+      expect(existsSync(lock)).toBe(false);
+      renameSync(`${backup}.held`, backup);
+      expect(rollbackCopyfileAliases(String(result.receiptId), { homeDir: f.home, pathValue })).toMatchObject({ rolledBack: true, restoredAliasCount: 14 });
+      for (const [path, text] of links) {
+        expect(lstatSync(path).isSymbolicLink()).toBe(true);
+        expect(readlinkSync(path)).toBe(text);
+        expect(realpathSync(path)).toBe(text);
+        // The switched pinned launcher is preserved beside it.
+        expect(pinnedTarget(`${path}.skills-alias-after-${result.receiptId}`)).toBe(text);
+      }
+      expect(JSON.parse(readFileSync(receiptPath, "utf8")).state).toBe("rolled-back");
+      expect(existsSync(lock)).toBe(false);
+      // The station is pre-pinned again, so a new adoption pins it again.
+      expect(adoptCopyfileAliases({ homeDir: f.home, pathValue })).toMatchObject({ adopted: true, aliasCount: 14 });
+    } finally { fixture.server.stop(true); }
+  });
+
+  test("runtime rollback after adopting pre-pinned symlinks: refused while they are pinned, exact through a newer update, complete after alias rollback", async () => {
+    const f = fixtureHome();
+    const first = await serverWithArtifact();
+    const second = await serverWithArtifact({}, {}, name => `console.log("0.10.9 ${name}");`, "0.10.9");
+    const lock = join(f.runtime, ".copyfile-update-lock");
+    try {
+      const pathValue = `${f.localBin}${delimiter}${f.bunBin}`;
+      const original = launcherSnapshot(binPaths(f));
+      const update = await updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue, registryOrigin: first.server.url.origin });
+      const targetRoot = join(f.runtime, "0.10.8-copyfile");
+      const links = asPrePinnedRollout(targetRoot);
+      const adopted = adoptCopyfileAliases({ homeDir: f.home, pathValue });
+      expect(adopted).toMatchObject({ adopted: true, aliasCount: 14 });
+      const pinned = launcherSnapshot(links.keys());
+      // The 0.10.8 receipt records bare symlinks as its new state. While the adopted
+      // pins replace them its rollback refuses, before any launcher moves.
+      expect(() => rollbackCopyfileRuntime(String(update.receiptId), { homeDir: f.home })).toThrow("LAUNCHER_DRIFT_ROLLBACK_REFUSED");
+      expect(launcherSnapshot(links.keys())).toEqual(pinned);
+      expect(JSON.parse(readFileSync(join(targetRoot, "rollout-receipt.json"), "utf8")).state).toBe("switched");
+      expect(existsSync(lock)).toBe(false);
+      // A newer update records the adopted pins as its old state, and its rollback restores them byte for byte.
+      const next = await updateCopyfileRuntime("0.10.9", { homeDir: f.home, pathValue, registryOrigin: second.server.url.origin });
+      expect(next).toMatchObject({ updated: true, version: "0.10.9", currentVersion: "0.10.8", launcherCount: 14 });
+      const nextReceipt = JSON.parse(readFileSync(join(f.runtime, "0.10.9-copyfile", "rollout-receipt.json"), "utf8"));
+      for (const item of nextReceipt.launchers) {
+        expect(item).toMatchObject({ oldShape: "pinned", oldTarget: links.get(item.path), oldCwd: targetRoot, oldSha256: createHash("sha256").update(pinned.get(item.path)!.text).digest("hex") });
+      }
+      expect(rollbackCopyfileRuntime(String(next.receiptId), { homeDir: f.home })).toMatchObject({ rolledBack: true, restoredVersion: "0.10.8", launcherCount: 14 });
+      for (const [path, state] of pinned) expect(launcherSnapshot([path]).get(path)).toMatchObject({ symlink: false, text: state.text });
+      // Undone in reverse order: the alias adoption, then the 0.10.8 rollout, back to the exact original links.
+      expect(rollbackCopyfileAliases(String(adopted.receiptId), { homeDir: f.home, pathValue })).toMatchObject({ rolledBack: true, restoredAliasCount: 14 });
+      for (const [path, text] of links) expect(readlinkSync(path)).toBe(text);
+      expect(rollbackCopyfileRuntime(String(update.receiptId), { homeDir: f.home })).toMatchObject({ rolledBack: true, restoredVersion: "0.10.6", launcherCount: 14 });
+      for (const [path, state] of original) {
+        expect(state.symlink).toBe(true);
+        expect(readlinkSync(path)).toBe(state.text);
+        expect(realpathSync(path)).toBe(join(f.oldPackage, BIN[basename(path) as keyof typeof BIN]));
+      }
+      expect(existsSync(lock)).toBe(false);
+    } finally { first.server.stop(true); second.server.stop(true); }
+  });
+
+  test("adopt-aliases still refuses chain-unsupported, foreign, unowned and unsafe launchers beside pre-pinned symlinks, and no refusal leaves a runtime lock", async () => {
+    const f = fixtureHome();
+    const fixture = await serverWithArtifact();
+    const lock = join(f.runtime, ".copyfile-update-lock");
+    try {
+      await updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue: `${f.localBin}${delimiter}${f.bunBin}`, registryOrigin: fixture.server.url.origin });
+      const targetRoot = join(f.runtime, "0.10.8-copyfile");
+      const links = asPrePinnedRollout(targetRoot);
+      // ~/.bun/bin stays an alias directory but is left off PATH, so the runtime
+      // layout check never sees the alias under test: adoption itself must refuse it.
+      const pathValue = f.localBin;
+      const alias = join(f.bunBin, "skills-mcp"), entry = links.get(alias)!;
+      const replaceAlias = (make: (temp: string) => void) => {
+        const temp = `${alias}.synthetic-${crypto.randomUUID()}`;
+        make(temp);
+        renameSync(temp, alias);
+      };
+      const restoreAlias = () => replaceAlias(temp => symlinkSync(entry, temp));
+      const refuses = (error: string) => {
+        expect(() => adoptCopyfileAliases({ homeDir: f.home, pathValue })).toThrow(error);
+        for (const [path, text] of links) if (path !== alias) expect(readlinkSync(path)).toBe(text);
+        expect([f.localBin, f.bunBin].flatMap(dir => readdirSync(dir).filter(name => name.includes(".skills-alias-")))).toEqual([]);
+        expect(existsSync(join(targetRoot, "alias-adoptions"))).toBe(false);
+        expect(existsSync(lock)).toBe(false);
+      };
+      // Chain-unsupported: the alias reaches the current entry through a second link.
+      symlinkSync(entry, join(f.bunBin, ".synthetic-hop"));
+      replaceAlias(temp => symlinkSync(".synthetic-hop", temp));
+      expect(realpathSync(alias)).toBe(entry);
+      refuses("ALIAS_LINK_CHAIN_UNSUPPORTED");
+      expect(readlinkSync(alias)).toBe(".synthetic-hop");
+      restoreAlias();
+      // Foreign: a regular file that is not a managed pinned launcher.
+      replaceAlias(temp => writeFileSync(temp, "#!/bin/sh\necho foreign\n", { mode: 0o755 }));
+      refuses("ALIAS_LINK_NOT_OWNED");
+      expect(readFileSync(alias, "utf8")).toBe("#!/bin/sh\necho foreign\n");
+      restoreAlias();
+      // Unowned: the alias itself belongs to another account (lstat reports another uid).
+      const realLstat = nodeFs.lstatSync;
+      const ownerSpy = spyOn(nodeFs, "lstatSync").mockImplementation(((path: nodeFs.PathLike, options?: nodeFs.StatSyncOptions) => {
+        const stat = realLstat(path, options as undefined);
+        if (String(path) !== alias || !stat) return stat;
+        return new Proxy(stat, { get: (target, key) => {
+          const value = Reflect.get(target, key, target);
+          if (key === "uid") return (value as number) + 1;
+          return typeof value === "function" ? value.bind(target) : value;
+        } });
+      }) as typeof nodeFs.lstatSync);
+      try { refuses("ALIAS_LINK_NOT_OWNED"); } finally { ownerSpy.mockRestore(); }
+      expect(readlinkSync(alias)).toBe(entry);
+      // Unsafe or unwritable alias directory.
+      for (const [mode, error] of [[0o775, "ALIAS_PATH_UNSAFE"], [0o777, "ALIAS_PATH_UNSAFE"], [0o500, "ALIAS_DIRECTORY_NOT_OWNED"]] as const) {
+        chmodSync(f.bunBin, mode);
+        try { refuses(error); } finally { chmodSync(f.bunBin, 0o700); }
+      }
+      // Pinned-shape refusals before the runtime lock is taken.
+      const runtimeSpy = spyOn(launcherModule, "pinnedLauncherRuntime").mockImplementationOnce(() => { throw new Error("LAUNCHER_RUNTIME_UNSAFE"); });
+      try { refuses("LAUNCHER_RUNTIME_UNSAFE"); } finally { runtimeSpy.mockRestore(); }
+      const stateSpy = spyOn(launcherModule, "pinnedLauncherState").mockImplementationOnce(() => { throw new Error("LAUNCHER_CWD_PATH_INVALID"); });
+      try { refuses("LAUNCHER_CWD_PATH_INVALID"); } finally { stateSpy.mockRestore(); }
+      // A failure after the first switch restores every exact pre-pinned symlink.
+      expect(() => adoptCopyfileAliases({ homeDir: f.home, pathValue, onAliasSwitched: () => { throw new Error("SYNTHETIC_POST_SWITCH_FAILURE"); } }))
+        .toThrow("ALIAS_ADOPTION_ROLLED_BACK");
+      for (const [path, text] of links) expect(readlinkSync(path)).toBe(text);
+      const failed = readdirSync(join(targetRoot, "alias-adoptions")).filter(name => name.endsWith(".json"));
+      expect(failed).toHaveLength(1);
+      expect(JSON.parse(readFileSync(join(targetRoot, "alias-adoptions", failed[0]!), "utf8")).state).toBe("rolled-back");
+      expect(existsSync(lock)).toBe(false);
+      // With every cause removed, the same station is adopted.
+      expect(adoptCopyfileAliases({ homeDir: f.home, pathValue })).toMatchObject({ adopted: true, aliasCount: 14 });
+      for (const [path, text] of links) expect(pinnedTarget(path)).toBe(text);
+      expect(existsSync(lock)).toBe(false);
+    } finally { fixture.server.stop(true); }
   });
 
   test("streams registry responses under a hard byte cap", async () => {

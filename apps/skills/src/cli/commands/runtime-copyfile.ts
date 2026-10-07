@@ -830,7 +830,11 @@ export function adoptCopyfileAliases(options: { homeDir?: string; pathValue?: st
         const actual = launcher.target;
         const oldLinkTarget = launcher.kind === "symlink" ? launcher.linkTarget : actual;
         const newTarget = join(layout.currentPackageRoot, target);
-        if (actual === newTarget) continue;
+        // A launcher already pinned to the current entry is left as it is. A bare
+        // symlink that already reaches the current entry (the shape an updater
+        // before pinned launchers wrote, including for this very runtime) is
+        // adopted like any other alias: same checks, backup, receipt and rollback.
+        if (actual === newTarget && launcher.kind === "pinned") continue;
         const chain = inspectAliasPackageChain(home, path, oldLinkTarget, actual, target);
         const source = validateAliasSource(home, name, actual);
         const backupPath = `${path}.skills-alias-prev-${id}`;
@@ -952,7 +956,10 @@ export function rollbackCopyfileAliases(receiptId: string, options: { homeDir?: 
       if (!launcherIs(item.path, newLauncherState(item)) && !launcherIs(item.path, oldLauncherState(item))) throw new Error("ALIAS_TARGET_DRIFT");
       if (entryExists(item.backupPath)) {
         if (!launcherIs(item.backupPath, oldLauncherState(item))) throw new Error("ALIAS_PREIMAGE_DRIFT");
-      } else if (current !== item.oldTarget) {
+      } else if (current !== item.oldTarget || !launcherIs(item.path, oldLauncherState(item))) {
+        // Without its backup a launcher must still be in its old state. The target
+        // alone cannot tell when the old and new targets are the same entry (a bare
+        // symlink pinned in place), so the exact old shape is required as well.
         throw new Error("ALIAS_BACKUP_MISSING_FOR_SWITCH");
       }
     }
