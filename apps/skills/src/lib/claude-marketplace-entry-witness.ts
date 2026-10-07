@@ -34,6 +34,10 @@ export interface ClaudeMarketplaceEntryWitness { path: string; hashMode: typeof 
 function need(value: unknown, reason: string): asserts value {
   if (!value) throw new Error(`Claude marketplace entry witness ${reason}`);
 }
+// Field names come from the catalog: quote and bound them in refusal text.
+const label = (key: string) => JSON.stringify(key.length > 64 ? `${key.slice(0, 64)}...` : key);
+// The shared reader and parser name the settings witness; keep only the reason.
+const reason = (error: unknown) => String((error as Error)?.message ?? error).replace(/^Claude settings witness /, "");
 
 // Top-level marketplace.json keys documented on 2026-10-07. Only `name`,
 // `metadata.pluginRoot`, `renames` (for the selected name) and, for an entry with
@@ -92,7 +96,7 @@ function canonical(value: NativeJsonValue): string {
 }
 
 function validateMarketplace(root: NativeJsonObject, selector: ClaudeMarketplaceEntrySelector): void {
-  for (const [key] of root.entries) need(MARKETPLACE_KEYS.has(key), `refuses unreviewed marketplace field: ${key}`);
+  for (const [key] of root.entries) need(MARKETPLACE_KEYS.has(key), `refuses unreviewed marketplace field: ${label(key)}`);
   const name = field(root, "name");
   need(isString(name) && name.value === selector.marketplace, "marketplace name does not match the reviewed binding");
   for (const key of ["$schema", "description", "version"]) { const value = field(root, key); need(value === undefined || isString(value), `has an invalid marketplace ${key}`); }
@@ -102,7 +106,7 @@ function validateMarketplace(root: NativeJsonObject, selector: ClaudeMarketplace
   if (metadata !== undefined) {
     need(metadata.kind === "object", "has an invalid marketplace metadata object");
     for (const [key, value] of metadata.entries) {
-      need(MARKETPLACE_METADATA_KEYS.has(key), `refuses unreviewed marketplace metadata field: ${key}`);
+      need(MARKETPLACE_METADATA_KEYS.has(key), `refuses unreviewed marketplace metadata field: ${label(key)}`);
       need(isString(value), `has an invalid marketplace metadata.${key}`);
     }
   }
@@ -116,7 +120,7 @@ function validateMarketplace(root: NativeJsonObject, selector: ClaudeMarketplace
     // Claude follows a rename chain from an old name to the current entry. When
     // the selected id is itself renamed, Claude loads another entry (or none),
     // so this witness would describe an entry that is not the one that loads.
-    need(!renames.entries.some(([from]) => from === selector.plugin), "plugin id is redirected by the marketplace renames map");
+    need(!renames.entries.some(([from]) => from.toLowerCase() === selector.plugin.toLowerCase()), "plugin id is redirected by the marketplace renames map");
   }
 }
 
@@ -125,11 +129,11 @@ function validateSource(source: NativeJsonValue | undefined): void {
   need(source?.kind === "object", "has an invalid plugin source");
   const type = field(source, "source");
   need(isString(type) && Object.hasOwn(SOURCE_KEYS, type.value), "has an unreviewed plugin source type");
-  for (const [key] of source.entries) need(SOURCE_KEYS[type.value]!.includes(key), `refuses unreviewed plugin source field: ${key}`);
+  for (const [key] of source.entries) need(SOURCE_KEYS[type.value]!.includes(key), `refuses unreviewed plugin source field: ${label(key)}`);
 }
 
 function projectEntry(entry: NativeJsonObject, selector: ClaudeMarketplaceEntrySelector): NativeJsonObject {
-  for (const [key] of entry.entries) need(ENTRY_BOUND_KEYS.has(key) || ENTRY_OMITTED_KEYS.has(key), `refuses unreviewed plugin entry field: ${key}`);
+  for (const [key] of entry.entries) need(ENTRY_BOUND_KEYS.has(key) || ENTRY_OMITTED_KEYS.has(key), `refuses unreviewed plugin entry field: ${label(key)}`);
   const name = field(entry, "name");
   need(isString(name) && name.value === selector.plugin, "selected entry name does not match");
   validateSource(field(entry, "source"));
@@ -139,7 +143,7 @@ function projectEntry(entry: NativeJsonObject, selector: ClaudeMarketplaceEntryS
   const experimental = field(entry, "experimental");
   if (experimental !== undefined) {
     need(experimental.kind === "object", "has an invalid entry experimental object");
-    for (const [key] of experimental.entries) need(EXPERIMENTAL_KEYS.has(key), `refuses unreviewed experimental component: ${key}`);
+    for (const [key] of experimental.entries) need(EXPERIMENTAL_KEYS.has(key), `refuses unreviewed experimental component: ${label(key)}`);
   }
   // Omitted metadata keeps documented types, so a malformed entry cannot hide
   // in a field this witness does not hash.
@@ -164,7 +168,7 @@ export function hashClaudeMarketplaceEntry(text: string, selector: ClaudeMarketp
     && typeof selector.plugin === "string" && NAME.test(selector.plugin), "requires an exact marketplace and plugin name");
   let root: NativeJsonObject;
   try { root = parseNativeJsonObject(text); }
-  catch (error) { throw new Error(`Claude marketplace entry witness cannot parse marketplace.json: ${(error as Error).message}`); }
+  catch (error) { throw new Error(`Claude marketplace entry witness cannot parse marketplace.json: ${reason(error)}`); }
   validateMarketplace(root, selector);
   const plugins = field(root, "plugins");
   need(plugins?.kind === "array", "requires a plugins array");
@@ -197,6 +201,6 @@ export function captureClaudeMarketplaceEntry(path: string, marketplace: string,
   need(claudeMarketplaceEntrySourceValid({ path, marketplace, plugin }), "requires a normalized absolute .claude-plugin/marketplace.json path and exact names");
   let text: string;
   try { text = readNativeSettingsWitnessFile(path, budget, "marketplace.json"); }
-  catch (error) { throw new Error(`Claude marketplace entry witness cannot read marketplace.json: ${(error as Error).message}`); }
+  catch (error) { throw new Error(`Claude marketplace entry witness cannot read marketplace.json: ${reason(error)}`); }
   return { path, hashMode: CLAUDE_MARKETPLACE_ENTRY_HASH_MODE, marketplace, plugin, sha256: hashClaudeMarketplaceEntry(text, { marketplace, plugin }) };
 }

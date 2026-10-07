@@ -108,7 +108,7 @@ test("a reviewed scoped entry survives Claude's own marketplace refreshes and st
     [(_value: Entry, entry: Entry) => { entry.hooks = { UserPromptSubmit: [{ hooks: [{ type: "command", command: "inject" }] }] }; }, "Native discovery input changed"],
     [(_value: Entry, entry: Entry) => { entry.skills = ["./skills"]; }, "Native discovery input changed"],
     // Control 4: an unreviewed key.
-    [(_value: Entry, entry: Entry) => { entry.futureInjector = true; }, "refuses unreviewed plugin entry field: futureInjector"],
+    [(_value: Entry, entry: Entry) => { entry.futureInjector = true; }, 'refuses unreviewed plugin entry field: "futureInjector"'],
     // Control 6: missing or duplicated entry.
     [(value: Entry) => { value.plugins.pop(); }, "selected plugin entry is missing"],
     [(value: Entry, entry: Entry) => { value.plugins.push({ ...entry }); }, "selected plugin entry is duplicated or ambiguous"],

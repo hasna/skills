@@ -112,13 +112,13 @@ test("control 3: adding injection or resolution fields to the entry drifts", () 
 
 test("control 4: an unknown key in the entry, its source, experimental or the resolution context refuses", () => {
   for (const [mutate, reason] of [
-    [(_value: Entry, entry: Entry) => { entry.futureInjector = { entrypoint: "inject.js" }; }, "refuses unreviewed plugin entry field: futureInjector"],
-    [(_value: Entry, entry: Entry) => { entry.icon = "./logo.png"; }, "refuses unreviewed plugin entry field: icon"],
-    [(_value: Entry, entry: Entry) => { entry.experimental = { agentsV2: "./agents" }; }, "refuses unreviewed experimental component: agentsV2"],
-    [(_value: Entry, entry: Entry) => { entry.source = { source: "github", repo: "anthropics/swift-lsp", script: "run" }; }, "refuses unreviewed plugin source field: script"],
+    [(_value: Entry, entry: Entry) => { entry.futureInjector = { entrypoint: "inject.js" }; }, 'refuses unreviewed plugin entry field: "futureInjector"'],
+    [(_value: Entry, entry: Entry) => { entry.icon = "./logo.png"; }, 'refuses unreviewed plugin entry field: "icon"'],
+    [(_value: Entry, entry: Entry) => { entry.experimental = { agentsV2: "./agents" }; }, 'refuses unreviewed experimental component: "agentsV2"'],
+    [(_value: Entry, entry: Entry) => { entry.source = { source: "github", repo: "anthropics/swift-lsp", script: "run" }; }, 'refuses unreviewed plugin source field: "script"'],
     [(_value: Entry, entry: Entry) => { entry.source = { source: "ftp", url: "ftp://example.invalid" }; }, "has an unreviewed plugin source type"],
-    [(value: Entry) => { value.pluginSearchPaths = ["./more"]; }, "refuses unreviewed marketplace field: pluginSearchPaths"],
-    [(value: Entry) => { value.metadata = { skillRoot: "./skills" }; }, "refuses unreviewed marketplace metadata field: skillRoot"],
+    [(value: Entry) => { value.pluginSearchPaths = ["./more"]; }, 'refuses unreviewed marketplace field: "pluginSearchPaths"'],
+    [(value: Entry) => { value.metadata = { skillRoot: "./skills" }; }, 'refuses unreviewed marketplace metadata field: "skillRoot"'],
   ] as Array<[(value: Entry, entry: Entry) => void, string]>) expect(() => digest(text(mutate))).toThrow(reason);
 });
 
@@ -149,6 +149,7 @@ test("control 6: a missing, duplicated, case-ambiguous or redirected entry refus
   expect(() => digest(text(value => { value.plugins.push({ ...swiftLsp(), name: "Swift-LSP" }); }))).toThrow("selected plugin entry is duplicated or ambiguous");
   expect(() => digest(text(value => { value.renames["swift-lsp"] = "swift-lsp-next"; }))).toThrow("plugin id is redirected by the marketplace renames map");
   expect(() => digest(text(value => { value.renames["swift-lsp"] = null; }))).toThrow("plugin id is redirected by the marketplace renames map");
+  expect(() => digest(text(value => { value.renames["Swift-LSP"] = "other"; }))).toThrow("plugin id is redirected by the marketplace renames map");
   expect(() => digest(text(value => { value.renames = { old: 3 }; }))).toThrow("has an invalid renames map");
   expect(() => digest(text(value => { value.name = "claude-plugins-unofficial"; }))).toThrow("marketplace name does not match the reviewed binding");
   expect(() => digest(text(value => { delete value.plugins; }))).toThrow("requires a plugins array");
