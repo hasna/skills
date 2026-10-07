@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.49
+
+- Write pinned launchers instead of bare `bun` symlinks: the runtime updater now writes `env -i` launchers with `--config=/dev/null --no-env-file --no-macros --no-install --cwd=<trusted>` and a `#!/bin/sh -p` header for every managed `skills*` launcher in every PATH directory (including `~/.local/bin`, `~/.bun/bin`, `/opt/homebrew/bin` and `/usr/local/bin`), so a hostile working directory, environment or `BUN_OPTIONS` cannot execute repository code inside the tool process; hook children already get the same isolation. Launchers switched by the previous updater stay bare symlinks until the next `skills self-update --version <newer version>` run by this code; `--adopt-aliases` pins only aliases still pointing at an older install. `/bin/sh` must accept `-p` (bash, zsh, dash 0.5.11 or later); older dash refuses before any write. Launchers no longer pass `NODE_OPTIONS`, `BUN_*`, `DYLD_*`, `LD_*`, `NODE_EXTRA_CA_CERTS` or the proxy variables into the runtime; stations relying on those for a proxy or custom CAs must configure them for the runtime directly.
+
 ## 0.10.46
 
 - Add explicitly reviewed Sumi settings witnesses that permit known display changes while preserving executable, plugin, permission and unknown configuration controls. Upgrade legacy reviews only with the exact preserved preimage and guarded policy readback.
