@@ -10,7 +10,7 @@ const CONTEXT_ERROR_CODES = new Set([
   "BUNDLE_UNAVAILABLE", "BUNDLE_TOO_LARGE", "SKILL_NOT_SELECTED", "INVALID_SESSION",
   "SESSION_PARENT_NOT_FOUND", "SESSION_PARENT_MISMATCH", "SESSION_NOT_FOUND", "SESSION_GENERATION_CHANGED",
   "SESSION_GENERATION_EXHAUSTED", "SESSION_PARENT_CHANGED", "SESSION_RECEIPT_CHANGED",
-  "SESSION_RECONCILIATION_REQUIRED",
+  "SESSION_RECONCILIATION_REQUIRED", "SESSION_RENEWAL_TIMEOUT",
   "SESSION_CONTEXT_CONFLICT", "SESSION_RECONCILIATION_INCOMPLETE", "SESSION_WRITE_LOCKED", "SESSION_WRITE_LOCK_CHANGED", "SESSION_LOCK_RECOVERY_INCOMPLETE",
 ]);
 
@@ -43,7 +43,10 @@ export function hookFailureReason(error: unknown, profileId?: string): string {
     return `${prefix} This session or project is pinned to a different profile. Inspect the session with skills sessions show <session-id> --json; review skills sessions reconcile for an intentional session change, or explicit project sync for a project change. Sync alone does not change that pin.`;
   }
   if (code === "SESSION_RECONCILIATION_REQUIRED") {
-    return `${prefix} A loaded skill changed or was removed. Inspect this session with skills sessions show <session-id> --json, then review skills sessions reconcile for an intentional change. Sync alone does not change this pin.`;
+    return `${prefix} A loaded skill changed or was removed. Inspect this session with skills sessions show <session-id> --json, then review skills sessions reconcile for an intentional change. Sync alone does not change this pin. A refusal is re-checked with the authority within five minutes, or sooner after the receipt or the synced profile revision changes.`;
+  }
+  if (code === "SESSION_RENEWAL_TIMEOUT") {
+    return `${prefix} Renewing this session's expired authorization did not finish within the hook's renewal window; no request was refused. Sync and diagnosis do not change this window. The existing pin is unchanged and the next prompt retries the renewal. If it keeps recurring, inspect the session with skills sessions show <session-id> --json and review skills sessions reconcile.`;
   }
   if (code.startsWith("SESSION_")) {
     return `${prefix} Inspect the session with skills sessions show <session-id> --json and review its parent or concurrent writer before retrying. Do not remove or rewrite its receipt to bypass this refusal.`;
@@ -62,7 +65,7 @@ export function hookFailureReason(error: unknown, profileId?: string): string {
 const OPTIONAL_CONTEXT_FAILURES = new Set([
   "SKILLS_API_CREDENTIAL_UNAVAILABLE", "SKILLS_API_UNAVAILABLE", "SKILLS_API_UNAUTHORIZED", "SKILLS_API_FORBIDDEN", "SKILLS_API_RESOURCE_UNAVAILABLE",
   "CACHED_PROFILE_EXPIRED", "CACHED_PROFILE_MISSING", "CACHED_BUNDLE_MISSING",
-  "SESSION_RECONCILIATION_REQUIRED", "SESSION_WRITE_BUSY",
+  "SESSION_RECONCILIATION_REQUIRED", "SESSION_RENEWAL_TIMEOUT", "SESSION_WRITE_BUSY",
   "SESSION_PARENT_CHANGED", "SESSION_CONTEXT_CONFLICT", "SKILLS_HOOK_TIMEOUT",
 ]);
 export function isOptionalHookContextFailure(error: unknown): error is HookDiagnosticError {

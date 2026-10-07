@@ -1,8 +1,9 @@
 import type { ResolvedSkillSelection } from "../types/skill-selection.js";
 import { createHash } from "node:crypto";
+import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { createProfileClient, type ProfileClient } from "./profile-client.js";
-import { MAX_CACHED_PROFILE_AGE_MS, verifySelectionBundleResponse, nextSkillSessionGeneration, readSkillSessionSnapshot, readSkillSessionSnapshotIfExists, replaceSkillSession, selectionKey, skillSessionSnapshotBinding, SkillSelectionError, validateResolvedProfile, type SelectionCacheOptions, type SkillSessionReceipt } from "./selection-cache.js";
+import { MAX_CACHED_PROFILE_AGE_MS, verifySelectionBundleResponse, nextSkillSessionGeneration, readSelectionJson, readSelectionProfile, readSkillSessionSnapshot, readSkillSessionSnapshotIfExists, replaceSkillSession, selectionCacheRoot, selectionKey, skillSessionSnapshotBinding, SkillSelectionError, validateResolvedProfile, writeSelectionJson, type SelectionCacheOptions, type SkillSessionReceipt, type SkillSessionSnapshot } from "./selection-cache.js";
 
 export interface SessionReconciliationInput {
   sessionId: string;
@@ -52,6 +53,57 @@ export const SESSION_RENEWAL_TIMEOUT_MS = 4_000;
 const SESSION_RENEWAL_CONCURRENCY = 4;
 
 /**
+ * A definitive automatic renewal refusal is remembered briefly so the managed
+ * hook does not resolve the whole profile again on every prompt. The record
+ * only ever repeats that refusal: it never authorizes, renews or writes a pin.
+ * It binds the exact receipt bytes, profile, authority, workspace and the
+ * locally synced profile revision, and lapses after a fixed window that the
+ * file cannot extend. Anything unexpected is ignored and the authority is asked.
+ */
+export const SESSION_RENEWAL_REFUSAL_TTL_MS = 5 * 60 * 1000;
+interface SessionRenewalRefusal {
+  schemaVersion: 1; kind: "managed-hook-renewal-refusal"; code: "SESSION_RECONCILIATION_REQUIRED";
+  sessionId: string; receiptSha256: string; profileId: string; authority: string; workspaceId: string;
+  refusedRevision: string; localProfileRevision: string | null; recordedAt: string; expiresAt: string;
+}
+const REFUSAL_KEYS = ["authority", "code", "expiresAt", "kind", "localProfileRevision", "profileId", "receiptSha256", "recordedAt", "refusedRevision", "schemaVersion", "sessionId", "workspaceId"];
+function renewalRefusalPath(sessionId: string, options: SelectionCacheOptions): string {
+  return join(selectionCacheRoot(options), "session-renewal-refusals", `${digest(sessionId)}.json`);
+}
+/** `undefined` means the synced revision cannot be read, so no refusal record applies. */
+function localProfileRevision(profileId: string, options: SelectionCacheOptions): string | null | undefined {
+  try { return readSelectionProfile(profileId, options)?.profile.profileRevision ?? null; } catch { return undefined; }
+}
+function currentRenewalRefusal(snapshot: SkillSessionSnapshot, profileId: string, localRevision: string | null | undefined, now: number, options: SelectionCacheOptions): SessionRenewalRefusal | null {
+  if (localRevision === undefined) return null;
+  let value: SessionRenewalRefusal | null;
+  try { value = readSelectionJson<SessionRenewalRefusal>(renewalRefusalPath(snapshot.sessionId, options)); } catch { return null; }
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).sort().join(",") !== REFUSAL_KEYS.join(",")
+    || value.schemaVersion !== 1 || value.kind !== "managed-hook-renewal-refusal" || value.code !== "SESSION_RECONCILIATION_REQUIRED"
+    || typeof value.refusedRevision !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.refusedRevision)
+    || typeof value.recordedAt !== "string" || typeof value.expiresAt !== "string") return null;
+  const recorded = Date.parse(value.recordedAt), expires = Date.parse(value.expiresAt);
+  if (!Number.isFinite(recorded) || new Date(recorded).toISOString() !== value.recordedAt || expires - recorded !== SESSION_RENEWAL_REFUSAL_TTL_MS
+    || new Date(expires).toISOString() !== value.expiresAt || now < recorded || now >= expires) return null;
+  const pinned = snapshot.receipt.profile;
+  if (value.sessionId !== snapshot.sessionId || value.receiptSha256 !== snapshot.sha256 || value.profileId !== profileId
+    || value.authority !== pinned.authority || value.workspaceId !== pinned.workspaceId || value.localProfileRevision !== localRevision) return null;
+  return value;
+}
+function recordRenewalRefusal(snapshot: SkillSessionSnapshot, profileId: string, refusedRevision: string, localRevision: string | null | undefined, now: number, options: SelectionCacheOptions): void {
+  if (localRevision === undefined) return;
+  const pinned = snapshot.receipt.profile;
+  const record: SessionRenewalRefusal = {
+    schemaVersion: 1, kind: "managed-hook-renewal-refusal", code: "SESSION_RECONCILIATION_REQUIRED",
+    sessionId: snapshot.sessionId, receiptSha256: snapshot.sha256, profileId, authority: pinned.authority, workspaceId: pinned.workspaceId,
+    refusedRevision, localProfileRevision: localRevision,
+    recordedAt: new Date(now).toISOString(), expiresAt: new Date(now + SESSION_RENEWAL_REFUSAL_TTL_MS).toISOString(),
+  };
+  // Best effort: failing to remember a refusal only costs another authority read.
+  try { writeSelectionJson(renewalRefusalPath(snapshot.sessionId, options), record); } catch { /* the refusal itself still propagates */ }
+}
+
+/**
  * Renew authorization for the complete immutable pin; never manufacture a
  * profile combining historical loaded versions with current unloaded versions.
  * Current profile membership/lifecycle authorizes unchanged pins. Historical
@@ -67,13 +119,21 @@ export async function reconcileSkillSessionIfSafe(sessionId: string, profileId: 
   const age = now - Date.parse(old.verifiedAt);
   if (age >= 0 && age <= MAX_CACHED_PROFILE_AGE_MS) return false;
   if (age < 0) throw new SkillSelectionError("INVALID_RECEIPT", "The session receipt has a future timestamp; inspect it before changing its pin.");
+  const localRevision = localProfileRevision(profileId, options);
+  const refusal = currentRenewalRefusal(snapshot, profileId, localRevision, now, options);
+  if (refusal) {
+    throw new SkillSelectionError("SESSION_RECONCILIATION_REQUIRED", `Renewal of this exact session pin was refused at ${refusal.recordedAt} by profile revision ${refusal.refusedRevision}; the existing pin is unchanged. The authority is asked again after ${refusal.expiresAt}, or sooner when the receipt or the synced profile revision changes. Review skills sessions reconcile for an intentional change.`);
+  }
   const deadline = performance.now() + SESSION_RENEWAL_TIMEOUT_MS;
   const controller = new AbortController();
-  const timeoutError = () => new SkillSelectionError("SKILLS_API_UNAVAILABLE", "Skills session authorization could not finish within the managed hook renewal window; the existing pin is unchanged.");
-  const assertActive = () => { if (controller.signal.aborted || performance.now() >= deadline) throw timeoutError(); };
+  // A spent renewal budget is not a network or HTTP failure of the authority.
+  const timeoutError = () => new SkillSelectionError("SESSION_RENEWAL_TIMEOUT", "Skills session renewal did not finish within the managed hook renewal window; the existing pin is unchanged and the next prompt retries it.");
+  const budgetSpent = () => controller.signal.aborted || performance.now() >= deadline;
+  const assertActive = () => { if (budgetSpent()) throw timeoutError(); };
   let rejectTimeout!: (error: Error) => void;
   const expired = new Promise<never>((_, reject) => { rejectTimeout = reject; });
   const timer = setTimeout(() => { controller.abort(); rejectTimeout(timeoutError()); }, SESSION_RENEWAL_TIMEOUT_MS);
+  let comparedRevision: string | undefined;
   async function renew(): Promise<boolean> {
     const client = options.client ?? await createProfileClient(controller.signal);
     assertActive();
@@ -83,6 +143,7 @@ export async function reconcileSkillSessionIfSafe(sessionId: string, profileId: 
     if (target.profileId !== profileId || target.authority !== old.profile.authority || target.workspaceId !== old.profile.workspaceId) {
       throw new SkillSelectionError("PROFILE_IDENTITY_MISMATCH", "The authenticated Skills profile does not match this session's profile, authority and workspace.");
     }
+    comparedRevision = target.profileRevision;
     const supportsEpochs = await client.supportsPinRenewal?.() ?? false;
     assertActive();
     if (supportsEpochs && target.selections.some(selection => !selection.authorizationEpoch)) {
@@ -148,6 +209,16 @@ export async function reconcileSkillSessionIfSafe(sessionId: string, profileId: 
     return true;
   }
   try { return await Promise.race([renew(), expired]); }
+  catch (error) {
+    if (error instanceof SkillSelectionError && error.code === "SESSION_RECONCILIATION_REQUIRED" && comparedRevision !== undefined) {
+      recordRenewalRefusal(snapshot, profileId, comparedRevision, localRevision, now, options);
+      throw error;
+    }
+    // Reads cut short by the shared deadline (aborted requests, a late bundle
+    // inspection) report the spent budget; definitive refusals keep their code.
+    if (budgetSpent() && !(error instanceof SkillSelectionError && error.code !== "SKILLS_API_UNAVAILABLE")) throw timeoutError();
+    throw error;
+  }
   finally { clearTimeout(timer); controller.abort(); }
 }
 

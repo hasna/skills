@@ -99,7 +99,7 @@ test("lifecycle sync may use the remaining budget while context retains a reserv
 
 test("typed delivery failures continue every maintained lifecycle without child payload or native fallback", async () => {
   const f = await fixture();
-  const unavailable = ["SKILLS_API_CREDENTIAL_UNAVAILABLE", "SKILLS_API_UNAVAILABLE", "SKILLS_API_UNAUTHORIZED", "SKILLS_API_FORBIDDEN", "SKILLS_API_RESOURCE_UNAVAILABLE", "SESSION_RECONCILIATION_REQUIRED", "SESSION_WRITE_BUSY", "SESSION_CONTEXT_CONFLICT", "SESSION_PARENT_CHANGED"];
+  const unavailable = ["SKILLS_API_CREDENTIAL_UNAVAILABLE", "SKILLS_API_UNAVAILABLE", "SKILLS_API_UNAUTHORIZED", "SKILLS_API_FORBIDDEN", "SKILLS_API_RESOURCE_UNAVAILABLE", "SESSION_RECONCILIATION_REQUIRED", "SESSION_RENEWAL_TIMEOUT", "SESSION_WRITE_BUSY", "SESSION_CONTEXT_CONFLICT", "SESSION_PARENT_CHANGED"];
   for (const agent of ["claude", "codex"]) for (const event of ["UserPromptSubmit", "SessionStart", "SubagentStart"]) for (const code of unavailable) {
     const result = await f.hook({ SKILLS_TEST_CHILD_STDOUT: JSON.stringify({ error: { code, message: "untrusted fixture message" }, context: "Forbidden fixture payload" }) }, event, agent);
     expect(result.value.decision).toBeUndefined(); expect(result.value.continue).not.toBe(false);
@@ -108,6 +108,24 @@ test("typed delivery failures continue every maintained lifecycle without child 
     expect(result.stdout).not.toContain("Forbidden fixture payload"); expect(result.stdout).not.toContain("untrusted fixture message");
     expect(result.stdout).toContain("Do not perform actions that depend on unavailable Skills instructions");
   }
+});
+
+test("a spent renewal budget is reported apart from an authority failure, without sync or diagnosis advice", async () => {
+  const f = await fixture();
+  const child = (code: string) => ({ SKILLS_TEST_CHILD_STDOUT: JSON.stringify({ error: { code } }) });
+  const timeout = await f.hook(child("SESSION_RENEWAL_TIMEOUT"));
+  expect(timeout.value.decision).toBeUndefined();
+  expect(timeout.value.systemMessage).toContain("[SESSION_RENEWAL_TIMEOUT]");
+  expect(timeout.value.systemMessage).toContain("renewal window");
+  expect(timeout.value.systemMessage).toContain("The existing pin is unchanged");
+  expect(timeout.stdout).not.toContain("Run skills sync");
+  expect(timeout.stdout).not.toContain("diagnose with");
+  const unavailable = await f.hook(child("SKILLS_API_UNAVAILABLE"));
+  expect(unavailable.value.systemMessage).toContain("[SKILLS_API_UNAVAILABLE]");
+  expect(unavailable.value.systemMessage).toContain("Run skills sync");
+  const refused = await f.hook(child("SESSION_RECONCILIATION_REQUIRED"));
+  expect(refused.value.systemMessage).toContain("re-checked with the authority within five minutes");
+  expect(refused.stdout).not.toContain("Run skills sync");
 });
 
 test("integrity, invalid state and opaque programming failures still refuse prompt delivery", async () => {
