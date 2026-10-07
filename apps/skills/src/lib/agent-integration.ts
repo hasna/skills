@@ -14,7 +14,7 @@ import { homedir } from "node:os";
 import { getDataDir, getDataDirReadOnly } from "./config.js";
 import { requiresCliSkillLoading, readManagedSkillPolicySnapshot, serializeManagedSkillPolicy, parseManagedSkillPolicy } from "./managed-policy.js";
 import { CLI_BRIDGE_NAME, CLI_BRIDGE_FILES, CLI_BRIDGE_DIGEST, CLI_BRIDGE_VERSION, isOwnedCliBridge } from "./agent-bridge.js";
-import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, rebindAgentDiscovery, captureDiscoveryDirectories, captureRetiredCodexDiscovery, projectNativeDiscoveryFields, type AgentDiscoveryBinding, type DiscoverySource, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
+import { assertProjectDiscovery, isDiscoveryRootUnresolved, resolveAgentDiscovery, verifyAgentDiscovery, verifyAutomaticDiscoveryClosure, rebindAgentDiscovery, captureDiscoveryDirectories, captureRetiredCodexDiscovery, projectNativeDiscoveryFields, type AgentDiscoveryBinding, type DiscoverySource, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderAgentHookCommand, renderOpenCodePlugin, type IntegrationAgent } from "./agent-adapters.js";
 import { assertCodexPathConfigEditable, CODEX_SKILL_CONFIG_SECTIONS, disableCodexBundledSkills, normalizeCodexInlinePathConfig } from "./agent-codex.js";
 
@@ -935,11 +935,12 @@ function verifyCoordinatedDiscovery(binding: AgentDiscoveryBinding, home: string
   try {
     if (binding.method !== "automatic" && binding.method !== "reviewed") throw new Error("Invalid managed discovery method");
     verifyAgentDiscovery(binding);
-    if (binding.method === "automatic") {
-      const current = resolveAgentDiscovery({ home, agent: binding.agent, canonical: path => canonicalAgentPath(path, aliases) });
-      if (JSON.stringify(current) !== JSON.stringify(binding)) throw new Error("Configured native discovery roots changed during Claude update");
-    }
-  } catch (error) { throw new Error(`NATIVE_SKILL_DRIFT: ${(error as Error).message}`); }
+    if (binding.method === "automatic") verifyAutomaticDiscoveryClosure(binding, { home, canonical: path => canonicalAgentPath(path, aliases), change: "Configured native discovery roots changed during Claude update" });
+  } catch (error) {
+    // An unresolvable runtime is an environment gap, not drift: keep its code.
+    if (isDiscoveryRootUnresolved(error)) throw error;
+    throw new Error(`NATIVE_SKILL_DRIFT: ${(error as Error).message}`);
+  }
 }
 
 export function planClaudeHookEventsUpdate(options: ClaudeHookUpdateOptions & { events: readonly ClaudeCoordinatedHookEvent[] }): AgentIntegrationPlan | null {
@@ -1400,11 +1401,11 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
   try {
     verifyAgentDiscovery(agent==="codex" ? {...discovery,codexDisabledPluginSkills:binding.codexPluginSkills ?? []} : discovery, options.codexDiscoveryRecovery);
     if (agent === "sumi" && discovery.method === "reviewed") resolveAgentDiscovery({ home, agent, retainedReview: discovery, canonical: path => canonicalAgentPath(path, aliases) });
-    if (discovery.method === "automatic") {
-      const current = resolveAgentDiscovery({ home, agent, canonical: path => canonicalAgentPath(path, aliases) });
-      if (JSON.stringify(current) !== JSON.stringify(discovery)) throw new Error("Configured native discovery roots changed");
-    }
-  } catch (error) { throw new Error(`NATIVE_SKILL_DRIFT: ${(error as Error).message}`); }
+    if (discovery.method === "automatic") verifyAutomaticDiscoveryClosure(discovery, { home, canonical: path => canonicalAgentPath(path, aliases), change: "Configured native discovery roots changed" });
+  } catch (error) {
+    if (isDiscoveryRootUnresolved(error)) throw error;
+    throw new Error(`NATIVE_SKILL_DRIFT: ${(error as Error).message}`);
+  }
   let installationInputRoots:string[]=[];
   if (agent==="codex") {
     try {
