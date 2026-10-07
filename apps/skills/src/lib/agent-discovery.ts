@@ -469,7 +469,8 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
       ? sources.filter(source => !isSupersededSettingsProjection(agent, canonical(configPath), source))
       : sources;
     const reviewedSourcesWithManifestProjection = review.sources.map(source => {
-      if (agent !== "claude" || source.format !== undefined || source.fields !== undefined || source.managedPlugins !== undefined
+      // A verified null hash pins absence; retain it so reappearance still fails.
+      if (agent !== "claude" || source.sha256 === null || source.format !== undefined || source.fields !== undefined || source.managedPlugins !== undefined
         || source.hashMode !== undefined && source.hashMode !== "bytes"
         || basename(source.path) !== "plugin.json" || !source.path.endsWith(join(sep, ".claude-plugin", "plugin.json"))) return source;
       const pluginRoot = dirname(dirname(source.path)), hooksPath = join(pluginRoot, "hooks/hooks.json");
