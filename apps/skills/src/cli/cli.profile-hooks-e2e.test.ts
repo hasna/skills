@@ -195,6 +195,12 @@ test("hook children started from a hostile directory read no bunfig.toml or .env
     const settings = json(join(f.a.home, ".claude", "settings.json"));
     const command = (event: string) => settings.hooks[event].flatMap((entry: any) => entry.hooks).find((entry: any) => entry.command.includes("hook user-prompt"))?.command as string;
     expect(command("SessionStart")).toContain(pinned);
+    // The rendered hook text is unchanged by pinned launchers; the hooks lane detects it by this pattern.
+    for (const event of ["SessionStart", "UserPromptSubmit"]) expect(command(event)).toMatch(/(?:^|\s)hook user-prompt --agent (claude|codex|gemini)(?:\s|$)/);
+    const codexHooks = json(join(f.a.home, ".codex", "hooks.json"));
+    const codexCommand = codexHooks.hooks.UserPromptSubmit.flatMap((entry: any) => entry.hooks).find((entry: any) => entry.command.includes("hook user-prompt"))?.command as string;
+    expect(codexCommand).toContain(pinned);
+    expect(codexCommand).toMatch(/(?:^|\s)hook user-prompt --agent (claude|codex|gemini)(?:\s|$)/);
     const started = await f.a.ok([], { cwd: hostile, shellCommand: command("SessionStart"), stdin: { cwd: f.a.project, session_id: "hostile-cwd", hook_event_name: "SessionStart", source: "startup", prompt: "$review-code" } });
     const prompt = await f.a.ok([], { cwd: hostile, shellCommand: command("UserPromptSubmit"), stdin: { cwd: f.a.project, session_id: "hostile-cwd", hook_event_name: "UserPromptSubmit", prompt: "$review-code" } });
     expect(started.continue).not.toBe(false);
