@@ -18,6 +18,7 @@ import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib
 import { captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4 } from "../../lib/claude-settings-witness.js";
 import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4 } from "../../lib/codex-settings-witness.js";
 import { captureClaudeMarketplaceRegistryV2 } from "../../lib/claude-marketplace-registry.js";
+import { captureClaudeMarketplaceEntry } from "../../lib/claude-marketplace-entry-witness.js";
 import { captureCodexNativeSkillCatalog } from "../../lib/codex-native-skill-catalog.js";
 import { selfSpawnCommand } from "../../lib/self-spawn.js";
 
@@ -144,15 +145,23 @@ export function registerAgentIntegration(parent: Command): void {
       }
     });
   hook.command("witness")
-    .requiredOption("--kind <kind>", "sumi-settings-v1, claude-settings-v4, claude-settings-v3, claude-settings-v2, codex-settings-v4, codex-settings-v3, codex-settings-v2, codex-settings-v1 or claude-marketplace-registry-v2")
-    .requiredOption("--path <path>", "Canonical absolute path to the reviewed settings or registry file")
+    .requiredOption("--kind <kind>", "sumi-settings-v1, claude-settings-v4, claude-settings-v3, claude-settings-v2, codex-settings-v4, codex-settings-v3, codex-settings-v2, codex-settings-v1, claude-marketplace-registry-v2 or claude-marketplace-entry-v1")
+    .requiredOption("--path <path>", "Canonical absolute path to the reviewed settings, registry or .claude-plugin/marketplace.json file")
+    .option("--marketplace <name>", "Exact marketplace name; claude-marketplace-entry-v1 only")
+    .option("--plugin <name>", "Exact plugin entry name; claude-marketplace-entry-v1 only")
     .option("--json", "Output the discovery witness as JSON", false)
     .description("Capture an explicit versioned review witness without installing it")
-    .action(async (options: {kind: string; path: string}) => {
+    .action(async (options: {kind: string; path: string; marketplace?: string; plugin?: string}) => {
+      if (options.kind === "claude-marketplace-entry-v1") {
+        if (options.marketplace === undefined || options.plugin === undefined) throw new Error("claude-marketplace-entry-v1 requires --marketplace and --plugin");
+        await writeCliOutput(JSON.stringify(captureClaudeMarketplaceEntry(options.path, options.marketplace, options.plugin), null, 2));
+        return;
+      }
+      if (options.marketplace !== undefined || options.plugin !== undefined) throw new Error("--marketplace and --plugin apply only to claude-marketplace-entry-v1");
       const capture = options.kind === "sumi-settings-v1" ? captureSumiSettings : options.kind === "codex-settings-v4" ? captureCodexSettingsV4 : options.kind === "codex-settings-v3" ? captureCodexSettingsV3 : options.kind === "codex-settings-v2" ? captureCodexSettingsV2 : options.kind === "codex-settings-v1" ? captureCodexSettings : options.kind === "claude-settings-v4" ? captureClaudeSettingsV4 : options.kind === "claude-settings-v3" ? captureClaudeSettingsV3
         : options.kind === "claude-settings-v2" ? captureClaudeSettingsV2
         : options.kind === "claude-marketplace-registry-v2" ? captureClaudeMarketplaceRegistryV2 : null;
-      if (!capture) throw new Error("Unsupported witness kind; select sumi-settings-v1, claude-settings-v4, claude-settings-v3, claude-settings-v2, codex-settings-v4, codex-settings-v3, codex-settings-v2, codex-settings-v1 or claude-marketplace-registry-v2");
+      if (!capture) throw new Error("Unsupported witness kind; select sumi-settings-v1, claude-settings-v4, claude-settings-v3, claude-settings-v2, codex-settings-v4, codex-settings-v3, codex-settings-v2, codex-settings-v1, claude-marketplace-registry-v2 or claude-marketplace-entry-v1");
       await writeCliOutput(JSON.stringify(capture(options.path), null, 2));
     });
   hook.command("rebind-settings")

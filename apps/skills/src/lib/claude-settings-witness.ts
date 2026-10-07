@@ -21,7 +21,7 @@ function parents(path: string): Array<[string, BigIntStats]> {
     if (at === dirname(at)) return result;
   }
 }
-export function readNativeSettingsWitnessFile(path: string, budget: ClaudeSettingsWitnessBudget, filename: "settings.json" | "config.toml" | "sumi.json" = "settings.json"): string {
+export function readNativeSettingsWitnessFile(path: string, budget: ClaudeSettingsWitnessBudget, filename: "settings.json" | "config.toml" | "sumi.json" | "marketplace.json" = "settings.json"): string {
   absolutePath(path); need(basename(path) === filename, `requires ${filename}`);
   need(Number.isSafeInteger(budget.remaining) && budget.remaining >= 0, "has an invalid byte budget");
   const ancestors = parents(path), initial = lstatSync(path, { bigint: true });
@@ -53,6 +53,8 @@ export function readNativeSettingsWitnessFile(path: string, budget: ClaudeSettin
 // A small tagged syntax tree rejects duplicate decoded keys and retains unknown
 // numbers without rounding (including large integers and negative zero).
 // Number spelling stays bound; object keys are canonicalized after parsing.
+export type NativeJsonObject = ObjectValue;
+export type NativeJsonValue = Value;
 type ObjectValue = { kind: "object"; entries: Array<[string, Value]> };
 type Value = ObjectValue | { kind: "array"; items: Value[] } | { kind: "string"; value: string } | { kind: "number"; value: string } | { kind: "literal"; value: "true" | "false" | "null" };
 function parse(text: string): ObjectValue {
@@ -105,6 +107,14 @@ function parse(text: string): ObjectValue {
   need(at === text.length && root.kind === "object", "requires a JSON object without trailing content");
   need(root.entries.length <= CLAUDE_SETTINGS_WITNESS_LIMITS.rows, "exceeds its settings field limit");
   return root;
+}
+
+/** The same strict syntax tree for other bounded native JSON witnesses:
+ * duplicate decoded keys refuse, numbers keep their spelling, and the byte,
+ * depth, node, string and top-level field limits above apply unchanged. */
+export function parseNativeJsonObject(text: string): NativeJsonObject {
+  need(typeof text === "string" && Buffer.byteLength(text) <= CLAUDE_SETTINGS_WITNESS_LIMITS.bytes, "exceeds its byte limit");
+  return parse(text);
 }
 
 // Everything not explicitly listed remains bound, including unknown fields,
