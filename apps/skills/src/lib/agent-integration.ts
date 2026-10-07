@@ -14,7 +14,7 @@ import { homedir } from "node:os";
 import { getDataDir, getDataDirReadOnly } from "./config.js";
 import { requiresCliSkillLoading, readManagedSkillPolicySnapshot, serializeManagedSkillPolicy, parseManagedSkillPolicy } from "./managed-policy.js";
 import { CLI_BRIDGE_NAME, CLI_BRIDGE_FILES, CLI_BRIDGE_DIGEST, CLI_BRIDGE_VERSION, isOwnedCliBridge } from "./agent-bridge.js";
-import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, rebindAgentDiscovery, captureDiscoveryDirectories, captureRetiredCodexDiscovery, projectNativeDiscoveryFields, type AgentDiscoveryBinding, type DiscoverySource, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
+import { assertProjectDiscovery, discoveryExecutable, recordedDiscoveryExecutable, isDiscoveryRootUnresolved, resolveAgentDiscovery, verifyAgentDiscovery, verifyAutomaticDiscoveryClosure, type DiscoveryExecutable, rebindAgentDiscovery, captureDiscoveryDirectories, captureRetiredCodexDiscovery, projectNativeDiscoveryFields, type AgentDiscoveryBinding, type DiscoverySource, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderAgentHookCommand, renderOpenCodePlugin, type IntegrationAgent } from "./agent-adapters.js";
 import { assertCodexPathConfigEditable, CODEX_SKILL_CONFIG_SECTIONS, disableCodexBundledSkills, normalizeCodexInlinePathConfig } from "./agent-codex.js";
 
@@ -32,7 +32,7 @@ export interface NativeSkillEntry { agent: string; path: string; hash: string; m
 export interface NativeMigrationTarget { agent: string; projectRoot: string; path: string; treeSha256: string; vendor?: true }
 export interface NativeMigrationTargetManifest { schema: "hasna.skills-native-migration-targets.v1"; targets: NativeMigrationTarget[]; digest: string }
 export interface AgentConfigChange { path: string; before: string | null; after: string }
-export interface AgentIntegrationPlan { observedNativeSources?: Array<{ path: string; sha256: string | null }>; codexPluginSkillReview?: { version: string; cwd: string; catalogSha256: string; configSha256: string | null }; observedSettings?: { path: string; before: string }; settingsWitnessUpgrade?: { agent: "claude" | "codex" | "sumi"; path: string; fromHashMode: string; fromSha256: string; toHashMode: string; toSha256: string; reviewedPreimage: string; currentSettingsSha256: string; replacedWitnesses: Array<{ hashMode: string; sha256: string }> }; dataDir: string; profileId: string; changes: AgentConfigChange[]; nativeSkills: NativeSkillEntry[]; observedPolicy?: { path: string; before: string | null }; discoveryBefore?: AgentDiscoveryBinding[]; discoveryAfter?: AgentDiscoveryBinding[]; rootAliases?: AgentRootAlias[]; managedAgentChecks?: { home: string; agents: IntegrationAgent[] }; retainedReviewChecks?: { home: string; projectDir: string; agents: IntegrationAgent[] } }
+export interface AgentIntegrationPlan { observedNativeSources?: Array<{ path: string; sha256: string | null }>; codexPluginSkillReview?: { version: string; cwd: string; catalogSha256: string; configSha256: string | null }; observedSettings?: { path: string; before: string }; settingsWitnessUpgrade?: { agent: "claude" | "codex" | "sumi"; path: string; fromHashMode: string; fromSha256: string; toHashMode: string; toSha256: string; reviewedPreimage: string; currentSettingsSha256: string; replacedWitnesses: Array<{ hashMode: string; sha256: string }> }; dataDir: string; profileId: string; changes: AgentConfigChange[]; nativeSkills: NativeSkillEntry[]; observedPolicy?: { path: string; before: string | null }; discoveryBefore?: AgentDiscoveryBinding[]; discoveryAfter?: AgentDiscoveryBinding[]; discoveryExecutables?: Record<string, DiscoveryExecutable>; rootAliases?: AgentRootAlias[]; managedAgentChecks?: { home: string; agents: IntegrationAgent[] }; retainedReviewChecks?: { home: string; projectDir: string; agents: IntegrationAgent[] } }
 
 const sha = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
 const HOOK_EVENTS: readonly ContextHookEvent[] = ["UserPromptSubmit", "SessionStart", "SubagentStart"];
@@ -582,7 +582,17 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     return [agent, { command, profileId }] as const;
   }));
   const retainedAgents: IntegrationAgent[] = [];
+  // A review resolves runtimes through this process's PATH. When that PATH
+  // cannot see a runtime the policy already recorded, keep the recorded one
+  // while it still resolves, rather than silently dropping its discovery.
+  const priorExecutables: Record<string, DiscoveryExecutable> = policy.bridge?.discoveryExecutables ?? {};
+  const executables = new Map<IntegrationAgent, DiscoveryExecutable | null>();
   const discoveries = [...new Set(options.agents)].map(agent => {
+    const prior = priorExecutables[agent];
+    // A prior record counts only while its path still resolves; a dangling,
+    // missing or unreadable one is treated as no record.
+    const executable = discoveryExecutable(agent) ?? (prior ? recordedDiscoveryExecutable(agent, prior) : null);
+    executables.set(agent, executable);
     const retainedReview: AgentDiscoveryBinding | undefined = options.discoveryInputs === undefined && policy.bridge?.discovery?.[agent]?.method === "reviewed" ? {...policy.bridge.discovery[agent], ...(agent==="codex" ? {codexDisabledPluginSkills:policy.bridge.codexPluginSkills ?? []} : {})} : undefined;
     if (retainedReview) {
       // A saved review is usable only in its current managed home, with the
@@ -590,7 +600,7 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
       assertManagedAgentBridge(agent, { home, dataDir, projectDir: options.projectDir ?? home });
       retainedAgents.push(agent);
     }
-    return resolveAgentDiscovery({ home, agent, reviewed: options.discoveryInputs, retainedReview, canonical: path => canonicalAgentPath(path, aliases) });
+    return resolveAgentDiscovery({ home, agent, reviewed: options.discoveryInputs, retainedReview, canonical: path => canonicalAgentPath(path, aliases), executable });
   });
   const codexConfigBefore = options.agents.includes("codex") ? readOptional(canonicalAgentPath(join(home, ".codex", "config.toml"), aliases)) : null;
   const codexConfig = Bun.TOML.parse(codexConfigBefore ?? "") as { plugins?: unknown; skills?: { config?: Array<{ path?: string; enabled?: boolean }> } };
@@ -718,7 +728,11 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     rootAliases: aliases,
     ...(options.codexNativeCatalog || codexPluginSkills.length || codexInactivePlugins.length || codexPluginSourceInputs.length ? { codexPluginSkills, codexInactivePlugins, codexPluginSkillReview } : {}),
     discovery: { ...policy.bridge?.discovery, ...Object.fromEntries(discoveryAfter.map(binding => [binding.agent, binding])) },
-  } };
+  } } as Record<string, any>;
+  const discoveryExecutables: Record<string, DiscoveryExecutable> = { ...priorExecutables };
+  for (const [agent, executable] of executables) { if (executable) discoveryExecutables[agent] = executable; else delete discoveryExecutables[agent]; }
+  if (Object.keys(discoveryExecutables).length) nextPolicy.bridge.discoveryExecutables = discoveryExecutables;
+  else delete nextPolicy.bridge.discoveryExecutables;
   const serializedPolicy = serializeManagedSkillPolicy(nextPolicy);
   if (JSON.stringify(policy) !== JSON.stringify(nextPolicy)) changes.push({ path: policyPath, before: previousPolicy, after: serializedPolicy });
   recheckRootAliases(aliases);
@@ -931,15 +945,16 @@ function claudeSettingsConsumers(home: string, path: string, discoveries: AgentD
 /** Automatic discovery closure is independent of native runtime trust. Keep
  * checking it even for a consumer whose settings this transaction does not edit.
  */
-function verifyCoordinatedDiscovery(binding: AgentDiscoveryBinding, home: string, aliases: AgentRootAlias[]): void {
+function verifyCoordinatedDiscovery(binding: AgentDiscoveryBinding, home: string, aliases: AgentRootAlias[], executable?: DiscoveryExecutable): void {
   try {
     if (binding.method !== "automatic" && binding.method !== "reviewed") throw new Error("Invalid managed discovery method");
     verifyAgentDiscovery(binding);
-    if (binding.method === "automatic") {
-      const current = resolveAgentDiscovery({ home, agent: binding.agent, canonical: path => canonicalAgentPath(path, aliases) });
-      if (JSON.stringify(current) !== JSON.stringify(binding)) throw new Error("Configured native discovery roots changed during Claude update");
-    }
-  } catch (error) { throw new Error(`NATIVE_SKILL_DRIFT: ${(error as Error).message}`); }
+    if (binding.method === "automatic") verifyAutomaticDiscoveryClosure(binding, { home, canonical: path => canonicalAgentPath(path, aliases), change: "Configured native discovery roots changed during Claude update", executable });
+  } catch (error) {
+    // An unresolvable runtime is an environment gap, not drift: keep its code.
+    if (isDiscoveryRootUnresolved(error)) throw error;
+    throw new Error(`NATIVE_SKILL_DRIFT: ${(error as Error).message}`);
+  }
 }
 
 export function planClaudeHookEventsUpdate(options: ClaudeHookUpdateOptions & { events: readonly ClaudeCoordinatedHookEvent[] }): AgentIntegrationPlan | null {
@@ -975,7 +990,8 @@ export function planClaudeHookEventsUpdate(options: ClaudeHookUpdateOptions & { 
   if (discoveries.length !== agents.length || !agents.includes("claude")) throw new Error("Missing managed Claude discovery coverage");
   // Raw rebinding recomputes hashes. Verify ALL old witnesses before any rebind
   // so an unrelated source change cannot be adopted by the narrower transaction.
-  for (const binding of discoveries) verifyCoordinatedDiscovery(binding, home, aliases);
+  const discoveryExecutables: Record<string, DiscoveryExecutable> | undefined = bridge.discoveryExecutables;
+  for (const binding of discoveries) verifyCoordinatedDiscovery(binding, home, aliases, discoveryExecutables?.[binding.agent]);
   const consumers = claudeSettingsConsumers(home, path, discoveries, aliases);
   for (const agent of consumers) assertManagedAgentBridge(agent, { home, dataDir, projectDir: home });
   const replacements = new Map(before === options.replacement ? [] : [[path, options.replacement]]);
@@ -999,7 +1015,7 @@ export function planClaudeHookEventsUpdate(options: ClaudeHookUpdateOptions & { 
     agentRoots: discoveries.filter(binding => consumers.includes(binding.agent)).flatMap(binding => binding.roots.map(path => ({ agent: binding.agent, path }))) });
   return { dataDir, profileId: policy.profileId ?? "default", changes, nativeSkills,
     observedPolicy: { path: policyPath, before: snapshot.text }, discoveryBefore: discoveries,
-    discoveryAfter, rootAliases: aliases, managedAgentChecks: { home, agents: consumers } };
+    discoveryAfter, ...(discoveryExecutables ? { discoveryExecutables } : {}), rootAliases: aliases, managedAgentChecks: { home, agents: consumers } };
 }
 
 function atomicWrite(path: string, content: string): void {
@@ -1078,7 +1094,7 @@ export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "co
   // unrelated source without rebinding it to whatever happens to be on disk.
   verifyAgentDiscovery(replacement);
   const after = serializeManagedSkillPolicy({ ...policy, bridge: { ...policy.bridge, discovery: { ...policy.bridge.discovery, [options.agent]: replacement } } });
-  return { dataDir, profileId: policy.profileId, changes: [{ path: join(dataDir, "agent-policy.json"), before: snapshot.text, after }], nativeSkills: [], observedPolicy: { path: join(dataDir, "agent-policy.json"), before: snapshot.text }, observedSettings: { path: configPath, before: settings }, discoveryBefore: [replacement], discoveryAfter: [replacement], rootAliases: aliases, managedAgentChecks: { home, agents: [options.agent] }, settingsWitnessUpgrade: { agent: options.agent, path: configPath, fromHashMode: previous.hashMode ?? "bytes", fromSha256: previous.sha256, toHashMode: next.hashMode, toSha256: next.sha256, reviewedPreimage: options.reviewedPreimage, currentSettingsSha256: options.expectedSettingsSha256, replacedWitnesses: replaced.map(source => ({ hashMode: source.hashMode ?? "bytes", sha256: source.sha256! })) } };
+  return { dataDir, profileId: policy.profileId, changes: [{ path: join(dataDir, "agent-policy.json"), before: snapshot.text, after }], nativeSkills: [], observedPolicy: { path: join(dataDir, "agent-policy.json"), before: snapshot.text }, observedSettings: { path: configPath, before: settings }, discoveryBefore: [replacement], discoveryAfter: [replacement], ...(policy.bridge.discoveryExecutables ? { discoveryExecutables: policy.bridge.discoveryExecutables } : {}), rootAliases: aliases, managedAgentChecks: { home, agents: [options.agent] }, settingsWitnessUpgrade: { agent: options.agent, path: configPath, fromHashMode: previous.hashMode ?? "bytes", fromSha256: previous.sha256, toHashMode: next.hashMode, toSha256: next.sha256, reviewedPreimage: options.reviewedPreimage, currentSettingsSha256: options.expectedSettingsSha256, replacedWitnesses: replaced.map(source => ({ hashMode: source.hashMode ?? "bytes", sha256: source.sha256! })) } };
 }
 
 export function applyAgentIntegration(plan: AgentIntegrationPlan, options: CodexCorpusWriteOptions = {}): { changed: string[]; backups: string[]; rootAliases?: AgentRootAlias[] } {
@@ -1113,7 +1129,7 @@ function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: Code
   }
   for (const agent of plan.managedAgentChecks?.agents ?? []) assertManagedAgentBridgeWithDiscovery(agent, { home: plan.managedAgentChecks!.home, dataDir: plan.dataDir, projectDir: plan.managedAgentChecks!.home }, provenDiscovery?.agent === agent ? provenDiscovery : undefined);
   for (const binding of plan.discoveryBefore ?? []) {
-    if (plan.managedAgentChecks) verifyCoordinatedDiscovery(binding, plan.managedAgentChecks.home, aliases);
+    if (plan.managedAgentChecks) verifyCoordinatedDiscovery(binding, plan.managedAgentChecks.home, aliases, plan.discoveryExecutables?.[binding.agent]);
     else verifyAgentDiscovery(binding);
   }
   if (plan.observedPolicy && currentText(plan.observedPolicy.path) !== plan.observedPolicy.before) throw new Error("Agent policy changed after planning");
@@ -1142,7 +1158,7 @@ function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: Code
     for (const source of plan.observedNativeSources ?? []) if (nativeSourceDigest(source.path) !== source.sha256) throw new Error("Native identity source changed during application");
     if (plan.observedSettings && readOptional(plan.observedSettings.path) !== plan.observedSettings.before) throw new Error("Native settings changed during witness application");
     for (const binding of plan.discoveryAfter ?? []) {
-      if (plan.managedAgentChecks) verifyCoordinatedDiscovery(binding, plan.managedAgentChecks.home, aliases);
+      if (plan.managedAgentChecks) verifyCoordinatedDiscovery(binding, plan.managedAgentChecks.home, aliases, plan.discoveryExecutables?.[binding.agent]);
       else verifyAgentDiscovery(binding);
     }
     for (const agent of plan.managedAgentChecks?.agents ?? []) assertManagedAgentBridge(agent, { home: plan.managedAgentChecks!.home, dataDir: plan.dataDir, projectDir: plan.managedAgentChecks!.home });
@@ -1400,11 +1416,11 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
   try {
     verifyAgentDiscovery(agent==="codex" ? {...discovery,codexDisabledPluginSkills:binding.codexPluginSkills ?? []} : discovery, options.codexDiscoveryRecovery);
     if (agent === "sumi" && discovery.method === "reviewed") resolveAgentDiscovery({ home, agent, retainedReview: discovery, canonical: path => canonicalAgentPath(path, aliases) });
-    if (discovery.method === "automatic") {
-      const current = resolveAgentDiscovery({ home, agent, canonical: path => canonicalAgentPath(path, aliases) });
-      if (JSON.stringify(current) !== JSON.stringify(discovery)) throw new Error("Configured native discovery roots changed");
-    }
-  } catch (error) { throw new Error(`NATIVE_SKILL_DRIFT: ${(error as Error).message}`); }
+    if (discovery.method === "automatic") verifyAutomaticDiscoveryClosure(discovery, { home, canonical: path => canonicalAgentPath(path, aliases), change: "Configured native discovery roots changed", executable: binding.discoveryExecutables?.[agent] });
+  } catch (error) {
+    if (isDiscoveryRootUnresolved(error)) throw error;
+    throw new Error(`NATIVE_SKILL_DRIFT: ${(error as Error).message}`);
+  }
   let installationInputRoots:string[]=[];
   if (agent==="codex") {
     try {

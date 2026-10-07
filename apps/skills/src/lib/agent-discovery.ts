@@ -24,6 +24,44 @@ export { captureDiscoveryDirectories, type DiscoveryDirectory } from "./agent-di
 
 export interface DiscoverySource { path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes" | "claude-plugin-manifest-v1" | "claude-plugin-registry" | "claude-marketplace-registry" | "claude-settings-v1" | "claude-settings-v2" | "claude-settings-v3" | "claude-settings-v4" | "claude-marketplace-registry-v2" | "codex-settings-v1" | "codex-settings-v2" | "codex-settings-v3" | "codex-settings-v4" | "sumi-settings-v1"; managedPlugins?: ManagedPluginRegistrationWitness[]; format?: "json" | "toml" | "yaml"; fields?: string[] }
 export interface AgentDiscoveryBinding { agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; method: "automatic" | "reviewed"; builtinNames?: string[]; codexDisabledPluginSkills?: CodexPluginSkillControl[]; codexRetiredMaterializations?: { roots:string[]; parents?:string[]; directories:Array<DiscoveryDirectory & {entries?:string[]}> }; codexInstallationInputs?: { version:string; catalogSha256:string; plugins:CodexPluginSourceInput[]; directories?:DiscoveryDirectory[] } }
+/** Discovery that depends on an installed runtime found by command name. */
+const DISCOVERY_RUNTIME_COMMANDS: Partial<Record<IntegrationAgent, string>> = Object.freeze({ gemini: "gemini" });
+/** An environment gap, not drift: the runtime a review saw cannot be resolved
+ * from this process, so its discovery cannot be re-derived. Callers keep it
+ * blocking and must not report it as NATIVE_SKILL_DRIFT. */
+export const DISCOVERY_ROOT_UNRESOLVED = "DISCOVERY_ROOT_UNRESOLVED";
+export function discoveryRootUnresolved(agent: IntegrationAgent, command: string, detail: string): Error {
+  return new Error(`${DISCOVERY_ROOT_UNRESOLVED}: ${agent} discovery cannot resolve its "${command}" executable: ${detail}. The reviewed discovery is unchanged; this is an environment gap, not drift.`);
+}
+export function isDiscoveryRootUnresolved(error: unknown): error is Error {
+  return error instanceof Error && error.message.startsWith(`${DISCOVERY_ROOT_UNRESOLVED}: `);
+}
+/** The runtime executable a discovery review resolved through PATH, with the
+ * realpath its launcher led to. The policy stores it beside the binding
+ * (bridge.discoveryExecutables), not inside it, so a consumer that compares
+ * stored bindings keeps the shape it already knows. */
+export interface DiscoveryExecutable { command: string; path: string; target: string }
+// Paths in refusal text come from the filesystem: JSON-quote them and escape
+// everything outside printable ASCII so no control or bidi character is echoed.
+const quotedPath = (path: string) => JSON.stringify(path).replace(/[^\x20-\x7e]/g, character => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+const realpathOrNull = (path: string): string | null => { try { return realpathSync(path); } catch { return null; } };
+/** Resolve the agent's runtime command through this process's PATH: the
+ * executable this process would actually run. */
+export function discoveryExecutable(agent: IntegrationAgent): DiscoveryExecutable | null {
+  const command = DISCOVERY_RUNTIME_COMMANDS[agent];
+  const found = command ? Bun.which(command) : null;
+  if (!command || !found) return null;
+  const path = resolve(found), target = realpathOrNull(path);
+  return target === null ? null : { command, path, target };
+}
+/** Check a recorded executable by its exact path, ignoring PATH. Null when the
+ * path no longer resolves (missing, dangling, ENOTDIR, EACCES). */
+export function recordedDiscoveryExecutable(agent: IntegrationAgent, recorded: DiscoveryExecutable): DiscoveryExecutable | null {
+  const command = DISCOVERY_RUNTIME_COMMANDS[agent];
+  if (!command || recorded.command !== command) throw new Error(`Recorded ${agent} discovery executable names another command`);
+  const target = realpathOrNull(recorded.path);
+  return target === null ? null : { command, path: recorded.path, target };
+}
 export interface ReviewedDiscoveryInputs { version: 1; agents: Array<{ agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; pluginHooks: "reviewed-no-skill-injection" }> }
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 function parseConfig(text: string, path: string, toml = false): any {
@@ -365,7 +403,43 @@ export function agentDiscoveryConfigPath(home: string, agent: IntegrationAgent):
   return join(home, agent === "hermes" ? ".hermes/config.yaml" : agent === "opencode" ? ".config/opencode/opencode.json" : `.${agent}/${agent === "codex" ? "config.toml" : agent === "cursor" ? "hooks.json" : "settings.json"}`);
 }
 
-export function resolveAgentDiscovery(options: { home: string; agent: IntegrationAgent; reviewed?: ReviewedDiscoveryInputs; retainedReview?: AgentDiscoveryBinding; canonical?: (path: string) => string }): AgentDiscoveryBinding {
+/** Re-derive an automatic binding and compare it with the stored one. A
+ * mismatch is drift, except when the only difference is a runtime this process
+ * cannot resolve: then it is DISCOVERY_ROOT_UNRESOLVED, which stays blocking. */
+export function verifyAutomaticDiscoveryClosure(binding: AgentDiscoveryBinding, options: { home: string; canonical: (path: string) => string; change: string; executable?: DiscoveryExecutable }): void {
+  const command = DISCOVERY_RUNTIME_COMMANDS[binding.agent], recorded = options.executable;
+  // What this process's PATH resolves is what the agent actually runs here.
+  const onPath = discoveryExecutable(binding.agent);
+  let runtime: DiscoveryExecutable | null, gap: string | undefined;
+  if (recorded) {
+    // The recorded path is always verified. A PATH that resolves a different
+    // runtime shadows the reviewed one: drift. A PATH that resolves none
+    // (a narrower PATH) leaves the recorded path as the only witness.
+    runtime = recordedDiscoveryExecutable(binding.agent, recorded);
+    if (runtime && runtime.target !== recorded.target) throw new Error(`${options.change}: the recorded ${binding.agent} executable now resolves to ${quotedPath(runtime.target)}, not the reviewed ${quotedPath(recorded.target)}`);
+    if (onPath && onPath.target !== recorded.target) throw new Error(`${options.change}: the "${command}" on this process's PATH resolves to ${quotedPath(onPath.target)}, not the reviewed ${quotedPath(recorded.target)}`);
+    if (!runtime) gap = `the recorded executable ${quotedPath(recorded.path)} no longer resolves. Restore it, or review the change with skills hook install`;
+  } else {
+    runtime = onPath;
+    if (!runtime) gap = "it is not on this process's PATH, and the reviewed policy has no recorded executable path. Run with the PATH used for the review, or run skills hook install there to record it";
+  }
+  const current = resolveAgentDiscovery({ home: options.home, agent: binding.agent, canonical: options.canonical, executable: runtime });
+  if (JSON.stringify(current) === JSON.stringify(binding)) return;
+  // The runtime contributed the package and builtin witnesses and names. Only
+  // when everything else still matches is the difference the missing runtime.
+  const reviewedWithRuntime = (binding.builtinNames?.length ?? 0) > 0 || binding.sources.some(source => basename(source.path) === "package.json");
+  const otherwiseCurrent = current.method === binding.method && JSON.stringify(current.roots) === JSON.stringify(binding.roots)
+    && JSON.stringify(current.directories) === JSON.stringify(binding.directories)
+    && current.sources.every(source => binding.sources.some(saved => isDeepStrictEqual(saved, source)));
+  // An unresolvable runtime is an environment gap only when nothing else changed.
+  if (command && gap && runtime === null && reviewedWithRuntime && otherwiseCurrent) throw discoveryRootUnresolved(binding.agent, command, gap);
+  throw new Error(options.change);
+}
+
+/** `executable` is the agent's runtime: omitted, it is resolved through PATH;
+ * a value (or null for none) is used as given, so verification never depends
+ * on the caller's PATH. */
+export function resolveAgentDiscovery(options: { home: string; agent: IntegrationAgent; reviewed?: ReviewedDiscoveryInputs; retainedReview?: AgentDiscoveryBinding; canonical?: (path: string) => string; executable?: DiscoveryExecutable | null }): AgentDiscoveryBinding {
   const canonical = options.canonical ?? resolve, home = resolve(options.home), agent = options.agent;
   const sources: DiscoverySource[] = [], roots = new Set<string>(), builtinNames: string[] = [];
   const witness = (path: string, format?: "json" | "toml" | "yaml", fields?: string[], hashMode?: DiscoverySource["hashMode"]) => {
@@ -416,12 +490,12 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
     }
   }
   if (agent === "gemini") {
-    const executable = Bun.which("gemini");
+    const executable = options.executable === undefined ? discoveryExecutable(agent) : options.executable;
     if (executable) {
       // Inspect the installed package, never run a client just to discover its
       // bundled skills. A client update changes this source binding.
       let packageRoot: string | undefined;
-      for (let directory = dirname(realpathSync(executable)), depth = 0; depth < 8; directory = dirname(directory), depth++) {
+      for (let directory = dirname(executable.target), depth = 0; depth < 8; directory = dirname(directory), depth++) {
         const path = join(directory, "package.json"), raw = read(path);
         if (raw !== null && parseConfig(raw, path).name === "@google/gemini-cli") { packageRoot = directory; witness(path); break; }
         if (dirname(directory) === directory) break;

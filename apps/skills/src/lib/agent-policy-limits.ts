@@ -43,6 +43,11 @@ export function assertAgentPolicyCollections(policy: Record<string, any>): void 
       ids.add(control.pluginId);
     }
   }
+  // Runtime executables recorded by a discovery review; only Gemini has one.
+  if (bridge.discoveryExecutables !== undefined) for (const [agent, executable] of Object.entries(record(bridge.discoveryExecutables, AGENT_POLICY_LIMITS.agents))) {
+    requireBound(agent === "gemini" && object(executable) && Object.keys(executable).length === 3 && executable.command === "gemini");
+    for (const path of [executable.path, executable.target]) { text(path); requireBound(!/[\x00-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(path) && isAbsolute(path) && resolve(path) === path); }
+  }
   if (bridge.disabledBuiltins !== undefined) for (const builtin of array(bridge.disabledBuiltins, AGENT_POLICY_LIMITS.builtinNames)) { requireBound(object(builtin)); text(builtin.path); text(builtin.hash, 64); }
   // Reviewed Codex native policy trust: exact per-platform executable digests. Its
   // semantic validation lives with the adapter; this keeps the stored bytes bounded.
