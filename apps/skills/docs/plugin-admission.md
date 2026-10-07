@@ -264,6 +264,123 @@ not proof of a timestamp-only change: review the complete current registration
 and its complementary sources before explicitly replacing an old witness.
 Capturing this witness does not write a policy or approve native registration.
 
+## Marketplace plugin entry witness
+
+`claude-marketplace-entry-v1` witnesses one plugin entry of a Claude
+`marketplace.json`, for a plugin whose only declaration is its marketplace entry
+(for example a `strict: false` entry with no `plugin.json`, such as
+`swift-lsp@claude-plugins-official`). A bytes witness of the whole catalog
+drifts every time Claude refreshes the marketplace by itself; this mode moves
+only when something that decides how the selected entry resolves or what it
+injects changes.
+
+The source names an absolute, normalized `<root>/.claude-plugin/marketplace.json`
+path, the exact marketplace `name` and the exact plugin entry `name`:
+
+```json
+{ "path": "/home/user/.claude/plugins/marketplaces/claude-plugins-official/.claude-plugin/marketplace.json",
+  "hashMode": "claude-marketplace-entry-v1", "marketplace": "claude-plugins-official",
+  "plugin": "swift-lsp", "sha256": "<digest>" }
+```
+
+It is accepted only in explicit reviewed Claude discovery. Paths with `..`,
+`//`, a trailing slash, control characters, another file name or another parent
+directory refuse, as do names outside `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`.
+
+The digest is SHA-256 over the domain prefix
+`hasna.skills.claude-marketplace-entry.v1\0` and canonical JSON (sorted object
+keys, array order and number spelling kept, no whitespace) of:
+
+- the marketplace `name`, `metadata.pluginRoot` (`null` when absent) and
+  `allowCrossMarketplaceDependenciesOn` (`null` when absent), for every entry
+  whether or not it declares `dependencies`: the root allowlist also governs
+  dependencies declared in the plugin's own `plugin.json`, which Claude's
+  auto-update and `/reload-plugins` act on. A present allowlist must be an
+  array of strings, so `null` only ever means absent;
+- the selected entry projected to its bound keys: `name`, `source`, `strict`,
+  `defaultEnabled`, `dependencies`, `relevance`, `headers`, `headersHelper`,
+  `settings`, `userConfig`, `types`, `channels`, `skills`, `commands`, `agents`,
+  `hooks`, `mcpServers`, `lspServers`, `outputStyles`, `workflows`,
+  `experimental`, `themes` and `monitors`, each with its full value.
+
+Key order: this canonical JSON sorts object keys at every level, under the
+domain prefix above. That deliberately differs from `claude-plugin-manifest-v1`,
+which keeps the manifest's own key order and has no domain prefix. Reordering
+keys in the catalog therefore never moves this digest, while array order,
+including the order of `allowCrossMarketplaceDependenciesOn`, stays bound.
+
+The entry's display and catalog metadata is validated and omitted:
+`$schema`, `description`, `version`, `author`, `homepage`, `repository`,
+`license`, `keywords`, `category`, `tags`, `displayName` and `metadata`. A real
+version or install-path change is still caught by the separate
+`installed_plugins.json` witness, which this mode never replaces. Other entries,
+the catalog `description`, `version`, `owner` and `$schema`,
+`forceRemoveDeletedPlugins` and renames of other plugins do not move the digest.
+Adding, removing or changing `allowCrossMarketplaceDependenciesOn` always does.
+
+The mode fails closed. Capture and verification refuse when:
+
+- the file is missing, a link, a special file, larger than 1 MiB, not strict
+  UTF-8, not one JSON object, has trailing content or a duplicate key;
+- the marketplace `name` differs from the bound name, or `plugins` is not an
+  array;
+- the selected entry is missing, appears twice, or has a case-only variant;
+- `renames` maps the selected name to another entry or to `null`;
+- the entry has a key outside the two lists above (including the directory
+  listing fields), `experimental` has a key other than `themes`, `monitors` or
+  `evals`, or an object `source` has an unknown type or a field outside that
+  type's documented fields (a `url` source may also carry `path`, as the
+  official catalog does);
+- the catalog has a top-level key outside `$schema`, `name`, `owner`,
+  `plugins`, `description`, `version`, `metadata`, `forceRemoveDeletedPlugins`,
+  `allowCrossMarketplaceDependenciesOn` and `renames`, or a `metadata` key other
+  than `description`, `version` and `pluginRoot`;
+- an omitted metadata field has the wrong type.
+
+New fields are refused, never ignored, until a reviewed version of this mode
+covers them. A refusal for an unknown key names the mode, the bound marketplace
+name and the exact key path, and never echoes a value. Key names are bounded to
+64 characters and JSON-quoted, with every character outside printable ASCII
+escaped. A plain key extends the path with `.key`; any other key appears as
+`["key"]`. For example:
+
+```text
+claude-marketplace-entry-v1: unknown top-level key "pluginSearchPaths" in claude-plugins-official
+claude-marketplace-entry-v1: unknown key "metadata.skillRoot" in claude-plugins-official
+claude-marketplace-entry-v1: unknown key "plugins[swift-lsp].futureInjector" in claude-plugins-official
+claude-marketplace-entry-v1: unknown key "plugins[swift-lsp].source.script" in claude-plugins-official
+```
+
+Inside a hook check the same text follows `NATIVE_SKILL_DRIFT:`. The only way
+forward after such a refusal is a fresh human review of the changed catalog
+and a guarded exact re-pin through hook installation: write the reviewed
+witnesses to a discovery inputs file, preview `skills hook install --agent
+claude --discovery-inputs <file>`, then run the same command with `--apply`.
+While the unknown key is present this mode refuses capture too, so that review
+must bind the catalog another way, for example an exact `bytes` witness from
+`captureDiscoveryByteSources`, until a reviewed version of this mode covers the
+key. There is no bypass, ignore list or relaxed mode.
+
+The field lists follow the
+[marketplace reference](https://code.claude.com/docs/en/plugins/marketplace-reference)
+and the [plugin manifest reference](https://code.claude.com/docs/en/plugins/manifest-reference),
+read on 2026-10-07.
+
+Capture a witness with
+`skills hook witness --kind claude-marketplace-entry-v1 --path <marketplace.json>
+--marketplace <name> --plugin <name> --json` (or
+`captureClaudeMarketplaceEntry(path, marketplace, plugin)`). Capture writes
+nothing and does not authorize a review. Put the witness in reviewed discovery
+inputs, keep the `settings.json`, `installed_plugins.json` and
+`known_marketplaces.json` witnesses and the plugin's absence witnesses, and
+preview `skills hook install --discovery-inputs <file>` before applying. Hook
+installation never rewrites the catalog, so an entry change between planning
+and applying refuses.
+
+Install a runtime that recognizes `claude-marketplace-entry-v1`, including any
+bundled copy of the verifier, before a policy carries it; an older runtime
+refuses the whole policy because the hash mode is unknown.
+
 ## Claude settings preferences
 
 `captureClaudeSettings(canonicalSettingsPath)` returns a versioned
