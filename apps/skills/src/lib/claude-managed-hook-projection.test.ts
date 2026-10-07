@@ -217,15 +217,21 @@ test.skipIf(process.platform !== "darwin")("unrelated entry churn in an ancestor
   try {
     const ready = churn.stdout.getReader(); await ready.read(); ready.releaseLock();
     const refusals: string[] = [];
-    for (let round = 0; round < 60; round++) {
+    // Eight plans are enough: at the base, every one refused under this churn.
+    for (let round = 0; round < 8; round++) {
       try { if (f.plan().replacements.length !== 4) refusals.push("unexpected replacements"); }
       catch (error) { refusals.push(String(error)); }
     }
+    // The churn ran throughout, so "never refuses" cannot pass vacuously.
+    expect(churn.exitCode).toBeNull();
     expect(refusals).toEqual([]);
     const grant = Bun.spawnSync(["/bin/chmod", "+a", "everyone allow add_file,delete_child", f.home], { stdout: "pipe", stderr: "pipe" });
     expect(grant.exitCode).toBe(0); expect(lstatSync(f.home).mode & 0o022).toBe(0);
     try { expect(() => f.plan()).toThrow("EXECUTABLE_UNVERIFIED"); }
     finally { expect(Bun.spawnSync(["/bin/chmod", "-N", f.home], { stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0); }
+    // Control: with the grant removed, the same churned ancestor projects again.
+    expect(f.plan().replacements).toHaveLength(4);
+    expect(churn.exitCode).toBeNull();
   } finally { churn.kill("SIGKILL"); await churn.exited; }
   expect(readFileSync(f.settings, "utf8")).toBe(f.before.settings);
   expect(readFileSync(f.policy, "utf8")).toBe(f.before.policy);
