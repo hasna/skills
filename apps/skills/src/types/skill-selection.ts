@@ -15,6 +15,8 @@ export interface SkillProfile {
   updatedAt: string;
 }
 export interface ResolvedSkillSelection extends SkillSelection {
+  /** Server-minted lifecycle fence, absent on legacy authorities/snapshots. */
+  authorizationEpoch?: string;
   authority: string;
   workspaceId: string;
   profileRevision: string;

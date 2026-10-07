@@ -410,6 +410,7 @@ export class MemorySkillsStore implements SkillsProductStore {
       updatedAt: now,
       revisionId: revisionIdOfRecord(recordFieldsOf(input, carriedBundle, carriedSkillMd)),
       revisionNumber: (previous?.revisionNumber ?? 0) + 1,
+      authorizationEpoch: previous?.authorizationEpoch ?? randomUUID().replaceAll("-", ""),
       lifecycle: previous?.lifecycle ?? "active",
       ...(previous?.archivedAt ? { archivedAt: previous.archivedAt } : {}),
       ...(previous?.archiveReason ? { archiveReason: previous.archiveReason } : {}),
@@ -456,6 +457,7 @@ export class MemorySkillsStore implements SkillsProductStore {
       return {
         slug, version,
         current: current?.orgId === principal.orgId ? {
+          authorizationEpoch: current.authorizationEpoch,
           lifecycle: current.lifecycle,
           ...(current.tombstonedAt ? { tombstonedAt: current.tombstonedAt } : {}),
         } : null,
@@ -486,6 +488,7 @@ export class MemorySkillsStore implements SkillsProductStore {
     }
     const next: ServerSkillRecord = {
       ...current,
+      authorizationEpoch: current.lifecycle === patch.lifecycle ? current.authorizationEpoch : randomUUID().replaceAll("-", ""),
       lifecycle: patch.lifecycle,
       updatedAt: nowIso(),
       revisionId: revisionIdOfRecord({ ...current, lifecycle: patch.lifecycle, archiveReason: patch.reason, replacementSlug: patch.replacementSlug }),
@@ -528,7 +531,7 @@ export class MemorySkillsStore implements SkillsProductStore {
     if (!current.tombstonedAt) {
       const tombstoned = nowIso();
       const purgeAfter = new Date(Date.now() + tombstoneWindowMs).toISOString();
-      const next = { ...current, tombstonedAt: tombstoned, tombstonePurgeAfter: purgeAfter, updatedAt: tombstoned };
+      const next = { ...current, authorizationEpoch: randomUUID().replaceAll("-", ""), tombstonedAt: tombstoned, tombstonePurgeAfter: purgeAfter, updatedAt: tombstoned };
       this.skills.set(skillKey(principal.orgId, slug), next);
       return next;
     }
@@ -1445,7 +1448,7 @@ export class PostgresSkillsStore implements SkillsProductStore {
     // string as a jsonb scalar rather than the requested array.
     const rows = await this.sql`
       SELECT q.value->>'slug' AS slug, q.value->>'version' AS version,
-        r.slug IS NOT NULL AS skill_exists, r.lifecycle, r.tombstoned_at,
+        r.slug IS NOT NULL AS skill_exists, r.lifecycle, r.tombstoned_at, r.authorization_epoch,
         v.bundle_sha256, b.sha256 IS NOT NULL AS bundle_available
       FROM jsonb_array_elements(${requested}::text::jsonb) WITH ORDINALITY AS q(value, ordinal)
       LEFT JOIN skills_registry r ON r.org_id = ${principal.orgId} AND r.slug = q.value->>'slug'
