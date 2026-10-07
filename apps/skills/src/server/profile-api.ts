@@ -315,11 +315,15 @@ export async function handleProfileApi(
     const result: ResolvedSkillProfile = resolvedProfileSnapshot(profile, authority);
     if (result.selections.length > MAX_PROFILE_SELECTIONS || profileDocumentBytes(result) > MAX_RESOLVED_PROFILE_BYTES) throw new SkillRequestError(413, "PROFILE_TOO_LARGE", "Resolved profile exceeds the advertised profile limits");
     const states = await validatePublished(store, principal, profile.selections);
-    result.selections = result.selections.map((selection, index) => {
-      const epoch = states[index]!.current?.authorizationEpoch;
-      if (!epoch || !/^[a-f0-9]{32}$/.test(epoch)) throw new SkillRequestError(503, "PIN_AUTHORIZATION_UNAVAILABLE", "The selection lifecycle fence is unavailable");
-      return { ...selection, authorizationEpoch: epoch };
-    });
+    // Old clients retain complete profile objects in their session hash. Keep
+    // their wire shape unchanged; epochs require an explicit capable caller.
+    if (new URL(request.url).searchParams.get("pinAuthorization") === "epoch-v1") {
+      result.selections = result.selections.map((selection, index) => {
+        const epoch = states[index]!.current?.authorizationEpoch;
+        if (!epoch || !/^[a-f0-9]{32}$/.test(epoch)) throw new SkillRequestError(503, "PIN_AUTHORIZATION_UNAVAILABLE", "The selection lifecycle fence is unavailable");
+        return { ...selection, authorizationEpoch: epoch };
+      });
+    }
     if (profileDocumentBytes(result) > MAX_RESOLVED_PROFILE_BYTES) throw new SkillRequestError(413, "PROFILE_TOO_LARGE", "Resolved profile exceeds the advertised profile limits");
     return json(result, 200, profile.revision);
   }
