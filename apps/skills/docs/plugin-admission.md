@@ -173,6 +173,33 @@ new loaders still require their dedicated review. API failure refuses an update;
 stale projection as synchronized. Claude may retain its previous installation
 after a refused update, whose existing local drift checks continue to apply.
 
+## Reviewed plugin-hook attestation scope
+
+A reviewed discovery input carries `pluginHooks: "reviewed-no-skill-injection"`.
+That value is the reviewer's statement; Skills does not inspect hook behavior.
+What the software currently enforces is narrower:
+
+- It is point-in-time. It covers the bytes listed when the review was applied.
+- It enforces one coupling only. When the review lists a Claude
+  `.claude-plugin/plugin.json` with a byte hash, it must also list that plugin's
+  `hooks/hooks.json` (when the file exists) and any string `hooks` target in the
+  manifest as exact byte sources. Nothing else is required.
+- Other plugin files, such as hook modules (`register.ts`, `runtime.ts` and
+  their imports), `bin/` files and `package.json`, are bound only if the review
+  lists them. A change to an unlisted file is not detected.
+- It is not anchored to the roots registered in
+  `~/.claude/plugins/installed_plugins.json`. When a review is present, the
+  enabled-plugin walk does not run, so Skills does not check that the listed
+  plugin roots are the registered ones or that every enabled plugin is listed.
+- It is detection-only. Later checks re-hash the stored sources. Drift makes the
+  Skills hooks refuse with `NATIVE_SKILL_DRIFT`; it does not stop, unload or
+  sandbox plugin code, which the native client keeps running.
+- It is a tripwire, not a security boundary. A process running as the same user
+  can rewrite the plugin files and the managed policy that holds the witnesses.
+
+A stronger witness anchored to the registered plugin roots is planned and not
+yet implemented.
+
 ## Marketplace registry timestamps
 
 For an explicitly reviewed `known_marketplaces.json`,
