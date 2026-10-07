@@ -195,6 +195,11 @@ test("retired plugin cache version requires fresh exact review before guarded po
   const applied = applyAgentIntegration(planAgentIntegration({ ...options, discoveryInputs: reviewed(newRoot) }));
   expect(applied.backups.some(path => readFileSync(path, "utf8") === legacyPolicy)).toBe(true);
   const sources = JSON.parse(readFileSync(policyPath, "utf8")).bridge.discovery.claude.sources;
+  // The runtime.ts drift check at the end relies on runtime.ts being a reviewed source. The
+  // reviewed path enforces only hooks.json and a declared hooks target; other plugin files are
+  // bound only when the review lists them. Fail here, by name, if the fixture stops listing it.
+  const reviewedRuntime = join(newRoot, "hooks/modules/runtime.ts");
+  expect(sources.map((source: { path: string }) => source.path)).toContain(reviewedRuntime);
   expect(sources.some((source: { path: string }) => source.path.startsWith(oldRoot + "/"))).toBe(false);
   expect(sources.find((source: { path: string }) => source.path === join(newRoot, ".claude-plugin/plugin.json")).hashMode).toBe("claude-plugin-manifest-v1");
   for (const relative of ["hooks/hooks.json", "hooks/modules/register.ts", "hooks/modules/runtime.ts"]) {
