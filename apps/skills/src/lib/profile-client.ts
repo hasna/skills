@@ -48,6 +48,12 @@ function identifier(value: unknown): value is string {
 function invalid(): never {
   throw new Error("The Skills API returned an invalid profile response");
 }
+/** An aborted or timed-out request is unavailable, and keeps a fixed abort cause for budget accounting. */
+function unavailable(error: unknown, message: string): SkillSelectionError {
+  const name = (error as { name?: unknown } | null)?.name;
+  return new SkillSelectionError("SKILLS_API_UNAVAILABLE", message,
+    name === "AbortError" || name === "TimeoutError" ? { cause: new DOMException("The Skills API request was cut short", name) } : undefined);
+}
 function validateSelection(value: unknown): asserts value is SkillSelection {
   if (
     !object(value) ||
@@ -125,8 +131,8 @@ export class HttpProfileClient implements ProfileClient {
           },
         },
       );
-    } catch {
-      throw new SkillSelectionError("SKILLS_API_UNAVAILABLE", "Unable to reach the configured Skills API");
+    } catch (error) {
+      throw unavailable(error, "Unable to reach the configured Skills API");
     }
     if (!response.ok) {
       void response.body?.cancel().catch(() => {});
@@ -149,7 +155,8 @@ export class HttpProfileClient implements ProfileClient {
           await readBoundedResponse(response, limit, this.signal),
         ),
       );
-    } catch {
+    } catch (error) {
+      if (this.signal?.aborted) throw unavailable(this.signal.reason ?? error, "The Skills API response was cut short");
       invalid();
     }
   }

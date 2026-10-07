@@ -6,14 +6,14 @@ import { hostname } from "node:os";
 import { dirname, join, parse, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { getDataDirReadOnly } from "./config.js";
-import { inspectSkillBundle, sha256Hex, SKILL_BUNDLE_INSPECTION_LIMITS, type SkillBundleEntry } from "./skill-bundle.js";
+import { inspectSkillBundle, sha256Hex, SkillBundleInspectionError, SKILL_BUNDLE_INSPECTION_LIMITS, type SkillBundleEntry } from "./skill-bundle.js";
 import { isValidSkillVersion } from "./skill-version.js";
 import { selectionAliasError } from "./selection-aliases.js";
 import { MAX_PROFILE_SELECTIONS, MAX_PROFILE_DOCUMENT_BYTES, MAX_RESOLVED_PROFILE_BYTES, MAX_SKILL_SESSION_ID_CHARS, profileDocumentBytes } from "./profile-limits.js";
 import type { ResolvedSkillProfile, ResolvedSkillSelection } from "../types/skill-selection.js";
 
 export class SkillSelectionError extends Error {
-  constructor(readonly code: string, message: string) { super(message); this.name = "SkillSelectionError"; }
+  constructor(readonly code: string, message: string, options?: ErrorOptions) { super(message, options); this.name = "SkillSelectionError"; }
 }
 export interface SelectionCacheOptions { cacheDir?: string; now?: () => number }
 export interface CachedSelectionProfile { schemaVersion: 1; verifiedAt: string; profile: ResolvedSkillProfile }
@@ -136,8 +136,8 @@ function atomicWrite(path: string, bytes: Uint8Array, mode: number, durable = fa
     if (durable) syncDirectory(dirname(path));
   } finally { try { unlinkSync(temporary); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; } }
 }
-export function readSelectionJson<T>(path: string): T | null {
-  const bytes = readRegularFile(path, MAX_PROFILE_DOCUMENT_BYTES);
+export function readSelectionJson<T>(path: string, maximumBytes = MAX_PROFILE_DOCUMENT_BYTES): T | null {
+  const bytes = readRegularFile(path, Math.min(maximumBytes, MAX_PROFILE_DOCUMENT_BYTES));
   if (!bytes) return null;
   try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as T; }
   catch { throw new SkillSelectionError("INVALID_RECEIPT", "The Skills selection receipt is unreadable; sync the profile again."); }
@@ -145,9 +145,11 @@ export function readSelectionJson<T>(path: string): T | null {
 
 async function verifiedEntries(selection: ResolvedSkillSelection, bytes: Uint8Array, signal?: AbortSignal, deadline?: number): Promise<SkillBundleEntry[]> {
   if (`sha256:${sha256Hex(bytes)}` !== selection.bundleDigest) throw new SkillSelectionError("BUNDLE_DIGEST_MISMATCH", "The skill bundle does not match its selected digest.");
-  const remaining = deadline === undefined ? undefined : Math.floor(deadline - performance.now());
+  // Round up: the inspection deadline (now + remaining) must never fall before
+  // the caller's deadline, so an inner timeout is never reported early.
+  const remaining = deadline === undefined ? undefined : Math.ceil(deadline - performance.now());
   signal?.throwIfAborted();
-  if (remaining !== undefined && remaining <= 0) throw new SkillSelectionError("SKILLS_API_UNAVAILABLE", "Skills session authorization deadline exceeded.");
+  if (remaining !== undefined && remaining <= 0) throw new SkillBundleInspectionError("BUNDLE_TIMEOUT", "Bundle inspection deadline exceeded");
   const bundle = await inspectSkillBundle(bytes, { signal, ...(remaining === undefined ? {} : { limits: { timeoutMs: remaining } }) });
   // Executable versions can ship README.md/CLAUDE.md, or only runtime files.
   // Cache validity is archive safety and exact identity; document reads decide

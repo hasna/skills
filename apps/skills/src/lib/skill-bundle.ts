@@ -517,7 +517,14 @@ export async function inspectSkillBundle(bundle: Uint8Array, options: InspectSki
     decoder.destroy(terminalError);
   };
   const onAbort = () => stop("BUNDLE_ABORTED");
-  const timer = setTimeout(() => stop("BUNDLE_TIMEOUT"), Math.max(1, deadline - performance.now()));
+  // Bun 1.3 timers can fire up to about a millisecond before a fractional
+  // delay. Re-arm for the remainder so the deadline is never reported early.
+  const expire = () => {
+    const remaining = deadline - performance.now();
+    if (remaining > 0) timer = setTimeout(expire, Math.max(1, Math.ceil(remaining)));
+    else stop("BUNDLE_TIMEOUT");
+  };
+  let timer = setTimeout(expire, Math.max(1, Math.ceil(deadline - performance.now())));
   signal?.addEventListener("abort", onAbort, { once: true });
   let decompressedByteSize = 0;
   let bytesSinceYield = 0;

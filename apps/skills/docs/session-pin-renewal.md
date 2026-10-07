@@ -12,8 +12,13 @@ The whole authorization shares a four-second deadline; failed authorization
 never refreshes the receipt or writes downloaded bundles into its cache.
 
 When that deadline is spent, the managed hook reports `SESSION_RENEWAL_TIMEOUT`.
-`SKILLS_API_UNAVAILABLE` stays reserved for network and HTTP 429/5xx failures.
-The pin is unchanged and the next prompt retries the renewal.
+Only a real deadline or abort signal counts: an aborted or timed-out request,
+or a bundle inspection timeout or abort. Inner bundle deadlines are rounded up
+to the renewal deadline and never fire early. The pin is unchanged and the next
+prompt retries the renewal. Other failures keep their own codes even after the
+deadline. `SKILLS_API_UNAVAILABLE` still means the authority could not be
+reached, answered HTTP 429/5xx, or omitted the lifecycle fences it advertised.
+Errors without a Skills code still fail as `SKILLS_CONTEXT_FAILED`.
 
 A definitive refusal (`SESSION_RECONCILIATION_REQUIRED`) is remembered for five
 minutes under `selection-cache/session-renewal-refusals/`. The record binds the
@@ -23,6 +28,7 @@ whole profile again. A changed receipt, a newly synced revision or the end of
 the window sends the next prompt back to the authority. The record only repeats
 a refusal: it never renews, authorizes or writes a pin, a malformed or extended
 record is ignored, and explicit `skills sessions reconcile` does not read it.
+A record larger than 4 KiB is ignored without being parsed.
 
 Removing a selection, changing its aliases or triggers, deleting or archiving
 a skill, losing access, or failing integrity checks still refuses renewal.
