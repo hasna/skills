@@ -10,6 +10,42 @@ afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: 
 const put = (path: string, contents: string) => { mkdirSync(join(path, ".."), { recursive: true }); writeFileSync(path, contents); };
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 
+test("reviewed absent plugin witnesses survive manifest upgrade and still refuse reappearance", () => {
+  const home = mkdtempSync(join(tmpdir(), "skills-claude-absent-manifest-"));
+  homes.push(home);
+  const active = join(home, ".claude/plugins/cache/market/plugin/0.1.2");
+  const retired = join(home, ".claude/plugins/cache/market/plugin/0.1.1");
+  const manifest = join(active, ".claude-plugin/plugin.json");
+  const absentManifest = join(retired, ".claude-plugin/plugin.json");
+  const absentHooks = join(retired, "hooks/hooks.json");
+  const settings = join(home, ".claude/settings.json");
+  const registrations = join(home, ".claude/plugins/installed_plugins.json");
+  put(settings, JSON.stringify({ enabledPlugins: { "plugin@market": true } }));
+  put(registrations, JSON.stringify({ version: 2, plugins: { "plugin@market": [{ scope: "user", installPath: active }] } }));
+  put(manifest, JSON.stringify({ name: "plugin", version: "0.1.2" }));
+  const absentSources = [absentManifest, absentHooks].map(path => ({ path, hashMode: "bytes" as const, sha256: null }));
+  const options = { home, dataDir: join(home, "skills-data"), projectDir: home, agents: ["claude" as const], command: "/fixture/skills" };
+  const plan = planAgentIntegration({ ...options, discoveryInputs: { version: 1, agents: [{
+    agent: "claude", roots: [join(active, "skills"), join(retired, "skills")],
+    sources: [...[settings, registrations, manifest].map(path => ({ path, sha256: sha(readFileSync(path, "utf8")) })), ...absentSources],
+    pluginHooks: "reviewed-no-skill-injection",
+  }] } });
+  // An absent witness is a real assertion, including between planning and apply.
+  put(absentManifest, JSON.stringify({ name: "unexpected" }));
+  expect(() => applyAgentIntegration(plan)).toThrow("Native discovery input changed");
+  rmSync(absentManifest);
+  applyAgentIntegration(plan);
+  const policyPath = join(options.dataDir, "agent-policy.json");
+  const sources = JSON.parse(readFileSync(policyPath, "utf8")).bridge.discovery.claude.sources;
+  for (const absent of absentSources) expect(sources.find((source: { path: string }) => source.path === absent.path)).toEqual(absent);
+  expect(sources.find((source: { path: string }) => source.path === manifest).hashMode).toBe("claude-plugin-manifest-v1");
+  expect(() => assertManagedAgentBridge("claude", options)).not.toThrow();
+  put(manifest, JSON.stringify({ name: "plugin", version: "0.1.3", description: "New metadata" }));
+  expect(() => assertManagedAgentBridge("claude", options)).not.toThrow();
+  put(absentHooks, "{}");
+  expect(() => assertManagedAgentBridge("claude", options)).toThrow("NATIVE_SKILL_DRIFT");
+});
+
 test("legacy raw plugin manifest witnesses stay strict until guarded hook installation preserves and upgrades the policy", () => {
   const home = mkdtempSync(join(tmpdir(), "skills-claude-plugin-upgrade-"));
   homes.push(home);
