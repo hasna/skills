@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add an explicit `claude-settings-v4` Claude settings witness that also permits a top-level built-in `theme` (`auto`, `dark`, `light`, `dark-daltonized`, `light-daltonized`, `dark-ansi`, `light-ansi`, pinned from the Claude Code settings reference). Custom and plugin themes, `skipDangerousModePermissionPrompt` and every permission, hook, environment and unknown setting stay bound. Opt in with `skills hook witness --kind claude-settings-v4` or `skills hook rebind-settings --agent claude --claude-witness-version 4`; existing v1/v2/v3 witnesses keep their meaning and the default rebind target stays v3. The managed policy accepts the new `claude-settings-v4` hash mode, so consumers that bundle the verifier must ship it before a policy uses it.
+
 ## 0.10.49
 
 - Write pinned launchers instead of bare `bun` symlinks: the runtime updater now writes `env -i` launchers with `--config=/dev/null --no-env-file --no-macros --no-install --cwd=<trusted>` and a `#!/bin/sh -p` header for every managed `skills*` launcher in every PATH directory (including `~/.local/bin`, `~/.bun/bin`, `/opt/homebrew/bin` and `/usr/local/bin`), so a hostile working directory, environment or `BUN_OPTIONS` cannot execute repository code inside the tool process; hook children already get the same isolation. Launchers switched by the previous updater stay bare symlinks until the next `skills self-update --version <newer version>` run by this code; `--adopt-aliases` pins only aliases still pointing at an older install. `/bin/sh` must accept `-p` (bash, zsh, dash 0.5.11 or later); older dash refuses before any write. Launchers no longer pass `NODE_OPTIONS`, `BUN_*`, `DYLD_*`, `LD_*`, `NODE_EXTRA_CA_CERTS` or the proxy variables into the runtime; stations relying on those for a proxy or custom CAs must configure them for the runtime directly.

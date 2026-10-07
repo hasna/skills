@@ -559,7 +559,8 @@ The plan proves the preserved original matches every witness being replaced,
 permits only the documented non-discovery differences, and labels the replacement
 witness (the JSON receipt lists them under `replacedWitnesses`). `--apply`
 preserves and reads back the original policy before writing, and never writes the
-native configuration. Claude upgrades to `claude-settings-v3`; Codex uses
+native configuration. Claude upgrades to `claude-settings-v3`, or to
+`claude-settings-v4` with `--claude-witness-version 4`; Codex uses
 `codex-settings-v2`, which also replaces the narrower automatic
 `plugins`/`marketplaces`/`skills` projection of the same file once the preserved
 original is proved to explain it. That projection is order-sensitive, so it keeps
@@ -2568,3 +2569,18 @@ Upgrade an existing review with `skills hook rebind-settings --agent codex
 Review the plan before adding `--apply`; the original review preimage must match
 its original mode, and unrelated changes refuse. This preserves the native
 configuration, root aliases, other witnesses and active session pins.
+
+`claude-settings-v4` is an explicit successor to `claude-settings-v3`. It
+additionally ignores only a top-level `theme` whose value is exactly one of the
+documented built-in values (`auto`, `dark`, `light`, `dark-daltonized`,
+`light-daltonized`, `dark-ansi`, `light-ansi`). Custom and plugin themes, other
+values or types, nested `theme` keys, `skipDangerousModePermissionPrompt` and
+every permission, hook, environment, helper and unknown setting stay bound.
+Existing raw/V1/V2/V3 reviews retain their original meaning.
+
+Capture with `skills hook witness --kind claude-settings-v4 --path <settings.json>`.
+Upgrade an existing review with `skills hook rebind-settings --agent claude
+--claude-witness-version 4 --reviewed-preimage <preserved-settings.json>
+--expected-policy-sha256 <policy-hash> --expected-settings-sha256 <settings-hash>`.
+Review the plan before adding `--apply`. See
+[built-in theme reviews](docs/plugin-admission.md#explicit-v4-built-in-theme-reviews).

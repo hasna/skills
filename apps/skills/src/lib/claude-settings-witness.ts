@@ -108,7 +108,8 @@ function parse(text: string): ObjectValue {
 }
 
 // Everything not explicitly listed remains bound, including unknown fields,
-// language, outputStyle, theme, command-bearing UI and provider mappings.
+// language, outputStyle, theme (v4 alone omits a built-in theme, see below),
+// command-bearing UI and provider mappings.
 const BOOLEAN_PREFERENCES = new Set([
   "autoScrollEnabled", "axScreenReader", "emojiCompletionEnabled", "prefersReducedMotion",
   "showTurnDuration", "spinnerTipsEnabled", "syntaxHighlightingDisabled", "terminalProgressBarEnabled",
@@ -129,6 +130,16 @@ const BUILTIN_MODEL_SELECTIONS = new Set([
   "claude-opus-4-5-20251101", "claude-opus-4-5", "claude-haiku-4-5",
   "claude-fable-5-1[1m]", "claude-opus-5[1m]", "claude-opus-4-7[1m]", "claude-opus-4-6[1m]", "claude-sonnet-4-6[1m]",
 ]);
+// v4 only: the fixed built-in values of the top-level `theme` setting, read on
+// 2026-10-07 from https://code.claude.com/docs/en/settings-reference#theme
+// (the same six presets are the custom-theme `base` values, plus the auto
+// option, in https://code.claude.com/docs/en/terminal-config#match-the-color-theme).
+// They select a colour palette and load nothing. `custom:<slug>` and
+// `custom:<plugin-name>:<slug>` load theme files from ~/.claude/themes/ or a
+// plugin, so they stay bound, as does every other value, type or spelling.
+// Exact, case-sensitive membership only: never a prefix, pattern or fold.
+export const CLAUDE_BUILTIN_THEMES = Object.freeze(["auto", "dark", "light", "dark-daltonized", "light-daltonized", "dark-ansi", "light-ansi"] as const);
+const BUILTIN_THEMES: ReadonlySet<string> = new Set(CLAUDE_BUILTIN_THEMES);
 function canonical(value: Value): Value {
   if (value.kind === "object") return { kind: "object", entries: value.entries.map(([key, child]): [string, Value] => [key, canonical(child)]).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0) };
   if (value.kind === "array") return { kind: "array", items: value.items.map(canonical) };
@@ -203,10 +214,14 @@ function inferencePreference(key: string, child: Value, version: 2 | 3): boolean
   return child.entries.length === 0;
 }
 
-function settingsDigest(text: string, version: 1 | 2 | 3 = 1): string {
+function settingsDigest(text: string, version: 1 | 2 | 3 | 4 = 1): string {
   const value = parse(text);
   value.entries = value.entries.filter(([key, child]) => {
-    if (version !== 1 && inferencePreference(key, child, version)) return false;
+    // v4 is v3 plus one omission: a top-level built-in theme. Any other theme
+    // value or type falls through and stays bound exactly as in v3; nested
+    // `theme` keys are never inspected here.
+    if (version === 4 && key === "theme" && child.kind === "string" && BUILTIN_THEMES.has(child.value)) return false;
+    if (version !== 1 && inferencePreference(key, child, version === 4 ? 3 : version)) return false;
     if (key === "model") {
       need(child.kind === "string", "contains an invalid model selection");
       return !BUILTIN_MODEL_SELECTIONS.has(child.value);
@@ -275,6 +290,38 @@ export function upgradeClaudeSettingsWitness(previous: { path: string; hashMode?
   const sha256 = settingsDigest(current, 3);
   need(settingsDigest(before, 3) === sha256, "non-preference settings changed; explicit discovery review required");
   return { path: previous.path, hashMode: "claude-settings-v3", sha256 };
+}
+
+/** Explicit review that additionally permits a built-in top-level theme.
+ * v1/v2/v3 witnesses keep their meaning; nothing selects v4 implicitly. */
+export function captureClaudeSettingsV4(path: string, budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }): { path: string; hashMode: "claude-settings-v4"; sha256: string } {
+  return { path, hashMode: "claude-settings-v4", sha256: settingsDigest(readNativeSettingsWitnessFile(path, budget), 4) };
+}
+export function hashClaudeSettingsReplacementV4(text: string, budget: ClaudeSettingsWitnessBudget): string {
+  need(typeof text === "string", "requires settings text");
+  const bytes = Buffer.byteLength(text);
+  need(bytes <= CLAUDE_SETTINGS_WITNESS_LIMITS.bytes && Number.isSafeInteger(budget.remaining) && budget.remaining >= bytes, "exceeds its byte limit");
+  budget.remaining -= bytes;
+  return settingsDigest(text, 4);
+}
+
+/** Explicit opt-in upgrade to v4 with an exact preserved preimage of the prior
+ * review (raw bytes, v1, v2 or v3). It proves that every setting v4 binds is
+ * unchanged; any other drift, including skipDangerousModePermissionPrompt,
+ * refuses. A stored witness is never rewritten without this call.
+ */
+export function upgradeClaudeSettingsWitnessV4(previous: { path: string; hashMode?: "bytes" | "claude-settings-v1" | "claude-settings-v2" | "claude-settings-v3"; sha256: string }, reviewedSettingsPath: string): ReturnType<typeof captureClaudeSettingsV4> {
+  need(previous && Object.keys(previous).every(key => ["path", "hashMode", "sha256"].includes(key))
+    && (previous.hashMode === undefined || previous.hashMode === "bytes" || previous.hashMode === "claude-settings-v1" || previous.hashMode === "claude-settings-v2" || previous.hashMode === "claude-settings-v3")
+    && typeof previous.sha256 === "string" && /^[a-f0-9]{64}$/.test(previous.sha256), "requires an exact prior settings witness");
+  const budget = { remaining: 2 * CLAUDE_SETTINGS_WITNESS_LIMITS.bytes };
+  const before = readNativeSettingsWitnessFile(reviewedSettingsPath, budget), current = readNativeSettingsWitnessFile(previous.path, budget);
+  const beforeDigest = previous.hashMode === undefined || previous.hashMode === "bytes" ? createHash("sha256").update(before).digest("hex")
+    : settingsDigest(before, previous.hashMode === "claude-settings-v1" ? 1 : previous.hashMode === "claude-settings-v2" ? 2 : 3);
+  need(beforeDigest === previous.sha256, "reviewed preimage does not match the prior witness");
+  const sha256 = settingsDigest(current, 4);
+  need(settingsDigest(before, 4) === sha256, "non-preference settings changed; explicit discovery review required");
+  return { path: previous.path, hashMode: "claude-settings-v4", sha256 };
 }
 
 /** Strict bounded JSON control witness; metadata exclusion must be explicit. */

@@ -239,8 +239,8 @@ Invalid values for the display preferences refuse capture and verification. Ever
 other field remains bound, including unknown future fields, hooks and their
 exact commands, permissions, native skill suppression and synchronization,
 plugin roots, marketplaces, environment and configuration precedence. Language,
-output style, theme, and command-bearing status or file suggestion settings are
-intentionally retained. These are narrow preference and inference-selection
+output style, theme (v4 alone permits the built-in theme values), and
+command-bearing status or file suggestion settings are intentionally retained. These are narrow preference and inference-selection
 exceptions, not general permission to change Claude configuration. The native
 bridge guard continues to check its exact commands and native Skill policy.
 
@@ -262,6 +262,43 @@ remain separate. It does not certify arbitrary command-line settings overrides
 or guarantee when a running native client adopts a settings edit.
 Those complementary checks retain their existing exact registration and hook
 entry comparisons; this mode does not relax them for property-order changes.
+
+### Explicit v4 built-in theme reviews
+
+`claude-settings-v4` is an explicit successor to v3. It binds everything v3
+binds, with one more omission: the top-level `theme` key, and only when its
+value is exactly one of the built-in values `auto`, `dark`, `light`,
+`dark-daltonized`, `light-daltonized`, `dark-ansi` or `light-ansi`. The list is
+pinned in code (`CLAUDE_BUILTIN_THEMES`) from the
+[`theme` setting reference](https://code.claude.com/docs/en/settings-reference#theme)
+and the [built-in presets](https://code.claude.com/docs/en/terminal-config#match-the-color-theme),
+read on 2026-10-07. Custom and plugin themes (`custom:<slug>`,
+`custom:<plugin-name>:<slug>`) load theme files, so they stay bound, as does any
+other value, type, spelling or letter case, and any `theme` key nested inside
+another setting. `skipDangerousModePermissionPrompt`, permissions, hooks,
+environment, `apiKeyHelper` and other helpers, plugins, marketplaces, custom
+model values and unknown settings stay bound exactly as in v3. The digest is
+domain-separated from v3.
+
+Existing v1, v2 and v3 witnesses keep their meaning; nothing selects v4
+implicitly, and a stored witness is never rewritten. A policy opts in through
+either explicit path:
+
+- a fresh review: `skills hook witness --kind claude-settings-v4 --path
+  <settings.json> --json` (or `captureClaudeSettingsV4(path)`), placed in the
+  reviewed discovery inputs and applied with the normal `skills hook install
+  --discovery-inputs <file>` plan/apply flow;
+- a preserved-preimage upgrade: `skills hook rebind-settings --agent claude
+  --claude-witness-version 4 --reviewed-preimage <preserved-settings.json>
+  --expected-policy-sha256 <policy-hash> --expected-settings-sha256
+  <settings-hash>` (or `upgradeClaudeSettingsWitnessV4`). It accepts a raw, v1,
+  v2 or v3 witness, proves the preimage matches it in its original mode, and
+  refuses unless the current settings equal the preimage under v4. Without
+  `--claude-witness-version` the rebind target remains v3.
+
+Install a runtime that recognizes `claude-settings-v4`, including any bundled
+copy of the verifier, before a policy carries it; an older runtime refuses the
+unknown hash mode.
 
 ## Verification and limits
 
