@@ -22,7 +22,7 @@ import { sumiConfigDirectory, sumiConfigPath, sumiBridgeRoot, renderSumiPlugin, 
 import { HERMES_OPT_OUT, parseHermesConfig, configureHermesHooks, assertHermesProtection, renderHermesSupervisor, assertNoHermesLegacyShadow, type HermesSupervisorBinding } from "./agent-hermes.js";
 import type { CodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery.js";
 import { assertClaudeHookEventsReplacement, type ClaudeCoordinatedHookEvent } from "./claude-settings-witness.js";
-import { snapshot as hookFileSnapshot, unchanged as hookFileUnchanged } from "./codex-hook-trust-files.js";
+import { snapshot as hookFileSnapshot, trustedAncestorOwner, unchanged as hookFileUnchanged } from "./codex-hook-trust-files.js";
 import { assertPinnedLauncherRuntimeSafe, resolveLauncherCommand } from "../cli/commands/runtime-launcher.js";
 
 export type { IntegrationAgent } from "./agent-adapters.js";
@@ -89,6 +89,11 @@ function isSystemRootAlias(path: string): boolean {
   if (process.platform !== "darwin" || !["/var", "/tmp", "/etc"].includes(path)) return false;
   const target = `/private${path}`, link = `private${path}`;
   const identity = (stat: BigIntStats) => `${stat.dev}:${stat.ino}:${stat.ctimeNs}:${stat.uid}:${stat.mode}`;
+  // The three directories are root-owned, so no other account can change their
+  // mode, owner or ACL; only entries change, and /private/tmp is sticky and
+  // world-writable by design. Bind each directory by object and trust fields,
+  // not by times that any process's entry churn moves.
+  const directoryIdentity = (stat: BigIntStats) => `${stat.dev}:${stat.ino}:${stat.uid}:${stat.mode}`;
   try {
     const before = lstatSync(path, { bigint: true });
     if (!before.isSymbolicLink() || before.uid !== 0n || readlinkSync(path) !== link) return false;
@@ -103,14 +108,14 @@ function isSystemRootAlias(path: string): boolean {
       } else if ((stat.mode & 0o1000n) === 0n) throw new Error("Unprotected system temporary directory");
       const fd = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
       try {
-        if (identity(fstatSync(fd, { bigint: true })) !== identity(stat) || !hasTrustedDarwinAcl(fd)
-          || identity(fstatSync(fd, { bigint: true })) !== identity(stat)) throw new Error("Unverified system alias directory ACL");
+        if (directoryIdentity(fstatSync(fd, { bigint: true })) !== directoryIdentity(stat) || !hasTrustedDarwinAcl(fd)
+          || directoryIdentity(fstatSync(fd, { bigint: true })) !== directoryIdentity(stat)) throw new Error("Unverified system alias directory ACL");
       } finally { closeSync(fd); }
-      return { directory, identity: identity(stat) };
+      return { directory, identity: directoryIdentity(stat) };
     });
     return realpathSync(path) === target && readlinkSync(path) === link
       && identity(lstatSync(path, { bigint: true })) === identity(before)
-      && directories.every(item => identity(lstatSync(item.directory, { bigint: true })) === item.identity);
+      && directories.every(item => directoryIdentity(lstatSync(item.directory, { bigint: true })) === item.identity);
   } catch { return false; }
 }
 
@@ -795,7 +800,9 @@ function projectedHookExecutable(command: string, expectedResolved?: string) {
       const result: string[] = [];
       for (let path = dirname(file); ; path = dirname(path)) {
         const stat = lstatSync(path, { bigint: true });
-        if (!stat.isDirectory() || ((stat.mode & 0o022n) !== 0n && !(stat.uid === 0n && (stat.mode & 0o1000n) !== 0n))) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
+        // Another non-root owner could replace entries whatever the mode.
+        if (!stat.isDirectory() || !trustedAncestorOwner(stat.uid)
+          || ((stat.mode & 0o022n) !== 0n && !(stat.uid === 0n && (stat.mode & 0o1000n) !== 0n))) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
         projectedHookAcl(path, stat);
         result.push(`${path}:${stat.dev}:${stat.ino}:${stat.uid}:${stat.mode}`);
         if (dirname(path) === path) break;
