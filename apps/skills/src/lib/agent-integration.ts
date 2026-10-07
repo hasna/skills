@@ -14,7 +14,7 @@ import { homedir } from "node:os";
 import { getDataDir, getDataDirReadOnly } from "./config.js";
 import { requiresCliSkillLoading, readManagedSkillPolicySnapshot, serializeManagedSkillPolicy, parseManagedSkillPolicy } from "./managed-policy.js";
 import { CLI_BRIDGE_NAME, CLI_BRIDGE_FILES, CLI_BRIDGE_DIGEST, CLI_BRIDGE_VERSION, isOwnedCliBridge } from "./agent-bridge.js";
-import { assertProjectDiscovery, discoveryExecutable, isDiscoveryRootUnresolved, resolveAgentDiscovery, verifyAgentDiscovery, verifyAutomaticDiscoveryClosure, type DiscoveryExecutable, rebindAgentDiscovery, captureDiscoveryDirectories, captureRetiredCodexDiscovery, projectNativeDiscoveryFields, type AgentDiscoveryBinding, type DiscoverySource, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
+import { assertProjectDiscovery, discoveryExecutable, recordedDiscoveryExecutable, isDiscoveryRootUnresolved, resolveAgentDiscovery, verifyAgentDiscovery, verifyAutomaticDiscoveryClosure, type DiscoveryExecutable, rebindAgentDiscovery, captureDiscoveryDirectories, captureRetiredCodexDiscovery, projectNativeDiscoveryFields, type AgentDiscoveryBinding, type DiscoverySource, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderAgentHookCommand, renderOpenCodePlugin, type IntegrationAgent } from "./agent-adapters.js";
 import { assertCodexPathConfigEditable, CODEX_SKILL_CONFIG_SECTIONS, disableCodexBundledSkills, normalizeCodexInlinePathConfig } from "./agent-codex.js";
 
@@ -589,8 +589,9 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
   const executables = new Map<IntegrationAgent, DiscoveryExecutable | null>();
   const discoveries = [...new Set(options.agents)].map(agent => {
     const prior = priorExecutables[agent];
-    let executable = discoveryExecutable(agent);
-    if (!executable && prior && lstatSync(prior.path, { throwIfNoEntry: false })) executable = discoveryExecutable(agent, prior);
+    // A prior record counts only while its path still resolves; a dangling,
+    // missing or unreadable one is treated as no record.
+    const executable = discoveryExecutable(agent) ?? (prior ? recordedDiscoveryExecutable(agent, prior) : null);
     executables.set(agent, executable);
     const retainedReview: AgentDiscoveryBinding | undefined = options.discoveryInputs === undefined && policy.bridge?.discovery?.[agent]?.method === "reviewed" ? {...policy.bridge.discovery[agent], ...(agent==="codex" ? {codexDisabledPluginSkills:policy.bridge.codexPluginSkills ?? []} : {})} : undefined;
     if (retainedReview) {

@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { DATA_DIR_ENV } from "./config.js";
 import { parseManagedSkillPolicy } from "./managed-policy.js";
-import { DISCOVERY_ROOT_UNRESOLVED, isDiscoveryRootUnresolved } from "../index.js";
 
 // Gemini discovery reads its installed runtime through the `gemini` command.
 // Bun.which uses the PATH a process starts with, so every PATH-sensitive step
@@ -73,6 +72,10 @@ const GONE = "no longer resolves";
 test("a narrower PATH verifies the recorded Gemini executable instead of re-resolving it", () => {
   const f = fixture();
   expect(f.run(f.full, "install")).toEqual(ok);
+  // Behaviour first: before this change these refused with NATIVE_SKILL_DRIFT.
+  expect(f.run(NARROW, "claude-update")).toEqual(ok);
+  expect(f.run(NARROW, "gemini-guard")).toEqual(ok);
+  expect(f.hook(NARROW)).toEqual({});
   const bridge = f.policy().bridge;
   expect(bridge.discoveryExecutables).toEqual({ gemini: { command: "gemini", path: f.launcher, target: f.entry } });
   // The binding keeps its existing shape; the executable is stored beside it.
@@ -107,9 +110,37 @@ test("a changed recorded runtime is still drift under any PATH", () => {
   const other = geminiPackage(join(f.root, "other", "gemini-cli"), "0.1.0");
   unlinkSync(f.launcher); symlinkSync(other, f.launcher);
   for (const PATH of [NARROW, f.full]) {
-    drift(f.run(PATH, "claude-update"), "the recorded gemini executable now resolves to another target");
-    drift(f.run(PATH, "gemini-guard"), "the recorded gemini executable now resolves to another target");
+    drift(f.run(PATH, "claude-update"), `the recorded gemini executable now resolves to ${JSON.stringify(other)}, not the reviewed ${JSON.stringify(f.entry)}`);
+    drift(f.run(PATH, "gemini-guard"), "the recorded gemini executable now resolves to");
   }
+});
+
+test("a different gemini first on PATH shadows the recorded runtime and refuses as drift", () => {
+  const f = fixture();
+  expect(f.run(f.full, "install")).toEqual(ok);
+  // An unreviewed runtime with an extra builtin, earlier on the caller's PATH.
+  const shadowEntry = geminiPackage(join(f.root, "shadow", "lib", "gemini-cli"), "9.9.9", ["skill-creator", "unreviewed-builtin"]);
+  const shadowBin = join(f.root, "shadow", "bin"); mkdirSync(shadowBin, { recursive: true });
+  symlinkSync(shadowEntry, join(shadowBin, "gemini"));
+  const shadowed = `${shadowBin}:${f.full}`;
+  const named = `the "gemini" on this process's PATH resolves to ${JSON.stringify(shadowEntry)}, not the reviewed ${JSON.stringify(f.entry)}`;
+  drift(f.run(shadowed, "claude-update"), named);
+  drift(f.run(shadowed, "gemini-guard"), named);
+  const denied = f.hook(shadowed);
+  expect(denied.decision).toBe("deny"); expect(denied.continue).toBe(false);
+  drift({ error: denied.reason }, named);
+  // The shadow also refuses when the recorded launcher itself is gone.
+  renameSync(f.launcher, `${f.launcher}.moved`);
+  drift(f.run(shadowed, "claude-update"), named);
+  renameSync(`${f.launcher}.moved`, f.launcher);
+  // Another launcher for the same reviewed runtime is not a shadow.
+  const aliasBin = join(f.root, "alias", "bin"); mkdirSync(aliasBin, { recursive: true });
+  symlinkSync(f.entry, join(aliasBin, "gemini"));
+  expect(f.run(`${aliasBin}:${NARROW}`, "claude-update")).toEqual(ok);
+  expect(f.hook(`${aliasBin}:${NARROW}`)).toEqual({});
+  // Without a shadow, the narrower PATH still verifies the recorded path only.
+  expect(f.run(NARROW, "claude-update")).toEqual(ok);
+  expect(f.run(NARROW, "gemini-guard")).toEqual(ok);
 });
 
 test("other discovery changes still refuse as drift under a narrower PATH", () => {
@@ -135,6 +166,15 @@ test("a missing recorded executable is DISCOVERY_ROOT_UNRESOLVED, not drift, and
     expect(denied.decision).toBe("deny"); expect(denied.continue).toBe(false);
     unresolved({ error: denied.reason }, GONE);
   }
+  // With the runtime gone, any other change is still drift, not a gap.
+  const settingsPath = join(f.home, ".gemini", "settings.json"), settings = readFileSync(settingsPath, "utf8");
+  writeFileSync(settingsPath, JSON.stringify({ ...JSON.parse(settings), skills: { ...JSON.parse(settings).skills, disabled: [] } }));
+  drift(f.run(NARROW, "claude-update"), "Native discovery input changed");
+  writeFileSync(settingsPath, settings);
+  const extension = join(f.home, ".gemini", "extensions", "added");
+  mkdirSync(extension, { recursive: true }); writeFileSync(join(extension, "gemini-extension.json"), JSON.stringify({ name: "added", version: "1.0.0" }));
+  drift(f.run(NARROW, "claude-update"), "Configured native discovery roots changed during Claude update");
+  rmSync(join(f.home, ".gemini", "extensions"), { recursive: true });
   renameSync(`${f.launcher}.moved`, f.launcher);
   expect(f.run(NARROW, "claude-update")).toEqual(ok);
   // A dangling launcher does not resolve either.
@@ -178,6 +218,23 @@ test("a narrower-PATH review keeps a recorded runtime that still resolves, and d
   expect(f.policy().bridge.discovery.gemini.builtinNames).toEqual([]);
 });
 
+test("a reinstall treats a dangling, blocked or unreachable recorded launcher as no record", () => {
+  for (const [kind, PATH] of [["dangling", "full"], ["dangling", "narrow"], ["enotdir", "narrow"], ["eacces", "narrow"]] as const) {
+    const f = fixture();
+    expect(f.run(f.full, "install")).toEqual(ok);
+    const path = PATH === "full" ? f.full : NARROW;
+    if (kind === "dangling") renameSync(f.entry, `${f.entry}.moved`);
+    if (kind === "enotdir") { renameSync(f.bin, `${f.bin}.moved`); writeFileSync(f.bin, "not a directory\n"); }
+    if (kind === "eacces") chmodSync(f.bin, 0o000);
+    try {
+      // Before this change the install refused with DISCOVERY_ROOT_UNRESOLVED.
+      expect(f.run(path, "install")).toEqual(ok);
+      expect(f.policy().bridge.discoveryExecutables).toBeUndefined();
+      expect(f.policy().bridge.discovery.gemini.builtinNames).toEqual([]);
+    } finally { if (kind === "eacces") chmodSync(f.bin, 0o755); }
+  }
+});
+
 test("a Gemini binding reviewed without a runtime stays current under any PATH", () => {
   const f = fixture();
   renameSync(f.launcher, `${f.launcher}.hidden`);
@@ -191,7 +248,9 @@ test("a Gemini binding reviewed without a runtime stays current under any PATH",
   drift(f.run(f.full, "claude-update"), "Configured native discovery roots changed during Claude update");
 });
 
-test("the SDK classifies the distinct code without treating drift as an environment gap", () => {
+test("the SDK classifies the distinct code without treating drift as an environment gap", async () => {
+  // Imported here so that the rest of this file also loads against older sources.
+  const { DISCOVERY_ROOT_UNRESOLVED, isDiscoveryRootUnresolved } = await import("../index.js");
   expect(DISCOVERY_ROOT_UNRESOLVED).toBe("DISCOVERY_ROOT_UNRESOLVED");
   expect(isDiscoveryRootUnresolved(new Error('DISCOVERY_ROOT_UNRESOLVED: gemini discovery cannot resolve its "gemini" executable: x'))).toBe(true);
   for (const other of [new Error("NATIVE_SKILL_DRIFT: Configured native discovery roots changed"), new Error("NATIVE_SKILL_DRIFT: DISCOVERY_ROOT_UNRESOLVED: x"), "DISCOVERY_ROOT_UNRESOLVED: x", null]) expect(isDiscoveryRootUnresolved(other)).toBe(false);
@@ -204,6 +263,8 @@ test("the stored policy bounds recorded discovery executables", () => {
   for (const invalid of [
     { codex: { ...executable, command: "codex" } }, { gemini: { ...executable, command: "other" } }, { gemini: { ...executable, path: "bin/gemini" } },
     { gemini: { ...executable, path: "/home/user/../user/.local/bin/gemini" } }, { gemini: { ...executable, target: "/home/user/x\n" } },
+    { gemini: { ...executable, path: "/home/user/.local/bin/gem\u202eini" } }, { gemini: { ...executable, target: "/home/user/\u009bx" } },
+    { gemini: { ...executable, path: "/home/user/\u2066gemini" } }, { gemini: { ...executable, target: "/home/user/\u200fx" } },
     { gemini: { ...executable, extra: true } }, { gemini: { command: "gemini", path: executable.path } }, { gemini: null }, [executable],
   ]) expect(() => parseManagedSkillPolicy(policy(invalid))).toThrow("has invalid collection bounds");
 });
