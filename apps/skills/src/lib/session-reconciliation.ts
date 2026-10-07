@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { createProfileClient, type ProfileClient } from "./profile-client.js";
+import { SkillBundleInspectionError } from "./skill-bundle.js";
 import { MAX_CACHED_PROFILE_AGE_MS, verifySelectionBundleResponse, nextSkillSessionGeneration, readSelectionJson, readSelectionProfile, readSkillSessionSnapshot, readSkillSessionSnapshotIfExists, replaceSkillSession, selectionCacheRoot, selectionKey, skillSessionSnapshotBinding, SkillSelectionError, validateResolvedProfile, writeSelectionJson, type SelectionCacheOptions, type SkillSessionReceipt, type SkillSessionSnapshot } from "./selection-cache.js";
 
 export interface SessionReconciliationInput {
@@ -50,6 +51,19 @@ export function inspectSkillSession(sessionId: string, options: SelectionCacheOp
 
 /** Fits inside the managed context child's 6.5-second ceiling, including CLI work. */
 export const SESSION_RENEWAL_TIMEOUT_MS = 4_000;
+/**
+ * Only a real deadline or abort signal of the renewal reports the spent
+ * budget: an AbortError or TimeoutError, a bundle inspection timeout or abort,
+ * or SKILLS_API_UNAVAILABLE whose cause is an aborted or timed-out request.
+ * An authority that answered (HTTP 429/5xx), invalid data and programming
+ * errors keep their own codes even after the deadline.
+ */
+function renewalDeadlineSignal(error: unknown): boolean {
+  if (error instanceof SkillSelectionError) return error.code === "SKILLS_API_UNAVAILABLE" && error.cause !== undefined && renewalDeadlineSignal(error.cause);
+  if (error instanceof SkillBundleInspectionError) return error.code === "BUNDLE_TIMEOUT" || error.code === "BUNDLE_ABORTED";
+  const name = (error as { name?: unknown } | null)?.name;
+  return name === "AbortError" || name === "TimeoutError";
+}
 const SESSION_RENEWAL_CONCURRENCY = 4;
 
 /**
@@ -61,6 +75,8 @@ const SESSION_RENEWAL_CONCURRENCY = 4;
  * file cannot extend. Anything unexpected is ignored and the authority is asked.
  */
 export const SESSION_RENEWAL_REFUSAL_TTL_MS = 5 * 60 * 1000;
+/** A refusal record is about 600 bytes; anything larger is ignored unread. */
+const SESSION_RENEWAL_REFUSAL_MAX_BYTES = 4 * 1024;
 interface SessionRenewalRefusal {
   schemaVersion: 1; kind: "managed-hook-renewal-refusal"; code: "SESSION_RECONCILIATION_REQUIRED";
   sessionId: string; receiptSha256: string; profileId: string; authority: string; workspaceId: string;
@@ -77,7 +93,7 @@ function localProfileRevision(profileId: string, options: SelectionCacheOptions)
 function currentRenewalRefusal(snapshot: SkillSessionSnapshot, profileId: string, localRevision: string | null | undefined, now: number, options: SelectionCacheOptions): SessionRenewalRefusal | null {
   if (localRevision === undefined) return null;
   let value: SessionRenewalRefusal | null;
-  try { value = readSelectionJson<SessionRenewalRefusal>(renewalRefusalPath(snapshot.sessionId, options)); } catch { return null; }
+  try { value = readSelectionJson<SessionRenewalRefusal>(renewalRefusalPath(snapshot.sessionId, options), SESSION_RENEWAL_REFUSAL_MAX_BYTES); } catch { return null; }
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).sort().join(",") !== REFUSAL_KEYS.join(",")
     || value.schemaVersion !== 1 || value.kind !== "managed-hook-renewal-refusal" || value.code !== "SESSION_RECONCILIATION_REQUIRED"
     || typeof value.refusedRevision !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.refusedRevision)
@@ -214,9 +230,9 @@ export async function reconcileSkillSessionIfSafe(sessionId: string, profileId: 
       recordRenewalRefusal(snapshot, profileId, comparedRevision, localRevision, now, options);
       throw error;
     }
-    // Reads cut short by the shared deadline (aborted requests, a late bundle
-    // inspection) report the spent budget; definitive refusals keep their code.
-    if (budgetSpent() && !(error instanceof SkillSelectionError && error.code !== "SKILLS_API_UNAVAILABLE")) throw timeoutError();
+    // Inner deadlines are rounded up to the renewal deadline and never fire
+    // early, so a deadline signal from this renewal means its budget is spent.
+    if (budgetSpent() && renewalDeadlineSignal(error)) throw timeoutError();
     throw error;
   }
   finally { clearTimeout(timer); controller.abort(); }
