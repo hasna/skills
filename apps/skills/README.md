@@ -468,6 +468,22 @@ start. The hook excludes that exact leading policy from skill selection, so it
 does not displace the user's requested skill. Other hook context and user text
 remain part of the selection input.
 
+Gemini discovery also covers the installed `@google/gemini-cli` package and its
+bundled builtin skills. `skills hook install` finds the package through the
+`gemini` command on its PATH and records the resolved executable and its
+realpath target in the managed policy (`bridge.discoveryExecutables.gemini`).
+Later checks use that recorded path instead of the caller's PATH, so a Claude
+hook update or a Gemini hook started with a narrower PATH (for example
+`env -i PATH=/usr/bin:/bin` or a launchd unit) verifies the same runtime. A
+changed target, package or builtin set refuses with `NATIVE_SKILL_DRIFT`. When
+the recorded executable no longer resolves, or a policy written before this
+record cannot find `gemini` on the caller's PATH, the refusal is
+`DISCOVERY_ROOT_UNRESOLVED`, naming the agent and the command. That is an
+environment gap rather than drift, and it still blocks. Run `skills hook
+install` from the reviewing environment to record or refresh the path. The SDK
+exports `DISCOVERY_ROOT_UNRESOLVED` and `isDiscoveryRootUnresolved` for callers
+that classify refusals.
+
 Known local plugin registrations are resolved automatically. Plugins with
 instruction-injecting hooks, unresolved runtime registrations, unsupported
 legacy command formats, and higher-precedence project discovery settings need
