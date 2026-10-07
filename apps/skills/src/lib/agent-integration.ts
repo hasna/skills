@@ -22,7 +22,7 @@ import { sumiConfigDirectory, sumiConfigPath, sumiBridgeRoot, renderSumiPlugin, 
 import { HERMES_OPT_OUT, parseHermesConfig, configureHermesHooks, assertHermesProtection, renderHermesSupervisor, assertNoHermesLegacyShadow, type HermesSupervisorBinding } from "./agent-hermes.js";
 import type { CodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery.js";
 import { assertClaudeHookEventsReplacement, type ClaudeCoordinatedHookEvent } from "./claude-settings-witness.js";
-import { snapshot as hookFileSnapshot, trustedAncestorOwner, unchanged as hookFileUnchanged } from "./codex-hook-trust-files.js";
+import { directAliasTarget, snapshot as hookFileSnapshot, trustedAncestorOwner, unchanged as hookFileUnchanged } from "./codex-hook-trust-files.js";
 import { assertPinnedLauncherRuntimeSafe, resolveLauncherCommand } from "../cli/commands/runtime-launcher.js";
 
 export type { IntegrationAgent } from "./agent-adapters.js";
@@ -120,7 +120,7 @@ function isSystemRootAlias(path: string): boolean {
 }
 
 /** Normalize only the verified OS prefix, never hide user-controlled links. */
-function canonicalSystemPath(path: string): string {
+export function canonicalSystemPath(path: string): string {
   const absolute = resolve(path), root = `/${absolute.split(sep)[1]}`;
   if (process.platform !== "darwin" || !["/var", "/tmp", "/etc"].includes(root) || !lstatSync(root, { throwIfNoEntry: false })?.isSymbolicLink()) return absolute;
   if (!isSystemRootAlias(root)) throw new Error(`Refusing symlink path: ${root}`);
@@ -789,9 +789,12 @@ function projectedHookAcl(path: string, observed: BigIntStats): void {
 
 /** Only the final command leaf may be an alias. Bind its parent permissions,
  * link identity and exact resolved package bytes using the existing file guard.
- * The alias is a symlink, or a managed pinned launcher written by the copyfile
+ * The alias is a symlink that names its physical target directly (a chain of
+ * links is refused, since a link in it could be re-pointed through a directory
+ * no walk here sees), or a managed pinned launcher written by the copyfile
  * updater: its exact template text binds the entry it runs, the launcher file
- * is bound like a package file, and its pinned Bun must be a safe file. */
+ * is bound like a package file, and its pinned Bun must be a safe file in a
+ * trusted directory chain, walked and rechecked like every other input. */
 function projectedHookExecutable(command: string, expectedResolved?: string) {
   try {
     if (!isAbsolute(command) || /[\0\r\n]/.test(command) || resolve(command) !== command) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
@@ -813,15 +816,26 @@ function projectedHookExecutable(command: string, expectedResolved?: string) {
     if (link.uid !== BigInt(process.getuid!()) || (!link.isFile() && !link.isSymbolicLink())) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
     const linkIdentity = (stat: BigIntStats) => `${stat.dev}:${stat.ino}:${stat.mode}:${stat.uid}:${stat.ctimeNs}`;
     const target = resolveLauncherCommand(command), resolved = target.entry;
+    // A file command is its own physical path; a symlink must name it directly.
+    const direct = () => link.isSymbolicLink() ? directAliasTarget(command) === target.physical : target.physical === command;
+    if (!direct()) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
     // Reject an unrelated target before opening any of its contents.
     if (expectedResolved !== undefined && resolved !== expectedResolved) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
     let launcher: ReturnType<typeof hookFileSnapshot> | undefined, launcherParentIdentity: string[] | undefined;
+    let runtime: { path: string; stat: BigIntStats; parents: string[] } | undefined;
     if (target.pinned) {
       launcherParentIdentity = parents(target.physical);
       launcher = hookFileSnapshot(target.physical, false);
       projectedHookAcl(launcher.file, launcher.stat);
       if (launcher.sha256 !== target.pinned.sha256 || (launcher.stat.mode & 0o100n) === 0n) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
-      assertPinnedLauncherRuntimeSafe(target.pinned.runtime);
+      // The pinned Bun runs the hook, so whoever can replace it, or an entry
+      // in any directory above it, controls the hook: walk it like the rest.
+      const path = target.pinned.runtime;
+      assertPinnedLauncherRuntimeSafe(path);
+      if (resolve(path) !== path) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
+      runtime = { path, parents: parents(path), stat: lstatSync(path, { bigint: true }) };
+      if (!runtime.stat.isFile()) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
+      projectedHookAcl(path, runtime.stat);
     }
     const resolvedParentIdentity = parents(resolved);
     const manifest = hookFileSnapshot(join(dirname(dirname(resolved)), "package.json"), false, { readOnlyPackage: true });
@@ -836,11 +850,17 @@ function projectedHookExecutable(command: string, expectedResolved?: string) {
       try {
         const again = resolveLauncherCommand(command);
         if (again.entry !== resolved || again.physical !== target.physical || linkIdentity(lstatSync(command, { bigint: true })) !== linkIdentity(link)
+          || !direct()
           || !isDeepStrictEqual(parents(), parentIdentity)
           || !isDeepStrictEqual(parents(resolved), resolvedParentIdentity)) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
         if (launcher) {
           if (!isDeepStrictEqual(parents(target.physical), launcherParentIdentity)) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
           projectedHookAcl(launcher.file, launcher.stat); hookFileUnchanged(launcher);
+        }
+        if (runtime) {
+          assertPinnedLauncherRuntimeSafe(runtime.path);
+          if (!isDeepStrictEqual(parents(runtime.path), runtime.parents)) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
+          projectedHookAcl(runtime.path, runtime.stat);
         }
         projectedHookAcl(cli.file, cli.stat); projectedHookAcl(manifest.file, manifest.stat);
         hookFileUnchanged(cli); hookFileUnchanged(manifest);
