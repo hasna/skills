@@ -9,6 +9,7 @@
  *   skills-mcp --http   # Streamable HTTP on 127.0.0.1:8836
  */
 
+import "../lib/launch-cwd-apply.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import pkg from "../../package.json" with { type: "json" };
 

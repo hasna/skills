@@ -8,6 +8,10 @@ import {
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { SEMVER_PATTERN } from "../../lib/skill-contract.js";
 import { validateReviewedRuntimeLock } from "./reviewed-runtime-lock.js";
+import {
+  type LauncherShape, type LauncherState, inspectLauncher, launcherIs, launcherTarget,
+  materializeLauncher, pinnedLauncherRuntime, pinnedLauncherState,
+} from "./runtime-launcher.js";
 
 const PACKAGE_NAME = "@hasna/skills";
 const REGISTRY_ORIGIN = "https://registry.npmjs.org";
@@ -25,13 +29,76 @@ const CONFIG_PREIMAGE_PATHS = [
 type JsonObject = Record<string, unknown>;
 type BinMap = Record<string, string>;
 
+/**
+ * One managed launcher's recorded transition. `oldLinkTarget` is the exact
+ * symlink text of a legacy launcher, or the entry path of a pinned one, so
+ * `resolve(dirname(path), oldLinkTarget) === oldTarget` holds for both shapes.
+ * Receipts written before pinned launchers existed carry none of the optional
+ * fields and describe a symlink-to-symlink switch.
+ */
+interface LauncherRecord {
+  path: string;
+  oldTarget: string;
+  oldLinkTarget: string;
+  newTarget: string;
+  backupPath: string;
+  oldShape?: LauncherShape;
+  oldRuntime?: string;
+  oldCwd?: string;
+  oldSha256?: string;
+  newShape?: LauncherShape;
+  newRuntime?: string;
+  newCwd?: string;
+  newSha256?: string;
+}
+
 interface RuntimeLayout {
   home: string;
   runtimeRoot: string;
   currentPackageRoot: string;
   currentVersion: string;
   bin: BinMap;
-  launchers: Array<{ path: string; oldTarget: string; oldLinkTarget: string; newTarget: string; backupPath: string }>;
+  launchers: LauncherRecord[];
+}
+
+function oldLauncherState(item: LauncherRecord): LauncherState {
+  if (item.oldShape === "pinned") return { shape: "pinned", runtime: item.oldRuntime!, cwd: item.oldCwd!, target: item.oldTarget, sha256: item.oldSha256! };
+  return { shape: "symlink", linkTarget: item.oldLinkTarget, target: item.oldTarget };
+}
+
+function newLauncherState(item: LauncherRecord): LauncherState {
+  if (item.newShape === "pinned") return { shape: "pinned", runtime: item.newRuntime!, cwd: item.newCwd!, target: item.newTarget, sha256: item.newSha256! };
+  return { shape: "symlink", linkTarget: item.newTarget, target: item.newTarget };
+}
+
+// Bind a record's shape fields exactly: absent fields mean a legacy symlink;
+// a pinned shape needs its runtime, trusted directory and digest, and its
+// digest must be the digest of the text those fields render.
+function assertLauncherRecordShapes(item: LauncherRecord): void {
+  const hex = /^[a-f0-9]{64}$/;
+  for (const side of ["old", "new"] as const) {
+    const shape = item[`${side}Shape`], runtime = item[`${side}Runtime`], cwd = item[`${side}Cwd`], sha = item[`${side}Sha256`];
+    if (shape === undefined) {
+      if (runtime !== undefined || cwd !== undefined || sha !== undefined) throw new Error("RECEIPT_LAUNCHER_SHAPE_INVALID");
+      continue;
+    }
+    if (shape === "symlink") {
+      if (runtime !== undefined || cwd !== undefined || sha !== undefined) throw new Error("RECEIPT_LAUNCHER_SHAPE_INVALID");
+      continue;
+    }
+    if (shape !== "pinned" || typeof runtime !== "string" || !isAbsolute(runtime) || typeof cwd !== "string" || !isAbsolute(cwd) || typeof sha !== "string" || !hex.test(sha)) {
+      throw new Error("RECEIPT_LAUNCHER_SHAPE_INVALID");
+    }
+    const target = side === "old" ? item.oldTarget : item.newTarget;
+    if (side === "old" && item.oldLinkTarget !== item.oldTarget) throw new Error("RECEIPT_LAUNCHER_SHAPE_INVALID");
+    if (pinnedLauncherState(runtime, cwd, target).sha256 !== sha) throw new Error("RECEIPT_LAUNCHER_SHAPE_INVALID");
+  }
+}
+
+/** The pinned-launcher fields for a switch onto `target` under the given runtime version root. */
+function pinnedRecordFields(runtime: string, cwd: string, target: string): Pick<LauncherRecord, "newShape" | "newRuntime" | "newCwd" | "newSha256"> {
+  const state = pinnedLauncherState(runtime, cwd, target);
+  return { newShape: "pinned", newRuntime: state.runtime, newCwd: state.cwd, newSha256: state.sha256 };
 }
 
 interface ConfigPreimage {
@@ -81,7 +148,7 @@ interface AliasReceipt {
   targetVersion: string;
   targetPackageRoot: string;
   rolloutReceiptId: string;
-  aliases: Array<{ path: string; oldTarget: string; oldLinkTarget: string; oldVersion: string; oldBinarySha256: string; newTarget: string; backupPath: string; chain?: AliasPackageChain }>;
+  aliases: Array<LauncherRecord & { oldVersion: string; oldBinarySha256: string; chain?: AliasPackageChain }>;
   switchedAliases: string[];
   rollbackCompletedAliases: string[];
 }
@@ -178,9 +245,12 @@ function resolveRuntimeLayout(homeInput: string, pathInput: string): RuntimeLayo
   if (!selectedLauncher) throw new Error("ACTIVE_SKILLS_LAUNCHER_NOT_FOUND");
   const launcherPath = resolve(selectedLauncher);
   assertNoSymlinkAncestors(dirname(launcherPath));
-  const launcherStat = lstatSync(launcherPath);
-  if (!launcherStat.isSymbolicLink()) throw new Error("ACTIVE_SKILLS_LAUNCHER_NOT_MANAGED_LINK");
-  const activeBinary = realpathSync(launcherPath);
+  const activeLauncher = inspectLauncher(launcherPath);
+  if (activeLauncher.kind === "foreign") throw new Error("ACTIVE_SKILLS_LAUNCHER_NOT_MANAGED_LINK");
+  const activeBinary = activeLauncher.target;
+  let activePhysical: string;
+  try { activePhysical = realpathSync(activeBinary); } catch { throw new Error("ACTIVE_RUNTIME_ENTRYPOINT_MISMATCH"); }
+  if (activePhysical !== activeBinary) throw new Error("ACTIVE_RUNTIME_ENTRYPOINT_MISMATCH");
   const currentPackageRoot = dirname(dirname(activeBinary));
   assertNoSymlinkAncestors(currentPackageRoot);
   if (!isWithin(runtimeRoot, currentPackageRoot)) throw new Error("ACTIVE_RUNTIME_OUTSIDE_COPYFILE_ROOT");
@@ -202,16 +272,22 @@ function resolveRuntimeLayout(homeInput: string, pathInput: string): RuntimeLayo
       const path = join(dir, name);
       if (!existsSync(path)) continue;
       assertNoSymlinkAncestors(dir);
-      let stat;
-      try { stat = lstatSync(path); } catch { continue; }
-      if (!stat.isSymbolicLink()) continue;
-      let actual: string;
-      try { actual = realpathSync(path); } catch { throw new Error("LAUNCHER_TARGET_UNREADABLE"); }
+      let launcher;
+      try { launcher = inspectLauncher(path); } catch (error) {
+        if (error instanceof Error && error.message === "LAUNCHER_TARGET_UNREADABLE") throw error;
+        continue;
+      }
+      if (launcher.kind === "foreign") continue;
+      const actual = launcher.target;
       if (actual !== join(currentPackageRoot, target)) continue;
-      const oldLinkTarget = readlinkSync(path);
-      if (resolve(dirname(path), oldLinkTarget) !== actual) throw new Error("LAUNCHER_SYMLINK_CHAIN_UNSUPPORTED");
       const newTarget = join(runtimeRoot, "__target__", "node_modules", "@hasna", "skills", target);
-      launchers.push({ path, oldTarget: actual, oldLinkTarget, newTarget, backupPath: `${path}.skills-prev-${randomUUID()}` });
+      const backupPath = `${path}.skills-prev-${randomUUID()}`;
+      if (launcher.kind === "symlink") {
+        if (resolve(dirname(path), launcher.linkTarget) !== actual) throw new Error("LAUNCHER_SYMLINK_CHAIN_UNSUPPORTED");
+        launchers.push({ path, oldTarget: actual, oldLinkTarget: launcher.linkTarget, newTarget, backupPath, oldShape: "symlink" });
+      } else {
+        launchers.push({ path, oldTarget: actual, oldLinkTarget: actual, newTarget, backupPath, oldShape: "pinned", oldRuntime: launcher.runtime, oldCwd: launcher.cwd, oldSha256: launcher.sha256 });
+      }
     }
   }
   if (!launchers.some(item => item.path === launcherPath)) throw new Error("ACTIVE_LAUNCHER_NOT_IN_PATH_INVENTORY");
@@ -570,15 +646,18 @@ function comparePackageTrees(expectedRoot: string, installedRoot: string): strin
   return expected.digest;
 }
 
-function replaceLink(path: string, target: string, backupPath: string, oldLinkTarget: string, oldTarget = resolve(dirname(path), oldLinkTarget)): void {
-  const stat = lstatSync(path);
-  if (!stat.isSymbolicLink() || entryExists(backupPath)) throw new Error("LAUNCHER_PREIMAGE_DRIFT");
-  const temp = `${path}.skills-next-${randomUUID()}`;
-  symlinkSync(oldLinkTarget, backupPath);
-  if (readlinkSync(backupPath) !== oldLinkTarget || realpathSync(backupPath) !== oldTarget) throw new Error("LAUNCHER_BACKUP_READBACK_MISMATCH");
-  symlinkSync(target, temp);
-  if (realpathSync(temp) !== target) throw new Error("LAUNCHER_NEW_LINK_READBACK_MISMATCH");
-  renameSync(temp, path);
+// Switch one launcher: the exact old state is first preserved at its backup
+// path and read back, then the new (pinned) launcher is created beside it and
+// renamed over the old one atomically.
+function replaceLauncher(item: LauncherRecord): void {
+  const oldState = oldLauncherState(item), newState = newLauncherState(item);
+  if (!launcherIs(item.path, oldState) || entryExists(item.backupPath)) throw new Error("LAUNCHER_PREIMAGE_DRIFT");
+  const temp = `${item.path}.skills-next-${randomUUID()}`;
+  try { materializeLauncher(item.backupPath, oldState); } catch { throw new Error("LAUNCHER_BACKUP_READBACK_MISMATCH"); }
+  if (!launcherIs(item.backupPath, oldState)) throw new Error("LAUNCHER_BACKUP_READBACK_MISMATCH");
+  try { materializeLauncher(temp, newState); } catch { throw new Error("LAUNCHER_NEW_LINK_READBACK_MISMATCH"); }
+  if (!launcherIs(temp, newState)) throw new Error("LAUNCHER_NEW_LINK_READBACK_MISMATCH");
+  renameSync(temp, item.path);
 }
 
 function atomicJson(path: string, value: unknown): void {
@@ -726,6 +805,8 @@ export function adoptCopyfileAliases(options: { homeDir?: string; pathValue?: st
   const id = randomUUID();
   const aliases: AliasReceipt["aliases"] = [];
   const currentRuntime = dirname(dirname(dirname(layout.currentPackageRoot)));
+  // Adopted aliases are written in the pinned shape, trusted to the active runtime version root.
+  const launcherRuntime = pinnedLauncherRuntime();
   const receiptDir = join(currentRuntime, "alias-adoptions");
   const receiptPath = join(receiptDir, `${id}.json`);
   let receipt: AliasReceipt | undefined;
@@ -739,17 +820,25 @@ export function adoptCopyfileAliases(options: { homeDir?: string; pathValue?: st
         if (!entryExists(path)) continue;
         assertOwnedSafePath(dir, home, true);
         const stat = lstatSync(path);
-        if (!stat.isSymbolicLink() || stat.uid !== (process.getuid?.() ?? -1)) throw new Error("ALIAS_LINK_NOT_OWNED");
-        const oldLinkTarget = readlinkSync(path);
-        let actual: string;
-        try { actual = realpathSync(path); } catch { throw new Error("ALIAS_LINK_CHAIN_UNSUPPORTED"); }
+        if (stat.uid !== (process.getuid?.() ?? -1)) throw new Error("ALIAS_LINK_NOT_OWNED");
+        let launcher;
+        try { launcher = inspectLauncher(path); } catch { throw new Error("ALIAS_LINK_CHAIN_UNSUPPORTED"); }
+        if (launcher.kind === "foreign") throw new Error("ALIAS_LINK_NOT_OWNED");
+        const actual = launcher.target;
+        const oldLinkTarget = launcher.kind === "symlink" ? launcher.linkTarget : actual;
         const newTarget = join(layout.currentPackageRoot, target);
         if (actual === newTarget) continue;
         const chain = inspectAliasPackageChain(home, path, oldLinkTarget, actual, target);
         const source = validateAliasSource(home, name, actual);
         const backupPath = `${path}.skills-alias-prev-${id}`;
         if (entryExists(backupPath)) throw new Error("ALIAS_BACKUP_COLLISION");
-        aliases.push({ path, oldTarget: actual, oldLinkTarget, oldVersion: source.version, oldBinarySha256: source.binarySha256, newTarget, backupPath, ...(chain ? { chain } : {}) });
+        const oldFields = launcher.kind === "symlink"
+          ? { oldShape: "symlink" as const }
+          : { oldShape: "pinned" as const, oldRuntime: launcher.runtime, oldCwd: launcher.cwd, oldSha256: launcher.sha256 };
+        aliases.push({
+          path, oldTarget: actual, oldLinkTarget, oldVersion: source.version, oldBinarySha256: source.binarySha256, newTarget, backupPath,
+          ...oldFields, ...pinnedRecordFields(launcherRuntime, currentRuntime, newTarget), ...(chain ? { chain } : {}),
+        });
       }
     }
     if (!aliases.length) return { adopted: true, version: layout.currentVersion, aliasCount: 0 };
@@ -763,21 +852,21 @@ export function adoptCopyfileAliases(options: { homeDir?: string; pathValue?: st
     };
     writeJsonPrivate(receiptPath, receipt);
     for (const item of aliases) {
-      if (readlinkSync(item.path) !== item.oldLinkTarget || realpathSync(item.path) !== item.oldTarget) throw new Error("ALIAS_CHANGED_BEFORE_SWITCH");
+      if (!launcherIs(item.path, oldLauncherState(item))) throw new Error("ALIAS_CHANGED_BEFORE_SWITCH");
       inspectAliasPackageChain(home, item.path, item.oldLinkTarget, item.oldTarget, layout.bin[basename(item.path)]!, item.chain, true);
       const source = validateAliasSource(home, basename(item.path), item.oldTarget);
       if (source.version !== item.oldVersion || source.binarySha256 !== item.oldBinarySha256) throw new Error("ALIAS_SOURCE_DRIFT");
       receipt.state = "switching";
       receipt.switchedAliases = [...receipt.switchedAliases, item.path];
       persistAliasReceipt(receiptPath, receipt);
-      replaceLink(item.path, item.newTarget, item.backupPath, item.oldLinkTarget, item.oldTarget);
-      if (realpathSync(item.path) !== item.newTarget || realpathSync(item.backupPath) !== item.oldTarget) throw new Error("ALIAS_SWITCH_READBACK_MISMATCH");
+      replaceLauncher(item);
+      if (!launcherIs(item.path, newLauncherState(item)) || !launcherIs(item.backupPath, oldLauncherState(item))) throw new Error("ALIAS_SWITCH_READBACK_MISMATCH");
       inspectAliasPackageChain(home, item.path, item.oldLinkTarget, item.oldTarget, layout.bin[basename(item.path)]!, item.chain, true);
       options.onAliasSwitched?.(item.path);
     }
     for (const item of aliases) {
       inspectAliasPackageChain(home, item.path, item.oldLinkTarget, item.oldTarget, layout.bin[basename(item.path)]!, item.chain, true);
-      if (readlinkSync(item.backupPath) !== item.oldLinkTarget || realpathSync(item.backupPath) !== item.oldTarget) throw new Error("ALIAS_BACKUP_DRIFT");
+      if (!launcherIs(item.backupPath, oldLauncherState(item))) throw new Error("ALIAS_BACKUP_DRIFT");
     }
     receipt.state = "switched";
     persistAliasReceipt(receiptPath, receipt);
@@ -790,23 +879,23 @@ export function adoptCopyfileAliases(options: { homeDir?: string; pathValue?: st
           if (!entryExists(item.backupPath)) {
             inspectAliasPackageChain(home, item.path, item.oldLinkTarget, item.oldTarget, layout.bin[basename(item.path)]!, item.chain, true);
             const source = validateAliasSource(home, basename(item.path), item.oldTarget);
-            if (!entryExists(item.path) || readlinkSync(item.path) !== item.oldLinkTarget || realpathSync(item.path) !== item.oldTarget
+            if (!entryExists(item.path) || !launcherIs(item.path, oldLauncherState(item))
                 || source.version !== item.oldVersion || source.binarySha256 !== item.oldBinarySha256) failed = true;
             continue;
           }
-          if (readlinkSync(item.backupPath) !== item.oldLinkTarget || realpathSync(item.backupPath) !== item.oldTarget) throw new Error("ALIAS_BACKUP_DRIFT");
+          if (!launcherIs(item.backupPath, oldLauncherState(item))) throw new Error("ALIAS_BACKUP_DRIFT");
           inspectAliasPackageChain(home, item.path, item.oldLinkTarget, item.oldTarget, layout.bin[basename(item.path)]!, item.chain, true);
           const source = validateAliasSource(home, basename(item.path), item.oldTarget);
           if (source.version !== item.oldVersion || source.binarySha256 !== item.oldBinarySha256) throw new Error("ALIAS_SOURCE_DRIFT");
-          if (realpathSync(item.path) === item.oldTarget && readlinkSync(item.path) === item.oldLinkTarget) continue;
-          if (realpathSync(item.path) !== item.newTarget) throw new Error("ALIAS_CHANGED_DURING_ROLLBACK");
+          if (launcherIs(item.path, oldLauncherState(item))) continue;
+          if (launcherTarget(item.path) !== item.newTarget) throw new Error("ALIAS_CHANGED_DURING_ROLLBACK");
           const after = `${item.path}.skills-alias-after-${id}`;
           if (entryExists(after)) throw new Error("ALIAS_AFTER_COLLISION");
-          symlinkSync(item.newTarget, after);
+          materializeLauncher(after, newLauncherState(item));
           const temp = `${item.path}.skills-alias-rollback-${randomUUID()}`;
-          symlinkSync(item.oldLinkTarget, temp);
+          materializeLauncher(temp, oldLauncherState(item));
           renameSync(temp, item.path);
-          if (readlinkSync(item.path) !== item.oldLinkTarget) throw new Error("ALIAS_ROLLBACK_READBACK_MISMATCH");
+          if (!launcherIs(item.path, oldLauncherState(item))) throw new Error("ALIAS_ROLLBACK_READBACK_MISMATCH");
           receipt.rollbackCompletedAliases = [...receipt.rollbackCompletedAliases, item.path];
           persistAliasReceipt(receiptPath, receipt);
         } catch { failed = true; }
@@ -848,36 +937,36 @@ export function rollbackCopyfileAliases(receiptId: string, options: { homeDir?: 
         throw new Error("ALIAS_RECEIPT_LAUNCHER_INVALID");
       }
       inspectAliasPackageChain(home, item.path, item.oldLinkTarget, item.oldTarget, target, item.chain, true);
+      assertLauncherRecordShapes(item);
       seen.add(item.path);
       assertOwnedSafePath(dirname(item.path), home, true);
       const source = validateAliasSource(home, name, item.oldTarget);
       if (source.version !== item.oldVersion || source.binarySha256 !== item.oldBinarySha256) throw new Error("ALIAS_PREIMAGE_DRIFT");
       const stat = lstatSync(item.path);
-      if (!stat.isSymbolicLink() || stat.uid !== (process.getuid?.() ?? -1)) throw new Error("ALIAS_LINK_DRIFT");
-      const current = realpathSync(item.path);
-      if (current !== item.newTarget && (current !== item.oldTarget || readlinkSync(item.path) !== item.oldLinkTarget)) throw new Error("ALIAS_TARGET_DRIFT");
+      if (stat.uid !== (process.getuid?.() ?? -1)) throw new Error("ALIAS_LINK_DRIFT");
+      let current: string;
+      try { current = launcherTarget(item.path); } catch { throw new Error("ALIAS_LINK_DRIFT"); }
+      if (!launcherIs(item.path, newLauncherState(item)) && !launcherIs(item.path, oldLauncherState(item))) throw new Error("ALIAS_TARGET_DRIFT");
       if (entryExists(item.backupPath)) {
-        const backup = lstatSync(item.backupPath);
-        if (!backup.isSymbolicLink() || readlinkSync(item.backupPath) !== item.oldLinkTarget || realpathSync(item.backupPath) !== item.oldTarget) throw new Error("ALIAS_PREIMAGE_DRIFT");
+        if (!launcherIs(item.backupPath, oldLauncherState(item))) throw new Error("ALIAS_PREIMAGE_DRIFT");
       } else if (current !== item.oldTarget) {
         throw new Error("ALIAS_BACKUP_MISSING_FOR_SWITCH");
       }
     }
     let restored = 0;
     for (const item of [...receipt.aliases].reverse()) {
-      if (realpathSync(item.path) === item.oldTarget && readlinkSync(item.path) === item.oldLinkTarget) continue;
+      if (launcherIs(item.path, oldLauncherState(item))) continue;
       receipt.state = "rollback-required";
       persistAliasReceipt(receiptPath, receipt);
       const after = `${item.path}.skills-alias-after-${receiptId}`;
       if (!entryExists(after)) {
-        symlinkSync(item.newTarget, after);
-        if (realpathSync(after) !== item.newTarget) throw new Error("ALIAS_AFTER_READBACK_MISMATCH");
-      } else if (realpathSync(after) !== item.newTarget) throw new Error("ALIAS_AFTER_DRIFT");
-      if (realpathSync(item.path) !== item.newTarget) throw new Error("ALIAS_TARGET_DRIFT");
+        try { materializeLauncher(after, newLauncherState(item)); } catch { throw new Error("ALIAS_AFTER_READBACK_MISMATCH"); }
+      } else if (!launcherIs(after, newLauncherState(item))) throw new Error("ALIAS_AFTER_DRIFT");
+      if (launcherTarget(item.path) !== item.newTarget) throw new Error("ALIAS_TARGET_DRIFT");
       const temp = `${item.path}.skills-alias-rollback-${randomUUID()}`;
-      symlinkSync(item.oldLinkTarget, temp);
+      materializeLauncher(temp, oldLauncherState(item));
       renameSync(temp, item.path);
-      if (readlinkSync(item.path) !== item.oldLinkTarget || realpathSync(item.path) !== item.oldTarget) throw new Error("ALIAS_ROLLBACK_READBACK_MISMATCH");
+      if (!launcherIs(item.path, oldLauncherState(item))) throw new Error("ALIAS_ROLLBACK_READBACK_MISMATCH");
       receipt.rollbackCompletedAliases = [...new Set([...receipt.rollbackCompletedAliases, item.path])];
       persistAliasReceipt(receiptPath, receipt);
       restored++;
@@ -923,7 +1012,13 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
   const releaseLock = acquireRuntimeLock(layout.runtimeRoot);
   const stagePath = join(layout.runtimeRoot, `.stage-${version}-${id}`);
   const finalPath = join(layout.runtimeRoot, `${version}-copyfile`);
-  const launchers = layout.launchers.map(item => ({ ...item, newTarget: join(finalPath, "node_modules", "@hasna", "skills", layout.bin[basename(item.path)]) }));
+  // Every switched launcher is written in the pinned shape: the exact Bun
+  // running this updater, the new runtime version root as the trusted cwd.
+  const launcherRuntime = pinnedLauncherRuntime();
+  const launchers = layout.launchers.map(item => {
+    const newTarget = join(finalPath, "node_modules", "@hasna", "skills", layout.bin[basename(item.path)]);
+    return { ...item, newTarget, ...pinnedRecordFields(launcherRuntime, finalPath, newTarget) };
+  });
   let switched: string[] = [];
   let moved = false;
   try {
@@ -1012,12 +1107,12 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
     if (!readFileSync(join(finalPath, "rollout-receipt.json")).equals(finalReceiptBytes)) throw new Error("RECEIPT_MOVE_READBACK_MISMATCH");
     assertConfigUnchanged(configPreimages);
     for (const item of launchers) {
-      if (realpathSync(item.path) !== item.oldTarget) throw new Error("LAUNCHER_DRIFT_BEFORE_SWITCH");
+      if (launcherTarget(item.path) !== item.oldTarget) throw new Error("LAUNCHER_DRIFT_BEFORE_SWITCH");
       receipt.state = "switching";
       receipt.switchedLaunchers = [...receipt.switchedLaunchers, item.path];
       persistReceipt(join(finalPath, "rollout-receipt.json"), receipt);
-      replaceLink(item.path, item.newTarget, item.backupPath, item.oldLinkTarget);
-      if (realpathSync(item.path) !== item.newTarget || realpathSync(item.backupPath) !== item.oldTarget) {
+      replaceLauncher(item);
+      if (!launcherIs(item.path, newLauncherState(item)) || !launcherIs(item.backupPath, oldLauncherState(item))) {
         throw new Error("LAUNCHER_SWITCH_READBACK_MISMATCH");
       }
       switched.push(item.path);
@@ -1031,14 +1126,13 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
       let rollbackFailed = false;
       for (const item of [...launchers].reverse()) {
         try {
-          const currentTarget = realpathSync(item.path);
-          if (currentTarget === item.oldTarget && readlinkSync(item.path) === item.oldLinkTarget) continue;
-          if (currentTarget !== item.newTarget) throw new Error("LAUNCHER_CHANGED_DURING_ROLLBACK");
+          if (launcherIs(item.path, oldLauncherState(item))) continue;
+          if (launcherTarget(item.path) !== item.newTarget) throw new Error("LAUNCHER_CHANGED_DURING_ROLLBACK");
           const temp = `${item.path}.skills-rollback-${id}`;
           const afterPath = `${item.path}.skills-after-${id}`;
           if (entryExists(afterPath)) throw new Error("ROLLBACK_PRESERVATION_PATH_EXISTS");
-          symlinkSync(item.newTarget, afterPath);
-          symlinkSync(item.oldLinkTarget, temp);
+          materializeLauncher(afterPath, newLauncherState(item));
+          materializeLauncher(temp, oldLauncherState(item));
           renameSync(temp, item.path);
         } catch { rollbackFailed = true; }
       }
@@ -1094,33 +1188,27 @@ export function rollbackCopyfileRuntime(receiptId: string, options: { homeDir?: 
     const bin = oldBins[basename(item.path)];
     if (!bin || !isAbsolute(item.path) || seen.has(item.path) || item.oldTarget !== join(receipt.currentPackageRoot, bin) || item.newTarget !== join(receipt.targetPackageRoot, bin) || !/^.+\.skills-prev-[0-9a-f-]{36}$/.test(item.backupPath) || !item.backupPath.startsWith(`${item.path}.skills-prev-`) || typeof item.oldLinkTarget !== "string" || resolve(dirname(item.path), item.oldLinkTarget) !== item.oldTarget) throw new Error("RECEIPT_LAUNCHER_BINDING_INVALID");
     assertNoSymlinkAncestors(dirname(item.path));
+    assertLauncherRecordShapes(item);
     seen.add(item.path);
-    const stat = lstatSync(item.path);
-    if (!stat.isSymbolicLink()) throw new Error("LAUNCHER_DRIFT_ROLLBACK_REFUSED");
-    const activeTarget = realpathSync(item.path);
-    if (activeTarget !== item.newTarget && (activeTarget !== item.oldTarget || readlinkSync(item.path) !== item.oldLinkTarget)) throw new Error("LAUNCHER_DRIFT_ROLLBACK_REFUSED");
+    const oldState = oldLauncherState(item), newState = newLauncherState(item);
+    let activeTarget: string;
+    try { activeTarget = launcherTarget(item.path); } catch { throw new Error("LAUNCHER_DRIFT_ROLLBACK_REFUSED"); }
+    if (!launcherIs(item.path, newState) && !launcherIs(item.path, oldState)) throw new Error("LAUNCHER_DRIFT_ROLLBACK_REFUSED");
     const hasBackup = entryExists(item.backupPath);
     if (activeTarget === item.newTarget && !hasBackup) throw new Error("LAUNCHER_PREIMAGE_DRIFT_ROLLBACK_REFUSED");
-    if (hasBackup) {
-      const backup = lstatSync(item.backupPath);
-      if (!backup.isSymbolicLink() || readlinkSync(item.backupPath) !== item.oldLinkTarget || realpathSync(item.backupPath) !== item.oldTarget) throw new Error("LAUNCHER_PREIMAGE_DRIFT_ROLLBACK_REFUSED");
-    }
+    if (hasBackup && !launcherIs(item.backupPath, oldState)) throw new Error("LAUNCHER_PREIMAGE_DRIFT_ROLLBACK_REFUSED");
     const afterPath = `${item.path}.skills-after-${receiptId}`;
-    if (entryExists(afterPath)) {
-      const after = lstatSync(afterPath);
-      if (!after.isSymbolicLink() || realpathSync(afterPath) !== item.newTarget) throw new Error("ROLLBACK_PRESERVATION_DRIFT");
-    }
+    if (entryExists(afterPath) && !launcherIs(afterPath, newState)) throw new Error("ROLLBACK_PRESERVATION_DRIFT");
     switched.push(item);
   }
   for (const item of switched.reverse()) {
-    const activeTarget = realpathSync(item.path);
-    if (activeTarget === item.oldTarget && readlinkSync(item.path) === item.oldLinkTarget) continue;
+    if (launcherIs(item.path, oldLauncherState(item))) continue;
     receipt.state = "rollback-required";
     persistReceipt(receiptPath, receipt);
     const afterPath = `${item.path}.skills-after-${receiptId}`;
-    if (!entryExists(afterPath)) symlinkSync(item.newTarget, afterPath);
+    if (!entryExists(afterPath)) materializeLauncher(afterPath, newLauncherState(item));
     const temp = `${item.path}.skills-rollback-${receiptId}-${randomUUID()}`;
-    symlinkSync(item.oldLinkTarget, temp);
+    materializeLauncher(temp, oldLauncherState(item));
     renameSync(temp, item.path);
     receipt.rollbackCompletedLaunchers = [...new Set([...receipt.rollbackCompletedLaunchers, item.path])];
     persistReceipt(receiptPath, receipt);

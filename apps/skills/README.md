@@ -1270,6 +1270,19 @@ reinstall or change your PATH.
 copyfile runtime, preserves configuration and launcher preimages, and keeps the
 previous runtime available for receipt-bound rollback.
 
+Every launcher the updater switches (`skills`, `skills-mcp`, `skills-serve`, and the
+rest, in each PATH directory it manages) is written as a pinned POSIX sh launcher,
+not a bare symlink: it execs the exact Bun binary that ran the update with
+`--config=/dev/null --no-env-file --no-macros --no-install --cwd=<runtime version root>`
+on the exact entry, through `env -i` with an explicit environment allowlist
+(`HOME`, `PATH`, `TMPDIR`, terminal and locale names, and `HASNA_*`, `SKILLS_*`,
+`MCP_*`, `XDG_*`, `LC_*`, `AWS_*`). A `bunfig.toml`, `.env` or `tsconfig.json` in
+the directory you run `skills` from, and `BUN_*` or `NODE_OPTIONS` in your shell,
+never reach the runtime. The CLI returns to your directory itself, so relative paths
+keep working. The receipt records the old and new launcher shape of every path, the
+backup keeps the exact previous launcher (symlink text or pinned bytes), and
+`--rollback` restores it byte for byte.
+
 To require a minimum dependency age, pass a positive integer number of days and
 repeat the exclusion option for package names or package globs:
 
