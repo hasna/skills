@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 // Thin adapter: the server is built and started through the SDK surface.
+// Restore the caller's directory before any other module evaluates (pinned launchers start in the runtime root).
+import "../lib/launch-cwd-apply.js";
 import pkg from "../../package.json" with { type: "json" };
 import { resolveServerConfig, startSkillsServer } from "../sdk/server.js";
 import { resolveDatabaseTarget } from "../sdk/storage.js";

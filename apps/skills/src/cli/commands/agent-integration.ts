@@ -19,6 +19,7 @@ import { captureClaudeSettingsV2, captureClaudeSettingsV3 } from "../../lib/clau
 import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4 } from "../../lib/codex-settings-witness.js";
 import { captureClaudeMarketplaceRegistryV2 } from "../../lib/claude-marketplace-registry.js";
 import { captureCodexNativeSkillCatalog } from "../../lib/codex-native-skill-catalog.js";
+import { selfSpawnCommand } from "../../lib/self-spawn.js";
 
 const RECOVERABLE_CONTEXT_CACHE_ERRORS = new Set(["CACHED_PROFILE_EXPIRED", "CACHED_PROFILE_MISSING", "CACHED_BUNDLE_MISSING"]);
 
@@ -45,9 +46,12 @@ function pinnedHookProfile(input: unknown, configuredProfile: string): string {
 async function contextForHook(input: unknown, profileId: string, cached: boolean, deadline: number): Promise<any> {
   const remaining = deadline - Date.now();
   if (remaining <= 0) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "context");
-  const args = [process.execPath, process.argv[1]!, "context", "--stdin", "--json", "--selection-profile", profileId];
+  const args = ["context", "--stdin", "--json", "--selection-profile", profileId];
   if (cached) args.push("--cached", "--auto-reconcile-safe");
-  const child = Bun.spawn(args, { stdin: new Blob([JSON.stringify(input)]), stdout: "pipe", stderr: "pipe", env: { ...process.env, NO_COLOR: "1" } });
+  // Pinned flags, trusted cwd and allowlisted environment: a hostile project's
+  // bunfig.toml, .env or BUN_OPTIONS must not reach the child on every prompt.
+  const self = selfSpawnCommand(args);
+  const child = Bun.spawn(self.command, { cwd: self.cwd, stdin: new Blob([JSON.stringify(input)]), stdout: "pipe", stderr: "pipe", env: { ...self.env, NO_COLOR: "1" } });
   let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, Math.min(6500, remaining));
   let result: any;
@@ -336,7 +340,8 @@ export function registerAgentIntegration(parent: Command): void {
           // two seconds of the existing total budget for verified context.
           const remaining = deadline - Date.now() - 2_000;
           if (remaining <= 0) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "sync");
-          const refresh = Bun.spawn([process.execPath, process.argv[1]!, "sync", "--selection-profile", selectionProfile, "--no-station-report", "--json"], { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, NO_COLOR: "1" } });
+          const self = selfSpawnCommand(["sync", "--selection-profile", selectionProfile, "--no-station-report", "--json"]);
+          const refresh = Bun.spawn(self.command, { cwd: self.cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...self.env, NO_COLOR: "1" } });
           let timedOut = false;
           const timer = setTimeout(() => { timedOut = true; refresh.kill("SIGKILL"); }, remaining);
           try {

@@ -10,7 +10,7 @@ import { requiresCliSkillLoading } from "../../lib/managed-policy.js";
 import { resolveSelectedRun, executeSelectedLocal, prepareSelectedSecretBindings } from "../../lib/selected-run.js";
 import { readSelectedSecretBindings } from "../../lib/execution-secrets.js";
 import { selectedProfileId, contextResolverOptions } from "./context.js";
-import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "fs";
+import { lstatSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { basename, dirname, isAbsolute, join } from "path";
 import { createInterface } from "readline";
 import type { Command } from "commander";
@@ -49,6 +49,7 @@ import { execute as executeRemote } from "./remote-account.js";
 import { describeRemoteFiles, type RemoteInputFile } from "../../lib/remote-files.js";
 import { optionPrefix } from "../option-boundary.js";
 import { adoptCopyfileAliases, rollbackCopyfileAliases, rollbackCopyfileRuntime, updateCopyfileRuntime } from "./runtime-copyfile.js";
+import { resolveLauncherCommand } from "./runtime-launcher.js";
 
 export function registerRuntime(parent: Command) {
   // Run
@@ -336,11 +337,23 @@ async function readUpdatedVersion(bunExecutable: string): Promise<string> {
   const installed = Bun.which("skills", { PATH: globalBin, cwd: globalBin });
   const selected = Bun.which("skills");
   if (!installed || !selected) throw new Error("Updated command is unavailable");
-  const selectedPath = realpathSync(selected);
-  if (selectedPath !== realpathSync(installed)) throw new Error("Updated command is shadowed on PATH");
-  const version = (await readUpdateCommand([selectedPath, "--version"])).trim();
+  const version = (await readUpdateCommand([selectedSkillsCommand(selected, installed), "--version"])).trim();
   if (!new RegExp(SEMVER_PATTERN).test(version)) throw new Error("Update version verification failed");
   return version;
+}
+
+/**
+ * The command to run for the Skills selected on PATH, after checking that it
+ * runs the installed entry. A symlink is compared by its physical target, as
+ * before; a managed pinned launcher by the exact entry it runs, and it is run
+ * through the launcher so the caller's directory configures nothing.
+ */
+export function selectedSkillsCommand(selected: string, installed: string): string {
+  let chosen: ReturnType<typeof resolveLauncherCommand>, expected: ReturnType<typeof resolveLauncherCommand>;
+  try { chosen = resolveLauncherCommand(selected); expected = resolveLauncherCommand(installed); }
+  catch { throw new Error("Updated command is unavailable"); }
+  if (chosen.entry !== expected.entry) throw new Error("Updated command is shadowed on PATH");
+  return chosen.pinned ? chosen.physical : chosen.entry;
 }
 
 async function readUpdateCommand(command: string[]): Promise<string> {

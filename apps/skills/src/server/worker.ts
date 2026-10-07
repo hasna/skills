@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+// Restore the caller's directory before any other module evaluates (pinned launchers start in the runtime root).
+import "../lib/launch-cwd-apply.js";
 import { randomUUID } from "node:crypto";
 import pkg from "../../package.json" with { type: "json" };
 import { assertDurableStore, resolveServerConfig } from "../sdk/server.js";

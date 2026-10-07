@@ -801,12 +801,15 @@ export function adoptCopyfileAliases(options: { homeDir?: string; pathValue?: st
   const home = realpathSync(resolve(options.homeDir ?? process.env.HOME ?? ""));
   const pathValue = options.pathValue ?? process.env.PATH ?? "";
   const { layout, rollout } = activeAliasRuntime(home, pathValue);
+  const currentRuntime = dirname(dirname(dirname(layout.currentPackageRoot)));
+  // Adopted aliases are written in the pinned shape, trusted to the active runtime
+  // version root. Resolve and check that shape before taking the runtime lock: a
+  // refusal here must not leave the lock held (it also guards both rollbacks).
+  const launcherRuntime = pinnedLauncherRuntime();
+  pinnedLauncherState(launcherRuntime, currentRuntime, join(layout.currentPackageRoot, layout.bin.skills ?? "bin/index.js"));
   const releaseLock = acquireRuntimeLock(layout.runtimeRoot);
   const id = randomUUID();
   const aliases: AliasReceipt["aliases"] = [];
-  const currentRuntime = dirname(dirname(dirname(layout.currentPackageRoot)));
-  // Adopted aliases are written in the pinned shape, trusted to the active runtime version root.
-  const launcherRuntime = pinnedLauncherRuntime();
   const receiptDir = join(currentRuntime, "alias-adoptions");
   const receiptPath = join(receiptDir, `${id}.json`);
   let receipt: AliasReceipt | undefined;
@@ -1009,16 +1012,18 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
   const runtimeRootStat = lstatSync(layout.runtimeRoot);
   if ((runtimeRootStat.mode & 0o077) !== 0) throw new Error("RUNTIME_ROOT_NOT_PRIVATE");
   const id = randomUUID();
-  const releaseLock = acquireRuntimeLock(layout.runtimeRoot);
   const stagePath = join(layout.runtimeRoot, `.stage-${version}-${id}`);
   const finalPath = join(layout.runtimeRoot, `${version}-copyfile`);
   // Every switched launcher is written in the pinned shape: the exact Bun
   // running this updater, the new runtime version root as the trusted cwd.
+  // Both are resolved and rendered before the runtime lock is taken, so a
+  // refusal (LAUNCHER_RUNTIME_UNSAFE, LAUNCHER_*_PATH_INVALID) leaves no lock.
   const launcherRuntime = pinnedLauncherRuntime();
   const launchers = layout.launchers.map(item => {
     const newTarget = join(finalPath, "node_modules", "@hasna", "skills", layout.bin[basename(item.path)]);
     return { ...item, newTarget, ...pinnedRecordFields(launcherRuntime, finalPath, newTarget) };
   });
+  const releaseLock = acquireRuntimeLock(layout.runtimeRoot);
   let switched: string[] = [];
   let moved = false;
   try {

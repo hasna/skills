@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Command } from "commander";
 import { registerRuntime } from "./runtime.js";
 import { createHash } from "node:crypto";
@@ -8,6 +8,7 @@ import { basename, delimiter, join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { adoptCopyfileAliases, preflightTarball, readBodyCapped, rollbackCopyfileAliases, rollbackCopyfileRuntime, updateCopyfileRuntime } from "./runtime-copyfile.js";
 import { inspectLauncher, launcherTarget, parsePinnedLauncher, renderPinnedLauncher } from "./runtime-launcher.js";
+import * as launcherModule from "./runtime-launcher.js";
 import { useDefaultTestTimeout } from "../../test-preload.js";
 
 useDefaultTestTimeout();
@@ -324,17 +325,102 @@ process.exit(status);
       const quoted = "it's \"quoted\"\nand multi-line $HOME `x` \\ trailing'";
       const bunOptions = `--preload=${join(hostile.dir, "preload.js")}`;
       for (const path of [join(f.localBin, "skills"), join(f.bunBin, "skills-mcp")]) {
-        const pinned = hostile.launch(path, { BUN_OPTIONS: bunOptions, NODE_OPTIONS: `--require=${join(hostile.dir, "preload.js")}`, HASNA_SKILLS_PROBE: "kept", SKILLS_PROBE: "kept", LC_ALL: "C", HASNA_QUOTED: quoted, HASNA_SKILLS_LAUNCH_CWD: "/spoofed-by-caller" });
+        const pinned = hostile.launch(path, { BUN_OPTIONS: bunOptions, NODE_OPTIONS: `--require=${join(hostile.dir, "preload.js")}`, HASNA_SKILLS_PROBE: "kept", SKILLS_PROBE: "kept", LC_ALL: "en_US.UTF-8", HASNA_QUOTED: quoted, HASNA_SKILLS_LAUNCH_CWD: "/spoofed-by-caller" });
         expect(pinned.stderr).toBe("");
         expect(pinned.code).toBe(0);
         expect(JSON.parse(pinned.stdout)).toEqual({
-          name: basename(path), dotenv: null, bunOptions: null, nodeOptions: null, kept: ["kept", "kept", "C"], quoted,
+          name: basename(path), dotenv: null, bunOptions: null, nodeOptions: null, kept: ["kept", "kept", "en_US.UTF-8"], quoted,
           cwd: targetRoot, launchCwd: realpathSync(hostile.dir), argv: ["probe-arg"],
         });
       }
       expect(hostile.markers()).toBe(1);
       expect(lstatSync(join(f.localBin, "skills")).isSymbolicLink()).toBe(false);
       expect(readFileSync(join(f.localBin, "skills"), "utf8")).toContain("--config=/dev/null --no-env-file --no-macros --no-install");
+    } finally { fixture.server.stop(true); }
+  });
+
+  test("the launcher's own shell runs with -p: exported functions and shell options from the caller run nothing", async () => {
+    const f = fixtureHome();
+    const fixture = await serverWithArtifact({}, {}, name => `console.log(JSON.stringify({ name: ${JSON.stringify(name)}, launchCwd: process.env.HASNA_SKILLS_LAUNCH_CWD ?? null, lcAll: process.env.LC_ALL ?? null }));`);
+    const hostile = hostileDirectory();
+    try {
+      await updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue: `${f.localBin}${delimiter}${f.bunBin}`, registryOrigin: fixture.server.url.origin });
+      const launcher = join(f.localBin, "skills");
+      expect(readFileSync(launcher, "utf8").startsWith("#!/bin/sh -p\n")).toBe(true);
+      const xtraceMarker = join(hostile.dir, "ps4-ran"), functionMarker = join(hostile.dir, "function-ran");
+      // On macOS /bin/sh is bash 3.2. Without -p it enables SHELLOPTS from the
+      // environment (xtrace then expands PS4 with command substitution) and
+      // imports exported functions, so `pwd -P` could be replaced before env -i.
+      const vectors: Record<string, string>[] = [
+        { SHELLOPTS: "xtrace", PS4: `$(/usr/bin/touch ${xtraceMarker})` },
+        { "BASH_FUNC_pwd%%": `() { /usr/bin/touch ${functionMarker}; echo /hijacked; }` },
+        { SHELLOPTS: "xtrace", PS4: `$(/usr/bin/touch ${xtraceMarker})`, "BASH_FUNC_pwd%%": `() { /usr/bin/touch ${functionMarker}; echo /hijacked; }`, LC_ALL: "it's \"odd\"" },
+      ];
+      for (const vector of vectors) {
+        const run = hostile.launch(launcher, vector);
+        expect(run.code).toBe(0);
+        expect(JSON.parse(run.stdout)).toEqual({ name: "skills", launchCwd: realpathSync(hostile.dir), lcAll: vector.LC_ALL ?? null });
+        expect(existsSync(xtraceMarker)).toBe(false);
+        expect(existsSync(functionMarker)).toBe(false);
+      }
+    } finally { fixture.server.stop(true); }
+  });
+
+  test("pinned server launchers pass HOST, PORT, NODE_ENV and AGENT_ID through the environment allowlist", async () => {
+    const f = fixtureHome();
+    const fixture = await serverWithArtifact({}, {}, name => `console.log(JSON.stringify({ name: ${JSON.stringify(name)}, host: process.env.HOST ?? null, port: process.env.PORT ?? null, nodeEnv: process.env.NODE_ENV ?? null, agentId: process.env.AGENT_ID ?? null, proxy: process.env.HTTPS_PROXY ?? null }));`);
+    const hostile = hostileDirectory();
+    try {
+      await updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue: `${f.localBin}${delimiter}${f.bunBin}`, registryOrigin: fixture.server.url.origin });
+      for (const name of ["skills-serve", "skills-server", "skills-worker", "skills-maintenance", "skills-migrate"]) {
+        const run = hostile.launch(join(f.localBin, name), { HOST: "127.0.0.1", PORT: "47911", NODE_ENV: "production", AGENT_ID: "agent-fixture", HTTPS_PROXY: "http://127.0.0.1:9" });
+        expect(run.code).toBe(0);
+        // skills-serve and skills-server share bin/server.js, so only the settings are compared.
+        expect(run.stderr).toBe("");
+        expect(JSON.parse(run.stdout)).toMatchObject({ host: "127.0.0.1", port: "47911", nodeEnv: "production", agentId: "agent-fixture", proxy: null });
+      }
+    } finally { fixture.server.stop(true); }
+  });
+
+  test("a pinned-launcher refusal before the switch leaves no runtime lock: retry, rollback and alias adoption still work", async () => {
+    const f = fixtureHome();
+    const fixture = await serverWithArtifact();
+    const pathValue = `${f.localBin}${delimiter}${f.bunBin}`;
+    const options = { homeDir: f.home, pathValue, registryOrigin: fixture.server.url.origin };
+    const lock = join(f.runtime, ".copyfile-update-lock");
+    try {
+      const runtimeSpy = spyOn(launcherModule, "pinnedLauncherRuntime").mockImplementationOnce(() => { throw new Error("LAUNCHER_RUNTIME_UNSAFE"); });
+      try { await expect(updateCopyfileRuntime("0.10.8", options)).rejects.toThrow("LAUNCHER_RUNTIME_UNSAFE"); } finally { runtimeSpy.mockRestore(); }
+      expect(existsSync(lock)).toBe(false);
+      const stateSpy = spyOn(launcherModule, "pinnedLauncherState").mockImplementationOnce(() => { throw new Error("LAUNCHER_CWD_PATH_INVALID"); });
+      try { await expect(updateCopyfileRuntime("0.10.8", options)).rejects.toThrow("LAUNCHER_CWD_PATH_INVALID"); } finally { stateSpy.mockRestore(); }
+      expect(existsSync(lock)).toBe(false);
+      for (const [path, content] of f.configs) expect(readFileSync(path, "utf8")).toBe(content);
+      expect(realpathSync(join(f.localBin, "skills"))).toBe(join(f.oldPackage, BIN.skills));
+      const result = await updateCopyfileRuntime("0.10.8", options);
+      expect(result).toMatchObject({ updated: true, launcherCount: 14 });
+      // Alias adoption: the same two refusals, then a successful adoption and its rollback.
+      const legacy = join(f.home, ".bun", "install", "global", "node_modules", "@hasna", "skills");
+      mkdirSync(join(legacy, "bin"), { recursive: true, mode: 0o700 });
+      writeFileSync(join(legacy, "package.json"), JSON.stringify({ name: "@hasna/skills", version: "0.10.6", bin: BIN }), { mode: 0o600 });
+      for (const target of new Set(Object.values(BIN))) writeFileSync(join(legacy, target), "legacy fixture\n", { mode: 0o755 });
+      const oldMcp = join(f.bunBin, "skills-mcp");
+      renameSync(oldMcp, `${oldMcp}.synthetic-prior`);
+      symlinkSync(relative(f.bunBin, join(legacy, BIN["skills-mcp"])), oldMcp);
+      const aliasRuntimeSpy = spyOn(launcherModule, "pinnedLauncherRuntime").mockImplementationOnce(() => { throw new Error("LAUNCHER_RUNTIME_UNSAFE"); });
+      try { expect(() => adoptCopyfileAliases({ homeDir: f.home, pathValue })).toThrow("LAUNCHER_RUNTIME_UNSAFE"); } finally { aliasRuntimeSpy.mockRestore(); }
+      expect(existsSync(lock)).toBe(false);
+      const aliasStateSpy = spyOn(launcherModule, "pinnedLauncherState").mockImplementationOnce(() => { throw new Error("LAUNCHER_CWD_PATH_INVALID"); });
+      try { expect(() => adoptCopyfileAliases({ homeDir: f.home, pathValue })).toThrow("LAUNCHER_CWD_PATH_INVALID"); } finally { aliasStateSpy.mockRestore(); }
+      expect(existsSync(lock)).toBe(false);
+      expect(realpathSync(oldMcp)).toBe(join(legacy, BIN["skills-mcp"]));
+      const adopted = adoptCopyfileAliases({ homeDir: f.home, pathValue });
+      expect(adopted).toMatchObject({ adopted: true, aliasCount: 1 });
+      expect(rollbackCopyfileAliases(String(adopted.receiptId), { homeDir: f.home, pathValue })).toMatchObject({ rolledBack: true, restoredAliasCount: 1 });
+      expect(realpathSync(oldMcp)).toBe(join(legacy, BIN["skills-mcp"]));
+      renameSync(`${oldMcp}.synthetic-prior`, oldMcp);
+      expect(rollbackCopyfileRuntime(String(result.receiptId), { homeDir: f.home })).toMatchObject({ rolledBack: true, restoredVersion: "0.10.6" });
+      expect(existsSync(lock)).toBe(false);
     } finally { fixture.server.stop(true); }
   });
 

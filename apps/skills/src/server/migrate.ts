@@ -15,6 +15,8 @@
  * Applied-version keys are file basenames, so migrations/0001_*.sql moving into
  * migrations/postgres/ did not orphan databases that had already applied it.
  */
+// Restore the caller's directory before any other module evaluates (pinned launchers start in the runtime root).
+import "../lib/launch-cwd-apply.js";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import pkg from "../../package.json" with { type: "json" };
