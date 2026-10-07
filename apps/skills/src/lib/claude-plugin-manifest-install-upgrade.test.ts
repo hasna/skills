@@ -147,3 +147,67 @@ test("reviewed hook plugins migrate only after exact raw manifest and hook revie
   put(runtime, "export function registerAutoGoal() { return \"changed\"; }\n");
   expect(() => assertManagedAgentBridge("claude", { home, dataDir, projectDir: home })).toThrow("NATIVE_SKILL_DRIFT");
 });
+
+
+test("retired plugin cache version requires fresh exact review before guarded policy rebind", () => {
+  const home = mkdtempSync(join(tmpdir(), "skills-claude-retired-plugin-version-"));
+  homes.push(home);
+  const id = "plugin@marketplace";
+  const oldRoot = join(home, ".claude/plugins/cache/marketplace/plugin/0.1.2");
+  const newRoot = join(home, ".claude/plugins/cache/marketplace/plugin/0.1.4");
+  const settings = join(home, ".claude/settings.json"), registrations = join(home, ".claude/plugins/installed_plugins.json");
+  const dataDir = join(home, "skills-data"), options = { home, dataDir, projectDir: home, agents: ["claude" as const], command: "/fixture/skills" };
+  const writePlugin = (root: string, version: string) => {
+    put(join(root, ".claude-plugin/plugin.json"), JSON.stringify({ name: "plugin", version, description: "Reviewed metadata", skills: "./skills" }));
+    put(join(root, "hooks/hooks.json"), JSON.stringify({ modules: ["register.ts"] }));
+    put(join(root, "hooks/modules/register.ts"), 'import { registerPlugin } from "./runtime";\nregisterPlugin();\n');
+    put(join(root, "hooks/modules/runtime.ts"), "export function registerPlugin() {}\n");
+    mkdirSync(join(root, "skills"), { recursive: true });
+  };
+  const hashFile = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
+  const reviewed = (root: string) => {
+    const manifest = join(root, ".claude-plugin/plugin.json"), hooks = join(root, "hooks/hooks.json");
+    const register = join(root, "hooks/modules/register.ts"), runtime = join(root, "hooks/modules/runtime.ts");
+    return { version: 1 as const, agents: [{ agent: "claude" as const, roots: [join(root, "skills")],
+      sources: [settings, registrations, manifest, hooks, register, runtime].map(path => ({ path, sha256: hashFile(path) })),
+      pluginHooks: "reviewed-no-skill-injection" as const }] };
+  };
+
+  put(settings, JSON.stringify({ enabledPlugins: { [id]: true } }));
+  writePlugin(oldRoot, "0.1.2");
+  put(registrations, JSON.stringify({ version: 2, plugins: { [id]: [{ scope: "user", installPath: oldRoot }] } }));
+  applyAgentIntegration(planAgentIntegration({ ...options, discoveryInputs: reviewed(oldRoot) }));
+
+  const policyPath = join(dataDir, "agent-policy.json"), policy = JSON.parse(readFileSync(policyPath, "utf8"));
+  const oldManifest = join(oldRoot, ".claude-plugin/plugin.json");
+  const oldSource = policy.bridge.discovery.claude.sources.find((source: { path: string }) => source.path === oldManifest);
+  expect(oldSource).toBeDefined();
+  delete oldSource.hashMode;
+  oldSource.sha256 = hashFile(oldManifest);
+  writeFileSync(policyPath, JSON.stringify(policy, null, 2) + "\n");
+  const legacyPolicy = readFileSync(policyPath, "utf8");
+
+  writePlugin(newRoot, "0.1.4");
+  put(registrations, JSON.stringify({ version: 2, plugins: { [id]: [{ scope: "user", installPath: newRoot }] } }));
+  rmSync(oldRoot, { recursive: true, force: true });
+  expect(() => assertManagedAgentBridge("claude", options)).toThrow("NATIVE_SKILL_DRIFT");
+
+  const applied = applyAgentIntegration(planAgentIntegration({ ...options, discoveryInputs: reviewed(newRoot) }));
+  expect(applied.backups.some(path => readFileSync(path, "utf8") === legacyPolicy)).toBe(true);
+  const sources = JSON.parse(readFileSync(policyPath, "utf8")).bridge.discovery.claude.sources;
+  expect(sources.some((source: { path: string }) => source.path.startsWith(oldRoot + "/"))).toBe(false);
+  expect(sources.find((source: { path: string }) => source.path === join(newRoot, ".claude-plugin/plugin.json")).hashMode).toBe("claude-plugin-manifest-v1");
+  for (const relative of ["hooks/hooks.json", "hooks/modules/register.ts", "hooks/modules/runtime.ts"]) {
+    const path = join(newRoot, relative);
+    expect(sources.find((source: { path: string }) => source.path === path).sha256).toBe(hashFile(path));
+  }
+  expect(() => assertManagedAgentBridge("claude", options)).not.toThrow();
+
+  put(join(newRoot, ".claude-plugin/plugin.json"), JSON.stringify({ name: "plugin", version: "0.1.5", description: "Updated metadata", skills: "./skills" }));
+  expect(() => assertManagedAgentBridge("claude", options)).not.toThrow();
+  put(join(newRoot, ".claude-plugin/plugin.json"), JSON.stringify({ name: "plugin", version: "0.1.5", description: "Updated metadata", skills: "./changed-skills" }));
+  expect(() => assertManagedAgentBridge("claude", options)).toThrow("NATIVE_SKILL_DRIFT");
+  put(join(newRoot, ".claude-plugin/plugin.json"), JSON.stringify({ name: "plugin", version: "0.1.5", description: "Updated metadata", skills: "./skills" }));
+  put(join(newRoot, "hooks/modules/runtime.ts"), "export function registerPlugin() { return 'changed'; }\n");
+  expect(() => assertManagedAgentBridge("claude", options)).toThrow("NATIVE_SKILL_DRIFT");
+});
