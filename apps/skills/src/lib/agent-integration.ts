@@ -765,7 +765,14 @@ function hookProjectionRefusal(reason: string): never {
  * File snapshots and parent identities remain the authority for bytes/modes. */
 function projectedHookAcl(path: string, observed: BigIntStats): void {
   if (process.platform !== "darwin") return;
-  const identity = (stat: BigIntStats) => `${stat.dev}:${stat.ino}:${stat.ctimeNs}:${stat.uid}:${stat.mode}:${stat.nlink}:${stat.size}:${stat.mtimeNs}`;
+  // A file binds its full identity. A directory binds the object (dev, ino)
+  // and its trust fields (uid, mode) only: its times, link count and size
+  // change whenever any process adds or removes an unrelated entry, such as in
+  // a shared TMPDIR or home. Replacing a bound descendant changes that
+  // descendant's own identity, and recheck re-reads every ancestor's ACL.
+  const identity = observed.isDirectory()
+    ? (stat: BigIntStats) => `${stat.dev}:${stat.ino}:${stat.uid}:${stat.mode}`
+    : (stat: BigIntStats) => `${stat.dev}:${stat.ino}:${stat.ctimeNs}:${stat.uid}:${stat.mode}:${stat.nlink}:${stat.size}:${stat.mtimeNs}`;
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
     | (observed.isDirectory() ? constants.O_DIRECTORY : 0));
   try {

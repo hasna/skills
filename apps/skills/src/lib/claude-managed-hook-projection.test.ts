@@ -206,6 +206,37 @@ test.skipIf(process.platform !== "darwin")("an alias-parent ACL grant during pro
   expect(readFileSync(f.policy, "utf8")).toBe(f.before.policy);
 });
 
+// A separate process adds and removes its own entries in one directory, as
+// unrelated processes do in a shared TMPDIR or home directory.
+const CHURN = `const fs = require("node:fs"), path = require("node:path"); let n = 0; fs.writeSync(1, "ready\\n");
+for (;;) { const file = path.join(process.env.CHURN_DIR, ".churn-" + (n++ % 32)); fs.closeSync(fs.openSync(file, "wx", 0o600)); fs.unlinkSync(file); if (n % 8 === 0) Bun.sleepSync(1); }`;
+
+test.skipIf(process.platform !== "darwin")("unrelated entry churn in an ancestor directory never refuses, while a grant there still does", async () => {
+  const f = fixture();
+  const churn = Bun.spawn([process.execPath, "--no-env-file", "-e", CHURN], { env: { PATH: "/usr/bin:/bin", CHURN_DIR: f.home }, stdout: "pipe", stderr: "pipe" });
+  try {
+    const ready = churn.stdout.getReader(); await ready.read(); ready.releaseLock();
+    const refusals: string[] = [];
+    // Eight plans are enough: at the base, every one refused under this churn.
+    for (let round = 0; round < 8; round++) {
+      try { if (f.plan().replacements.length !== 4) refusals.push("unexpected replacements"); }
+      catch (error) { refusals.push(String(error)); }
+    }
+    // The churn ran throughout, so "never refuses" cannot pass vacuously.
+    expect(churn.exitCode).toBeNull();
+    expect(refusals).toEqual([]);
+    const grant = Bun.spawnSync(["/bin/chmod", "+a", "everyone allow add_file,delete_child", f.home], { stdout: "pipe", stderr: "pipe" });
+    expect(grant.exitCode).toBe(0); expect(lstatSync(f.home).mode & 0o022).toBe(0);
+    try { expect(() => f.plan()).toThrow("EXECUTABLE_UNVERIFIED"); }
+    finally { expect(Bun.spawnSync(["/bin/chmod", "-N", f.home], { stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0); }
+    // Control: with the grant removed, the same churned ancestor projects again.
+    expect(f.plan().replacements).toHaveLength(4);
+    expect(churn.exitCode).toBeNull();
+  } finally { churn.kill("SIGKILL"); await churn.exited; }
+  expect(readFileSync(f.settings, "utf8")).toBe(f.before.settings);
+  expect(readFileSync(f.policy, "utf8")).toBe(f.before.policy);
+});
+
 test("single quotes in a trusted executable path round trip through the owning renderer", () => {
   const f = fixture(), alias = join(f.home, "skills' alias");
   symlinkSync(f.executable, alias);
