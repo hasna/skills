@@ -972,3 +972,25 @@ for (const change of ["removed", "revived", "legacy-upgrade", "corrupt-old-bundl
     expect(existsSync(join(f.a.data, "selection-cache", "session-reconciliations"))).toBe(false);
   } finally { await f.close(); }
 });
+
+
+test("profile epochs require explicit caller opt-in and leave the legacy wire shape unchanged", async () => {
+  const f = await fixture("", false);
+  try {
+    await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+    const url = f.a.env.HASNA_SKILLS_API_URL + "/api/v1/profiles/engineering/resolve";
+    const headers = { Authorization: "Bearer " + f.a.env.HASNA_SKILLS_API_KEY_OVERRIDE };
+    const legacyResponse = await fetch(url, { headers });
+    const capableResponse = await fetch(url + "?pinAuthorization=epoch-v1", { headers });
+    expect(legacyResponse.status).toBe(200); expect(capableResponse.status).toBe(200);
+    const legacy = await legacyResponse.json() as any, capable = await capableResponse.json() as any;
+    expect(legacy.selections[0].authorizationEpoch).toBeUndefined();
+    expect(capable.selections[0].authorizationEpoch).toMatch(/^[a-f0-9]{32}$/);
+    expect({ ...capable, selections: capable.selections.map(({ authorizationEpoch, ...selection }: any) => selection) }).toEqual(legacy);
+    const epoch = capable.selections[0].authorizationEpoch;
+    await f.a.ok(["sync", "--selection-profile", "engineering", "--json"]);
+    await f.a.ok(["context", "review", "--session", "epoch-opt-in", "--selection-profile", "engineering", "--cached", "--json"]);
+    const sessions = join(f.a.data, "selection-cache", "sessions");
+    expect(json(join(sessions, readdirSync(sessions)[0]!)).profile.selections[0].authorizationEpoch).toBe(epoch);
+  } finally { await f.close(); }
+});

@@ -161,7 +161,7 @@ export class HttpProfileClient implements ProfileClient {
   async resolveProfile(id: string): Promise<ResolvedSkillProfile> {
     if (!identifier(id)) throw new Error("Invalid selection profile id");
     const result = await this.read(
-      await this.request(`/profiles/${encodeURIComponent(id)}/resolve`),
+      await this.request(`/profiles/${encodeURIComponent(id)}/resolve?pinAuthorization=epoch-v1`),
       MAX_RESOLVED_PROFILE_BYTES,
     );
     if (

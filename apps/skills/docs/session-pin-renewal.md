@@ -48,3 +48,9 @@ the migrated server before relying on historical-pin renewal. A server that does
 not advertise the capability never grants relaxed historical renewal; missing
 advertised epochs fail closed. Store rollback must restore the preserved store
 as a unit, not manufacture prior epochs.
+
+Profile resolution emits lifecycle epochs only when the caller requests
+`?pinAuthorization=epoch-v1`. The default response preserves the legacy complete
+profile shape, including existing session hashes. New clients opt in explicitly;
+old servers ignore the query and retain exact-current renewal only. Historical
+continuation still requires the advertised capability and genuine matching epochs.
