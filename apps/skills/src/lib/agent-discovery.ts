@@ -9,6 +9,7 @@ import type { IntegrationAgent } from "./agent-adapters.js";
 import { captureDiscoveryDirectories, captureDiscoveryDirectoryProjection, verifyDiscoveryDirectoryProjection, verifyDiscoveryDirectories, type DiscoveryDirectory, type DiscoveryDirectoryProjection } from "./agent-discovery-directories.js";
 import { discoveryByteBudget, hashRawDiscoveryFile } from "./agent-discovery-bytes.js";
 import { hashDiscoveryPathFile } from "./agent-discovery-path-bytes.js";
+import { hashClaudePluginManifest, projectReviewedClaudePluginManifest } from "./claude-plugin-manifest-witness.js";
 import { hashManagedPluginRegistry, type ManagedPluginRegistrationWitness } from "./plugin-discovery.js";
 import { readPluginBinding } from "./plugin-admission.js";
 import { captureClaudeMarketplaceRegistry, captureClaudeMarketplaceRegistryV2 } from "./claude-marketplace-registry.js";
@@ -20,7 +21,7 @@ import { sumiConfigDirectory, sumiConfigPath } from "./agent-sumi.js";
 import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
 export { captureDiscoveryDirectories, type DiscoveryDirectory } from "./agent-discovery-directories.js";
 
-export interface DiscoverySource { path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes" | "claude-plugin-registry" | "claude-marketplace-registry" | "claude-settings-v1" | "claude-settings-v2" | "claude-settings-v3" | "claude-marketplace-registry-v2" | "codex-settings-v1" | "codex-settings-v2" | "codex-settings-v3" | "codex-settings-v4" | "sumi-settings-v1"; managedPlugins?: ManagedPluginRegistrationWitness[]; format?: "json" | "toml" | "yaml"; fields?: string[] }
+export interface DiscoverySource { path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes" | "claude-plugin-manifest-v1" | "claude-plugin-registry" | "claude-marketplace-registry" | "claude-settings-v1" | "claude-settings-v2" | "claude-settings-v3" | "claude-marketplace-registry-v2" | "codex-settings-v1" | "codex-settings-v2" | "codex-settings-v3" | "codex-settings-v4" | "sumi-settings-v1"; managedPlugins?: ManagedPluginRegistrationWitness[]; format?: "json" | "toml" | "yaml"; fields?: string[] }
 export interface AgentDiscoveryBinding { agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; method: "automatic" | "reviewed"; builtinNames?: string[]; codexDisabledPluginSkills?: CodexPluginSkillControl[]; codexRetiredMaterializations?: { roots:string[]; parents?:string[]; directories:Array<DiscoveryDirectory & {entries?:string[]}> }; codexInstallationInputs?: { version:"codex-cli 0.160.0"; catalogSha256:string; plugins:CodexPluginSourceInput[]; directories?:DiscoveryDirectory[] } }
 export interface ReviewedDiscoveryInputs { version: 1; agents: Array<{ agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; pluginHooks: "reviewed-no-skill-injection" }> }
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -97,6 +98,11 @@ function projected(source: DiscoverySource, changes?: Map<string, string>, budge
   if (source.hashMode === "claude-plugin-registry") {
     if (source.format !== undefined || source.fields !== undefined || !source.managedPlugins || changes?.has(source.path)) throw new Error("Managed plugin registry witnesses require verified native registrations");
     return hashManagedPluginRegistry(source.path, source.managedPlugins);
+  }
+  if (source.hashMode === "claude-plugin-manifest-v1") {
+    if (source.format !== undefined || source.fields !== undefined || source.managedPlugins !== undefined || changes?.has(source.path)) throw new Error("Claude plugin manifest witnesses require a native discovery source without synthetic changes");
+    const text = read(source.path);
+    return text === null ? null : hashClaudePluginManifest(text);
   }
   if (source.managedPlugins !== undefined) throw new Error("Managed plugin rules require a typed registry witness");
   if (source.hashMode !== undefined) {
@@ -262,6 +268,7 @@ function codexInstallationRoots(binding:AgentDiscoveryBinding):string[] {
   return reviewedCodexPluginSourceRoots(cache,proof.plugins,path=>{const text=read(path);if(text===null) throw new Error("Missing native installation input");return text;});
 }
 function assertMarketplaceBinding(binding: AgentDiscoveryBinding, source: DiscoverySource): void {
+  if (source.hashMode === "claude-plugin-manifest-v1" && (binding.agent !== "claude" || basename(source.path) !== "plugin.json" || !source.path.endsWith(join(sep, ".claude-plugin", "plugin.json")))) throw new Error("Claude plugin manifest witnesses require Claude plugin discovery");
   if (source.hashMode === "sumi-settings-v1" && (binding.agent !== "sumi" || binding.method !== "reviewed" || basename(source.path) !== "sumi.json")) throw new Error("Sumi settings witnesses require explicit reviewed Sumi configuration");
   if ((source.hashMode === "codex-settings-v1" || source.hashMode === "codex-settings-v2" || (source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4")) && (binding.agent !== "codex" || binding.method !== "reviewed" || basename(source.path) !== "config.toml")) throw new Error("Codex settings witnesses require explicit reviewed Codex configuration");
   if ((source.hashMode === "claude-settings-v1" || source.hashMode === "claude-settings-v2" || source.hashMode === "claude-settings-v3") && (binding.agent !== "claude" || binding.method !== "reviewed" || basename(source.path) !== "settings.json")) throw new Error("Claude settings witnesses require explicit reviewed Claude configuration");
@@ -360,8 +367,8 @@ export function agentDiscoveryConfigPath(home: string, agent: IntegrationAgent):
 export function resolveAgentDiscovery(options: { home: string; agent: IntegrationAgent; reviewed?: ReviewedDiscoveryInputs; retainedReview?: AgentDiscoveryBinding; canonical?: (path: string) => string }): AgentDiscoveryBinding {
   const canonical = options.canonical ?? resolve, home = resolve(options.home), agent = options.agent;
   const sources: DiscoverySource[] = [], roots = new Set<string>(), builtinNames: string[] = [];
-  const witness = (path: string, format?: "json" | "toml" | "yaml", fields?: string[]) => {
-    const source: DiscoverySource = { path: canonical(path), sha256: null, ...(format ? { format, fields } : {}) };
+  const witness = (path: string, format?: "json" | "toml" | "yaml", fields?: string[], hashMode?: DiscoverySource["hashMode"]) => {
+    const source: DiscoverySource = { path: canonical(path), sha256: null, ...(format ? { format, fields } : {}), ...(hashMode ? { hashMode } : {}) };
     source.sha256 = projected(source); sources.push(source); return read(source.path);
   };
   if (agent === "hermes") assertHermesEnvironment(home);
@@ -369,6 +376,8 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
   const configText = witness(configPath, agent === "hermes" ? "yaml" : agent === "codex" ? "toml" : "json", agent === "hermes" ? ["skills", "plugins", "hooks"] : agent === "claude" ? ["enabledPlugins", "extraKnownMarketplaces"] : agent === "codex" ? [...CODEX_DISCOVERY_PROJECTION_FIELDS] : agent === "gemini" ? ["skills", "extensions", "security"] : agent === "opencode" ? ["plugin", "skills"] : agent === "sumi" ? [...SUMI_DISCOVERY_PROJECTION_FIELDS] : ["version"]);
   const config: any = configText === null ? {} : agent === "hermes" ? parseHermesConfig(configText) : parseConfig(configText, configPath, agent === "codex");
   const unresolved = (detail: string): never => { throw new Error(`Native discovery is unresolved (${agent}: ${detail}); provide a reviewed --discovery-inputs file`); };
+  if (options.reviewed && (options.reviewed.version !== 1 || !Array.isArray(options.reviewed.agents) || options.reviewed.agents.some(item => !item || typeof item !== "object") || new Set(options.reviewed.agents.map(item => item.agent)).size !== options.reviewed.agents.length)) throw new Error("Invalid --discovery-inputs version or agents");
+  const review = options.reviewed?.agents.find(item => item.agent === agent);
   if (agent === "sumi") {
     const directory = sumiConfigDirectory(home);
     if (witness(join(directory, "sumi.jsonc")) !== null) unresolved("JSONC configuration requires a supported format adapter");
@@ -447,8 +456,6 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
       || (agent === "gemini" && JSON.stringify(retained.builtinNames) !== JSON.stringify(builtinNames))) unresolved("retained review is missing current runtime discovery coverage");
     return retained;
   }
-  if (options.reviewed && (options.reviewed.version !== 1 || !Array.isArray(options.reviewed.agents) || options.reviewed.agents.some(item => !item || typeof item !== "object") || new Set(options.reviewed.agents.map(item => item.agent)).size !== options.reviewed.agents.length)) throw new Error("Invalid --discovery-inputs version or agents");
-  const review = options.reviewed?.agents.find(item => item.agent === agent);
   if (review) {
     if (review.pluginHooks !== "reviewed-no-skill-injection" || !Array.isArray(review.sources) || !review.sources.length || !Array.isArray(review.roots)) throw new Error("Discovery review must bind sources and confirm plugin hooks do not inject retired skills");
     const supplied = { agent, roots: review.roots, sources: review.sources, ...(review.directories !== undefined ? { directories: review.directories } : {}), method: "reviewed" as const };
@@ -461,13 +468,37 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
     const reviewedSources = supersedesSettingsProjection(agent, review.sources, canonical(configPath))
       ? sources.filter(source => !isSupersededSettingsProjection(agent, canonical(configPath), source))
       : sources;
-    return { ...supplied, roots: [...new Set([...roots, ...supplied.roots])].sort(), sources: [...reviewedSources, ...review.sources], ...(agent === "gemini" ? { builtinNames } : {}) };
+    const reviewedSourcesWithManifestProjection = review.sources.map(source => {
+      if (agent !== "claude" || source.format !== undefined || source.fields !== undefined || source.managedPlugins !== undefined
+        || source.hashMode !== undefined && source.hashMode !== "bytes"
+        || basename(source.path) !== "plugin.json" || !source.path.endsWith(join(sep, ".claude-plugin", "plugin.json"))) return source;
+      const pluginRoot = dirname(dirname(source.path)), hooksPath = join(pluginRoot, "hooks/hooks.json");
+      const hookStat = lstatSync(hooksPath, { throwIfNoEntry: false });
+      const text = read(source.path);
+      if (text === null) throw new Error("Reviewed Claude plugin manifest is missing");
+      const manifestSha256 = projectReviewedClaudePluginManifest(text, source.sha256 ?? "");
+      const manifest = JSON.parse(text) as Record<string, unknown>;
+      if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Error("Reviewed Claude plugin manifest must be an object");
+      const reviewedHookPaths = new Set<string>();
+      if (hookStat) reviewedHookPaths.add(hooksPath);
+      if (manifest.hooks !== undefined) {
+        if (typeof manifest.hooks !== "string") throw new Error("Reviewed Claude plugin manifest has an unsupported hooks target");
+        const declaredHookPath = resolve(pluginRoot, manifest.hooks);
+        if (!declaredHookPath.startsWith(pluginRoot + sep)) throw new Error("Reviewed Claude plugin hooks target escapes its root");
+        reviewedHookPaths.add(declaredHookPath);
+      }
+      for (const hooksFile of reviewedHookPaths) if (!review.sources.some(hook => hook.path === canonical(hooksFile) && hook.sha256 !== null && hook.format === undefined && hook.fields === undefined && hook.managedPlugins === undefined && (hook.hashMode === undefined || hook.hashMode === "bytes"))) throw new Error("Reviewed Claude plugin manifest requires separately reviewed exact hook file sources");
+      return { path: source.path, sha256: manifestSha256, hashMode: "claude-plugin-manifest-v1" as const };
+    });
+    const combined = [...reviewedSources, ...reviewedSourcesWithManifestProjection];
+    const unique = combined.filter((source, index) => combined.findIndex(candidate => isDeepStrictEqual(candidate, source)) === index);
+    return { ...supplied, roots: [...new Set([...roots, ...supplied.roots])].sort(), sources: unique, ...(agent === "gemini" ? { builtinNames } : {}) };
   }
 
   function plugin(root: string): void {
     root = canonical(root); safe(root);
     const manifestPath = join(root, agent === "claude" ? ".claude-plugin/plugin.json" : ".codex-plugin/plugin.json");
-    const raw = witness(manifestPath); if (raw === null) unresolved("plugin manifest missing");
+    const raw = witness(manifestPath, undefined, undefined, agent === "claude" ? "claude-plugin-manifest-v1" : undefined); if (raw === null) unresolved("plugin manifest missing");
     const manifest = parseConfig(raw!, manifestPath);
     const hooks = witness(join(root, "hooks/hooks.json"));
     if (manifest.hooks !== undefined || hooks !== null) unresolved("plugin hooks require a separate no-skill-injection review");
