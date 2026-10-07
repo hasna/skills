@@ -6,10 +6,16 @@ export function need(value: unknown, code: string): asserts value {
   if (!value) throw new Error(`CODEX_HOOK_TRUST_${code}`);
 }
 const sameStat = (a: BigIntStats, b: BigIntStats) => ["dev", "ino", "uid", "nlink", "mode", "size", "mtimeNs", "ctimeNs"].every(key => a[key as keyof BigIntStats] === b[key as keyof BigIntStats]);
+/** The owner of a directory can rename or replace its entries whatever its
+ * mode, so an ancestor must belong to root or the current user. There is no
+ * allowlist: a prefix such as /opt/homebrew passes only when one of them owns it. */
+export function trustedAncestorOwner(uid: number | bigint): boolean {
+  return BigInt(uid) === 0n || BigInt(uid) === BigInt(process.getuid!());
+}
 function safeParents(file: string): void {
   for (let p = dirname(file); ; p = dirname(p)) {
     const s = lstatSync(p);
-    need(s.isDirectory() && !s.isSymbolicLink(), "UNSAFE_PARENT");
+    need(s.isDirectory() && !s.isSymbolicLink() && trustedAncestorOwner(s.uid), "UNSAFE_PARENT");
     // A system temporary directory is safe only with the sticky bit. Every
     // other ancestor must prevent replacement by another account.
     need((s.mode & 0o022) === 0 || (s.uid === 0 && (s.mode & 0o1000) !== 0), "UNSAFE_PARENT");

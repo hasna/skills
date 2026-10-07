@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import * as integration from "./agent-integration.js";
 import { renderAgentHookCommand } from "./agent-adapters.js";
 import { renderPinnedLauncher } from "../cli/commands/runtime-launcher.js";
+import { pretendOwner } from "./foreign-owner.fixture.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
@@ -216,14 +217,17 @@ test.skipIf(process.platform !== "darwin")("unrelated entry churn in an ancestor
   const churn = Bun.spawn([process.execPath, "--no-env-file", "-e", CHURN], { env: { PATH: "/usr/bin:/bin", CHURN_DIR: f.home }, stdout: "pipe", stderr: "pipe" });
   try {
     const ready = churn.stdout.getReader(); await ready.read(); ready.releaseLock();
-    const refusals: string[] = [];
+    const refusals: string[] = [], homeBefore = lstatSync(f.home, { bigint: true }).mtimeNs;
     // Eight plans are enough: at the base, every one refused under this churn.
     for (let round = 0; round < 8; round++) {
       try { if (f.plan().replacements.length !== 4) refusals.push("unexpected replacements"); }
       catch (error) { refusals.push(String(error)); }
     }
-    // The churn ran throughout, so "never refuses" cannot pass vacuously.
-    expect(churn.exitCode).toBeNull();
+    // The churn overlapped the projections (the home changed during them), and
+    // the process is still running once an event-loop turn updates its status,
+    // so "never refuses" cannot pass vacuously.
+    expect(lstatSync(f.home, { bigint: true }).mtimeNs).not.toBe(homeBefore);
+    await Bun.sleep(10); expect(churn.exitCode).toBeNull();
     expect(refusals).toEqual([]);
     const grant = Bun.spawnSync(["/bin/chmod", "+a", "everyone allow add_file,delete_child", f.home], { stdout: "pipe", stderr: "pipe" });
     expect(grant.exitCode).toBe(0); expect(lstatSync(f.home).mode & 0o022).toBe(0);
@@ -231,8 +235,21 @@ test.skipIf(process.platform !== "darwin")("unrelated entry churn in an ancestor
     finally { expect(Bun.spawnSync(["/bin/chmod", "-N", f.home], { stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0); }
     // Control: with the grant removed, the same churned ancestor projects again.
     expect(f.plan().replacements).toHaveLength(4);
-    expect(churn.exitCode).toBeNull();
+    await Bun.sleep(10); expect(churn.exitCode).toBeNull();
   } finally { churn.kill("SIGKILL"); await churn.exited; }
+  expect(readFileSync(f.settings, "utf8")).toBe(f.before.settings);
+  expect(readFileSync(f.policy, "utf8")).toBe(f.before.policy);
+});
+
+test("an executable ancestor owned by another non-root account refuses the projection; own or root ancestors do not", () => {
+  const f = fixture(), other = process.getuid!() + 1000;
+  expect(f.plan().replacements).toHaveLength(4);
+  for (const ancestor of [join(f.home, "runtime", "bin"), join(f.home, "runtime"), f.home]) {
+    let restore = pretendOwner(ancestor, other);
+    try { expect(() => f.plan(), ancestor).toThrow("EXECUTABLE_UNVERIFIED"); } finally { restore(); }
+    restore = pretendOwner(ancestor, 0);
+    try { expect(f.plan().replacements, ancestor).toHaveLength(4); } finally { restore(); }
+  }
   expect(readFileSync(f.settings, "utf8")).toBe(f.before.settings);
   expect(readFileSync(f.policy, "utf8")).toBe(f.before.policy);
 });
