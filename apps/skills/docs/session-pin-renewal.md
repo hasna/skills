@@ -11,6 +11,19 @@ the local receipt's existing generation/hash guard reject concurrent changes.
 The whole authorization shares a four-second deadline; failed authorization
 never refreshes the receipt or writes downloaded bundles into its cache.
 
+When that deadline is spent, the managed hook reports `SESSION_RENEWAL_TIMEOUT`.
+`SKILLS_API_UNAVAILABLE` stays reserved for network and HTTP 429/5xx failures.
+The pin is unchanged and the next prompt retries the renewal.
+
+A definitive refusal (`SESSION_RECONCILIATION_REQUIRED`) is remembered for five
+minutes under `selection-cache/session-renewal-refusals/`. The record binds the
+exact receipt bytes, profile, authority, workspace and locally synced profile
+revision. Within that window the hook repeats the refusal without resolving the
+whole profile again. A changed receipt, a newly synced revision or the end of
+the window sends the next prompt back to the authority. The record only repeats
+a refusal: it never renews, authorizes or writes a pin, a malformed or extended
+record is ignored, and explicit `skills sessions reconcile` does not read it.
+
 Removing a selection, changing its aliases or triggers, deleting or archiving
 a skill, losing access, or failing integrity checks still refuses renewal.
 Deletion and archive transitions rotate the server's per-skill epoch. Restoring
