@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Add an explicit `claude-settings-v4` Claude settings witness that also permits a top-level built-in `theme` (`auto`, `dark`, `light`, `dark-daltonized`, `light-daltonized`, `dark-ansi`, `light-ansi`, pinned from the Claude Code settings reference). Custom and plugin themes, `skipDangerousModePermissionPrompt` and every permission, hook, environment and unknown setting stay bound. Opt in with `skills hook witness --kind claude-settings-v4` or `skills hook rebind-settings --agent claude --claude-witness-version 4`; existing v1/v2/v3 witnesses keep their meaning and the default rebind target stays v3. The managed policy accepts the new `claude-settings-v4` hash mode, so consumers that bundle the verifier must ship it before a policy uses it.
+- `skills self-update --adopt-aliases` now also pins a bare symlink launcher that already targets the current runtime's entry, such as those the 0.10.48 updater left pointing at the 0.10.49 runtime. It uses the same ownership, foreign and chain refusals, `.skills-alias-prev-<id>` backup, receipt and `--rollback-aliases` as any adopted alias; a launcher already pinned to the current runtime is left unchanged. Roll an adoption back before rolling back the runtime that installed those symlinks: that runtime rollback refuses with `LAUNCHER_DRIFT_ROLLBACK_REFUSED` while the adopted pinned launchers are in place. Alias rollback without a backup now also requires the exact old launcher shape, not only its target.
 
 ## 0.10.49
 

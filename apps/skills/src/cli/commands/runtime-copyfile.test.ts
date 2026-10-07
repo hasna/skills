@@ -1115,7 +1115,7 @@ else { writeFileSync(${JSON.stringify(log)}, "unexpected"); process.exit(83); }
         expect(pinnedTarget(item.path)).toBe(item.newTarget);
         expect(readFileSync(item.path, "utf8")).toBe(renderPinnedLauncher({ runtime, cwd: targetRoot, entry: item.newTarget }));
         expect(lstatSync(item.backupPath).isSymbolicLink()).toBe(true);
-        expect(readlinkSync(item.backupPath)).toBe(links.get(item.path));
+        expect(readlinkSync(item.backupPath)).toBe(links.get(item.path)!);
       }
       // Positive control: the preserved pre-pinned launcher, run from the hostile
       // directory, loads that directory's bunfig.toml preload and .env.

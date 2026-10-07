@@ -1305,6 +1305,21 @@ the backup keeps the exact previous launcher (symlink text or pinned bytes), and
 projection and `skills self-update` read a managed pinned launcher as the exact
 entry it runs and bind the launcher's own bytes as well.
 
+An updater from before pinned launchers (0.10.48 and earlier) writes bare symlinks,
+including when it installs a version that has them, and an exact-version update to
+the version already installed is refused. `skills self-update --adopt-aliases` pins
+those launchers in place: in `~/.local/bin`, `~/.bun/bin`, `/opt/homebrew/bin` and
+`/usr/local/bin`, a bare symlink that already reaches the current runtime's entry is
+adopted like an alias still pointing at an older install. The same refusals apply
+(an unsafe or unwritable directory, a launcher owned by another account, a foreign
+file, an unsupported link chain), the exact symlink is kept as
+`<launcher>.skills-alias-prev-<receipt id>`, the receipt records it as the old
+`symlink` shape, and `--rollback-aliases <receipt id>` restores it exactly. A
+launcher already pinned to the current runtime is left unchanged. Undo in reverse
+order: roll back the adoption before rolling back the runtime update that wrote
+those symlinks, because that update's `--rollback` refuses with
+`LAUNCHER_DRIFT_ROLLBACK_REFUSED` while the adopted pinned launchers are in place.
+
 To require a minimum dependency age, pass a positive integer number of days and
 repeat the exclusion option for package names or package globs:
 
