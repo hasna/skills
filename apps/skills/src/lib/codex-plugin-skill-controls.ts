@@ -246,6 +246,7 @@ export function reviewedCodexPluginCapabilitiesUnchanged(cache:string, controls:
 }
 export function reviewCodexPluginControls(catalog:CodexNativeSkillCatalog, documents:string[], cache:string, cwd:string, read:Read, rules:unknown, pluginSettings?:unknown, plannedRules?:unknown, denials:ReviewedCodexSkillDenial[]=[]): { skills:CodexPluginSkillControl[]; inactivePlugins:CodexInactivePluginControl[]; sourceInputs:CodexPluginSourceInput[] } {
   if (!supportsCodexNativeCapability(catalog?.version, "qualified-skill-catalog") || catalog.cwd!==cwd) refuse();
+  const installedPluginReview=supportsCodexNativeCapability(catalog.version, "installed-plugin-review");
   if (!Array.isArray(denials) || denials.length>4096 || new Set(denials.map(item=>item?.path)).size!==denials.length
     || denials.some(item=>!item || Object.keys(item).sort().join(",")!=="name,path,sha256" || typeof item.name!=="string" || typeof item.path!=="string" || !/^[a-f0-9]{64}$/.test(item.sha256))) refuse();
   const usedDenials=new Set<string>();
@@ -273,7 +274,7 @@ export function reviewCodexPluginControls(catalog:CodexNativeSkillCatalog, docum
     // The native loader reads an installed cache root, never this declared
     // Local installation input. Keep a separate, positively attested role;
     // shared bytes or a temporary-directory name do not establish that role.
-    if (catalog.version==="codex-cli 0.160.0" && installed.length===1 && installed[0]!.installed
+    if (installedPluginReview && installed.length===1 && installed[0]!.installed
       && installed[0]!.localVersion===basename(located.root) && installed[0]!.sourceType==="local"
       && codexPluginSourceIsConfigControlled(installed[0]!)) {
       const plugin=installed[0]!, input={pluginId:expectedPluginId,namespace:located.namespace,pluginParent:located.pluginParent,sourceRoot:plugin.sourcePath!,sourceSha256:plugin.sourceSha256!};
@@ -288,7 +289,7 @@ export function reviewCodexPluginControls(catalog:CodexNativeSkillCatalog, docum
     // The caller supplies the current config covered by its discovery witness;
     // a catalog snapshot alone cannot establish continuing disablement.
     const settings=pluginSettings && typeof pluginSettings==="object" && !Array.isArray(pluginSettings) ? pluginSettings as Record<string,any> : undefined;
-    if (catalog.version==="codex-cli 0.160.0" && !listed.length && !skills.some(skill=>skill.pluginId===expectedPluginId) && installed.length===1 && installed[0]!.installed && !installed[0]!.enabled
+    if (installedPluginReview && !listed.length && !skills.some(skill=>skill.pluginId===expectedPluginId) && installed.length===1 && installed[0]!.installed && !installed[0]!.enabled
       && codexPluginSourceIsConfigControlled(installed[0]!)
       && settings && Object.hasOwn(settings,expectedPluginId) && settings[expectedPluginId]?.enabled===false) {
       if (!Array.isArray(rules)) refuse();
@@ -334,13 +335,13 @@ export function reviewCodexPluginControls(catalog:CodexNativeSkillCatalog, docum
       // that stronger planned control, with the current name still disabled.
       // Never use planned denies to manufacture an inactive/unknown identity.
       const denial=denials.find(item=>item.path===document);
-      const explicitDeny=denial!==undefined && remotePluginId!==undefined && catalog.version==="codex-cli 0.160.0"
+      const explicitDeny=denial!==undefined && remotePluginId!==undefined && installedPluginReview
         && denial.name===parsed.name && denial.sha256===createHash("sha256").update(read(document)).digest("hex")
         && Array.isArray(rules) && !rules.some((rule:any)=>(rule?.path===document || typeof rule?.name==="string" && rule.name.trim()===parsed.name) && rule.enabled!==false)
         && Array.isArray(plannedRules) && plannedRules.some((rule:any)=>rule?.path===document && rule.enabled===false);
       if (denial && !explicitDeny) refuse();
       if (explicitDeny) usedDenials.add(document);
-      const plannedPathDeny=catalog.version==="codex-cli 0.160.0" && remotePluginId!==undefined
+      const plannedPathDeny=installedPluginReview && remotePluginId!==undefined
         && Array.isArray(rules) && rules.some((rule:any)=>typeof rule?.name==="string" && rule.name.trim()===parsed.name && rule.enabled===false)
         && !rules.some((rule:any)=>(rule?.path===document || typeof rule?.name==="string" && rule.name.trim()===parsed.name) && rule.enabled!==false)
         && Array.isArray(plannedRules) && plannedRules.some((rule:any)=>rule?.path===document && rule.enabled===false)

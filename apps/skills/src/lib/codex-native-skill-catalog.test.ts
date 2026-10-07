@@ -62,7 +62,7 @@ test("positive native source provenance distinguishes config-owned inactivity fr
   }
 });
 
-for (const nativeVersion of ["codex-cli 0.159.2", "codex-cli 0.160.0"]) test(`native ${nativeVersion} capture sends only bounded reads and releases its child`, async () => {
+for (const nativeVersion of ["codex-cli 0.159.2", "codex-cli 0.160.0", "codex-cli 0.160.1"]) test(`native ${nativeVersion} capture sends only bounded reads and releases its child`, async () => {
   const calls: Array<[string, unknown]> = [];
   let closed = 0;
   const rpc: CodexHookRpc = { version: nativeVersion, request: async (method, params) => { calls.push([method, params]); return method === "skills/list" ? response() : installed; }, close: async () => { closed++; } };
@@ -78,12 +78,20 @@ for (const nativeVersion of ["codex-cli 0.159.2", "codex-cli 0.160.0"]) test(`na
 test("native capture closes on refused requests, validation failures, and unsupported versions", async () => {
   for (const mode of ["request", "projection", "version", "unmeasuredVersion", "unmeasuredFutureVersion"]) {
     let closed = 0, requested = 0;
-    const rpc: CodexHookRpc = { version: mode === "version" ? "codex-cli 0.999.0" : mode === "unmeasuredVersion" ? "codex-cli 0.159.0" : mode === "unmeasuredFutureVersion" ? "codex-cli 0.160.1" : "codex-cli 0.159.2", request: async () => { requested++; if (mode === "request") throw new Error("NATIVE_RPC_REFUSED"); return null; }, close: async () => { closed++; } };
+    const rpc: CodexHookRpc = { version: mode === "version" ? "codex-cli 0.999.0" : mode === "unmeasuredVersion" ? "codex-cli 0.159.0" : mode === "unmeasuredFutureVersion" ? "codex-cli 0.160.2" : "codex-cli 0.159.2", request: async () => { requested++; if (mode === "request") throw new Error("NATIVE_RPC_REFUSED"); return null; }, close: async () => { closed++; } };
     await expect(captureCodexNativeSkillCatalog({ command: "codex", home: "/synthetic/home", cwd }, async () => rpc)).rejects.toThrow();
     expect(closed).toBe(1);
     expect(requested).toBe(["version", "unmeasuredVersion", "unmeasuredFutureVersion"].includes(mode) ? 0 : mode === "request" ? 1 : 2);
   }
 });
+
+for (const version of ["codex-cli 0.160.2", "codex-cli 0.161.0", "codex-cli 0.159.3", "codex-cli 0.160.1-alpha.1", "codex-cli 0.160.10", "0.160.1"])
+  test(`native capture refuses the unmeasured neighbour ${JSON.stringify(version)} before any read`, async () => {
+    let closed = 0, requested = 0;
+    const rpc: CodexHookRpc = { version, request: async (method) => { requested++; return method === "skills/list" ? response() : installed; }, close: async () => { closed++; } };
+    await expect(captureCodexNativeSkillCatalog({ command: "codex", home: "/synthetic/home", cwd }, async () => rpc)).rejects.toThrow("CODEX_NATIVE_SKILL_CATALOG_UNSUPPORTED_VERSION");
+    expect({ requested, closed }).toEqual({ requested: 0, closed: 1 });
+  });
 
 test("ordered exact names survive cache-path churn while preserving the bridge and path overrides", () => {
   const deny = [{ name: "vendor:deploy", enabled: false }];

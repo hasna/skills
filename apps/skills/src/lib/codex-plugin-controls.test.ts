@@ -246,7 +246,7 @@ test("remote null-version denied materialization binds the native installation r
  expect(()=>reviewCodexPluginSkillControls(catalog,[document],cache,home,read,rules)).toThrow("IDENTITY_UNSUPPORTED");
 });
 
-function remoteNameDisabledRefresh() {
+function remoteNameDisabledRefresh(nativeVersion="codex-cli 0.160.0") {
  const home=mkdtempSync(join(tmpdir(),"skills-remote-name-refresh-")); roots.push(home); admitCorpusFixture(join(home, ".codex"));
  const cache=join(home,".codex/plugins/cache"), parent=join(cache,"openai-curated-remote/recorder");
  const old=join(parent,"0.4.0"), current=join(parent,"0.4.1"), config=join(home,".codex/config.toml");
@@ -260,7 +260,7 @@ function remoteNameDisabledRefresh() {
  put(config,`model = "synthetic"\n[plugins."recorder@openai-curated-remote"]\nenabled = true\n[[skills.config]]\npath = ${JSON.stringify(oldDocument)}\nenabled = false\n[[skills.config]]\nname = "recorder:record-browser"\nenabled = false\n`);
  const f={home,dataDir:join(home,"data"),projectDir:home};
  const plugin={id:"recorder@openai-curated-remote",name:"recorder",installed:true,enabled:true,localVersion:null,remotePluginId,sourceType:"remote" as const};
- const catalog={version:"codex-cli 0.160.0",cwd:home,skills:[] as Array<{name:string;path:string;enabled:boolean;pluginId:string|null}>,plugins:[plugin]};
+ const catalog={version:nativeVersion,cwd:home,skills:[] as Array<{name:string;path:string;enabled:boolean;pluginId:string|null}>,plugins:[plugin]};
  const freshReview=()=>({version:1 as const,agents:[{agent:"codex" as const,roots:[cache],sources:[captureCodexSettingsV3(config),{path:manifest,sha256:createHash("sha256").update(readFileSync(manifest)).digest("hex")}],pluginHooks:"reviewed-no-skill-injection" as const}]});
  // Enroll the original, then simulate Codex replacing its synthetic cache.
  const originalReview={version:1 as const,agents:[{agent:"codex" as const,roots:[cache],sources:[captureCodexSettingsV3(config)],pluginHooks:"reviewed-no-skill-injection" as const}]};
@@ -271,8 +271,8 @@ function remoteNameDisabledRefresh() {
  return {f,cache,parent,old,oldDocument,current,document,manifest,receipt,config,catalog,options};
 }
 
-test("fresh review plans the exact new path for a remote skill already omitted by its qualified-name deny",()=>{
- const fixture=remoteNameDisabledRefresh(), {f,config,document,oldDocument,options,catalog}=fixture;
+for (const nativeVersion of ["codex-cli 0.160.0", "codex-cli 0.160.1"]) test(`${nativeVersion} fresh review plans the exact new path for a remote skill already omitted by its qualified-name deny`,()=>{
+ const fixture=remoteNameDisabledRefresh(nativeVersion), {f,config,document,oldDocument,options,catalog}=fixture;
  const before=readFileSync(config,"utf8");
  expect(()=>assertManagedAgentBridge("codex",f)).toThrow("NATIVE_SKILL_DRIFT");
  const plan=planAgentIntegration(options());
@@ -321,7 +321,24 @@ test("planned remote refresh deny never substitutes for fresh identity, existing
 });
 
 
-test("inert disabled plugin documents do not block qualified review while active hook controls still refuse", () => {
+test("0.160 plugin installation semantics stay bound to the exact admitted releases",()=>{
+ const {f,config,document,oldDocument,catalog,options}=remoteNameDisabledRefresh();
+ const before=readFileSync(config,"utf8"), read=(path:string)=>readFileSync(path,"utf8"), rules=(Bun.TOML.parse(before) as any).skills.config;
+ const text=read(document), denial={name:"recorder:record-browser",path:document,sha256:createHash("sha256").update(text).digest("hex")};
+ // Positive control on the measured 0.160.0 release with the same inputs.
+ expect(()=>planAgentIntegration(options())).not.toThrow();
+ expect(reviewCodexPluginControls(catalog,[document],join(f.home,".codex/plugins/cache"),f.home,read,rules,undefined,[...rules,{path:document,enabled:false}],[denial]).skills.map(skill=>skill.name)).toEqual(["recorder:record-browser"]);
+ // 0.159.2 keeps its qualified catalog, but never the 0.160 planned remote path or explicit denial semantics.
+ for (const version of ["codex-cli 0.159.2","codex-cli 0.160.2","codex-cli 0.161.0","codex-cli 0.160.1-alpha.1","codex-cli 0.160.10"]) {
+   const snapshot={...catalog,version};
+   expect(()=>planAgentIntegration({...options(),codexNativeCatalog:snapshot})).toThrow("IDENTITY_UNSUPPORTED");
+   expect(()=>reviewCodexPluginControls(snapshot,[document],join(f.home,".codex/plugins/cache"),f.home,read,rules,undefined,[...rules,{path:document,enabled:false}],[denial])).toThrow("IDENTITY_UNSUPPORTED");
+   expect(readFileSync(config,"utf8")).toBe(before);
+ }
+ expect(rules).toContainEqual({path:oldDocument,enabled:false});
+});
+
+for (const nativeVersion of ["codex-cli 0.160.0", "codex-cli 0.160.1"]) test(`${nativeVersion} inert disabled plugin documents do not block qualified review while active hook controls still refuse`, () => {
  const home=mkdtempSync(join(tmpdir(),"skills-inert-plugin-review-")); roots.push(home); admitCorpusFixture(join(home, ".codex"));
  const cache=join(home,".codex/plugins/cache"), inactiveRoot=join(cache,"probe/inactive/1.0.0"), activeRoot=join(cache,"probe/active/1.0.0");
  const inactive=join(inactiveRoot,"skills/inert-skill/SKILL.md"), active=join(activeRoot,"skills/active-skill/SKILL.md");
@@ -330,7 +347,7 @@ test("inert disabled plugin documents do not block qualified review while active
  put(inactive,"---\nname: inert-skill\ndescription: Synthetic inactive plugin fixture\n---\nFixture\n");
  put(join(activeRoot,".codex-plugin/plugin.json"),JSON.stringify({name:"active",version:"1.0.0"}));
  put(active,"---\nname: active-skill\ndescription: Synthetic active plugin fixture\n---\nFixture\n");
- const catalog={version:"codex-cli 0.160.0",cwd:home,skills:[{name:"active:active-skill",path:active,enabled:true,pluginId:"active@probe"}],plugins:[
+ const catalog={version:nativeVersion,cwd:home,skills:[{name:"active:active-skill",path:active,enabled:true,pluginId:"active@probe"}],plugins:[
    {id:"inactive@probe",name:"inactive",installed:true,enabled:false,localVersion:"1.0.0",sourceType:"local" as const,sourceSha256:hashNativeJsonControls(JSON.stringify({type:"local",path:join(home,"source/inactive")})),sourcePath:join(home,"source/inactive")},
    {id:"active@probe",name:"active",installed:true,enabled:true,localVersion:"1.0.0"}]};
  const read=(path:string)=>readFileSync(path,"utf8"), rules=[{path:inactive,enabled:false}], settings={"inactive@probe":{enabled:false}};
@@ -349,7 +366,7 @@ test("inert disabled plugin documents do not block qualified review while active
  expect(inert(inactive,settings,[...rules,{path:inactive,enabled:true}])).toBe(false);
  expect(isReviewedCodexPluginInactive(inactive,cache,[...reviewed.inactivePlugins,...reviewed.inactivePlugins],settings,rules,read)).toBe(false);
  expect(()=>assertAgentPolicyCollections({bridge:{codexInactivePlugins:reviewed.inactivePlugins}})).toThrow();
- expect(()=>assertAgentPolicyCollections({bridge:{codexInactivePlugins:reviewed.inactivePlugins,codexPluginSkillReview:{version:"codex-cli 0.160.0",catalogSha256:"b".repeat(64)}}})).not.toThrow();
+ expect(()=>assertAgentPolicyCollections({bridge:{codexInactivePlugins:reviewed.inactivePlugins,codexPluginSkillReview:{version:nativeVersion,catalogSha256:"b".repeat(64)}}})).not.toThrow();
 
  expect(reviewCodexPluginSkillControls({...catalog,skills:[]},[inactive],cache,home,read,rules,settings)).toEqual([]);
  // A native snapshot alone never proves continuing disablement.
@@ -399,7 +416,7 @@ test("inert disabled plugin documents do not block qualified review while active
  expect(()=>assertManagedAgentBridge("codex",f)).toThrow("NATIVE_SKILL_DRIFT");
 });
 
-for (const rootKind of ["plugin", "skills"] as const) test(`native local installation inputs remain inventory-only with a configured ${rootKind} root`, () => {
+for (const nativeVersion of ["codex-cli 0.160.0", "codex-cli 0.160.1"]) for (const rootKind of ["plugin", "skills"] as const) test(`native ${nativeVersion} local installation inputs remain inventory-only with a configured ${rootKind} root`, () => {
  const home=mkdtempSync(join(tmpdir(),"skills-native-install-input-"));roots.push(home); admitCorpusFixture(join(home, ".codex"));
  const cache=join(home,".codex/plugins/cache"), installedRoot=join(cache,"probe/vendor/1.0.0"), sourceRoot=join(home,"installation-input/vendor");
  const installedDoc=join(installedRoot,"skills/deploy/SKILL.md"), sourceDoc=join(sourceRoot,"skills/deploy/SKILL.md"), sourceManifest=join(sourceRoot,".codex-plugin/plugin.json");
@@ -409,7 +426,7 @@ for (const rootKind of ["plugin", "skills"] as const) test(`native local install
  put(sourceDoc,'---\nname: deploy\ndescription: Synthetic installation input\n---\nDifferent input body');
  const config=join(home,".codex/config.toml");put(config,"");
  const read=(path:string)=>readFileSync(path,"utf8"), hash=(path:string)=>createHash("sha256").update(read(path)).digest("hex");
- const catalog={version:"codex-cli 0.160.0",cwd:home,skills:[{name:"vendor:deploy",path:installedDoc,enabled:true,pluginId:"vendor@probe"}],plugins:[{id:"vendor@probe",name:"vendor",installed:true,enabled:true,localVersion:"1.0.0",sourceType:"local" as const,sourcePath:sourceRoot,sourceSha256:hashNativeJsonControls(JSON.stringify({type:"local",path:sourceRoot}))}]};
+ const catalog={version:nativeVersion,cwd:home,skills:[{name:"vendor:deploy",path:installedDoc,enabled:true,pluginId:"vendor@probe"}],plugins:[{id:"vendor@probe",name:"vendor",installed:true,enabled:true,localVersion:"1.0.0",sourceType:"local" as const,sourcePath:sourceRoot,sourceSha256:hashNativeJsonControls(JSON.stringify({type:"local",path:sourceRoot}))}]};
  const review=reviewCodexPluginControls(catalog,[installedDoc,sourceDoc],cache,home,read,[]);
  expect(review.skills).toHaveLength(1);expect(review.sourceInputs).toHaveLength(1);
  const sourceRoots=reviewedCodexPluginSourceRoots(cache,review.sourceInputs,read);
@@ -424,6 +441,8 @@ for (const rootKind of ["plugin", "skills"] as const) test(`native local install
  const rehydrated=parseManagedSkillPolicy(policyText).bridge?.discovery?.codex;
  expect(rehydrated).toEqual(stored);
  expect(rehydrated?.codexInstallationInputs?.plugins).toHaveLength(1);
+ expect(stored.codexInstallationInputs.version).toBe(nativeVersion);
+ expect(JSON.parse(policyText).bridge.codexPluginSkillReview.version).toBe(nativeVersion);
  expect(rehydrated?.codexInstallationInputs?.plugins[0]?.sourceRoot).toBe(sourceRoot);
  expect(rehydrated?.roots).toEqual([configuredRoot]);
  // Exercise the persisted policy, without a new native catalog or input envelope.
@@ -615,8 +634,8 @@ test("an absent remote skills-only parent retains its disabled identity and refu
  expect(()=>assertManagedAgentBridge("codex",f)).toThrow("NATIVE_SKILL_DRIFT");
 });
 
-test("explicit reviewed denial binds a new omitted remote qualified name to its document and genuine installation",()=>{
- const {f,config,document,manifest,catalog,options}=remoteNameDisabledRefresh();
+for (const nativeVersion of ["codex-cli 0.160.0", "codex-cli 0.160.1"]) test(`${nativeVersion} explicit reviewed denial binds a new omitted remote qualified name to its document and genuine installation`,()=>{
+ const {f,config,document,manifest,catalog,options}=remoteNameDisabledRefresh(nativeVersion);
  const text=readFileSync(document,"utf8").replace("name: record-browser","name: newly-named");put(document,text);
  const denial={name:"recorder:newly-named",path:document,sha256:createHash("sha256").update(text).digest("hex")};
  expect(()=>planAgentIntegration(options())).toThrow("IDENTITY_UNSUPPORTED");
