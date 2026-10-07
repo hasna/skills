@@ -3,12 +3,22 @@ import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { captureCodexNativeSkillCatalog, isCodexNativeSkillDisabled } from "./codex-native-skill-catalog.js";
+import { admitCorpusFixture, wrapNativeInspectionFixture } from "./codex-corpus.fixture.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
 // Explicit opt-in requires a reviewed native executable. The runner provides a
 // synthetic HOME, read-only station files and sandbox-only writable paths.
 const binary = process.env.SKILLS_TEST_CODEX_COMMAND;
+// The transport holds the shared corpus admission lease, which only native
+// enrollment creates. This test measures catalog semantics, not admission: it
+// admits its synthetic home through the protocol fixture and passes every other
+// invocation, including --version and app-server, to the reviewed executable.
+const admittedNativeCommand = (home: string): string => {
+  const command = join(home, "native-codex");
+  writeFileSync(command, wrapNativeInspectionFixture(`#!/bin/sh\nexec '${binary!.replaceAll("'", "'\\''")}' "$@"\n`), { mode: 0o700 });
+  return command;
+};
 test.skipIf(!binary)("native catalog preserves exact ordered name controls across path changes", async () => {
   const home = mkdtempSync(join(tmpdir(), "skills-native-catalog-"));
   const codexHome = join(home, ".codex"), folder = join(home, ".agents/skills/vendor"), bridge = join(home, ".agents/skills/skills-cli");
@@ -16,12 +26,14 @@ test.skipIf(!binary)("native catalog preserves exact ordered name controls acros
   const base = 'model = "synthetic"\nmodel_provider = "fixture"\n[model_providers.fixture]\nname = "Synthetic unauthenticated provider"\nbase_url = "https://native-catalog.invalid/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n';
   try {
     for (const path of [codexHome, folder, bridge]) mkdirSync(path, { recursive: true, mode: 0o700 });
+    admitCorpusFixture(codexHome);
+    const command = admittedNativeCommand(home);
     writeFileSync(document, "---\nname: vendor:deploy\ndescription: Synthetic qualified-name fixture\n---\nSynthetic instruction.\n");
     writeFileSync(join(bridge, "SKILL.md"), "---\nname: skills-cli\ndescription: Synthetic bridge fixture\n---\nSynthetic instruction.\n");
     const capture = async (rules: Array<{ name?: string; path?: string; enabled: boolean }>) => {
       writeFileSync(config, base + rules.map(rule => `\n[[skills.config]]\n${rule.name === undefined ? `path = ${JSON.stringify(rule.path)}` : `name = ${JSON.stringify(rule.name)}`}\nenabled = ${rule.enabled}\n`).join(""), { mode: 0o600 });
       const original = readFileSync(config);
-      const catalog = await captureCodexNativeSkillCatalog({ command: binary!, home, codexHome, cwd: home });
+      const catalog = await captureCodexNativeSkillCatalog({ command, home, codexHome, cwd: home });
       expect(readFileSync(config)).toEqual(original);
       expect(catalog.plugins).toEqual([]);
       expect(catalog.skills.find(skill => skill.name === "skills-cli")?.enabled).toBe(true);

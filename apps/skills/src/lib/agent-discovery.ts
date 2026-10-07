@@ -19,10 +19,11 @@ import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, c
 import { absentDisabledCodexPluginParent, reviewedDisabledCodexPluginParent, reviewedRetiredCodexRoot, reviewedCodexPluginCapabilitiesUnchanged, reviewedCodexPluginSourceRoots, type CodexPluginSkillControl, type CodexPluginSourceInput } from "./codex-plugin-skill-controls.js";
 import { sumiConfigDirectory, sumiConfigPath } from "./agent-sumi.js";
 import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
+import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
 export { captureDiscoveryDirectories, type DiscoveryDirectory } from "./agent-discovery-directories.js";
 
 export interface DiscoverySource { path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes" | "claude-plugin-manifest-v1" | "claude-plugin-registry" | "claude-marketplace-registry" | "claude-settings-v1" | "claude-settings-v2" | "claude-settings-v3" | "claude-settings-v4" | "claude-marketplace-registry-v2" | "codex-settings-v1" | "codex-settings-v2" | "codex-settings-v3" | "codex-settings-v4" | "sumi-settings-v1"; managedPlugins?: ManagedPluginRegistrationWitness[]; format?: "json" | "toml" | "yaml"; fields?: string[] }
-export interface AgentDiscoveryBinding { agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; method: "automatic" | "reviewed"; builtinNames?: string[]; codexDisabledPluginSkills?: CodexPluginSkillControl[]; codexRetiredMaterializations?: { roots:string[]; parents?:string[]; directories:Array<DiscoveryDirectory & {entries?:string[]}> }; codexInstallationInputs?: { version:"codex-cli 0.160.0"; catalogSha256:string; plugins:CodexPluginSourceInput[]; directories?:DiscoveryDirectory[] } }
+export interface AgentDiscoveryBinding { agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; method: "automatic" | "reviewed"; builtinNames?: string[]; codexDisabledPluginSkills?: CodexPluginSkillControl[]; codexRetiredMaterializations?: { roots:string[]; parents?:string[]; directories:Array<DiscoveryDirectory & {entries?:string[]}> }; codexInstallationInputs?: { version:string; catalogSha256:string; plugins:CodexPluginSourceInput[]; directories?:DiscoveryDirectory[] } }
 export interface ReviewedDiscoveryInputs { version: 1; agents: Array<{ agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; pluginHooks: "reviewed-no-skill-injection" }> }
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 function parseConfig(text: string, path: string, toml = false): any {
@@ -257,7 +258,7 @@ export function verifyAgentDiscovery(binding: AgentDiscoveryBinding, codexRecove
 function codexInstallationRoots(binding:AgentDiscoveryBinding):string[] {
   const proof=binding.codexInstallationInputs;
   if (proof===undefined) return [];
-  if (binding.agent!=="codex" || binding.method!=="reviewed" || proof.version!=="codex-cli 0.160.0" || !/^[a-f0-9]{64}$/.test(proof.catalogSha256) || !Array.isArray(proof.plugins) || !proof.plugins.length) throw new Error("Invalid native installation input proof");
+  if (binding.agent!=="codex" || binding.method!=="reviewed" || !supportsCodexNativeCapability(proof.version,"installed-plugin-review") || !/^[a-f0-9]{64}$/.test(proof.catalogSha256) || !Array.isArray(proof.plugins) || !proof.plugins.length) throw new Error("Invalid native installation input proof");
   const cache=dirname(dirname(proof.plugins[0]!.pluginParent));
   const config=join(dirname(dirname(cache)),"config.toml"), home=dirname(dirname(dirname(cache)));
   const configSource=binding.sources.find(source=>source.path===config && source.sha256!==null && (!source.format || source.format==="toml" && source.fields?.includes("plugins")));

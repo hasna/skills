@@ -1,4 +1,5 @@
 import { basename, isAbsolute, join, resolve, sep } from "node:path";
+import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
 /** Shared bounds for stored policy, discovery, and pre-activation validation. */
 export const AGENT_POLICY_LIMITS = Object.freeze({ bytes: 1024 * 1024, agents: 16, discoverySources: 2048, discoveryRawSourceBytes: 64 * 1024 * 1024, discoveryRawTotalBytes: 256 * 1024 * 1024, discoveryPathLinks: 40, discoveryPathSteps: 256, discoveryPathSourceMetadataBytes: 64 * 1024, discoveryPathTotalMetadataBytes: 8 * 1024 * 1024, discoveryRoots: 512, discoveryDirectories: 64, discoveryDirectoryEntries: 20000, discoveryDirectoryBytes: 8 * 1024 * 1024, builtinNames: 2048, rootAliases: 2, fields: 64, pathCharacters: 4096 });
 function object(value: unknown): value is Record<string, any> { return Boolean(value && typeof value === "object" && !Array.isArray(value)); }
@@ -33,7 +34,7 @@ export function assertAgentPolicyCollections(policy: Record<string, any>): void 
   }
   if (bridge.codexInactivePlugins !== undefined) {
     const controls=array(bridge.codexInactivePlugins,4096), ids=new Set<string>();
-    requireBound(controls.length===0 || object(bridge.codexPluginSkillReview) && bridge.codexPluginSkillReview.version==="codex-cli 0.160.0" && typeof bridge.codexPluginSkillReview.catalogSha256==="string" && /^[a-f0-9]{64}$/.test(bridge.codexPluginSkillReview.catalogSha256));
+    requireBound(controls.length===0 || object(bridge.codexPluginSkillReview) && supportsCodexNativeCapability(bridge.codexPluginSkillReview.version,"installed-plugin-review") && typeof bridge.codexPluginSkillReview.catalogSha256==="string" && /^[a-f0-9]{64}$/.test(bridge.codexPluginSkillReview.catalogSha256));
     for (const control of controls) {
       requireBound(object(control) && Object.keys(control).every(key=>["pluginId","namespace","pluginParent","sourceType","sourceSha256"].includes(key)));
       text(control.pluginId,1024); text(control.namespace,64); text(control.pluginParent);
@@ -64,7 +65,7 @@ export function assertAgentPolicyCollections(policy: Record<string, any>): void 
     }
     if (value.codexInstallationInputs!==undefined) {
       const proof=record(value.codexInstallationInputs,4), inputs=array(proof.plugins,4096), ids=new Set<string>();
-      requireBound(agent==="codex" && value.agent==="codex" && value.method==="reviewed" && proof.version==="codex-cli 0.160.0" && typeof proof.catalogSha256==="string" && /^[a-f0-9]{64}$/.test(proof.catalogSha256)
+      requireBound(agent==="codex" && value.agent==="codex" && value.method==="reviewed" && supportsCodexNativeCapability(proof.version,"installed-plugin-review") && typeof proof.catalogSha256==="string" && /^[a-f0-9]{64}$/.test(proof.catalogSha256)
         && inputs.length>0 && object(bridge.codexPluginSkillReview) && bridge.codexPluginSkillReview.version===proof.version && bridge.codexPluginSkillReview.catalogSha256===proof.catalogSha256);
       for (const input of inputs) {
         requireBound(object(input) && Object.keys(input).every(key=>["pluginId","namespace","pluginParent","sourceRoot","sourceSha256"].includes(key)));

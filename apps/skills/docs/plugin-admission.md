@@ -404,8 +404,8 @@ witness intersecting the write still refuses instead of adopting a new inode.
 
 ## Codex bundled cleanup controls
 
-Qualified native skill review supports a narrow subset of Codex 0.159.2 and
-0.160.0's bundled cleanup hooks. The identities `browser`, `chrome`, `chrome-dev`,
+Qualified native skill review supports a narrow subset of Codex 0.159.2,
+0.160.0 and 0.160.1's bundled cleanup hooks. The identities `browser`, `chrome`, `chrome-dev`,
 `chrome-internal` and `computer-use` in `openai-bundled` may call
 `node_repl.turn_ended`; `unified-computer-use` may call `cua_repl.turn_ended`.
 Only `Interrupt`, `SubagentStop` and `Stop` are accepted, with one group and one
@@ -421,4 +421,6 @@ apply and subsequent discovery checks. This review preserves native cleanup;
 it neither enables plugins nor grants hook trust, browser authority or signing.
 The upstream contracts are
 [0.159.2 bundled hooks](https://github.com/openai/codex/blob/ff6aec96948b70d94983af2641a6b67c94faeff5/codex-rs/plugin/src/bundled_hooks.rs)
-and [0.160.0 bundled hooks](https://github.com/openai/codex/blob/a956835d020762cb2b570053af06f643a11c0ecc/codex-rs/plugin/src/bundled_hooks.rs).
+and [0.160.0 bundled hooks](https://github.com/openai/codex/blob/a956835d020762cb2b570053af06f643a11c0ecc/codex-rs/plugin/src/bundled_hooks.rs);
+0.160.1 carries the identical file
+([0.160.1 bundled hooks](https://github.com/openai/codex/blob/d27764b82f7118f674371e6d6e76271d9d606edb/codex-rs/plugin/src/bundled_hooks.rs)).
