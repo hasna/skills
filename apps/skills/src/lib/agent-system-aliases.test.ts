@@ -183,15 +183,26 @@ test.skipIf(process.platform !== "darwin")("hook planning and CLI match reviewed
     const { home, skill, latest } = vendorFixture(true);
     const dataDir = join(home, "data"), document = join(skill, "SKILL.md"), configPath = join(home, ".codex", "config.toml");
     const reviewedCacheAlias = selectorAlias ? temporaryAlias(latest) : latest;
-    writeFileSync(configPath, `# preserved header\n[skills]\nconfig = [{ path = ${JSON.stringify(document)}, enabled = ${enabled} }]\nkeep_this = "preserved"\n[skills.bundled]\nenabled = false\n`);
+    const original = `# preserved header\n[skills]\nconfig = [{ path = ${JSON.stringify(document)}, enabled = ${enabled} }]\nkeep_this = "preserved"\n[skills.bundled]\nenabled = false\n`;
+    writeFileSync(configPath, original);
     const options = { home, dataDir, agents: ["codex" as const], projectDir: home };
     const plan = planAgentIntegration({ ...options, reviewedCacheAlias });
     expect(plan.nativeSkills.filter(entry => entry.vendor).map(entry => entry.path)).toEqual([skill]);
-    const planned = plan.changes.find(change => change.path === configPath)!.after!;
-    expect(planned).toContain("# preserved header");
-    const parsed = Bun.TOML.parse(planned) as { skills: { keep_this: string; config: unknown[] } };
-    expect(parsed.skills.keep_this).toBe("preserved");
-    expect(parsed.skills.config).toContainEqual({ path: document, enabled: false });
+    const configChange = plan.changes.find(change => change.path === configPath);
+    if (enabled) {
+      // The enabled document must be disabled through a planned rewrite.
+      const planned = configChange!.after!;
+      expect(planned).toContain("# preserved header");
+      const parsed = Bun.TOML.parse(planned) as { skills: { keep_this: string; config: unknown[] } };
+      expect(parsed.skills.keep_this).toBe("preserved");
+      expect(parsed.skills.config).toContainEqual({ path: document, enabled: false });
+    } else {
+      // Already disabled: the config is semantically current, so planning keeps
+      // the native bytes and only witnesses them (semantic no-op since 0.10.45).
+      // The reviewed alias still resolves before the disabled-vendor early return.
+      expect(configChange).toBeUndefined();
+      expect(plan.observedSettings).toEqual({ path: configPath, before: original });
+    }
     expect(() => planAgentIntegration({ ...options, reviewedCacheAlias: `${reviewedCacheAlias}-other` })).toThrow(/Refusing symlink path|Reviewed cache alias/);
     const child = Bun.spawnSync([process.execPath, "--no-env-file", new URL("../cli/index.tsx", import.meta.url).pathname,
       "hook", "install", "--agent", "codex", "--reviewed-cache-alias", reviewedCacheAlias, "--json"], {
