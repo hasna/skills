@@ -190,6 +190,18 @@ test("the managed bridge verifies a reviewed v4 witness across built-in theme dr
   expect(() => assertManagedAgentBridge("claude", f)).not.toThrow();
 });
 
+test("a normal reinstall retains a reviewed v4 witness after built-in theme drift", () => {
+  const f = reviewedClaude("claude-settings-v4");
+  const stored = f.witness();
+  writeFileSync(f.config, JSON.stringify({ ...f.settings(), theme: "light-ansi" }));
+  applyAgentIntegration(planAgentIntegration({ home: f.home, dataDir: f.dataDir, projectDir: f.projectDir, agents: ["claude"] }));
+  expect(f.witness()).toEqual(stored);
+  expect(f.settings().theme).toBe("light-ansi");
+  expect(() => assertManagedAgentBridge("claude", f)).not.toThrow();
+  writeFileSync(f.config, JSON.stringify({ ...f.settings(), theme: "custom:dracula" }));
+  expect(() => planAgentIntegration({ home: f.home, dataDir: f.dataDir, projectDir: f.projectDir, agents: ["claude"] })).toThrow();
+});
+
 test("a reviewed v3 witness keeps its exact meaning: a built-in theme still refuses", () => {
   const f = reviewedClaude("claude-settings-v3");
   const reviewed = f.settings(), stored = f.witness();
