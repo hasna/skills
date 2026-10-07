@@ -2606,10 +2606,26 @@ Review the plan before adding `--apply`. See
 `claude-marketplace-entry-v1` witnesses one plugin entry of a Claude
 `marketplace.json` instead of the whole catalog, so Claude's own marketplace
 refreshes do not invalidate a review of a plugin declared only by its entry.
-It binds the marketplace name, `metadata.pluginRoot` and the entry's identity,
-source and every component or command-bearing field; display metadata such as
-`description` and `version` is omitted. Unknown keys, a missing, duplicated or
-renamed entry, and unparsable JSON refuse. Capture with `skills hook witness
---kind claude-marketplace-entry-v1 --path <.claude-plugin/marketplace.json>
---marketplace <name> --plugin <name>`. See
+It binds the marketplace name, `metadata.pluginRoot`,
+`allowCrossMarketplaceDependenciesOn` (its value, or its absence, for every
+entry) and the entry's identity, source and every component or command-bearing
+field; display metadata such as `description` and `version` is omitted. Its
+canonical JSON sorts object keys and is hashed under the domain prefix
+`hasna.skills.claude-marketplace-entry.v1\0`; this deliberately differs from
+`claude-plugin-manifest-v1`, which keeps key order. Unknown keys, a missing,
+duplicated or renamed entry, and unparsable JSON refuse. Capture with `skills
+hook witness --kind claude-marketplace-entry-v1 --path
+<.claude-plugin/marketplace.json> --marketplace <name> --plugin <name>`.
+
+An unknown top-level, `metadata` or entry key refuses with the mode, the bound
+marketplace name and the exact key path, never the value, for example
+`claude-marketplace-entry-v1: unknown top-level key "x" in
+claude-plugins-official` or `unknown key "plugins[swift-lsp].x"`. The only way
+forward after such a refusal is a fresh human review of the changed catalog and
+a guarded exact re-pin: write the reviewed witnesses to a discovery inputs file,
+preview `skills hook install --agent claude --discovery-inputs <file>`, then
+run the same command with `--apply`. While the key is present this mode refuses
+capture as well, so the re-pinned review must bind the catalog another way, such
+as an exact `bytes` witness, until a reviewed version of this mode covers the
+key. There is no bypass, ignore list or relaxed mode. See
 [marketplace plugin entry witness](docs/plugin-admission.md#marketplace-plugin-entry-witness).

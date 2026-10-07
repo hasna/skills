@@ -43,11 +43,12 @@ const base = digest(text());
 
 test("the digest is the domain-separated canonical projection of the bound marketplace fields and entry", () => {
   // Hand-written expected canonical text: sorted keys, no whitespace, omitted
-  // metadata (description, version, author, category) and pluginRoot null.
-  const canonical = '{"marketplace":{"name":"claude-plugins-official","pluginRoot":null},"plugin":{"lspServers":{"sourcekit-lsp":{"command":"sourcekit-lsp","extensionToLanguage":{".swift":"swift"}}},"name":"swift-lsp","source":"./plugins/swift-lsp","strict":false}}';
+  // metadata (description, version, author, category), and pluginRoot and
+  // allowCrossMarketplaceDependenciesOn bound as null when absent.
+  const canonical = '{"marketplace":{"allowCrossMarketplaceDependenciesOn":null,"name":"claude-plugins-official","pluginRoot":null},"plugin":{"lspServers":{"sourcekit-lsp":{"command":"sourcekit-lsp","extensionToLanguage":{".swift":"swift"}}},"name":"swift-lsp","source":"./plugins/swift-lsp","strict":false}}';
   expect(base).toBe(createHash("sha256").update("hasna.skills.claude-marketplace-entry.v1\0").update(canonical).digest("hex"));
   expect(base).not.toBe(createHash("sha256").update(canonical).digest("hex"));
-  expect(base).toBe("10021f42a1a3d5d53b0b9da96ba0317b047e44187a77a7822a1c1a323871e04f");
+  expect(base).toBe("2f0254eb4e00dd8200debb47139f25890488a82e782021ec3a21544af9673ae5");
 });
 
 test("control 1: other entries, catalog metadata and formatting leave the digest unchanged", () => {
@@ -62,7 +63,7 @@ test("control 1: other entries, catalog metadata and formatting leave the digest
     value => { value.renames["old-name"] = "context7"; value.renames.gone = null; },
     value => { value.description = "New catalog description"; value.version = "2"; value.$schema = "https://example.invalid/schema.json"; },
     value => { value.owner = { name: "Anthropic PBC", url: "https://example.invalid" }; },
-    value => { value.forceRemoveDeletedPlugins = true; value.allowCrossMarketplaceDependenciesOn = ["other-market"]; },
+    value => { value.forceRemoveDeletedPlugins = true; },
     value => { value.metadata = { description: "Alternate description", version: "3" }; },
     (_value, entry) => { const lsp = entry.lspServers; delete entry.lspServers; entry.zzz = undefined; entry.lspServers = lsp; },
   ];
@@ -110,16 +111,52 @@ test("control 3: adding injection or resolution fields to the entry drifts", () 
   ]) expect(digest(changed)).not.toBe(base);
 });
 
-test("control 4: an unknown key in the entry, its source, experimental or the resolution context refuses", () => {
+test("control 4: an unknown key in the entry, its source, experimental or the resolution context refuses with the mode, marketplace and exact key path", () => {
   for (const [mutate, reason] of [
-    [(_value: Entry, entry: Entry) => { entry.futureInjector = { entrypoint: "inject.js" }; }, 'refuses unreviewed plugin entry field: "futureInjector"'],
-    [(_value: Entry, entry: Entry) => { entry.icon = "./logo.png"; }, 'refuses unreviewed plugin entry field: "icon"'],
-    [(_value: Entry, entry: Entry) => { entry.experimental = { agentsV2: "./agents" }; }, 'refuses unreviewed experimental component: "agentsV2"'],
-    [(_value: Entry, entry: Entry) => { entry.source = { source: "github", repo: "anthropics/swift-lsp", script: "run" }; }, 'refuses unreviewed plugin source field: "script"'],
-    [(_value: Entry, entry: Entry) => { entry.source = { source: "ftp", url: "ftp://example.invalid" }; }, "has an unreviewed plugin source type"],
-    [(value: Entry) => { value.pluginSearchPaths = ["./more"]; }, 'refuses unreviewed marketplace field: "pluginSearchPaths"'],
-    [(value: Entry) => { value.metadata = { skillRoot: "./skills" }; }, 'refuses unreviewed marketplace metadata field: "skillRoot"'],
-  ] as Array<[(value: Entry, entry: Entry) => void, string]>) expect(() => digest(text(mutate))).toThrow(reason);
+    [(value: Entry) => { value.pluginSearchPaths = ["./more"]; }, 'claude-marketplace-entry-v1: unknown top-level key "pluginSearchPaths" in claude-plugins-official'],
+    [(value: Entry) => { value.metadata = { skillRoot: "./skills" }; }, 'claude-marketplace-entry-v1: unknown key "metadata.skillRoot" in claude-plugins-official'],
+    [(value: Entry) => { value.metadata = { pluginRoot: "./plugins", "plugin.root": "./x" }; }, 'claude-marketplace-entry-v1: unknown key "metadata[\\"plugin.root\\"]" in claude-plugins-official'],
+    [(_value: Entry, entry: Entry) => { entry.futureInjector = { entrypoint: "inject.js" }; }, 'claude-marketplace-entry-v1: unknown key "plugins[swift-lsp].futureInjector" in claude-plugins-official'],
+    [(_value: Entry, entry: Entry) => { entry.icon = "./logo.png"; }, 'claude-marketplace-entry-v1: unknown key "plugins[swift-lsp].icon" in claude-plugins-official'],
+    [(_value: Entry, entry: Entry) => { entry.experimental = { agentsV2: "./agents" }; }, 'claude-marketplace-entry-v1: unknown key "plugins[swift-lsp].experimental.agentsV2" in claude-plugins-official'],
+    [(_value: Entry, entry: Entry) => { entry.source = { source: "github", repo: "anthropics/swift-lsp", script: "run" }; }, 'claude-marketplace-entry-v1: unknown key "plugins[swift-lsp].source.script" in claude-plugins-official'],
+    [(_value: Entry, entry: Entry) => { entry.author = { name: "a", command: "run" }; }, 'claude-marketplace-entry-v1: unknown key "plugins[swift-lsp].author.command" in claude-plugins-official'],
+    [(_value: Entry, entry: Entry) => { entry.repository = { url: "https://example.invalid", hook: "run" }; }, 'claude-marketplace-entry-v1: unknown key "plugins[swift-lsp].repository.hook" in claude-plugins-official'],
+  ] as Array<[(value: Entry, entry: Entry) => void, string]>) {
+    let message = "";
+    try { digest(text(mutate)); } catch (error) { message = (error as Error).message; }
+    expect(message).toBe(reason);
+  }
+  // An unknown source type is a value, not a key: it refuses without echoing it.
+  expect(() => digest(text((_value, entry) => { entry.source = { source: "ftp", url: "ftp://example.invalid" }; }))).toThrow("has an unreviewed plugin source type");
+  let message = "";
+  try { digest(text((_value, entry) => { entry.source = { source: "ftp-secret-value", url: "ftp://example.invalid" }; })); } catch (error) { message = (error as Error).message; }
+  expect(message).not.toContain("ftp-secret-value");
+});
+
+test("unknown-key refusals quote hostile key names, bound them and never echo values", () => {
+  const hostile = 'x"\n\u001b[31m\u202e\u009b' + "k".repeat(80);
+  const refusals = [
+    (value: Entry) => { value[hostile] = "secret-top-level-value"; },
+    (value: Entry) => { value.metadata = { [hostile]: "secret-metadata-value" }; },
+    (_value: Entry, entry: Entry) => { entry[hostile] = "secret-entry-value"; },
+  ].map(mutate => { try { digest(text(mutate)); } catch (error) { return (error as Error).message; } return ""; });
+  // The key is bounded to 64 characters (10 before the run of "k"), JSON-quoted,
+  // and U+202E and U+009B, which JSON.stringify leaves raw, are escaped too.
+  const key = 'x\\"\\n\\u001b[31m\\u202e\\u009b' + "k".repeat(54) + "...";
+  expect(refusals[0]).toBe(`claude-marketplace-entry-v1: unknown top-level key "${key}" in claude-plugins-official`);
+  // Inside a path the bracketed key is JSON-quoted once more, so the escapes
+  // JSON.stringify made double; the non-ASCII escapes are applied once, last.
+  const nested = 'x\\\\\\"\\\\n\\\\u001b[31m\\u202e\\u009b' + "k".repeat(54) + "...";
+  // Every message is still valid JSON text for the quoted key or path.
+  expect(JSON.parse(`"${key}"`)).toBe(hostile.slice(0, 64) + "...");
+  expect(JSON.parse(`"metadata[\\"${nested}\\"]"`)).toBe(`metadata[${JSON.stringify(hostile.slice(0, 64) + "...")}]`);
+  expect(refusals[1]).toBe(`claude-marketplace-entry-v1: unknown key "metadata[\\"${nested}\\"]" in claude-plugins-official`);
+  expect(refusals[2]).toBe(`claude-marketplace-entry-v1: unknown key "plugins[swift-lsp][\\"${nested}\\"]" in claude-plugins-official`);
+  for (const message of refusals) {
+    expect(message).toMatch(/^[\x20-\x7e]+$/);
+    expect(message).not.toContain("secret");
+  }
 });
 
 test("control 5: entry description, version and other display metadata leave the digest unchanged", () => {
@@ -136,7 +173,7 @@ test("control 5: entry description, version and other display metadata leave the
   for (const mutate of [
     (_value: Entry, entry: Entry) => { entry.version = 1; },
     (_value: Entry, entry: Entry) => { entry.description = { text: "x" }; },
-    (_value: Entry, entry: Entry) => { entry.author = { name: "a", command: "run" }; },
+    (_value: Entry, entry: Entry) => { entry.author = { name: "a", email: 7 }; },
     (_value: Entry, entry: Entry) => { entry.tags = "lsp"; },
     (_value: Entry, entry: Entry) => { entry.metadata = ["not", "an", "object"]; },
     (_value: Entry, entry: Entry) => { entry.strict = "false"; },
@@ -167,15 +204,30 @@ test("control 7: metadata.pluginRoot is bound, including its presence", () => {
   expect(() => digest(text(value => { value.metadata = { pluginRoot: 3 }; }))).toThrow("has an invalid marketplace metadata.pluginRoot");
 });
 
-test("cross-marketplace dependency permission is bound only for an entry that declares dependencies", () => {
-  const withDependencies = (allowed?: string[]) => digest(text((value, entry) => {
-    entry.dependencies = ["helper@other-market"];
+test("allowCrossMarketplaceDependenciesOn is bound for every entry, with or without dependencies", () => {
+  // The root allowlist also governs dependencies the plugin declares in its own
+  // plugin.json, so it binds even when the selected entry declares none.
+  const allow = (allowed: string[] | undefined, dependencies?: string[]) => digest(text((value, entry) => {
+    if (dependencies) entry.dependencies = dependencies;
     if (allowed) value.allowCrossMarketplaceDependenciesOn = allowed;
   }));
-  expect(withDependencies()).not.toBe(withDependencies(["other-market"]));
-  expect(withDependencies(["other-market"])).not.toBe(withDependencies(["other-market", "third"]));
-  expect(digest(text(value => { value.allowCrossMarketplaceDependenciesOn = ["anything"]; }))).toBe(base);
-  expect(() => digest(text(value => { value.allowCrossMarketplaceDependenciesOn = "other-market"; }))).toThrow("invalid allowCrossMarketplaceDependenciesOn");
+  for (const dependencies of [undefined, ["helper@other-market"]]) {
+    const absent = allow(undefined, dependencies), added = allow(["other-market"], dependencies);
+    const variants = [absent, added, allow(["other-market", "third"], dependencies), allow(["third", "other-market"], dependencies), allow([], dependencies)];
+    // Adding, changing, reordering or emptying the allowlist drifts; each value is distinct from absence.
+    expect(new Set(variants).size).toBe(variants.length);
+    // Removing it again returns to the digest of a catalog that never had it.
+    expect(digest(text((value, entry) => { if (dependencies) entry.dependencies = dependencies; value.allowCrossMarketplaceDependenciesOn = ["other-market"]; delete value.allowCrossMarketplaceDependenciesOn; }))).toBe(absent);
+    expect(added).toBe(allow(["other-market"], dependencies));
+  }
+  expect(allow(undefined)).toBe(base);
+  expect(allow(["other-market"])).not.toBe(base);
+  // Unrelated churn next to a present allowlist still leaves the digest unchanged.
+  const pinned = allow(["other-market"]);
+  expect(digest(text(value => { value.allowCrossMarketplaceDependenciesOn = ["other-market"]; value.plugins[0].description = "Refreshed"; value.plugins.push({ name: "new-plugin", source: "./plugins/new-plugin" }); value.forceRemoveDeletedPlugins = false; }))).toBe(pinned);
+  for (const invalid of ["other-market", null, [3], { market: true }]) {
+    expect(() => digest(text(value => { value.allowCrossMarketplaceDependenciesOn = invalid; }))).toThrow("invalid allowCrossMarketplaceDependenciesOn");
+  }
 });
 
 test("unparsable or ambiguous marketplace JSON refuses", () => {

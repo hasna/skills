@@ -6,7 +6,10 @@
  * the marketplace fields that affect resolution and the entry's identity and
  * injection fields. Non-injecting entry metadata is validated and omitted.
  * Every unknown entry, top-level or `metadata` key refuses: a new field may be a
- * new injection or resolution input, so it is never ignored. A missing or
+ * new injection or resolution input, so it is never ignored. The refusal names
+ * this mode, the bound marketplace and the exact key path, never a value, and
+ * the only way forward is a fresh human review and an exact re-pin through
+ * `skills hook install --discovery-inputs`; there is no ignore list. A missing or
  * duplicate entry, a redirected plugin id, a parse failure or a binding mismatch
  * refuses. Version and install-path changes stay covered by the separate
  * installed_plugins.json witness; this mode never replaces that witness.
@@ -34,15 +37,31 @@ export interface ClaudeMarketplaceEntryWitness { path: string; hashMode: typeof 
 function need(value: unknown, reason: string): asserts value {
   if (!value) throw new Error(`Claude marketplace entry witness ${reason}`);
 }
-// Field names come from the catalog: quote and bound them in refusal text.
-const label = (key: string) => JSON.stringify(key.length > 64 ? `${key.slice(0, 64)}...` : key);
+// Key names come from the catalog: refusal text bounds each one to 64
+// characters, JSON-quotes it and escapes everything outside printable ASCII, so
+// a hostile key cannot carry control or bidirectional characters into a
+// terminal or log. Values are never echoed.
+const bounded = (key: string) => key.length > 64 ? `${key.slice(0, 64)}...` : key;
+const quote = (text: string) => JSON.stringify(text).replace(/[^\x20-\x7e]/g, character => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+// A plain key extends the path with ".key"; any other key becomes ["key"], so
+// a dot or bracket inside a key name cannot read as a deeper path.
+const child = (path: string, key: string) => path + (/^[A-Za-z0-9_$-]{1,64}$/.test(key) ? `.${key}` : `[${JSON.stringify(bounded(key))}]`);
+function unknownKey(selector: ClaudeMarketplaceEntrySelector, path: string | null, key: string): never {
+  // `selector.marketplace` and `selector.plugin` already match NAME.
+  throw new Error(path === null
+    ? `${CLAUDE_MARKETPLACE_ENTRY_HASH_MODE}: unknown top-level key ${quote(bounded(key))} in ${selector.marketplace}`
+    : `${CLAUDE_MARKETPLACE_ENTRY_HASH_MODE}: unknown key ${quote(child(path, key))} in ${selector.marketplace}`);
+}
+function knownKeys(object: NativeJsonObject, allowed: { has(key: string): boolean }, selector: ClaudeMarketplaceEntrySelector, path: string | null): void {
+  for (const [key] of object.entries) if (!allowed.has(key)) unknownKey(selector, path, key);
+}
 // The shared reader and parser name the settings witness; keep only the reason.
 const reason = (error: unknown) => String((error as Error)?.message ?? error).replace(/^Claude settings witness /, "");
 
 // Top-level marketplace.json keys documented on 2026-10-07. Only `name`,
-// `metadata.pluginRoot`, `renames` (for the selected name) and, for an entry with
-// dependencies, `allowCrossMarketplaceDependenciesOn` affect how the selected
-// entry resolves; the rest are validated and omitted.
+// `metadata.pluginRoot`, `renames` (for the selected name) and
+// `allowCrossMarketplaceDependenciesOn` affect how the selected entry resolves;
+// the rest are validated and omitted.
 const MARKETPLACE_KEYS = new Set(["$schema", "name", "owner", "plugins", "description", "version", "metadata", "forceRemoveDeletedPlugins", "allowCrossMarketplaceDependenciesOn", "renames"]);
 const MARKETPLACE_METADATA_KEYS = new Set(["description", "version", "pluginRoot"]);
 // Entry keys bound in the digest: identity and source, load controls, every
@@ -75,7 +94,7 @@ const field = (object: NativeJsonObject, key: string): NativeJsonValue | undefin
 const isString = (value: NativeJsonValue | undefined): value is Extract<NativeJsonValue, { kind: "string" }> => value?.kind === "string";
 const isBoolean = (value: NativeJsonValue | undefined) => value?.kind === "literal" && (value.value === "true" || value.value === "false");
 const stringArray = (value: NativeJsonValue | undefined) => value?.kind === "array" && value.items.every(isString);
-const stringObject = (value: NativeJsonValue | undefined, keys: readonly string[]) => value?.kind === "object" && value.entries.every(([key, item]) => keys.includes(key) && isString(item));
+const stringObject = (value: NativeJsonValue | undefined) => value?.kind === "object" && value.entries.every(([, item]) => isString(item));
 
 /** Selector and path checks shared by capture, discovery binding and the stored policy bounds. */
 export function claudeMarketplaceEntrySourceValid(source: { path?: unknown; marketplace?: unknown; plugin?: unknown }): boolean {
@@ -92,11 +111,13 @@ function canonical(value: NativeJsonValue): string {
   if (value.kind === "array") return "[" + value.items.map(canonical).join(",") + "]";
   // Sorted keys: no Claude consumer gives JSON object key order a meaning here
   // (duplicate keys already refuse). Array order and number spelling stay bound.
+  // This deliberately differs from claude-plugin-manifest-v1, which keeps key
+  // order; the domain prefix keeps the two digests apart.
   return "{" + [...value.entries].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, item]) => JSON.stringify(key) + ":" + canonical(item)).join(",") + "}";
 }
 
 function validateMarketplace(root: NativeJsonObject, selector: ClaudeMarketplaceEntrySelector): void {
-  for (const [key] of root.entries) need(MARKETPLACE_KEYS.has(key), `refuses unreviewed marketplace field: ${label(key)}`);
+  knownKeys(root, MARKETPLACE_KEYS, selector, null);
   const name = field(root, "name");
   need(isString(name) && name.value === selector.marketplace, "marketplace name does not match the reviewed binding");
   for (const key of ["$schema", "description", "version"]) { const value = field(root, key); need(value === undefined || isString(value), `has an invalid marketplace ${key}`); }
@@ -105,10 +126,8 @@ function validateMarketplace(root: NativeJsonObject, selector: ClaudeMarketplace
   const metadata = field(root, "metadata");
   if (metadata !== undefined) {
     need(metadata.kind === "object", "has an invalid marketplace metadata object");
-    for (const [key, value] of metadata.entries) {
-      need(MARKETPLACE_METADATA_KEYS.has(key), `refuses unreviewed marketplace metadata field: ${label(key)}`);
-      need(isString(value), `has an invalid marketplace metadata.${key}`);
-    }
+    knownKeys(metadata, MARKETPLACE_METADATA_KEYS, selector, "metadata");
+    for (const [key, value] of metadata.entries) need(isString(value), `has an invalid marketplace metadata.${key}`);
   }
   const remove = field(root, "forceRemoveDeletedPlugins");
   need(remove === undefined || isBoolean(remove), "has an invalid forceRemoveDeletedPlugins value");
@@ -124,26 +143,27 @@ function validateMarketplace(root: NativeJsonObject, selector: ClaudeMarketplace
   }
 }
 
-function validateSource(source: NativeJsonValue | undefined): void {
+function validateSource(source: NativeJsonValue | undefined, selector: ClaudeMarketplaceEntrySelector, path: string): void {
   if (isString(source)) { need(source.value.length > 0, "has an empty plugin source"); return; }
   need(source?.kind === "object", "has an invalid plugin source");
   const type = field(source, "source");
   need(isString(type) && Object.hasOwn(SOURCE_KEYS, type.value), "has an unreviewed plugin source type");
-  for (const [key] of source.entries) need(SOURCE_KEYS[type.value]!.includes(key), `refuses unreviewed plugin source field: ${label(key)}`);
+  knownKeys(source, new Set(SOURCE_KEYS[type.value]), selector, path);
 }
 
 function projectEntry(entry: NativeJsonObject, selector: ClaudeMarketplaceEntrySelector): NativeJsonObject {
-  for (const [key] of entry.entries) need(ENTRY_BOUND_KEYS.has(key) || ENTRY_OMITTED_KEYS.has(key), `refuses unreviewed plugin entry field: ${label(key)}`);
+  const path = `plugins[${selector.plugin}]`;
+  knownKeys(entry, { has: key => ENTRY_BOUND_KEYS.has(key) || ENTRY_OMITTED_KEYS.has(key) }, selector, path);
   const name = field(entry, "name");
   need(isString(name) && name.value === selector.plugin, "selected entry name does not match");
-  validateSource(field(entry, "source"));
+  validateSource(field(entry, "source"), selector, `${path}.source`);
   for (const key of ["strict", "defaultEnabled"]) { const value = field(entry, key); need(value === undefined || isBoolean(value), `has an invalid entry ${key}`); }
   const headersHelper = field(entry, "headersHelper");
   need(headersHelper === undefined || isString(headersHelper), "has an invalid entry headersHelper");
   const experimental = field(entry, "experimental");
   if (experimental !== undefined) {
     need(experimental.kind === "object", "has an invalid entry experimental object");
-    for (const [key] of experimental.entries) need(EXPERIMENTAL_KEYS.has(key), `refuses unreviewed experimental component: ${label(key)}`);
+    knownKeys(experimental, EXPERIMENTAL_KEYS, selector, `${path}.experimental`);
   }
   // Omitted metadata keeps documented types, so a malformed entry cannot hide
   // in a field this witness does not hash.
@@ -151,10 +171,11 @@ function projectEntry(entry: NativeJsonObject, selector: ClaudeMarketplaceEntryS
     const value = field(entry, key);
     need(value === undefined || isString(value), `has an invalid entry ${key}`);
   }
-  const author = field(entry, "author");
-  need(author === undefined || isString(author) || stringObject(author, ["name", "email", "url"]), "has an invalid entry author");
-  const repository = field(entry, "repository");
-  need(repository === undefined || isString(repository) || stringObject(repository, ["type", "url", "directory"]), "has an invalid entry repository");
+  for (const [key, keys] of [["author", new Set(["name", "email", "url"])], ["repository", new Set(["type", "url", "directory"])]] as const) {
+    const value = field(entry, key);
+    if (value?.kind === "object") knownKeys(value, keys, selector, `${path}.${key}`);
+    need(value === undefined || isString(value) || stringObject(value), `has an invalid entry ${key}`);
+  }
   for (const key of ["keywords", "tags"]) { const value = field(entry, key); need(value === undefined || stringArray(value), `has an invalid entry ${key}`); }
   const metadata = field(entry, "metadata");
   need(metadata === undefined || metadata.kind === "object", "has an invalid entry metadata object");
@@ -186,9 +207,11 @@ export function hashClaudeMarketplaceEntry(text: string, selector: ClaudeMarketp
   const marketplace: NativeJsonObject = { kind: "object", entries: [
     ["name", field(root, "name")!],
     ["pluginRoot", pluginRoot ?? nullValue],
-    // Cross-marketplace dependency permission matters only for an entry that
-    // declares dependencies; bind it there, including its absence.
-    ...(field(entry, "dependencies") !== undefined ? [["allowCrossMarketplaceDependenciesOn", field(root, "allowCrossMarketplaceDependenciesOn") ?? nullValue] as [string, NativeJsonValue]] : []),
+    // The root allowlist also governs dependencies declared in the plugin's own
+    // plugin.json, which Claude's auto-update and /reload-plugins act on, so it
+    // is bound for every entry: its value when present, `null` when absent (a
+    // present value must be a string array, so `null` only means absent).
+    ["allowCrossMarketplaceDependenciesOn", field(root, "allowCrossMarketplaceDependenciesOn") ?? nullValue],
   ] };
   const projection: NativeJsonObject = { kind: "object", entries: [["marketplace", marketplace], ["plugin", entry]] };
   return createHash("sha256").update(DOMAIN).update(canonical(projection)).digest("hex");

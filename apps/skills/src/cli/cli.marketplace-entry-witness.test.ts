@@ -34,13 +34,22 @@ test("hook witness captures one reviewed marketplace entry and refuses misplaced
   const result = await run(root, ["hook", "witness", "--kind", "claude-marketplace-entry-v1", "--path", path, "--marketplace", "claude-plugins-official", "--plugin", "swift-lsp", "--json"]);
   expect(result.exitCode).toBe(0);
   expect(JSON.parse(result.stdout)).toEqual({ path, hashMode: "claude-marketplace-entry-v1", marketplace: "claude-plugins-official", plugin: "swift-lsp",
-    sha256: "10021f42a1a3d5d53b0b9da96ba0317b047e44187a77a7822a1c1a323871e04f" });
+    sha256: "2f0254eb4e00dd8200debb47139f25890488a82e782021ec3a21544af9673ae5" });
   const missing = await run(root, ["hook", "witness", "--kind", "claude-marketplace-entry-v1", "--path", path, "--marketplace", "claude-plugins-official", "--json"]);
   expect(missing.exitCode).not.toBe(0);
   expect(missing.stderr).toContain("claude-marketplace-entry-v1 requires --marketplace and --plugin");
   const misplaced = await run(root, ["hook", "witness", "--kind", "claude-settings-v3", "--path", path, "--plugin", "swift-lsp", "--json"]);
   expect(misplaced.exitCode).not.toBe(0);
   expect(misplaced.stderr).toContain("--marketplace and --plugin apply only to claude-marketplace-entry-v1");
+  const unknownPath = join(root, "unknown/.claude-plugin/marketplace.json");
+  mkdirSync(join(root, "unknown/.claude-plugin"), { recursive: true });
+  writeFileSync(unknownPath, JSON.stringify({ name: "claude-plugins-official", pluginSearchPaths: ["./secret-path-value"], plugins: [{ name: "swift-lsp", source: "./plugins/swift-lsp" }] }));
+  const unknown = await run(root, ["hook", "witness", "--kind", "claude-marketplace-entry-v1", "--path", unknownPath, "--marketplace", "claude-plugins-official", "--plugin", "swift-lsp", "--json"]);
+  expect(unknown.exitCode).not.toBe(0);
+  expect(unknown.stdout).toBe("");
+  expect(unknown.stderr).toContain('claude-marketplace-entry-v1: unknown top-level key "pluginSearchPaths" in claude-plugins-official');
+  expect(unknown.stderr).not.toContain("secret-path-value");
   // Capture is read-only: nothing beyond the fixture and the CLI's own scratch dirs appears.
   expect(readdirSync(join(root, "marketplace/.claude-plugin"))).toEqual(["marketplace.json"]);
+  expect(readdirSync(join(root, "unknown/.claude-plugin"))).toEqual(["marketplace.json"]);
 });

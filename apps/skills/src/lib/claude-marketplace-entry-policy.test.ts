@@ -10,7 +10,7 @@ import { parseManagedSkillPolicy } from "./managed-policy.js";
 // The expected digest is pinned (it equals the canonical projection checked in
 // claude-marketplace-entry-witness.test.ts), so this file exercises only the
 // public installation path: a build without the mode refuses the whole review.
-const ENTRY_SHA256 = "10021f42a1a3d5d53b0b9da96ba0317b047e44187a77a7822a1c1a323871e04f";
+const ENTRY_SHA256 = "2f0254eb4e00dd8200debb47139f25890488a82e782021ec3a21544af9673ae5";
 const homes: string[] = [];
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
 const put = (path: string, contents: string) => { mkdirSync(join(path, ".."), { recursive: true }); writeFileSync(path, contents); };
@@ -107,17 +107,22 @@ test("a reviewed scoped entry survives Claude's own marketplace refreshes and st
     // Control 3: a new component on the entry.
     [(_value: Entry, entry: Entry) => { entry.hooks = { UserPromptSubmit: [{ hooks: [{ type: "command", command: "inject" }] }] }; }, "Native discovery input changed"],
     [(_value: Entry, entry: Entry) => { entry.skills = ["./skills"]; }, "Native discovery input changed"],
-    // Control 4: an unreviewed key.
-    [(_value: Entry, entry: Entry) => { entry.futureInjector = true; }, 'refuses unreviewed plugin entry field: "futureInjector"'],
+    // Control 4: an unreviewed key, named with the mode, marketplace and exact path.
+    [(_value: Entry, entry: Entry) => { entry.futureInjector = true; }, 'claude-marketplace-entry-v1: unknown key "plugins[swift-lsp].futureInjector" in claude-plugins-official'],
+    [(value: Entry) => { value.pluginSearchPaths = ["./more"]; }, 'claude-marketplace-entry-v1: unknown top-level key "pluginSearchPaths" in claude-plugins-official'],
+    [(value: Entry) => { value.metadata = { skillRoot: "./skills" }; }, 'claude-marketplace-entry-v1: unknown key "metadata.skillRoot" in claude-plugins-official'],
     // Control 6: missing or duplicated entry.
     [(value: Entry) => { value.plugins.pop(); }, "selected plugin entry is missing"],
     [(value: Entry, entry: Entry) => { value.plugins.push({ ...entry }); }, "selected plugin entry is duplicated or ambiguous"],
     // Control 7: plugin root.
     [(value: Entry) => { value.metadata = { pluginRoot: "./plugins" }; }, "Native discovery input changed"],
+    // The cross-marketplace allowlist binds although swift-lsp declares no dependencies.
+    [(value: Entry) => { value.allowCrossMarketplaceDependenciesOn = ["other-market"]; }, "Native discovery input changed"],
   ] as Array<[(value: Entry, entry: Entry) => void, string]>) {
     put(paths.marketplace, catalog(mutate));
     expect(guard).toThrow("NATIVE_SKILL_DRIFT");
     expect(guard).toThrow(reason);
+    if (reason.startsWith("claude-marketplace-entry-v1: ")) expect(guard).toThrow(`NATIVE_SKILL_DRIFT: ${reason}`);
     put(paths.marketplace, original);
     expect(guard).not.toThrow();
   }

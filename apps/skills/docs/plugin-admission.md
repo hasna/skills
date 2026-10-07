@@ -223,14 +223,23 @@ The digest is SHA-256 over the domain prefix
 `hasna.skills.claude-marketplace-entry.v1\0` and canonical JSON (sorted object
 keys, array order and number spelling kept, no whitespace) of:
 
-- the marketplace `name` and `metadata.pluginRoot` (`null` when absent), and
-  `allowCrossMarketplaceDependenciesOn` (`null` when absent) only when the entry
-  declares `dependencies`;
+- the marketplace `name`, `metadata.pluginRoot` (`null` when absent) and
+  `allowCrossMarketplaceDependenciesOn` (`null` when absent), for every entry
+  whether or not it declares `dependencies`: the root allowlist also governs
+  dependencies declared in the plugin's own `plugin.json`, which Claude's
+  auto-update and `/reload-plugins` act on. A present allowlist must be an
+  array of strings, so `null` only ever means absent;
 - the selected entry projected to its bound keys: `name`, `source`, `strict`,
   `defaultEnabled`, `dependencies`, `relevance`, `headers`, `headersHelper`,
   `settings`, `userConfig`, `types`, `channels`, `skills`, `commands`, `agents`,
   `hooks`, `mcpServers`, `lspServers`, `outputStyles`, `workflows`,
   `experimental`, `themes` and `monitors`, each with its full value.
+
+Key order: this canonical JSON sorts object keys at every level, under the
+domain prefix above. That deliberately differs from `claude-plugin-manifest-v1`,
+which keeps the manifest's own key order and has no domain prefix. Reordering
+keys in the catalog therefore never moves this digest, while array order,
+including the order of `allowCrossMarketplaceDependenciesOn`, stays bound.
 
 The entry's display and catalog metadata is validated and omitted:
 `$schema`, `description`, `version`, `author`, `homepage`, `repository`,
@@ -239,6 +248,7 @@ version or install-path change is still caught by the separate
 `installed_plugins.json` witness, which this mode never replaces. Other entries,
 the catalog `description`, `version`, `owner` and `$schema`,
 `forceRemoveDeletedPlugins` and renames of other plugins do not move the digest.
+Adding, removing or changing `allowCrossMarketplaceDependenciesOn` always does.
 
 The mode fails closed. Capture and verification refuse when:
 
@@ -260,7 +270,30 @@ The mode fails closed. Capture and verification refuse when:
 - an omitted metadata field has the wrong type.
 
 New fields are refused, never ignored, until a reviewed version of this mode
-covers them. The field lists follow the
+covers them. A refusal for an unknown key names the mode, the bound marketplace
+name and the exact key path, and never echoes a value. Key names are bounded to
+64 characters and JSON-quoted, with every character outside printable ASCII
+escaped. A plain key extends the path with `.key`; any other key appears as
+`["key"]`. For example:
+
+```text
+claude-marketplace-entry-v1: unknown top-level key "pluginSearchPaths" in claude-plugins-official
+claude-marketplace-entry-v1: unknown key "metadata.skillRoot" in claude-plugins-official
+claude-marketplace-entry-v1: unknown key "plugins[swift-lsp].futureInjector" in claude-plugins-official
+claude-marketplace-entry-v1: unknown key "plugins[swift-lsp].source.script" in claude-plugins-official
+```
+
+Inside a hook check the same text follows `NATIVE_SKILL_DRIFT:`. The only way
+forward after such a refusal is a fresh human review of the changed catalog
+and a guarded exact re-pin through hook installation: write the reviewed
+witnesses to a discovery inputs file, preview `skills hook install --agent
+claude --discovery-inputs <file>`, then run the same command with `--apply`.
+While the unknown key is present this mode refuses capture too, so that review
+must bind the catalog another way, for example an exact `bytes` witness from
+`captureDiscoveryByteSources`, until a reviewed version of this mode covers the
+key. There is no bypass, ignore list or relaxed mode.
+
+The field lists follow the
 [marketplace reference](https://code.claude.com/docs/en/plugins/marketplace-reference)
 and the [plugin manifest reference](https://code.claude.com/docs/en/plugins/manifest-reference),
 read on 2026-10-07.
