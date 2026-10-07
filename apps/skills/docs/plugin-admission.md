@@ -179,26 +179,49 @@ A reviewed discovery input carries `pluginHooks: "reviewed-no-skill-injection"`.
 That value is the reviewer's statement; Skills does not inspect hook behavior.
 What the software currently enforces is narrower:
 
-- It is point-in-time. It covers the bytes listed when the review was applied.
-- It enforces one coupling only. When the review lists a Claude
-  `.claude-plugin/plugin.json` with a byte hash, it must also list that plugin's
-  `hooks/hooks.json` (when the file exists) and any string `hooks` target in the
-  manifest as exact byte sources. Nothing else is required.
-- Other plugin files, such as hook modules (`register.ts`, `runtime.ts` and
-  their imports), `bin/` files and `package.json`, are bound only if the review
-  lists them. A change to an unlisted file is not detected.
-- It is not anchored to the roots registered in
-  `~/.claude/plugins/installed_plugins.json`. When a review is present, the
-  enabled-plugin walk does not run, so Skills does not check that the listed
-  plugin roots are the registered ones or that every enabled plugin is listed.
+- It is point-in-time. It binds the listed sources as they were when the review
+  was applied. One exception: a manifest listed as a plain byte witness is
+  stored as a `claude-plugin-manifest-v1` projection that ignores the
+  descriptive fields `description`, `version`, `author`, `homepage`,
+  `repository`, `license` and `keywords`. Every other manifest field, including
+  `hooks`, `skills`, `commands` and unknown fields, stays bound.
+- It enforces one coupling only, and only for a Claude
+  `.claude-plugin/plugin.json` listed as a plain byte witness (`hashMode`
+  omitted or `"bytes"`) with a non-null `sha256`. The review must then also list
+  that plugin's `hooks/hooks.json` (when the file exists at review time) and any
+  string `hooks` target in the manifest, each as a plain byte witness with a
+  non-null hash. A non-string `hooks` value and a `hooks` target outside the
+  plugin root are refused. A manifest listed as `claude-plugin-manifest-v1`
+  (the form Skills writes into the stored policy) or as `path-bytes` triggers
+  no hook-file requirement. Nothing else is required.
+- A `hooks/hooks.json` that is absent at review time and appears later is
+  detected only if the review pinned it with `sha256: null`.
+- For plugins not covered by a `claude-plugin-registry` admission witness (see
+  [Discovery transition contract](#discovery-transition-contract)):
+  - other plugin files, such as hook modules (`register.ts`, `runtime.ts` and
+    their imports), `bin/` files and `package.json`, are bound only if the
+    review lists them, and a change to an unlisted file is not detected;
+  - the review is not anchored to the roots registered in
+    `~/.claude/plugins/installed_plugins.json`. When a review is present, the
+    enabled-plugin walk does not run, so Skills does not check that the listed
+    plugin roots are the registered ones or that every enabled plugin is listed.
+- A `claude-plugin-registry` witness covers its admitted, receipt-backed
+  plugins on every check. It re-reads `installed_plugins.json`, requires each
+  managed row's `installPath` to be `cache/<marketplace>/<plugin>/<version>`,
+  checks every file in every retained cache version against the admission
+  receipts without the review listing them, and binds unmanaged rows exactly.
+- Reviewed sources under an entirely absent retired Claude version root are
+  skipped while that whole root stays absent and the reviewed settings and
+  registry select a different, verified version. If the root reappears, its
+  sources are checked again.
 - It is detection-only. Later checks re-hash the stored sources. Drift makes the
   Skills hooks refuse with `NATIVE_SKILL_DRIFT`; it does not stop, unload or
   sandbox plugin code, which the native client keeps running.
 - It is a tripwire, not a security boundary. A process running as the same user
   can rewrite the plugin files and the managed policy that holds the witnesses.
 
-A stronger witness anchored to the registered plugin roots is planned and not
-yet implemented.
+For plugins outside receipt-backed admission, a stronger witness anchored to the
+registered plugin roots is planned and not yet implemented.
 
 ## Marketplace registry timestamps
 

@@ -485,19 +485,25 @@ directories are outside automatic coverage and require their own integration
 review before declaring a station migrated.
 
 The `pluginHooks` attestation is the reviewer's point-in-time statement; Skills
-does not inspect hook behavior. For a listed Claude `.claude-plugin/plugin.json`,
-Skills requires only exact byte witnesses for that plugin's `hooks/hooks.json`
-(when present) and any string `hooks` target in the manifest. Other plugin
-files, such as hook modules and their imports, `bin/` files and `package.json`,
-are bound only if the review lists them. The review is not checked against the
+does not inspect hook behavior. When a Claude `.claude-plugin/plugin.json` is
+listed as a plain byte witness (`hashMode` omitted or `"bytes"`) with a
+non-null `sha256`, Skills also requires plain byte witnesses for that plugin's
+`hooks/hooks.json` (when present) and any string `hooks` target in the
+manifest. A manifest listed as `claude-plugin-manifest-v1` (the form Skills
+writes into the stored policy) or as `path-bytes` triggers no such requirement.
+For plugins outside receipt-backed admission (a `claude-plugin-registry`
+witness, see the
+[discovery transition contract](docs/plugin-admission.md#discovery-transition-contract)),
+other plugin files such as hook modules, `bin/` files and `package.json` are
+bound only if the review lists them, and the review is not checked against the
 roots registered in `~/.claude/plugins/installed_plugins.json`. Later checks
 re-hash the stored sources, and drift makes the Skills hooks refuse with
 `NATIVE_SKILL_DRIFT`; this detects a change but does not stop plugin code from
 running. A process running as the same user can rewrite the plugin files and
 the managed policy, so the witness is a tripwire, not a security boundary. See
-[plugin admission](docs/plugin-admission.md#reviewed-plugin-hook-attestation-scope).
-A stronger witness anchored to the plugin registry is planned and not yet
-implemented.
+[the full scope](docs/plugin-admission.md#reviewed-plugin-hook-attestation-scope).
+A stronger witness for plugins outside receipt-backed admission is planned and
+not yet implemented.
 
 When `hook install` omits `--discovery-inputs`, it reuses an existing reviewed
 binding only after rechecking its sources, directory membership, configuration
