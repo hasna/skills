@@ -67,11 +67,12 @@ const OTHER = process.getuid!() + 1000;
 // A synthetic pinned Bun in its own directory chain; it is checked, never run.
 function pinnedRuntime() {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "skills-hook-trust-bun-")); roots.push(dir);
-  const runtime = join(dir, "bin", "bun");
-  mkdirSync(dirname(runtime), { mode: 0o700 }); writeFileSync(runtime, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+  const runtime = join(dir, "rt", "bin", "bun");
+  mkdirSync(dirname(runtime), { recursive: true, mode: 0o700 }); writeFileSync(runtime, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
   return runtime;
 }
-const refusals = (f: ReturnType<typeof fixture>) => [() => bindSkillsCli("skills", f.reviewed), () => bindSkillsCli(f.command, f.reviewed), () => inspectRecordedSkillsCli(f.command, { path: f.entry, version: "1.2.3", sha256: f.reviewed.sha256, manifestSha256: createHash("sha256").update(readFileSync(join(dirname(dirname(f.entry)), "package.json"))).digest("hex") })];
+const receiptFor = (f: ReturnType<typeof fixture>) => ({ path: f.entry, version: "1.2.3", sha256: f.reviewed.sha256, manifestSha256: createHash("sha256").update(readFileSync(join(dirname(dirname(f.entry)), "package.json"))).digest("hex") });
+const refusals = (f: ReturnType<typeof fixture>) => [() => bindSkillsCli("skills", f.reviewed), () => bindSkillsCli(f.command, f.reviewed), () => inspectRecordedSkillsCli(f.command, receiptFor(f))];
 
 // N3: the directory holding the command is walked, not only its physical target.
 for (const shape of ["symlink", "pinned"] as const) {
@@ -157,5 +158,112 @@ test.skipIf(process.platform !== "darwin")("a skills command spelled through the
     expect(bound.receipt.path).toBe(f.entry);
     expect(() => bound.recheck()).not.toThrow();
     expect(() => inspectRecordedSkillsCli(spelled, bound.receipt).recheck()).not.toThrow();
+  }
+});
+
+// B1 (#73 security review): `..` after a linked component. path.resolve and
+// Bun's realpath drop `..` as text, but the kernel follows the link first, so
+// the walk and the execution would see different files. Layout from the
+// reviewer's proof of concept: trusted/link -> foreign/sub,
+// foreign/skills -> entry, trusted/skills -> entry, foreign owned by another account.
+function dotDotLayout(f: ReturnType<typeof fixture>) {
+  const foreign = join(f.root, "foreign"), trusted = join(f.root, "trusted");
+  mkdirSync(join(foreign, "sub"), { recursive: true, mode: 0o700 }); mkdirSync(trusted, { mode: 0o700 });
+  symlinkSync(f.entry, join(foreign, "skills"));
+  symlinkSync(join(foreign, "sub"), join(trusted, "link"));
+  symlinkSync(f.entry, join(trusted, "skills"));
+  return { foreign, trusted, command: `${trusted}/link/../skills` };
+}
+// The refusal names its code and a fix hint, and no path.
+const NOT_CANONICAL = /^CODEX_HOOK_TRUST_SKILLS_COMMAND_NOT_CANONICAL: [^/]+$/;
+
+test("a skills command spelled with .. after a linked directory is refused before any walk or resolution", () => {
+  const f = fixture("symlink"), l = dotDotLayout(f);
+  // The kernel reaches the entry through the foreign link.
+  expect(realpathSync(join(l.foreign, "skills"))).toBe(f.entry);
+  const restore = pretendOwner(l.foreign, OTHER);
+  try {
+    // Control: the foreign link spelled directly is refused by its walk.
+    expect(() => bindSkillsCli(join(l.foreign, "skills"), f.reviewed)).toThrow("CODEX_HOOK_TRUST_UNSAFE_PARENT");
+    // The reviewer's sequence, admitted at every step before: bind, recheck, recorded inspection, recheck.
+    expect(() => {
+      const bound = bindSkillsCli(l.command, f.reviewed); bound.recheck();
+      inspectRecordedSkillsCli(l.command, bound.receipt).recheck();
+    }).toThrow(NOT_CANONICAL);
+    expect(() => inspectRecordedSkillsCli(l.command, receiptFor(f))).toThrow(NOT_CANONICAL);
+    // The same spelling reached through PATH, as Bun.which returns it.
+    process.env.PATH = `${l.trusted}/link/..:/usr/bin:/bin`;
+    expect(Bun.which("skills", { PATH: process.env.PATH })).toBe(l.command);
+    expect(() => bindSkillsCli("skills", f.reviewed)).toThrow(NOT_CANONICAL);
+  } finally { restore(); }
+  // Control: the normalized spelling of the trusted link still binds and rechecks.
+  process.env.PATH = `${l.trusted}:/usr/bin:/bin`;
+  const bound = bindSkillsCli("skills", f.reviewed);
+  expect(() => bound.recheck()).not.toThrow();
+  expect(() => inspectRecordedSkillsCli(join(l.trusted, "skills"), bound.receipt).recheck()).not.toThrow();
+});
+
+test("relative, repeated-slash, dot and trailing-slash command spellings are refused", () => {
+  const f = fixture("symlink"), cwd = process.cwd();
+  for (const spelled of [`/${f.command}`, f.command.replace(/\/bin\//, "//bin/"), f.command.replace(/\/bin\//, "/./bin/"), `${f.command}/`]) {
+    expect(() => bindSkillsCli(spelled, f.reviewed), spelled).toThrow(NOT_CANONICAL);
+    expect(() => inspectRecordedSkillsCli(spelled, receiptFor(f)), spelled).toThrow(NOT_CANONICAL);
+  }
+  // A relative PATH entry makes Bun.which return a relative command.
+  process.chdir(f.root);
+  try {
+    process.env.PATH = "bin:/usr/bin:/bin";
+    expect(Bun.which("skills", { PATH: process.env.PATH })).toBe("bin/skills");
+    expect(() => bindSkillsCli("skills", f.reviewed)).toThrow(NOT_CANONICAL);
+  } finally { process.chdir(cwd); }
+});
+
+// #73 security NB1: the recheck must bind the physical launcher and its Bun, not only the entry.
+test("a skills command re-pointed after binding to another launcher for the same entry is refused by the recheck", () => {
+  const f = fixture("symlink"), launchers = join(f.root, "launchers"), goodBun = pinnedRuntime(), otherBun = pinnedRuntime();
+  mkdirSync(launchers, { mode: 0o700 });
+  const launcher = (name: string, runtime: string) => {
+    const path = join(launchers, name);
+    writeFileSync(path, renderPinnedLauncher({ runtime, cwd: join(f.root, "runtime"), entry: f.entry }), { mode: 0o755 });
+    return path;
+  };
+  const a = launcher("a", goodBun), b = launcher("b", otherBun), repoint = (to: string) => { rmSync(f.command); symlinkSync(to, f.command); };
+  for (const foreignBun of [true, false]) {
+    repoint(a);
+    const bound = bindSkillsCli(f.command, f.reviewed), recorded = inspectRecordedSkillsCli(f.command, bound.receipt);
+    expect(() => bound.recheck()).not.toThrow(); expect(() => recorded.recheck()).not.toThrow();
+    repoint(b);
+    const restore = foreignBun ? pretendOwner(dirname(otherBun), OTHER) : () => {};
+    try {
+      // A fresh bind through b refuses only when its Bun is unsafe; the recheck always does.
+      if (foreignBun) expect(() => bindSkillsCli(f.command, f.reviewed)).toThrow("CODEX_HOOK_TRUST_UNSAFE_PARENT");
+      expect(() => bound.recheck()).toThrow("CODEX_HOOK_TRUST_SKILLS_COMMAND_CHANGED");
+      expect(() => recorded.recheck()).toThrow("CODEX_HOOK_TRUST_SKILLS_COMMAND_CHANGED");
+    } finally { restore(); }
+  }
+});
+
+// Runtime spellings the #73 security review probed: only the exact physical path of the Bun is admitted.
+function runtimeSpellings(physical: string): Record<string, string> {
+  const base = dirname(dirname(physical));
+  mkdirSync(join(base, "x"), { mode: 0o700 });
+  symlinkSync(base, `${base}-link`);
+  symlinkSync(physical, join(dirname(physical), "bun-link"));
+  const spellings: Record<string, string> = {
+    "x/../bin": `${base}/x/../bin/bun`, "repeated slash": `${base}//bin/bun`, "dot step": `${base}/./bin/bun`, "trailing slash": `${physical}/`,
+    "linked directory": `${base}-link/bin/bun`, "linked leaf": join(dirname(physical), "bun-link"),
+  };
+  if (process.platform === "darwin" && physical.startsWith("/private/var/")) spellings["/var alias"] = physical.replace(/^\/private\/var\//, "/var/");
+  return spellings;
+}
+
+test("a launcher pinned to any spelling of its Bun but the exact physical path is refused", () => {
+  const physical = pinnedRuntime(), spellings = runtimeSpellings(physical);
+  expect(Object.keys(spellings).length).toBeGreaterThanOrEqual(process.platform === "darwin" ? 7 : 6);
+  const control = fixture("pinned", physical);
+  expect(() => bindSkillsCli("skills", control.reviewed)).not.toThrow();
+  for (const [name, spelled] of Object.entries(spellings)) {
+    const f = fixture("pinned", spelled);
+    for (const run of refusals(f)) expect(run, name).toThrow(/^CODEX_HOOK_TRUST_(SKILLS_LAUNCHER_UNVERIFIED|UNSAFE_PARENT)$/);
   }
 });

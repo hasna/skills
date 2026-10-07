@@ -353,6 +353,40 @@ for (const subject of ["file", "directory"] as const) {
   });
 }
 
+// Runtime spellings the #73 security review probed: only the exact physical path of the Bun is admitted.
+test("a launcher pinned to any spelling of its Bun but the exact physical path refuses the projection", () => {
+  const f = fixture("pinned", "pinned-bun/bin/bun"), physical = f.runtime!, base = dirname(dirname(physical));
+  mkdirSync(join(base, "x"), { mode: 0o700 });
+  symlinkSync(base, `${base}-link`);
+  symlinkSync(physical, join(dirname(physical), "bun-link"));
+  const spellings: Record<string, string> = {
+    "x/../bin": `${base}/x/../bin/bun`, "repeated slash": `${base}//bin/bun`, "dot step": `${base}/./bin/bun`, "trailing slash": `${physical}/`,
+    "linked directory": `${base}-link/bin/bun`, "linked leaf": join(dirname(physical), "bun-link"),
+  };
+  if (process.platform === "darwin" && physical.startsWith("/private/var/")) spellings["/var alias"] = physical.replace(/^\/private\/var\//, "/var/");
+  expect(Object.keys(spellings).length).toBeGreaterThanOrEqual(process.platform === "darwin" ? 7 : 6);
+  const pin = (runtime: string) => writeFileSync(f.command, renderPinnedLauncher({ runtime, cwd: join(f.home, "runtime"), entry: f.executable }));
+  for (const [name, spelled] of Object.entries(spellings)) {
+    pin(spelled);
+    expect(() => f.plan(), name).toThrow("EXECUTABLE_UNVERIFIED");
+  }
+  // Control: the exact physical path projects again.
+  pin(physical);
+  expect(f.plan().replacements).toHaveLength(4);
+  expect(readFileSync(f.policy, "utf8")).toBe(f.before.policy);
+});
+
+// Parity with the Codex path (B1): a command spelled with .. after a linked directory is refused.
+test("a command spelled with .. after a linked directory refuses the projection; its normalized spelling does not", () => {
+  const f = fixture(), foreign = join(f.home, "foreign"), trusted = join(f.home, "trusted");
+  mkdirSync(join(foreign, "sub"), { recursive: true, mode: 0o700 }); mkdirSync(trusted, { mode: 0o700 });
+  symlinkSync(f.executable, join(foreign, "skills")); symlinkSync(join(foreign, "sub"), join(trusted, "link")); symlinkSync(f.executable, join(trusted, "skills"));
+  f.target.hooks.SessionStart[0].hooks[0].command = renderAgentHookCommand(`${trusted}/link/../skills`, "claude", "default", "SessionStart");
+  expect(() => f.plan()).toThrow("EXECUTABLE_UNVERIFIED");
+  f.target.hooks.SessionStart[0].hooks[0].command = renderAgentHookCommand(join(trusted, "skills"), "claude", "default", "SessionStart");
+  expect(f.plan().replacements).toHaveLength(4);
+});
+
 test("single quotes in a trusted executable path round trip through the owning renderer", () => {
   const f = fixture(), alias = join(f.home, "skills' alias");
   symlinkSync(f.executable, alias);
