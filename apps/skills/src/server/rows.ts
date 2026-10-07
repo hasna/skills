@@ -129,6 +129,7 @@ export function rowToSkill(row: Record<string, unknown>): ServerSkillRecord {
     revisionNumber: Number(row.revision_number ?? 0),
     ...(row.tombstoned_at ? { tombstonedAt: dateString(row.tombstoned_at) } : {}),
     ...(row.tombstone_purge_after ? { tombstonePurgeAfter: dateString(row.tombstone_purge_after) } : {}),
+    ...(typeof row.authorization_epoch === "string" ? { authorizationEpoch: row.authorization_epoch } : {}),
     lifecycle: row.lifecycle === "archived" ? "archived" : "active",
     ...(row.archived_at ? { archivedAt: dateString(row.archived_at) } : {}),
     ...(row.archive_reason ? { archiveReason: String(row.archive_reason) } : {}),
@@ -141,6 +142,7 @@ export function rowToPublishedSelectionState(row: Record<string, unknown>): Publ
     slug: String(row.slug),
     version: String(row.version),
     current: row.skill_exists ? {
+      ...(typeof row.authorization_epoch === "string" ? { authorizationEpoch: row.authorization_epoch } : {}),
       lifecycle: row.lifecycle === "archived" ? "archived" : "active",
       ...(row.tombstoned_at ? { tombstonedAt: dateString(row.tombstoned_at) } : {}),
     } : null,

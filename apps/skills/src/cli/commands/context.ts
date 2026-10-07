@@ -92,7 +92,7 @@ export function registerContextCommands(parent: Command): void {
     .option("--stdin", "Read native hook JSON or a prompt from stdin", false)
     .option("--selection-profile <id>", "Selection profile (separate from the credential --profile)")
     .option("--cached", "Use only an explicitly selected verified cache, at most 24 hours old", false)
-    .option("--auto-reconcile-safe", "For managed hooks, archive and renew an expired session only when all loaded selections are unchanged", false)
+    .option("--auto-reconcile-safe", "For managed hooks, renew authorized immutable session pins without adopting newer selected versions", false)
     .option("--session <id>", "Keep the same skill versions across this session")
     .option("--restore", "Re-emit loaded session context after compaction or resume", false)
     .option("--max-chars <count>", "Optional maximum injected characters")

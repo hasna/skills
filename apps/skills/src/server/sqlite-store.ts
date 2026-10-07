@@ -761,7 +761,8 @@ export class SqliteSkillsStore implements SkillsProductStore {
         if (!tag.trim()) continue;
         insertTag.run(orgId, input.slug, tag);
       }
-      return rowToSkill(row!);
+      // SQLite RETURNING precedes AFTER triggers; read the epoch in this transaction.
+      return this.getSkillSync(input.principal, input.slug)!;
     })();
   }
 
@@ -796,7 +797,7 @@ export class SqliteSkillsStore implements SkillsProductStore {
       if (patch.lifecycle === "active") { delete next.archivedAt; delete next.archiveReason; delete next.replacementSlug; }
       const row = this.get("UPDATE skills_registry SET lifecycle=?, archived_at=?, archive_reason=?, replacement_slug=?, revision_id=?, revision_number=revision_number+1, updated_at=? WHERE org_id=? AND slug=? AND tombstoned_at IS NULL AND revision_id=? RETURNING *", [next.lifecycle, next.archivedAt ?? null, next.archiveReason ?? null, next.replacementSlug ?? null, revisionIdOfRecord(next), next.updatedAt, principal.orgId, slug, current.revisionId]);
       if (!row) throw new SkillRevisionConflictError(slug, expectedRevisionId, this.getSkillSync(principal, slug)?.revisionId ?? null);
-      return rowToSkill(row);
+      return this.getSkillSync(principal, slug)!;
     }).immediate();
   }
 
@@ -881,7 +882,7 @@ export class SqliteSkillsStore implements SkillsProductStore {
          RETURNING *`,
         [tombstonedAt, purgeAfter, tombstonedAt, principal.orgId, slug],
       );
-      return rowToSkill(row!);
+      return this.getSkillSync(principal, slug)!;
     })();
   }
 
@@ -931,7 +932,7 @@ export class SqliteSkillsStore implements SkillsProductStore {
     const requested = JSON.stringify(selections.map(({ slug, version }) => ({ slug, version })));
     return this.all(
       `SELECT json_extract(q.value, '$.slug') AS slug, json_extract(q.value, '$.version') AS version,
-         r.slug IS NOT NULL AS skill_exists, r.lifecycle, r.tombstoned_at,
+         r.slug IS NOT NULL AS skill_exists, r.lifecycle, r.tombstoned_at, r.authorization_epoch,
          v.bundle_sha256, b.sha256 IS NOT NULL AS bundle_available
        FROM json_each(?) q
        LEFT JOIN skills_registry r ON r.org_id = ? AND r.slug = json_extract(q.value, '$.slug')

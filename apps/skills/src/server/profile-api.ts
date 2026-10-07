@@ -125,6 +125,7 @@ async function validatePublished(
         "Selected bundle is unavailable",
       );
   }
+  return states;
 }
 async function body(
   request: Request,
@@ -198,6 +199,7 @@ export async function handleProfileApi(
       capabilities: [
         "skills.registry",
         "skills.versions",
+        "skills.session-pin-renewal",
         ...(store.selectionStore && store.executionGrantStore ? ["skills.execution-grants"] : []),
         ...(store.selectionStore
           ? ["skills.profiles", "skills.station-state"]
@@ -272,6 +274,7 @@ export async function handleProfileApi(
     const authority = skillsApiRequestUrl(normalizeSkillsApiOrigin(config.publicBaseUrl), "/api/v1/").replace(/\/+$/, "");
     const revision = "x".repeat(128);
     const projected = resolvedProfileSnapshot({ id, workspaceId: principal.orgId, revision, selections }, authority);
+    projected.selections = projected.selections.map(selection => ({ ...selection, authorizationEpoch: "0".repeat(32) }));
     if (profileDocumentBytes(projected) > MAX_RESOLVED_PROFILE_BYTES
         || profileDocumentBytes({ profileId: id, profileRevision: revision, selections }) > Math.min(config.requestBodyLimitBytes, MAX_PROFILE_DOCUMENT_BYTES)) {
       throw new SkillRequestError(413, "PROFILE_TOO_LARGE", "The complete resolved profile and station/session receipts must fit the advertised profile limits");
@@ -311,7 +314,13 @@ export async function handleProfileApi(
     ).replace(/\/+$/, "");
     const result: ResolvedSkillProfile = resolvedProfileSnapshot(profile, authority);
     if (result.selections.length > MAX_PROFILE_SELECTIONS || profileDocumentBytes(result) > MAX_RESOLVED_PROFILE_BYTES) throw new SkillRequestError(413, "PROFILE_TOO_LARGE", "Resolved profile exceeds the advertised profile limits");
-    await validatePublished(store, principal, profile.selections);
+    const states = await validatePublished(store, principal, profile.selections);
+    result.selections = result.selections.map((selection, index) => {
+      const epoch = states[index]!.current?.authorizationEpoch;
+      if (!epoch || !/^[a-f0-9]{32}$/.test(epoch)) throw new SkillRequestError(503, "PIN_AUTHORIZATION_UNAVAILABLE", "The selection lifecycle fence is unavailable");
+      return { ...selection, authorizationEpoch: epoch };
+    });
+    if (profileDocumentBytes(result) > MAX_RESOLVED_PROFILE_BYTES) throw new SkillRequestError(413, "PROFILE_TOO_LARGE", "Resolved profile exceeds the advertised profile limits");
     return json(result, 200, profile.revision);
   }
   if (resource === "stations" && parts.length === 3 && child === "state") {

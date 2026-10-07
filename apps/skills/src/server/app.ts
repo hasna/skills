@@ -356,13 +356,14 @@ async function handleApiV1(
       return json(skillVersionPayload(version, current));
     }
     if (request.method === "GET" && id && subresource === "versions" && childId && parts[4] === "bundle" && !parts[5]) {
-      const { version, bytes } = await readSkillVersionBundle(store, artifactStorage, principal, id, childId);
+      const { version, bytes, authorizationEpoch } = await readSkillVersionBundle(store, artifactStorage, principal, id, childId);
       const headers: Record<string, string> = {
         "Content-Type": "application/gzip",
         "Content-Length": String(bytes.byteLength),
         "Content-Disposition": `attachment; filename="${version.slug}-${version.version}.tar.gz"`,
         "X-Skill-Bundle-Sha256": version.bundleSha256,
         "X-Skill-Version": version.version,
+        ...(authorizationEpoch ? { "X-Skill-Authorization-Epoch": authorizationEpoch } : {}),
         ETag: `"${version.bundleSha256}"`,
         "Cache-Control": "no-store",
       };

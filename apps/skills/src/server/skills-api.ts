@@ -773,7 +773,7 @@ export async function readSkillVersionBundle(
   principal: ApiPrincipal,
   slug: string,
   version: string,
-): Promise<{ version: ServerSkillVersion; bytes: OwnedBytes }> {
+): Promise<{ version: ServerSkillVersion; bytes: OwnedBytes; authorizationEpoch?: string }> {
   const found = await readSkillVersion(store, principal, slug, version);
   // Deletion withholds content (todos d061fcda), historic versions included: a tombstoned
   // slug answers 410 here exactly as /bundle does, and a purged one 404. The version rows
@@ -793,7 +793,7 @@ export async function readSkillVersionBundle(
       `stored bundle for '${slug}@${version}' hashes to ${actual} but was published as ${found.bundleSha256}`,
     );
   }
-  return { version: found, bytes };
+  return { version: found, bytes, authorizationEpoch: resolved.record.authorizationEpoch };
 }
 
 /** The manifest's version, validated as a path-safe version string (hasna/apps#1630). */

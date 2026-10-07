@@ -1,7 +1,8 @@
+import type { ResolvedSkillSelection } from "../types/skill-selection.js";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { createProfileClient, type ProfileClient } from "./profile-client.js";
-import { MAX_CACHED_PROFILE_AGE_MS, nextSkillSessionGeneration, readSkillSessionSnapshot, readSkillSessionSnapshotIfExists, replaceSkillSession, selectionKey, skillSessionSnapshotBinding, SkillSelectionError, validateResolvedProfile, type SelectionCacheOptions, type SkillSessionReceipt } from "./selection-cache.js";
+import { MAX_CACHED_PROFILE_AGE_MS, verifySelectionBundleResponse, nextSkillSessionGeneration, readSkillSessionSnapshot, readSkillSessionSnapshotIfExists, replaceSkillSession, selectionKey, skillSessionSnapshotBinding, SkillSelectionError, validateResolvedProfile, type SelectionCacheOptions, type SkillSessionReceipt } from "./selection-cache.js";
 
 export interface SessionReconciliationInput {
   sessionId: string;
@@ -46,45 +47,108 @@ export function inspectSkillSession(sessionId: string, options: SelectionCacheOp
   };
 }
 
+/** Fits inside the managed context child's 6.5-second ceiling, including CLI work. */
+export const SESSION_RENEWAL_TIMEOUT_MS = 4_000;
+const SESSION_RENEWAL_CONCURRENCY = 4;
+
 /**
- * Managed hooks may move an expired pin only when every skill already loaded
- * by this session is still selected with exactly the same behavior and bytes.
- * The old receipt is archived and replaced under its exact snapshot lock.
+ * Renew authorization for the complete immutable pin; never manufacture a
+ * profile combining historical loaded versions with current unloaded versions.
+ * Current profile membership/lifecycle authorizes unchanged pins. Historical
+ * versions additionally require the authenticated exact-version bundle read.
  */
 export async function reconcileSkillSessionIfSafe(sessionId: string, profileId: string, options: SessionReconciliationOptions = {}): Promise<boolean> {
-  const snapshot = readSkillSessionSnapshotIfExists(sessionId, options);
-  if (!snapshot) return false;
+  const existing = readSkillSessionSnapshotIfExists(sessionId, options);
+  if (!existing) return false;
+  const snapshot = existing;
   const old = snapshot.receipt;
   if (old.profile.profileId !== profileId) throw new SkillSelectionError("PROFILE_LOCK_MISMATCH", "The session is pinned to a different Skills profile.");
   const now = (options.now ?? Date.now)();
   const age = now - Date.parse(old.verifiedAt);
   if (age >= 0 && age <= MAX_CACHED_PROFILE_AGE_MS) return false;
   if (age < 0) throw new SkillSelectionError("INVALID_RECEIPT", "The session receipt has a future timestamp; inspect it before changing its pin.");
-  const client = options.client ?? await createProfileClient();
-  const target = structuredClone(await client.resolveProfile(profileId));
-  validateResolvedProfile(target, client.authority);
-  if (target.profileId !== profileId || target.authority !== old.profile.authority || target.workspaceId !== old.profile.workspaceId) {
-    throw new SkillSelectionError("PROFILE_IDENTITY_MISMATCH", "The authenticated Skills profile does not match this session's profile, authority and workspace.");
-  }
-  const oldByKey = new Map(old.profile.selections.map(selection => [selectionKey(selection), selection]));
-  const targetBySlug = new Map(target.selections.map(selection => [selection.slug, selection]));
-  for (const key of old.loaded) {
-    const previous = oldByKey.get(key)!;
-    const current = targetBySlug.get(previous.slug);
-    if (!current || !isDeepStrictEqual({ ...previous, profileRevision: target.profileRevision }, current)) {
-      throw new SkillSelectionError("SESSION_RECONCILIATION_REQUIRED", "A loaded Skills selection was removed or changed; review skills sessions reconcile before changing this session's pin.");
+  const deadline = performance.now() + SESSION_RENEWAL_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timeoutError = () => new SkillSelectionError("SKILLS_API_UNAVAILABLE", "Skills session authorization could not finish within the managed hook renewal window; the existing pin is unchanged.");
+  const assertActive = () => { if (controller.signal.aborted || performance.now() >= deadline) throw timeoutError(); };
+  let rejectTimeout!: (error: Error) => void;
+  const expired = new Promise<never>((_, reject) => { rejectTimeout = reject; });
+  const timer = setTimeout(() => { controller.abort(); rejectTimeout(timeoutError()); }, SESSION_RENEWAL_TIMEOUT_MS);
+  async function renew(): Promise<boolean> {
+    const client = options.client ?? await createProfileClient(controller.signal);
+    assertActive();
+    const target = structuredClone(await client.resolveProfile(profileId));
+    assertActive();
+    validateResolvedProfile(target, client.authority);
+    if (target.profileId !== profileId || target.authority !== old.profile.authority || target.workspaceId !== old.profile.workspaceId) {
+      throw new SkillSelectionError("PROFILE_IDENTITY_MISMATCH", "The authenticated Skills profile does not match this session's profile, authority and workspace.");
     }
+    const supportsEpochs = await client.supportsPinRenewal?.() ?? false;
+    assertActive();
+    if (supportsEpochs && target.selections.some(selection => !selection.authorizationEpoch)) {
+      throw new SkillSelectionError("SKILLS_API_UNAVAILABLE", "The Skills authority did not provide its advertised lifecycle fences.");
+    }
+    const legacy = old.profile.selections.some(selection => !selection.authorizationEpoch);
+    const targetBySlug = new Map(target.selections.map(selection => [selection.slug, selection]));
+    const historical: ResolvedSkillSelection[] = [];
+    // Check every selectable old entry, not only loaded ones: cached context may
+    // select an as-yet-unloaded entry after this authorization is renewed.
+    for (const previous of old.profile.selections) {
+      const current = targetBySlug.get(previous.slug);
+      if (!current) throw new SkillSelectionError("SESSION_RECONCILIATION_REQUIRED", "A pinned Skills selection was removed; review skills sessions reconcile before changing this session's pin.");
+      // A known epoch is never replaced from current state, even when bytes match.
+      if (previous.authorizationEpoch && (!supportsEpochs || previous.authorizationEpoch !== current.authorizationEpoch)) {
+        throw new SkillSelectionError("SESSION_RECONCILIATION_REQUIRED", "A pinned skill's lifecycle authorization changed; review skills sessions reconcile before changing this session's pin.");
+      }
+      const changedVersion = selectionKey(previous) !== selectionKey(current);
+      if (changedVersion && (!supportsEpochs || legacy)) {
+        throw new SkillSelectionError("SESSION_RECONCILIATION_REQUIRED", "This legacy session has no verified lifecycle continuity for its older version; review skills sessions reconcile once to migrate its pin.");
+      }
+      const expected = { ...previous, version: current.version, bundleDigest: current.bundleDigest, profileRevision: target.profileRevision,
+        // Only exact-current legacy bytes gain genuine current authorization now.
+        ...(!previous.authorizationEpoch && current.authorizationEpoch ? { authorizationEpoch: current.authorizationEpoch } : {}),
+      };
+      if (!isDeepStrictEqual(expected, current)) {
+        throw new SkillSelectionError("SESSION_RECONCILIATION_REQUIRED", "A pinned skill's selection policy changed; review skills sessions reconcile before changing this session's pin.");
+      }
+      if (changedVersion) historical.push(previous);
+    }
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(SESSION_RENEWAL_CONCURRENCY, historical.length) }, async () => {
+      while (next < historical.length) {
+        assertActive();
+        const selection = historical[next++]!;
+        const response = await client.getBundle(selection.slug, selection.version);
+        assertActive();
+        await verifySelectionBundleResponse(selection, response, controller.signal, deadline);
+        assertActive();
+      }
+    }));
+    // Detect a removal, metadata change or authority drift during historical
+    // reads before extending validity. Never retry against an unreviewed target.
+    const confirmed = await client.resolveProfile(profileId);
+    assertActive();
+    validateResolvedProfile(confirmed, client.authority);
+    if (!isDeepStrictEqual(target, confirmed)) throw new SkillSelectionError("SESSION_TARGET_CHANGED", "The authenticated Skills profile changed during session authorization; the existing pin is unchanged.");
+    const replacement: SkillSessionReceipt = {
+      ...old, generation: nextSkillSessionGeneration(snapshot.generation),
+      profile: legacy || !supportsEpochs ? target : old.profile,
+      // Age starts at the first authorization read, not at completion.
+      verifiedAt: new Date(now).toISOString(),
+    };
+    replaceSkillSession(skillSessionSnapshotBinding(snapshot), replacement, {
+      schemaVersion: 1, kind: "managed-hook-pin-authorization-renewal", sessionId,
+      profileRevision: old.profile.profileRevision,
+      authorizedByProfileRevision: target.profileRevision, authorizedByProfileSha256: digest(target),
+      historicalVersionCount: historical.length,
+      authorizationMode: legacy || !supportsEpochs ? "exact-current-authorization" : "continuous-immutable-pin",
+      ...(legacy && supportsEpochs ? { epochsFirstVerifiedAt: new Date(now).toISOString() } : {}),
+      retainedLoadedCount: old.loaded.length, retiredLoadedCount: 0,
+    }, options, assertActive);
+    return true;
   }
-  const replacement: SkillSessionReceipt = {
-    ...old, generation: nextSkillSessionGeneration(snapshot.generation), verifiedAt: new Date((options.now ?? Date.now)()).toISOString(),
-    profile: target, loaded: [...old.loaded],
-  };
-  replaceSkillSession(skillSessionSnapshotBinding(snapshot), replacement, {
-    schemaVersion: 1, kind: "managed-hook-safe-reconciliation", sessionId,
-    fromProfileRevision: old.profile.profileRevision, toProfileRevision: target.profileRevision,
-    retainedLoadedCount: old.loaded.length, retiredLoadedCount: 0,
-  }, options);
-  return true;
+  try { return await Promise.race([renew(), expired]); }
+  finally { clearTimeout(timer); controller.abort(); }
 }
 
 /** Explicit review for changed loaded selections or intentional profile migration. */
