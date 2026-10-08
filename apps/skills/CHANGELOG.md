@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.56
+
+- Require explicit Claude discovery reviews to cover each registered active cache manifest, skill root and hook source before installation. This prevents an incomplete old-cache-only review from breaking prompt hooks after cache retirement. Distinct project registrations, exact byte witnesses and reviewed absent manifests are supported; hook behavior still requires the existing no-skill-injection review. Existing policies and session pins remain unchanged by the package update.
+
 ## 0.10.55
 
 - Identify exact pinned skills in CLI and SDK session inspection, including slug, version, bundle digest and loaded state. Reconciliation preview now names retained, retired and unloaded selections, explains removed or changed bundles, and lists exact replacements and added target selections. The metadata delta is bound to the reviewed plan digest; inspection and preview leave receipts unchanged, and existing counts, CAS, expiry and lock checks remain intact.
