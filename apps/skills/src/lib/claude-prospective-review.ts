@@ -381,8 +381,8 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
       if (!object(row) || !["user", "project", "local"].includes(row.scope) || typeof row.installPath !== "string") refuse(`current selected plugin ${pluginId} registration row is malformed`);
       abs(row.installPath, "registered plugin install path");
       if (row.version !== undefined && (typeof row.version !== "string" || !row.version)) refuse("current selected plugin registration version is malformed");
-      if (row.scope === "project") abs(row.projectPath, "registered plugin project path");
-      else if (row.projectPath !== undefined) refuse("non-project plugin registration has a project path");
+      if (row.scope === "project" || row.scope === "local") abs(row.projectPath, "registered plugin project path");
+      else if (row.projectPath !== undefined) refuse("user plugin registration has a project path");
     }
     const isTargetScopeRow = (row: any) => row?.scope === request.scope.kind && (request.scope.kind === "user" ? row.projectPath === undefined : row.projectPath === request.scope.projectPath);
     const targetIndexes = currentRows.map((row: any, index: number) => isTargetScopeRow(row) ? index : -1).filter((index: number) => index >= 0);

@@ -49,7 +49,7 @@ function fixture(scope: "user" | "project" = "user", existingMarketplace = false
   for (const plugin of pluginNames) {
     const id = `${plugin}@fixture-market`, path = join(home, `.claude/plugins/cache/fixture-market/${plugin}/0.9.0`);
     initialRegistrations[id] = scope === "user"
-      ? [{ scope: "local", installPath: path, version: "0.8.0" }, { scope: "user", installPath: path, version: "0.9.0", installedAt: "2026-10-01T00:00:00.000Z", lastUpdated: "2026-10-03T00:00:00.000Z" }, { scope: "project", projectPath: anotherProject, installPath: path, version: "0.9.0", installedAt: "2026-10-01T00:00:00.000Z" }]
+      ? [{ scope: "local", projectPath, installPath: path, version: "0.8.0" }, { scope: "user", installPath: path, version: "0.9.0", installedAt: "2026-10-01T00:00:00.000Z", lastUpdated: "2026-10-03T00:00:00.000Z" }, { scope: "project", projectPath: anotherProject, installPath: path, version: "0.9.0", installedAt: "2026-10-01T00:00:00.000Z" }]
       : [{ scope: "project", projectPath: anotherProject, installPath: path, version: "0.8.0" }, { scope: "user", installPath: path, version: "0.9.0", installedAt: "2026-10-01T00:00:00.000Z", lastUpdated: "2026-10-03T00:00:00.000Z" }];
   }
   initialRegistrations["other@market"] = [{ scope: "local", installPath: join(home, ".claude/local/other"), version: "4.0.0" }];
@@ -320,6 +320,32 @@ test("project scope binds its exact project path while preserving the same candi
   expect(rows.find(row => row.scope === "user")?.installedAt).toBe("2026-10-01T00:00:00.000Z");
 });
 
+test("user and project updates preserve a same-plugin local registration with its projectPath", () => {
+  for (const scope of ["user", "project"] as const) {
+    const f = fixture(scope);
+    const localRow = {
+      scope: "local",
+      projectPath: f.request.scope.projectPath,
+      installPath: join(f.home, ".claude/local/demo"),
+      version: "0.8.0",
+      retainedNativeField: "preserve-local-row",
+    };
+    const before = JSON.parse(readFileSync(f.installed, "utf8"));
+    const id = "demo@fixture-market";
+    before.plugins[id].splice(0, 1, localRow);
+    const after = structuredClone(f.request.delta.installedPluginsAfter as Record<string, any>);
+    after.plugins[id].splice(0, 1, localRow);
+    (f.request.delta as Record<string, unknown>).installedPluginsAfter = after;
+    refreshRegistryBinding(f, before);
+
+    expect(() => review(f.request)).not.toThrow();
+    const reviewedRows = (f.request.delta.installedPluginsAfter as Record<string, any>).plugins[id];
+    expect(reviewedRows[0]).toEqual(localRow);
+    expect(reviewedRows[0].scope).toBe("local");
+    expect(reviewedRows[0].projectPath).toBe(f.request.scope.projectPath);
+  }
+});
+
 test("an update preserves installedAt and allows only the prior or generated lastUpdated value", () => {
   const f = fixture("user");
   const rows = (f.request.delta.installedPluginsAfter as Record<string, any>).plugins["demo@fixture-market"] as Array<Record<string, unknown>>;
@@ -368,7 +394,7 @@ test("present malformed v2 registration entries refuse while absent entries and 
 
   const local = fixture();
   const localRegistry = JSON.parse(readFileSync(local.installed, "utf8"));
-  const localRow = { scope: "local", installPath: join(local.home, ".claude/local/demo"), version: "1.0.0", retainedNativeField: true };
+  const localRow = { scope: "local", projectPath: local.request.scope.projectPath, installPath: join(local.home, ".claude/local/demo"), version: "1.0.0", retainedNativeField: true };
   localRegistry.plugins["demo@fixture-market"].push(localRow);
   refreshRegistryBinding(local, localRegistry);
   const localRows = (local.request.delta.installedPluginsAfter as Record<string, any>).plugins["demo@fixture-market"] as Array<Record<string, unknown>>;
