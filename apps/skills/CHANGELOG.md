@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.55
+
+- Identify exact pinned skills in CLI and SDK session inspection, including slug, version, bundle digest and loaded state. Reconciliation preview now names retained, retired and unloaded selections, explains removed or changed bundles, and lists exact replacements and added target selections. The metadata delta is bound to the reviewed plan digest; inspection and preview leave receipts unchanged, and existing counts, CAS, expiry and lock checks remain intact.
+
 ## 0.10.54
 
 - Preserve reviewed `claude-plugin-manifest-v1` witnesses when Claude removes an entire retired plugin cache version and unchanged settings and supported registrations still prove a distinct active replacement. Discovery verification and hook rebinding retain the original reviewed digest. Active manifest changes, missing active hooks or cache, inconsistent registrations, unknown native skills and changed returning manifests still refuse.
