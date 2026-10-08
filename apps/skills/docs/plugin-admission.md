@@ -177,10 +177,30 @@ after a refused update, whose existing local drift checks continue to apply.
 
 Before adding or changing a marketplace, an installer may call
 `skills hook review-claude-candidate --request <absolute-json-path> --json`.
-The `skills.claude-plugin-prospective-review/v1` request binds the frozen
-candidate/catalog/manifest, current Skills and Claude preimages, explicit
-user/project scope, caller assessment and complete expected semantic documents.
-The validator derives the owned change and refuses any unrelated graph change.
+The `skills.claude-plugin-prospective-review/v1` request binds one frozen
+marketplace/catalog closure and a non-empty `plugins` array. Each selected
+plugin supplies its exact `plugin`, `manifestPath`, `manifestSha256` and bounded
+JSON `optionsPatch`; an optional `releaseManifest` carries the separate
+release.json path and raw-byte SHA-256. The request also binds current Skills
+and Claude preimages, explicit user/project scope, caller assessment and one
+complete expected semantic document set for the whole selected plugin batch.
+The validator checks every selected manifest and source against the same
+closure before returning one receipt. It derives the owned changes and refuses
+any unrelated graph change. Harnesses validates each options patch against its
+release manifest before invoking Claude; Skills does not copy its private
+option allowlists or infer that caller-supplied options are release-approved.
+The supported catalog shape uses relative selected-plugin sources inside that
+closure. Nontrivial `metadata.pluginRoot` values and native catalog or selected
+plugin dependency declarations refuse because this validator does not resolve
+or review unselected external plugins.
+The request may declare `functionHooksEnv: "1"`; without that declaration the
+environment document is preserved unchanged. The validator shallow-merges
+each declared options patch into the selected plugin's existing `options`;
+the patch must explicitly bind `enabled: true`, and the validator enforces that
+value after merging. This preserves all other selected options and unrelated
+plugin configuration. It refuses a selected `enabledPlugins` array shape that
+this schema does not model. Existing target registration rows keep their array
+positions, new rows append, and unrelated rows remain byte-semantically bound.
 Its receipt binds the raw request bytes and the complete projected documents;
 semantic digests use UTF-8 JSON with object keys recursively sorted in
 ECMAScript UTF-16 order, array order retained and JavaScript JSON primitive
@@ -202,6 +222,15 @@ the caller's no-skill-injection assessment is not a semantic hook review, and
 structural refusal checks do not prove hook behavior. Recheck all preimages and
 candidate closure immediately before the first native mutation. The validator
 does not claim native install atomicity or crash recovery.
+
+The optional release manifest witness binds the complete supplied release.json
+file bytes, path and SHA-256 in the request/receipt. Harnesses remains
+responsible for verifying that its release options correspond to every
+selected `optionsPatch`; the public Skills validator deliberately does not
+interpret private release schemas.
+Installed consumers can use the public `captureClaudeProspectiveCandidateClosure`
+and `hashClaudePluginManifest` exports to prepare the exact digests without
+copying the package's hashing algorithms.
 
 ## Reviewed plugin-hook attestation scope
 

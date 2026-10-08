@@ -177,7 +177,7 @@ export function registerAgentIntegration(parent: Command): void {
         const requestBytes = readFileSync(options.request);
         const request = JSON.parse(requestBytes.toString("utf8")) as ClaudeProspectiveReviewRequest;
         const receipt = reviewClaudeProspectiveCandidate(request, createHash("sha256").update(requestBytes).digest("hex"));
-        await writeCliOutput(options.json ? JSON.stringify(receipt) : `Claude plugin candidate review accepted for ${receipt.pluginId}; native state was not changed.`);
+        await writeCliOutput(options.json ? JSON.stringify(receipt) : `Claude plugin candidate review accepted for ${receipt.pluginIds.length} selected plugin(s); native state was not changed.`);
       } catch (error) {
         console.error(error instanceof Error && error.message.startsWith("CLAUDE_CANDIDATE_REVIEW_REFUSED:") ? error.message : "CLAUDE_CANDIDATE_REVIEW_REFUSED: request or current preimage validation failed");
         process.exitCode = 1;

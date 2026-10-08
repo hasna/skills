@@ -32,7 +32,7 @@ export interface ClaudeProspectiveReviewRequest {
   scope: { kind: "user" | "project"; projectPath: string };
   native: { home: string; executable: { path: string; target: string; version: string; sha256: string }; configRoot: string; pluginRoot: string };
   skills: { dataDir: string; policySha256: string; discoverySha256: string; discoveryInputs: ReviewedDiscoveryInputs };
-  candidate: { marketplace: string; plugin: string; root: string; catalogPath: string; catalogSha256: string; closureSha256: string; manifestPath: string; manifestSha256: string };
+  candidate: { marketplace: string; root: string; catalogPath: string; catalogSha256: string; closureSha256: string; plugins: Array<{ plugin: string; manifestPath: string; manifestSha256: string; optionsPatch: Record<string, unknown> }>; releaseManifest?: { path: string; sha256: string }; functionHooksEnv?: "1" };
   preimages: {
     settings: { path: string; sha256: string | null };
     userSettings: { path: string; sha256: string | null };
@@ -58,9 +58,9 @@ export interface ClaudeProspectiveReviewReceipt {
   accepted: true;
   applied: false;
   scope: ClaudeProspectiveReviewRequest["scope"];
-  pluginId: string;
+  pluginIds: string[];
   native: { executablePath: string; executableTarget: string; executableVersion: string; executableSha256: string; configRoot: string; pluginRoot: string };
-  candidate: { marketplace: string; plugin: string; closureSha256: string; catalogSha256: string; manifestSha256: string };
+  candidate: { marketplace: string; plugins: Array<{ plugin: string; pluginId: string; manifestSha256: string; optionsPatchSha256: string }>; closureSha256: string; catalogSha256: string; releaseManifest?: { path: string; sha256: string } };
   targetSettingsPath: string;
   skillsDiscoverySha256: string;
   requestFileSha256: string;
@@ -68,13 +68,22 @@ export interface ClaudeProspectiveReviewReceipt {
   operationSha256: string;
   expectedPostStateSha256: string;
   preimages: Array<{ name: string; path: string; sha256: string | null }>;
-  ownedDelta: { settingsEnabledPlugin: string; knownMarketplace: string; installedPlugin: string; unrelatedGraph: "preserved-by-complete-semantic-documents" };
+  ownedDelta: { settingsEnabledPlugins: string[]; selectedPluginOptions: string[]; functionHooksEnv: string | null; knownMarketplace: string; installedPlugins: string[]; unrelatedGraph: "preserved-by-complete-semantic-documents" };
   identityPrecondition: "Harnesses must resolve the installed Claude home/config/plugin roots and executable path/version/hash plus the installed Skills data directory through their package-owned consumers, then compare every value before trusting this receipt; this validator checks supplied paths and current bytes only and does not establish actual consumer identity";
   reviewPrecondition: "The caller's no-skill-injection assessment is bound to the raw request hash; structural checks are not semantic hook review, and Harnesses must retain its existing review record and verify the exact candidate binding";
   limitation: "validation-only; native installer atomicity and crash recovery are not established";
 }
 
 function object(value: unknown): value is Record<string, any> { return !!value && typeof value === "object" && !Array.isArray(value); }
+function hasOwn(value: unknown, key: string): boolean { return object(value) && Object.hasOwn(value, key); }
+function assertJsonValue(value: unknown, name: string, depth = 0): void {
+  if (depth > 32) refuse(`${name} exceeds the JSON nesting bound`);
+  if (value === null || typeof value === "string" || typeof value === "boolean") return;
+  if (typeof value === "number") { if (!Number.isFinite(value)) refuse(`${name} contains a non-finite number`); return; }
+  if (Array.isArray(value)) { for (const item of value) assertJsonValue(item, name, depth + 1); return; }
+  if (object(value)) { for (const item of Object.values(value)) assertJsonValue(item, name, depth + 1); return; }
+  refuse(`${name} contains a non-JSON value`);
+}
 /** Semantic digests use JSON.stringify primitives and array order, with every
  * object recursively key-sorted by ECMAScript UTF-16 code-unit order, encoded
  * as UTF-8. The request file itself is separately bound by raw bytes. */
@@ -234,26 +243,78 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
   if (request.native.pluginRoot !== pluginRoot) refuse("Claude plugin root differs from the supported standard plugins directory; Cowork and custom cache roots require a separately bound schema");
   const pluginRootStat = lstatSync(pluginRoot, { throwIfNoEntry: false });
   if (pluginRootStat && (!pluginRootStat.isDirectory() || pluginRootStat.isSymbolicLink())) refuse("Claude plugin root is not a regular directory");
-  keys(request.candidate, ["marketplace", "plugin", "root", "catalogPath", "catalogSha256", "closureSha256", "manifestPath", "manifestSha256"], "candidate");
+  keys(request.candidate, ["marketplace", "root", "catalogPath", "catalogSha256", "closureSha256", "plugins", ...(hasOwn(request.candidate, "releaseManifest") ? ["releaseManifest"] : []), ...(hasOwn(request.candidate, "functionHooksEnv") ? ["functionHooksEnv"] : [])], "candidate");
   const candidate = request.candidate;
   canonicalDir(candidate.root, "candidate root");
-  for (const [name, value] of [["marketplace", candidate.marketplace], ["plugin", candidate.plugin]] as const) {
-    if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)) refuse(`invalid candidate ${name}`);
-  }
-  for (const [name, path] of [["catalog", candidate.catalogPath], ["manifest", candidate.manifestPath]] as const) {
-    abs(path, `${name} path`);
-    if (path !== candidate.root && !path.startsWith(candidate.root + sep)) refuse(`${name} must be inside the frozen candidate root`);
-  }
-  if (!SHA256.test(candidate.catalogSha256) || !SHA256.test(candidate.closureSha256) || !SHA256.test(candidate.manifestSha256)) refuse("candidate digests must be lowercase SHA-256");
+  if (typeof candidate.marketplace !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(candidate.marketplace)) refuse("invalid candidate marketplace");
+  if (!Array.isArray(candidate.plugins) || candidate.plugins.length < 1 || candidate.plugins.length > 32) refuse("candidate must select between one and 32 plugins from one marketplace");
+  if (candidate.functionHooksEnv !== undefined && candidate.functionHooksEnv !== "1") refuse("function-hook environment mutation only supports the explicit value 1");
+  abs(candidate.catalogPath, "catalog path");
+  if (!candidate.catalogPath.startsWith(candidate.root + sep)) refuse("catalog must be inside the frozen candidate root");
+  if (candidate.catalogPath !== join(candidate.root, ".claude-plugin", "marketplace.json")) refuse("marketplace catalog must be at the frozen root's .claude-plugin/marketplace.json path");
+  if (!SHA256.test(candidate.catalogSha256) || !SHA256.test(candidate.closureSha256)) refuse("candidate digests must be lowercase SHA-256");
   if (captureClaudeProspectiveCandidateClosure(candidate.root) !== candidate.closureSha256) refuse("complete candidate closure changed");
   if (sha(safeFile(candidate.catalogPath, "candidate catalog")) !== candidate.catalogSha256) refuse("candidate catalog changed");
-  if (basename(candidate.catalogPath) !== "marketplace.json") refuse("candidate catalog must be marketplace.json");
-  const entry = captureClaudeMarketplaceEntry(candidate.catalogPath, candidate.marketplace, candidate.plugin);
-  if (entry.sha256.length !== 64) refuse("candidate marketplace entry is invalid");
-  if (basename(candidate.manifestPath) !== "plugin.json" || hashClaudePluginManifest(safeFile(candidate.manifestPath, "candidate plugin manifest").toString("utf8")) !== candidate.manifestSha256) refuse("candidate plugin manifest changed or is invalid");
-  const pluginManifest = JSON.parse(safeFile(candidate.manifestPath, "candidate plugin manifest").toString("utf8"));
-  if (!object(pluginManifest) || pluginManifest.name !== candidate.plugin) refuse("candidate plugin manifest identity differs from the selected entry");
-  assertNoUnprojectedSkillPayload(candidate.root, candidate.catalogPath, candidate.marketplace, candidate.plugin, pluginManifest);
+  let candidateCatalog: unknown;
+  try { candidateCatalog = JSON.parse(safeFile(candidate.catalogPath, "candidate catalog").toString("utf8")); } catch { refuse("candidate catalog is not valid JSON"); }
+  if (!object(candidateCatalog) || candidateCatalog.name !== candidate.marketplace || !Array.isArray(candidateCatalog.plugins)) refuse("candidate catalog identity is invalid");
+  const catalogMetadata = candidateCatalog.metadata;
+  if (catalogMetadata !== undefined && !object(catalogMetadata)) refuse("candidate catalog metadata has an unsupported shape");
+  if (catalogMetadata?.pluginRoot !== undefined && catalogMetadata.pluginRoot !== "." && catalogMetadata.pluginRoot !== "./") refuse("nontrivial marketplace metadata.pluginRoot is unsupported by this local-closure schema");
+  for (const [name, dependencies] of [["catalog", candidateCatalog.dependencies], ["catalog metadata", catalogMetadata?.dependencies]] as const) {
+    if (dependencies !== undefined && (!Array.isArray(dependencies) || dependencies.length !== 0)) refuse(`${name} declares unsupported native dependencies`);
+  }
+  const selectedPlugins: Array<{ plugin: string; pluginId: string; manifestSha256: string; optionsPatch: Record<string, unknown>; pluginRoot: string; manifest: Record<string, any>; selectedEntry: Record<string, any> }> = [];
+  const pluginNames = new Set<string>(), sanitizedCachePaths = new Set<string>();
+  for (const selected of candidate.plugins) {
+    keys(selected, ["plugin", "manifestPath", "manifestSha256", "optionsPatch"], "selected plugin");
+    if (typeof selected.plugin !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(selected.plugin)) refuse("invalid selected plugin name");
+    if (pluginNames.has(selected.plugin)) refuse("candidate repeats a selected plugin");
+    pluginNames.add(selected.plugin);
+    if (!object(selected.optionsPatch)) refuse("selected plugin optionsPatch must be a JSON object");
+    assertJsonValue(selected.optionsPatch, "selected plugin optionsPatch");
+    if (selected.optionsPatch.enabled !== true) refuse("selected plugin optionsPatch must explicitly declare enabled: true");
+    if (Buffer.byteLength(canonicalJson(selected.optionsPatch), "utf8") > 16 * 1024) refuse("selected plugin optionsPatch exceeds its byte bound");
+    abs(selected.manifestPath, "manifest path");
+    if (!selected.manifestPath.startsWith(candidate.root + sep) || basename(dirname(selected.manifestPath)) !== ".claude-plugin"
+      || selected.manifestPath !== join(dirname(dirname(selected.manifestPath)), ".claude-plugin", "plugin.json")) refuse("plugin manifest must be under a plugin root inside the frozen marketplace closure");
+    const pluginRoot = dirname(dirname(selected.manifestPath));
+    const relativePluginRoot = relative(candidate.root, pluginRoot);
+    if (!relativePluginRoot || relativePluginRoot === "." || relativePluginRoot === ".." || relativePluginRoot.startsWith(`..${sep}`) || isAbsolute(relativePluginRoot)) refuse("plugin root must be a child of the frozen marketplace root");
+    canonicalDir(pluginRoot, "candidate plugin root");
+    if (!SHA256.test(selected.manifestSha256)) refuse("selected plugin manifest digest must be lowercase SHA-256");
+    if (hashClaudePluginManifest(safeFile(selected.manifestPath, "candidate plugin manifest").toString("utf8")) !== selected.manifestSha256) refuse("candidate plugin manifest changed or is invalid");
+    const manifest = JSON.parse(safeFile(selected.manifestPath, "candidate plugin manifest").toString("utf8"));
+    if (!object(manifest) || manifest.name !== selected.plugin) refuse("candidate plugin manifest identity differs from the selected entry");
+    const entries = candidateCatalog.plugins.filter((entry: unknown) => object(entry) && entry.name === selected.plugin);
+    if (entries.length !== 1 || !object(entries[0])) refuse("candidate marketplace plugin entry is missing or ambiguous");
+    const selectedEntry = entries[0] as Record<string, any>;
+    if (selectedEntry.skills !== undefined || selectedEntry.commands !== undefined) refuse("candidate marketplace entry declares native skill or command payloads");
+    if (selectedEntry.dependencies !== undefined && (!Array.isArray(selectedEntry.dependencies) || selectedEntry.dependencies.length !== 0)) refuse("selected marketplace plugin declares unsupported native dependencies");
+    if (manifest.skills !== undefined || manifest.commands !== undefined) refuse("candidate plugin declares native skill or command payloads; project those through the Skills plugin admission flow first");
+    const manifestVersion = manifest.version;
+    if (typeof manifestVersion !== "string" || !manifestVersion || typeof selectedEntry.version !== "string" || selectedEntry.version !== manifestVersion) refuse("candidate manifest version differs from the selected marketplace entry version");
+    const sanitizeComponent = (value: string) => value.replace(/[^A-Za-z0-9_-]/g, "-");
+    const sanitizedVersion = manifestVersion === "." || manifestVersion === ".." ? "-" : manifestVersion.replace(/[^A-Za-z0-9._-]/g, "-");
+    if (manifestVersion.length > 256 || /[\x00-\x1f\x7f/\\]/.test(manifestVersion) || !sanitizedVersion) refuse("candidate version is not a supported native cache component");
+    const sanitizedCachePath = [sanitizeComponent(candidate.marketplace), sanitizeComponent(selected.plugin), sanitizedVersion].join("/");
+    if (sanitizedCachePaths.has(sanitizedCachePath)) refuse("selected plugins collide after native cache path sanitization");
+    sanitizedCachePaths.add(sanitizedCachePath);
+    const sourcePath = selectedEntry.source;
+    const sourceRelativePath = relative(candidate.root, pluginRoot).split(sep).join("/");
+    const expectedSourcePath = sourceRelativePath === "." ? "./" : `./${sourceRelativePath}`;
+    if (typeof sourcePath !== "string" || isAbsolute(sourcePath) || sourcePath !== expectedSourcePath
+      || resolve(dirname(dirname(candidate.catalogPath)), sourcePath) !== pluginRoot) refuse("marketplace source does not resolve to the frozen plugin closure; external source mapping is not supported by this schema");
+    const entry = captureClaudeMarketplaceEntry(candidate.catalogPath, candidate.marketplace, selected.plugin);
+    if (entry.sha256.length !== 64) refuse("candidate marketplace entry is invalid");
+    assertNoUnprojectedSkillPayload(candidate.root, candidate.catalogPath, candidate.marketplace, selected.plugin, manifest);
+    selectedPlugins.push({ plugin: selected.plugin, pluginId: `${selected.plugin}@${candidate.marketplace}`, manifestSha256: selected.manifestSha256, optionsPatch: selected.optionsPatch, pluginRoot, manifest, selectedEntry });
+  }
+  if (candidate.releaseManifest !== undefined) {
+    keys(candidate.releaseManifest, ["path", "sha256"], "release manifest witness");
+    abs(candidate.releaseManifest.path, "release manifest path");
+    if (!SHA256.test(candidate.releaseManifest.sha256) || sha(safeFile(candidate.releaseManifest.path, "release manifest")) !== candidate.releaseManifest.sha256) refuse("complete release manifest bytes changed or lack a valid digest");
+  }
 
   if (!request.preimages || !object(request.preimages)) refuse("current Claude preimages are required");
   keys(request.preimages, ["settings", "userSettings", "projectSettings", "projectSettingsLocal", "marketplaces", "installedPlugins"], "current Claude preimages");
@@ -285,81 +346,83 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
   const delta = request.delta;
   keys(delta, ["settingsAfter", "knownMarketplacesAfter", "installedPluginsAfter"], "complete semantic delta");
   for (const [key, value] of Object.entries(delta)) if (!object(value)) refuse(`${key} must be a complete JSON object`);
-  const pluginId = `${candidate.plugin}@${candidate.marketplace}`;
   const settings = jsonFile(expectedPaths.settings, "Claude settings");
   if (settings && settings.enabledPlugins !== undefined && !object(settings.enabledPlugins)) refuse("current settings enabledPlugins is not an object");
+  if (settings?.pluginConfigs !== undefined && !object(settings.pluginConfigs)) refuse("current settings pluginConfigs is not an object");
   const marketplaces = jsonFile(expectedPaths.marketplaces, "Claude known marketplaces");
   const registrations = jsonFile(expectedPaths.installedPlugins, "Claude installed plugins");
   if (registrations && (registrations.version !== 2 || !object(registrations.plugins))) refuse("current installed plugin registry has an unsupported shape");
-  const hasCurrentPluginKey = !!registrations && Object.prototype.hasOwnProperty.call(registrations.plugins, pluginId);
-  const currentRows = hasCurrentPluginKey ? registrations!.plugins[pluginId] : [];
-  if (!Array.isArray(currentRows)) refuse("current selected plugin registrations are malformed");
-  for (const row of currentRows) {
-    if (!object(row) || !["user", "project", "local"].includes(row.scope) || typeof row.installPath !== "string") refuse("current selected plugin registration row is malformed");
-    abs(row.installPath, "registered plugin install path");
-    if (row.version !== undefined && (typeof row.version !== "string" || !row.version)) refuse("current selected plugin registration version is malformed");
-    if (row.scope === "project") { abs(row.projectPath, "registered plugin project path"); }
-    else if (row.projectPath !== undefined) refuse("non-project plugin registration has a project path");
-  }
-  const isTargetScopeRow = (row: any) => row?.scope === request.scope.kind && (request.scope.kind === "user" ? row.projectPath === undefined : row.projectPath === request.scope.projectPath);
-  const targetRows = currentRows.filter(isTargetScopeRow);
-  if (targetRows.length > 1) refuse("current selected-scope plugin registrations are ambiguous");
-  const existingTarget = targetRows[0];
-  if (existingTarget !== undefined && (!object(existingTarget) || Object.keys(existingTarget).some(key => !["scope", "projectPath", "installPath", "version", "installedAt", "lastUpdated"].includes(key)))) refuse("current selected-scope plugin registration has unsupported fields");
-  for (const key of ["installedAt", "lastUpdated"] as const) if (existingTarget?.[key] !== undefined && !validUtcTimestamp(existingTarget[key])) refuse(`current selected-scope plugin ${key} field is invalid`);
-  const catalog = JSON.parse(safeFile(candidate.catalogPath, "candidate catalog").toString("utf8")) as Record<string, any>;
-  const selectedEntry = catalog.plugins.find((entry: unknown) => object(entry) && entry.name === candidate.plugin);
-  const manifestVersion = (JSON.parse(safeFile(candidate.manifestPath, "candidate plugin manifest").toString("utf8")) as Record<string, unknown>).version;
-  if (typeof manifestVersion !== "string" || !manifestVersion) refuse("candidate manifest lacks a concrete version");
-  if (typeof selectedEntry?.version !== "string" || selectedEntry.version !== manifestVersion) refuse("candidate manifest version differs from the selected marketplace entry version");
-  const sanitizeComponent = (value: string) => value.replace(/[^A-Za-z0-9_-]/g, "-");
-  const sanitizedVersion = manifestVersion === "." || manifestVersion === ".." ? "-" : manifestVersion.replace(/[^A-Za-z0-9._-]/g, "-");
-  if (manifestVersion.length > 256 || /[\x00-\x1f\x7f/\\]/.test(manifestVersion) || !sanitizedVersion) refuse("candidate version is not a supported native cache component");
-  const expectedInstallPath = join(pluginRoot, "cache", sanitizeComponent(candidate.marketplace), sanitizeComponent(candidate.plugin), sanitizedVersion);
-  if (expectedInstallPath.length > 4096) refuse("candidate native cache path exceeds its bound");
-  const targetRegistration = {
-    scope: request.scope.kind,
-    ...(request.scope.kind === "project" ? { projectPath: request.scope.projectPath } : {}),
-    installPath: expectedInstallPath,
-    version: manifestVersion,
-    ...(existingTarget ? {
-      ...(existingTarget.installedAt === undefined ? {} : { installedAt: existingTarget.installedAt }),
-      lastUpdated: existingTarget.lastUpdated === undefined ? GENERATED_PLUGIN_UPDATE_TIME : preserveOrGenerateTimestamp(existingTarget.lastUpdated, "installed_plugins.selected-row.lastUpdated"),
-    } : { installedAt: GENERATED_FRESH_PLUGIN_INSTALLED_AT, lastUpdated: GENERATED_PLUGIN_UPDATE_TIME }),
-  };
-  const sourcePath = object(selectedEntry) ? selectedEntry.source : undefined;
-  const candidatePluginRoot = dirname(dirname(candidate.manifestPath));
-  const marketplaceRoot = dirname(dirname(candidate.catalogPath));
-  const sourceRelativePath = relative(candidate.root, candidatePluginRoot).split(sep).join("/");
-  const expectedSourcePath = sourceRelativePath === "." ? "./" : `./${sourceRelativePath}`;
-  if (typeof sourcePath !== "string" || isAbsolute(sourcePath) || sourcePath !== expectedSourcePath
-    || resolve(marketplaceRoot, sourcePath) !== candidatePluginRoot) refuse("marketplace source does not resolve to the frozen plugin closure; external source mapping is not supported by this schema");
-
   const settingsAfter = settings ? structuredClone(settings) : {};
   if (settingsAfter.enabledPlugins === undefined) settingsAfter.enabledPlugins = {};
   if (!object(settingsAfter.enabledPlugins)) refuse("target settings enabledPlugins is not an object");
-  settingsAfter.enabledPlugins[pluginId] = true;
-  if (!isDeepStrictEqual(delta.settingsAfter, settingsAfter)) refuse("complete settings document differs from the exact selected-plugin enablement operation");
+  if (settingsAfter.pluginConfigs === undefined) settingsAfter.pluginConfigs = {};
+  if (!object(settingsAfter.pluginConfigs)) refuse("target settings pluginConfigs is not an object");
+  const targetRegistrations = new Map<string, Record<string, unknown>>();
+  const selectedPluginIds: string[] = [];
+  const selectedOptionPaths: string[] = [];
+  for (const selected of selectedPlugins) {
+    const { pluginId, plugin, manifest, optionsPatch } = selected;
+    if (Array.isArray(settings?.enabledPlugins?.[pluginId])) refuse("selected enabledPlugins value is an array; this schema does not model that native shape");
+    selectedPluginIds.push(pluginId);
+    settingsAfter.enabledPlugins[pluginId] = true;
+    const currentConfig = settings?.pluginConfigs?.[pluginId];
+    if (currentConfig !== undefined && !object(currentConfig)) refuse("selected pluginConfigs entry is malformed");
+    const currentOptions = currentConfig?.options;
+    if (currentOptions !== undefined && !object(currentOptions)) refuse("selected pluginConfigs options are malformed");
+    const nextConfig = currentConfig === undefined ? {} : structuredClone(currentConfig);
+    nextConfig.options = { ...(currentOptions ?? {}), ...optionsPatch, enabled: true };
+    settingsAfter.pluginConfigs[pluginId] = nextConfig;
+    selectedOptionPaths.push(`pluginConfigs.${pluginId}.options`);
+
+    const hasCurrentPluginKey = !!registrations && Object.prototype.hasOwnProperty.call(registrations.plugins, pluginId);
+    const currentRows = hasCurrentPluginKey ? registrations!.plugins[pluginId] : [];
+    if (!Array.isArray(currentRows)) refuse(`current selected plugin ${pluginId} registrations are malformed`);
+    for (const row of currentRows) {
+      if (!object(row) || !["user", "project", "local"].includes(row.scope) || typeof row.installPath !== "string") refuse(`current selected plugin ${pluginId} registration row is malformed`);
+      abs(row.installPath, "registered plugin install path");
+      if (row.version !== undefined && (typeof row.version !== "string" || !row.version)) refuse("current selected plugin registration version is malformed");
+      if (row.scope === "project") abs(row.projectPath, "registered plugin project path");
+      else if (row.projectPath !== undefined) refuse("non-project plugin registration has a project path");
+    }
+    const isTargetScopeRow = (row: any) => row?.scope === request.scope.kind && (request.scope.kind === "user" ? row.projectPath === undefined : row.projectPath === request.scope.projectPath);
+    const targetIndexes = currentRows.map((row: any, index: number) => isTargetScopeRow(row) ? index : -1).filter((index: number) => index >= 0);
+    if (targetIndexes.length > 1) refuse(`current selected-scope registrations for ${pluginId} are ambiguous`);
+    const existingTarget = targetIndexes.length === 1 ? currentRows[targetIndexes[0]] : undefined;
+    if (existingTarget !== undefined && Object.keys(existingTarget).some(key => !["scope", "projectPath", "installPath", "version", "installedAt", "lastUpdated"].includes(key))) refuse("current selected-scope plugin registration has unsupported fields");
+    for (const key of ["installedAt", "lastUpdated"] as const) if (existingTarget?.[key] !== undefined && !validUtcTimestamp(existingTarget[key])) refuse(`current selected-scope plugin ${key} field is invalid`);
+    const manifestVersion = manifest.version as string;
+    const sanitizeComponent = (value: string) => value.replace(/[^A-Za-z0-9_-]/g, "-");
+    const sanitizedVersion = manifestVersion === "." || manifestVersion === ".." ? "-" : manifestVersion.replace(/[^A-Za-z0-9._-]/g, "-");
+    const expectedInstallPath = join(pluginRoot, "cache", sanitizeComponent(candidate.marketplace), sanitizeComponent(plugin), sanitizedVersion);
+    if (expectedInstallPath.length > 4096) refuse("candidate native cache path exceeds its bound");
+    const targetRegistration = {
+      scope: request.scope.kind,
+      ...(request.scope.kind === "project" ? { projectPath: request.scope.projectPath } : {}),
+      installPath: expectedInstallPath,
+      version: manifestVersion,
+      ...(existingTarget ? {
+        ...(existingTarget.installedAt === undefined ? {} : { installedAt: existingTarget.installedAt }),
+        lastUpdated: existingTarget.lastUpdated === undefined ? GENERATED_PLUGIN_UPDATE_TIME : preserveOrGenerateTimestamp(existingTarget.lastUpdated, "installed_plugins.selected-row.lastUpdated"),
+      } : { installedAt: GENERATED_FRESH_PLUGIN_INSTALLED_AT, lastUpdated: GENERATED_PLUGIN_UPDATE_TIME }),
+    };
+    targetRegistrations.set(pluginId, targetRegistration);
+  }
+  if (candidate.functionHooksEnv === "1") {
+    const env = settingsAfter.env === undefined ? {} : settingsAfter.env;
+    if (!object(env)) refuse("target settings env is not an object");
+    settingsAfter.env = { ...env, CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: "1" };
+  }
+  if (!isDeepStrictEqual(delta.settingsAfter, settingsAfter)) refuse("complete settings document differs from the exact selected plugin/options/environment operations");
 
   const marketplaceRowBefore = marketplaces?.[candidate.marketplace];
   if (marketplaceRowBefore !== undefined && !object(marketplaceRowBefore)) refuse("current marketplace row has an unsupported shape");
   if (marketplaceRowBefore !== undefined && Object.keys(marketplaceRowBefore).some(key => !["source", "installLocation", "autoUpdate", "lastUpdated"].includes(key))) refuse("current marketplace row has unsupported fields");
   if (marketplaceRowBefore?.autoUpdate !== undefined && typeof marketplaceRowBefore.autoUpdate !== "boolean") refuse("current marketplace autoUpdate field is invalid");
   if (marketplaceRowBefore?.lastUpdated !== undefined && !validUtcTimestamp(marketplaceRowBefore.lastUpdated)) refuse("current marketplace update timestamp is invalid");
-  // Claude's registered local-directory marketplace materializes at its
-  // source directory. The plugin cache is separate and is bound above.
   const targetMarketplaceLocation = candidate.root;
-  const sameMarketplaceSource = isDeepStrictEqual(marketplaceRowBefore?.source, { source: "directory", path: candidate.root })
-    && marketplaceRowBefore?.installLocation === targetMarketplaceLocation;
-  const afterMarketplace: Record<string, unknown> = {
-    source: { source: "directory", path: candidate.root },
-    installLocation: targetMarketplaceLocation,
-    autoUpdate: false,
-    lastUpdated: sameMarketplaceSource && marketplaceRowBefore?.lastUpdated !== undefined
-      ? preserveOrGenerateTimestamp(marketplaceRowBefore.lastUpdated, "known-marketplaces.lastUpdated")
-      : GENERATED_MARKETPLACE_TIME,
-  };
-  if (afterMarketplace.installLocation !== candidate.root || afterMarketplace.autoUpdate !== false) refuse("owned marketplace row is invalid");
+  const sameMarketplaceSource = isDeepStrictEqual(marketplaceRowBefore?.source, { source: "directory", path: candidate.root }) && marketplaceRowBefore?.installLocation === targetMarketplaceLocation;
+  const afterMarketplace: Record<string, unknown> = { source: { source: "directory", path: candidate.root }, installLocation: targetMarketplaceLocation, autoUpdate: false,
+    lastUpdated: sameMarketplaceSource && marketplaceRowBefore?.lastUpdated !== undefined ? preserveOrGenerateTimestamp(marketplaceRowBefore.lastUpdated, "known-marketplaces.lastUpdated") : GENERATED_MARKETPLACE_TIME };
   const marketplacesAfter = marketplaces ? structuredClone(marketplaces) : {};
   marketplacesAfter[candidate.marketplace] = afterMarketplace;
   if (!isDeepStrictEqual(delta.knownMarketplacesAfter, marketplacesAfter)) refuse("complete marketplace document differs from the exact selected-directory marketplace operation");
@@ -367,20 +430,27 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
   const installedAfter = registrations ? structuredClone(registrations) : { version: 2, plugins: {} };
   if (installedAfter.plugins === undefined) installedAfter.plugins = {};
   if (!object(installedAfter.plugins)) refuse("current installed plugin registry has an unsupported shape");
-  const otherRows = currentRows.filter((row: any) => !isTargetScopeRow(row));
-  installedAfter.plugins[pluginId] = [...otherRows, targetRegistration];
-  if (!isDeepStrictEqual(delta.installedPluginsAfter, installedAfter)) refuse("complete installed plugin document changes an unrelated registration or has a target row not derived from the candidate");
+  for (const [pluginId, targetRegistration] of targetRegistrations) {
+    const rows: any[] = Object.prototype.hasOwnProperty.call(installedAfter.plugins, pluginId) ? installedAfter.plugins[pluginId] : [];
+    if (!Array.isArray(rows)) refuse(`current selected plugin ${pluginId} registrations are malformed`);
+    const isTargetScopeRow = (row: any) => row?.scope === request.scope.kind && (request.scope.kind === "user" ? row.projectPath === undefined : row.projectPath === request.scope.projectPath);
+    const index = rows.findIndex(isTargetScopeRow);
+    const nextRows = [...rows];
+    if (index < 0) nextRows.push(targetRegistration);
+    else nextRows[index] = targetRegistration;
+    installedAfter.plugins[pluginId] = nextRows;
+  }
+  if (!isDeepStrictEqual(delta.installedPluginsAfter, installedAfter)) refuse("complete installed plugin document changes an unrelated registration or has target rows not derived from every selected candidate");
 
-  const expectedAfter = { targetSettingsPath: expectedPaths.settings, settings: settingsAfter, knownMarketplaces: marketplacesAfter, installedPlugins: installedAfter };
   const semanticDocumentsSha256 = sha(canonicalJson({ settings: settingsAfter, knownMarketplaces: marketplacesAfter, installedPlugins: installedAfter }));
   const exactPreimages = Object.keys(expectedPaths).map(name => ({ name, path: expectedPaths[name as keyof typeof expectedPaths], sha256: request.preimages[name as keyof typeof expectedPaths].sha256 }));
   const expectedPostStateSha256 = sha(canonicalJson({ paths: expectedPaths, targetSettingsPath: expectedPaths.settings, semanticDocumentsSha256, currentPreimages: exactPreimages }));
   const operationSha256 = sha(canonicalJson({ scope: request.scope, native: request.native, candidate: request.candidate, paths: expectedPaths,
     preimages: exactPreimages, skills: { dataDir: request.skills.dataDir, policySha256: request.skills.policySha256, discoverySha256: request.skills.discoverySha256 }, review: request.review, semanticDocumentsSha256 }));
   return {
-    schema: CLAUDE_PROSPECTIVE_REVIEW_SCHEMA, accepted: true, applied: false, scope: request.scope, pluginId,
+    schema: CLAUDE_PROSPECTIVE_REVIEW_SCHEMA, accepted: true, applied: false, scope: request.scope, pluginIds: selectedPluginIds,
     native: { executablePath: request.native.executable.path, executableTarget: request.native.executable.target, executableVersion: request.native.executable.version, executableSha256: request.native.executable.sha256, configRoot: request.native.configRoot, pluginRoot: request.native.pluginRoot },
-    candidate: { marketplace: candidate.marketplace, plugin: candidate.plugin, closureSha256: candidate.closureSha256, catalogSha256: candidate.catalogSha256, manifestSha256: candidate.manifestSha256 },
+    candidate: { marketplace: candidate.marketplace, plugins: selectedPlugins.map(item => ({ plugin: item.plugin, pluginId: item.pluginId, manifestSha256: item.manifestSha256, optionsPatchSha256: sha(canonicalJson(item.optionsPatch)) })), closureSha256: candidate.closureSha256, catalogSha256: candidate.catalogSha256, ...(candidate.releaseManifest ? { releaseManifest: candidate.releaseManifest } : {}) },
     targetSettingsPath: expectedPaths.settings,
     skillsDiscoverySha256: request.skills.discoverySha256,
     requestFileSha256,
@@ -396,7 +466,7 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
       { name: "installed-plugins", path: expectedPaths.installedPlugins, sha256: request.preimages.installedPlugins.sha256 },
       { name: "skills-policy", path: join(request.skills.dataDir, "agent-policy.json"), sha256: request.skills.policySha256 },
     ],
-    ownedDelta: { settingsEnabledPlugin: pluginId, knownMarketplace: candidate.marketplace, installedPlugin: pluginId, unrelatedGraph: "preserved-by-complete-semantic-documents" },
+    ownedDelta: { settingsEnabledPlugins: selectedPluginIds, selectedPluginOptions: selectedOptionPaths, functionHooksEnv: candidate.functionHooksEnv ?? null, knownMarketplace: candidate.marketplace, installedPlugins: selectedPluginIds, unrelatedGraph: "preserved-by-complete-semantic-documents" },
     identityPrecondition: "Harnesses must resolve the installed Claude home/config/plugin roots and executable path/version/hash plus the installed Skills data directory through their package-owned consumers, then compare every value before trusting this receipt; this validator checks supplied paths and current bytes only and does not establish actual consumer identity",
     reviewPrecondition: "The caller's no-skill-injection assessment is bound to the raw request hash; structural checks are not semantic hook review, and Harnesses must retain its existing review record and verify the exact candidate binding",
     limitation: "validation-only; native installer atomicity and crash recovery are not established",
