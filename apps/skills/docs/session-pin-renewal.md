@@ -51,6 +51,17 @@ Use `skills sessions show <session-id> --json`, then plan with
 `skills sessions reconcile <session-id> --from-profile <old-id>
 --from-revision <old-revision> --receipt-sha256 <old-sha256>
 --selection-profile <target-id> --profile-revision <target-revision>`.
+`show` returns `selections` with each pinned slug, version, bundle digest and
+loaded flag. Preview returns `plan.selectionDelta`: each old selection is
+`retained`, `retired` or `unloaded`, with the reason `same-bundle`,
+`selection-removed` or `bundle-changed`. Changed bundles name their exact current
+`replacement`; `plan.addedSelections` names target selections absent from the
+old pin. Retention describes exact bundle identity; the full target profile
+digest still binds policy and lifecycle changes. These projections contain no
+payloads, aliases, triggers or credentials. The SDK's `inspectSkillSession` and
+`reconcileSkillSession` expose the same metadata. Show and preview leave the
+receipt unchanged, and the complete projected delta is bound to `planDigest`.
+
 Review the loaded selections retained or retired. Apply only that unchanged
 plan with `--apply --plan-digest <digest> --plan-issued-at <time>
 --plan-expires-at <time>` within its five-minute window. The supported operation
