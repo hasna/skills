@@ -38,14 +38,29 @@ function assertPlanWindow(issuedAt: string, expiresAt: string, now: number): voi
   }
 }
 
+/** Exact bundle identity only; never spread receipt, policy or payload fields. */
+export interface SessionSelectionMetadata { slug: string; version: string; bundleDigest: string }
+export interface SessionSelectionDelta {
+  selection: SessionSelectionMetadata;
+  loaded: boolean;
+  outcome: "retained" | "retired" | "unloaded";
+  reason: "same-bundle" | "selection-removed" | "bundle-changed";
+  replacement?: SessionSelectionMetadata;
+}
+function selectionMetadata(selection: ResolvedSkillSelection): SessionSelectionMetadata {
+  return { slug: selection.slug, version: selection.version, bundleDigest: selection.bundleDigest };
+}
+
 /** Metadata only: inspection never displays skill payloads or resolves credentials. */
 export function inspectSkillSession(sessionId: string, options: SelectionCacheOptions = {}) {
   const snapshot = readSkillSessionSnapshot(sessionId, options), { receipt } = snapshot;
+  const loaded = new Set(receipt.loaded);
   return {
     sessionId, path: snapshot.path, receiptSha256: snapshot.sha256, generation: snapshot.generation, verifiedAt: receipt.verifiedAt,
     authority: receipt.profile.authority, workspaceId: receipt.profile.workspaceId,
     profileId: receipt.profile.profileId, profileRevision: receipt.profile.profileRevision,
     selectionCount: receipt.profile.selections.length, loadedCount: receipt.loaded.length,
+    selections: receipt.profile.selections.map(selection => ({ ...selectionMetadata(selection), loaded: loaded.has(selectionKey(selection)) })),
   };
 }
 
@@ -269,12 +284,26 @@ export async function reconcileSkillSession(input: SessionReconciliationInput, o
   }
   const targetKeys = new Set(target.selections.map(selectionKey));
   const loaded = old.loaded.filter(key => targetKeys.has(key));
+  const previouslyLoaded = new Set(old.loaded);
+  const targetBySlug = new Map(target.selections.map(selection => [selection.slug, selection]));
+  const previousSlugs = new Set(old.profile.selections.map(selection => selection.slug));
+  const selectionDelta: SessionSelectionDelta[] = old.profile.selections.map(previous => {
+    const current = targetBySlug.get(previous.slug);
+    const wasLoaded = previouslyLoaded.has(selectionKey(previous));
+    const reason = !current ? "selection-removed" : selectionKey(previous) === selectionKey(current) ? "same-bundle" : "bundle-changed";
+    return {
+      selection: selectionMetadata(previous), loaded: wasLoaded,
+      outcome: !wasLoaded ? "unloaded" : reason === "same-bundle" ? "retained" : "retired", reason,
+      ...(reason === "bundle-changed" ? { replacement: selectionMetadata(current!) } : {}),
+    };
+  });
   const replacementGeneration = nextSkillSessionGeneration(snapshot.generation);
   const plan = {
     schemaVersion: 1, issuedAt, expiresAt, sessionId: input.sessionId, sessionPath: snapshot.path,
     before: { receiptSha256: snapshot.sha256, generation: snapshot.generation, profileId: old.profile.profileId, profileRevision: old.profile.profileRevision, selectionCount: old.profile.selections.length },
     target: { authority: target.authority, workspaceId: target.workspaceId, profileId: target.profileId, profileRevision: target.profileRevision, profileSha256: digest(target), selectionCount: target.selections.length },
     replacementGeneration, retainedLoadedCount: loaded.length, retiredLoadedCount: old.loaded.length - loaded.length,
+    selectionDelta, addedSelections: target.selections.filter(selection => !previousSlugs.has(selection.slug)).map(selectionMetadata),
     scope: "Only this receipt; existing child sessions, project locks, shared profiles, hooks and running processes are unchanged.",
   };
   const planDigest = digest(plan);

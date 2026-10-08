@@ -35,6 +35,59 @@ function approval(planned: Awaited<ReturnType<typeof reconcileSkillSession>>) {
   return { planDigest: planned.planDigest, planIssuedAt: planned.plan.issuedAt, planExpiresAt: planned.plan.expiresAt };
 }
 
+test("session inspection and preview identify loaded changes separately from unloaded selections without leaking private fields or writing", async () => {
+  const f = fixture();
+  const selected = f.old.profile.selections[0]!;
+  const metadata = (slug: string) => ({ slug, version: selected.version, bundleDigest: selected.bundleDigest });
+  const selections = ["example", "removed", "changed", "unloaded", "unloaded-removed", "unloaded-changed"].map(slug => ({
+    ...selected, slug, aliases: [`${slug}-alias`], triggers: { keywords: ["SYNTHETIC_PRIVATE_FIELD_CANARY"] },
+    privatePayload: "SYNTHETIC_PRIVATE_FIELD_CANARY",
+  }));
+  const old = { ...f.old, profile: { ...f.old.profile, selections }, loaded: selections.slice(0, 3).map(selectionKey) };
+  writeSelectionJson(sessionReceiptPath("root", f), old);
+  const before = readFileSync(sessionReceiptPath("root", f));
+  const target = { ...f.target, selections: selections.filter(row => !row.slug.endsWith("removed")).map(row => ({
+    ...row, profileRevision: "new-revision", ...(row.slug.endsWith("changed") ? { version: "2.0.0", bundleDigest: `sha256:${"b".repeat(64)}` } : {}),
+  })).concat([{ ...selections[0]!, slug: "added", aliases: ["added-alias"], profileRevision: "new-revision" }]) };
+  const inspected = inspectSkillSession("root", f);
+  expect(inspected.selectionCount).toBe(6);
+  expect(inspected.loadedCount).toBe(3);
+  expect(inspected.selections).toEqual(selections.map((row, index) => ({ ...metadata(row.slug), loaded: index < 3 })));
+  const plan = await reconcileSkillSession({ ...f.input, receiptSha256: createHash("sha256").update(before).digest("hex") }, {
+    ...f, client: { ...f.client, resolveProfile: async () => target },
+  });
+  expect(plan.plan.retainedLoadedCount).toBe(1);
+  expect(plan.plan.retiredLoadedCount).toBe(2);
+  expect(plan.plan.selectionDelta).toEqual(selections.map((row, index) => {
+    const current = target.selections.find(value => value.slug === row.slug);
+    const reason = !current ? "selection-removed" : row.slug.endsWith("changed") ? "bundle-changed" : "same-bundle";
+    return { selection: metadata(row.slug), loaded: index < 3,
+      outcome: index >= 3 ? "unloaded" : reason === "same-bundle" ? "retained" : "retired", reason,
+      ...(reason === "bundle-changed" ? { replacement: { slug: row.slug, version: "2.0.0", bundleDigest: `sha256:${"b".repeat(64)}` } } : {}),
+    };
+  }));
+  expect(plan.plan.addedSelections).toEqual([metadata("added")]);
+  expect(JSON.stringify({ inspected, plan })).not.toContain("SYNTHETIC_PRIVATE_FIELD_CANARY");
+  expect(JSON.stringify({ inspected, plan })).not.toContain("privatePayload");
+  expect(JSON.stringify({ inspected, plan })).not.toContain("aliases");
+  expect(readFileSync(sessionReceiptPath("root", f))).toEqual(before);
+  expect(existsSync(join(f.cacheDir, "session-reconciliations"))).toBe(false);
+});
+
+test("a reviewed session delta is bound to the plan digest even when counts stay the same", async () => {
+  const f = fixture();
+  f.target.selections = [];
+  const planned = await reconcileSkillSession(f.input, f);
+  const altered = structuredClone(planned.plan);
+  expect(altered.selectionDelta[0]!.selection.slug).toBe("example");
+  altered.selectionDelta[0]!.selection.slug = "different";
+  const changedDigest = createHash("sha256").update(JSON.stringify(altered)).digest("hex");
+  await expect(reconcileSkillSession({ ...f.input, apply: true, ...approval(planned), planDigest: changedDigest }, f))
+    .rejects.toMatchObject({ code: "SESSION_PLAN_CHANGED" });
+  expect(readFileSync(sessionReceiptPath("root", f))).toEqual(f.before);
+  expect(existsSync(join(f.cacheDir, "session-reconciliations"))).toBe(false);
+});
+
 test("safe hook reconciliation archives an expired pin and preserves loaded skills across unrelated profile changes", async () => {
   const f = fixture();
   const unselected = { ...f.old.profile.selections[0]!, slug: "unloaded" };

@@ -6,7 +6,11 @@ import { buildSkillContext, type SkillContextInput } from "../../lib/skill-conte
 import { loadSelectedSkill, type SelectionResolverOptions } from "../../lib/selection-resolver.js";
 import { inspectSessionWriteLock, recoverSessionWriteLock, SkillSelectionError } from "../../lib/selection-cache.js";
 import { readManagedSkillPolicy } from "../../lib/managed-policy.js";
-import { inspectSkillSession, reconcileSkillSession, reconcileSkillSessionIfSafe, type SessionReconciliationInput } from "../../lib/session-reconciliation.js";
+import { inspectSkillSession, reconcileSkillSession, reconcileSkillSessionIfSafe, type SessionReconciliationInput, type SessionSelectionMetadata } from "../../lib/session-reconciliation.js";
+
+function sessionSelectionLabel(selection: SessionSelectionMetadata): string {
+  return `${selection.slug}@${selection.version} ${selection.bundleDigest}`;
+}
 
 export function selectedProfileId(explicit?: string): string {
   return explicit ?? process.env.HASNA_SKILLS_SELECTION_PROFILE ?? readManagedSkillPolicy()?.profileId ?? "default";
@@ -27,7 +31,10 @@ export function registerContextCommands(parent: Command): void {
     .action(async (id: string, options: { json?: boolean }) => {
       try {
         const result = inspectSkillSession(id);
-        await writeCliOutput(options.json ? JSON.stringify(result) : `${JSON.stringify(id)}: ${result.profileId} at ${result.profileRevision}\nReceipt SHA256: ${result.receiptSha256}`);
+        await writeCliOutput(options.json ? JSON.stringify(result) : [
+          `${JSON.stringify(id)}: ${result.profileId} at ${result.profileRevision}`, `Receipt SHA256: ${result.receiptSha256}`,
+          ...result.selections.map(selection => `${selection.loaded ? "Loaded" : "Unloaded"}: ${sessionSelectionLabel(selection)}`),
+        ].join("\n"));
       } catch (error) { reportContextError(error, options.json); }
     });
   sessions.command("recover-lock <id>")
@@ -69,7 +76,12 @@ export function registerContextCommands(parent: Command): void {
         const result = await reconcileSkillSession({ ...options, sessionId: id });
         await writeCliOutput(options.json ? JSON.stringify(result) : result.applied
           ? `Reconciled ${JSON.stringify(id)} to ${result.plan.target.profileId} at ${result.plan.target.profileRevision}.\nPreserved original receipt: ${result.archivePath}`
-          : `Planned one session reconciliation. Review --json output, then use --apply --plan-digest ${result.planDigest} --plan-issued-at ${result.plan.issuedAt} --plan-expires-at ${result.plan.expiresAt}.`);
+          : [
+            `Planned one session reconciliation: ${result.plan.retainedLoadedCount} loaded retained, ${result.plan.retiredLoadedCount} loaded retired.`,
+            ...result.plan.selectionDelta.map(row => `${row.outcome} (${row.reason}): ${sessionSelectionLabel(row.selection)}${row.replacement ? ` -> ${sessionSelectionLabel(row.replacement)}` : ""}`),
+            ...result.plan.addedSelections.map(selection => `Added selection (unloaded): ${sessionSelectionLabel(selection)}`),
+            `Review --json output, then use --apply --plan-digest ${result.planDigest} --plan-issued-at ${result.plan.issuedAt} --plan-expires-at ${result.plan.expiresAt}.`,
+          ].join("\n"));
       } catch (error) { reportContextError(error, options.json); }
     });
   parent.command("load <skill>")
