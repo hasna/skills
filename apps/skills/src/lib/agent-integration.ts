@@ -159,7 +159,7 @@ function rootAliases(home: string, allowed = false): AgentRootAlias[] {
   return result;
 }
 
-function canonicalAgentPath(path: string, aliases: AgentRootAlias[]): string {
+export function canonicalAgentPath(path: string, aliases: AgentRootAlias[]): string {
   const absolute = canonicalSystemPath(path), binding = aliases.find(item => absolute === item.alias || absolute.startsWith(item.alias + sep));
   return binding ? join(binding.target, relative(binding.alias, absolute)) : absolute;
 }
@@ -193,7 +193,7 @@ function disabledCodexSkillPaths(config: { skills?: { config?: Array<{ path?: st
   return [...settings].filter(([, values]) => values.length === 1 && values[0] === true).map(([document]) => dirname(document));
 }
 
-function recheckRootAliases(aliases: AgentRootAlias[]): void {
+export function recheckRootAliases(aliases: AgentRootAlias[]): void {
   for (const binding of aliases) {
     if (!["claude", "codex"].includes(binding.agent) || binding.alias !== join(binding.home, `.${binding.agent}`)) throw new Error("Invalid agent root alias binding");
     const current = readRootAlias(binding.home, binding.agent);

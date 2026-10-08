@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.57
+
+- Add `skills hook review-claude-candidate` for installers to validate a frozen Claude plugin candidate before changing native state. The read-only check binds the candidate, current discovery, selected scope and complete proposed configuration while preserving unrelated plugin registrations and settings. The installer must verify its actual consumer identity, perform the review before marketplace activation, and verify the resulting native state; this check does not make native installation atomic.
+
 ## 0.10.56
 
 - Require explicit Claude discovery reviews to cover each registered active cache manifest, skill root and hook source before installation. This prevents an incomplete old-cache-only review from breaking prompt hooks after cache retirement. Distinct project registrations, exact byte witnesses and reviewed absent manifests are supported; hook behavior still requires the existing no-skill-injection review. Existing policies and session pins remain unchanged by the package update.

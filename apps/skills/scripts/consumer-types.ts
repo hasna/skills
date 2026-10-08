@@ -108,6 +108,9 @@ getSkillsByTag("writing", [{ tags: [123] }]);
 getAllTags([{ category: "Content Generation" }]);
 import { planClaudeHookEventsUpdate, planClaudePreToolUseHookUpdate, CLAUDE_COORDINATED_HOOK_EVENTS,
   type ClaudeCoordinatedHookEvent } from "@hasna/skills";
+import { captureClaudeProspectiveCandidateClosure, hashClaudePluginManifest } from "@hasna/skills";
+const closureDigest: string = captureClaudeProspectiveCandidateClosure("/synthetic/immutable-candidate");
+const manifestDigest: string = hashClaudePluginManifest('{"name":"fixture","version":"1.0.0"}');
 const coordinatedEvents: readonly ClaudeCoordinatedHookEvent[] = CLAUDE_COORDINATED_HOOK_EVENTS;
 const coordinatedPlan = planClaudeHookEventsUpdate({ events: coordinatedEvents, expectedSettingsSha256: "absent", replacement: "{}" });
 const preToolPlan: typeof coordinatedPlan = planClaudePreToolUseHookUpdate({ expectedSettingsSha256: "absent", replacement: "{}" });
@@ -566,7 +569,7 @@ const wrongSuspend: false = suspended;
 // @ts-expect-error Resume cannot be widened to boolean or any.
 const wrongResume: true = resumed;
 void [service, version, status, terminalStatus, wrongVersion, wrongStatus, client, auth,
-  rootError, requestError, unavailableCode, arbitraryCode, storageEnv, storage, invalidStorage,
+  rootError, requestError, unavailableCode, arbitraryCode, storageEnv, storage, invalidStorage, closureDigest, manifestDigest,
   validRole, invalidRole, suspendLiteral, resumeLiteral, wrongSuspend, wrongResume];
 `);
   await writeFile(join(workspace, "admin-list-runtime.ts"), `
@@ -650,6 +653,26 @@ console.log("Installed bundle SDK runtime: 17 assertions passed.");
     }
   }
   await run([process.execPath, "node_modules/typescript/bin/tsc", "-p", "tsconfig.json"], workspace);
+  await writeFile(join(workspace, "prospective-review-runtime.ts"), `
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { captureClaudeProspectiveCandidateClosure, hashClaudePluginManifest } from "@hasna/skills";
+const root = mkdtempSync(join(tmpdir(), "skills-prospective-export-"));
+try {
+  mkdirSync(join(root, ".claude-plugin"));
+  writeFileSync(join(root, ".claude-plugin/marketplace.json"), JSON.stringify({ name: "fixture", plugins: [] }));
+  const before = captureClaudeProspectiveCandidateClosure(root);
+  writeFileSync(join(root, "release.json"), JSON.stringify({ version: "1.0.0" }));
+  const after = captureClaudeProspectiveCandidateClosure(root);
+  assert.match(before, /^[a-f0-9]{64}$/);
+  assert.notEqual(before, after);
+  assert.match(hashClaudePluginManifest('{"name":"fixture","version":"1.0.0"}'), /^[a-f0-9]{64}$/);
+} finally { rmSync(root, { recursive: true, force: true }); }
+console.log("Installed prospective-review exports: closure and manifest digest runtime passed.");
+`);
+  console.log((await run([process.execPath, "--no-env-file", "prospective-review-runtime.ts"], workspace)).trim());
   console.log((await run([process.execPath, "--no-env-file", resolve(root, "scripts/consumer-storage.ts"), workspace], workspace)).trim());
   console.log((await run([process.execPath, "--no-env-file", "admin-list-runtime.ts"], workspace)).trim());
   console.log((await run([process.execPath, "--no-env-file", "bundle-runtime.ts"], workspace)).trim());
