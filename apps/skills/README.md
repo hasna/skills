@@ -645,7 +645,7 @@ skills hook install --agent codex --codex-native-catalog /private/catalog.json -
 
 Codex 0.159.2, 0.160.0, 0.160.1 and 0.161.0 have measured qualified-name catalog support.
 Native transport, capture and review use one capability registry of exact
-releases. Unmeasured releases, including 0.160.2 and 0.161.0, refuse until the
+releases. Unmeasured releases, including 0.160.2 and 0.161.1, refuse until the
 native catalog/name-denial and hook-dispatch acceptance tests pass; an RPC
 handshake alone does not establish those semantics. Admitting a release does not
 admit its corpus: the transport still requires the existing native corpus
