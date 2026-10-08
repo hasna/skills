@@ -88,6 +88,94 @@ function read(path: string, changes?: Map<string, string>): string | null {
   if (!stat.isFile() || stat.size > 16 * 1024 * 1024) throw new Error(`Unsupported or oversized native discovery input: ${path}`);
   return readFileSync(path, "utf8");
 }
+/** Require the currently registered cache's discovery inputs in an explicit
+ * review, so retiring an old cache cannot reveal a missing active binding.
+ * Hook behavior remains the reviewer's no-skill-injection assessment; this
+ * check does not attempt to infer executable behavior from plugin source. */
+function assertReviewedClaudeCacheClosures(home: string, config: Record<string, any>, review: ReviewedDiscoveryInputs["agents"][number]): void {
+  const enabledIds = Object.entries(config.enabledPlugins ?? {}).filter(([, enabled]) => enabled === true).map(([id]) => id);
+  if (enabledIds.length === 0) return;
+  const registryPath = join(home, ".claude/plugins/installed_plugins.json");
+  const cacheRoot = join(home, ".claude/plugins/cache");
+  const registryText = read(registryPath);
+  // The registry is needed only to resolve enabled cache-backed registrations.
+  // If it is absent there cannot be a cache root to protect in this check;
+  // existing reviewed inputs for ordinary/custom discovery remain valid.
+  if (registryText === null) return;
+  const registry = parseConfig(registryText, registryPath);
+  if (registry.version !== 2 || !registry.plugins || typeof registry.plugins !== "object" || Array.isArray(registry.plugins)) throw new Error("Reviewed Claude installed plugin registrations are invalid");
+  const cachePath = (path: unknown): path is string => typeof path === "string" && isAbsolute(path)
+    && resolve(path) === path && (path === cacheRoot || path.startsWith(cacheRoot + sep));
+  const activeRoots = new Set<string>();
+  for (const id of enabledIds) {
+    const rows = registry.plugins[id];
+    if (!Array.isArray(rows)) continue;
+    for (const row of rows) {
+      if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+      if (typeof row.installPath === "string" && (row.installPath === cacheRoot || row.installPath.startsWith(cacheRoot + sep))) {
+        if (!cachePath(row.installPath) || row.installPath.length > AGENT_POLICY_LIMITS.pathCharacters
+          || row.version !== undefined && (typeof row.version !== "string" || basename(row.installPath) !== row.version)) {
+          throw new Error("Reviewed Claude discovery has a malformed active cache registration");
+        }
+        if (row.scope === "user" && (row.projectPath === undefined || row.projectPath === null)) {
+          // valid user installation
+        } else if (row.scope === "project" && typeof row.projectPath === "string" && isAbsolute(row.projectPath)
+          && resolve(row.projectPath) === row.projectPath && row.projectPath.length <= AGENT_POLICY_LIMITS.pathCharacters) {
+          // Each canonical project registration is independently relevant;
+          // it may legitimately point at a different cached version.
+        } else throw new Error("Reviewed Claude discovery has an unsupported active cache registration scope");
+        activeRoots.add(row.installPath);
+      }
+    }
+  }
+  if (activeRoots.size === 0) return;
+  const registrySource = review.sources.find(source => source.path === registryPath && source.sha256 !== null
+    && source.format === undefined && source.fields === undefined && source.managedPlugins === undefined
+    && (source.hashMode === undefined || source.hashMode === "bytes"));
+  if (!registrySource) throw new Error("Reviewed Claude discovery must bind installed registrations for active cache plugins");
+  const reviewedFile = (path: string, manifest = false) => review.sources.some(source => source.path === path && source.sha256 !== null
+    && source.format === undefined && source.fields === undefined && source.managedPlugins === undefined
+    && (source.hashMode === undefined || source.hashMode === "bytes" || manifest && source.hashMode === "claude-plugin-manifest-v1"));
+  const requireSource = (path: string, description: string, manifest = false): void => {
+    if (!reviewedFile(path, manifest)) throw new Error(`Reviewed active Claude cache plugin ${description} is not bound`);
+  };
+  for (const root of activeRoots) {
+    safe(root);
+    const rootStat = lstatSync(root, { throwIfNoEntry: false });
+    if (!rootStat?.isDirectory() || realpathSync(root) !== root) throw new Error("Reviewed Claude active cache plugin root is missing or unsafe");
+    const manifestPath = join(root, ".claude-plugin/plugin.json");
+    const manifestStat = lstatSync(manifestPath, { throwIfNoEntry: false });
+    let manifest: Record<string, unknown> | undefined;
+    if (manifestStat) {
+      if (!manifestStat.isFile()) throw new Error("Reviewed active Claude cache plugin manifest is unsupported");
+      requireSource(manifestPath, "manifest", true);
+      const raw = read(manifestPath);
+      if (raw === null) throw new Error("Reviewed Claude active cache plugin manifest is missing");
+      manifest = JSON.parse(raw) as Record<string, unknown>;
+      if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Error("Reviewed Claude active cache plugin manifest is invalid");
+    } else if (!review.sources.some(source => source.path === manifestPath && source.hashMode === "path-bytes" && source.sha256 !== null
+      && source.format === undefined && source.fields === undefined && source.managedPlugins === undefined)) {
+      throw new Error("Reviewed Claude active cache plugin manifest absence requires a path-bytes witness");
+    }
+    const roots = new Set([join(root, "skills")]);
+    if (lstatSync(join(root, "SKILL.md"), { throwIfNoEntry: false })?.isFile()) roots.add(root);
+    const declared = manifest?.skills === undefined ? ["./skills"] : typeof manifest.skills === "string" ? [manifest.skills] : manifest.skills;
+    if (!Array.isArray(declared) || declared.some(path => typeof path !== "string")) throw new Error("Reviewed Claude active cache plugin has unsupported skill paths");
+    for (const value of declared) {
+      const path = resolve(root, value);
+      if (path !== root && !path.startsWith(root + sep)) throw new Error("Reviewed Claude active cache plugin skill path escapes its root");
+      roots.add(path.endsWith(`${sep}SKILL.md`) ? dirname(path) : path);
+    }
+    for (const skillRoot of roots) if (!review.roots.includes(skillRoot)) throw new Error("Reviewed Claude active cache plugin skill root is not covered");
+    const hooksPath = join(root, "hooks/hooks.json");
+    const hooksStat = lstatSync(hooksPath, { throwIfNoEntry: false });
+    if (hooksStat) {
+      if (!hooksStat.isFile()) throw new Error("Reviewed Claude plugin hook manifest is unsupported");
+      requireSource(hooksPath, "hook manifest");
+    }
+    if (typeof manifest?.hooks === "string") requireSource(resolve(root, manifest.hooks), "manifest-declared hook source");
+  }
+}
 /** Project one native configuration's witnessed fields, exactly as discovery
  * binds them. Used for both the current file and a preserved reviewed preimage. */
 export function projectNativeDiscoveryFields(text: string, format: "json" | "toml" | "yaml", fields: readonly string[], path: string): string {
@@ -601,6 +689,7 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
       for (const hooksFile of reviewedHookPaths) if (!review.sources.some(hook => hook.path === canonical(hooksFile) && hook.sha256 !== null && hook.format === undefined && hook.fields === undefined && hook.managedPlugins === undefined && (hook.hashMode === undefined || hook.hashMode === "bytes"))) throw new Error("Reviewed Claude plugin manifest requires separately reviewed exact hook file sources");
       return { path: source.path, sha256: manifestSha256, hashMode: "claude-plugin-manifest-v1" as const };
     });
+    if (agent === "claude") assertReviewedClaudeCacheClosures(home, config, review);
     const combined = [...reviewedSources, ...reviewedSourcesWithManifestProjection];
     const unique = combined.filter((source, index) => combined.findIndex(candidate => isDeepStrictEqual(candidate, source)) === index);
     return { ...supplied, roots: [...new Set([...roots, ...supplied.roots])].sort(), sources: unique, ...(agent === "gemini" ? { builtinNames } : {}) };

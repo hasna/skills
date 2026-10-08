@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyAgentIntegration, assertManagedAgentBridge, planAgentIntegration } from "./agent-integration.js";
+import { captureDiscoveryPathSources } from "./agent-discovery.js";
 
 const homes: string[] = [];
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
@@ -269,4 +270,127 @@ test("retired plugin cache version requires fresh exact review before guarded po
   put(join(newRoot, ".claude-plugin/plugin.json"), JSON.stringify({ name: "plugin", version: "0.1.5", description: "Updated metadata", skills: "./skills" }));
   put(join(newRoot, "hooks/modules/runtime.ts"), "export function registerPlugin() { return 'changed'; }\n");
   expect(() => assertManagedAgentBridge("claude", options)).toThrow("NATIVE_SKILL_DRIFT");
+});
+
+test("reviewed Claude discovery requires the current registered cache manifest and hook closure", () => {
+  const home = mkdtempSync(join(tmpdir(), "skills-claude-active-cache-review-"));
+  homes.push(home);
+  const parent = join(home, ".claude/plugins/cache/market/plugin");
+  const retired = join(parent, "1.0.0"), active = join(parent, "1.0.4"), activeProject = join(parent, "1.0.5");
+  const settings = join(home, ".claude/settings.json"), registry = join(home, ".claude/plugins/installed_plugins.json");
+  const id = "plugin@market", unrelated = "swift-lsp@claude-plugins-official";
+  put(settings, JSON.stringify({ enabledPlugins: { [id]: true, [unrelated]: true } }));
+  put(registry, JSON.stringify({ version: 2, plugins: {
+    [id]: [
+      { scope: "project", projectPath: join(home, "project-a"), installPath: active, version: "1.0.4" },
+      { scope: "project", projectPath: join(home, "project-b"), installPath: activeProject, version: "1.0.5" },
+    ],
+    [unrelated]: [{ scope: "local", installPath: join(home, ".claude/local/swift-lsp") }],
+  } }));
+  const writePlugin = (root: string, version: string) => {
+    put(join(root, ".claude-plugin/plugin.json"), JSON.stringify({ name: "plugin", version, skills: "./skills" }));
+    put(join(root, "hooks/hooks.json"), JSON.stringify({ modules: ["register.ts"] }));
+    put(join(root, "hooks/modules/register.ts"), 'import "./runtime";\n');
+    put(join(root, "hooks/modules/runtime.ts"), "export function registerPlugin() {}\n");
+    mkdirSync(join(root, "skills"), { recursive: true });
+  };
+  writePlugin(retired, "1.0.0");
+  writePlugin(active, "1.0.4");
+  writePlugin(activeProject, "1.0.5");
+  const options = { home, dataDir: join(home, "skills-data"), projectDir: home, agents: ["claude" as const], command: "/fixture/skills" };
+  const files = (roots: string[]) => [settings, registry, ...roots.flatMap(root => [
+    ".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/modules/register.ts", "hooks/modules/runtime.ts",
+  ].map(relative => join(root, relative)))];
+  const reviewed = (roots: string[], paths: string[]) => ({ version: 1 as const, agents: [{
+    agent: "claude" as const,
+    roots: roots.map(root => join(root, "skills")),
+    sources: paths.map(path => ({ path, sha256: sha(readFileSync(path, "utf8")) })),
+    pluginHooks: "reviewed-no-skill-injection" as const,
+  }] });
+
+  // The prior review still covers the retired tree and current settings/registry,
+  // but omits the active registered plugin cache entirely. It must fail before a
+  // policy plan can be applied, even while the retired tree still exists. An
+  // unrelated enabled local-scope integration is outside this cache check.
+  const incomplete = reviewed([retired], files([retired]));
+  expect(() => planAgentIntegration({ ...options, discoveryInputs: incomplete })).toThrow("active Claude cache plugin");
+
+  const complete = reviewed([retired, active, activeProject], files([retired, active, activeProject]));
+  expect(() => planAgentIntegration({ ...options, discoveryInputs: complete })).not.toThrow();
+  const missingHookSource = reviewed([retired, active, activeProject], files([retired, active, activeProject]).filter(path => path !== join(active, "hooks/hooks.json")));
+  expect(() => planAgentIntegration({ ...options, discoveryInputs: missingHookSource })).toThrow("separately reviewed exact hook file sources");
+  const missingProjectRoot = { ...complete, agents: [{ ...complete.agents[0]!, roots: [join(retired, "skills"), join(active, "skills")] }] };
+  expect(() => planAgentIntegration({ ...options, discoveryInputs: missingProjectRoot })).toThrow("skill root is not covered");
+  const explicitBytes = { ...complete, agents: [{ ...complete.agents[0]!, sources: complete.agents[0]!.sources.map(source => source.path === registry ? { ...source, hashMode: "bytes" as const } : source) }] };
+  expect(() => planAgentIntegration({ ...options, discoveryInputs: explicitBytes })).not.toThrow();
+});
+
+test("reviewed Claude inputs without enabled cache plugins do not acquire a registry requirement", () => {
+  const home = mkdtempSync(join(tmpdir(), "skills-claude-no-cache-review-"));
+  homes.push(home);
+  const settings = join(home, ".claude/settings.json");
+  put(settings, JSON.stringify({ enabledPlugins: { "swift-lsp@claude-plugins-official": true } }));
+  const localRoot = join(home, ".claude/local/swift-lsp");
+  mkdirSync(localRoot, { recursive: true });
+  const options = { home, dataDir: join(home, "skills-data"), projectDir: home, agents: ["claude" as const], command: "/fixture/skills" };
+  const review = { version: 1 as const, agents: [{ agent: "claude" as const, roots: [localRoot],
+    sources: [{ path: settings, sha256: sha(readFileSync(settings, "utf8")) }], pluginHooks: "reviewed-no-skill-injection" as const }] };
+  expect(() => planAgentIntegration({ ...options, discoveryInputs: review })).not.toThrow();
+});
+
+test("reviewed Claude policy apply remains valid after the old cache is removed", () => {
+  const home = mkdtempSync(join(tmpdir(), "skills-claude-reviewed-cache-retirement-"));
+  homes.push(home);
+  const parent = join(home, ".claude/plugins/cache/market/plugin"), old = join(parent, "1.0.0"), active = join(parent, "1.0.4");
+  const settings = join(home, ".claude/settings.json"), registry = join(home, ".claude/plugins/installed_plugins.json");
+  put(settings, JSON.stringify({ enabledPlugins: { "plugin@market": true } }));
+  put(registry, JSON.stringify({ version: 2, plugins: { "plugin@market": [{ scope: "user", installPath: active, version: "1.0.4" }] } }));
+  const writePlugin = (root: string, version: string) => {
+    put(join(root, ".claude-plugin/plugin.json"), JSON.stringify({ name: "plugin", version, skills: "./skills" }));
+    put(join(root, "hooks/hooks.json"), JSON.stringify({ modules: ["./register.ts"] }));
+    put(join(root, "hooks/register.ts"), 'import "./runtime";\n');
+    put(join(root, "hooks/runtime.ts"), "export function registerPlugin() {}\n");
+    put(join(root, "README.md"), "Ordinary unreviewed prose asset; not an executable discovery input.\n");
+    mkdirSync(join(root, "skills"), { recursive: true });
+  };
+  writePlugin(old, "1.0.0"); writePlugin(active, "1.0.4");
+  const paths = [settings, registry, ...[old, active].flatMap(root => [
+    ".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.ts", "hooks/runtime.ts",
+  ].map(relative => join(root, relative)))];
+  const options = { home, dataDir: join(home, "skills-data"), projectDir: home, agents: ["claude" as const], command: "/fixture/skills" };
+  const discoveryInputs = { version: 1 as const, agents: [{ agent: "claude" as const,
+    roots: [join(old, "skills"), join(active, "skills")], sources: paths.map(path => ({ path, sha256: sha(readFileSync(path, "utf8")) })),
+    pluginHooks: "reviewed-no-skill-injection" as const }] };
+  const policyPath = join(options.dataDir, "agent-policy.json");
+  applyAgentIntegration(planAgentIntegration({ ...options, discoveryInputs }));
+  expect(() => assertManagedAgentBridge("claude", options)).not.toThrow();
+  const persisted = JSON.parse(readFileSync(policyPath, "utf8")).bridge.discovery.claude;
+  expect(persisted.sources.find((source: { path: string }) => source.path === join(active, ".claude-plugin/plugin.json")).hashMode)
+    .toBe("claude-plugin-manifest-v1");
+  renameSync(old, join(home, "preserved-old-cache"));
+  expect(() => assertManagedAgentBridge("claude", options)).not.toThrow();
+});
+
+test("reviewed Claude discovery preserves a typed absence witness for active plugins without plugin.json", () => {
+  const home = mkdtempSync(join(tmpdir(), "skills-claude-optional-plugin-manifest-"));
+  homes.push(home);
+  const active = join(home, ".claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0");
+  const settings = join(home, ".claude/settings.json"), registry = join(home, ".claude/plugins/installed_plugins.json");
+  const manifest = join(active, ".claude-plugin/plugin.json"), id = "swift-lsp@claude-plugins-official";
+  put(settings, JSON.stringify({ enabledPlugins: { [id]: true } }));
+  put(registry, JSON.stringify({ version: 2, plugins: { [id]: [{ scope: "user", installPath: active, version: "1.0.0" }] } }));
+  mkdirSync(join(active, "skills"), { recursive: true });
+  const options = { home, dataDir: join(home, "skills-data"), projectDir: home, agents: ["claude" as const], command: "/fixture/skills" };
+  const sources = [
+    { path: settings, sha256: sha(readFileSync(settings, "utf8")) },
+    { path: registry, sha256: sha(readFileSync(registry, "utf8")) },
+    ...captureDiscoveryPathSources([manifest]),
+  ];
+  const review = { version: 1 as const, agents: [{ agent: "claude" as const, roots: [join(active, "skills")], sources,
+    pluginHooks: "reviewed-no-skill-injection" as const }] };
+  expect(() => planAgentIntegration({ ...options, discoveryInputs: review })).not.toThrow();
+  const missingAbsenceWitness = { ...review, agents: [{ ...review.agents[0]!, sources: sources.filter(source => source.path !== manifest) }] };
+  expect(() => planAgentIntegration({ ...options, discoveryInputs: missingAbsenceWitness })).toThrow("path-bytes witness");
+  const untypedAbsence = { ...review, agents: [{ ...review.agents[0]!, sources: [...sources.filter(source => source.path !== manifest), { path: manifest, hashMode: "bytes" as const, sha256: null }] }] };
+  expect(() => planAgentIntegration({ ...options, discoveryInputs: untypedAbsence })).toThrow("path-bytes witness");
 });

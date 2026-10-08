@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyAgentIntegration, assertManagedAgentBridge, planAgentIntegration } from "./agent-integration.js";
 import { parseManagedSkillPolicy } from "./managed-policy.js";
+import { captureDiscoveryPathSources } from "./agent-discovery.js";
 
 // End-to-end coverage through the existing hook installation and guard APIs.
 // The expected digest is pinned (it equals the canonical projection checked in
@@ -56,7 +57,7 @@ function fixture(prefix: string) {
     sources: [
       ...[paths.settings, paths.registrations, paths.known].map(path => ({ path, sha256: sha(path) })),
       entry,
-      ...[join(installPath, ".claude-plugin/plugin.json"), join(installPath, "hooks/hooks.json")].map(path => ({ path, hashMode: "bytes" as const, sha256: null })),
+      ...captureDiscoveryPathSources([join(installPath, ".claude-plugin/plugin.json"), join(installPath, "hooks/hooks.json")]),
     ],
     pluginHooks: "reviewed-no-skill-injection" as const,
   }] });
