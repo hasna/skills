@@ -19,6 +19,7 @@ import { captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettings
 import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4 } from "../../lib/codex-settings-witness.js";
 import { captureClaudeMarketplaceRegistryV2 } from "../../lib/claude-marketplace-registry.js";
 import { captureClaudeMarketplaceEntry } from "../../lib/claude-marketplace-entry-witness.js";
+import { reviewClaudeProspectiveCandidate, type ClaudeProspectiveReviewRequest } from "../../lib/claude-prospective-review.js";
 import { captureCodexNativeSkillCatalog } from "../../lib/codex-native-skill-catalog.js";
 import { selfSpawnCommand } from "../../lib/self-spawn.js";
 
@@ -163,6 +164,24 @@ export function registerAgentIntegration(parent: Command): void {
         : options.kind === "claude-marketplace-registry-v2" ? captureClaudeMarketplaceRegistryV2 : null;
       if (!capture) throw new Error("Unsupported witness kind; select sumi-settings-v1, claude-settings-v4, claude-settings-v3, claude-settings-v2, codex-settings-v4, codex-settings-v3, codex-settings-v2, codex-settings-v1, claude-marketplace-registry-v2 or claude-marketplace-entry-v1");
       await writeCliOutput(JSON.stringify(capture(options.path), null, 2));
+    });
+  hook.command("review-claude-candidate")
+    .requiredOption("--request <file>", "Frozen skills.claude-plugin-prospective-review/v1 JSON request")
+    .option("--json", "Return the validation-only receipt as JSON", false)
+    .description("Validate a prospective Claude plugin candidate and current preimages without changing native state; Harnesses must compare native and Skills paths against installed package-owned resolvers before trusting the receipt")
+    .action(async (options: { request: string; json: boolean }) => {
+      try {
+        if (!isAbsolute(options.request)) throw new Error("CLAUDE_CANDIDATE_REVIEW_REFUSED: --request must be an absolute path");
+        const stat = lstatSync(options.request);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) throw new Error("CLAUDE_CANDIDATE_REVIEW_REFUSED: request must be a regular file no larger than 1 MiB");
+        const requestBytes = readFileSync(options.request);
+        const request = JSON.parse(requestBytes.toString("utf8")) as ClaudeProspectiveReviewRequest;
+        const receipt = reviewClaudeProspectiveCandidate(request, createHash("sha256").update(requestBytes).digest("hex"));
+        await writeCliOutput(options.json ? JSON.stringify(receipt) : `Claude plugin candidate review accepted for ${receipt.pluginId}; native state was not changed.`);
+      } catch (error) {
+        console.error(error instanceof Error && error.message.startsWith("CLAUDE_CANDIDATE_REVIEW_REFUSED:") ? error.message : "CLAUDE_CANDIDATE_REVIEW_REFUSED: request or current preimage validation failed");
+        process.exitCode = 1;
+      }
     });
   hook.command("rebind-settings")
     .requiredOption("--agent <agent>", "claude, codex or sumi")

@@ -173,6 +173,36 @@ new loaders still require their dedicated review. API failure refuses an update;
 stale projection as synchronized. Claude may retain its previous installation
 after a refused update, whose existing local drift checks continue to apply.
 
+## Prospective Claude candidate review
+
+Before adding or changing a marketplace, an installer may call
+`skills hook review-claude-candidate --request <absolute-json-path> --json`.
+The `skills.claude-plugin-prospective-review/v1` request binds the frozen
+candidate/catalog/manifest, current Skills and Claude preimages, explicit
+user/project scope, caller assessment and complete expected semantic documents.
+The validator derives the owned change and refuses any unrelated graph change.
+Its receipt binds the raw request bytes and the complete projected documents;
+semantic digests use UTF-8 JSON with object keys recursively sorted in
+ECMAScript UTF-16 order, array order retained and JavaScript JSON primitive
+serialization.
+
+Native-generated fields use typed markers only in the exact selected rows:
+`{"$generated":"claude-utc-timestamp","field":"<path>"}` requires a valid generated
+UTC timestamp at that field. For a native update that may preserve or refresh
+`lastUpdated`, `{"$allowed":[<exact prior timestamp>,<generated marker>]}` permits
+only those two values. Existing `installedAt` remains exact; a fresh install's
+`installedAt` is generated. No other row fields accept markers.
+
+This is a read-only validator. It does not establish that caller-supplied
+`native.home`, config/plugin roots, executable identity or Skills `dataDir` are
+the installed consumers. Harnesses must resolve them through the installed
+package-owned consumers and compare them before trusting the receipt. It must
+also retain its existing review record and bind it to the exact candidate:
+the caller's no-skill-injection assessment is not a semantic hook review, and
+structural refusal checks do not prove hook behavior. Recheck all preimages and
+candidate closure immediately before the first native mutation. The validator
+does not claim native install atomicity or crash recovery.
+
 ## Reviewed plugin-hook attestation scope
 
 A reviewed discovery input carries `pluginHooks: "reviewed-no-skill-injection"`.
