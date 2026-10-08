@@ -18,6 +18,10 @@ const MEASURED_CODEX_CAPABILITIES: Readonly<Record<string, readonly CodexNativeC
   // stdio MCP environment backport (#51121); its app-server protocol schema is
   // byte-identical and its native catalog acceptance test passes.
   "codex-cli 0.160.1": ["hooks", "qualified-skill-catalog", "installed-plugin-review"],
+  // Exact 0.161.0 binary measured through the hook and skill catalog acceptance
+  // paths; neighbouring releases remain unsupported. Native corpus admission
+  // is independently required and is not granted by this entry.
+  "codex-cli 0.161.0": ["hooks", "qualified-skill-catalog", "installed-plugin-review"],
 };
 
 /** `installed-plugin-review`: the 0.160 `plugin/installed` source identities and

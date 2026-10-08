@@ -46,7 +46,7 @@ for (const [namespace, server] of [["browser", "node_repl"], ["chrome", "node_re
   test(`native bundled cleanup identity ${namespace} remains restricted to ${server}`, () => {
     const f = fixture(namespace!, "openai-bundled", server!);
     expect(f.review()).toHaveLength(1);
-    for (const version of ["codex-cli 0.159.2", "codex-cli 0.160.0", "codex-cli 0.160.1"]) expect(reviewCodexPluginSkillControls({ ...f.catalog, version }, [f.document], f.cache, f.home, f.read, [])).toHaveLength(1);
+    for (const version of ["codex-cli 0.159.2", "codex-cli 0.160.0", "codex-cli 0.160.1", "codex-cli 0.161.0"]) expect(reviewCodexPluginSkillControls({ ...f.catalog, version }, [f.document], f.cache, f.home, f.read, [])).toHaveLength(1);
     f.manifest.hooks.hooks.Stop![0]!.hooks[0]!.server = server === "node_repl" ? "cua_repl" : "node_repl";
     put(f.manifestPath, JSON.stringify(f.manifest)); expect(f.review).toThrow("IDENTITY_UNSUPPORTED");
   });
