@@ -643,7 +643,7 @@ skills hook native-catalog --cwd /absolute/project --output /private/catalog.jso
 skills hook install --agent codex --codex-native-catalog /private/catalog.json --json
 ```
 
-Codex 0.159.2, 0.160.0 and 0.160.1 have measured qualified-name catalog support.
+Codex 0.159.2, 0.160.0, 0.160.1 and 0.161.0 have measured qualified-name catalog support.
 Native transport, capture and review use one capability registry of exact
 releases. Unmeasured releases, including 0.160.2 and 0.161.0, refuse until the
 native catalog/name-denial and hook-dispatch acceptance tests pass; an RPC
@@ -697,7 +697,7 @@ different extant, witnessed user version. Individual missing files, current
 registered roots, aliases and registration changes still refuse; historical
 source hashes and typed settings witnesses remain intact.
 
-For a Codex 0.160.0 or 0.160.1 remote refresh omitted by an existing qualified-name disable,
+For a Codex 0.160.0, 0.160.1 or 0.161.0 remote refresh omitted by an existing qualified-name disable,
 a fresh native catalog and discovery review can plan the new exact path disable
 in the same transaction. The remote installation receipt, namespace and capability
 controls must match; conflicting enable rules, unknown names and ambiguous

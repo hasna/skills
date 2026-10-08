@@ -49,7 +49,7 @@ writeFileSync(${JSON.stringify(join(root, "closed"))}, "closed");` : ""}
   return { command, document };
 }
 
-for (const nativeVersion of ["0.159.2", "0.160.0", "0.160.1"]) test(`built CLI captures the ${nativeVersion} native catalog privately with exact readback`, async () => {
+for (const nativeVersion of ["0.159.2", "0.160.0", "0.160.1", "0.161.0"]) test(`built CLI captures the ${nativeVersion} native catalog privately with exact readback`, async () => {
   const root = mkdtempSync(join(scratch, "case-")), { command, document } = native(root, nativeVersion);
   const output = join(root, "catalog.json");
   const result = await run(root, ["hook", "native-catalog", "--cwd", root, "--output", output, "--codex-command", command, "--json"]);
@@ -85,7 +85,7 @@ test("built CLI refuses a native version without qualified-name control support"
   expect(existsSync(output)).toBe(false);
 });
 
-for (const nativeVersion of ["0.160.2", "0.161.0"]) test(`built CLI refuses the unmeasured ${nativeVersion} neighbour without publishing output`, async () => {
+for (const nativeVersion of ["0.160.2", "0.161.1", "0.162.0"]) test(`built CLI refuses the unmeasured ${nativeVersion} neighbour without publishing output`, async () => {
   const root = mkdtempSync(join(scratch, "case-")), { command } = native(root, nativeVersion);
   const output = join(root, "catalog.json");
   const result = await run(root, ["hook", "native-catalog", "--cwd", root, "--output", output, "--codex-command", command, "--json"]);
@@ -95,7 +95,7 @@ for (const nativeVersion of ["0.160.2", "0.161.0"]) test(`built CLI refuses the 
   expect(existsSync(output)).toBe(false);
 });
 
-for (const nativeVersion of ["0.160.0", "0.160.1"]) for (const state of ["unenrolled", "pending", "exclusive"] as const) test(`built CLI ${nativeVersion} catalog refuses ${state} admission without publishing output`, async () => {
+for (const nativeVersion of ["0.160.0", "0.160.1", "0.161.0"]) for (const state of ["unenrolled", "pending", "exclusive"] as const) test(`built CLI ${nativeVersion} catalog refuses ${state} admission without publishing output`, async () => {
   const root = mkdtempSync(join(scratch, "case-"));
   const { command } = native(root, nativeVersion, { enrolled: state !== "unenrolled" });
   const corpus = join(root, "home", ".codex"), output = join(root, "catalog.json");

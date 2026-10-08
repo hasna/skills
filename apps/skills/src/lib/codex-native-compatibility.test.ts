@@ -12,13 +12,13 @@ test("registry admits codex-cli 0.160.1 with exactly the 0.160.0 capabilities", 
   expect(capabilities("codex-cli 0.160.1")).toEqual(capabilities("codex-cli 0.160.0"));
   expect([...SUPPORTED_CODEX_HOOK_VERSIONS]).toEqual(["codex-cli 0.153.0", "codex-cli 0.154.0", "codex-cli 0.155.0", "codex-cli 0.155.1",
     "codex-cli 0.156.1", "codex-cli 0.157.0", "codex-cli 0.157.1", "codex-cli 0.158.0", "codex-cli 0.159.0", "codex-cli 0.159.2",
-    "codex-cli 0.160.0", "codex-cli 0.160.1"]);
+    "codex-cli 0.160.0", "codex-cli 0.160.1", "codex-cli 0.161.0"]);
   expect(Object.isFrozen(SUPPORTED_CODEX_HOOK_VERSIONS)).toBe(true);
 });
 
 test("registry refuses unmeasured neighbours and malformed version strings for every capability", () => {
   const refused: unknown[] = [
-    "codex-cli 0.160.2", "codex-cli 0.161.0", "codex-cli 0.159.1", "codex-cli 0.159.3", "codex-cli 0.160.10", "codex-cli 0.16.1",
+    "codex-cli 0.160.2", "codex-cli 0.162.0", "codex-cli 0.159.1", "codex-cli 0.159.3", "codex-cli 0.160.10", "codex-cli 0.16.1",
     "codex-cli 1.160.1", "codex-cli 0.160.1-alpha.1", "codex-cli 0.160.1-rc.1", "codex-cli 0.160.1+build.1", "codex-cli 0.160.01",
     "codex-cli 0.160", "codex-cli 0.160.x", "codex-cli 0.160.*", "codex-cli >=0.160.0", "codex-cli ^0.160.0", "codex-cli ~0.160.1",
     "0.160.1", "v0.160.1", "codex-cli v0.160.1", "Codex-CLI 0.160.1", "codex 0.160.1", "codex-cli  0.160.1", " codex-cli 0.160.1",
@@ -63,11 +63,23 @@ test("stored installation and inactive plugin evidence refuses unmeasured, older
     expect(() => assertAgentPolicyCollections(installationPolicy(version, version))).not.toThrow();
     expect(() => assertAgentPolicyCollections(inactivePolicy(version))).not.toThrow();
   }
-  for (const version of ["codex-cli 0.159.2", "codex-cli 0.160.2", "codex-cli 0.161.0", "codex-cli 0.160.1-alpha.1", "0.160.1", undefined]) {
+  for (const version of ["codex-cli 0.159.2", "codex-cli 0.160.2", "codex-cli 0.162.0", "codex-cli 0.160.1-alpha.1", "0.160.1", undefined]) {
     expect(() => assertAgentPolicyCollections(installationPolicy(version, version))).toThrow("bounds are invalid");
     expect(() => assertAgentPolicyCollections(inactivePolicy(version))).toThrow("bounds are invalid");
   }
   // The proof must name the same admitted release as the catalog review it binds.
   for (const [proof, review] of [["codex-cli 0.160.1", "codex-cli 0.160.0"], ["codex-cli 0.160.0", "codex-cli 0.160.1"], ["codex-cli 0.160.1", "codex-cli 0.160.2"]])
     expect(() => assertAgentPolicyCollections(installationPolicy(proof, review))).toThrow("bounds are invalid");
+});
+
+test("registry admits measured codex-cli 0.161.0 and preserves its stored review binding", () => {
+  expect(capabilities("codex-cli 0.161.0")).toEqual(["hooks", "qualified-skill-catalog", "installed-plugin-review"]);
+  expect(() => assertAgentPolicyCollections(installationPolicy("codex-cli 0.161.0", "codex-cli 0.161.0"))).not.toThrow();
+  expect(() => assertAgentPolicyCollections(inactivePolicy("codex-cli 0.161.0"))).not.toThrow();
+  for (const version of ["codex-cli 0.161.1", "codex-cli 0.162.0", "codex-cli 0.161.0-alpha.1", "codex-cli 0.161.0+build.1"])
+    expect(capabilities(version)).toEqual([]);
+  for (const previous of ["codex-cli 0.160.0", "codex-cli 0.160.1"]) {
+    expect(() => assertAgentPolicyCollections(installationPolicy("codex-cli 0.161.0", previous))).toThrow("bounds are invalid");
+    expect(() => assertAgentPolicyCollections(installationPolicy(previous, "codex-cli 0.161.0"))).toThrow("bounds are invalid");
+  }
 });
