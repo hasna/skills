@@ -246,15 +246,32 @@ function absentRetiredClaudeRoots(binding:AgentDiscoveryBinding):string[] {
     // A direct user hook can still select a retired version independently of
     // plugin registration. Keep that active path under the ordinary guard.
     if (JSON.stringify(config.hooks ?? {}).includes(root)) continue;
+    const registrationScope=(row:unknown):string|null=>{
+      if (!row || typeof row!=="object" || Array.isArray(row)) return null;
+      const value=row as Record<string,unknown>;
+      if (typeof value.installPath!=="string" || /[\x00-\x1f\x7f]/.test(value.installPath) || !isAbsolute(value.installPath) || resolve(value.installPath)!==value.installPath || value.installPath.length>AGENT_POLICY_LIMITS.pathCharacters) return null;
+      if (value.scope==="user") return value.projectPath===undefined || value.projectPath===null ? "user\0" : null;
+      if (value.scope==="project") return typeof value.projectPath==="string" && !/[\x00-\x1f\x7f]/.test(value.projectPath) && value.projectPath.length<=AGENT_POLICY_LIMITS.pathCharacters && isAbsolute(value.projectPath) && resolve(value.projectPath)===value.projectPath ? `project\0${value.projectPath}` : null;
+      return null;
+    };
+    // Every registration must still be structurally safe with respect to the
+    // retired path, but unrelated plugin scopes are outside this exception.
+    if (Object.values(installed.plugins).some(value=>!Array.isArray(value) || value.some(row=>!row || typeof row.installPath!=="string" || row.installPath===root || row.installPath.startsWith(root+sep) || root.startsWith(row.installPath+sep)))) continue;
     const rows=installed.plugins[id];
-    if (!Array.isArray(rows) || rows.length!==1 || rows[0]?.scope!=="user" || typeof rows[0]?.installPath!=="string") continue;
-    const active=rows[0].installPath;
-    if (rows[0].version!==basename(active) || resolve(active)!==active || dirname(active)!==dirname(root) || active===root || !lstatSync(active,{throwIfNoEntry:false})?.isDirectory() || realpathSync(active)!==active) continue;
+    if (!Array.isArray(rows) || rows.length<1) continue;
+    const targetScopes=new Set<string>(); let targetValid=true;
+    for (const row of rows) {
+      const scope=registrationScope(row), value=row as Record<string,unknown>|null;
+      if (scope===null || targetScopes.has(scope) || value?.installPath!==rows[0]?.installPath || value?.version!==rows[0]?.version) { targetValid=false; break; }
+      targetScopes.add(scope);
+    }
+    if (!targetValid || !targetScopes.has("user\0")) continue;
+    const active=rows[0]?.installPath;
+    if (typeof active!=="string" || rows[0]?.version!==basename(active) || dirname(active)!==dirname(root) || active===root || !lstatSync(active,{throwIfNoEntry:false})?.isDirectory() || realpathSync(active)!==active) continue;
     const activeManifest=full(join(active,".claude-plugin/plugin.json"));
     if (!activeManifest || projected(activeManifest)!==activeManifest.sha256) continue;
-    // Any registration selecting the missing graph keeps it active, regardless
-    // of plugin label or scope. Malformed registration shapes fail closed.
-    if (Object.values(installed.plugins).some(value=>!Array.isArray(value) || value.some(row=>!row || typeof row.installPath!=="string" || row.installPath===root || row.installPath.startsWith(root+sep) || root.startsWith(row.installPath+sep)))) continue;
+    // Only the target plugin's supported user/project registrations qualify
+    // this exception; unrelated native registration scopes remain untouched.
     result.add(root);
   }
   return [...result];
