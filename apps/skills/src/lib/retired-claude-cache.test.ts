@@ -4,9 +4,32 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { captureClaudeSettingsV3 } from "./claude-settings-witness.js";
+import { hashClaudePluginManifest } from "./claude-plugin-manifest-witness.js";
 import { verifyAgentDiscovery, rebindAgentDiscovery, type AgentDiscoveryBinding } from "./agent-discovery.js";
 const put=(path:string,text:string)=>{mkdirSync(dirname(path),{recursive:true});writeFileSync(path,text);};
 const hash=(path:string)=>createHash("sha256").update(readFileSync(path)).digest("hex");
+test("semantic manifest alone proves an absent retired version while preserving its original digest",()=>{
+ const home=mkdtempSync(join(tmpdir(),"skills-retired-claude-semantic-only-"));
+ try {
+  const parent=join(home,".claude/plugins/cache/probe/vendor"),old=join(parent,"1.0.0"),active=join(parent,"2.0.0");
+  const settings=join(home,".claude/settings.json"),registry=join(home,".claude/plugins/installed_plugins.json");
+  put(settings,JSON.stringify({enabledPlugins:{"vendor@probe":true}}));
+  put(registry,JSON.stringify({version:2,plugins:{"vendor@probe":[{scope:"user",installPath:active,version:"2.0.0"}]}}));
+  const manifests=[old,active].map(root=>join(root,".claude-plugin/plugin.json"));
+  for(const path of manifests) put(path,JSON.stringify({name:"vendor"}));
+  const sources=[captureClaudeSettingsV3(settings),{path:registry,sha256:hash(registry)},...manifests.map(path=>({path,hashMode:"claude-plugin-manifest-v1" as const,sha256:hashClaudePluginManifest(readFileSync(path,"utf8"))}))];
+  const binding:AgentDiscoveryBinding={agent:"claude",method:"reviewed",roots:[old,active],sources};
+  verifyAgentDiscovery(binding);renameSync(old,join(home,"preserved-old"));
+  expect(()=>verifyAgentDiscovery(binding)).not.toThrow();
+  expect(rebindAgentDiscovery(binding,new Map()).sources).toEqual(sources);
+  expect(()=>rebindAgentDiscovery(binding,new Map([[manifests[0]!,"{}"]]))).toThrow("without synthetic changes");
+  const unsupported={...binding,sources:sources.map(source=>source.path===manifests[0] ? {...source,hashMode:"path-bytes" as const} : source)};
+  expect(()=>verifyAgentDiscovery(unsupported)).toThrow();
+  renameSync(join(home,"preserved-old"),old);
+  put(manifests[0]!,JSON.stringify({name:"changed-vendor"}));
+  expect(()=>verifyAgentDiscovery(binding)).toThrow("Native discovery input changed");
+ } finally {rmSync(home,{recursive:true,force:true});}
+});
 test("retired Claude cache absence preserves its witness while active missing hooks and registration drift refuse",()=>{
  const home=mkdtempSync(join(tmpdir(),"skills-retired-claude-"));
  try {

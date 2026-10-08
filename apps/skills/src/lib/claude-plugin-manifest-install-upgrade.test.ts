@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyAgentIntegration, assertManagedAgentBridge, planAgentIntegration } from "./agent-integration.js";
@@ -9,6 +9,60 @@ const homes: string[] = [];
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
 const put = (path: string, contents: string) => { mkdirSync(join(path, ".."), { recursive: true }); writeFileSync(path, contents); };
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+
+test("installed semantic manifest witnesses survive retired cache removal without accepting active or native skill drift", () => {
+  const home = mkdtempSync(join(tmpdir(), "skills-claude-retired-semantic-manifest-"));
+  homes.push(home);
+  const parent = join(home, ".claude/plugins/cache/market/plugin");
+  const retired = join(parent, "1.0.0"), active = join(parent, "2.0.0");
+  const settings = join(home, ".claude/settings.json"), registry = join(home, ".claude/plugins/installed_plugins.json");
+  const projectPath = join(home, "project");
+  put(settings, JSON.stringify({ enabledPlugins: { "plugin@market": true } }));
+  const rows = [{ scope: "user", installPath: active, version: "2.0.0" },
+    { scope: "project", projectPath, installPath: active, version: "2.0.0" }];
+  const registryText = JSON.stringify({ version: 2, plugins: { "plugin@market": rows } });
+  put(registry, registryText);
+  for (const root of [retired, active]) {
+    put(join(root, ".claude-plugin/plugin.json"), JSON.stringify({ name: "plugin", version: root === retired ? "1.0.0" : "2.0.0", skills: "./skills" }));
+    put(join(root, "hooks/hooks.json"), JSON.stringify({ modules: ["register.ts"] }));
+    put(join(root, "hooks/modules/register.ts"), "export function registerPlugin() {}\n");
+    mkdirSync(join(root, "skills"), { recursive: true });
+  }
+  const paths = [settings, registry, ...[retired, active].flatMap(root =>
+    [".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/modules/register.ts"].map(path => join(root, path)))];
+  const options = { home, dataDir: join(home, "skills-data"), projectDir: home, agents: ["claude" as const], command: "/fixture/skills" };
+  applyAgentIntegration(planAgentIntegration({ ...options, discoveryInputs: { version: 1, agents: [{
+    agent: "claude", roots: [join(retired, "skills"), join(active, "skills")],
+    sources: paths.map(path => ({ path, sha256: sha(readFileSync(path, "utf8")) })), pluginHooks: "reviewed-no-skill-injection",
+  }] } }));
+  const policyPath = join(options.dataDir, "agent-policy.json");
+  const originalSources = JSON.parse(readFileSync(policyPath, "utf8")).bridge.discovery.claude.sources;
+  for (const root of [retired, active]) {
+    expect(originalSources.find((source: { path: string }) => source.path === join(root, ".claude-plugin/plugin.json")).hashMode).toBe("claude-plugin-manifest-v1");
+  }
+  expect(() => assertManagedAgentBridge("claude", options)).not.toThrow();
+  renameSync(retired, join(home, "preserved-retired"));
+  expect(() => assertManagedAgentBridge("claude", options)).not.toThrow();
+  applyAgentIntegration(planAgentIntegration(options));
+  expect(JSON.parse(readFileSync(policyPath, "utf8")).bridge.discovery.claude.sources).toEqual(originalSources);
+
+  const manifest = join(active, ".claude-plugin/plugin.json"), manifestText = readFileSync(manifest, "utf8");
+  put(manifest, JSON.stringify({ name: "plugin", skills: "./changed-skills" }));
+  expect(() => assertManagedAgentBridge("claude", options)).toThrow("NATIVE_SKILL_DRIFT");
+  put(manifest, manifestText);
+  const hooks = join(active, "hooks/hooks.json"), hookText = readFileSync(hooks, "utf8");
+  renameSync(hooks, join(home, "preserved-active-hooks"));
+  expect(() => assertManagedAgentBridge("claude", options)).toThrow("NATIVE_SKILL_DRIFT");
+  put(hooks, hookText);
+  renameSync(active, join(home, "preserved-active"));
+  expect(() => assertManagedAgentBridge("claude", options)).toThrow("NATIVE_SKILL_DRIFT");
+  renameSync(join(home, "preserved-active"), active);
+  put(registry, JSON.stringify({ version: 2, plugins: { "plugin@market": [rows[0], { ...rows[1], version: "3.0.0" }] } }));
+  expect(() => assertManagedAgentBridge("claude", options)).toThrow("NATIVE_SKILL_DRIFT");
+  put(registry, registryText);
+  put(join(active, "skills/unreviewed/SKILL.md"), "---\nname: unreviewed\ndescription: synthetic regression fixture\n---\nUnknown native skill.\n");
+  expect(() => assertManagedAgentBridge("claude", options)).toThrow("NATIVE_SKILL_DRIFT");
+});
 
 test("reviewed absent plugin witnesses survive manifest upgrade and still refuse reappearance", () => {
   const home = mkdtempSync(join(tmpdir(), "skills-claude-absent-manifest-"));

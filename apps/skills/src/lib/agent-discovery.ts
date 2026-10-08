@@ -221,14 +221,22 @@ export function captureRetiredCodexDiscovery(binding:AgentDiscoveryBinding, cont
     && isDeepStrictEqual(previous.directories.map(item=>item.path),directories.map(item=>item.path))) return {...current,codexRetiredMaterializations:previous};
   return {...current,codexRetiredMaterializations:{roots,parents,directories:captureDiscoveryDirectoryProjection(directories.map(item=>item.path),roots)}};
 }
-/** Retain historical bytes only when the entire old Claude version is absent
+/** Only full byte witnesses and the installer's full manifest projection may
+ * retain their reviewed digest beneath a positively verified absent root. */
+function retainableAbsentSource(source: DiscoverySource): boolean {
+  if (source.format!==undefined || source.fields!==undefined || source.managedPlugins!==undefined) return false;
+  return [undefined,"bytes"].includes(source.hashMode)
+    || source.hashMode==="claude-plugin-manifest-v1" && source.sha256!==null
+      && source.path.endsWith(join(sep,".claude-plugin","plugin.json"));
+}
+/** Retain historical witnesses only when the entire old Claude version is absent
  * and unchanged native settings/registry select a different extant user root.
  * No individual missing hook or currently registered root is exempt. */
 function absentRetiredClaudeRoots(binding:AgentDiscoveryBinding):string[] {
   if (binding.agent!=="claude" || binding.method!=="reviewed") return [];
   const result=new Set<string>();
   for (const source of binding.sources) {
-    if (source.format!==undefined || source.fields!==undefined || source.managedPlugins!==undefined || ![undefined,"bytes"].includes(source.hashMode) || source.sha256===null) continue;
+    if (!retainableAbsentSource(source) || source.sha256===null) continue;
     const marker=sep+".claude"+sep+"plugins"+sep+"cache"+sep, at=source.path.indexOf(marker);
     if (at<0 || source.path.indexOf(marker,at+1)>=0) continue;
     const cache=source.path.slice(0,at+marker.length-1), parts=source.path.slice(at+marker.length).split(sep);
@@ -312,7 +320,7 @@ export function verifyAgentDiscovery(binding: AgentDiscoveryBinding, codexRecove
     // positively attested installation role binds current source identity.
     // These bodies/directories are not native loading inputs.
     if (installationInput(source.path)) { safe(source.path); continue; }
-    if (absentRoots.some(root=>source.path.startsWith(root+sep)) && source.format===undefined && source.fields===undefined && source.managedPlugins===undefined && [undefined,"bytes"].includes(source.hashMode)) { safe(source.path); continue; }
+    if (absentRoots.some(root=>source.path.startsWith(root+sep)) && retainableAbsentSource(source)) { safe(source.path); continue; }
     const current = projected(source, undefined, budget);
     if (current !== source.sha256 && !verifiesCodexHookDiscoverySource(binding, source, current, codexRecovery)) throw new Error(`Native discovery input changed; run skills hook install with a fresh discovery review: ${source.path}`);
   }
@@ -345,7 +353,7 @@ export function rebindAgentDiscovery(binding: AgentDiscoveryBinding, changes: Ma
   const installationRoots=codexInstallationRoots(binding), absentRoots=[...absentCodexSkillRoots(binding),...absentRetiredClaudeRoots(binding),...retiredCodexRoots(binding).filter(root=>!lstatSync(root,{throwIfNoEntry:false}))];
   const rebound={ ...binding, sources: binding.sources.map(source => {
     assertMarketplaceBinding(binding, source);
-    if (!changes.has(source.path) && (installationRoots.some(root=>source.path.startsWith(root+sep)) || absentRoots.some(root=>source.path.startsWith(root+sep)) && source.format===undefined && source.fields===undefined && source.managedPlugins===undefined && [undefined,"bytes"].includes(source.hashMode))) return source;
+    if (!changes.has(source.path) && (installationRoots.some(root=>source.path.startsWith(root+sep)) || absentRoots.some(root=>source.path.startsWith(root+sep)) && retainableAbsentSource(source))) return source;
     const sha256 = projected(source, changes, budget);
     // Only a planned write may change its witness. Do not adopt source drift
     // between initial validation and hook rendering, including raw witnesses.
