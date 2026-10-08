@@ -338,6 +338,27 @@ test("reviewed Claude inputs without enabled cache plugins do not acquire a regi
   expect(() => planAgentIntegration({ ...options, discoveryInputs: review })).not.toThrow();
 });
 
+test("explicit Claude reviews reject malformed present registrations and retain non-cache discovery", () => {
+  const home = mkdtempSync(join(tmpdir(), "skills-claude-malformed-registration-"));
+  homes.push(home);
+  const settings = join(home, ".claude/settings.json"), registry = join(home, ".claude/plugins/installed_plugins.json");
+  const id = "plugin@market", localRoot = join(home, ".claude/local/plugin");
+  put(settings, JSON.stringify({ enabledPlugins: { [id]: true } }));
+  mkdirSync(localRoot, { recursive: true });
+  const options = { home, dataDir: join(home, "skills-data"), projectDir: home, agents: ["claude" as const], command: "/fixture/skills" };
+  const reviewed = () => ({ version: 1 as const, agents: [{ agent: "claude" as const, roots: [localRoot],
+    sources: [settings, registry].map(path => ({ path, sha256: sha(readFileSync(path, "utf8")) })),
+    pluginHooks: "reviewed-no-skill-injection" as const }] });
+  for (const rows of [{ installPath: localRoot }, null, [null], ["invalid"], [{}], [{ installPath: 42 }]]) {
+    put(registry, JSON.stringify({ version: 2, plugins: { [id]: rows } }));
+    expect(() => planAgentIntegration({ ...options, discoveryInputs: reviewed() })).toThrow("Reviewed Claude enabled plugin registration");
+  }
+  put(registry, JSON.stringify({ version: 2, plugins: { [id]: [{ scope: "local", installPath: localRoot, version: "1.2.3" }] } }));
+  expect(() => planAgentIntegration({ ...options, discoveryInputs: reviewed() })).not.toThrow();
+  put(registry, JSON.stringify({ version: 2, plugins: {} }));
+  expect(() => planAgentIntegration({ ...options, discoveryInputs: reviewed() })).not.toThrow();
+});
+
 test("reviewed Claude policy apply remains valid after the old cache is removed", () => {
   const home = mkdtempSync(join(tmpdir(), "skills-claude-reviewed-cache-retirement-"));
   homes.push(home);

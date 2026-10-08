@@ -109,9 +109,12 @@ function assertReviewedClaudeCacheClosures(home: string, config: Record<string, 
   const activeRoots = new Set<string>();
   for (const id of enabledIds) {
     const rows = registry.plugins[id];
-    if (!Array.isArray(rows)) continue;
+    if (rows === undefined) continue;
+    if (!Array.isArray(rows)) throw new Error("Reviewed Claude enabled plugin registrations must be an array");
     for (const row of rows) {
-      if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+      if (!row || typeof row !== "object" || Array.isArray(row) || typeof row.installPath !== "string") {
+        throw new Error("Reviewed Claude enabled plugin registration requires an object with an installPath string");
+      }
       if (typeof row.installPath === "string" && (row.installPath === cacheRoot || row.installPath.startsWith(cacheRoot + sep))) {
         if (!cachePath(row.installPath) || row.installPath.length > AGENT_POLICY_LIMITS.pathCharacters
           || row.version !== undefined && (typeof row.version !== "string" || basename(row.installPath) !== row.version)) {
