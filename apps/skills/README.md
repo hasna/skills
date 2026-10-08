@@ -696,6 +696,10 @@ remain absent only while unchanged native settings and registrations select a
 different extant, witnessed user version. Individual missing files, current
 registered roots, aliases and registration changes still refuse; historical
 source hashes and typed settings witnesses remain intact.
+An explicit Claude discovery review must cover every registered active cache
+manifest, skill root and hook source. Installation refuses an incomplete review
+that covers only an older cache, before retirement of that cache can break prompt
+delivery. Hook behavior still requires the existing no-skill-injection review.
 
 For a Codex 0.160.0, 0.160.1 or 0.161.0 remote refresh omitted by an existing qualified-name disable,
 a fresh native catalog and discovery review can plan the new exact path disable
