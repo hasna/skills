@@ -3,20 +3,23 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { installSumiPathsFixture } from "./sumi-paths.fixture.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { archiveNativeSkills, inventoryNativeSkills, parseNativeMigrationTargetManifest, selectNativeMigrationTargets, type NativeMigrationTargetManifest } from "./agent-integration.js";
 import { INTEGRATION_AGENTS } from "./agent-adapters.js";
 
 useDefaultTestTimeout();
 const roots: string[] = [];
+const originalPath = process.env.PATH;
 let restoreInspector: () => void;
 beforeEach(() => { restoreInspector = installCorpusInspectorFixture(); });
-afterEach(() => { restoreInspector(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { restoreInspector(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); process.env.PATH = originalPath; });
 
 function fixture(count = 1): { root: string; home: string; project: string } {
   const root = mkdtempSync(join(tmpdir(), "skills-native-target-")); roots.push(root);
   const home = join(root, "home"), project = join(root, "project");
   mkdirSync(home, { recursive: true }); mkdirSync(join(project, ".codex", "skills"), { recursive: true });
+  process.env.PATH = installSumiPathsFixture(home) + ":" + (originalPath ?? "");
   admitCorpusFixture(join(project, ".codex"));
   for (let index = 0; index < count; index++) {
     const skill = join(project, ".codex", "skills", `reviewed-${index}`);

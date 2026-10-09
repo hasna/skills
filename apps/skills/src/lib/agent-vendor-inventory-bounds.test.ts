@@ -22,46 +22,46 @@ test("retiring a vendor document preserves deep assets and still detects a new n
   const f = fixture(), skill = join(f.cache, "market/presentations/1.0.0/skills/presentations"), document = join(skill, "SKILL.md");
   const asset = join(skill, "artifact_tool_docs/api/references/cookbook/example.md");
   put(document, "Vendor presentation instructions\n"); put(asset);
-  const inventory = inventoryNativeSkills(f.home, { includeVendor: true }); expect(inventory).toHaveLength(1);
+  const inventory = inventoryNativeSkills(f.home, { agents: ["codex"], includeVendor: true }); expect(inventory).toHaveLength(1);
   const archived = archiveNativeSkills(inventory, { dataDir: f.dataDir, includeVendor: true });
   expect(archived.entries).toHaveLength(1); expect(existsSync(document)).toBe(false);
   expect(readFileSync(archived.entries[0]!.archive, "utf8")).toBe("Vendor presentation instructions\n");
   expect(readFileSync(asset, "utf8")).toBe("retained asset\n");
-  expect(inventoryNativeSkills(f.home, { includeVendor: true })).toEqual([]);
+  expect(inventoryNativeSkills(f.home, { agents: ["codex"], includeVendor: true })).toEqual([]);
   const options = { home: f.home, dataDir: f.dataDir, agents: ["codex"] as const, command: "/opt/skills", profileId: "fleet" };
   applyAgentIntegration(planAgentIntegration({ ...options, agents: [...options.agents] }));
   expect(() => assertManagedAgentBridge("codex", { ...f, projectDir: f.home })).not.toThrow();
   put(join(asset, "../new-skill/SKILL.md"), "New native instructions\n");
-  expect(inventoryNativeSkills(f.home, { includeVendor: true }).some(entry => entry.path.endsWith("new-skill"))).toBe(true);
+  expect(inventoryNativeSkills(f.home, { agents: ["codex"], includeVendor: true }).some(entry => entry.path.endsWith("new-skill"))).toBe(true);
   expect(() => assertManagedAgentBridge("codex", { ...f, projectDir: f.home })).toThrow("NATIVE_SKILL_DRIFT");
   expect(readFileSync(asset, "utf8")).toBe("retained asset\n");
 });
 
 test("vendor discovery retains a finite depth limit and the existing ordinary-root limit", () => {
   const f = fixture(); mkdirSync(join(f.cache, ...Array(34).fill("nested")), { recursive: true });
-  expect(() => inventoryNativeSkills(f.home, { includeVendor: true })).toThrow("discovery limit exceeded");
+  expect(() => inventoryNativeSkills(f.home, { agents: ["codex"], includeVendor: true })).toThrow("discovery limit exceeded");
   const ordinary = fixture(); mkdirSync(join(ordinary.home, ".claude/skills/a/b/c/d/e"), { recursive: true });
-  expect(() => inventoryNativeSkills(ordinary.home)).toThrow("discovery limit exceeded");
+  expect(() => inventoryNativeSkills(ordinary.home, { agents: ["claude"] })).toThrow("discovery limit exceeded");
 });
 
 test("deep vendor assets cannot introduce linked directories", () => {
   const f = fixture(), nested = join(f.cache, ...Array(9).fill("asset")), outside = join(f.home, "outside");
   mkdirSync(nested, { recursive: true }); mkdirSync(outside); put(join(outside, "SKILL.md"), "Outside instructions\n");
   symlinkSync(outside, join(nested, "escape"));
-  expect(() => inventoryNativeSkills(f.home, { includeVendor: true })).toThrow("symlink");
+  expect(() => inventoryNativeSkills(f.home, { agents: ["codex"], includeVendor: true })).toThrow("symlink");
   expect(readFileSync(join(outside, "SKILL.md"), "utf8")).toBe("Outside instructions\n");
 });
 
 test("vendor discovery refuses a real FIFO without opening it", () => {
   const f = fixture(); mkdirSync(f.cache, { recursive: true });
   const fifo = join(f.cache, "pipe"), command = spawnSync("mkfifo", [fifo]); expect(command.status).toBe(0);
-  expect(() => inventoryNativeSkills(f.home, { includeVendor: true })).toThrow("Unsupported native discovery entry");
+  expect(() => inventoryNativeSkills(f.home, { agents: ["codex"], includeVendor: true })).toThrow("Unsupported native discovery entry");
 });
 
 test("native discovery limits directory entry allocation even when files contain no skills", () => {
   const f = fixture(); mkdirSync(f.cache, { recursive: true });
   for (let i = 0; i < 20_001; i++) writeFileSync(join(f.cache, `asset-${i}`), "");
-  expect(() => inventoryNativeSkills(f.home, { includeVendor: true })).toThrow("entry limit exceeded");
+  expect(() => inventoryNativeSkills(f.home, { agents: ["codex"], includeVendor: true })).toThrow("entry limit exceeded");
 });
 
 test("native discovery bounds UTF-8 path metadata below the entry limit", () => {
@@ -73,5 +73,5 @@ test("native discovery bounds UTF-8 path metadata below the entry limit", () => 
   expect((fileCount + 2) * join(directory, `${prefix}${fileCount - 1}`).length).toBeLessThan(4 * 1024 * 1024);
   mkdirSync(directory, { recursive: true });
   for (let i = 0; i < fileCount; i++) writeFileSync(join(directory, `${prefix}${i}`), "");
-  expect(() => inventoryNativeSkills(f.home, { includeVendor: true })).toThrow("metadata limit exceeded");
+  expect(() => inventoryNativeSkills(f.home, { agents: ["codex"], includeVendor: true })).toThrow("metadata limit exceeded");
 });

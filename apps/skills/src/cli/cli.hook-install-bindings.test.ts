@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runCliInCwd } from "./cli.test-utils.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
+import { installSumiPathsFixture } from "../lib/sumi-paths.fixture.js";
 
 useDefaultTestTimeout();
 const homes: string[] = [];
@@ -50,9 +51,10 @@ test("bare CLI install reuses reviewed Claude discovery alongside automatic adap
   admitCorpusFixture(join(home, ".codex"));
   const inspectorDirectory = corpusInspectorPathFixture();
   const f = reviewedReinstallFixture(home), reviewPath = join(home, "review.json");
+  const sumiPathBin = installSumiPathsFixture(home);
   writeFileSync(reviewPath, JSON.stringify(f.review()));
   const bin = join(home, "bin"); mkdirSync(bin); symlinkSync(process.execPath, join(bin, "bun"));
-  const run = (args: string[]) => runCliInCwd(["hook", "install", "--json", ...args], home, { HOME: home, HASNA_HOME: join(home, ".hasna"), PATH: bin + ":" + inspectorDirectory });
+  const run = (args: string[]) => runCliInCwd(["hook", "install", "--json", ...args], home, { HOME: home, HASNA_HOME: join(home, ".hasna"), PATH: (args.includes("--agent") && args[args.indexOf("--agent") + 1] !== "all" ? "" : sumiPathBin + ":") + bin + ":" + inspectorDirectory });
   const first = await run(["--agent", "claude", "--command", "/opt/bin/skills", "--selection-profile", "fleet", "--discovery-inputs", reviewPath, "--apply"]);
   expect(first.exitCode).toBe(0);
   const planned = await run([]); expect(planned.stderr).toBe(""); expect(planned.exitCode).toBe(0);

@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { applyAgentIntegration, assertManagedAgentBridge, planAgentIntegration, planClaudeHookEventsUpdate } from "./agent-integration.js";
+import { applyAgentIntegration, assertManagedAgentBridge, inventoryNativeSkills, planAgentIntegration, planClaudeHookEventsUpdate } from "./agent-integration.js";
 import { captureDiscoveryByteSources, captureDiscoveryDirectories, captureDiscoveryPathSources, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
@@ -172,6 +172,37 @@ test("the explicit OpenCode compatibility reader remains guarded", () => {
   expect(() => applyAgentIntegration(pending)).toThrow("OpenCode bridge protection changed");
   expect(read(f.settingsPath)).toBe(before);
   expect(read(f.policyPath)).toBe(policyBefore);
+});
+
+test("a recorded unrelated Sumi binding stays frozen without blocking Claude or Codex when Sumi paths are unavailable", () => {
+  const f = fixture(), policy = JSON.parse(read(f.policyPath));
+  const sumiRoot = join(f.home, ".sumi/skills"); mkdirSync(sumiRoot, { recursive: true });
+  policy.bridge.agents.push("sumi");
+  policy.bridge.commands.sumi = "/fixture/skills";
+  policy.bridge.profiles.sumi = "default";
+  policy.bridge.discovery.sumi = {
+    agent: "sumi", method: "reviewed", roots: [sumiRoot],
+    sources: captureDiscoveryByteSources([f.extraSource]),
+    directories: captureDiscoveryDirectories([f.extraDirectory]),
+    pluginHooks: "reviewed-no-skill-injection",
+  };
+  put(f.policyPath, JSON.stringify(policy));
+  const before = read(f.policyPath), savedPath = process.env.PATH;
+  try {
+    process.env.PATH = "";
+    const pending = plan(f);
+    expect(pending.managedAgentChecks?.agents).toEqual(["claude"]);
+    expect(pending.discoveryAfter?.find(binding => binding.agent === "sumi")).toEqual(policy.bridge.discovery.sumi);
+    expect(inventoryNativeSkills(f.home, { agents: ["claude"] })).toBeArray();
+    expect(inventoryNativeSkills(f.home, { agents: ["codex"] })).toBeArray();
+
+    put(f.extraSource, "// Changed reviewed source\n");
+    expect(() => plan(f)).toThrow("changed");
+    put(f.extraSource, "// Synthetic reviewed source\n");
+    put(join(f.extraDirectory, "new-entry.js"), "// Added reviewed directory entry\n");
+    expect(() => plan(f)).toThrow("changed");
+  } finally { process.env.PATH = savedPath; }
+  expect(read(f.policyPath)).toBe(before);
 });
 
 test("post-write affected-consumer failure rolls back settings and policy", () => {

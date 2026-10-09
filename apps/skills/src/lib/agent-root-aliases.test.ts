@@ -37,7 +37,7 @@ function bytes(root: string) {
 
 test("root aliases require opt-in and hooks use canonical paths while preserving .agents and existing Codex disables", () => {
   const f = fixture();
-  expect(() => inventoryNativeSkills(f.home)).toThrow("symlink");
+  expect(() => inventoryNativeSkills(f.home, { agents: ["claude", "codex"] })).toThrow("symlink");
   expect(() => planAgentIntegration({ ...f, agents: ["claude", "codex"] })).toThrow("symlink");
   const before = bytes(join(f.workspace, ".claude", "skills"));
   const plan = planAgentIntegration({ ...f, agents: ["claude", "codex"], allowRootAliases: true });
@@ -55,7 +55,7 @@ test("root aliases require opt-in and hooks use canonical paths while preserving
   expect(settings.existing).toBe(true); expect(settings.permissions.allow).toEqual(["Read"]);
   const after = bytes(join(f.workspace, ".claude", "skills"));
   for (const [path, content] of Object.entries(before)) expect(after[path]).toBe(content);
-  expect(inventoryNativeSkills(f.home, { allowRootAliases: true }).filter(entry => entry.bridge)).toHaveLength(2);
+  expect(inventoryNativeSkills(f.home, { agents: ["claude", "codex"], allowRootAliases: true }).filter(entry => entry.bridge)).toHaveLength(2);
   expect(lstatSync(join(f.home, ".claude")).isSymbolicLink()).toBe(true);
   expect(readFileSync(join(f.home, ".agents", "skills", "separate", "SKILL.md"), "utf8")).toContain("Separate");
   const receipt = JSON.parse(readFileSync(join(dirname(result.backups[0]!), "receipt.json"), "utf8"));
@@ -63,7 +63,7 @@ test("root aliases require opt-in and hooks use canonical paths while preserving
 });
 
 test("native archive preserves complete canonical bytes and alias binding, leaving separate unmanaged .agents intact", () => {
-  const f = fixture(), inventory = inventoryNativeSkills(f.home, { allowRootAliases: true });
+  const f = fixture(), inventory = inventoryNativeSkills(f.home, { agents: ["claude", "codex"], allowRootAliases: true });
   const originals = new Map(inventory.filter(entry => entry.managed).map(entry => [entry.path, bytes(entry.path)]));
   expect(() => archiveNativeSkills(inventory, { dataDir: f.dataDir })).toThrow("explicit allowRootAliases");
   const result = archiveNativeSkills(inventory, { dataDir: f.dataDir, allowRootAliases: true });
@@ -83,17 +83,17 @@ for (const kind of ["outside", "dangling", "file", "chained", "overlap"] as cons
   else if (kind === "overlap") target = join(f.workspace, ".codex");
   else { target = join(f.home, "other-link"); symlinkSync(join(f.workspace, ".claude"), target); }
   symlinkSync(target, alias);
-  expect(() => inventoryNativeSkills(f.home, { allowRootAliases: true })).toThrow();
+  expect(() => inventoryNativeSkills(f.home, { agents: ["claude", "codex"], allowRootAliases: true })).toThrow();
 });
 
 test("opt-in never follows resource, configuration, or unrecognized .agents symlinks", () => {
   const f = fixture(), asset = join(f.workspace, ".claude", "skills", "claude", "assets", "link"), config = join(f.workspace, ".claude", "settings.json");
   symlinkSync(join(f.home, ".agents", "skills", "separate", "SKILL.md"), asset);
-  expect(() => inventoryNativeSkills(f.home, { allowRootAliases: true })).toThrow("symlink"); unlinkSync(asset);
+  expect(() => inventoryNativeSkills(f.home, { agents: ["claude", "codex"], allowRootAliases: true })).toThrow("symlink"); unlinkSync(asset);
   const text = readFileSync(config, "utf8"); unlinkSync(config); put(join(f.home, "configuration.json"), text); symlinkSync(join(f.home, "configuration.json"), config);
   expect(() => planAgentIntegration({ ...f, agents: ["claude"], allowRootAliases: true })).toThrow("symlink"); unlinkSync(config); put(config, text);
   renameSync(join(f.home, ".agents"), join(f.home, "agents-target")); symlinkSync(join(f.home, "agents-target"), join(f.home, ".agents"));
-  expect(() => inventoryNativeSkills(f.home, { allowRootAliases: true })).toThrow("symlink");
+  expect(() => inventoryNativeSkills(f.home, { agents: ["claude", "codex"], allowRootAliases: true })).toThrow("symlink");
 });
 
 test("retargeted root aliases refuse both hook apply and native archive before any mutation", () => {
@@ -116,7 +116,7 @@ test("replacing a canonical root directory at the same path invalidates the plan
 
 test("managed prompts support reviewed home aliases and still refuse local discovery overrides or file aliases", () => {
   const f = fixture();
-  archiveNativeSkills(inventoryNativeSkills(f.home, { allowRootAliases: true }), { dataDir: f.dataDir, allowRootAliases: true, includeUnmanaged: true });
+  archiveNativeSkills(inventoryNativeSkills(f.home, { agents: ["claude", "codex"], allowRootAliases: true }), { dataDir: f.dataDir, allowRootAliases: true, includeUnmanaged: true });
   applyAgentIntegration(planAgentIntegration({ ...f, agents: ["claude", "codex"], allowRootAliases: true }));
   expect(() => assertManagedAgentBridge("claude", { ...f, projectDir: f.home })).not.toThrow();
   const local = join(f.workspace, ".claude", "settings.local.json");

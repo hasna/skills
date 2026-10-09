@@ -24,7 +24,7 @@ test("installation creates one owned CLI bridge per agent and migration preserve
   for (const agent of f.agents) expect(existsSync(join(f.home, `.${agent}`, "skills", "skills-cli"))).toBe(false);
   expect(plan.changes.filter(change => change.path.endsWith("/skills-cli/SKILL.md"))).toHaveLength(2);
   applyAgentIntegration(plan);
-  const inventory = inventoryNativeSkills(f.home);
+  const inventory = inventoryNativeSkills(f.home, { agents: [...f.agents] });
   expect(inventory).toHaveLength(2);
   for (const entry of inventory) {
     expect(entry).toMatchObject({ bridge: true, managed: true, vendor: false });
@@ -41,7 +41,7 @@ test("renamed or tampered bridge copies never inherit the migration exemption", 
   renameSync(claude, renamed);
   const codex = join(f.home, ".codex", "skills", "skills-cli");
   writeFileSync(join(codex, "extra-instructions.md"), "Do not trust this extra content\n");
-  const inventory = inventoryNativeSkills(f.home);
+  const inventory = inventoryNativeSkills(f.home, { agents: [...f.agents] });
   expect(inventory.filter(entry => entry.bridge)).toEqual([]);
   expect(() => planAgentIntegration(f)).toThrow("bridge");
   const archived = archiveNativeSkills(inventory, { dataDir: f.dataDir, includeUnmanaged: true });
@@ -69,7 +69,7 @@ test("explicit vendor retirement removes only discovery documents and preserves 
   writeFileSync(join(skill, "SKILL.md"), "Vendor instructions.\n");
   writeFileSync(join(skill, "scripts", "shared.js"), "export const shared = true;\n");
   writeFileSync(join(plugin, "plugin.json"), '{"preserved":true}\n');
-  const inventory = inventoryNativeSkills(f.home, { includeVendor: true });
+  const inventory = inventoryNativeSkills(f.home, { agents: [...f.agents], includeVendor: true });
   expect(archiveNativeSkills(inventory, { dataDir: f.dataDir, includeUnmanaged: true }).entries).toEqual([]);
   const receipt = archiveNativeSkills(inventory, { dataDir: f.dataDir, includeVendor: true });
   expect(receipt.entries).toHaveLength(1);
@@ -93,7 +93,7 @@ test("Gemini, OpenCode and Cursor plans preserve unrelated settings and install 
   const opencode = JSON.parse(readFileSync(paths.opencode, "utf8"));
   expect(opencode.permission.skill).toEqual({ "*": "deny", "skills-cli": "allow" });
   expect(existsSync(join(f.home, ".config", "opencode", "plugins", "skills-cli.js"))).toBe(true);
-  expect(inventoryNativeSkills(f.home).filter(entry => entry.bridge)).toHaveLength(3);
+  expect(inventoryNativeSkills(f.home, { agents: ["gemini", "opencode", "cursor"] }).filter(entry => entry.bridge)).toHaveLength(3);
   expect(planAgentIntegration({ ...f, agents: ["gemini", "opencode", "cursor"] }).changes).toEqual([]);
 });
 
@@ -110,7 +110,7 @@ test("a failed installation rolls back newly created bridge directories so a fre
 for (const vendor of [false, true]) test(`an exhausted ${vendor ? "vendor" : "native"} discovery bound never certifies a partial inventory`, () => {
   const f = options(), path = join(f.home, ".claude", ...(vendor ? ["plugins", "cache"] : ["skills"]), ...Array.from({ length: vendor ? 34 : 15 }, (_, index) => `nested-${index}`));
   mkdirSync(path, { recursive: true }); writeFileSync(join(path, "SKILL.md"), "Deep native instructions\n");
-  expect(() => inventoryNativeSkills(f.home, { includeVendor: true })).toThrow("discovery limit");
+  expect(() => inventoryNativeSkills(f.home, { agents: ["claude"], includeVendor: true })).toThrow("discovery limit");
   expect(() => planAgentIntegration(f)).toThrow("discovery limit");
 });
 
@@ -118,7 +118,7 @@ test("Codex restored built-ins are allowed only at their bound digest and disabl
   const f = options(), system = join(f.home, ".codex", "skills", ".system", "skill-creator"), config = join(f.home, ".codex", "config.toml"), bridge = join(f.home, ".codex", "skills", "skills-cli", "SKILL.md");
   mkdirSync(system, { recursive: true }); writeFileSync(join(system, "SKILL.md"), "Packaged builtin fixture\n");
   writeFileSync(config, `model = "preserved"\n[[skills.config]]\npath = ${JSON.stringify(bridge)}\nenabled = false\n`);
-  const migration = archiveNativeSkills(inventoryNativeSkills(f.home, { includeVendor: true }), { dataDir: f.dataDir, includeVendor: true });
+  const migration = archiveNativeSkills(inventoryNativeSkills(f.home, { agents: [...f.agents], includeVendor: true }), { dataDir: f.dataDir, includeVendor: true });
   expect(migration.entries).toEqual([]);
   expect(readFileSync(join(system, "SKILL.md"), "utf8")).toBe("Packaged builtin fixture\n");
   applyAgentIntegration(planAgentIntegration(f));
@@ -141,7 +141,7 @@ test("account-synced plugin skills are refused and archived without removing plu
   writeFileSync(join(plugin, "helper.js"), "export const fixture = true;\n");
   writeFileSync(join(plugin, ".mcp.json"), '{"mcpServers":{}}');
   expect(() => assertManagedAgentBridge("claude", { ...f, projectDir: f.home })).toThrow("NATIVE_SKILL_DRIFT");
-  const inventory = inventoryNativeSkills(f.home, { includeVendor: true });
+  const inventory = inventoryNativeSkills(f.home, { agents: [...f.agents], includeVendor: true });
   expect(inventory.find(entry => entry.path === skill)).toMatchObject({ agent: "claude", vendor: true, managed: false });
   expect(archiveNativeSkills(inventory, { dataDir: f.dataDir, includeUnmanaged: true }).entries).toEqual([]);
   const receipt = archiveNativeSkills(inventory, { dataDir: f.dataDir, includeVendor: true });
@@ -187,7 +187,7 @@ test("an enabled external plugin cannot escape configured inventory, retirement 
   writeFileSync(join(plugin, ".claude-plugin/plugin.json"), '{"name":"review"}');
   writeFileSync(settings, '{"enabledPlugins":{"review@personal":true}}');
   writeFileSync(join(f.home, ".claude/plugins/installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "review@personal": [{ scope: "user", installPath: plugin }] } }));
-  const inventory = inventoryNativeSkills(f.home, { includeVendor: true, configured: true });
+  const inventory = inventoryNativeSkills(f.home, { agents: [...f.agents], includeVendor: true, configured: true });
   expect(inventory.some(entry => entry.path === skill && entry.vendor)).toBe(true);
   archiveNativeSkills(inventory, { dataDir: f.dataDir, includeVendor: true });
   expect(readFileSync(join(skill, "shared.js"), "utf8")).toBe("preserved executable asset\n");

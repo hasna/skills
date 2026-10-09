@@ -22,7 +22,7 @@ function fixture(agent: "claude" | "codex", alias = false) {
   const plugin = join(root, "plugins", "cache", "official", "superpowers", "6.3.0");
   const skill = join(plugin, "skills", "review");
   put(join(skill, "SKILL.md"), "Review instructions\n");
-  return { home, root, plugin, skill, dataDir: join(home, ".hasna", "skills"), includeVendor: true, allowRootAliases: alias };
+  return { home, root, plugin, skill, dataDir: join(home, ".hasna", "skills"), includeVendor: true, allowRootAliases: alias, agents: [agent] as const };
 }
 
 for (const agent of ["claude", "codex"] as const) for (const alias of [false, true]) {
@@ -32,7 +32,7 @@ for (const agent of ["claude", "codex"] as const) for (const alias of [false, tr
     symlinkSync("CLAUDE.md", join(f.plugin, "metadata-without-extension"));
     // Inventory needs target metadata only; reading this file's contents is unnecessary.
     chmodSync(metadata, 0o000);
-    expect(inventoryNativeSkills(f.home, { allowRootAliases: alias })).toHaveLength(0);
+    expect(inventoryNativeSkills(f.home, { agents: [agent], allowRootAliases: alias })).toHaveLength(0);
     const plan = planAgentIntegration({ ...f, agents: [agent] });
     expect(plan.nativeSkills).toMatchObject([{ agent, path: f.skill, vendor: true, managed: false }]);
     expect(plan.nativeSkills).toHaveLength(1);
@@ -87,7 +87,7 @@ test("an exact reviewed skill-containing cache alias permits vendor retirement w
   symlinkSync(f.plugin, link);
   expect(() => inventoryNativeSkills(f.home, f)).toThrow("symlink");
   expect(() => inventoryNativeSkills(f.home, { ...f, reviewedCacheAlias: join(parent, "other") })).toThrow("symlink");
-  expect(() => inventoryNativeSkills(f.home, { reviewedCacheAlias: link })).toThrow("vendor inventory");
+  expect(() => inventoryNativeSkills(f.home, { agents: ["codex"], reviewedCacheAlias: link })).toThrow("vendor inventory");
   const reviewed = inventoryNativeSkills(f.home, { ...f, reviewedCacheAlias: link });
   expect(reviewed).toMatchObject([{ agent: "codex", path: f.skill, vendor: true }]);
   expect(reviewed).toHaveLength(1);

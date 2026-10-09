@@ -23,9 +23,9 @@ test("native migration covers project ancestors without duplicate archive entrie
   const f = fixture(), parent = join(f.home, "workspace"), project = join(parent, "repo", "src");
   const native = join(parent, ".claude", "skills", "ancestor-copy");
   mkdirSync(project, { recursive: true }); put(join(native, "SKILL.md"), "Synthetic ancestor instructions\n");
-  const inventory = inventoryNativeSkills(f.home, { projectDir: project, projectDirs: [parent, project] });
+  const inventory = inventoryNativeSkills(f.home, { agents: ["claude"], projectDir: project, projectDirs: [parent, project] });
   expect(inventory.map(entry => entry.path)).toEqual([native]);
-  expect(inventoryNativeSkills(f.home, { projectDir: project }).map(entry => entry.path)).toEqual([native]);
+  expect(inventoryNativeSkills(f.home, { agents: ["claude"], projectDir: project }).map(entry => entry.path)).toEqual([native]);
   const archived = archiveNativeSkills(inventory, { dataDir: f.dataDir, includeUnmanaged: true });
   expect(archived.entries).toHaveLength(1);
   expect(readFileSync(join(archived.entries[0]!.archive, "SKILL.md"), "utf8")).toBe("Synthetic ancestor instructions\n");
@@ -38,7 +38,7 @@ test("a Claude hook plan does not inspect unrelated Codex plugin roots", () => {
   symlinkSync(codexPluginRoot, join(f.home, ".codex", "skills"), "dir");
   expect(() => planAgentIntegration({ ...f, agents: ["claude"] })).not.toThrow();
   expect(() => inventoryNativeSkills(f.home, { agents: ["claude"] })).not.toThrow();
-  expect(() => inventoryNativeSkills(f.home)).toThrow("symlink");
+  expect(() => inventoryNativeSkills(f.home, { agents: ["codex"] })).toThrow("symlink");
 });
 
 test("Claude planning and guarded loading exclude another agent's populated vendor cache alias", () => {
@@ -51,7 +51,7 @@ test("Claude planning and guarded loading exclude another agent's populated vend
   applyAgentIntegration(plan);
   expect(() => assertManagedAgentBridge("claude", { ...f, projectDir: f.home })).not.toThrow();
   expect(() => inventoryNativeSkills(f.home, { includeVendor: true, agents: ["codex"] })).toThrow("symlink");
-  expect(() => inventoryNativeSkills(f.home, { includeVendor: true })).toThrow("symlink");
+  expect(() => inventoryNativeSkills(f.home, { agents: ["codex"], includeVendor: true })).toThrow("symlink");
   expect(readFileSync(skill, "utf8")).toBe("Synthetic Codex vendor instructions\n");
 });
 
@@ -63,7 +63,7 @@ test("selected-agent inventory retains its vendor skills and excludes other vend
   const selected = inventoryNativeSkills(f.home, { includeVendor: true, agents: ["claude"] });
   expect(selected.map(entry => entry.path)).toEqual([claude]);
   expect(selected[0]).toMatchObject({ agent: "claude", vendor: true });
-  expect(inventoryNativeSkills(f.home, { includeVendor: true }).map(entry => entry.path)).toEqual([claude, gemini]);
+  expect(inventoryNativeSkills(f.home, { agents: ["claude", "gemini"], includeVendor: true }).map(entry => entry.path)).toEqual([claude, gemini]);
 });
 
 test("selected-agent inventory limits configured discovery before reading other agent settings", () => {
@@ -72,7 +72,7 @@ test("selected-agent inventory limits configured discovery before reading other 
   expect(inventoryNativeSkills(f.home, { configured: true, agents: ["claude"] })).toEqual([]);
   expect(inventoryNativeSkills(f.home, { configured: true, includeVendor: true, agents: [] })).toEqual([]);
   expect(() => inventoryNativeSkills(f.home, { configured: true, agents: ["codex"] })).toThrow("Invalid native discovery configuration");
-  expect(() => inventoryNativeSkills(f.home, { configured: true })).toThrow("Invalid native discovery configuration");
+  expect(() => inventoryNativeSkills(f.home, { configured: true, agents: ["claude", "codex"] })).toThrow("Invalid native discovery configuration");
 });
 
 test("selected-agent inventory limits explicit roots while keeping selected root safety", () => {
@@ -82,7 +82,7 @@ test("selected-agent inventory limits explicit roots while keeping selected root
   const agentRoots = [{ agent: "claude", path: claude }, { agent: "codex", path: codex }];
   expect(inventoryNativeSkills(f.home, { agents: ["claude"], agentRoots }).map(entry => entry.path)).toEqual([claude]);
   expect(() => inventoryNativeSkills(f.home, { agents: ["codex"], agentRoots })).toThrow("symlink");
-  expect(() => inventoryNativeSkills(f.home, { agentRoots })).toThrow("symlink");
+  expect(() => inventoryNativeSkills(f.home, { agents: ["codex"], agentRoots })).toThrow("symlink");
 });
 
 test("native drift identifies bounded escaped paths without exposing document contents", () => {
@@ -210,7 +210,7 @@ test("hook install plans without writes, preserves unrelated hooks and is idempo
   expect(readFileSync(applied.backups[0]!, "utf8")).toBe(before);
   const again = planAgentIntegration({ ...f, agents: ["claude", "codex"], command: "/opt/bin/skills" });
   expect(again.changes).toHaveLength(0);
-  expect(inventoryNativeSkills(f.home).filter(entry => entry.agent === "claude")).toMatchObject([{ bridge: true }]);
+  expect(inventoryNativeSkills(f.home, { agents: ["claude"] })).toMatchObject([{ bridge: true }]);
 });
 
 for (const slot of [0, 1, 2]) test(`Codex binding replacement preserves unrelated native hook indexes around owned slot ${slot}`, () => {
@@ -272,13 +272,13 @@ test("Codex overrides disable native skills while preserving unrelated TOML and 
 test("native migration archives exact user bytes and refuses changed plans", () => {
   const f = fixture(), skill = join(f.home, ".claude", "skills", "review");
   put(join(skill, "SKILL.md"), "Unique user instructions\n"); put(join(skill, "references", "example.txt"), "User reference\n");
-  const inventory = inventoryNativeSkills(f.home);
+  const inventory = inventoryNativeSkills(f.home, { agents: ["claude"] });
   expect(inventory).toHaveLength(1); expect(inventory[0]!.managed).toBe(false);
   const archived = archiveNativeSkills(inventory, { dataDir: f.dataDir, includeUnmanaged: true });
   expect(existsSync(skill)).toBe(false);
   expect(readFileSync(join(archived.entries[0]!.archive, "SKILL.md"), "utf8")).toBe("Unique user instructions\n");
   expect(readFileSync(join(archived.entries[0]!.archive, "references", "example.txt"), "utf8")).toBe("User reference\n");
-  put(join(skill, "SKILL.md"), "Original\n"); const stale = inventoryNativeSkills(f.home);
+  put(join(skill, "SKILL.md"), "Original\n"); const stale = inventoryNativeSkills(f.home, { agents: ["claude"] });
   writeFileSync(join(skill, "SKILL.md"), "New edit\n");
   expect(() => archiveNativeSkills(stale, { dataDir: f.dataDir, includeUnmanaged: true })).toThrow("changed after planning");
   expect(readFileSync(join(skill, "SKILL.md"), "utf8")).toBe("New edit\n");
@@ -286,10 +286,10 @@ test("native migration archives exact user bytes and refuses changed plans", () 
 
 test("migration never follows symlinked content or automatically archives unowned skills", () => {
   const f = fixture(), skill = join(f.home, ".claude", "skills", "review"); put(join(skill, "SKILL.md"), "Review\n");
-  let inventory = inventoryNativeSkills(f.home);
+  let inventory = inventoryNativeSkills(f.home, { agents: ["claude"] });
   expect(archiveNativeSkills(inventory, { dataDir: f.dataDir }).entries).toHaveLength(0);
   symlinkSync(join(f.home, ".hasna"), join(skill, "outside"));
-  expect(() => inventoryNativeSkills(f.home)).toThrow("symlink");
+  expect(() => inventoryNativeSkills(f.home, { agents: ["claude"] })).toThrow("symlink");
 });
 
 test("Gemini global and project skills are inventoried and preserved without implicit ownership", () => {
@@ -298,7 +298,7 @@ test("Gemini global and project skills are inventoried and preserved without imp
   put(join(global, "SKILL.md"), "Global Gemini instructions\n");
   put(join(global, "references", "source.txt"), "Unique reference bytes\n");
   put(join(project, "SKILL.md"), "Project Gemini instructions\n");
-  const inventory = inventoryNativeSkills(f.home, { projectDir });
+  const inventory = inventoryNativeSkills(f.home, { agents: ["gemini"], projectDir });
   expect(inventory.map(entry => ({ agent: entry.agent, path: entry.path, managed: entry.managed }))).toEqual([
     { agent: "gemini", path: global, managed: false }, { agent: "gemini", path: project, managed: false },
   ]);
@@ -320,7 +320,7 @@ test("hook output injects selected context but cannot execute a matched skill", 
 test("explicit vendor inventory disables cached plugin skills without moving plugin files", () => {
   const f = fixture(), skill = join(f.home, ".codex", "plugins", "cache", "market", "review-plugin", "1.0.0", "skills", "review", "SKILL.md");
   put(skill, "Vendor plugin instructions\n");
-  expect(inventoryNativeSkills(f.home)).toHaveLength(0);
+  expect(inventoryNativeSkills(f.home, { agents: ["claude", "codex"] })).toHaveLength(0);
   const plan = planAgentIntegration({ ...f, agents: ["codex"], includeVendor: true });
   expect(plan.nativeSkills).toMatchObject([{ path: join(skill, ".."), vendor: true }]);
   applyAgentIntegration(plan);

@@ -7,6 +7,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { buildCliFixture } from "./cli-build.fixture.js";
 import { renderPinnedLauncher } from "./commands/runtime-launcher.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
+import { installSumiPathsFixture } from "../lib/sumi-paths.fixture.js";
 import { SqliteSkillsStore } from "../server/sqlite-store.js";
 import { SqliteGovernanceStore } from "../sdk/governance-store.js";
 import { createSkillsFetchHandler, type SkillsFetchHandler } from "../server/app.js";
@@ -54,15 +55,20 @@ async function fixture(documentSuffix = "", enrolled = true) {
   handler = await createSkillsFetchHandler({ store, governanceStore, runtime: null, config: { publicBaseUrl: origin } });
   function station(id: string) {
     const home = join(root, id, "home"), data = join(home, ".hasna", "skills"), project = join(root, id, "project");
+    const sumiPathBin = installSumiPathsFixture(home);
     // Bind the synthetic HTTP credential explicitly; never consult a station Keychain.
     const env = { PATH: `${corpusInspectorPathFixture()}:${dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, USERPROFILE: home, HASNA_HOME: join(home, ".hasna"), HASNA_SKILLS_DIR: data, HASNA_SKILLS_API_KEY_OVERRIDE: token, HASNA_SKILLS_API_URL: origin, HASNA_STATION: id, NO_COLOR: "1", TERM: "dumb", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", TMPDIR: join(root, id, "tmp") };
     for (const path of [home, data, project, env.TMPDIR]) mkdirSync(path, { recursive: true });
     if (enrolled) admitCorpusFixture(join(home, ".codex"));
     async function run(args: string[], options: { stdin?: unknown; env?: Record<string, string>; cwd?: string; shellCommand?: string; slowPipe?: boolean } = {}) {
       const command = [process.execPath, "--no-env-file", binary, ...args];
+      const agentIndex = args.indexOf("--agent"), selectedAgent = agentIndex === -1 ? undefined : args[agentIndex + 1];
+      const allInventory = (args[0] === "migrate" && args[1] === "native" && selectedAgent === undefined)
+        || (args[0] === "hook" && args[1] === "install" && selectedAgent === undefined);
+      const needsSumiResolver = allInventory || selectedAgent === "all" || selectedAgent === "sumi";
       // A shell creates a kernel pipe, unlike Bun.spawn's socket-backed capture.
       // Delay its reader to exercise backpressure before the command returns.
-      const child = Bun.spawn(options.shellCommand ? ["/bin/sh", "-c", options.shellCommand] : options.slowPipe ? ["bash", "-o", "pipefail", "-c", '"$@" | { sleep 0.2; cat; }', "skills-pipe", ...command] : command, { cwd: options.cwd ?? project, env: { ...env, ...options.env }, stdin: options.stdin === undefined ? "ignore" : new Blob([JSON.stringify(options.stdin)]), stdout: "pipe", stderr: "pipe" });
+      const child = Bun.spawn(options.shellCommand ? ["/bin/sh", "-c", options.shellCommand] : options.slowPipe ? ["bash", "-o", "pipefail", "-c", '"$@" | { sleep 0.2; cat; }', "skills-pipe", ...command] : command, { cwd: options.cwd ?? project, env: { ...env, ...(needsSumiResolver ? { PATH: `${sumiPathBin}:${env.PATH}` } : {}), ...options.env }, stdin: options.stdin === undefined ? "ignore" : new Blob([JSON.stringify(options.stdin)]), stdout: "pipe", stderr: "pipe" });
       const timer = setTimeout(() => child.kill("SIGKILL"), 12_000);
       try { const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]); return { stdout, stderr, exitCode }; }
       finally { clearTimeout(timer); }
