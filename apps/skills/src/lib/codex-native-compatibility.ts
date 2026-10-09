@@ -22,6 +22,9 @@ const MEASURED_CODEX_CAPABILITIES: Readonly<Record<string, readonly CodexNativeC
   // paths; neighbouring releases remain unsupported. Native corpus admission
   // is independently required and is not granted by this entry.
   "codex-cli 0.161.0": ["hooks", "qualified-skill-catalog", "installed-plugin-review"],
+  // Exact 0.162.0 protocol acceptance covers hooks, native catalog capture
+  // and installed-plugin review. Native corpus admission remains separate.
+  "codex-cli 0.162.0": ["hooks", "qualified-skill-catalog", "installed-plugin-review"],
 };
 
 /** `installed-plugin-review`: the 0.160 `plugin/installed` source identities and
