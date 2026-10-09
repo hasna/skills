@@ -611,7 +611,10 @@ describe("R1 — the published package names no unapproved host", () => {
       'const DEFAULT_LINK_LOCAL_HOST = "http://169.254.170.2";',
       "host = `${DEFAULT_LINK_LOCAL_HOST}${relative}`;",
     ].join("\n");
-    for (const file of ["bin/migrate.js", "bin/server.js", "bin/worker.js", "dist/sdk/index.js"]) {
+    // The built migration entry point does not bundle the AWS ECS credentials
+    // site. Keep the computed-host positive controls limited to artifacts that
+    // the verified build actually emits with this SDK expression.
+    for (const file of ["bin/server.js", "bin/worker.js", "dist/sdk/index.js"]) {
       expect(findDisallowedCodeUrls([{ file, content: sdkSite }]).map((f) => f.kind), file).toEqual([]);
     }
     // A source file with no SDK site is not covered by the bundle entries.
@@ -620,6 +623,10 @@ describe("R1 — the published package names no unapproved host", () => {
     // Negative control 1: the same shape in a bundle that does NOT carry the SDK site
     // (bin/mcp.js) is still a finding; the entry is per bundle, not package-wide.
     expect(findDisallowedCodeUrls([{ file: "bin/mcp.js", content: sdkSite }]).map((f) => f.kind)).toEqual(["undeterminable-host"]);
+    // The migration bundle currently carries no copy of this computed ECS
+    // credentials site, so its path must not inherit the server/worker carve-out.
+    expect(findDisallowedCodeUrls([{ file: "bin/migrate.js", content: sdkSite }]).map((f) => f.kind))
+      .toEqual(["undeterminable-host"]);
 
     // Negative control 2: the entry key is the host-producing expression, so a different
     // computed host in the annotated bundle is still a finding.
@@ -752,22 +759,26 @@ describe("R1 — the published package names no unapproved host", () => {
   // Skipping the coverage check on an unbuilt local tree is only safe while CI
   // guarantees a built one; reordering the workflow would otherwise turn that
   // skip from "not applicable here" into "not checked anywhere", silently.
-  test("CI builds before it tests", () => {
-    const workflow = join(process.cwd(), ".github", "workflows", "ci.yml");
+  test("the standalone release workflow builds before it tests", () => {
+    const workflow = join(process.cwd(), "..", "..", ".github", "workflows", "release-skills.yml");
     expect(existsSync(workflow), `${workflow} must exist`).toBe(true);
     const lines = readFileSync(workflow, "utf8").split(/\r?\n/);
-    const stepLine = (script: string) =>
-      lines.findIndex((line) => new RegExp(`^\\s*run:\\s*bun run ${script}\\s*$`).test(line));
-    const build = stepLine("build");
-    const tests = stepLine("test");
-    expect(build, "ci.yml must run `bun run build`").toBeGreaterThanOrEqual(0);
-    expect(tests, "ci.yml must run `bun run test`").toBeGreaterThanOrEqual(0);
-    expect(
-      build < tests
-        ? ""
-        : `ci.yml runs \`bun run test\` (line ${tests + 1}) before \`bun run build\` (line ${build + 1}); ` +
-          "the entry-point coverage check needs bin/ and dist/ to exist",
-    ).toBe("");
+    const stepBounds = (name: string) => {
+      const start = lines.findIndex((line) => new RegExp(`^\\s*- name: ${name}\\s*$`).test(line));
+      if (start < 0) return { start, body: "" };
+      const next = lines.findIndex((line, index) => index > start && /^\s*- name: /.test(line));
+      const end = next < 0 ? lines.length : next;
+      return { start, body: lines.slice(start, end).join("\n") };
+    };
+    const build = stepBounds("Build");
+    const tests = stepBounds("Test");
+    expect(build.start, "release-skills.yml must define its Build step").toBeGreaterThanOrEqual(0);
+    expect(tests.start, "release-skills.yml must define its Test step").toBeGreaterThanOrEqual(0);
+    expect(build.start < tests.start, "Build must precede Test in release-skills.yml").toBe(true);
+    expect(build.body).toContain("working-directory: apps/skills");
+    expect(build.body).toContain("bun run build");
+    expect(tests.body).toContain("working-directory: apps/skills");
+    expect(tests.body).toContain("bun run prepublishOnly");
   });
 
   // Defence in depth. The packed set contains src/ only after a build, via the
