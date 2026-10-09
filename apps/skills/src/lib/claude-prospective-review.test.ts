@@ -23,7 +23,7 @@ beforeAll(async () => {
 });
 afterAll(() => rmSync(cliScratch, { recursive: true, force: true }));
 
-function fixture(scope: "user" | "project" = "user", existingMarketplace = false, pluginNames = ["demo"]) {
+function fixture(scope: "user" | "project" = "user", existingMarketplace = false, pluginNames = ["demo"], extraMarketplaces?: (home: string) => unknown, mutateKnown?: (rows: Record<string, any>) => void) {
   const home = mkdtempSync(join(tmpdir(), "skills-claude-prospective-")); roots.push(home);
   const settings = join(home, ".claude/settings.json"), known = join(home, ".claude/plugins/known_marketplaces.json"), installed = join(home, ".claude/plugins/installed_plugins.json");
   const candidateRoot = join(home, "frozen-candidate");
@@ -38,13 +38,16 @@ function fixture(scope: "user" | "project" = "user", existingMarketplace = false
       "other@market": { options: { enabled: true, retain: "other" } },
     },
     env: { OTHER_ENV: "retained", CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: "0" },
+    ...(extraMarketplaces ? { extraKnownMarketplaces: extraMarketplaces(home) } : {}),
   };
   put(settings, JSON.stringify(initialSettings));
   put(projectSettings, JSON.stringify({ permissions: { allow: ["Read"] } }));
-  put(known, JSON.stringify({
+  const initialKnown: Record<string, any> = {
     "unrelated-market": { source: { source: "directory", path: join(home, "unrelated-market") }, installLocation: join(home, ".claude/plugins/marketplaces/unrelated-market"), lastUpdated: "2026-10-01T00:00:00.000Z" },
     ...(existingMarketplace ? { "fixture-market": { source: { source: "directory", path: candidateRoot }, installLocation: candidateRoot, autoUpdate: true, lastUpdated: "2026-10-02T00:00:00.000Z" } } : {}),
-  }));
+  };
+  mutateKnown?.(initialKnown);
+  put(known, JSON.stringify(initialKnown));
   const initialRegistrations: Record<string, unknown> = {};
   for (const plugin of pluginNames) {
     const id = `${plugin}@fixture-market`, path = join(home, `.claude/plugins/cache/fixture-market/${plugin}/0.9.0`);
@@ -52,7 +55,13 @@ function fixture(scope: "user" | "project" = "user", existingMarketplace = false
       ? [{ scope: "local", projectPath, installPath: path, version: "0.8.0" }, { scope: "user", installPath: path, version: "0.9.0", installedAt: "2026-10-01T00:00:00.000Z", lastUpdated: "2026-10-03T00:00:00.000Z" }, { scope: "project", projectPath: anotherProject, installPath: path, version: "0.9.0", installedAt: "2026-10-01T00:00:00.000Z" }]
       : [{ scope: "project", projectPath: anotherProject, installPath: path, version: "0.8.0" }, { scope: "user", installPath: path, version: "0.9.0", installedAt: "2026-10-01T00:00:00.000Z", lastUpdated: "2026-10-03T00:00:00.000Z" }];
   }
-  initialRegistrations["other@market"] = [{ scope: "local", installPath: join(home, ".claude/local/other"), version: "4.0.0" }];
+  initialRegistrations["other@market"] = [{ scope: "local", projectPath, installPath: join(home, ".claude/local/other"), version: "4.0.0" }];
+  for (const rows of Object.values(initialRegistrations) as Array<Array<Record<string, unknown>>>) {
+    for (const row of rows) {
+      row.installedAt ??= "2026-10-01T00:00:00.000Z";
+      row.lastUpdated ??= "2026-10-03T00:00:00.000Z";
+    }
+  }
   put(installed, JSON.stringify({ version: 2, plugins: initialRegistrations }));
   const dataDir = join(home, "skills-data");
   const options = { home, dataDir, projectDir: home, agents: ["claude" as const], command: "/fixture/skills" };
@@ -84,7 +93,7 @@ function fixture(scope: "user" | "project" = "user", existingMarketplace = false
   }
   targetSettingsAfter.env ??= {};
   targetSettingsAfter.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS = "1";
-  const knownAfter = { "unrelated-market": { source: { source: "directory", path: join(home, "unrelated-market") }, installLocation: join(home, ".claude/plugins/marketplaces/unrelated-market"), lastUpdated: "2026-10-01T00:00:00.000Z" }, "fixture-market": { source: { source: "directory", path: candidateRoot }, installLocation: candidateRoot, autoUpdate: false, lastUpdated: existingMarketplace ? { $allowed: ["2026-10-02T00:00:00.000Z", { $generated: "claude-utc-timestamp", field: "known-marketplaces.lastUpdated" }] } : { $generated: "claude-utc-timestamp", field: "known-marketplaces.lastUpdated" } } };
+  const knownAfter = { ...structuredClone(initialKnown), "fixture-market": { source: { source: "directory", path: candidateRoot }, installLocation: candidateRoot, autoUpdate: false, lastUpdated: existingMarketplace ? { $allowed: ["2026-10-02T00:00:00.000Z", { $generated: "claude-utc-timestamp", field: "known-marketplaces.lastUpdated" }] } : { $generated: "claude-utc-timestamp", field: "known-marketplaces.lastUpdated" } } };
   const installedAfterPlugins: Record<string, any> = { ...initialRegistrations };
   for (const { plugin } of candidatePlugins) {
     const pluginId = `${plugin}@fixture-market`, rows = [...installedAfterPlugins[pluginId]];
@@ -153,6 +162,199 @@ function awaitManifestHash(path: string): string {
   return hashClaudePlugin(readFileSync(path, "utf8"));
 }
 import { hashClaudePluginManifest as hashClaudePlugin } from "./claude-plugin-manifest-witness.js";
+
+test("Claude 2.1.293 user install models its exact selected marketplace source setting", () => {
+  const f = fixture();
+  f.request.native.executable.version = "2.1.293 (Claude Code)";
+  f.request.candidate.settingsMarketplaceSource = "directory";
+  f.request.delta.settingsAfter.extraKnownMarketplaces = {
+    "fixture-market": { source: { source: "directory", path: f.candidateRoot } },
+  };
+  const before = [f.settings, f.known, f.installed, join(f.dataDir, "agent-policy.json")].map(path => readFileSync(path, "utf8"));
+  expect(review(f.request).accepted).toBe(true);
+  expect([f.settings, f.known, f.installed, join(f.dataDir, "agent-policy.json")].map(path => readFileSync(path, "utf8"))).toEqual(before);
+});
+
+test("the declared settings marketplace operation preserves supported foreign rows", () => {
+  const f = fixture("user", false, ["demo"], home => ({
+    "other-market": { source: { source: "directory", path: join(home, "other") }, autoUpdate: false },
+    "fixture-market": { source: { source: "directory", path: join(home, "prior") } },
+  }));
+  f.request.native.executable.version = "2.1.293";
+  f.request.candidate.settingsMarketplaceSource = "directory";
+  const extra = JSON.parse(readFileSync(f.settings, "utf8")).extraKnownMarketplaces;
+  const expected = { ...extra, "fixture-market": { ...extra["fixture-market"], source: { source: "directory", path: f.candidateRoot } } };
+  f.request.delta.settingsAfter.extraKnownMarketplaces = structuredClone(expected);
+  expect(review(f.request).accepted).toBe(true);
+  for (const mutate of [
+    (value: any) => { delete value["other-market"]; },
+    (value: any) => { value["other-market"].autoUpdate = true; },
+    (value: any) => { value["fixture-market"].autoUpdate = false; },
+    (value: any) => { value["fixture-market"].source.path = join(f.home, "unreviewed"); },
+    (value: any) => { value["fixture-market"].source.source = "github"; },
+    (value: any) => { value.injected = { source: { source: "directory", path: f.candidateRoot } }; },
+  ]) {
+    const altered = structuredClone(expected); mutate(altered);
+    f.request.delta.settingsAfter.extraKnownMarketplaces = altered;
+    expect(() => review(f.request)).toThrow("complete settings document differs");
+  }
+});
+
+test("native metadata loss refuses before installation even when the caller predicts preservation", () => {
+  for (const [name, metadata] of [
+    ["fixture-market", { autoUpdate: false }],
+    ["fixture-market", { fixtureMetadata: { preserve: true } }],
+    ["other-market", { fixtureMetadata: { preserve: true } }],
+  ] as const) {
+    const f = fixture("user", false, ["demo"], home => ({ [name]: { source: { source: "directory", path: join(home, "prior") }, ...metadata } }));
+    f.request.native.executable.version = "2.1.293";
+    f.request.candidate.settingsMarketplaceSource = "directory";
+    const before = readFileSync(f.settings, "utf8");
+    const extra = JSON.parse(before).extraKnownMarketplaces;
+    f.request.delta.settingsAfter.extraKnownMarketplaces = { ...extra, "fixture-market": { ...extra["fixture-market"], source: { source: "directory", path: f.candidateRoot } } };
+    expect(() => review(f.request)).toThrow("metadata cannot be preserved");
+    expect(readFileSync(f.settings, "utf8")).toBe(before);
+  }
+});
+
+test("native known-marketplace metadata loss refuses before writes even when the caller predicts preservation", () => {
+  for (const mutate of [
+    (rows: Record<string, any>) => { rows["unrelated-market"].fixtureMetadata = { preserve: true }; },
+    (rows: Record<string, any>) => { rows["unrelated-market"].source.fixtureMetadata = "preserve"; },
+    (rows: Record<string, any>) => { rows["fixture-market"].source.fixtureMetadata = "preserve"; },
+  ]) {
+    const f = fixture("user", true, ["demo"], undefined, mutate);
+    f.request.native.executable.version = "2.1.293";
+    f.request.candidate.settingsMarketplaceSource = "directory";
+    f.request.delta.settingsAfter.extraKnownMarketplaces = { "fixture-market": { source: { source: "directory", path: f.candidateRoot } } };
+    const paths = [f.settings, f.known, f.installed, join(f.dataDir, "agent-policy.json")];
+    const before = paths.map(path => readFileSync(path, "utf8"));
+    expect(() => review(f.request)).toThrow("CLAUDE_CANDIDATE_REVIEW_REFUSED");
+    expect(paths.map(path => readFileSync(path, "utf8"))).toEqual(before);
+  }
+});
+
+test("the measured known-marketplace directory row retains foreign auto-update metadata", () => {
+  const f = fixture("user", true, ["demo"], undefined, rows => { rows["unrelated-market"].autoUpdate = true; });
+  f.request.native.executable.version = "2.1.293";
+  f.request.candidate.settingsMarketplaceSource = "directory";
+  f.request.delta.settingsAfter.extraKnownMarketplaces = { "fixture-market": { source: { source: "directory", path: f.candidateRoot } } };
+  const before = readFileSync(f.known, "utf8");
+  expect(review(f.request).accepted).toBe(true);
+  expect(readFileSync(f.known, "utf8")).toBe(before);
+});
+
+test("the foreign GitHub index projection preserves the row without widening the install source", () => {
+  const f = fixture("user", true, ["demo"], undefined, rows => {
+    rows["unrelated-market"].source = { source: "github", repo: "example/official-plugins" };
+    rows["unrelated-market"].autoUpdate = true;
+  });
+  f.request.native.executable.version = "2.1.293";
+  f.request.candidate.settingsMarketplaceSource = "directory";
+  f.request.delta.settingsAfter.extraKnownMarketplaces = { "fixture-market": { source: { source: "directory", path: f.candidateRoot } } };
+  const before = readFileSync(f.known, "utf8");
+  expect(review(f.request).accepted).toBe(true);
+  expect(readFileSync(f.known, "utf8")).toBe(before);
+  (f.request.delta.knownMarketplacesAfter["unrelated-market"] as Record<string, any>).source.repo = "example/replaced";
+  expect(() => review(f.request)).toThrow("complete marketplace document differs");
+});
+
+test("the known-marketplace preflight refuses unknown GitHub metadata and malformed foreign fields", () => {
+  for (const mutate of [
+    (row: any) => { row.source = { source: "github", repo: "example/other", ref: "main" }; },
+    (row: any) => { row.source = { source: "github", repo: "https://example.invalid/other" }; },
+    (row: any) => { row.source = { source: "github", repo: "example/other\n" }; },
+    (row: any) => { row.source = { source: "git", url: "https://example.invalid/other" }; },
+    (row: any) => { row.autoUpdate = "true"; },
+    (row: any) => { row.installLocation = "relative"; },
+    (row: any) => { row.lastUpdated = "invalid"; },
+  ]) {
+    const f = fixture("user", true, ["demo"], undefined, rows => mutate(rows["unrelated-market"]));
+    f.request.native.executable.version = "2.1.293";
+    f.request.candidate.settingsMarketplaceSource = "directory";
+    f.request.delta.settingsAfter.extraKnownMarketplaces = { "fixture-market": { source: { source: "directory", path: f.candidateRoot } } };
+    const before = readFileSync(f.known, "utf8");
+    expect(() => review(f.request)).toThrow("CLAUDE_CANDIDATE_REVIEW_REFUSED");
+    expect(readFileSync(f.known, "utf8")).toBe(before);
+  }
+});
+
+test("the declared native operation refuses installed-registry metadata loss before any writer", () => {
+  for (const mutate of [
+    (registry: any) => { registry.fixtureMetadata = { preserve: true }; },
+    (registry: any) => { registry.plugins["other@market"][0].fixtureMetadata = "preserve"; },
+    (registry: any) => { registry.plugins["demo@fixture-market"][0].fixtureMetadata = "preserve"; },
+  ]) {
+    const f = fixture();
+    f.request.native.executable.version = "2.1.293";
+    f.request.candidate.settingsMarketplaceSource = "directory";
+    f.request.delta.settingsAfter.extraKnownMarketplaces = { "fixture-market": { source: { source: "directory", path: f.candidateRoot } } };
+    expect(review(f.request).accepted).toBe(true);
+    const registry = JSON.parse(readFileSync(f.installed, "utf8"));
+    mutate(registry);
+    mutate(f.request.delta.installedPluginsAfter);
+    refreshRegistryBinding(f, registry);
+    const paths = [f.settings, f.known, f.installed, join(f.dataDir, "agent-policy.json")];
+    const before = paths.map(path => readFileSync(path, "utf8"));
+    expect(() => review(f.request)).toThrow("CLAUDE_CANDIDATE_REVIEW_REFUSED");
+    expect(paths.map(path => readFileSync(path, "utf8"))).toEqual(before);
+  }
+});
+
+test("the installed-registry projection preserves supported foreign Git metadata", () => {
+  const f = fixture();
+  f.request.native.executable.version = "2.1.293";
+  f.request.candidate.settingsMarketplaceSource = "directory";
+  f.request.delta.settingsAfter.extraKnownMarketplaces = { "fixture-market": { source: { source: "directory", path: f.candidateRoot } } };
+  const registry = JSON.parse(readFileSync(f.installed, "utf8"));
+  registry.plugins["other@market"][0].gitCommitSha = "a".repeat(40);
+  (f.request.delta.installedPluginsAfter.plugins as Record<string, any>)["other@market"][0].gitCommitSha = "a".repeat(40);
+  refreshRegistryBinding(f, registry);
+  const before = readFileSync(f.installed, "utf8");
+  expect(review(f.request).accepted).toBe(true);
+  expect(readFileSync(f.installed, "utf8")).toBe(before);
+  (f.request.delta.installedPluginsAfter.plugins as Record<string, any>)["other@market"][0].gitCommitSha = "b".repeat(40);
+  expect(() => review(f.request)).toThrow("complete installed plugin document changes an unrelated registration");
+});
+
+test("unmeasured or malformed foreign source declarations refuse the directory operation", () => {
+  for (const source of [
+    { source: "github", repo: "example/other" },
+    { source: "directory", path: "/fixture/other", extra: "unknown" },
+    { source: "directory", path: "relative" },
+  ]) {
+    const f = fixture("user", false, ["demo"], () => ({ "other-market": { source } }));
+    f.request.native.executable.version = "2.1.293";
+    f.request.candidate.settingsMarketplaceSource = "directory";
+    expect(() => review(f.request)).toThrow("CLAUDE_CANDIDATE_REVIEW_REFUSED");
+  }
+});
+
+test("a malformed current settings marketplace map or selected row cannot be normalized", () => {
+  for (const malformed of [null, [], true, "invalid", { "fixture-market": null }, { "fixture-market": [] }]) {
+    const f = fixture("user", false, ["demo"], () => malformed);
+    f.request.native.executable.version = "2.1.293";
+    f.request.candidate.settingsMarketplaceSource = "directory";
+    f.request.delta.settingsAfter.extraKnownMarketplaces = { "fixture-market": { source: { source: "directory", path: f.candidateRoot } } };
+    expect(() => review(f.request)).toThrow("is not an object");
+  }
+});
+
+test("settings marketplace mutation is explicit and restricted to the measured native operation", () => {
+  for (const version of ["2.1.292", "2.1.294", "2.1.295", "2.1.293-beta", "2.1.293+local"]) {
+    const f = fixture(); f.request.native.executable.version = version;
+    f.request.candidate.settingsMarketplaceSource = "directory";
+    expect(() => review(f.request)).toThrow("measured Claude 2.1.293 user scope");
+  }
+  const project = fixture("project"); project.request.native.executable.version = "2.1.293";
+  project.request.candidate.settingsMarketplaceSource = "directory";
+  expect(() => review(project.request)).toThrow("measured Claude 2.1.293 user scope");
+  const f = fixture(); f.request.native.executable.version = "2.1.293";
+  f.request.delta.settingsAfter.extraKnownMarketplaces = { "fixture-market": { source: { source: "directory", path: f.candidateRoot } } };
+  expect(() => review(f.request)).toThrow("complete settings document differs");
+  (f.request.candidate as any).settingsMarketplaceSource = "github";
+  expect(() => review(f.request)).toThrow("measured Claude 2.1.293 user scope");
+});
 
 test("prospective review accepts an exact user-scoped frozen candidate without writing native state", () => {
   const f = fixture();

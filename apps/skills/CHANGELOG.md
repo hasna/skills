@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.59
+
+- Model Claude 2.1.293's user-scoped marketplace source setting during prospective plugin review. Installers explicitly declare the directory-source operation; Skills derives its exact path from the reviewed frozen candidate and preserves unrelated settings and marketplace entries. Preflight all authoritative marketplace and installed-plugin rows, including foreign entries and scopes, before the native parser can discard unsupported metadata. Preserve supported directory/GitHub entries and foreign Git revisions. Omission keeps the existing review contract.
+
 ## 0.10.58
 
 - Admit exact `codex-cli 0.162.0` for native hook transport, qualified skill catalog capture and installed-plugin review after native acceptance. Neighboring releases and prerelease/build variants remain unsupported; native corpus admission is separate and still requires an admission-capable build.
