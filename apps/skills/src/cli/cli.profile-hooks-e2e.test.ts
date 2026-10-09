@@ -146,11 +146,14 @@ test("alternate-agent CLI migration binds shared input to the selected custom Co
   } finally { publication.close(); await f.close(); }
 });
 
-for (const relativeRoot of [".sumi/skills", ".agents/skill"]) test(`alternate-agent CLI leaves unrelated ${relativeRoot} migration usable without Codex enrollment`, async () => {
-  const f = await fixture("", false), skill = join(f.a.project, relativeRoot, "unrelated"), bytes = "Synthetic unrelated input\n";
+for (const relativeRoot of ["sumi-config/skills", ".agents/skill"]) test(`alternate-agent CLI leaves unrelated ${relativeRoot} migration usable without Codex enrollment`, async () => {
+  const f = await fixture("", false), skill = relativeRoot === ".agents/skill"
+    ? join(f.a.project, relativeRoot, "unrelated")
+    : join(f.a.home, relativeRoot, "unrelated"), bytes = "Synthetic unrelated input\n";
   put(join(skill, "SKILL.md"), bytes);
   try {
-    const result = await f.a.run(["migrate", "native", "--agent", "sumi", "--include-unmanaged", "--apply", "--json"]);
+    const result = await f.a.run(["migrate", "native", "--agent", "sumi", "--include-unmanaged", "--apply", "--json"],
+      relativeRoot === "sumi-config/skills" ? { env: { SUMI_CONFIG_DIR: join(f.a.home, "sumi-config") } } : undefined);
     expect(result.stderr).toBe(""); expect(result.exitCode).toBe(0);
     const value = JSON.parse(result.stdout); expect(value.entries).toHaveLength(1);
     expect(readFileSync(join(value.entries[0].archive, "SKILL.md"), "utf8")).toBe(bytes);

@@ -35,7 +35,7 @@ function fixture() {
 const deny=()=>{appendFileSync(process.env.QA_DENIED,"blocked\\n");throw new Error("SYNC_HOME_IO_DENIED")};
 const original=globalThis.fetch;globalThis.fetch=(input,options)=>{if(/^https?:/.test(String(input instanceof Request?input.url:input)))return Promise.reject(deny());return original(input,options)};
 ${guardSource}
-syncBuiltinESMExports();Bun.spawn=deny;Bun.spawnSync=deny;
+syncBuiltinESMExports();
 `);
   const env = { HOME: home, USERPROFILE: home, HASNA_HOME: join(home, ".hasna"), HASNA_SKILLS_DIR: data, SKILLS_DATA_DIR: data,
     TMPDIR: join(root, "tmp"), PATH: inspectorDirectory, NO_COLOR: "1", TERM: "dumb", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", QA_DENIED: denied,

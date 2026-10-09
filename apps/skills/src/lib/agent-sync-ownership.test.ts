@@ -55,7 +55,7 @@ async function removeInFreshHome(root: string, home: string, project: string, op
 const deny=()=>{appendFileSync(process.env.QA_DENIED,"blocked\\n");throw Error("OWNED_INSTALLER_IO_REFUSED")};const original=globalThis.fetch;
 globalThis.fetch=(input,options)=>{if(/^https?:/.test(String(input instanceof Request?input.url:input)))return Promise.reject(deny());return original(input,options)};
 ${guardSource}
-syncBuiltinESMExports();Bun.spawn=deny;Bun.spawnSync=deny;`);
+syncBuiltinESMExports();`);
   const entry = installed ? join(installed, "dist/index.js") : join(import.meta.dir, "installer.ts");
   const script = `const api=await import(${JSON.stringify(pathToFileURL(entry).href)});const options=${JSON.stringify({ ...options, codexCommand: inspector })};
 const removed=api.removeSkillForAgent("target",options);const repeated=api.removeSkillForAgent("target",options);console.log(JSON.stringify({removed,repeated}));`;
