@@ -10,8 +10,9 @@ import { isDeepStrictEqual } from "node:util";
 import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
 import { canonicalAgentPath, recheckRootAliases, type AgentRootAlias } from "./agent-integration.js";
 import { captureClaudeMarketplaceEntry } from "./claude-marketplace-entry-witness.js";
-import { hashClaudePluginManifest } from "./claude-plugin-manifest-witness.js";
+import { captureClaudePluginManifestFile, hashClaudePluginManifest } from "./claude-plugin-manifest-witness.js";
 import { readManagedSkillPolicySnapshot } from "./managed-policy.js";
+import { getDataDirReadOnly } from "./config.js";
 import { hashExecutableFile } from "./codex-native-skill-policy.js";
 
 export const CLAUDE_PROSPECTIVE_REVIEW_SCHEMA = "skills.claude-plugin-prospective-review/v1" as const;
@@ -19,6 +20,11 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const MAX_CANDIDATE_FILES = 16_384;
 const MAX_CANDIDATE_BYTES = 256 * 1024 * 1024;
 const sha = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
+
+/** Hash the exact serialized Claude discovery binding used by review requests. */
+export function hashClaudeDiscoveryBinding(binding: unknown): string {
+  return sha(JSON.stringify(binding));
+}
 function refuse(reason: string): never { throw new Error(`CLAUDE_CANDIDATE_REVIEW_REFUSED: ${reason}`); }
 const GENERATED_MARKETPLACE_TIME = Object.freeze({ $generated: "claude-utc-timestamp", field: "known-marketplaces.lastUpdated" });
 const GENERATED_FRESH_PLUGIN_INSTALLED_AT = Object.freeze({ $generated: "claude-utc-timestamp", field: "installed_plugins.fresh-row.installedAt" });
@@ -154,6 +160,42 @@ export function captureClaudeProspectiveCandidateClosure(root: string): string {
   walk(root);
   entries.sort((a, b) => a[0].localeCompare(b[0]));
   return sha(JSON.stringify(entries));
+}
+
+/** Read-only capture used by the installed Claude installer bridge. */
+export function captureClaudeInstallerCandidate(root: string, policyPath: string): {
+  closureSha256: string;
+  discoverySha256: string;
+  manifests: Array<{ plugin: string; path: string; hashMode: "claude-plugin-manifest-v1"; sha256: string }>;
+} {
+  const closureSha256 = captureClaudeProspectiveCandidateClosure(root);
+  const dataDir = getDataDirReadOnly();
+  if (policyPath !== join(dataDir, "agent-policy.json")) refuse("Skills policy path differs from the package-owned resolver");
+  const catalogPath = join(root, ".claude-plugin/marketplace.json");
+  const catalog = jsonFile(catalogPath, "candidate catalog");
+  if (!catalog || !Array.isArray(catalog.plugins)) refuse("candidate catalog is invalid");
+  const names = new Set<string>();
+  const manifests = catalog.plugins.map((row: unknown) => {
+    if (!object(row) || typeof row.name !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(row.name)) refuse("candidate catalog plugin name is invalid");
+    if (names.has(row.name)) refuse("candidate catalog repeats a plugin name");
+    names.add(row.name);
+    if (typeof row.source !== "string" || isAbsolute(row.source) || /[\\\x00-\x1f\x7f]/.test(row.source)) refuse("candidate catalog plugin source is invalid");
+    const pluginRoot = resolve(root, row.source);
+    const relativeRoot = relative(root, pluginRoot);
+    if (!relativeRoot || relativeRoot === "." || relativeRoot === ".." || relativeRoot.startsWith(`..${sep}`) || isAbsolute(relativeRoot)) refuse("candidate plugin source escapes the candidate root");
+    const path = join(pluginRoot, ".claude-plugin/plugin.json");
+    return { plugin: row.name, ...captureClaudePluginManifestFile(path) };
+  });
+  const policy = readManagedSkillPolicySnapshot(dataDir);
+  const binding = policy?.value.bridge?.discovery?.claude;
+  if (!binding || typeof binding !== "object" || Array.isArray(binding)) refuse("Claude discovery binding is unavailable");
+  const discoverySha256 = hashClaudeDiscoveryBinding(binding);
+  // The receipt is a point-in-time witness only if both the candidate closure
+  // and the exact policy snapshot used above still match at return time.
+  if (captureClaudeProspectiveCandidateClosure(root) !== closureSha256) refuse("candidate closure changed during capture");
+  const finalPolicy = readManagedSkillPolicySnapshot(dataDir);
+  if (finalPolicy?.text !== policy?.text) refuse("Skills discovery policy changed during capture");
+  return { closureSha256, discoverySha256, manifests };
 }
 
 function readWitness(path: string, expected: string | null, name: string): void {
@@ -340,7 +382,7 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
   for (const path of new Set(Object.values(expectedPaths))) if (!reviewedPaths.has(path)) refuse("Skills discovery review does not bind every current user/project Claude settings and registration source");
   const binding = resolveAgentDiscovery({ home: request.native.home, agent: "claude", canonical, reviewed: request.skills.discoveryInputs });
   verifyAgentDiscovery(binding);
-  if (sha(JSON.stringify(binding)) !== request.skills.discoverySha256) refuse("Skills discovery preimage differs from its reviewed binding");
+  if (hashClaudeDiscoveryBinding(binding) !== request.skills.discoverySha256) refuse("Skills discovery preimage differs from its reviewed binding");
   assertProjectDiscovery("claude", [request.scope.projectPath], request.native.home, canonical, binding);
   const stored = snapshot.value.bridge?.discovery?.claude;
   if (!stored || !isDeepStrictEqual(stored, binding) || snapshot.value.bridge?.home !== request.native.home) refuse("Skills policy does not bind the reviewed current Claude discovery");

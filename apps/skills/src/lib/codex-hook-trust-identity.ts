@@ -4,6 +4,7 @@ import { directAliasTarget, need, safeParents, snapshot, trustedAncestorOwner, u
 import { isDeepStrictEqual } from "node:util";
 import { assertPinnedLauncherRuntimeSafe, resolveLauncherCommand } from "../cli/commands/runtime-launcher.js";
 import { canonicalSystemPath } from "./agent-integration.js";
+import { executableWitness, hashExecutableFile } from "./codex-native-skill-policy.js";
 
 // Refusal texts: the code before the colon is what journals record; the rest
 // is a fix hint and names no path.
@@ -122,4 +123,31 @@ export function bindSkillsCli(command: string, reviewed?: ReviewedSkillsCli) {
       unchanged(cli); unchanged(manifest);
     },
   };
+}
+
+/** A bounded, read-only producer identity for commands that must call their configured stable CLI. */
+export function captureSkillsCliProducerIdentity(command: string) {
+  const bound = bindSkillsCli(command);
+  const target = skillsCommandTarget(command);
+  const cli = snapshot(target.entry, false, { readOnlyPackage: true });
+  const manifest = snapshot(join(dirname(dirname(target.entry)), "package.json"), false, { readOnlyPackage: true });
+  const pkg = JSON.parse(manifest.text);
+  need(pkg.name === "@hasna/skills" && pkg.version === bound.receipt.version && target.entry === bound.receipt.path, "SKILLS_PACKAGE_MISMATCH");
+  const launcher = target.launcher ?? cli;
+  const actualRuntime = realpathSync(process.execPath);
+  need(!target.runtime || target.runtime === actualRuntime, "SKILLS_RUNTIME_MISMATCH");
+  const runtimeWitness = executableWitness(actualRuntime), runtimeSha256 = hashExecutableFile(actualRuntime);
+  const receipt = {
+    schema: "skills.cli-producer-identity/v1" as const,
+    configuredCommandPath: command,
+    physicalLauncher: { path: target.physical, sha256: launcher.sha256 },
+    runtimeEntry: { path: target.entry, sha256: cli.sha256 },
+    runtime: { path: actualRuntime, sha256: runtimeSha256 },
+    package: { name: pkg.name as "@hasna/skills", version: pkg.version as string, manifestSha256: manifest.sha256 },
+  };
+  bound.recheck();
+  targetUnchanged(command, target);
+  unchanged(cli); unchanged(manifest);
+  need(JSON.stringify(executableWitness(actualRuntime)) === JSON.stringify(runtimeWitness) && hashExecutableFile(actualRuntime) === runtimeSha256, "SKILLS_RUNTIME_CHANGED");
+  return receipt;
 }
