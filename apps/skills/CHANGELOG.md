@@ -2,7 +2,7 @@
 
 ## 0.10.59
 
-- Model Claude 2.1.293's user-scoped marketplace source setting during prospective plugin review. Installers explicitly declare the directory-source operation; Skills derives its exact path from the reviewed frozen candidate and preserves unrelated settings and marketplace entries. Omission keeps the existing review contract.
+- Model Claude 2.1.293's user-scoped marketplace source setting during prospective plugin review. Installers explicitly declare the directory-source operation; Skills derives its exact path from the reviewed frozen candidate and preserves unrelated settings and marketplace entries. Existing metadata that the native installer would remove is refused before writing. Omission keeps the existing review contract.
 
 ## 0.10.58
 

@@ -419,9 +419,18 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
   if (candidate.settingsMarketplaceSource === "directory") {
     const extra = settingsAfter.extraKnownMarketplaces === undefined ? {} : settingsAfter.extraKnownMarketplaces;
     if (!object(extra)) refuse("current extraKnownMarketplaces is not an object");
-    const selected = Object.hasOwn(extra, candidate.marketplace) ? extra[candidate.marketplace] : undefined;
-    if (selected !== undefined && !object(selected)) refuse("current selected settings marketplace is not an object");
-    settingsAfter.extraKnownMarketplaces = { ...extra, [candidate.marketplace]: { ...selected, source: { source: "directory", path: candidate.root } } };
+    for (const [name, row] of Object.entries(extra)) {
+      if (!object(row)) refuse("current settings marketplace row is not an object");
+      // Native 2.1.293 replaces the selected row and parses every foreign row.
+      // Reject metadata it would drop before allowing the installer to write.
+      const allowed = name === candidate.marketplace ? ["source"] : ["source", "autoUpdate"];
+      if (Object.keys(row).some(key => !allowed.includes(key)) || !Object.hasOwn(row, "source")) refuse("current settings marketplace metadata cannot be preserved by the measured native operation");
+      if (Object.hasOwn(row, "autoUpdate") && typeof row.autoUpdate !== "boolean") refuse("current settings marketplace autoUpdate is not a boolean");
+      keys(row.source, ["source", "path"], "current settings marketplace directory source");
+      if (row.source.source !== "directory") refuse("current settings marketplace source is outside the measured directory contract");
+      abs(row.source.path, "current settings marketplace directory path");
+    }
+    settingsAfter.extraKnownMarketplaces = { ...extra, [candidate.marketplace]: { source: { source: "directory", path: candidate.root } } };
   }
   if (!isDeepStrictEqual(delta.settingsAfter, settingsAfter)) refuse("complete settings document differs from the exact selected plugin/options/environment/marketplace operations");
 

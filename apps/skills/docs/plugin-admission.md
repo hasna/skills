@@ -198,8 +198,13 @@ environment document is preserved unchanged. For a measured Claude 2.1.293
 user-scoped install, `candidate.settingsMarketplaceSource: "directory"`
 explicitly declares the native settings registration. Skills derives
 `extraKnownMarketplaces[candidate.marketplace].source` from the exact frozen
-candidate root, preserving other entries and selected-entry metadata. The
-complete supplied settings document must match that projection. Omission
+candidate root. The measured operation accepts existing directory sources
+only. Foreign entries may also carry a boolean `autoUpdate`; other metadata
+refuses before writing because the native parser drops unknown fields.
+Selected-entry metadata, including `autoUpdate`, also refuses because this
+Claude release replaces that entire entry. The complete supplied settings
+document must match the derived projection, preserving all foreign entries.
+Omission
 preserves this field unchanged; other values, versions and project scope
 refuse. The installer must still verify the actual native executable and
 poststate; a supplied version string does not establish consumer identity.
