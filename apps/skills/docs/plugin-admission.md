@@ -257,6 +257,32 @@ Installed consumers can use the public `captureClaudeProspectiveCandidateClosure
 and `hashClaudePluginManifest` exports to prepare the exact digests without
 copying the package's hashing algorithms.
 
+### Claude installer witness CLI
+
+The installed Skills command exposes a fixed read-only bridge for installer
+evidence:
+
+```text
+skills hook capture-claude-installer --request /absolute/request.json --json
+```
+
+The UTF-8 request is a bounded JSON object with schema
+`skills.claude-installer-capture/v1`, the exact configured `commandPath`, one
+fixed `operation` (`settings`, `marketplace-registry`, `managed-plugin-registry`,
+`path-bytes`, `discovery-directories`, `plugin-manifest`, or `candidate`), and
+only that operation's documented inputs. The result uses
+`skills.claude-installer-capture-result/v1` and contains a Skills producer
+receipt plus the selected existing witness result. Candidate manifests include
+their plugin name, canonical path, `hashMode: "claude-plugin-manifest-v1"`, and
+SHA-256; the closure and discovery digests use the existing Skills algorithms.
+The command verifies the configured command resolves to this installed
+`@hasna/skills` producer and rechecks producer identity around capture.
+
+This command only captures and validates source witnesses. It does not invoke
+Claude, install plugins, mutate settings or policy, authorize a candidate, or
+establish installer atomicity or crash recovery. Input refusals identify the
+fixed field or operation and its accepted form without echoing request contents.
+
 ## Reviewed plugin-hook attestation scope
 
 A reviewed discovery input carries `pluginHooks: "reviewed-no-skill-injection"`.

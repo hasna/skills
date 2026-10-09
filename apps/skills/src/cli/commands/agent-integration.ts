@@ -22,6 +22,7 @@ import { captureClaudeMarketplaceEntry } from "../../lib/claude-marketplace-entr
 import { reviewClaudeProspectiveCandidate, type ClaudeProspectiveReviewRequest } from "../../lib/claude-prospective-review.js";
 import { captureCodexNativeSkillCatalog } from "../../lib/codex-native-skill-catalog.js";
 import { selfSpawnCommand } from "../../lib/self-spawn.js";
+import { captureClaudeInstallerRequest, safeClaudeInstallerCaptureError } from "./claude-installer-capture.js";
 
 const RECOVERABLE_CONTEXT_CACHE_ERRORS = new Set(["CACHED_PROFILE_EXPIRED", "CACHED_PROFILE_MISSING", "CACHED_BUNDLE_MISSING"]);
 
@@ -164,6 +165,24 @@ export function registerAgentIntegration(parent: Command): void {
         : options.kind === "claude-marketplace-registry-v2" ? captureClaudeMarketplaceRegistryV2 : null;
       if (!capture) throw new Error("Unsupported witness kind; select sumi-settings-v1, claude-settings-v4, claude-settings-v3, claude-settings-v2, codex-settings-v4, codex-settings-v3, codex-settings-v2, codex-settings-v1, claude-marketplace-registry-v2 or claude-marketplace-entry-v1");
       await writeCliOutput(JSON.stringify(capture(options.path), null, 2));
+    });
+  hook.command("capture-claude-installer")
+    .requiredOption("--request <file>", "Versioned, bounded read-only installer capture request JSON")
+    .option("--json", "Return the versioned capture receipt as JSON", false)
+    .description("Capture allowlisted Claude installer witnesses through this configured Skills CLI without changing native state")
+    .action(async (options: { request: string; json: boolean }) => {
+      if (!options.json) {
+        console.error("JSON_REQUIRED: pass --json to receive the versioned capture result");
+        process.exitCode = 1;
+        return;
+      }
+      try {
+        const receipt = captureClaudeInstallerRequest(options.request);
+        await writeCliOutput(JSON.stringify(receipt));
+      } catch (error) {
+        console.error(safeClaudeInstallerCaptureError(error));
+        process.exitCode = 1;
+      }
     });
   hook.command("review-claude-candidate")
     .requiredOption("--request <file>", "Frozen skills.claude-plugin-prospective-review/v1 JSON request")

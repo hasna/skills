@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.60
+
+- Add `skills hook capture-claude-installer` so installers can obtain versioned discovery witnesses through their configured Skills CLI, including retained-runtime launchers. The read-only command binds and rechecks the running CLI and runtime, delegates to the existing witness implementations, and returns bounded diagnostics without exposing input contents. It does not install plugins, change native configuration, or replace the prospective candidate review.
+
 ## 0.10.59
 
 - Model Claude 2.1.293's user-scoped marketplace source setting during prospective plugin review. Installers explicitly declare the directory-source operation; Skills derives its exact path from the reviewed frozen candidate and preserves unrelated settings and marketplace entries. Preflight all authoritative marketplace and installed-plugin rows, including foreign entries and scopes, before the native parser can discard unsupported metadata. Preserve supported directory/GitHub entries and foreign Git revisions. Omission keeps the existing review contract.

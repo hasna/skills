@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from "node:fs";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
 
 export const CLAUDE_PLUGIN_MANIFEST_LIMITS = Object.freeze({ bytes: 1024 * 1024, depth: 32, nodes: 65536, stringCharacters: 16384 });
 
@@ -110,6 +112,33 @@ export function hashClaudePluginManifest(text: string): string {
   validateDescriptiveFields(manifest);
   const discovery = { kind: "object" as const, entries: manifest.entries.filter(([key]) => !DESCRIPTIVE_FIELDS.has(key)) };
   return createHash("sha256").update(canonical(discovery)).digest("hex");
+}
+
+/** Capture a canonical plugin.json file without following a link or exposing its contents. */
+export function captureClaudePluginManifestFile(path: string) {
+  if (!isAbsolute(path) || resolve(path) !== path || basename(path) !== "plugin.json" || basename(dirname(path)) !== ".claude-plugin") throw new Error("Invalid Claude plugin manifest path");
+  for (let at = dirname(path); ; at = dirname(at)) {
+    const parent = lstatSync(at, { throwIfNoEntry: false });
+    if (!parent?.isDirectory() || parent.isSymbolicLink()) throw new Error("Claude plugin manifest path is not a regular path");
+    if (at === dirname(at)) break;
+  }
+  const before = lstatSync(path, { throwIfNoEntry: false });
+  if (!before?.isFile() || before.isSymbolicLink() || before.size > CLAUDE_PLUGIN_MANIFEST_LIMITS.bytes) throw new Error("Claude plugin manifest is not a bounded regular file");
+  const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | constants.O_NONBLOCK);
+  try {
+    const opened = fstatSync(fd);
+    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== before.size) throw new Error("Claude plugin manifest changed while opening");
+    const bytes = Buffer.alloc(CLAUDE_PLUGIN_MANIFEST_LIMITS.bytes + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const count = readSync(fd, bytes, length, bytes.length - length, null);
+      if (count === 0) break;
+      length += count;
+    }
+    const after = fstatSync(fd), current = lstatSync(path);
+    if (length > CLAUDE_PLUGIN_MANIFEST_LIMITS.bytes || length !== opened.size || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs || current.dev !== opened.dev || current.ino !== opened.ino || current.mtimeMs !== opened.mtimeMs || current.ctimeMs !== opened.ctimeMs) throw new Error("Claude plugin manifest changed while reading");
+    return { path, hashMode: "claude-plugin-manifest-v1" as const, sha256: hashClaudePluginManifest(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, length))) };
+  } finally { closeSync(fd); }
 }
 
 /** Project only the exact raw manifest bytes that the explicit review attested. */
