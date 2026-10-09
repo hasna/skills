@@ -18,8 +18,13 @@ afterEach(() => { restoreInspector(); for (const root of roots.splice(0)) rmSync
 function fixture(count = 1): { root: string; home: string; project: string } {
   const root = mkdtempSync(join(tmpdir(), "skills-native-target-")); roots.push(root);
   const home = join(root, "home"), project = join(root, "project");
-  mkdirSync(home, { recursive: true }); mkdirSync(join(project, ".codex", "skills"), { recursive: true });
-  process.env.PATH = installSumiPathsFixture(home) + ":" + (originalPath ?? "");
+  mkdirSync(home, { recursive: true, mode: 0o700 });
+  mkdirSync(project, { mode: 0o700 });
+  mkdirSync(join(project, ".codex"), { mode: 0o700 });
+  mkdirSync(join(project, ".codex", "skills"), { mode: 0o700 });
+  // Preserve the admitted synthetic Codex inspector installed by beforeEach;
+  // add the opt-in Sumi path helper without replacing the trusted fixture PATH.
+  process.env.PATH = installSumiPathsFixture(home) + ":" + (process.env.PATH ?? originalPath ?? "");
   admitCorpusFixture(join(project, ".codex"));
   for (let index = 0; index < count; index++) {
     const skill = join(project, ".codex", "skills", `reviewed-${index}`);

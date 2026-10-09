@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { runCliInCwd } from "./cli.test-utils.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { installSumiPathsFixture } from "../lib/sumi-paths.fixture.js";
+import { INTEGRATION_AGENTS } from "../lib/agent-adapters.js";
 
 useDefaultTestTimeout();
 const homes: string[] = [];
@@ -59,7 +60,7 @@ test("bare CLI install reuses reviewed Claude discovery alongside automatic adap
   expect(first.exitCode).toBe(0);
   const planned = await run([]); expect(planned.stderr).toBe(""); expect(planned.exitCode).toBe(0);
   expect(JSON.parse(planned.stdout).discovery.find((item: any) => item.agent === "claude").method).toBe("reviewed");
-  expect(JSON.parse(planned.stdout).discovery).toHaveLength(6);
+  expect(JSON.parse(planned.stdout).discovery.map((item: any) => item.agent)).toEqual([...INTEGRATION_AGENTS]);
   const applied = await run(["--apply"]); expect(applied.exitCode).toBe(0);
   const policy = JSON.parse(readFileSync(join(home, ".hasna/skills/agent-policy.json"), "utf8"));
   expect(policy.bridge.profiles.claude).toBe("fleet"); expect(policy.bridge.commands.claude).toBe("/opt/bin/skills");

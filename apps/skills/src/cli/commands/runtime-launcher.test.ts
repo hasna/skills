@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { type LauncherProfile, inspectLauncher, launcherIs, launcherProfileForBin, materializeLauncher, parsePinnedLauncher, pinnedLauncherEnvironment, pinnedLauncherState, pinnedLauncherText, renderPinnedLauncher, resolveLauncherCommand } from "./runtime-launcher.js";
 import { selectedSkillsCommand } from "./runtime.js";
 import { selfSpawnCommand, selfSpawnRoot } from "../../lib/self-spawn.js";
+import { resolveServerConfig } from "../../server/config.js";
 import { useDefaultTestTimeout } from "../../test-preload.js";
 
 useDefaultTestTimeout();
@@ -221,4 +222,15 @@ test("client projection rejects storage names before accessing any value", () =>
   expect(pinnedLauncherEnvironment(env)).toEqual({ SKILLS_API_URL: "https://skills.example.test" });
   expect(pinnedLauncherEnvironment(Object.fromEntries(locatorNames.map(name => [name, "fixture.sqlite"])), "server"))
     .toEqual(Object.fromEntries(locatorNames.map(name => [name, "fixture.sqlite"])));
+});
+
+
+test("server database locator aliases preserve canonical precedence and generic fallback", () => {
+  expect(resolveServerConfig({}).databaseUrl).toBeUndefined();
+  expect(resolveServerConfig({ SKILLS_DATABASE_URL: "skills.sqlite" }).databaseUrl).toBe("skills.sqlite");
+  expect(resolveServerConfig({ DATABASE_URL: "generic.sqlite" }).databaseUrl).toBe("generic.sqlite");
+  expect(resolveServerConfig({ SKILLS_DATABASE_URL: "skills.sqlite", DATABASE_URL: "generic.sqlite" }).databaseUrl).toBe("skills.sqlite");
+  expect(resolveServerConfig({ HASNA_SKILLS_DATABASE_URL: "canonical.sqlite", SKILLS_DATABASE_URL: "skills.sqlite", DATABASE_URL: "generic.sqlite" }).databaseUrl).toBe("canonical.sqlite");
+  expect(resolveServerConfig({ HASNA_SKILLS_DATABASE_URL: "", SKILLS_DATABASE_URL: "skills.sqlite", DATABASE_URL: "generic.sqlite" }).databaseUrl).toBe("skills.sqlite");
+  expect(resolveServerConfig({ HASNA_SKILLS_DATABASE_URL: "", SKILLS_DATABASE_URL: "", DATABASE_URL: "generic.sqlite" }).databaseUrl).toBe("generic.sqlite");
 });

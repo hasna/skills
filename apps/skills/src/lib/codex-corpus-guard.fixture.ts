@@ -20,6 +20,7 @@ export function corpusProcessGuardFixture(command: string, roots: string[]): str
   const aclHelper = process.platform === "darwin"
     ? fileURLToPath(new URL("../native/kernel-lock-acl-darwin", import.meta.resolve("@hasna/contracts/kernel-lock"))) : null;
   return `
+import { mock as corpusMock } from "bun:test";
 import { fstatSync as corpusFstat, lstatSync as corpusLstat, realpathSync as corpusRealpath } from "node:fs";
 const corpusInspector = ${JSON.stringify(realpathSync(command))};
 const corpusRoots = ${JSON.stringify(canonicalRoots)};
@@ -56,9 +57,26 @@ function corpusPermits(method, program, args, options) {
     });
   } catch { return false; }
 }
+// Bun's synchronous Node implementations delegate to Bun.spawnSync. Keep
+// that internal call under the validated outer request, never a direct grant.
+let corpusSyncDepth = 0;
+const corpusBunSpawnSync = Bun.spawnSync;
+Bun.spawn = deny;
+Bun.spawnSync = (...args) => corpusSyncDepth > 0 ? corpusBunSpawnSync.apply(Bun, args) : deny();
 for (const method of ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"]) {
   const original = child[method];
-  child[method] = (...args) => corpusPermits(method, ...args) ? original.apply(child, args) : deny();
+  child[method] = (...args) => {
+    const nestedInspector = corpusSyncDepth > 0 && method === "spawnSync" && corpusPermits("execFileSync", ...args);
+    if (!nestedInspector && !corpusPermits(method, ...args)) return deny();
+    corpusSyncDepth++;
+    try { return original.apply(child, args); }
+    finally { corpusSyncDepth--; }
+  };
+}
+// Bun does not refresh named ESM exports through syncBuiltinESMExports.
+// Register both aliases in this synthetic preload before subject imports.
+for (const specifier of ["node:child_process", "child_process"]) {
+  corpusMock.module(specifier, () => ({ ...child, default: child }));
 }
 `;
 }
