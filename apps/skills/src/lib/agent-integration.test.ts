@@ -66,6 +66,27 @@ test("selected-agent inventory retains its vendor skills and excludes other vend
   expect(inventoryNativeSkills(f.home, { agents: ["claude", "gemini"], includeVendor: true }).map(entry => entry.path)).toEqual([claude, gemini]);
 });
 
+test("Codex drift guidance scopes recovery inventory without requiring unrelated Sumi paths", () => {
+  const f = fixture(), nativeSkill = join(f.home, ".codex", "skills", "unmanaged", "SKILL.md");
+  put(nativeSkill, "Synthetic unmanaged Codex instructions\n");
+  const savedPath = process.env.PATH;
+  try {
+    // Keep only this test file's synthetic Codex inspector available. No
+    // Sumi helper is added to the PATH for this selected-agent path.
+    process.env.PATH = savedPath?.split(":", 1)[0] ?? "";
+    applyAgentIntegration(planAgentIntegration({ ...f, agents: ["codex"] }));
+    let refusal: Error | undefined;
+    try { assertManagedAgentBridge("codex", { ...f, projectDir: f.home }); }
+    catch (error) { refusal = error as Error; }
+    expect(refusal?.message).toContain("NATIVE_SKILL_DRIFT");
+    expect(refusal?.message).toContain("unexpected native skill copies");
+    expect(refusal?.message).toMatch(/skills migrate native .*--agent codex/);
+  } finally {
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
+  }
+});
+
 test("selected-agent inventory limits configured discovery before reading other agent settings", () => {
   const f = fixture();
   put(join(f.home, ".codex", "config.toml"), "invalid = [\n");
@@ -105,6 +126,7 @@ test("native drift identifies bounded escaped paths without exposing document co
   expect(reason).not.toContain("copy-11");
   expect(reason).toContain("...");
   expect(reason.length).toBeLessThanOrEqual(4096);
+  expect(reason).toContain("skills migrate native --agent claude --project");
   expect(reason).toContain("--project");
   expect(reason).toContain("--json");
 });
