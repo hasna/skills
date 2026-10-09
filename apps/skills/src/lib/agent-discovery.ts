@@ -92,11 +92,12 @@ function read(path: string, changes?: Map<string, string>): string | null {
  * review, so retiring an old cache cannot reveal a missing active binding.
  * Hook behavior remains the reviewer's no-skill-injection assessment; this
  * check does not attempt to infer executable behavior from plugin source. */
-function assertReviewedClaudeCacheClosures(home: string, config: Record<string, any>, review: ReviewedDiscoveryInputs["agents"][number]): void {
+function assertReviewedClaudeCacheClosures(home: string, config: Record<string, any>, review: ReviewedDiscoveryInputs["agents"][number], canonical: (path: string) => string): void {
   const enabledIds = Object.entries(config.enabledPlugins ?? {}).filter(([, enabled]) => enabled === true).map(([id]) => id);
   if (enabledIds.length === 0) return;
-  const registryPath = join(home, ".claude/plugins/installed_plugins.json");
-  const cacheRoot = join(home, ".claude/plugins/cache");
+  const registryPath = canonical(join(home, ".claude/plugins/installed_plugins.json"));
+  const cacheAliasRoot = join(home, ".claude/plugins/cache");
+  const cacheRoot = canonical(cacheAliasRoot);
   const registryText = read(registryPath);
   // The registry is needed only to resolve enabled cache-backed registrations.
   // If it is absent there cannot be a cache root to protect in this check;
@@ -105,7 +106,8 @@ function assertReviewedClaudeCacheClosures(home: string, config: Record<string, 
   const registry = parseConfig(registryText, registryPath);
   if (registry.version !== 2 || !registry.plugins || typeof registry.plugins !== "object" || Array.isArray(registry.plugins)) throw new Error("Reviewed Claude installed plugin registrations are invalid");
   const cachePath = (path: unknown): path is string => typeof path === "string" && isAbsolute(path)
-    && resolve(path) === path && (path === cacheRoot || path.startsWith(cacheRoot + sep));
+    && resolve(path) === path
+    && [cacheAliasRoot, cacheRoot].some(root => path === root || path.startsWith(root + sep));
   const activeRoots = new Set<string>();
   for (const id of enabledIds) {
     const rows = registry.plugins[id];
@@ -115,7 +117,7 @@ function assertReviewedClaudeCacheClosures(home: string, config: Record<string, 
       if (!row || typeof row !== "object" || Array.isArray(row) || typeof row.installPath !== "string") {
         throw new Error("Reviewed Claude enabled plugin registration requires an object with an installPath string");
       }
-      if (typeof row.installPath === "string" && (row.installPath === cacheRoot || row.installPath.startsWith(cacheRoot + sep))) {
+      if ([cacheAliasRoot, cacheRoot].some(root => row.installPath === root || row.installPath.startsWith(root + sep))) {
         if (!cachePath(row.installPath) || row.installPath.length > AGENT_POLICY_LIMITS.pathCharacters
           || row.version !== undefined && (typeof row.version !== "string" || basename(row.installPath) !== row.version)) {
           throw new Error("Reviewed Claude discovery has a malformed active cache registration");
@@ -127,7 +129,7 @@ function assertReviewedClaudeCacheClosures(home: string, config: Record<string, 
           // Each canonical project registration is independently relevant;
           // it may legitimately point at a different cached version.
         } else throw new Error("Reviewed Claude discovery has an unsupported active cache registration scope");
-        activeRoots.add(row.installPath);
+        activeRoots.add(canonical(row.installPath));
       }
     }
   }
@@ -692,7 +694,7 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
       for (const hooksFile of reviewedHookPaths) if (!review.sources.some(hook => hook.path === canonical(hooksFile) && hook.sha256 !== null && hook.format === undefined && hook.fields === undefined && hook.managedPlugins === undefined && (hook.hashMode === undefined || hook.hashMode === "bytes"))) throw new Error("Reviewed Claude plugin manifest requires separately reviewed exact hook file sources");
       return { path: source.path, sha256: manifestSha256, hashMode: "claude-plugin-manifest-v1" as const };
     });
-    if (agent === "claude") assertReviewedClaudeCacheClosures(home, config, review);
+    if (agent === "claude") assertReviewedClaudeCacheClosures(home, config, review, canonical);
     const combined = [...reviewedSources, ...reviewedSourcesWithManifestProjection];
     const unique = combined.filter((source, index) => combined.findIndex(candidate => isDeepStrictEqual(candidate, source)) === index);
     return { ...supplied, roots: [...new Set([...roots, ...supplied.roots])].sort(), sources: unique, ...(agent === "gemini" ? { builtinNames } : {}) };

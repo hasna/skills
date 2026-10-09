@@ -23,8 +23,9 @@
 import { createHash } from "node:crypto";
 import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, symlinkSync, writeSync } from "node:fs";
 import { isAbsolute } from "node:path";
+import { CLIENT_LAUNCHER_STORAGE_DENY_AWK, LEGACY_PINNED_LAUNCHER_SCHEMA, SERVER_LAUNCHER_ENV_NAMES, isStorageLocatorEnvironmentName, renderLegacyPinnedLauncher } from "../../server/launcher-environment-policy.js";
 
-export const PINNED_LAUNCHER_SCHEMA = "hasna-skills-pinned-launcher-v1";
+export const PINNED_LAUNCHER_SCHEMA = "hasna-skills-pinned-launcher-v2";
 
 /** The variable the launcher uses to hand the caller's directory to the CLI. */
 export const LAUNCH_CWD_VARIABLE = "HASNA_SKILLS_LAUNCH_CWD";
@@ -36,11 +37,11 @@ export const PINNED_LAUNCHER_BUN_FLAGS = ["--config=/dev/null", "--no-env-file",
  * Environment names passed through `env -i`, by exact name. Everything else,
  * including `BUN_*`, `NODE_OPTIONS`, `DYLD_*`, `LD_*` and proxy settings, is
  * dropped. The handling is total on purpose: a name is either listed here,
- * matches a prefix below, or never reaches the runtime.
+ * matches a prefix below, and passes the server-owned profile policy.
  */
 export const PINNED_LAUNCHER_ENV_NAMES = [
   "HOME", "PATH", "TMPDIR", "TERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "COLORTERM", "LANG", "USER", "LOGNAME", "SHELL", "TZ",
-  "NO_COLOR", "FORCE_COLOR", "CI", "COLUMNS", "LINES", "EDITOR", "VISUAL", "PAGER", "SSH_AUTH_SOCK", "DATABASE_URL",
+  "NO_COLOR", "FORCE_COLOR", "CI", "COLUMNS", "LINES", "EDITOR", "VISUAL", "PAGER", "SSH_AUTH_SOCK",
   "TERMINAL_CWD", "CODEX_HOME", "HERMES_HOME", "HERMES_ENABLE_PROJECT_PLUGINS",
   // Settings the pinned server, worker and publish entries read by these bare names
   // (src/server/config.ts, src/server/runtime-worker.ts, src/cli/commands/publish.ts).
@@ -55,26 +56,51 @@ const ENV_PREFIX = new RegExp(`^(${PINNED_LAUNCHER_ENV_PREFIXES.join("|")})_`);
 const ENV_EXACT = new Set<string>(PINNED_LAUNCHER_ENV_NAMES);
 
 /** The allowlisted subset of an environment, by the same rule the launcher applies. */
-export function pinnedLauncherEnvironment(env: Record<string, string | undefined>): Record<string, string> {
+export function pinnedLauncherEnvironment(env: Record<string, string | undefined>, profile: LauncherProfile = "client"): Record<string, string> {
+  assertLauncherProfile(profile);
   const result: Record<string, string> = {};
-  for (const [name, value] of Object.entries(env)) {
-    if (value === undefined || !ENV_NAME.test(name) || (!ENV_EXACT.has(name) && !ENV_PREFIX.test(name))) continue;
-    result[name] = value;
+  for (const name of Object.keys(env)) {
+    if (!ENV_NAME.test(name)) continue;
+    const storageLocator = isStorageLocatorEnvironmentName(name);
+    if (storageLocator && profile === "client") continue;
+    if (!storageLocator && !ENV_EXACT.has(name) && !ENV_PREFIX.test(name)) continue;
+    const value = env[name];
+    if (value !== undefined) result[name] = value;
   }
   return result;
 }
 
 export type LauncherShape = "symlink" | "pinned";
 
-export interface PinnedLauncherBinding { runtime: string; cwd: string; entry: string }
+export type LauncherFormat = "v1" | "v2";
+export type LauncherProfile = "client" | "server";
+export interface LauncherMetadata { format?: LauncherFormat; profile?: LauncherProfile }
+export interface PinnedLauncherBinding extends LauncherMetadata { runtime: string; cwd: string; entry: string }
+
+function assertLauncherProfile(profile: unknown): asserts profile is LauncherProfile {
+  if (profile !== "client" && profile !== "server") throw new Error("LAUNCHER_PROFILE_INVALID");
+}
+
+/** Role follows the package's public bin/entry contract, never a path substring. */
+export function launcherProfileForBin(name: string, entry: string): LauncherProfile {
+  const bins: Record<string, readonly [string, LauncherProfile]> = {
+    skills: ["bin/index.js", "client"], "skills-mcp": ["bin/mcp.js", "client"],
+    "skills-serve": ["bin/server.js", "server"], "skills-server": ["bin/server.js", "server"],
+    "skills-worker": ["bin/worker.js", "server"], "skills-maintenance": ["bin/maintenance.js", "server"],
+    "skills-migrate": ["bin/migrate.js", "server"],
+  };
+  const contract = bins[name];
+  if (!contract || entry !== contract[0]) throw new Error("LAUNCHER_BIN_CONTRACT_INVALID");
+  return contract[1];
+}
 
 export type LauncherState =
   | { shape: "symlink"; linkTarget: string; target: string }
-  | { shape: "pinned"; runtime: string; cwd: string; target: string; sha256: string };
+  | ({ shape: "pinned"; runtime: string; cwd: string; target: string; sha256: string } & LauncherMetadata);
 
 export type InspectedLauncher =
   | { kind: "symlink"; linkTarget: string; target: string }
-  | { kind: "pinned"; runtime: string; cwd: string; target: string; sha256: string; text: string }
+  | ({ kind: "pinned"; runtime: string; cwd: string; target: string; sha256: string; text: string } & LauncherMetadata)
   | { kind: "foreign" };
 
 function sha256(bytes: Uint8Array | string): string {
@@ -92,11 +118,19 @@ export function renderPinnedLauncher(binding: PinnedLauncherBinding): string {
   assertLauncherPath(binding.runtime, "LAUNCHER_RUNTIME_PATH_INVALID");
   assertLauncherPath(binding.cwd, "LAUNCHER_CWD_PATH_INVALID");
   assertLauncherPath(binding.entry, "LAUNCHER_ENTRY_PATH_INVALID");
-  const names = PINNED_LAUNCHER_ENV_NAMES.join(" ");
+  if (binding.format === "v1") {
+    if (binding.profile !== undefined) throw new Error("LAUNCHER_PROFILE_INVALID");
+    return renderLegacyPinnedLauncher(binding);
+  }
+  if (binding.format !== undefined && binding.format !== "v2") throw new Error("LAUNCHER_FORMAT_INVALID");
+  const profile = binding.profile === undefined ? "client" : binding.profile;
+  assertLauncherProfile(profile);
+  const names = [...PINNED_LAUNCHER_ENV_NAMES, ...(profile === "server" ? SERVER_LAUNCHER_ENV_NAMES : [])].join(" ");
   const prefixes = PINNED_LAUNCHER_ENV_PREFIXES.join("|");
   return [
     "#!/bin/sh -p",
     `# ${PINNED_LAUNCHER_SCHEMA}`,
+    `# environment-profile: ${profile}`,
     "# Written by `skills self-update`; rewrite it with `skills self-update`, do not edit by hand.",
     "# Runs the exact Skills entry below under one exact Bun from one trusted directory with",
     "# no working-directory configuration (no bunfig.toml, no .env, no macros, no auto-install)",
@@ -113,6 +147,7 @@ export function renderPinnedLauncher(binding: PinnedLauncherBinding): string {
     "  for (name in ENVIRON) {",
     "    if (name !~ /^[A-Za-z_][A-Za-z0-9_]*$/) continue",
     `    if (name == "LC_ALL" || (!(name in allow) && name !~ /^(${prefixes})_/)) continue`,
+    ...(profile === "client" ? [CLIENT_LAUNCHER_STORAGE_DENY_AWK] : []),
     "    value = ENVIRON[name]; quoted = \"\"",
     "    while ((k = index(value, \"\\047\")) > 0) { quoted = quoted substr(value, 1, k - 1) \"\\047\\\\\\047\\047\"; value = substr(value, k + 1) }",
     "    printf \"\\047%s=%s\\047 \", name, quoted value",
@@ -131,7 +166,14 @@ const COMMAND_LINE = new RegExp(`^set -- '([^']+)' ${PINNED_LAUNCHER_BUN_FLAGS.j
 export function parsePinnedLauncher(text: string): PinnedLauncherBinding | null {
   const match = COMMAND_LINE.exec(text);
   if (!match) return null;
-  const binding = { runtime: match[1]!, cwd: match[2]!, entry: match[3]! };
+  let metadata: LauncherMetadata;
+  if (text.split("\n")[1] === `# ${LEGACY_PINNED_LAUNCHER_SCHEMA}`) metadata = { format: "v1" };
+  else if (text.split("\n")[1] === `# ${PINNED_LAUNCHER_SCHEMA}`) {
+    const profile = /^# environment-profile: (client|server)$/m.exec(text)?.[1] as LauncherProfile | undefined;
+    if (!profile) return null;
+    metadata = { format: "v2", profile };
+  } else return null;
+  const binding = { runtime: match[1]!, cwd: match[2]!, entry: match[3]!, ...metadata };
   try { if (renderPinnedLauncher(binding) !== text) return null; } catch { return null; }
   return binding;
 }
@@ -174,7 +216,7 @@ export function inspectLauncher(path: string): InspectedLauncher {
   const text = readFileSync(path, "utf8");
   const binding = parsePinnedLauncher(text);
   if (!binding) return { kind: "foreign" };
-  return { kind: "pinned", runtime: binding.runtime, cwd: binding.cwd, target: binding.entry, sha256: sha256(text), text };
+  return { kind: "pinned", format: binding.format, profile: binding.profile, runtime: binding.runtime, cwd: binding.cwd, target: binding.entry, sha256: sha256(text), text };
 }
 
 /** The entry a managed launcher runs, whichever shape it has. */
@@ -197,20 +239,24 @@ export function launcherIs(path: string, state: LauncherState): boolean {
   try { inspected = inspectLauncher(path); } catch { return false; }
   if (state.shape === "symlink") return inspected.kind === "symlink" && inspected.linkTarget === state.linkTarget && inspected.target === state.target;
   return inspected.kind === "pinned" && inspected.sha256 === state.sha256 && inspected.runtime === state.runtime
-    && inspected.cwd === state.cwd && inspected.target === state.target;
+    && inspected.cwd === state.cwd && inspected.target === state.target
+    && inspected.format === (state.format ?? "v1") && inspected.profile === state.profile;
 }
 
 /** The pinned launcher text for a state, verified against the recorded digest. */
-export function pinnedLauncherText(state: { runtime: string; cwd: string; target: string; sha256: string }): string {
-  const text = renderPinnedLauncher({ runtime: state.runtime, cwd: state.cwd, entry: state.target });
+export function pinnedLauncherText(state: { runtime: string; cwd: string; target: string; sha256: string } & LauncherMetadata): string {
+  if (state.format === "v2") assertLauncherProfile(state.profile);
+  const text = renderPinnedLauncher({ runtime: state.runtime, cwd: state.cwd, entry: state.target, format: state.format === undefined ? "v1" : state.format, profile: state.profile });
   if (sha256(text) !== state.sha256) throw new Error("LAUNCHER_TEXT_DIGEST_MISMATCH");
   return text;
 }
 
 /** Build the pinned state for an entry under the given Bun binary and trusted directory. */
-export function pinnedLauncherState(runtime: string, cwd: string, target: string): Extract<LauncherState, { shape: "pinned" }> {
-  const text = renderPinnedLauncher({ runtime, cwd, entry: target });
-  return { shape: "pinned", runtime, cwd, target, sha256: sha256(text) };
+export function pinnedLauncherState(runtime: string, cwd: string, target: string, metadata: LauncherMetadata = { format: "v2", profile: "client" }): Extract<LauncherState, { shape: "pinned" }> {
+  const format = metadata.format === undefined ? "v1" : metadata.format, profile = metadata.profile;
+  if (format === "v2") assertLauncherProfile(profile);
+  const text = renderPinnedLauncher({ runtime, cwd, entry: target, format, profile });
+  return { shape: "pinned", runtime, cwd, target, sha256: sha256(text), format, ...(profile ? { profile } : {}) };
 }
 
 /**

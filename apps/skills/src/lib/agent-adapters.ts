@@ -9,7 +9,9 @@ export const AGENT_ADAPTERS = {
   codex: { root: ".codex/skills", config: ".codex/hooks.json", events: ["UserPromptSubmit", "SessionStart", "SubagentStart"], promptContext: true },
   gemini: { root: ".gemini/skills", config: ".gemini/settings.json", events: ["BeforeAgent", "SessionStart"], promptContext: true },
   opencode: { root: ".config/opencode/skills", config: ".config/opencode/opencode.json", events: ["chat.message"], promptContext: true },
-  sumi: { root: ".hasna-internal/sumi/config/skills", config: ".hasna-internal/sumi/config/sumi.json", events: ["prompt", "context"], promptContext: true },
+  // Native Sumi roots are resolved by its dedicated read-only `sumi-paths`
+  // command. Nulls are intentional: static defaults here bypass its resolver.
+  sumi: { root: null, config: null, events: ["prompt", "context"], promptContext: true },
   hermes: { root: ".hermes/skills", config: ".hermes/config.yaml", events: ["pre_llm_call", "pre_tool_call"], promptContext: true, promptFailureMode: "open", toolFailureMode: "supervised-child-errors-block", requiresNativeTrust: true },
   cursor: { root: ".cursor/skills", config: ".cursor/hooks.json", events: ["beforeSubmitPrompt", "sessionStart"], promptContext: false },
 } as const;

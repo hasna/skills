@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { builtinModules } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
@@ -39,6 +40,30 @@ function sha256(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+function assertBundledSurfaces(producerRoot: string): void {
+  const builtins = new Set([...builtinModules, ...builtinModules.map(name => `node:${name}`), "bun", "bun:sqlite"]);
+  const scanner = new Bun.Transpiler({ loader: "js" });
+  for (const file of ["dist/index.js", "dist/storage.js", "dist/sdk/index.js", "dist/admin-contract.js", "bin/mcp.js"]) {
+    const imports = scanner.scanImports(readFileSync(join(producerRoot, file), "utf8").replace(/^#!.*\n/, ""));
+    expect(imports.filter(entry => !builtins.has(entry.path) && !(file === "bin/mcp.js" &&
+      (entry.path === "@modelcontextprotocol/sdk" || entry.path.startsWith("@modelcontextprotocol/sdk/"))))).toEqual([]);
+  }
+  expect(scanner.scanImports('import { KernelLock } from "@hasna/contracts/kernel-lock";')
+    .filter(entry => !builtins.has(entry.path))).toHaveLength(1);
+  const scratch = mkdtempSync(join(tmpdir(), "skills-bundled-sdk-consumer-"));
+  chmodSync(scratch, 0o700);
+  try {
+    cpSync(join(producerRoot, "dist"), join(scratch, "dist"), { recursive: true });
+    cpSync(join(producerRoot, "native"), join(scratch, "native"), { recursive: true });
+    const home = join(scratch, "home"); mkdirSync(home, { mode: 0o700 });
+    writeFileSync(join(scratch, "package.json"), '{"private":true,"type":"module"}');
+    const program = 'import assert from "node:assert/strict"; const sdk = await import("./dist/sdk/index.js"); const api = await import("./dist/index.js"); assert.equal(typeof sdk.HttpProfileClient, "function"); assert.equal(typeof api.inspectSkillSession, "function"); console.log("Dependency-free SDK consumer passed.");';
+    expect(run([process.execPath, "--no-env-file", "--no-install", "--eval", program], scratch,
+      { HOME: home, TMPDIR: scratch, PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" }))
+      .toContain("Dependency-free SDK consumer passed.");
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
+}
+
 releaseArtifactTest("two clean builds produce byte-identical npm packs and an isolated production install resolves vault credentials", () => {
   expect(npmExecutable).not.toBeNull();
   expect(nodeExecutable).not.toBeNull();
@@ -46,7 +71,7 @@ releaseArtifactTest("two clean builds produce byte-identical npm packs and an is
   chmodSync(scratch, 0o700);
   try {
     const producer = join(scratch, "producer");
-    const excludedRoots = new Set(["bin", "dist", "node_modules", ".turbo"]);
+    const excludedRoots = new Set(["bin", "dist", "native", "node_modules", ".turbo"]);
     cpSync(packageRoot, producer, {
       recursive: true,
       filter(source) {
@@ -85,6 +110,7 @@ releaseArtifactTest("two clean builds produce byte-identical npm packs and an is
     mkdirSync(firstPackDir, { mode: 0o700 });
     mkdirSync(secondPackDir, { mode: 0o700 });
     run([process.execPath, "--no-env-file", "run", "build"], producer, env);
+    assertBundledSurfaces(producer);
     const firstArchive = packInto(firstPackDir, producer, env);
     run([process.execPath, "--no-env-file", "run", "build"], producer, env);
     const secondArchive = packInto(secondPackDir, producer, env);
@@ -96,7 +122,7 @@ releaseArtifactTest("two clean builds produce byte-identical npm packs and an is
     // The outer npm pack ships these exact standalone-lock artifacts. Promote
     // only after reproducibility AND every installed-consumer check succeeds;
     // a failing credential or isolation proof leaves existing outputs intact.
-    for (const directory of ["bin", "dist"]) {
+    for (const directory of ["bin", "dist", "native"]) {
       rmSync(join(packageRoot, directory), { recursive: true, force: true });
       cpSync(join(producer, directory), join(packageRoot, directory), { recursive: true });
     }

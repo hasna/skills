@@ -1,32 +1,139 @@
 /** Sumi 0.2.52: Harnesses e6776271ca8065a3a091eacedebd6fd7ef47ccd3,
  * upstream 06b6c916a564c9c88af36cbd19817ba3d4ac4476. Never run its
  * adoptHome resolver during discovery: resolving paths must be read-only. */
-import { existsSync, lstatSync, realpathSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { accessSync, constants, existsSync, lstatSync, realpathSync, statSync } from "node:fs";
+import { delimiter, isAbsolute, join, resolve } from "node:path";
 
-export function sumiConfigDirectory(home: string, env: NodeJS.ProcessEnv = process.env): string {
-  for (const key of ["SUMI_CONFIG", "SUMI_CONFIG_CONTENT"]) if (env[key] !== undefined) throw new Error(`Sumi ${key} requires a dedicated discovery adapter; unset it before Skills integration`);
-  const selected = (key: string) => env[key]?.trim() ? env[key]! : undefined;
-  const expand = (value: string) => resolve(value === "~" ? home : value.startsWith("~/") ? join(home, value.slice(2)) : value);
-  const explicit = selected("SUMI_CONFIG_DIR");
-  const xdg = selected("XDG_CONFIG_HOME");
-  const custom = selected("SUMI_HOME");
-  const canonical = explicit ? expand(explicit) : xdg ? join(expand(xdg), "sumi") : join(custom ? expand(custom) : join(home, ".hasna-internal/sumi"), "config");
-  if (explicit || xdg || custom) return canonical;
-  const legacy = join(home, ".config/sumi");
-  const a = lstatSync(canonical, { throwIfNoEntry: false }), b = lstatSync(legacy, { throwIfNoEntry: false });
-  // Two independent roots can contain a partially adopted union. That is not
-  // one witnessed config directory and needs owning-app adoption first.
-  if (a && b && realpathSync(canonical) !== realpathSync(legacy)) throw new Error("Sumi config roots conflict; complete native home adoption before Skills integration");
-  const path = a ? canonical : b ? legacy : canonical;
-  if (!existsSync(path)) return path;
-  const physical = realpathSync(path);
-  if ((a?.isSymbolicLink() || b?.isSymbolicLink()) && ![canonical, legacy].includes(physical)) throw new Error("Sumi config alias must resolve to its canonical or legacy root");
+const SUMI_PATH_SELECTORS = ["SUMI_HOME", "SUMI_CONFIG_DIR", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME"] as const;
+const SUMI_PATH_KEYS = ["data", "cache", "config", "state"] as const;
+const SUMI_PATH_OUTPUT_LIMIT = 128 * 1024;
+
+export type SumiPathPlan = {
+  schemaVersion: 1;
+  kind: "sumi-paths";
+  home: string;
+  cwd: string;
+  roots: Record<typeof SUMI_PATH_KEYS[number], string>;
+  legacyRoots: Record<typeof SUMI_PATH_KEYS[number], string | null>;
+  configFiles: { canonical: string; legacy: string | null };
+  skillRoots: { canonical: string; legacy: string | null };
+};
+
+export class SumiPathResolverError extends Error {
+  constructor(readonly code: string) { super(`Sumi path discovery refused (${code})`); this.name = "SumiPathResolverError"; }
+}
+
+function recordWithKeys(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+}
+
+function absolutePath(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 32768
+    && !/[\x00-\x1f\x7f]/.test(value) && isAbsolute(value) && resolve(value) === value;
+}
+
+function absoluteInput(value: string): boolean {
+  return value.length > 0 && value.length <= 32768 && !/[\x00-\x1f\x7f]/.test(value) && isAbsolute(value);
+}
+
+function resolveSumiPathsCommand(pathValue: string | undefined): string | null {
+  if (!pathValue) return null;
+  for (const directory of pathValue.split(delimiter)) {
+    // Empty PATH elements search cwd implicitly. Do not turn that into a
+    // package resolver: only an explicit installed-bin directory is eligible.
+    if (!directory || /[\x00-\x1f\x7f]/.test(directory)) continue;
+    const candidate = resolve(directory, "sumi-paths");
+    try {
+      accessSync(candidate, constants.X_OK);
+      if (statSync(candidate).isFile()) return candidate;
+    } catch { /* try the next PATH directory */ }
+  }
+  return null;
+}
+
+function validPathPlan(value: unknown, home: string, cwd: string): value is SumiPathPlan {
+  if (!recordWithKeys(value, ["schemaVersion", "kind", "home", "cwd", "roots", "legacyRoots", "configFiles", "skillRoots"])) return false;
+  if (value.schemaVersion !== 1 || value.kind !== "sumi-paths" || value.home !== resolve(home) || value.cwd !== resolve(cwd)) return false;
+  if (!recordWithKeys(value.roots, SUMI_PATH_KEYS) || !recordWithKeys(value.legacyRoots, SUMI_PATH_KEYS)) return false;
+  for (const key of SUMI_PATH_KEYS) {
+    if (!absolutePath(value.roots[key])) return false;
+    if (value.legacyRoots[key] !== null && !absolutePath(value.legacyRoots[key])) return false;
+  }
+  if (!recordWithKeys(value.configFiles, ["canonical", "legacy"]) || !recordWithKeys(value.skillRoots, ["canonical", "legacy"])) return false;
+  if (!absolutePath(value.configFiles.canonical) || !absolutePath(value.skillRoots.canonical)) return false;
+  if (value.configFiles.legacy !== null && !absolutePath(value.configFiles.legacy)) return false;
+  if (value.skillRoots.legacy !== null && !absolutePath(value.skillRoots.legacy)) return false;
+  const configRoot = value.roots.config;
+  const legacyConfigRoot = value.legacyRoots.config;
+  if (typeof configRoot !== "string" || (legacyConfigRoot !== null && typeof legacyConfigRoot !== "string")) return false;
+  if (value.configFiles.canonical !== join(configRoot, "sumi.json") || value.skillRoots.canonical !== join(configRoot, "skills")) return false;
+  if (legacyConfigRoot === null) return value.configFiles.legacy === null && value.skillRoots.legacy === null;
+  return value.configFiles.legacy === join(legacyConfigRoot, "sumi.json") && value.skillRoots.legacy === join(legacyConfigRoot, "skills");
+}
+
+/** Resolve native paths through Sumi's dedicated, read-only command. Never
+ * probe the general Sumi CLI: older versions may adopt their home on startup. */
+export function sumiPathPlan(home: string, cwd = process.cwd(), env: NodeJS.ProcessEnv = process.env): SumiPathPlan {
+  for (const key of ["SUMI_CONFIG", "SUMI_CONFIG_CONTENT"]) if (env[key] !== undefined) throw new SumiPathResolverError("SUMI_PATH_CONFIG_UNSUPPORTED");
+  if (!absoluteInput(home) || !absoluteInput(cwd)) throw new SumiPathResolverError("SUMI_PATH_INPUT_REFUSED");
+  const runtimePath = process.env.PATH ?? "";
+  const executable = resolveSumiPathsCommand(runtimePath);
+  if (!executable || !isAbsolute(executable)) throw new SumiPathResolverError("SUMI_PATH_RESOLVER_UNAVAILABLE");
+  const childEnv: NodeJS.ProcessEnv = { PATH: runtimePath };
+  for (const key of SUMI_PATH_SELECTORS) if (env[key] !== undefined) childEnv[key] = env[key];
+  let child: ReturnType<typeof spawnSync>;
+  try {
+    child = spawnSync(executable, ["--json", "--home", resolve(home), "--cwd", resolve(cwd)], {
+      cwd: resolve(cwd), env: childEnv, encoding: "buffer", timeout: 3000, maxBuffer: SUMI_PATH_OUTPUT_LIMIT, shell: false,
+    });
+  } catch { throw new SumiPathResolverError("SUMI_PATH_RESOLVER_UNAVAILABLE"); }
+  const stdoutBytes = child.stdout === null ? 0 : Buffer.byteLength(child.stdout);
+  const stderrBytes = child.stderr === null ? 0 : Buffer.byteLength(child.stderr);
+  if (child.error || child.signal || !child.stdout || stdoutBytes > SUMI_PATH_OUTPUT_LIMIT || stderrBytes > 0) {
+    throw new SumiPathResolverError("SUMI_PATH_RESOLVER_UNAVAILABLE");
+  }
+  let result: unknown;
+  try { result = JSON.parse(child.stdout.toString("utf8")); } catch { throw new SumiPathResolverError("SUMI_PATH_RESOLVER_INVALID_RESPONSE"); }
+  if (recordWithKeys(result, ["schemaVersion", "kind", "code"]) && result.schemaVersion === 1 && result.kind === "sumi-paths-error"
+    && (result.code === "SUMI_PATH_INPUT_REFUSED" || result.code === "SUMI_PATH_CONFIG_UNSUPPORTED") && child.status === 2) {
+    throw new SumiPathResolverError(result.code);
+  }
+  if (child.status !== 0 || !validPathPlan(result, home, cwd)) throw new SumiPathResolverError("SUMI_PATH_RESOLVER_INVALID_RESPONSE");
+  return result;
+}
+
+function selectedConfigDirectory(plan: SumiPathPlan): string {
+  const canonical = plan.roots.config, legacy = plan.legacyRoots.config;
+  if (legacy === null) return existsSync(canonical) ? realpathSync(canonical) : canonical;
+  const canonicalStat = lstatSync(canonical, { throwIfNoEntry: false }), legacyStat = lstatSync(legacy, { throwIfNoEntry: false });
+  // Keep the prior conflict refusal: two independent stores need Sumi's home
+  // adoption, not a Skills-side guess at which copy is authoritative.
+  if (canonicalStat && legacyStat && realpathSync(canonical) !== realpathSync(legacy)) throw new Error("Sumi config roots conflict; complete native home adoption before Skills integration");
+  const selected = canonicalStat ? canonical : legacyStat ? legacy : canonical;
+  if (!existsSync(selected)) return selected;
+  const physical = realpathSync(selected);
+  if ((canonicalStat?.isSymbolicLink() || legacyStat?.isSymbolicLink()) && ![canonical, legacy].includes(physical)) throw new Error("Sumi config alias must resolve to its canonical or legacy root");
   return physical;
 }
 
-export function sumiBridgeRoot(home: string): string { return join(sumiConfigDirectory(home), "skills"); }
-export function sumiConfigPath(home: string): string { return join(sumiConfigDirectory(home), "sumi.json"); }
+export function sumiConfigDirectory(home: string, env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): string {
+  return selectedConfigDirectory(sumiPathPlan(home, cwd, env));
+}
+
+export function sumiSkillRoots(home: string, cwd = process.cwd(), env: NodeJS.ProcessEnv = process.env): string[] {
+  const plan = sumiPathPlan(home, cwd, env);
+  return [join(selectedConfigDirectory(plan), "skills")];
+}
+
+export function sumiBridgeRoot(home: string, cwd = process.cwd(), env: NodeJS.ProcessEnv = process.env): string {
+  return sumiSkillRoots(home, cwd, env)[0]!;
+}
+
+export function sumiConfigPath(home: string, cwd = process.cwd(), env: NodeJS.ProcessEnv = process.env): string {
+  return join(sumiConfigDirectory(home, env, cwd), "sumi.json");
+}
 
 /** Native V2 plugin, not an OpenCode chat.message factory. Instructions enter
  * transient request context; prompts and the plugin carry no payload fallback. */
