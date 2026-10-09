@@ -62,7 +62,7 @@ test.skipIf(!binary)("native catalog preserves exact ordered name controls acros
     expect(skill.path).toBe(join(relocated, "SKILL.md"));
     expect(skill.enabled).toBe(false);
   } finally { rmSync(home, { recursive: true, force: true }); }
-}, 30000);
+}, 60000);
 
 // Exercise a genuine local installation as well as the empty plugin inventory.
 // Every registration, cache and configuration here belongs to this test home.
@@ -101,7 +101,7 @@ test.skipIf(!binary)("native catalog binds local installation source and exact d
     expect(inactive.plugins?.find(plugin => plugin.id === "vendor@probe")).toMatchObject({ installed: true, enabled: false, sourceType: "local", sourcePath: source });
     expect(inactive.skills.filter(skill => skill.pluginId === "vendor@probe")).toEqual([]);
   } finally { rmSync(home, { recursive: true, force: true }); }
-}, 30000);
+}, 60000);
 
 test.skipIf(!binary)("native hook transport reads hooks and paginated features and guards config writes by version", async () => {
   const home = mkdtempSync(join(tmpdir(), "skills-native-hooks-")), codexHome = join(home, ".codex");

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.58
+
+- Admit exact `codex-cli 0.162.0` for native hook transport, qualified skill catalog capture and installed-plugin review after native acceptance. Neighboring releases and prerelease/build variants remain unsupported; native corpus admission is separate and still requires an admission-capable build.
+- Allow up to 10 seconds for an owned native child to close after its existing one-second direct-child termination grace. The shared corpus admission lease remains held until the child actually closes.
+
 ## 0.10.57
 
 - Add `skills hook review-claude-candidate` for installers to validate a frozen Claude plugin candidate before changing native state. The read-only check binds the candidate, current discovery, selected scope and complete proposed configuration while preserving unrelated plugin registrations and settings. The installer must verify its actual consumer identity, perform the review before marketplace activation, and verify the resulting native state; this check does not make native installation atomic.

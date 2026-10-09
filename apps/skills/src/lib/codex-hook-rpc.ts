@@ -89,7 +89,7 @@ export async function connectCodexHookRpc(options: { command: string; home: stri
       if (childClosed) return;
       await new Promise<void>((resolve, reject) => {
         const terminate = setTimeout(() => { child.kill(); }, 1000);
-        const deadline = setTimeout(() => { clearTimeout(terminate); reject(new Error("CODEX_HOOK_TRUST_NATIVE_CLOSE_UNCONFIRMED")); }, 5000);
+        const deadline = setTimeout(() => { clearTimeout(terminate); reject(new Error("CODEX_HOOK_TRUST_NATIVE_CLOSE_UNCONFIRMED")); }, 10_000);
         actualClose.then(() => { clearTimeout(terminate); clearTimeout(deadline); resolve(); });
       });
     },
