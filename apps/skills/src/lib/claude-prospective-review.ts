@@ -32,7 +32,7 @@ export interface ClaudeProspectiveReviewRequest {
   scope: { kind: "user" | "project"; projectPath: string };
   native: { home: string; executable: { path: string; target: string; version: string; sha256: string }; configRoot: string; pluginRoot: string };
   skills: { dataDir: string; policySha256: string; discoverySha256: string; discoveryInputs: ReviewedDiscoveryInputs };
-  candidate: { marketplace: string; root: string; catalogPath: string; catalogSha256: string; closureSha256: string; plugins: Array<{ plugin: string; manifestPath: string; manifestSha256: string; optionsPatch: Record<string, unknown> }>; releaseManifest?: { path: string; sha256: string }; functionHooksEnv?: "1" };
+  candidate: { marketplace: string; root: string; catalogPath: string; catalogSha256: string; closureSha256: string; plugins: Array<{ plugin: string; manifestPath: string; manifestSha256: string; optionsPatch: Record<string, unknown> }>; releaseManifest?: { path: string; sha256: string }; functionHooksEnv?: "1"; settingsMarketplaceSource?: "directory" };
   preimages: {
     settings: { path: string; sha256: string | null };
     userSettings: { path: string; sha256: string | null };
@@ -243,12 +243,14 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
   if (request.native.pluginRoot !== pluginRoot) refuse("Claude plugin root differs from the supported standard plugins directory; Cowork and custom cache roots require a separately bound schema");
   const pluginRootStat = lstatSync(pluginRoot, { throwIfNoEntry: false });
   if (pluginRootStat && (!pluginRootStat.isDirectory() || pluginRootStat.isSymbolicLink())) refuse("Claude plugin root is not a regular directory");
-  keys(request.candidate, ["marketplace", "root", "catalogPath", "catalogSha256", "closureSha256", "plugins", ...(hasOwn(request.candidate, "releaseManifest") ? ["releaseManifest"] : []), ...(hasOwn(request.candidate, "functionHooksEnv") ? ["functionHooksEnv"] : [])], "candidate");
+  keys(request.candidate, ["marketplace", "root", "catalogPath", "catalogSha256", "closureSha256", "plugins", ...(hasOwn(request.candidate, "releaseManifest") ? ["releaseManifest"] : []), ...(hasOwn(request.candidate, "functionHooksEnv") ? ["functionHooksEnv"] : []), ...(hasOwn(request.candidate, "settingsMarketplaceSource") ? ["settingsMarketplaceSource"] : [])], "candidate");
   const candidate = request.candidate;
   canonicalDir(candidate.root, "candidate root");
   if (typeof candidate.marketplace !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(candidate.marketplace)) refuse("invalid candidate marketplace");
   if (!Array.isArray(candidate.plugins) || candidate.plugins.length < 1 || candidate.plugins.length > 32) refuse("candidate must select between one and 32 plugins from one marketplace");
   if (candidate.functionHooksEnv !== undefined && candidate.functionHooksEnv !== "1") refuse("function-hook environment mutation only supports the explicit value 1");
+  if (hasOwn(candidate, "settingsMarketplaceSource") && (candidate.settingsMarketplaceSource !== "directory" || request.scope.kind !== "user"
+    || !["2.1.293", "2.1.293 (Claude Code)"].includes(request.native.executable.version))) refuse("settings marketplace source operation requires directory source and the measured Claude 2.1.293 user scope");
   abs(candidate.catalogPath, "catalog path");
   if (!candidate.catalogPath.startsWith(candidate.root + sep)) refuse("catalog must be inside the frozen candidate root");
   if (candidate.catalogPath !== join(candidate.root, ".claude-plugin", "marketplace.json")) refuse("marketplace catalog must be at the frozen root's .claude-plugin/marketplace.json path");
@@ -412,7 +414,16 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
     if (!object(env)) refuse("target settings env is not an object");
     settingsAfter.env = { ...env, CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: "1" };
   }
-  if (!isDeepStrictEqual(delta.settingsAfter, settingsAfter)) refuse("complete settings document differs from the exact selected plugin/options/environment operations");
+  // Measured native marketplace-add also registers this source in user settings.
+  // Declare the operation explicitly; version text alone never authorizes it.
+  if (candidate.settingsMarketplaceSource === "directory") {
+    const extra = settingsAfter.extraKnownMarketplaces === undefined ? {} : settingsAfter.extraKnownMarketplaces;
+    if (!object(extra)) refuse("current extraKnownMarketplaces is not an object");
+    const selected = Object.hasOwn(extra, candidate.marketplace) ? extra[candidate.marketplace] : undefined;
+    if (selected !== undefined && !object(selected)) refuse("current selected settings marketplace is not an object");
+    settingsAfter.extraKnownMarketplaces = { ...extra, [candidate.marketplace]: { ...selected, source: { source: "directory", path: candidate.root } } };
+  }
+  if (!isDeepStrictEqual(delta.settingsAfter, settingsAfter)) refuse("complete settings document differs from the exact selected plugin/options/environment/marketplace operations");
 
   const marketplaceRowBefore = marketplaces?.[candidate.marketplace];
   if (marketplaceRowBefore !== undefined && !object(marketplaceRowBefore)) refuse("current marketplace row has an unsupported shape");

@@ -194,7 +194,16 @@ closure. Nontrivial `metadata.pluginRoot` values and native catalog or selected
 plugin dependency declarations refuse because this validator does not resolve
 or review unselected external plugins.
 The request may declare `functionHooksEnv: "1"`; without that declaration the
-environment document is preserved unchanged. The validator shallow-merges
+environment document is preserved unchanged. For a measured Claude 2.1.293
+user-scoped install, `candidate.settingsMarketplaceSource: "directory"`
+explicitly declares the native settings registration. Skills derives
+`extraKnownMarketplaces[candidate.marketplace].source` from the exact frozen
+candidate root, preserving other entries and selected-entry metadata. The
+complete supplied settings document must match that projection. Omission
+preserves this field unchanged; other values, versions and project scope
+refuse. The installer must still verify the actual native executable and
+poststate; a supplied version string does not establish consumer identity.
+The validator shallow-merges
 each declared options patch into the selected plugin's existing `options`;
 the patch must explicitly bind `enabled: true`, and the validator enforces that
 value after merging. This preserves all other selected options and unrelated

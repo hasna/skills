@@ -23,7 +23,7 @@ beforeAll(async () => {
 });
 afterAll(() => rmSync(cliScratch, { recursive: true, force: true }));
 
-function fixture(scope: "user" | "project" = "user", existingMarketplace = false, pluginNames = ["demo"]) {
+function fixture(scope: "user" | "project" = "user", existingMarketplace = false, pluginNames = ["demo"], extraMarketplaces?: (home: string) => unknown) {
   const home = mkdtempSync(join(tmpdir(), "skills-claude-prospective-")); roots.push(home);
   const settings = join(home, ".claude/settings.json"), known = join(home, ".claude/plugins/known_marketplaces.json"), installed = join(home, ".claude/plugins/installed_plugins.json");
   const candidateRoot = join(home, "frozen-candidate");
@@ -38,6 +38,7 @@ function fixture(scope: "user" | "project" = "user", existingMarketplace = false
       "other@market": { options: { enabled: true, retain: "other" } },
     },
     env: { OTHER_ENV: "retained", CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: "0" },
+    ...(extraMarketplaces ? { extraKnownMarketplaces: extraMarketplaces(home) } : {}),
   };
   put(settings, JSON.stringify(initialSettings));
   put(projectSettings, JSON.stringify({ permissions: { allow: ["Read"] } }));
@@ -153,6 +154,69 @@ function awaitManifestHash(path: string): string {
   return hashClaudePlugin(readFileSync(path, "utf8"));
 }
 import { hashClaudePluginManifest as hashClaudePlugin } from "./claude-plugin-manifest-witness.js";
+
+test("Claude 2.1.293 user install models its exact selected marketplace source setting", () => {
+  const f = fixture();
+  f.request.native.executable.version = "2.1.293 (Claude Code)";
+  f.request.candidate.settingsMarketplaceSource = "directory";
+  f.request.delta.settingsAfter.extraKnownMarketplaces = {
+    "fixture-market": { source: { source: "directory", path: f.candidateRoot } },
+  };
+  const before = [f.settings, f.known, f.installed, join(f.dataDir, "agent-policy.json")].map(path => readFileSync(path, "utf8"));
+  expect(review(f.request).accepted).toBe(true);
+  expect([f.settings, f.known, f.installed, join(f.dataDir, "agent-policy.json")].map(path => readFileSync(path, "utf8"))).toEqual(before);
+});
+
+test("the declared settings marketplace operation preserves foreign rows and selected metadata", () => {
+  const f = fixture("user", false, ["demo"], home => ({
+    "other-market": { source: { source: "github", repo: "example/other" }, autoUpdate: false },
+    "fixture-market": { source: { source: "directory", path: join(home, "prior") }, autoUpdate: false },
+  }));
+  f.request.native.executable.version = "2.1.293";
+  f.request.candidate.settingsMarketplaceSource = "directory";
+  const extra = JSON.parse(readFileSync(f.settings, "utf8")).extraKnownMarketplaces;
+  const expected = { ...extra, "fixture-market": { ...extra["fixture-market"], source: { source: "directory", path: f.candidateRoot } } };
+  f.request.delta.settingsAfter.extraKnownMarketplaces = structuredClone(expected);
+  expect(review(f.request).accepted).toBe(true);
+  for (const mutate of [
+    (value: any) => { delete value["other-market"]; },
+    (value: any) => { value["other-market"].autoUpdate = true; },
+    (value: any) => { delete value["fixture-market"].autoUpdate; },
+    (value: any) => { value["fixture-market"].source.path = join(f.home, "unreviewed"); },
+    (value: any) => { value["fixture-market"].source.source = "github"; },
+    (value: any) => { value.injected = { source: { source: "directory", path: f.candidateRoot } }; },
+  ]) {
+    const altered = structuredClone(expected); mutate(altered);
+    f.request.delta.settingsAfter.extraKnownMarketplaces = altered;
+    expect(() => review(f.request)).toThrow("complete settings document differs");
+  }
+});
+
+test("a malformed current settings marketplace map or selected row cannot be normalized", () => {
+  for (const malformed of [null, [], true, "invalid", { "fixture-market": null }, { "fixture-market": [] }]) {
+    const f = fixture("user", false, ["demo"], () => malformed);
+    f.request.native.executable.version = "2.1.293";
+    f.request.candidate.settingsMarketplaceSource = "directory";
+    f.request.delta.settingsAfter.extraKnownMarketplaces = { "fixture-market": { source: { source: "directory", path: f.candidateRoot } } };
+    expect(() => review(f.request)).toThrow("is not an object");
+  }
+});
+
+test("settings marketplace mutation is explicit and restricted to the measured native operation", () => {
+  for (const version of ["2.1.292", "2.1.294", "2.1.295", "2.1.293-beta", "2.1.293+local"]) {
+    const f = fixture(); f.request.native.executable.version = version;
+    f.request.candidate.settingsMarketplaceSource = "directory";
+    expect(() => review(f.request)).toThrow("measured Claude 2.1.293 user scope");
+  }
+  const project = fixture("project"); project.request.native.executable.version = "2.1.293";
+  project.request.candidate.settingsMarketplaceSource = "directory";
+  expect(() => review(project.request)).toThrow("measured Claude 2.1.293 user scope");
+  const f = fixture(); f.request.native.executable.version = "2.1.293";
+  f.request.delta.settingsAfter.extraKnownMarketplaces = { "fixture-market": { source: { source: "directory", path: f.candidateRoot } } };
+  expect(() => review(f.request)).toThrow("complete settings document differs");
+  (f.request.candidate as any).settingsMarketplaceSource = "github";
+  expect(() => review(f.request)).toThrow("measured Claude 2.1.293 user scope");
+});
 
 test("prospective review accepts an exact user-scoped frozen candidate without writing native state", () => {
   const f = fixture();
