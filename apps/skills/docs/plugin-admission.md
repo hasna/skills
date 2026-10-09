@@ -204,8 +204,19 @@ refuses before writing because the native parser drops unknown fields.
 Selected-entry metadata, including `autoUpdate`, also refuses because this
 Claude release replaces that entire entry. The complete supplied settings
 document must match the derived projection, preserving all foreign entries.
-Omission
-preserves this field unchanged; other values, versions and project scope
+The same declared operation preflights every authoritative
+`known_marketplaces.json` row: exact `source`, `installLocation`, `lastUpdated`
+and optional boolean `autoUpdate`. Sources are either `{source: "directory",
+path: <normalized absolute path>}` or `{source: "github", repo: "owner/repository"}`.
+Other source keys and row metadata refuse before the native parser can drop them.
+The complete `installed_plugins.json` document must contain only `version` and
+`plugins`. Every existing row, including untouched plugins and other scopes,
+must have `scope`, `installPath`, `version`, `installedAt` and `lastUpdated`,
+with a project path for project/local scope and an optional 40-character
+lowercase hexadecimal `gitCommitSha`. Unsupported metadata or malformed fields
+refuse before installation; supported foreign rows remain exact in the required
+after-document. Existing selected-row restrictions still apply.
+Omission preserves the settings field unchanged; other values, versions and project scope
 refuse. The installer must still verify the actual native executable and
 poststate; a supplied version string does not establish consumer identity.
 The validator shallow-merges

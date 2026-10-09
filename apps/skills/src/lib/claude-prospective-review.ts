@@ -354,6 +354,25 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
   const marketplaces = jsonFile(expectedPaths.marketplaces, "Claude known marketplaces");
   const registrations = jsonFile(expectedPaths.installedPlugins, "Claude installed plugins");
   if (registrations && (registrations.version !== 2 || !object(registrations.plugins))) refuse("current installed plugin registry has an unsupported shape");
+  if (candidate.settingsMarketplaceSource === "directory" && registrations) {
+    // Native install/update rewrites every registration, including untouched IDs
+    // and non-target scopes. Refuse fields its parser would silently discard.
+    keys(registrations, ["version", "plugins"], "current complete installed plugin registry");
+    for (const rows of Object.values(registrations.plugins)) {
+      if (!Array.isArray(rows)) refuse("current installed plugin rows are not an array");
+      for (const row of rows) {
+        if (!object(row)) refuse("current installed plugin row is not an object");
+        keys(row, ["scope", "installPath", "version", "installedAt", "lastUpdated", ...(Object.hasOwn(row, "projectPath") ? ["projectPath"] : []), ...(Object.hasOwn(row, "gitCommitSha") ? ["gitCommitSha"] : [])], "current complete installed plugin row");
+        if (!["user", "project", "local"].includes(row.scope) || typeof row.version !== "string" || !row.version) refuse("current installed plugin scope or version is invalid");
+        abs(row.installPath, "current installed plugin path");
+        if (row.scope === "user") {
+          if (Object.hasOwn(row, "projectPath")) refuse("current user plugin row has a project path");
+        } else abs(row.projectPath, "current installed plugin project path");
+        if (!validUtcTimestamp(row.installedAt) || !validUtcTimestamp(row.lastUpdated)) refuse("current installed plugin timestamps are invalid");
+        if (Object.hasOwn(row, "gitCommitSha") && (typeof row.gitCommitSha !== "string" || !/^[a-f0-9]{40}$/.test(row.gitCommitSha))) refuse("current installed plugin Git commit is outside the measured preservation contract");
+      }
+    }
+  }
   const settingsAfter = settings ? structuredClone(settings) : {};
   if (settingsAfter.enabledPlugins === undefined) settingsAfter.enabledPlugins = {};
   if (!object(settingsAfter.enabledPlugins)) refuse("target settings enabledPlugins is not an object");
@@ -431,6 +450,23 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
       abs(row.source.path, "current settings marketplace directory path");
     }
     settingsAfter.extraKnownMarketplaces = { ...extra, [candidate.marketplace]: { source: { source: "directory", path: candidate.root } } };
+    // Marketplace-add parses and rewrites the complete authoritative index too.
+    // A predicted copy of foreign metadata cannot prove native preservation.
+    for (const row of Object.values(marketplaces ?? {})) {
+      if (!object(row)) refuse("current known marketplace row is not an object");
+      keys(row, ["source", "installLocation", "lastUpdated", ...(Object.hasOwn(row, "autoUpdate") ? ["autoUpdate"] : [])], "current known marketplace row");
+      if (!object(row.source)) refuse("current known marketplace source is not an object");
+      if (row.source.source === "directory") {
+        keys(row.source, ["source", "path"], "current known marketplace directory source");
+        abs(row.source.path, "current known marketplace directory path");
+      } else if (row.source.source === "github") {
+        keys(row.source, ["source", "repo"], "current known marketplace GitHub source");
+        if (typeof row.source.repo !== "string" || row.source.repo.length > 512 || !/^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(row.source.repo)) refuse("current known marketplace GitHub repository is not an owner/repository identifier");
+      } else refuse("current known marketplace source is outside the measured preservation contract");
+      abs(row.installLocation, "current known marketplace install location");
+      if (!validUtcTimestamp(row.lastUpdated)) refuse("current known marketplace timestamp is invalid");
+      if (Object.hasOwn(row, "autoUpdate") && typeof row.autoUpdate !== "boolean") refuse("current known marketplace autoUpdate is not a boolean");
+    }
   }
   if (!isDeepStrictEqual(delta.settingsAfter, settingsAfter)) refuse("complete settings document differs from the exact selected plugin/options/environment/marketplace operations");
 
