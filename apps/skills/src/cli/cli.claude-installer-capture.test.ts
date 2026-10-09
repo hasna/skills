@@ -183,22 +183,36 @@ test("request file rejects malformed, oversized, non-UTF-8 and symlink inputs wi
 
 test("rejects a valid but different @hasna/skills producer", async () => {
   const otherPackage = join(scratch, "other-runtime/node_modules/@hasna/skills"), otherEntry = join(otherPackage, "bin/index.js");
-  mkdirSync(dirname(otherEntry), { recursive: true });
+  mkdirSync(dirname(otherEntry), { recursive: true, mode: 0o700 });
   const contractPackage = realpathSync(join(dirname(entry), "node_modules/@hasna/contracts"));
-  mkdirSync(join(otherPackage, "node_modules/@hasna"), { recursive: true });
+  mkdirSync(join(otherPackage, "node_modules/@hasna"), { recursive: true, mode: 0o700 });
+  for (const directory of [join(scratch, "other-runtime"), join(scratch, "other-runtime/node_modules"), join(scratch, "other-runtime/node_modules/@hasna"), otherPackage, dirname(otherEntry)]) chmodSync(directory, 0o700);
   symlinkSync(contractPackage, join(otherPackage, "node_modules/@hasna/contracts"), "dir");
-  writeFileSync(join(otherPackage, "package.json"), JSON.stringify({ name: "@hasna/skills", version: "1.2.3", bin: { skills: "bin/index.js" } }));
+  const otherManifest = join(otherPackage, "package.json");
+  writeFileSync(otherManifest, JSON.stringify({ name: "@hasna/skills", version: "1.2.3", bin: { skills: "bin/index.js" } }), { mode: 0o644 });
+  chmodSync(otherManifest, 0o644);
   copyFileSync(entry, otherEntry); chmodSync(otherEntry, 0o755);
   rmSync(command, { force: true }); symlinkSync(otherEntry, command);
   const requestPath = join(scratch, "different-producer.json");
   writeFileSync(requestPath, JSON.stringify(base("path-bytes", { paths: [] })), { mode: 0o600 });
-  const child = Bun.spawn([command, "hook", "capture-claude-installer", "--request", requestPath, "--json"], {
-    cwd: scratch, env: { PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`, HOME: join(scratch, "home"), TMPDIR: temp, HASNA_SKILLS_DIR: dataDir, NO_COLOR: "1" },
-    stdin: "ignore", stdout: "pipe", stderr: "pipe",
-  });
-  const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  const output = { stdout, stderr, exitCode };
-  expect(output.exitCode).not.toBe(0); expect(output.stdout).toBe(""); expect(output.stderr).toContain("PRODUCER_UNVERIFIED:");
+  const env = { PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`, HOME: join(scratch, "home"), TMPDIR: temp, HASNA_SKILLS_DIR: dataDir, NO_COLOR: "1" };
+  const invoke = async (argv: string[]) => {
+    const child = Bun.spawn(argv, { cwd: scratch, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    return { stdout, stderr, exitCode };
+  };
+  // Positive control: the alternative package is valid when both the running
+  // entry and the configured command resolve to it.
+  const matching = await invoke([process.execPath, "--no-env-file", otherEntry, "hook", "capture-claude-installer", "--request", requestPath, "--json"]);
+  if (matching.exitCode !== 0) {
+    const code = matching.stderr.match(/CODEX_HOOK_TRUST_[A-Z0-9_]+/)?.[0] ?? matching.stderr.match(/^[A-Z][A-Z0-9_]+/)?.[0] ?? "UNCLASSIFIED";
+    throw new Error(`alternative producer positive control refused: ${code}`);
+  }
+  expect(JSON.parse(matching.stdout).producer.runtimeEntry.path).toBe(otherEntry);
+  // Mismatch control: keep the declared command bound to that alternative, but
+  // run the original package entry. The producer guard must refuse the split.
+  const mismatched = await invoke([process.execPath, "--no-env-file", entry, "hook", "capture-claude-installer", "--request", requestPath, "--json"]);
+  expect(mismatched.exitCode).not.toBe(0); expect(mismatched.stdout).toBe(""); expect(mismatched.stderr).toContain("PRODUCER_UNVERIFIED:");
 });
 
 test("unknown operations, keys and producer paths refuse without echoing private request data", async () => {
