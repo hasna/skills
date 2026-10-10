@@ -2759,3 +2759,29 @@ capture as well, so the re-pinned review must bind the catalog another way, such
 as an exact `bytes` witness, until a reviewed version of this mode covers the
 key. There is no bypass, ignore list or relaxed mode. See
 [marketplace plugin entry witness](docs/plugin-admission.md#marketplace-plugin-entry-witness).
+
+
+`codex-settings-v5` explicitly projects only schema-valid string vectors at the
+document-root `tui.status_line` field, including empty, unknown and future display
+IDs, additions, removal and reordering. OpenAI Codex 0.162.1 declares this field
+as `Option<Vec<String>>`: its UI parser displays known items and ignores/warns
+about unknown strings, without executing commands or loading discovery inputs.
+There is no ID whitelist or entry-count cap; existing whole-file and parser
+resource guards still apply. Malformed values, nonstrings, profile/nested fields,
+other TUI fields and discovery controls remain bound. This verified upstream
+contract does not approve a different native consumer's interpretation.
+V5 retains V4's availability-count contract and V3's supported ordinary local MCP
+projection. Existing byte/V1/V2/V3/V4 reviews retain their exact meaning.
+
+Capture with `skills hook witness --kind codex-settings-v5 --path <config.toml>`.
+Upgrade with `skills hook rebind-settings --agent codex --codex-witness-version 5
+--reviewed-preimage <preserved-config.toml> --expected-policy-sha256 <policy-hash>
+--expected-settings-sha256 <settings-hash>`. Review before adding `--apply`. The
+preserved config must first match its original digest under its original mode;
+all changes outside V5 refuse. The guarded upgrade changes policy only, preserves
+native settings, other witnesses and session pins, and revalidates before apply.
+
+
+Codex cache witnesses migrate separately through `skills hook rebind-cache --agent codex`. Preview requires the exact current policy and configuration SHA-256 values. Name each reviewed remote app-only parent with `--app-only-parent`; skill-bearing parents must already have enrolled qualified-name denies and semantic capability controls. The complete cache census refuses unknown parents, cache-member aliases, new skills, direct hooks selecting cache inputs, and changed app/MCP/receipt capabilities. Reviewed whole Codex root aliases keep their existing identity/CAS guards; hook selection through either the alias or canonical cache path is refused. Commands containing the direct `plugins/cache` selector are conservatively refused, including HOME, tilde and relative spellings; no shell evaluation is performed. App-only bootstrap verifies the old full manifest and receipt sources, then explicitly reviews current app capabilities; it does not claim those app bytes were historically witnessed.
+
+Review the returned semantic cache digest, then repeat with `--expected-cache-witness-sha256 <digest> --apply`. The owning apply path preserves/readbacks the original policy, recomputes the whole plan, compares policy/config/cache preimages, writes only the Skills policy, and verifies the resulting consumer. Historical directory hashes and source rows remain retained as provenance; this command cannot reconstruct an unavailable old directory tree or waive an ancestor directory containing unrelated inputs. Equivalent version materializations and inert assets then leave the new Codex-specific witness unchanged. Every other discovery source, directory, settings witness, native control and session pin stays under its existing contract. Settings and cache upgrades remain independent; neither silently repairs drift in the other.

@@ -3,8 +3,10 @@ import { codexCorpusRootForPath, withCodexCorpusWrite, type CodexCorpusWriteOpti
 import { reviewCodexPluginControls, reviewedCodexPluginSourceRoots, isReviewedCodexPluginInactive, isReviewedCodexPluginSkillDisabled, reviewedCodexPluginCapabilitiesUnchanged, disableReviewedCodexPluginNames, absentDisabledCodexPluginParent, classifyCodexPluginCacheDocument, type ReviewedCodexSkillDenial, type CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
 import { verifyCodexNativeSkillPolicy, parseCodexNativeHookEnvelope, recordCodexNativePolicyAcceptance, type CodexNativeHookEnvelope, type ProcessInspector, type NativePolicyHelperRunner } from "./codex-native-skill-policy.js";
 import { projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
-import { upgradeCodexSettingsWitness, upgradeCodexSettingsWitnessV3, upgradeCodexSettingsWitnessV4, readCodexSettingsPreimage, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
+import { upgradeCodexSettingsWitness, upgradeCodexSettingsWitnessV3, upgradeCodexSettingsWitnessV4, upgradeCodexSettingsWitnessV5, readCodexSettingsPreimage, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
 import { upgradeClaudeSettingsWitness, upgradeClaudeSettingsWitnessV4 } from "./claude-settings-witness.js";
+import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
+import { captureCodexSemanticCacheWitness, type CodexSemanticCacheAppOnlyParent } from "./codex-semantic-cache-witness.js";
 import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -14,7 +16,7 @@ import { homedir } from "node:os";
 import { getDataDir, getDataDirReadOnly } from "./config.js";
 import { requiresCliSkillLoading, readManagedSkillPolicySnapshot, serializeManagedSkillPolicy, parseManagedSkillPolicy } from "./managed-policy.js";
 import { CLI_BRIDGE_NAME, CLI_BRIDGE_FILES, CLI_BRIDGE_DIGEST, CLI_BRIDGE_VERSION, isOwnedCliBridge } from "./agent-bridge.js";
-import { assertProjectDiscovery, discoveryExecutable, recordedDiscoveryExecutable, isDiscoveryRootUnresolved, resolveAgentDiscovery, verifyAgentDiscovery, verifyAutomaticDiscoveryClosure, type DiscoveryExecutable, rebindAgentDiscovery, captureDiscoveryDirectories, captureRetiredCodexDiscovery, projectNativeDiscoveryFields, type AgentDiscoveryBinding, type DiscoverySource, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
+import { assertProjectDiscovery, discoveryExecutable, recordedDiscoveryExecutable, isDiscoveryRootUnresolved, resolveAgentDiscovery, verifyAgentDiscovery, verifyAutomaticDiscoveryClosure, type DiscoveryExecutable, rebindAgentDiscovery, captureDiscoveryDirectories, captureRetiredCodexDiscovery, projectNativeDiscoveryFields, codexSemanticCacheSourceRole, codexSemanticCacheDirectoryRole, assertCodexSemanticCacheHookSafety, type AgentDiscoveryBinding, type DiscoverySource, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderAgentHookCommand, renderOpenCodePlugin, type IntegrationAgent } from "./agent-adapters.js";
 import { assertCodexPathConfigEditable, CODEX_SKILL_CONFIG_SECTIONS, disableCodexBundledSkills, normalizeCodexInlinePathConfig } from "./agent-codex.js";
 
@@ -33,7 +35,7 @@ export interface NativeSkillEntry { agent: string; path: string; hash: string; m
 export interface NativeMigrationTarget { agent: string; projectRoot: string; path: string; treeSha256: string; vendor?: true }
 export interface NativeMigrationTargetManifest { schema: "hasna.skills-native-migration-targets.v1"; targets: NativeMigrationTarget[]; digest: string }
 export interface AgentConfigChange { path: string; before: string | null; after: string }
-export interface AgentIntegrationPlan { reviewArtifactSources?: Array<{ path: string; sha256: string }>; retainedReviewArtifacts?: ReviewArtifactChange[]; reviewArtifactMigration?: ReviewArtifactMigration; observedNativeSources?: Array<{ path: string; sha256: string | null }>; codexPluginSkillReview?: { version: string; cwd: string; catalogSha256: string; configSha256: string | null }; observedSettings?: { path: string; before: string }; settingsWitnessUpgrade?: { agent: "claude" | "codex" | "sumi"; path: string; fromHashMode: string; fromSha256: string; toHashMode: string; toSha256: string; reviewedPreimage: string; currentSettingsSha256: string; replacedWitnesses: Array<{ hashMode: string; sha256: string }> }; dataDir: string; profileId: string; changes: AgentConfigChange[]; nativeSkills: NativeSkillEntry[]; observedPolicy?: { path: string; before: string | null }; discoveryBefore?: AgentDiscoveryBinding[]; discoveryAfter?: AgentDiscoveryBinding[]; discoveryExecutables?: Record<string, DiscoveryExecutable>; rootAliases?: AgentRootAlias[]; managedAgentChecks?: { home: string; projectDir?: string; agents: IntegrationAgent[] }; retainedReviewChecks?: { home: string; projectDir: string; agents: IntegrationAgent[] } }
+export interface AgentIntegrationPlan { cacheWitnessUpgrade?: CodexSemanticCacheUpgrade; reviewArtifactSources?: Array<{ path: string; sha256: string }>; retainedReviewArtifacts?: ReviewArtifactChange[]; reviewArtifactMigration?: ReviewArtifactMigration; observedNativeSources?: Array<{ path: string; sha256: string | null }>; codexPluginSkillReview?: { version: string; cwd: string; catalogSha256: string; configSha256: string | null }; observedSettings?: { path: string; before: string }; settingsWitnessUpgrade?: { agent: "claude" | "codex" | "sumi"; path: string; fromHashMode: string; fromSha256: string; toHashMode: string; toSha256: string; reviewedPreimage: string; currentSettingsSha256: string; replacedWitnesses: Array<{ hashMode: string; sha256: string }> }; dataDir: string; profileId: string; changes: AgentConfigChange[]; nativeSkills: NativeSkillEntry[]; observedPolicy?: { path: string; before: string | null }; discoveryBefore?: AgentDiscoveryBinding[]; discoveryAfter?: AgentDiscoveryBinding[]; discoveryExecutables?: Record<string, DiscoveryExecutable>; rootAliases?: AgentRootAlias[]; managedAgentChecks?: { home: string; projectDir?: string; agents: IntegrationAgent[] }; retainedReviewChecks?: { home: string; projectDir: string; agents: IntegrationAgent[] } }
 
 const sha = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
 const HOOK_EVENTS: readonly ContextHookEvent[] = ["UserPromptSubmit", "SessionStart", "SubagentStart"];
@@ -1017,7 +1019,7 @@ function claudeSettingsConsumers(home: string, path: string, discoveries: AgentD
 function verifyCoordinatedDiscovery(binding: AgentDiscoveryBinding, home: string, aliases: AgentRootAlias[], executable?: DiscoveryExecutable): void {
   try {
     if (binding.method !== "automatic" && binding.method !== "reviewed") throw new Error("Invalid managed discovery method");
-    verifyAgentDiscovery(binding);
+    verifyAgentDiscovery(binding, undefined, aliases);
     if (binding.method === "automatic") verifyAutomaticDiscoveryClosure(binding, { home, canonical: path => canonicalAgentPath(path, aliases), change: "Configured native discovery roots changed during Claude update", executable });
   } catch (error) {
     // An unresolvable runtime is an environment gap, not drift: keep its code.
@@ -1098,8 +1100,8 @@ function atomicWrite(path: string, content: string): void {
  * Runtime readers never relax the old witness. All other discovery sources,
  * unknown settings, native controls and policy bytes remain guarded.
  */
-export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "codex" | "sumi"; targetCodexVersion?: 2 | 3 | 4; targetClaudeVersion?: 3 | 4; reviewedPreimage: string; home?: string; dataDir?: string; projectDir?: string; expectedPolicySha256: string; expectedSettingsSha256: string }): AgentIntegrationPlan {
-  if (options.targetCodexVersion !== undefined && (options.agent !== "codex" || ![2, 3, 4].includes(options.targetCodexVersion))) throw new Error("Invalid Codex witness target version");
+export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "codex" | "sumi"; targetCodexVersion?: 2 | 3 | 4 | 5; targetClaudeVersion?: 3 | 4; reviewedPreimage: string; home?: string; dataDir?: string; projectDir?: string; expectedPolicySha256: string; expectedSettingsSha256: string }): AgentIntegrationPlan {
+  if (options.targetCodexVersion !== undefined && (options.agent !== "codex" || ![2, 3, 4, 5].includes(options.targetCodexVersion))) throw new Error("Invalid Codex witness target version");
   // Claude v3 stays the default target; v4 (built-in theme presets) is opt-in.
   if (options.targetClaudeVersion !== undefined && (options.agent !== "claude" || ![3, 4].includes(options.targetClaudeVersion))) throw new Error("Invalid Claude witness target version");
   const home = resolve(options.home ?? homedir()), dataDir = options.dataDir ?? getDataDirReadOnly();
@@ -1121,7 +1123,7 @@ export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "co
   // and therefore stops matching as soon as Codex re-serializes the file it owns.
   const replaced: DiscoverySource[] = [previous];
   if (options.agent === "codex") {
-    if (previous.hashMode !== undefined && previous.hashMode !== "bytes" && previous.hashMode !== "codex-settings-v1" && !((options.targetCodexVersion === 3 || options.targetCodexVersion === 4) && previous.hashMode === "codex-settings-v2") && !(options.targetCodexVersion === 4 && previous.hashMode === "codex-settings-v3")) throw new Error("Codex settings witness upgrade requires an eligible preserved configuration witness");
+    if (previous.hashMode !== undefined && previous.hashMode !== "bytes" && previous.hashMode !== "codex-settings-v1" && !((options.targetCodexVersion === 3 || options.targetCodexVersion === 4 || options.targetCodexVersion === 5) && previous.hashMode === "codex-settings-v2") && !((options.targetCodexVersion === 4 || options.targetCodexVersion === 5) && previous.hashMode === "codex-settings-v3") && !(options.targetCodexVersion === 5 && previous.hashMode === "codex-settings-v4")) throw new Error("Codex settings witness upgrade requires an eligible preserved configuration witness");
     const preimage = readCodexSettingsPreimage(options.reviewedPreimage);
     for (const source of binding.sources) {
       if (source === previous || source.path !== configPath) continue;
@@ -1148,6 +1150,8 @@ export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "co
     ? options.targetClaudeVersion === 4
       ? upgradeClaudeSettingsWitnessV4(previous as Parameters<typeof upgradeClaudeSettingsWitnessV4>[0], options.reviewedPreimage)
       : upgradeClaudeSettingsWitness(previous as Parameters<typeof upgradeClaudeSettingsWitness>[0], options.reviewedPreimage)
+    : options.targetCodexVersion === 5
+      ? upgradeCodexSettingsWitnessV5(previous as Parameters<typeof upgradeCodexSettingsWitnessV5>[0], options.reviewedPreimage)
     : options.targetCodexVersion === 4
       ? upgradeCodexSettingsWitnessV4(previous as Parameters<typeof upgradeCodexSettingsWitnessV4>[0], options.reviewedPreimage)
     : options.targetCodexVersion === 3
@@ -1161,9 +1165,84 @@ export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "co
   const replacement: AgentDiscoveryBinding = { ...binding, sources: rebound };
   // A proved semantic replacement is explicit in this plan. Verify every
   // unrelated source without rebinding it to whatever happens to be on disk.
-  verifyAgentDiscovery(replacement);
+  verifyAgentDiscovery(replacement, undefined, aliases);
   const after = serializeManagedSkillPolicy({ ...policy, bridge: { ...policy.bridge, discovery: { ...policy.bridge.discovery, [options.agent]: replacement } } });
   return { dataDir, profileId: policy.profileId, changes: [{ path: join(dataDir, "agent-policy.json"), before: snapshot.text, after }], nativeSkills: [], observedPolicy: { path: join(dataDir, "agent-policy.json"), before: snapshot.text }, observedSettings: { path: configPath, before: settings }, discoveryBefore: [replacement], discoveryAfter: [replacement], ...(policy.bridge.discoveryExecutables ? { discoveryExecutables: policy.bridge.discoveryExecutables } : {}), rootAliases: aliases, managedAgentChecks: { home, agents: [options.agent] }, settingsWitnessUpgrade: { agent: options.agent, path: configPath, fromHashMode: previous.hashMode ?? "bytes", fromSha256: previous.sha256, toHashMode: next.hashMode, toSha256: next.sha256, reviewedPreimage: options.reviewedPreimage, currentSettingsSha256: options.expectedSettingsSha256, replacedWitnesses: replaced.map(source => ({ hashMode: source.hashMode ?? "bytes", sha256: source.sha256! })) } };
+}
+
+export interface CodexSemanticCacheUpgrade {
+  agent: "codex";
+  appOnlyParents: string[];
+  expectedPolicySha256: string;
+  expectedSettingsSha256: string;
+  expectedCacheWitnessSha256?: string;
+  home?: string;
+  dataDir?: string;
+}
+/** Explicit current capability review. Old aggregate directory digests remain
+ * evidence, not a reconstructed historical tree or a new byte baseline. */
+export function planCodexSemanticCacheWitnessUpgrade(options: CodexSemanticCacheUpgrade): AgentIntegrationPlan {
+  if (options.agent !== "codex" || !/^[a-f0-9]{64}$/.test(options.expectedPolicySha256)
+    || !/^[a-f0-9]{64}$/.test(options.expectedSettingsSha256)
+    || options.expectedCacheWitnessSha256 !== undefined && !/^[a-f0-9]{64}$/.test(options.expectedCacheWitnessSha256)
+    || !Array.isArray(options.appOnlyParents) || options.appOnlyParents.length > 4096 || new Set(options.appOnlyParents).size !== options.appOnlyParents.length) throw new Error("Invalid Codex semantic cache upgrade request");
+  const home = resolve(options.home ?? homedir()), dataDir = options.dataDir ?? getDataDirReadOnly();
+  const snapshot = readManagedSkillPolicySnapshot(dataDir);
+  if (!snapshot || sha(snapshot.text) !== options.expectedPolicySha256) throw new Error("Managed policy preimage changed");
+  const policy = snapshot.value, aliases = policy.bridge?.rootAliases ?? [];
+  recheckRootAliases(aliases);
+  const binding: AgentDiscoveryBinding | undefined = policy.bridge?.discovery?.codex;
+  if (!binding || binding.agent !== "codex" || binding.method !== "reviewed" || binding.codexSemanticCache) throw new Error("Cache upgrade requires an existing legacy reviewed Codex binding");
+  const controls: CodexPluginSkillControl[] = policy.bridge?.codexPluginSkills ?? [];
+  if (!supportsCodexNativeCapability(policy.bridge?.codexPluginSkillReview?.version, "installed-plugin-review")) throw new Error("Cache upgrade requires prior installed-plugin review");
+  if (!controls.length || !isDeepStrictEqual(controls, binding.codexDisabledPluginSkills ?? controls)) throw new Error("Cache upgrade requires unchanged enrolled plugin controls");
+  const cacheRoot = canonicalAgentPath(join(home, ".codex/plugins/cache"), aliases);
+  if (controls.some(control => dirname(dirname(control.pluginParent)) !== cacheRoot)) throw new Error("Cache upgrade names another enrolled cache");
+  const configPath = canonicalAgentPath(join(home, ".codex/config.toml"), aliases), settings = readOptional(configPath);
+  if (settings === null || sha(settings) !== options.expectedSettingsSha256) throw new Error("Native settings preimage changed");
+  const boundedRead = (path: string): string => new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(readNativeBytes(path, 1024 * 1024));
+  const unchangedFullSource = (path: string): string => {
+    const source = binding.sources.find(source => source.path === path && source.sha256 !== null && source.format === undefined && source.fields === undefined && source.reviewArtifact === undefined && (source.hashMode === undefined || source.hashMode === "bytes"));
+    if (!source) throw new Error("Cache upgrade lacks prior full identity source");
+    const text = boundedRead(path);
+    if (sha(text) !== source.sha256) throw new Error("Reviewed cache identity source changed");
+    return text;
+  };
+  const appOnlyParents: CodexSemanticCacheAppOnlyParent[] = options.appOnlyParents.map(parent => {
+    const parts = relative(cacheRoot, parent).split(sep);
+    if (!isAbsolute(parent) || resolve(parent) !== parent || parts.length !== 2 || parts.some(part => !/^[A-Za-z0-9_-]{1,64}$/.test(part))
+      || controls.some(control => control.pluginParent === parent)) throw new Error("Unsupported app-only parent role");
+    const receipt = JSON.parse(unchangedFullSource(join(parent, ".codex-remote-plugin-install.json")));
+    if (!receipt || Object.keys(receipt).length !== 2 || receipt.schema_version !== 1 || typeof receipt.remote_plugin_id !== "string") throw new Error("Invalid reviewed app-only parent identity");
+    const manifests = binding.sources.filter(source => source.path.startsWith(parent + sep) && source.path.endsWith(join(sep, ".codex-plugin/plugin.json")));
+    if (!manifests.length) throw new Error("App-only bootstrap lacks prior full manifests");
+    for (const source of manifests) unchangedFullSource(source.path);
+    return { role: "app-only" as const, pluginId: `${parts[1]}@${parts[0]}`, namespace: parts[1]!, pluginParent: parent, remotePluginId: receipt.remote_plugin_id };
+  }).sort((a, b) => a.pluginParent.localeCompare(b.pluginParent));
+  const parents = [...new Set([...controls.map(control => control.pluginParent), ...appOnlyParents.map(parent => parent.pluginParent)])];
+  const reviewedAlias = aliases.find((alias: AgentRootAlias) => alias.agent === "codex");
+  const hookRootAlias = reviewedAlias ? { alias: reviewedAlias.alias, target: reviewedAlias.target } : null;
+  assertCodexSemanticCacheHookSafety(cacheRoot, parents, configPath, hookRootAlias);
+  const supersededSources = binding.sources.filter(source => codexSemanticCacheSourceRole(source, cacheRoot, parents));
+  // Existing app/MCP full-byte witnesses must explain the bootstrap too. The
+  // stale skill manifest is covered by its already enrolled semantic controls.
+  for (const source of supersededSources) if ([".app.json", ".mcp.json"].includes(source.path.split(sep).at(-1)!)) unchangedFullSource(source.path);
+  const supersededDirectories = (binding.directories ?? []).filter(directory => codexSemanticCacheDirectoryRole(directory.path, cacheRoot));
+  if (!supersededDirectories.some(directory => directory.path === cacheRoot)
+    || (binding.directories ?? []).some(directory => cacheRoot.startsWith(directory.path + sep))) throw new Error("Cache upgrade requires exact cache directory coverage without an unproved ancestor projection");
+  const rules = (Bun.TOML.parse(settings) as any).skills?.config ?? [];
+  const witness = captureCodexSemanticCacheWitness({ cacheRoot, controls, appOnlyParents, rules, read: boundedRead });
+  if (options.expectedCacheWitnessSha256 !== undefined && witness.sha256 !== options.expectedCacheWitnessSha256) throw new Error("Reviewed semantic cache preimage changed");
+  const replacement: AgentDiscoveryBinding = { ...binding, codexDisabledPluginSkills: controls, codexSemanticCache: {
+    schema: "hasna.codex-semantic-cache-discovery.v1", configPath, hookRootAlias, witness, appOnlyParents, previousPolicySha256: options.expectedPolicySha256, supersededSources, supersededDirectories,
+  } };
+  verifyAgentDiscovery(replacement, undefined, aliases);
+  const after = serializeManagedSkillPolicy({ ...policy, bridge: { ...policy.bridge, discovery: { ...policy.bridge.discovery, codex: replacement } } });
+  return { dataDir, profileId: policy.profileId, nativeSkills: [], changes: [{ path: join(dataDir, "agent-policy.json"), before: snapshot.text, after }],
+    observedPolicy: { path: join(dataDir, "agent-policy.json"), before: snapshot.text }, observedSettings: { path: configPath, before: settings },
+    discoveryBefore: [replacement], discoveryAfter: [replacement], rootAliases: aliases, managedAgentChecks: { home, agents: ["codex"] },
+    ...(policy.bridge.discoveryExecutables ? { discoveryExecutables: policy.bridge.discoveryExecutables } : {}),
+    cacheWitnessUpgrade: { ...options, home, dataDir, appOnlyParents: appOnlyParents.map(parent => parent.pluginParent) } };
 }
 
 export interface ReviewArtifactMigration {
@@ -1225,17 +1304,26 @@ function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: Code
       || JSON.stringify(verified.discoveryAfter) !== JSON.stringify(plan.discoveryAfter)) throw new Error("REVIEW_ARTIFACT_PLAN_CHANGED");
   }
   let provenDiscovery: AgentDiscoveryBinding | undefined;
+  if (plan.cacheWitnessUpgrade) {
+    if (!plan.cacheWitnessUpgrade.expectedCacheWitnessSha256 || !plan.observedPolicy?.before || !plan.managedAgentChecks) throw new Error("Invalid cache witness upgrade plan");
+    const verified = planCodexSemanticCacheWitnessUpgrade(plan.cacheWitnessUpgrade);
+    if (JSON.stringify(verified.changes) !== JSON.stringify(plan.changes)
+      || JSON.stringify(verified.cacheWitnessUpgrade) !== JSON.stringify(plan.cacheWitnessUpgrade)
+      || JSON.stringify(verified.discoveryAfter) !== JSON.stringify(plan.discoveryAfter)) throw new Error("Cache witness upgrade plan changed");
+    provenDiscovery = verified.discoveryBefore![0];
+  }
   if (plan.settingsWitnessUpgrade) {
+    if (plan.cacheWitnessUpgrade) throw new Error("Independent witness upgrades cannot be combined implicitly");
     const upgrade = plan.settingsWitnessUpgrade;
     if (!plan.managedAgentChecks || !plan.observedPolicy?.before) throw new Error("Invalid settings witness upgrade plan");
-    const verified = planAgentSettingsWitnessUpgrade({ agent: upgrade.agent, ...(upgrade.agent === "codex" ? { targetCodexVersion: upgrade.toHashMode === "codex-settings-v4" ? 4 as const : upgrade.toHashMode === "codex-settings-v3" ? 3 as const : 2 as const } : {}), ...(upgrade.agent === "claude" && upgrade.toHashMode === "claude-settings-v4" ? { targetClaudeVersion: 4 as const } : {}), reviewedPreimage: upgrade.reviewedPreimage, home: plan.managedAgentChecks.home, dataDir: plan.dataDir, expectedPolicySha256: sha(plan.observedPolicy.before), expectedSettingsSha256: upgrade.currentSettingsSha256 });
+    const verified = planAgentSettingsWitnessUpgrade({ agent: upgrade.agent, ...(upgrade.agent === "codex" ? { targetCodexVersion: upgrade.toHashMode === "codex-settings-v5" ? 5 as const : upgrade.toHashMode === "codex-settings-v4" ? 4 as const : upgrade.toHashMode === "codex-settings-v3" ? 3 as const : 2 as const } : {}), ...(upgrade.agent === "claude" && upgrade.toHashMode === "claude-settings-v4" ? { targetClaudeVersion: 4 as const } : {}), reviewedPreimage: upgrade.reviewedPreimage, home: plan.managedAgentChecks.home, dataDir: plan.dataDir, expectedPolicySha256: sha(plan.observedPolicy.before), expectedSettingsSha256: upgrade.currentSettingsSha256 });
     if (JSON.stringify(verified.changes) !== JSON.stringify(plan.changes) || JSON.stringify(verified.settingsWitnessUpgrade) !== JSON.stringify(upgrade)) throw new Error("Settings witness upgrade plan changed");
     provenDiscovery = verified.discoveryBefore![0];
   }
   for (const agent of plan.managedAgentChecks?.agents ?? []) assertManagedAgentBridgeWithDiscovery(agent, { home: plan.managedAgentChecks!.home, dataDir: plan.dataDir, projectDir: plan.managedAgentChecks!.projectDir ?? plan.managedAgentChecks!.home }, provenDiscovery?.agent === agent ? provenDiscovery : undefined);
   for (const binding of plan.discoveryBefore ?? []) {
     if (plan.managedAgentChecks) verifyCoordinatedDiscovery(binding, plan.managedAgentChecks.home, aliases, plan.discoveryExecutables?.[binding.agent]);
-    else verifyAgentDiscovery(binding);
+    else verifyAgentDiscovery(binding, undefined, aliases);
   }
   if (plan.observedPolicy && currentText(plan.observedPolicy.path) !== plan.observedPolicy.before) throw new Error("Agent policy changed after planning");
   for (const change of plan.changes) if (currentText(change.path) !== change.before) throw new Error(`Configuration changed after planning: ${change.path}`);
@@ -1271,10 +1359,10 @@ function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: Code
     if (plan.observedSettings && readOptional(plan.observedSettings.path) !== plan.observedSettings.before) throw new Error("Native settings changed during witness application");
     for (const binding of plan.discoveryAfter ?? []) {
       if (plan.managedAgentChecks) verifyCoordinatedDiscovery(binding, plan.managedAgentChecks.home, aliases, plan.discoveryExecutables?.[binding.agent]);
-      else verifyAgentDiscovery(binding);
+      else verifyAgentDiscovery(binding, undefined, aliases);
     }
     for (const agent of plan.managedAgentChecks?.agents ?? []) assertManagedAgentBridge(agent, { home: plan.managedAgentChecks!.home, dataDir: plan.dataDir, projectDir: plan.managedAgentChecks!.projectDir ?? plan.managedAgentChecks!.home });
-    atomicWrite(join(backupRoot, "receipt.json"), JSON.stringify({ version: 1, changes: written.map(change => ({ path: change.path, beforeHash: change.before === null ? null : sha(change.before), afterHash: sha(change.after) })), backups, ...(plan.retainedReviewArtifacts?.length ? { retainedReviewArtifacts: plan.retainedReviewArtifacts.map(item => ({ path: item.path, ...item.artifact })) } : {}), ...(aliases.length ? { rootAliases: aliases } : {}) }) + "\n");
+    atomicWrite(join(backupRoot, "receipt.json"), JSON.stringify({ version: 1, changes: written.map(change => ({ path: change.path, beforeHash: change.before === null ? null : sha(change.before), afterHash: sha(change.after) })), backups, ...(plan.cacheWitnessUpgrade ? { cacheWitnessUpgrade: plan.cacheWitnessUpgrade } : {}), ...(plan.retainedReviewArtifacts?.length ? { retainedReviewArtifacts: plan.retainedReviewArtifacts.map(item => ({ path: item.path, ...item.artifact })) } : {}), ...(aliases.length ? { rootAliases: aliases } : {}) }) + "\n");
   } catch (error) {
     assertCurrent();
     for (const change of written.reverse()) {
@@ -1530,7 +1618,7 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
   if (!discovery || discovery.agent !== agent) throw new Error("NATIVE_SKILL_DRIFT: native discovery coverage is missing; run skills hook install");
   if (agent === "gemini" && !discovery.builtinNames?.every(name => config.skills.disabled.includes(name))) throw new Error("NATIVE_SKILL_DRIFT: an installed Gemini builtin is not disabled");
   try {
-    verifyAgentDiscovery(agent==="codex" ? {...discovery,codexDisabledPluginSkills:binding.codexPluginSkills ?? []} : discovery, options.codexDiscoveryRecovery);
+    verifyAgentDiscovery(agent==="codex" ? {...discovery,codexDisabledPluginSkills:binding.codexPluginSkills ?? []} : discovery, options.codexDiscoveryRecovery, aliases);
     if (agent === "sumi" && discovery.method === "reviewed") resolveAgentDiscovery({ home, agent, retainedReview: discovery, canonical: path => canonicalAgentPath(path, aliases) });
     if (discovery.method === "automatic") verifyAutomaticDiscoveryClosure(discovery, { home, canonical: path => canonicalAgentPath(path, aliases), change: "Configured native discovery roots changed", executable: binding.discoveryExecutables?.[agent] });
   } catch (error) {
