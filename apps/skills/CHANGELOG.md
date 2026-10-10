@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.62
+
+- Verify a declared target runtime’s read-only consumer prerequisites before switching Skills launchers. Missing or incompatible Sumi path readers refuse activation while retaining the prepared rollout receipt, old runtime, launcher bytes, configuration and session receipts.
+- Report undeclared legacy targets as unverified and document the independent exact-target preflight required when first upgrading from 0.10.61. Receipt-based rollback remains supported.
+
 ## 0.10.60
 
 - Add `skills hook capture-claude-installer` so installers can obtain versioned discovery witnesses through their configured Skills CLI, including retained-runtime launchers. The read-only command binds and rechecks the running CLI and runtime, delegates to the existing witness implementations, and returns bounded diagnostics without exposing input contents. It does not install plugins, change native configuration, or replace the prospective candidate review.
