@@ -21,9 +21,10 @@ import { absentDisabledCodexPluginParent, reviewedDisabledCodexPluginParent, rev
 import { sumiConfigDirectory, sumiConfigPath } from "./agent-sumi.js";
 import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
 import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
+import { verifyRetainedReviewArtifact, type RetainedReviewArtifact, type ReviewedArtifact } from "./retained-review-artifacts.js";
 export { captureDiscoveryDirectories, type DiscoveryDirectory } from "./agent-discovery-directories.js";
 
-export interface DiscoverySource { path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes" | "claude-plugin-manifest-v1" | "claude-plugin-registry" | "claude-marketplace-registry" | "claude-settings-v1" | "claude-settings-v2" | "claude-settings-v3" | "claude-settings-v4" | "claude-marketplace-registry-v2" | "codex-settings-v1" | "codex-settings-v2" | "codex-settings-v3" | "codex-settings-v4" | "sumi-settings-v1" | "claude-marketplace-entry-v1"; managedPlugins?: ManagedPluginRegistrationWitness[]; format?: "json" | "toml" | "yaml"; fields?: string[]; marketplace?: string; plugin?: string }
+export interface DiscoverySource { reviewArtifact?: RetainedReviewArtifact; path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes" | "claude-plugin-manifest-v1" | "claude-plugin-registry" | "claude-marketplace-registry" | "claude-settings-v1" | "claude-settings-v2" | "claude-settings-v3" | "claude-settings-v4" | "claude-marketplace-registry-v2" | "codex-settings-v1" | "codex-settings-v2" | "codex-settings-v3" | "codex-settings-v4" | "sumi-settings-v1" | "claude-marketplace-entry-v1"; managedPlugins?: ManagedPluginRegistrationWitness[]; format?: "json" | "toml" | "yaml"; fields?: string[]; marketplace?: string; plugin?: string }
 export interface AgentDiscoveryBinding { agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; method: "automatic" | "reviewed"; builtinNames?: string[]; codexDisabledPluginSkills?: CodexPluginSkillControl[]; codexRetiredMaterializations?: { roots:string[]; parents?:string[]; directories:Array<DiscoveryDirectory & {entries?:string[]}> }; codexInstallationInputs?: { version:string; catalogSha256:string; plugins:CodexPluginSourceInput[]; directories?:DiscoveryDirectory[] } }
 /** Discovery that depends on an installed runtime found by command name. */
 const DISCOVERY_RUNTIME_COMMANDS: Partial<Record<IntegrationAgent, string>> = Object.freeze({ gemini: "gemini" });
@@ -63,7 +64,7 @@ export function recordedDiscoveryExecutable(agent: IntegrationAgent, recorded: D
   const target = realpathOrNull(recorded.path);
   return target === null ? null : { command, path: recorded.path, target };
 }
-export interface ReviewedDiscoveryInputs { version: 1; agents: Array<{ agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; pluginHooks: "reviewed-no-skill-injection" }> }
+export interface ReviewedDiscoveryInputs { version: 1; agents: Array<{ agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; reviewArtifacts?: ReviewedArtifact[]; directories?: DiscoveryDirectory[]; pluginHooks: "reviewed-no-skill-injection" }> }
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 function parseConfig(text: string, path: string, toml = false): any {
   try {
@@ -202,6 +203,7 @@ function supersedesSettingsProjection(agent: IntegrationAgent, sources: Discover
   return agent === "codex" && sources.some(source => source.path === configPath && (source.hashMode === "codex-settings-v2" || (source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4")));
 }
 function projected(source: DiscoverySource, changes?: Map<string, string>, budget = discoveryByteBudget()): string | null {
+  if (source.reviewArtifact !== undefined) verifyRetainedReviewArtifact(source);
   if (source.hashMode === "sumi-settings-v1") {
     if (source.format !== undefined || source.fields !== undefined || source.managedPlugins !== undefined || typeof source.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(source.sha256)) throw new Error("Sumi settings witnesses require exact typed metadata");
     const current = captureSumiSettings(source.path, budget).sha256;

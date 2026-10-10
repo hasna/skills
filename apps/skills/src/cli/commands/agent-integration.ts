@@ -10,7 +10,7 @@ import { normalizeHermesHookInput, assertHermesTool } from "../../lib/agent-herm
 import { parseSkillContextInput, selectedProfileId } from "./context.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, normalizeAgentHookEvent } from "../../lib/agent-adapters.js";
 import { detectedIntegrationAgents } from "../../lib/agent-install-selection.js";
-import { planAgentIntegration, planClaudeManagedHookProjection, planAgentSettingsWitnessUpgrade, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, hookContextOutput, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, type IntegrationAgent } from "../../lib/agent-integration.js";
+import { planAgentIntegration, planClaudeManagedHookProjection, planAgentSettingsWitnessUpgrade, planReviewedArtifactMigration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, hookContextOutput, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, type IntegrationAgent } from "../../lib/agent-integration.js";
 import { enrollCodexNativeHooks, reconcileCodexNativeHooks } from "../../lib/agent-codex-trust.js";
 import { codexNativeHookEnvelopeFromInput, CODEX_NATIVE_POLICY_FD_ENV } from "../../lib/codex-native-skill-policy.js";
 import { planCodexNativeTrust, applyCodexNativeTrust, previewCodexNativeTrust } from "../../lib/codex-native-trust.js";
@@ -90,6 +90,31 @@ function agents(value: string): IntegrationAgent[] {
 
 export function registerAgentIntegration(parent: Command): void {
   const hook = parent.command("hook").description("Load selected Skills context through agent lifecycle hooks");
+  hook.command("retain-review-artifact")
+    .requiredOption("--kind <kind>", "Explicit artifact type: codex-native-catalog")
+    .requiredOption("--source <path>", "Exact canonical absolute legacy reviewed artifact path")
+    .requiredOption("--expected-policy-sha256 <sha256>", "Exact current policy byte digest")
+    .requiredOption("--expected-source-sha256 <sha256>", "Original reviewed artifact byte digest")
+    .option("--apply", "Apply the guarded plan; defaults to read-only planning", false)
+    .option("--json", "Return bounded retention metadata", false)
+    .description("Retain exact immutable review evidence without refreshing native discovery or trust")
+    .action(async (options: { kind: string; source: string; expectedPolicySha256: string; expectedSourceSha256: string; apply: boolean }) => {
+      try {
+        if (options.kind !== "codex-native-catalog") throw new Error("REVIEW_ARTIFACT_INVALID");
+        const plan = planReviewedArtifactMigration({ kind: options.kind, sourcePath: options.source,
+          expectedPolicySha256: options.expectedPolicySha256, expectedSourceSha256: options.expectedSourceSha256,
+          projectDir: process.cwd() });
+        const result = options.apply ? applyAgentIntegration(plan) : undefined;
+        await writeCliOutput(JSON.stringify({ version: 1, applied: options.apply,
+          artifacts: plan.discoveryAfter?.flatMap(binding => binding.sources.filter(source => source.reviewArtifact?.originalPath === options.source)
+            .map(source => ({ path: source.path, ...source.reviewArtifact }))),
+          changes: plan.changes.map(change => change.path), ...(result ? { result } : {}) }));
+      } catch (error) {
+        const code = error instanceof Error && /^REVIEW_ARTIFACT_[A-Z_]+$/.test(error.message)
+          ? error.message : "REVIEW_ARTIFACT_MIGRATION_REFUSED";
+        console.error(code); process.exitCode = 1;
+      }
+    });
   hook.command("project-claude-settings")
     .requiredOption("--expected-target-sha256 <sha256>", "SHA-256 of the exact target settings bytes supplied on stdin")
     .option("--expected-source-sha256 <sha256>", "Source witness from the preceding projection, for revalidation")

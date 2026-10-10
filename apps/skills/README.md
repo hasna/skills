@@ -560,6 +560,47 @@ the managed policy, so the witness is a tripwire, not a security boundary. See
 A stronger witness for plugins outside receipt-backed admission is planned and
 not yet implemented.
 
+Captured review catalogs are immutable evidence, while configuration and plugin
+files remain live discovery inputs. To retain a captured Codex native catalog,
+explicitly add `reviewArtifacts` to its Codex entry in `--discovery-inputs`:
+
+```json
+"reviewArtifacts": [{
+  "kind": "codex-native-catalog",
+  "path": "/absolute/private/reviewed-catalog.json",
+  "sha256": "<exact original file SHA-256>"
+}]
+```
+
+The same path and digest must already be a full byte witness in `sources`.
+The normal read-only install plan validates the catalog using its owning schema;
+apply retains its exact bytes privately under the resolved Skills data directory
+at `agent-discovery/artifacts/<sha256>/catalog.json` before changing the policy.
+The stored witness includes the original path, byte digest and projected catalog
+digest. Later hooks verify the retained bytes and permissions, so removal of the
+original scratch copy cannot break discovery. Live native roots, configuration,
+plugin files and trust still require their original witnesses; retention does
+not refresh or exempt them. No artifact is inferred from a filename.
+
+For an existing reviewed policy, plan one exact legacy witness migration:
+
+```bash
+skills hook retain-review-artifact --kind codex-native-catalog \
+  --source /absolute/private/reviewed-catalog.json \
+  --expected-policy-sha256 <current-policy-byte-sha256> \
+  --expected-source-sha256 <original-reviewed-byte-sha256> --json
+```
+
+Run from the same reviewed project directory; add `--apply` to execute that
+guarded transaction. It requires the original bytes to exist and all current
+bridge, discovery and trust checks to pass. Missing originals need exact recovery
+first; this command never captures a replacement catalog or rehashes a changed
+source. Apply preserves and reads back the old policy, leaves the original source
+and session pins intact, and records retention lineage in the transaction
+receipt. Existing sources without an explicit declaration keep their live-path
+semantics. Immutable files left by a compensated transaction are retained and
+may be reused only after exact verification.
+
 When `hook install` omits `--discovery-inputs`, it reuses an existing reviewed
 binding only after rechecking its sources, directory membership, configuration
 coverage, managed bridge and native trust. Unchanged reviews need no new input
