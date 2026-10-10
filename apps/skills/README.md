@@ -2759,3 +2759,19 @@ capture as well, so the re-pinned review must bind the catalog another way, such
 as an exact `bytes` witness, until a reviewed version of this mode covers the
 key. There is no bypass, ignore list or relaxed mode. See
 [marketplace plugin entry witness](docs/plugin-admission.md#marketplace-plugin-entry-witness).
+
+
+`codex-settings-v5` explicitly adds recognized native `tui.status_line` display
+items and their documented aliases (OpenAI Codex 0.162.1), including additions,
+removal and reordering. Only lists of at most 256 known string IDs are projected.
+Unknown IDs, malformed values, other TUI fields and discovery controls remain
+bound. V5 retains V4's availability-count contract and V3's supported ordinary
+local MCP projection. Existing byte/V1/V2/V3/V4 reviews retain their exact meaning.
+
+Capture with `skills hook witness --kind codex-settings-v5 --path <config.toml>`.
+Upgrade with `skills hook rebind-settings --agent codex --codex-witness-version 5
+--reviewed-preimage <preserved-config.toml> --expected-policy-sha256 <policy-hash>
+--expected-settings-sha256 <settings-hash>`. Review before adding `--apply`. The
+preserved config must first match its original digest under its original mode;
+all changes outside V5 refuse. The guarded upgrade changes policy only, preserves
+native settings, other witnesses and session pins, and revalidates before apply.
