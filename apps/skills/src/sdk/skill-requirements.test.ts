@@ -21,6 +21,10 @@ type Case = { name: string; texts: string[]; dependencies?: Record<string, strin
 const meta = (name: string, tags: string[]): SkillMeta =>
   ({ name, displayName: name, description: "Synthetic fixture", category: "Development Tools", tags });
 
+// The SDK consumer's call shape: a canonical name and explicit texts, `meta` omitted.
+const PROVIDER_TEXTS = ["Set OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY and AWS_REGION.",
+  "Authenticate with SKILLS_API_KEY or SKILL_API_KEY.\nRequires ffmpeg."];
+
 const CORPUS: Case[] = [
   { name: "doc-tool", texts: ["# Doc tool\nSet OPENAI_API_KEY and STRIPE_SECRET_KEY before running.\nNeeds ffmpeg, python3 and git.",
     "Export MY_SERVICE_TOKEN, GITHUB_TOKEN and REPORT_BUCKET first."], dependencies: { xlsx: "^0.18.5", zod: "4.0.0" } },
@@ -32,6 +36,8 @@ const CORPUS: Case[] = [
   { name: "local-tagged", texts: ["SKILLS_API_KEY stays as written for local skills. OPENAI_API_KEY too.", "github gitlab gitignore only"],
     dependencies: { "@scope/pkg": "1.2.3" }, meta: meta("local-tagged", ["Premium-ish", "writing"]) },
   { name: "empty", texts: [] },
+  { name: "consumer-canonical", texts: PROVIDER_TEXTS },
+  { name: "consumer-hasna", texts: ["Uses HASNA_SKILLS_API_KEY and XAI_API_KEY."] },
 ];
 
 // Captured from the internal helper at 00b630d (0.10.66), before it was public.
@@ -45,6 +51,9 @@ const GOLDEN: SkillRequirements[] = [
   { envVars: ["OPENAI_API_KEY", "SKILLS_API_KEY"], systemDeps: [], cliCommand: "skills run local-tagged",
     dependencies: { "@scope/pkg": "1.2.3" } },
   { envVars: [], systemDeps: [], cliCommand: "skills run empty", dependencies: {} },
+  { envVars: ["ANTHROPIC_API_KEY", "AWS_REGION", "GEMINI_API_KEY", "OPENAI_API_KEY", "SKILLS_API_KEY", "SKILL_API_KEY"],
+    systemDeps: ["ffmpeg"], cliCommand: "skills run consumer-canonical", dependencies: {} },
+  { envVars: ["HASNA_SKILLS_API_KEY", "XAI_API_KEY"], systemDeps: [], cliCommand: "skills run consumer-hasna", dependencies: {} },
 ];
 
 function evaluate(fn: typeof internal.getSkillRequirementsFromContent, cases: readonly Case[]) {
@@ -77,6 +86,32 @@ test("output is determined only by the explicit arguments", () => {
   // canonical HASNA_SKILLS_API_KEY, local skills keep what they wrote.
   expect(first[1]!.envVars).not.toContain("SKILLS_API_KEY");
   expect(first[3]!.envVars).toContain("SKILLS_API_KEY");
+});
+
+test("with meta omitted, no hosted filtering or key normalization is applied", () => {
+  const omitted = sdk.getSkillRequirementsFromContent("consumer-canonical", PROVIDER_TEXTS);
+  expect(omitted).toEqual(GOLDEN[5]!);
+  // Hosted-provider keys and both API-key aliases stay as the text names them,
+  // and HASNA_SKILLS_API_KEY is listed only when the text names it.
+  expect(omitted.envVars).toEqual(expect.arrayContaining(["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "AWS_REGION", "SKILLS_API_KEY", "SKILL_API_KEY"]));
+  expect(omitted.envVars).not.toContain("HASNA_SKILLS_API_KEY");
+  expect(sdk.getSkillRequirementsFromContent("consumer-hasna", ["Uses HASNA_SKILLS_API_KEY and XAI_API_KEY."])).toEqual(GOLDEN[6]!);
+  expect(sdk.getSkillRequirementsFromContent("consumer-canonical", PROVIDER_TEXTS)).toEqual(omitted);
+  // A record without the premium or remote tag behaves exactly like no record.
+  expect(sdk.getSkillRequirementsFromContent("consumer-canonical", PROVIDER_TEXTS, undefined, meta("consumer-canonical", []))).toEqual(omitted);
+  // The same texts for a hosted record keep the existing normalization.
+  const hosted = { envVars: ["HASNA_SKILLS_API_KEY"], systemDeps: ["ffmpeg"], cliCommand: "skills run consumer-canonical", dependencies: {} };
+  expect(sdk.getSkillRequirementsFromContent("consumer-canonical", PROVIDER_TEXTS, undefined, meta("consumer-canonical", ["remote"]))).toEqual(hosted);
+  expect(sdk.getSkillRequirementsFromContent("consumer-canonical", PROVIDER_TEXTS, {}, meta("consumer-canonical", ["premium"]))).toEqual(hosted);
+});
+
+test("dependencies are returned by reference, and an omitted map is fresh on every call", () => {
+  const dependencies = { xlsx: "^0.18.5" };
+  expect(sdk.getSkillRequirementsFromContent("by-reference", [], dependencies).dependencies).toBe(dependencies);
+  const first = sdk.getSkillRequirementsFromContent("by-reference", []).dependencies;
+  const second = sdk.getSkillRequirementsFromContent("by-reference", []).dependencies;
+  expect(first).toEqual({});
+  expect(first).not.toBe(second);
 });
 
 test("frozen inputs are read without being mutated", () => {
@@ -165,6 +200,7 @@ test("poisoned ambient configuration and trapped ambient reads leave the result 
     const report = JSON.parse(result.stdout.toString());
     expect(report.failure).toBeNull();
     expect(report.attempts).toEqual([]);
+    // Includes the meta-omitted consumer calls: no registry, file or env lookup.
     expect(report.results).toEqual(GOLDEN);
   } finally {
     chmodSync(locked, 0o700);

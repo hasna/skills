@@ -745,7 +745,7 @@ console.log("Installed quote error root/SDK runtime: 14 assertions passed.");
   await run([process.execPath, "--no-env-file", "test", resolve(root, "src/sdk/skill-requirements.test.ts")], workspace, {
     SKILLS_REQUIREMENTS_TEST_PACKAGE: join(workspace, "node_modules/@hasna/skills"),
   });
-  console.log("Installed SDK requirements helper: export, fixed-input output, frozen inputs and trapped poisoned ambient reads passed.");
+  console.log("Installed SDK requirements helper: export, fixed-input output with and without meta, by-reference dependencies, frozen inputs and trapped poisoned ambient reads passed.");
   // Exercise the installed CLI archive too: malformed polling values must not
   // cross the quote/credit boundary; the maximum accepted delay must not overflow
   // into rapid status requests after an owned loopback run is submitted.
