@@ -4,6 +4,7 @@
 import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, lstatSync, realpathSync, statSync } from "node:fs";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
+import { HOOK_REFUSAL_REASON_CODES } from "./hook-diagnostics.js";
 
 const SUMI_PATH_SELECTORS = ["SUMI_HOME", "SUMI_CONFIG_DIR", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME"] as const;
 const SUMI_PATH_KEYS = ["data", "cache", "config", "state"] as const;
@@ -138,28 +139,38 @@ export function sumiConfigPath(home: string, cwd = process.cwd(), env: NodeJS.Pr
 /** Native V2 plugin, not an OpenCode chat.message factory. Instructions enter
  * transient request context; prompts and the plugin carry no payload fallback. */
 export function renderSumiPlugin(command: string, profile: string): string {
-  return renderSumiPluginVersion(command, profile, false);
+  return renderSumiPluginVersion(command, profile, 3);
 }
 
 /** Exact previous generator only: upgrades may replace this owned plugin, never
  * arbitrary plugin bytes. Native discovery and config checks still run first. */
 export function isManagedSumiPlugin(text: string | null, command: string, profile: string): boolean {
-  return text === renderSumiPlugin(command, profile) || text === renderSumiPluginVersion(command, profile, true);
+  return text === renderSumiPlugin(command, profile) || text === renderSumiPluginVersion(command, profile, 2)
+    || text === renderSumiPluginVersion(command, profile, 1);
 }
 
-function renderSumiPluginVersion(command: string, profile: string, legacy: boolean): string {
+function renderSumiPluginVersion(command: string, profile: string, version: 1 | 2 | 3): string {
+  const legacy = version === 1;
   const failure = (message: string) => legacy ? `new Error(${JSON.stringify(message)})` : "refusal()";
   return `// Managed by @hasna/skills. Regenerate with skills hook install --agent sumi.
 import { spawn } from "node:child_process";
 const command = ${JSON.stringify(command)};
 const profile = ${JSON.stringify(profile)};
-${legacy ? "" : `function refusal() {
-  const error = new Error("Skills verification blocked this request. Review the Sumi Skills hook configuration, then retry.");
+${legacy ? "" : `function refusal(${version === 3 ? "reasonCode" : ""}) {
+  const error = new Error("Skills verification blocked this request. Review the Sumi Skills hook configuration, then retry."${version === 3 ? ' + (reasonCode ? " [" + reasonCode + "]" : "")' : ""});
   error.name = "SkillsHookRefusal";
-  error.skillsHookRefusal = { version: 1, code: "SKILLS_HOOK_REFUSED" };
+  error.skillsHookRefusal = { version: 1, code: "SKILLS_HOOK_REFUSED"${version === 3 ? ", ...(reasonCode ? { reasonCode } : {})" : ""} };
   return error;
 }
-`}function context(input) {
+`}${version === 3 ? `const reasonCodes = new Set(${JSON.stringify(HOOK_REFUSAL_REASON_CODES)});
+function refusedResult(result) {
+  const reason = result.reason ?? result.stopReason ?? result.systemMessage;
+  if (typeof reason !== "string" || reason.length > 16384) return refusal();
+  if (reason.startsWith("NATIVE_SKILL_DRIFT:")) return refusal("NATIVE_SKILL_DRIFT");
+  const code = /^Skills context is unavailable \\[([A-Z_]+)\\]/.exec(reason)?.[1];
+  return refusal(reasonCodes.has(code) ? code : undefined);
+}
+` : ""}function context(input) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, ["hook", "user-prompt", "--agent", "sumi", "--selection-profile", profile], { cwd: input.cwd, stdio: ["pipe", "pipe", "pipe"] });
     const chunks = []; let bytes = 0, failure;
@@ -174,12 +185,12 @@ ${legacy ? "" : `function refusal() {
       try {
         const result = JSON.parse(Buffer.concat(chunks).toString("utf8"));
         if (!result || typeof result !== "object" || Array.isArray(result)) throw ${failure("Invalid Skills hook response")};
-        if (result.decision === "block" || result.continue === false) throw ${failure("Skills prompt hook refused")};
+        if (result.decision === "block" || result.continue === false) throw ${version === 3 ? "refusedResult(result)" : failure("Skills prompt hook refused")};
         if (Object.keys(result).length && (!result.hookSpecificOutput || result.hookSpecificOutput.hookEventName !== input.hook_event_name)) throw ${failure("Invalid Skills hook response")};
         const text = result.hookSpecificOutput?.additionalContext ?? "";
         if (typeof text !== "string") throw ${failure("Invalid Skills prompt context")};
         resolve(text);
-      } catch (error) { reject(${legacy ? "error" : "refusal()"}); }
+      } catch (error) { reject(${legacy ? "error" : version === 3 ? 'error instanceof Error && error.name === "SkillsHookRefusal" ? error : refusal()' : "refusal()"}); }
     });
     child.stdin.end(JSON.stringify(input));
   });
@@ -211,9 +222,13 @@ export default {
       sessions.add(event.sessionID);
     }));
     registrations.push(await ctx.session.hook("context", async event => {
-      const last = event.messages.findLast(message => message.role === "user");
+${version === 3 ? `      // Model messages also contain checkpoints, attachments and synthetic
+      // user-role history, with no owner-prompt provenance. Prompt admission
+      // already matched and persisted Skills; restore that verified state only.
+      const prompt = "";
+` : `      const last = event.messages.findLast(message => message.role === "user");
       const prompt = (last?.content ?? []).filter(part => part.type === "text").map(part => part.text).join("\\n");
-      // Recheck on every primary request, including resumed and synthetic
+`}      // Recheck on every primary request, including resumed and synthetic
       // sessions. The CLI owns optional failures versus explicit refusals.
       const text = await context(await input(event.sessionID, prompt, !sessions.has(event.sessionID)));
       if (text) event.system.push({ type: "text", text });
