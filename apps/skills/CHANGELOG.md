@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Export `getSkillRequirementsFromContent` and the `SkillRequirements` type from `@hasna/skills/sdk`, so SDK consumers can derive a skill's environment variables, system dependencies, CLI command and npm dependencies from content they already hold instead of copying the parser. The helper is unchanged: its result depends only on its arguments, and it reads no registry, file, environment, install state or network and does not mutate its inputs. Hosted (`premium` or `remote`) skills still list `HASNA_SKILLS_API_KEY` in place of `SKILLS_API_KEY`. Its environment-name scan no longer writes shared `RegExp` state, and `texts` now accepts a `readonly string[]`. The installed consumer fixture checks the export's declarations and runs fixed-input, frozen-input and poisoned-ambient checks against the packed archive.
+
 ## 0.10.66
 
 - Preserve reviewed Codex hook-capability plugin parents in semantic discovery witnesses while binding their exact marketplace, plugin, hook, manifest, and enabled-settings identities. Refuse additional app/MCP capabilities and ambiguous source witnesses.

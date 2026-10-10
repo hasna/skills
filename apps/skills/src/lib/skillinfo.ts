@@ -101,8 +101,18 @@ export function getSkillRequirements(name: string): SkillRequirements | null {
   return getSkillRequirementsFromContent(name, texts, dependencies, meta);
 }
 
-/** Shared parser for verified bundle content and explicit local authoring files. */
-export function getSkillRequirementsFromContent(name: string, texts: string[], dependencies: Record<string, string> = {}, meta?: SkillMeta): SkillRequirements {
+/**
+ * Shared parser for verified bundle content and explicit local authoring files.
+ * Public through `@hasna/skills/sdk`.
+ *
+ * The result depends only on the arguments: `texts` are the documentation
+ * contents to scan (for example SKILL.md, README.md, CLAUDE.md, .env.example),
+ * `dependencies` is the skill package's dependency map and `meta` its catalog
+ * record. It reads no registry, file, environment, install state or network,
+ * and never mutates its inputs; the returned `dependencies` is the caller's
+ * object, not a copy.
+ */
+export function getSkillRequirementsFromContent(name: string, texts: readonly string[], dependencies: Record<string, string> = {}, meta?: SkillMeta): SkillRequirements {
   const allText = texts.join("\n");
   const canonicalName = meta?.name ?? normalizeSkillName(name);
 
@@ -463,14 +473,14 @@ const ENV_VAR_PATTERN = /\b([A-Z][A-Z0-9_]{2,}(?:_API_KEY|_KEY|_TOKEN|_SECRET|_U
 const GENERIC_ENV_PATTERN = /\b((?:OPENAI|ANTHROPIC|GEMINI|XAI|ELEVENLABS|DEEPGRAM|REPLICATE|FAL|STABILITY|EXA|FIRECRAWL|TWILIO|SENDGRID|RESEND|SLACK|DISCORD|NOTION|LINEAR|GITHUB|AWS|GOOGLE|CLOUDFLARE|VERCEL|SUPABASE|STRIPE)_[A-Z_]+)\b/g;
 
 /**
- * Extract environment variable names from text using known patterns
+ * Extract environment variable names from text using known patterns.
+ * matchAll iterates a copy of each pattern, so the shared module-level
+ * RegExp state (lastIndex) is never written.
  */
 function extractEnvVars(text: string): Set<string> {
   const envVars = new Set<string>();
   for (const pattern of [ENV_VAR_PATTERN, GENERIC_ENV_PATTERN]) {
-    pattern.lastIndex = 0;
-    let match;
-    while ((match = pattern.exec(text)) !== null) {
+    for (const match of text.matchAll(pattern)) {
       envVars.add(match[1]);
     }
   }

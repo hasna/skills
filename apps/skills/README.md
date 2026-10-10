@@ -2534,6 +2534,28 @@ untrusted byte entries, not arbitrary JavaScript proxies or hostile host code.
 `ContentHashInputError` reports fixed invalid-input, limit, abort or timeout codes
 without including file contents or paths in its messages.
 
+### Requirements from explicit content
+
+`@hasna/skills/sdk` exports `getSkillRequirementsFromContent`, the parser behind
+`skills requires`, for content the caller already holds, such as verified
+bundle entries:
+
+```ts
+import { getSkillRequirementsFromContent, type SkillMeta, type SkillRequirements } from "@hasna/skills/sdk";
+
+declare const meta: SkillMeta | undefined; // the skill's catalog record, if known
+const requirements: SkillRequirements = getSkillRequirementsFromContent(
+  "write-brief", [skillMd, readme, envExample], packageJson.dependencies, meta);
+// { envVars, systemDeps, cliCommand: "skills run write-brief", dependencies }
+```
+
+The result depends only on the arguments. It reads no registry, file,
+environment, install state or network, and does not change its inputs; the
+returned `dependencies` is the object you passed. When `meta.tags` includes
+`premium` or `remote`, the skill is treated as hosted: provider keys such as
+`OPENAI_API_KEY` are omitted, `SKILLS_API_KEY` and `SKILL_API_KEY` are dropped,
+and `HASNA_SKILLS_API_KEY` is listed.
+
 ## Invitation email recovery
 
 An existing account with no usable membership can explicitly recover access by
