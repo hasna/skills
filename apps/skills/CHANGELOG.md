@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.65
+
+- Restore already loaded Skills context in Sumi continuation and compaction events without treating native checkpoints or message history as a new owner prompt. Preserve the full native model context and existing hook input limits; ordinary owner prompts still match and load newly selected skills.
+- Preserve bounded, branded Skills hook refusal reasons and recognize exact prior managed Sumi plugin renderers during guarded upgrades. Native discovery, integrity and configuration checks remain enforced.
+
 ## 0.10.63
 
 - Retain explicitly reviewed immutable Codex catalog artifacts as exact private bytes under the resolved Skills data directory, with their original path and digests. Removing the original scratch copy no longer breaks hooks; live configuration, plugin and native trust witnesses remain enforced.
