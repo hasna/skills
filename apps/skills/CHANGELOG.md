@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.63
+
+- Retain explicitly reviewed immutable Codex catalog artifacts as exact private bytes under the resolved Skills data directory, with their original path and digests. Removing the original scratch copy no longer breaks hooks; live configuration, plugin and native trust witnesses remain enforced.
+- Add guarded `skills hook retain-review-artifact` planning and application for one exact legacy reviewed catalog witness. Require the original bytes and current policy digest, preserve the old policy and session pins, and refuse missing, changed or unsafe evidence without capturing a replacement.
+
 ## 0.10.62
 
 - Verify a declared target runtime’s read-only consumer prerequisites before switching Skills launchers. Missing or incompatible Sumi path readers refuse activation while retaining the prepared rollout receipt, old runtime, launcher bytes, configuration and session receipts.

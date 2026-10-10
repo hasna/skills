@@ -24,6 +24,7 @@ import type { CodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery
 import { assertClaudeHookEventsReplacement, type ClaudeCoordinatedHookEvent } from "./claude-settings-witness.js";
 import { directAliasTarget, snapshot as hookFileSnapshot, trustedAncestorOwner, unchanged as hookFileUnchanged } from "./codex-hook-trust-files.js";
 import { assertPinnedLauncherRuntimeSafe, resolveLauncherCommand } from "../cli/commands/runtime-launcher.js";
+import { planReviewArtifactRetention, verifyRetainedReviewArtifact, verifyReviewArtifactOriginal, writeReviewArtifactExclusive, type ReviewArtifactChange } from "./retained-review-artifacts.js";
 
 export type { IntegrationAgent } from "./agent-adapters.js";
 export type ContextHookEvent = "UserPromptSubmit" | "SessionStart" | "SubagentStart";
@@ -32,7 +33,7 @@ export interface NativeSkillEntry { agent: string; path: string; hash: string; m
 export interface NativeMigrationTarget { agent: string; projectRoot: string; path: string; treeSha256: string; vendor?: true }
 export interface NativeMigrationTargetManifest { schema: "hasna.skills-native-migration-targets.v1"; targets: NativeMigrationTarget[]; digest: string }
 export interface AgentConfigChange { path: string; before: string | null; after: string }
-export interface AgentIntegrationPlan { observedNativeSources?: Array<{ path: string; sha256: string | null }>; codexPluginSkillReview?: { version: string; cwd: string; catalogSha256: string; configSha256: string | null }; observedSettings?: { path: string; before: string }; settingsWitnessUpgrade?: { agent: "claude" | "codex" | "sumi"; path: string; fromHashMode: string; fromSha256: string; toHashMode: string; toSha256: string; reviewedPreimage: string; currentSettingsSha256: string; replacedWitnesses: Array<{ hashMode: string; sha256: string }> }; dataDir: string; profileId: string; changes: AgentConfigChange[]; nativeSkills: NativeSkillEntry[]; observedPolicy?: { path: string; before: string | null }; discoveryBefore?: AgentDiscoveryBinding[]; discoveryAfter?: AgentDiscoveryBinding[]; discoveryExecutables?: Record<string, DiscoveryExecutable>; rootAliases?: AgentRootAlias[]; managedAgentChecks?: { home: string; agents: IntegrationAgent[] }; retainedReviewChecks?: { home: string; projectDir: string; agents: IntegrationAgent[] } }
+export interface AgentIntegrationPlan { reviewArtifactSources?: Array<{ path: string; sha256: string }>; retainedReviewArtifacts?: ReviewArtifactChange[]; reviewArtifactMigration?: ReviewArtifactMigration; observedNativeSources?: Array<{ path: string; sha256: string | null }>; codexPluginSkillReview?: { version: string; cwd: string; catalogSha256: string; configSha256: string | null }; observedSettings?: { path: string; before: string }; settingsWitnessUpgrade?: { agent: "claude" | "codex" | "sumi"; path: string; fromHashMode: string; fromSha256: string; toHashMode: string; toSha256: string; reviewedPreimage: string; currentSettingsSha256: string; replacedWitnesses: Array<{ hashMode: string; sha256: string }> }; dataDir: string; profileId: string; changes: AgentConfigChange[]; nativeSkills: NativeSkillEntry[]; observedPolicy?: { path: string; before: string | null }; discoveryBefore?: AgentDiscoveryBinding[]; discoveryAfter?: AgentDiscoveryBinding[]; discoveryExecutables?: Record<string, DiscoveryExecutable>; rootAliases?: AgentRootAlias[]; managedAgentChecks?: { home: string; projectDir?: string; agents: IntegrationAgent[] }; retainedReviewChecks?: { home: string; projectDir: string; agents: IntegrationAgent[] } }
 
 const sha = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
 const HOOK_EVENTS: readonly ContextHookEvent[] = ["UserPromptSubmit", "SessionStart", "SubagentStart"];
@@ -583,6 +584,7 @@ function assertCodexInstallationInputs(home:string, projectDirs:string[], inputs
 
 /** Planning is read-only; credentials and unrelated settings never appear in CLI output. */
 export function planAgentIntegration(options: { home?: string; dataDir?: string; agents: IntegrationAgent[]; command?: string; profileId?: string; includeVendor?: boolean; projectDir?: string; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean; reviewedCacheAlias?: string; codexNativeCatalog?: CodexNativeSkillCatalog; codexSkillDenials?: ReviewedCodexSkillDenial[] }): AgentIntegrationPlan {
+  if (options.discoveryInputs?.agents.some(review => review.reviewArtifacts !== undefined && !options.agents.includes(review.agent))) throw new Error("REVIEW_ARTIFACT_INVALID");
   if (options.codexSkillDenials !== undefined && (!options.codexNativeCatalog || !options.discoveryInputs || !options.agents.includes("codex"))) throw new Error("Explicit Codex skill denials require a fresh native catalog and discovery review");
   const home = options.home ?? homedir(), dataDir = options.dataDir ?? getDataDirReadOnly();
   const aliases = rootAliases(home, options.allowRootAliases);
@@ -756,10 +758,21 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
   for (const [agent, executable] of executables) { if (executable) discoveryExecutables[agent] = executable; else delete discoveryExecutables[agent]; }
   if (Object.keys(discoveryExecutables).length) nextPolicy.bridge.discoveryExecutables = discoveryExecutables;
   else delete nextPolicy.bridge.discoveryExecutables;
+  const retainedReviewArtifacts: ReviewArtifactChange[] = [];
+  const reviewArtifactSources: Array<{ path: string; sha256: string }> = [];
+  for (let index = 0; index < discoveryAfter.length; index++) {
+    const original = discoveryAfter[index]!;
+    const artifacts = options.discoveryInputs?.agents.find(review => review.agent === original.agent)?.reviewArtifacts;
+    const retained = planReviewArtifactRetention(original, artifacts, dataDir, home);
+    retainedReviewArtifacts.push(...retained.changes); reviewArtifactSources.push(...retained.observed);
+    discoveryAfter[index] = retained.binding;
+    nextPolicy.bridge.discovery[original.agent] = retained.binding;
+  }
+  changes.push(...retainedReviewArtifacts);
   const serializedPolicy = serializeManagedSkillPolicy(nextPolicy);
   if (JSON.stringify(policy) !== JSON.stringify(nextPolicy)) changes.push({ path: policyPath, before: previousPolicy, after: serializedPolicy });
   recheckRootAliases(aliases);
-  return { dataDir, profileId, changes, nativeSkills, ...(observedSettings ? { observedSettings } : {}), ...(observedNativeSources.length ? { observedNativeSources } : {}), ...(nextPolicy.bridge.codexPluginSkillReview ? { codexPluginSkillReview: nextPolicy.bridge.codexPluginSkillReview } : {}), observedPolicy: { path: policyPath, before: previousPolicy }, discoveryBefore: discoveries, discoveryAfter, ...(aliases.length ? { rootAliases: aliases } : {}), ...(retainedAgents.length ? { retainedReviewChecks: { home, projectDir: options.projectDir ?? home, agents: retainedAgents } } : {}) };
+  return { dataDir, profileId, changes, nativeSkills, ...(retainedReviewArtifacts.length ? { retainedReviewArtifacts } : {}), ...(reviewArtifactSources.length ? { reviewArtifactSources } : {}), ...(observedSettings ? { observedSettings } : {}), ...(observedNativeSources.length ? { observedNativeSources } : {}), ...(nextPolicy.bridge.codexPluginSkillReview ? { codexPluginSkillReview: nextPolicy.bridge.codexPluginSkillReview } : {}), observedPolicy: { path: policyPath, before: previousPolicy }, discoveryBefore: discoveries, discoveryAfter, ...(aliases.length ? { rootAliases: aliases } : {}), ...(retainedAgents.length ? { retainedReviewChecks: { home, projectDir: options.projectDir ?? home, agents: retainedAgents } } : {}) };
 }
 
 export interface ClaudeManagedHookProjection {
@@ -1153,6 +1166,36 @@ export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "co
   return { dataDir, profileId: policy.profileId, changes: [{ path: join(dataDir, "agent-policy.json"), before: snapshot.text, after }], nativeSkills: [], observedPolicy: { path: join(dataDir, "agent-policy.json"), before: snapshot.text }, observedSettings: { path: configPath, before: settings }, discoveryBefore: [replacement], discoveryAfter: [replacement], ...(policy.bridge.discoveryExecutables ? { discoveryExecutables: policy.bridge.discoveryExecutables } : {}), rootAliases: aliases, managedAgentChecks: { home, agents: [options.agent] }, settingsWitnessUpgrade: { agent: options.agent, path: configPath, fromHashMode: previous.hashMode ?? "bytes", fromSha256: previous.sha256, toHashMode: next.hashMode, toSha256: next.sha256, reviewedPreimage: options.reviewedPreimage, currentSettingsSha256: options.expectedSettingsSha256, replacedWitnesses: replaced.map(source => ({ hashMode: source.hashMode ?? "bytes", sha256: source.sha256! })) } };
 }
 
+export interface ReviewArtifactMigration {
+  kind: "codex-native-catalog"; sourcePath: string; expectedPolicySha256: string; expectedSourceSha256: string;
+  home?: string; dataDir?: string; projectDir?: string;
+}
+/** Explicit exact-proof migration. Never captures a new catalog or refreshes live inputs. */
+export function planReviewedArtifactMigration(options: ReviewArtifactMigration): AgentIntegrationPlan {
+  if (options.kind !== "codex-native-catalog" || !/^[a-f0-9]{64}$/.test(options.expectedPolicySha256)
+    || !/^[a-f0-9]{64}$/.test(options.expectedSourceSha256)) throw new Error("REVIEW_ARTIFACT_INVALID");
+  const home = resolve(options.home ?? homedir()), dataDir = resolve(options.dataDir ?? getDataDirReadOnly());
+  const snapshot = readManagedSkillPolicySnapshot(dataDir);
+  if (!snapshot || sha(snapshot.text) !== options.expectedPolicySha256) throw new Error("REVIEW_ARTIFACT_POLICY_CHANGED");
+  const before = snapshot.value.bridge?.discovery?.codex as AgentDiscoveryBinding | undefined;
+  if (!before || before.agent !== "codex" || before.method !== "reviewed") throw new Error("REVIEW_ARTIFACT_INVALID");
+  // All existing native trust and live inputs must still pass. A recovered exact
+  // source may satisfy its old witness; a missing source cannot be substituted.
+  assertManagedAgentBridge("codex", { home, dataDir, projectDir: options.projectDir ?? home });
+  const retained = planReviewArtifactRetention(before, [{ kind: options.kind, path: options.sourcePath, sha256: options.expectedSourceSha256 }], dataDir, home);
+  const next = { ...snapshot.value, bridge: { ...snapshot.value.bridge,
+    discovery: { ...snapshot.value.bridge.discovery, codex: retained.binding } } };
+  return { dataDir, profileId: snapshot.value.profileId, nativeSkills: [],
+    changes: [...retained.changes, { path: join(dataDir, "agent-policy.json"), before: snapshot.text, after: serializeManagedSkillPolicy(next) }],
+    observedPolicy: { path: join(dataDir, "agent-policy.json"), before: snapshot.text },
+    reviewArtifactSources: retained.observed, retainedReviewArtifacts: retained.changes,
+    reviewArtifactMigration: { ...options, home, dataDir },
+    discoveryBefore: [{ ...before, codexDisabledPluginSkills: snapshot.value.bridge.codexPluginSkills ?? [] }],
+    discoveryAfter: [{ ...retained.binding, codexDisabledPluginSkills: snapshot.value.bridge.codexPluginSkills ?? [] }],
+    rootAliases: snapshot.value.bridge.rootAliases ?? [],
+    managedAgentChecks: { home, projectDir: options.projectDir ?? home, agents: ["codex"] } };
+}
+
 export function applyAgentIntegration(plan: AgentIntegrationPlan, options: CodexCorpusWriteOptions = {}): { changed: string[]; backups: string[]; rootAliases?: AgentRootAlias[] } {
   const roots = plan.changes.flatMap(change => {
     const lexical = codexCorpusRootForPath(change.path);
@@ -1163,6 +1206,7 @@ export function applyAgentIntegration(plan: AgentIntegrationPlan, options: Codex
 }
 
 function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: CodexCorpusWriteOptions = {}, assertCurrent: () => void): { changed: string[]; backups: string[]; rootAliases?: AgentRootAlias[] } {
+  for (const source of plan.reviewArtifactSources ?? []) verifyReviewArtifactOriginal(source.path, source.sha256);
   for (const source of plan.observedNativeSources ?? []) if (nativeSourceDigest(source.path) !== source.sha256) throw new Error("Native identity source changed after planning");
   if (plan.observedSettings && readOptional(plan.observedSettings.path) !== plan.observedSettings.before) throw new Error("Native settings changed after witness planning");
   // Refuse an unusable policy before creating backups or changing native config.
@@ -1175,6 +1219,11 @@ function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: Code
   // Verify the old trust before writing. An explicit command/profile change
   // still uses the ordinary native approval flow for its newly installed hook.
   for (const agent of plan.retainedReviewChecks?.agents ?? []) assertManagedAgentBridge(agent, { ...plan.retainedReviewChecks!, dataDir: plan.dataDir });
+  if (plan.reviewArtifactMigration) {
+    const verified = planReviewedArtifactMigration(plan.reviewArtifactMigration);
+    if (JSON.stringify(verified.changes) !== JSON.stringify(plan.changes)
+      || JSON.stringify(verified.discoveryAfter) !== JSON.stringify(plan.discoveryAfter)) throw new Error("REVIEW_ARTIFACT_PLAN_CHANGED");
+  }
   let provenDiscovery: AgentDiscoveryBinding | undefined;
   if (plan.settingsWitnessUpgrade) {
     const upgrade = plan.settingsWitnessUpgrade;
@@ -1183,7 +1232,7 @@ function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: Code
     if (JSON.stringify(verified.changes) !== JSON.stringify(plan.changes) || JSON.stringify(verified.settingsWitnessUpgrade) !== JSON.stringify(upgrade)) throw new Error("Settings witness upgrade plan changed");
     provenDiscovery = verified.discoveryBefore![0];
   }
-  for (const agent of plan.managedAgentChecks?.agents ?? []) assertManagedAgentBridgeWithDiscovery(agent, { home: plan.managedAgentChecks!.home, dataDir: plan.dataDir, projectDir: plan.managedAgentChecks!.home }, provenDiscovery?.agent === agent ? provenDiscovery : undefined);
+  for (const agent of plan.managedAgentChecks?.agents ?? []) assertManagedAgentBridgeWithDiscovery(agent, { home: plan.managedAgentChecks!.home, dataDir: plan.dataDir, projectDir: plan.managedAgentChecks!.projectDir ?? plan.managedAgentChecks!.home }, provenDiscovery?.agent === agent ? provenDiscovery : undefined);
   for (const binding of plan.discoveryBefore ?? []) {
     if (plan.managedAgentChecks) verifyCoordinatedDiscovery(binding, plan.managedAgentChecks.home, aliases, plan.discoveryExecutables?.[binding.agent]);
     else verifyAgentDiscovery(binding);
@@ -1208,17 +1257,24 @@ function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: Code
       if (currentText(change.path) !== change.before) throw new Error(`Configuration changed after planning: ${change.path}`);
       for (let directory = dirname(change.path); !existsSync(directory); directory = dirname(directory)) createdDirectories.add(directory);
       const after = change.after;
-      atomicWrite(change.path, after); written.push({ path: change.path, before: change.before, after });
+      const immutable = plan.retainedReviewArtifacts?.find(item => item.path === change.path);
+      if (immutable) {
+        if (immutable.before !== null || immutable.after !== change.after || change.before !== null) throw new Error("REVIEW_ARTIFACT_PLAN_CHANGED");
+        // Keep immutable evidence on transaction failure; compensate policy and
+        // native changes only. An exact retry may reuse the retained bytes.
+        writeReviewArtifactExclusive(immutable);
+      } else { atomicWrite(change.path, after); written.push({ path: change.path, before: change.before, after }); }
     }
     assertCurrent(); recheckRootAliases(aliases);
+    for (const source of plan.reviewArtifactSources ?? []) verifyReviewArtifactOriginal(source.path, source.sha256);
     for (const source of plan.observedNativeSources ?? []) if (nativeSourceDigest(source.path) !== source.sha256) throw new Error("Native identity source changed during application");
     if (plan.observedSettings && readOptional(plan.observedSettings.path) !== plan.observedSettings.before) throw new Error("Native settings changed during witness application");
     for (const binding of plan.discoveryAfter ?? []) {
       if (plan.managedAgentChecks) verifyCoordinatedDiscovery(binding, plan.managedAgentChecks.home, aliases, plan.discoveryExecutables?.[binding.agent]);
       else verifyAgentDiscovery(binding);
     }
-    for (const agent of plan.managedAgentChecks?.agents ?? []) assertManagedAgentBridge(agent, { home: plan.managedAgentChecks!.home, dataDir: plan.dataDir, projectDir: plan.managedAgentChecks!.home });
-    atomicWrite(join(backupRoot, "receipt.json"), JSON.stringify({ version: 1, changes: written.map(change => ({ path: change.path, beforeHash: change.before === null ? null : sha(change.before), afterHash: sha(change.after) })), backups, ...(aliases.length ? { rootAliases: aliases } : {}) }) + "\n");
+    for (const agent of plan.managedAgentChecks?.agents ?? []) assertManagedAgentBridge(agent, { home: plan.managedAgentChecks!.home, dataDir: plan.dataDir, projectDir: plan.managedAgentChecks!.projectDir ?? plan.managedAgentChecks!.home });
+    atomicWrite(join(backupRoot, "receipt.json"), JSON.stringify({ version: 1, changes: written.map(change => ({ path: change.path, beforeHash: change.before === null ? null : sha(change.before), afterHash: sha(change.after) })), backups, ...(plan.retainedReviewArtifacts?.length ? { retainedReviewArtifacts: plan.retainedReviewArtifacts.map(item => ({ path: item.path, ...item.artifact })) } : {}), ...(aliases.length ? { rootAliases: aliases } : {}) }) + "\n");
   } catch (error) {
     assertCurrent();
     for (const change of written.reverse()) {
@@ -1407,6 +1463,10 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
   const visible = (entry: NativeSkillEntry) => entry.agent === agent || (["codex", "gemini", "opencode", "hermes", "sumi"].includes(agent) && entry.path.includes(`${sep}.agents${sep}skills${sep}`)) || (["opencode", "sumi"].includes(agent) && entry.agent === "claude");
   const discovery: AgentDiscoveryBinding | undefined = provenDiscovery ?? binding.discovery?.[agent];
   assertProjectDiscovery(agent, [...roots], home, path => canonicalAgentPath(path, aliases), discovery);
+  for (const source of discovery?.sources ?? []) if (source.reviewArtifact !== undefined) {
+    if (agent !== "codex") throw new Error("NATIVE_SKILL_DRIFT: invalid review artifact consumer");
+    verifyRetainedReviewArtifact(source, dataDir);
+  }
   const configPath = canonicalAgentPath(nativeAgentConfig(home, agent, options.projectDir ?? process.cwd()), aliases), config = agent === "hermes" ? parseHermesConfig(readOptional(configPath)) : jsonObject(readOptional(configPath), configPath);
   const command = binding.commands?.[agent], profile = binding.profiles?.[agent];
   if (typeof command !== "string" || typeof profile !== "string") throw new Error("NATIVE_SKILL_DRIFT: the native hook command/profile binding is missing");

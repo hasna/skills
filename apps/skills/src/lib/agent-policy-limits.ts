@@ -100,6 +100,14 @@ export function assertAgentPolicyCollections(policy: Record<string, any>): void 
         const managed = array(source.managedPlugins, 64); requireBound(managed.length > 0);
         for (const entry of managed) { requireBound(object(entry) && Object.keys(entry).every(key => ["bindingId", "storeRoot"].includes(key))); text(entry.storeRoot); requireBound(typeof entry.bindingId === "string" && /^[a-f0-9]{64}$/.test(entry.bindingId)); }
       } else requireBound(source.managedPlugins === undefined);
+      if (source.reviewArtifact !== undefined) {
+        const artifact = source.reviewArtifact;
+        requireBound(agent === "codex" && value.method === "reviewed" && source.hashMode === "bytes" && object(artifact)
+          && Object.keys(artifact).length === 6 && Object.keys(artifact).every(key => ["version", "kind", "storeRoot", "originalPath", "sha256", "catalogSha256"].includes(key)) && artifact.version === 1 && artifact.kind === "codex-native-catalog"
+          && artifact.sha256 === source.sha256 && /^[a-f0-9]{64}$/.test(artifact.catalogSha256));
+        for (const path of [artifact.storeRoot, artifact.originalPath]) { text(path); requireBound(isAbsolute(path) && resolve(path) === path); }
+        requireBound(source.path === join(artifact.storeRoot, "agent-discovery", "artifacts", artifact.sha256, "catalog.json"));
+      }
       if (source.format !== undefined) requireBound(["json", "toml", "yaml"].includes(source.format));
       if (source.fields !== undefined) for (const field of array(source.fields, AGENT_POLICY_LIMITS.fields)) text(field, 256);
     }
