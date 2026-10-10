@@ -109,9 +109,34 @@ skills migrate native --include-unmanaged --include-vendor --apply --json
 
 # Preview the available adapters, then install one bridge plus hooks per agent.
 skills hook agents --json
-skills hook install --agent all --selection-profile default --json
-skills hook install --agent all --selection-profile default --apply --json
+skills hook install --selection-profile default --json
+skills hook install --selection-profile default --apply --json
 ```
+
+Without `--agent`, hook installation selects configured or detected consumers:
+existing managed bridge bindings, provider-specific home configuration, or an
+installed native CLI found through PATH. Detection reads metadata and never
+executes a native CLI. A provider-specific directory also identifies a GUI
+consumer without a CLI, such as Cursor. Shared `.agents/skills` or Claude
+configuration alone does not identify another provider. No detected consumers
+is an error; use `--agent <agent>` to configure a new consumer explicitly.
+
+Every selected adapter still validates its configuration and prerequisites;
+errors never silently drop a detected consumer. Explicit `--agent all` selects
+all maintained adapters and requires every adapter's discovery capability,
+including Sumi's installed read-only `sumi-paths` command. Sumi is selected by
+its managed binding, native `sumi` or `sumi-paths` executable, existing legacy
+provider home or `~/.config/sumi` configuration, a Sumi directory beneath
+`XDG_CONFIG_HOME`, or any set `SUMI_HOME`, `SUMI_CONFIG_DIR`, `SUMI_CONFIG` or
+`SUMI_CONFIG_CONTENT` selector (even empty or malformed). It then uses the
+unchanged Sumi path protocol and fails closed on unsupported configuration or
+a missing helper. Generic XDG configuration alone does not select Sumi; its
+provider directory must be present. Relative XDG paths resolve against the
+working directory, and home shorthand expands as in the native path protocol.
+Dangling or inaccessible provider roots never silently drop Sumi. Provider-defined
+roots outside these published presence locations cannot be detected without a
+binding, selector or executable; specify `--agent sumi` for that case. This is
+a detection limit, not proof that Sumi is absent.
 
 Native migration includes the current directory, every ancestor, and the global
 agent directories. Use `--project /path/to/project` to include another project
@@ -1260,7 +1285,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills install [name@version] --selection-profile <id>` | | Cache selected immutable bundles; without names, sync the profile |
 | `skills load <name> --selection-profile <id>` | | Load complete instructions from the verified selection |
 | `skills context <prompt> --selection-profile <id>` | | Resolve instructions matching the prompt and profile triggers |
-| `skills hook install --agent all --selection-profile <id>` | | Plan one CLI bridge plus supported native hooks; `--apply` installs it, then restart and trust the hooks |
+| `skills hook install --selection-profile <id>` | | Plan bridges and hooks for configured/detected consumers; `--agent <agent>` selects one, explicit `--agent all` requires every adapter; `--apply` installs them, then restart and trust the hooks |
 | `skills sessions show <id> --json` | | Inspect one session's exact profile revision and receipt hash without loading payloads |
 | `skills sessions reconcile <id> --from-profile <id> --from-revision <rev> --receipt-sha256 <sha> --selection-profile <id> --profile-revision <rev>` | | Plan an explicit migration of one live session; `--apply --plan-digest <digest> --plan-issued-at <time> --plan-expires-at <time>` (within five minutes) preserves its old receipt and applies the reviewed replacement |
 | `skills hook agents --json` | | Report maintained adapters and explicit coverage limits |
