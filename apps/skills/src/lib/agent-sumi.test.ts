@@ -225,12 +225,13 @@ test("legacy Sumi plugin changes invalidate automatic and retained reviewed witn
 
 test("native prompt and request hooks preserve actual root, child and nested custody", async () => {
   const root = fixture(), log = join(root, "calls.jsonl"), command = join(root, "fixture-skills"), pluginPath = join(root, "plugin.js");
-  put(command, `#!${process.execPath}\nimport {appendFileSync} from "node:fs";\nconst input = await Bun.stdin.json(); appendFileSync(${JSON.stringify(log)}, JSON.stringify(input)+"\\n");\nif (input.prompt === "refuse") console.log(JSON.stringify({decision:"block",stopReason:"UNTRUSTED_STOP_REASON /private/path",message:"UNTRUSTED_MESSAGE"}));\nelse if (input.prompt === "malformed") console.log("invalid");\nelse console.log(JSON.stringify({hookSpecificOutput:{hookEventName:input.hook_event_name,additionalContext:input.prompt === "optional" ? "No Skills instructions were delivered by this hook. Ordinary work may continue." : "Verified fixture instructions"}}));\n`); chmodSync(command, 0o700);
+  put(command, `#!${process.execPath}\nimport {appendFileSync} from "node:fs";\nconst input = await Bun.stdin.json(); appendFileSync(${JSON.stringify(log)}, JSON.stringify(input)+"\\n");\nif (input.prompt === "refuse") console.log(JSON.stringify({decision:"block",stopReason:"UNTRUSTED_STOP_REASON /private/path",message:"UNTRUSTED_MESSAGE"}));\nelse if (input.prompt === "malformed") console.log("invalid");\nelse console.log(JSON.stringify({hookSpecificOutput:{hookEventName:input.hook_event_name,additionalContext:input.session_id === "optional" ? "No Skills instructions were delivered by this hook. Ordinary work may continue." : "Verified fixture instructions"}}));\n`); chmodSync(command, 0o700);
   put(pluginPath, renderSumiPlugin(command, "engineering"));
   const plugin = (await import(pluginPath)).default;
   const hooks = new Map<string, (event: any) => Promise<void>>();
   const sessions: Record<string, { id: string; parentID?: string; agent?: string; location: { directory: string } }> = {
     root: { id: "root", agent: "native-build", location: { directory: root } },
+    optional: { id: "optional", location: { directory: root } },
     child: { id: "child", parentID: "root", agent: "native-explore", location: { directory: root } },
     nested: { id: "nested", parentID: "child", location: { directory: root } },
   };
@@ -264,7 +265,7 @@ test("native prompt and request hooks preserve actual root, child and nested cus
   }
   failNativeRead = false;
   await expect(hooks.get("prompt")!({ sessionID: "root", prompt: { text: "malformed" } })).rejects.toThrow();
-  const request = { sessionID: "root", system: [] as Array<{ type: string; text: string }>, messages: [{ role: "user", content: [{ type: "text", text: "optional" }] }] };
+  const request = { sessionID: "optional", system: [] as Array<{ type: string; text: string }>, messages: [{ role: "user", content: [{ type: "text", text: "optional" }] }] };
   await hooks.get("context")!(request);
   expect(JSON.stringify(request.system)).toContain("Ordinary work may continue");
   await expect(hooks.get("prompt")!({ sessionID: "root", prompt: { text: "review", skills: [{ id: "foreign" }] } })).rejects.toThrow("Skills verification blocked");

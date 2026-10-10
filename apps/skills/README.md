@@ -334,6 +334,12 @@ Sumi uses its native V2 plugin API, independently of OpenCode. Its managed
 `plugins/skills-cli.js` plugin validates prompt admission and adds selected
 instructions to transient request context. Real native session IDs and parent
 IDs bind exact inherited pins; native agent definitions are not Hasna identities.
+Prompt matching uses the native prompt-admission event. Request context restores
+verified loaded Skills and never treats model history, attachments or compaction
+checkpoints as a new owner prompt. The complete native model context is unchanged;
+the hook's input limits and native/integrity refusals remain strict. Adapter
+refusals retain only fixed reason codes, never child diagnostic prose. Both older
+managed plugin forms remain recognized for a reviewed hook-install upgrade.
 Native payload tool calls and prompt attachments are refused except for the
 `skills-cli` bridge. The supported configuration resolver honors `SUMI_CONFIG_DIR`,
 `XDG_CONFIG_HOME` and `SUMI_HOME` without performing native home adoption.

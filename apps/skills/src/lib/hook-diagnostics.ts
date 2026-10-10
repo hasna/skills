@@ -14,6 +14,11 @@ const CONTEXT_ERROR_CODES = new Set([
   "SESSION_CONTEXT_CONFLICT", "SESSION_RECONCILIATION_INCOMPLETE", "SESSION_WRITE_LOCKED", "SESSION_WRITE_LOCK_CHANGED", "SESSION_LOCK_RECOVERY_INCOMPLETE",
 ]);
 
+/** Fixed codes only; generated native adapters must never copy refusal prose. */
+export const HOOK_REFUSAL_REASON_CODES: readonly string[] = Object.freeze([
+  ...CONTEXT_ERROR_CODES, "SKILLS_HOOK_FAILED", "SKILLS_HOOK_TIMEOUT", "SKILLS_HOOK_INVALID_RESPONSE",
+]);
+
 export class HookDiagnosticError extends Error {
   constructor(readonly code: string, readonly stage: "context" | "sync") {
     super("Skills hook operation failed");
