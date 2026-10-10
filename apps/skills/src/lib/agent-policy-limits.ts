@@ -84,6 +84,41 @@ export function assertAgentPolicyCollections(policy: Record<string, any>): void 
         requireBound(directory.sha256===null || typeof directory.sha256==="string" && /^[a-f0-9]{64}$/.test(directory.sha256));
       }
     }
+    if (value.codexSemanticCache !== undefined) {
+      const proof = record(value.codexSemanticCache, 8), witness = record(proof.witness, 6);
+      requireBound(agent === "codex" && value.agent === "codex" && value.method === "reviewed"
+        && Object.keys(proof).length === 8 && proof.schema === "hasna.codex-semantic-cache-discovery.v1"
+        && typeof proof.previousPolicySha256 === "string" && /^[a-f0-9]{64}$/.test(proof.previousPolicySha256)
+        && Object.keys(witness).length === 6 && witness.schema === "hasna.codex-semantic-cache-witness.v1"
+        && typeof witness.sha256 === "string" && /^[a-f0-9]{64}$/.test(witness.sha256));
+      text(proof.configPath); requireBound(isAbsolute(proof.configPath) && resolve(proof.configPath) === proof.configPath && basename(proof.configPath) === "config.toml");
+      text(witness.cacheRoot); requireBound(isAbsolute(witness.cacheRoot) && resolve(witness.cacheRoot) === witness.cacheRoot);
+      if (proof.hookRootAlias !== null) {
+        requireBound(object(proof.hookRootAlias) && Object.keys(proof.hookRootAlias).length === 2);
+        for (const key of ["alias", "target"]) { text(proof.hookRootAlias[key]); requireBound(isAbsolute(proof.hookRootAlias[key]) && resolve(proof.hookRootAlias[key]) === proof.hookRootAlias[key]); }
+      }
+      const parents = array(proof.appOnlyParents, 4096);
+      for (const parent of parents) {
+        requireBound(object(parent) && Object.keys(parent).length === 5 && parent.role === "app-only");
+        for (const key of ["pluginId", "namespace", "pluginParent", "remotePluginId"]) text(parent[key]);
+        requireBound(isAbsolute(parent.pluginParent) && resolve(parent.pluginParent) === parent.pluginParent);
+      }
+      for (const row of [...array(witness.controls, 4096), ...array(witness.appOnlyParents, 4096)]) {
+        requireBound(object(row));
+        for (const key of ["pluginId", "namespace", "pluginParent"]) text(row[key]);
+        for (const key of ["manifestSha256", "appSha256", "mcpSha256", "receiptSha256"]) if (row[key] !== undefined) requireBound(typeof row[key] === "string" && /^[a-f0-9]{64}$/.test(row[key]));
+      }
+      for (const skill of array(witness.skills, 4096)) {
+        requireBound(object(skill)); for (const key of ["name", "pluginId", "namespace", "pluginParent"]) text(skill[key]);
+        for (const rule of array(skill.disabledRules, 4096)) text(rule);
+      }
+      for (const source of array(proof.supersededSources, AGENT_POLICY_LIMITS.discoverySources)) {
+        requireBound(object(source)); text(source.path); requireBound(source.sha256 === null || typeof source.sha256 === "string" && /^[a-f0-9]{64}$/.test(source.sha256));
+      }
+      for (const directory of array(proof.supersededDirectories, AGENT_POLICY_LIMITS.discoveryDirectories)) {
+        requireBound(object(directory)); text(directory.path); requireBound(directory.sha256 === null || typeof directory.sha256 === "string" && /^[a-f0-9]{64}$/.test(directory.sha256));
+      }
+    }
     for (const root of array(value.roots, AGENT_POLICY_LIMITS.discoveryRoots)) text(root);
     for (const source of array(value.sources, AGENT_POLICY_LIMITS.discoverySources)) {
       requireBound(object(source)); text(source.path);

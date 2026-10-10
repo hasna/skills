@@ -10,7 +10,7 @@ import { normalizeHermesHookInput, assertHermesTool } from "../../lib/agent-herm
 import { parseSkillContextInput, selectedProfileId } from "./context.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, normalizeAgentHookEvent } from "../../lib/agent-adapters.js";
 import { detectedIntegrationAgents } from "../../lib/agent-install-selection.js";
-import { planAgentIntegration, planClaudeManagedHookProjection, planAgentSettingsWitnessUpgrade, planReviewedArtifactMigration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, hookContextOutput, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, type IntegrationAgent } from "../../lib/agent-integration.js";
+import { planAgentIntegration, planClaudeManagedHookProjection, planAgentSettingsWitnessUpgrade, planCodexSemanticCacheWitnessUpgrade, planReviewedArtifactMigration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, hookContextOutput, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, type IntegrationAgent } from "../../lib/agent-integration.js";
 import { enrollCodexNativeHooks, reconcileCodexNativeHooks } from "../../lib/agent-codex-trust.js";
 import { codexNativeHookEnvelopeFromInput, CODEX_NATIVE_POLICY_FD_ENV } from "../../lib/codex-native-skill-policy.js";
 import { planCodexNativeTrust, applyCodexNativeTrust, previewCodexNativeTrust } from "../../lib/codex-native-trust.js";
@@ -228,12 +228,31 @@ export function registerAgentIntegration(parent: Command): void {
         process.exitCode = 1;
       }
     });
+  hook.command("rebind-cache")
+    .requiredOption("--agent <agent>", "codex")
+    .requiredOption("--expected-policy-sha256 <sha256>", "Exact current managed policy bytes")
+    .requiredOption("--expected-settings-sha256 <sha256>", "Exact current Codex configuration bytes")
+    .option("--app-only-parent <path>", "Explicit canonical remote cache parent with app capabilities and no Skill docs", (value: string, previous: string[]) => [...previous, value], [])
+    .option("--expected-cache-witness-sha256 <sha256>", "Exact semantic cache digest from the reviewed preview; required with --apply")
+    .option("--apply", "Apply the reviewed policy-only cache witness migration", false)
+    .option("--json", "Return metadata-only preview or receipt", false)
+    .description("Explicitly migrate an enrolled Codex cache to semantic skill and capability identity")
+    .action(async (options) => {
+      try {
+        if (options.agent !== "codex") throw new Error("Cache witness rebind accepts codex only");
+        if (options.apply && options.expectedCacheWitnessSha256 === undefined) throw new Error("Cache witness apply requires --expected-cache-witness-sha256 from an exact reviewed preview");
+        const plan = planCodexSemanticCacheWitnessUpgrade({ agent: "codex", appOnlyParents: options.appOnlyParent, expectedPolicySha256: options.expectedPolicySha256, expectedSettingsSha256: options.expectedSettingsSha256, ...(options.expectedCacheWitnessSha256 !== undefined ? { expectedCacheWitnessSha256: options.expectedCacheWitnessSha256 } : {}) });
+        const result = options.apply ? applyAgentIntegration(plan) : { changed: [], backups: [] };
+        const proof = plan.discoveryAfter![0]!.codexSemanticCache!;
+        await writeCliOutput(options.json ? JSON.stringify({ applied: options.apply, cacheWitnessUpgrade: plan.cacheWitnessUpgrade, witness: proof.witness, previousDirectories: proof.supersededDirectories, previousSources: proof.supersededSources, ...result }) : `Codex semantic cache witness ${options.apply ? "upgraded" : "planned"}; native configuration and cache were not changed.`);
+      } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
+    });
   hook.command("rebind-settings")
     .requiredOption("--agent <agent>", "claude, codex or sumi")
     .requiredOption("--reviewed-preimage <path>", "Exact preserved legacy settings.json, config.toml or sumi.json")
     .requiredOption("--expected-policy-sha256 <sha256>", "Exact current managed policy bytes")
     .requiredOption("--expected-settings-sha256 <sha256>", "Exact current native settings bytes")
-    .option("--codex-witness-version <version>", "Explicit target: 2 (legacy default) 3 (service tier and model-advertised effort), 4 (native availability UI counts), or 5 (recognized status-line display items)")
+    .option("--codex-witness-version <version>", "Explicit target: 2 (legacy default) 3 (service tier and model-advertised effort), 4 (native availability UI counts), or 5 (schema-valid root status-line string vectors)")
     .option("--claude-witness-version <version>", "Explicit target: 3 (default) or 4 (also permits a built-in top-level theme)")
     .option("--apply", "Apply the explicit semantic witness upgrade with preservation and readback", false)
     .option("--json", "Return the metadata-only plan or receipt", false)

@@ -76,6 +76,10 @@ test("the real witness CLI exposes V5 without changing V3 capture semantics", as
   expect(await capture("codex-settings-v5")).toBe(oldV5);
   expect(await capture("codex-settings-v3")).not.toBe(oldV3);
   writeFileSync(f.original, 'tui.status_line=["current-dir","unknown-status-item"]\n');
+  expect(await capture("codex-settings-v5")).toBe(oldV5);
+  writeFileSync(f.original, 'tui.status_line=["current-dir",1]\n');
+  expect(await capture("codex-settings-v5")).not.toBe(oldV5);
+  writeFileSync(f.original, 'tui.status_line=["future-status-item"]\n[tui.native_discovery]\ncommand="/bin/unreviewed"\n');
   expect(await capture("codex-settings-v5")).not.toBe(oldV5);
   expect(readdirSync(f.data)).toEqual([]);
 });

@@ -35,11 +35,22 @@ test("status display additions, removals and reordering are opt-in V5 preference
   expect(v5('tui={status_line=["context-usage", "project-name", "thread-id"]}\n' + base)).toBe(v5(before));
 });
 
-test("unknown, executable-looking, malformed and excessive status lists remain bound", () => {
-  for (const value of ['["future-item"]', '["/bin/unreviewed"]', '["$(command)"]', '["model", 1]', '"model"', '{command="/bin/unreviewed"}', '["model\\nname"]', JSON.stringify(Array(257).fill("model"))]) {
-    expect(v5(base + `[tui]\nstatus_line=${value}\n`)).not.toBe(v5(before));
+test("schema-valid future, empty and ignored status strings remain display preferences", () => {
+  // Native Vec<String> has no entry-count cap. Unknown strings are ignored and
+  // warned about by the UI parser; they never become commands or discovery.
+  for (const value of ['["future-item"]', '[""]', '["/bin/unreviewed"]', '["$(command)"]', '["model\\nname"]', '["42", "future-item", ""]', JSON.stringify(Array(257).fill("model"))]) {
+    expect(v5(base + `[tui]\nstatus_line=${value}\n`)).toBe(v5(before));
   }
-  expect(v5(base + '[tui]\nstatus_line=["future-item"]\n')).not.toBe(v5(base + '[tui]\nstatus_line=["another-item"]\n'));
+  expect(v5(base + '[tui]\nstatus_line=["future-item"]\n')).toBe(v5(base + '[tui]\nstatus_line=["another-item"]\n'));
+});
+
+test("malformed or nonstring status vectors remain bound", () => {
+  for (const value of ['["model", 1]', '[true]', '[1.0]', '[["model"]]', '[{command="/bin/unreviewed"}]', '"model"', 'true', '1', '{command="/bin/unreviewed"}']) {
+    let digest: string;
+    try { digest = v5(base + `[tui]\nstatus_line=${value}\n`); }
+    catch (error) { expect((error as Error).message).toBe("Invalid Codex settings witness"); continue; }
+    expect(digest).not.toBe(v5(before));
+  }
 });
 
 test("other TUI and discovery controls cannot hide behind a status edit", () => {
@@ -71,6 +82,7 @@ test("string-contained TUI lookalikes and profiles remain protected", () => {
   const lookalike = 'instructions="""\n[tui]\nstatus_line=["model"]\n"""\n';
   expect(v5(lookalike+before)).not.toBe(v5(lookalike.replace('"model"', '"context-used"')+changed));
   expect(v5(before+'[profiles.other.tui]\nstatus_line=["model"]\n')).not.toBe(v5(changed+'[profiles.other.tui]\nstatus_line=["context-used"]\n'));
+  expect(v5(before+'[tui.nested]\nstatus_line=["future-item"]\n')).not.toBe(v5(changed+'[tui.nested]\nstatus_line=["another-item"]\n'));
 });
 
 for (const [mode, originalHash] of [[undefined, sha], ["bytes", sha], ["codex-settings-v1", v1], ["codex-settings-v2", v2], ["codex-settings-v3", v3], ["codex-settings-v4", v4]] as const) {
@@ -85,6 +97,9 @@ for (const [mode, originalHash] of [[undefined, sha], ["bytes", sha], ["codex-se
     expect(upgradeCodexSettingsWitnessV5(previous, original)).toEqual({ path: config, hashMode: "codex-settings-v5", sha256: v5(changed) });
     expect(readFileSync(config, 'utf8')).toBe(changed);
     expect(readFileSync(original, 'utf8')).toBe(before);
+    const future = changed.replace('"context-used"', '"future-status-item"');
+    writeFileSync(config, future);
+    expect(upgradeCodexSettingsWitnessV5(previous, original).sha256).toBe(v5(before));
     // The current config cannot substitute for the genuine reviewed original.
     expect(() => upgradeCodexSettingsWitnessV5(previous, config)).toThrow('Invalid Codex settings witness');
     for (const tail of ['[plugins.extra]\nenabled=true\n', '[hooks]\ncommand="/bin/unreviewed"\n', '[[skills.config]]\nname="extra"\nenabled=true\n']) {

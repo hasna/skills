@@ -4,8 +4,11 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, realpathSy
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
-import { planAgentIntegration, applyAgentIntegration, assertManagedAgentBridge, planAgentSettingsWitnessUpgrade } from "./agent-integration.js";
-import { hashCodexSettingsReplacementV3, hashCodexSettingsReplacementV4 } from "./codex-settings-witness.js";
+import { planAgentIntegration, applyAgentIntegration, assertManagedAgentBridge, planAgentSettingsWitnessUpgrade, planCodexSemanticCacheWitnessUpgrade } from "./agent-integration.js";
+import { captureDiscoveryDirectories } from "./agent-discovery.js";
+import { hashNativeJsonControls } from "./claude-settings-witness.js";
+import { serializeManagedSkillPolicy } from "./managed-policy.js";
+import { hashCodexSettingsReplacementV3, hashCodexSettingsReplacementV4, hashCodexSettingsReplacementV5 } from "./codex-settings-witness.js";
 import { admitCorpusFixture, installCorpusInspectorFixture } from "./codex-corpus.fixture.js";
 useDefaultTestTimeout();
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -60,10 +63,52 @@ for (const aliased of [false, true]) for (const version of [3, 4] as const) test
   expect(() => assertManagedAgentBridge("codex", f)).not.toThrow();
   writeFileSync(config, current.replace('"context-used"', '"weekly-limit"'));
   expect(() => assertManagedAgentBridge("codex", f)).not.toThrow();
+  writeFileSync(config, current.replace('"context-used"', '"future-status-item"'));
+  expect(() => assertManagedAgentBridge("codex", f)).not.toThrow();
   for (const tail of ['\n[plugins.extra]\nenabled=true\n', '\n[[skills.config]]\nname="extra"\nenabled=true\n', '\n[hooks]\ncommand="/bin/unreviewed"\n']) {
     writeFileSync(config, current + tail);
     expect(() => assertManagedAgentBridge("codex", f)).toThrow("Native discovery input changed");
     expect(readFileSync(policyPath, "utf8")).toBe(policyAfter);
   }
   expect(readFileSync(pin, "utf8")).toBe(pinned);
+});
+
+test("guarded semantic cache apply preserves the legacy policy, native config and pins, then supports ordinary hook replanning", () => {
+  const home = mkdtempSync(join(realpathSync(tmpdir()), "skills-semantic-cache-apply-")); homes.push(home);
+  const codex = join(home, ".codex"); mkdirSync(codex); admitCorpusFixture(codex);
+  const f = { home, dataDir: join(home, "data"), projectDir: home };
+  applyAgentIntegration(planAgentIntegration({ ...f, agents: ["codex"] }));
+  const cache = join(codex, "plugins/cache"), parent = join(cache, "market/vendor"), root = join(parent, "1.0.0");
+  const put = (path: string, text: string) => { mkdirSync(join(path, ".."), { recursive: true }); writeFileSync(path, text); };
+  const manifest = JSON.stringify({ name: "vendor", version: "1.0.0" });
+  put(join(root, ".codex-plugin/plugin.json"), manifest);
+  put(join(parent, ".codex-remote-plugin-install.json"), JSON.stringify({ schema_version: 1, remote_plugin_id: "remote-vendor" }));
+  put(join(root, "skills/deploy/SKILL.md"), "---\nname: deploy\ndescription: Synthetic disabled skill\n---\nBody");
+  const config = join(codex, "config.toml"), settings = readFileSync(config, "utf8") + '\n[[skills.config]]\nname="vendor:deploy"\nenabled=false\n'; put(config, settings);
+  const policyPath = join(f.dataDir, "agent-policy.json"), policy = JSON.parse(readFileSync(policyPath, "utf8"));
+  const controls = [{ name: "vendor:deploy", pluginId: "vendor@market", namespace: "vendor", pluginParent: parent, manifestSha256: hashNativeJsonControls(manifest, "version"), remotePluginId: "remote-vendor" }];
+  const binding = policy.bridge.discovery.codex;
+  binding.method = "reviewed";
+  binding.sources = binding.sources.filter((source: any) => source.path !== config);
+  binding.sources.push({ path: config, hashMode: "codex-settings-v5", sha256: hashCodexSettingsReplacementV5(settings) }, { path: join(root, ".codex-plugin/plugin.json"), sha256: sha(manifest) }, { path: join(parent, ".codex-remote-plugin-install.json"), sha256: sha(readFileSync(join(parent, ".codex-remote-plugin-install.json"), "utf8")) });
+  binding.directories = captureDiscoveryDirectories([cache]); binding.roots.push(cache); binding.codexDisabledPluginSkills = controls;
+  policy.bridge.codexPluginSkills = controls; policy.bridge.codexPluginSkillReview = { version: "codex-cli 0.162.0", cwd: home, catalogSha256: "a".repeat(64), configSha256: sha(settings) };
+  const before = serializeManagedSkillPolicy(policy); put(policyPath, before);
+  const pin = join(f.dataDir, "synthetic-session-pin.json"); put(pin, '{"generation":5}');
+  put(join(root, "assets/new.txt"), "Benign refresh");
+  const options = { ...f, agent: "codex" as const, appOnlyParents: [], expectedPolicySha256: sha(before), expectedSettingsSha256: sha(settings) };
+  const preview = planCodexSemanticCacheWitnessUpgrade(options);
+  const plan = planCodexSemanticCacheWitnessUpgrade({ ...options, expectedCacheWitnessSha256: preview.discoveryAfter![0]!.codexSemanticCache!.witness.sha256 });
+  const applied = applyAgentIntegration(plan);
+  expect(applied.changed).toEqual([policyPath]);
+  expect(readFileSync(applied.backups[0]!, "utf8")).toBe(before);
+  expect(readFileSync(config, "utf8")).toBe(settings);
+  expect(readFileSync(pin, "utf8")).toBe('{"generation":5}');
+  expect(() => assertManagedAgentBridge("codex", f)).not.toThrow();
+  const installed = JSON.parse(readFileSync(policyPath, "utf8")), proof = installed.bridge.discovery.codex.codexSemanticCache;
+  const ordinary = planAgentIntegration({ ...f, agents: ["codex"] });
+  expect(ordinary.discoveryAfter!.find(binding => binding.agent === "codex")!.codexSemanticCache).toEqual(proof);
+  applyAgentIntegration(ordinary);
+  expect(() => assertManagedAgentBridge("codex", f)).not.toThrow();
+  expect(readFileSync(pin, "utf8")).toBe('{"generation":5}');
 });

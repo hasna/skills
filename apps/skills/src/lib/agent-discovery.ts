@@ -2,7 +2,7 @@ import { captureSumiSettings, hashSumiSettingsReplacement, SUMI_DISCOVERY_PROJEC
 import { AGENT_POLICY_LIMITS } from "./agent-policy-limits.js";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { parseHermesConfig, assertHermesEnvironment } from "./agent-hermes.js";
 import type { IntegrationAgent } from "./agent-adapters.js";
@@ -22,10 +22,21 @@ import { sumiConfigDirectory, sumiConfigPath } from "./agent-sumi.js";
 import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
 import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
 import { verifyRetainedReviewArtifact, type RetainedReviewArtifact, type ReviewedArtifact } from "./retained-review-artifacts.js";
+import { captureCodexSemanticCacheWitness, assertCodexSemanticCacheWitnessUnchanged, type CodexSemanticCacheWitness, type CodexSemanticCacheAppOnlyParent } from "./codex-semantic-cache-witness.js";
 export { captureDiscoveryDirectories, type DiscoveryDirectory } from "./agent-discovery-directories.js";
 
 export interface DiscoverySource { reviewArtifact?: RetainedReviewArtifact; path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes" | "claude-plugin-manifest-v1" | "claude-plugin-registry" | "claude-marketplace-registry" | "claude-settings-v1" | "claude-settings-v2" | "claude-settings-v3" | "claude-settings-v4" | "claude-marketplace-registry-v2" | "codex-settings-v1" | "codex-settings-v2" | "codex-settings-v3" | "codex-settings-v4" | "codex-settings-v5" | "sumi-settings-v1" | "claude-marketplace-entry-v1"; managedPlugins?: ManagedPluginRegistrationWitness[]; format?: "json" | "toml" | "yaml"; fields?: string[]; marketplace?: string; plugin?: string }
-export interface AgentDiscoveryBinding { agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; method: "automatic" | "reviewed"; builtinNames?: string[]; codexDisabledPluginSkills?: CodexPluginSkillControl[]; codexRetiredMaterializations?: { roots:string[]; parents?:string[]; directories:Array<DiscoveryDirectory & {entries?:string[]}> }; codexInstallationInputs?: { version:string; catalogSha256:string; plugins:CodexPluginSourceInput[]; directories?:DiscoveryDirectory[] } }
+export interface CodexSemanticCacheDiscovery {
+  schema: "hasna.codex-semantic-cache-discovery.v1";
+  configPath: string;
+  hookRootAlias: { alias: string; target: string } | null;
+  witness: CodexSemanticCacheWitness;
+  appOnlyParents: CodexSemanticCacheAppOnlyParent[];
+  previousPolicySha256: string;
+  supersededSources: DiscoverySource[];
+  supersededDirectories: DiscoveryDirectory[];
+}
+export interface AgentDiscoveryBinding { codexSemanticCache?: CodexSemanticCacheDiscovery; agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; method: "automatic" | "reviewed"; builtinNames?: string[]; codexDisabledPluginSkills?: CodexPluginSkillControl[]; codexRetiredMaterializations?: { roots:string[]; parents?:string[]; directories:Array<DiscoveryDirectory & {entries?:string[]}> }; codexInstallationInputs?: { version:string; catalogSha256:string; plugins:CodexPluginSourceInput[]; directories?:DiscoveryDirectory[] } }
 /** Discovery that depends on an installed runtime found by command name. */
 const DISCOVERY_RUNTIME_COMMANDS: Partial<Record<IntegrationAgent, string>> = Object.freeze({ gemini: "gemini" });
 /** An environment gap, not drift: the runtime a review saw cannot be resolved
@@ -270,8 +281,8 @@ function absentCodexSkillRoots(binding:AgentDiscoveryBinding):string[] {
   const rules=(Bun.TOML.parse(read(config)!) as any).skills?.config ?? [];
   return [...new Set(controls.map(control=>control.pluginParent))].filter(parent=>!codexDirectHookSelects(cache,parent) && absentDisabledCodexPluginParent(cache,parent,controls,rules));
 }
-function codexDirectHookSelects(cache:string,root:string):boolean {
-  const codex=dirname(dirname(cache)),config=Bun.TOML.parse(read(join(codex,"config.toml")) ?? "") as any;
+function codexDirectHookSelects(cache:string,root:string,configPath = join(dirname(dirname(cache)), "config.toml")):boolean {
+  const codex=dirname(configPath),config=Bun.TOML.parse(read(configPath) ?? "") as any;
   const hooks=read(join(codex,"hooks.json"));
   if(hooks!==null) hashNativeJsonControls(hooks);
   return JSON.stringify(config.hooks ?? {}).includes(root) || hooks!==null && JSON.stringify(JSON.parse(hooks)).includes(root);
@@ -379,10 +390,75 @@ function absentRetiredClaudeRoots(binding:AgentDiscoveryBinding):string[] {
   }
   return [...result];
 }
-export function verifyAgentDiscovery(binding: AgentDiscoveryBinding, codexRecovery?: CodexHookDiscoveryRecovery): void {
+/** Only native capability locations covered by the complete typed cache census
+ * qualify. Historical sources remain stored; arbitrary missing files do not. */
+export function codexSemanticCacheSourceRole(source: DiscoverySource, cacheRoot: string, parents: readonly string[]): boolean {
+  if (!isAbsolute(source.path) || resolve(source.path) !== source.path || /[\x00-\x1f\x7f]/.test(source.path)
+    || source.format !== undefined || source.fields !== undefined || source.managedPlugins !== undefined || source.reviewArtifact !== undefined
+    || source.hashMode !== undefined && source.hashMode !== "bytes") return false;
+  const parts = relative(cacheRoot, source.path).split(sep);
+  if (parts.length < 3 || !parents.includes(join(cacheRoot, parts[0]!, parts[1]!))) return false;
+  const tail = parts.slice(3).join("/");
+  return parts.length === 5 && tail === ".codex-plugin/plugin.json" && source.sha256 !== null
+    || parts.length === 4 && [".app.json", ".mcp.json"].includes(tail) && source.sha256 !== null
+    || source.sha256 === null && (parts.length === 4 && tail === "SKILL.md" || parts.length === 5 && tail === "hooks/hooks.json");
+}
+export function codexSemanticCacheDirectoryRole(path: string, cacheRoot: string): boolean {
+  return isAbsolute(path) && resolve(path) === path && !/[\x00-\x1f\x7f]/.test(path)
+    && (path === cacheRoot || path.startsWith(cacheRoot + sep));
+}
+export function assertCodexSemanticCacheHookSafety(cacheRoot: string, parents: readonly string[], configPath: string, hookRootAlias: CodexSemanticCacheDiscovery["hookRootAlias"] = null): void {
+  const selectionRoots = [cacheRoot, ...parents];
+  if (hookRootAlias !== null) {
+    if (!hookRootAlias || Object.keys(hookRootAlias).length !== 2
+      || [hookRootAlias.alias, hookRootAlias.target].some(path => typeof path !== "string" || !isAbsolute(path) || resolve(path) !== path || /[\x00-\x1f\x7f]/.test(path))
+      || hookRootAlias.target !== dirname(configPath) || cacheRoot !== join(hookRootAlias.target, "plugins/cache")
+      || !lstatSync(hookRootAlias.alias, { throwIfNoEntry: false })?.isSymbolicLink()
+      || realpathSync(hookRootAlias.alias) !== hookRootAlias.target || realpathSync(hookRootAlias.target) !== hookRootAlias.target) throw new Error("Reviewed semantic cache hook alias changed");
+    // This mapping only adds forbidden hook-selection spellings. It never
+    // authorizes a root, source, alias, or cache projection.
+    selectionRoots.push(...selectionRoots.map(root => join(hookRootAlias.alias, relative(hookRootAlias.target, root))));
+  }
+  // The native hook runner uses a shell. Refuse this direct cache selector
+  // conservatively, covering HOME/${HOME}, tilde and relative spellings
+  // without evaluating shell code or granting any new projection scope.
+  selectionRoots.push("plugins/cache");
+  if (selectionRoots.some(parent => codexDirectHookSelects(cacheRoot, parent, configPath))) throw new Error("Direct native hooks select a projected Codex cache input");
+}
+function verifyCodexSemanticCacheDiscovery(binding: AgentDiscoveryBinding, reviewedRootAliases?: readonly { agent: IntegrationAgent; alias: string; target: string }[]): CodexSemanticCacheDiscovery | undefined {
+  const proof = binding.codexSemanticCache;
+  if (!proof) return undefined;
+  if (reviewedRootAliases !== undefined) {
+    const alias = reviewedRootAliases.find(alias => alias.agent === "codex");
+    const expected = alias ? { alias: alias.alias, target: alias.target } : null;
+    if (!isDeepStrictEqual(proof.hookRootAlias, expected)) throw new Error("Semantic cache hook alias differs from reviewed root binding");
+  }
+  const controls = binding.codexDisabledPluginSkills;
+  if (binding.agent !== "codex" || binding.method !== "reviewed" || !controls?.length
+    || proof.schema !== "hasna.codex-semantic-cache-discovery.v1" || !/^[a-f0-9]{64}$/.test(proof.previousPolicySha256)
+    || !Array.isArray(proof.appOnlyParents) || !Array.isArray(proof.supersededSources) || !Array.isArray(proof.supersededDirectories)) throw new Error("Invalid Codex semantic cache discovery proof");
+  const cacheRoot = proof.witness.cacheRoot;
+  if (controls.some(control => dirname(dirname(control.pluginParent)) !== cacheRoot)) throw new Error("Codex semantic cache names another enrolled cache");
+  const parents = [...new Set([...controls.map(control => control.pluginParent), ...proof.appOnlyParents.map(parent => parent.pluginParent)])];
+  const sources = binding.sources.filter(source => codexSemanticCacheSourceRole(source, cacheRoot, parents));
+  const directories = (binding.directories ?? []).filter(directory => codexSemanticCacheDirectoryRole(directory.path, cacheRoot));
+  if (!directories.length || !isDeepStrictEqual(sources, proof.supersededSources) || !isDeepStrictEqual(directories, proof.supersededDirectories)) throw new Error("Codex semantic cache provenance changed");
+  const configPath = proof.configPath;
+  if (!isAbsolute(configPath) || resolve(configPath) !== configPath || basename(configPath) !== "config.toml" || /[\x00-\x1f\x7f]/.test(configPath)) throw new Error("Invalid semantic cache configuration source");
+  const configSource = binding.sources.find(source => source.path === configPath && source.sha256 !== null && source.format === undefined && source.fields === undefined);
+  if (!configSource || projected(configSource) !== configSource.sha256) throw new Error("Codex semantic cache requires unchanged reviewed configuration");
+  assertCodexSemanticCacheHookSafety(cacheRoot, parents, configPath, proof.hookRootAlias);
+  const rules = parseConfig(read(configPath)!, configPath, true).skills?.config ?? [];
+  const current = captureCodexSemanticCacheWitness({ cacheRoot, controls, appOnlyParents: proof.appOnlyParents, rules });
+  assertCodexSemanticCacheWitnessUnchanged(proof.witness, current);
+  return proof;
+}
+export function verifyAgentDiscovery(binding: AgentDiscoveryBinding, codexRecovery?: CodexHookDiscoveryRecovery, reviewedRootAliases?: readonly { agent: IntegrationAgent; alias: string; target: string }[]): void {
   if (codexRecovery) assertCodexHookDiscoveryRecovery(binding, codexRecovery);
   if (!binding || !Array.isArray(binding.sources) || !Array.isArray(binding.roots) || binding.sources.length > AGENT_POLICY_LIMITS.discoverySources || binding.roots.length > AGENT_POLICY_LIMITS.discoveryRoots) throw new Error("Invalid native discovery binding");
   if (binding.agent === "hermes" && !binding.directories?.length) throw new Error("Hermes discovery requires directory membership coverage; run skills hook install with a fresh discovery review");
+  const semanticCache = verifyCodexSemanticCacheDiscovery(binding, reviewedRootAliases);
+  const semanticDirectory = (path: string) => Boolean(semanticCache && codexSemanticCacheDirectoryRole(path, semanticCache.witness.cacheRoot));
   const installationRoots=codexInstallationRoots(binding);
   const retiredRoots=retiredCodexRoots(binding);
   const installationInput=(path:string)=>installationRoots.some(root=>path===root || path.startsWith(root+sep));
@@ -390,9 +466,9 @@ export function verifyAgentDiscovery(binding: AgentDiscoveryBinding, codexRecove
     const projected=binding.codexInstallationInputs?.directories ?? [];
     const ancestors=binding.directories.filter(directory=>installationRoots.some(root=>root.startsWith(directory.path+sep)));
     if (projected.length!==ancestors.length || projected.some(directory=>!ancestors.some(original=>original.path===directory.path))) throw new Error("Missing installation input directory projection");
-    const ordinary=binding.directories.filter(directory=>!installationInput(directory.path) && !ancestors.includes(directory));
+    const ordinary=binding.directories.filter(directory=>!installationInput(directory.path) && !ancestors.includes(directory) && !semanticDirectory(directory.path));
     if(binding.codexRetiredMaterializations) {
-      const projection=binding.codexRetiredMaterializations!.directories;
+      const projection=binding.codexRetiredMaterializations!.directories.filter(directory => !semanticDirectory(directory.path));
       if(projection.length!==ordinary.length || projection.some((item,index)=>item.path!==ordinary[index]?.path)) throw new Error("Missing retired Codex directory projection");
       const omitted=[...retiredRoots,...(binding.codexRetiredMaterializations.parents ?? []).filter(parent=>!lstatSync(parent,{throwIfNoEntry:false}))];
       if(projection.every(item=>Array.isArray(item.entries))) verifyDiscoveryDirectoryProjection(projection as DiscoveryDirectoryProjection[],omitted);
@@ -411,6 +487,7 @@ export function verifyAgentDiscovery(binding: AgentDiscoveryBinding, codexRecove
     if (source.hashMode === "claude-plugin-registry" && binding.agent !== "claude") throw new Error("Managed Claude registry witnesses cannot apply to another agent");
     if (source.format !== undefined && (!["json", "toml", "yaml"].includes(source.format) || !Array.isArray(source.fields) || !source.fields.length || source.fields.length > 64 || source.fields.some(field => typeof field !== "string" || !field))) throw new Error("Invalid native discovery projection");
     if (source.sha256 !== null && !/^[a-f0-9]{64}$/.test(source.sha256)) throw new Error("Invalid native discovery digest");
+    if (semanticCache?.supersededSources.some(previous => isDeepStrictEqual(previous, source))) { safe(source.path); continue; }
     // Preserve the original full inventory witness as evidence, while the
     // positively attested installation role binds current source identity.
     // These bodies/directories are not native loading inputs.
@@ -444,10 +521,15 @@ function assertMarketplaceBinding(binding: AgentDiscoveryBinding, source: Discov
   if (source.hashMode === "claude-marketplace-entry-v1" && (binding.agent !== "claude" || binding.method !== "reviewed" || !claudeMarketplaceEntrySourceValid(source))) throw new Error("Claude marketplace entry witnesses require explicit reviewed Claude discovery of one named entry");
 }
 export function rebindAgentDiscovery(binding: AgentDiscoveryBinding, changes: Map<string, string>): AgentDiscoveryBinding {
+  const semanticCache = verifyCodexSemanticCacheDiscovery(binding);
   const budget = discoveryByteBudget();
   const installationRoots=codexInstallationRoots(binding), absentRoots=[...absentCodexSkillRoots(binding),...absentRetiredClaudeRoots(binding),...retiredCodexRoots(binding).filter(root=>!lstatSync(root,{throwIfNoEntry:false}))];
   const rebound={ ...binding, sources: binding.sources.map(source => {
     assertMarketplaceBinding(binding, source);
+    if (semanticCache?.supersededSources.some(previous => isDeepStrictEqual(previous, source))) {
+      if (changes.has(source.path)) throw new Error("Codex semantic cache sources cannot be written by hook rendering");
+      return source;
+    }
     if (!changes.has(source.path) && (installationRoots.some(root=>source.path.startsWith(root+sep)) || absentRoots.some(root=>source.path.startsWith(root+sep)) && retainableAbsentSource(source))) return source;
     const sha256 = projected(source, changes, budget);
     // Only a planned write may change its witness. Do not adopt source drift
@@ -653,9 +735,14 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
     // A retained typed witness already binds this file more strongly than
     // the order-sensitive TOML projection, so it replaces that projection
     // instead of requiring it again.
-    const covered = supersedesSettingsProjection(agent, retained.sources, canonical(configPath))
+    let covered = supersedesSettingsProjection(agent, retained.sources, canonical(configPath))
       ? sources.filter(source => !isSupersededSettingsProjection(agent, canonical(configPath), source))
       : sources;
+    if (retained.codexSemanticCache) {
+      const proof = retained.codexSemanticCache;
+      const parents = [...new Set([...(retained.codexDisabledPluginSkills ?? []).map(control => control.pluginParent), ...proof.appOnlyParents.map(parent => parent.pluginParent)])];
+      covered = covered.filter(source => !codexSemanticCacheSourceRole(source, proof.witness.cacheRoot, parents));
+    }
     if (covered.some(source => !retained.sources.some(saved => isDeepStrictEqual(saved, source)))
       || [...roots].some(root => !retained.roots.includes(root))
       || (agent === "gemini" && JSON.stringify(retained.builtinNames) !== JSON.stringify(builtinNames))) unresolved("retained review is missing current runtime discovery coverage");

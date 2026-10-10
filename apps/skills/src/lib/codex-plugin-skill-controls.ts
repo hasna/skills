@@ -84,7 +84,13 @@ function isBundledCleanupHooks(root:string, namespace:string, value:unknown):boo
   }
   return true;
 }
-function rootControls(root:string, read:Read): { namespace:string; manifestSha256:string; appSha256?:string; mcpSha256?:string } {
+export interface CodexPluginRootControls { namespace:string; manifestSha256:string; appSha256?:string; mcpSha256?:string }
+/** Reuse the strict package-owned capability parser for an explicitly reviewed
+ * plugin materialization. This does not establish parent or receipt identity. */
+export function readCodexPluginRootControls(root:string, read:Read): CodexPluginRootControls {
+  return rootControls(root, read);
+}
+function rootControls(root:string, read:Read): CodexPluginRootControls {
   const manifestPath=join(root,".codex-plugin/plugin.json"), manifestFile=lstatSync(manifestPath,{throwIfNoEntry:false});
   if (!lstatSync(join(root,".codex-plugin"),{throwIfNoEntry:false})?.isDirectory() || !manifestFile?.isFile() || manifestFile.size>1024*1024) refuse();
   let manifest:any, manifestSha256:string;

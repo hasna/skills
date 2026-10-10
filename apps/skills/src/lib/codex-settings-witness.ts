@@ -212,25 +212,16 @@ function projectModelAvailabilityNux(config: Record<string, any>, text: string):
   return { config, numericSource: text };
 }
 /** OpenAI Codex rust-v0.162.1: config/src/types.rs Tui.status_line is
- * Option<Vec<String>>; tui/src/bottom_pane/status_line_setup.rs StatusLineItem
- * parses only these fixed display ids/aliases. They select existing UI items,
- * never user commands, paths or discovery providers. Unknown ids stay bound.
+ * Option<Vec<String>>; tui/src/chatwidget/status_surfaces.rs parses known items
+ * for display and ignores/warns about unknown strings. Strings never become
+ * user commands, files or discovery providers. Project only this root field's
+ * native schema; profiles, nested TUI fields and malformed values stay bound.
  * https://github.com/openai/codex/tree/rust-v0.162.1/codex-rs
  */
-const STATUS_LINE_ITEMS = new Set([
-  "model", "model-name", "model-with-reasoning", "reasoning", "current-dir",
-  "project-name", "project", "project-root", "hostname", "git-branch",
-  "pull-request-number", "branch-changes", "run-state", "status", "permissions",
-  "approval-mode", "approval", "context-remaining", "context-used", "context-usage",
-  "five-hour-limit", "weekly-limit", "codex-version", "context-window-size",
-  "used-tokens", "total-input-tokens", "total-output-tokens", "thread-credits",
-  "estimated-thread-cost", "thread-id", "session-id", "fast-mode", "daybreak",
-  "raw-output", "thread-name", "thread-title", "workspace-headline", "task-progress",
-]);
 function projectStatusLine(config: Record<string, any>): void {
   const tui = config.tui;
-  if (!isRecord(tui) || !Array.isArray(tui.status_line) || tui.status_line.length > 256
-    || !tui.status_line.every((item: unknown) => typeof item === "string" && STATUS_LINE_ITEMS.has(item))) return;
+  if (!isRecord(tui) || !Array.isArray(tui.status_line)
+    || !tui.status_line.every((item: unknown) => typeof item === "string")) return;
   delete tui.status_line;
   if (!Object.keys(tui).length) delete config.tui;
   // Every accepted item is a quoted string: it contributes no numeric spelling
@@ -310,7 +301,7 @@ export function upgradeCodexSettingsWitnessV4(previous: { path: string; hashMode
   return { path: previous.path, hashMode: "codex-settings-v4", sha256 };
 }
 
-/** Explicit V5 adds only recognized native status-line display selections. */
+/** Explicit V5 adds only schema-valid root status-line string vectors. */
 export function hashCodexSettingsReplacementV5(text: string, budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }): string {
   need(Buffer.byteLength(text) <= 1024 * 1024 && budget.remaining >= Buffer.byteLength(text)); budget.remaining -= Buffer.byteLength(text);
   return settingsDigest(text, 5);
