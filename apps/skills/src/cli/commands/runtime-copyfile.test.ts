@@ -1,15 +1,17 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Command } from "commander";
 import { registerRuntime } from "./runtime.js";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { basename, delimiter, join, relative } from "node:path";
+import { basename, delimiter, dirname, join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { adoptCopyfileAliases, preflightTarball, readBodyCapped, rollbackCopyfileAliases, rollbackCopyfileRuntime, updateCopyfileRuntime } from "./runtime-copyfile.js";
 import { inspectLauncher, launcherTarget, parsePinnedLauncher, renderPinnedLauncher } from "./runtime-launcher.js";
 import * as launcherModule from "./runtime-launcher.js";
 import * as nodeFs from "node:fs";
+import { version as prerequisiteTargetVersion } from "../../../package.json";
+import { installSumiPathsFixture } from "../../lib/sumi-paths.fixture.js";
 import { useDefaultTestTimeout } from "../../test-preload.js";
 
 useDefaultTestTimeout();
@@ -67,11 +69,12 @@ function fixtureHome() {
   return { home, runtime, oldPackage, localBin, bunBin, externalBin, configs };
 }
 
-async function serverWithArtifact(dependencies: Record<string, string> = {}, optionalDependencies: Record<string, string> = {}, entryBody: (name: string) => string = name => `console.log("0.10.8 ${name}");`, version = "0.10.8") {
+async function serverWithArtifact(dependencies: Record<string, string> = {}, optionalDependencies: Record<string, string> = {}, entryBody: (name: string) => string = name => `console.log("0.10.8 ${name}");`, version = "0.10.8", prerequisites?: { declaration: unknown; entry: string | null }) {
   const artifact = await new Bun.Archive({
-    "package/package.json": JSON.stringify({ name: "@hasna/skills", version, bin: BIN, dependencies, ...(Object.keys(optionalDependencies).length ? { optionalDependencies } : {}) }),
+    "package/package.json": JSON.stringify({ name: "@hasna/skills", version, bin: BIN, dependencies, ...(Object.keys(optionalDependencies).length ? { optionalDependencies } : {}), ...(prerequisites ? { skillsRuntimePrerequisites: prerequisites.declaration } : {}) }),
     "package/README.md": "Synthetic package fixture.\n",
     ...Object.fromEntries(Object.entries(BIN).map(([name, file]) => [`package/${file}`, `#!/usr/bin/env bun\n${entryBody(name)}\n`])),
+    ...(prerequisites?.entry !== null && prerequisites?.entry !== undefined ? { "package/dist/runtime-prerequisites.js": prerequisites.entry } : {}),
   }, { compress: "gzip" }).bytes();
   const integrity = `sha512-${createHash("sha512").update(artifact).digest("base64")}`;
   let server: ReturnType<typeof Bun.serve>;
@@ -745,7 +748,7 @@ else { writeFileSync(${JSON.stringify(log)}, "unexpected"); process.exit(83); }
       } finally {
         process.umask(priorUmask);
       }
-      expect(result).toMatchObject({ updated: true, version: "0.10.8", currentVersion: "0.10.6", launcherCount: 21, configCount: 4, tarballIntegrity: integrity });
+      expect(result).toMatchObject({ updated: true, version: "0.10.8", currentVersion: "0.10.6", launcherCount: 21, configCount: 4, tarballIntegrity: integrity, prerequisites: { status: "not-declared" } });
       const targetRoot = join(f.runtime, "0.10.8-copyfile");
       const targetPackage = join(targetRoot, "node_modules", "@hasna", "skills");
       const nodeModulesRoot = join(targetRoot, "node_modules");
@@ -1461,5 +1464,132 @@ else { writeFileSync(${JSON.stringify(log)}, "unexpected"); process.exit(83); }
     const checksum = [...header].reduce((sum, byte) => sum + byte, 0).toString(8).padStart(6, "0");
     header.set(new TextEncoder().encode(`${checksum}\0 `), 148);
     await expect(preflightTarball(gzipSync(tar))).rejects.toThrow("TARBALL_ENTRY_TYPE_UNSUPPORTED");
+  });
+});
+
+describe("target runtime activation prerequisites", () => {
+  async function targetUpdate(version: string, options: Parameters<typeof updateCopyfileRuntime>[1]) {
+    const prior = process.env.HASNA_SKILLS_DIR;
+    process.env.HASNA_SKILLS_DIR = join(options!.homeDir!, ".hasna/skills");
+    try { return await updateCopyfileRuntime(version, options); }
+    finally { if (prior === undefined) delete process.env.HASNA_SKILLS_DIR; else process.env.HASNA_SKILLS_DIR = prior; }
+  }
+
+  const declaration = { version: 1, entry: "dist/runtime-prerequisites.js" };
+  async function targetEntry() {
+    const built = await Bun.build({ entrypoints: [join(import.meta.dir, "../../runtime-prerequisites.ts")], target: "bun" });
+    if (!built.success) throw new Error("Synthetic target build failed");
+    return built.outputs[0]!.text();
+  }
+  const sessionPreimages = new Map<string, { path: string; bytes: Buffer; inode: number }>();
+  function assertSessionPreserved(f: ReturnType<typeof fixtureHome>) {
+    const original = sessionPreimages.get(f.home)!;
+    expect(readFileSync(original.path).equals(original.bytes)).toBe(true);
+    expect(lstatSync(original.path).ino).toBe(original.inode);
+  }
+  function configure(f: ReturnType<typeof fixtureHome>, agents: string[]) {
+    // An existing synthetic pin is outside runtime/config preimages. The
+    // activation checker must leave it intact even when activation refuses.
+    const sessionId = randomUUID();
+    const path = join(f.home, ".hasna/skills/selection-cache/sessions", `${createHash("sha256").update(sessionId).digest("hex")}.json`);
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    writeFileSync(path, JSON.stringify({ sessionId, generation: 7, synthetic: true }), { mode: 0o600 });
+    const original = { path, bytes: readFileSync(path), inode: lstatSync(path).ino };
+    sessionPreimages.set(f.home, original);
+    assertSessionPreserved(f);
+    writeFileSync(join(f.home, ".hasna/skills/agent-policy.json"), JSON.stringify({ loading: "cli", bridge: { agents } }), { mode: 0o600 });
+  }
+  function preparedRefusal(f: ReturnType<typeof fixtureHome>, before: ReturnType<typeof launcherSnapshot>, code: string) {
+    expect(launcherSnapshot(before.keys())).toEqual(before);
+    assertSessionPreserved(f);
+    expect(existsSync(join(f.runtime, `${prerequisiteTargetVersion}-copyfile`))).toBe(false);
+    const stages = readdirSync(f.runtime).filter(name => name.startsWith(`.stage-${prerequisiteTargetVersion}-`));
+    expect(stages).toHaveLength(1);
+    const stage = join(f.runtime, stages[0]!);
+    const receipt = JSON.parse(readFileSync(join(stage, "rollout-receipt.json"), "utf8"));
+    expect(receipt).toMatchObject({ state: "prepared", targetVersion: prerequisiteTargetVersion, prerequisites: { status: "refused", code }, switchedLaunchers: [] });
+    expect(receipt.tarballSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(receipt.packageTreeSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(createHash("sha256").update(readFileSync(join(stage, "preimage/manifest.json"))).digest("hex")).toBe(receipt.preimageSha256);
+    for (const config of receipt.configs) if (config.present) {
+      const original = readFileSync(join(stage, "preimage/configs", config.relativePath));
+      expect(readFileSync(config.sourcePath)).toEqual(original);
+      expect(createHash("sha256").update(original).digest("hex")).toBe(config.sha256);
+    }
+    expect(existsSync(join(f.runtime, ".copyfile-update-lock"))).toBe(false);
+    expect(existsSync(f.oldPackage)).toBe(true);
+    return receipt;
+  }
+  test.each(["missing", "invalid-schema", "stderr", "unsupported-config"])("prerequisite refusal preserves launchers, configuration and bound prepared receipt: %s", async mode => {
+    const f = fixtureHome(); configure(f, ["sumi"]);
+    const helperBin = installSumiPathsFixture(f.home);
+    const helper = join(helperBin, "sumi-paths");
+    if (mode === "missing") rmSync(helper);
+    if (mode === "invalid-schema") writeFileSync(helper, `#!${process.execPath}\nconsole.log(JSON.stringify({schemaVersion:99}));\n`, { mode: 0o700 });
+    if (mode === "stderr") writeFileSync(helper, `#!${process.execPath}\nconsole.error('synthetic diagnostic must not escape');\nprocess.exit(2);\n`, { mode: 0o700 });
+    const fixture = await serverWithArtifact({}, {}, undefined, prerequisiteTargetVersion, { declaration, entry: await targetEntry() });
+    const before = launcherSnapshot(binPaths(f));
+    const previous = process.env.SUMI_CONFIG_CONTENT;
+    try {
+      if (mode === "unsupported-config") process.env.SUMI_CONFIG_CONTENT = "synthetic omitted content";
+      const code = `RUNTIME_PREREQUISITE_REFUSED_${mode === "invalid-schema" ? "SUMI_PATH_RESOLVER_INVALID_RESPONSE" : mode === "unsupported-config" ? "SUMI_PATH_CONFIG_UNSUPPORTED" : "SUMI_PATH_RESOLVER_UNAVAILABLE"}`;
+      await expect(targetUpdate(prerequisiteTargetVersion, { homeDir: f.home, cwd: f.home, pathValue: `${helperBin}${delimiter}${f.localBin}${delimiter}${f.bunBin}`, registryOrigin: fixture.server.url.origin })).rejects.toThrow(code);
+      preparedRefusal(f, before, code);
+    } finally {
+      if (previous === undefined) delete process.env.SUMI_CONFIG_CONTENT; else process.env.SUMI_CONFIG_CONTENT = previous;
+      fixture.server.stop(true);
+    }
+  });
+  test.each(["missing-entry", "unknown-contract", "wrong-target", "invalid-response", "timeout"])("declared target prerequisite contract fails closed: %s", async mode => {
+    const f = fixtureHome(); configure(f, ["claude"]);
+    const fixture = await serverWithArtifact({}, {}, undefined, prerequisiteTargetVersion, {
+      declaration: mode === "unknown-contract" ? { ...declaration, version: 2 } : declaration,
+      entry: mode === "missing-entry" ? null : mode === "timeout" ? "await Bun.sleep(10000);" : mode === "wrong-target" ? 'console.log(JSON.stringify({schema:"skills.runtime-prerequisites.v1",targetVersion:"0.0.0",ok:true,checked:[],code:null}));'
+        : mode === "invalid-response" ? 'console.log(JSON.stringify({synthetic:"unrecognized"}));' : await targetEntry(),
+    });
+    const before = launcherSnapshot(binPaths(f));
+    const code = mode === "missing-entry" ? "RUNTIME_PREREQUISITE_ENTRY_MISSING" : mode === "unknown-contract" ? "RUNTIME_PREREQUISITE_CONTRACT_INVALID" : mode === "timeout" ? "RUNTIME_PREREQUISITE_CHECK_UNAVAILABLE" : "RUNTIME_PREREQUISITE_RESPONSE_INVALID";
+    try {
+      await expect(targetUpdate(prerequisiteTargetVersion, { homeDir: f.home, cwd: f.home, pathValue: `${f.localBin}${delimiter}${f.bunBin}`, registryOrigin: fixture.server.url.origin })).rejects.toThrow(code);
+      preparedRefusal(f, before, code);
+    } finally { fixture.server.stop(true); }
+  });
+  test("target reader preserves relative Sumi selectors instead of testing conflicting defaults", async () => {
+    const f = fixtureHome(); configure(f, ["sumi"]);
+    for (const path of [join(f.home, ".hasna-internal/sumi/config"), join(f.home, ".config/sumi"), join(f.home, "selected-config")]) mkdirSync(path, { recursive: true, mode: 0o700 });
+    const helperBin = installSumiPathsFixture(f.home);
+    const fixture = await serverWithArtifact({}, {}, undefined, prerequisiteTargetVersion, { declaration, entry: await targetEntry() });
+    const prior = process.env.SUMI_CONFIG_DIR;
+    try {
+      process.env.SUMI_CONFIG_DIR = "selected-config";
+      const result = await targetUpdate(prerequisiteTargetVersion, { homeDir: f.home, cwd: f.home, pathValue: `${helperBin}${delimiter}${f.localBin}${delimiter}${f.bunBin}`, registryOrigin: fixture.server.url.origin });
+      expect(result.prerequisites).toMatchObject({ status: "verified", checked: ["sumi-paths"] });
+      assertSessionPreserved(f);
+      expect(rollbackCopyfileRuntime(String(result.receiptId), { homeDir: f.home })).toMatchObject({ rolledBack: true });
+      assertSessionPreserved(f);
+    } finally {
+      if (prior === undefined) delete process.env.SUMI_CONFIG_DIR; else process.env.SUMI_CONFIG_DIR = prior;
+      fixture.server.stop(true);
+    }
+  });
+  test.each([true, false])("target entry verifies only applicable consumers (Sumi=%s), preserving rollback", async sumi => {
+    const f = fixtureHome(); configure(f, sumi ? ["sumi"] : ["claude"]);
+    const helperBin = sumi ? installSumiPathsFixture(f.home) : f.localBin;
+    const fixture = await serverWithArtifact({}, {}, undefined, prerequisiteTargetVersion, { declaration, entry: await targetEntry() });
+    const before = launcherSnapshot(binPaths(f));
+    try {
+      const result = await targetUpdate(prerequisiteTargetVersion, { homeDir: f.home, cwd: f.home, pathValue: `${helperBin}${delimiter}${f.localBin}${delimiter}${f.bunBin}`, registryOrigin: fixture.server.url.origin });
+      const receipt = JSON.parse(readFileSync(join(f.runtime, `${prerequisiteTargetVersion}-copyfile/rollout-receipt.json`), "utf8"));
+      expect(receipt.prerequisites).toMatchObject({ status: "verified", schema: "skills.runtime-prerequisites.v1", targetVersion: prerequisiteTargetVersion, entry: declaration.entry, checked: sumi ? ["sumi-paths"] : [] });
+      expect(receipt.prerequisites.entrySha256).toBe(createHash("sha256").update(readFileSync(join(receipt.targetPackageRoot, declaration.entry))).digest("hex"));
+      for (const config of receipt.configs) if (config.present) expect(readFileSync(config.sourcePath)).toEqual(readFileSync(join(f.runtime, `${prerequisiteTargetVersion}-copyfile/preimage/configs`, config.relativePath)));
+      assertSessionPreserved(f);
+      expect(rollbackCopyfileRuntime(String(result.receiptId), { homeDir: f.home })).toMatchObject({ rolledBack: true });
+      assertSessionPreserved(f);
+      for (const [path, old] of before) {
+        expect(readlinkSync(path)).toBe(old.text);
+        expect(launcherTarget(path)).toBe(join(f.oldPackage, BIN[basename(path) as keyof typeof BIN]));
+      }
+    } finally { fixture.server.stop(true); }
   });
 });

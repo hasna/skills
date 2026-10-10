@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { createGunzip } from "node:zlib";
+import { spawnSync } from "node:child_process";
 import {
   chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync,
   readdirSync, readlinkSync, realpathSync, renameSync, symlinkSync, writeFileSync,
@@ -11,6 +12,7 @@ import { validateReviewedRuntimeLock } from "./reviewed-runtime-lock.js";
 import {
   type LauncherShape, type LauncherState, type LauncherFormat, type LauncherProfile, inspectLauncher, launcherIs, launcherTarget,
   materializeLauncher, pinnedLauncherRuntime, pinnedLauncherState, pinnedLauncherText, launcherProfileForBin,
+  PINNED_LAUNCHER_BUN_FLAGS, LAUNCH_CWD_VARIABLE,
 } from "./runtime-launcher.js";
 
 const PACKAGE_NAME = "@hasna/skills";
@@ -146,8 +148,51 @@ interface CopyfileReceipt {
   launchers: RuntimeLayout["launchers"];
   dependencyPolicy?: NpmReleaseAgePolicy & { npmVersion: string };
   reviewedLockSha256?: string;
+  prerequisites?: JsonObject;
   switchedLaunchers: string[];
   rollbackCompletedLaunchers: string[];
+}
+
+/** Invoke the verified TARGET's opt-in contract, never the current CLI's
+ * discovery algorithm. Legacy packages have no declaration and are explicitly
+ * unverified; an unknown declaration or missing declared entry fails closed. */
+function verifyTargetPrerequisites(manifest: JsonObject, packageRoot: string, home: string, cwd: string, pathValue: string): JsonObject {
+  const declaration = manifest.skillsRuntimePrerequisites;
+  if (declaration === undefined) return { status: "not-declared" };
+  const contract = object(declaration, "RUNTIME_PREREQUISITE_CONTRACT_INVALID");
+  if (Object.keys(contract).length !== 2 || contract.version !== 1 || contract.entry !== "dist/runtime-prerequisites.js") {
+    throw new Error("RUNTIME_PREREQUISITE_CONTRACT_INVALID");
+  }
+  const entry = join(packageRoot, contract.entry);
+  if (!entryExists(entry) || !lstatSync(entry).isFile() || lstatSync(entry).isSymbolicLink()) throw new Error("RUNTIME_PREREQUISITE_ENTRY_MISSING");
+  const entrySha256 = hash(readFileSync(entry));
+  // Only path selectors reach the reader. Credentials, dotenv/preloads and
+  // arbitrary Bun options never do. Unsupported config inputs need presence,
+  // not their possibly sensitive contents, to reproduce the owning refusal.
+  const env: Record<string, string> = { HOME: home, PATH: pathValue, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" };
+  for (const key of ["HASNA_SKILLS_DIR", "HASNA_SKILLS_HOME", "SKILLS_HOME", "HASNA_DATA_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "SUMI_HOME", "SUMI_CONFIG_DIR", "HERMES_HOME"]) {
+    if (process.env[key] !== undefined) env[key] = process.env[key]!;
+  }
+  for (const key of ["SUMI_CONFIG", "SUMI_CONFIG_CONTENT"]) if (process.env[key] !== undefined) env[key] = "";
+  const child = spawnSync(pinnedLauncherRuntime(), [...PINNED_LAUNCHER_BUN_FLAGS, entry, home, cwd], {
+    cwd: dirname(packageRoot), env, encoding: "buffer", timeout: 5000, maxBuffer: 128 * 1024, shell: false,
+  });
+  if (child.error || child.signal || !child.stdout || child.stderr?.byteLength) throw new Error("RUNTIME_PREREQUISITE_CHECK_UNAVAILABLE");
+  let result: JsonObject;
+  try { result = object(JSON.parse(child.stdout.toString("utf8")), "RUNTIME_PREREQUISITE_RESPONSE_INVALID"); }
+  catch { throw new Error("RUNTIME_PREREQUISITE_RESPONSE_INVALID"); }
+  if (Object.keys(result).length !== 5 || result.schema !== "skills.runtime-prerequisites.v1" || result.targetVersion !== manifest.version
+    || typeof result.ok !== "boolean" || !Array.isArray(result.checked) || result.checked.length > 1
+    || result.checked.some(value => value !== "sumi-paths")) throw new Error("RUNTIME_PREREQUISITE_RESPONSE_INVALID");
+  const codes = ["RUNTIME_CONSUMER_DISCOVERY_REFUSED", "RUNTIME_PREREQUISITE_INPUT_REFUSED", "SUMI_PATH_INPUT_REFUSED", "SUMI_PATH_CONFIG_UNSUPPORTED",
+    "SUMI_PATH_RESOLVER_UNAVAILABLE", "SUMI_PATH_RESOLVER_INVALID_RESPONSE", "SUMI_PATH_DISCOVERY_REFUSED"];
+  if (!result.ok) {
+    if (child.status !== 2 || typeof result.code !== "string" || !codes.includes(result.code)) throw new Error("RUNTIME_PREREQUISITE_RESPONSE_INVALID");
+    throw new Error(`RUNTIME_PREREQUISITE_REFUSED_${result.code}`);
+  }
+  if (child.status !== 0 || result.code !== null) throw new Error("RUNTIME_PREREQUISITE_RESPONSE_INVALID");
+  if (hash(readFileSync(entry)) !== entrySha256) throw new Error("RUNTIME_PREREQUISITE_ENTRY_CHANGED");
+  return { status: "verified", schema: result.schema, targetVersion: result.targetVersion, entry: contract.entry, entrySha256, checked: result.checked };
 }
 
 interface AliasReceipt {
@@ -1002,7 +1047,7 @@ export function rollbackCopyfileAliases(receiptId: string, options: { homeDir?: 
   }
 }
 
-export async function updateCopyfileRuntime(version: string, options: { homeDir?: string; pathValue?: string; registryOrigin?: string; fetcher?: typeof fetch; minReleaseAge?: number; minReleaseAgeExclude?: string[]; reviewedLock?: string; reviewedLockSha256?: string; onLauncherSwitched?: (path: string) => void } = {}): Promise<JsonObject> {
+export async function updateCopyfileRuntime(version: string, options: { homeDir?: string; pathValue?: string; cwd?: string; registryOrigin?: string; fetcher?: typeof fetch; minReleaseAge?: number; minReleaseAgeExclude?: string[]; reviewedLock?: string; reviewedLockSha256?: string; onLauncherSwitched?: (path: string) => void } = {}): Promise<JsonObject> {
   if (!new RegExp(SEMVER_PATTERN).test(version)) throw new Error("EXACT_VERSION_REQUIRED");
   if (!STABLE_SEMVER_PATTERN.test(version)) throw new Error("EXACT_STABLE_VERSION_REQUIRED");
   const policy = releaseAgePolicy(options);
@@ -1112,6 +1157,17 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
       launchers, switchedLaunchers: [], rollbackCompletedLaunchers: [],
     };
     writeJsonPrivate(join(stagePath, "rollout-receipt.json"), receipt);
+    try {
+      receipt.prerequisites = verifyTargetPrerequisites(installed.data, installedPackage, home, resolve(options.cwd ?? process.env[LAUNCH_CWD_VARIABLE] ?? process.cwd()), options.pathValue ?? process.env.PATH ?? "");
+    } catch (error) {
+      // Keep the real prepared receipt and exact artifact/preimage bindings.
+      // No launcher has switched; all child diagnostics remain unrendered.
+      const code = error instanceof Error && /^RUNTIME_PREREQUISITE_[A-Z_]+$/.test(error.message) ? error.message : "RUNTIME_PREREQUISITE_CHECK_UNAVAILABLE";
+      receipt.prerequisites = { status: "refused", code };
+      persistReceipt(join(stagePath, "rollout-receipt.json"), receipt);
+      throw new Error(code);
+    }
+    persistReceipt(join(stagePath, "rollout-receipt.json"), receipt);
     const finalNodeModules = join(stagePackage, "node_modules");
     const stagedNodeModules = join(stagePath, "node_modules");
     renameSync(finalNodeModules, stagedNodeModules);
@@ -1142,7 +1198,7 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
     }
     receipt.state = "switched";
     persistReceipt(join(finalPath, "rollout-receipt.json"), receipt);
-    return { updated: true, version, currentVersion: layout.currentVersion, receiptId: id, runtimeRoot: finalPath, tarballSha256: artifact.sha256, tarballIntegrity: artifact.integrity, runtimeTreeSha256: stagedTree.digest, launcherCount: launchers.length, configCount: configPreimages.length, ...(policy ? { dependencyPolicy: { ...policy, npmVersion: npmVersion! } } : {}), ...(reviewedLockBytes ? { reviewedLockSha256: options.reviewedLockSha256 } : {}) };
+    return { updated: true, version, currentVersion: layout.currentVersion, receiptId: id, runtimeRoot: finalPath, tarballSha256: artifact.sha256, tarballIntegrity: artifact.integrity, runtimeTreeSha256: stagedTree.digest, launcherCount: launchers.length, configCount: configPreimages.length, prerequisites: receipt.prerequisites, ...(policy ? { dependencyPolicy: { ...policy, npmVersion: npmVersion! } } : {}), ...(reviewedLockBytes ? { reviewedLockSha256: options.reviewedLockSha256 } : {}) };
   } catch (error) {
     if (switched.length > 0 || moved) {
       let rollbackFailed = false;
