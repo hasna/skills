@@ -9,7 +9,7 @@ import { getDataDirReadOnly } from "./config.js";
 /** Presence selects adapters; it does not resolve native paths or approve
  * their configuration. The existing planner still verifies every selected
  * provider. Never execute a native CLI to detect it, particularly Sumi. */
-export function detectedIntegrationAgents(options: { home?: string; dataDir?: string; env?: NodeJS.ProcessEnv; cwd?: string } = {}): IntegrationAgent[] {
+export function detectedIntegrationAgents(options: { home?: string; dataDir?: string; env?: NodeJS.ProcessEnv; cwd?: string; allowEmpty?: boolean } = {}): IntegrationAgent[] {
   const home = options.home ?? homedir(), env = options.env ?? process.env;
   const policy = readManagedSkillPolicySnapshot(options.dataDir ?? getDataDirReadOnly())?.value;
   const bridge = policy?.bridge;
@@ -42,6 +42,6 @@ export function detectedIntegrationAgents(options: { home?: string; dataDir?: st
     return present(join(home, dirname(adapter.config)))
       || NATIVE_SKILL_ROOTS.some(([provider, root]) => provider === agent && dirname(root) === `.${agent}` && present(join(home, dirname(root))));
   });
-  if (!selected.length) throw new Error(`No configured or detected agents; select --agent <agent> explicitly (${INTEGRATION_AGENTS.join(", ")}).`);
+  if (!selected.length && !options.allowEmpty) throw new Error(`No configured or detected agents; select --agent <agent> explicitly (${INTEGRATION_AGENTS.join(", ")}).`);
   return selected;
 }

@@ -41,6 +41,7 @@
     "migrations/",
     "docs/skill-standard.md",
     "docs/plugin-admission.md",
+    "docs/runtime-activation.md",
     "schemas/",
     "LICENSE",
     "README.md",
@@ -51,8 +52,8 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "clean": "rm -rf bin/ dist/",
-    "build": "bun run clean && bun build --external @hasna/contracts/kernel-lock ./src/cli/index.tsx --outdir ./bin --target bun && bun build --external @modelcontextprotocol/sdk ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build --external @hasna/contracts/kernel-lock ./src/server/index.ts --outfile ./bin/server.js --target bun && bun build --external @hasna/contracts/kernel-lock ./src/server/worker.ts --outfile ./bin/worker.js --target bun && bun build --external @hasna/contracts/kernel-lock ./src/server/migrate.ts --outfile ./bin/migrate.js --target bun && bun build --external @hasna/contracts/kernel-lock ./src/server/maintenance.ts --outfile ./bin/maintenance.js --target bun && bun build ./src/index.ts ./src/storage.ts ./src/sdk/index.ts ./src/admin-contract.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --declaration --outDir dist && bun scripts/stage-kernel-lock-assets.ts",
-    "build:js": "rm -rf dist && bun build ./src/index.ts ./src/storage.ts ./src/sdk/index.ts ./src/admin-contract.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --declaration --outDir dist && bun scripts/stage-kernel-lock-assets.ts",
+    "build": "bun run clean && bun build --external @hasna/contracts/kernel-lock ./src/cli/index.tsx --outdir ./bin --target bun && bun build --external @modelcontextprotocol/sdk ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build --external @hasna/contracts/kernel-lock ./src/server/index.ts --outfile ./bin/server.js --target bun && bun build --external @hasna/contracts/kernel-lock ./src/server/worker.ts --outfile ./bin/worker.js --target bun && bun build --external @hasna/contracts/kernel-lock ./src/server/migrate.ts --outfile ./bin/migrate.js --target bun && bun build --external @hasna/contracts/kernel-lock ./src/server/maintenance.ts --outfile ./bin/maintenance.js --target bun && bun build ./src/index.ts ./src/storage.ts ./src/sdk/index.ts ./src/admin-contract.ts ./src/runtime-prerequisites.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --declaration --outDir dist && bun scripts/stage-kernel-lock-assets.ts",
+    "build:js": "rm -rf dist && bun build ./src/index.ts ./src/storage.ts ./src/sdk/index.ts ./src/admin-contract.ts ./src/runtime-prerequisites.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --declaration --outDir dist && bun scripts/stage-kernel-lock-assets.ts",
     "test": "bun test --timeout 30000",
     "dev": "bun run ./src/cli/index.tsx",
     "dev:watch": "bun --watch run ./src/cli/index.tsx",
@@ -129,5 +130,9 @@
   "homepage": "https://github.com/hasna/skills/tree/main/apps/skills",
   "bugs": {
     "url": "https://github.com/hasna/skills/issues"
+  },
+  "skillsRuntimePrerequisites": {
+    "version": 1,
+    "entry": "dist/runtime-prerequisites.js"
   }
 }
