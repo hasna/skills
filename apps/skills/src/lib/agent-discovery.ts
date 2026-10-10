@@ -22,7 +22,7 @@ import { sumiConfigDirectory, sumiConfigPath } from "./agent-sumi.js";
 import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
 import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
 import { verifyRetainedReviewArtifact, type RetainedReviewArtifact, type ReviewedArtifact } from "./retained-review-artifacts.js";
-import { captureCodexSemanticCacheWitness, assertCodexSemanticCacheWitnessUnchanged, type CodexSemanticCacheWitness, type CodexSemanticCacheAppOnlyParent } from "./codex-semantic-cache-witness.js";
+import { captureCodexSemanticCacheWitness, assertCodexSemanticCacheWitnessUnchanged, type CodexSemanticCacheWitness, type CodexSemanticCacheAppOnlyParent, type CodexSemanticCacheReviewedHookParent } from "./codex-semantic-cache-witness.js";
 export { captureDiscoveryDirectories, type DiscoveryDirectory } from "./agent-discovery-directories.js";
 
 export interface DiscoverySource { reviewArtifact?: RetainedReviewArtifact; path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes" | "claude-plugin-manifest-v1" | "claude-plugin-registry" | "claude-marketplace-registry" | "claude-settings-v1" | "claude-settings-v2" | "claude-settings-v3" | "claude-settings-v4" | "claude-marketplace-registry-v2" | "codex-settings-v1" | "codex-settings-v2" | "codex-settings-v3" | "codex-settings-v4" | "codex-settings-v5" | "sumi-settings-v1" | "claude-marketplace-entry-v1"; managedPlugins?: ManagedPluginRegistrationWitness[]; format?: "json" | "toml" | "yaml"; fields?: string[]; marketplace?: string; plugin?: string }
@@ -32,6 +32,7 @@ export interface CodexSemanticCacheDiscovery {
   hookRootAlias: { alias: string; target: string } | null;
   witness: CodexSemanticCacheWitness;
   appOnlyParents: CodexSemanticCacheAppOnlyParent[];
+  reviewedHookParents?: CodexSemanticCacheReviewedHookParent[];
   previousPolicySha256: string;
   supersededSources: DiscoverySource[];
   supersededDirectories: DiscoveryDirectory[];
@@ -392,15 +393,17 @@ function absentRetiredClaudeRoots(binding:AgentDiscoveryBinding):string[] {
 }
 /** Only native capability locations covered by the complete typed cache census
  * qualify. Historical sources remain stored; arbitrary missing files do not. */
-export function codexSemanticCacheSourceRole(source: DiscoverySource, cacheRoot: string, parents: readonly string[]): boolean {
+export function codexSemanticCacheSourceRole(source: DiscoverySource, cacheRoot: string, parents: readonly string[], hookParents: readonly string[] = []): boolean {
   if (!isAbsolute(source.path) || resolve(source.path) !== source.path || /[\x00-\x1f\x7f]/.test(source.path)
     || source.format !== undefined || source.fields !== undefined || source.managedPlugins !== undefined || source.reviewArtifact !== undefined
     || source.hashMode !== undefined && source.hashMode !== "bytes") return false;
   const parts = relative(cacheRoot, source.path).split(sep);
   if (parts.length < 3 || !parents.includes(join(cacheRoot, parts[0]!, parts[1]!))) return false;
   const tail = parts.slice(3).join("/");
+  const parent = join(cacheRoot, parts[0]!, parts[1]!);
   return parts.length === 5 && tail === ".codex-plugin/plugin.json" && source.sha256 !== null
     || parts.length === 4 && [".app.json", ".mcp.json"].includes(tail) && source.sha256 !== null
+    || parts.length === 5 && tail === "hooks/hooks.json" && hookParents.includes(parent) && source.sha256 !== null
     || source.sha256 === null && (parts.length === 4 && tail === "SKILL.md" || parts.length === 5 && tail === "hooks/hooks.json");
 }
 export function codexSemanticCacheDirectoryRole(path: string, cacheRoot: string): boolean {
@@ -439,8 +442,26 @@ function verifyCodexSemanticCacheDiscovery(binding: AgentDiscoveryBinding, revie
     || !Array.isArray(proof.appOnlyParents) || !Array.isArray(proof.supersededSources) || !Array.isArray(proof.supersededDirectories)) throw new Error("Invalid Codex semantic cache discovery proof");
   const cacheRoot = proof.witness.cacheRoot;
   if (controls.some(control => dirname(dirname(control.pluginParent)) !== cacheRoot)) throw new Error("Codex semantic cache names another enrolled cache");
-  const parents = [...new Set([...controls.map(control => control.pluginParent), ...proof.appOnlyParents.map(parent => parent.pluginParent)])];
-  const sources = binding.sources.filter(source => codexSemanticCacheSourceRole(source, cacheRoot, parents));
+  const reviewedHookParents = proof.reviewedHookParents ?? [];
+  if (!Array.isArray(reviewedHookParents) || reviewedHookParents.length > 4096
+    || reviewedHookParents.some(parent => !parent || !((parent.installation === "remote-receipt"
+      && Object.keys(parent).sort().join(",") === "installation,namespace,pluginId,pluginParent,remotePluginId,role"
+      && typeof parent.remotePluginId === "string") || (parent.installation === "local-marketplace"
+      && Object.keys(parent).sort().join(",") === "installation,marketplaceSha256,marketplaceSourcePath,namespace,pluginId,pluginParent,role"
+      && typeof parent.marketplaceSourcePath === "string" && /^[a-f0-9]{64}$/.test(parent.marketplaceSha256 ?? "")))
+      || parent.role !== "reviewed-hook" || typeof parent.pluginId !== "string" || typeof parent.namespace !== "string"
+      || typeof parent.pluginParent !== "string")
+    || new Set(reviewedHookParents.map(parent => parent.pluginParent)).size !== reviewedHookParents.length
+    || !isDeepStrictEqual((proof.witness.hookParents ?? []).map(({ manifestSha256: _manifest, hooksSha256: _hooks, receiptSha256: _receipt, ...parent }) => parent), reviewedHookParents)) {
+    throw new Error("Invalid reviewed native-hook cache role");
+  }
+  for (const parent of reviewedHookParents) if (parent.installation === "local-marketplace"
+    && !binding.sources.some(source => source.path === parent.marketplaceSourcePath && source.sha256 === parent.marketplaceSha256
+      && source.sha256 !== null && source.format === undefined && source.fields === undefined && source.reviewArtifact === undefined
+      && (source.hashMode === undefined || source.hashMode === "bytes"))) throw new Error("Local marketplace hook parent lost its enrolled source witness");
+  const parents = [...new Set([...controls.map(control => control.pluginParent), ...proof.appOnlyParents.map(parent => parent.pluginParent), ...reviewedHookParents.map(parent => parent.pluginParent)])];
+  const hookParentPaths = reviewedHookParents.map(parent => parent.pluginParent);
+  const sources = binding.sources.filter(source => codexSemanticCacheSourceRole(source, cacheRoot, parents, hookParentPaths));
   const directories = (binding.directories ?? []).filter(directory => codexSemanticCacheDirectoryRole(directory.path, cacheRoot));
   if (!directories.length || !isDeepStrictEqual(sources, proof.supersededSources) || !isDeepStrictEqual(directories, proof.supersededDirectories)) throw new Error("Codex semantic cache provenance changed");
   const configPath = proof.configPath;
@@ -449,7 +470,7 @@ function verifyCodexSemanticCacheDiscovery(binding: AgentDiscoveryBinding, revie
   if (!configSource || projected(configSource) !== configSource.sha256) throw new Error("Codex semantic cache requires unchanged reviewed configuration");
   assertCodexSemanticCacheHookSafety(cacheRoot, parents, configPath, proof.hookRootAlias);
   const rules = parseConfig(read(configPath)!, configPath, true).skills?.config ?? [];
-  const current = captureCodexSemanticCacheWitness({ cacheRoot, controls, appOnlyParents: proof.appOnlyParents, rules });
+  const current = captureCodexSemanticCacheWitness({ cacheRoot, controls, appOnlyParents: proof.appOnlyParents, reviewedHookParents, rules });
   assertCodexSemanticCacheWitnessUnchanged(proof.witness, current);
   return proof;
 }

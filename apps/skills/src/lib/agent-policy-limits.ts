@@ -85,11 +85,13 @@ export function assertAgentPolicyCollections(policy: Record<string, any>): void 
       }
     }
     if (value.codexSemanticCache !== undefined) {
-      const proof = record(value.codexSemanticCache, 8), witness = record(proof.witness, 6);
+      const proof = record(value.codexSemanticCache, 9), witness = record(proof.witness, 7);
       requireBound(agent === "codex" && value.agent === "codex" && value.method === "reviewed"
-        && Object.keys(proof).length === 8 && proof.schema === "hasna.codex-semantic-cache-discovery.v1"
+        && [8, 9].includes(Object.keys(proof).length) && Object.keys(proof).every(key => ["schema", "configPath", "hookRootAlias", "witness", "appOnlyParents", "previousPolicySha256", "supersededSources", "supersededDirectories", "reviewedHookParents"].includes(key))
+        && proof.schema === "hasna.codex-semantic-cache-discovery.v1"
         && typeof proof.previousPolicySha256 === "string" && /^[a-f0-9]{64}$/.test(proof.previousPolicySha256)
-        && Object.keys(witness).length === 6 && witness.schema === "hasna.codex-semantic-cache-witness.v1"
+        && [6, 7].includes(Object.keys(witness).length) && Object.keys(witness).every(key => ["schema", "cacheRoot", "controls", "appOnlyParents", "skills", "sha256", "hookParents"].includes(key))
+        && witness.schema === "hasna.codex-semantic-cache-witness.v1"
         && typeof witness.sha256 === "string" && /^[a-f0-9]{64}$/.test(witness.sha256));
       text(proof.configPath); requireBound(isAbsolute(proof.configPath) && resolve(proof.configPath) === proof.configPath && basename(proof.configPath) === "config.toml");
       text(witness.cacheRoot); requireBound(isAbsolute(witness.cacheRoot) && resolve(witness.cacheRoot) === witness.cacheRoot);
@@ -103,10 +105,39 @@ export function assertAgentPolicyCollections(policy: Record<string, any>): void 
         for (const key of ["pluginId", "namespace", "pluginParent", "remotePluginId"]) text(parent[key]);
         requireBound(isAbsolute(parent.pluginParent) && resolve(parent.pluginParent) === parent.pluginParent);
       }
+      if (proof.reviewedHookParents !== undefined) for (const parent of array(proof.reviewedHookParents, 4096)) {
+        requireBound(object(parent) && parent.role === "reviewed-hook"
+          && (parent.installation === "remote-receipt" && Object.keys(parent).length === 6
+            || parent.installation === "local-marketplace" && Object.keys(parent).length === 7));
+        requireBound(parent.installation === "remote-receipt"
+          ? Object.keys(parent).sort().join(",") === "installation,namespace,pluginId,pluginParent,remotePluginId,role"
+          : Object.keys(parent).sort().join(",") === "installation,marketplaceSha256,marketplaceSourcePath,namespace,pluginId,pluginParent,role");
+        for (const key of ["pluginId", "namespace", "pluginParent", "installation"]) text(parent[key]);
+        if (parent.installation === "remote-receipt") text(parent.remotePluginId);
+        else { text(parent.marketplaceSourcePath); requireBound(typeof parent.marketplaceSha256 === "string" && /^[a-f0-9]{64}$/.test(parent.marketplaceSha256)
+          && isAbsolute(parent.marketplaceSourcePath) && resolve(parent.marketplaceSourcePath) === parent.marketplaceSourcePath && basename(parent.marketplaceSourcePath) === "marketplace.json"); }
+        requireBound(isAbsolute(parent.pluginParent) && resolve(parent.pluginParent) === parent.pluginParent);
+      }
       for (const row of [...array(witness.controls, 4096), ...array(witness.appOnlyParents, 4096)]) {
         requireBound(object(row));
         for (const key of ["pluginId", "namespace", "pluginParent"]) text(row[key]);
         for (const key of ["manifestSha256", "appSha256", "mcpSha256", "receiptSha256"]) if (row[key] !== undefined) requireBound(typeof row[key] === "string" && /^[a-f0-9]{64}$/.test(row[key]));
+      }
+      if (witness.hookParents !== undefined) for (const row of array(witness.hookParents, 4096)) {
+        requireBound(object(row) && row.role === "reviewed-hook"
+          && (row.installation === "remote-receipt" && Object.keys(row).length === 9
+            || row.installation === "local-marketplace" && Object.keys(row).length === 9));
+        requireBound(row.installation === "remote-receipt"
+          ? Object.keys(row).sort().join(",") === "hooksSha256,installation,manifestSha256,namespace,pluginId,pluginParent,receiptSha256,remotePluginId,role"
+          : Object.keys(row).sort().join(",") === "hooksSha256,installation,manifestSha256,marketplaceSha256,marketplaceSourcePath,namespace,pluginId,pluginParent,role");
+        for (const key of ["pluginId", "namespace", "pluginParent", "installation"]) text(row[key]);
+        if (row.installation === "remote-receipt") text(row.remotePluginId);
+        else { text(row.marketplaceSourcePath); requireBound(typeof row.marketplaceSha256 === "string" && /^[a-f0-9]{64}$/.test(row.marketplaceSha256)
+          && isAbsolute(row.marketplaceSourcePath) && resolve(row.marketplaceSourcePath) === row.marketplaceSourcePath && basename(row.marketplaceSourcePath) === "marketplace.json"); }
+        requireBound(isAbsolute(row.pluginParent) && resolve(row.pluginParent) === row.pluginParent);
+        for (const key of ["manifestSha256", "hooksSha256"]) requireBound(typeof row[key] === "string" && /^[a-f0-9]{64}$/.test(row[key]));
+        if (row.installation === "remote-receipt") requireBound(typeof row.receiptSha256 === "string" && /^[a-f0-9]{64}$/.test(row.receiptSha256));
+        else requireBound(row.receiptSha256 === undefined);
       }
       for (const skill of array(witness.skills, 4096)) {
         requireBound(object(skill)); for (const key of ["name", "pluginId", "namespace", "pluginParent"]) text(skill[key]);
