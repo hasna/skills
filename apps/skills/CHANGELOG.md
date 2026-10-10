@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.66
+
+- Preserve reviewed Codex hook-capability plugin parents in semantic discovery witnesses while binding their exact marketplace, plugin, hook, manifest, and enabled-settings identities. Refuse additional app/MCP capabilities and ambiguous source witnesses.
+
 ## 0.10.65
 
 - Restore already loaded Skills context in Sumi continuation and compaction events without treating native checkpoints or message history as a new owner prompt. Preserve the full native model context and existing hook input limits; ordinary owner prompts still match and load newly selected skills.
