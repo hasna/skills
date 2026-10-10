@@ -10,7 +10,7 @@
  */
 import { createHash } from "node:crypto";
 import { constants, closeSync, fstatSync, lstatSync, openSync, readSync, readdirSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { hashNativeJsonControls } from "./claude-settings-witness.js";
 import {
   classifyCodexPluginCacheDocument,
@@ -58,11 +58,33 @@ export interface CodexSemanticCacheAppOnlyParentWitness extends CodexSemanticCac
   mcpSha256?: string;
 }
 
+/** Explicitly reviewed native MCP-hook parent. Its cache materializations are
+ * admitted only when the complete manifest and hooks declaration were already
+ * enrolled as full-byte native discovery sources. */
+export interface CodexSemanticCacheReviewedHookParent {
+  role: "reviewed-hook";
+  pluginId: string;
+  namespace: string;
+  pluginParent: string;
+  installation: "remote-receipt" | "local-marketplace";
+  remotePluginId?: string;
+  marketplaceSourcePath?: string;
+  marketplaceSha256?: string;
+}
+
+export interface CodexSemanticCacheReviewedHookParentWitness extends CodexSemanticCacheReviewedHookParent {
+  manifestSha256: string;
+  hooksSha256: string;
+  receiptSha256?: string;
+}
+
 export interface CodexSemanticCacheWitness {
   schema: typeof CODEX_SEMANTIC_CACHE_WITNESS_SCHEMA;
   cacheRoot: string;
   controls: CodexSemanticCacheControl[];
   appOnlyParents: CodexSemanticCacheAppOnlyParentWitness[];
+  /** Optional only for compatibility with already persisted v1 witnesses. */
+  hookParents?: CodexSemanticCacheReviewedHookParentWitness[];
   skills: CodexSemanticCacheSkill[];
   sha256: string;
 }
@@ -72,6 +94,8 @@ export interface CaptureCodexSemanticCacheWitnessOptions {
   controls: CodexPluginSkillControl[];
   /** Explicit package-reviewed parents; absence never infers this role. */
   appOnlyParents?: CodexSemanticCacheAppOnlyParent[];
+  /** Explicit roles only; cache presence never creates a hook role. */
+  reviewedHookParents?: CodexSemanticCacheReviewedHookParent[];
   rules: unknown;
   /** Package-owned, bounded read used by the existing semantic control review. */
   read?: (path: string) => string;
@@ -82,6 +106,25 @@ const digest = (value: unknown): value is string => typeof value === "string" &&
 const refuse = (): never => { throw new Error("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED: review Codex plugin cache identity and controls"); };
 const MAX_DOCUMENT_BYTES = 1024 * 1024;
 const MAX_RECEIPT_BYTES = 16 * 1024;
+
+export function codexLocalMarketplaceMapsPlugin(text: string, marketplace: string, plugin: string): boolean {
+  try {
+    hashNativeJsonControls(text);
+    const value: unknown = JSON.parse(text);
+    if (!plainObject(value) || !exactKeys(value, ["interface", "name", "plugins"])
+      || value.name !== marketplace || !(typeof value.interface === "string" || Number.isSafeInteger(value.interface))
+      || !Array.isArray(value.plugins) || value.plugins.length < 1 || value.plugins.length > 4096) return false;
+    const rows = value.plugins.filter((row: unknown) => plainObject(row) && row.name === plugin);
+    if (rows.length !== 1) return false;
+    const row = rows[0] as Record<string, unknown>;
+    if (!exactKeys(row, ["name", "source"]) || !plainObject(row.source)
+      || !exactKeys(row.source, ["source", "path"]) || row.source.source !== "local"
+      || typeof row.source.path !== "string" || !row.source.path.startsWith("./") || row.source.path.includes("\\")) return false;
+    const parts = row.source.path.split("/");
+    return parts[0] === "." && parts.length > 1 && parts.slice(1).every(part => /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(part))
+      && parts.at(-1) === plugin;
+  } catch { return false; }
+}
 
 function defaultRead(path: string): string {
   const before = lstatSync(path, { throwIfNoEntry: false, bigint: true });
@@ -139,7 +182,7 @@ function validPluginParent(cacheRoot: string, pluginParent: string, namespace: s
 }
 
 function assertWitnessShape(value: unknown): asserts value is CodexSemanticCacheWitness {
-  if (!plainObject(value) || !exactKeys(value, ["schema", "cacheRoot", "controls", "appOnlyParents", "skills", "sha256"])
+  if (!plainObject(value) || !exactKeys(value, ["schema", "cacheRoot", "controls", "appOnlyParents", "skills", "sha256"], ["hookParents"])
     || value.schema !== CODEX_SEMANTIC_CACHE_WITNESS_SCHEMA || typeof value.cacheRoot !== "string"
     || !isAbsolute(value.cacheRoot) || resolve(value.cacheRoot) !== value.cacheRoot || !digest(value.sha256)
     || !Array.isArray(value.controls) || value.controls.length === 0 || value.controls.length > 4096
@@ -177,6 +220,27 @@ function assertWitnessShape(value: unknown): asserts value is CodexSemanticCache
       || appOnlyParentPaths.has(row.pluginParent) || controlParents.has(row.pluginParent)) refuse();
     appOnlyParentPaths.add(row.pluginParent as string);
   }
+  const hookParentPaths = new Set<string>();
+  const hookParents = witness.hookParents === undefined ? [] : witness.hookParents as unknown[];
+  if (!Array.isArray(hookParents) || hookParents.length > 4096) refuse();
+  for (const candidate of hookParents) {
+    if (!plainObject(candidate)) refuse();
+    const row = candidate as Record<string, unknown>;
+    const remote = row.installation === "remote-receipt";
+    const local = row.installation === "local-marketplace";
+    if (!exactKeys(row, ["role", "pluginId", "namespace", "pluginParent", "installation", "manifestSha256", "hooksSha256"],
+      remote ? ["remotePluginId", "receiptSha256"] : local ? ["marketplaceSourcePath", "marketplaceSha256"] : [])
+      || row.role !== "reviewed-hook" || !identifier(row.namespace) || typeof row.pluginId !== "string"
+      || !/^[A-Za-z0-9_-]{1,64}@[A-Za-z0-9_-]{1,64}$/.test(row.pluginId)
+      || typeof row.pluginParent !== "string" || !validPluginParent(String(witness.cacheRoot), row.pluginParent, row.namespace, row.pluginId)
+      || (remote && (typeof row.remotePluginId !== "string" || !/^[A-Za-z0-9_~-]{1,1024}$/.test(row.remotePluginId) || !digest(row.receiptSha256)))
+      || (local && (typeof row.marketplaceSourcePath !== "string" || !isAbsolute(row.marketplaceSourcePath)
+        || resolve(row.marketplaceSourcePath) !== row.marketplaceSourcePath || basename(row.marketplaceSourcePath) !== "marketplace.json"
+        || !digest(row.marketplaceSha256)))
+      || (!remote && !local) || !digest(row.manifestSha256) || !digest(row.hooksSha256)
+      || hookParentPaths.has(row.pluginParent) || controlParents.has(row.pluginParent) || appOnlyParentPaths.has(row.pluginParent)) refuse();
+    hookParentPaths.add(row.pluginParent as string);
+  }
   const skillNames = new Set<string>();
   const qualifiedNames = new Set<string>();
   for (const candidate of witness.skills as unknown[]) {
@@ -195,7 +259,7 @@ function assertWitnessShape(value: unknown): asserts value is CodexSemanticCache
     qualifiedNames.add(qualified); skillNames.add(row.name as string);
   }
   const projection = { schema: witness.schema, cacheRoot: witness.cacheRoot, controls: witness.controls,
-    appOnlyParents: witness.appOnlyParents, skills: witness.skills };
+    appOnlyParents: witness.appOnlyParents, ...(witness.hookParents === undefined ? {} : { hookParents: witness.hookParents }), skills: witness.skills };
   if (hash(projection) !== witness.sha256) refuse();
 }
 
@@ -375,10 +439,116 @@ function appOnlyParentProjection(cacheRoot: string, parents: CodexSemanticCacheA
   return rows.sort((a, b) => a.pluginId.localeCompare(b.pluginId) || a.pluginParent.localeCompare(b.pluginParent));
 }
 
-function assertParents(cacheRoot: string, controls: CodexSemanticCacheControl[], appOnlyParents: CodexSemanticCacheAppOnlyParentWitness[], files: string[], members: string[]): void {
+const codexHookEvents = new Set(["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
+  "Stop", "SubagentStart", "SubagentStop", "PreCompact", "Notification", "PermissionRequest", "SessionEnd",
+  "ConfigChange", "WorktreeCreate", "WorktreeRemove", "TeammateIdle", "TaskComplete"]);
+
+function assertJsonValue(value: unknown, depth = 0, budget = { members: 0 }): void {
+  if (depth > 32 || ++budget.members > 4096) refuse();
+  if (value === null || typeof value === "string" || typeof value === "boolean") return;
+  if (typeof value === "number" && Number.isFinite(value)) return;
+  if (Array.isArray(value)) { for (const item of value) assertJsonValue(item, depth + 1, budget); return; }
+  if (!plainObject(value)) refuse();
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (!key || /[\x00-\x1f\x7f]/.test(key)) refuse();
+    assertJsonValue(item, depth + 1, budget);
+  }
+}
+
+function reviewedHookControls(root: string, read: (path: string) => string): { namespace: string; manifestSha256: string; hooksSha256: string } {
+  const manifestPath = join(root, ".codex-plugin/plugin.json"), hooksPath = join(root, "hooks/hooks.json");
+  let manifest: unknown, manifestSha256: string, hooks: unknown, hooksSha256: string;
+  try {
+    const manifestText = read(manifestPath);
+    manifestSha256 = hashNativeJsonControls(manifestText, "version");
+    manifest = JSON.parse(manifestText);
+    const hooksText = read(hooksPath);
+    hashNativeJsonControls(hooksText);
+    hooksSha256 = createHash("sha256").update(hooksText).digest("hex");
+    hooks = JSON.parse(hooksText);
+  } catch { return refuse(); }
+  if (!plainObject(manifest) || !exactKeys(manifest, ["name", "version", "hooks"], ["description"])
+    || !identifier(manifest.name) || typeof manifest.version !== "string" || manifest.version !== basename(root)
+    || manifest.hooks !== "./hooks/hooks.json"
+    || (manifest.description !== undefined && (typeof manifest.description !== "string" || !manifest.description.trim() || manifest.description.length > 1024))) refuse();
+  const manifestRecord = manifest as Record<string, unknown>;
+  if (!plainObject(hooks) || !exactKeys(hooks, ["hooks"]) || !plainObject(hooks.hooks)) refuse();
+  const hookTable = (hooks as Record<string, unknown>).hooks as Record<string, unknown>;
+  const events = Object.entries(hookTable);
+  if (!events.length || events.length > 32) refuse();
+  for (const [event, groups] of events) {
+    if (!codexHookEvents.has(event) || !Array.isArray(groups) || !groups.length || groups.length > 32) refuse();
+    for (const group of groups as unknown[]) {
+      if (!plainObject(group) || !exactKeys(group, ["hooks"]) || !Array.isArray(group.hooks) || !group.hooks.length || group.hooks.length > 32) refuse();
+      const handlers = (group as Record<string, unknown>).hooks as unknown[];
+      for (const handler of handlers) {
+        if (!plainObject(handler) || !exactKeys(handler, ["type", "server", "tool", "input"], ["timeout"])
+          || handler.type !== "mcp_tool" || !identifier(handler.server) || !identifier(handler.tool)
+          || !plainObject(handler.input)
+          || (handler.timeout !== undefined && (!Number.isSafeInteger(handler.timeout) || Number(handler.timeout) < 1 || Number(handler.timeout) > 300))) refuse();
+        assertJsonValue((handler as Record<string, unknown>).input);
+      }
+    }
+  }
+  return { namespace: manifestRecord.name as string, manifestSha256, hooksSha256 };
+}
+
+function reviewedHookParentProjection(cacheRoot: string, parents: CodexSemanticCacheReviewedHookParent[], read: (path: string) => string): CodexSemanticCacheReviewedHookParentWitness[] {
+  if (!Array.isArray(parents) || parents.length > 4096) refuse();
+  const seen = new Set<string>(), rows: CodexSemanticCacheReviewedHookParentWitness[] = [];
+  for (const parent of parents) {
+    const remote = parent?.installation === "remote-receipt", local = parent?.installation === "local-marketplace";
+    if (!parent || !exactKeys(parent as unknown as Record<string, unknown>, ["installation", "namespace", "pluginId", "pluginParent", "role"],
+      remote ? ["remotePluginId"] : local ? ["marketplaceSourcePath", "marketplaceSha256"] : [])
+      || parent.role !== "reviewed-hook" || !identifier(parent.namespace)
+      || !/^[A-Za-z0-9_-]{1,64}@[A-Za-z0-9_-]{1,64}$/.test(parent.pluginId) || typeof parent.pluginParent !== "string"
+      || (remote && (typeof parent.remotePluginId !== "string" || !/^[A-Za-z0-9_~-]{1,1024}$/.test(parent.remotePluginId)))
+      || (local && (typeof parent.marketplaceSourcePath !== "string" || !isAbsolute(parent.marketplaceSourcePath)
+        || resolve(parent.marketplaceSourcePath) !== parent.marketplaceSourcePath || basename(parent.marketplaceSourcePath) !== "marketplace.json"
+        || !digest(parent.marketplaceSha256))) || (!remote && !local)) refuse();
+    const parts = relative(cacheRoot, parent.pluginParent).split(sep);
+    if (!isAbsolute(parent.pluginParent) || resolve(parent.pluginParent) !== parent.pluginParent || parts.length !== 2
+      || parts.some(part => !identifier(part)) || parts[1] !== parent.namespace || parent.pluginId !== `${parent.namespace}@${parts[0]}`
+      || seen.has(parent.pluginParent)) refuse();
+    seen.add(parent.pluginParent);
+    const parentStat = lstatSync(parent.pluginParent, { throwIfNoEntry: false });
+    if (!parentStat?.isDirectory() || parentStat.isSymbolicLink() || realpathSync(parent.pluginParent) !== parent.pluginParent) refuse();
+    const receiptPath = join(parent.pluginParent, ".codex-remote-plugin-install.json"), receiptStat = lstatSync(receiptPath, { throwIfNoEntry: false });
+    let receiptText: string | undefined;
+    if (remote) {
+      if (!receiptStat?.isFile() || receiptStat.isSymbolicLink() || receiptStat.size > MAX_RECEIPT_BYTES) refuse();
+      try {
+        receiptText = read(receiptPath); hashNativeJsonControls(receiptText);
+        const receipt = JSON.parse(receiptText);
+        if (!plainObject(receipt) || !exactKeys(receipt, ["schema_version", "remote_plugin_id"])
+          || receipt.schema_version !== 1 || receipt.remote_plugin_id !== parent.remotePluginId) refuse();
+      } catch { refuse(); }
+    } else {
+      const marketplaceSourcePath = parent.marketplaceSourcePath ?? refuse();
+      if (receiptStat !== undefined || !parent.marketplaceSha256) refuse();
+      let marketplaceText: string;
+      try { marketplaceText = read(marketplaceSourcePath); } catch { return refuse(); }
+      if (createHash("sha256").update(marketplaceText).digest("hex") !== parent.marketplaceSha256
+        || !codexLocalMarketplaceMapsPlugin(marketplaceText, parts[0]!, parent.namespace)) refuse();
+    }
+    const materializations = readdirSync(parent.pluginParent).filter(name => name !== ".codex-remote-plugin-install.json").map(version => {
+      if (!/^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/.test(version)) refuse();
+      const root = join(parent.pluginParent, version), stat = lstatSync(root, { throwIfNoEntry: false });
+      if (!stat?.isDirectory() || stat.isSymbolicLink() || realpathSync(root) !== root) refuse();
+      const controls = reviewedHookControls(root, read);
+      if (controls.namespace !== parent.namespace) refuse();
+      return { manifestSha256: controls.manifestSha256, hooksSha256: controls.hooksSha256 };
+    });
+    if (!materializations.length || materializations.some(item => canonical(item) !== canonical(materializations[0]))) refuse();
+    rows.push({ ...parent, ...(receiptText === undefined ? {} : { receiptSha256: createHash("sha256").update(receiptText).digest("hex") }), ...materializations[0]! });
+  }
+  return rows.sort((a, b) => a.pluginId.localeCompare(b.pluginId) || a.pluginParent.localeCompare(b.pluginParent));
+}
+
+function assertParents(cacheRoot: string, controls: CodexSemanticCacheControl[], appOnlyParents: CodexSemanticCacheAppOnlyParentWitness[], hookParents: CodexSemanticCacheReviewedHookParentWitness[], files: string[], members: string[]): void {
   const expected = new Set<string>();
   const expectedMarkets = new Set<string>();
-  for (const control of [...controls, ...appOnlyParents]) {
+  for (const control of [...controls, ...appOnlyParents, ...hookParents]) {
     const rel = relative(cacheRoot, control.pluginParent), parts = rel.split(sep);
     if (resolve(control.pluginParent) !== control.pluginParent || parts.length !== 2 || parts.some(part => !identifier(part))
       || control.pluginId !== `${control.namespace}@${parts[0]}` || parts[1] !== control.namespace) refuse();
@@ -419,7 +589,11 @@ function assertParents(cacheRoot: string, controls: CodexSemanticCacheControl[],
     if (parts.includes(".codex-plugin") && (parts.length < 4 || parts[3] !== ".codex-plugin"
       || (parts.length === 4 ? base !== ".codex-plugin" : parts.length !== 5 || base !== "plugin.json"))) refuse();
     if ([".app.json", ".mcp.json"].includes(base) && (parts.length !== 4 || dirname(member) !== root)) refuse();
-    if (parts.includes("hooks")) refuse();
+    if ([".app.json", ".mcp.json"].includes(base)
+      && hookParents.some(reviewed => reviewed.pluginParent === parent)) refuse();
+    if (parts.includes("hooks") && (![4, 5].includes(parts.length) || parts[3] !== "hooks"
+      || (parts.length === 4 ? base !== "hooks" : base !== "hooks.json")
+      || !hookParents.some(reviewed => reviewed.pluginParent === join(cacheRoot, parts[0]!, parts[1]!)))) refuse();
   }
 }
 
@@ -519,11 +693,13 @@ export function captureCodexSemanticCacheWitness(options: CaptureCodexSemanticCa
     const initialTree = treeSnapshot(options.cacheRoot);
     const controls = controlProjection(options.controls, read);
     const appOnlyParents = appOnlyParentProjection(options.cacheRoot, options.appOnlyParents ?? [], read);
+    const hookParents = reviewedHookParentProjection(options.cacheRoot, options.reviewedHookParents ?? [], read);
     const skillParents = new Set(controls.map(control => control.pluginParent));
-    if (appOnlyParents.some(parent => skillParents.has(parent.pluginParent))) refuse();
+    if (appOnlyParents.some(parent => skillParents.has(parent.pluginParent))
+      || hookParents.some(parent => skillParents.has(parent.pluginParent) || appOnlyParents.some(app => app.pluginParent === parent.pluginParent))) refuse();
     if (!reviewedCodexPluginCapabilitiesUnchanged(options.cacheRoot, options.controls, read, options.rules)) refuse();
     const files = initialTree.files;
-    assertParents(options.cacheRoot, controls, appOnlyParents, files, initialTree.state.members);
+    assertParents(options.cacheRoot, controls, appOnlyParents, hookParents, files, initialTree.state.members);
     const expectedNamesByRoot = assertSkillMaterializations(options.cacheRoot, options.controls, files, read);
 
     const docs = files.filter(path => path.endsWith(`${sep}SKILL.md`));
@@ -532,6 +708,7 @@ export function captureCodexSemanticCacheWitness(options: CaptureCodexSemanticCa
     for (const document of docs) {
       const rel = relative(options.cacheRoot, document).split(sep);
       if (appOnlyParents.some(parent => parent.pluginParent === join(options.cacheRoot, rel[0]!, rel[1]!))) refuse();
+      if (hookParents.some(parent => parent.pluginParent === join(options.cacheRoot, rel[0]!, rel[1]!))) refuse();
       const documentStat = lstatSync(document, { throwIfNoEntry: false });
       if (!documentStat?.isFile() || documentStat.isSymbolicLink() || documentStat.size > MAX_DOCUMENT_BYTES) refuse();
       const identity = classifyCodexPluginCacheDocument(document, options.cacheRoot, read);
@@ -577,7 +754,7 @@ export function captureCodexSemanticCacheWitness(options: CaptureCodexSemanticCa
     tracked.verify();
     const finalTree = treeSnapshot(options.cacheRoot);
     assertSameTree(initialTree.state, finalTree.state, tracked.paths());
-    const completeProjection = { schema: CODEX_SEMANTIC_CACHE_WITNESS_SCHEMA, cacheRoot: options.cacheRoot, controls, appOnlyParents, skills: uniqueSkills } as const;
+    const completeProjection = { schema: CODEX_SEMANTIC_CACHE_WITNESS_SCHEMA, cacheRoot: options.cacheRoot, controls, appOnlyParents, hookParents, skills: uniqueSkills } as const;
     return { ...completeProjection, sha256: hash(completeProjection) };
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED")) throw error;
@@ -594,9 +771,10 @@ export function assertCodexSemanticCacheWitnessUnchanged(
   assertWitnessShape(previous);
   assertWitnessShape(current);
   const priorProjection = { schema: previous.schema, cacheRoot: previous.cacheRoot, controls: previous.controls,
-    appOnlyParents: previous.appOnlyParents, skills: previous.skills };
+    appOnlyParents: previous.appOnlyParents, ...(previous.hookParents === undefined ? {} : { hookParents: previous.hookParents }), skills: previous.skills };
   const currentProjection = { schema: current.schema, cacheRoot: current.cacheRoot, controls: current.controls,
-    appOnlyParents: current.appOnlyParents, skills: current.skills };
+    appOnlyParents: current.appOnlyParents, ...(current.hookParents === undefined ? {} : { hookParents: current.hookParents }), skills: current.skills };
+  const comparable = (projection: typeof priorProjection | typeof currentProjection) => ({ ...projection, hookParents: projection.hookParents ?? [] });
   if (hash(priorProjection) !== previous.sha256 || hash(currentProjection) !== current.sha256
-    || canonical(priorProjection) !== canonical(currentProjection)) refuse();
+    || canonical(comparable(priorProjection)) !== canonical(comparable(currentProjection))) refuse();
 }

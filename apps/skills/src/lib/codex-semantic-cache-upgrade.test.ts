@@ -3,7 +3,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, sy
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
-import { captureDiscoveryDirectories, verifyAgentDiscovery, resolveAgentDiscovery, rebindAgentDiscovery, codexSemanticCacheSourceRole, codexSemanticCacheDirectoryRole, type AgentDiscoveryBinding } from "./agent-discovery.js";
+import { captureDiscoveryDirectories, verifyAgentDiscovery, resolveAgentDiscovery, rebindAgentDiscovery, codexSemanticCacheSourceRole, codexSemanticCacheDirectoryRole, type AgentDiscoveryBinding, type DiscoverySource } from "./agent-discovery.js";
 import { planCodexSemanticCacheWitnessUpgrade, applyAgentIntegration } from "./agent-integration.js";
 import { hashCodexSettingsReplacementV5 } from "./codex-settings-witness.js";
 import { hashNativeJsonControls } from "./claude-settings-witness.js";
@@ -48,8 +48,104 @@ function fixture(reviewedVersion = "codex-cli 0.162.0") {
   const policy = serializeManagedSkillPolicy({ version: 1, loading: "cli", profileId: "fleet", bridge: { discovery: { codex: binding }, codexPluginSkills: controls, codexPluginSkillReview: { version: reviewedVersion, catalogSha256: "a".repeat(64) } } });
   put(policyPath, policy);
   const options = { agent: "codex" as const, home, dataDir, appOnlyParents: [appParent], expectedPolicySha256: sha(policy), expectedSettingsSha256: sha(settings) };
-  return { home, dataDir, cache, parent, appParent, appRoot, skill, binding, policy, policyPath, config, settings, external, controls, addSkill, addApp, options };
+  return { home, dataDir, cache, parent, appParent, appRoot, skill, binding, policy, policyPath, config, settings, external, controls, addSkill, addApp, source, options };
 }
+
+function addReviewedHookParent(f: ReturnType<typeof fixture>) {
+  const parent = join(f.cache, "partner/relay"), root = join(parent, "1.0.0");
+  put(join(parent, ".codex-remote-plugin-install.json"), '{"schema_version":1,"remote_plugin_id":"remote-relay"}');
+  const manifest = '{"name":"relay","version":"1.0.0","hooks":"./hooks/hooks.json","description":"Synthetic reviewed hook"}';
+  const hooks = '{"hooks":{"SessionStart":[{"hooks":[{"type":"mcp_tool","server":"bridge_server","tool":"activate","input":{},"timeout":5}]}]}}';
+  put(join(root, ".codex-plugin/plugin.json"), manifest); put(join(root, "hooks/hooks.json"), hooks);
+  f.binding.sources.push(f.source(join(parent, ".codex-remote-plugin-install.json")), f.source(join(root, ".codex-plugin/plugin.json")), f.source(join(root, "hooks/hooks.json")));
+  const policy = serializeManagedSkillPolicy({ ...parseManagedSkillPolicy(f.policy), bridge: { ...parseManagedSkillPolicy(f.policy).bridge, discovery: { ...parseManagedSkillPolicy(f.policy).bridge.discovery, codex: f.binding } } });
+  put(f.policyPath, policy);
+  return { parent, root, policy, options: { ...f.options, expectedPolicySha256: sha(policy), reviewedHookParents: [parent] } };
+}
+
+function addLocalMarketplaceHookParent(f: ReturnType<typeof fixture>) {
+  const parent = join(f.cache, "fixture-market/relay"), root = join(parent, "0.1.0");
+  const manifest = '{"name":"relay","version":"0.1.0","hooks":"./hooks/hooks.json"}';
+  const hooks = '{"hooks":{"SessionStart":[{"hooks":[{"type":"mcp_tool","server":"fixture_bridge","tool":"activate_hook","input":{},"timeout":5}]}],"UserPromptSubmit":[{"hooks":[{"type":"mcp_tool","server":"fixture_bridge","tool":"activate_hook","input":{},"timeout":5}]}]}}';
+  const marketplacePath = join(f.home, "bridge-package/plugin/.agents/plugins/marketplace.json");
+  const marketplace = '{"interface":1,"name":"fixture-market","plugins":[{"name":"relay","source":{"source":"local","path":"./plugins/relay"}}]}';
+  put(join(root, ".codex-plugin/plugin.json"), manifest); put(join(root, "hooks/hooks.json"), hooks); put(marketplacePath, marketplace);
+  const settings = `${f.settings}\n[plugins."relay@fixture-market"]\nenabled = true\n`;
+  put(f.config, settings);
+  const binding = f.binding;
+  binding.sources.push(f.source(marketplacePath), f.source(join(root, ".codex-plugin/plugin.json")), f.source(join(root, "hooks/hooks.json")));
+  binding.sources = binding.sources.map(source => source.path === f.config
+    ? { ...source, sha256: hashCodexSettingsReplacementV5(settings) } : source);
+  const policy = serializeManagedSkillPolicy({ ...parseManagedSkillPolicy(f.policy), bridge: {
+    ...parseManagedSkillPolicy(f.policy).bridge,
+    discovery: { ...parseManagedSkillPolicy(f.policy).bridge.discovery, codex: binding },
+  } });
+  put(f.policyPath, policy);
+  return { parent, root, marketplacePath, policy, settings, options: { ...f.options, expectedPolicySha256: sha(policy), expectedSettingsSha256: sha(settings), reviewedHookParents: [parent] } };
+}
+
+test("semantic migration explicitly composes a fully enrolled native mcp_tool parent", () => {
+  const f = fixture(), hook = addReviewedHookParent(f);
+  expect(() => verifyAgentDiscovery(f.binding)).toThrow("directory membership changed");
+  const plan = planCodexSemanticCacheWitnessUpgrade(hook.options), next = plan.discoveryAfter![0]!;
+  expect(next.codexSemanticCache!.reviewedHookParents).toEqual([{ role: "reviewed-hook", pluginId: "relay@partner", namespace: "relay", pluginParent: hook.parent, installation: "remote-receipt", remotePluginId: "remote-relay" }]);
+  expect(next.codexSemanticCache!.witness.hookParents).toHaveLength(1);
+  expect(next.codexSemanticCache!.supersededSources.filter(source => source.path.startsWith(hook.parent))).toHaveLength(2);
+  expect(() => verifyAgentDiscovery(next)).not.toThrow();
+  put(join(hook.root, "hooks/hooks.json"), '{"hooks":{"SessionStart":[{"hooks":[{"type":"mcp_tool","server":"bridge_server","tool":"activate","input":{},"timeout":6}]}]}}');
+  expect(() => verifyAgentDiscovery(next)).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+});
+
+test("local marketplace hook parent without a remote receipt uses its enrolled source and enabled config", () => {
+  const f = fixture(), local = addLocalMarketplaceHookParent(f);
+  expect(lstatSync(join(local.parent, ".codex-remote-plugin-install.json"), { throwIfNoEntry: false })).toBeUndefined();
+  const plan = planCodexSemanticCacheWitnessUpgrade(local.options), next = plan.discoveryAfter![0]!;
+  expect(next.codexSemanticCache!.reviewedHookParents).toEqual([{
+    role: "reviewed-hook", pluginId: "relay@fixture-market", namespace: "relay", pluginParent: local.parent,
+    installation: "local-marketplace", marketplaceSourcePath: local.marketplacePath, marketplaceSha256: sha(readFileSync(local.marketplacePath, "utf8")),
+  }]);
+  expect(next.codexSemanticCache!.witness.hookParents?.[0]?.receiptSha256).toBeUndefined();
+  expect(() => verifyAgentDiscovery(next)).not.toThrow();
+  const disabledSettings = local.settings.replace("enabled = true", "enabled = false"); put(f.config, disabledSettings);
+  expect(() => planCodexSemanticCacheWitnessUpgrade({ ...local.options, expectedSettingsSha256: sha(disabledSettings) })).toThrow("not enabled");
+});
+
+test("hook-role bootstrap requires exact reviewed identities and refuses unknown or nested hook capability", () => {
+  const f = fixture(), hook = addReviewedHookParent(f);
+  expect(() => planCodexSemanticCacheWitnessUpgrade({ ...hook.options, reviewedHookParents: [] })).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+  expect(() => planCodexSemanticCacheWitnessUpgrade({ ...hook.options, reviewedHookParents: [join(f.cache, "wrong/relay")] })).toThrow("Local marketplace hook parent lacks one exact enrolled marketplace source");
+  const incomplete = parseManagedSkillPolicy(hook.policy);
+  incomplete.bridge.discovery.codex!.sources = incomplete.bridge.discovery.codex!.sources.filter((source: DiscoverySource) => source.path !== join(hook.root, "hooks/hooks.json"));
+  const incompleteText = serializeManagedSkillPolicy(incomplete); put(f.policyPath, incompleteText);
+  expect(() => planCodexSemanticCacheWitnessUpgrade({ ...hook.options, expectedPolicySha256: sha(incompleteText) })).toThrow("prior full identity source");
+  put(f.policyPath, hook.policy);
+  put(join(hook.root, "other/hooks/hooks.json"), '{"hooks":{}}');
+  expect(() => planCodexSemanticCacheWitnessUpgrade(hook.options)).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+  rmSync(join(hook.root, "other"), { recursive: true });
+  put(join(hook.root, "hooks/hooks.json"), '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"unsafe"}]}]}}');
+  expect(() => planCodexSemanticCacheWitnessUpgrade(hook.options)).toThrow("Reviewed cache identity source changed");
+  put(join(hook.root, "hooks/hooks.json"), '{"hooks":{"SessionStart":[{"hooks":[{"type":"mcp_tool","server":"bridge_server","tool":"activate","input":{},"command":"unexpected"}]}]}}');
+  expect(() => planCodexSemanticCacheWitnessUpgrade(hook.options)).toThrow("Reviewed cache identity source changed");
+  put(join(hook.root, "hooks/hooks.json"), '{"hooks":{"SessionStart":[{"hooks":[{"type":"mcp_tool","server":"bridge_server","tool":"activate","input":{},"timeout":5}]}]}}');
+  put(join(hook.root, ".codex-plugin/plugin.json"), '{"name":"wrong","version":"1.0.0","hooks":"./hooks/hooks.json"}');
+  expect(() => planCodexSemanticCacheWitnessUpgrade(hook.options)).toThrow("Reviewed cache identity source changed");
+});
+
+test("hook-role bootstrap refuses duplicate conflicting full-byte witnesses", () => {
+  for (const duplicate of ["conflicting-full", "null-absence"] as const) {
+    const f = fixture(), hook = addReviewedHookParent(f), hooksPath = join(hook.root, "hooks/hooks.json");
+    f.binding.sources.push(duplicate === "conflicting-full"
+      ? { ...f.source(hooksPath), sha256: "0".repeat(64) }
+      : { path: hooksPath, sha256: null });
+    const policy = serializeManagedSkillPolicy({ ...parseManagedSkillPolicy(hook.policy), bridge: {
+      ...parseManagedSkillPolicy(hook.policy).bridge,
+      discovery: { ...parseManagedSkillPolicy(hook.policy).bridge.discovery, codex: f.binding },
+    } });
+    put(f.policyPath, policy);
+    expect(() => planCodexSemanticCacheWitnessUpgrade({ ...hook.options, expectedPolicySha256: sha(policy) }))
+      .toThrow("Reviewed hook identity source is ambiguous");
+  }
+});
 
 test("explicit semantic migration retains legacy proof and accepts inert cache changes with equivalent versions", () => {
   const f = fixture();
@@ -224,11 +320,11 @@ test("reviewed whole Codex root aliases preserve the exact canonical config sour
 });
 
 test("the built cache CLI previews the exact roles and refuses unguarded apply or foreign agents", async () => {
-  const f = fixture(), binary = join(f.home, "built/skills.js"); mkdirSync(join(f.home, "built"));
+  const f = fixture(), hook = addReviewedHookParent(f), binary = join(f.home, "built/skills.js"); mkdirSync(join(f.home, "built"));
   await buildCliFixture(join(import.meta.dir, "../cli/index.tsx"), binary);
   const run = async (extra: string[], agent = "codex") => {
     const child = Bun.spawn([process.execPath, "--no-env-file", binary, "hook", "rebind-cache", "--agent", agent,
-      "--app-only-parent", f.appParent, "--expected-policy-sha256", sha(f.policy), "--expected-settings-sha256", sha(f.settings), "--json", ...extra], {
+      "--app-only-parent", f.appParent, "--reviewed-hook-parent", hook.parent, "--expected-policy-sha256", sha(hook.policy), "--expected-settings-sha256", sha(f.settings), "--json", ...extra], {
       cwd: f.home, env: { HOME: f.home, USERPROFILE: f.home, HASNA_HOME: join(f.home, ".hasna"), HASNA_SKILLS_DIR: f.dataDir, PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, TMPDIR: tmpdir(), NO_COLOR: "1" },
       stdin: "ignore", stdout: "pipe", stderr: "pipe",
     });
@@ -237,11 +333,11 @@ test("the built cache CLI previews the exact roles and refuses unguarded apply o
   };
   const preview = await run([]);
   expect(preview.exitCode).toBe(0); expect(preview.stderr).toBe("");
-  expect(JSON.parse(preview.stdout).witness.sha256).toBe(planCodexSemanticCacheWitnessUpgrade(f.options).discoveryAfter![0]!.codexSemanticCache!.witness.sha256);
+  expect(JSON.parse(preview.stdout).witness.sha256).toBe(planCodexSemanticCacheWitnessUpgrade(hook.options).discoveryAfter![0]!.codexSemanticCache!.witness.sha256);
   const unguarded = await run(["--apply"]);
   expect(unguarded.exitCode).toBe(1); expect(unguarded.stderr).toContain("requires --expected-cache-witness-sha256");
   const foreign = await run([], "claude");
   expect(foreign.exitCode).toBe(1); expect(foreign.stderr).toContain("accepts codex only");
-  expect(readFileSync(f.policyPath, "utf8")).toBe(f.policy);
+  expect(readFileSync(f.policyPath, "utf8")).toBe(hook.policy);
   expect(readFileSync(f.config, "utf8")).toBe(f.settings);
 }, 30000);

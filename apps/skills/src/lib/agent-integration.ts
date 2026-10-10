@@ -4,14 +4,14 @@ import { reviewCodexPluginControls, reviewedCodexPluginSourceRoots, isReviewedCo
 import { verifyCodexNativeSkillPolicy, parseCodexNativeHookEnvelope, recordCodexNativePolicyAcceptance, type CodexNativeHookEnvelope, type ProcessInspector, type NativePolicyHelperRunner } from "./codex-native-skill-policy.js";
 import { projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
 import { upgradeCodexSettingsWitness, upgradeCodexSettingsWitnessV3, upgradeCodexSettingsWitnessV4, upgradeCodexSettingsWitnessV5, readCodexSettingsPreimage, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
-import { upgradeClaudeSettingsWitness, upgradeClaudeSettingsWitnessV4 } from "./claude-settings-witness.js";
+import { upgradeClaudeSettingsWitness, upgradeClaudeSettingsWitnessV4, hashNativeJsonControls } from "./claude-settings-witness.js";
 import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
-import { captureCodexSemanticCacheWitness, type CodexSemanticCacheAppOnlyParent } from "./codex-semantic-cache-witness.js";
+import { captureCodexSemanticCacheWitness, codexLocalMarketplaceMapsPlugin, type CodexSemanticCacheAppOnlyParent, type CodexSemanticCacheReviewedHookParent } from "./codex-semantic-cache-witness.js";
 import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { existsSync, lstatSync, statSync, mkdirSync, readFileSync, readdirSync, opendirSync, readlinkSync, realpathSync, renameSync, rmdirSync, writeFileSync, unlinkSync, chmodSync, openSync, closeSync, fsyncSync, fstatSync, readSync, constants, linkSync, type BigIntStats, type Dirent } from "node:fs";
-import { dirname, join, resolve, relative, isAbsolute, sep } from "node:path";
+import { basename, dirname, join, resolve, relative, isAbsolute, sep } from "node:path";
 import { homedir } from "node:os";
 import { getDataDir, getDataDirReadOnly } from "./config.js";
 import { requiresCliSkillLoading, readManagedSkillPolicySnapshot, serializeManagedSkillPolicy, parseManagedSkillPolicy } from "./managed-policy.js";
@@ -1173,6 +1173,8 @@ export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "co
 export interface CodexSemanticCacheUpgrade {
   agent: "codex";
   appOnlyParents: string[];
+  /** Explicit cache parents whose complete native mcp_tool hook contract was already enrolled. */
+  reviewedHookParents?: string[];
   expectedPolicySha256: string;
   expectedSettingsSha256: string;
   expectedCacheWitnessSha256?: string;
@@ -1185,7 +1187,8 @@ export function planCodexSemanticCacheWitnessUpgrade(options: CodexSemanticCache
   if (options.agent !== "codex" || !/^[a-f0-9]{64}$/.test(options.expectedPolicySha256)
     || !/^[a-f0-9]{64}$/.test(options.expectedSettingsSha256)
     || options.expectedCacheWitnessSha256 !== undefined && !/^[a-f0-9]{64}$/.test(options.expectedCacheWitnessSha256)
-    || !Array.isArray(options.appOnlyParents) || options.appOnlyParents.length > 4096 || new Set(options.appOnlyParents).size !== options.appOnlyParents.length) throw new Error("Invalid Codex semantic cache upgrade request");
+    || !Array.isArray(options.appOnlyParents) || options.appOnlyParents.length > 4096 || new Set(options.appOnlyParents).size !== options.appOnlyParents.length
+    || options.reviewedHookParents !== undefined && (!Array.isArray(options.reviewedHookParents) || options.reviewedHookParents.length > 4096 || new Set(options.reviewedHookParents).size !== options.reviewedHookParents.length)) throw new Error("Invalid Codex semantic cache upgrade request");
   const home = resolve(options.home ?? homedir()), dataDir = options.dataDir ?? getDataDirReadOnly();
   const snapshot = readManagedSkillPolicySnapshot(dataDir);
   if (!snapshot || sha(snapshot.text) !== options.expectedPolicySha256) throw new Error("Managed policy preimage changed");
@@ -1202,11 +1205,18 @@ export function planCodexSemanticCacheWitnessUpgrade(options: CodexSemanticCache
   if (settings === null || sha(settings) !== options.expectedSettingsSha256) throw new Error("Native settings preimage changed");
   const boundedRead = (path: string): string => new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(readNativeBytes(path, 1024 * 1024));
   const unchangedFullSource = (path: string): string => {
-    const source = binding.sources.find(source => source.path === path && source.sha256 !== null && source.format === undefined && source.fields === undefined && source.reviewArtifact === undefined && (source.hashMode === undefined || source.hashMode === "bytes"));
-    if (!source) throw new Error("Cache upgrade lacks prior full identity source");
+    const sources = binding.sources.filter(source => source.path === path && source.sha256 !== null && source.format === undefined && source.fields === undefined && source.reviewArtifact === undefined && (source.hashMode === undefined || source.hashMode === "bytes"));
+    if (sources.length !== 1) throw new Error("Cache upgrade requires one unambiguous prior full identity source");
+    const source = sources[0]!;
     const text = boundedRead(path);
     if (sha(text) !== source.sha256) throw new Error("Reviewed cache identity source changed");
     return text;
+  };
+  const unchangedReviewedHookSource = (path: string): string => {
+    const sources = binding.sources.filter(source => source.path === path);
+    if (!sources.length) throw new Error("Cache upgrade lacks prior full identity source");
+    if (sources.length !== 1) throw new Error("Reviewed hook identity source is ambiguous");
+    return unchangedFullSource(path);
   };
   const appOnlyParents: CodexSemanticCacheAppOnlyParent[] = options.appOnlyParents.map(parent => {
     const parts = relative(cacheRoot, parent).split(sep);
@@ -1219,11 +1229,50 @@ export function planCodexSemanticCacheWitnessUpgrade(options: CodexSemanticCache
     for (const source of manifests) unchangedFullSource(source.path);
     return { role: "app-only" as const, pluginId: `${parts[1]}@${parts[0]}`, namespace: parts[1]!, pluginParent: parent, remotePluginId: receipt.remote_plugin_id };
   }).sort((a, b) => a.pluginParent.localeCompare(b.pluginParent));
-  const parents = [...new Set([...controls.map(control => control.pluginParent), ...appOnlyParents.map(parent => parent.pluginParent)])];
+  const reviewedHookParents: CodexSemanticCacheReviewedHookParent[] = (options.reviewedHookParents ?? []).map(parent => {
+    const parts = relative(cacheRoot, parent).split(sep);
+    if (!isAbsolute(parent) || resolve(parent) !== parent || parts.length !== 2 || parts.some(part => !/^[A-Za-z0-9_-]{1,64}$/.test(part))
+      || controls.some(control => control.pluginParent === parent) || appOnlyParents.some(role => role.pluginParent === parent)) throw new Error("Unsupported reviewed native-hook parent role");
+    const receiptPath = join(parent, ".codex-remote-plugin-install.json"), receiptStat = lstatSync(receiptPath, { throwIfNoEntry: false });
+    let identity: CodexSemanticCacheReviewedHookParent;
+    if (receiptStat) {
+      if (!receiptStat.isFile() || receiptStat.isSymbolicLink() || receiptStat.size > 16 * 1024) throw new Error("Invalid reviewed native-hook install receipt");
+      const receiptText = unchangedReviewedHookSource(receiptPath);
+      let receipt: any;
+      try { hashNativeJsonControls(receiptText); receipt = JSON.parse(receiptText); } catch { throw new Error("Invalid reviewed native-hook install receipt"); }
+      if (!receipt || Array.isArray(receipt) || Object.keys(receipt).length !== 2 || receipt.schema_version !== 1
+        || typeof receipt.remote_plugin_id !== "string" || !/^[A-Za-z0-9_~-]{1,1024}$/.test(receipt.remote_plugin_id)) throw new Error("Invalid reviewed native-hook install receipt");
+      identity = { role: "reviewed-hook", pluginId: `${parts[1]}@${parts[0]}`, namespace: parts[1]!, pluginParent: parent, installation: "remote-receipt", remotePluginId: receipt.remote_plugin_id };
+    } else {
+      const pluginId = `${parts[1]}@${parts[0]}`;
+      const marketplaceSources = binding.sources.filter(source => basename(source.path) === "marketplace.json" && source.sha256 !== null
+        && source.format === undefined && source.fields === undefined && source.reviewArtifact === undefined && (source.hashMode === undefined || source.hashMode === "bytes"));
+      const matches = marketplaceSources.flatMap(source => {
+        const text = unchangedFullSource(source.path);
+        return codexLocalMarketplaceMapsPlugin(text, parts[0]!, parts[1]!) ? [{ source, text }] : [];
+      });
+      if (matches.length !== 1) throw new Error("Local marketplace hook parent lacks one exact enrolled marketplace source");
+      const { source } = matches[0]!;
+      const config = Bun.TOML.parse(settings) as any;
+      if (config.plugins?.[pluginId]?.enabled !== true) throw new Error("Local marketplace hook parent is not enabled in the unchanged Codex settings");
+      identity = { role: "reviewed-hook", pluginId, namespace: parts[1]!, pluginParent: parent, installation: "local-marketplace", marketplaceSourcePath: source.path, marketplaceSha256: source.sha256! };
+    }
+    const versions = readdirSync(parent).filter(name => name !== ".codex-remote-plugin-install.json");
+    if (!versions.length || versions.length > 4096) throw new Error("Reviewed native-hook parent has no bounded materializations");
+    for (const version of versions) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/.test(version)) throw new Error("Invalid reviewed native-hook version identity");
+      const root = join(parent, version), stat = lstatSync(root, { throwIfNoEntry: false });
+      if (!stat?.isDirectory() || stat.isSymbolicLink() || realpathSync(root) !== root) throw new Error("Invalid reviewed native-hook materialization");
+      unchangedReviewedHookSource(join(root, ".codex-plugin/plugin.json"));
+      unchangedReviewedHookSource(join(root, "hooks/hooks.json"));
+    }
+    return identity;
+  }).sort((a, b) => a.pluginParent.localeCompare(b.pluginParent));
+  const parents = [...new Set([...controls.map(control => control.pluginParent), ...appOnlyParents.map(parent => parent.pluginParent), ...reviewedHookParents.map(parent => parent.pluginParent)])];
   const reviewedAlias = aliases.find((alias: AgentRootAlias) => alias.agent === "codex");
   const hookRootAlias = reviewedAlias ? { alias: reviewedAlias.alias, target: reviewedAlias.target } : null;
   assertCodexSemanticCacheHookSafety(cacheRoot, parents, configPath, hookRootAlias);
-  const supersededSources = binding.sources.filter(source => codexSemanticCacheSourceRole(source, cacheRoot, parents));
+  const supersededSources = binding.sources.filter(source => codexSemanticCacheSourceRole(source, cacheRoot, parents, reviewedHookParents.map(parent => parent.pluginParent)));
   // Existing app/MCP full-byte witnesses must explain the bootstrap too. The
   // stale skill manifest is covered by its already enrolled semantic controls.
   for (const source of supersededSources) if ([".app.json", ".mcp.json"].includes(source.path.split(sep).at(-1)!)) unchangedFullSource(source.path);
@@ -1231,10 +1280,10 @@ export function planCodexSemanticCacheWitnessUpgrade(options: CodexSemanticCache
   if (!supersededDirectories.some(directory => directory.path === cacheRoot)
     || (binding.directories ?? []).some(directory => cacheRoot.startsWith(directory.path + sep))) throw new Error("Cache upgrade requires exact cache directory coverage without an unproved ancestor projection");
   const rules = (Bun.TOML.parse(settings) as any).skills?.config ?? [];
-  const witness = captureCodexSemanticCacheWitness({ cacheRoot, controls, appOnlyParents, rules, read: boundedRead });
+  const witness = captureCodexSemanticCacheWitness({ cacheRoot, controls, appOnlyParents, reviewedHookParents, rules, read: boundedRead });
   if (options.expectedCacheWitnessSha256 !== undefined && witness.sha256 !== options.expectedCacheWitnessSha256) throw new Error("Reviewed semantic cache preimage changed");
   const replacement: AgentDiscoveryBinding = { ...binding, codexDisabledPluginSkills: controls, codexSemanticCache: {
-    schema: "hasna.codex-semantic-cache-discovery.v1", configPath, hookRootAlias, witness, appOnlyParents, previousPolicySha256: options.expectedPolicySha256, supersededSources, supersededDirectories,
+    schema: "hasna.codex-semantic-cache-discovery.v1", configPath, hookRootAlias, witness, appOnlyParents, reviewedHookParents, previousPolicySha256: options.expectedPolicySha256, supersededSources, supersededDirectories,
   } };
   verifyAgentDiscovery(replacement, undefined, aliases);
   const after = serializeManagedSkillPolicy({ ...policy, bridge: { ...policy.bridge, discovery: { ...policy.bridge.discovery, codex: replacement } } });
@@ -1242,7 +1291,7 @@ export function planCodexSemanticCacheWitnessUpgrade(options: CodexSemanticCache
     observedPolicy: { path: join(dataDir, "agent-policy.json"), before: snapshot.text }, observedSettings: { path: configPath, before: settings },
     discoveryBefore: [replacement], discoveryAfter: [replacement], rootAliases: aliases, managedAgentChecks: { home, agents: ["codex"] },
     ...(policy.bridge.discoveryExecutables ? { discoveryExecutables: policy.bridge.discoveryExecutables } : {}),
-    cacheWitnessUpgrade: { ...options, home, dataDir, appOnlyParents: appOnlyParents.map(parent => parent.pluginParent) } };
+    cacheWitnessUpgrade: { ...options, home, dataDir, appOnlyParents: appOnlyParents.map(parent => parent.pluginParent), reviewedHookParents: reviewedHookParents.map(parent => parent.pluginParent) } };
 }
 
 export interface ReviewArtifactMigration {

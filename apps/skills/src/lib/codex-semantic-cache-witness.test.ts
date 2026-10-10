@@ -1,10 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { hashNativeJsonControls } from "./claude-settings-witness.js";
-import { captureCodexSemanticCacheWitness, assertCodexSemanticCacheWitnessUnchanged, type CodexSemanticCacheAppOnlyParent } from "./codex-semantic-cache-witness.js";
+import { captureCodexSemanticCacheWitness, assertCodexSemanticCacheWitnessUnchanged, type CodexSemanticCacheAppOnlyParent, type CodexSemanticCacheReviewedHookParent, type CodexSemanticCacheWitness } from "./codex-semantic-cache-witness.js";
 import type { CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
 
 const roots: string[] = [];
@@ -30,10 +30,109 @@ function fixture() {
   }];
   const rules: Array<{ name?: string; path?: string; enabled: boolean }> = [{ name: "vendor:deploy", enabled: false }];
   const read = (path: string) => readFileSync(path, "utf8");
-  const capture = (nextControls = controls, nextRules: unknown = rules, appOnlyParents: CodexSemanticCacheAppOnlyParent[] = [], nextRead = read) =>
-    captureCodexSemanticCacheWitness({ cacheRoot, controls: nextControls, appOnlyParents, rules: nextRules, read: nextRead });
+  const capture = (nextControls = controls, nextRules: unknown = rules, appOnlyParents: CodexSemanticCacheAppOnlyParent[] = [], nextRead = read, reviewedHookParents: CodexSemanticCacheReviewedHookParent[] = []) =>
+    captureCodexSemanticCacheWitness({ cacheRoot, controls: nextControls, appOnlyParents, reviewedHookParents, rules: nextRules, read: nextRead });
   return { home, cacheRoot, pluginParent, old, addVersion, controls, rules, capture, read };
 }
+
+function hookFixture() {
+  const f = fixture(), pluginParent = join(f.cacheRoot, "partner/relay");
+  put(join(pluginParent, ".codex-remote-plugin-install.json"), JSON.stringify({ schema_version: 1, remote_plugin_id: "remote-relay" }));
+  const add = (version: string) => {
+    const root = join(pluginParent, version);
+    put(join(root, ".codex-plugin/plugin.json"), JSON.stringify({ name: "relay", version, hooks: "./hooks/hooks.json", description: "Synthetic reviewed native hook" }));
+    put(join(root, "hooks/hooks.json"), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "mcp_tool", server: "local_bridge", tool: "activate", input: {}, timeout: 5 }] }] } }));
+    return root;
+  };
+  const root = add("1.0.0"), role: CodexSemanticCacheReviewedHookParent = { role: "reviewed-hook", pluginId: "relay@partner", namespace: "relay", pluginParent, installation: "remote-receipt", remotePluginId: "remote-relay" };
+  return { ...f, hookParent: pluginParent, hookRoot: root, role, add };
+}
+
+function localHookFixture() {
+  const f = fixture(), pluginParent = join(f.cacheRoot, "fixture-market/relay"), root = join(pluginParent, "0.1.0");
+  const marketplaceSourcePath = join(f.home, "bridge-package/plugin/.agents/plugins/marketplace.json");
+  const marketplace = '{"interface":1,"name":"fixture-market","plugins":[{"name":"relay","source":{"source":"local","path":"./plugins/relay"}}]}';
+  put(marketplaceSourcePath, marketplace);
+  put(join(root, ".codex-plugin/plugin.json"), '{"name":"relay","version":"0.1.0","hooks":"./hooks/hooks.json"}');
+  put(join(root, "hooks/hooks.json"), '{"hooks":{"SessionStart":[{"hooks":[{"type":"mcp_tool","server":"fixture_bridge","tool":"activate_hook","input":{},"timeout":5}]}]}}');
+  const role: CodexSemanticCacheReviewedHookParent = { role: "reviewed-hook", pluginId: "relay@fixture-market", namespace: "relay", pluginParent,
+    installation: "local-marketplace", marketplaceSourcePath, marketplaceSha256: createHash("sha256").update(marketplace).digest("hex") };
+  return { ...f, hookParent: pluginParent, hookRoot: root, marketplaceSourcePath, marketplace, role };
+}
+
+test("explicit reviewed native hook parent composes with skills and allows equivalent version materializations", () => {
+  const f = hookFixture(), before = f.capture(f.controls, f.rules, [], f.read, [f.role]);
+  expect(before.hookParents).toHaveLength(1);
+  expect(before.skills.map(skill => skill.name)).toEqual(["vendor:deploy"]);
+  put(join(f.hookRoot, "assets/readme.txt"), "inert");
+  const next = f.add("2.0.0");
+  expect(() => f.capture(f.controls, f.rules, [], f.read, [f.role])).not.toThrow();
+  expect(f.capture(f.controls, f.rules, [], f.read, [f.role]).hookParents).toEqual(before.hookParents);
+  put(join(next, "hooks/hooks.json"), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "mcp_tool", server: "local_bridge", tool: "activate", input: {}, timeout: 6 }] }] } }));
+  expect(() => f.capture(f.controls, f.rules, [], f.read, [f.role])).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+  expect(() => f.capture()).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+});
+
+test("local marketplace hook parent needs no remote receipt but binds marketplace mapping and full bytes", () => {
+  const f = localHookFixture(), before = f.capture(f.controls, f.rules, [], f.read, [f.role]);
+  const members: string[] = [f.hookParent];
+  const walk = (directory: string) => { for (const name of readdirSync(directory)) { const path = join(directory, name); members.push(path); if (lstatSync(path).isDirectory()) walk(path); } };
+  walk(f.hookParent);
+  expect(members).toHaveLength(6);
+  expect(members.filter(path => lstatSync(path).isDirectory())).toHaveLength(4);
+  expect(members.filter(path => lstatSync(path).isFile())).toHaveLength(2);
+  expect(lstatSync(join(f.hookParent, ".codex-remote-plugin-install.json"), { throwIfNoEntry: false })).toBeUndefined();
+  expect(before.hookParents).toHaveLength(1);
+  expect(before.hookParents?.[0]?.installation).toBe("local-marketplace");
+  expect(before.hookParents?.[0]?.receiptSha256).toBeUndefined();
+  expect(() => f.capture(f.controls, f.rules, [], f.read, [{ ...f.role, pluginId: "relay@another-market" }])).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+  expect(() => f.capture(f.controls, f.rules, [], f.read, [{ ...f.role, marketplaceSha256: "0".repeat(64) }])).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+  const changedMarketplace = f.marketplace.replace('"name":"fixture-market"', '"name":"changed-market"');
+  put(f.marketplaceSourcePath, changedMarketplace);
+  expect(() => f.capture(f.controls, f.rules, [], f.read, [{ ...f.role, marketplaceSha256: createHash("sha256").update(changedMarketplace).digest("hex") }]))
+    .toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+});
+
+test("reviewed hook parents reject unreviewed nesting, wrong identity, unknown types and fields", () => {
+  const f = hookFixture();
+  const nested = join(f.hookRoot, "extra/hooks/hooks.json");
+  put(nested, JSON.stringify({ hooks: {} }));
+  expect(() => f.capture(f.controls, f.rules, [], f.read, [f.role])).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+  rmSync(join(f.hookRoot, "extra"), { recursive: true });
+  put(join(f.hookRoot, ".codex-plugin/plugin.json"), JSON.stringify({ name: "different", version: "1.0.0", hooks: "./hooks/hooks.json" }));
+  expect(() => f.capture(f.controls, f.rules, [], f.read, [f.role])).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+  put(join(f.hookRoot, ".codex-plugin/plugin.json"), JSON.stringify({ name: "relay", version: "1.0.0", hooks: "./hooks/hooks.json" }));
+  put(join(f.hookRoot, "hooks/hooks.json"), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: "echo unsafe" }] }] } }));
+  expect(() => f.capture(f.controls, f.rules, [], f.read, [f.role])).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+  put(join(f.hookRoot, "hooks/hooks.json"), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "mcp_tool", server: "local_bridge", tool: "activate", input: {}, timeout: 5, command: "unexpected" }] }] } }));
+  expect(() => f.capture(f.controls, f.rules, [], f.read, [f.role])).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+  put(join(f.hookRoot, "hooks/hooks.json"), '{"hooks":{},"hooks":{}}');
+  expect(() => f.capture(f.controls, f.rules, [], f.read, [f.role])).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+  put(join(f.hookRoot, "hooks/hooks.json"), '{"hooks":{"SessionStart":[{"hooks":[{"type":"mcp_tool","server":"local_bridge","tool":"activate","input":{},"timeout":5}]}]}}');
+  put(join(f.hookRoot, ".codex-plugin/plugin.json"), '{"name":"relay","version":"1.0.0","hooks":"./hooks/hooks.json","hooks":"./hooks/hooks.json"}');
+  expect(() => f.capture(f.controls, f.rules, [], f.read, [f.role])).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+  put(join(f.hookRoot, ".codex-plugin/plugin.json"), '{"name":"relay","version":"1.0.0","hooks":"./hooks/hooks.json"}');
+  put(join(f.hookRoot, "hooks/hooks.json"), '{"hooks":{"UnknownEvent":[{"hooks":[{"type":"mcp_tool","server":"local_bridge","tool":"activate","input":{},"timeout":5}]}]}}');
+  expect(() => f.capture(f.controls, f.rules, [], f.read, [f.role])).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+  put(join(f.hookRoot, "hooks/hooks.json"), '{"hooks":{"SessionStart":[{"hooks":[{"type":"mcp_tool","server":"local_bridge","tool":"activate","input":{},"timeout":5}]}]}}');
+  put(join(f.hookRoot, "skills/hidden/SKILL.md"), "---\nname: hidden\ndescription: unreviewed\n---\nbody");
+  expect(() => f.capture(f.controls, f.rules, [], f.read, [f.role])).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+  rmSync(join(f.hookRoot, "skills"), { recursive: true });
+  const alias = join(f.cacheRoot, "partner/alias"); symlinkSync(f.hookParent, alias);
+  expect(() => f.capture(f.controls, f.rules, [], f.read, [{ ...f.role, pluginId: "relay@partner", pluginParent: alias }])).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+});
+
+test("reviewed hook parents refuse new root app and MCP capabilities", () => {
+  const remote = hookFixture();
+  remote.capture(remote.controls, remote.rules, [], remote.read, [remote.role]);
+  put(join(remote.hookRoot, ".mcp.json"), JSON.stringify({ mcpServers: { unreviewed: { command: "synthetic-command", args: [] } } }));
+  expect(() => remote.capture(remote.controls, remote.rules, [], remote.read, [remote.role])).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+
+  const local = localHookFixture();
+  local.capture(local.controls, local.rules, [], local.read, [local.role]);
+  put(join(local.hookRoot, ".app.json"), JSON.stringify({ name: "synthetic-new-app", url: "https://synthetic.example.com" }));
+  expect(() => local.capture(local.controls, local.rules, [], local.read, [local.role])).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+});
 
 function witnessHash(projection: unknown): string {
   const encode = (value: any): string => value === null || typeof value !== "object" ? JSON.stringify(value)
@@ -258,4 +357,12 @@ test("witness digest is recomputed and cannot be used to silently bless changed 
   const emptyProjection = { schema: before.schema, cacheRoot: before.cacheRoot, controls: [], appOnlyParents: [], skills: [] };
   const emptyWitness = { ...emptyProjection, sha256: witnessHash(emptyProjection) } as unknown as typeof before;
   expect(() => assertCodexSemanticCacheWitnessUnchanged(before, emptyWitness)).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+});
+
+test("older v1 witnesses without the optional hook-role field remain verifiable", () => {
+  const f = fixture(), current = f.capture(), previous = structuredClone(current) as CodexSemanticCacheWitness;
+  delete previous.hookParents;
+  const { sha256: _sha, ...projection } = previous;
+  previous.sha256 = witnessHash(projection);
+  expect(() => assertCodexSemanticCacheWitnessUnchanged(previous, current)).not.toThrow();
 });

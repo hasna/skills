@@ -233,6 +233,7 @@ export function registerAgentIntegration(parent: Command): void {
     .requiredOption("--expected-policy-sha256 <sha256>", "Exact current managed policy bytes")
     .requiredOption("--expected-settings-sha256 <sha256>", "Exact current Codex configuration bytes")
     .option("--app-only-parent <path>", "Explicit canonical remote cache parent with app capabilities and no Skill docs", (value: string, previous: string[]) => [...previous, value], [])
+    .option("--reviewed-hook-parent <path>", "Explicit canonical cache parent with already-reviewed native mcp_tool hooks", (value: string, previous: string[]) => [...previous, value], [])
     .option("--expected-cache-witness-sha256 <sha256>", "Exact semantic cache digest from the reviewed preview; required with --apply")
     .option("--apply", "Apply the reviewed policy-only cache witness migration", false)
     .option("--json", "Return metadata-only preview or receipt", false)
@@ -241,7 +242,7 @@ export function registerAgentIntegration(parent: Command): void {
       try {
         if (options.agent !== "codex") throw new Error("Cache witness rebind accepts codex only");
         if (options.apply && options.expectedCacheWitnessSha256 === undefined) throw new Error("Cache witness apply requires --expected-cache-witness-sha256 from an exact reviewed preview");
-        const plan = planCodexSemanticCacheWitnessUpgrade({ agent: "codex", appOnlyParents: options.appOnlyParent, expectedPolicySha256: options.expectedPolicySha256, expectedSettingsSha256: options.expectedSettingsSha256, ...(options.expectedCacheWitnessSha256 !== undefined ? { expectedCacheWitnessSha256: options.expectedCacheWitnessSha256 } : {}) });
+        const plan = planCodexSemanticCacheWitnessUpgrade({ agent: "codex", appOnlyParents: options.appOnlyParent, reviewedHookParents: options.reviewedHookParent, expectedPolicySha256: options.expectedPolicySha256, expectedSettingsSha256: options.expectedSettingsSha256, ...(options.expectedCacheWitnessSha256 !== undefined ? { expectedCacheWitnessSha256: options.expectedCacheWitnessSha256 } : {}) });
         const result = options.apply ? applyAgentIntegration(plan) : { changed: [], backups: [] };
         const proof = plan.discoveryAfter![0]!.codexSemanticCache!;
         await writeCliOutput(options.json ? JSON.stringify({ applied: options.apply, cacheWitnessUpgrade: plan.cacheWitnessUpgrade, witness: proof.witness, previousDirectories: proof.supersededDirectories, previousSources: proof.supersededSources, ...result }) : `Codex semantic cache witness ${options.apply ? "upgraded" : "planned"}; native configuration and cache were not changed.`);
