@@ -9,8 +9,8 @@ import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep 
 import { SEMVER_PATTERN } from "../../lib/skill-contract.js";
 import { validateReviewedRuntimeLock } from "./reviewed-runtime-lock.js";
 import {
-  type LauncherShape, type LauncherState, inspectLauncher, launcherIs, launcherTarget,
-  materializeLauncher, pinnedLauncherRuntime, pinnedLauncherState,
+  type LauncherShape, type LauncherState, type LauncherFormat, type LauncherProfile, inspectLauncher, launcherIs, launcherTarget,
+  materializeLauncher, pinnedLauncherRuntime, pinnedLauncherState, pinnedLauncherText, launcherProfileForBin,
 } from "./runtime-launcher.js";
 
 const PACKAGE_NAME = "@hasna/skills";
@@ -46,10 +46,14 @@ interface LauncherRecord {
   oldRuntime?: string;
   oldCwd?: string;
   oldSha256?: string;
+  oldFormat?: LauncherFormat;
+  oldProfile?: LauncherProfile;
   newShape?: LauncherShape;
   newRuntime?: string;
   newCwd?: string;
   newSha256?: string;
+  newFormat?: LauncherFormat;
+  newProfile?: LauncherProfile;
 }
 
 interface RuntimeLayout {
@@ -62,28 +66,30 @@ interface RuntimeLayout {
 }
 
 function oldLauncherState(item: LauncherRecord): LauncherState {
-  if (item.oldShape === "pinned") return { shape: "pinned", runtime: item.oldRuntime!, cwd: item.oldCwd!, target: item.oldTarget, sha256: item.oldSha256! };
+  if (item.oldShape === "pinned") return { shape: "pinned", runtime: item.oldRuntime!, cwd: item.oldCwd!, target: item.oldTarget, sha256: item.oldSha256!, format: item.oldFormat, profile: item.oldProfile };
   return { shape: "symlink", linkTarget: item.oldLinkTarget, target: item.oldTarget };
 }
 
 function newLauncherState(item: LauncherRecord): LauncherState {
-  if (item.newShape === "pinned") return { shape: "pinned", runtime: item.newRuntime!, cwd: item.newCwd!, target: item.newTarget, sha256: item.newSha256! };
+  if (item.newShape === "pinned") return { shape: "pinned", runtime: item.newRuntime!, cwd: item.newCwd!, target: item.newTarget, sha256: item.newSha256!, format: item.newFormat, profile: item.newProfile };
   return { shape: "symlink", linkTarget: item.newTarget, target: item.newTarget };
 }
 
 // Bind a record's shape fields exactly: absent fields mean a legacy symlink;
 // a pinned shape needs its runtime, trusted directory and digest, and its
-// digest must be the digest of the text those fields render.
-function assertLauncherRecordShapes(item: LauncherRecord): void {
+// digest must be the digest of the text those fields render. Absent pinned
+// format/profile fields mean exact historical V1; V2 requires a bin-bound role.
+function assertLauncherRecordShapes(item: LauncherRecord, expectedProfile: LauncherProfile): void {
   const hex = /^[a-f0-9]{64}$/;
   for (const side of ["old", "new"] as const) {
     const shape = item[`${side}Shape`], runtime = item[`${side}Runtime`], cwd = item[`${side}Cwd`], sha = item[`${side}Sha256`];
+    const format = item[`${side}Format`], profile = item[`${side}Profile`];
     if (shape === undefined) {
-      if (runtime !== undefined || cwd !== undefined || sha !== undefined) throw new Error("RECEIPT_LAUNCHER_SHAPE_INVALID");
+      if (runtime !== undefined || cwd !== undefined || sha !== undefined || format !== undefined || profile !== undefined) throw new Error("RECEIPT_LAUNCHER_SHAPE_INVALID");
       continue;
     }
     if (shape === "symlink") {
-      if (runtime !== undefined || cwd !== undefined || sha !== undefined) throw new Error("RECEIPT_LAUNCHER_SHAPE_INVALID");
+      if (runtime !== undefined || cwd !== undefined || sha !== undefined || format !== undefined || profile !== undefined) throw new Error("RECEIPT_LAUNCHER_SHAPE_INVALID");
       continue;
     }
     if (shape !== "pinned" || typeof runtime !== "string" || !isAbsolute(runtime) || typeof cwd !== "string" || !isAbsolute(cwd) || typeof sha !== "string" || !hex.test(sha)) {
@@ -91,14 +97,17 @@ function assertLauncherRecordShapes(item: LauncherRecord): void {
     }
     const target = side === "old" ? item.oldTarget : item.newTarget;
     if (side === "old" && item.oldLinkTarget !== item.oldTarget) throw new Error("RECEIPT_LAUNCHER_SHAPE_INVALID");
-    if (pinnedLauncherState(runtime, cwd, target).sha256 !== sha) throw new Error("RECEIPT_LAUNCHER_SHAPE_INVALID");
+    if (format === "v2" && profile !== expectedProfile) throw new Error("RECEIPT_LAUNCHER_SHAPE_INVALID");
+    try {
+      pinnedLauncherText({ runtime, cwd, target, sha256: sha, format, profile });
+    } catch { throw new Error("RECEIPT_LAUNCHER_SHAPE_INVALID"); }
   }
 }
 
 /** The pinned-launcher fields for a switch onto `target` under the given runtime version root. */
-function pinnedRecordFields(runtime: string, cwd: string, target: string): Pick<LauncherRecord, "newShape" | "newRuntime" | "newCwd" | "newSha256"> {
-  const state = pinnedLauncherState(runtime, cwd, target);
-  return { newShape: "pinned", newRuntime: state.runtime, newCwd: state.cwd, newSha256: state.sha256 };
+function pinnedRecordFields(runtime: string, cwd: string, target: string, profile: LauncherProfile): Pick<LauncherRecord, "newShape" | "newRuntime" | "newCwd" | "newSha256" | "newFormat" | "newProfile"> {
+  const state = pinnedLauncherState(runtime, cwd, target, { format: "v2", profile });
+  return { newShape: "pinned", newRuntime: state.runtime, newCwd: state.cwd, newSha256: state.sha256, newFormat: state.format, newProfile: state.profile };
 }
 
 interface ConfigPreimage {
@@ -286,7 +295,7 @@ function resolveRuntimeLayout(homeInput: string, pathInput: string): RuntimeLayo
         if (resolve(dirname(path), launcher.linkTarget) !== actual) throw new Error("LAUNCHER_SYMLINK_CHAIN_UNSUPPORTED");
         launchers.push({ path, oldTarget: actual, oldLinkTarget: launcher.linkTarget, newTarget, backupPath, oldShape: "symlink" });
       } else {
-        launchers.push({ path, oldTarget: actual, oldLinkTarget: actual, newTarget, backupPath, oldShape: "pinned", oldRuntime: launcher.runtime, oldCwd: launcher.cwd, oldSha256: launcher.sha256 });
+        launchers.push({ path, oldTarget: actual, oldLinkTarget: actual, newTarget, backupPath, oldShape: "pinned", oldRuntime: launcher.runtime, oldCwd: launcher.cwd, oldSha256: launcher.sha256, oldFormat: launcher.format, oldProfile: launcher.profile });
       }
     }
   }
@@ -834,17 +843,18 @@ export function adoptCopyfileAliases(options: { homeDir?: string; pathValue?: st
         // symlink that already reaches the current entry (the shape an updater
         // before pinned launchers wrote, including for this very runtime) is
         // adopted like any other alias: same checks, backup, receipt and rollback.
-        if (actual === newTarget && launcher.kind === "pinned") continue;
+        if (actual === newTarget && launcher.kind === "pinned" && launcher.format === "v2"
+          && launcher.profile === launcherProfileForBin(name, target)) continue;
         const chain = inspectAliasPackageChain(home, path, oldLinkTarget, actual, target);
         const source = validateAliasSource(home, name, actual);
         const backupPath = `${path}.skills-alias-prev-${id}`;
         if (entryExists(backupPath)) throw new Error("ALIAS_BACKUP_COLLISION");
         const oldFields = launcher.kind === "symlink"
           ? { oldShape: "symlink" as const }
-          : { oldShape: "pinned" as const, oldRuntime: launcher.runtime, oldCwd: launcher.cwd, oldSha256: launcher.sha256 };
+          : { oldShape: "pinned" as const, oldRuntime: launcher.runtime, oldCwd: launcher.cwd, oldSha256: launcher.sha256, oldFormat: launcher.format, oldProfile: launcher.profile };
         aliases.push({
           path, oldTarget: actual, oldLinkTarget, oldVersion: source.version, oldBinarySha256: source.binarySha256, newTarget, backupPath,
-          ...oldFields, ...pinnedRecordFields(launcherRuntime, currentRuntime, newTarget), ...(chain ? { chain } : {}),
+          ...oldFields, ...pinnedRecordFields(launcherRuntime, currentRuntime, newTarget, launcherProfileForBin(name, target)), ...(chain ? { chain } : {}),
         });
       }
     }
@@ -944,7 +954,7 @@ export function rollbackCopyfileAliases(receiptId: string, options: { homeDir?: 
         throw new Error("ALIAS_RECEIPT_LAUNCHER_INVALID");
       }
       inspectAliasPackageChain(home, item.path, item.oldLinkTarget, item.oldTarget, target, item.chain, true);
-      assertLauncherRecordShapes(item);
+      assertLauncherRecordShapes(item, launcherProfileForBin(name, target));
       seen.add(item.path);
       assertOwnedSafePath(dirname(item.path), home, true);
       const source = validateAliasSource(home, name, item.oldTarget);
@@ -1028,7 +1038,7 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
   const launcherRuntime = pinnedLauncherRuntime();
   const launchers = layout.launchers.map(item => {
     const newTarget = join(finalPath, "node_modules", "@hasna", "skills", layout.bin[basename(item.path)]);
-    return { ...item, newTarget, ...pinnedRecordFields(launcherRuntime, finalPath, newTarget) };
+    return { ...item, newTarget, ...pinnedRecordFields(launcherRuntime, finalPath, newTarget, launcherProfileForBin(basename(item.path), layout.bin[basename(item.path)]!)) };
   });
   const releaseLock = acquireRuntimeLock(layout.runtimeRoot);
   let switched: string[] = [];
@@ -1200,7 +1210,7 @@ export function rollbackCopyfileRuntime(receiptId: string, options: { homeDir?: 
     const bin = oldBins[basename(item.path)];
     if (!bin || !isAbsolute(item.path) || seen.has(item.path) || item.oldTarget !== join(receipt.currentPackageRoot, bin) || item.newTarget !== join(receipt.targetPackageRoot, bin) || !/^.+\.skills-prev-[0-9a-f-]{36}$/.test(item.backupPath) || !item.backupPath.startsWith(`${item.path}.skills-prev-`) || typeof item.oldLinkTarget !== "string" || resolve(dirname(item.path), item.oldLinkTarget) !== item.oldTarget) throw new Error("RECEIPT_LAUNCHER_BINDING_INVALID");
     assertNoSymlinkAncestors(dirname(item.path));
-    assertLauncherRecordShapes(item);
+    assertLauncherRecordShapes(item, launcherProfileForBin(basename(item.path), bin));
     seen.add(item.path);
     const oldState = oldLauncherState(item), newState = newLauncherState(item);
     let activeTarget: string;

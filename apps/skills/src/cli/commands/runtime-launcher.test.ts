@@ -1,10 +1,12 @@
+import { createHash } from "node:crypto";
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { renderPinnedLauncher, resolveLauncherCommand } from "./runtime-launcher.js";
+import { type LauncherProfile, inspectLauncher, launcherIs, launcherProfileForBin, materializeLauncher, parsePinnedLauncher, pinnedLauncherEnvironment, pinnedLauncherState, pinnedLauncherText, renderPinnedLauncher, resolveLauncherCommand } from "./runtime-launcher.js";
 import { selectedSkillsCommand } from "./runtime.js";
 import { selfSpawnCommand, selfSpawnRoot } from "../../lib/self-spawn.js";
+import { resolveServerConfig } from "../../server/config.js";
 import { useDefaultTestTimeout } from "../../test-preload.js";
 
 useDefaultTestTimeout();
@@ -96,17 +98,17 @@ test("every pinned entry restores the launch directory before any other import",
   }
 });
 
-test("a pinned skills-serve binds the caller's HOST and PORT and resolves a relative database URL in the caller's directory", async () => {
+test.each(["HASNA_SKILLS_DATABASE_URL", "SKILLS_DATABASE_URL", "DATABASE_URL"])("a pinned skills-serve preserves %s and resolves it in the caller directory", async (locator) => {
   const root = scratch("skills-pinned-serve-"), trusted = join(root, "trusted"), caller = join(root, "caller"), home = join(root, "home");
   for (const dir of [trusted, caller, home]) mkdirSync(dir, { mode: 0o700 });
   const launcher = join(root, "skills-serve");
-  writeFileSync(launcher, renderPinnedLauncher({ runtime: realpathSync(process.execPath), cwd: trusted, entry: join(appRoot, "src", "server", "index.ts") }), { mode: 0o755 });
+  writeFileSync(launcher, renderPinnedLauncher({ runtime: realpathSync(process.execPath), cwd: trusted, entry: join(appRoot, "src", "server", "index.ts"), format: "v2", profile: "server" }), { mode: 0o755 });
   const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("") });
   const port = probe.port; probe.stop(true);
   // SKILLS_HOST names an address that cannot be bound, so a dropped HOST fails instead of listening widely.
   const child = Bun.spawn([launcher], { cwd: caller, stdin: "ignore", stdout: "pipe", stderr: "pipe",
     env: { HOME: home, PATH: "/usr/bin:/bin", HOST: "127.0.0.1", SKILLS_HOST: "192.0.2.1", PORT: String(port), NODE_ENV: "production",
-      HASNA_SKILLS_DATABASE_URL: "served.sqlite", SKILLS_PUBLIC_BASE_URL: `http://127.0.0.1:${port}` } });
+      [locator]: "served.sqlite", SKILLS_PUBLIC_BASE_URL: `http://127.0.0.1:${port}` } });
   const timer = setTimeout(() => child.kill("SIGKILL"), 20_000);
   let output = "";
   try {
@@ -141,4 +143,94 @@ test("command resolution reads a managed pinned launcher as its exact entry and 
   expect(selectedSkillsCommand(pinned, link)).toBe(pinned);
   expect(selectedSkillsCommand(link, link)).toBe(entry);
   expect(() => selectedSkillsCommand(edited, link)).toThrow("Updated command is shadowed on PATH");
+});
+
+// Captured from the unchanged .60 renderer, rather than derived from the current renderer.
+const originalV1 = "#!/bin/sh -p\n# hasna-skills-pinned-launcher-v1\n# Written by `skills self-update`; rewrite it with `skills self-update`, do not edit by hand.\n# Runs the exact Skills entry below under one exact Bun from one trusted directory with\n# no working-directory configuration (no bunfig.toml, no .env, no macros, no auto-install)\n# and only the environment names allowed here. Everything else, BUN_* and NODE_OPTIONS\n# included, never reaches the runtime. The CLI returns to the caller's directory itself.\n# `-p` keeps the caller's exported functions and shell options out of this shell.\nset -eu\nHASNA_SKILLS_LAUNCH_CWD=$(pwd -P 2>/dev/null || :)\nexport HASNA_SKILLS_LAUNCH_CWD\nset -- '/opt/bun' --config=/dev/null --no-env-file --no-macros --no-install '--cwd=/opt/runtime' '/opt/pkg/bin/index.js' \"$@\"\nhasna_skills_env=$(LC_ALL=C /usr/bin/awk 'BEGIN {\n  n = split(\"HOME PATH TMPDIR TERM TERM_PROGRAM TERM_PROGRAM_VERSION COLORTERM LANG USER LOGNAME SHELL TZ NO_COLOR FORCE_COLOR CI COLUMNS LINES EDITOR VISUAL PAGER SSH_AUTH_SOCK DATABASE_URL TERMINAL_CWD CODEX_HOME HERMES_HOME HERMES_ENABLE_PROJECT_PLUGINS HOST PORT NODE_ENV AGENT_ID ECS_CONTAINER_METADATA_URI_V4\", exact, \" \")\n  for (i = 1; i <= n; i++) allow[exact[i]] = 1\n  for (name in ENVIRON) {\n    if (name !~ /^[A-Za-z_][A-Za-z0-9_]*$/) continue\n    if (name == \"LC_ALL\" || (!(name in allow) && name !~ /^(HASNA|SKILLS|SKILL|MCP|XDG|LC|AWS)_/)) continue\n    value = ENVIRON[name]; quoted = \"\"\n    while ((k = index(value, \"\\047\")) > 0) { quoted = quoted substr(value, 1, k - 1) \"\\047\\\\\\047\\047\"; value = substr(value, k + 1) }\n    printf \"\\047%s=%s\\047 \", name, quoted value\n  }\n}')\neval \"set -- $hasna_skills_env \\\"\\$@\\\"\"\nif [ \"${LC_ALL+x}\" = x ]; then set -- \"LC_ALL=$LC_ALL\" \"$@\"; fi\nexec /usr/bin/env -i \"$@\"\n";
+
+test("original V1 bytes parse, inspect and restore with old receipt fields", () => {
+  const binding = { runtime: "/opt/bun", cwd: "/opt/runtime", entry: "/opt/pkg/bin/index.js" };
+  expect(parsePinnedLauncher(originalV1)).toEqual({ ...binding, format: "v1" });
+  expect(renderPinnedLauncher({ ...binding, format: "v1" })).toBe(originalV1);
+  const state = { shape: "pinned" as const, runtime: binding.runtime, cwd: binding.cwd,
+    target: binding.entry, sha256: createHash("sha256").update(originalV1).digest("hex") };
+  expect(pinnedLauncherText(state)).toBe(originalV1);
+  const path = join(scratch("skills-v1-readback-"), "skills");
+  materializeLauncher(path, state);
+  expect(readFileSync(path, "utf8")).toBe(originalV1);
+  expect(inspectLauncher(path)).toMatchObject({ kind: "pinned", format: "v1", sha256: state.sha256 });
+  expect(launcherIs(path, state)).toBe(true);
+  expect(parsePinnedLauncher(originalV1.replace("set -eu", "set -eu\ntrue"))).toBeNull();
+});
+
+const locatorNames = ["DATABASE_URL", "HASNA_SKILLS_DATABASE_URL", "SKILLS_DATABASE_URL"];
+const configuredEnvironment = {
+  HOME: "/synthetic/home", PATH: "/usr/bin:/bin", HASNA_HOME: "/synthetic/hasna",
+  HASNA_CONFIG_HOME: "/synthetic/config", SKILLS_API_URL: "https://skills.example.test",
+  SKILLS_API_KEY: "synthetic-fixture", HASNA_SKILLS_API_URL: "https://gateway.example.test",
+  HASNA_SKILLS_API_KEY: "synthetic-fixture", SKILLS_PROFILE: "fixture", MCP_TRANSPORT: "stdio",
+  SKILL_TEST_MODE: "1", XDG_CONFIG_HOME: "/synthetic/config", AWS_REGION: "eu-west-1", LC_ALL: "C",
+  HOST: "127.0.0.1", PORT: "8080", NODE_ENV: "production", AGENT_ID: "fixture",
+  ECS_CONTAINER_METADATA_URI_V4: "http://169.254.170.2/fixture", DATABASE_URL: "bare.sqlite",
+  HASNA_SKILLS_DATABASE_URL: "canonical.sqlite", SKILLS_DATABASE_URL: "fallback.sqlite",
+  BUN_OPTIONS: "--preload=/invalid", NODE_OPTIONS: "--require=/invalid", HTTPS_PROXY: "http://invalid",
+};
+
+test.each(["client", "server"] as const)("V2 %s shell and JS environment projections agree on storage and documented options", (profile) => {
+  const root = scratch("skills-v2-env-"), entry = join(root, "probe.ts"), launcher = join(root, "launcher");
+  writeFileSync(entry, "console.log(JSON.stringify(process.env));\n", { mode: 0o755 });
+  const binding = { runtime: realpathSync(process.execPath), cwd: root, entry, format: "v2" as const, profile };
+  writeFileSync(launcher, renderPinnedLauncher(binding), { mode: 0o755 });
+  const child = Bun.spawnSync([launcher], { cwd: root, env: configuredEnvironment, stdout: "pipe", stderr: "pipe" });
+  expect(child.exitCode).toBe(0);
+  expect(child.stderr.toString()).toBe("");
+  const actual = JSON.parse(child.stdout.toString());
+  const expected = pinnedLauncherEnvironment(configuredEnvironment, profile);
+  for (const [name, value] of Object.entries(expected)) expect(actual[name]).toBe(value);
+  for (const name of locatorNames) expect(actual[name]).toBe(profile === "server" ? configuredEnvironment[name as keyof typeof configuredEnvironment] : undefined);
+  for (const name of ["BUN_OPTIONS", "NODE_OPTIONS", "HTTPS_PROXY"]) expect(actual[name]).toBeUndefined();
+  expect(parsePinnedLauncher(readFileSync(launcher, "utf8"))).toEqual(binding);
+});
+
+test("every installed package bin has an explicit matching environment role", () => {
+  const pkg = JSON.parse(readFileSync(join(appRoot, "package.json"), "utf8"));
+  const roles: Record<string, LauncherProfile> = { skills: "client", "skills-mcp": "client", "skills-serve": "server",
+    "skills-server": "server", "skills-worker": "server", "skills-maintenance": "server", "skills-migrate": "server" };
+  expect(Object.keys(roles).sort()).toEqual(Object.keys(pkg.bin).sort());
+  for (const [name, entry] of Object.entries(pkg.bin)) expect(launcherProfileForBin(name, entry as string)).toBe(roles[name]);
+  expect(() => launcherProfileForBin("skills", "bin/server.js")).toThrow("LAUNCHER_BIN_CONTRACT_INVALID");
+  expect(() => launcherProfileForBin("unknown", "bin/server.js")).toThrow("LAUNCHER_BIN_CONTRACT_INVALID");
+});
+
+test("V2 refuses profile, text, format and digest tampering", () => {
+  const state = pinnedLauncherState("/opt/bun", "/opt/runtime", "/opt/pkg/bin/index.js");
+  const text = pinnedLauncherText(state);
+  expect(state).toMatchObject({ format: "v2", profile: "client" });
+  expect(parsePinnedLauncher(text.replace("environment-profile: client", "environment-profile: server"))).toBeNull();
+  expect(parsePinnedLauncher(text.replace("environment-profile: client", "environment-profile: unknown"))).toBeNull();
+  expect(() => pinnedLauncherText({ ...state, profile: "server" })).toThrow("LAUNCHER_TEXT_DIGEST_MISMATCH");
+  expect(() => pinnedLauncherText({ ...state, format: undefined })).toThrow("LAUNCHER_PROFILE_INVALID");
+  expect(() => pinnedLauncherText({ ...state, sha256: "0".repeat(64) })).toThrow("LAUNCHER_TEXT_DIGEST_MISMATCH");
+  expect(parsePinnedLauncher(text.replace("set -eu", "set -eu\ntrue"))).toBeNull();
+});
+
+
+test("client projection rejects storage names before accessing any value", () => {
+  const env: Record<string, string | undefined> = { SKILLS_API_URL: "https://skills.example.test" };
+  for (const name of locatorNames) Object.defineProperty(env, name, { enumerable: true,
+    get: () => { throw new Error(`storage locator read: ${name}`); } });
+  expect(pinnedLauncherEnvironment(env)).toEqual({ SKILLS_API_URL: "https://skills.example.test" });
+  expect(pinnedLauncherEnvironment(Object.fromEntries(locatorNames.map(name => [name, "fixture.sqlite"])), "server"))
+    .toEqual(Object.fromEntries(locatorNames.map(name => [name, "fixture.sqlite"])));
+});
+
+
+test("server database locator aliases preserve canonical precedence and generic fallback", () => {
+  expect(resolveServerConfig({}).databaseUrl).toBeUndefined();
+  expect(resolveServerConfig({ SKILLS_DATABASE_URL: "skills.sqlite" }).databaseUrl).toBe("skills.sqlite");
+  expect(resolveServerConfig({ DATABASE_URL: "generic.sqlite" }).databaseUrl).toBe("generic.sqlite");
+  expect(resolveServerConfig({ SKILLS_DATABASE_URL: "skills.sqlite", DATABASE_URL: "generic.sqlite" }).databaseUrl).toBe("skills.sqlite");
+  expect(resolveServerConfig({ HASNA_SKILLS_DATABASE_URL: "canonical.sqlite", SKILLS_DATABASE_URL: "skills.sqlite", DATABASE_URL: "generic.sqlite" }).databaseUrl).toBe("canonical.sqlite");
+  expect(resolveServerConfig({ HASNA_SKILLS_DATABASE_URL: "", SKILLS_DATABASE_URL: "skills.sqlite", DATABASE_URL: "generic.sqlite" }).databaseUrl).toBe("skills.sqlite");
+  expect(resolveServerConfig({ HASNA_SKILLS_DATABASE_URL: "", SKILLS_DATABASE_URL: "", DATABASE_URL: "generic.sqlite" }).databaseUrl).toBe("generic.sqlite");
 });

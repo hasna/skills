@@ -81,7 +81,7 @@ export function resolveServerConfig(env: Record<string, string | undefined> = pr
   return {
     host,
     port,
-    databaseUrl: env[DATABASE_URL_ENV] || env.DATABASE_URL || undefined,
+    databaseUrl: env[DATABASE_URL_ENV] || env.SKILLS_DATABASE_URL || env.DATABASE_URL || undefined,
     bootstrapApiKey: env.HASNA_SKILLS_BOOTSTRAP_API_KEY || undefined,
     artifactBucket: env.HASNA_SKILLS_S3_BUCKET || env.SKILLS_S3_BUCKET || undefined,
     artifactPrefix: normalizePrefix(env.HASNA_SKILLS_S3_PREFIX || env.SKILLS_S3_PREFIX || "skills/artifacts"),

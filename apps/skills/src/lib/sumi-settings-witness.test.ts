@@ -6,19 +6,23 @@ import { tmpdir } from "node:os";
 import { captureSumiSettings, hashSumiSettingsReplacement } from "./sumi-settings-witness.js";
 import { applyAgentIntegration, assertManagedAgentBridge, planAgentIntegration, planAgentSettingsWitnessUpgrade } from "./agent-integration.js";
 import { captureDiscoveryByteSources, resolveAgentDiscovery, verifyAgentDiscovery } from "./agent-discovery.js";
+import { installSumiPathsFixture } from "./sumi-paths.fixture.js";
 
 const roots: string[] = [];
+const originalPath = process.env.PATH;
 const keys = ["SUMI_CONFIG", "SUMI_CONFIG_CONTENT", "SUMI_CONFIG_DIR", "SUMI_HOME", "XDG_CONFIG_HOME"];
 const selectors = new Map<string, string | undefined>();
 beforeEach(() => { for (const key of keys) { selectors.set(key, process.env[key]); delete process.env[key]; } });
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  process.env.PATH = originalPath;
   for (const key of keys) { const value = selectors.get(key); if (value === undefined) delete process.env[key]; else process.env[key] = value; }
 });
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 function put(path: string, text: string) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text); }
 function fixture(typed = false) {
   const home = mkdtempSync(join(tmpdir(), "skills-sumi-witness-")); roots.push(home);
+  process.env.PATH = installSumiPathsFixture(home) + ":" + (originalPath ?? "");
   const dataDir = join(home, "data"), config = join(home, ".hasna-internal/sumi/config/sumi.json"), plugin = join(dirname(config), "plugins/reviewed.js");
   put(config, JSON.stringify({ username: "before", plugins: [{ package: "reviewed-plugin", options: { enabled: true } }], experimental: { statusline: true }, permissions: [] }));
   put(plugin, "export default { id: 'reviewed', async setup() {} };\n");

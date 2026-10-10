@@ -154,7 +154,109 @@ function asPrePinnedRollout(targetRoot: string): Map<string, string> {
   return links;
 }
 
+// Replay a .60 rollout: its new launchers are exact V1 bytes, and receipt
+// format/profile metadata is absent. Rebuild the synthetic preimage binding.
+function asV1Rollout(targetRoot: string): Map<string, string> {
+  const receiptPath = join(targetRoot, "rollout-receipt.json");
+  const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
+  const texts = new Map<string, string>();
+  for (const item of receipt.launchers) {
+    const text = renderPinnedLauncher({ runtime: item.newRuntime, cwd: item.newCwd, entry: item.newTarget, format: "v1" });
+    writeFileSync(item.path, text);
+    item.newSha256 = createHash("sha256").update(text).digest("hex");
+    delete item.oldFormat; delete item.oldProfile; delete item.newFormat; delete item.newProfile;
+    texts.set(item.path, text);
+  }
+  const manifestPath = join(targetRoot, "preimage", "manifest.json");
+  const manifest = Buffer.from(`${JSON.stringify({ schema: "skills.copyfile-preimage.v1", configs: receipt.configs, launchers: receipt.launchers }, null, 2)}\n`);
+  chmodSync(manifestPath, 0o600); writeFileSync(manifestPath, manifest); chmodSync(manifestPath, 0o400);
+  receipt.preimageSha256 = createHash("sha256").update(manifest).digest("hex");
+  writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+  return texts;
+}
+
 describe("exact-version copyfile runtime update", () => {
+  test("original V1 active fleet launchers upgrade to V2 bin roles and rollback byte-exact", async () => {
+    const f = fixtureHome(), fixture = await serverWithArtifact();
+    const oldTexts = new Map<string, string>();
+    for (const dir of [f.localBin, f.bunBin]) for (const [name, bin] of Object.entries(BIN)) {
+      const path = join(dir, name), text = renderPinnedLauncher({ runtime: realpathSync(process.execPath),
+        cwd: join(f.runtime, "0.10.6-copyfile"), entry: join(f.oldPackage, bin), format: "v1" });
+      const temp = `${path}.synthetic-v1`; writeFileSync(temp, text, { mode: 0o755 }); renameSync(temp, path);
+      oldTexts.set(path, text);
+    }
+    try {
+      const result = await updateCopyfileRuntime("0.10.8", { homeDir: f.home,
+        pathValue: `${f.localBin}${delimiter}${f.bunBin}`, registryOrigin: fixture.server.url.origin });
+      const receipt = JSON.parse(readFileSync(join(f.runtime, "0.10.8-copyfile", "rollout-receipt.json"), "utf8"));
+      for (const item of receipt.launchers) {
+        const profile = launcherModule.launcherProfileForBin(basename(item.path), BIN[basename(item.path) as keyof typeof BIN]);
+        expect(item).toMatchObject({ oldFormat: "v1", newFormat: "v2", newProfile: profile });
+        expect(readFileSync(item.backupPath, "utf8")).toBe(oldTexts.get(item.path)!);
+        expect(inspectLauncher(item.path)).toMatchObject({ kind: "pinned", format: "v2", profile });
+      }
+      expect(rollbackCopyfileRuntime(String(result.receiptId), { homeDir: f.home })).toMatchObject({ rolledBack: true });
+      for (const [path, text] of oldTexts) expect(readFileSync(path, "utf8")).toBe(text);
+    } finally { fixture.server.stop(true); }
+  });
+
+  test("old V1 rollout receipts without format metadata rollback and preserve exact V1 after-images", async () => {
+    const f = fixtureHome(), fixture = await serverWithArtifact();
+    try {
+      const result = await updateCopyfileRuntime("0.10.8", { homeDir: f.home,
+        pathValue: `${f.localBin}${delimiter}${f.bunBin}`, registryOrigin: fixture.server.url.origin });
+      const texts = asV1Rollout(join(f.runtime, "0.10.8-copyfile"));
+      expect(rollbackCopyfileRuntime(String(result.receiptId), { homeDir: f.home })).toMatchObject({ rolledBack: true });
+      for (const [path, text] of texts) {
+        expect(lstatSync(path).isSymbolicLink()).toBe(true);
+        expect(readFileSync(`${path}.skills-after-${result.receiptId}`, "utf8")).toBe(text);
+      }
+    } finally { fixture.server.stop(true); }
+  });
+
+  test("old V1 alias receipts without format metadata restore exact V1 prior launchers", async () => {
+    const f = fixtureHome(), fixture = await serverWithArtifact();
+    const pathValue = `${f.localBin}${delimiter}${f.bunBin}`;
+    try {
+      await updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue, registryOrigin: fixture.server.url.origin });
+      const root = join(f.runtime, "0.10.8-copyfile"), texts = asV1Rollout(root);
+      // Half the aliases still point to the previous .60 runtime, forcing an
+      // actual V1 rollback reconstruction rather than a same-state no-op.
+      for (const [name, bin] of Object.entries(BIN)) {
+        const path = join(f.bunBin, name), text = renderPinnedLauncher({ runtime: realpathSync(process.execPath),
+          cwd: join(f.runtime, "0.10.6-copyfile"), entry: join(f.oldPackage, bin), format: "v1" });
+        writeFileSync(path, text); texts.set(path, text);
+      }
+      const adopted = adoptCopyfileAliases({ homeDir: f.home, pathValue });
+      expect(adopted.aliasCount).toBe(14);
+      const receiptPath = join(root, "alias-adoptions", `${adopted.receiptId}.json`);
+      const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
+      const before = launcherSnapshot(receipt.aliases.map((item: { path: string }) => item.path));
+      for (const tamper of ["profile", "digest", "format"] as const) {
+        const changed = structuredClone(receipt), item = changed.aliases.find((item: { path: string }) => basename(item.path) === "skills");
+        if (tamper === "profile") {
+          item.newProfile = "server";
+          // Even a self-consistent server profile is refused for the client bin.
+          item.newSha256 = launcherModule.pinnedLauncherState(item.newRuntime, item.newCwd, item.newTarget,
+            { format: "v2", profile: "server" }).sha256;
+        } else if (tamper === "digest") item.newSha256 = "0".repeat(64);
+        else delete item.newFormat;
+        writeFileSync(receiptPath, `${JSON.stringify(changed, null, 2)}\n`);
+        expect(() => rollbackCopyfileAliases(String(adopted.receiptId), { homeDir: f.home, pathValue })).toThrow("RECEIPT_LAUNCHER_SHAPE_INVALID");
+        expect(launcherSnapshot(before.keys())).toEqual(before);
+      }
+      for (const item of receipt.aliases) {
+        // Reproduce a legacy alias receipt whose new state also used V1.
+        const text = renderPinnedLauncher({ runtime: item.newRuntime, cwd: item.newCwd, entry: item.newTarget, format: "v1" });
+        writeFileSync(item.path, text); item.newSha256 = createHash("sha256").update(text).digest("hex");
+        delete item.oldFormat; delete item.oldProfile; delete item.newFormat; delete item.newProfile;
+      }
+      writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+      expect(rollbackCopyfileAliases(String(adopted.receiptId), { homeDir: f.home, pathValue })).toMatchObject({ rolledBack: true, restoredAliasCount: 7 });
+      for (const [path, text] of texts) expect(readFileSync(path, "utf8")).toBe(text);
+    } finally { fixture.server.stop(true); }
+  });
+
   test("reviewed lock skips registry resolution and preserves exact bytes through real npm ci", async () => {
     const reviewed = fixtureHome(), consumer = fixtureHome();
     const fixture = await serverWithArtifact();
@@ -268,7 +370,7 @@ process.exit(code);
       else if (dependencies["@hasna/secrets"]) expect(JSON.parse(readFileSync(join(consumer.runtime, "0.10.8-copyfile", "node_modules", "@hasna", "skills", "node_modules", "@hasna", "secrets", "package.json"), "utf8")).version).toBe("0.4.2");
       expect(rollbackCopyfileRuntime(String(result.receiptId), { homeDir: consumer.home })).toMatchObject({ rolledBack: true });
     } finally { fixture.server.stop(true); }
-  });
+  }, 120_000);
 
   test("real npm conflicting Hasna dependency versions retain nested closure without changing archive payload", async () => {
     const f = fixtureHome();
@@ -408,18 +510,21 @@ process.exit(status);
     } finally { fixture.server.stop(true); }
   });
 
-  test("pinned server launchers pass HOST, PORT, NODE_ENV and AGENT_ID through the environment allowlist", async () => {
+  test("pinned package bin roles preserve server storage and documented client options", async () => {
     const f = fixtureHome();
-    const fixture = await serverWithArtifact({}, {}, name => `console.log(JSON.stringify({ name: ${JSON.stringify(name)}, host: process.env.HOST ?? null, port: process.env.PORT ?? null, nodeEnv: process.env.NODE_ENV ?? null, agentId: process.env.AGENT_ID ?? null, proxy: process.env.HTTPS_PROXY ?? null }));`);
+    const fixture = await serverWithArtifact({}, {}, name => `console.log(JSON.stringify({ name: ${JSON.stringify(name)}, host: process.env.HOST ?? null, port: process.env.PORT ?? null, nodeEnv: process.env.NODE_ENV ?? null, agentId: process.env.AGENT_ID ?? null, proxy: process.env.HTTPS_PROXY ?? null, database: process.env.DATABASE_URL ?? null, canonical: process.env.HASNA_SKILLS_DATABASE_URL ?? null, fallback: process.env.SKILLS_DATABASE_URL ?? null, api: process.env.SKILLS_API_URL ?? null }));`);
     const hostile = hostileDirectory();
     try {
       await updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue: `${f.localBin}${delimiter}${f.bunBin}`, registryOrigin: fixture.server.url.origin });
-      for (const name of ["skills-serve", "skills-server", "skills-worker", "skills-maintenance", "skills-migrate"]) {
-        const run = hostile.launch(join(f.localBin, name), { HOST: "127.0.0.1", PORT: "47911", NODE_ENV: "production", AGENT_ID: "agent-fixture", HTTPS_PROXY: "http://127.0.0.1:9" });
+      for (const name of Object.keys(BIN) as Array<keyof typeof BIN>) {
+        const run = hostile.launch(join(f.localBin, name), { HOST: "127.0.0.1", PORT: "47911", NODE_ENV: "production", AGENT_ID: "agent-fixture", HTTPS_PROXY: "http://127.0.0.1:9",
+          DATABASE_URL: "bare.sqlite", HASNA_SKILLS_DATABASE_URL: "canonical.sqlite", SKILLS_DATABASE_URL: "fallback.sqlite", SKILLS_API_URL: "https://skills.example.test" });
         expect(run.code).toBe(0);
         // skills-serve and skills-server share bin/server.js, so only the settings are compared.
         expect(run.stderr).toBe("");
-        expect(JSON.parse(run.stdout)).toMatchObject({ host: "127.0.0.1", port: "47911", nodeEnv: "production", agentId: "agent-fixture", proxy: null });
+        const server = launcherModule.launcherProfileForBin(name, BIN[name]) === "server";
+        expect(JSON.parse(run.stdout)).toMatchObject({ host: "127.0.0.1", port: "47911", nodeEnv: "production", agentId: "agent-fixture", proxy: null,
+          database: server ? "bare.sqlite" : null, canonical: server ? "canonical.sqlite" : null, fallback: server ? "fallback.sqlite" : null, api: "https://skills.example.test" });
       }
     } finally { fixture.server.stop(true); }
   });
@@ -648,7 +753,7 @@ else { writeFileSync(${JSON.stringify(log)}, "unexpected"); process.exit(83); }
       expect(pinnedTarget(join(f.bunBin, "skills"))).toBe(join(targetPackage, BIN.skills));
       // The switched launcher is the exact fleet pinned shape for this runtime, cwd and entry.
       const pinnedBinding = parsePinnedLauncher(readFileSync(join(f.localBin, "skills"), "utf8"));
-      expect(pinnedBinding).toEqual({ runtime: realpathSync(process.execPath), cwd: targetRoot, entry: join(targetPackage, BIN.skills) });
+      expect(pinnedBinding).toEqual({ runtime: realpathSync(process.execPath), cwd: targetRoot, entry: join(targetPackage, BIN.skills), format: "v2", profile: "client" });
       expect(readFileSync(join(f.localBin, "skills"), "utf8")).toBe(renderPinnedLauncher(pinnedBinding!));
       expect(readFileSync(join(f.localBin, "skills"), "utf8")).toContain(`'${realpathSync(process.execPath)}' --config=/dev/null --no-env-file --no-macros --no-install '--cwd=${targetRoot}' '${join(targetPackage, BIN.skills)}' "$@"`);
       expect(readFileSync(join(f.localBin, "skills"), "utf8")).toContain('exec /usr/bin/env -i "$@"');
@@ -1113,7 +1218,7 @@ else { writeFileSync(${JSON.stringify(log)}, "unexpected"); process.exit(83); }
         });
         expect([item.oldRuntime, item.oldCwd, item.oldSha256, item.chain]).toEqual([undefined, undefined, undefined, undefined]);
         expect(pinnedTarget(item.path)).toBe(item.newTarget);
-        expect(readFileSync(item.path, "utf8")).toBe(renderPinnedLauncher({ runtime, cwd: targetRoot, entry: item.newTarget }));
+        expect(readFileSync(item.path, "utf8")).toBe(renderPinnedLauncher({ runtime, cwd: targetRoot, entry: item.newTarget, format: item.newFormat, profile: item.newProfile }));
         expect(lstatSync(item.backupPath).isSymbolicLink()).toBe(true);
         expect(readlinkSync(item.backupPath)).toBe(links.get(item.path)!);
       }

@@ -3,18 +3,21 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { renderSumiPlugin, isManagedSumiPlugin, sumiConfigDirectory } from "./agent-sumi.js";
-import { applyAgentIntegration, assertManagedAgentBridge, planAgentIntegration } from "./agent-integration.js";
+import { renderSumiPlugin, isManagedSumiPlugin, sumiConfigDirectory, sumiPathPlan, SumiPathResolverError } from "./agent-sumi.js";
+import { applyAgentIntegration, assertManagedAgentBridge, inventoryNativeSkills, planAgentIntegration, planClaudeHookEventsUpdate } from "./agent-integration.js";
 import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
 
 // Native V2 boundary fixture bound to Sumi 0.2.52, Harnesses e6776271ca8065a3a091eacedebd6fd7ef47ccd3,
 // upstream 06b6c916a564c9c88af36cbd19817ba3d4ac4476. These are mutable
 // SessionPrompt/SessionContext and promise Plugin shapes, not OpenCode hooks.
 const roots: string[] = [];
-const configSelectors = ["SUMI_CONFIG_DIR", "XDG_CONFIG_HOME", "SUMI_HOME", "SUMI_CONFIG", "SUMI_CONFIG_CONTENT"] as const;
+const configSelectors = ["SUMI_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "SUMI_HOME", "SUMI_CONFIG", "SUMI_CONFIG_CONTENT"] as const;
 const inheritedSelectors = new Map(configSelectors.map(key => [key, process.env[key]]));
 const originalSelectors = new Map<string, string | undefined>();
+let originalPath: string | undefined;
+const providerResponses = new Map<string, string>();
 beforeEach(() => {
+  originalPath = process.env.PATH;
   for (const key of configSelectors) {
     originalSelectors.set(key, process.env[key]);
     delete process.env[key];
@@ -28,11 +31,35 @@ afterEach(() => {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
     originalSelectors.clear();
+    providerResponses.clear();
   }
 });
 afterAll(() => { expect(configSelectors.every(key => process.env[key] === inheritedSelectors.get(key))).toBe(true); });
-function fixture() { const root = mkdtempSync(join(tmpdir(), "skills-sumi-native-")); roots.push(root); return root; }
+function pathResponse(home: string, cwd = process.cwd(), configRoot = "__HOME__/.hasna-internal/sumi/config", legacyRoot: string | null = "__HOME__/.config/sumi") {
+  const root = (value: string) => value.replaceAll("__HOME__", home);
+  return {
+    schemaVersion: 1, kind: "sumi-paths", home, cwd,
+    roots: { data: join(home, ".local/share/sumi"), cache: join(home, ".cache/sumi"), config: root(configRoot), state: join(home, ".local/state/sumi") },
+    legacyRoots: { data: join(home, ".local/share/sumi"), cache: join(home, ".cache/sumi"), config: legacyRoot === null ? null : root(legacyRoot), state: join(home, ".local/state/sumi") },
+    configFiles: { canonical: join(root(configRoot), "sumi.json"), legacy: legacyRoot === null ? null : join(root(legacyRoot), "sumi.json") },
+    skillRoots: { canonical: join(root(configRoot), "skills"), legacy: legacyRoot === null ? null : join(root(legacyRoot), "skills") },
+  };
+}
+function setPathResponse(home: string, value: unknown) { writeFileSync(providerResponses.get(home)!, JSON.stringify(value)); }
+function fixture() {
+  const root = mkdtempSync(join(tmpdir(), "skills-sumi-native-")); roots.push(root);
+  const bin = join(root, "test-bin"), response = join(root, "path-response.json"), envKeys = join(root, "path-env-keys.json");
+  mkdirSync(bin, { mode: 0o700 });
+  const executable = join(bin, "sumi-paths");
+  writeFileSync(executable, `#!${process.execPath}\nimport { readFileSync, writeFileSync } from "node:fs";\nconst args = process.argv.slice(2); const home = args[args.indexOf("--home") + 1]; const cwd = args[args.indexOf("--cwd") + 1];\nconst result = JSON.parse(readFileSync(${JSON.stringify(response)}, "utf8"));\nwriteFileSync(${JSON.stringify(envKeys)}, JSON.stringify(Object.keys(process.env).sort()));\nif (result.kind === "sumi-paths") { result.home = home; result.cwd = cwd; for (const group of [result.roots, result.legacyRoots, result.configFiles, result.skillRoots]) for (const key of Object.keys(group)) if (typeof group[key] === "string") group[key] = group[key].replaceAll("__HOME__", home); process.stdout.write(JSON.stringify(result)); }\nelse { process.stdout.write(JSON.stringify(result)); process.exitCode = 2; }\n`, { mode: 0o700 });
+  chmodSync(executable, 0o700);
+  providerResponses.set(root, response); setPathResponse(root, pathResponse(root));
+  process.env.PATH = bin + ":" + (originalPath ?? "");
+  return root;
+}
 function put(path: string, text: string) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text); }
 
 test("exact previous managed Sumi plugin upgrades with preservation; modified bytes stay refused", () => {
@@ -62,9 +89,37 @@ test("read-only Sumi resolver honors native selectors and adopted roots without 
   expect(sumiConfigDirectory(home, {})).toBe(legacy);
   mkdirSync(dirname(canonical), { recursive: true }); symlinkSync(legacy, canonical);
   expect(sumiConfigDirectory(home, {})).toBe(legacy);
-  expect(sumiConfigDirectory(home, { SUMI_HOME: "~/native", XDG_CONFIG_HOME: "~/xdg", SUMI_CONFIG_DIR: "~/specific" })).toBe(join(home, "specific"));
-  expect(sumiConfigDirectory(home, { SUMI_HOME: "~/native", XDG_CONFIG_HOME: "~/xdg" })).toBe(join(home, "xdg/sumi"));
-  expect(sumiConfigDirectory(home, { SUMI_HOME: "~/native" })).toBe(join(home, "native/config"));
+  const custom = pathResponse(home, process.cwd(), "__HOME__/specific", null);
+  setPathResponse(home, custom);
+  const selected = sumiConfigDirectory(home, { PATH: process.env.PATH, SUMI_HOME: "~/native", XDG_CONFIG_HOME: "~/xdg", SUMI_CONFIG_DIR: "~/specific" });
+  expect(selected).toBe(join(home, "specific"));
+  const envKeys = JSON.parse(readFileSync(join(home, "path-env-keys.json"), "utf8"));
+  expect(envKeys).toEqual(["PATH", "SUMI_CONFIG_DIR", "SUMI_HOME", "XDG_CONFIG_HOME"]);
+});
+
+test("Sumi path resolver refuses unsupported config selectors before invoking the dedicated bin", () => {
+  const home = fixture(), envKeys = join(home, "path-env-keys.json");
+  for (const key of ["SUMI_CONFIG", "SUMI_CONFIG_CONTENT"] as const) {
+    expect(() => sumiConfigDirectory(home, { PATH: process.env.PATH, [key]: "synthetic" })).toThrow(new SumiPathResolverError("SUMI_PATH_CONFIG_UNSUPPORTED"));
+    expect(existsSync(envKeys)).toBe(false);
+  }
+});
+
+test("Sumi path resolver rejects malformed or incompatible standalone command output", () => {
+  const home = fixture(), result = pathResponse(home);
+  setPathResponse(home, { ...result, extra: "unexpected" });
+  expect(() => sumiPathPlan(home)).toThrow(new SumiPathResolverError("SUMI_PATH_RESOLVER_INVALID_RESPONSE"));
+  setPathResponse(home, { schemaVersion: 1, kind: "sumi-paths-error", code: "SUMI_PATH_CONFIG_UNSUPPORTED" });
+  expect(() => sumiPathPlan(home)).toThrow(new SumiPathResolverError("SUMI_PATH_CONFIG_UNSUPPORTED"));
+});
+
+test("Sumi path discovery refuses without its dedicated bin and unrelated Claude inventory does not invoke it", () => {
+  const home = fixture(), savedPath = process.env.PATH;
+  process.env.PATH = "";
+  try {
+    expect(() => sumiPathPlan(home)).toThrow(new SumiPathResolverError("SUMI_PATH_RESOLVER_UNAVAILABLE"));
+    expect(inventoryNativeSkills(home, { agents: ["claude"] })).toBeArray();
+  } finally { process.env.PATH = savedPath; }
 });
 
 test("independent canonical and legacy config stores are refused", () => {
@@ -218,4 +273,43 @@ test("native prompt and request hooks preserve actual root, child and nested cus
   await hooks.get("execute.before")!({ tool: "skill", input: { id: "skills-cli" } });
   await hooks.get("execute.before")!({ tool: "read", input: {} });
   await cleanup(); expect(hooks.size).toBe(0);
+});
+
+test("Claude hook planning skips non-intersecting Sumi paths and retains bound-reader checks", () => {
+  const home = fixture(), dataDir = join(home, "skills-data"), configDir = sumiConfigDirectory(home);
+  const sumiConfig = join(configDir, "sumi.json"), policyPath = join(dataDir, "agent-policy.json");
+  put(sumiConfig, "{}");
+  const review: ReviewedDiscoveryInputs = {
+    version: 1,
+    agents: [{
+      agent: "sumi",
+      roots: ["skill", "skills"].flatMap(name => [join(configDir, name), join(home, ".claude", name), join(home, ".agents", name)]),
+      sources: [{ path: sumiConfig, sha256: createHash("sha256").update("{}").digest("hex") }],
+      pluginHooks: "reviewed-no-skill-injection",
+    }],
+  };
+  applyAgentIntegration(planAgentIntegration({ home, dataDir, agents: ["claude", "sumi"], discoveryInputs: review }));
+  const settingsPath = join(home, ".claude/settings.json"), before = readFileSync(settingsPath, "utf8");
+  const changed = JSON.parse(before);
+  changed.hooks = { ...(changed.hooks ?? {}), Stop: [{ hooks: [{ type: "command", command: "/opt/hooks/bin/stop-check" }] }] };
+  const replacement = JSON.stringify(changed);
+  const plan = () => planClaudeHookEventsUpdate({ home, dataDir, expectedSettingsSha256: createHash("sha256").update(before).digest("hex"), replacement, events: ["Stop"] });
+  const savedPath = process.env.PATH;
+  try {
+    process.env.PATH = "";
+    const unrelated = plan();
+    expect(unrelated?.managedAgentChecks?.agents).toEqual(["claude"]);
+
+    process.env.PATH = savedPath ?? "";
+    setPathResponse(home, { schemaVersion: 1, kind: "malformed-sumi-paths" });
+    expect(plan()?.managedAgentChecks?.agents).toEqual(["claude"]);
+
+    const policy = JSON.parse(readFileSync(policyPath, "utf8"));
+    policy.bridge.discovery.sumi.sources.push({ path: settingsPath, sha256: createHash("sha256").update(before).digest("hex") });
+    writeFileSync(policyPath, JSON.stringify(policy));
+    process.env.PATH = "";
+    expect(() => plan()).toThrow("SUMI_PATH_RESOLVER_UNAVAILABLE");
+  } finally {
+    process.env.PATH = savedPath;
+  }
 });
