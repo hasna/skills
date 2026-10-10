@@ -22,6 +22,10 @@ function fixture(count = 1): { root: string; home: string; project: string } {
   mkdirSync(project, { mode: 0o700 });
   mkdirSync(join(project, ".codex"), { mode: 0o700 });
   mkdirSync(join(project, ".codex", "skills"), { mode: 0o700 });
+  // The migration archive transaction also locks the native Codex home, not
+  // only the project discovery root. Admit both synthetic roots explicitly.
+  mkdirSync(join(home, ".codex"), { mode: 0o700 });
+  admitCorpusFixture(join(home, ".codex"));
   // Preserve the admitted synthetic Codex inspector installed by beforeEach;
   // add the opt-in Sumi path helper without replacing the trusted fixture PATH.
   process.env.PATH = installSumiPathsFixture(home) + ":" + (process.env.PATH ?? originalPath ?? "");

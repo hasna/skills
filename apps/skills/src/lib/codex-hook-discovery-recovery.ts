@@ -10,6 +10,18 @@ type Snapshot = ReturnType<typeof snapshot>;
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 const fields = [...CODEX_DISCOVERY_PROJECTION_FIELDS];
 const structure = (text: string): any => JSON.parse(JSON.stringify(Bun.TOML.parse(text)));
+// This field is a derived runtime projection of the policy's Codex plugin
+// controls. Older persisted discovery bindings omit it; the verifier supplies
+// an explicit empty array when there are no controls. Bind the same semantic
+// value in both forms while retaining every non-empty control in the digest.
+const discoveryDigest = (binding: AgentDiscoveryBinding): string => {
+  const controls = binding.codexDisabledPluginSkills;
+  if (!Object.hasOwn(binding, "codexDisabledPluginSkills") || (Array.isArray(controls) && controls.length === 0)) {
+    const { codexDisabledPluginSkills: _controls, ...withoutControls } = binding;
+    return sha(JSON.stringify({ ...withoutControls, codexDisabledPluginSkills: [] }));
+  }
+  return sha(JSON.stringify(binding));
+};
 
 /** A receipt projection, not an override supplied by a CLI caller. Only this
  * module can create the in-memory proof used by discovery verification. */
@@ -48,14 +60,14 @@ export function createCodexHookDiscoveryRecovery(binding: AgentDiscoveryBinding,
   for (const { key, state } of additionStates) expected.hooks.state[key] = { ...state };
   need(isDeepStrictEqual(expected, actual) && codexTrustReconcileWitness(before.text, keys) === codexTrustReconcileWitness(current.text, keys) && codexTrustUnmanagedSemantic(before.text, keys) === codexTrustUnmanagedSemantic(current.text, keys), "RECONCILE_DISCOVERY_TRUST_WITNESS");
   unchanged(before); unchanged(current);
-  const witness = Object.freeze({ configPath: current.file, beforeSha256: before.sha256, currentSha256: current.sha256, discoverySha256: sha(JSON.stringify(binding)), typedProjectionSha256: projection });
+  const witness = Object.freeze({ configPath: current.file, beforeSha256: before.sha256, currentSha256: current.sha256, discoverySha256: discoveryDigest(binding), typedProjectionSha256: projection });
   proofs.set(witness, { before, current, recheckAdditions });
   return witness;
 }
 
 export function assertCodexHookDiscoveryRecovery(binding: AgentDiscoveryBinding, witness: CodexHookDiscoveryRecovery): void {
   const proof = proofs.get(witness);
-  need(!!proof && binding.agent === "codex" && witness.discoverySha256 === sha(JSON.stringify(binding)), "RECONCILE_DISCOVERY_RECOVERY_CHANGED");
+  need(!!proof && binding.agent === "codex" && witness.discoverySha256 === discoveryDigest(binding), "RECONCILE_DISCOVERY_RECOVERY_CHANGED");
   unchanged(proof.before); unchanged(proof.current);
   proof.recheckAdditions();
 }

@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { enrollCodexNativeHooks, reconcileCodexNativeHooks } from "./agent-codex-trust.js";
 import { connectCodexHookRpc } from "./codex-hook-rpc.js";
-import { createCodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery.js";
+import { assertCodexHookDiscoveryRecovery, createCodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery.js";
 import { captureDiscoveryByteSources } from "./agent-discovery.js";
 import { snapshot } from "./codex-hook-trust-files.js";
 
@@ -359,7 +359,7 @@ test("native reconciliation supersedes a stale journal only for an exact Codex b
   writeFileSync(join(journal, "intent.json"), JSON.stringify({ ...intentFor(f, plan, hooksText, policyText), beforeSha256: createHash("sha256").update(f.before).digest("hex") }) + "\n", { mode: 0o600 });
   const currentPackage = join(f.home, "package-current"), currentCli = join(currentPackage, "bin/index.js"), currentCommand = join(f.home, "bin/skills-current");
   mkdirSync(join(currentPackage, "bin"), { recursive: true, mode: 0o700 }); writeFileSync(currentCli, "#!/usr/bin/env bun\n// Synthetic current published CLI fixture\n", { mode: 0o700 });
-  writeFileSync(join(currentPackage, "package.json"), JSON.stringify({ name: "@hasna/skills", version: "0.9.7", bin: { skills: "bin/index.js" } }), { mode: 0o600 }); symlinkSync(currentCli, currentCommand); rmSync(f.command); symlinkSync(currentCommand, f.command);
+  writeFileSync(join(currentPackage, "package.json"), JSON.stringify({ name: "@hasna/skills", version: "0.9.7", bin: { skills: "bin/index.js" } }), { mode: 0o600 }); symlinkSync(currentCli, currentCommand); rmSync(f.command); symlinkSync(currentCli, f.command);
   const currentCliWitness = { path: currentCommand, version: "0.9.7", sha256: createHash("sha256").update(readFileSync(currentCli)).digest("hex") };
   const policy = JSON.parse(policyText.toString()); policy.bridge.commands.codex = currentCommand; writeFileSync(policyPath, JSON.stringify(policy), { mode: 0o600 });
   const hooks = JSON.parse(hooksText.toString()); for (const groups of Object.values(hooks.hooks) as any[]) groups[0].hooks[0].command = groups[0].hooks[0].command.replace(f.command, currentCommand); writeFileSync(f.hooksPath, JSON.stringify(hooks), { mode: 0o600 });
@@ -859,6 +859,40 @@ test("the bridge refuses a valid discovery proof for a different configuration r
   const proof = createCodexHookDiscoveryRecovery(binding, snapshot(join(f.journal, "config.before.toml"), true), snapshot(other, true), intent.hooks)!;
   expect(() => assertManagedAgentBridge("codex", { home: f.home, dataDir: f.dataDir, projectDir: f.home, codexDiscoveryRecovery: proof })).toThrow("different configuration root");
   expect(f.calls).toHaveLength(0); expect(existsSync(join(f.journal, "receipt.json"))).toBe(false);
+});
+
+test("Codex recovery binds omitted and empty derived plugin controls equally, but binds non-empty controls", async () => {
+  const f = await discoveryRecoveryFixture(true);
+  const intent = JSON.parse(readFileSync(join(f.journal, "intent.json"), "utf8"));
+  const witness = createCodexHookDiscoveryRecovery(
+    f.policy.bridge.discovery.codex,
+    snapshot(join(f.journal, "config.before.toml"), true),
+    snapshot(f.configPath, true),
+    intent.hooks,
+  )!;
+  const emptyControls = { ...f.policy.bridge.discovery.codex, codexDisabledPluginSkills: [] };
+  expect(() => assertCodexHookDiscoveryRecovery(emptyControls, witness)).not.toThrow();
+  const emptyControlsFirst = { codexDisabledPluginSkills: [], ...f.policy.bridge.discovery.codex };
+  expect(() => assertCodexHookDiscoveryRecovery(emptyControlsFirst, witness)).not.toThrow();
+  const reverseWitness = createCodexHookDiscoveryRecovery(
+    emptyControlsFirst,
+    snapshot(join(f.journal, "config.before.toml"), true),
+    snapshot(f.configPath, true),
+    intent.hooks,
+  )!;
+  expect(() => assertCodexHookDiscoveryRecovery(f.policy.bridge.discovery.codex, reverseWitness)).not.toThrow();
+
+  const changedControls = structuredClone(f.policy.bridge.discovery.codex);
+  changedControls.codexDisabledPluginSkills = [{
+    name: "synthetic",
+    pluginId: "synthetic@1.0.0",
+    namespace: "synthetic",
+    pluginParent: join(f.home, ".codex/plugins/cache/synthetic"),
+    manifestSha256: "a".repeat(64),
+  }];
+  expect(() => assertCodexHookDiscoveryRecovery(changedControls, witness)).toThrow("RECONCILE_DISCOVERY_RECOVERY_CHANGED");
+  expect(() => assertCodexHookDiscoveryRecovery({ ...f.policy.bridge.discovery.codex, codexDisabledPluginSkills: null } as any, witness)).toThrow("RECONCILE_DISCOVERY_RECOVERY_CHANGED");
+  expect(() => assertCodexHookDiscoveryRecovery({ ...f.policy.bridge.discovery.codex, roots: [join(f.home, "changed-root")] }, witness)).toThrow("RECONCILE_DISCOVERY_RECOVERY_CHANGED");
 });
 
 for (const additionVersion of [0, 1, 2]) for (const format of ["json", "human"] as const) test.skipIf(!process.env.SKILLS_TEST_CODEX_COMMAND)(`real CLI recovers both witnesses, enrolls a new command and requires a reviewed same-command refresh (${format}, additions v${additionVersion})`, async () => {
