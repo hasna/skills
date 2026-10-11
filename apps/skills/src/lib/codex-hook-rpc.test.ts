@@ -19,7 +19,7 @@ for (const version of ["0.999.0", "0.160.2", "0.154.0", "0.155.1", "0.156.1", "0
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
-for (const version of ["0.157.0", "0.157.1", "0.158.0", "0.159.0", "0.159.2", "0.160.0", "0.160.1", "0.161.0", "0.162.0"]) test(`native transport accepts the ${version} protocol`, async () => {
+for (const version of ["0.157.0", "0.157.1", "0.158.0", "0.159.0", "0.159.2", "0.160.0", "0.160.1", "0.161.0", "0.162.0", "0.162.1"]) test(`native transport accepts the ${version} protocol`, async () => {
   const home = mkdtempSync(join(tmpdir(), "skills-rpc-supported-")), command = join(home, "codex");
   try {
     admitCorpusFixture(home); admitCorpusFixture(join(home,".codex"));
@@ -104,7 +104,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   return command;
 }
 
-for (const versionLine of ["codex-cli 0.160.2", "codex-cli 0.161.1", "codex-cli 0.162.1", "codex-cli 0.163.0", "codex-cli 0.162.0-alpha.1", "codex-cli 0.162.0-rc.1", "codex-cli 0.162.0+build.1", "codex-cli 0.159.1", "codex-cli 0.159.3", "codex-cli 0.160.10",
+for (const versionLine of ["codex-cli 0.160.2", "codex-cli 0.161.1", "codex-cli 0.162.2", "codex-cli 0.163.0", "codex-cli 0.162.0-alpha.1", "codex-cli 0.162.0-rc.1", "codex-cli 0.162.0+build.1", "codex-cli 0.159.1", "codex-cli 0.159.3", "codex-cli 0.160.10",
   "codex-cli 0.160.1-alpha.1", "codex-cli 0.160.1+build.1", "codex-cli 0.160", "codex-cli v0.160.1", "Codex-CLI 0.160.1", "codex-cli  0.160.1", "0.160.1"])
   test(`native transport refuses the unmeasured neighbour ${JSON.stringify(versionLine)} before RPC`, async () => {
     const home = mkdtempSync(join(tmpdir(), "skills-rpc-neighbour-")), spawned = join(home, "spawned");
@@ -126,7 +126,7 @@ for (const [versionLine, userAgentVersion] of [["codex-cli 0.161.0", "0.160.1"],
     } finally { rmSync(home, { recursive: true, force: true }); }
   });
 
-for (const nativeVersion of ["0.160.1", "0.161.0", "0.162.0"]) test(`native transport admits ${nativeVersion} only through an existing shared corpus admission`, async () => {
+for (const nativeVersion of ["0.160.1", "0.161.0", "0.162.0", "0.162.1"]) test(`native transport admits ${nativeVersion} only through an existing shared corpus admission`, async () => {
   const home = mkdtempSync(join(tmpdir(), "skills-rpc-0160-1-admission-")), spawned = join(home, "spawned");
   try {
     const command = handshakeFixture(home, `codex-cli ${nativeVersion}`, nativeVersion, spawned);
