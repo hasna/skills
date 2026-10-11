@@ -263,6 +263,20 @@ CONTENT_HASH_LIMITS.entries = 0;
 revisionIdOf({ ...revisionContent, tags: "unordered" });
 // @ts-expect-error Root revision declarations cannot silently lose required fields.
 rootRevision({ slug: "fixture" });
+import { getSkillRequirementsFromContent, type SkillRequirements, type SkillMeta as SdkSkillMeta } from "@hasna/skills/sdk";
+const requirementsMeta: SdkSkillMeta = { name: "fixture", displayName: "Fixture", description: "Fixture", category: "Development Tools", tags: ["remote"] };
+const requirementsTexts: readonly string[] = Object.freeze(["Set OPENAI_API_KEY.", "Needs ffmpeg."]);
+const requirements: SkillRequirements = getSkillRequirementsFromContent("fixture", requirementsTexts, Object.freeze({ xlsx: "1.0.0" }), requirementsMeta);
+const requirementsDefaults: SkillRequirements = getSkillRequirementsFromContent("fixture", []);
+const requirementsEnv: string[] = requirements.envVars;
+const requirementsCli: string | null = requirementsDefaults.cliCommand;
+const requirementsDependencies: Record<string, string> = requirements.dependencies;
+// @ts-expect-error Content is passed explicitly, never as a path or a registry name.
+getSkillRequirementsFromContent("fixture", "SKILL.md");
+// @ts-expect-error Dependency versions are strings.
+getSkillRequirementsFromContent("fixture", [], { xlsx: 1 });
+// @ts-expect-error The result is synchronous, never a promise.
+const asyncRequirements: Promise<SkillRequirements> = requirements;
 declare const store: SkillsProductStore;
 // Only compiled, never executed: preserve the existing modes and check the
 // additive streaming option through actual installed declarations.
@@ -570,7 +584,8 @@ const wrongSuspend: false = suspended;
 const wrongResume: true = resumed;
 void [service, version, status, terminalStatus, wrongVersion, wrongStatus, client, auth,
   rootError, requestError, unavailableCode, arbitraryCode, storageEnv, storage, invalidStorage, closureDigest, manifestDigest,
-  validRole, invalidRole, suspendLiteral, resumeLiteral, wrongSuspend, wrongResume];
+  validRole, invalidRole, suspendLiteral, resumeLiteral, wrongSuspend, wrongResume,
+  requirementsEnv, requirementsCli, requirementsDependencies, asyncRequirements];
 `);
   await writeFile(join(workspace, "admin-list-runtime.ts"), `
 import { strict as assert } from "node:assert";
@@ -727,6 +742,10 @@ try {
 console.log("Installed quote error root/SDK runtime: 14 assertions passed.");
 `);
   console.log((await run([process.execPath, "--no-env-file", "quote-error-runtime.ts"], workspace)).trim());
+  await run([process.execPath, "--no-env-file", "test", resolve(root, "src/sdk/skill-requirements.test.ts")], workspace, {
+    SKILLS_REQUIREMENTS_TEST_PACKAGE: join(workspace, "node_modules/@hasna/skills"),
+  });
+  console.log("Installed SDK requirements helper: export, fixed-input output with and without meta, by-reference dependencies, frozen inputs and trapped poisoned ambient reads passed.");
   // Exercise the installed CLI archive too: malformed polling values must not
   // cross the quote/credit boundary; the maximum accepted delay must not overflow
   // into rapid status requests after an owned loopback run is submitted.

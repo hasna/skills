@@ -68,6 +68,8 @@ export * from "../lib/remote-recurring-contract.js";
 export { RecurringInputError, RemoteRecurringError, RemoteRecurringUnavailableError, RemoteRecurringReadError, RemoteRecurringUnconfirmedError } from "../lib/remote-recurring.js";
 export type { RecurringCapability, RecurringListOptions, RemoteRecurringErrorCode } from "../lib/remote-recurring.js";
 export { canonicalJson, canonicalJsonSha256 } from "../lib/canonical-json.js";
+// Pure over caller-supplied content: no registry, filesystem, environment or network reads.
+export { getSkillRequirementsFromContent, type SkillRequirements } from "../lib/skillinfo.js";
 export type { RemoteQuoteUnavailableCode } from "../lib/remote-client.js";
 export { RemoteCreditApprovalError, type RemoteRunApproval, type RemoteRunQuote, type RemoteCreditPack } from "../lib/remote-account.js";
 export { type RemoteInputFile, type RemoteInputFileDescriptor } from "../lib/remote-files.js";
