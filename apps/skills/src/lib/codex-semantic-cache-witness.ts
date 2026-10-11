@@ -111,8 +111,12 @@ export function codexLocalMarketplaceMapsPlugin(text: string, marketplace: strin
   try {
     hashNativeJsonControls(text);
     const value: unknown = JSON.parse(text);
+    const marketplaceInterface = plainObject(value) ? value.interface : undefined;
+    const validInterface = typeof marketplaceInterface === "string" || Number.isSafeInteger(marketplaceInterface)
+      || (plainObject(marketplaceInterface) && exactKeys(marketplaceInterface, [], ["displayName"])
+        && typeof marketplaceInterface.displayName === "string" && marketplaceInterface.displayName.trim().length > 0);
     if (!plainObject(value) || !exactKeys(value, ["interface", "name", "plugins"])
-      || value.name !== marketplace || !(typeof value.interface === "string" || Number.isSafeInteger(value.interface))
+      || value.name !== marketplace || !validInterface
       || !Array.isArray(value.plugins) || value.plugins.length < 1 || value.plugins.length > 4096) return false;
     const rows = value.plugins.filter((row: unknown) => plainObject(row) && row.name === plugin);
     if (rows.length !== 1) return false;
@@ -472,7 +476,8 @@ function reviewedHookControls(root: string, read: (path: string) => string): { n
     || manifest.hooks !== "./hooks/hooks.json"
     || (manifest.description !== undefined && (typeof manifest.description !== "string" || !manifest.description.trim() || manifest.description.length > 1024))) refuse();
   const manifestRecord = manifest as Record<string, unknown>;
-  if (!plainObject(hooks) || !exactKeys(hooks, ["hooks"]) || !plainObject(hooks.hooks)) refuse();
+  if (!plainObject(hooks) || !exactKeys(hooks, ["hooks"], ["description"]) || !plainObject(hooks.hooks)
+    || (hooks.description !== undefined && typeof hooks.description !== "string")) refuse();
   const hookTable = (hooks as Record<string, unknown>).hooks as Record<string, unknown>;
   const events = Object.entries(hookTable);
   if (!events.length || events.length > 32) refuse();
@@ -591,7 +596,10 @@ function assertParents(cacheRoot: string, controls: CodexSemanticCacheControl[],
     if ([".app.json", ".mcp.json"].includes(base) && (parts.length !== 4 || dirname(member) !== root)) refuse();
     if ([".app.json", ".mcp.json"].includes(base)
       && hookParents.some(reviewed => reviewed.pluginParent === parent)) refuse();
-    if (parts.includes("hooks") && (![4, 5].includes(parts.length) || parts[3] !== "hooks"
+    // Application templates can contain ordinary hooks/ source directories.
+    // Native hook catalogs remain controls at any depth; the direct plugin
+    // hooks/ directory also requires its explicitly reviewed hook role.
+    if ((parts[3] === "hooks" || base === "hooks.json") && (![4, 5].includes(parts.length) || parts[3] !== "hooks"
       || (parts.length === 4 ? base !== "hooks" : base !== "hooks.json")
       || !hookParents.some(reviewed => reviewed.pluginParent === join(cacheRoot, parts[0]!, parts[1]!)))) refuse();
   }

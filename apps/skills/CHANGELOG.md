@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.10.67
+
+- Accept the documented local-marketplace `interface.displayName` object and optional hook-file `description` metadata during guarded Codex cache review. Preserve exact reviewed hook bytes and refuse unknown metadata or changed capabilities.
+- Treat nested application source directories named `hooks` as ordinary cache assets. Native `hooks.json` files, direct plugin hook directories and explicit hook selectors remain guarded.
 
 - Export `getSkillRequirementsFromContent` and the `SkillRequirements` type from `@hasna/skills/sdk`, so SDK consumers can derive a skill's environment variables, system dependencies, CLI command and npm dependencies from content they already hold instead of copying the parser. The helper is unchanged: its result depends only on its arguments, and it reads no registry, file, environment, install state or network and does not mutate its inputs. Hosted (`premium` or `remote`) skills still list `HASNA_SKILLS_API_KEY` in place of `SKILLS_API_KEY`. Its environment-name scan no longer writes shared `RegExp` state, and `texts` now accepts a `readonly string[]`. The installed consumer fixture checks the export's declarations and runs fixed-input, frozen-input and poisoned-ambient checks against the packed archive.
 

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { captureDiscoveryDirectories, verifyAgentDiscovery, resolveAgentDiscovery, rebindAgentDiscovery, codexSemanticCacheSourceRole, codexSemanticCacheDirectoryRole, type AgentDiscoveryBinding, type DiscoverySource } from "./agent-discovery.js";
 import { planCodexSemanticCacheWitnessUpgrade, applyAgentIntegration } from "./agent-integration.js";
+import { codexLocalMarketplaceMapsPlugin } from "./codex-semantic-cache-witness.js";
 import { hashCodexSettingsReplacementV5 } from "./codex-settings-witness.js";
 import { hashNativeJsonControls } from "./claude-settings-witness.js";
 import { serializeManagedSkillPolicy, parseManagedSkillPolicy } from "./managed-policy.js";
@@ -63,12 +64,12 @@ function addReviewedHookParent(f: ReturnType<typeof fixture>) {
   return { parent, root, policy, options: { ...f.options, expectedPolicySha256: sha(policy), reviewedHookParents: [parent] } };
 }
 
-function addLocalMarketplaceHookParent(f: ReturnType<typeof fixture>) {
+function addLocalMarketplaceHookParent(f: ReturnType<typeof fixture>, metadata: Record<string, unknown> = { description: "Synthetic lifecycle hook metadata" }) {
   const parent = join(f.cache, "fixture-market/relay"), root = join(parent, "0.1.0");
   const manifest = '{"name":"relay","version":"0.1.0","hooks":"./hooks/hooks.json"}';
-  const hooks = '{"hooks":{"SessionStart":[{"hooks":[{"type":"mcp_tool","server":"fixture_bridge","tool":"activate_hook","input":{},"timeout":5}]}],"UserPromptSubmit":[{"hooks":[{"type":"mcp_tool","server":"fixture_bridge","tool":"activate_hook","input":{},"timeout":5}]}]}}';
+  const hooks = JSON.stringify({ ...metadata, hooks: { SessionStart: [{ hooks: [{ type: "mcp_tool", server: "fixture_bridge", tool: "activate_hook", input: {}, timeout: 5 }] }], UserPromptSubmit: [{ hooks: [{ type: "mcp_tool", server: "fixture_bridge", tool: "activate_hook", input: {}, timeout: 5 }] }] } });
   const marketplacePath = join(f.home, "bridge-package/plugin/.agents/plugins/marketplace.json");
-  const marketplace = '{"interface":1,"name":"fixture-market","plugins":[{"name":"relay","source":{"source":"local","path":"./plugins/relay"}}]}';
+  const marketplace = '{"interface":{"displayName":"Synthetic fixture marketplace"},"name":"fixture-market","plugins":[{"name":"relay","source":{"source":"local","path":"./plugins/relay"}}]}';
   put(join(root, ".codex-plugin/plugin.json"), manifest); put(join(root, "hooks/hooks.json"), hooks); put(marketplacePath, marketplace);
   const settings = `${f.settings}\n[plugins."relay@fixture-market"]\nenabled = true\n`;
   put(f.config, settings);
@@ -83,6 +84,42 @@ function addLocalMarketplaceHookParent(f: ReturnType<typeof fixture>) {
   put(f.policyPath, policy);
   return { parent, root, marketplacePath, policy, settings, options: { ...f.options, expectedPolicySha256: sha(policy), expectedSettingsSha256: sha(settings), reviewedHookParents: [parent] } };
 }
+
+test("local marketplace identity accepts the documented displayName object and rejects unsupported interface shapes", () => {
+  const actualSchemaShape = JSON.stringify({
+    name: "synthetic-market",
+    interface: { displayName: "Synthetic marketplace" },
+    plugins: [{ name: "synthetic-plugin", source: { source: "local", path: "./plugins/synthetic-plugin" } }],
+  });
+  expect(codexLocalMarketplaceMapsPlugin(actualSchemaShape, "synthetic-market", "synthetic-plugin")).toBe(true);
+  expect(codexLocalMarketplaceMapsPlugin(JSON.stringify({
+    name: "synthetic-market", interface: {},
+    plugins: [{ name: "synthetic-plugin", source: { source: "local", path: "./plugins/synthetic-plugin" } }],
+  }), "synthetic-market", "synthetic-plugin")).toBe(false);
+  expect(codexLocalMarketplaceMapsPlugin(JSON.stringify({
+    name: "synthetic-market", interface: { displayName: 42 },
+    plugins: [{ name: "synthetic-plugin", source: { source: "local", path: "./plugins/synthetic-plugin" } }],
+  }), "synthetic-market", "synthetic-plugin")).toBe(false);
+  expect(codexLocalMarketplaceMapsPlugin(JSON.stringify({
+    name: "synthetic-market", interface: { displayName: "Synthetic", unreviewed: true },
+    plugins: [{ name: "synthetic-plugin", source: { source: "local", path: "./plugins/synthetic-plugin" } }],
+  }), "synthetic-market", "synthetic-plugin")).toBe(false);
+  expect(codexLocalMarketplaceMapsPlugin(JSON.stringify({
+    name: "synthetic-market", interface: { displayName: "Synthetic" },
+    plugins: [
+      { name: "synthetic-plugin", source: { source: "local", path: "./plugins/synthetic-plugin" } },
+      { name: "synthetic-plugin", source: { source: "local", path: "./plugins/other" } },
+    ],
+  }), "synthetic-market", "synthetic-plugin")).toBe(false);
+  expect(codexLocalMarketplaceMapsPlugin(JSON.stringify({
+    name: "synthetic-market", interface: { displayName: "Synthetic" },
+    plugins: [{ name: "synthetic-plugin", source: { source: "git", path: "./plugins/synthetic-plugin" } }],
+  }), "synthetic-market", "synthetic-plugin")).toBe(false);
+  expect(codexLocalMarketplaceMapsPlugin(JSON.stringify({
+    name: "synthetic-market", interface: 1,
+    plugins: [{ name: "synthetic-plugin", source: { source: "local", path: "./plugins/synthetic-plugin" } }],
+  }), "synthetic-market", "synthetic-plugin")).toBe(true);
+});
 
 test("semantic migration explicitly composes a fully enrolled native mcp_tool parent", () => {
   const f = fixture(), hook = addReviewedHookParent(f);
@@ -108,6 +145,30 @@ test("local marketplace hook parent without a remote receipt uses its enrolled s
   expect(() => verifyAgentDiscovery(next)).not.toThrow();
   const disabledSettings = local.settings.replace("enabled = true", "enabled = false"); put(f.config, disabledSettings);
   expect(() => planCodexSemanticCacheWitnessUpgrade({ ...local.options, expectedSettingsSha256: sha(disabledSettings) })).toThrow("not enabled");
+});
+
+test("reviewed hook metadata accepts optional descriptions while retaining their exact byte identity", () => {
+  for (const metadata of [{}, { description: "" }, { description: "Synthetic lifecycle hook metadata" }]) {
+    const f = fixture(), local = addLocalMarketplaceHookParent(f, metadata);
+    const plan = planCodexSemanticCacheWitnessUpgrade(local.options), next = plan.discoveryAfter![0]!;
+    expect(() => verifyAgentDiscovery(next)).not.toThrow();
+    const hooksPath = join(local.root, "hooks/hooks.json"), reviewedText = readFileSync(hooksPath, "utf8");
+    expect(next.codexSemanticCache!.witness.hookParents?.[0]?.hooksSha256).toBe(sha(reviewedText));
+    put(hooksPath, JSON.stringify({ ...JSON.parse(reviewedText), description: "Changed description" }));
+    expect(() => verifyAgentDiscovery(next)).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+  }
+});
+
+test("reviewed hook metadata refuses malformed descriptions and unknown top-level fields even when enrolled", () => {
+  for (const metadata of [
+    { description: null }, { description: 42 }, { description: true }, { description: {} }, { description: [] },
+    { description: "Synthetic", unreviewed: true },
+  ]) {
+    const f = fixture(), local = addLocalMarketplaceHookParent(f, metadata);
+    expect(() => planCodexSemanticCacheWitnessUpgrade(local.options)).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+    expect(readFileSync(f.policyPath, "utf8")).toBe(local.policy);
+    expect(readFileSync(f.config, "utf8")).toBe(local.settings);
+  }
 });
 
 test("hook-role bootstrap requires exact reviewed identities and refuses unknown or nested hook capability", () => {
@@ -226,6 +287,26 @@ test("new control paths, disabled skill-name replacement, and role-proof tamperi
   rmSync(join(f.skill.root, "nested"), { recursive: true });
   put(join(f.skill.root, "skills/deploy/SKILL.md"), "---\nname: ship\ndescription: Synthetic replacement\n---\nContent");
   expect(() => verifyAgentDiscovery(next)).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+});
+
+test("nested application hooks remain inert assets while native hook files and selectors remain guarded", () => {
+  const f = fixture(), asset = join(f.skill.root, "skills/deploy/templates/starter/hooks/use-mobile.ts");
+  put(asset, "export const useMobile = () => false;\n");
+  const next = planCodexSemanticCacheWitnessUpgrade(f.options).discoveryAfter![0]!;
+  expect(() => verifyAgentDiscovery(next)).not.toThrow();
+  put(asset, "export const useMobile = () => true;\n");
+  expect(() => verifyAgentDiscovery(next)).not.toThrow();
+  const nestedControl = join(dirname(asset), "hooks.json");
+  put(nestedControl, '{"hooks":{}}');
+  expect(() => verifyAgentDiscovery(next)).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+  rmSync(nestedControl);
+  mkdirSync(join(f.skill.root, "hooks"));
+  expect(() => verifyAgentDiscovery(next)).toThrow("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED");
+  rmSync(join(f.skill.root, "hooks"), { recursive: true });
+  put(join(f.home, ".codex/hooks.json"), JSON.stringify({ hooks: { Stop: [{ command: asset }] } }));
+  expect(() => verifyAgentDiscovery(next)).toThrow("Direct native hooks select");
+  expect(readFileSync(f.policyPath, "utf8")).toBe(f.policy);
+  expect(readFileSync(f.config, "utf8")).toBe(f.settings);
 });
 
 test("direct hooks cannot select projected cache assets; managed hooks outside the cache remain valid", () => {
