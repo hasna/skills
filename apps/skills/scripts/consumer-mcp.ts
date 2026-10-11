@@ -15,8 +15,10 @@
  * - bun, root zod at the declared range (the newest version it admits);
  * - npm, root zod pinned below the floor (default 4.3.5), where npm hoists the
  *   SDK onto that zod and nests a newer one under the package.
- * Each case runs initialize, tools/list and a valid and an invalid tools/call
- * over stdio in local mode, and every case must list byte-identical tools. Only
+ * Each case runs initialize, tools/list, a valid tools/call and three invalid
+ * ones (a wrong type, and confirm=false and an unknown key on a .strict() tool),
+ * each refused with -32602, over stdio in local mode. Every case must list
+ * byte-identical tools. Only
  * the package install uses the network: the MCP child refuses and counts every
  * fetch. The tested zod range and version come from the archive itself.
  *
@@ -160,14 +162,26 @@ async function exerciseMcp(mcp: string, cwd: string, env: Record<string, string>
     assert.notEqual(accepted.isError, true, `list_skills refused valid arguments: ${JSON.stringify(accepted).slice(0, 500)}`);
     const page = JSON.parse(accepted.content[0].text);
     assert(Array.isArray(page.skills) && page.limit === 1, "list_skills returned an unexpected page");
-    // A JSON-RPC error or an isError result both count as a refusal naming the field.
-    const invalid = await response(4, "tools/call", { name: "list_skills", arguments: { limit: "one" } });
-    const refusal = JSON.stringify(invalid.error ?? (invalid.result?.isError === true ? invalid.result : null));
-    assert(refusal !== "null" && refusal.includes("limit"), `Invalid list_skills arguments were not refused by schema validation: ${JSON.stringify(invalid).slice(0, 500)}`);
+    // Invalid arguments must be refused by the SDK's validation with -32602
+    // (a JSON-RPC error, or an isError result carrying it) before any handler runs.
+    async function refused(id: number, name: string, args: Record<string, unknown>, field: string) {
+      const message = await response(id, "tools/call", { name, arguments: args });
+      const refusal = JSON.stringify(message.error ?? (message.result?.isError === true ? message.result : null));
+      const code = message.error?.code ?? Number(/MCP error (-?\d+)/.exec(refusal)?.[1]);
+      assert(refusal !== "null" && code === -32602 && refusal.includes(field),
+        `${name} arguments were not refused by schema validation with -32602: ${JSON.stringify(message).slice(0, 500)}`);
+    }
+    await refused(4, "list_skills", { limit: "one" }, "limit");
+    // A .strict() tool: a confirm=false value and an unknown key are both refused.
+    const uuid = "00000000-0000-4000-8000-000000000001";
+    const accept = { userId: uuid, membershipId: uuid, email: "member@example.test", code: "000000", invitationId: uuid,
+      token: "t".repeat(43), confirm: true };
+    await refused(5, "accept_workspace_invitation", { ...accept, confirm: false }, "confirm");
+    await refused(6, "accept_workspace_invitation", { ...accept, unexpectedKey: true }, "unexpectedKey");
     child.stdin.end();
     assert.equal(await child.exited, 0, "The installed MCP did not exit cleanly");
     await stderr;
-    return { tools: listed.tools as unknown[], calls: 2 };
+    return { tools: listed.tools as unknown[], calls: 4 };
   } finally { clearTimeout(timer); child.stdin.end(); stop(); await child.exited; reader.releaseLock(); }
 }
 

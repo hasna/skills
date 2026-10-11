@@ -89,9 +89,11 @@ Without arguments, the fixture still packs its own archive for normal `prepack`.
 
 The receipt's `mcp-binary-surface` check is static and offline: it reads the
 installed `bin/mcp.js` without running it. The file must import only
-`@modelcontextprotocol/sdk`, bundle exactly one zod, and serve `tools/list` with
-that zod (`src/mcp/package-tool-list.ts`), because the consumer's SDK may resolve
-another zod.
+`@modelcontextprotocol/sdk` and bundle exactly one zod. It must also contain the
+package-zod `tools/list` handler (`servePackageZodToolList` from
+`src/mcp/package-tool-list.ts`), which is needed because the consumer's SDK may
+resolve another zod. The check only looks for that name. The handler's behavior
+is covered by `src/mcp/package-tool-list.test.ts`.
 
 Packed MCP consumer acceptance installs and runs floating third-party packages,
 so it is not part of `prepack`, `prepublishOnly` or `verify:consumer-types`, and
@@ -100,16 +102,24 @@ the publish job does not run it. It runs in the unprivileged
 no environment, no secrets and no id-token. That job runs on pull requests that
 change `apps/skills` and on manual dispatch, with the release toolchain pins. It
 installs the locked dependencies, typechecks, builds and runs the prepack gates.
+It also runs the unit tests for the `tools/list` handler and the gate helpers.
 It then packs the archive and runs `verify:consumer-mcp` on it:
 - under bun, with root `zod` at the declared floor and at the declared range;
 - under npm, with root `zod` at 4.3.5, 3.25.76 and 4.1.13, below the floor,
   where npm runs the SDK on that older zod.
 
 The tested range comes from the archive's own `package.json`. Each layout runs
-`initialize`, `tools/list` and a valid and an invalid `tools/call` with every
-fetch refused. Every layout must list identical tools and schemas. The job
-uploads only the gate's summary. Run the gate locally with
+`initialize` and `tools/list`, with every fetch refused. It then runs a valid
+`tools/call` and three invalid ones, each of which must be refused with -32602:
+a wrong type, and `confirm: false` and an unknown key on a `.strict()` tool.
+Every layout must list identical tools and schemas. The job uploads only the
+gate's summary.
+
+Run the gate locally with
 `bun run verify:consumer-mcp [--archive <path> --sha256 <hex>] [--npm-split-zod <version>]...`.
+Without `--npm-split-zod` it runs the two bun layouts and only the npm 4.3.5
+layout. Each `--npm-split-zod` replaces that npm list, so the workflow passes
+4.3.5, 3.25.76 and 4.1.13 explicitly.
 
 Immediately before publication, `scripts/publish-reviewed-archive.ts` requires
 the tag-push context, review and consumer receipts, package/version, complete

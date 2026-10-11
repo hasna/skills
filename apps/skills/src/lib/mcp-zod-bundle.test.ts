@@ -20,7 +20,7 @@ const HANDLER = "function servePackageZodToolList(server) {}\n";
 const scratch = mkdtempSync(join(tmpdir(), "skills-mcp-zod-bundle-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
-test("bin/mcp.js imports only the MCP SDK, bundles one zod and serves tools/list with it", () => {
+test("bin/mcp.js imports only the MCP SDK, bundles one zod and contains the package-zod tools/list handler", () => {
   const sdk = 'import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";\nimport { readFileSync } from "node:fs";\n';
   expect(() => assertMcpBinarySurface(sdk + ZOD_CORE + HANDLER)).not.toThrow();
   expect(() => assertMcpBinarySurface('#!/usr/bin/env bun\nconst sdk = await import("@modelcontextprotocol/sdk/server/stdio.js");\n' + ZOD_CORE + HANDLER)).not.toThrow();
@@ -29,7 +29,7 @@ test("bin/mcp.js imports only the MCP SDK, bundles one zod and serves tools/list
   expect(() => assertMcpBinarySurface('import { readFileSync } from "node:fs";\n' + ZOD_CORE + HANDLER)).toThrow("not bundle it");
   expect(() => assertMcpBinarySurface(sdk + HANDLER)).toThrow("exactly one zod; found 0");
   expect(() => assertMcpBinarySurface(sdk + ZOD_CORE + ZOD_CORE.replace("version", "version2") + HANDLER)).toThrow("exactly one zod; found 2");
-  expect(() => assertMcpBinarySurface(sdk + ZOD_CORE)).toThrow("serve tools/list with its bundled zod");
+  expect(() => assertMcpBinarySurface(sdk + ZOD_CORE)).toThrow("must contain the package-zod tools/list handler");
   expect(CONSUMER_CHECKS).toContain("mcp-binary-surface");
 });
 

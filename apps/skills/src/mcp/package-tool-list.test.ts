@@ -107,6 +107,36 @@ test("every registration form and tool update lists exactly as the SDK lists it"
   expect(JSON.stringify(ours)).toBe(JSON.stringify(reference));
 });
 
+test("the SDK still refuses invalid arguments with -32602, including on .strict() tools", async () => {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = buildServer();
+  const client = new Client({ name: "package-tool-list-test", version: "0.0.0" }, { capabilities: {} });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  const uuid = "00000000-0000-4000-8000-000000000001";
+  const accept = { userId: uuid, membershipId: uuid, email: "member@example.test", code: "000000", invitationId: uuid,
+    token: "t".repeat(43), confirm: true };
+  const refusal = async (name: string, args: Record<string, unknown>) => {
+    try {
+      const result = await client.callTool({ name, arguments: args });
+      expect(result.isError).toBe(true);
+      return JSON.stringify(result.content);
+    } catch (error) {
+      return `MCP error ${(error as { code?: number }).code}: ${(error as Error).message}`;
+    }
+  };
+  try {
+    for (const [name, args, field] of [
+      ["list_skills", { limit: "one" }, "limit"],
+      ["accept_workspace_invitation", { ...accept, confirm: false }, "confirm"],
+      ["accept_workspace_invitation", { ...accept, unexpectedKey: true }, "unexpectedKey"],
+    ] as const) {
+      const text = await refusal(name, args);
+      expect(text).toContain("-32602");
+      expect(text).toContain(field);
+    }
+  } finally { await client.close(); await server.close(); }
+});
+
 test("the positional tool() form takes its input schema where the SDK does", () => {
   const shape = { x: z.string() }, annotations = { readOnlyHint: true }, cb = () => undefined;
   expect(legacyInputSchema([cb])).toBeUndefined();

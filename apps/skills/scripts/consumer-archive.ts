@@ -15,8 +15,9 @@ const isMcpSdk = (path: string) => path === "@modelcontextprotocol/sdk" || path.
 /**
  * Static, offline check of the built bin/mcp.js; it executes nothing. The
  * binary bundles everything except the MCP SDK: it imports the SDK and nothing
- * else outside the runtime, embeds exactly one zod, and serves tools/list with
- * that zod (src/mcp/package-tool-list.ts) because the SDK may resolve another.
+ * else outside the runtime, and embeds exactly one zod. It must also contain
+ * the package-zod tools/list handler; that is a name check only, and the
+ * handler's behavior is covered by src/mcp/package-tool-list.test.ts.
  */
 export function assertMcpBinarySurface(source: string): void {
   const imports = new Bun.Transpiler({ loader: "js" }).scanImports(source.replace(/^#!.*\n/, ""))
@@ -27,7 +28,7 @@ export function assertMcpBinarySurface(source: string): void {
   // zod's core declares its version object once per bundled copy.
   const zodCopies = source.match(/major:\s*\d+,\s*minor:\s*\d+,\s*patch:\s*\d+/g)?.length ?? 0;
   if (zodCopies !== 1) throw new Error(`bin/mcp.js must bundle exactly one zod; found ${zodCopies}`);
-  if (!source.includes("servePackageZodToolList")) throw new Error("bin/mcp.js must serve tools/list with its bundled zod");
+  if (!source.includes("servePackageZodToolList")) throw new Error("bin/mcp.js must contain the package-zod tools/list handler (servePackageZodToolList)");
 }
 
 export type ArchiveDigest = { bytes: number; sha256: string; integrity: string };

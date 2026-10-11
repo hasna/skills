@@ -761,7 +761,7 @@ console.log("Installed quote error root/SDK runtime: 14 assertions passed.");
   // packed MCP consumer layouts run third-party code, so they run in the
   // unprivileged skills-consumer-gate workflow (scripts/consumer-mcp.ts), not here.
   assertMcpBinarySurface(await readFile(join(workspace, "node_modules/@hasna/skills", metadata.bin["skills-mcp"]), "utf8"));
-  console.log("Installed MCP binary: imports only @modelcontextprotocol/sdk, bundles one zod and serves tools/list with it.");
+  console.log("Installed MCP binary: imports only @modelcontextprotocol/sdk, bundles one zod and contains the package-zod tools/list handler.");
   console.log(`Consumer types: @hasna/skills@${metadata.version} passed strict installed-package checking for all four exports (skipLibCheck=false).`);
   const receipt = await completeConsumerArchive(archive, metadata.version);
   if (options.receipt) await writeFile(options.receipt, JSON.stringify(receipt) + "\n", { flag: "wx", mode: 0o600 });
