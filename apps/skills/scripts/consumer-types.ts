@@ -761,7 +761,7 @@ console.log("Installed quote error root/SDK runtime: 14 assertions passed.");
   // The stdio MCP must not depend on which zod the consumer installs: check the
   // declared floor exactly and the newest version the declared range admits.
   for (const result of await verifyInstalledMcpZodCases(archive.installedFrom, metadata)) {
-    console.log(`Installed MCP zod ${result.case}: zod ${result.zodVersion}, SDK ${result.sdkVersion} (${result.binaryZodAndSdk} in bin/mcp.js); initialize, tools/list (${result.tools} tools) and ${result.calls} tools/call passed with no network request.`);
+    console.log(`Installed MCP zod ${result.case}: consumer zod ${result.zodVersion} and MCP SDK ${result.sdkVersion}, bin/mcp.js ${result.binaryZodAndSdk === "bundled" ? "bundles both" : "imports both"}; initialize, tools/list (${result.tools} tools) and ${result.calls} tools/call passed with no network request.`);
   }
   console.log(`Consumer types: @hasna/skills@${metadata.version} passed strict installed-package checking for all four exports (skipLibCheck=false).`);
   const receipt = await completeConsumerArchive(archive, metadata.version);

@@ -151,7 +151,8 @@ export async function verifyInstalledMcpZod(options: {
   archive: string; root: string; testCase: McpZodCase; zodSpec: string; version: string;
 }): Promise<McpZodResult> {
   const consumer = join(options.root, `mcp-zod-${options.testCase}`);
-  const home = join(consumer, "home"), cache = join(consumer, "install-cache");
+  // Both cases share one private install cache below the temporary root.
+  const home = join(consumer, "home"), cache = join(options.root, "install-cache");
   await mkdir(home, { recursive: true, mode: 0o700 });
   const installEnv = { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, TMPDIR: consumer, NO_COLOR: "1",
     BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", BUN_INSTALL_CACHE_DIR: cache,
