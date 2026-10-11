@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { assertInstalledBinaries, assertInstalledIdentity, completeConsumerArchive, parseConsumerArguments, stageConsumerArchive } from "./consumer-archive.js";
+import { verifyInstalledMcpZodCases } from "./consumer-mcp.js";
 
 // Check the public distribution against its declared dependencies, independently
 // of workspace overrides and skipLibCheck. npm's lifecycle is disabled in the
@@ -757,6 +758,11 @@ console.log("Installed quote error root/SDK runtime: 14 assertions passed.");
     SKILLS_REMOTE_ROUTING_TEST_PACKAGE: join(workspace, "node_modules/@hasna/skills"),
   });
   console.log("Installed CLI routing: explicit remote approval, isolated profiles, target conflicts and managed defaults passed.");
+  // The stdio MCP must not depend on which zod the consumer installs: check the
+  // declared floor exactly and the newest version the declared range admits.
+  for (const result of await verifyInstalledMcpZodCases(archive.installedFrom, metadata)) {
+    console.log(`Installed MCP zod ${result.case}: zod ${result.zodVersion}, SDK ${result.sdkVersion} (${result.binaryZodAndSdk} in bin/mcp.js); initialize, tools/list (${result.tools} tools) and ${result.calls} tools/call passed with no network request.`);
+  }
   console.log(`Consumer types: @hasna/skills@${metadata.version} passed strict installed-package checking for all four exports (skipLibCheck=false).`);
   const receipt = await completeConsumerArchive(archive, metadata.version);
   if (options.receipt) await writeFile(options.receipt, JSON.stringify(receipt) + "\n", { flag: "wx", mode: 0o600 });

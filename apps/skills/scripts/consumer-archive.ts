@@ -5,7 +5,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 export const CONSUMER_EXPORTS = [".", "./admin-contract", "./sdk", "./storage"] as const;
 export const CONSUMER_CHECKS = [
   "strict-types", "storage-runtime", "admin-list-runtime", "bundle-runtime", "content-hash-revision-runtime",
-  "quote-error-runtime", "cli-polling", "cli-remote-routing", "bin-entrypoints",
+  "quote-error-runtime", "cli-polling", "cli-remote-routing", "bin-entrypoints", "mcp-zod-instance",
 ] as const;
 
 export type ArchiveDigest = { bytes: number; sha256: string; integrity: string };

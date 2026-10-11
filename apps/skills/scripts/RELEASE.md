@@ -87,6 +87,15 @@ after both the original archive and its installed input still match. Its
 temporary install is removed; the reviewed original and external receipt remain.
 Without arguments, the fixture still packs its own archive for normal `prepack`.
 
+The receipt's `mcp-zod-instance` check installs the same archive twice more,
+into consumers whose root pins `zod` to the declared floor exactly and to the
+newest version the declared range admits, each re-checked with
+`--frozen-lockfile`. It starts the installed `skills-mcp --stdio` in local mode
+with every fetch refused and runs `initialize`, `tools/list` and two
+`tools/call` requests. It also requires `bin/mcp.js` to bundle zod and the MCP
+SDK together, or to import both from the same installed zod package. Run it on
+its own with `bun run verify:consumer-mcp [--archive <path> --sha256 <hex>]`.
+
 Immediately before publication, `scripts/publish-reviewed-archive.ts` requires
 the tag-push context, review and consumer receipts, package/version, complete
 check set and current archive hashes to agree. It passes the same file to
