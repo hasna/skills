@@ -95,7 +95,7 @@ async function exerciseMcp(mcp: string, cwd: string, env: Record<string, string>
   void stderr.catch(stop);
   const reader = child.stdout.getReader(), decoder = new TextDecoder();
   let pending = "", outputBytes = 0;
-  async function rpc(id: number, method: string, params: unknown): Promise<any> {
+  async function response(id: number, method: string, params: unknown): Promise<{ result?: any; error?: { code: number; message: string } }> {
     child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
     child.stdin.flush();
     while (true) {
@@ -104,8 +104,7 @@ async function exerciseMcp(mcp: string, cwd: string, env: Record<string, string>
         const message = JSON.parse(pending.slice(0, newline)); pending = pending.slice(newline + 1);
         if (message.id === undefined) continue;
         assert.equal(message.id, id);
-        if (message.error) throw new Error(`MCP ${method} failed (${message.error.code}): ${String(message.error.message).slice(0, 500)}`);
-        return message.result;
+        return message;
       }
       const part = await reader.read();
       if (part.done) throw new Error(`MCP ended before its ${method} response: ${(await stderr.catch(() => "")).slice(-2_000)}`);
@@ -113,6 +112,11 @@ async function exerciseMcp(mcp: string, cwd: string, env: Record<string, string>
       assert(outputBytes <= LIMIT_BYTES, "Installed MCP output limit");
       pending += decoder.decode(part.value, { stream: true });
     }
+  }
+  async function rpc(id: number, method: string, params: unknown): Promise<any> {
+    const message = await response(id, method, params);
+    if (message.error) throw new Error(`MCP ${method} failed (${message.error.code}): ${String(message.error.message).slice(0, 500)}`);
+    return message.result;
   }
   try {
     const initialized = await rpc(1, "initialize", { protocolVersion: "2024-11-05", capabilities: {},
@@ -130,10 +134,10 @@ async function exerciseMcp(mcp: string, cwd: string, env: Record<string, string>
     assert.notEqual(accepted.isError, true, `list_skills refused valid arguments: ${JSON.stringify(accepted).slice(0, 500)}`);
     const page = JSON.parse(accepted.content[0].text);
     assert(Array.isArray(page.skills) && page.limit === 1, "list_skills returned an unexpected page");
-    const refused = await rpc(4, "tools/call", { name: "list_skills", arguments: { limit: "one" } }).then(
-      result => ({ isError: result.isError === true, text: JSON.stringify(result) }),
-      (error: Error) => ({ isError: true, text: error.message }));
-    assert(refused.isError && refused.text.includes("limit"), `Invalid list_skills arguments were not refused by schema validation: ${refused.text.slice(0, 500)}`);
+    // A JSON-RPC error or an isError result both count as a refusal naming the field.
+    const invalid = await response(4, "tools/call", { name: "list_skills", arguments: { limit: "one" } });
+    const refusal = JSON.stringify(invalid.error ?? (invalid.result?.isError === true ? invalid.result : null));
+    assert(refusal !== "null" && refusal.includes("limit"), `Invalid list_skills arguments were not refused by schema validation: ${JSON.stringify(invalid).slice(0, 500)}`);
     child.stdin.end();
     assert.equal(await child.exited, 0, "The installed MCP did not exit cleanly");
     await stderr;
