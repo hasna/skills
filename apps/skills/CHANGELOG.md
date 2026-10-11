@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Bundle the MCP SDK with zod in `bin/mcp.js` (`skills-mcp`), as the `skills mcp` CLI command already does. Since 0.10.61 the binary bundled zod 4.5.4 but loaded the MCP SDK from the consumer's `node_modules`, so an SDK that resolved an older zod, such as the declared floor 4.3.6, failed `tools/list` with `ctx.deferred.push` undefined. The tool schemas and the SDK now always use the same zod, whatever zod or SDK the consumer installs. The `zod` and `@modelcontextprotocol/sdk` ranges are unchanged.
+- Load zod from `node_modules` in `bin/mcp.js` (`skills-mcp`), next to the MCP SDK it already loads from there. Since 0.10.61 the binary bundled zod 4.5.4 while the SDK stayed external, so an SDK that resolved an older zod, such as the declared floor 4.3.6, failed `tools/list` with `ctx.deferred.push` undefined. The tool schemas and the SDK now share the installed zod. The binary still bundles everything else, and the `zod` (^4.3.6) and `@modelcontextprotocol/sdk` ranges are unchanged.
 - The installed consumer fixture and its receipt add an `mcp-zod-instance` check. It runs the packed archive's stdio MCP against the declared zod floor and the newest zod the range admits, with no network access after installation. `verify:consumer-mcp` runs it on its own.
 
 ## 0.10.68

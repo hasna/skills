@@ -43,12 +43,18 @@ function sha256(path: string): string {
 function assertBundledSurfaces(producerRoot: string): void {
   const builtins = new Set([...builtinModules, ...builtinModules.map(name => `node:${name}`), "bun", "bun:sqlite"]);
   const scanner = new Bun.Transpiler({ loader: "js" });
-  // bin/mcp.js bundles the MCP SDK with the zod its tool schemas use. An
-  // external SDK converts and validates those schemas with whatever zod the
-  // consumer resolves for it, which broke tools/list in 0.10.61-0.10.68.
+  // bin/mcp.js bundles everything except the MCP SDK and the zod the SDK
+  // converts and validates its tool schemas with. A bundled zod beside the
+  // external SDK broke tools/list for consumers on an older zod (0.10.61-0.10.68).
+  const sdkOrZod = (path: string) => path === "zod" || path.startsWith("zod/")
+    || path === "@modelcontextprotocol/sdk" || path.startsWith("@modelcontextprotocol/sdk/");
   for (const file of ["dist/index.js", "dist/storage.js", "dist/sdk/index.js", "dist/admin-contract.js", "dist/runtime-prerequisites.js", "bin/mcp.js"]) {
     const imports = scanner.scanImports(readFileSync(join(producerRoot, file), "utf8").replace(/^#!.*\n/, ""));
-    expect(imports.filter(entry => !builtins.has(entry.path))).toEqual([]);
+    expect(imports.filter(entry => !builtins.has(entry.path) && !(file === "bin/mcp.js" && sdkOrZod(entry.path)))).toEqual([]);
+    if (file === "bin/mcp.js") {
+      const external = new Set(imports.map(entry => entry.path.startsWith("zod") ? "zod" : entry.path.split("/").slice(0, 2).join("/")));
+      expect(external.has("zod") && external.has("@modelcontextprotocol/sdk")).toBe(true);
+    }
   }
   expect(scanner.scanImports('import { KernelLock } from "@hasna/contracts/kernel-lock";')
     .filter(entry => !builtins.has(entry.path))).toHaveLength(1);

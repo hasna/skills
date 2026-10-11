@@ -9,7 +9,8 @@ useDefaultTestTimeout();
 
 // The MCP tool schemas and the MCP SDK must share one zod. 0.10.61-0.10.68 built
 // bin/mcp.js with zod bundled but the SDK external, so an installed SDK that
-// resolved an older zod failed tools/list with `ctx.deferred.push`.
+// resolved an older zod failed tools/list with `ctx.deferred.push`. The binary
+// keeps the SDK external and resolves zod from node_modules beside it.
 const packageRoot = resolve(import.meta.dir, "../..");
 const { declaredFloor, mcpBinaryDisposition } = await import(resolve(packageRoot, "scripts/consumer-mcp.ts"));
 const { CONSUMER_CHECKS } = await import(resolve(packageRoot, "scripts/consumer-archive.ts"));
@@ -37,7 +38,7 @@ test("the consumer fixture pins the declared zod floor of a caret range only", (
   expect(CONSUMER_CHECKS).toContain("mcp-zod-instance");
 });
 
-test("the package build bundles zod and the MCP SDK together in bin/mcp.js", async () => {
+test("the package build leaves both zod and the MCP SDK external in bin/mcp.js", async () => {
   const metadata = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
   const steps = String(metadata.scripts.build).split(" && ").filter(step => step.includes("./src/mcp/index.ts"));
   expect(steps).toHaveLength(1);
@@ -56,5 +57,5 @@ test("the package build bundles zod and the MCP SDK together in bin/mcp.js", asy
     const [stdout, stderr, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     if (status !== 0) throw new Error(`MCP build failed (${status}):\n${stdout.slice(-4_000)}${stderr.slice(-4_000)}`);
   } finally { clearTimeout(deadline); }
-  expect(mcpBinaryDisposition(readFileSync(outfile, "utf8"))).toBe("bundled");
+  expect(mcpBinaryDisposition(readFileSync(outfile, "utf8"))).toBe("installed");
 });
