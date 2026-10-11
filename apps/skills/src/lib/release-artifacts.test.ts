@@ -43,6 +43,8 @@ function sha256(path: string): string {
 function assertBundledSurfaces(producerRoot: string): void {
   const builtins = new Set([...builtinModules, ...builtinModules.map(name => `node:${name}`), "bun", "bun:sqlite"]);
   const scanner = new Bun.Transpiler({ loader: "js" });
+  // bin/mcp.js bundles everything except the MCP SDK, zod included; its
+  // tools/list converts schemas with that bundled zod (mcp/package-tool-list.ts).
   for (const file of ["dist/index.js", "dist/storage.js", "dist/sdk/index.js", "dist/admin-contract.js", "dist/runtime-prerequisites.js", "bin/mcp.js"]) {
     const imports = scanner.scanImports(readFileSync(join(producerRoot, file), "utf8").replace(/^#!.*\n/, ""));
     expect(imports.filter(entry => !builtins.has(entry.path) && !(file === "bin/mcp.js" &&

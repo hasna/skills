@@ -7,6 +7,7 @@ import { prepareInvitationRecoveryTarget } from "../lib/invitation-recovery-targ
 import { RemoteSkillsAuthClient } from "../lib/remote-auth.js";
 import { invitationEmailCustomerError, type RequestInvitationEmailChallenge, type AcceptInvitationEmailChallenge } from "../lib/remote-invitation-recovery.js";
 import { mcpError, mcpJson } from "./helpers.js";
+import { servePackageZodToolList } from "./package-tool-list.js";
 
 /** Dedicated anonymous proof surface. Ordinary tools and credential resolution are not initialized. */
 export async function startInvitationRecoveryMcp(args: string[], env: Record<string, string | undefined> = process.env) {
@@ -14,9 +15,16 @@ export async function startInvitationRecoveryMcp(args: string[], env: Record<str
     || env.MCP_HTTP === "1" || !!env.MCP_HTTP_PORT || isSkillsLocalOptIn(env)) throw new Error("Use only --invitation-recovery --stdio with an explicit Skills API URL.");
   const target = prepareInvitationRecoveryTarget(env);
   const server = new McpServer({ name: "skills-invitation-recovery", version: pkg.version });
+  // tools/list must convert schemas with this package's zod, not the SDK's.
+  servePackageZodToolList(server);
+  registerInvitationRecoveryTools(server, new RemoteSkillsAuthClient(target.origin), target);
+  target.unchanged(); await server.connect(new StdioServerTransport());
+}
+
+/** Register the two anonymous invitation recovery tools on `server`. */
+export function registerInvitationRecoveryTools(server: McpServer, client: RemoteSkillsAuthClient, target: { unchanged(): void }): void {
   const uuid = z.string().regex(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/);
   const proof = { invitationId: uuid, challengeId: uuid, token: z.string().regex(/^[A-Za-z0-9_-]{43}$/).describe("Invitation secret, only in this request; never logged or persisted."), confirm: z.literal(true) };
-  const client = new RemoteSkillsAuthClient(target.origin);
   server.registerTool("request_invitation_email_challenge", {
     title: "Request Invitation Recovery Code", description: "Existing accounts without usable memberships only. Retain the caller challenge UUID before this single request. The response does not confirm eligibility or email delivery. No automatic retry or credential writes.",
     inputSchema: z.object(proof).strict(), annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
@@ -31,5 +39,4 @@ export async function startInvitationRecoveryMcp(args: string[], env: Record<str
     try { target.unchanged(); return mcpJson(await client.acceptInvitationEmailChallenge(input)); }
     catch (error) { const result = invitationEmailCustomerError(error); return mcpError(result.code, result.error); }
   });
-  target.unchanged(); await server.connect(new StdioServerTransport());
 }

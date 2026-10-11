@@ -66,6 +66,7 @@
     "verify:release": "bun run scripts/release-guard.ts",
     "verify:release-review": "bun run scripts/verify-release-review.ts",
     "verify:consumer-types": "bun run scripts/consumer-types.ts",
+    "verify:consumer-mcp": "bun run scripts/consumer-mcp.ts",
     "prepack": "bun run verify:generated && bun run verify:release && bun run verify:consumer-types",
     "prepublishOnly": "bun run verify:producer && bun run typecheck && bun run test",
     "verify:producer": "bun run scripts/release-dependencies.ts",

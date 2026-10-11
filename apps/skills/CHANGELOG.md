@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Serve `tools/list` in `skills-mcp` with JSON Schema converted by the package's own zod. `bin/mcp.js` bundles zod and loads only the MCP SDK from the consumer's `node_modules`. Since 0.10.61 the SDK's own `tools/list` converted the tool schemas with whatever zod the SDK resolved, and failed or degraded whenever that zod was older than the bundled 4.5.4:
+  - It failed with `ctx.deferred.push` undefined for consumers that lock zod 4.3.x or 4.4.x, and for npm trees whose own zod is 4.2.0 to 4.3.5.
+  - It advertised degraded schemas for npm trees on zod 3.25.x or 4.1.x.
+
+  The new output matches the SDK's own conversion field for field, including tools registered with the positional `tool()` form. Argument validation stays with the SDK, and the `zod` and `@modelcontextprotocol/sdk` ranges are unchanged.
+- The installed consumer receipt adds a static `mcp-binary-surface` check. That check confirms `bin/mcp.js` imports only the MCP SDK and bundles one zod. It also checks that the `tools/list` handler is present, by name only; the handler's behavior is covered by unit tests.
+- The packed MCP consumer layouts run in the new unprivileged `skills-consumer-gate` workflow, never in the publish job:
+  - bun at the declared zod floor and at the declared range;
+  - npm with zod 4.3.5, 3.25.76 and 4.1.13.
+
+  Each layout runs a valid call and three invalid calls refused with -32602, and every layout must list identical tools. Locally, `verify:consumer-mcp` runs the two bun layouts and only the npm 4.3.5 layout unless `--npm-split-zod` is given.
+
 ## 0.10.68
 
 - Admit the exact Codex 0.162.1 hooks, qualified skill catalog and installed-plugin review contracts, which are unchanged from 0.162.0. Preserve exact version-bound review evidence, future-version rejection, executable trust and independent native corpus admission.
