@@ -87,14 +87,17 @@ after both the original archive and its installed input still match. Its
 temporary install is removed; the reviewed original and external receipt remain.
 Without arguments, the fixture still packs its own archive for normal `prepack`.
 
-The receipt's `mcp-zod-instance` check installs the same archive twice more,
-into consumers whose root pins `zod` to the declared floor exactly and to the
-newest version the declared range admits, each re-checked with
-`--frozen-lockfile`. It starts the installed `skills-mcp --stdio` in local mode
-with every fetch refused and runs `initialize`, `tools/list` and two
-`tools/call` requests. It also requires `bin/mcp.js` to bundle zod and the MCP
-SDK together, or to import both from the same installed zod package. Run it on
-its own with `bun run verify:consumer-mcp [--archive <path> --sha256 <hex>]`.
+The receipt's `mcp-zod-instance` check reads the declared `zod` range from the
+archive's own `package.json` and installs the archive three more times. Two
+installs use bun with root `zod` pinned to the declared floor exactly and to the
+declared range; the third uses npm with root `zod` pinned below the floor
+(4.3.5), where npm runs the MCP SDK on that older zod. Each install is re-checked
+from its lock (`--frozen-lockfile`, `npm ci`). The check then starts the
+installed `skills-mcp --stdio` in local mode with every fetch refused and runs
+`initialize`, `tools/list` and a valid and an invalid `tools/call`. Every layout
+must list identical tools and schemas, and `bin/mcp.js` must import only the MCP
+SDK. Run it on its own with
+`bun run verify:consumer-mcp [--archive <path> --sha256 <hex>] [--npm-split-zod <version>]...`.
 
 Immediately before publication, `scripts/publish-reviewed-archive.ts` requires
 the tag-push context, review and consumer receipts, package/version, complete

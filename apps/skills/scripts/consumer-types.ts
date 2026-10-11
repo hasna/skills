@@ -758,10 +758,11 @@ console.log("Installed quote error root/SDK runtime: 14 assertions passed.");
     SKILLS_REMOTE_ROUTING_TEST_PACKAGE: join(workspace, "node_modules/@hasna/skills"),
   });
   console.log("Installed CLI routing: explicit remote approval, isolated profiles, target conflicts and managed defaults passed.");
-  // The stdio MCP must not depend on which zod the consumer installs: check the
-  // declared floor exactly and the newest version the declared range admits.
-  for (const result of await verifyInstalledMcpZodCases(archive.installedFrom, metadata)) {
-    console.log(`Installed MCP zod ${result.case}: consumer zod ${result.zodVersion} and MCP SDK ${result.sdkVersion}, bin/mcp.js ${result.binaryZodAndSdk === "bundled" ? "bundles both" : "imports both"}; initialize, tools/list (${result.tools} tools) and ${result.calls} tools/call passed with no network request.`);
+  // The stdio MCP must not depend on which zod the consumer installs. The cases
+  // (bun at the declared floor and range, npm split below it) read the range
+  // from the archive itself.
+  for (const result of await verifyInstalledMcpZodCases(archive.installedFrom)) {
+    console.log(`Installed MCP zod ${result.case}: root zod ${result.rootZod}, MCP SDK ${result.sdkVersion} on zod ${result.sdkZod}; initialize, tools/list (${result.tools} tools, sha256 ${result.toolsSha256}) and ${result.calls} tools/call passed with no network request.`);
   }
   console.log(`Consumer types: @hasna/skills@${metadata.version} passed strict installed-package checking for all four exports (skipLibCheck=false).`);
   const receipt = await completeConsumerArchive(archive, metadata.version);
