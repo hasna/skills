@@ -1,6 +1,6 @@
-/** Native capabilities measured against exact Codex releases. The transport
+/** Native capabilities reviewed against exact Codex releases. The transport
  * still verifies executable trust, the native version handshake and each RPC
- * response. Unknown releases require the native acceptance tests before entry.
+ * response. Unknown releases stay unsupported until their exact contract is reviewed.
  */
 const MEASURED_CODEX_CAPABILITIES: Readonly<Record<string, readonly CodexNativeCapability[]>> = {
   "codex-cli 0.153.0": ["hooks"],
@@ -25,6 +25,10 @@ const MEASURED_CODEX_CAPABILITIES: Readonly<Record<string, readonly CodexNativeC
   // Exact 0.162.0 protocol acceptance covers hooks, native catalog capture
   // and installed-plugin review. Native corpus admission remains separate.
   "codex-cli 0.162.0": ["hooks", "qualified-skill-catalog", "installed-plugin-review"],
+  // rust-v0.162.1 (092d3acd) has byte-identical hooks, app-server/protocol,
+  // skills, plugin and config contracts to rust-v0.162.0 (c1382380).
+  // This exact entry preserves runtime validation and separate corpus admission.
+  "codex-cli 0.162.1": ["hooks", "qualified-skill-catalog", "installed-plugin-review"],
 };
 
 /** `installed-plugin-review`: the 0.160 `plugin/installed` source identities and

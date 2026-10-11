@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.68
+
+- Admit the exact Codex 0.162.1 hooks, qualified skill catalog and installed-plugin review contracts, which are unchanged from 0.162.0. Preserve exact version-bound review evidence, future-version rejection, executable trust and independent native corpus admission.
+
 ## 0.10.67
 
 - Accept the documented local-marketplace `interface.displayName` object and optional hook-file `description` metadata during guarded Codex cache review. Preserve exact reviewed hook bytes and refuse unknown metadata or changed capabilities.
