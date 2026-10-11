@@ -62,7 +62,7 @@ test("positive native source provenance distinguishes config-owned inactivity fr
   }
 });
 
-for (const nativeVersion of ["codex-cli 0.159.2", "codex-cli 0.160.0", "codex-cli 0.160.1", "codex-cli 0.161.0", "codex-cli 0.162.0"]) test(`native ${nativeVersion} capture sends only bounded reads and releases its child`, async () => {
+for (const nativeVersion of ["codex-cli 0.159.2", "codex-cli 0.160.0", "codex-cli 0.160.1", "codex-cli 0.161.0", "codex-cli 0.162.0", "codex-cli 0.162.1"]) test(`native ${nativeVersion} capture sends only bounded reads and releases its child`, async () => {
   const calls: Array<[string, unknown]> = [];
   let closed = 0;
   const rpc: CodexHookRpc = { version: nativeVersion, request: async (method, params) => { calls.push([method, params]); return method === "skills/list" ? response() : installed; }, close: async () => { closed++; } };
@@ -85,7 +85,7 @@ test("native capture closes on refused requests, validation failures, and unsupp
   }
 });
 
-for (const version of ["codex-cli 0.160.2", "codex-cli 0.161.1", "codex-cli 0.162.1", "codex-cli 0.163.0", "codex-cli 0.162.0-alpha.1", "codex-cli 0.162.0+build.1", "codex-cli 0.159.3", "codex-cli 0.160.1-alpha.1", "codex-cli 0.160.10", "0.160.1"])
+for (const version of ["codex-cli 0.160.2", "codex-cli 0.161.1", "codex-cli 0.162.2", "codex-cli 0.163.0", "codex-cli 0.162.0-alpha.1", "codex-cli 0.162.0+build.1", "codex-cli 0.159.3", "codex-cli 0.160.1-alpha.1", "codex-cli 0.160.10", "0.160.1"])
   test(`native capture refuses the unmeasured neighbour ${JSON.stringify(version)} before any read`, async () => {
     let closed = 0, requested = 0;
     const rpc: CodexHookRpc = { version, request: async (method) => { requested++; return method === "skills/list" ? response() : installed; }, close: async () => { closed++; } };
@@ -124,4 +124,14 @@ test("remote inventory retains only native installation identity and never adver
  expect(projectCodexInstalledPlugins(inventory({...plugin,source:{type:"git"},sourceType:"remote"}))[0]?.sourceType).toBeUndefined();
  for (const remotePluginId of ["bad.identity", "https://opaque.example/identity", "bad\nidentity", {}, "", "x".repeat(1025)])
   expect(()=>projectCodexInstalledPlugins(inventory({...plugin,remotePluginId}))).toThrow("CATALOG_INVALID");
+});
+
+
+test("0.162.1 compatibility never converts a transport admission refusal into a catalog", async () => {
+  let connected = 0;
+  await expect(captureCodexNativeSkillCatalog({ command: "codex", home: "/synthetic/home", cwd }, async () => {
+    connected++;
+    throw new Error("CODEX_CORPUS_ADMISSION_REQUIRED");
+  })).rejects.toThrow("CODEX_CORPUS_ADMISSION_REQUIRED");
+  expect(connected).toBe(1);
 });
