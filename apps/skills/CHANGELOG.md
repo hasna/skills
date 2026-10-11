@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Serve `tools/list` in `skills-mcp` with JSON Schema converted by the package's own zod. `bin/mcp.js` bundles zod and loads the MCP SDK from the consumer's `node_modules`. Since 0.10.61 the SDK's own `tools/list` converted the tool schemas with whatever zod the SDK resolved. When that zod was older than the bundled 4.5.4, `tools/list` failed with `ctx.deferred.push` undefined (a consumer lock holding zod 4.3.6, or npm trees whose own zod is 4.2.0 to 4.3.5) or advertised degraded schemas (npm trees on zod 3.25.x or 4.1.x). The output matches the SDK's own conversion field for field, including tools registered with the positional `tool()` form. Argument validation stays with the SDK, and the `zod` and `@modelcontextprotocol/sdk` ranges are unchanged.
-- The installed consumer fixture and its receipt add an `mcp-zod-instance` check. It runs the packed archive's stdio MCP under bun at the declared zod floor and range, and under npm with zod 4.3.5. It requires identical tool listings in every layout and allows no network access after installation. `verify:consumer-mcp` runs it on its own.
+- The installed consumer receipt adds a static `mcp-binary-surface` check: `bin/mcp.js` imports only the MCP SDK, bundles one zod and serves `tools/list` with it. Packed MCP consumer layouts run in the new unprivileged `skills-consumer-gate` workflow, never in the publish job: bun at the declared zod floor and range, and npm with zod 4.3.5, 3.25.76 and 4.1.13. Every layout must list identical tools. `verify:consumer-mcp` runs the same check locally.
 
 ## 0.10.68
 

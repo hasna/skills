@@ -1,12 +1,34 @@
 import { createHash } from "node:crypto";
 import { lstat, readFile, writeFile } from "node:fs/promises";
+import { builtinModules } from "node:module";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 export const CONSUMER_EXPORTS = [".", "./admin-contract", "./sdk", "./storage"] as const;
 export const CONSUMER_CHECKS = [
   "strict-types", "storage-runtime", "admin-list-runtime", "bundle-runtime", "content-hash-revision-runtime",
-  "quote-error-runtime", "cli-polling", "cli-remote-routing", "bin-entrypoints", "mcp-zod-instance",
+  "quote-error-runtime", "cli-polling", "cli-remote-routing", "bin-entrypoints", "mcp-binary-surface",
 ] as const;
+
+const runtimeModules = new Set([...builtinModules, ...builtinModules.map(name => `node:${name}`), "bun", "bun:sqlite"]);
+const isMcpSdk = (path: string) => path === "@modelcontextprotocol/sdk" || path.startsWith("@modelcontextprotocol/sdk/");
+
+/**
+ * Static, offline check of the built bin/mcp.js; it executes nothing. The
+ * binary bundles everything except the MCP SDK: it imports the SDK and nothing
+ * else outside the runtime, embeds exactly one zod, and serves tools/list with
+ * that zod (src/mcp/package-tool-list.ts) because the SDK may resolve another.
+ */
+export function assertMcpBinarySurface(source: string): void {
+  const imports = new Bun.Transpiler({ loader: "js" }).scanImports(source.replace(/^#!.*\n/, ""))
+    .map(entry => entry.path).filter(path => !runtimeModules.has(path));
+  const foreign = [...new Set(imports.filter(path => !isMcpSdk(path)))];
+  if (foreign.length) throw new Error(`bin/mcp.js must bundle everything except the MCP SDK; it imports ${foreign.join(", ")}`);
+  if (!imports.some(isMcpSdk)) throw new Error("bin/mcp.js must load the MCP SDK from node_modules, not bundle it");
+  // zod's core declares its version object once per bundled copy.
+  const zodCopies = source.match(/major:\s*\d+,\s*minor:\s*\d+,\s*patch:\s*\d+/g)?.length ?? 0;
+  if (zodCopies !== 1) throw new Error(`bin/mcp.js must bundle exactly one zod; found ${zodCopies}`);
+  if (!source.includes("servePackageZodToolList")) throw new Error("bin/mcp.js must serve tools/list with its bundled zod");
+}
 
 export type ArchiveDigest = { bytes: number; sha256: string; integrity: string };
 export type ConsumerArchive = ArchiveDigest & { source: string; installedFrom: string };

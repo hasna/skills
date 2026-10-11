@@ -2,8 +2,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { assertInstalledBinaries, assertInstalledIdentity, completeConsumerArchive, parseConsumerArguments, stageConsumerArchive } from "./consumer-archive.js";
-import { verifyInstalledMcpZodCases } from "./consumer-mcp.js";
+import { assertInstalledBinaries, assertInstalledIdentity, assertMcpBinarySurface, completeConsumerArchive, parseConsumerArguments, stageConsumerArchive } from "./consumer-archive.js";
 
 // Check the public distribution against its declared dependencies, independently
 // of workspace overrides and skipLibCheck. npm's lifecycle is disabled in the
@@ -758,12 +757,11 @@ console.log("Installed quote error root/SDK runtime: 14 assertions passed.");
     SKILLS_REMOTE_ROUTING_TEST_PACKAGE: join(workspace, "node_modules/@hasna/skills"),
   });
   console.log("Installed CLI routing: explicit remote approval, isolated profiles, target conflicts and managed defaults passed.");
-  // The stdio MCP must not depend on which zod the consumer installs. The cases
-  // (bun at the declared floor and range, npm split below it) read the range
-  // from the archive itself.
-  for (const result of await verifyInstalledMcpZodCases(archive.installedFrom)) {
-    console.log(`Installed MCP zod ${result.case}: root zod ${result.rootZod}, MCP SDK ${result.sdkVersion} on zod ${result.sdkZod}; initialize, tools/list (${result.tools} tools, sha256 ${result.toolsSha256}) and ${result.calls} tools/call passed with no network request.`);
-  }
+  // Static and offline: read the installed bin/mcp.js without running it. The
+  // packed MCP consumer layouts run third-party code, so they run in the
+  // unprivileged skills-consumer-gate workflow (scripts/consumer-mcp.ts), not here.
+  assertMcpBinarySurface(await readFile(join(workspace, "node_modules/@hasna/skills", metadata.bin["skills-mcp"]), "utf8"));
+  console.log("Installed MCP binary: imports only @modelcontextprotocol/sdk, bundles one zod and serves tools/list with it.");
   console.log(`Consumer types: @hasna/skills@${metadata.version} passed strict installed-package checking for all four exports (skipLibCheck=false).`);
   const receipt = await completeConsumerArchive(archive, metadata.version);
   if (options.receipt) await writeFile(options.receipt, JSON.stringify(receipt) + "\n", { flag: "wx", mode: 0o600 });

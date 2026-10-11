@@ -87,16 +87,28 @@ after both the original archive and its installed input still match. Its
 temporary install is removed; the reviewed original and external receipt remain.
 Without arguments, the fixture still packs its own archive for normal `prepack`.
 
-The receipt's `mcp-zod-instance` check reads the declared `zod` range from the
-archive's own `package.json` and installs the archive three more times. Two
-installs use bun with root `zod` pinned to the declared floor exactly and to the
-declared range; the third uses npm with root `zod` pinned below the floor
-(4.3.5), where npm runs the MCP SDK on that older zod. Each install is re-checked
-from its lock (`--frozen-lockfile`, `npm ci`). The check then starts the
-installed `skills-mcp --stdio` in local mode with every fetch refused and runs
-`initialize`, `tools/list` and a valid and an invalid `tools/call`. Every layout
-must list identical tools and schemas, and `bin/mcp.js` must import only the MCP
-SDK. Run it on its own with
+The receipt's `mcp-binary-surface` check is static and offline: it reads the
+installed `bin/mcp.js` without running it. The file must import only
+`@modelcontextprotocol/sdk`, bundle exactly one zod, and serve `tools/list` with
+that zod (`src/mcp/package-tool-list.ts`), because the consumer's SDK may resolve
+another zod.
+
+Packed MCP consumer acceptance installs and runs floating third-party packages,
+so it is not part of `prepack`, `prepublishOnly` or `verify:consumer-types`, and
+the publish job does not run it. It runs in the unprivileged
+`.github/workflows/skills-consumer-gate.yml` job, which has read-only contents,
+no environment, no secrets and no id-token. That job runs on pull requests that
+change `apps/skills` and on manual dispatch, with the release toolchain pins. It
+installs the locked dependencies, typechecks, builds and runs the prepack gates.
+It then packs the archive and runs `verify:consumer-mcp` on it:
+- under bun, with root `zod` at the declared floor and at the declared range;
+- under npm, with root `zod` at 4.3.5, 3.25.76 and 4.1.13, below the floor,
+  where npm runs the SDK on that older zod.
+
+The tested range comes from the archive's own `package.json`. Each layout runs
+`initialize`, `tools/list` and a valid and an invalid `tools/call` with every
+fetch refused. Every layout must list identical tools and schemas. The job
+uploads only the gate's summary. Run the gate locally with
 `bun run verify:consumer-mcp [--archive <path> --sha256 <hex>] [--npm-split-zod <version>]...`.
 
 Immediately before publication, `scripts/publish-reviewed-archive.ts` requires

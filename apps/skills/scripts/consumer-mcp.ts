@@ -19,16 +19,19 @@
  * over stdio in local mode, and every case must list byte-identical tools. Only
  * the package install uses the network: the MCP child refuses and counts every
  * fetch. The tested zod range and version come from the archive itself.
+ *
+ * It installs and runs floating third-party packages, so it is not part of
+ * prepack, prepublishOnly or verify:consumer-types. It runs in the unprivileged
+ * .github/workflows/skills-consumer-gate.yml job, never in the publish job.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { builtinModules } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 
-import { parseConsumerArguments, stageConsumerArchive } from "./consumer-archive.js";
+import { assertMcpBinarySurface, parseConsumerArguments, stageConsumerArchive } from "./consumer-archive.js";
 
 export type McpZodCase = { label: string; installer: "bun" | "npm"; zodSpec: string };
 export type McpZodResult = {
@@ -39,17 +42,6 @@ export type McpZodResult = {
 const LIMIT_BYTES = 1_024_000;
 const PUBLISHER_EXEMPT = ["@hasna/skills", "@hasna/contracts", "@hasna/events", "@hasna/secrets"];
 const DEFAULT_NPM_SPLIT_ZOD = ["4.3.5"];
-const builtins = new Set([...builtinModules, ...builtinModules.map(name => `node:${name}`), "bun", "bun:sqlite"]);
-const isSdk = (path: string) => path === "@modelcontextprotocol/sdk" || path.startsWith("@modelcontextprotocol/sdk/");
-
-/** bin/mcp.js bundles everything except the MCP SDK: it must import the SDK and nothing else. */
-export function assertMcpBinarySurface(source: string): void {
-  const imports = new Bun.Transpiler({ loader: "js" }).scanImports(source.replace(/^#!.*\n/, ""))
-    .map(entry => entry.path).filter(path => !builtins.has(path));
-  const foreign = [...new Set(imports.filter(path => !isSdk(path)))];
-  if (foreign.length) throw new Error(`bin/mcp.js must bundle everything except the MCP SDK; it imports ${foreign.join(", ")}`);
-  if (!imports.some(isSdk)) throw new Error("bin/mcp.js must load the MCP SDK from node_modules, not bundle it");
-}
 
 /** The declared floor of a caret range such as `^4.3.6`. */
 export function declaredFloor(range: unknown): string {

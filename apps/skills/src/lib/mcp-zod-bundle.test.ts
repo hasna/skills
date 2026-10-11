@@ -9,21 +9,28 @@ useDefaultTestTimeout();
 
 // bin/mcp.js bundles everything except the MCP SDK, zod included. The SDK may
 // resolve another zod, so tools/list converts schemas with the bundled zod
-// (src/mcp/package-tool-list.ts). These cover the installed consumer gate's
-// helpers and the exact build step; the gate itself runs from verify:consumer-types.
+// (src/mcp/package-tool-list.ts). These cover the release receipt's static
+// binary check, the consumer gate's helpers and the exact build step. The gate
+// itself runs in the unprivileged skills-consumer-gate workflow.
 const packageRoot = resolve(import.meta.dir, "../..");
-const { assertMcpBinarySurface, declaredFloor, mcpZodCases, readArchiveMetadata } = await import(resolve(packageRoot, "scripts/consumer-mcp.ts"));
-const { CONSUMER_CHECKS } = await import(resolve(packageRoot, "scripts/consumer-archive.ts"));
+const { declaredFloor, mcpZodCases, readArchiveMetadata } = await import(resolve(packageRoot, "scripts/consumer-mcp.ts"));
+const { CONSUMER_CHECKS, assertMcpBinarySurface } = await import(resolve(packageRoot, "scripts/consumer-archive.ts"));
+const ZOD_CORE = "const version = { major: 4, minor: 5, patch: 4 };\n";
+const HANDLER = "function servePackageZodToolList(server) {}\n";
 const scratch = mkdtempSync(join(tmpdir(), "skills-mcp-zod-bundle-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
-test("bin/mcp.js may import the MCP SDK and nothing else outside the runtime", () => {
-  expect(() => assertMcpBinarySurface('import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";\nimport { readFileSync } from "node:fs";\n')).not.toThrow();
-  expect(() => assertMcpBinarySurface('#!/usr/bin/env bun\nconst sdk = await import("@modelcontextprotocol/sdk/server/stdio.js");\n')).not.toThrow();
-  expect(() => assertMcpBinarySurface('import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";\nimport { z } from "zod";\n'))
-    .toThrow("bundle everything except the MCP SDK; it imports zod");
-  expect(() => assertMcpBinarySurface('import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";\nimport "zod/v4";\n')).toThrow("it imports zod/v4");
-  expect(() => assertMcpBinarySurface('import { readFileSync } from "node:fs";\nconst inlinedSdk = 1;\n')).toThrow("not bundle it");
+test("bin/mcp.js imports only the MCP SDK, bundles one zod and serves tools/list with it", () => {
+  const sdk = 'import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";\nimport { readFileSync } from "node:fs";\n';
+  expect(() => assertMcpBinarySurface(sdk + ZOD_CORE + HANDLER)).not.toThrow();
+  expect(() => assertMcpBinarySurface('#!/usr/bin/env bun\nconst sdk = await import("@modelcontextprotocol/sdk/server/stdio.js");\n' + ZOD_CORE + HANDLER)).not.toThrow();
+  expect(() => assertMcpBinarySurface(sdk + 'import { z } from "zod";\n' + HANDLER)).toThrow("bundle everything except the MCP SDK; it imports zod");
+  expect(() => assertMcpBinarySurface(sdk + 'import "zod/v4";\n' + ZOD_CORE + HANDLER)).toThrow("it imports zod/v4");
+  expect(() => assertMcpBinarySurface('import { readFileSync } from "node:fs";\n' + ZOD_CORE + HANDLER)).toThrow("not bundle it");
+  expect(() => assertMcpBinarySurface(sdk + HANDLER)).toThrow("exactly one zod; found 0");
+  expect(() => assertMcpBinarySurface(sdk + ZOD_CORE + ZOD_CORE.replace("version", "version2") + HANDLER)).toThrow("exactly one zod; found 2");
+  expect(() => assertMcpBinarySurface(sdk + ZOD_CORE)).toThrow("serve tools/list with its bundled zod");
+  expect(CONSUMER_CHECKS).toContain("mcp-binary-surface");
 });
 
 test("the consumer gate pins the declared zod floor and npm split cases outside the range", () => {
@@ -40,7 +47,6 @@ test("the consumer gate pins the declared zod floor and npm split cases outside 
     .toEqual(["bun-floor", "bun-latest", "npm-split-3.25.76", "npm-split-4.1.13"]);
   expect(() => mcpZodCases("^4.3.6", ["4.4.0"])).toThrow("outside the declared range");
   expect(() => mcpZodCases("^4.3.6", ["^4.3.5"])).toThrow("outside the declared range");
-  expect(CONSUMER_CHECKS).toContain("mcp-zod-instance");
 });
 
 test("the gate reads the tested zod range from the packed archive, not the checkout", () => {
@@ -76,9 +82,5 @@ test("the package build bundles zod and leaves only the MCP SDK external in bin/
     const [stdout, stderr, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     if (status !== 0) throw new Error(`MCP build failed (${status}):\n${stdout.slice(-4_000)}${stderr.slice(-4_000)}`);
   } finally { clearTimeout(deadline); }
-  const source = readFileSync(outfile, "utf8");
-  expect(() => assertMcpBinarySurface(source)).not.toThrow();
-  // The bundled zod and the package-zod tools/list handler are both in the binary.
-  expect(source).toMatch(/major:\s*4,\s*minor:\s*\d+,\s*patch:\s*\d+/);
-  expect(source).toContain("servePackageZodToolList");
+  expect(() => assertMcpBinarySurface(readFileSync(outfile, "utf8"))).not.toThrow();
 });
