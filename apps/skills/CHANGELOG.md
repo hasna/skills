@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.69
 
 - Serve `tools/list` in `skills-mcp` with JSON Schema converted by the package's own zod. `bin/mcp.js` bundles zod and loads only the MCP SDK from the consumer's `node_modules`. Since 0.10.61 the SDK's own `tools/list` converted the tool schemas with whatever zod the SDK resolved, and failed or degraded whenever that zod was older than the bundled 4.5.4:
   - It failed with `ctx.deferred.push` undefined for consumers that lock zod 4.3.x or 4.4.x, and for npm trees whose own zod is 4.2.0 to 4.3.5.
