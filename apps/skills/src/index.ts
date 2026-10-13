@@ -520,7 +520,7 @@ export { syncSelectionProfile } from "./lib/selection-resolver.js";
 export { inspectSkillSession, reconcileSkillSession, type SessionReconciliationInput, type SessionReconciliationOptions } from "./lib/session-reconciliation.js";
 export { planAgentIntegration, planClaudeStopHookUpdate, planClaudePreToolUseHookUpdate, planClaudeHookEventsUpdate, planClaudeManagedHookProjection, planAgentSettingsWitnessUpgrade, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills } from "./lib/agent-integration.js";
 export type { ClaudeManagedHookProjection, ClaudeManagedHookProjectionOptions } from "./lib/agent-integration.js";
-export { captureDiscoveryDirectories, captureDiscoveryByteSources, captureDiscoveryPathSources, DISCOVERY_ROOT_UNRESOLVED, isDiscoveryRootUnresolved, type DiscoveryDirectory, type DiscoveryExecutable, type DiscoverySource } from "./lib/agent-discovery.js";
+export { captureDiscoveryDirectories, captureDiscoveryByteSources, captureDiscoveryPathSources, captureDiscoveryExecutableSources, DISCOVERY_ROOT_UNRESOLVED, isDiscoveryRootUnresolved, type DiscoveryDirectory, type DiscoveryExecutable, type DiscoverySource } from "./lib/agent-discovery.js";
 export { captureClaudeMarketplaceRegistry, captureClaudeMarketplaceRegistryV2 } from "./lib/claude-marketplace-registry.js";
 export { captureClaudeMarketplaceEntry, hashClaudeMarketplaceEntry, CLAUDE_MARKETPLACE_ENTRY_HASH_MODE, type ClaudeMarketplaceEntrySelector, type ClaudeMarketplaceEntryWitness } from "./lib/claude-marketplace-entry-witness.js";
 export { captureClaudeProspectiveCandidateClosure } from "./lib/claude-prospective-review.js";
@@ -536,7 +536,9 @@ export { assertPortableAuthoringPath, type PortableAuthoringPathOptions } from "
 
 export { CLAUDE_COORDINATED_HOOK_EVENTS, type ClaudeCoordinatedHookEvent } from "./lib/claude-settings-witness.js";
 
-export { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4, captureCodexSettingsV5, upgradeCodexSettingsWitness, upgradeCodexSettingsWitnessV3, upgradeCodexSettingsWitnessV4, upgradeCodexSettingsWitnessV5 } from "./lib/codex-settings-witness.js";
+export { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4, captureCodexSettingsV5, captureCodexSettingsV6, upgradeCodexSettingsWitness, upgradeCodexSettingsWitnessV3, upgradeCodexSettingsWitnessV4, upgradeCodexSettingsWitnessV5 } from "./lib/codex-settings-witness.js";
 export { projectCodexNativeSkillCatalog, projectCodexInstalledPlugins, projectCodexInstalledPluginEntries, captureCodexNativeSkillCatalog, isCodexNativeSkillDisabled, type CodexNativeSkillCatalog, type CodexNativeSkill, type CodexInstalledPlugin } from "./lib/codex-native-skill-catalog.js";
 
 export { captureSumiSettings, upgradeSumiSettingsWitness } from "./lib/sumi-settings-witness.js";
+
+export type { CodexReviewedHookSource } from "./lib/codex-hook-mcp-dependencies.js";

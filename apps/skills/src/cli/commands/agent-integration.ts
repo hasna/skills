@@ -4,8 +4,8 @@ import type { Command } from "commander";
 import { existsSync, lstatSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { isAbsolute } from "node:path";
-import { isDiscoveryRootUnresolved, type ReviewedDiscoveryInputs } from "../../lib/agent-discovery.js";
+import { basename, isAbsolute, resolve } from "node:path";
+import { isDiscoveryRootUnresolved, captureDiscoveryExecutableSources, type ReviewedDiscoveryInputs } from "../../lib/agent-discovery.js";
 import { normalizeHermesHookInput, assertHermesTool } from "../../lib/agent-hermes.js";
 import { parseSkillContextInput, selectedProfileId } from "./context.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, normalizeAgentHookEvent } from "../../lib/agent-adapters.js";
@@ -17,7 +17,7 @@ import { planCodexNativeTrust, applyCodexNativeTrust, previewCodexNativeTrust } 
 import { HookDiagnosticError, hookChildError, hookFailureReason, isOptionalHookContextFailure, hookUnavailableContext } from "../../lib/hook-diagnostics.js";
 import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib/selection-cache.js";
 import { captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4 } from "../../lib/claude-settings-witness.js";
-import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4, captureCodexSettingsV5 } from "../../lib/codex-settings-witness.js";
+import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4, captureCodexSettingsV5, captureCodexSettingsV6 } from "../../lib/codex-settings-witness.js";
 import { captureClaudeMarketplaceRegistryV2 } from "../../lib/claude-marketplace-registry.js";
 import { captureClaudeMarketplaceEntry } from "../../lib/claude-marketplace-entry-witness.js";
 import { reviewClaudeProspectiveCandidate, type ClaudeProspectiveReviewRequest } from "../../lib/claude-prospective-review.js";
@@ -173,13 +173,25 @@ export function registerAgentIntegration(parent: Command): void {
       }
     });
   hook.command("witness")
-    .requiredOption("--kind <kind>", "sumi-settings-v1, claude-settings-v4, claude-settings-v3, claude-settings-v2, codex-settings-v5, codex-settings-v4, codex-settings-v3, codex-settings-v2, codex-settings-v1, claude-marketplace-registry-v2 or claude-marketplace-entry-v1")
+    .requiredOption("--kind <kind>", "codex-settings-v6, executable-v1, sumi-settings-v1, claude-settings-v4, claude-settings-v3, claude-settings-v2, codex-settings-v5, codex-settings-v4, codex-settings-v3, codex-settings-v2, codex-settings-v1, claude-marketplace-registry-v2 or claude-marketplace-entry-v1")
     .requiredOption("--path <path>", "Canonical absolute path to the reviewed settings, registry or .claude-plugin/marketplace.json file")
+    .option("--reviewed-hook-sources <file>", "Bounded JSON array of raw path/sha256 witnesses; codex-settings-v6 only (the package derives complete hook membership)")
     .option("--marketplace <name>", "Exact marketplace name; claude-marketplace-entry-v1 only")
     .option("--plugin <name>", "Exact plugin entry name; claude-marketplace-entry-v1 only")
     .option("--json", "Output the discovery witness as JSON", false)
     .description("Capture an explicit versioned review witness without installing it")
-    .action(async (options: {kind: string; path: string; marketplace?: string; plugin?: string}) => {
+    .action(async (options: {kind: string; path: string; marketplace?: string; plugin?: string; reviewedHookSources?: string}) => {
+      if (options.kind !== "codex-settings-v6" && options.reviewedHookSources !== undefined) throw new Error("--reviewed-hook-sources applies only to codex-settings-v6");
+      if (options.kind === "codex-settings-v6" || options.kind === "executable-v1") {
+        if (options.marketplace !== undefined || options.plugin !== undefined) throw new Error("Marketplace selectors cannot be used with hook-provider witnesses");
+        if (options.kind === "executable-v1") { await writeCliOutput(JSON.stringify(captureDiscoveryExecutableSources([options.path])[0], null, 2)); return; }
+        if (!options.reviewedHookSources) throw new Error("Codex V6 requires a bounded --reviewed-hook-sources JSON array");
+        const { hashNativeJsonControls, readNativeSettingsWitnessFile } = await import("../../lib/claude-settings-witness.js");
+        const metadata = resolve(options.reviewedHookSources);
+        const text = readNativeSettingsWitnessFile(metadata, { remaining: 1024 * 1024 }, basename(metadata) as "config.toml");
+        hashNativeJsonControls(`{"sources":${text}}`);
+        await writeCliOutput(JSON.stringify(captureCodexSettingsV6(options.path, JSON.parse(text)), null, 2)); return;
+      }
       if (options.kind === "claude-marketplace-entry-v1") {
         if (options.marketplace === undefined || options.plugin === undefined) throw new Error("claude-marketplace-entry-v1 requires --marketplace and --plugin");
         await writeCliOutput(JSON.stringify(captureClaudeMarketplaceEntry(options.path, options.marketplace, options.plugin), null, 2));

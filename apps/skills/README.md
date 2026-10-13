@@ -2810,6 +2810,45 @@ all changes outside V5 refuse. The guarded upgrade changes policy only, preserve
 native settings, other witnesses and session pins, and revalidates before apply.
 
 
+`codex-settings-v6` is an opt-in fresh review for native hooks that reference local
+stdio MCP providers. Capture it with `skills hook witness --kind codex-settings-v6
+--path <config.toml> --reviewed-hook-sources <raw-source-witnesses.json>`. The JSON
+array contains exact `{path, sha256}` raw witnesses, including verified absences.
+The package derives home declarations and the conservative selected cache roots:
+native literal `local`, or a sole installed version. Multiple nonlocal versions
+refuse rather than approximate native semver/lexical selection. Root AgentPlugin
+format refuses; all three legacy manifest locations and their absences are bound
+in native precedence order. Explicit homogeneous nonempty path/inline hook lists
+replace defaults; unsupported fallback shapes refuse. A shorter provider list
+cannot omit a declared route. Remote state can enable a locally disabled plugin,
+so local `enabled = false` never removes its selected root from this union. This
+does not establish native effective activation, feature eligibility or trust.
+Include the
+returned witness and its independently reviewed raw hook sources in the complete
+`--discovery-inputs` review. There is no automatic upgrade or V6 rebind-settings.
+
+V6 binds every supported hook-referenced route's command, arguments, environment,
+cwd, tool/approval settings and source population. Missing or unknown referenced
+routes, reserved Apps routes and unsupported native forms refuse. Higher precedence
+project hook declarations or referenced provider overrides also refuse; unrelated
+project MCP/UI settings remain usable. It preserves V5 display tolerances and omits supported unrelated
+ordinary MCP routes across table, dotted and inline TOML forms. Parsed values are
+canonical with path-attributed integer/float provenance; nonfinite numbers and
+unsafe integers refuse. Numeric attribution retains native type and exact decimal
+values, with a 1 MiB input and 16 MiB total reparse bound. Unsupported parser shapes
+refuse. V1–V5 meanings remain
+unchanged. Hook trust and native admission remain separately owned.
+
+For a reviewed provider executable larger than the raw-source limit, capture
+`skills hook witness --kind executable-v1 --path <canonical-executable>`. This
+explicit V6-only discovery role reuses the plugin executable integrity reader:
+streaming, safe executable permissions/custody, no-follow and race checks,
+256 MiB per executable and the existing aggregate budget. Raw/text limits remain
+64 MiB. Bind the provider's full reviewed code/runtime closure and directory
+membership too; an executable digest does not prove dynamic backend behavior or
+native adoption. These captures read files and never launch a native consumer.
+
+
 Codex cache witnesses migrate separately through `skills hook rebind-cache --agent codex`. Preview requires the exact current policy and configuration SHA-256 values. Name each reviewed remote app-only parent with `--app-only-parent`; name each already reviewed native `mcp_tool` parent with `--reviewed-hook-parent`. Hook parents require exact enrolled manifest and hook bytes. When the owning installer created a remote-install receipt, its exact schema, identity and bytes are required. A local marketplace install with no receipt is accepted only when the exact full marketplace source is already enrolled and the unchanged Codex settings enable that exact plugin identity. The complete cache census refuses unknown parents, cache-member aliases, new skills, direct hooks selecting cache inputs, and changed app/MCP/hook/receipt or marketplace capabilities. Reviewed whole Codex root aliases keep their existing identity/CAS guards; hook selection through either the alias or canonical cache path is refused. Commands containing the direct `plugins/cache` selector are conservatively refused, including HOME, tilde and relative spellings; no shell evaluation is performed. App-only bootstrap verifies the old full manifest and receipt sources, then explicitly reviews current app capabilities; it does not claim those app bytes were historically witnessed.
 
 Review the returned semantic cache digest, then repeat with `--expected-cache-witness-sha256 <digest> --apply`. The owning apply path preserves/readbacks the original policy, recomputes the whole plan, compares policy/config/cache preimages, writes only the Skills policy, and verifies the resulting consumer. Historical directory hashes and source rows remain retained as provenance; this command cannot reconstruct an unavailable old directory tree or waive an ancestor directory containing unrelated inputs. Equivalent version materializations and inert assets then leave the new Codex-specific witness unchanged. Every other discovery source, directory, settings witness, native control and session pin stays under its existing contract. Settings and cache upgrades remain independent; neither silently repairs drift in the other.

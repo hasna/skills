@@ -34,8 +34,11 @@
  */
 import { hashCodexSettingsReplacement as hashCodexSettingsReplacementV1 } from "./codex-settings-witness-v1.js";
 export { captureCodexSettings, hashCodexSettingsReplacement } from "./codex-settings-witness-v1.js";
+import { captureCodexHookMcpDependencies, type CodexReviewedHookSource, type CodexHookMcpDependencies } from "./codex-hook-mcp-dependencies.js";
+import { isCodexLocalStdioMcpServer } from "./codex-local-mcp-controls.js";
 import { projectRegularCodexMcp } from "./codex-mcp-discovery-projection.js";
 import { createHash } from "node:crypto";
+import { CodexNumericValue, codexNumericProvenance, codexIntegerToken, embedCodexNumericTokens } from "./codex-numeric-provenance-v6.js";
 import { isDeepStrictEqual } from "node:util";
 import { readNativeSettingsWitnessFile, type ClaudeSettingsWitnessBudget } from "./claude-settings-witness.js";
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -80,6 +83,7 @@ function numericTokens(text: string): string[] {
 }
 function canonical(value: unknown, depth = 0, budget = { remaining: 65536 }): unknown {
   need(depth <= 32 && --budget.remaining >= 0);
+  if (value instanceof CodexNumericValue) return ["native-numeric", value.token.kind, value.token.value];
   if (value === null) return ["null"];
   if (typeof value === "string") return ["string", value];
   if (typeof value === "boolean") return ["boolean", value];
@@ -91,7 +95,7 @@ function canonical(value: unknown, depth = 0, budget = { remaining: 65536 }): un
 }
 /** Remove only the documented non-discovery classes. Malformed values for an
  * otherwise-normalized key refuse instead of being adopted silently. */
-function normalize(config: Record<string, any>, version: 2 | 3 | 4 | 5 = 2): void {
+function normalize(config: Record<string, any>, version: 2 | 3 | 4 | 5 | 6 = 2): void {
   if (isRecord(config.hooks)) {
     delete config.hooks.state;
     // An empty `[hooks]` table means the same as no hooks configuration at all.
@@ -108,7 +112,7 @@ function normalize(config: Record<string, any>, version: 2 | 3 | 4 | 5 = 2): voi
   }
   inference(config, version);
   if (isRecord(config.profiles)) for (const profile of Object.values(config.profiles)) if (isRecord(profile)) inference(profile, version);
-  if (version === 5) projectStatusLine(config);
+  if (version >= 5) projectStatusLine(config);
 }
 /** A registration that cannot enable anything: one unambiguous selector and an
  * explicit `enabled = false`, with no other key to reinterpret. */
@@ -119,7 +123,7 @@ function disablesOneSkill(entry: unknown): boolean {
   const selector = (["path", "name"] as const).filter(key => Object.hasOwn(entry, key));
   return selector.length === 1 && typeof entry[selector[0]!] === "string" && entry[selector[0]!].length > 0;
 }
-function inference(target: Record<string, any>, version: 2 | 3 | 4 | 5): void {
+function inference(target: Record<string, any>, version: 2 | 3 | 4 | 5 | 6): void {
   const keys = version >= 3 ? [...INFERENCE, "service_tier", "plan_mode_reasoning_effort", "personality"] : INFERENCE;
   for (const key of keys) if (Object.hasOwn(target, key)) {
     const value = target[key];
@@ -227,14 +231,42 @@ function projectStatusLine(config: Record<string, any>): void {
   // Every accepted item is a quoted string: it contributes no numeric spelling
   // tokens. Keep the original source so unrelated numeric syntax stays bound.
 }
-function settingsDigest(text: string, version: 2 | 3 | 4 | 5 = 2): string {
+function settingsDigest(text: string, version: 2 | 3 | 4 | 5 | 6 = 2, dependencies?: CodexHookMcpDependencies): string {
   let config: any;
   try { config = Bun.TOML.parse(text); } catch { throw new Error("Invalid Codex settings witness"); }
   need(isRecord(config));
+  if (version === 6) {
+    need(dependencies);
+    canonical(config);
+    const tokens = codexNumericProvenance(text, config);
+    if (isRecord(config.hooks)) for (const [event, groups] of Object.entries(config.hooks)) {
+      if (event === "state" || !Array.isArray(groups)) continue;
+      groups.forEach((group, index) => group.hooks?.forEach((handler: any, ordinal: number) => {
+        for (const field of ["timeout", "additionalContextLimit"]) if (typeof handler[field] === "number") need(codexIntegerToken(tokens, ["hooks", event, index, "hooks", ordinal, field]));
+      }));
+    }
+    if (isRecord(config.mcp_servers)) {
+      for (const [name, row] of Object.entries(config.mcp_servers)) {
+        const server = row as Record<string, any>;
+        const integerKinds = ["tool_input_schema_max_bytes", "startup_timeout_ms"].every(field => typeof server?.[field] !== "number" || codexIntegerToken(tokens, ["mcp_servers", name, field]))
+          && (!isRecord(server?.tools) || Object.entries(server.tools).every(([tool, options]) => typeof (options as any)?.output_token_limit !== "number" || codexIntegerToken(tokens, ["mcp_servers", name, "tools", tool, "output_token_limit"])));
+        if (dependencies.servers.includes(name)) need(integerKinds);
+        if (!dependencies.servers.includes(name) && !["codex_apps", "_codex_apps"].includes(name) && integerKinds && isCodexLocalStdioMcpServer(name, row)) delete config.mcp_servers[name];
+      }
+      if (!Object.keys(config.mcp_servers).length) delete config.mcp_servers;
+    }
+    const counts = isRecord(config.tui) ? config.tui.model_availability_nux : undefined;
+    if (isRecord(counts) && Object.keys(counts).length <= 256 && Object.entries(counts).every(([name, value]) => typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 0xffffffff && codexIntegerToken(tokens, ["tui", "model_availability_nux", name]))) delete config.tui.model_availability_nux;
+    config = embedCodexNumericTokens(config, tokens);
+    normalize(config, 6);
+    if (isRecord(config.tui) && !Object.keys(config.tui).length) delete config.tui;
+    return sha(`hasna.skills.codex-settings.v6\0${JSON.stringify([canonical(config), canonical(dependencies)])}`);
+  }
   const mcp = version >= 3 ? projectRegularCodexMcp(config, text) : { config, numericSource: text };
   const projected = version >= 4 ? projectModelAvailabilityNux(mcp.config, mcp.numericSource) : mcp;
   normalize(projected.config, version);
-  return sha(`hasna.skills.codex-settings.v${version}\0${JSON.stringify([canonical(projected.config), numericTokens(projected.numericSource)])}`);
+  const values = [canonical(projected.config), numericTokens(projected.numericSource)];
+  return sha(`hasna.skills.codex-settings.v${version}\0${JSON.stringify(values)}`);
 }
 export function hashCodexSettingsReplacementV2(text: string, budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }): string {
   need(Buffer.byteLength(text) <= 1024 * 1024 && budget.remaining >= Buffer.byteLength(text)); budget.remaining -= Buffer.byteLength(text);
@@ -320,4 +352,15 @@ export function upgradeCodexSettingsWitnessV5(previous: { path: string; hashMode
   const sha256 = settingsDigest(current, 5);
   if (settingsDigest(before, 5) !== sha256) throw new Error("Codex settings outside the reviewed V5 contract changed; explicit discovery review required");
   return { path: previous.path, hashMode: "codex-settings-v5", sha256 };
+}
+
+/** V6 keeps V5 display tolerances and binds routes referenced by the complete
+ * independently reviewed native hook source population. No legacy migration. */
+export function captureCodexSettingsV6(path: string, reviewedSources: readonly CodexReviewedHookSource[], budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }, changes?: Map<string, string>): { path: string; hashMode: "codex-settings-v6"; sha256: string; hookSources: CodexReviewedHookSource[] } {
+  const original = readNativeSettingsWitnessFile(path, budget, "config.toml");
+  const text = changes?.get(path) ?? original; need(Buffer.byteLength(text) <= 1024 * 1024);
+  const dependencies = captureCodexHookMcpDependencies(path, reviewedSources, text, changes, budget);
+  const config: Record<string, any> = Bun.TOML.parse(text);
+  need(dependencies.servers.every(server => !["codex_apps", "_codex_apps"].includes(server) && isCodexLocalStdioMcpServer(server, config.mcp_servers?.[server])));
+  return { path, hashMode: "codex-settings-v6", sha256: settingsDigest(text, 6, dependencies), hookSources: dependencies.sources };
 }
