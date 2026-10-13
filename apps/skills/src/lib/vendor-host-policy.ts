@@ -64,6 +64,7 @@ export const APPROVED_CODE_HOSTS: readonly { domain: string; reason: string }[] 
   { domain: "githubusercontent.com", reason: "Raw GitHub content links in generated docs." },
   { domain: "npmjs.org", reason: "The npm registry, named by install instructions." },
   { domain: "json-schema.org", reason: "JSON Schema spec URIs (identifiers, not endpoints)." },
+  { domain: "agent-plugins.org", reason: "AgentPlugin schema identifiers used only to refuse unsupported plugin manifest formats; no network requests." },
   { domain: "w3.org", reason: "W3C namespace URIs in generated SVG/XML (identifiers, not endpoints)." },
   { domain: "sitemaps.org", reason: "Sitemap protocol namespace URI in generated XML." },
   { domain: "nextjs.org", reason: "Framework docs link in generated project scaffolding." },
