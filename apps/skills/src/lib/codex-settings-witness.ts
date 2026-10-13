@@ -257,6 +257,8 @@ function settingsDigest(text: string, version: 2 | 3 | 4 | 5 | 6 = 2, dependenci
     }
     const counts = isRecord(config.tui) ? config.tui.model_availability_nux : undefined;
     if (isRecord(counts) && Object.keys(counts).length <= 256 && Object.entries(counts).every(([name, value]) => typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 0xffffffff && codexIntegerToken(tokens, ["tui", "model_availability_nux", name]))) delete config.tui.model_availability_nux;
+    // Native Tui Option<bool>: either value records the completed accessibility probe.
+    if (isRecord(config.tui) && typeof config.tui.screen_reader_detection_done === "boolean") delete config.tui.screen_reader_detection_done;
     config = embedCodexNumericTokens(config, tokens);
     normalize(config, 6);
     if (isRecord(config.tui) && !Object.keys(config.tui).length) delete config.tui;

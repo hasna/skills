@@ -34,6 +34,17 @@ test("V6 binds referenced routes while retaining display and unrelated MCP toler
   expect(f.capture(route + unrelated + '[tui]\nstatus_line = 7\n').sha256).not.toBe(before.sha256);
 });
 
+test("V6 tolerates only the native boolean screen-reader detection receipt", () => {
+  const f = fixture(), before = f.capture(route).sha256;
+  for (const text of ["tui.screen_reader_detection_done = true\n", "tui.screen_reader_detection_done = false\n", "tui = { screen_reader_detection_done = true }\n", "[tui]\nscreen_reader_detection_done = false\n"]) expect(f.capture(text + (text.startsWith("[tui]") ? "\n" : "") + route).sha256).toBe(before);
+  for (const value of ['"true"', "1", "[]", "{}"])
+    expect(f.capture(`tui.screen_reader_detection_done = ${value}\n` + route).sha256).not.toBe(before);
+  expect(f.capture('tui.screen_reader_detection_done = true\nsandbox_mode = "danger-full-access"\n' + route).sha256).not.toBe(before);
+  expect(f.capture('tui.screen_reader_detection_done = false\nprojects."/project".trust_level = "trusted"\n' + route).sha256).not.toBe(before);
+  for (const hash of [hashCodexSettingsReplacementV4, hashCodexSettingsReplacementV5])
+    expect(hash('tui.screen_reader_detection_done = true\n')).not.toBe(hash(''));
+});
+
 test("V6 is independent of table, dotted and inline representation", () => {
   const f = fixture();
   const table = '[mcp_servers.provider]\ncommand = "/owned/provider"\ntool_timeout_sec = 10.5\n' + unrelated + ui;
