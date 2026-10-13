@@ -2834,7 +2834,7 @@ V6 binds every supported hook-referenced route's command, arguments, environment
 cwd, tool/approval settings and source population. Missing or unknown referenced
 routes, reserved Apps routes and unsupported native forms refuse. Higher precedence
 project hook declarations or referenced provider overrides also refuse; unrelated
-project MCP/UI settings remain usable. It preserves V5 display tolerances and omits supported unrelated
+project MCP/UI settings remain usable. It preserves V5 display tolerances, omits only boolean `tui.screen_reader_detection_done` accessibility-probe receipts, and omits supported unrelated
 ordinary MCP routes across table, dotted and inline TOML forms. Parsed values are
 canonical with path-attributed integer/float provenance; nonfinite numbers and
 unsafe integers refuse. Numeric attribution retains native type and exact decimal

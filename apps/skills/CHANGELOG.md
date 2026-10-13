@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.70
+
+- Add opt-in V6 Codex settings witnesses that bind reviewed hook declarations and their referenced local stdio MCP providers, including higher-precedence project overrides. Preserve V1–V5 meanings, harmless display changes and unrelated ordinary MCP changes; refuse unsupported routes and unproved source populations without automatically migrating existing witnesses.
+- Preserve native selection for routine retained plugin versions while refusing ambiguous mixed-version ordering. Keep native activation, trust and corpus admission separate from the conservative declared-route review.
+- Add explicit executable integrity witnesses using the existing custody, race and aggregate-budget guards, without increasing raw text-source limits.
+
 ## 0.10.69
 
 - Serve `tools/list` in `skills-mcp` with JSON Schema converted by the package's own zod. `bin/mcp.js` bundles zod and loads only the MCP SDK from the consumer's `node_modules`. Since 0.10.61 the SDK's own `tools/list` converted the tool schemas with whatever zod the SDK resolved, and failed or degraded whenever that zod was older than the bundled 4.5.4:
