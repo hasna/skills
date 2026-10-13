@@ -12,8 +12,53 @@ export interface CodexReviewedHookSource { path: string; sha256: string | null }
 export interface CodexHookMcpDependencies { sources: CodexReviewedHookSource[]; servers: string[] }
 const need: (value: unknown) => asserts value = (value: unknown): asserts value => { if (!value) throw new Error("Incomplete or unsupported reviewed Codex hook dependency"); };
 const record = (value: unknown): value is Record<string, any> => Boolean(value && typeof value === "object" && !Array.isArray(value));
-const identifier = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(value);
+const identifier = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 64 && !/[^A-Za-z0-9_-]/.test(value);
 const events = new Set(["PreToolUse", "PermissionRequest", "PostToolUse", "PreCompact", "PostCompact", "SessionStart", "SessionEnd", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop", "Interrupt"]);
+
+/** Exact Codex installed.rs selector contract, using its locked semver1.0.27
+ * Version::cmp (including BuildMetadata::cmp), not loose npm precedence.
+ * Mixed semver/lexical comparisons can cycle. Validate the complete resulting
+ * order so selection cannot depend on native read_dir/sort enumeration. */
+export function selectCodexPluginVersion(versions: readonly string[], budget = { remaining: 65536 }): string {
+  need(Array.isArray(versions) && versions.length > 0 && new Set(versions).size === versions.length
+    && versions.every(version => typeof version === "string" && version.length > 0 && version.length <= 4096 && !/[^A-Za-z0-9._+-]/.test(version) && ![".", ".."].includes(version)));
+  if (versions.includes("local")) return "local";
+  type Version = { core: bigint[]; pre: string; build: string };
+  const parsed = new Map<string, Version | null>();
+  for (const version of versions) {
+    const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*))?(?:\+([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*))?$/.exec(version);
+    const core = match ? match.slice(1, 4).map(value => BigInt(value!)) : [];
+    const valid = match && core.every(value => value <= 18446744073709551615n)
+      && !(match[4] ?? "").split(".").some(part => /^0\d+$/.test(part));
+    parsed.set(version, valid ? { core, pre: match[4] ?? "", build: match[5] ?? "" } : null);
+  }
+  const lexical = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
+  function identifiers(a: string, b: string, build: boolean): number {
+    if (a === b) return 0;
+    if (!build && (!a || !b)) return a ? -1 : 1;
+    const left = a.split("."), right = b.split(".");
+    for (let at = 0; at < Math.min(left.length, right.length); at++) {
+      const x = left[at]!, y = right[at]!, xn = /^\d*$/.test(x), yn = /^\d*$/.test(y);
+      let order: number;
+      if (xn && yn) {
+        const xv = build ? x.replace(/^0+/, "") : x, yv = build ? y.replace(/^0+/, "") : y;
+        order = Math.sign(xv.length - yv.length) || lexical(xv, yv) || (build ? Math.sign(x.length - y.length) : 0);
+      } else order = xn !== yn ? (xn ? -1 : 1) : lexical(x, y);
+      if (order) return order;
+    }
+    return Math.sign(left.length - right.length);
+  }
+  function compare(a: string, b: string): number {
+    need(Number.isSafeInteger(budget.remaining) && --budget.remaining >= 0);
+    const x = parsed.get(a), y = parsed.get(b);
+    if (!x || !y) return lexical(a, b);
+    for (let at = 0; at < 3; at++) if (x.core[at] !== y.core[at]) return x.core[at]! < y.core[at]! ? -1 : 1;
+    return identifiers(x.pre, y.pre, false) || identifiers(x.build, y.build, true);
+  }
+  const ordered = [...versions].sort(compare);
+  for (let left = 0; left < ordered.length; left++) for (let right = left + 1; right < ordered.length; right++) need(compare(ordered[left]!, ordered[right]!) < 0);
+  return ordered.at(-1)!;
+}
 
 function collect(table: unknown, servers: Set<string>): void {
   need(record(table) && Object.keys(table).length <= 32);
@@ -81,16 +126,13 @@ export function captureCodexHookMcpDependencies(configPath: string, reviewed: re
   const candidates = new Map<string, string[]>();
   for (const row of inventory.entries) {
     const [relative, type] = JSON.parse(row) as [string, string], parts = relative.split("/");
-    if (type !== "directory" || parts.length !== 3 || !/^[A-Za-z0-9._+-]+$/.test(parts[2]!)) continue;
+    if (type !== "directory" || parts.length !== 3 || !parts[2] || /[^A-Za-z0-9._+-]/.test(parts[2])) continue;
     const identity = parts.slice(0, 2).join("/");
     candidates.set(identity, [...(candidates.get(identity) ?? []), parts[2]!]);
   }
+  const selectionBudget = { remaining: 65536 };
   for (const [identity, versions] of candidates) {
-    // Native selection prefers literal `local`. A sole version is also
-    // unambiguous; multiple nonlocal versions require the native selector's
-    // complete semver/lexical ordering, outside this bounded file-only scope.
-    need(versions.includes("local") || versions.length === 1);
-    const root = join(cacheRoot, identity, versions.includes("local") ? "local" : versions[0]!);
+    const root = join(cacheRoot, identity, selectCodexPluginVersion(versions, selectionBudget));
     // Native AgentPlugin root format precedes both legacy manifest locations.
     // Its extension/executor contract is outside this stdio-only witness.
     const agent = read(join(root, "plugin.json"));

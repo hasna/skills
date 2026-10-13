@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { captureCodexSettingsV6, hashCodexSettingsReplacementV2, hashCodexSettingsReplacementV4, hashCodexSettingsReplacementV5 } from "./codex-settings-witness.js";
 import { assertProjectDiscovery, captureDiscoveryByteSources, captureDiscoveryExecutableSources, captureDiscoveryPathSources, verifyAgentDiscovery, rebindAgentDiscovery, type AgentDiscoveryBinding } from "./agent-discovery.js";
 import { assertAgentPolicyCollections } from "./agent-policy-limits.js";
+import { selectCodexPluginVersion } from "./codex-hook-mcp-dependencies.js";
 
 const homes: string[] = [];
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
@@ -99,10 +100,39 @@ test("V6 binds alternate manifests/default hooks and refuses native fallback amb
   expect(capture).toThrow();
 });
 
-test("V6 refuses unproved multi-version native selection without local", () => {
+test("V6 retains routine old versions without turning inactive hooks into dependencies", () => {
   const f = fixture(); f.capture();
-  for (const version of ["1.0.0", "2.0.0"]) mkdirSync(join(f.home, ".codex/plugins/cache/market/plugin", version), { recursive: true });
-  expect(() => f.capture()).toThrow("Incomplete or unsupported");
+  const parent = join(f.home, ".codex/plugins/cache/market/plugin"), root = join(parent, "0.0.21");
+  mkdirSync(join(root, ".codex-plugin"), { recursive: true }); mkdirSync(join(root, "hooks"));
+  writeFileSync(join(root, ".codex-plugin/plugin.json"), JSON.stringify({ name: "plugin" })); writeFileSync(join(root, "hooks/hooks.json"), JSON.stringify(hook()));
+  const paths = [f.hooks, ...["plugin.json", ".codex-plugin/plugin.json", ".claude-plugin/plugin.json", ".cursor-plugin/plugin.json", "hooks/hooks.json"].map(path => join(root, path))];
+  const capture = () => captureCodexSettingsV6(f.config, captureDiscoveryByteSources(paths).map(({ path, sha256 }) => ({ path, sha256 })));
+  const before = capture();
+  const old = join(parent, "0.0.19"); mkdirSync(join(old, ".codex-plugin"), { recursive: true }); mkdirSync(join(old, "hooks"));
+  writeFileSync(join(old, ".codex-plugin/plugin.json"), JSON.stringify({ name: "plugin" })); writeFileSync(join(old, "hooks/hooks.json"), JSON.stringify(hook("unproved-inactive-old")));
+  expect(capture().sha256).toBe(before.sha256);
+  mkdirSync(join(parent, "0.0.22")); // Actual selection change must require review.
+  expect(capture).toThrow();
+});
+
+test("V6 native selector matches strict Rust semver, build ordering and local preference", () => {
+  for (const [versions, expected] of [
+    [["0.0.19", "0.0.21"], "0.0.21"], [["2.0.0", "10.0.0"], "10.0.0"],
+    [["1.0.0-alpha.2", "1.0.0-alpha.10", "1.0.0"], "1.0.0"],
+    [["1.0.0-99999999999999999999999999", "1.0.0-100000000000000000000000000"], "1.0.0-100000000000000000000000000"],
+    [["1.0.0+2", "1.0.0+10"], "1.0.0+10"], [["1.0.0+1", "1.0.0+01", "1.0.0+001"], "1.0.0+001"],
+    [["1.0.0+0", "1.0.0+00"], "1.0.0+00"], [["1.0.0+99", "1.0.0+alpha"], "1.0.0+alpha"],
+    [["18446744073709551615.0.0", "999.0.0"], "18446744073709551615.0.0"],
+    [["18446744073709551616.0.0", "999.0.0"], "999.0.0"],
+    [["01.0.0", "1.0.0"], "1.0.0"], [["development", "snapshot"], "snapshot"],
+    [["2.0.0", "10.0.0", "zz"], "zz"], [["2.0.0", "10.0.0", "15foo", "local"], "local"],
+  ] as Array<[string[], string]>) {
+    expect(selectCodexPluginVersion(versions)).toBe(expected); expect(selectCodexPluginVersion([...versions].reverse())).toBe(expected);
+  }
+  for (const versions of [["2.0.0", "10.0.0", "15foo"], ["15foo", "2.0.0", "10.0.0"], ["10.0.0", "15foo", "2.0.0"], ["2.0.0", "10.0.0", "15foo", "zz"]]) expect(() => selectCodexPluginVersion(versions)).toThrow();
+  expect(() => selectCodexPluginVersion(["1.0.0", "2.0.0"], { remaining: 0 })).toThrow();
+  expect(() => selectCodexPluginVersion(["1.0.0", "1.0.0"])).toThrow();
+  expect(() => selectCodexPluginVersion(["1.0.0\n"])).toThrow();
 });
 
 test("old witnesses retain their UI and ordinary MCP meanings", () => {

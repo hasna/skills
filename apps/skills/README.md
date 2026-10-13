@@ -2815,8 +2815,11 @@ stdio MCP providers. Capture it with `skills hook witness --kind codex-settings-
 --path <config.toml> --reviewed-hook-sources <raw-source-witnesses.json>`. The JSON
 array contains exact `{path, sha256}` raw witnesses, including verified absences.
 The package derives home declarations and the conservative selected cache roots:
-native literal `local`, or a sole installed version. Multiple nonlocal versions
-refuse rather than approximate native semver/lexical selection. Root AgentPlugin
+native literal `local`, otherwise the highest version under the native strict
+Rust semver ordering (including build metadata), with lexical comparison when
+either name is not semver. Routine retained versions stay supported; mixed-name
+cycles or comparison ties refuse rather than depend on filesystem enumeration.
+Selection has an aggregate 65,536-comparison bound. Root AgentPlugin
 format refuses; all three legacy manifest locations and their absences are bound
 in native precedence order. Explicit homogeneous nonempty path/inline hook lists
 replace defaults; unsupported fallback shapes refuse. A shorter provider list
