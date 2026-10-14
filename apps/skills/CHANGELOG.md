@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Accept a Claude prospective review when the project `.claude/settings.local.json` is absent with a null preimage and the reviewed discovery sources omit it. Keep the absent-at-review re-check, and keep requiring every present settings and registration source.
+- Accept a Claude prospective review when the project `.claude/settings.json` or `.claude/settings.local.json` is absent with a null preimage, the reviewed discovery sources omit it, and no other expected source (such as the target settings) shares its path. Each exempt file is re-checked as absent after discovery and again before the result. Every present settings and registration source is still required.
 
 ## 0.10.71
 

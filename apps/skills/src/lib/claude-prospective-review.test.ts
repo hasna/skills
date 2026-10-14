@@ -675,10 +675,10 @@ test("a shallow plugin.json cannot derive a source root outside the frozen closu
   expect(() => review(f.request)).toThrow("CLAUDE_CANDIDATE_REVIEW_REFUSED:");
 });
 
-function rebindDiscovery(f: ReturnType<typeof fixture>, includeLocal: boolean): void {
+function rebindDiscovery(f: ReturnType<typeof fixture>, includeLocal: boolean, includeProject = true): void {
   const options = { home: f.home, dataDir: f.dataDir, projectDir: f.home, agents: ["claude" as const], command: "/fixture/skills" };
   const prior = JSON.parse(readFileSync(join(f.dataDir, "agent-policy.json"), "utf8")).bridge.discovery.claude;
-  const paths = includeLocal ? [f.projectSettings, f.projectSettingsLocal, f.known, f.installed] : [f.projectSettings, f.known, f.installed];
+  const paths = [...(includeProject ? [f.projectSettings] : []), ...(includeLocal ? [f.projectSettingsLocal] : []), f.known, f.installed];
   const discoveryInputs: ReviewedDiscoveryInputs = { version: 1, agents: [{
     agent: "claude", roots: prior.roots, sources: [captureClaudeSettingsV4(f.settings), ...captureDiscoveryPathSources(paths)],
     pluginHooks: "reviewed-no-skill-injection",
@@ -720,6 +720,62 @@ test("an exempt absent settings.local.json created during discovery still refuse
   const spy = spyOn(discovery, "verifyAgentDiscovery").mockImplementation(((binding: any) => {
     put(f.projectSettingsLocal, JSON.stringify({ permissions: {} }));
     return (original as any)(binding);
+  }) as any);
+  try {
+    expect(() => review(f.request)).toThrow("absent at review but is now present");
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+// The frozen AutoGoal acceptance on station01: user scope, a project with no
+// .claude directory, so both project settings files are absent and unreviewed.
+function removeProjectSettings(f: ReturnType<typeof fixture>): void {
+  rmSync(f.projectSettings, { force: true });
+  f.request.preimages.projectSettings.sha256 = null;
+}
+
+test("both absent project settings files with null preimages need not be reviewed sources", () => {
+  const f = fixture();
+  removeProjectSettings(f);
+  rebindDiscovery(f, false, false);
+  expect(review(f.request).accepted).toBe(true);
+});
+
+test("a present project settings.json must still be a reviewed discovery source", () => {
+  const f = fixture();
+  rebindDiscovery(f, false, false);
+  expect(f.request.preimages.projectSettings.sha256).not.toBeNull();
+  expect(() => review(f.request)).toThrow("does not bind every current user/project Claude settings and registration source");
+});
+
+test("an exempt absent project settings.json created during discovery still refuses", async () => {
+  const discovery = await import("./agent-discovery.js");
+  const f = fixture();
+  removeProjectSettings(f);
+  rebindDiscovery(f, false, false);
+  const original = discovery.verifyAgentDiscovery;
+  const spy = spyOn(discovery, "verifyAgentDiscovery").mockImplementation(((binding: any) => {
+    put(f.projectSettings, JSON.stringify({ permissions: {} }));
+    return (original as any)(binding);
+  }) as any);
+  try {
+    expect(() => review(f.request)).toThrow("absent at review but is now present");
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+test("an exempt absent project settings.json created after discovery still refuses before the result", async () => {
+  const discovery = await import("./agent-discovery.js");
+  const f = fixture();
+  removeProjectSettings(f);
+  rebindDiscovery(f, false, false);
+  const original = discovery.assertProjectDiscovery;
+  const spy = spyOn(discovery, "assertProjectDiscovery").mockImplementation(((...args: any[]) => {
+    const result = (original as any)(...args);
+    put(f.projectSettings, JSON.stringify({ permissions: {} }));
+    return result;
   }) as any);
   try {
     expect(() => review(f.request)).toThrow("absent at review but is now present");

@@ -382,23 +382,27 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
   if (!request.review || request.review.pluginHooks !== "reviewed-no-skill-injection") refuse("an explicit no-skill-injection review is required");
   if (request.skills.discoveryInputs?.version !== 1 || !Array.isArray(request.skills.discoveryInputs.agents) || request.skills.discoveryInputs.agents.length !== 1 || request.skills.discoveryInputs.agents[0]?.agent !== "claude" || request.skills.discoveryInputs.agents[0]?.pluginHooks !== "reviewed-no-skill-injection") refuse("one explicit reviewed Claude discovery binding is required");
   const reviewedPaths = new Set(request.skills.discoveryInputs.agents[0]!.sources.map(source => source.path));
-  // An absent project settings.local.json has nothing to review: its null
-  // preimage was just re-checked by readWitness, and the delta never writes it.
-  const absentLocal = request.preimages.projectSettingsLocal.sha256 === null ? expectedPaths.projectSettingsLocal : undefined;
+  // An absent project settings file has nothing to review: its null preimage
+  // was just re-checked by readWitness. Only the two project settings files
+  // qualify, and only when no other expected source (such as the delta's
+  // target settings or the user settings) shares the path.
+  const exemptAbsent = (["projectSettings", "projectSettingsLocal"] as const).filter(name =>
+    request.preimages[name].sha256 === null
+    && !Object.entries(expectedPaths).some(([other, path]) => other !== name && path === expectedPaths[name])
+    && !reviewedPaths.has(expectedPaths[name]));
   const requiredPaths = new Set(Object.values(expectedPaths));
-  if (absentLocal !== undefined && !Object.entries(expectedPaths).some(([name, path]) => name !== "projectSettingsLocal" && path === absentLocal)) requiredPaths.delete(absentLocal);
+  for (const name of exemptAbsent) requiredPaths.delete(expectedPaths[name]);
   for (const path of requiredPaths) if (!reviewedPaths.has(path)) refuse("Skills discovery review does not bind every current user/project Claude settings and registration source");
-  // When the absent file is exempt from review, it must stay absent through
-  // discovery and until the result is produced; re-check after each read.
-  const localExempt = absentLocal !== undefined && !reviewedPaths.has(absentLocal);
-  const assertLocalStillAbsent = () => { if (localExempt) readWitness(absentLocal!, null, "projectSettingsLocal"); };
+  // An exempt file must stay absent through discovery and until the result is
+  // produced; re-check after each read.
+  const assertExemptStillAbsent = () => { for (const name of exemptAbsent) readWitness(expectedPaths[name], null, name); };
   const binding = resolveAgentDiscovery({ home: request.native.home, agent: "claude", canonical, reviewed: request.skills.discoveryInputs });
   verifyAgentDiscovery(binding);
   if (hashClaudeDiscoveryBinding(binding) !== request.skills.discoverySha256) refuse("Skills discovery preimage differs from its reviewed binding");
   assertProjectDiscovery("claude", [request.scope.projectPath], request.native.home, canonical, binding);
   const stored = snapshot.value.bridge?.discovery?.claude;
   if (!stored || !isDeepStrictEqual(stored, binding) || snapshot.value.bridge?.home !== request.native.home) refuse("Skills policy does not bind the reviewed current Claude discovery");
-  assertLocalStillAbsent();
+  assertExemptStillAbsent();
 
   const delta = request.delta;
   keys(delta, ["settingsAfter", "knownMarketplacesAfter", "installedPluginsAfter"], "complete semantic delta");
@@ -553,7 +557,7 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
   }
   if (!isDeepStrictEqual(delta.installedPluginsAfter, installedAfter)) refuse("complete installed plugin document changes an unrelated registration or has target rows not derived from every selected candidate");
 
-  assertLocalStillAbsent();
+  assertExemptStillAbsent();
   const semanticDocumentsSha256 = sha(canonicalJson({ settings: settingsAfter, knownMarketplaces: marketplacesAfter, installedPlugins: installedAfter }));
   const exactPreimages = Object.keys(expectedPaths).map(name => ({ name, path: expectedPaths[name as keyof typeof expectedPaths], sha256: request.preimages[name as keyof typeof expectedPaths].sha256 }));
   const expectedPostStateSha256 = sha(canonicalJson({ paths: expectedPaths, targetSettingsPath: expectedPaths.settings, semanticDocumentsSha256, currentPreimages: exactPreimages }));
