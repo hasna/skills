@@ -341,19 +341,31 @@ test("a malformed current settings marketplace map or selected row cannot be nor
 });
 
 test("settings marketplace mutation is explicit and restricted to the measured native operation", () => {
-  for (const version of ["2.1.292", "2.1.294", "2.1.295", "2.1.293-beta", "2.1.293+local"]) {
+  for (const version of ["2.1.292", "2.1.294", "2.1.295", "2.1.297", "2.1.298", "2.1.293-beta", "2.1.296+local"]) {
     const f = fixture(); f.request.native.executable.version = version;
     f.request.candidate.settingsMarketplaceSource = "directory";
-    expect(() => review(f.request)).toThrow("measured Claude 2.1.293 user scope");
+    expect(() => review(f.request)).toThrow("measured Claude user-scope writer");
   }
   const project = fixture("project"); project.request.native.executable.version = "2.1.293";
   project.request.candidate.settingsMarketplaceSource = "directory";
-  expect(() => review(project.request)).toThrow("measured Claude 2.1.293 user scope");
+  expect(() => review(project.request)).toThrow("measured Claude user-scope writer");
   const f = fixture(); f.request.native.executable.version = "2.1.293";
   f.request.delta.settingsAfter.extraKnownMarketplaces = { "fixture-market": { source: { source: "directory", path: f.candidateRoot } } };
   expect(() => review(f.request)).toThrow("complete settings document differs");
   (f.request.candidate as any).settingsMarketplaceSource = "github";
-  expect(() => review(f.request)).toThrow("measured Claude 2.1.293 user scope");
+  expect(() => review(f.request)).toThrow("measured Claude user-scope writer");
+});
+
+test("measured fleet Claude writers accept the declared directory operation", () => {
+  for (const version of ["2.1.276", "2.1.278", "2.1.282", "2.1.287", "2.1.293", "2.1.296", "2.1.299"]) {
+    const f = fixture();
+    f.request.native.executable.version = `${version} (Claude Code)`;
+    f.request.candidate.settingsMarketplaceSource = "directory";
+    f.request.delta.settingsAfter.extraKnownMarketplaces = {
+      "fixture-market": { source: { source: "directory", path: f.candidateRoot } },
+    };
+    expect(review(f.request).accepted).toBe(true);
+  }
 });
 
 test("prospective review accepts an exact user-scoped frozen candidate without writing native state", () => {

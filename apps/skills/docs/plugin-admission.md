@@ -194,8 +194,9 @@ closure. Nontrivial `metadata.pluginRoot` values and native catalog or selected
 plugin dependency declarations refuse because this validator does not resolve
 or review unselected external plugins.
 The request may declare `functionHooksEnv: "1"`; without that declaration the
-environment document is preserved unchanged. For a measured Claude 2.1.293
-user-scoped install, `candidate.settingsMarketplaceSource: "directory"`
+environment document is preserved unchanged. For a measured Claude 2.1.276,
+2.1.278, 2.1.282, 2.1.287, 2.1.293, 2.1.296 or 2.1.299 user-scoped install,
+`candidate.settingsMarketplaceSource: "directory"`
 explicitly declares the native settings registration. Skills derives
 `extraKnownMarketplaces[candidate.marketplace].source` from the exact frozen
 candidate root. The measured operation accepts existing directory sources
