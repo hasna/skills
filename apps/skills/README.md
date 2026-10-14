@@ -828,19 +828,24 @@ loaded bundles, retires changed or removed ones and delivers context for the
 prompt. The first hook context that succeeds and reaches the agent afterwards
 names each retired loaded skill once and how to reload its replacement; earlier
 instructions from those skills must not be relied on. Identity, integrity, lock and receipt failures, an
-unavailable authority and anything the planner refuses keep their refusal. If
-the migration cannot finish within the four-second renewal window, the hook
-reports `SESSION_RECONCILIATION_REQUIRED` with that reason and the next prompt
-retries. Turn this off station-wide with `skills config set sessionPinMigration
-off --global`; the hook then keeps today's refusal until the explicit
-reconciliation below. A missing cache may be recovered through authenticated context.
+unavailable authority and anything the planner refuses keep their refusal. A
+project lock (`.skills/selection.lock.json`) at the prompt's working directory
+also keeps the refusal, so a session is never migrated past the project's pin,
+and so does a loaded skill whose lifecycle epoch rotated while its bytes stayed
+the same. If the migration cannot finish within the four-second renewal window,
+the hook reports `SESSION_RECONCILIATION_REQUIRED` with that reason and the next
+prompt retries. Turn this off station-wide with `skills config set
+sessionPinMigration off --global` (the key is refused without `--global`, and a
+global configuration that cannot be read or parsed also turns it off); the hook
+then keeps today's refusal until the explicit reconciliation below. A missing
+cache may be recovered through authenticated context.
 
 After verifying the native bridge and input, ordinary lifecycle hooks continue
 without skill payload on typed hosted authentication/refusal/availability failures,
 context timeouts, valid concurrent writers, context CAS conflicts, or required
 session reconciliation. They emit a fixed warning that Skills-dependent actions
 are unavailable; previously loaded instructions are not an authorization fallback.
-The hook does not rewrite a session pin or remove another writer’s lock to bypass these refusals. Explicit `skills
+Apart from the automatic migration above, the hook does not rewrite a session pin or remove another writer’s lock to bypass these refusals. Explicit `skills
 load`, `skills context`, and `skills run` still refuse unavailable or unauthorized
 instructions. Native skill tool guards still deny unmanaged payloads. Invalid
 input/receipts, integrity or authority mismatches, unknown failures, and native
@@ -1021,7 +1026,9 @@ hosted publication access.
 `--profile` option chooses an isolated credential file; these are separate
 settings. `HASNA_SKILLS_SELECTION_PROFILE` overrides the installed selection
 profile. A project lock and an existing session keep exact versions until they
-are explicitly changed or a new session starts.
+are explicitly changed or a new session starts. The one exception is the
+managed hook's automatic migration of an expired session pin described above,
+which never applies while a project lock governs the prompt's working directory.
 
 ## Executable skills
 
@@ -1379,7 +1386,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills setup-info` | | Version, pinned skills, agent configs, paths |
 | `skills export` | | Export pinned skills as JSON |
 | `skills import <file>` | | Pin skills from a JSON export |
-| `skills config set <key> <value>` | | Set default agent, scope, output format, or API origin; `sessionPinMigration off --global` keeps managed hooks from migrating refused session pins |
+| `skills config set <key> <value>` | | Set default agent, scope, output format, or API origin; `sessionPinMigration off --global` keeps managed hooks from migrating refused session pins (global scope only) |
 | `skills config unset <key>` | | Remove a configuration value (`skills config unset apiUrl` clears the stored service address and returns to running on this machine) |
 | `skills new <name>` | `scaffold` | Scaffold a portable skill under `~/.hasna/skills/installed/<name>` |
 | `skills port <path>` | `add` | Import an existing skill folder into the portable standard |

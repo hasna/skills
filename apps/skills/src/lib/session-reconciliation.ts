@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import { createProfileClient, type ProfileClient } from "./profile-client.js";
 import { SkillBundleInspectionError } from "./skill-bundle.js";
 import { isValidSkillVersion } from "./skill-version.js";
-import { MAX_CACHED_PROFILE_AGE_MS, verifySelectionBundleResponse, nextSkillSessionGeneration, readSelectionJson, readSelectionProfile, readSkillSessionSnapshot, readSkillSessionSnapshotIfExists, replaceSkillSession, selectionCacheRoot, selectionKey, skillSessionSnapshotBinding, SkillSelectionError, validateResolvedProfile, writeSelectionJson, type SelectionCacheOptions, type SkillSessionReceipt, type SkillSessionSnapshot } from "./selection-cache.js";
+import { MAX_CACHED_PROFILE_AGE_MS, verifySelectionBundleResponse, nextSkillSessionGeneration, readProjectSelection, readSelectionJson, readSelectionProfile, readSkillSessionSnapshot, readSkillSessionSnapshotIfExists, replaceSkillSession, selectionCacheRoot, selectionKey, skillSessionSnapshotBinding, SkillSelectionError, validateResolvedProfile, writeSelectionJson, type SelectionCacheOptions, type SkillSessionReceipt, type SkillSessionSnapshot } from "./selection-cache.js";
 
 export interface SessionReconciliationInput {
   sessionId: string;
@@ -253,6 +253,43 @@ export interface SessionPinRenewalOptions extends SessionReconciliationOptions {
    * revision instead. Every other failure keeps its existing refusal.
    */
   migrate?: boolean;
+  /**
+   * Required for `migrate`: the directory whose project lock governs this
+   * context, read exactly as session creation reads it (the hook input's cwd).
+   * Without it, or while a lock is present there, migration does not run.
+   */
+  projectDir?: string;
+}
+
+/**
+ * A project lock (`.skills/selection.lock.json`, written by `skills pin`,
+ * `skills install --project` and `skills sync --project`) is an intentional
+ * pin that keeps exact versions until it is explicitly changed, and sessions
+ * started in that project inherit it. Automatic migration never moves a
+ * session past it: any lock present at the directory, or one that cannot be
+ * read, keeps today's refusal. A lock for another profile is already refused
+ * earlier as PROFILE_LOCK_MISMATCH. Only a confirmed absence lets migration run.
+ */
+function projectLockGoverns(projectDir: string | undefined): boolean {
+  if (projectDir === undefined) return true;
+  try { return readProjectSelection(projectDir) !== null; } catch { return true; }
+}
+
+/**
+ * A known lifecycle epoch is never revived silently. Deletion and archive
+ * rotate it, and renewal refuses the rotation even when the restored bytes
+ * match. The planner keys retention on exact bundle identity, so such a loaded
+ * selection would be retained without telling the session; it keeps the
+ * refusal for explicit `skills sessions reconcile` instead.
+ */
+function retainsRotatedLoadedEpoch(old: SkillSessionReceipt, target: ResolvedSkillProfile): boolean {
+  const loaded = new Set(old.loaded);
+  const targetBySlug = new Map(target.selections.map(selection => [selection.slug, selection]));
+  return old.profile.selections.some(previous => {
+    const current = targetBySlug.get(previous.slug);
+    return previous.authorizationEpoch !== undefined && loaded.has(selectionKey(previous)) && current !== undefined
+      && selectionKey(current) === selectionKey(previous) && current.authorizationEpoch !== previous.authorizationEpoch;
+  });
 }
 
 /**
@@ -270,7 +307,8 @@ export class SessionPinMigrationTimeout extends SkillSelectionError {
 const AMBIGUOUS_MIGRATION_FAILURES = new Set(["SESSION_RECONCILIATION_INCOMPLETE", "SESSION_LOCK_RECOVERY_INCOMPLETE"]);
 
 export async function renewSkillSessionPin(sessionId: string, profileId: string, options: SessionPinRenewalOptions = {}): Promise<SessionPinRenewalOutcome> {
-  const migrate = options.migrate === true;
+  // With a governing project lock this is exactly the renewal without migration.
+  const migrate = options.migrate === true && !projectLockGoverns(options.projectDir);
   const existing = readSkillSessionSnapshotIfExists(sessionId, options);
   if (!existing) return { outcome: "unchanged" };
   const snapshot = existing;
@@ -383,6 +421,7 @@ export async function renewSkillSessionPin(sessionId: string, profileId: string,
    * original refusal, or says the budget ran out.
    */
   function migratePin(target: ResolvedSkillProfile, refusal: SkillSelectionError): SessionPinRenewalOutcome {
+    if (retainsRotatedLoadedEpoch(old, target)) throw refusal;
     try {
       assertActive();
       const planned = planSessionReconciliation(snapshot, target, new Date(now).toISOString(), new Date(now + SESSION_RECONCILIATION_PLAN_TTL_MS).toISOString());

@@ -59,6 +59,21 @@ those. Plain `skills context` never consumes it. It applies only while the pin
 holds the migrated profile, revision and generation, and a malformed or
 oversized record is ignored.
 
+A project lock is an intentional pin, and migration never moves a session past
+it. Sessions inherit `.skills/selection.lock.json` from the context's `cwd`
+when they start (`skills pin`, `skills install --project` and `skills sync
+--project` write it). When a lock is present at that same `cwd`, or cannot be
+read there, the hook keeps today's refusal, including its remembered refusal
+record, and leaves both the session pin and the lock unchanged. Change the lock
+explicitly or review `skills sessions reconcile`. A caller that does not name
+the `cwd` never migrates.
+
+A loaded selection whose known lifecycle epoch changed also keeps the refusal
+when its bytes are the same again (deleted or archived, then restored).
+Migration would retain it unchanged, so the session would never be told.
+Review it with `skills sessions reconcile`. A changed epoch on a selection the
+session never loaded does not block migration.
+
 Remembered refusals are neither read nor written while migration is on. Every
 failure other than a plain revision move keeps its existing refusal: identity
 mismatches, unreadable receipts, integrity checks, an unavailable authority,
@@ -67,8 +82,14 @@ four-second renewal deadline reports `SESSION_RECONCILIATION_REQUIRED` with a
 fixed `migration: "timeout"` marker, which the hook explains; the pin is
 unchanged and the next prompt retries. Outcomes that may already have committed
 keep `SESSION_RECONCILIATION_INCOMPLETE`. Renewable pins still renew without
-migrating. Turn migration off station-wide with `skills config set
-sessionPinMigration off --global`; only the global configuration is read.
+migrating.
+
+Turn migration off station-wide with `skills config set sessionPinMigration off
+--global`. Only the global configuration is read, and setting the key without
+`--global` is refused. Migration is on when that file is missing, or when it is
+a readable JSON object without the key or with exactly `"auto"`. Any other
+state keeps the refusal: an unreadable or malformed file, a truncated write, a
+non-object document, a retired key, or any other value.
 
 ## Compatibility and intentional migration
 

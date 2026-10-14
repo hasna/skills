@@ -105,7 +105,7 @@ export function registerContextCommands(parent: Command): void {
     .option("--selection-profile <id>", "Selection profile (separate from the credential --profile)")
     .option("--cached", "Use only an explicitly selected verified cache, at most 24 hours old", false)
     .option("--auto-reconcile-safe", "For managed hooks, renew authorized immutable session pins without adopting newer selected versions", false)
-    .option("--auto-migrate-session-pin", "With --auto-reconcile-safe: when renewal is refused because the same profile moved on, migrate the pin to the current revision and retire changed or removed loaded skills; managed hooks name them once", false)
+    .option("--auto-migrate-session-pin", "With --auto-reconcile-safe: when renewal is refused because the same profile moved on, migrate the pin to the current revision and retire changed or removed loaded skills; managed hooks name them once. A project lock at the input cwd keeps the refusal", false)
     .option("--session <id>", "Keep the same skill versions across this session")
     .option("--restore", "Re-emit loaded session context after compaction or resume", false)
     .option("--max-chars <count>", "Optional maximum injected characters")
@@ -127,7 +127,9 @@ export function registerContextCommands(parent: Command): void {
         catch (error) {
           if (!options.cached || !options.autoReconcileSafe || !(error instanceof SkillSelectionError)
               || error.code !== "CACHED_PROFILE_EXPIRED" || !sessionId) throw error;
-          const renewal = await renewSkillSessionPin(sessionId, input.profileId!, { ...resolverOptions, migrate: options.autoMigrateSessionPin === true });
+          // Session creation reads the project lock at input.cwd; a lock there
+          // keeps today's refusal instead of migrating past the project's pin.
+          const renewal = await renewSkillSessionPin(sessionId, input.profileId!, { ...resolverOptions, migrate: options.autoMigrateSessionPin === true, projectDir: input.cwd });
           if (renewal.outcome === "unchanged") throw error;
           result = await buildSkillContext(input, resolverOptions);
           if (renewal.outcome === "migrated") result = { ...result, sessionPinMigration: renewal.migration };

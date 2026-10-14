@@ -200,11 +200,26 @@ function readConfigFile(path: string): Partial<SkillsConfig> {
  * its profile moved on, unless the station turns that off with
  * `skills config set sessionPinMigration off --global`. Only the global
  * configuration is read: the prompt hook never reads a project-controlled file
- * for this. A configuration that cannot be read keeps the refusal.
+ * for this.
+ *
+ * This reads the file itself instead of readConfigFile, which returns {} for
+ * an unreadable or malformed file. An opt-out must survive a damaged file, so
+ * only a missing file or a readable JSON object without the key means "auto".
+ * Any other read error, a parse error (including a truncated write), a
+ * non-object document, a retired key or a value other than exactly "auto" or
+ * "off" keeps the refusal.
  */
 export function sessionPinMigrationEnabled(): boolean {
-  try { return readConfigFile(getConfigPathReadOnly("global")).sessionPinMigration !== "off"; }
-  catch { return false; }
+  let text: string;
+  try { text = readFileSync(getConfigPathReadOnly("global"), "utf-8"); }
+  catch (error) { return (error as NodeJS.ErrnoException | null)?.code === "ENOENT"; }
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return false;
+    assertNoRetiredConfigKeys(parsed as Record<string, unknown>, getConfigPathReadOnly("global"));
+    if (!Object.hasOwn(parsed, "sessionPinMigration")) return true;
+    return (parsed as Record<string, unknown>).sessionPinMigration === "auto";
+  } catch { return false; }
 }
 
 /**
@@ -228,6 +243,13 @@ export function saveConfig(key: string, value: string, scope: ConfigScope = "pro
 
   if (!validKeys().includes(key)) {
     throw new Error(`Unknown config key: ${key}. Valid keys: ${validKeys().join(", ")}`);
+  }
+
+  // The managed hook reads this key only from the global configuration (see
+  // sessionPinMigrationEnabled). A project value would report success and do
+  // nothing, so refuse it and name the scope that takes effect.
+  if (key === "sessionPinMigration" && scope !== "global") {
+    throw new Error(`${key} is read only from the global configuration. Use: skills config set ${key} <auto|off> --global`);
   }
 
   const normalized = normalizeConfigValue(key as keyof SkillsConfig, value);

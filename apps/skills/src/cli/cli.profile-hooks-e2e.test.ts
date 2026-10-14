@@ -1105,6 +1105,11 @@ test("the station opt-out keeps today's refusal and pin; turning it back on migr
   try {
     await f.a.install();
     const pin = (await legacyExpiredPinsAfterUpgrade(f, ["parent-session"]))[0]!;
+    // The hook reads only the global setting, so a project-scope opt-out is refused rather than ignored.
+    const projectScope = await f.a.run(["config", "set", "sessionPinMigration", "off", "--json"]);
+    expect(projectScope.exitCode).toBe(1);
+    expect(JSON.parse(projectScope.stdout).error).toContain("Use: skills config set sessionPinMigration <auto|off> --global");
+    expect(existsSync(join(f.a.project, "skills.config.json"))).toBe(false);
     expect((await f.a.ok(["config", "set", "sessionPinMigration", "off", "--global", "--json"])).value).toBe("off");
     for (const agent of ["claude", "codex"] as const) {
       const refused = await f.a.hook(agent, "UserPromptSubmit", { prompt: "$review-code" });
@@ -1119,6 +1124,41 @@ test("the station opt-out keeps today's refusal and pin; turning it back on migr
     const migrated = await f.a.hook("claude", "UserPromptSubmit", { prompt: "$review-code" });
     expect(migrated.hookSpecificOutput.additionalContext).toContain("- review-code@1.0.0: now 2.0.0");
     expect(json(pin.receiptPath).profile.selections[0].version).toBe("2.0.0");
+  } finally { await f.close(); }
+});
+
+test("a session pinned by an intentional project lock keeps today's refusal in that project instead of migrating", async () => {
+  const f = await fixture();
+  try {
+    await f.a.install();
+    const first = await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+    // `skills sync --project` records the exact selected versions in the project's lock.
+    await f.a.ok(["sync", "--project", "--json"]);
+    const lockPath = join(f.a.project, ".skills", "selection.lock.json");
+    await f.a.hook("claude", "UserPromptSubmit", { session_id: "locked-session", prompt: "$review-code" });
+    const sessions = join(f.a.data, "selection-cache", "sessions");
+    const receiptPath = readdirSync(sessions).map(name => join(sessions, name)).find(path => json(path).sessionId === "locked-session")!;
+    const old = json(receiptPath);
+    expect(old.profile).toEqual(json(lockPath).profile);
+    old.verifiedAt = new Date(0).toISOString();
+    for (const selection of old.profile.selections) delete selection.authorizationEpoch;
+    put(receiptPath, JSON.stringify(old));
+    await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[1]!.file, "--if-match", first.revision, "--json"]);
+    const before = readFileSync(receiptPath), lockBefore = readFileSync(lockPath);
+    for (const agent of ["claude", "codex"] as const) {
+      const refused = await f.a.hook(agent, "UserPromptSubmit", { session_id: "locked-session", prompt: "$review-code" });
+      expect(refused.decision).toBeUndefined();
+      expect(refused.systemMessage).toContain("[SESSION_RECONCILIATION_REQUIRED]");
+      expect(JSON.stringify(refused)).not.toContain("Published 2.0.0"); expect(JSON.stringify(refused)).not.toContain("pin was migrated");
+      expect(readFileSync(receiptPath)).toEqual(before); expect(readFileSync(lockPath)).toEqual(lockBefore);
+    }
+    expect(existsSync(join(f.a.data, "selection-cache", "session-reconciliations"))).toBe(false);
+    // Control: the same expired pin, prompted from a directory without a project lock, migrates.
+    const elsewhere = join(f.root, "elsewhere"); mkdirSync(elsewhere);
+    const migrated = await f.a.hook("claude", "UserPromptSubmit", { session_id: "locked-session", cwd: elsewhere, prompt: "$review-code" });
+    expect(migrated.hookSpecificOutput.additionalContext).toContain("- review-code@1.0.0: now 2.0.0");
+    expect(json(receiptPath).profile.selections[0].version).toBe("2.0.0");
+    expect(readFileSync(lockPath)).toEqual(lockBefore);
   } finally { await f.close(); }
 });
 
