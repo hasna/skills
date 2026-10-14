@@ -109,7 +109,7 @@ export function snapshotPluginTree(root: string, options: { nativeRuntime?: "cla
         // Certified native runtimes mark retained historical versions for later pruning.
         // Its timestamp and process pins never authorize package content.
         const bytes = readBytes(absolute, 32, "native-pin");
-        pluginNeed(/^[1-9][0-9]{12}$/.test(new TextDecoder().decode(bytes)), "Malformed native orphan timestamp");
+        pluginNeed(bytes.byteLength === 13 && /^[1-9][0-9]{12}$/.test(new TextDecoder().decode(bytes)), "Malformed native orphan timestamp");
         same(entryStat, stat(absolute)); files.push({ path: absolute, stat: entryStat }); continue;
       }
       if (relative === "" && name === ".in_use" && (options.nativeRuntime === "claude-2.1.274" || options.nativeRuntime === "claude-2.1.276")) {
