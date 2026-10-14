@@ -7,6 +7,10 @@
 - Stop long-running sessions from failing every prompt with `SESSION_RECONCILIATION_REQUIRED` after their profile moves on. When renewal of an expired session pin is refused for the same profile, authority and workspace, the managed prompt hook of every maintained agent (Claude, Codex, Gemini, Cursor, Sumi, OpenCode, Hermes) now applies the existing `skills sessions reconcile` planner and applier to the already authenticated current revision: it archives the old receipt, writes the new pin under the existing receipt precondition and lock, retains unchanged loaded skills, retires changed or removed ones and delivers context for the prompt. The first hook context that succeeds and reaches the agent then names each retired loaded skill once, with the command to reload its replacement (Cursor shows it at session start, Sumi on its context restoration call; plain `skills context` never consumes it).
 - Keep today's refusal for identity mismatches, unreadable receipts, integrity and lock failures, an unavailable authority and anything the planner refuses. A migration that cannot finish inside the four-second renewal window keeps `SESSION_RECONCILIATION_REQUIRED` and says so; no refusal code was added, so installed Sumi plugins stay byte-identical. Explicit `skills sessions reconcile` is unchanged. Operators turn automatic migration off with `skills config set sessionPinMigration off --global`; `skills context` gains the matching `--auto-migrate-session-pin` flag (requires `--auto-reconcile-safe`).
 
+## 0.10.71
+
+- Admit the user-scoped Claude directory marketplace writer on the exact 2.1.276, 2.1.278, 2.1.282, 2.1.287, 2.1.296 and 2.1.299 versions measured on the fleet. Keep 2.1.293 support and reject unmeasured versions and project scope.
+
 ## 0.10.70
 
 - Add opt-in V6 Codex settings witnesses that bind reviewed hook declarations and their referenced local stdio MCP providers, including higher-precedence project overrides. Preserve V1–V5 meanings, harmless display changes and unrelated ordinary MCP changes; refuse unsupported routes and unproved source populations without automatically migrating existing witnesses.

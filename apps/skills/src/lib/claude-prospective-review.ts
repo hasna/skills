@@ -291,8 +291,11 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
   if (typeof candidate.marketplace !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(candidate.marketplace)) refuse("invalid candidate marketplace");
   if (!Array.isArray(candidate.plugins) || candidate.plugins.length < 1 || candidate.plugins.length > 32) refuse("candidate must select between one and 32 plugins from one marketplace");
   if (candidate.functionHooksEnv !== undefined && candidate.functionHooksEnv !== "1") refuse("function-hook environment mutation only supports the explicit value 1");
+  const settingsMarketplaceWriterVersions = ["2.1.276", "2.1.278", "2.1.282", "2.1.287", "2.1.293", "2.1.296", "2.1.299"];
+  const nativeVersion = request.native.executable.version;
+  const measuredSettingsWriter = settingsMarketplaceWriterVersions.some(version => nativeVersion === version || nativeVersion === `${version} (Claude Code)`);
   if (hasOwn(candidate, "settingsMarketplaceSource") && (candidate.settingsMarketplaceSource !== "directory" || request.scope.kind !== "user"
-    || !["2.1.293", "2.1.293 (Claude Code)"].includes(request.native.executable.version))) refuse("settings marketplace source operation requires directory source and the measured Claude 2.1.293 user scope");
+    || !measuredSettingsWriter)) refuse("settings marketplace source operation requires directory source and a measured Claude user-scope writer");
   abs(candidate.catalogPath, "catalog path");
   if (!candidate.catalogPath.startsWith(candidate.root + sep)) refuse("catalog must be inside the frozen candidate root");
   if (candidate.catalogPath !== join(candidate.root, ".claude-plugin", "marketplace.json")) refuse("marketplace catalog must be at the frozen root's .claude-plugin/marketplace.json path");
