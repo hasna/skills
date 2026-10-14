@@ -12,6 +12,7 @@ import { pluginExecutableDigest } from "./plugin-projection-store.js";
 import { captureCodexSettingsV6 } from "./codex-settings-witness.js";
 import { captureCodexHookMcpDependencies, type CodexReviewedHookSource } from "./codex-hook-mcp-dependencies.js";
 import { hashDiscoveryPathFile } from "./agent-discovery-path-bytes.js";
+import { CLAUDE_ORPHAN_MARKER_MODE, hashClaudePluginCacheOrphanMarker, isClaudePluginCacheOrphanMarker } from "./claude-plugin-cache-marker.js";
 import { hashClaudePluginManifest, projectReviewedClaudePluginManifest } from "./claude-plugin-manifest-witness.js";
 import { hashManagedPluginRegistry, type ManagedPluginRegistrationWitness } from "./plugin-discovery.js";
 import { readPluginBinding } from "./plugin-admission.js";
@@ -28,7 +29,7 @@ import { verifyRetainedReviewArtifact, type RetainedReviewArtifact, type Reviewe
 import { captureCodexSemanticCacheWitness, assertCodexSemanticCacheWitnessUnchanged, type CodexSemanticCacheWitness, type CodexSemanticCacheAppOnlyParent, type CodexSemanticCacheReviewedHookParent } from "./codex-semantic-cache-witness.js";
 export { captureDiscoveryDirectories, type DiscoveryDirectory } from "./agent-discovery-directories.js";
 
-export interface DiscoverySource { reviewArtifact?: RetainedReviewArtifact; path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes" | "claude-plugin-manifest-v1" | "claude-plugin-registry" | "claude-marketplace-registry" | "claude-settings-v1" | "claude-settings-v2" | "claude-settings-v3" | "claude-settings-v4" | "claude-marketplace-registry-v2" | "codex-settings-v1" | "codex-settings-v2" | "codex-settings-v3" | "codex-settings-v4" | "codex-settings-v5" | "codex-settings-v6" | "executable-v1" | "sumi-settings-v1" | "claude-marketplace-entry-v1"; hookSources?: CodexReviewedHookSource[]; managedPlugins?: ManagedPluginRegistrationWitness[]; format?: "json" | "toml" | "yaml"; fields?: string[]; marketplace?: string; plugin?: string }
+export interface DiscoverySource { reviewArtifact?: RetainedReviewArtifact; path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes" | "claude-plugin-orphaned-at-v1" | "claude-plugin-manifest-v1" | "claude-plugin-registry" | "claude-marketplace-registry" | "claude-settings-v1" | "claude-settings-v2" | "claude-settings-v3" | "claude-settings-v4" | "claude-marketplace-registry-v2" | "codex-settings-v1" | "codex-settings-v2" | "codex-settings-v3" | "codex-settings-v4" | "codex-settings-v5" | "codex-settings-v6" | "executable-v1" | "sumi-settings-v1" | "claude-marketplace-entry-v1"; hookSources?: CodexReviewedHookSource[]; managedPlugins?: ManagedPluginRegistrationWitness[]; format?: "json" | "toml" | "yaml"; fields?: string[]; marketplace?: string; plugin?: string }
 export interface CodexSemanticCacheDiscovery {
   schema: "hasna.codex-semantic-cache-discovery.v1";
   configPath: string;
@@ -220,6 +221,10 @@ function supersedesSettingsProjection(agent: IntegrationAgent, sources: Discover
 function projected(source: DiscoverySource, changes?: Map<string, string>, budget = discoveryByteBudget()): string | null {
   if (source.reviewArtifact !== undefined) verifyRetainedReviewArtifact(source);
   if (source.hookSources !== undefined && source.hashMode !== "codex-settings-v6") throw new Error("Hook dependency metadata requires Codex V6");
+  if (source.hashMode === CLAUDE_ORPHAN_MARKER_MODE) {
+    if (source.format !== undefined || source.fields !== undefined || source.managedPlugins !== undefined || source.reviewArtifact !== undefined) throw new Error("Claude orphan markers require a typed native witness");
+    return hashClaudePluginCacheOrphanMarker(source.path, budget, changes);
+  }
   if (source.hashMode === "codex-settings-v6") {
     if (source.format !== undefined || source.fields !== undefined || source.managedPlugins !== undefined || !Array.isArray(source.hookSources)) throw new Error("Codex V6 requires exact reviewed hook sources");
     const current = captureCodexSettingsV6(source.path, source.hookSources, budget);
@@ -342,13 +347,15 @@ export function captureRetiredCodexDiscovery(binding:AgentDiscoveryBinding, cont
     && isDeepStrictEqual(previous.directories.map(item=>item.path),directories.map(item=>item.path))) return {...current,codexRetiredMaterializations:previous};
   return {...current,codexRetiredMaterializations:{roots,parents,directories:captureDiscoveryDirectoryProjection(directories.map(item=>item.path),roots)}};
 }
-/** Only full byte witnesses and the installer's full manifest projection may
- * retain their reviewed digest beneath a positively verified absent root. */
+/** Only full byte witnesses, the installer's full manifest projection and a
+ * present version-root orphan marker may retain their reviewed digest beneath
+ * a positively verified absent root. */
 function retainableAbsentSource(source: DiscoverySource): boolean {
   if (source.format!==undefined || source.fields!==undefined || source.managedPlugins!==undefined) return false;
   return [undefined,"bytes"].includes(source.hashMode)
     || source.hashMode==="claude-plugin-manifest-v1" && source.sha256!==null
-      && source.path.endsWith(join(sep,".claude-plugin","plugin.json"));
+      && source.path.endsWith(join(sep,".claude-plugin","plugin.json"))
+    || source.hashMode===CLAUDE_ORPHAN_MARKER_MODE && source.sha256!==null && isClaudePluginCacheOrphanMarker(source.path);
 }
 /** Retain historical witnesses only when the entire old Claude version is absent
  * and unchanged native settings/registry select a different extant user root.
@@ -548,6 +555,7 @@ function codexInstallationRoots(binding:AgentDiscoveryBinding):string[] {
   return reviewedCodexPluginSourceRoots(cache,proof.plugins,path=>{const text=read(path);if(text===null) throw new Error("Missing native installation input");return text;});
 }
 function assertMarketplaceBinding(binding: AgentDiscoveryBinding, source: DiscoverySource): void {
+  if (source.hashMode === CLAUDE_ORPHAN_MARKER_MODE && (binding.agent !== "claude" || binding.method !== "reviewed" || !isClaudePluginCacheOrphanMarker(source.path))) throw new Error("Claude orphan markers require reviewed Claude plugin-cache discovery");
   if (source.hashMode === "executable-v1" && (binding.agent !== "codex" || binding.method !== "reviewed" || !binding.sources.some(row => row.hashMode === "codex-settings-v6"))) throw new Error("Provider executable witnesses require explicit reviewed Codex V6");
   if (source.hashMode === "codex-settings-v6" && (new Set(binding.sources.map(row => row.path)).size !== binding.sources.length || !Array.isArray(source.hookSources) || source.hookSources.some(hook => !binding.sources.some(row => row.path === hook.path && row.sha256 === hook.sha256 && [undefined, "bytes"].includes(row.hashMode) && row.format === undefined && row.fields === undefined)))) throw new Error("Missing independently reviewed Codex hook source population");
 
@@ -598,18 +606,22 @@ export function captureDiscoveryExecutableSources(paths: string[]): DiscoverySou
   return paths.map(path => ({ path, hashMode: "executable-v1", sha256: hashReviewedExecutable(path, budget) }));
 }
 
-/** Capture full byte witnesses for reviewed source or executable files; never import or execute them. */
+/** Capture exact source bytes, or typed Claude cache marker presence; never execute them. */
 export function captureDiscoveryByteSources(paths: string[]): DiscoverySource[] {
   if (!Array.isArray(paths) || paths.length > AGENT_POLICY_LIMITS.discoverySources || new Set(paths).size !== paths.length) throw new Error("Invalid raw discovery source collection");
   const budget = discoveryByteBudget();
-  return paths.map(path => ({ path, hashMode: "bytes", sha256: hashRawDiscoveryFile(path, budget) }));
+  return paths.map(path => isClaudePluginCacheOrphanMarker(path)
+    ? { path, hashMode: CLAUDE_ORPHAN_MARKER_MODE, sha256: hashClaudePluginCacheOrphanMarker(path, budget) }
+    : { path, hashMode: "bytes", sha256: hashRawDiscoveryFile(path, budget) });
 }
 
 /** Capture executable/source path identity, including links and absent targets. */
 export function captureDiscoveryPathSources(paths: string[]): DiscoverySource[] {
   if (!Array.isArray(paths) || paths.length > AGENT_POLICY_LIMITS.discoverySources || new Set(paths).size !== paths.length) throw new Error("Invalid path discovery source collection");
   const budget = discoveryByteBudget();
-  return paths.map(path => ({ path, hashMode: "path-bytes", sha256: hashDiscoveryPathFile(path, budget) }));
+  return paths.map(path => isClaudePluginCacheOrphanMarker(path)
+    ? { path, hashMode: CLAUDE_ORPHAN_MARKER_MODE, sha256: hashClaudePluginCacheOrphanMarker(path, budget) }
+    : { path, hashMode: "path-bytes", sha256: hashDiscoveryPathFile(path, budget) });
 }
 
 /** Project settings can introduce a higher-precedence discovery source. Until
@@ -843,6 +855,15 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
       ? sources.filter(source => !isSupersededSettingsProjection(agent, canonical(configPath), source))
       : sources;
     const reviewedSourcesWithManifestProjection = review.sources.map(source => {
+      // The supplied raw/path witness was verified above. A fresh explicit
+      // review may replace it with typed native presence; retained bindings
+      // never silently change the meaning of historical byte witnesses.
+      if (agent === "claude" && source.format === undefined && source.fields === undefined
+        && source.managedPlugins === undefined && source.reviewArtifact === undefined
+        && [undefined, "bytes", "path-bytes"].includes(source.hashMode)
+        && isClaudePluginCacheOrphanMarker(source.path)) {
+        return { path: source.path, hashMode: CLAUDE_ORPHAN_MARKER_MODE, sha256: hashClaudePluginCacheOrphanMarker(source.path) };
+      }
       // A verified null hash pins absence; retain it so reappearance still fails.
       if (agent !== "claude" || source.sha256 === null || source.format !== undefined || source.fields !== undefined || source.managedPlugins !== undefined
         || source.hashMode !== undefined && source.hashMode !== "bytes"

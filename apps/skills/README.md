@@ -550,6 +550,10 @@ non-null `sha256`, Skills also requires plain byte witnesses for that plugin's
 `hooks/hooks.json` (when present) and any string `hooks` target in the
 manifest. A manifest listed as `claude-plugin-manifest-v1` (the form Skills
 writes into the stored policy) or as `path-bytes` triggers no such requirement.
+The version-root `.orphaned_at` timestamp that Claude rewrites at startup is
+bound by presence only, as `claude-plugin-orphaned-at-v1`, and is still
+strictly validated; see
+[the full scope](docs/plugin-admission.md#reviewed-plugin-hook-attestation-scope).
 For plugins outside receipt-backed admission (a `claude-plugin-registry`
 witness, see the
 [discovery transition contract](docs/plugin-admission.md#discovery-transition-contract)),
