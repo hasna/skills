@@ -6,9 +6,9 @@ import { getSkillRequirementsFromContent } from "./skillinfo.js";
 import { readSelectedDocument } from "./selected-document.js";
 import {
   activateSelectionProfile, assertFreshCachedProfile, cacheSelectionBundle, projectSelectionLockPath,
-  readCachedSelection, readProjectSelection, readSelectionProfile, readSkillSessionSnapshotIfExists, selectionKey,
+  readCachedSelection, readProjectSelectionSnapshot, readSelectionProfile, readSkillSessionSnapshotIfExists, selectionKey,
   skillSessionSnapshotBinding, SkillSelectionError, validateResolvedProfile, writeSelectionJson, writeSkillSession,
-  type CachedSelectionProfile, type SelectionCacheOptions, type SkillSessionParentBinding, type SkillSessionReceipt,
+  type CachedSelectionProfile, type SelectionCacheOptions, type SkillSessionParentBinding, type SkillSessionProjectLock, type SkillSessionReceipt,
 } from "./selection-cache.js";
 
 export interface SelectionResolverOptions extends SelectionCacheOptions {
@@ -70,6 +70,8 @@ export interface ResolvedSelectionContext {
   parentSnapshot?: SkillSessionParentBinding;
   inheritedLoaded?: string[];
   client?: ProfileClient;
+  /** Set when a new session's pin comes from the project lock; the session receipt records it. */
+  projectLock?: SkillSessionProjectLock;
 }
 export async function resolveSelectionContext(profileId: string, options: SelectionResolverOptions = {}): Promise<ResolvedSelectionContext> {
   const sessionState = options.sessionId ? readSkillSessionSnapshotIfExists(options.sessionId, options) : null;
@@ -82,7 +84,10 @@ export async function resolveSelectionContext(profileId: string, options: Select
   const parentSession = parentState?.receipt ?? null;
   const sessionSnapshot = sessionState ? skillSessionSnapshotBinding(sessionState) : null;
   const parentSnapshot = parentState ? skillSessionSnapshotBinding(parentState) : undefined;
-  const project = options.projectDir ? readProjectSelection(options.projectDir) : null;
+  const projectSnapshot = options.projectDir ? readProjectSelectionSnapshot(options.projectDir) : null;
+  const project = projectSnapshot?.receipt ?? null;
+  // Only a new root session takes its pin from the lock; a child inherits its parent's receipt, provenance included.
+  const projectLock = !session && !parentSession && projectSnapshot ? { projectLock: projectSnapshot.lock } : {};
   if ((session && session.profile.profileId !== profileId) || (parentSession && parentSession.profile.profileId !== profileId) || (project && project.profile.profileId !== profileId)) {
     throw new SkillSelectionError("PROFILE_LOCK_MISMATCH", "The session or project is pinned to a different Skills profile. Select the pinned profile, or review skills sessions reconcile for an intentional session change and explicit project sync for a project change.");
   }
@@ -91,7 +96,7 @@ export async function resolveSelectionContext(profileId: string, options: Select
     if (!receipt) throw new SkillSelectionError("CACHED_PROFILE_MISSING", "No verified Skills profile is cached; authenticate and sync it first.");
     assertFreshCachedProfile(receipt, options);
     assertBinding(receipt.profile, options);
-    return { receipt, session, sessionSnapshot, parentSnapshot, inheritedLoaded: parentSession?.loaded };
+    return { receipt, session, sessionSnapshot, parentSnapshot, inheritedLoaded: parentSession?.loaded, ...projectLock };
   }
   // Authentication failure never becomes a cached or local read. Cached mode is explicit.
   const client = options.client ?? await createProfileClient();
@@ -106,7 +111,7 @@ export async function resolveSelectionContext(profileId: string, options: Select
   // The current profile authorizes the workspace; an existing session/project retains exact versions.
   // Each old version is revalidated through the exact bundle endpoint when loaded below.
   const receipt = locked ?? { schemaVersion: 1 as const, verifiedAt: new Date((options.now ?? Date.now)()).toISOString(), profile: current };
-  return { receipt, session, sessionSnapshot, parentSnapshot, client, inheritedLoaded: parentSession?.loaded };
+  return { receipt, session, sessionSnapshot, parentSnapshot, client, inheritedLoaded: parentSession?.loaded, ...projectLock };
 }
 function assertBinding(profile: ResolvedSkillProfile, options: SelectionResolverOptions): void {
   if ((options.authority !== undefined && profile.authority !== options.authority)
@@ -143,6 +148,7 @@ export async function loadSelectedSkill(spec: string, profileId: string, options
     const session: SkillSessionReceipt = {
       ...context.receipt, sessionId: options.sessionId,
       loaded: [...new Set([...(context.session?.loaded ?? []), selectionKey(selection)])],
+      ...(context.projectLock ? { projectLock: context.projectLock } : {}),
     };
     writeSkillSession(session, { current: context.sessionSnapshot, parent: context.parentSnapshot }, options);
   }

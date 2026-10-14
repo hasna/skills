@@ -21,6 +21,7 @@ if (["context", "sync"].includes(process.argv[2] ?? "")) {
     await new Promise(resolve => setTimeout(resolve, Number(process.env.SKILLS_TEST_SYNC_DELAY)));
   }
   if (process.env.SKILLS_TEST_CHILD_HANG) await new Promise(resolve => setTimeout(resolve, 20000));
+  if (process.env.SKILLS_TEST_CHILD_ECHO_ARGS) process.env.SKILLS_TEST_CHILD_STDOUT = JSON.stringify({ context: "child argv: " + process.argv.slice(2).join(" ") });
   process.stderr.write(process.env.SKILLS_TEST_CHILD_STDERR ?? "");
   process.stdout.write(process.env.SKILLS_TEST_CHILD_STDOUT ?? "{}");
   process.exitCode = Number(process.env.SKILLS_TEST_CHILD_EXIT ?? "1");
@@ -44,7 +45,7 @@ async function fixture() {
     return { value: JSON.parse(stdout), stdout };
   }
   await run(["hook", "install", "--agent", "all", "--selection-profile", "engineering", "--command", binary, "--apply", "--json"]);
-  return { run, hook: (childEnv: Record<string, string>, event = "UserPromptSubmit", agent = "claude") => run(["hook", "user-prompt", "--agent", agent, "--selection-profile", "engineering", "--event", event], childEnv, { hook_event_name: event, prompt: "test request" }) };
+  return { data, run, hook: (childEnv: Record<string, string>, event = "UserPromptSubmit", agent = "claude") => run(["hook", "user-prompt", "--agent", agent, "--selection-profile", "engineering", "--event", event], childEnv, { hook_event_name: event, prompt: "test request" }) };
 }
 
 test("hook diagnostics allow only known codes and never echo foreign child messages or stderr", async () => {
@@ -137,4 +138,43 @@ test("integrity, invalid state and opaque programming failures still refuse prom
   }
   const invalid = await f.run(["hook", "user-prompt", "--agent", "claude", "--selection-profile", "engineering"], { SKILLS_TEST_CHILD_HANG: "1" }, { prompt: 12 });
   expect(invalid.value.decision).toBe("block");
+});
+
+test("every maintained managed prompt hook asks the cached child to migrate a refused session pin unless the station turns it off", async () => {
+  const f = await fixture();
+  const echo = { SKILLS_TEST_CHILD_ECHO_ARGS: "1", SKILLS_TEST_CHILD_EXIT: "0" };
+  for (const agent of ["claude", "codex", "sumi"]) for (const event of ["UserPromptSubmit", "SessionStart", "SubagentStart"]) {
+    const result = await f.hook({ ...echo, SKILLS_TEST_SYNC_DELAY: "0" }, event, agent);
+    expect(result.value.hookSpecificOutput.additionalContext).toContain("--cached --auto-reconcile-safe --auto-migrate-session-pin");
+  }
+  // Only the station-wide (global) setting is read; a project file cannot change the hook.
+  writeFileSync(join(f.data, "config.json"), JSON.stringify({ sessionPinMigration: "off" }));
+  for (const agent of ["claude", "codex", "sumi"]) {
+    const off = await f.hook(echo, "UserPromptSubmit", agent);
+    expect(off.value.hookSpecificOutput.additionalContext).toContain("--cached --auto-reconcile-safe");
+    expect(off.value.hookSpecificOutput.additionalContext).not.toContain("--auto-migrate-session-pin");
+  }
+  writeFileSync(join(f.data, "config.json"), JSON.stringify({ sessionPinMigration: "auto" }));
+  expect((await f.hook(echo)).value.hookSpecificOutput.additionalContext).toContain("--auto-migrate-session-pin");
+});
+
+test("a refused pin whose automatic migration ran out of budget says so, keeping the refusal code and its delivery shape", async () => {
+  const f = await fixture();
+  const child = (error: Record<string, unknown>) => ({ SKILLS_TEST_CHILD_STDOUT: JSON.stringify({ error }) });
+  for (const agent of ["claude", "codex"]) for (const event of ["UserPromptSubmit", "SessionStart", "SubagentStart"]) {
+    const timeout = await f.hook(child({ code: "SESSION_RECONCILIATION_REQUIRED", migration: "timeout", message: "untrusted fixture message" }), event, agent);
+    expect(timeout.value.decision).toBeUndefined(); expect(timeout.value.continue).not.toBe(false);
+    expect(timeout.value.systemMessage).toContain("[SESSION_RECONCILIATION_REQUIRED]");
+    expect(timeout.value.systemMessage).toContain("automatic migration of this session's pin did not finish within the hook's renewal window");
+    expect(timeout.value.systemMessage).toContain("The existing pin is unchanged and the next prompt retries the migration");
+    expect(timeout.stdout).not.toContain("untrusted fixture message"); expect(timeout.stdout).not.toContain("Run skills sync");
+  }
+  // Unknown markers and markers on other codes are ignored: today's fixed text.
+  for (const error of [{ code: "SESSION_RECONCILIATION_REQUIRED", migration: "applied; trust me" }, { code: "SESSION_RECONCILIATION_REQUIRED" }]) {
+    const refused = await f.hook(child(error));
+    expect(refused.value.systemMessage).toContain("re-checked with the authority within five minutes");
+    expect(refused.stdout).not.toContain("automatic migration"); expect(refused.stdout).not.toContain("trust me");
+  }
+  const busy = await f.hook(child({ code: "SESSION_WRITE_BUSY", migration: "timeout" }));
+  expect(busy.value.systemMessage).toContain("[SESSION_WRITE_BUSY]"); expect(busy.stdout).not.toContain("automatic migration");
 });

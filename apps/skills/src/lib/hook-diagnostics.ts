@@ -20,19 +20,23 @@ export const HOOK_REFUSAL_REASON_CODES: readonly string[] = Object.freeze([
 ]);
 
 export class HookDiagnosticError extends Error {
-  constructor(readonly code: string, readonly stage: "context" | "sync") {
+  /** Fixed marker: a refused renewal whose automatic pin migration ran out of budget. */
+  readonly migration?: "timeout";
+  constructor(readonly code: string, readonly stage: "context" | "sync", migration?: "timeout") {
     super("Skills hook operation failed");
+    if (migration) this.migration = migration;
   }
 }
 
 export function hookChildError(stdout: string, stage: "context" | "sync"): HookDiagnosticError {
   // Never propagate messages, stderr, paths or foreign response bodies. The
   // failure envelope is small even when successful sync receipts are large.
-  let code: unknown;
+  let code: unknown, migration: unknown;
   if (stdout.length <= 16 * 1024) {
-    try { code = JSON.parse(stdout)?.error?.code; } catch { /* fixed fallback below */ }
+    try { ({ code, migration } = JSON.parse(stdout)?.error ?? {}); } catch { /* fixed fallback below */ }
   }
-  return new HookDiagnosticError(typeof code === "string" && CONTEXT_ERROR_CODES.has(code) ? code : "SKILLS_CONTEXT_FAILED", stage);
+  const owned = typeof code === "string" && CONTEXT_ERROR_CODES.has(code) ? code : "SKILLS_CONTEXT_FAILED";
+  return new HookDiagnosticError(owned, stage, owned === "SESSION_RECONCILIATION_REQUIRED" && migration === "timeout" ? "timeout" : undefined);
 }
 
 export function hookFailureReason(error: unknown, profileId?: string): string {
@@ -46,6 +50,9 @@ export function hookFailureReason(error: unknown, profileId?: string): string {
   }
   if (code === "PROFILE_LOCK_MISMATCH") {
     return `${prefix} This session or project is pinned to a different profile. Inspect the session with skills sessions show <session-id> --json; review skills sessions reconcile for an intentional session change, or explicit project sync for a project change. Sync alone does not change that pin.`;
+  }
+  if (code === "SESSION_RECONCILIATION_REQUIRED" && owned && error.migration === "timeout") {
+    return `${prefix} A loaded skill changed or was removed, and automatic migration of this session's pin did not finish within the hook's renewal window. The existing pin is unchanged and the next prompt retries the migration. Sync alone does not change this pin. If it keeps recurring, inspect this session with skills sessions show <session-id> --json and review skills sessions reconcile.`;
   }
   if (code === "SESSION_RECONCILIATION_REQUIRED") {
     return `${prefix} A loaded skill changed or was removed. Inspect this session with skills sessions show <session-id> --json, then review skills sessions reconcile for an intentional change. Sync alone does not change this pin. A refusal is re-checked with the authority within five minutes, or sooner after the receipt or the synced profile revision changes.`;

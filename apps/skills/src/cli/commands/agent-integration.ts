@@ -16,6 +16,7 @@ import { codexNativeHookEnvelopeFromInput, CODEX_NATIVE_POLICY_FD_ENV } from "..
 import { planCodexNativeTrust, applyCodexNativeTrust, previewCodexNativeTrust } from "../../lib/codex-native-trust.js";
 import { HookDiagnosticError, hookChildError, hookFailureReason, isOptionalHookContextFailure, hookUnavailableContext } from "../../lib/hook-diagnostics.js";
 import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib/selection-cache.js";
+import { takeSessionPinMigrationNotice } from "../../lib/session-reconciliation.js";
 import { captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4 } from "../../lib/claude-settings-witness.js";
 import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4, captureCodexSettingsV5, captureCodexSettingsV6 } from "../../lib/codex-settings-witness.js";
 import { captureClaudeMarketplaceRegistryV2 } from "../../lib/claude-marketplace-registry.js";
@@ -23,6 +24,7 @@ import { captureClaudeMarketplaceEntry } from "../../lib/claude-marketplace-entr
 import { reviewClaudeProspectiveCandidate, type ClaudeProspectiveReviewRequest } from "../../lib/claude-prospective-review.js";
 import { captureCodexNativeSkillCatalog } from "../../lib/codex-native-skill-catalog.js";
 import { selfSpawnCommand } from "../../lib/self-spawn.js";
+import { sessionPinMigrationEnabled } from "../../lib/config.js";
 import { captureClaudeInstallerRequest, safeClaudeInstallerCaptureError } from "./claude-installer-capture.js";
 
 const RECOVERABLE_CONTEXT_CACHE_ERRORS = new Set(["CACHED_PROFILE_EXPIRED", "CACHED_PROFILE_MISSING", "CACHED_BUNDLE_MISSING"]);
@@ -47,11 +49,30 @@ function pinnedHookProfile(input: unknown, configuredProfile: string): string {
   }
 }
 
+/**
+ * Prepend a pending session pin migration notice to context the agent will
+ * read, then mark it delivered. Cursor shows hook context only at session
+ * start, and Sumi discards its prompt-admission output (its context call sends
+ * an empty prompt), so those calls leave the notice pending.
+ */
+function withSessionPinMigrationNotice(agent: IntegrationAgent, event: string, input: unknown, result: { context: string }): void {
+  try {
+    const parsed = parseSkillContextInput(JSON.stringify(input));
+    if (!parsed.sessionId || (agent === "cursor" && event !== "SessionStart") || (agent === "sumi" && parsed.prompt !== "")) return;
+    const notice = takeSessionPinMigrationNotice(parsed.agentId ? `${parsed.sessionId}:${parsed.agentId}` : parsed.sessionId);
+    if (notice) result.context = [notice, result.context].filter(Boolean).join("\n\n");
+  } catch { /* the notice stays pending; context delivery is unaffected */ }
+}
+
 async function contextForHook(input: unknown, profileId: string, cached: boolean, deadline: number): Promise<any> {
   const remaining = deadline - Date.now();
   if (remaining <= 0) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "context");
   const args = ["context", "--stdin", "--json", "--selection-profile", profileId];
   if (cached) args.push("--cached", "--auto-reconcile-safe");
+  // Default for every agent's managed hook: a refused renewal of the same
+  // profile migrates the pin and names retired loaded skills once. Operators
+  // keep the refusal with `skills config set sessionPinMigration off --global`.
+  if (cached && sessionPinMigrationEnabled()) args.push("--auto-migrate-session-pin");
   // Pinned flags, trusted cwd and allowlisted environment: a hostile project's
   // bunfig.toml, .env or BUN_OPTIONS must not reach the child on every prompt.
   const self = selfSpawnCommand(args);
@@ -468,8 +489,10 @@ export function registerAgentIntegration(parent: Command): void {
         // SessionStart refresh and the bridge guard above still use the configured
         // profile; explicit context CLI requests keep their strict mismatch rules.
         selectionProfile = pinnedHookProfile(input, selectionProfile);
-        // An expired snapshot may advance only when all loaded selections are unchanged.
+        // An expired snapshot renews when its pin is still authorized; a refused
+        // renewal of the same profile migrates the pin unless the station opted out.
         const result = await contextForHook(input, selectionProfile, true, deadline);
+        withSessionPinMigrationNotice(options.agent, event, input, result);
         const output = hookContextOutput(event, result) as { hookSpecificOutput?: { hookEventName: string; additionalContext: string } };
         if (options.agent === "hermes") {
           await writeCliOutput(JSON.stringify({ context: output.hookSpecificOutput?.additionalContext ?? "" }));
