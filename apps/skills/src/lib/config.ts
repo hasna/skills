@@ -46,12 +46,15 @@ export interface SkillsConfig {
   defaultScope?: "global" | "project";
   format?: "compact" | "json" | "csv";
   extensionsDir?: string;
+  /** Managed hooks, global scope only: "auto" (default) migrates a refused expired session pin; "off" keeps the refusal. */
+  sessionPinMigration?: "auto" | "off";
 }
 
 const ENUM_KEYS: Partial<Record<keyof SkillsConfig, string[]>> = {
   defaultAgent: ["claude", "codex", "gemini", "pi", "opencode", "all"],
   defaultScope: ["global", "project"],
   format: ["compact", "json", "csv"],
+  sessionPinMigration: ["auto", "off"],
 };
 
 const STRING_KEYS = ["extensionsDir"] as const satisfies readonly (keyof SkillsConfig)[];
@@ -190,6 +193,18 @@ function readConfigFile(path: string): Partial<SkillsConfig> {
     if (value !== undefined) (config as Record<string, string>)[key] = value;
   }
   return config;
+}
+
+/**
+ * Managed hooks migrate a session pin whose renewal was refused only because
+ * its profile moved on, unless the station turns that off with
+ * `skills config set sessionPinMigration off --global`. Only the global
+ * configuration is read: the prompt hook never reads a project-controlled file
+ * for this. A configuration that cannot be read keeps the refusal.
+ */
+export function sessionPinMigrationEnabled(): boolean {
+  try { return readConfigFile(getConfigPathReadOnly("global")).sessionPinMigration !== "off"; }
+  catch { return false; }
 }
 
 /**

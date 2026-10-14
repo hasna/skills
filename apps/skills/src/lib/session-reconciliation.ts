@@ -1,9 +1,10 @@
-import type { ResolvedSkillSelection } from "../types/skill-selection.js";
+import type { ResolvedSkillProfile, ResolvedSkillSelection } from "../types/skill-selection.js";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { createProfileClient, type ProfileClient } from "./profile-client.js";
 import { SkillBundleInspectionError } from "./skill-bundle.js";
+import { isValidSkillVersion } from "./skill-version.js";
 import { MAX_CACHED_PROFILE_AGE_MS, verifySelectionBundleResponse, nextSkillSessionGeneration, readSelectionJson, readSelectionProfile, readSkillSessionSnapshot, readSkillSessionSnapshotIfExists, replaceSkillSession, selectionCacheRoot, selectionKey, skillSessionSnapshotBinding, SkillSelectionError, validateResolvedProfile, writeSelectionJson, type SelectionCacheOptions, type SkillSessionReceipt, type SkillSessionSnapshot } from "./selection-cache.js";
 
 export interface SessionReconciliationInput {
@@ -135,23 +136,155 @@ function recordRenewalRefusal(snapshot: SkillSessionSnapshot, profileId: string,
 }
 
 /**
+ * A managed-hook migration that retired loaded skills leaves one notice for the
+ * session, delivered with the next successful context and then marked
+ * delivered. It is written before the receipt commit and applies only once the
+ * pin really holds the migrated profile, revision and generation, so a failed
+ * commit or a later intentional change never shows it. It carries metadata
+ * only; it authorizes nothing and is ignored unless every field is exact.
+ */
+const MIGRATION_NOTICE_MAX_BYTES = 32 * 1024;
+const MIGRATION_NOTICE_MAX_ENTRIES = 50;
+const MIGRATION_NOTICE_SHOWN_ENTRIES = 20;
+const NOTICE_KEYS = ["authority", "fromRevision", "generation", "kind", "profileId", "recordedAt", "retired", "retiredCount", "schemaVersion", "sessionId", "toRevision", "workspaceId"];
+const SAFE_LABEL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const NOTICE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+interface SessionPinMigrationNoticeEntry { slug: string; version: string; replacementVersion?: string }
+interface SessionPinMigrationNoticeRecord {
+  schemaVersion: 1; kind: "session-pin-migration-notice"; sessionId: string;
+  profileId: string; authority: string; workspaceId: string; fromRevision: string; toRevision: string; generation: number;
+  retiredCount: number; retired: SessionPinMigrationNoticeEntry[]; recordedAt: string; deliveredAt?: string;
+}
+function migrationNoticePath(sessionId: string, options: SelectionCacheOptions): string {
+  return join(selectionCacheRoot(options), "session-pin-migration-notices", `${digest(sessionId)}.json`);
+}
+function writeSessionPinMigrationNotice(snapshot: SkillSessionSnapshot, target: ResolvedSkillProfile, generation: number, retired: SessionSelectionDelta[], now: number, options: SelectionCacheOptions): void {
+  const record: SessionPinMigrationNoticeRecord = {
+    schemaVersion: 1, kind: "session-pin-migration-notice", sessionId: snapshot.sessionId,
+    profileId: target.profileId, authority: target.authority, workspaceId: target.workspaceId,
+    fromRevision: snapshot.receipt.profile.profileRevision, toRevision: target.profileRevision, generation,
+    retiredCount: retired.length,
+    retired: retired.slice(0, MIGRATION_NOTICE_MAX_ENTRIES).map(row => ({ slug: row.selection.slug, version: row.selection.version,
+      ...(row.replacement ? { replacementVersion: row.replacement.version } : {}) })),
+    recordedAt: new Date(now).toISOString(),
+  };
+  // A notice its reader would ignore must not stand in for telling the session.
+  if (Buffer.byteLength(`${JSON.stringify(record)}\n`) > MIGRATION_NOTICE_MAX_BYTES || !validNotice(record, snapshot.sessionId)) {
+    throw new SkillSelectionError("RECEIPT_TOO_LARGE", "The session pin migration notice exceeds its bounds.");
+  }
+  writeSelectionJson(migrationNoticePath(snapshot.sessionId, options), record);
+}
+function validNoticeEntry(entry: unknown): entry is SessionPinMigrationNoticeEntry {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+  const value = entry as Record<string, unknown>, keys = Object.keys(value).sort().join(",");
+  return (keys === "slug,version" || keys === "replacementVersion,slug,version")
+    && typeof value.slug === "string" && value.slug.length <= 128 && NOTICE_SLUG.test(value.slug)
+    && isValidSkillVersion(value.version) && (value.replacementVersion === undefined || isValidSkillVersion(value.replacementVersion));
+}
+function validNotice(value: unknown, sessionId: string): value is SessionPinMigrationNoticeRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).filter(key => key !== "deliveredAt").sort().join(",");
+  const timestamp = (stamp: unknown) => typeof stamp === "string" && Number.isFinite(Date.parse(stamp)) && new Date(Date.parse(stamp)).toISOString() === stamp;
+  return keys === NOTICE_KEYS.join(",") && record.schemaVersion === 1 && record.kind === "session-pin-migration-notice" && record.sessionId === sessionId
+    && [record.profileId, record.authority, record.workspaceId, record.fromRevision, record.toRevision].every(field => typeof field === "string" && field.length > 0)
+    && Number.isSafeInteger(record.generation) && (record.generation as number) > 0 && timestamp(record.recordedAt)
+    && (record.deliveredAt === undefined || timestamp(record.deliveredAt))
+    && Array.isArray(record.retired) && record.retired.length > 0 && record.retired.length <= MIGRATION_NOTICE_MAX_ENTRIES && record.retired.every(validNoticeEntry)
+    && Number.isSafeInteger(record.retiredCount) && (record.retiredCount as number) >= record.retired.length;
+}
+function renderSessionPinMigrationNotice(record: SessionPinMigrationNoticeRecord): string {
+  const profile = SAFE_LABEL.test(record.profileId) ? record.profileId : undefined;
+  const revision = SAFE_LABEL.test(record.toRevision) ? ` (revision ${record.toRevision})` : "";
+  const shown = record.retired.slice(0, MIGRATION_NOTICE_SHOWN_ENTRIES);
+  const more = record.retiredCount - shown.length;
+  return [
+    `Skills: this session's pin was migrated to the current ${profile ? `${profile} ` : ""}profile${revision} because loaded skills changed or were removed. Their earlier instructions are retired; do not rely on them:`,
+    ...shown.map(entry => entry.replacementVersion === undefined
+      ? `- ${entry.slug}@${entry.version}: no longer selected.`
+      : `- ${entry.slug}@${entry.version}: now ${entry.replacementVersion}${entry.replacementVersion === entry.version ? " with changed content" : ""}; reload with skills load ${entry.slug}@${entry.replacementVersion}${profile ? ` --selection-profile ${profile}` : ""} if it is still needed.`),
+    ...(more > 0 ? [`- ${more} more retired loaded skill(s), listed in this session's reconciliation receipt.`] : []),
+  ].join("\n");
+}
+
+/**
+ * Return the pending migration notice for this session once its pin holds the
+ * migrated profile, then mark it delivered. Anything unexpected returns null.
+ */
+export function takeSessionPinMigrationNotice(sessionId: string, options: SelectionCacheOptions = {}): string | null {
+  const path = migrationNoticePath(sessionId, options);
+  let record: unknown, current: SkillSessionSnapshot | null;
+  try { record = readSelectionJson<unknown>(path, MIGRATION_NOTICE_MAX_BYTES); } catch { return null; }
+  if (!validNotice(record, sessionId) || record.deliveredAt !== undefined) return null;
+  try { current = readSkillSessionSnapshotIfExists(sessionId, options); } catch { return null; }
+  const pin = current?.receipt.profile;
+  if (!current || !pin || pin.profileId !== record.profileId || pin.authority !== record.authority || pin.workspaceId !== record.workspaceId
+    || pin.profileRevision !== record.toRevision || current.generation < record.generation) return null;
+  // Best effort: a failed marker only repeats this notice on a later prompt.
+  try { writeSelectionJson(path, { ...record, deliveredAt: new Date((options.now ?? Date.now)()).toISOString() }); } catch { /* still delivered now */ }
+  return renderSessionPinMigrationNotice(record);
+}
+
+/**
  * Renew authorization for the complete immutable pin; never manufacture a
  * profile combining historical loaded versions with current unloaded versions.
  * Current profile membership/lifecycle authorizes unchanged pins. Historical
  * versions additionally require the authenticated exact-version bundle read.
  */
 export async function reconcileSkillSessionIfSafe(sessionId: string, profileId: string, options: SessionReconciliationOptions = {}): Promise<boolean> {
+  return (await renewSkillSessionPin(sessionId, profileId, { ...options, migrate: false })).outcome !== "unchanged";
+}
+
+/** Metadata only: what an automatic migration retired, never payloads. */
+export interface SessionPinMigration {
+  profileId: string; fromRevision: string; toRevision: string;
+  retainedLoadedCount: number; retiredLoadedCount: number;
+  retired: SessionSelectionDelta[];
+  archivePath: string; receiptPath: string;
+}
+export type SessionPinRenewalOutcome =
+  | { outcome: "unchanged" }
+  | { outcome: "renewed" }
+  | { outcome: "migrated"; migration: SessionPinMigration };
+export interface SessionPinRenewalOptions extends SessionReconciliationOptions {
+  /**
+   * Managed hooks only: when renewal is refused because the same profile moved
+   * on, apply the explicit reconciliation plan to the authenticated current
+   * revision instead. Every other failure keeps its existing refusal.
+   */
+  migrate?: boolean;
+}
+
+/**
+ * A refused renewal whose automatic migration could not finish within the
+ * renewal deadline. It keeps the refusal code; the fixed `migration` marker
+ * lets the hook say why without carrying free text across its boundary.
+ */
+export class SessionPinMigrationTimeout extends SkillSelectionError {
+  readonly migration = "timeout" as const;
+  constructor() {
+    super("SESSION_RECONCILIATION_REQUIRED", "A loaded skill changed or was removed, and automatic migration of this session pin did not finish within the managed hook renewal window; the existing pin is unchanged and the next prompt retries it.");
+  }
+}
+/** Outcomes that may already have committed are never relabelled as a refusal. */
+const AMBIGUOUS_MIGRATION_FAILURES = new Set(["SESSION_RECONCILIATION_INCOMPLETE", "SESSION_LOCK_RECOVERY_INCOMPLETE"]);
+
+export async function renewSkillSessionPin(sessionId: string, profileId: string, options: SessionPinRenewalOptions = {}): Promise<SessionPinRenewalOutcome> {
+  const migrate = options.migrate === true;
   const existing = readSkillSessionSnapshotIfExists(sessionId, options);
-  if (!existing) return false;
+  if (!existing) return { outcome: "unchanged" };
   const snapshot = existing;
   const old = snapshot.receipt;
   if (old.profile.profileId !== profileId) throw new SkillSelectionError("PROFILE_LOCK_MISMATCH", "The session is pinned to a different Skills profile.");
   const now = (options.now ?? Date.now)();
   const age = now - Date.parse(old.verifiedAt);
-  if (age >= 0 && age <= MAX_CACHED_PROFILE_AGE_MS) return false;
+  if (age >= 0 && age <= MAX_CACHED_PROFILE_AGE_MS) return { outcome: "unchanged" };
   if (age < 0) throw new SkillSelectionError("INVALID_RECEIPT", "The session receipt has a future timestamp; inspect it before changing its pin.");
-  const localRevision = localProfileRevision(profileId, options);
-  const refusal = currentRenewalRefusal(snapshot, profileId, localRevision, now, options);
+  // A remembered refusal only spares authority reads for a pin that will keep
+  // refusing. With migration the authenticated read decides, so neither the
+  // record nor the synced revision it binds is read or written.
+  const localRevision = migrate ? undefined : localProfileRevision(profileId, options);
+  const refusal = migrate ? null : currentRenewalRefusal(snapshot, profileId, localRevision, now, options);
   if (refusal) {
     throw new SkillSelectionError("SESSION_RECONCILIATION_REQUIRED", `Renewal of this exact session pin was refused at ${refusal.recordedAt} by profile revision ${refusal.refusedRevision}; the existing pin is unchanged. The authority is asked again after ${refusal.expiresAt}, or sooner when the receipt or the synced profile revision changes. Review skills sessions reconcile for an intentional change.`);
   }
@@ -164,8 +297,10 @@ export async function reconcileSkillSessionIfSafe(sessionId: string, profileId: 
   let rejectTimeout!: (error: Error) => void;
   const expired = new Promise<never>((_, reject) => { rejectTimeout = reject; });
   const timer = setTimeout(() => { controller.abort(); rejectTimeout(timeoutError()); }, SESSION_RENEWAL_TIMEOUT_MS);
-  let comparedRevision: string | undefined;
-  async function renew(): Promise<boolean> {
+  // Set once the authenticated target passed identity checks; only refusals
+  // from comparing the pin with this exact target may be remembered or migrated.
+  let comparedTarget: ResolvedSkillProfile | undefined;
+  async function renew(): Promise<SessionPinRenewalOutcome> {
     const client = options.client ?? await createProfileClient(controller.signal);
     assertActive();
     const target = structuredClone(await client.resolveProfile(profileId));
@@ -174,7 +309,7 @@ export async function reconcileSkillSessionIfSafe(sessionId: string, profileId: 
     if (target.profileId !== profileId || target.authority !== old.profile.authority || target.workspaceId !== old.profile.workspaceId) {
       throw new SkillSelectionError("PROFILE_IDENTITY_MISMATCH", "The authenticated Skills profile does not match this session's profile, authority and workspace.");
     }
-    comparedRevision = target.profileRevision;
+    comparedTarget = target;
     const supportsEpochs = await client.supportsPinRenewal?.() ?? false;
     assertActive();
     if (supportsEpochs && target.selections.some(selection => !selection.authorizationEpoch)) {
@@ -237,12 +372,44 @@ export async function reconcileSkillSessionIfSafe(sessionId: string, profileId: 
       ...(legacy && supportsEpochs ? { epochsFirstVerifiedAt: new Date(now).toISOString() } : {}),
       retainedLoadedCount: old.loaded.length, retiredLoadedCount: 0,
     }, options, assertActive);
-    return true;
+    return { outcome: "renewed" };
+  }
+  /**
+   * Apply the explicit reconciliation plan to the target this renewal already
+   * authenticated and validated (same profile, authority and workspace) with no
+   * further authority read. Unchanged loaded bundles are retained and changed or
+   * removed ones retired; the archive, exact receipt precondition and lock are
+   * the explicit applier's own. Any failure that cannot have committed keeps the
+   * original refusal, or says the budget ran out.
+   */
+  function migratePin(target: ResolvedSkillProfile, refusal: SkillSelectionError): SessionPinRenewalOutcome {
+    try {
+      assertActive();
+      const planned = planSessionReconciliation(snapshot, target, new Date(now).toISOString(), new Date(now + SESSION_RECONCILIATION_PLAN_TTL_MS).toISOString());
+      const retired = planned.plan.selectionDelta.filter(row => row.outcome === "retired");
+      // Persist the notice before committing, so a committed migration can always
+      // tell the session what it retired even if this prompt's context fails.
+      if (retired.length) writeSessionPinMigrationNotice(snapshot, target, planned.plan.replacementGeneration, retired, now, options);
+      assertActive();
+      const result = applySessionReconciliation(snapshot, target, planned,
+        { kind: "managed-hook-session-pin-migration", ...planned.plan, planDigest: planned.planDigest, refusedRenewal: refusal.message },
+        // Age starts at the first authorization read, not at completion.
+        new Date(now).toISOString(), options, assertActive);
+      return { outcome: "migrated", migration: {
+        profileId, fromRevision: old.profile.profileRevision, toRevision: target.profileRevision,
+        retainedLoadedCount: planned.plan.retainedLoadedCount, retiredLoadedCount: planned.plan.retiredLoadedCount,
+        retired, archivePath: result.archivePath, receiptPath: result.receiptPath,
+      } };
+    } catch (error) {
+      if (error instanceof SkillSelectionError && AMBIGUOUS_MIGRATION_FAILURES.has(error.code)) throw error;
+      throw budgetSpent() ? new SessionPinMigrationTimeout() : refusal;
+    }
   }
   try { return await Promise.race([renew(), expired]); }
   catch (error) {
-    if (error instanceof SkillSelectionError && error.code === "SESSION_RECONCILIATION_REQUIRED" && comparedRevision !== undefined) {
-      recordRenewalRefusal(snapshot, profileId, comparedRevision, localRevision, now, options);
+    if (error instanceof SkillSelectionError && error.code === "SESSION_RECONCILIATION_REQUIRED" && comparedTarget !== undefined) {
+      if (migrate) return migratePin(comparedTarget, error);
+      recordRenewalRefusal(snapshot, profileId, comparedTarget.profileRevision, localRevision, now, options);
       throw error;
     }
     // Inner deadlines are rounded up to the renewal deadline and never fire
@@ -279,6 +446,22 @@ export async function reconcileSkillSession(input: SessionReconciliationInput, o
   if (target.profileId !== input.selectionProfile || target.profileRevision !== input.profileRevision) {
     throw new SkillSelectionError("SESSION_TARGET_CHANGED", "The API selection profile does not match the intended target revision; review the current selection before proceeding.");
   }
+  const planned = planSessionReconciliation(snapshot, target, issuedAt, expiresAt);
+  const { plan, planDigest } = planned;
+  if (input.planDigest !== undefined && input.planDigest !== planDigest) throw new SkillSelectionError("SESSION_PLAN_CHANGED", "The session reconciliation plan differs from the reviewed plan.");
+  if (!input.apply) return { applied: false as const, plan, planDigest, archivePath: undefined, receiptPath: undefined, beforeSha256: snapshot.sha256, afterSha256: undefined };
+  assertPlanWindow(issuedAt, expiresAt, (options.now ?? Date.now)());
+  const result = applySessionReconciliation(snapshot, target, planned, { ...plan, planDigest }, new Date((options.now ?? Date.now)()).toISOString(), options,
+    () => assertPlanWindow(issuedAt, expiresAt, (options.now ?? Date.now)()));
+  return { applied: true as const, plan, planDigest, ...result };
+}
+
+/**
+ * The one reconciliation planner, shared by explicit review and the managed
+ * hook's automatic migration. Metadata only; it never reads payloads or writes.
+ */
+function planSessionReconciliation(snapshot: SkillSessionSnapshot, target: ResolvedSkillProfile, issuedAt: string, expiresAt: string) {
+  const old = snapshot.receipt;
   if (old.profile.authority !== target.authority || old.profile.workspaceId !== target.workspaceId) {
     throw new SkillSelectionError("PROFILE_IDENTITY_MISMATCH", "A session reconciliation cannot change its Skills authority or workspace.");
   }
@@ -299,21 +482,19 @@ export async function reconcileSkillSession(input: SessionReconciliationInput, o
   });
   const replacementGeneration = nextSkillSessionGeneration(snapshot.generation);
   const plan = {
-    schemaVersion: 1, issuedAt, expiresAt, sessionId: input.sessionId, sessionPath: snapshot.path,
+    schemaVersion: 1, issuedAt, expiresAt, sessionId: snapshot.sessionId, sessionPath: snapshot.path,
     before: { receiptSha256: snapshot.sha256, generation: snapshot.generation, profileId: old.profile.profileId, profileRevision: old.profile.profileRevision, selectionCount: old.profile.selections.length },
     target: { authority: target.authority, workspaceId: target.workspaceId, profileId: target.profileId, profileRevision: target.profileRevision, profileSha256: digest(target), selectionCount: target.selections.length },
     replacementGeneration, retainedLoadedCount: loaded.length, retiredLoadedCount: old.loaded.length - loaded.length,
     selectionDelta, addedSelections: target.selections.filter(selection => !previousSlugs.has(selection.slug)).map(selectionMetadata),
     scope: "Only this receipt; existing child sessions, project locks, shared profiles, hooks and running processes are unchanged.",
   };
-  const planDigest = digest(plan);
-  if (input.planDigest !== undefined && input.planDigest !== planDigest) throw new SkillSelectionError("SESSION_PLAN_CHANGED", "The session reconciliation plan differs from the reviewed plan.");
-  if (!input.apply) return { applied: false as const, plan, planDigest, archivePath: undefined, receiptPath: undefined, beforeSha256: snapshot.sha256, afterSha256: undefined };
-  assertPlanWindow(issuedAt, expiresAt, (options.now ?? Date.now)());
-  const replacement: SkillSessionReceipt = {
-    ...old, generation: replacementGeneration, verifiedAt: new Date((options.now ?? Date.now)()).toISOString(), profile: target, loaded,
-  };
-  const result = replaceSkillSession(skillSessionSnapshotBinding(snapshot), replacement, { ...plan, planDigest }, options,
-    () => assertPlanWindow(issuedAt, expiresAt, (options.now ?? Date.now)()));
-  return { applied: true as const, plan, planDigest, ...result };
+  return { plan, planDigest: digest(plan), loaded };
+}
+
+/** The one applier: preserve the exact old receipt, then atomically write the planned pin. */
+function applySessionReconciliation(snapshot: SkillSessionSnapshot, target: ResolvedSkillProfile, planned: ReturnType<typeof planSessionReconciliation>,
+  record: unknown, verifiedAt: string, options: SelectionCacheOptions, beforeCommit: () => void) {
+  const replacement: SkillSessionReceipt = { ...snapshot.receipt, generation: planned.plan.replacementGeneration, verifiedAt, profile: target, loaded: planned.loaded };
+  return replaceSkillSession(skillSessionSnapshotBinding(snapshot), replacement, record, options, beforeCommit);
 }

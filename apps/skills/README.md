@@ -819,8 +819,20 @@ a skill. Cached use is explicit and expires after 24 hours. When a session
 receipt expires, the hook authenticates the current profile. If every loaded
 selection still has identical metadata and bundle digest, it archives the old
 receipt and advances that session to the current profile under an exact receipt
-precondition. Unloaded selections may be added or removed. If a loaded selection
-changed or disappeared, no instructions are delivered until the explicit
+precondition. Unloaded selections may be added or removed. If renewal is refused
+because the same profile moved on (a loaded selection changed or disappeared, or
+another pinned selection's policy, membership or lifecycle changed), the managed
+hook applies the explicit reconciliation planner and applier below to the
+authenticated current revision: it archives the old receipt, retains unchanged
+loaded bundles, retires changed or removed ones and delivers context for the
+prompt. The first hook context that succeeds and reaches the agent afterwards
+names each retired loaded skill once and how to reload its replacement; earlier
+instructions from those skills must not be relied on. Identity, integrity, lock and receipt failures, an
+unavailable authority and anything the planner refuses keep their refusal. If
+the migration cannot finish within the four-second renewal window, the hook
+reports `SESSION_RECONCILIATION_REQUIRED` with that reason and the next prompt
+retries. Turn this off station-wide with `skills config set sessionPinMigration
+off --global`; the hook then keeps today's refusal until the explicit
 reconciliation below. A missing cache may be recovered through authenticated context.
 
 After verifying the native bridge and input, ordinary lifecycle hooks continue
@@ -1367,7 +1379,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills setup-info` | | Version, pinned skills, agent configs, paths |
 | `skills export` | | Export pinned skills as JSON |
 | `skills import <file>` | | Pin skills from a JSON export |
-| `skills config set <key> <value>` | | Set default agent, scope, output format, or API origin |
+| `skills config set <key> <value>` | | Set default agent, scope, output format, or API origin; `sessionPinMigration off --global` keeps managed hooks from migrating refused session pins |
 | `skills config unset <key>` | | Remove a configuration value (`skills config unset apiUrl` clears the stored service address and returns to running on this machine) |
 | `skills new <name>` | `scaffold` | Scaffold a portable skill under `~/.hasna/skills/installed/<name>` |
 | `skills port <path>` | `add` | Import an existing skill folder into the portable standard |

@@ -36,6 +36,40 @@ Deletion and archive transitions rotate the server's per-skill epoch. Restoring
 or recreating a skill can authorize new sessions, but cannot silently revive a
 known older epoch. Ordinary publishing leaves the epoch unchanged.
 
+## Automatic migration on the managed hook
+
+Managed prompt hooks for every maintained agent pass
+`--auto-migrate-session-pin` to the cached context child. When renewal of an
+expired pin is refused after the authenticated profile passed its identity
+checks, the child applies the same planner and applier as `skills sessions
+reconcile` to that already validated target: same profile, authority and
+workspace, no further authority read. Loaded selections with the exact same
+bundle are retained; changed or removed loaded selections are retired. The old
+receipt is archived under `selection-cache/session-reconciliations/` with an
+operation receipt of kind `managed-hook-session-pin-migration`, and the new pin
+is written under the existing receipt precondition and write lock.
+
+When loaded skills are retired, a metadata-only notice is written under
+`selection-cache/session-pin-migration-notices/` before the receipt commit. The
+managed hook prepends it to the first context that succeeds for that session and
+reaches the agent (including the authenticated fallback when a new bundle is not
+cached yet), then marks it delivered. Cursor shows hook context only at session
+start and Sumi only on its context restoration call, so the notice waits for
+those. Plain `skills context` never consumes it. It applies only while the pin
+holds the migrated profile, revision and generation, and a malformed or
+oversized record is ignored.
+
+Remembered refusals are neither read nor written while migration is on. Every
+failure other than a plain revision move keeps its existing refusal: identity
+mismatches, unreadable receipts, integrity checks, an unavailable authority,
+lock contention and planner refusals. A migration that cannot finish inside the
+four-second renewal deadline reports `SESSION_RECONCILIATION_REQUIRED` with a
+fixed `migration: "timeout"` marker, which the hook explains; the pin is
+unchanged and the next prompt retries. Outcomes that may already have committed
+keep `SESSION_RECONCILIATION_INCOMPLETE`. Renewable pins still renew without
+migrating. Turn migration off station-wide with `skills config set
+sessionPinMigration off --global`; only the global configuration is read.
+
 ## Compatibility and intentional migration
 
 Existing clients and servers keep the exact-current-selection path. An older

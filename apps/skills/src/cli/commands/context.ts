@@ -6,7 +6,7 @@ import { buildSkillContext, type SkillContextInput } from "../../lib/skill-conte
 import { loadSelectedSkill, type SelectionResolverOptions } from "../../lib/selection-resolver.js";
 import { inspectSessionWriteLock, recoverSessionWriteLock, SkillSelectionError } from "../../lib/selection-cache.js";
 import { readManagedSkillPolicy } from "../../lib/managed-policy.js";
-import { inspectSkillSession, reconcileSkillSession, reconcileSkillSessionIfSafe, type SessionReconciliationInput, type SessionSelectionMetadata } from "../../lib/session-reconciliation.js";
+import { inspectSkillSession, reconcileSkillSession, renewSkillSessionPin, SessionPinMigrationTimeout, type SessionPinMigration, type SessionReconciliationInput, type SessionSelectionMetadata } from "../../lib/session-reconciliation.js";
 
 function sessionSelectionLabel(selection: SessionSelectionMetadata): string {
   return `${selection.slug}@${selection.version} ${selection.bundleDigest}`;
@@ -15,7 +15,7 @@ function sessionSelectionLabel(selection: SessionSelectionMetadata): string {
 export function selectedProfileId(explicit?: string): string {
   return explicit ?? process.env.HASNA_SKILLS_SELECTION_PROFILE ?? readManagedSkillPolicy()?.profileId ?? "default";
 }
-export interface ContextCommandOptions { selectionProfile?: string; cached?: boolean; autoReconcileSafe?: boolean; json?: boolean; stdin?: boolean; session?: string; restore?: boolean; maxChars?: string; maxSkills?: string; file?: string }
+export interface ContextCommandOptions { selectionProfile?: string; cached?: boolean; autoReconcileSafe?: boolean; autoMigrateSessionPin?: boolean; json?: boolean; stdin?: boolean; session?: string; restore?: boolean; maxChars?: string; maxSkills?: string; file?: string }
 export function contextResolverOptions(options: ContextCommandOptions): SelectionResolverOptions {
   if (!options.cached) return {};
   const configured = configuredSkillsApiUrl();
@@ -105,6 +105,7 @@ export function registerContextCommands(parent: Command): void {
     .option("--selection-profile <id>", "Selection profile (separate from the credential --profile)")
     .option("--cached", "Use only an explicitly selected verified cache, at most 24 hours old", false)
     .option("--auto-reconcile-safe", "For managed hooks, renew authorized immutable session pins without adopting newer selected versions", false)
+    .option("--auto-migrate-session-pin", "With --auto-reconcile-safe: when renewal is refused because the same profile moved on, migrate the pin to the current revision and retire changed or removed loaded skills; managed hooks name them once", false)
     .option("--session <id>", "Keep the same skill versions across this session")
     .option("--restore", "Re-emit loaded session context after compaction or resume", false)
     .option("--max-chars <count>", "Optional maximum injected characters")
@@ -113,20 +114,23 @@ export function registerContextCommands(parent: Command): void {
     .action(async (prompt: string | undefined, options: ContextCommandOptions) => {
       try {
         if (options.autoReconcileSafe && !options.cached) throw new SkillSelectionError("INVALID_CONTEXT_INPUT", "--auto-reconcile-safe requires --cached.");
+        if (options.autoMigrateSessionPin && !options.autoReconcileSafe) throw new SkillSelectionError("INVALID_CONTEXT_INPUT", "--auto-migrate-session-pin requires --auto-reconcile-safe.");
         const input = options.stdin ? parseSkillContextInput(await readContextStdin()) : { prompt: prompt ?? "" };
         input.profileId = selectedProfileId(options.selectionProfile ?? input.profileId);
         input.cwd ??= process.cwd();
         input.sessionId = options.session ?? input.sessionId;
         input.restore ||= options.restore;
         const resolverOptions = { ...contextResolverOptions(options), ...(options.maxChars === undefined ? {} : { maxChars: Number(options.maxChars) }), maxSkills: Number(options.maxSkills) };
-        let result;
+        const sessionId = input.sessionId && (input.agentId ? `${input.sessionId}:${input.agentId}` : input.sessionId);
+        let result: Awaited<ReturnType<typeof buildSkillContext>> & { sessionPinMigration?: SessionPinMigration };
         try { result = await buildSkillContext(input, resolverOptions); }
         catch (error) {
           if (!options.cached || !options.autoReconcileSafe || !(error instanceof SkillSelectionError)
-              || error.code !== "CACHED_PROFILE_EXPIRED" || !input.sessionId) throw error;
-          const sessionId = input.agentId ? `${input.sessionId}:${input.agentId}` : input.sessionId;
-          if (!await reconcileSkillSessionIfSafe(sessionId, input.profileId!, resolverOptions)) throw error;
+              || error.code !== "CACHED_PROFILE_EXPIRED" || !sessionId) throw error;
+          const renewal = await renewSkillSessionPin(sessionId, input.profileId!, { ...resolverOptions, migrate: options.autoMigrateSessionPin === true });
+          if (renewal.outcome === "unchanged") throw error;
           result = await buildSkillContext(input, resolverOptions);
+          if (renewal.outcome === "migrated") result = { ...result, sessionPinMigration: renewal.migration };
         }
         await writeCliOutput(options.json ? JSON.stringify(result) : result.context);
       } catch (error) { reportContextError(error, options.json); }
@@ -139,7 +143,9 @@ export function reportContextError(error: unknown, json = false): void {
   const message = error instanceof SkillSelectionError ? error.message : storageFull
     ? "Skills could not save verified local state because the filesystem is full or its quota is exhausted. Free space through your approved recoverable cleanup process, then retry the same session."
     : "Skills context could not be loaded. Check authentication and the selected profile.";
-  if (json) console.log(JSON.stringify({ error: { code, message } }));
+  // A fixed marker, never free text, says why a refusal outlived its migration.
+  const migration = error instanceof SessionPinMigrationTimeout ? error.migration : undefined;
+  if (json) console.log(JSON.stringify({ error: { code, message, ...(migration ? { migration } : {}) } }));
   else console.error(message);
   process.exitCode = 1;
 }
