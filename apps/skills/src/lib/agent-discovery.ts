@@ -12,6 +12,7 @@ import { pluginExecutableDigest } from "./plugin-projection-store.js";
 import { captureCodexSettingsV6 } from "./codex-settings-witness.js";
 import { captureCodexHookMcpDependencies, type CodexReviewedHookSource } from "./codex-hook-mcp-dependencies.js";
 import { hashDiscoveryPathFile } from "./agent-discovery-path-bytes.js";
+import { NativeDiscoveryWitnessChange, witnessChanged } from "./native-discovery-witness-change.js";
 import { hashClaudePluginManifest, projectReviewedClaudePluginManifest } from "./claude-plugin-manifest-witness.js";
 import { hashManagedPluginRegistry, type ManagedPluginRegistrationWitness } from "./plugin-discovery.js";
 import { readPluginBinding } from "./plugin-admission.js";
@@ -488,7 +489,10 @@ function verifyCodexSemanticCacheDiscovery(binding: AgentDiscoveryBinding, revie
   assertCodexSemanticCacheWitnessUnchanged(proof.witness, current);
   return proof;
 }
-export function verifyAgentDiscovery(binding: AgentDiscoveryBinding, codexRecovery?: CodexHookDiscoveryRecovery, reviewedRootAliases?: readonly { agent: IntegrationAgent; alias: string; target: string }[]): void {
+/** Source-byte and directory-membership drift are NativeDiscoveryWitnessChange
+ * errors. Only the live Codex prompt hook passes `witnessChanges`, which collects
+ * them so the remaining checks still run; every other failure always throws. */
+export function verifyAgentDiscovery(binding: AgentDiscoveryBinding, codexRecovery?: CodexHookDiscoveryRecovery, reviewedRootAliases?: readonly { agent: IntegrationAgent; alias: string; target: string }[], witnessChanges?: NativeDiscoveryWitnessChange[]): void {
   if (codexRecovery) assertCodexHookDiscoveryRecovery(binding, codexRecovery);
   if (!binding || !Array.isArray(binding.sources) || !Array.isArray(binding.roots) || binding.sources.length > AGENT_POLICY_LIMITS.discoverySources || binding.roots.length > AGENT_POLICY_LIMITS.discoveryRoots) throw new Error("Invalid native discovery binding");
   if (binding.agent === "hermes" && !binding.directories?.length) throw new Error("Hermes discovery requires directory membership coverage; run skills hook install with a fresh discovery review");
@@ -506,14 +510,17 @@ export function verifyAgentDiscovery(binding: AgentDiscoveryBinding, codexRecove
       const projection=binding.codexRetiredMaterializations!.directories.filter(directory => !semanticDirectory(directory.path));
       if(projection.length!==ordinary.length || projection.some((item,index)=>item.path!==ordinary[index]?.path)) throw new Error("Missing retired Codex directory projection");
       const omitted=[...retiredRoots,...(binding.codexRetiredMaterializations.parents ?? []).filter(parent=>!lstatSync(parent,{throwIfNoEntry:false}))];
-      if(projection.every(item=>Array.isArray(item.entries))) verifyDiscoveryDirectoryProjection(projection as DiscoveryDirectoryProjection[],omitted);
+      if(projection.every(item=>Array.isArray(item.entries))) verifyDiscoveryDirectoryProjection(projection as DiscoveryDirectoryProjection[],omitted,witnessChanges);
       else {
         if(omitted.some(root=>!retiredRoots.includes(root))) throw new Error("Missing reviewed directory membership inventory; provide a fresh discovery review");
         const current=captureDiscoveryDirectoryProjection(ordinary.map(item=>item.path),retiredRoots).map(({entries,...item})=>item);
-        if(!isDeepStrictEqual(current,projection)) throw new Error("Native discovery directory membership changed outside retired Codex roots");
+        if(!isDeepStrictEqual(current,projection)) {
+          const changed=projection.filter((item,index)=>!isDeepStrictEqual(current[index],item));
+          for (const item of changed.length && current.length===projection.length ? changed : [null]) witnessChanged(new NativeDiscoveryWitnessChange("membership",item?.path ?? null,"Native discovery directory membership changed outside retired Codex roots"),witnessChanges);
+        }
       }
-    } else verifyDiscoveryDirectories(ordinary);
-    verifyDiscoveryDirectories(projected,installationRoots);
+    } else verifyDiscoveryDirectories(ordinary,[],witnessChanges);
+    verifyDiscoveryDirectories(projected,installationRoots,witnessChanges);
   }
   const absentRoots=[...absentCodexSkillRoots(binding),...absentRetiredClaudeRoots(binding),...retiredRoots.filter(root=>!lstatSync(root,{throwIfNoEntry:false}))];
   const budget = discoveryByteBudget();
@@ -529,7 +536,7 @@ export function verifyAgentDiscovery(binding: AgentDiscoveryBinding, codexRecove
     if (installationInput(source.path)) { safe(source.path); continue; }
     if (absentRoots.some(root=>source.path.startsWith(root+sep)) && retainableAbsentSource(source)) { safe(source.path); continue; }
     const current = projected(source, undefined, budget);
-    if (current !== source.sha256 && !verifiesCodexHookDiscoverySource(binding, source, current, codexRecovery)) throw new Error(`Native discovery input changed; run skills hook install with a fresh discovery review: ${source.path}`);
+    if (current !== source.sha256 && !verifiesCodexHookDiscoverySource(binding, source, current, codexRecovery)) witnessChanged(new NativeDiscoveryWitnessChange("input", source.path, `Native discovery input changed; run skills hook install with a fresh discovery review: ${source.path}`), witnessChanges);
   }
   for (const root of binding.roots) safe(root);
   for (const root of absentRoots) { safe(root); if (lstatSync(root,{throwIfNoEntry:false})) throw new Error("Retired native materialization changed during discovery verification"); }
@@ -699,8 +706,11 @@ export function agentDiscoveryConfigPath(home: string, agent: IntegrationAgent):
 
 /** Re-derive an automatic binding and compare it with the stored one. A
  * mismatch is drift, except when the only difference is a runtime this process
- * cannot resolve: then it is DISCOVERY_ROOT_UNRESOLVED, which stays blocking. */
-export function verifyAutomaticDiscoveryClosure(binding: AgentDiscoveryBinding, options: { home: string; canonical: (path: string) => string; change: string; executable?: DiscoveryExecutable }): void {
+ * cannot resolve: then it is DISCOVERY_ROOT_UNRESOLVED, which stays blocking.
+ * Only the live Codex prompt hook passes `witnessChanges`: when roots, method and
+ * every source and directory path are unchanged and only witness digests differ,
+ * those are collected as NativeDiscoveryWitnessChange instead of refusing. */
+export function verifyAutomaticDiscoveryClosure(binding: AgentDiscoveryBinding, options: { home: string; canonical: (path: string) => string; change: string; executable?: DiscoveryExecutable; witnessChanges?: NativeDiscoveryWitnessChange[] }): void {
   const command = DISCOVERY_RUNTIME_COMMANDS[binding.agent], recorded = options.executable;
   // What this process's PATH resolves is what the agent actually runs here.
   const onPath = discoveryExecutable(binding.agent);
@@ -727,7 +737,22 @@ export function verifyAutomaticDiscoveryClosure(binding: AgentDiscoveryBinding, 
     && current.sources.every(source => binding.sources.some(saved => isDeepStrictEqual(saved, source)));
   // An unresolvable runtime is an environment gap only when nothing else changed.
   if (command && gap && runtime === null && reviewedWithRuntime && otherwiseCurrent) throw discoveryRootUnresolved(binding.agent, command, gap);
+  if (options.witnessChanges && collectAutomaticWitnessChanges(binding, current, options.witnessChanges)) return;
   throw new Error(options.change);
+}
+/** True, with the changed witnesses collected, only when the re-derived binding
+ * has the stored shape exactly (method, roots, builtin names and every source
+ * and directory path, format and mode) and differs only in witness digests. */
+function collectAutomaticWitnessChanges(binding: AgentDiscoveryBinding, current: AgentDiscoveryBinding, changes: NativeDiscoveryWitnessChange[]): boolean {
+  const shape = (value: AgentDiscoveryBinding) => JSON.stringify({ ...value, sources: value.sources.map(source => ({ ...source, sha256: null })), ...(value.directories ? { directories: value.directories.map(directory => ({ ...directory, sha256: null })) } : {}) });
+  if (shape(current) !== shape(binding)) return false;
+  binding.sources.forEach((source, index) => {
+    if (current.sources[index]!.sha256 !== source.sha256) changes.push(new NativeDiscoveryWitnessChange("input", source.path, `Native discovery input changed; run skills hook install with a fresh discovery review: ${source.path}`));
+  });
+  (binding.directories ?? []).forEach((directory, index) => {
+    if (current.directories![index]!.sha256 !== directory.sha256) changes.push(new NativeDiscoveryWitnessChange("membership", directory.path, `Native discovery directory membership changed; run skills hook install with a fresh discovery review: ${directory.path}`));
+  });
+  return true;
 }
 
 /** `executable` is the agent's runtime: omitted, it is resolved through PATH;

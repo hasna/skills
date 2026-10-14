@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Patch Changes
+
+- Keep Codex prompts running when a vendor plugin refresh or a Codex configuration edit changes what the reviewed discovery binding saw. Only the live Codex prompt hook opts in. It delivers Skills context and shows a visible `systemMessage` warning, with up to three escaped paths and how to retire or re-review them, for: classified vendor copies in the canonical `~/.codex/plugins/cache` (no symlinked component, unchanged tree, not under a `hasna*` marketplace), when every remaining copy is one; a changed reviewed discovery source such as `~/.codex/config.toml`; changed directory membership such as the plugin cache; and changed reviewed plugin capability controls. These changes are classified at their source as typed witness changes, never by message text.
+- Still refuse, with unchanged messages: user, repo, project and `~/.agents/skills` copies, `.system` skills, unclassified cache files and Hasna marketplace copies, missing discovery coverage, unresolved discovery roots, changed automatic discovery roots or source population, every other discovery or bridge integrity failure, and every install, trust, migrate and sync check. Warnings write no acceptance record and change no binding, witness or native policy adapter semantics.
+
 ## 0.10.70
 
 - Add opt-in V6 Codex settings witnesses that bind reviewed hook declarations and their referenced local stdio MCP providers, including higher-precedence project overrides. Preserve V1–V5 meanings, harmless display changes and unrelated ordinary MCP changes; refuse unsupported routes and unproved source populations without automatically migrating existing witnesses.
