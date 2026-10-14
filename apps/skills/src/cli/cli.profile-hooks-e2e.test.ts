@@ -943,24 +943,21 @@ test("installed Codex prompt continues after reviewed Pages app and qualified sk
  const f=await fixture();
  try {
   await f.a.install(); await f.a.ok(["profiles","set","engineering","--file",f.versions[0]!.file,"--json"]); await f.a.ok(["sync","--json"]);
-  const parent=join(f.a.home,".codex/plugins/cache/probe/pages"), names=["maintain-space","manage-schedules","organize-space","write-page"];
+  // Reviewed qualified denials make these allowlisted vendor copies inert. A
+  // non-vendor marketplace has its own blocking coverage in vendor-drift tests.
+  const parent=join(f.a.home,".codex/plugins/cache/openai-curated/pages"), names=["maintain-space","manage-schedules","organize-space","write-page"];
   const app='{"apps":{"pages":{"id":"synthetic_pages_connector","required":true}}}';
   const add=(version:string,skills=names)=>{const root=join(parent,version);put(join(root,".codex-plugin/plugin.json"),JSON.stringify({name:"pages",version,apps:"./.app.json"}));put(join(root,".app.json"),app);for(const name of skills)put(join(root,"skills",name,"SKILL.md"),`---\nname: ${name}\ndescription: Synthetic native fixture\n---\nUNMANAGED_NATIVE_PAYLOAD\n`);return root;};
   const original=add("1.0.0"), file=join(f.root,"native-review.json");
-  put(file,JSON.stringify({version:"codex-cli 0.159.2",cwd:f.a.project,skills:names.map(name=>({name:`pages:${name}`,path:join(original,"skills",name,"SKILL.md"),enabled:true,pluginId:"pages@probe"})),plugins:[{id:"pages@probe",name:"pages",installed:true,enabled:true,localVersion:"1.0.0"}]}));
+  put(file,JSON.stringify({version:"codex-cli 0.159.2",cwd:f.a.project,skills:names.map(name=>({name:`pages:${name}`,path:join(original,"skills",name,"SKILL.md"),enabled:true,pluginId:"pages@openai-curated"})),plugins:[{id:"pages@openai-curated",name:"pages",installed:true,enabled:true,localVersion:"1.0.0"}]}));
   const receipt=await f.a.ok(["hook","install","--agent","codex","--codex-native-catalog",file,"--apply","--json"]);
   expect(receipt.codexPluginSkills).toHaveLength(4);expect(receipt.codexPluginSkills[0].name).toBe("pages:maintain-space");expect(receipt.codexPluginSkills[0].appSha256).toMatch(/^[a-f0-9]{64}$/);expect(receipt.codexPluginSkillReview.version).toBe("codex-cli 0.159.2");
   for (const version of ["3.0.0","4.0.0"]) {
    add(version); const result=await f.a.hook("codex","UserPromptSubmit",{prompt:"$review-code"});expect(result.decision).toBeUndefined();expect(result.hookSpecificOutput.additionalContext).toContain("Published 1.0.0");expect(JSON.stringify(result)).not.toContain("UNMANAGED_NATIVE_PAYLOAD");
   }
   const appPath=join(parent,"4.0.0/.app.json");
-  // Changed reviewed capability controls warn on the live prompt instead of blocking.
-  put(appPath,app.replace("true","false"));const changed=await f.a.hook("codex","UserPromptSubmit",{prompt:"$review-code"});expect(changed.decision).toBeUndefined();expect(changed.systemMessage).toContain("reviewed Codex discovery witness changed (plugin capability controls)");expect(changed.hookSpecificOutput.additionalContext).toContain("Published 1.0.0");expect(JSON.stringify(changed)).not.toContain("UNMANAGED_NATIVE_PAYLOAD");
-  // A new skill from a vendor plugin refresh does not stop the live prompt: it is
-  // reported in a visible warning and Skills context is still delivered.
-  put(appPath,app);add("4.0.0",["unknown"]); const refreshed=await f.a.hook("codex","UserPromptSubmit",{prompt:"$review-code"});expect(refreshed.decision).toBeUndefined();expect(refreshed.systemMessage).toContain("Skills warning: 1 vendor Codex plugin skill copy");expect(refreshed.systemMessage).toContain(JSON.stringify(join(parent,"4.0.0","skills","unknown")));expect(refreshed.hookSpecificOutput.additionalContext).toContain("Published 1.0.0");expect(JSON.stringify(refreshed)).not.toContain("UNMANAGED_NATIVE_PAYLOAD");
-  // Beside a user copy the same refresh still refuses.
-  put(join(f.a.home,".codex/skills/user-copy/SKILL.md"),"---\nname: user-copy\ndescription: Synthetic native fixture\n---\nUNMANAGED_NATIVE_PAYLOAD\n"); const unsafe=await f.a.hook("codex","UserPromptSubmit",{prompt:"$review-code"});expect(unsafe.decision).toBe("block");expect(unsafe.reason).toContain("NATIVE_SKILL_DRIFT");expect(unsafe.hookSpecificOutput).toBeUndefined();
+  put(appPath,app.replace("true","false"));const changed=await f.a.hook("codex","UserPromptSubmit",{prompt:"ordinary coding"});expect(changed.decision).toBe("block");expect(changed.reason).toContain("NATIVE_SKILL_DRIFT");expect(changed.hookSpecificOutput).toBeUndefined();
+  put(appPath,app);add("4.0.0",["unknown"]); const unsafe=await f.a.hook("codex","UserPromptSubmit",{prompt:"$review-code"});expect(unsafe.decision).toBe("block");expect(unsafe.reason).toContain("NATIVE_SKILL_DRIFT");expect(unsafe.hookSpecificOutput).toBeUndefined();
  } finally { await f.close(); }
 });
 

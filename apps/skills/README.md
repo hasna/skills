@@ -207,25 +207,55 @@ is recorded at `agent-hooks/codex-native-policy-acceptance.json`; user,
 repository and project copies still refuse, and format or digest checks never
 prove the runtime policy on their own.
 
-A Codex plugin refresh or configuration edit can change what the reviewed
-discovery binding saw. The live Codex prompt hook does not stop on these alone:
-it still delivers Skills context and adds a visible `systemMessage` warning
-naming up to three paths when the only drift is
+A Codex plugin refresh can deposit a new vendor skill in `~/.codex/plugins/cache`
+(for example `openai-curated-remote/sites/1.0.2-remix-b.1/skills/sites-remix`).
+Skill payloads still reach agents only through the Skills CLI, so an enabled
+vendor copy keeps blocking the Codex prompt hook. Retire it by disabling it in
+`~/.codex/config.toml`. The plugin-qualified name survives later version
+directories, so prefer it:
 
-- classified vendor skill copies in the canonical `~/.codex/plugins/cache` (no
-  symlinked component, unchanged tree, not under a `hasna*` marketplace), when
-  every remaining copy is one;
-- a changed reviewed discovery source, such as `~/.codex/config.toml`;
-- changed directory membership, such as the plugin cache; or
-- changed reviewed plugin capability controls.
+```toml
+[[skills.config]]
+name = "sites:sites-remix"
+enabled = false
+```
 
-Retire vendor copies with `skills migrate native --agent codex --include-vendor`
-or disable each exact `SKILL.md` path with `[[skills.config]] path = "..."
-enabled = false`; re-review changed witnesses with `skills hook install --agent
-codex` and a fresh discovery review. A warning records no acceptance. Any
-non-vendor copy, missing discovery coverage, unresolved or changed discovery
-roots, any other integrity failure, and every install, trust, migrate and sync
-check still refuse with `NATIVE_SKILL_DRIFT`.
+An exact `path = ".../sites/1.0.2-remix-b.1/skills/sites-remix/SKILL.md"` rule
+also works, but only for that version. On the live Codex prompt hook only, a
+copy is then exempt when every condition holds:
+
+- it is package-classified plugin content in `openai-bundled`, `openai-curated`
+  or `openai-curated-remote` (exact names), with Codex's remote install receipt
+  for the remote marketplace;
+- it carries no Skills or Hasna marker;
+- a `[[skills.config]]` rule disables it, and no matching rule enables it, or
+  its exact plugin table disables the whole plugin.
+
+To disable the whole plugin, add this exact table instead:
+
+```toml
+[plugins."sites@openai-curated-remote"]
+enabled = false
+```
+
+Instead of editing by hand, `skills hook native-catalog` followed by
+`skills hook install --agent codex --codex-native-catalog <file>` writes the same
+rules through the guarded install path.
+
+The hook also tolerates, with a visible `systemMessage` warning, only the
+discovery-witness changes such a refresh provably makes:
+- appended vendor disable rules or vendor plugin disables in `config.toml`,
+  accepted when removing exactly those entries or restoring a formerly enabled
+  vendor flag reproduces the reviewed digest;
+- directory membership changes under an allowlisted vendor marketplace whose
+  plugins declare no hooks or commands.
+
+Every other copy and change still refuses with `NATIVE_SKILL_DRIFT`, including:
+- user, project, `.system` and Hasna-marketplace copies;
+- capability-control changes and whole-cache membership changes;
+- plugin activation, including a vendor plugin gaining `enabled = true`;
+- missing coverage and changed roots;
+- every install, trust, migrate and sync check.
 
 Native hook invocations must use their installed adapter's selection profile.
 An old client command or environment override naming another profile refuses

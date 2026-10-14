@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { lstatSync, opendirSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { AGENT_POLICY_LIMITS } from "./agent-policy-limits.js";
-import { NativeDiscoveryWitnessChange, witnessChanged } from "./native-discovery-witness-change.js";
+import { NativeDiscoveryWitnessChange, witnessChanged, type NativeDiscoveryWitnessTolerance } from "./native-discovery-witness-change.js";
 
 /** Recursive path/type membership only; source-file hashes bind reviewed bytes. */
 export interface DiscoveryDirectory { path: string; sha256: string | null }
@@ -66,9 +66,9 @@ export function captureDiscoveryDirectoryProjection(paths:string[], omittedRoots
 }
 /** Compare a planner-captured inventory after removing only exact inert graphs.
  * The stored rows must reproduce their original digest before projection. A
- * membership change is a NativeDiscoveryWitnessChange: thrown, or collected for
- * the live Codex prompt hook only. Invalid inventories always throw. */
-export function verifyDiscoveryDirectoryProjection(directories:DiscoveryDirectoryProjection[], omittedRoots:readonly string[], changes?:NativeDiscoveryWitnessChange[]):void {
+ * membership change is a NativeDiscoveryWitnessChange: thrown, unless the live
+ * Codex prompt hook's tolerance accepts it. Invalid inventories always throw. */
+export function verifyDiscoveryDirectoryProjection(directories:DiscoveryDirectoryProjection[], omittedRoots:readonly string[], tolerance?:NativeDiscoveryWitnessTolerance):void {
   need(directories.length<=AGENT_POLICY_LIMITS.discoveryDirectories,"Invalid projected discovery directory collection");
   let count=0,bytes=0;
   const expected=directories.map(directory=>{
@@ -91,7 +91,7 @@ export function verifyDiscoveryDirectoryProjection(directories:DiscoveryDirector
   });
   const current=captureDiscoveryDirectoryProjection(directories.map(item=>item.path),omittedRoots);
   for (let i = 0; i < current.length; i++) if (current[i]!.sha256 !== expected[i]!.sha256) {
-    witnessChanged(new NativeDiscoveryWitnessChange("membership", directories[i]!.path, "Native discovery directory membership changed outside retired Codex roots"), changes);
+    witnessChanged(new NativeDiscoveryWitnessChange("membership", directories[i]!.path, "Native discovery directory membership changed outside retired Codex roots"), tolerance, tolerance?.acceptsMembership(directories[i]!.path) === true);
   }
 }
 /** Read-only capture; callers must review both membership and source bytes. */
@@ -101,13 +101,13 @@ export function captureDiscoveryDirectories(paths: string[], excludedRoots: read
   for (const root of excludedRoots) safe(root);
   return paths.map(path => capture(path, budget, excludedRoots));
 }
-/** A membership change is a NativeDiscoveryWitnessChange: thrown, or collected
- * for the live Codex prompt hook only. Invalid collections always throw. */
-export function verifyDiscoveryDirectories(directories: DiscoveryDirectory[], excludedRoots: readonly string[] = [], changes?: NativeDiscoveryWitnessChange[]): void {
+/** A membership change is a NativeDiscoveryWitnessChange: thrown, unless the
+ * live Codex prompt hook's tolerance accepts it. Invalid collections always throw. */
+export function verifyDiscoveryDirectories(directories: DiscoveryDirectory[], excludedRoots: readonly string[] = [], tolerance?: NativeDiscoveryWitnessTolerance): void {
   need(Array.isArray(directories) && directories.length <= AGENT_POLICY_LIMITS.discoveryDirectories, "Invalid native discovery directory collection");
   for (const directory of directories) need(directory && typeof directory === "object" && (directory.sha256 === null || typeof directory.sha256 === "string" && /^[a-f0-9]{64}$/.test(directory.sha256)), "Invalid native discovery directory digest");
   const current = captureDiscoveryDirectories(directories.map(directory => directory.path), excludedRoots);
   for (let i = 0; i < directories.length; i++) if (current[i]!.sha256 !== directories[i]!.sha256) {
-    witnessChanged(new NativeDiscoveryWitnessChange("membership", directories[i]!.path, `Native discovery directory membership changed; run skills hook install with a fresh discovery review: ${directories[i]!.path}`), changes);
+    witnessChanged(new NativeDiscoveryWitnessChange("membership", directories[i]!.path, `Native discovery directory membership changed; run skills hook install with a fresh discovery review: ${directories[i]!.path}`), tolerance, tolerance?.acceptsMembership(directories[i]!.path) === true);
   }
 }

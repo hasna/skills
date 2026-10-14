@@ -1,6 +1,6 @@
 import { upgradeSumiSettingsWitness, readSumiSettingsPreimage, SUMI_DISCOVERY_PROJECTION_FIELDS } from "./sumi-settings-witness.js";
 import { codexCorpusRootForPath, withCodexCorpusWrite, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
-import { reviewCodexPluginControls, reviewedCodexPluginSourceRoots, isReviewedCodexPluginInactive, isReviewedCodexPluginSkillDisabled, reviewedCodexPluginCapabilitiesUnchanged, disableReviewedCodexPluginNames, absentDisabledCodexPluginParent, classifyCodexPluginCacheDocument, type ReviewedCodexSkillDenial, type CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
+import { reviewCodexPluginControls, reviewedCodexPluginSourceRoots, isReviewedCodexPluginInactive, isReviewedCodexPluginSkillDisabled, reviewedCodexPluginCapabilitiesUnchanged, disableReviewedCodexPluginNames, absentDisabledCodexPluginParent, classifyCodexPluginCacheDocument, codexRemoteInstallReceipt, type CodexPluginCacheDocumentIdentity, type ReviewedCodexSkillDenial, type CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
 import { verifyCodexNativeSkillPolicy, parseCodexNativeHookEnvelope, recordCodexNativePolicyAcceptance, type CodexNativeHookEnvelope, type ProcessInspector, type NativePolicyHelperRunner } from "./codex-native-skill-policy.js";
 import { projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
 import { upgradeCodexSettingsWitness, upgradeCodexSettingsWitnessV3, upgradeCodexSettingsWitnessV4, upgradeCodexSettingsWitnessV5, readCodexSettingsPreimage, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
@@ -8,7 +8,9 @@ import { upgradeClaudeSettingsWitness, upgradeClaudeSettingsWitnessV4, hashNativ
 import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
 import { captureCodexSemanticCacheWitness, codexLocalMarketplaceMapsPlugin, type CodexSemanticCacheAppOnlyParent, type CodexSemanticCacheReviewedHookParent } from "./codex-semantic-cache-witness.js";
 import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
-import { NativeDiscoveryWitnessChange, witnessChanged, type NativeDiscoveryWitnessKind } from "./native-discovery-witness-change.js";
+import type { NativeDiscoveryWitnessChange, NativeDiscoveryWitnessKind, NativeDiscoveryWitnessTolerance } from "./native-discovery-witness-change.js";
+import { CODEX_REMOTE_VENDOR_MARKETPLACES, codexVendorMarketplace, codexVendorSubtreeHookFree } from "./codex-vendor-refresh.js";
+import { isCodexNativeSkillDisabled } from "./codex-native-skill-catalog.js";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { existsSync, lstatSync, statSync, mkdirSync, readFileSync, readdirSync, opendirSync, readlinkSync, realpathSync, renameSync, rmdirSync, writeFileSync, unlinkSync, chmodSync, openSync, closeSync, fsyncSync, fstatSync, readSync, constants, linkSync, type BigIntStats, type Dirent } from "node:fs";
@@ -17,7 +19,7 @@ import { homedir } from "node:os";
 import { getDataDir, getDataDirReadOnly } from "./config.js";
 import { requiresCliSkillLoading, readManagedSkillPolicySnapshot, serializeManagedSkillPolicy, parseManagedSkillPolicy } from "./managed-policy.js";
 import { CLI_BRIDGE_NAME, CLI_BRIDGE_FILES, CLI_BRIDGE_DIGEST, CLI_BRIDGE_VERSION, isOwnedCliBridge } from "./agent-bridge.js";
-import { assertProjectDiscovery, discoveryExecutable, recordedDiscoveryExecutable, isDiscoveryRootUnresolved, resolveAgentDiscovery, verifyAgentDiscovery, verifyAutomaticDiscoveryClosure, type DiscoveryExecutable, rebindAgentDiscovery, captureDiscoveryDirectories, captureRetiredCodexDiscovery, projectNativeDiscoveryFields, codexSemanticCacheSourceRole, codexSemanticCacheDirectoryRole, assertCodexSemanticCacheHookSafety, type AgentDiscoveryBinding, type DiscoverySource, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
+import { assertProjectDiscovery, codexVendorConfigChangeOnly, discoveryExecutable, recordedDiscoveryExecutable, isDiscoveryRootUnresolved, resolveAgentDiscovery, verifyAgentDiscovery, verifyAutomaticDiscoveryClosure, type DiscoveryExecutable, rebindAgentDiscovery, captureDiscoveryDirectories, captureRetiredCodexDiscovery, projectNativeDiscoveryFields, codexSemanticCacheSourceRole, codexSemanticCacheDirectoryRole, assertCodexSemanticCacheHookSafety, type AgentDiscoveryBinding, type DiscoverySource, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderAgentHookCommand, renderOpenCodePlugin, type IntegrationAgent } from "./agent-adapters.js";
 import { assertCodexPathConfigEditable, CODEX_SKILL_CONFIG_SECTIONS, disableCodexBundledSkills, normalizeCodexInlinePathConfig } from "./agent-codex.js";
 
@@ -1559,25 +1561,26 @@ function archiveNativeSkillsUnlocked(inventory: NativeSkillEntry[], options: Cod
 export interface CodexNativePolicyGuardInput extends CodexNativeHookEnvelope { inspector?: ProcessInspector; helperRunner?: NativePolicyHelperRunner; /** Absolute epoch ms by which the hook must answer; bounds the hash and helper. */ deadlineMs?: number }
 interface ManagedBridgeOptions {
   home?: string; dataDir?: string; projectDir?: string; projectDirs?: string[]; profileId?: string; codexDiscoveryRecovery?: CodexHookDiscoveryRecovery; codexNativePolicy?: CodexNativePolicyGuardInput;
-  /** Live Codex prompt hook only. Report, instead of refusing, the drift a Codex
-   * plugin refresh or configuration edit produces: changed reviewed discovery
-   * witnesses (source bytes, directory membership, plugin capability controls)
-   * and, when every remaining copy is one, classified vendor Codex plugin-cache
-   * copies. Install, trust, migrate and sync never pass it. */
-  codexPromptDriftWarnings?: boolean;
+  /** Live Codex prompt hook only. Exempt vendor Codex plugin-cache copies that
+   * Codex configuration provably disables, and tolerate, with a warning, the
+   * discovery-witness changes a vendor plugin refresh provably makes. Enabled
+   * vendor copies and every other change still refuse. Install, trust, migrate
+   * and sync never pass it. */
+  codexPromptHook?: boolean;
 }
 
 /** Result of a guard call; both lists are empty unless the caller opted in.
- * `codexVendorPluginCopies` holds canonical skill directories and
- * `codexDiscoveryChanges` the changed witnesses, each reported instead of refused. */
-export interface ManagedBridgeReport { codexVendorPluginCopies: string[]; codexDiscoveryChanges: Array<{ kind: NativeDiscoveryWitnessKind; path: string | null }> }
+ * `codexInertVendorCopies` holds the canonical skill directories exempted as
+ * disabled vendor copies; `codexDiscoveryChanges` the witnesses tolerated as a
+ * vendor plugin refresh. */
+export interface ManagedBridgeReport { codexInertVendorCopies: string[]; codexDiscoveryChanges: Array<{ kind: NativeDiscoveryWitnessKind; path: string | null }> }
 
 /** Structural classification shared by the native-policy adapter and the live
- * prompt-hook vendor report: package-identified installed-plugin content inside
+ * prompt-hook vendor exemption: package-identified installed-plugin content inside
  * the canonical Codex plugin cache (no `..`, no symlinked component, real paths
  * equal), a regular SKILL.md and an unchanged inventoried tree. `admit` adds the
- * caller's condition on the canonical document before the tree is hashed. */
-function classifiedCodexPluginCacheCopy(entry: NativeSkillEntry, cache: string, read: (path: string) => string, admit: (document: string) => boolean): boolean {
+ * caller's condition on the canonical document and its identity before hashing. */
+function classifiedCodexPluginCacheCopy(entry: NativeSkillEntry, cache: string, read: (path: string) => string, admit: (document: string, identity: CodexPluginCacheDocumentIdentity) => boolean): boolean {
   try {
     if (entry.agent !== "codex" || !entry.vendor || entry.bridge || entry.system) return false;
     const document = join(entry.path, "SKILL.md");
@@ -1586,8 +1589,9 @@ function classifiedCodexPluginCacheCopy(entry: NativeSkillEntry, cache: string, 
     assertSafePath(entry.path);
     if (!lstatSync(cache).isDirectory() || !lstatSync(entry.path).isDirectory() || !lstatSync(document).isFile()) return false;
     if (realpathSync.native(cache) !== cache || realpathSync.native(entry.path) !== entry.path || realpathSync.native(document) !== document) return false;
-    if (!classifyCodexPluginCacheDocument(document, cache, read)) return false;
-    if (!admit(document)) return false;
+    const identity = classifyCodexPluginCacheDocument(document, cache, read);
+    if (!identity) return false;
+    if (!admit(document, identity)) return false;
     return treeHash(entry.path) === entry.hash;
   } catch { return false; }
 }
@@ -1601,21 +1605,41 @@ export function isInertCodexPluginCacheCopy(entry: NativeSkillEntry, cache: stri
   return classifiedCodexPluginCacheCopy(entry, cache, read, document => !allowedHostPaths.includes(document));
 }
 
-/** A vendor copy that a Codex plugin refresh materialized in the plugin cache:
- * the same classification as `isInertCodexPluginCacheCopy` without the
- * allowed-host-path policy. Copies under a Hasna-owned marketplace (first cache
- * segment starting with `hasna`) are never vendor copies and keep refusing. */
-export function isVendorCodexPluginCacheCopy(entry: NativeSkillEntry, cache: string, read: (path: string) => string): boolean {
-  const marketplace = relative(cache, entry.path).split(sep)[0] ?? "";
-  if (marketplace.toLowerCase().startsWith("hasna")) return false;
-  return classifiedCodexPluginCacheCopy(entry, cache, read, () => true);
+/** A vendor plugin-cache copy that Codex configuration provably disables, so its
+ * payload never loads natively. Vendor means: classified installed-plugin content
+ * in an allowlisted OpenAI marketplace (exact names), with the native remote
+ * install receipt for remote marketplaces, and no Skills-managed or Hasna
+ * marker. Disabled means: a `[[skills.config]]` rule names its exact SKILL.md
+ * path or its plugin-qualified name with `enabled = false` (the native ordered
+ * evaluation agrees), and no matching rule enables it, or the exact plugin
+ * table has `enabled = false`. */
+export function isInertCodexVendorPluginCopy(entry: NativeSkillEntry, cache: string, rules: unknown, read: (path: string) => string, plugins?: unknown): boolean {
+  try {
+    if (entry.managed || lstatSync(join(entry.path, ".hasna-skills.json"), { throwIfNoEntry: false })) return false;
+    const marketplace = codexVendorMarketplace(cache, entry.path);
+    if (!marketplace) return false;
+    return classifiedCodexPluginCacheCopy(entry, cache, read, (document, identity) => {
+      if (identity.pluginId !== `${identity.namespace}@${marketplace}`) return false;
+      if (CODEX_REMOTE_VENDOR_MARKETPLACES.includes(marketplace) && codexRemoteInstallReceipt(identity.pluginParent, read) === null) return false;
+      if (plugins && typeof plugins === "object" && !Array.isArray(plugins) && Object.hasOwn(plugins, identity.pluginId)
+        && (plugins as Record<string, any>)[identity.pluginId]?.enabled === false) return true;
+      if (!Array.isArray(rules)) return false;
+      // Native path rules canonicalize through links; so does this pre-check.
+      const canonical = (path: string) => { try { return realpathSync.native(path); } catch { return resolve(path); } };
+      const matches = (rule: any) => (typeof rule?.name === "string" && rule.name.trim() === identity.name)
+        || (typeof rule?.path === "string" && [document, entry.path].includes(canonical(rule.path)));
+      if (rules.some(rule => matches(rule) && rule?.enabled !== false)) return false;
+      return isCodexNativeSkillDisabled({ name: identity.name, path: document, pluginId: identity.pluginId, enabled: true }, rules);
+    });
+  } catch { return false; }
 }
 
 /** Show filenames only: never read payloads into diagnostics. Escape control
- * characters and cap both path count and length for native hook output. */
-function nativeSkillPathList(paths: readonly string[]): string {
+ * characters and cap both path count and length for native hook output.
+ * `invisible` also escapes zero-width and byte-order characters (warning text). */
+function nativeSkillPathList(paths: readonly string[], invisible = false): string {
   const shown = paths.slice(0, 3).map(path => {
-    const escaped = JSON.stringify(path).replace(/[\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g,
+    const escaped = JSON.stringify(path).replace(invisible ? /[\u007f-\u009f\u061c\u200b\u200e\u200f\u2028-\u202e\u2060\u2066-\u2069\ufeff]/g : /[\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g,
       character => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
     return escaped.length > 768 ? `${escaped.slice(0, 384)}...${escaped.slice(-381)}` : escaped;
   });
@@ -1623,24 +1647,16 @@ function nativeSkillPathList(paths: readonly string[]): string {
   return `${shown.join(", ")}${remaining ? `; ${remaining} more` : ""}`;
 }
 
-/** Visible, non-blocking warning for the drift the live Codex prompt hook reported
- * instead of refusing, or undefined when nothing was reported. Paths only, never
- * payloads or file contents. */
+/** Visible, non-blocking warning for the discovery-witness changes the live Codex
+ * prompt hook tolerated as a vendor plugin refresh, or undefined when there were
+ * none. One bounded line; paths only, never payloads or file contents. */
 export function codexPromptDriftWarning(report: ManagedBridgeReport): string | undefined {
-  const lines: string[] = [];
-  const copies = report.codexVendorPluginCopies;
-  if (copies.length) {
-    const one = copies.length === 1;
-    lines.push(`Skills warning: ${copies.length} vendor Codex plugin skill ${one ? "copy was" : "copies were"} found in the plugin cache and ${one ? "was" : "were"} not blocked: ${nativeSkillPathList(copies)}. Codex may load ${one ? "it" : "them"} natively beside the Skills CLI bridge. Retire ${one ? "it" : "them"} with skills migrate native --agent codex --project <working-directory> --include-vendor --json (then --apply after review), or disable each exact path with [[skills.config]] path = "<skill-directory>/SKILL.md" enabled = false in the Codex config.toml.`);
-  }
   const changes = report.codexDiscoveryChanges;
-  if (changes.length) {
-    const one = changes.length === 1;
-    const kinds = [...new Set(changes.map(change => change.kind === "input" ? "source file" : change.kind === "membership" ? "directory membership" : "plugin capability controls"))].join(", ");
-    const paths = [...new Set(changes.flatMap(change => change.path === null ? [] : [change.path]))];
-    lines.push(`Skills warning: ${changes.length} reviewed Codex discovery ${one ? "witness" : "witnesses"} changed (${kinds}) and ${one ? "was" : "were"} not blocked${paths.length ? `: ${nativeSkillPathList(paths)}` : ""}. Skills context is still delivered, but native discovery is no longer verified against the review. Review the change, then refresh the binding with skills hook install --agent codex and a fresh discovery review.`);
-  }
-  return lines.length ? lines.join("\n") : undefined;
+  if (!changes.length) return undefined;
+  const one = changes.length === 1;
+  const kinds = [...new Set(changes.map(change => change.kind === "input" ? "vendor configuration entries" : "vendor plugin cache membership"))].join(", ");
+  const paths = [...new Set(changes.flatMap(change => change.path === null ? [] : [change.path]))];
+  return `Skills warning: ${changes.length} reviewed Codex discovery ${one ? "witness" : "witnesses"} changed only by a vendor plugin refresh (${kinds}) and ${one ? "was" : "were"} not blocked${paths.length ? `: ${nativeSkillPathList(paths, true)}` : ""}. Enabled vendor skill copies and every other change still block. Refresh the binding with skills hook install --agent codex and a fresh discovery review.`;
 }
 
 /** Run before any prompt context load. Missing ownership or reappearing native
@@ -1691,24 +1707,36 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
     if (agent === "gemini" && (config.hooksConfig?.enabled === false || config.skills?.enabled !== true || !["antigravity-support", "skill-creator"].every(name => config.skills?.disabled?.includes(name)) || config.skills?.disabled?.includes(CLI_BRIDGE_NAME))) throw new Error("NATIVE_SKILL_DRIFT: Gemini bridge or bundled-skill protection changed; run skills hook install");
   }
   const codexPath = canonicalAgentPath(join(home, ".codex", "config.toml"), aliases);
+  // Live Codex prompt hook only: tolerate a changed reviewed witness only when it
+  // is provably a vendor plugin refresh (appended vendor disable rows or vendor
+  // plugin tables in config.toml; membership under an allowlisted, hook-free
+  // vendor marketplace). Every other caller passes no tolerance.
+  const vendorCache = canonicalAgentPath(join(home, ".codex", "plugins", "cache"), aliases);
+  const witnessTolerance: NativeDiscoveryWitnessTolerance | undefined = agent === "codex" && options.codexPromptHook === true ? {
+    changes: [],
+    acceptsInput: source => source.path === codexPath && codexVendorConfigChangeOnly(source, vendorCache),
+    acceptsMembership: path => codexVendorMarketplace(vendorCache, path) !== null && codexVendorSubtreeHookFree(vendorCache, path),
+  } : undefined;
   if (options.codexDiscoveryRecovery && (agent !== "codex" || options.codexDiscoveryRecovery.configPath !== codexPath)) throw new Error("NATIVE_SKILL_DRIFT: Codex trust recovery names a different configuration root");
   const codexConfig = agent === "codex" ? Bun.TOML.parse(readOptional(codexPath) ?? "") as { plugins?: unknown; skills?: { bundled?: { enabled?: boolean }; config?: Array<{ path?: string; name?: string; enabled?: boolean }> } } : {};
   if (agent === "codex" && codexConfig.skills?.bundled?.enabled !== false) throw new Error("NATIVE_SKILL_DRIFT: Codex bundled skill reseeding is not disabled (skills.bundled.enabled); run skills hook install");
   const setting = (path: string) => (codexConfig.skills?.config ?? []).filter(entry => typeof entry.path === "string" && [path, join(path, "SKILL.md")].includes(canonicalAgentPath(entry.path, aliases)));
   if (agent === "codex" && [...setting(expected), ...(codexConfig.skills?.config ?? []).filter(entry => typeof entry.name === "string" && entry.name.trim() === CLI_BRIDGE_NAME)].some(entry => entry.enabled === false)) throw new Error("NATIVE_SKILL_DRIFT: the Codex CLI bridge is disabled; run skills hook install");
-  // Live Codex prompt hook only: collect changed reviewed discovery witnesses so
-  // they warn instead of refusing. Every other caller passes no collector.
-  const witnessChanges: NativeDiscoveryWitnessChange[] | undefined = agent === "codex" && options.codexPromptDriftWarnings === true ? [] : undefined;
-  if (agent === "codex" && !reviewedCodexPluginCapabilitiesUnchanged(canonicalAgentPath(join(home,".codex/plugins/cache"),aliases),binding.codexPluginSkills ?? [],path=>new TextDecoder("utf-8",{fatal:true}).decode(readNativeBytes(path,1024*1024)),codexConfig.skills?.config ?? [])) witnessChanged(new NativeDiscoveryWitnessChange("capability", canonicalAgentPath(join(home,".codex/plugins/cache"),aliases), "NATIVE_SKILL_DRIFT: reviewed native plugin capability controls changed; run skills hook install with a fresh discovery review"), witnessChanges);
+  if (agent === "codex" && !reviewedCodexPluginCapabilitiesUnchanged(canonicalAgentPath(join(home,".codex/plugins/cache"),aliases),binding.codexPluginSkills ?? [],path=>new TextDecoder("utf-8",{fatal:true}).decode(readNativeBytes(path,1024*1024)),codexConfig.skills?.config ?? [])) throw new Error("NATIVE_SKILL_DRIFT: reviewed native plugin capability controls changed; run skills hook install with a fresh discovery review");
   const disabledPlugin = (entry: NativeSkillEntry): boolean => {
     if (agent !== "codex" || !entry.vendor) return false;
     const document=join(entry.path,"SKILL.md"), cache=canonicalAgentPath(join(home,".codex/plugins/cache"),aliases), read=(path:string)=>new TextDecoder("utf-8",{fatal:true}).decode(readNativeBytes(path,1024*1024));
+    if (options.codexPromptHook === true && entry.path.startsWith(vendorCache + sep))
+      return isInertCodexVendorPluginCopy(entry, vendorCache, codexConfig.skills?.config, read, codexConfig.plugins);
     return isReviewedCodexPluginInactive(document,cache,binding.codexInactivePlugins ?? [],codexConfig.plugins,codexConfig.skills?.config ?? [],read)
       || isReviewedCodexPluginSkillDisabled(document,cache,binding.codexPluginSkills ?? [],codexConfig.skills?.config,read);
   };
   const disabledPaths = new Set(disabledCodexSkillPaths(codexConfig, aliases));
   const disabledVendorSkill = (entry: NativeSkillEntry): boolean => {
     if (agent !== "codex" || !entry.vendor) return false;
+    // Live cache copies all pass the same classifier below, including copies
+    // formerly covered by exact-path or reviewed-name exemptions.
+    if (options.codexPromptHook === true && entry.path.startsWith(vendorCache + sep)) return false;
     if ((binding.codexPluginSkills ?? []).some((control: CodexPluginSkillControl) => entry.path.startsWith(control.pluginParent + sep))) return disabledPlugin(entry);
     if (disabledPlugin(entry)) return true;
     if (!disabledPaths.has(entry.path)) return false;
@@ -1735,9 +1763,9 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
   if (!discovery || discovery.agent !== agent) throw new Error("NATIVE_SKILL_DRIFT: native discovery coverage is missing; run skills hook install");
   if (agent === "gemini" && !discovery.builtinNames?.every(name => config.skills.disabled.includes(name))) throw new Error("NATIVE_SKILL_DRIFT: an installed Gemini builtin is not disabled");
   try {
-    verifyAgentDiscovery(agent==="codex" ? {...discovery,codexDisabledPluginSkills:binding.codexPluginSkills ?? []} : discovery, options.codexDiscoveryRecovery, aliases, witnessChanges);
+    verifyAgentDiscovery(agent==="codex" ? {...discovery,codexDisabledPluginSkills:binding.codexPluginSkills ?? []} : discovery, options.codexDiscoveryRecovery, aliases, witnessTolerance);
     if (agent === "sumi" && discovery.method === "reviewed") resolveAgentDiscovery({ home, agent, retainedReview: discovery, canonical: path => canonicalAgentPath(path, aliases) });
-    if (discovery.method === "automatic") verifyAutomaticDiscoveryClosure(discovery, { home, canonical: path => canonicalAgentPath(path, aliases), change: "Configured native discovery roots changed", executable: binding.discoveryExecutables?.[agent], ...(witnessChanges ? { witnessChanges } : {}) });
+    if (discovery.method === "automatic") verifyAutomaticDiscoveryClosure(discovery, { home, canonical: path => canonicalAgentPath(path, aliases), change: "Configured native discovery roots changed", executable: binding.discoveryExecutables?.[agent], ...(witnessTolerance ? { witnessTolerance } : {}) });
   } catch (error) {
     if (isDiscoveryRootUnresolved(error)) throw error;
     throw new Error(`NATIVE_SKILL_DRIFT: ${(error as Error).message}`);
@@ -1773,24 +1801,24 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
       recordCodexNativePolicyAcceptance(dataDir, verification, inert.map(entry => ({ path: entry.path, treeSha256: entry.hash })));
     } catch (error) { inert = []; adapterRefusal = (error as Error).message; }
   }
-  // Live Codex prompt hook only (codexPromptDriftWarnings): a vendor plugin
-  // refresh must not stop every Codex prompt. When every copy that remains after
-  // the exemptions and the adapter is a classified vendor plugin-cache copy,
-  // report those copies to the caller instead of refusing. Anything else,
-  // including any non-vendor copy beside them, refuses below.
-  let reported: NativeSkillEntry[] = [];
-  if (agent === "codex" && options.codexPromptDriftWarnings === true && unexpected.length > inert.length) {
-    const remaining = unexpected.filter(entry => !inert.includes(entry));
-    const cache = canonicalAgentPath(join(home, ".codex", "plugins", "cache"), aliases), read = (path: string) => new TextDecoder("utf-8", { fatal: true }).decode(readNativeBytes(path, 1024 * 1024));
-    if (remaining.every(entry => isVendorCodexPluginCacheCopy(entry, cache, read))) reported = remaining;
+  // Live Codex prompt hook only (codexPromptHook): exempt vendor plugin-cache
+  // copies that Codex configuration provably disables, so a vendor refresh that
+  // is already retired by a disable rule does not stop every prompt. An enabled
+  // vendor copy, and every other copy, refuses below; nothing is recorded.
+  let inertVendor: NativeSkillEntry[] = [];
+  if (agent === "codex" && options.codexPromptHook === true && unexpected.length > inert.length) {
+    const read = (path: string) => new TextDecoder("utf-8", { fatal: true }).decode(readNativeBytes(path, 1024 * 1024));
+    inertVendor = unexpected.filter(entry => !inert.includes(entry) && isInertCodexVendorPluginCopy(entry, vendorCache, codexConfig.skills?.config, read, codexConfig.plugins));
   }
-  if (unexpected.length > inert.length + reported.length) {
-    throw new Error(`NATIVE_SKILL_DRIFT: ${unexpected.length} unexpected native skill copies were found: ${nativeSkillPathList(unexpected.map(entry => entry.path))}. Review skills migrate native --agent ${agent} --project <working-directory> --include-unmanaged --include-vendor --json before continuing; it inventories that directory and its ancestors. Use --apply after reviewing the archive plan.${adapterRefusal ? ` Native policy adapter refused: ${adapterRefusal}` : ""}`);
+  if (unexpected.length > inert.length + inertVendor.length) {
+    // The adapter is all-or-nothing, so only exempted vendor copies leave the list.
+    const blocking = unexpected.filter(entry => !inertVendor.includes(entry));
+    throw new Error(`NATIVE_SKILL_DRIFT: ${blocking.length} unexpected native skill copies were found: ${nativeSkillPathList(blocking.map(entry => entry.path))}. Review skills migrate native --agent ${agent} --project <working-directory> --include-unmanaged --include-vendor --json before continuing; it inventories that directory and its ancestors. Use --apply after reviewing the archive plan.${adapterRefusal ? ` Native policy adapter refused: ${adapterRefusal}` : ""}`);
   }
   recheckRootAliases(aliases);
   // The automatic closure can re-report a source verifyAgentDiscovery collected.
-  const discoveryChanges = (witnessChanges ?? []).filter((change, index, all) => all.findIndex(other => other.kind === change.kind && other.path === change.path) === index);
-  return { codexVendorPluginCopies: reported.map(entry => entry.path), codexDiscoveryChanges: discoveryChanges.map(change => ({ kind: change.kind, path: change.path })) };
+  const discoveryChanges = (witnessTolerance?.changes ?? []).filter((change, index, all) => all.findIndex(other => other.kind === change.kind && other.path === change.path) === index);
+  return { codexInertVendorCopies: inertVendor.map(entry => entry.path), codexDiscoveryChanges: discoveryChanges.map(change => ({ kind: change.kind, path: change.path })) };
 }
 
 const SKILLS_LOADING_POLICY = "Skills loading policy: discover skills with `skills list` or `skills search`, and read selected instructions with `skills load <slug>`. Use `skills sync` to refresh the shared profile. The only native skill is the owned skills-cli bridge. Create and edit payload skills in the Skills authoring workspace; do not copy payload instructions into native discovery folders. Context loading does not authorize execution; use `skills run` only when the task calls for running a skill.";

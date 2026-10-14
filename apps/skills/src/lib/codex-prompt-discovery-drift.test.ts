@@ -5,11 +5,12 @@ import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { planAgentIntegration, applyAgentIntegration, assertManagedAgentBridge, codexPromptDriftWarning } from "./agent-integration.js";
-import { captureDiscoveryDirectories, verifyAgentDiscovery } from "./agent-discovery.js";
+import { captureDiscoveryDirectories, codexVendorConfigChangeOnly, verifyAgentDiscovery } from "./agent-discovery.js";
 import { verifyDiscoveryDirectories } from "./agent-discovery-directories.js";
-import { NativeDiscoveryWitnessChange } from "./native-discovery-witness-change.js";
+import { captureCodexSettingsV3 } from "./codex-settings-witness.js";
+import { codexVendorConfigCandidates } from "./codex-vendor-refresh.js";
+import { NativeDiscoveryWitnessChange, type NativeDiscoveryWitnessTolerance } from "./native-discovery-witness-change.js";
 import { readManagedSkillPolicySnapshot, serializeManagedSkillPolicy } from "./managed-policy.js";
-import { codexNativePolicyReceiptPath } from "./codex-native-skill-policy.js";
 import { admitCorpusFixture, installCorpusInspectorFixture } from "./codex-corpus.fixture.js";
 useDefaultTestTimeout();
 let restoreInspector: () => void;
@@ -18,156 +19,252 @@ afterEach(() => { restoreInspector(); });
 const roots: string[] = []; afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const put = (p: string, s: string) => { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, s); };
 const sha = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
+const read = (path: string) => readFileSync(path, "utf8");
+const payload = (name: string) => `---\nname: ${name}\ndescription: Synthetic fixture\n---\nSynthetic native instructions\n`;
 function refusal(run: () => unknown): string {
   try { run(); return "ACCEPTED"; } catch (error) { return (error as Error).message; }
 }
 
-interface Station { home: string; dataDir: string; projectDir: string; cache: string; config: string }
+interface Station { home: string; dataDir: string; projectDir: string; cache: string; config: string; vendor: string }
 function home(prefix: string): Station {
   // Real path: macOS maps /tmp and /var to /private, and the guard compares real paths.
   const home = realpathSync(mkdtempSync(join(tmpdir(), prefix))); roots.push(home); admitCorpusFixture(join(home, ".codex"));
-  return { home, dataDir: join(home, "data"), projectDir: home, cache: join(home, ".codex", "plugins", "cache"), config: join(home, ".codex", "config.toml") };
+  const cache = join(home, ".codex", "plugins", "cache");
+  return { home, dataDir: join(home, "data"), projectDir: home, cache, config: join(home, ".codex", "config.toml"), vendor: join(cache, "openai-curated-remote") };
 }
 const opts = (s: Station) => ({ home: s.home, dataDir: s.dataDir, projectDir: s.projectDir });
-const warn = (s: Station) => ({ ...opts(s), codexPromptDriftWarnings: true });
-/** Automatic Codex discovery, as `skills hook install --agent codex` records it. */
+const live = (s: Station) => ({ ...opts(s), codexPromptHook: true });
+/** A vendor plugin parent present at review time, as fleet stations have. */
+function vendorPlugin(s: Station, name = "sites"): void {
+  put(join(s.vendor, name, ".codex-remote-plugin-install.json"), JSON.stringify({ schema_version: 1, remote_plugin_id: "plugins_synthetic_00_0000000000000000000" }));
+}
+/** Automatic Codex discovery (raw TOML projection of plugins, marketplaces and skills). */
 function automatic(): Station {
-  const s = home("skills-discovery-drift-auto-");
+  const s = home("skills-witness-auto-"); vendorPlugin(s);
   applyAgentIntegration(planAgentIntegration({ ...opts(s), agents: ["codex"] }));
   return s;
 }
-/** Reviewed Codex discovery that binds the plugin cache directory membership. */
-function reviewed(): Station {
-  const s = home("skills-discovery-drift-reviewed-");
-  mkdirSync(join(s.cache, "openai-curated-remote"), { recursive: true }); put(s.config, "");
-  const review = { version: 1 as const, agents: [{ agent: "codex" as const, roots: [], sources: [{ path: s.config, sha256: sha(s.config) }], directories: captureDiscoveryDirectories([s.cache]), pluginHooks: "reviewed-no-skill-injection" as const }] };
+/** Reviewed discovery: a typed V3 settings witness plus bound directory membership. */
+function reviewed(directories: (s: Station) => string[] = s => [s.vendor]): Station {
+  const s = home("skills-witness-reviewed-"); vendorPlugin(s);
+  mkdirSync(join(s.cache, "hasna-internal-bridge", "hasna-codex"), { recursive: true }); put(s.config, "");
+  const review = { version: 1 as const, agents: [{ agent: "codex" as const, roots: [], sources: [captureCodexSettingsV3(s.config)], directories: captureDiscoveryDirectories(directories(s)), pluginHooks: "reviewed-no-skill-injection" as const }] };
   applyAgentIntegration(planAgentIntegration({ ...opts(s), agents: ["codex"], discoveryInputs: review }));
   expect(readManagedSkillPolicySnapshot(s.dataDir)!.value.bridge.discovery.codex.method).toBe("reviewed");
+  expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toBe("ACCEPTED");
   return s;
 }
-/** Reviewed Pages plugin skill denials whose app capability controls are bound. */
-function pages(): Station & { app: string; appPath: string } {
-  const s = home("skills-discovery-drift-pages-");
-  const root = join(s.cache, "probe", "pages", "1.0.0"), names = ["maintain-space", "write-page"];
-  const app = '{"apps":{"pages":{"id":"synthetic_pages_connector","required":true}}}';
-  put(join(root, ".codex-plugin", "plugin.json"), JSON.stringify({ name: "pages", version: "1.0.0", apps: "./.app.json" })); put(join(root, ".app.json"), app);
-  for (const name of names) put(join(root, "skills", name, "SKILL.md"), `---\nname: ${name}\ndescription: Synthetic Pages fixture\n---\nSynthetic disabled body`);
-  const catalog = { version: "codex-cli 0.159.2", cwd: s.home, skills: names.map(name => ({ name: `pages:${name}`, path: join(root, "skills", name, "SKILL.md"), enabled: false, pluginId: "pages@probe" })), plugins: [{ id: "pages@probe", name: "pages", installed: true, enabled: true, localVersion: "1.0.0" }] };
-  applyAgentIntegration(planAgentIntegration({ ...opts(s), agents: ["codex"], codexNativeCatalog: catalog }));
-  return { ...s, app, appPath: join(root, ".app.json") };
-}
-/** Same bytes in, same refusal out: the strict guard is unchanged by this feature. */
+const append = (s: Station, rows: string) => writeFileSync(s.config, `${read(s.config).trimEnd()}\n\n${rows}`);
+const nameRule = (name: string, enabled = false) => `[[skills.config]]\nname = ${JSON.stringify(name)}\nenabled = ${enabled}\n`;
+const INPUT = (s: Station) => `NATIVE_SKILL_DRIFT: Native discovery input changed; run skills hook install with a fresh discovery review: ${s.config}`;
 function changePolicy(s: Station, change: (bridge: any) => void): void {
   const snapshot = readManagedSkillPolicySnapshot(s.dataDir)!;
   change(snapshot.value.bridge);
   writeFileSync(join(s.dataDir, "agent-policy.json"), serializeManagedSkillPolicy(snapshot.value));
 }
 
-describe("discovery-witness drift warns only on the live Codex prompt hook", () => {
-  test("(2) a changed reviewed configuration source is reported, for automatic and reviewed discovery", () => {
-    for (const s of [automatic(), reviewed()]) {
-      const before = readFileSync(s.config, "utf8"), policyBefore = readFileSync(join(s.dataDir, "agent-policy.json"));
-      put(s.config, `${before}\n[plugins."other@probe"]\nenabled = false\n`);
-      expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toBe(`NATIVE_SKILL_DRIFT: Native discovery input changed; run skills hook install with a fresh discovery review: ${s.config}`);
-      const report = assertManagedAgentBridge("codex", warn(s));
-      // Reported once, even when the automatic closure sees the same source again.
-      expect(report).toEqual({ codexVendorPluginCopies: [], codexDiscoveryChanges: [{ kind: "input", path: s.config }] });
-      expect(codexPromptDriftWarning(report)).toBe(`Skills warning: 1 reviewed Codex discovery witness changed (source file) and was not blocked: ${JSON.stringify(s.config)}. Skills context is still delivered, but native discovery is no longer verified against the review. Review the change, then refresh the binding with skills hook install --agent codex and a fresh discovery review.`);
-      // Warning records nothing: no policy rewrite and no acceptance receipt.
-      expect(readFileSync(join(s.dataDir, "agent-policy.json")).equals(policyBefore)).toBe(true);
-      expect(existsReceipt(s)).toBe(false);
+describe("B3: only changes a vendor plugin refresh provably makes are tolerated", () => {
+  test("appended vendor disable rules in config.toml warn under automatic discovery; the strict guard refuses", () => {
+    const s = automatic(), policy = readFileSync(join(s.dataDir, "agent-policy.json"));
+    append(s, nameRule("sites:sites-remix"));
+    expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toBe(INPUT(s));
+    const report = assertManagedAgentBridge("codex", live(s));
+    // Reported once although verifyAgentDiscovery and the automatic closure both see it.
+    expect(report).toEqual({ codexInertVendorCopies: [], codexDiscoveryChanges: [{ kind: "input", path: s.config }] });
+    expect(codexPromptDriftWarning(report)).toBe(`Skills warning: 1 reviewed Codex discovery witness changed only by a vendor plugin refresh (vendor configuration entries) and was not blocked: ${JSON.stringify(s.config)}. Enabled vendor skill copies and every other change still block. Refresh the binding with skills hook install --agent codex and a fresh discovery review.`);
+    // Several appended vendor rules, by name and by exact vendor path.
+    append(s, `[[skills.config]]\npath = ${JSON.stringify(join(s.vendor, "sites", "1.0.2", "skills", "x", "SKILL.md"))}\nenabled = false\n`);
+    expect(assertManagedAgentBridge("codex", live(s)).codexDiscoveryChanges).toEqual([{ kind: "input", path: s.config }]);
+    expect(readFileSync(join(s.dataDir, "agent-policy.json")).equals(policy)).toBe(true);
+  });
+
+  test("any other configuration change refuses, alone or beside vendor rules", () => {
+    const cases = (s: Station): string[] => [
+      nameRule("hasna-codex:x"),
+      nameRule("sites:sites-remix", true),
+      nameRule("unknown-plugin:x"),
+      `[[skills.config]]\npath = ${JSON.stringify(join(s.home, ".agents", "skills", "x", "SKILL.md"))}\nenabled = false\n`,
+      `${nameRule("sites:sites-remix")}\n[plugins."hasna-codex@hasna-internal-bridge"]\nenabled = false\n`,
+      `[marketplaces.local-x]\nsource_type = "local"\nsource = "/tmp/local-x"\n\n${nameRule("sites:sites-remix")}`,
+    ];
+    for (const index of [0, 1, 2, 3, 4, 5]) {
+      const s = automatic();
+      append(s, cases(s)[index]!);
+      expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toMatch(/^NATIVE_SKILL_DRIFT: (Native discovery input changed|Configured native discovery roots changed)/);
+    }
+    // A vendor rule followed by a non-vendor rule is not an appended vendor-only change.
+    const s = automatic();
+    append(s, `${nameRule("sites:sites-remix")}\n${nameRule("hasna-codex:x")}`);
+    expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toBe(INPUT(s));
+  });
+
+  test("a reviewed typed settings witness tolerates a vendor plugin table but no other setting", () => {
+    const s = reviewed();
+    append(s, `[plugins."sites@openai-curated-remote"]\nenabled = false\n`);
+    expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toBe(INPUT(s));
+    expect(assertManagedAgentBridge("codex", live(s)).codexDiscoveryChanges).toEqual([{ kind: "input", path: s.config }]);
+    for (const other of ['approval_policy = "never"\n', `[plugins."sites@acme"]\nenabled = false\n`, `[plugins."sites@openai-curated-remote"]\nenabled = false\nextra = 1\n`]) {
+      const t = reviewed();
+      writeFileSync(t.config, `${other}${read(t.config)}`.replace(/^(\[plugins[^\n]*\n[^\n]*\n)(.*)$/s, "$2\n$1"));
+      expect(refusal(() => assertManagedAgentBridge("codex", live(t)))).toBe(INPUT(t));
     }
   });
 
-  test("(3) a changed plugin-cache directory membership is reported", () => {
-    const s = reviewed();
-    put(join(s.cache, "openai-curated-remote", "sites", "1.0.2-remix-b.1", "assets", "logo.txt"), "synthetic asset");
-    expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toBe(`NATIVE_SKILL_DRIFT: Native discovery directory membership changed; run skills hook install with a fresh discovery review: ${s.cache}`);
-    const report = assertManagedAgentBridge("codex", warn(s));
-    expect(report).toEqual({ codexVendorPluginCopies: [], codexDiscoveryChanges: [{ kind: "membership", path: s.cache }] });
-    expect(codexPromptDriftWarning(report)).toContain("(directory membership)");
-    // Both drift classes at once: membership plus a classified vendor plugin copy.
-    const parent = join(s.cache, "openai-curated-remote", "sites");
-    put(join(parent, "1.0.2-remix-b.1", ".codex-plugin", "plugin.json"), JSON.stringify({ name: "sites", version: "1.0.2-remix-b.1", description: "Synthetic plugin" }));
-    put(join(parent, "1.0.2-remix-b.1", "skills", "sites-remix", "SKILL.md"), "---\nname: sites-remix\ndescription: Synthetic vendor plugin refresh fixture\n---\nSynthetic native instructions\n");
-    const both = assertManagedAgentBridge("codex", warn(s));
-    expect(both.codexVendorPluginCopies).toEqual([join(parent, "1.0.2-remix-b.1", "skills", "sites-remix")]);
-    expect(both.codexDiscoveryChanges).toEqual([{ kind: "membership", path: s.cache }]);
-    expect(codexPromptDriftWarning(both)!.split("\n")).toHaveLength(2);
+  test("a reviewed binding cannot activate a pre-existing hook-bearing vendor plugin by adding enabled=true", () => {
+    const s = home("skills-witness-vendor-hooks-"); vendorPlugin(s);
+    const root = join(s.vendor, "sites", "1.0.0");
+    put(join(root, ".codex-plugin", "plugin.json"), JSON.stringify({ name: "sites", version: "1.0.0", hooks: "./hooks/hooks.json" }));
+    put(join(root, "hooks", "hooks.json"), JSON.stringify({ hooks: {} })); put(s.config, "");
+    const review = { version: 1 as const, agents: [{ agent: "codex" as const, roots: [], sources: [captureCodexSettingsV3(s.config)], directories: captureDiscoveryDirectories([s.vendor]), pluginHooks: "reviewed-no-skill-injection" as const }] };
+    applyAgentIntegration(planAgentIntegration({ ...opts(s), agents: ["codex"], discoveryInputs: review }));
+    expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toBe("ACCEPTED");
+    append(s, `[plugins."sites@openai-curated-remote"]\nenabled = true\n`);
+    expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toBe(INPUT(s));
   });
 
-  test("(4) changed reviewed plugin capability controls are reported with the now-unshielded plugin skills", () => {
-    const s = pages();
-    expect(assertManagedAgentBridge("codex", warn(s))).toEqual({ codexVendorPluginCopies: [], codexDiscoveryChanges: [] });
-    put(s.appPath, s.app.replace("true", "false"));
-    expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toBe("NATIVE_SKILL_DRIFT: reviewed native plugin capability controls changed; run skills hook install with a fresh discovery review");
-    const report = assertManagedAgentBridge("codex", warn(s));
-    expect(report.codexDiscoveryChanges).toEqual([{ kind: "capability", path: s.cache }]);
-    // The reviewed denials no longer apply, so the plugin skills become reported vendor copies.
-    expect(report.codexVendorPluginCopies.sort()).toEqual([join(s.cache, "probe", "pages", "1.0.0", "skills", "maintain-space"), join(s.cache, "probe", "pages", "1.0.0", "skills", "write-page")]);
-    expect(codexPromptDriftWarning(report)).toContain("(plugin capability controls)");
-    expect(existsReceipt(s)).toBe(false);
+  test("membership changes under a bound, hook-free vendor marketplace warn; hooks there refuse", () => {
+    const s = reviewed();
+    put(join(s.vendor, "sites", "1.0.2-remix-b.1", ".codex-plugin", "plugin.json"), JSON.stringify({ name: "sites", version: "1.0.2-remix-b.1" }));
+    put(join(s.vendor, "sites", "1.0.2-remix-b.1", "assets", "logo.txt"), "synthetic asset");
+    expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toBe(`NATIVE_SKILL_DRIFT: Native discovery directory membership changed; run skills hook install with a fresh discovery review: ${s.vendor}`);
+    const report = assertManagedAgentBridge("codex", live(s));
+    expect(report).toEqual({ codexInertVendorCopies: [], codexDiscoveryChanges: [{ kind: "membership", path: s.vendor }] });
+    expect(codexPromptDriftWarning(report)).toContain("(vendor plugin cache membership)");
+    // A vendor plugin that gains hooks is not a routine refresh.
+    for (const hooks of [(root: string) => put(join(root, "hooks", "hooks.json"), "{}"), (root: string) => put(join(root, ".codex-plugin", "plugin.json"), JSON.stringify({ name: "sites", version: "1.0.2-remix-b.1", hooks: "./hooks.json" }))]) {
+      const t = reviewed();
+      const root = join(t.vendor, "sites", "1.0.2-remix-b.1");
+      put(join(root, ".codex-plugin", "plugin.json"), JSON.stringify({ name: "sites", version: "1.0.2-remix-b.1" }));
+      hooks(root);
+      expect(refusal(() => assertManagedAgentBridge("codex", live(t)))).toMatch(/^NATIVE_SKILL_DRIFT: Native discovery directory membership changed/);
+    }
+    // An enabled vendor skill that arrives with the refresh still blocks.
+    put(join(s.vendor, "sites", "1.0.2-remix-b.1", "skills", "sites-remix", "SKILL.md"), payload("sites-remix"));
+    expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toMatch(/^NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: /);
+  });
+
+  test("P3: a new plugin with hooks under hasna-internal-bridge refuses under a reviewed binding", () => {
+    for (const bound of [(s: Station) => [s.cache], (s: Station) => [join(s.cache, "hasna-internal-bridge")]]) {
+      const s = reviewed(bound);
+      const root = join(s.cache, "hasna-internal-bridge", "hasna-hooks", "1.0.0");
+      put(join(root, ".codex-plugin", "plugin.json"), JSON.stringify({ name: "hasna-hooks", version: "1.0.0", hooks: "./hooks/hooks.json" }));
+      put(join(root, "hooks", "hooks.json"), JSON.stringify({ hooks: {} }));
+      expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toMatch(/^NATIVE_SKILL_DRIFT: Native discovery directory membership changed/);
+    }
+    // A whole-cache membership witness cannot be attributed to a vendor subtree.
+    const s = reviewed(t => [t.cache]);
+    put(join(s.vendor, "sites", "1.0.2", "assets", "logo.txt"), "synthetic asset");
+    expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toBe(`NATIVE_SKILL_DRIFT: Native discovery directory membership changed; run skills hook install with a fresh discovery review: ${s.cache}`);
+  });
+
+  test("P4: a newly registered local marketplace with an enabled payload plugin refuses", () => {
+    for (const station of [automatic, () => reviewed()]) {
+      const s = station();
+      const source = join(s.home, "local-x");
+      put(join(source, "payload", ".codex-plugin", "plugin.json"), JSON.stringify({ name: "payload", version: "1.0.0" }));
+      append(s, `[marketplaces.local-x]\nsource_type = "local"\nsource = ${JSON.stringify(source)}\n\n[plugins."payload@local-x"]\nenabled = true\n`);
+      const root = join(s.cache, "local-x", "payload", "1.0.0");
+      put(join(root, ".codex-plugin", "plugin.json"), JSON.stringify({ name: "payload", version: "1.0.0" }));
+      put(join(root, "skills", "payload", "SKILL.md"), payload("payload"));
+      expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toMatch(/^NATIVE_SKILL_DRIFT: (Native discovery input changed|Native discovery directory membership changed|1 unexpected native skill copies)/);
+    }
+  });
+
+  test("changed reviewed plugin capability controls stay strict on the live hook", () => {
+    const s = home("skills-witness-pages-");
+    const root = join(s.cache, "openai-curated-remote", "pages", "1.0.0"), names = ["maintain-space", "write-page"];
+    const app = '{"apps":{"pages":{"id":"synthetic_pages_connector","required":true}}}';
+    put(join(root, ".codex-plugin", "plugin.json"), JSON.stringify({ name: "pages", version: "1.0.0", apps: "./.app.json" })); put(join(root, ".app.json"), app);
+    put(join(root, "..", ".codex-remote-plugin-install.json"), JSON.stringify({ schema_version: 1, remote_plugin_id: "plugins_synthetic_00_0000000000000000000" }));
+    for (const name of names) put(join(root, "skills", name, "SKILL.md"), payload(name));
+    const catalog = { version: "codex-cli 0.162.1", cwd: s.home, skills: [], plugins: [{ id: "pages@openai-curated-remote", name: "pages", installed: true, enabled: true, localVersion: null, remotePluginId: "plugins_synthetic_00_0000000000000000000", sourceType: "remote" as const }] };
+    put(s.config, names.map(name => `[[skills.config]]\npath = ${JSON.stringify(join(root, "skills", name, "SKILL.md"))}\nenabled = false\n`).join("\n"));
+    applyAgentIntegration(planAgentIntegration({ ...opts(s), agents: ["codex"], codexNativeCatalog: catalog }));
+    expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toBe("ACCEPTED");
+    put(join(root, ".app.json"), app.replace("true", "false"));
+    const capability = "NATIVE_SKILL_DRIFT: reviewed native plugin capability controls changed; run skills hook install with a fresh discovery review";
+    expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toBe(capability);
+    expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toBe(capability);
   });
 });
 
-describe("fail-closed cases are unchanged in warn mode", () => {
-  test("a non-vendor native copy beside discovery drift still refuses", () => {
+describe("fail-closed cases are unchanged on the live hook", () => {
+  test("config candidates retain reviewed vendor tables and never tolerate a plugin activation", () => {
+    // The read-only configuration proof needs no hook installation or admission.
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), "skills-vendor-config-proof-"))); roots.push(directory);
+    const cache = join(directory, "cache"), path = join(directory, "config.toml");
+    const baseline = `[plugins."sites@openai-curated-remote"]\nenabled = false\n\n`;
+    const source = { path, sha256: createHash("sha256").update(baseline).digest("hex") };
+    put(path, `${baseline}[plugins."chrome@openai-curated"]\nenabled = false\n`);
+    expect(codexVendorConfigCandidates(read(path), cache)).toContain(baseline);
+    expect(codexVendorConfigChangeOnly(source, cache)).toBe(true);
+    const enabledBaseline = baseline.replace("false", "true");
+    put(path, baseline);
+    expect(codexVendorConfigChangeOnly({ ...source, sha256: createHash("sha256").update(enabledBaseline).digest("hex") }, cache)).toBe(true);
+    put(path, `${baseline}[plugins."chrome@openai-curated"]\nenabled = true\n`);
+    expect(codexVendorConfigChangeOnly(source, cache)).toBe(false);
+    put(path, `${baseline}[plugins."payload@acme"]\nenabled = false\n`);
+    expect(codexVendorConfigChangeOnly(source, cache)).toBe(false);
+    put(path, `${baseline}[marketplaces.local]\nsource_type = "local"\nsource = "/synthetic/local"\n\n[plugins."chrome@openai-curated"]\nenabled = false\n`);
+    expect(codexVendorConfigChangeOnly(source, cache)).toBe(false);
+    const many = Array.from({ length: 9 }, (_, index) => `[plugins."p${index}@openai-curated"]\nenabled = false\n`).join("\n");
+    expect(codexVendorConfigCandidates(many, cache)).toEqual([]);
+  });
+
+  test("a non-vendor native copy beside a tolerated change still refuses", () => {
     for (const copy of [join(".agents", "skills", "user-copy"), join(".codex", "skills", "user-copy"), join(".codex", "skills", ".system", "builtin")]) {
       const s = automatic();
-      put(s.config, `${readFileSync(s.config, "utf8")}\n[plugins."other@probe"]\nenabled = false\n`);
-      put(join(s.home, copy, "SKILL.md"), "---\nname: user-copy\ndescription: Synthetic user copy\n---\nSynthetic native instructions\n");
-      expect(refusal(() => assertManagedAgentBridge("codex", warn(s)))).toMatch(/^NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: /);
+      append(s, nameRule("sites:sites-remix"));
+      put(join(s.home, copy, "SKILL.md"), payload("user-copy"));
+      expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toMatch(/^NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: /);
     }
-    const s = pages();
-    put(s.appPath, s.app.replace("true", "false"));
-    put(join(s.home, ".agents", "skills", "user-copy", "SKILL.md"), "---\nname: user-copy\ndescription: Synthetic user copy\n---\nSynthetic native instructions\n");
-    expect(refusal(() => assertManagedAgentBridge("codex", warn(s)))).toMatch(/^NATIVE_SKILL_DRIFT: 3 unexpected native skill copies were found: /);
   });
 
-  test("missing discovery coverage still refuses", () => {
-    const s = automatic();
-    changePolicy(s, bridge => { delete bridge.discovery.codex; });
-    expect(refusal(() => assertManagedAgentBridge("codex", warn(s)))).toBe("NATIVE_SKILL_DRIFT: native discovery coverage is missing; run skills hook install");
+  test("missing discovery coverage, changed automatic roots and unsafe roots still refuse", () => {
+    const missing = automatic();
+    changePolicy(missing, bridge => { delete bridge.discovery.codex; });
+    expect(refusal(() => assertManagedAgentBridge("codex", live(missing)))).toBe("NATIVE_SKILL_DRIFT: native discovery coverage is missing; run skills hook install");
+    const extra = automatic(), root = join(extra.home, "extra-root"); mkdirSync(root);
+    changePolicy(extra, bridge => { bridge.discovery.codex.roots = [...bridge.discovery.codex.roots, root].sort(); });
+    expect(refusal(() => assertManagedAgentBridge("codex", live(extra)))).toBe("NATIVE_SKILL_DRIFT: Configured native discovery roots changed");
+    const linked = reviewed(), real = join(linked.home, "real-root"), link = join(linked.home, "linked-root"); mkdirSync(real); symlinkSync(real, link);
+    changePolicy(linked, bridge => { bridge.discovery.codex.roots = [link]; });
+    expect(refusal(() => assertManagedAgentBridge("codex", live(linked)))).toBe(refusal(() => assertManagedAgentBridge("codex", opts(linked))));
+    expect(refusal(() => assertManagedAgentBridge("codex", live(linked)))).toMatch(/^(NATIVE_SKILL_DRIFT: )?Refusing symlink/);
   });
 
-  test("changed automatic discovery roots still refuse", () => {
-    const s = automatic();
-    const extra = join(s.home, "extra-root"); mkdirSync(extra);
-    changePolicy(s, bridge => { bridge.discovery.codex.roots = [...bridge.discovery.codex.roots, extra].sort(); });
-    expect(refusal(() => assertManagedAgentBridge("codex", warn(s)))).toBe("NATIVE_SKILL_DRIFT: Configured native discovery roots changed");
-  });
-
-  test("other discovery verification failures still refuse", () => {
+  test("verifiers throw the typed change with the unchanged message unless a tolerance accepts it", () => {
     const s = reviewed();
-    // A reviewed root that became a symlink is an unsafe binding, not witness drift.
-    const real = join(s.home, "real-root"), link = join(s.home, "linked-root"); mkdirSync(real); symlinkSync(real, link);
-    changePolicy(s, bridge => { bridge.discovery.codex.roots = [link]; });
-    expect(refusal(() => assertManagedAgentBridge("codex", warn(s)))).toBe(refusal(() => assertManagedAgentBridge("codex", opts(s))));
-    expect(refusal(() => assertManagedAgentBridge("codex", warn(s)))).toMatch(/^(NATIVE_SKILL_DRIFT: )?Refusing symlink/);
-  });
-
-  test("other agents and callers without the opt-in never collect", () => {
-    const s = reviewed();
-    put(join(s.cache, "openai-curated-remote", "extra", "README"), "x");
-    // The verifiers throw the typed change, with the unchanged message, when no collector is given.
+    put(join(s.vendor, "extra", "README"), "x");
+    append(s, `[plugins."sites@openai-curated-remote"]\nenabled = false\n`);
     const binding = readManagedSkillPolicySnapshot(s.dataDir)!.value.bridge.discovery.codex;
+    const tolerance = (input: boolean, membership: boolean): NativeDiscoveryWitnessTolerance => ({ changes: [], acceptsInput: () => input, acceptsMembership: () => membership });
     let thrown: unknown;
     try { verifyAgentDiscovery(binding); } catch (error) { thrown = error; }
+    // Membership is verified before sources; both throw their unchanged plain message.
     expect(thrown).toBeInstanceOf(NativeDiscoveryWitnessChange);
-    expect(thrown).toBeInstanceOf(Error);
     expect((thrown as Error).name).toBe("Error");
     expect((thrown as NativeDiscoveryWitnessChange).kind).toBe("membership");
-    expect((thrown as Error).message).toBe(`Native discovery directory membership changed; run skills hook install with a fresh discovery review: ${s.cache}`);
+    expect((thrown as Error).message).toBe(`Native discovery directory membership changed; run skills hook install with a fresh discovery review: ${s.vendor}`);
+    expect(() => verifyAgentDiscovery(binding, undefined, undefined, tolerance(false, true))).toThrow(`Native discovery input changed; run skills hook install with a fresh discovery review: ${s.config}`);
+    expect(() => verifyAgentDiscovery(binding, undefined, undefined, tolerance(false, true))).toThrow(NativeDiscoveryWitnessChange);
+    expect(() => verifyAgentDiscovery(binding, undefined, undefined, tolerance(true, false))).toThrow(`Native discovery directory membership changed; run skills hook install with a fresh discovery review: ${s.vendor}`);
+    const accepting = tolerance(true, true);
+    verifyAgentDiscovery(binding, undefined, undefined, accepting);
+    expect([...new Set(accepting.changes.map(change => `${change.kind}:${change.path}`))].sort()).toEqual([`input:${s.config}`, `membership:${s.vendor}`]);
     expect(() => verifyDiscoveryDirectories(binding.directories)).toThrow(NativeDiscoveryWitnessChange);
-    // With a collector, every change is gathered and nothing throws.
-    const changes: NativeDiscoveryWitnessChange[] = [];
-    verifyAgentDiscovery(binding, undefined, undefined, changes);
-    expect(changes.map(change => [change.kind, change.path])).toEqual([["membership", s.cache]]);
-    // An explicit false is the strict guard.
-    expect(refusal(() => assertManagedAgentBridge("codex", { ...opts(s), codexPromptDriftWarnings: false }))).toMatch(/^NATIVE_SKILL_DRIFT: Native discovery directory membership changed/);
+  });
+
+  test("config candidates are proven by structure: string bodies and inline tables never count as vendor rows", () => {
+    const s = reviewed();
+    const source = readManagedSkillPolicySnapshot(s.dataDir)!.value.bridge.discovery.codex.sources.find((item: any) => item.path === s.config);
+    // A real appended vendor rule, then a bound setting whose multi-line string
+    // body looks like another appended vendor rule.
+    append(s, nameRule("sites:a"));
+    append(s, `[profiles.p]\nmodel_instructions = """\n[[skills.config]]\nname = "sites:b"\nenabled = false\n"""\n`);
+    expect(codexVendorConfigChangeOnly(source, s.cache)).toBe(false);
+    expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toBe(INPUT(s));
+    expect(codexVendorConfigCandidates('plugins = { "sites@openai-curated-remote" = { enabled = false } }\n', s.cache)).toEqual([]);
+    expect(codexVendorConfigCandidates("not = [toml", s.cache)).toEqual([]);
   });
 });
-
-function existsReceipt(s: Station): boolean {
-  try { readFileSync(codexNativePolicyReceiptPath(s.dataDir)); return true; } catch { return false; }
-}

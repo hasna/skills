@@ -4,8 +4,17 @@
 
 ### Patch Changes
 
-- Keep Codex prompts running when a vendor plugin refresh or a Codex configuration edit changes what the reviewed discovery binding saw. Only the live Codex prompt hook opts in. It delivers Skills context and shows a visible `systemMessage` warning, with up to three escaped paths and how to retire or re-review them, for: classified vendor copies in the canonical `~/.codex/plugins/cache` (no symlinked component, unchanged tree, not under a `hasna*` marketplace), when every remaining copy is one; a changed reviewed discovery source such as `~/.codex/config.toml`; changed directory membership such as the plugin cache; and changed reviewed plugin capability controls. These changes are classified at their source as typed witness changes, never by message text.
-- Still refuse, with unchanged messages: user, repo, project and `~/.agents/skills` copies, `.system` skills, unclassified cache files and Hasna marketplace copies, missing discovery coverage, unresolved discovery roots, changed automatic discovery roots or source population, every other discovery or bridge integrity failure, and every install, trust, migrate and sync check. Warnings write no acceptance record and change no binding, witness or native policy adapter semantics.
+- Keep Codex prompts running after a vendor plugin refresh that Codex configuration already retires, without any native fallback. On the live Codex prompt hook only, a vendor plugin-cache copy is exempt when all of the following hold:
+  - it is package-classified content in `openai-bundled`, `openai-curated` or `openai-curated-remote` (exact names), with Codex's remote install receipt where Codex writes one;
+  - it carries no Skills or Hasna marker;
+  - a `[[skills.config]]` exact-path or plugin-qualified-name rule (for example `name = "sites:sites-remix"`) disables it and no rule enables it, or its exact plugin table has `enabled = false`.
+
+  An enabled vendor copy still blocks, so the earlier native-fallback refusal is unchanged.
+- On the same hook, tolerate with a visible `systemMessage` warning only the discovery-witness changes a vendor refresh provably makes:
+  - appended vendor disable rules or vendor plugin `enabled = false` tables in `config.toml`, proven by reproducing the reviewed digest (plugin activation stays strict);
+  - directory membership under a hook-free allowlisted vendor marketplace.
+
+  These are classified at their source as typed witness changes, never by message text. Every other copy and change, and every install, trust, migrate and sync check, still refuse with unchanged messages. Nothing is recorded or rebound.
 
 ## 0.10.70
 

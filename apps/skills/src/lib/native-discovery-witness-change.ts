@@ -1,12 +1,13 @@
-/** What changed under a reviewed native discovery witness: a bound source file's
- * projected bytes, a bound directory's membership, or the reviewed Codex plugin
- * capability controls. */
-export type NativeDiscoveryWitnessKind = "input" | "membership" | "capability";
+import type { DiscoverySource } from "./agent-discovery.js";
+
+/** What changed under a reviewed native discovery witness: a bound source
+ * file's projected bytes, or a bound directory's membership. */
+export type NativeDiscoveryWitnessKind = "input" | "membership";
 
 /** A reviewed discovery witness no longer matches the current file system. It is
  * drift of something the review bound, never an invalid, missing or unresolvable
  * binding, which keep their own plain errors. The message is unchanged from the
- * plain error each site threw before, so every caller that does not collect
+ * plain error each site threw before, so every caller that does not tolerate
  * these sees exactly the same refusal. */
 export class NativeDiscoveryWitnessChange extends Error {
   readonly kind: NativeDiscoveryWitnessKind;
@@ -19,9 +20,17 @@ export class NativeDiscoveryWitnessChange extends Error {
   }
 }
 
-/** Throw the change, or hand it to an opted-in collector and continue. Only the
- * live Codex prompt hook supplies a collector; every other caller refuses. */
-export function witnessChanged(change: NativeDiscoveryWitnessChange, collector?: NativeDiscoveryWitnessChange[]): void {
-  if (!collector) throw change;
-  collector.push(change);
+/** Live Codex prompt hook only. Decides, per changed witness, whether the change
+ * is provably one a Codex vendor plugin refresh makes; accepted changes are
+ * collected instead of refusing. Every other change still throws. */
+export interface NativeDiscoveryWitnessTolerance {
+  acceptsInput(source: DiscoverySource): boolean;
+  acceptsMembership(path: string): boolean;
+  readonly changes: NativeDiscoveryWitnessChange[];
+}
+
+/** Throw the change unless an opted-in tolerance accepted it. */
+export function witnessChanged(change: NativeDiscoveryWitnessChange, tolerance: NativeDiscoveryWitnessTolerance | undefined, accepted: boolean): void {
+  if (!tolerance || !accepted) throw change;
+  tolerance.changes.push(change);
 }

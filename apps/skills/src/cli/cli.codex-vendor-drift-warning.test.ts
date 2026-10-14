@@ -29,107 +29,115 @@ afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 const payload = (name: string) => `---\nname: ${name}\ndescription: Synthetic vendor plugin refresh fixture\n---\nSynthetic native instructions\n`;
 const put = (p: string, s: string) => { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, s); };
 const delivered = { SKILLS_TEST_CHILD_EXIT: "0", SKILLS_TEST_CHILD_STDOUT: JSON.stringify({ context: "Verified fixture context" }) };
+const REMOTE_ID = "plugins_synthetic_00_0000000000000000000";
 
-async function fixture() {
+/** A station shaped like station04: Skills hooks installed for every agent, then
+ * a reviewed native catalog enrolled the remote `sites@openai-curated-remote`
+ * plugin (1.0.1), then a remote refresh deposited 1.0.2-remix-b.1/sites-remix. */
+async function station04() {
   const home = mkdtempSync(join(scratch, "home-")), data = join(home, ".hasna", "skills");
   mkdirSync(data, { recursive: true });
   admitCorpusFixture(join(home, ".codex"));
   const env = { PATH: `${installSumiPathsFixture(home)}:${corpusInspectorPathFixture()}:${dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, USERPROFILE: home, HASNA_HOME: join(home, ".hasna"), HASNA_SKILLS_DIR: data, NO_COLOR: "1", TMPDIR: scratch };
-  async function run(args: string[], childEnv: Record<string, string> = {}, input: unknown = {}) {
-    const child = Bun.spawn([process.execPath, "--no-env-file", binary, ...args], { cwd: home, env: { ...env, ...childEnv }, stdin: new Blob([JSON.stringify(input)]), stdout: "pipe", stderr: "pipe" });
+  async function run(args: string[], childEnv: Record<string, string> = {}, input: unknown = {}, cwd = home) {
+    const child = Bun.spawn([process.execPath, "--no-env-file", binary, ...args], { cwd, env: { ...env, ...childEnv }, stdin: new Blob([JSON.stringify(input)]), stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    expect(status).toBe(0); expect(stderr).toBe("");
+    expect(stderr).toBe(""); expect(status).toBe(0);
     return { value: JSON.parse(stdout), stdout };
   }
   await run(["hook", "install", "--agent", "all", "--selection-profile", "engineering", "--command", binary, "--apply", "--json"]);
-  /** Materialize a plugin version the way Codex's remote plugin refresh does. */
-  const vendor = (marketplace = "openai-curated-remote", plugin = "sites", version = "1.0.2-remix-b.1", skill = "sites-remix") => {
-    const parent = join(home, ".codex", "plugins", "cache", marketplace, plugin), path = join(parent, version, "skills", skill);
-    put(join(parent, version, ".codex-plugin", "plugin.json"), JSON.stringify({ name: plugin, version, description: "Synthetic plugin" }));
-    put(join(parent, ".codex-remote-plugin-install.json"), JSON.stringify({ schema_version: 1, remote_plugin_id: `plugins~Plugin_${plugin.padEnd(32, "0")}` }));
-    put(join(path, "SKILL.md"), payload(skill));
-    return path;
-  };
-  return { home, run, vendor, hook: (childEnv: Record<string, string>, event = "UserPromptSubmit", agent = "codex") => run(["hook", "user-prompt", "--agent", agent, "--selection-profile", "engineering", "--event", event], childEnv, { hook_event_name: event, prompt: "test request", cwd: home }) };
+  const config = join(home, ".codex", "config.toml"), parent = join(home, ".codex", "plugins", "cache", "openai-curated-remote", "sites");
+  const oldDocument = join(parent, "1.0.1", "skills", "sites", "SKILL.md");
+  put(join(parent, "1.0.1", ".codex-plugin", "plugin.json"), JSON.stringify({ name: "sites", version: "1.0.1", description: "Synthetic plugin" }));
+  put(oldDocument, payload("sites"));
+  put(join(parent, ".codex-remote-plugin-install.json"), JSON.stringify({ schema_version: 1, remote_plugin_id: REMOTE_ID }));
+  writeFileSync(config, `${readFileSync(config, "utf8").trimEnd()}\n\n[[skills.config]]\npath = ${JSON.stringify(oldDocument)}\nenabled = false\n`);
+  const catalog = join(scratch, `catalog-${Math.random().toString(36).slice(2)}.json`);
+  writeFileSync(catalog, JSON.stringify({ version: "codex-cli 0.160.0", cwd: home, skills: [], plugins: [{ id: "sites@openai-curated-remote", name: "sites", installed: true, enabled: true, localVersion: null, remotePluginId: REMOTE_ID, sourceType: "remote" }] }));
+  const receipt = await run(["hook", "install", "--agent", "codex", "--codex-native-catalog", catalog, "--apply", "--json"]);
+  expect(receipt.value.codexPluginSkills.map((control: any) => control.name)).toEqual(["sites:sites"]);
+  const installed = readFileSync(config, "utf8");
+  // An isolated working directory, outside the home, as a Codex session in a repository has.
+  const cwd = mkdtempSync(join(scratch, "isolated-cwd-"));
+  const hook = (event = "UserPromptSubmit", agent = "codex", childEnv: Record<string, string> = delivered) =>
+    run(["hook", "user-prompt", "--agent", agent, "--selection-profile", "engineering", "--event", event], childEnv, { hook_event_name: event, prompt: "test request", cwd }, cwd);
+  const clean = await hook();
+  expect(clean.value.decision).toBeUndefined(); expect(clean.value.systemMessage).toBeUndefined();
+  const copy = join(parent, "1.0.2-remix-b.1", "skills", "sites-remix");
+  put(join(parent, "1.0.2-remix-b.1", ".codex-plugin", "plugin.json"), JSON.stringify({ name: "sites", version: "1.0.2-remix-b.1", description: "Synthetic plugin" }));
+  put(join(copy, "SKILL.md"), payload("sites-remix"));
+  const setConfig = (rows: string) => writeFileSync(config, `${installed.trimEnd()}\n\n${rows}`);
+  return { home, cwd, config, copy, installed, hook, run, setConfig };
 }
 
-test("vendor plugin-cache drift warns visibly and Codex context delivery continues on every lifecycle event", async () => {
-  const f = await fixture();
-  const clean = await f.hook(delivered);
-  expect(clean.value.systemMessage).toBeUndefined();
-  expect(clean.value.hookSpecificOutput.additionalContext).toContain("Verified fixture context");
-  const copy = f.vendor();
+test("station04 replay from an isolated cwd: an enabled refreshed vendor skill blocks every Codex lifecycle event", async () => {
+  const f = await station04();
   for (const event of ["UserPromptSubmit", "SessionStart", "SubagentStart"]) {
-    const result = await f.hook(delivered, event);
-    expect(result.value.decision).toBeUndefined(); expect(result.value.continue).not.toBe(false);
-    expect(result.value.systemMessage).toStartWith("Skills warning: 1 vendor Codex plugin skill copy was found in the plugin cache and was not blocked: ");
-    expect(result.value.systemMessage).toContain(JSON.stringify(copy));
-    expect(result.value.systemMessage).toContain("--include-vendor");
-    expect(result.value.systemMessage).toContain("[[skills.config]]");
-    expect(result.value.hookSpecificOutput.hookEventName).toBe(event);
-    expect(result.value.hookSpecificOutput.additionalContext).toContain("Verified fixture context");
-    // Paths only: the vendor payload never reaches hook output.
+    const result = await f.hook(event);
+    const reason = result.value.reason ?? result.value.stopReason ?? result.value.systemMessage;
+    expect(reason).toStartWith(`NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ${JSON.stringify(f.copy)}`);
     expect(result.stdout).not.toContain("Synthetic native instructions");
+    if (event === "UserPromptSubmit") expect(result.value.decision).toBe("block");
+    if (event === "SessionStart") expect(result.value.continue).toBe(false);
   }
 });
 
-test("an optional delivery failure keeps both the unavailable notice and the vendor warning visible", async () => {
-  const f = await fixture();
-  f.vendor();
-  const result = await f.hook({ SKILLS_TEST_CHILD_STDOUT: JSON.stringify({ error: { code: "SKILLS_API_UNAVAILABLE" } }) });
-  expect(result.value.decision).toBeUndefined();
-  expect(result.value.systemMessage).toContain("[SKILLS_API_UNAVAILABLE]");
-  expect(result.value.systemMessage).toContain("Skills warning: 1 vendor Codex plugin skill copy");
+test("station04 replay from an isolated cwd: a qualified-name disable delivers context without loading the skill", async () => {
+  const f = await station04();
+  // The station already has this version's exact-path denial; the operator adds
+  // the qualified name so a subsequent version stays inert too.
+  f.setConfig(`[[skills.config]]\npath = ${JSON.stringify(join(f.copy, "SKILL.md"))}\nenabled = false\n\n[[skills.config]]\nname = "sites:sites-remix"\nenabled = false\n`);
+  for (const event of ["UserPromptSubmit", "SessionStart", "SubagentStart"]) {
+    const result = await f.hook(event);
+    expect(result.value.decision).toBeUndefined(); expect(result.value.continue).not.toBe(false);
+    expect(result.value.hookSpecificOutput.hookEventName).toBe(event);
+    expect(result.value.hookSpecificOutput.additionalContext).toContain("Verified fixture context");
+    expect(result.stdout).not.toContain("Synthetic native instructions");
+    // The appended vendor rule changed the automatic configuration witness; it is
+    // tolerated as a vendor refresh entry and named, never silently adopted.
+    expect(result.value.systemMessage).toStartWith("Skills warning: 1 reviewed Codex discovery witness changed only by a vendor plugin refresh (vendor configuration entries) and was not blocked: ");
+  }
+  // The exact-path disable already present on station04 works the same way.
+  f.setConfig(`[[skills.config]]\npath = ${JSON.stringify(join(f.copy, "SKILL.md"))}\nenabled = false\n`);
+  const byPath = await f.hook();
+  expect(byPath.value.decision).toBeUndefined();
+  expect(byPath.value.hookSpecificOutput.additionalContext).toContain("Verified fixture context");
+  expect(byPath.stdout).not.toContain("Synthetic native instructions");
+  f.setConfig(`[plugins."sites@openai-curated-remote"]\nenabled = false\n`);
+  const byPlugin = await f.hook();
+  expect(byPlugin.value.decision).toBeUndefined();
+  expect(byPlugin.value.hookSpecificOutput.additionalContext).toContain("Verified fixture context");
+  expect(byPlugin.stdout).not.toContain("Synthetic native instructions");
+  // A later enabling rule brings the block back.
+  f.setConfig(`[[skills.config]]\nname = "sites:sites-remix"\nenabled = false\n\n[[skills.config]]\nname = "sites:sites-remix"\nenabled = true\n`);
+  expect((await f.hook()).value.decision).toBe("block");
 });
 
-test("vendor drift beside a user copy or under a Hasna marketplace still blocks the Codex prompt", async () => {
-  const user = await fixture();
-  user.vendor();
-  put(join(user.home, ".codex", "skills", "user-copy", "SKILL.md"), payload("user-copy"));
-  const blocked = await user.hook(delivered);
+test("a disabled vendor skill beside a user copy, or under a non-OpenAI marketplace, still blocks; Claude is unchanged", async () => {
+  const f = await station04();
+  f.setConfig(`[[skills.config]]\nname = "sites:sites-remix"\nenabled = false\n`);
+  put(join(f.home, ".agents", "skills", "user-copy", "SKILL.md"), payload("user-copy"));
+  const blocked = await f.hook();
   expect(blocked.value.decision).toBe("block");
-  expect(blocked.value.reason).toStartWith("NATIVE_SKILL_DRIFT: 2 unexpected native skill copies were found: ");
-  expect(blocked.value.systemMessage).toBeUndefined();
-  const started = await user.hook(delivered, "SessionStart");
-  expect(started.value.continue).toBe(false);
-  expect(started.value.stopReason).toStartWith("NATIVE_SKILL_DRIFT: 2 unexpected native skill copies were found: ");
-  const hasna = await fixture();
-  hasna.vendor("hasna-skills", "payload", "1.0.0", "payload");
-  const refused = await hasna.hook(delivered);
-  expect(refused.value.decision).toBe("block");
-  expect(refused.value.reason).toStartWith("NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ");
-});
-
-test("other agents' hook output is unchanged when the Codex plugin cache holds vendor copies", async () => {
-  const f = await fixture();
-  f.vendor();
-  const claude = await f.hook(delivered, "UserPromptSubmit", "claude");
+  expect(blocked.value.reason).toStartWith(`NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ${JSON.stringify(join(f.home, ".agents", "skills", "user-copy"))}`);
+  const g = await station04();
+  const acme = join(g.home, ".codex", "plugins", "cache", "acme", "sites", "1.0.0");
+  put(join(acme, ".codex-plugin", "plugin.json"), JSON.stringify({ name: "sites", version: "1.0.0" }));
+  put(join(acme, "skills", "sites-remix", "SKILL.md"), payload("sites-remix"));
+  g.setConfig(`[[skills.config]]\nname = "sites:sites-remix"\nenabled = false\n`);
+  const lookalike = await g.hook();
+  expect(lookalike.value.decision).toBe("block");
+  expect(lookalike.value.reason).toContain(JSON.stringify(join(acme, "skills", "sites-remix")));
+  const claude = await g.hook("UserPromptSubmit", "claude");
   expect(claude.value.systemMessage).toBeUndefined();
   expect(claude.value).toEqual({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: expect.stringContaining("Verified fixture context") } });
 });
 
-test("a changed Codex discovery source warns and still delivers context; beside a non-vendor copy it blocks", async () => {
-  const f = await fixture();
-  const config = join(f.home, ".codex", "config.toml");
-  writeFileSync(config, `${readFileSync(config, "utf8")}\n[plugins."other@probe"]\nenabled = false\n`);
-  for (const event of ["UserPromptSubmit", "SessionStart", "SubagentStart"]) {
-    const result = await f.hook(delivered, event);
-    expect(result.value.decision).toBeUndefined(); expect(result.value.continue).not.toBe(false);
-    expect(result.value.systemMessage).toStartWith("Skills warning: 1 reviewed Codex discovery witness changed (source file) and was not blocked: ");
-    expect(result.value.systemMessage).toContain(JSON.stringify(realpathSync(config)));
-    expect(result.value.hookSpecificOutput.additionalContext).toContain("Verified fixture context");
-  }
-  // Both drift classes together produce one warning line each.
-  f.vendor();
-  const both = await f.hook(delivered);
-  expect(both.value.systemMessage.split("\n")).toHaveLength(2);
-  expect(both.value.hookSpecificOutput.additionalContext).toContain("Verified fixture context");
-  // A non-vendor copy still blocks, whatever else drifted.
-  put(join(f.home, ".agents", "skills", "user-copy", "SKILL.md"), payload("user-copy"));
-  const blocked = await f.hook(delivered);
-  expect(blocked.value.decision).toBe("block");
-  expect(blocked.value.reason).toStartWith("NATIVE_SKILL_DRIFT: 2 unexpected native skill copies were found: ");
-  // The Claude hook does not read the Codex configuration and is unchanged.
-  const claude = await f.hook(delivered, "UserPromptSubmit", "claude");
-  expect(claude.value.systemMessage).toBeUndefined();
+test("an optional delivery failure keeps both the unavailable notice and the vendor-refresh warning visible", async () => {
+  const f = await station04();
+  f.setConfig(`[[skills.config]]\nname = "sites:sites-remix"\nenabled = false\n`);
+  const result = await f.hook("UserPromptSubmit", "codex", { SKILLS_TEST_CHILD_STDOUT: JSON.stringify({ error: { code: "SKILLS_API_UNAVAILABLE" } }) });
+  expect(result.value.decision).toBeUndefined();
+  expect(result.value.systemMessage).toContain("[SKILLS_API_UNAVAILABLE]");
+  expect(result.value.systemMessage).toContain("changed only by a vendor plugin refresh");
 });

@@ -392,7 +392,7 @@ export function registerAgentIntegration(parent: Command): void {
       let selectionProfile: string | undefined;
       let verifiedContextBoundary = false;
       let nativeEvent = event;
-      // Visible, non-blocking Codex notice for drift the guard reported.
+      // Visible, non-blocking Codex notice for vendor-refresh witness changes.
       let driftWarning: string | undefined;
       try {
         if (agents(options.agent).length !== 1) throw new Error("A hook invocation requires one agent");
@@ -437,10 +437,11 @@ export function registerAgentIntegration(parent: Command): void {
         // events. Hand the exact native fields and the stdin digest to the guard's
         // adapter; every other agent, event and guard call keeps today's behaviour.
         const codexNativePolicy = options.agent === "codex" ? codexNativeHookEnvelopeFromInput(input, event, inputBytes, process.env[CODEX_NATIVE_POLICY_FD_ENV]) : undefined;
-        // Only this live Codex context path opts in to warning, instead of
-        // refusing, on plugin-refresh and discovery-witness drift; every other
-        // guard call, and every other drift class, still refuses.
-        const bridge = assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile, ...(codexNativePolicy ? { codexNativePolicy: { ...codexNativePolicy, deadlineMs: deadline } } : {}), ...(options.agent === "codex" ? { codexPromptDriftWarnings: true } : {}) });
+        // Only this live Codex context path opts in: vendor copies that Codex
+        // configuration disables are exempt, and witness changes a vendor plugin
+        // refresh provably makes warn. Enabled vendor copies, every other drift
+        // and every other guard call still refuse.
+        const bridge = assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile, ...(codexNativePolicy ? { codexNativePolicy: { ...codexNativePolicy, deadlineMs: deadline } } : {}), ...(options.agent === "codex" ? { codexPromptHook: true } : {}) });
         if (options.agent === "codex") driftWarning = codexPromptDriftWarning(bridge);
         if (typeof input.prompt === "string") input.prompt = normalizeAgentHookPrompt(options.agent, nativeEvent, input.prompt);
         // Validate every context field before a timeout or API refusal can be
