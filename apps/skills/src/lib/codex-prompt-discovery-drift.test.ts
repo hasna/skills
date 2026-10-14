@@ -1,6 +1,6 @@
 import { test, expect, beforeEach, afterEach, describe } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { useDefaultTestTimeout } from "../test-preload.js";
@@ -8,7 +8,7 @@ import { planAgentIntegration, applyAgentIntegration, assertManagedAgentBridge, 
 import { captureDiscoveryDirectories, codexVendorConfigChangeOnly, verifyAgentDiscovery } from "./agent-discovery.js";
 import { verifyDiscoveryDirectories } from "./agent-discovery-directories.js";
 import { captureCodexSettingsV3 } from "./codex-settings-witness.js";
-import { codexVendorConfigCandidates } from "./codex-vendor-refresh.js";
+import { codexVendorConfigCandidates, codexVendorSubtreeHookFree } from "./codex-vendor-refresh.js";
 import { NativeDiscoveryWitnessChange, type NativeDiscoveryWitnessTolerance } from "./native-discovery-witness-change.js";
 import { readManagedSkillPolicySnapshot, serializeManagedSkillPolicy } from "./managed-policy.js";
 import { admitCorpusFixture, installCorpusInspectorFixture } from "./codex-corpus.fixture.js";
@@ -143,6 +143,59 @@ describe("B3: only changes a vendor plugin refresh provably makes are tolerated"
     expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toMatch(/^NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: /);
   });
 
+  test("B-2: a refreshed vendor version is tolerated only with one hook-free Codex manifest and only visible skills", () => {
+    const at = (s: Station, version = "1.0.3") => join(s.vendor, "sites", version);
+    const codex = (root: string, extra: Record<string, unknown> = {}) => put(join(root, ".codex-plugin", "plugin.json"), JSON.stringify({ name: "sites", version: basename(root), description: "Synthetic plugin", ...extra }));
+    const startup = (root: string) => put(join(root, "startup.json"), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: "true" }] }] } }));
+    const refused: Array<[string, (s: Station) => void]> = [
+      // Codex 0.162.1 also reads these manifest locations (codex-hook-mcp-dependencies.ts).
+      ["Claude manifest declaring a hooks path", s => { put(join(at(s), ".claude-plugin", "plugin.json"), JSON.stringify({ name: "sites", version: "1.0.3", hooks: "./startup.json" })); startup(at(s)); }],
+      ["Cursor manifest declaring a hooks path", s => { put(join(at(s), ".cursor-plugin", "plugin.json"), JSON.stringify({ name: "sites", version: "1.0.3", hooks: "./startup.json" })); startup(at(s)); }],
+      ["Claude manifest with inline hooks", s => put(join(at(s), ".claude-plugin", "plugin.json"), JSON.stringify({ name: "sites", version: "1.0.3", hooks: { hooks: { SessionStart: [] } } }))],
+      ["root AgentPlugin manifest", s => { put(join(at(s), "plugin.json"), JSON.stringify({ $schema: "https://agent-plugins.org/schemas/plugin.json", name: "sites", hooks: "./startup.json" })); startup(at(s)); }],
+      ["hook-free Claude manifest beside the Codex manifest", s => { codex(at(s)); put(join(at(s), ".claude-plugin", "plugin.json"), JSON.stringify({ name: "sites", version: "1.0.3" })); }],
+      ["root manifest beside the Codex manifest", s => { codex(at(s)); put(join(at(s), "plugin.json"), JSON.stringify({ name: "sites" })); }],
+      ["Codex manifest hooks path", s => { codex(at(s), { hooks: "./startup.json" }); startup(at(s)); }],
+      ["Codex manifest hooks list", s => { codex(at(s), { hooks: ["./startup.json"] }); startup(at(s)); }],
+      ["Codex manifest inline hooks", s => codex(at(s), { hooks: { hooks: {} } })],
+      ["Codex manifest null hooks", s => codex(at(s), { hooks: null })],
+      ["Codex manifest commands", s => codex(at(s), { commands: "./commands" })],
+      ["Codex manifest extensions", s => codex(at(s), { extensions: "./extensions" })],
+      ["hooks directory", s => { codex(at(s)); put(join(at(s), "hooks", "hooks.json"), "{}"); }],
+      // Custom skill roots, and payloads the native inventory never sees.
+      ["skills path into a dot-directory", s => { codex(at(s), { skills: "./.payload" }); put(join(at(s), ".payload", "hidden", "SKILL.md"), payload("hidden")); }],
+      ["custom visible skills path", s => { codex(at(s), { skills: "./more" }); put(join(at(s), "more", "x", "SKILL.md"), payload("x")); }],
+      ["skills path list", s => codex(at(s), { skills: ["./skills/"] })],
+      ["dot-directory skill below the default root", s => { codex(at(s), { skills: "./skills/" }); put(join(at(s), "skills", ".hidden", "SKILL.md"), payload("hidden")); }],
+      ["dot-directory skill elsewhere in the version", s => { codex(at(s)); put(join(at(s), ".agents", "skills", "x", "SKILL.md"), payload("x")); }],
+      ["node_modules skill", s => { codex(at(s)); put(join(at(s), "skills", "node_modules", "x", "SKILL.md"), payload("x")); }],
+      ["nested skill", s => { codex(at(s)); put(join(at(s), "skills", "a", "SKILL.md"), payload("a")); put(join(at(s), "skills", "a", "inner", "SKILL.md"), payload("inner")); }],
+      ["missing Codex manifest", s => put(join(at(s), "assets", "logo.txt"), "synthetic asset")],
+      ["duplicate manifest keys", s => put(join(at(s), ".codex-plugin", "plugin.json"), '{"name":"sites","version":"1.0.3","skills":"./.payload","skills":"./skills/"}')],
+      ["dot-named version directory", s => { codex(at(s, ".1.0.3")); put(join(at(s, ".1.0.3"), "skills", "x", "SKILL.md"), payload("x")); }],
+      ["hidden marketplace directory", s => put(join(s.vendor, ".staging", "sites", "1.0.3", "skills", "x", "SKILL.md"), payload("x"))],
+      ["symlinked version outside the cache", s => { const outside = join(s.home, "outside-plugin"); codex(outside, { hooks: "./startup.json" }); startup(outside); symlinkSync(outside, at(s, "1.0.9")); }],
+    ];
+    for (const [label, make] of refused) {
+      const s = reviewed();
+      make(s);
+      expect([label, codexVendorSubtreeHookFree(s.cache, s.vendor)]).toEqual([label, false]);
+      expect([label, refusal(() => assertManagedAgentBridge("codex", live(s)))]).toEqual([label, expect.stringMatching(/^NATIVE_SKILL_DRIFT: (Native discovery directory membership changed|Refusing symlink)/)]);
+    }
+    // Accepted control: a vendor-shaped refresh (manifest fields as fleet stations
+    // have them) with a disabled skill under the default skills root.
+    const s = reviewed();
+    const root = at(s), copy = join(root, "skills", "sites-remix");
+    codex(root, { skills: "./skills/", apps: "./.app.json", author: { name: "Synthetic" }, homepage: "https://example.invalid", interface: { displayName: "Sites" }, keywords: ["sites"], license: "MIT" });
+    put(join(root, ".app.json"), '{"apps":{"sites":{"id":"synthetic_sites_connector","required":true}}}');
+    put(join(root, "assets", "logo.txt"), "synthetic asset");
+    put(join(copy, "SKILL.md"), payload("sites-remix"));
+    append(s, nameRule("sites:sites-remix"));
+    expect(codexVendorSubtreeHookFree(s.cache, s.vendor)).toBe(true);
+    expect(assertManagedAgentBridge("codex", live(s))).toEqual({ codexInertVendorCopies: [copy], codexDiscoveryChanges: [{ kind: "membership", path: s.vendor }] });
+    expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toBe(`NATIVE_SKILL_DRIFT: Native discovery directory membership changed; run skills hook install with a fresh discovery review: ${s.vendor}`);
+  });
+
   test("P3: a new plugin with hooks under hasna-internal-bridge refuses under a reviewed binding", () => {
     for (const bound of [(s: Station) => [s.cache], (s: Station) => [join(s.cache, "hasna-internal-bridge")]]) {
       const s = reviewed(bound);
@@ -209,6 +262,34 @@ describe("fail-closed cases are unchanged on the live hook", () => {
     expect(codexVendorConfigChangeOnly(source, cache)).toBe(false);
     const many = Array.from({ length: 9 }, (_, index) => `[plugins."p${index}@openai-curated"]\nenabled = false\n`).join("\n");
     expect(codexVendorConfigCandidates(many, cache)).toEqual([]);
+  });
+
+  test("N-2: config candidates try the smallest edit first, so the documented table bound holds and bounds only refuse", () => {
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), "skills-vendor-config-bound-"))); roots.push(directory);
+    const cache = join(directory, "cache"), path = join(directory, "config.toml");
+    mkdirSync(join(cache, "openai-curated-remote", "sites"), { recursive: true });
+    const tables = (from: number, to: number) => Array.from({ length: to - from }, (_, index) => `[plugins."p${from + index}@openai-curated"]\nenabled = false\n`).join("\n");
+    const typed = (reviewedText: string) => { put(path, reviewedText); return captureCodexSettingsV3(path); };
+    const raw = (reviewedText: string) => ({ path, sha256: createHash("sha256").update(reviewedText).digest("hex") });
+    // Typed V3 witness (disable-only rows never change it): one or two new tables
+    // among eight are proven; a third is beyond the 128-candidate bound and refuses.
+    for (const [reviewedTables, proven] of [[7, true], [6, true], [5, false]] as const) {
+      const reviewedText = `model = "x"\n\n${tables(0, reviewedTables)}`;
+      const source = typed(reviewedText);
+      put(path, `${reviewedText}\n${tables(reviewedTables, 8)}`);
+      expect([reviewedTables, codexVendorConfigChangeOnly(source, cache)]).toEqual([reviewedTables, proven]);
+    }
+    // A raw witness binds rows: appended vendor rows beside eight reviewed tables are proven.
+    const eight = `model = "x"\n\n${tables(0, 8)}`;
+    put(path, `${eight}${nameRule("sites:a")}${nameRule("sites:b")}`);
+    expect(codexVendorConfigChangeOnly(raw(eight), cache)).toBe(true);
+    // A non-vendor change is never proven, and nine tables exceed the bound.
+    put(path, `${eight}\napproval_policy = "never"\n\n${nameRule("sites:a")}`);
+    expect(codexVendorConfigChangeOnly(raw(eight), cache)).toBe(false);
+    const nine = typed(eight);
+    put(path, `${eight}\n${tables(8, 9)}`);
+    expect(codexVendorConfigChangeOnly(nine, cache)).toBe(false);
+    expect(codexVendorConfigCandidates(read(path), cache)).toEqual([]);
   });
 
   test("a non-vendor native copy beside a tolerated change still refuses", () => {

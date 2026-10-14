@@ -227,16 +227,19 @@ copy is then exempt when every condition holds:
 - it is package-classified plugin content in `openai-bundled`, `openai-curated`
   or `openai-curated-remote` (exact names), with Codex's remote install receipt
   for the remote marketplace;
-- it carries no Skills or Hasna marker;
-- a `[[skills.config]]` rule disables it, and no matching rule enables it, or
-  its exact plugin table disables the whole plugin.
+- it carries no Skills or Hasna marker and no other `SKILL.md` below it;
+- a `[[skills.config]]` rule names its exact path or its plugin-qualified name
+  with `enabled = false`, and no matching rule enables it.
 
-To disable the whole plugin, add this exact table instead:
-
-```toml
-[plugins."sites@openai-curated-remote"]
-enabled = false
-```
+A whole-plugin `[plugins."sites@openai-curated-remote"] enabled = false` table
+is not enough on its own: remote state can enable a locally disabled remote
+plugin, and a cache copy carries no proof that its plugin source is
+configuration-controlled, so the copy keeps blocking until a path or name rule
+retires it. This exemption only adds to the guard's existing ones; every copy
+that the guard already accepts, such as an exact-path disable in any plugin-cache
+marketplace or a reviewed plugin control, stays accepted on the live hook. Once
+the hook tolerates one of the witness changes below, a state the strict guard
+refuses outright, plugin-cache copies are exempt only through this vendor rule.
 
 Instead of editing by hand, `skills hook native-catalog` followed by
 `skills hook install --agent codex --codex-native-catalog <file>` writes the same
@@ -246,12 +249,21 @@ The hook also tolerates, with a visible `systemMessage` warning, only the
 discovery-witness changes such a refresh provably makes:
 - appended vendor disable rules or vendor plugin disables in `config.toml`,
   accepted when removing exactly those entries or restoring a formerly enabled
-  vendor flag reproduces the reviewed digest;
-- directory membership changes under an allowlisted vendor marketplace whose
-  plugins declare no hooks or commands.
+  vendor flag reproduces the reviewed digest. Candidates are tried smallest edit
+  first, at most 128; with a typed settings witness that covers any change to up
+  to two of at most eight vendor plugin tables. A change beyond the bound refuses;
+- directory membership changes under an allowlisted vendor marketplace in which
+  every plugin version has exactly one manifest, `.codex-plugin/plugin.json`,
+  that declares no hooks (path, list or inline), commands, extensions or
+  non-default skills path, with no `hooks` directory, no root, `.claude-plugin`
+  or `.cursor-plugin` manifest, no link and no `SKILL.md` that the inventory
+  cannot see (below a dot-named or `node_modules` directory, or nested in
+  another skill).
 
 Every other copy and change still refuses with `NATIVE_SKILL_DRIFT`, including:
-- user, project, `.system` and Hasna-marketplace copies;
+- user, project, `.system` and Hasna-marketplace copies that the guard does not
+  already exempt;
+- an enabled vendor copy whose plugin is only disabled by a whole-plugin table;
 - capability-control changes and whole-cache membership changes;
 - plugin activation, including a vendor plugin gaining `enabled = true`;
 - missing coverage and changed roots;

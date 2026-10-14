@@ -114,7 +114,7 @@ describe("B1: the live prompt hook exempts only vendor copies Codex configuratio
     assertNothingRecorded(s);
   });
 
-  test("a whole-plugin disable makes the copy inert; conflicting skill rules and invalid receipts still block", () => {
+  test("a whole-plugin disable never makes the copy inert; conflicting skill rules and invalid receipts still block", () => {
     const s = station04();
     // An enabling rule is not a vendor refresh entry, so the changed reviewed
     // configuration itself refuses; either way the copy never loads unblocked.
@@ -126,10 +126,15 @@ describe("B1: the live prompt hook exempts only vendor copies Codex configuratio
       writeFileSync(s.config, s.installed); append(s, rows);
       expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toMatch(/^NATIVE_SKILL_DRIFT: (Native discovery input changed|1 unexpected native skill copies)/);
     }
-    // A whole-plugin disable is sufficient even without a per-skill disable.
+    // Remote state can enable a locally disabled remote plugin, so a whole-plugin
+    // table alone never exempts the copy. The table itself is a tolerated vendor
+    // disable; the copy it fails to retire still blocks, naming only that copy.
     writeFileSync(s.config, s.installed); append(s, `[plugins."sites@openai-curated-remote"]\nenabled = false\n`);
-    expect(assertManagedAgentBridge("codex", live(s)).codexInertVendorCopies).toEqual([s.copy]);
+    expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toBe(`NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ${JSON.stringify(s.copy)}. Review skills migrate native --agent codex --project <working-directory> --include-unmanaged --include-vendor --json before continuing; it inventories that directory and its ancestors. Use --apply after reviewing the archive plan.`);
     expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toBe(`NATIVE_SKILL_DRIFT: Native discovery input changed; run skills hook install with a fresh discovery review: ${s.config}`);
+    // With a qualified-name disable beside it, the name rule is what exempts the copy.
+    append(s, byName("sites:sites-remix"));
+    expect(assertManagedAgentBridge("codex", live(s))).toEqual({ codexInertVendorCopies: [s.copy], codexDiscoveryChanges: [{ kind: "input", path: s.config }] });
     writeFileSync(s.config, s.installed); append(s, byName("sites:sites-remix"));
     expect(assertManagedAgentBridge("codex", live(s)).codexInertVendorCopies).toEqual([s.copy]);
     // Remote vendor plugins must carry the native install receipt.
@@ -168,33 +173,83 @@ describe("operator path: the guarded install writes the disable outside the prom
     const applied = applyAgentIntegration(plan);
     expect(applied.backups.some(path => read(path) === s.installed)).toBe(true);
     expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toBe("ACCEPTED");
-    expect(assertManagedAgentBridge("codex", live(s))).toEqual({ codexInertVendorCopies: [s.copy], codexDiscoveryChanges: [] });
+    // The reviewed control now exempts it on every guard call, so the live hook
+    // needs no vendor exemption and reports none.
+    expect(assertManagedAgentBridge("codex", live(s))).toEqual({ codexInertVendorCopies: [], codexDiscoveryChanges: [] });
   });
 });
 
 describe("B2: vendor classification is an exact allowlist", () => {
-  test("P1: a Skills-managed or Hasna-marked payload under openai-curated-remote blocks even when disabled", () => {
+  test("P1: a Skills-managed or Hasna-marked payload under openai-curated-remote is never a vendor copy", () => {
     for (const marker of [JSON.stringify({ managedBy: "@hasna/skills" }), "not json"]) {
       const s = reviewedV3();
       const [copy] = plugin(s, { name: "payload", version: "1.0.0", skills: ["payload"] });
       put(join(copy!, ".hasna-skills.json"), marker);
+      // A qualified-name disable, which only the vendor classifier honours, does not exempt it.
       append(s, byName("payload:payload"));
       expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toMatch(UNEXPECTED(1));
+      expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toMatch(UNEXPECTED(1));
+      // An exact-path disable is the guard's own plugin-cache rule, which every guard
+      // call applies; the live hook keeps it and never classifies the copy as vendor.
       append(s, byPath(copy!));
-      expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toMatch(UNEXPECTED(1));
+      expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toBe("ACCEPTED");
+      expect(assertManagedAgentBridge("codex", live(s))).toEqual({ codexInertVendorCopies: [], codexDiscoveryChanges: [] });
+      // Once the hook tolerates a witness change (a vendor plugin table), the strict
+      // guard refuses the whole state, so only the vendor classifier can exempt a
+      // plugin-cache copy, and it never classifies this one.
+      append(s, `[plugins."payload@openai-curated-remote"]\nenabled = false\n`);
+      expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toBe(`NATIVE_SKILL_DRIFT: Native discovery input changed; run skills hook install with a fresh discovery review: ${s.config}`);
+      const blocked = refusal(() => assertManagedAgentBridge("codex", live(s)));
+      expect(blocked).toMatch(UNEXPECTED(1));
+      expect(blocked).toContain(JSON.stringify(copy));
     }
   });
 
-  test("P2: look-alike and non-OpenAI marketplaces block even when disabled", () => {
+  test("P2: look-alike and non-OpenAI marketplaces are never vendor copies", () => {
     expect([...CODEX_VENDOR_MARKETPLACES]).toEqual(["openai-bundled", "openai-curated", "openai-curated-remote"]);
-    for (const marketplace of ["acme", "skills", "andrei-hasna", "open-hasna", "hasna", "hasna-internal-bridge", "openai-curated-remote-x", "OpenAI-Curated-Remote", "workspace-directory"]) {
+    for (const marketplace of ["acme", "skills", "andrei-hasna", "open-hasna", "hasna", "hasna-internal-bridge", "openai-curated-remote-x", "OpenAI-Curated-Remote", "workspace-directory", "created-by-me-remote"]) {
       const s = reviewedV3();
       const [copy] = plugin(s, { marketplace });
       append(s, byName("sites:sites-remix"));
       expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toMatch(UNEXPECTED(1));
+      expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toMatch(UNEXPECTED(1));
       append(s, byPath(copy!));
-      expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toMatch(UNEXPECTED(1));
+      expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toBe("ACCEPTED");
+      expect(assertManagedAgentBridge("codex", live(s))).toEqual({ codexInertVendorCopies: [], codexDiscoveryChanges: [] });
     }
+  });
+
+  test("N-1: the live hook keeps every exemption the strict guard grants (exact-path and reviewed controls)", () => {
+    // Exact-path disables in any plugin-cache marketplace, as the strict guard accepts them.
+    for (const marketplace of ["workspace-directory", "created-by-me-remote", "hasna-internal-bridge", "acme", "openai-curated-remote"]) {
+      const s = reviewedV3();
+      const [copy] = plugin(s, { marketplace, name: "x", version: "1.0.0", skills: ["y"] });
+      append(s, byPath(copy!));
+      expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toBe("ACCEPTED");
+      expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toBe("ACCEPTED");
+      // A tolerated vendor change elsewhere is a state the strict guard refuses;
+      // there only the vendor classifier exempts plugin-cache copies.
+      append(s, `[plugins."sites@openai-curated-remote"]\nenabled = false\n`);
+      expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toBe(`NATIVE_SKILL_DRIFT: Native discovery input changed; run skills hook install with a fresh discovery review: ${s.config}`);
+      const vendor = marketplace === "openai-curated-remote";
+      if (vendor) expect(assertManagedAgentBridge("codex", live(s))).toEqual({ codexInertVendorCopies: [copy!], codexDiscoveryChanges: [{ kind: "input", path: s.config }] });
+      else expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toBe(`NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ${JSON.stringify(copy)}. Review skills migrate native --agent codex --project <working-directory> --include-unmanaged --include-vendor --json before continuing; it inventories that directory and its ancestors. Use --apply after reviewing the archive plan.`);
+    }
+    // A reviewed qualified-name control in a non-vendor marketplace, across a version relocation.
+    const s = home("skills-vendor-reviewed-control-");
+    const parent = join(s.cache, "probe", "pages"), names = ["maintain-space", "write-page"];
+    const add = (version: string) => {
+      const root = join(parent, version);
+      put(join(root, ".codex-plugin", "plugin.json"), JSON.stringify({ name: "pages", version }));
+      for (const name of names) put(join(root, "skills", name, "SKILL.md"), payload(name));
+      return root;
+    };
+    const original = add("1.0.0"); put(s.config, "");
+    const catalog = { version: "codex-cli 0.159.2", cwd: s.home, skills: names.map(name => ({ name: `pages:${name}`, path: join(original, "skills", name, "SKILL.md"), enabled: true, pluginId: "pages@probe" })), plugins: [{ id: "pages@probe", name: "pages", installed: true, enabled: true, localVersion: "1.0.0" }] };
+    applyAgentIntegration(planAgentIntegration({ ...opts(s), agents: ["codex"], codexNativeCatalog: catalog }));
+    add("2.0.0");
+    expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toBe("ACCEPTED");
+    expect(assertManagedAgentBridge("codex", live(s))).toEqual({ codexInertVendorCopies: [], codexDiscoveryChanges: [] });
   });
 
   test("disabled copies in the non-remote OpenAI marketplaces are inert without a remote receipt", () => {
@@ -203,6 +258,21 @@ describe("B2: vendor classification is an exact allowlist", () => {
       const [copy] = plugin(s, { marketplace, name: "chrome", version: "0.9.1", skills: ["chrome-devtools"], receipt: false });
       append(s, byName("chrome:chrome-devtools"));
       expect(assertManagedAgentBridge("codex", live(s)).codexInertVendorCopies).toEqual([copy!]);
+    }
+  });
+
+  test("B-1: a whole-plugin table alone never exempts a vendor copy, in any vendor marketplace", () => {
+    // A cache copy carries no proof that its plugin source is configuration
+    // controlled, and remote state can enable a locally disabled remote plugin.
+    for (const [marketplace, receipt] of [["openai-curated-remote", true], ["openai-curated", false], ["openai-bundled", false]] as const) {
+      const s = reviewedV3();
+      const [copy] = plugin(s, { marketplace, receipt });
+      append(s, `[plugins."sites@${marketplace}"]\nenabled = false\n`);
+      expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toBe(`NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ${JSON.stringify(copy)}. Review skills migrate native --agent codex --project <working-directory> --include-unmanaged --include-vendor --json before continuing; it inventories that directory and its ancestors. Use --apply after reviewing the archive plan.`);
+      // An exact-path or qualified-name rule is what retires it.
+      append(s, byName("sites:sites-remix"));
+      expect(assertManagedAgentBridge("codex", live(s)).codexInertVendorCopies).toEqual([copy!]);
+      assertNothingRecorded(s);
     }
   });
 
@@ -233,9 +303,16 @@ describe("B2: vendor classification is an exact allowlist", () => {
     expect(isInertCodexVendorPluginCopy(entry, s.cache, [{ path: join(vendor!, "SKILL.md"), enabled: false }], read)).toBe(true);
     expect(isInertCodexVendorPluginCopy(entry, s.cache, [], read)).toBe(false);
     expect(isInertCodexVendorPluginCopy(entry, s.cache, undefined, read)).toBe(false);
-    expect(isInertCodexVendorPluginCopy(entry, s.cache, undefined, read, { "sites@openai-curated-remote": { enabled: false } })).toBe(true);
-    expect(isInertCodexVendorPluginCopy(entry, s.cache, [], read, { "sites@openai-curated-remote": { enabled: true } })).toBe(false);
-    expect(isInertCodexVendorPluginCopy(entry, s.cache, [], read, { "other@openai-curated-remote": { enabled: false } })).toBe(false);
+    // Plugin tables are not an input: an extra argument from an older caller is ignored.
+    const legacy = isInertCodexVendorPluginCopy as unknown as (...args: unknown[]) => boolean;
+    expect(legacy(entry, s.cache, undefined, read, { "sites@openai-curated-remote": { enabled: false } })).toBe(false);
+    expect(legacy(entry, s.cache, [], read, { "sites@openai-curated-remote": { enabled: false } })).toBe(false);
+    // A second SKILL.md nested below the copy would load under its own name.
+    const nested = join(vendor!, "examples", "inner", "SKILL.md"); put(nested, payload("inner"));
+    const nestedEntry = inventoryNativeSkills(s.home, { includeVendor: true, agents: ["codex"], projectDir: s.home }).find(item => item.path === vendor)!;
+    expect(isInertCodexVendorPluginCopy(nestedEntry, s.cache, rules, read)).toBe(false);
+    rmSync(join(vendor!, "examples"), { recursive: true });
+    expect(isInertCodexVendorPluginCopy(entry, s.cache, rules, read)).toBe(true);
     expect(isInertCodexVendorPluginCopy(entry, s.cache, [{ name: "sites:other", enabled: false }], read)).toBe(false);
     expect(isInertCodexVendorPluginCopy(entry, s.cache, [...rules, { path: join(vendor!, "SKILL.md"), enabled: true }], read)).toBe(false);
     expect(isInertCodexVendorPluginCopy(entry, s.cache, [{ name: "sites:sites-remix" }], read)).toBe(false);
@@ -300,5 +377,21 @@ describe("scope and warning text", () => {
     expect(long.length).toBeLessThanOrEqual(768 + 400);
     const third = codexPromptDriftWarning({ codexInertVendorCopies: [], codexDiscoveryChanges: [{ kind: "membership", path: `/c/a${ch(0x2060)}b` }] })!;
     expect(third).toContain(`"/c/a${bs}u2060b"`);
+  });
+
+  test("N-4: the warning escapes every format character, including joiners, soft hyphen and astral tag characters", () => {
+    const bs = String.fromCharCode(92);
+    // ZWNJ, ZWJ, soft hyphen, Mongolian vowel separator, interlinear annotation,
+    // language tag, tag letter A, Kaithi number sign (astral Cf), paragraph separator, BEL.
+    for (const code of [0x200c, 0x200d, 0x00ad, 0x180e, 0xfff9, 0xe0001, 0xe0041, 0x110bd, 0x2029, 0x0007]) {
+      const character = String.fromCodePoint(code);
+      const warning = codexPromptDriftWarning({ codexInertVendorCopies: [], codexDiscoveryChanges: [{ kind: "membership", path: `/c/a${character}b` }] })!;
+      const escaped = Array.from({ length: character.length }, (_, index) => `${bs}u${character.charCodeAt(index).toString(16).padStart(4, "0")}`).join("");
+      expect([code.toString(16), warning.includes(character)]).toEqual([code.toString(16), false]);
+      expect([code.toString(16), warning.includes(`"/c/a${escaped}b"`)]).toEqual([code.toString(16), true]);
+      expect([...warning].some(part => /[\p{Cf}\p{Cc}\p{Zl}\p{Zp}]/u.test(part))).toBe(false);
+    }
+    // Ordinary non-ASCII text is shown as is.
+    expect(codexPromptDriftWarning({ codexInertVendorCopies: [], codexDiscoveryChanges: [{ kind: "membership", path: "/c/caf\u00e9-\u0219" }] })).toContain(`"/c/caf\u00e9-\u0219"`);
   });
 });

@@ -7,12 +7,13 @@
 - Keep Codex prompts running after a vendor plugin refresh that Codex configuration already retires, without any native fallback. On the live Codex prompt hook only, a vendor plugin-cache copy is exempt when all of the following hold:
   - it is package-classified content in `openai-bundled`, `openai-curated` or `openai-curated-remote` (exact names), with Codex's remote install receipt where Codex writes one;
   - it carries no Skills or Hasna marker;
-  - a `[[skills.config]]` exact-path or plugin-qualified-name rule (for example `name = "sites:sites-remix"`) disables it and no rule enables it, or its exact plugin table has `enabled = false`.
+  - it has no other `SKILL.md` nested below it;
+  - a `[[skills.config]]` exact-path or plugin-qualified-name rule (for example `name = "sites:sites-remix"`) disables it and no rule enables it. A whole-plugin `enabled = false` table alone is never enough, because remote state can enable a locally disabled remote plugin.
 
-  An enabled vendor copy still blocks, so the earlier native-fallback refusal is unchanged.
+  An enabled vendor copy still blocks, so the earlier native-fallback refusal is unchanged. The exemption only adds to the guard's existing ones: exact-path disables in any plugin-cache marketplace and reviewed plugin controls stay accepted on the live hook. Once the hook tolerates a witness change below, which the strict guard refuses outright, plugin-cache copies are exempt only through the vendor rule.
 - On the same hook, tolerate with a visible `systemMessage` warning only the discovery-witness changes a vendor refresh provably makes:
-  - appended vendor disable rules or vendor plugin `enabled = false` tables in `config.toml`, proven by reproducing the reviewed digest (plugin activation stays strict);
-  - directory membership under a hook-free allowlisted vendor marketplace.
+  - appended vendor disable rules or vendor plugin `enabled = false` tables in `config.toml`, proven by reproducing the reviewed digest (plugin activation stays strict). Candidates are tried smallest edit first within a 128-candidate bound; a change beyond it refuses;
+  - directory membership under an allowlisted vendor marketplace whose every plugin version has only a `.codex-plugin/plugin.json` manifest with no hooks, commands, extensions or custom skills path, no hooks directory, no root, `.claude-plugin` or `.cursor-plugin` manifest, and no skill hidden from the inventory.
 
   These are classified at their source as typed witness changes, never by message text. Every other copy and change, and every install, trust, migrate and sync check, still refuse with unchanged messages. Nothing is recorded or rebound.
 

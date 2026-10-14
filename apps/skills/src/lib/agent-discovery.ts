@@ -798,7 +798,10 @@ export function codexVendorConfigChangeOnly(source: DiscoverySource, cache: stri
     if (basename(source.path) !== "config.toml" || typeof source.sha256 !== "string" || source.reviewArtifact !== undefined || source.managedPlugins !== undefined || source.hookSources !== undefined) return false;
     const text = read(source.path);
     if (text === null) return false;
-    return codexVendorConfigCandidates(text, cache).some(candidate => replacementDigest(source, candidate) === source.sha256);
+    // Typed V2-V5 settings digests already exclude disable-only rows, so row
+    // removal cannot change them; skipping it only narrows the search.
+    const rowsAffectDigest = !["codex-settings-v2", "codex-settings-v3", "codex-settings-v4", "codex-settings-v5"].includes(source.hashMode ?? "");
+    return codexVendorConfigCandidates(text, cache, { rowsAffectDigest }).some(candidate => replacementDigest(source, candidate) === source.sha256);
   } catch { return false; }
 }
 /** The digest a source's own mode would record for `text`, without consulting the file. */

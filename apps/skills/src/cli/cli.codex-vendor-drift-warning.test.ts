@@ -103,10 +103,13 @@ test("station04 replay from an isolated cwd: a qualified-name disable delivers c
   expect(byPath.value.decision).toBeUndefined();
   expect(byPath.value.hookSpecificOutput.additionalContext).toContain("Verified fixture context");
   expect(byPath.stdout).not.toContain("Synthetic native instructions");
+  // A whole-plugin table alone never retires a remote vendor copy: remote state
+  // can enable a locally disabled remote plugin. The copy still blocks.
   f.setConfig(`[plugins."sites@openai-curated-remote"]\nenabled = false\n`);
   const byPlugin = await f.hook();
-  expect(byPlugin.value.decision).toBeUndefined();
-  expect(byPlugin.value.hookSpecificOutput.additionalContext).toContain("Verified fixture context");
+  expect(byPlugin.value.decision).toBe("block");
+  expect(byPlugin.value.reason).toStartWith(`NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ${JSON.stringify(f.copy)}`);
+  expect(byPlugin.value.hookSpecificOutput).toBeUndefined();
   expect(byPlugin.stdout).not.toContain("Synthetic native instructions");
   // A later enabling rule brings the block back.
   f.setConfig(`[[skills.config]]\nname = "sites:sites-remix"\nenabled = false\n\n[[skills.config]]\nname = "sites:sites-remix"\nenabled = true\n`);

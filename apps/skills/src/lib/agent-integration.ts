@@ -1605,15 +1605,34 @@ export function isInertCodexPluginCacheCopy(entry: NativeSkillEntry, cache: stri
   return classifiedCodexPluginCacheCopy(entry, cache, read, document => !allowedHostPaths.includes(document));
 }
 
+/** Whether a skill directory holds another SKILL.md in any subdirectory. Fails
+ * closed: links, special files, read errors and an oversized tree count as nested. */
+function nestedSkillDocument(root: string): boolean {
+  let entries = 0;
+  const visit = (path: string, depth: number): boolean => {
+    if (depth > 32) return true;
+    for (const name of readdirSync(path)) {
+      if (++entries > 10000) return true;
+      const child = join(path, name), stat = lstatSync(child);
+      if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) return true;
+      if (stat.isDirectory() ? visit(child, depth + 1) : depth > 0 && name.toLowerCase() === "skill.md") return true;
+    }
+    return false;
+  };
+  try { return visit(root, 0); } catch { return true; }
+}
+
 /** A vendor plugin-cache copy that Codex configuration provably disables, so its
  * payload never loads natively. Vendor means: classified installed-plugin content
  * in an allowlisted OpenAI marketplace (exact names), with the native remote
- * install receipt for remote marketplaces, and no Skills-managed or Hasna
- * marker. Disabled means: a `[[skills.config]]` rule names its exact SKILL.md
- * path or its plugin-qualified name with `enabled = false` (the native ordered
- * evaluation agrees), and no matching rule enables it, or the exact plugin
- * table has `enabled = false`. */
-export function isInertCodexVendorPluginCopy(entry: NativeSkillEntry, cache: string, rules: unknown, read: (path: string) => string, plugins?: unknown): boolean {
+ * install receipt for remote marketplaces, no Skills-managed or Hasna marker,
+ * and no other SKILL.md nested below it. Disabled means: a `[[skills.config]]`
+ * rule names its exact SKILL.md path or its plugin-qualified name with
+ * `enabled = false` (the native ordered evaluation agrees), and no matching rule
+ * enables it. A whole-plugin `[plugins."<id>"] enabled = false` table is never
+ * enough: remote state can enable a locally disabled remote plugin, and a
+ * cache copy carries no proof that its source is configuration-controlled. */
+export function isInertCodexVendorPluginCopy(entry: NativeSkillEntry, cache: string, rules: unknown, read: (path: string) => string): boolean {
   try {
     if (entry.managed || lstatSync(join(entry.path, ".hasna-skills.json"), { throwIfNoEntry: false })) return false;
     const marketplace = codexVendorMarketplace(cache, entry.path);
@@ -1621,8 +1640,8 @@ export function isInertCodexVendorPluginCopy(entry: NativeSkillEntry, cache: str
     return classifiedCodexPluginCacheCopy(entry, cache, read, (document, identity) => {
       if (identity.pluginId !== `${identity.namespace}@${marketplace}`) return false;
       if (CODEX_REMOTE_VENDOR_MARKETPLACES.includes(marketplace) && codexRemoteInstallReceipt(identity.pluginParent, read) === null) return false;
-      if (plugins && typeof plugins === "object" && !Array.isArray(plugins) && Object.hasOwn(plugins, identity.pluginId)
-        && (plugins as Record<string, any>)[identity.pluginId]?.enabled === false) return true;
+      // A nested skill would load under its own name, which no rule here covers.
+      if (nestedSkillDocument(entry.path)) return false;
       if (!Array.isArray(rules)) return false;
       // Native path rules canonicalize through links; so does this pre-check.
       const canonical = (path: string) => { try { return realpathSync.native(path); } catch { return resolve(path); } };
@@ -1636,11 +1655,13 @@ export function isInertCodexVendorPluginCopy(entry: NativeSkillEntry, cache: str
 
 /** Show filenames only: never read payloads into diagnostics. Escape control
  * characters and cap both path count and length for native hook output.
- * `invisible` also escapes zero-width and byte-order characters (warning text). */
+ * `invisible` (warning text) escapes every format character (`\p{Cf}`: zero-width,
+ * joiners, soft hyphen, bidirectional controls, byte-order and tag characters),
+ * every control and the line and paragraph separators, as JSON `\uXXXX` units. */
 function nativeSkillPathList(paths: readonly string[], invisible = false): string {
   const shown = paths.slice(0, 3).map(path => {
-    const escaped = JSON.stringify(path).replace(invisible ? /[\u007f-\u009f\u061c\u200b\u200e\u200f\u2028-\u202e\u2060\u2066-\u2069\ufeff]/g : /[\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g,
-      character => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+    const escaped = JSON.stringify(path).replace(invisible ? /[\p{Cf}\p{Cc}\p{Zl}\p{Zp}]/gu : /[\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g,
+      character => Array.from({ length: character.length }, (_, index) => `\\u${character.charCodeAt(index).toString(16).padStart(4, "0")}`).join(""));
     return escaped.length > 768 ? `${escaped.slice(0, 384)}...${escaped.slice(-381)}` : escaped;
   });
   const remaining = paths.length - shown.length;
@@ -1726,17 +1747,22 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
   const disabledPlugin = (entry: NativeSkillEntry): boolean => {
     if (agent !== "codex" || !entry.vendor) return false;
     const document=join(entry.path,"SKILL.md"), cache=canonicalAgentPath(join(home,".codex/plugins/cache"),aliases), read=(path:string)=>new TextDecoder("utf-8",{fatal:true}).decode(readNativeBytes(path,1024*1024));
-    if (options.codexPromptHook === true && entry.path.startsWith(vendorCache + sep))
-      return isInertCodexVendorPluginCopy(entry, vendorCache, codexConfig.skills?.config, read, codexConfig.plugins);
     return isReviewedCodexPluginInactive(document,cache,binding.codexInactivePlugins ?? [],codexConfig.plugins,codexConfig.skills?.config ?? [],read)
       || isReviewedCodexPluginSkillDisabled(document,cache,binding.codexPluginSkills ?? [],codexConfig.skills?.config,read);
   };
+  // Live Codex prompt hook only: a vendor plugin-cache copy that Codex
+  // configuration disables by exact path or qualified name. With no tolerated
+  // witness change it only adds to the exemptions every guard call has. Once the
+  // hook has tolerated a witness change, the strict guard would refuse the whole
+  // state, so no strict exemption is being kept: plugin-cache copies are then
+  // exempt only through this narrow classifier. Read after discovery verification.
+  const inertVendorCopy = (entry: NativeSkillEntry): boolean => agent === "codex" && options.codexPromptHook === true && entry.vendor && entry.path.startsWith(vendorCache + sep)
+    && isInertCodexVendorPluginCopy(entry, vendorCache, codexConfig.skills?.config, path => new TextDecoder("utf-8", { fatal: true }).decode(readNativeBytes(path, 1024 * 1024)));
+  const vendorOnlyCacheCopy = (entry: NativeSkillEntry): boolean => (witnessTolerance?.changes.length ?? 0) > 0 && entry.path.startsWith(vendorCache + sep);
   const disabledPaths = new Set(disabledCodexSkillPaths(codexConfig, aliases));
   const disabledVendorSkill = (entry: NativeSkillEntry): boolean => {
     if (agent !== "codex" || !entry.vendor) return false;
-    // Live cache copies all pass the same classifier below, including copies
-    // formerly covered by exact-path or reviewed-name exemptions.
-    if (options.codexPromptHook === true && entry.path.startsWith(vendorCache + sep)) return false;
+    if (vendorOnlyCacheCopy(entry)) return false;
     if ((binding.codexPluginSkills ?? []).some((control: CodexPluginSkillControl) => entry.path.startsWith(control.pluginParent + sep))) return disabledPlugin(entry);
     if (disabledPlugin(entry)) return true;
     if (!disabledPaths.has(entry.path)) return false;
@@ -1776,7 +1802,7 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
       installationInputRoots=reviewedCodexPluginSourceRoots(canonicalAgentPath(join(home,".codex/plugins/cache"),aliases),discovery.codexInstallationInputs?.plugins ?? [],path=>new TextDecoder("utf-8",{fatal:true}).decode(readNativeBytes(path,1024*1024))); }
     catch { throw new Error("NATIVE_SKILL_DRIFT: native installation input identity changed; review discovery and catalog"); }
   }
-  const inventory = inventoryNativeSkills(home, { includeVendor: true, guardHermes: agent === "hermes", agents: [agent], projectDirs: [...roots], agentRoots: discovery.roots.map(path => ({ agent, path })), allowRootAliases: aliases.length > 0, disabledVendorPaths: agent === "codex" ? disabledCodexSkillPaths(codexConfig, aliases) : [], disabledVendorSkill: disabledPlugin, codexInstallationInputRoots: installationInputRoots });
+  const inventory = inventoryNativeSkills(home, { includeVendor: true, guardHermes: agent === "hermes", agents: [agent], projectDirs: [...roots], agentRoots: discovery.roots.map(path => ({ agent, path })), allowRootAliases: aliases.length > 0, disabledVendorPaths: agent === "codex" ? disabledCodexSkillPaths(codexConfig, aliases) : [], disabledVendorSkill: entry => vendorOnlyCacheCopy(entry) ? inertVendorCopy(entry) : disabledPlugin(entry) || inertVendorCopy(entry), codexInstallationInputRoots: installationInputRoots });
   const unexpected = inventory.filter(entry => visible(entry) && !entry.bridge && !disabledVendorSkill(entry));
   // Codex native policy adapter: consulted only when a Codex hook supplied native
   // policy input and the guard would otherwise refuse. A verified restricted
@@ -1807,8 +1833,7 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
   // vendor copy, and every other copy, refuses below; nothing is recorded.
   let inertVendor: NativeSkillEntry[] = [];
   if (agent === "codex" && options.codexPromptHook === true && unexpected.length > inert.length) {
-    const read = (path: string) => new TextDecoder("utf-8", { fatal: true }).decode(readNativeBytes(path, 1024 * 1024));
-    inertVendor = unexpected.filter(entry => !inert.includes(entry) && isInertCodexVendorPluginCopy(entry, vendorCache, codexConfig.skills?.config, read, codexConfig.plugins));
+    inertVendor = unexpected.filter(entry => !inert.includes(entry) && inertVendorCopy(entry));
   }
   if (unexpected.length > inert.length + inertVendor.length) {
     // The adapter is all-or-nothing, so only exempted vendor copies leave the list.
