@@ -1,8 +1,12 @@
 # Renewing immutable session pins
 
 Managed cached context expires after 24 hours. A renewal checks the authenticated
-profile again; it does not automatically migrate the session to newly selected
-skill versions. When the server advertises `skills.session-pin-renewal`, a pin
+profile again and never adopts newly selected skill versions itself. When a
+renewal is refused, the managed prompt hook migrates the pin by default, with
+the exceptions described in "Automatic migration on the managed hook" below.
+Explicit `skills context` without `--auto-migrate-session-pin`, and stations
+that turn migration off, keep the refusal. When the server advertises
+`skills.session-pin-renewal`, a pin
 with a verified authorization epoch can retain its complete old profile across
 ordinary version upgrades. Every old selection must still be selected with the
 same policy and lifecycle epoch. Historical bundles must pass authenticated
@@ -30,6 +34,16 @@ a refusal: it never renews, authorizes or writes a pin, a malformed or extended
 record is ignored, and explicit `skills sessions reconcile` does not read it.
 A record larger than 4 KiB is ignored without being parsed.
 
+There are two kinds of record. A renewal refusal (`managed-hook-renewal-refusal`)
+is repeated only while migration is off for that prompt: it says the pin
+cannot be renewed as it is, not that it cannot migrate. A migration refusal
+(`managed-hook-migration-refusal`) is written when the managed hook's migration
+itself refuses deterministically. The causes are a project lock, a rotated
+epoch on a loaded skill, a planner refusal or any other failure that is not
+transient. Because it implies the renewal refusal, it is repeated in either
+mode. A budget timeout, an unavailable authority, write-lock contention, a
+concurrent receipt change and I/O failures are never remembered.
+
 Removing a selection, changing its aliases or triggers, deleting or archiving
 a skill, losing access, or failing integrity checks still refuses renewal.
 Deletion and archive transitions rotate the server's per-skill epoch. Restoring
@@ -50,23 +64,36 @@ operation receipt of kind `managed-hook-session-pin-migration`, and the new pin
 is written under the existing receipt precondition and write lock.
 
 When loaded skills are retired, a metadata-only notice is written under
-`selection-cache/session-pin-migration-notices/` before the receipt commit. The
+`selection-cache/session-pin-migration-notices/`. Only the writer that commits
+the pin writes it: it holds the session write lock, the exact receipt
+precondition has held, and the notice is written immediately before the pin. A
+concurrent migrator that loses the precondition never touches it. The
 managed hook prepends it to the first context that succeeds for that session and
 reaches the agent (including the authenticated fallback when a new bundle is not
-cached yet), then marks it delivered. Cursor shows hook context only at session
-start and Sumi only on its context restoration call, so the notice waits for
-those. Plain `skills context` never consumes it. It applies only while the pin
-holds the migrated profile, revision and generation, and a malformed or
-oversized record is ignored.
+cached yet), then marks it delivered under the same lock. If another writer
+holds that lock, the notice stays pending for a later prompt. Cursor shows hook
+context only at session start and Sumi only on its context restoration call, so
+the notice waits for those. Plain `skills context` never consumes it. It
+applies only while the pin holds the migrated profile, revision and generation,
+and a malformed or oversized record is ignored.
 
-A project lock is an intentional pin, and migration never moves a session past
-it. Sessions inherit `.skills/selection.lock.json` from the context's `cwd`
-when they start (`skills pin`, `skills install --project` and `skills sync
---project` write it). When a lock is present at that same `cwd`, or cannot be
-read there, the hook keeps today's refusal, including its remembered refusal
-record, and leaves both the session pin and the lock unchanged. Change the lock
-explicitly or review `skills sessions reconcile`. A caller that does not name
-the `cwd` never migrates.
+A project lock (`.skills/selection.lock.json`, written by `skills pin`,
+`skills install --project` and `skills sync --project`) is an intentional pin.
+A session started in a directory that holds one inherits the lock's pin and
+records that provenance in its receipt as `projectLock`: the lock's path and
+the SHA-256 of its exact bytes. Its subagent sessions inherit the record. The
+hook never migrates such a session automatically, from whatever directory it
+later prompts, even after the lock file is changed or removed. For a session
+without that record (including every session created before the record existed;
+receipts never stored their creation directory), the hook does not migrate
+while a lock is present, or cannot be read, in the prompt's `cwd` or any
+ancestor up to the filesystem root. A caller that does not name the `cwd` never
+migrates. In each case the hook keeps the renewal refusal and its record, and
+leaves both the session pin and the lock unchanged. The check runs three times:
+before the authority read, after it, and under the session write lock
+immediately before the pin is written, so a lock created while the authority
+answers still governs. Change the lock explicitly, or review `skills sessions
+reconcile`, which preserves the record.
 
 A loaded selection whose known lifecycle epoch changed also keeps the refusal
 when its bytes are the same again (deleted or archived, then restored).
@@ -74,33 +101,41 @@ Migration would retain it unchanged, so the session would never be told.
 Review it with `skills sessions reconcile`. A changed epoch on a selection the
 session never loaded does not block migration.
 
-Remembered refusals are neither read nor written while migration is on. Every
-failure other than a plain revision move keeps its existing refusal: identity
-mismatches, unreadable receipts, integrity checks, an unavailable authority,
-lock contention and planner refusals. A migration that cannot finish inside the
+Every failure other than a plain revision move keeps its existing refusal:
+identity mismatches, unreadable receipts, integrity checks, an unavailable
+authority and planner refusals. Session write-lock contention keeps its own
+`SESSION_WRITE_BUSY`, and the next prompt retries. A migration that cannot finish inside the
 four-second renewal deadline reports `SESSION_RECONCILIATION_REQUIRED` with a
 fixed `migration: "timeout"` marker, which the hook explains; the pin is
 unchanged and the next prompt retries. Outcomes that may already have committed
-keep `SESSION_RECONCILIATION_INCOMPLETE`. Renewable pins still renew without
-migrating.
+keep `SESSION_RECONCILIATION_INCOMPLETE`. That includes a failure after the
+new pin was written, such as releasing the write lock. Renewable pins still
+renew without migrating.
 
 Turn migration off station-wide with `skills config set sessionPinMigration off
 --global`. Only the global configuration is read, and setting the key without
-`--global` is refused. Migration is on when that file is missing, or when it is
-a readable JSON object without the key or with exactly `"auto"`. Any other
-state keeps the refusal: an unreadable or malformed file, a truncated write, a
-non-object document, a retired key, or any other value.
+`--global` is refused. Migration is on in two cases only. Either `lstat` finds
+no entry at the configuration path inside an existing data directory, or the
+entry is a regular file (read without following links) that holds a JSON object
+without the key or with exactly `"auto"`. Every other state keeps the refusal:
+a symlink (dangling or not), a directory or other non-regular entry, a missing
+or dangling data directory, an unreadable or malformed file, a truncated write,
+a non-object document, a retired key, or any other value.
 
 ## Compatibility and intentional migration
 
 Existing clients and servers keep the exact-current-selection path. An older
 receipt without epochs can acquire genuine current epochs only if every old
 selection still matches the authoritative current version, digest and policy.
-This is fresh authorization now, not evidence of historical continuity. A
-legacy receipt whose selected version has already changed requires one reviewed
-migration. No bulk receipt rewrite is needed; new sessions acquire current
-epochs normally. Known epoch mismatches always require intentional migration,
-even when the selected bytes match again.
+This is fresh authorization now, not evidence of historical continuity. Renewal
+never migrates a legacy receipt whose selected version has already changed, or
+a pin with a known epoch mismatch. Under the managed hook's default, such a
+refusal is migrated automatically as described above, and the changed loaded
+skills are retired and named. Two cases are not migrated: a session that
+follows a project lock, and a known epoch mismatch on a loaded skill whose
+bytes match again. Those, and every refusal where migration is off, require one
+reviewed migration with the steps below. No bulk receipt rewrite is needed; new
+sessions acquire current epochs normally.
 
 Use `skills sessions show <session-id> --json`, then plan with
 `skills sessions reconcile <session-id> --from-profile <old-id>

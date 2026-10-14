@@ -1,11 +1,11 @@
 import type { ResolvedSkillProfile, ResolvedSkillSelection } from "../types/skill-selection.js";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { createProfileClient, type ProfileClient } from "./profile-client.js";
 import { SkillBundleInspectionError } from "./skill-bundle.js";
 import { isValidSkillVersion } from "./skill-version.js";
-import { MAX_CACHED_PROFILE_AGE_MS, verifySelectionBundleResponse, nextSkillSessionGeneration, readProjectSelection, readSelectionJson, readSelectionProfile, readSkillSessionSnapshot, readSkillSessionSnapshotIfExists, replaceSkillSession, selectionCacheRoot, selectionKey, skillSessionSnapshotBinding, SkillSelectionError, validateResolvedProfile, writeSelectionJson, type SelectionCacheOptions, type SkillSessionReceipt, type SkillSessionSnapshot } from "./selection-cache.js";
+import { MAX_CACHED_PROFILE_AGE_MS, verifySelectionBundleResponse, nextSkillSessionGeneration, readProjectSelection, readSelectionJson, readSelectionProfile, readSkillSessionSnapshot, readSkillSessionSnapshotIfExists, replaceSkillSession, selectionCacheRoot, selectionKey, skillSessionSnapshotBinding, SkillSelectionError, validateResolvedProfile, withSkillSessionWriteLock, writeSelectionJson, type SelectionCacheOptions, type SkillSessionReceipt, type SkillSessionSnapshot } from "./selection-cache.js";
 
 export interface SessionReconciliationInput {
   sessionId: string;
@@ -89,12 +89,22 @@ const SESSION_RENEWAL_CONCURRENCY = 4;
  * It binds the exact receipt bytes, profile, authority, workspace and the
  * locally synced profile revision, and lapses after a fixed window that the
  * file cannot extend. Anything unexpected is ignored and the authority is asked.
+ *
+ * Two kinds exist. A renewal refusal says only that this pin cannot be renewed
+ * as it is, so it is repeated only while migration is off. A refusal of the
+ * managed hook's migration itself (a project lock, a rotated epoch, a planner
+ * refusal or anything else that is not transient) also implies the renewal
+ * refusal, so it is repeated in either mode. Timeouts, an unavailable
+ * authority, write-lock contention and other transient failures are never
+ * remembered.
  */
 export const SESSION_RENEWAL_REFUSAL_TTL_MS = 5 * 60 * 1000;
 /** A refusal record is about 600 bytes; anything larger is ignored unread. */
 const SESSION_RENEWAL_REFUSAL_MAX_BYTES = 4 * 1024;
+const RENEWAL_REFUSAL = "managed-hook-renewal-refusal", MIGRATION_REFUSAL = "managed-hook-migration-refusal";
+type SessionRenewalRefusalKind = typeof RENEWAL_REFUSAL | typeof MIGRATION_REFUSAL;
 interface SessionRenewalRefusal {
-  schemaVersion: 1; kind: "managed-hook-renewal-refusal"; code: "SESSION_RECONCILIATION_REQUIRED";
+  schemaVersion: 1; kind: SessionRenewalRefusalKind; code: "SESSION_RECONCILIATION_REQUIRED";
   sessionId: string; receiptSha256: string; profileId: string; authority: string; workspaceId: string;
   refusedRevision: string; localProfileRevision: string | null; recordedAt: string; expiresAt: string;
 }
@@ -106,12 +116,12 @@ function renewalRefusalPath(sessionId: string, options: SelectionCacheOptions): 
 function localProfileRevision(profileId: string, options: SelectionCacheOptions): string | null | undefined {
   try { return readSelectionProfile(profileId, options)?.profile.profileRevision ?? null; } catch { return undefined; }
 }
-function currentRenewalRefusal(snapshot: SkillSessionSnapshot, profileId: string, localRevision: string | null | undefined, now: number, options: SelectionCacheOptions): SessionRenewalRefusal | null {
+function currentRenewalRefusal(snapshot: SkillSessionSnapshot, profileId: string, localRevision: string | null | undefined, now: number, options: SelectionCacheOptions, kinds: readonly SessionRenewalRefusalKind[]): SessionRenewalRefusal | null {
   if (localRevision === undefined) return null;
   let value: SessionRenewalRefusal | null;
   try { value = readSelectionJson<SessionRenewalRefusal>(renewalRefusalPath(snapshot.sessionId, options), SESSION_RENEWAL_REFUSAL_MAX_BYTES); } catch { return null; }
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).sort().join(",") !== REFUSAL_KEYS.join(",")
-    || value.schemaVersion !== 1 || value.kind !== "managed-hook-renewal-refusal" || value.code !== "SESSION_RECONCILIATION_REQUIRED"
+    || value.schemaVersion !== 1 || !kinds.includes(value.kind) || value.code !== "SESSION_RECONCILIATION_REQUIRED"
     || typeof value.refusedRevision !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.refusedRevision)
     || typeof value.recordedAt !== "string" || typeof value.expiresAt !== "string") return null;
   const recorded = Date.parse(value.recordedAt), expires = Date.parse(value.expiresAt);
@@ -122,11 +132,11 @@ function currentRenewalRefusal(snapshot: SkillSessionSnapshot, profileId: string
     || value.authority !== pinned.authority || value.workspaceId !== pinned.workspaceId || value.localProfileRevision !== localRevision) return null;
   return value;
 }
-function recordRenewalRefusal(snapshot: SkillSessionSnapshot, profileId: string, refusedRevision: string, localRevision: string | null | undefined, now: number, options: SelectionCacheOptions): void {
+function recordRenewalRefusal(snapshot: SkillSessionSnapshot, profileId: string, refusedRevision: string, localRevision: string | null | undefined, now: number, options: SelectionCacheOptions, kind: SessionRenewalRefusalKind): void {
   if (localRevision === undefined) return;
   const pinned = snapshot.receipt.profile;
   const record: SessionRenewalRefusal = {
-    schemaVersion: 1, kind: "managed-hook-renewal-refusal", code: "SESSION_RECONCILIATION_REQUIRED",
+    schemaVersion: 1, kind, code: "SESSION_RECONCILIATION_REQUIRED",
     sessionId: snapshot.sessionId, receiptSha256: snapshot.sha256, profileId, authority: pinned.authority, workspaceId: pinned.workspaceId,
     refusedRevision, localProfileRevision: localRevision,
     recordedAt: new Date(now).toISOString(), expiresAt: new Date(now + SESSION_RENEWAL_REFUSAL_TTL_MS).toISOString(),
@@ -138,10 +148,14 @@ function recordRenewalRefusal(snapshot: SkillSessionSnapshot, profileId: string,
 /**
  * A managed-hook migration that retired loaded skills leaves one notice for the
  * session, delivered with the next successful context and then marked
- * delivered. It is written before the receipt commit and applies only once the
- * pin really holds the migrated profile, revision and generation, so a failed
- * commit or a later intentional change never shows it. It carries metadata
- * only; it authorizes nothing and is ignored unless every field is exact.
+ * delivered. Only the writer that commits the pin publishes it: it is written
+ * under the session write lock, after the exact receipt precondition held and
+ * immediately before the pin itself, so a concurrent migrator that loses that
+ * precondition never touches it. Delivery marks it under the same lock. It
+ * applies only once the pin really holds the migrated profile, revision and
+ * generation, so a failed commit or a later intentional change never shows it.
+ * It carries metadata only; it authorizes nothing and is ignored unless every
+ * field is exact.
  */
 const MIGRATION_NOTICE_MAX_BYTES = 32 * 1024;
 const MIGRATION_NOTICE_MAX_ENTRIES = 50;
@@ -158,7 +172,8 @@ interface SessionPinMigrationNoticeRecord {
 function migrationNoticePath(sessionId: string, options: SelectionCacheOptions): string {
   return join(selectionCacheRoot(options), "session-pin-migration-notices", `${digest(sessionId)}.json`);
 }
-function writeSessionPinMigrationNotice(snapshot: SkillSessionSnapshot, target: ResolvedSkillProfile, generation: number, retired: SessionSelectionDelta[], now: number, options: SelectionCacheOptions): void {
+/** Build and bound the notice before any write; publication happens at the commit. */
+function sessionPinMigrationNotice(snapshot: SkillSessionSnapshot, target: ResolvedSkillProfile, generation: number, retired: SessionSelectionDelta[], now: number): SessionPinMigrationNoticeRecord {
   const record: SessionPinMigrationNoticeRecord = {
     schemaVersion: 1, kind: "session-pin-migration-notice", sessionId: snapshot.sessionId,
     profileId: target.profileId, authority: target.authority, workspaceId: target.workspaceId,
@@ -172,7 +187,7 @@ function writeSessionPinMigrationNotice(snapshot: SkillSessionSnapshot, target: 
   if (Buffer.byteLength(`${JSON.stringify(record)}\n`) > MIGRATION_NOTICE_MAX_BYTES || !validNotice(record, snapshot.sessionId)) {
     throw new SkillSelectionError("RECEIPT_TOO_LARGE", "The session pin migration notice exceeds its bounds.");
   }
-  writeSelectionJson(migrationNoticePath(snapshot.sessionId, options), record);
+  return record;
 }
 function validNoticeEntry(entry: unknown): entry is SessionPinMigrationNoticeEntry {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
@@ -213,16 +228,29 @@ function renderSessionPinMigrationNotice(record: SessionPinMigrationNoticeRecord
  */
 export function takeSessionPinMigrationNotice(sessionId: string, options: SelectionCacheOptions = {}): string | null {
   const path = migrationNoticePath(sessionId, options);
-  let record: unknown, current: SkillSessionSnapshot | null;
-  try { record = readSelectionJson<unknown>(path, MIGRATION_NOTICE_MAX_BYTES); } catch { return null; }
-  if (!validNotice(record, sessionId) || record.deliveredAt !== undefined) return null;
-  try { current = readSkillSessionSnapshotIfExists(sessionId, options); } catch { return null; }
-  const pin = current?.receipt.profile;
-  if (!current || !pin || pin.profileId !== record.profileId || pin.authority !== record.authority || pin.workspaceId !== record.workspaceId
-    || pin.profileRevision !== record.toRevision || current.generation < record.generation) return null;
-  // Best effort: a failed marker only repeats this notice on a later prompt.
-  try { writeSelectionJson(path, { ...record, deliveredAt: new Date((options.now ?? Date.now)()).toISOString() }); } catch { /* still delivered now */ }
-  return renderSessionPinMigrationNotice(record);
+  const pending = (): SessionPinMigrationNoticeRecord | null => {
+    const record = readSelectionJson<unknown>(path, MIGRATION_NOTICE_MAX_BYTES);
+    return validNotice(record, sessionId) && record.deliveredAt === undefined ? record : null;
+  };
+  // Most prompts have nothing pending and take no lock.
+  try { if (!pending()) return null; } catch { return null; }
+  try {
+    // Publication holds the same lock, so marking this notice delivered can
+    // never overwrite one a later migration has just committed. A busy lock
+    // leaves the notice pending for a later prompt.
+    return withSkillSessionWriteLock(sessionId, options, assertOwned => {
+      const record = pending();
+      if (!record) return null;
+      const current = readSkillSessionSnapshotIfExists(sessionId, options);
+      const pin = current?.receipt.profile;
+      if (!current || !pin || pin.profileId !== record.profileId || pin.authority !== record.authority || pin.workspaceId !== record.workspaceId
+        || pin.profileRevision !== record.toRevision || current.generation < record.generation) return null;
+      assertOwned();
+      // Best effort: a failed marker only repeats this notice on a later prompt.
+      try { writeSelectionJson(path, { ...record, deliveredAt: new Date((options.now ?? Date.now)()).toISOString() }); } catch { /* still delivered now */ }
+      return renderSessionPinMigrationNotice(record);
+    });
+  } catch { return null; }
 }
 
 /**
@@ -254,9 +282,9 @@ export interface SessionPinRenewalOptions extends SessionReconciliationOptions {
    */
   migrate?: boolean;
   /**
-   * Required for `migrate`: the directory whose project lock governs this
-   * context, read exactly as session creation reads it (the hook input's cwd).
-   * Without it, or while a lock is present there, migration does not run.
+   * Required for `migrate`: the prompt's directory (the hook input's cwd).
+   * Without it, or while it or an ancestor holds a project lock, migration
+   * does not run.
    */
   projectDir?: string;
 }
@@ -265,14 +293,28 @@ export interface SessionPinRenewalOptions extends SessionReconciliationOptions {
  * A project lock (`.skills/selection.lock.json`, written by `skills pin`,
  * `skills install --project` and `skills sync --project`) is an intentional
  * pin that keeps exact versions until it is explicitly changed, and sessions
- * started in that project inherit it. Automatic migration never moves a
- * session past it: any lock present at the directory, or one that cannot be
- * read, keeps today's refusal. A lock for another profile is already refused
- * earlier as PROFILE_LOCK_MISMATCH. Only a confirmed absence lets migration run.
+ * started in that project inherit it. Automatic migration never moves such a
+ * pin, so this keeps today's refusal when:
+ * - the session recorded at creation that its pin came from a lock (its child
+ *   sessions inherit that record), whatever the prompt's directory now is; or
+ * - for any session without that record, including those created before it
+ *   existed, a lock is present in the prompt's directory or any ancestor up to
+ *   the filesystem root, or one of them cannot be read. Receipts never stored a
+ *   creation directory, so a nearby lock is the remaining sign; or
+ * - the prompt's directory is not named.
+ * Only a confirmed absence lets migration run, and it is confirmed three times:
+ * before the authority read, after it, and under the session write lock
+ * immediately before the pin is written. A lock for another profile at the
+ * prompt's directory is already refused earlier as PROFILE_LOCK_MISMATCH.
  */
-function projectLockGoverns(projectDir: string | undefined): boolean {
-  if (projectDir === undefined) return true;
-  try { return readProjectSelection(projectDir) !== null; } catch { return true; }
+function pinFollowsProjectLock(receipt: SkillSessionReceipt, projectDir: string | undefined): boolean {
+  if (Object.hasOwn(receipt, "projectLock") || projectDir === undefined) return true;
+  try {
+    for (let directory = resolve(projectDir); ; directory = dirname(directory)) {
+      if (readProjectSelection(directory) !== null) return true;
+      if (dirname(directory) === directory) return false;
+    }
+  } catch { return true; }
 }
 
 /**
@@ -305,10 +347,15 @@ export class SessionPinMigrationTimeout extends SkillSelectionError {
 }
 /** Outcomes that may already have committed are never relabelled as a refusal. */
 const AMBIGUOUS_MIGRATION_FAILURES = new Set(["SESSION_RECONCILIATION_INCOMPLETE", "SESSION_LOCK_RECOVERY_INCOMPLETE"]);
+/**
+ * Migration failures that say nothing lasting about this pin: write-lock
+ * state, a concurrent receipt change and the spent budget. They keep the
+ * refusal (or their own code) but are never remembered. Failures that are not
+ * Skills errors (I/O) are treated the same way.
+ */
+const TRANSIENT_MIGRATION_FAILURES = new Set(["SESSION_WRITE_BUSY", "SESSION_WRITE_LOCKED", "SESSION_WRITE_LOCK_CHANGED", "SESSION_RECEIPT_CHANGED", "SESSION_GENERATION_CHANGED", "SESSION_RENEWAL_TIMEOUT"]);
 
 export async function renewSkillSessionPin(sessionId: string, profileId: string, options: SessionPinRenewalOptions = {}): Promise<SessionPinRenewalOutcome> {
-  // With a governing project lock this is exactly the renewal without migration.
-  const migrate = options.migrate === true && !projectLockGoverns(options.projectDir);
   const existing = readSkillSessionSnapshotIfExists(sessionId, options);
   if (!existing) return { outcome: "unchanged" };
   const snapshot = existing;
@@ -318,11 +365,14 @@ export async function renewSkillSessionPin(sessionId: string, profileId: string,
   const age = now - Date.parse(old.verifiedAt);
   if (age >= 0 && age <= MAX_CACHED_PROFILE_AGE_MS) return { outcome: "unchanged" };
   if (age < 0) throw new SkillSelectionError("INVALID_RECEIPT", "The session receipt has a future timestamp; inspect it before changing its pin.");
-  // A remembered refusal only spares authority reads for a pin that will keep
-  // refusing. With migration the authenticated read decides, so neither the
-  // record nor the synced revision it binds is read or written.
-  const localRevision = migrate ? undefined : localProfileRevision(profileId, options);
-  const refusal = migrate ? null : currentRenewalRefusal(snapshot, profileId, localRevision, now, options);
+  // A pin that follows a project lock is exactly the renewal without migration.
+  const migrate = options.migrate === true && !pinFollowsProjectLock(old, options.projectDir);
+  // A remembered refusal spares the authority read for a pin that will keep
+  // refusing. With migration on, only a refusal of the migration itself
+  // applies: a renewal refusal remembered while migration was off says nothing
+  // about whether the pin can migrate.
+  const localRevision = localProfileRevision(profileId, options);
+  const refusal = currentRenewalRefusal(snapshot, profileId, localRevision, now, options, migrate ? [MIGRATION_REFUSAL] : [RENEWAL_REFUSAL, MIGRATION_REFUSAL]);
   if (refusal) {
     throw new SkillSelectionError("SESSION_RECONCILIATION_REQUIRED", `Renewal of this exact session pin was refused at ${refusal.recordedAt} by profile revision ${refusal.refusedRevision}; the existing pin is unchanged. The authority is asked again after ${refusal.expiresAt}, or sooner when the receipt or the synced profile revision changes. Review skills sessions reconcile for an intentional change.`);
   }
@@ -421,19 +471,34 @@ export async function renewSkillSessionPin(sessionId: string, profileId: string,
    * original refusal, or says the budget ran out.
    */
   function migratePin(target: ResolvedSkillProfile, refusal: SkillSelectionError): SessionPinRenewalOutcome {
-    if (retainsRotatedLoadedEpoch(old, target)) throw refusal;
+    // A deterministic refusal is remembered like a renewal refusal, so later
+    // prompts in its window repeat it without resolving the profile again.
+    const refuse = (): never => {
+      recordRenewalRefusal(snapshot, profileId, target.profileRevision, localRevision, now, options, MIGRATION_REFUSAL);
+      throw refusal;
+    };
+    // The authority read was awaited: a project lock created meanwhile governs now.
+    if (retainsRotatedLoadedEpoch(old, target) || pinFollowsProjectLock(old, options.projectDir)) refuse();
+    let planned: ReturnType<typeof planSessionReconciliation> | undefined;
     try {
       assertActive();
-      const planned = planSessionReconciliation(snapshot, target, new Date(now).toISOString(), new Date(now + SESSION_RECONCILIATION_PLAN_TTL_MS).toISOString());
+      planned = planSessionReconciliation(snapshot, target, new Date(now).toISOString(), new Date(now + SESSION_RECONCILIATION_PLAN_TTL_MS).toISOString());
       const retired = planned.plan.selectionDelta.filter(row => row.outcome === "retired");
-      // Persist the notice before committing, so a committed migration can always
-      // tell the session what it retired even if this prompt's context fails.
-      if (retired.length) writeSessionPinMigrationNotice(snapshot, target, planned.plan.replacementGeneration, retired, now, options);
+      const notice = retired.length ? sessionPinMigrationNotice(snapshot, target, planned.plan.replacementGeneration, retired, now) : undefined;
       assertActive();
       const result = applySessionReconciliation(snapshot, target, planned,
         { kind: "managed-hook-session-pin-migration", ...planned.plan, planDigest: planned.planDigest, refusedRenewal: refusal.message },
         // Age starts at the first authorization read, not at completion.
-        new Date(now).toISOString(), options, assertActive);
+        new Date(now).toISOString(), options, () => {
+          // Under the session write lock, after the exact receipt precondition
+          // held and immediately before the pin is written. A project lock
+          // created since the last check still keeps the refusal. Only this
+          // committing writer publishes the notice, before its pin, so a
+          // committed migration can always tell the session what it retired.
+          assertActive();
+          if (pinFollowsProjectLock(old, options.projectDir)) throw refusal;
+          if (notice) writeSelectionJson(migrationNoticePath(snapshot.sessionId, options), notice);
+        });
       return { outcome: "migrated", migration: {
         profileId, fromRevision: old.profile.profileRevision, toRevision: target.profileRevision,
         retainedLoadedCount: planned.plan.retainedLoadedCount, retiredLoadedCount: planned.plan.retiredLoadedCount,
@@ -441,14 +506,31 @@ export async function renewSkillSessionPin(sessionId: string, profileId: string,
       } };
     } catch (error) {
       if (error instanceof SkillSelectionError && AMBIGUOUS_MIGRATION_FAILURES.has(error.code)) throw error;
-      throw budgetSpent() ? new SessionPinMigrationTimeout() : refusal;
+      // A failure after the pin was written (such as releasing the write lock)
+      // is not a refusal: the migration may have committed.
+      if (planned && holdsReplacement(planned.plan.replacementGeneration, target)) {
+        throw new SkillSelectionError("SESSION_RECONCILIATION_INCOMPLETE", "The session pin was migrated, but the managed hook could not confirm the operation; inspect skills sessions show and the session's reconciliation receipt before any retry.");
+      }
+      // Another writer holds this session: keep its own code; a later prompt retries.
+      if (error instanceof SkillSelectionError && error.code === "SESSION_WRITE_BUSY") throw error;
+      if (budgetSpent()) throw new SessionPinMigrationTimeout();
+      if (error === refusal || (error instanceof SkillSelectionError && !TRANSIENT_MIGRATION_FAILURES.has(error.code))) refuse();
+      throw refusal;
     }
+  }
+  /** Whether the receipt now holds this migration's exact replacement pin. */
+  function holdsReplacement(generation: number, target: ResolvedSkillProfile): boolean {
+    try {
+      const current = readSkillSessionSnapshotIfExists(sessionId, options);
+      return current !== null && current.generation === generation && current.receipt.verifiedAt === new Date(now).toISOString()
+        && isDeepStrictEqual(current.receipt.profile, target);
+    } catch { return false; }
   }
   try { return await Promise.race([renew(), expired]); }
   catch (error) {
     if (error instanceof SkillSelectionError && error.code === "SESSION_RECONCILIATION_REQUIRED" && comparedTarget !== undefined) {
       if (migrate) return migratePin(comparedTarget, error);
-      recordRenewalRefusal(snapshot, profileId, comparedTarget.profileRevision, localRevision, now, options);
+      recordRenewalRefusal(snapshot, profileId, comparedTarget.profileRevision, localRevision, now, options, RENEWAL_REFUSAL);
       throw error;
     }
     // Inner deadlines are rounded up to the renewal deadline and never fire

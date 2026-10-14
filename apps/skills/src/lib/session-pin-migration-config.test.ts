@@ -5,10 +5,10 @@
  * refusal, so a broken file can never silently defeat an operator's "off".
  */
 import { expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { getConfigPathReadOnly, saveConfig, sessionPinMigrationEnabled } from "./config.js";
+import { DATA_DIR_ENV, getConfigPathReadOnly, saveConfig, sessionPinMigrationEnabled } from "./config.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
@@ -20,6 +20,8 @@ function write(text: string): void {
 }
 
 test("a missing global configuration, or one without the key or with exactly auto, keeps migration on", () => {
+  // Missing means lstat finds no entry inside an existing data directory.
+  mkdirSync(dirname(configPath()), { recursive: true });
   expect(existsSync(configPath())).toBe(false);
   expect(sessionPinMigrationEnabled()).toBe(true);
   for (const document of [{}, { format: "json" }, { sessionPinMigration: "auto" }]) {
@@ -73,4 +75,32 @@ test("the project configuration refuses sessionPinMigration, which managed hooks
     saveConfig("sessionPinMigration", "auto", "global");
     expect(sessionPinMigrationEnabled()).toBe(true);
   } finally { process.chdir(cwd); rmSync(project, { recursive: true, force: true }); }
+});
+
+test("a dangling symlink at the global configuration is unreadable, not missing", () => {
+  mkdirSync(dirname(configPath()), { recursive: true });
+  symlinkSync(`${configPath()}.missing-off-target`, configPath());
+  expect(sessionPinMigrationEnabled()).toBe(false);
+});
+
+test("a symlinked global configuration keeps the refusal even when its target allows migration", () => {
+  mkdirSync(dirname(configPath()), { recursive: true });
+  const target = `${configPath()}.target`;
+  writeFileSync(target, JSON.stringify({ sessionPinMigration: "auto" }), { mode: 0o600 });
+  symlinkSync(target, configPath());
+  expect(sessionPinMigrationEnabled()).toBe(false);
+});
+
+for (const ancestry of ["missing", "dangling"] as const) test(`a ${ancestry} data directory keeps the refusal`, () => {
+  const prior = process.env[DATA_DIR_ENV], root = mkdtempSync(join(tmpdir(), "skills-config-ancestry-"));
+  const data = join(root, "skills");
+  if (ancestry === "dangling") symlinkSync(join(root, "gone"), data);
+  process.env[DATA_DIR_ENV] = data;
+  try {
+    expect(configPath()).toBe(join(data, "config.json"));
+    expect(sessionPinMigrationEnabled()).toBe(false);
+  } finally {
+    if (prior === undefined) delete process.env[DATA_DIR_ENV]; else process.env[DATA_DIR_ENV] = prior;
+    rmSync(root, { recursive: true, force: true });
+  }
 });

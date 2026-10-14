@@ -1127,7 +1127,7 @@ test("the station opt-out keeps today's refusal and pin; turning it back on migr
   } finally { await f.close(); }
 });
 
-test("a session pinned by an intentional project lock keeps today's refusal in that project instead of migrating", async () => {
+test("a session pinned by an intentional project lock keeps today's refusal wherever it prompts from", async () => {
   const f = await fixture();
   try {
     await f.a.install();
@@ -1140,6 +1140,7 @@ test("a session pinned by an intentional project lock keeps today's refusal in t
     const receiptPath = readdirSync(sessions).map(name => join(sessions, name)).find(path => json(path).sessionId === "locked-session")!;
     const old = json(receiptPath);
     expect(old.profile).toEqual(json(lockPath).profile);
+    expect(old.projectLock).toEqual({ path: lockPath, sha256: createHash("sha256").update(readFileSync(lockPath)).digest("hex") });
     old.verifiedAt = new Date(0).toISOString();
     for (const selection of old.profile.selections) delete selection.authorizationEpoch;
     put(receiptPath, JSON.stringify(old));
@@ -1152,9 +1153,21 @@ test("a session pinned by an intentional project lock keeps today's refusal in t
       expect(JSON.stringify(refused)).not.toContain("Published 2.0.0"); expect(JSON.stringify(refused)).not.toContain("pin was migrated");
       expect(readFileSync(receiptPath)).toEqual(before); expect(readFileSync(lockPath)).toEqual(lockBefore);
     }
+    // The agent changes directory: a subdirectory of the project, then an unrelated directory.
+    const subdirectory = join(f.a.project, "src"), elsewhere = join(f.root, "elsewhere");
+    mkdirSync(subdirectory); mkdirSync(elsewhere);
+    for (const cwd of [subdirectory, elsewhere]) {
+      const refused = await f.a.hook("claude", "UserPromptSubmit", { session_id: "locked-session", cwd, prompt: "$review-code" });
+      expect(refused.systemMessage).toContain("[SESSION_RECONCILIATION_REQUIRED]"); expect(JSON.stringify(refused)).not.toContain("Published 2.0.0");
+      expect(readFileSync(receiptPath)).toEqual(before);
+    }
     expect(existsSync(join(f.a.data, "selection-cache", "session-reconciliations"))).toBe(false);
-    // Control: the same expired pin, prompted from a directory without a project lock, migrates.
-    const elsewhere = join(f.root, "elsewhere"); mkdirSync(elsewhere);
+    // A receipt written before provenance existed: the lock above the prompt's directory still keeps the refusal.
+    const legacy = json(receiptPath); delete legacy.projectLock; put(receiptPath, JSON.stringify(legacy));
+    const legacyBefore = readFileSync(receiptPath);
+    const ancestor = await f.a.hook("claude", "UserPromptSubmit", { session_id: "locked-session", cwd: subdirectory, prompt: "$review-code" });
+    expect(ancestor.systemMessage).toContain("[SESSION_RECONCILIATION_REQUIRED]"); expect(readFileSync(receiptPath)).toEqual(legacyBefore);
+    // Control: that legacy receipt, prompted from a directory with no lock on its path, migrates.
     const migrated = await f.a.hook("claude", "UserPromptSubmit", { session_id: "locked-session", cwd: elsewhere, prompt: "$review-code" });
     expect(migrated.hookSpecificOutput.additionalContext).toContain("- review-code@1.0.0: now 2.0.0");
     expect(json(receiptPath).profile.selections[0].version).toBe("2.0.0");

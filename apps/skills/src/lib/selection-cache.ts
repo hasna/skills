@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, readSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
-import { dirname, join, parse, resolve } from "node:path";
+import { dirname, isAbsolute, join, parse, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { getDataDirReadOnly } from "./config.js";
 import { inspectSkillBundle, sha256Hex, SkillBundleInspectionError, SKILL_BUNDLE_INSPECTION_LIMITS, type SkillBundleEntry } from "./skill-bundle.js";
@@ -18,6 +18,8 @@ export class SkillSelectionError extends Error {
 export interface SelectionCacheOptions { cacheDir?: string; now?: () => number }
 export interface CachedSelectionProfile { schemaVersion: 1; verifiedAt: string; profile: ResolvedSkillProfile }
 export interface SkillSessionParentBinding { sessionId: string; generation: number; receiptSha256: string }
+/** The project lock a session's pin was inherited from: its absolute path and the SHA-256 of its exact bytes. */
+export interface SkillSessionProjectLock { path: string; sha256: string }
 export interface SkillSessionReceipt extends CachedSelectionProfile {
   sessionId: string;
   loaded: string[];
@@ -25,6 +27,12 @@ export interface SkillSessionReceipt extends CachedSelectionProfile {
   generation?: number;
   /** Private local metadata binding a child receipt to the exact parent snapshot it inherited. */
   parent?: SkillSessionParentBinding;
+  /**
+   * Set when the session was created from a project lock (and inherited by its
+   * child sessions). Such a pin follows that intentional lock, so the managed
+   * hook never migrates it automatically, whatever the prompt's directory.
+   */
+  projectLock?: SkillSessionProjectLock;
 }
 export interface SkillSessionSnapshot extends SkillSessionParentBinding { path: string; bytes: Uint8Array; receipt: SkillSessionReceipt; sha256: string }
 export interface SkillSessionWritePrecondition { current: SkillSessionParentBinding | null; parent?: SkillSessionParentBinding }
@@ -241,9 +249,18 @@ export function assertFreshCachedProfile(receipt: CachedSelectionProfile, option
 }
 export function projectSelectionLockPath(projectDir: string): string { return join(resolve(projectDir), ".skills", SELECTION_LOCK_FILE); }
 export function readProjectSelection(projectDir: string): CachedSelectionProfile | null {
-  const receipt = readSelectionJson<CachedSelectionProfile>(projectSelectionLockPath(projectDir));
-  if (receipt) validateSelectionReceipt(receipt);
-  return receipt;
+  return readProjectSelectionSnapshot(projectDir)?.receipt ?? null;
+}
+/** The project lock with the provenance a session created from it records. */
+export function readProjectSelectionSnapshot(projectDir: string): { receipt: CachedSelectionProfile; lock: SkillSessionProjectLock } | null {
+  const path = projectSelectionLockPath(projectDir);
+  const bytes = readRegularFile(path, MAX_PROFILE_DOCUMENT_BYTES);
+  if (!bytes) return null;
+  let receipt: CachedSelectionProfile;
+  try { receipt = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as CachedSelectionProfile; }
+  catch { throw new SkillSelectionError("INVALID_RECEIPT", "The Skills selection receipt is unreadable; sync the profile again."); }
+  validateSelectionReceipt(receipt);
+  return { receipt, lock: { path, sha256: sha256Hex(bytes) } };
 }
 export function sessionReceiptPath(sessionId: string, options: SelectionCacheOptions = {}): string {
   if (!sessionId.trim() || sessionId.length > MAX_SKILL_SESSION_ID_CHARS) throw new SkillSelectionError("INVALID_SESSION", `A Skills session id must contain 1–${MAX_SKILL_SESSION_ID_CHARS} characters.`);
@@ -270,6 +287,12 @@ function validateSkillSessionReceipt(receipt: SkillSessionReceipt, sessionId: st
   if (receipt.parent) {
     validateSkillSessionBinding(receipt.parent);
     if (receipt.parent.sessionId === sessionId) throw new SkillSelectionError("INVALID_RECEIPT", "A Skills child session cannot name itself as its parent.");
+  }
+  const lock = receipt.projectLock as unknown;
+  if (lock !== undefined && (!lock || typeof lock !== "object" || Array.isArray(lock) || Object.keys(lock).sort().join(",") !== "path,sha256"
+      || typeof (lock as SkillSessionProjectLock).path !== "string" || !isAbsolute((lock as SkillSessionProjectLock).path)
+      || (lock as SkillSessionProjectLock).path.length > 4096 || !/^[a-f0-9]{64}$/.test((lock as SkillSessionProjectLock).sha256))) {
+    throw new SkillSelectionError("INVALID_RECEIPT", "The Skills session receipt contains invalid project lock provenance.");
   }
 }
 
@@ -587,6 +610,14 @@ function withSessionWriteLocks<T>(sessionIds: string[], options: SelectionCacheO
 }
 function withSessionWriteLock<T>(sessionId: string, options: SelectionCacheOptions, action: (assertOwned: () => void) => T): T {
   return withSessionWriteLocks([sessionId], options, action);
+}
+/**
+ * Hold this session's receipt write lock for state that must change only with
+ * its pin (the managed-hook migration notice). Another holder refuses with
+ * SESSION_WRITE_BUSY; nothing waits.
+ */
+export function withSkillSessionWriteLock<T>(sessionId: string, options: SelectionCacheOptions, action: (assertOwned: () => void) => T): T {
+  return withSessionWriteLock(sessionId, options, action);
 }
 function sameSnapshot(actual: SkillSessionSnapshot | null, expected: SkillSessionParentBinding | null): boolean {
   return actual === null ? expected === null : expected !== null && actual.sessionId === expected.sessionId

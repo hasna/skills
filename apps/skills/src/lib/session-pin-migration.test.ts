@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { packSkillBundle } from "./skill-bundle.js";
-import { reconcileSkillSessionIfSafe, renewSkillSessionPin, SESSION_RENEWAL_TIMEOUT_MS, SessionPinMigrationTimeout, takeSessionPinMigrationNotice } from "./session-reconciliation.js";
+import { reconcileSkillSessionIfSafe, renewSkillSessionPin, SESSION_RENEWAL_REFUSAL_TTL_MS, SESSION_RENEWAL_TIMEOUT_MS, SessionPinMigrationTimeout, takeSessionPinMigrationNotice } from "./session-reconciliation.js";
 import { cacheSelectionBundle, projectSelectionLockPath, readSkillSessionSnapshot, selectionKey, sessionReceiptPath, SkillSelectionError, writeSelectionJson, type SkillSessionReceipt } from "./selection-cache.js";
 import { buildSkillContext } from "./skill-context.js";
 import type { ProfileClient } from "./profile-client.js";
@@ -164,15 +164,16 @@ test("a corrupt receipt is refused before any authority read or migration", asyn
   expect(f.reads()).toBe(0); expect(readFileSync(f.receiptPath, "utf8")).toBe("{not json"); expect(archives(f.cacheDir)).toEqual([]);
 });
 
-test("lock contention keeps today's refusal and leaves the receipt and lock exactly as found", async () => {
+test("lock contention keeps its own code, is not remembered, and leaves the receipt and lock exactly as found", async () => {
   const f = await fixture();
   f.target.selections = [f.target.selections[1]!];
   const lockPath = `${f.receiptPath}.write-lock`, lock = JSON.stringify({ schemaVersion: 1, operationId: randomUUID(), sessionId: "session", pid: process.pid });
   writeFileSync(lockPath, lock, { mode: 0o600 });
-  await expect(renewSkillSessionPin("session", "fleet", { ...f, migrate: true })).rejects.toMatchObject({ code: "SESSION_RECONCILIATION_REQUIRED" });
+  await expect(renewSkillSessionPin("session", "fleet", { ...f, migrate: true })).rejects.toMatchObject({ code: "SESSION_WRITE_BUSY" });
   expect(readFileSync(f.receiptPath)).toEqual(f.before); expect(readFileSync(lockPath, "utf8")).toBe(lock);
-  expect(archives(f.cacheDir)).toEqual([]);
-  // The notice prepared before the commit never applies to the unchanged pin.
+  expect(archives(f.cacheDir)).toEqual([]); expect(refusalRecords(f.cacheDir)).toBe(false);
+  // Only a writer that holds the lock and passes the receipt precondition publishes a notice.
+  expect(existsSync(noticePath(f.cacheDir, "session"))).toBe(false);
   expect(takeSessionPinMigrationNotice("session", f)).toBeNull();
 });
 
@@ -272,6 +273,8 @@ async function lockedProject() {
   expect(created.context).toContain("Loaded body 1.0.0.");
   const sessionPath = sessionReceiptPath("from-lock", f), inherited = JSON.parse(readFileSync(sessionPath, "utf8"));
   expect(inherited.profile).toEqual(f.old.profile);
+  // The receipt records where its pin came from: the lock path and its exact bytes.
+  expect(inherited.projectLock).toEqual({ path: lockPath, sha256: createHash("sha256").update(readFileSync(lockPath)).digest("hex") });
   inherited.verifiedAt = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(); writeSelectionJson(sessionPath, inherited);
   f.target.selections[0] = { ...f.target.selections[0]!, version: "2.0.0", bundleDigest: `sha256:${f.v2.sha256}`, authorizationEpoch: "f".repeat(32) };
   return { ...f, lockPath, sessionPath, lockBefore: readFileSync(lockPath), sessionBefore: readFileSync(sessionPath) };
@@ -290,17 +293,45 @@ test("a project lock at the hook's cwd keeps today's refusal: the session is nev
     .rejects.toMatchObject({ code: "CACHED_PROFILE_EXPIRED" });
 });
 
-test("control: the same refused pin migrates when no project lock governs the cwd, and never without a named cwd", async () => {
+test("a session created from a project lock never migrates, from a subdirectory, an unrelated directory or after the lock is gone", async () => {
   const f = await lockedProject();
-  // A caller that does not name the directory whose lock governs never migrates.
-  await expect(renewSkillSessionPin("from-lock", "fleet", { ...f, projectDir: undefined, migrate: true })).rejects.toMatchObject({ code: "SESSION_RECONCILIATION_REQUIRED" });
-  expect(readFileSync(f.sessionPath)).toEqual(f.sessionBefore);
-  const elsewhere = join(f.root, "elsewhere"); mkdirSync(elsewhere);
-  const outcome = await renewSkillSessionPin("from-lock", "fleet", { ...f, projectDir: elsewhere, migrate: true });
-  expect(outcome.outcome).toBe("migrated");
-  expect(readSkillSessionSnapshot("from-lock", f).receipt.profile).toEqual(f.target);
-  // Migration rewrites only the session receipt; the project lock is untouched.
-  expect(readFileSync(f.lockPath)).toEqual(f.lockBefore);
+  const subdirectory = join(f.projectDir, "src", "deep"), unrelated = join(f.root, "elsewhere");
+  mkdirSync(subdirectory, { recursive: true }); mkdirSync(unrelated);
+  for (const projectDir of [subdirectory, unrelated]) {
+    const error = await renewSkillSessionPin("from-lock", "fleet", { ...f, projectDir, migrate: true }).catch(failure => failure);
+    expect(error).toMatchObject({ code: "SESSION_RECONCILIATION_REQUIRED" }); expect(error).not.toBeInstanceOf(SessionPinMigrationTimeout);
+    expect(readFileSync(f.sessionPath)).toEqual(f.sessionBefore);
+  }
+  // The recorded provenance still governs once the lock file itself is removed.
+  rmSync(f.lockPath);
+  await expect(renewSkillSessionPin("from-lock", "fleet", { ...f, projectDir: unrelated, migrate: true, now: () => Date.now() + SESSION_RENEWAL_REFUSAL_TTL_MS }))
+    .rejects.toMatchObject({ code: "SESSION_RECONCILIATION_REQUIRED" });
+  expect(readFileSync(f.sessionPath)).toEqual(f.sessionBefore); expect(archives(f.cacheDir)).toEqual([]);
+  // A subagent started from that session inherits its provenance.
+  writeSelectionJson(f.sessionPath, { ...JSON.parse(f.sessionBefore.toString("utf8")), verifiedAt: new Date().toISOString() });
+  await buildSkillContext({ profileId: "fleet", sessionId: "from-lock", agentId: "child", cwd: unrelated, prompt: "$review-code" }, { ...f, cached: true, authority: AUTHORITY });
+  expect(readSkillSessionSnapshot("from-lock:child", f).receipt.projectLock).toEqual(JSON.parse(f.sessionBefore.toString("utf8")).projectLock);
+});
+
+test("a session without lock provenance does not migrate while a lock sits in the prompt's directory or any ancestor", async () => {
+  const f = await fixture();
+  f.target.selections[0] = { ...f.target.selections[0]!, version: "2.0.0", bundleDigest: `sha256:${f.v2.sha256}`, authorizationEpoch: "f".repeat(32) };
+  // The fixture receipt predates provenance: it records no lock and no creation directory.
+  expect(Object.hasOwn(JSON.parse(f.before.toString("utf8")), "projectLock")).toBe(false);
+  const subdirectory = join(f.projectDir, "src", "deep"); mkdirSync(subdirectory, { recursive: true });
+  writeSelectionJson(projectSelectionLockPath(f.projectDir), { schemaVersion: 1, verifiedAt: new Date().toISOString(), profile: f.old.profile });
+  for (const projectDir of [f.projectDir, subdirectory]) {
+    await expect(renewSkillSessionPin("session", "fleet", { ...f, projectDir, migrate: true, now: () => Date.now() + SESSION_RENEWAL_REFUSAL_TTL_MS * (projectDir === f.projectDir ? 0 : 2) }))
+      .rejects.toMatchObject({ code: "SESSION_RECONCILIATION_REQUIRED" });
+    expect(readFileSync(f.receiptPath)).toEqual(f.before);
+  }
+  // Without a named directory it never migrates either.
+  await expect(renewSkillSessionPin("session", "fleet", { ...f, projectDir: undefined, migrate: true, now: () => Date.now() + SESSION_RENEWAL_REFUSAL_TTL_MS * 4 }))
+    .rejects.toMatchObject({ code: "SESSION_RECONCILIATION_REQUIRED" });
+  // Control: from a directory with no lock on its path, the same pin migrates.
+  const unrelated = join(f.root, "elsewhere"); mkdirSync(unrelated);
+  expect((await renewSkillSessionPin("session", "fleet", { ...f, projectDir: unrelated, migrate: true, now: () => Date.now() + SESSION_RENEWAL_REFUSAL_TTL_MS * 6 })).outcome).toBe("migrated");
+  expect(readSkillSessionSnapshot("session", f).receipt.profile).toEqual(f.target);
 });
 
 for (const lock of ["malformed", "directory"] as const) test(`a ${lock} project lock also keeps the refusal`, async () => {
@@ -325,7 +356,118 @@ test("a loaded skill whose lifecycle epoch rotated keeps the refusal even when i
   // A rotated epoch on an unloaded selection never reached this session's context, so it still migrates.
   f.target.selections[0] = { ...f.target.selections[0]!, authorizationEpoch: EPOCH };
   f.target.selections[1] = { ...f.target.selections[1]!, authorizationEpoch: "b".repeat(32) };
-  const outcome = await renewSkillSessionPin("session", "fleet", { ...f, migrate: true });
+  // (After the first refusal's five-minute record has lapsed.)
+  const outcome = await renewSkillSessionPin("session", "fleet", { ...f, migrate: true, now: () => Date.now() + SESSION_RENEWAL_REFUSAL_TTL_MS + 1000 });
   if (outcome.outcome !== "migrated") throw Error(`expected a migration, got ${outcome.outcome}`);
   expect(outcome.migration.retired).toEqual([]); expect(readSkillSessionSnapshot("session", f).receipt.profile).toEqual(f.target);
+});
+
+test("a project lock created during the authority read keeps the refusal", async () => {
+  const f = await fixture();
+  f.target.selections[0] = { ...f.target.selections[0]!, version: "2.0.0", bundleDigest: `sha256:${f.v2.sha256}`, authorizationEpoch: "f".repeat(32) };
+  const lockPath = projectSelectionLockPath(f.projectDir);
+  // No lock when renewal starts; the project is pinned while the authority answers.
+  const client: ProfileClient = { ...f.client, resolveProfile: async profileId => {
+    writeSelectionJson(lockPath, { schemaVersion: 1, verifiedAt: new Date().toISOString(), profile: f.old.profile });
+    return f.client.resolveProfile(profileId);
+  } };
+  const error = await renewSkillSessionPin("session", "fleet", { ...f, client, migrate: true }).catch(failure => failure);
+  expect(error).toMatchObject({ code: "SESSION_RECONCILIATION_REQUIRED" }); expect(error).not.toBeInstanceOf(SessionPinMigrationTimeout);
+  expect(readFileSync(f.receiptPath)).toEqual(f.before); expect(readSkillSessionSnapshot("session", f).receipt.profile.profileRevision).toBe("old");
+  expect(JSON.parse(readFileSync(lockPath, "utf8")).profile).toEqual(f.old.profile);
+  expect(archives(f.cacheDir)).toEqual([]); expect(existsSync(noticePath(f.cacheDir, "session"))).toBe(false);
+});
+
+test("a project lock created after the authority read but before the commit still keeps the refusal", async () => {
+  const f = await fixture();
+  f.target.selections[0] = { ...f.target.selections[0]!, version: "2.0.0", bundleDigest: `sha256:${f.v2.sha256}`, authorizationEpoch: "f".repeat(32) };
+  const lockPath = projectSelectionLockPath(f.projectDir);
+  // The governing directory is read before the authority read, after it, and
+  // under the session write lock just before the pin is written. The lock
+  // appears only for that last check, after the receipt precondition held.
+  let checks = 0;
+  const options: NonNullable<Parameters<typeof renewSkillSessionPin>[2]> = { ...f, migrate: true };
+  Object.defineProperty(options, "projectDir", { enumerable: true, get() {
+    if (++checks === 3) writeSelectionJson(lockPath, { schemaVersion: 1, verifiedAt: new Date().toISOString(), profile: f.old.profile });
+    return f.projectDir;
+  } });
+  const error = await renewSkillSessionPin("session", "fleet", options).catch(failure => failure);
+  expect(checks).toBe(3);
+  expect(error).toMatchObject({ code: "SESSION_RECONCILIATION_REQUIRED" }); expect(error).not.toBeInstanceOf(SessionPinMigrationTimeout);
+  expect(readFileSync(f.receiptPath)).toEqual(f.before); expect(existsSync(noticePath(f.cacheDir, "session"))).toBe(false);
+  // The preservation archive was prepared but never applied; the pin did not move.
+  const operations = archives(f.cacheDir);
+  expect(operations).toHaveLength(1);
+  expect(JSON.parse(readFileSync(join(f.cacheDir, "session-reconciliations", operations[0]!, "receipt.json"), "utf8")).status).toBe("prepared");
+});
+
+test("a concurrent migrator that loses the receipt precondition never touches the winner's notice", async () => {
+  const f = await fixture();
+  f.target.selections[0] = { ...f.target.selections[0]!, version: "2.0.0", bundleDigest: `sha256:${f.v2.sha256}`, authorizationEpoch: "f".repeat(32) };
+  // The loser's authority answers later with a different revision that removes review-code.
+  const other = structuredClone(f.target); other.profileRevision = "other-current";
+  other.selections = other.selections.slice(1).map(row => ({ ...row, profileRevision: "other-current" }));
+  let entered!: () => void, release!: (profile: ResolvedSkillProfile) => void;
+  const reading = new Promise<void>(resolve => { entered = resolve; });
+  const answer = new Promise<ResolvedSkillProfile>(resolve => { release = resolve; });
+  const loser = renewSkillSessionPin("session", "fleet", { ...f, migrate: true, client: { ...f.client, resolveProfile: async () => { entered(); return answer; } } })
+    .catch(failure => failure);
+  // The loser has read the old receipt and is waiting for its authority.
+  await reading;
+  const winner = await renewSkillSessionPin("session", "fleet", { ...f, migrate: true });
+  expect(winner.outcome).toBe("migrated");
+  const committed = readFileSync(noticePath(f.cacheDir, "session"));
+  release(structuredClone(other));
+  const lost = await loser;
+  expect(lost).toMatchObject({ code: "SESSION_RECONCILIATION_REQUIRED" }); expect(lost).not.toBeInstanceOf(SessionPinMigrationTimeout);
+  expect(readFileSync(noticePath(f.cacheDir, "session"))).toEqual(committed);
+  expect(readSkillSessionSnapshot("session", f).receipt.profile).toEqual(f.target);
+  expect(takeSessionPinMigrationNotice("session", f)).toContain("- review-code@1.0.0: now 2.0.0; reload with skills load review-code@2.0.0 --selection-profile fleet if it is still needed.");
+});
+
+test("delivery marks the notice under the session write lock and leaves it pending while another writer holds it", async () => {
+  const f = await fixture();
+  f.target.selections = [f.target.selections[1]!];
+  expect((await renewSkillSessionPin("session", "fleet", { ...f, migrate: true })).outcome).toBe("migrated");
+  const lockPath = `${f.receiptPath}.write-lock`, lock = JSON.stringify({ schemaVersion: 1, operationId: randomUUID(), sessionId: "session", pid: process.pid });
+  writeFileSync(lockPath, lock, { mode: 0o600 });
+  const pending = readFileSync(noticePath(f.cacheDir, "session"));
+  expect(takeSessionPinMigrationNotice("session", f)).toBeNull();
+  expect(readFileSync(noticePath(f.cacheDir, "session"))).toEqual(pending); expect(readFileSync(lockPath, "utf8")).toBe(lock);
+  rmSync(lockPath);
+  expect(takeSessionPinMigrationNotice("session", f)).toContain("- review-code@1.0.0: no longer selected.");
+  expect(existsSync(lockPath)).toBe(false);
+});
+
+test("a deterministic migration refusal is remembered for its window in either mode, without another authority read", async () => {
+  const f = await fixture();
+  // A loaded skill deleted and restored with identical bytes: migration refuses deterministically.
+  f.target.selections[0] = { ...f.target.selections[0]!, authorizationEpoch: "b".repeat(32) };
+  const at = (ms: number) => () => Date.now() + ms;
+  await expect(renewSkillSessionPin("session", "fleet", { ...f, migrate: true, now: at(0) })).rejects.toMatchObject({ code: "SESSION_RECONCILIATION_REQUIRED" });
+  expect(f.reads()).toBe(1);
+  const record = JSON.parse(readFileSync(join(f.cacheDir, "session-renewal-refusals", readdirSync(join(f.cacheDir, "session-renewal-refusals"))[0]!), "utf8"));
+  expect(record.kind).toBe("managed-hook-migration-refusal"); expect(record.receiptSha256).toBe(createHash("sha256").update(f.before).digest("hex"));
+  for (const options of [{ migrate: true, now: at(60_000) }, { migrate: false, now: at(120_000) }]) {
+    const error = await renewSkillSessionPin("session", "fleet", { ...f, ...options }).catch(failure => failure);
+    expect(error).toMatchObject({ code: "SESSION_RECONCILIATION_REQUIRED" }); expect(error.message).toContain("was refused at");
+  }
+  expect(f.reads()).toBe(1);
+  // After the window the authority decides again.
+  await expect(renewSkillSessionPin("session", "fleet", { ...f, migrate: true, now: at(SESSION_RENEWAL_REFUSAL_TTL_MS + 1000) })).rejects.toMatchObject({ code: "SESSION_RECONCILIATION_REQUIRED" });
+  expect(f.reads()).toBe(2);
+  expect(readFileSync(f.receiptPath)).toEqual(f.before); expect(archives(f.cacheDir)).toEqual([]);
+});
+
+test("a project lock that appears during the authority read is remembered too, so the next prompt reads nothing", async () => {
+  const f = await fixture();
+  f.target.selections[0] = { ...f.target.selections[0]!, version: "2.0.0", bundleDigest: `sha256:${f.v2.sha256}`, authorizationEpoch: "f".repeat(32) };
+  const client: ProfileClient = { ...f.client, resolveProfile: async profileId => {
+    writeSelectionJson(projectSelectionLockPath(f.projectDir), { schemaVersion: 1, verifiedAt: new Date().toISOString(), profile: f.old.profile });
+    return f.client.resolveProfile(profileId);
+  } };
+  await expect(renewSkillSessionPin("session", "fleet", { ...f, client, migrate: true })).rejects.toMatchObject({ code: "SESSION_RECONCILIATION_REQUIRED" });
+  expect(f.reads()).toBe(1);
+  await expect(renewSkillSessionPin("session", "fleet", { ...f, client, migrate: true })).rejects.toMatchObject({ code: "SESSION_RECONCILIATION_REQUIRED" });
+  expect(f.reads()).toBe(1); expect(readFileSync(f.receiptPath)).toEqual(f.before);
 });

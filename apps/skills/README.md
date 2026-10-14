@@ -827,16 +827,20 @@ authenticated current revision: it archives the old receipt, retains unchanged
 loaded bundles, retires changed or removed ones and delivers context for the
 prompt. The first hook context that succeeds and reaches the agent afterwards
 names each retired loaded skill once and how to reload its replacement; earlier
-instructions from those skills must not be relied on. Identity, integrity, lock and receipt failures, an
-unavailable authority and anything the planner refuses keep their refusal. A
-project lock (`.skills/selection.lock.json`) at the prompt's working directory
-also keeps the refusal, so a session is never migrated past the project's pin,
-and so does a loaded skill whose lifecycle epoch rotated while its bytes stayed
-the same. If the migration cannot finish within the four-second renewal window,
+instructions from those skills must not be relied on. Identity, integrity and receipt failures, an
+unavailable authority and anything the planner refuses keep their refusal;
+session write-lock contention keeps `SESSION_WRITE_BUSY`. A
+session created from a project lock (`.skills/selection.lock.json`) records
+that lock in its receipt and is never migrated automatically, whatever
+directory it later prompts from. A session without that record is not migrated
+while a lock sits in the prompt's working directory or any ancestor. A loaded
+skill whose lifecycle epoch rotated while its bytes stayed the same also keeps
+the refusal. If the migration cannot finish within the four-second renewal window,
 the hook reports `SESSION_RECONCILIATION_REQUIRED` with that reason and the next
 prompt retries. Turn this off station-wide with `skills config set
 sessionPinMigration off --global` (the key is refused without `--global`, and a
-global configuration that cannot be read or parsed also turns it off); the hook
+global configuration that is a symlink, cannot be read or cannot be parsed also
+turns it off); the hook
 then keeps today's refusal until the explicit reconciliation below. A missing
 cache may be recovered through authenticated context.
 
@@ -1027,8 +1031,9 @@ hosted publication access.
 settings. `HASNA_SKILLS_SELECTION_PROFILE` overrides the installed selection
 profile. A project lock and an existing session keep exact versions until they
 are explicitly changed or a new session starts. The one exception is the
-managed hook's automatic migration of an expired session pin described above,
-which never applies while a project lock governs the prompt's working directory.
+managed hook's automatic migration of an expired session pin described above.
+It never applies to a session created from a project lock, and never while a
+lock sits in the prompt's working directory or an ancestor.
 
 ## Executable skills
 

@@ -8,7 +8,7 @@
  * Values from the project config override global config.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, statSync, writeFileSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { RETIRED_CONFIG_KEYS, assertNoRetiredConfigKeys } from "./retired-settings.js";
 import { getDataRoot } from "./app-home.js";
@@ -204,15 +204,28 @@ function readConfigFile(path: string): Partial<SkillsConfig> {
  *
  * This reads the file itself instead of readConfigFile, which returns {} for
  * an unreadable or malformed file. An opt-out must survive a damaged file, so
- * only a missing file or a readable JSON object without the key means "auto".
- * Any other read error, a parse error (including a truncated write), a
- * non-object document, a retired key or a value other than exactly "auto" or
- * "off" keeps the refusal.
+ * "auto" needs one of two confirmed states. Either lstat finds no entry at the
+ * path and its directory exists, or the entry is a regular file (not a
+ * symlink), opened without following links, holding a JSON object without the
+ * key or with exactly "auto". Everything else keeps the refusal: a dangling or
+ * other symlink, a directory or other non-regular entry, a missing or dangling
+ * data directory, any read error, a parse error (including a truncated write),
+ * a non-object document, a retired key, or a value other than "auto" or "off".
  */
 export function sessionPinMigrationEnabled(): boolean {
+  const path = getConfigPathReadOnly("global");
   let text: string;
-  try { text = readFileSync(getConfigPathReadOnly("global"), "utf-8"); }
-  catch (error) { return (error as NodeJS.ErrnoException | null)?.code === "ENOENT"; }
+  try {
+    const entry = lstatSync(path, { throwIfNoEntry: false });
+    if (!entry) return statSync(dirname(path)).isDirectory();
+    if (!entry.isFile()) return false;
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const opened = fstatSync(fd);
+      if (!opened.isFile() || opened.dev !== entry.dev || opened.ino !== entry.ino) return false;
+      text = readFileSync(fd, "utf-8");
+    } finally { closeSync(fd); }
+  } catch { return false; }
   try {
     const parsed: unknown = JSON.parse(text);
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return false;

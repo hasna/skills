@@ -114,6 +114,6 @@ export async function buildSkillContext(input: SkillContextInput, options: Skill
     workspaceId: profile.workspaceId, source: options.cached ? "verified-cache" as const : "api" as const,
     ...(sessionId ? { sessionId } : {}), restored: Boolean(input.restore), chars: context.length, selections,
   };
-  if (sessionId) writeSkillSession({ ...resolved.receipt, sessionId, loaded: [...loaded] }, { current: resolved.sessionSnapshot, parent: resolved.parentSnapshot }, options);
+  if (sessionId) writeSkillSession({ ...resolved.receipt, sessionId, loaded: [...loaded], ...(resolved.projectLock ? { projectLock: resolved.projectLock } : {}) }, { current: resolved.sessionSnapshot, parent: resolved.parentSnapshot }, options);
   return { context, selections, omitted, receipt };
 }

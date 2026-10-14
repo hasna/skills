@@ -114,6 +114,38 @@ test("a definitive refusal is not re-resolved on every prompt and never interlea
   } finally { api.close(); }
 }, 60_000);
 
+test("with the managed hook's migration flag, a deterministic migration refusal is remembered too", async () => {
+  // A loaded selection was deleted and restored with identical bytes: its
+  // lifecycle epoch rotated, so renewal refuses and migration refuses too.
+  const rotated = (authority: string) => {
+    const profile = fleetProfile(authority, "current-revision");
+    profile.selections[17] = { ...profile.selections[17]!, authorizationEpoch: hex("rotated-epoch-17").slice(0, 32) };
+    return profile;
+  };
+  // First resolve answers inside the budget; the next ones would exceed it.
+  const api = authority(rotated, [1300, 4300, 4300, 1300, 1300]);
+  try {
+    const s = station(api), results = await prompts(5, s, ["--auto-migrate-session-pin"]);
+    report("refused pin and refused migration, variable authority latency", s, results);
+    expect(results.map(result => result.code)).toEqual(Array(5).fill("SESSION_RECONCILIATION_REQUIRED"));
+    expect(api.resolves()).toBe(1);
+    expect(Math.max(...results.slice(1).map(result => result.ms))).toBeLessThan(1500);
+    expect(readFileSync(s.receiptPath)).toEqual(s.before);
+    expect(existsSync(join(s.cacheDir, "session-reconciliations"))).toBe(false);
+  } finally { api.close(); }
+}, 60_000);
+
+test("with the migration flag, a budget timeout is still retried, not cached", async () => {
+  const api = authority(current, [4500]);
+  try {
+    const s = station(api), results = await prompts(2, s, ["--auto-migrate-session-pin"]);
+    report("migration flag, authority slower than the renewal budget", s, results);
+    expect(results.map(result => result.code)).toEqual(["SESSION_RENEWAL_TIMEOUT", "SESSION_RENEWAL_TIMEOUT"]);
+    expect(api.resolves()).toBe(2);
+    expect(readFileSync(s.receiptPath)).toEqual(s.before);
+  } finally { api.close(); }
+}, 60_000);
+
 test("a renewal budget timeout has its own code and is retried, not cached", async () => {
   const api = authority(current, [4500]);
   try {
