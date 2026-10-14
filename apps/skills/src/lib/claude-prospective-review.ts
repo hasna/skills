@@ -388,12 +388,17 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
   const requiredPaths = new Set(Object.values(expectedPaths));
   if (absentLocal !== undefined && !Object.entries(expectedPaths).some(([name, path]) => name !== "projectSettingsLocal" && path === absentLocal)) requiredPaths.delete(absentLocal);
   for (const path of requiredPaths) if (!reviewedPaths.has(path)) refuse("Skills discovery review does not bind every current user/project Claude settings and registration source");
+  // When the absent file is exempt from review, it must stay absent through
+  // discovery and until the result is produced; re-check after each read.
+  const localExempt = absentLocal !== undefined && !reviewedPaths.has(absentLocal);
+  const assertLocalStillAbsent = () => { if (localExempt) readWitness(absentLocal!, null, "projectSettingsLocal"); };
   const binding = resolveAgentDiscovery({ home: request.native.home, agent: "claude", canonical, reviewed: request.skills.discoveryInputs });
   verifyAgentDiscovery(binding);
   if (hashClaudeDiscoveryBinding(binding) !== request.skills.discoverySha256) refuse("Skills discovery preimage differs from its reviewed binding");
   assertProjectDiscovery("claude", [request.scope.projectPath], request.native.home, canonical, binding);
   const stored = snapshot.value.bridge?.discovery?.claude;
   if (!stored || !isDeepStrictEqual(stored, binding) || snapshot.value.bridge?.home !== request.native.home) refuse("Skills policy does not bind the reviewed current Claude discovery");
+  assertLocalStillAbsent();
 
   const delta = request.delta;
   keys(delta, ["settingsAfter", "knownMarketplacesAfter", "installedPluginsAfter"], "complete semantic delta");
@@ -548,6 +553,7 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
   }
   if (!isDeepStrictEqual(delta.installedPluginsAfter, installedAfter)) refuse("complete installed plugin document changes an unrelated registration or has target rows not derived from every selected candidate");
 
+  assertLocalStillAbsent();
   const semanticDocumentsSha256 = sha(canonicalJson({ settings: settingsAfter, knownMarketplaces: marketplacesAfter, installedPlugins: installedAfter }));
   const exactPreimages = Object.keys(expectedPaths).map(name => ({ name, path: expectedPaths[name as keyof typeof expectedPaths], sha256: request.preimages[name as keyof typeof expectedPaths].sha256 }));
   const expectedPostStateSha256 = sha(canonicalJson({ paths: expectedPaths, targetSettingsPath: expectedPaths.settings, semanticDocumentsSha256, currentPreimages: exactPreimages }));

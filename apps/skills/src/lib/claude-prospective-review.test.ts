@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve, join as pathJoin } from "node:path";
@@ -710,4 +710,20 @@ test("a project settings.local.json absent at review but present now still refus
   rebindDiscovery(f, false);
   put(f.projectSettingsLocal, JSON.stringify({ permissions: {} }));
   expect(() => review(f.request)).toThrow("absent at review but is now present");
+});
+
+test("an exempt absent settings.local.json created during discovery still refuses", async () => {
+  const discovery = await import("./agent-discovery.js");
+  const f = fixture();
+  rebindDiscovery(f, false);
+  const original = discovery.verifyAgentDiscovery;
+  const spy = spyOn(discovery, "verifyAgentDiscovery").mockImplementation(((binding: any) => {
+    put(f.projectSettingsLocal, JSON.stringify({ permissions: {} }));
+    return (original as any)(binding);
+  }) as any);
+  try {
+    expect(() => review(f.request)).toThrow("absent at review but is now present");
+  } finally {
+    spy.mockRestore();
+  }
 });
