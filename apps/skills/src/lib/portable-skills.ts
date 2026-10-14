@@ -541,10 +541,15 @@ export function installCorpusSkillAtomically(
 
 export function validatePortableSkillDirectory(name: string, skillPath: string): SkillValidationResult {
   const normalizedName = normalizePortableSkillName(name);
-  const base = validateSkillDirectory(normalizedName, skillPath);
+  let manifest: PortableSkillManifest | undefined;
+  let manifestError: unknown;
+  if (existsSync(skillPath)) {
+    try { manifest = readPortableSkillManifest(skillPath, normalizedName); }
+    catch (error) { manifestError = error; }
+  }
+  const base = validateSkillDirectory(normalizedName, skillPath, undefined, { kind: manifest?.kind });
   const issues: SkillValidationMessage[] = [...base.issues];
   const warnings: SkillValidationMessage[] = [...base.warnings];
-  let manifest: PortableSkillManifest | undefined;
 
   if (existsSync(skillPath)) {
     const skillJsonPath = join(skillPath, "skill.json");
@@ -553,7 +558,8 @@ export function validatePortableSkillDirectory(name: string, skillPath: string):
       add(issues, "portable.manifest_missing", "Missing portable manifest: expected SKILL.md frontmatter and/or skill.json");
     }
     try {
-      manifest = readPortableSkillManifest(skillPath, normalizedName);
+      if (manifestError) throw manifestError;
+      if (!manifest) throw new Error("Portable manifest could not be read");
       const isInstruction = manifest.kind === "instruction";
       if (manifest.name !== normalizedName) {
         add(issues, "portable.name_mismatch", `Portable manifest name '${manifest.name}' does not match '${normalizedName}'`);
@@ -575,24 +581,6 @@ export function validatePortableSkillDirectory(name: string, skillPath: string):
         skillPath,
       });
       for (const issue of contractIssues) add(issues, issue.code, issue.message);
-      // Consumer frontmatter is minimal (name + description), so `kind` lives
-      // in skill.json. When the manifest declares kind: instruction, drop the
-      // executable-only checks the frontmatter-derived base pass added.
-      if (manifest.kind === "instruction") {
-        const executableOnlyCodes = new Set([
-          "package.missing",
-          "package.bin_missing",
-          "skill.src_missing",
-          "skill.src_index_missing",
-          "skill.runtime_entrypoint_unsafe",
-          "skill.runtime_entrypoint_missing",
-          "skill.runtime_entrypoint_symlink",
-          "skill.runtime_entrypoint_not_file",
-        ]);
-        for (let i = issues.length - 1; i >= 0; i--) {
-          if (executableOnlyCodes.has(issues[i]!.code)) issues.splice(i, 1);
-        }
-      }
       // Instruction skills are SKILL.md-primary: no inputs, commands, or AGENTS.md required.
       if (!isInstruction && (!Array.isArray(manifest.inputs) || manifest.inputs.length === 0)) {
         add(issues, "portable.inputs_missing", "Portable manifest must declare inputs");
