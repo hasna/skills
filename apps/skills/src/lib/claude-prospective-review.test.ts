@@ -674,3 +674,40 @@ test("a shallow plugin.json cannot derive a source root outside the frozen closu
   f.request.candidate.closureSha256 = captureClaudeProspectiveCandidateClosure(f.candidateRoot);
   expect(() => review(f.request)).toThrow("CLAUDE_CANDIDATE_REVIEW_REFUSED:");
 });
+
+function rebindDiscovery(f: ReturnType<typeof fixture>, includeLocal: boolean): void {
+  const options = { home: f.home, dataDir: f.dataDir, projectDir: f.home, agents: ["claude" as const], command: "/fixture/skills" };
+  const prior = JSON.parse(readFileSync(join(f.dataDir, "agent-policy.json"), "utf8")).bridge.discovery.claude;
+  const paths = includeLocal ? [f.projectSettings, f.projectSettingsLocal, f.known, f.installed] : [f.projectSettings, f.known, f.installed];
+  const discoveryInputs: ReviewedDiscoveryInputs = { version: 1, agents: [{
+    agent: "claude", roots: prior.roots, sources: [captureClaudeSettingsV4(f.settings), ...captureDiscoveryPathSources(paths)],
+    pluginHooks: "reviewed-no-skill-injection",
+  }] };
+  applyAgentIntegration(planAgentIntegration({ ...options, discoveryInputs }));
+  const binding = resolveAgentDiscovery({ home: f.home, agent: "claude", reviewed: discoveryInputs });
+  f.request.skills.discoveryInputs = discoveryInputs;
+  f.request.skills.discoverySha256 = sha(JSON.stringify(binding));
+  f.request.skills.policySha256 = sha(readFileSync(join(f.dataDir, "agent-policy.json")));
+}
+
+test("an absent project settings.local.json with a null preimage need not be a reviewed discovery source", () => {
+  const f = fixture();
+  rebindDiscovery(f, false);
+  expect(f.request.preimages.projectSettingsLocal.sha256).toBeNull();
+  expect(review(f.request).accepted).toBe(true);
+});
+
+test("a present project settings.local.json must still be a reviewed discovery source", () => {
+  const f = fixture();
+  put(f.projectSettingsLocal, JSON.stringify({ permissions: {} }));
+  f.request.preimages.projectSettingsLocal.sha256 = sha(readFileSync(f.projectSettingsLocal));
+  rebindDiscovery(f, false);
+  expect(() => review(f.request)).toThrow("does not bind every current user/project Claude settings and registration source");
+});
+
+test("a project settings.local.json absent at review but present now still refuses", () => {
+  const f = fixture();
+  rebindDiscovery(f, false);
+  put(f.projectSettingsLocal, JSON.stringify({ permissions: {} }));
+  expect(() => review(f.request)).toThrow("absent at review but is now present");
+});

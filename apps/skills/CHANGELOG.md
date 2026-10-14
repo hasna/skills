@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Accept a Claude prospective review when the project `.claude/settings.local.json` is absent with a null preimage and the reviewed discovery sources omit it. Keep the absent-at-review re-check, and keep requiring every present settings and registration source.
+
 ## 0.10.71
 
 - Admit the user-scoped Claude directory marketplace writer on the exact 2.1.276, 2.1.278, 2.1.282, 2.1.287, 2.1.296 and 2.1.299 versions measured on the fleet. Keep 2.1.293 support and reject unmeasured versions and project scope.

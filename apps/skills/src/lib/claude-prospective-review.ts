@@ -382,7 +382,12 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
   if (!request.review || request.review.pluginHooks !== "reviewed-no-skill-injection") refuse("an explicit no-skill-injection review is required");
   if (request.skills.discoveryInputs?.version !== 1 || !Array.isArray(request.skills.discoveryInputs.agents) || request.skills.discoveryInputs.agents.length !== 1 || request.skills.discoveryInputs.agents[0]?.agent !== "claude" || request.skills.discoveryInputs.agents[0]?.pluginHooks !== "reviewed-no-skill-injection") refuse("one explicit reviewed Claude discovery binding is required");
   const reviewedPaths = new Set(request.skills.discoveryInputs.agents[0]!.sources.map(source => source.path));
-  for (const path of new Set(Object.values(expectedPaths))) if (!reviewedPaths.has(path)) refuse("Skills discovery review does not bind every current user/project Claude settings and registration source");
+  // An absent project settings.local.json has nothing to review: its null
+  // preimage was just re-checked by readWitness, and the delta never writes it.
+  const absentLocal = request.preimages.projectSettingsLocal.sha256 === null ? expectedPaths.projectSettingsLocal : undefined;
+  const requiredPaths = new Set(Object.values(expectedPaths));
+  if (absentLocal !== undefined && !Object.entries(expectedPaths).some(([name, path]) => name !== "projectSettingsLocal" && path === absentLocal)) requiredPaths.delete(absentLocal);
+  for (const path of requiredPaths) if (!reviewedPaths.has(path)) refuse("Skills discovery review does not bind every current user/project Claude settings and registration source");
   const binding = resolveAgentDiscovery({ home: request.native.home, agent: "claude", canonical, reviewed: request.skills.discoveryInputs });
   verifyAgentDiscovery(binding);
   if (hashClaudeDiscoveryBinding(binding) !== request.skills.discoverySha256) refuse("Skills discovery preimage differs from its reviewed binding");
