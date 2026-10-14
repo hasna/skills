@@ -16,6 +16,7 @@
   - directory membership under an allowlisted vendor marketplace whose every plugin version has only a `.codex-plugin/plugin.json` manifest with no hooks, commands, extensions or custom skills path, no hooks directory, no root, `.claude-plugin` or `.cursor-plugin` manifest, and no skill hidden from the inventory.
 
   These are classified at their source as typed witness changes, never by message text. Every other copy and change, and every install, trust, migrate and sync check, still refuse with unchanged messages. Nothing is recorded or rebound.
+- Accept a Claude prospective review when the project `.claude/settings.json` or `.claude/settings.local.json` is absent with a null preimage, the reviewed discovery sources omit it, and no other expected source (such as the target settings) shares its path. Each exempt file is re-checked as absent after discovery and again before the result. Every present settings and registration source is still required.
 
 ## 0.10.71
 
