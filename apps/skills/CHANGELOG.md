@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Stop reviewed Claude discovery from raising `NATIVE_SKILL_DRIFT` on every Claude start because Claude rewrites the `.orphaned_at` timestamp at a plugin-cache version root (`.claude/plugins/cache/<marketplace>/<plugin>/<version>/.orphaned_at`). Byte and path captures of that exact path, and a fresh explicit review of a plain byte or `path-bytes` witness of it, now record a typed `claude-plugin-orphaned-at-v1` witness that binds the marker's presence but not its bytes or inode. Each capture and check still refuses anything but a regular, non-symlink, user-owned file of at most 32 bytes matching `^[1-9][0-9]{12}$`. The name stays in directory membership, and a typed marker under a pruned retired version keeps the existing retired-root exemption. Other depths, other names and Skills-owned producer trees keep exact byte witnesses; stored byte witnesses of the marker keep their meaning until one fresh review.
+- Certified Claude managed-cache snapshots now also require the marker to be exactly 13 bytes, so a UTF-8 byte-order mark before the timestamp is refused.
+
 ## 0.10.71
 
 - Admit the user-scoped Claude directory marketplace writer on the exact 2.1.276, 2.1.278, 2.1.282, 2.1.287, 2.1.296 and 2.1.299 versions measured on the fleet. Keep 2.1.293 support and reject unmeasured versions and project scope.

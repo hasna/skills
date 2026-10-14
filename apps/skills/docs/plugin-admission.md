@@ -330,9 +330,23 @@ What the software currently enforces is narrower:
   managed row's `installPath` to be `cache/<marketplace>/<plugin>/<version>`,
   checks every file in every retained cache version against the admission
   receipts without the review listing them, and binds unmanaged rows exactly.
+- Claude rewrites the 13-digit millisecond timestamp in
+  `.claude/plugins/cache/<marketplace>/<plugin>/<version>/.orphaned_at` when it
+  starts. Capturing that exact path with `captureDiscoveryByteSources` or
+  `captureDiscoveryPathSources` (including the installer `path-bytes`
+  operation) produces a `claude-plugin-orphaned-at-v1` witness, and a fresh
+  explicit review converts a plain byte or `path-bytes` witness of it to that
+  form. The witness binds the marker's presence or absence, not its bytes or
+  inode. Every capture and check still requires a regular, non-symlink file
+  owned by the current user, at most 32 bytes, matching `^[1-9][0-9]{12}$`.
+  The name stays in `directories` membership, so other added or removed names
+  are still detected. A marker at any other depth, any other name, and any
+  Skills-owned producer tree keep their exact byte witnesses. A stored review
+  that binds the marker's bytes keeps that meaning and needs one fresh review.
 - An entirely absent retired Claude version root exempts only its plain byte
   sources (`hashMode` omitted or `"bytes"`, with no `format`, `fields` or
-  `managedPlugins`). Such a source with a non-null `sha256` is also the only
+  `managedPlugins`) and a present `claude-plugin-orphaned-at-v1` marker. Such a
+  source with a non-null `sha256` is also the only
   thing that identifies the root, and the root qualifies only while it stays
   entirely absent and the reviewed settings and registry select a different,
   verified version. Every other source under that root is re-hashed as usual,
