@@ -71,7 +71,7 @@ describe("B3: only changes a vendor plugin refresh provably makes are tolerated"
     const report = assertManagedAgentBridge("codex", live(s));
     // Reported once although verifyAgentDiscovery and the automatic closure both see it.
     expect(report).toEqual({ codexInertVendorCopies: [], codexDiscoveryChanges: [{ kind: "input", path: s.config }] });
-    expect(codexPromptDriftWarning(report)).toBe(`Skills warning: 1 reviewed Codex discovery witness changed only by a vendor plugin refresh (vendor configuration entries) and was not blocked: ${JSON.stringify(s.config)}. Enabled vendor skill copies and every other change still block. Refresh the binding with skills hook install --agent codex and a fresh discovery review.`);
+    expect(codexPromptDriftWarning(report)).toBe(`Skills warning: 1 recorded Codex discovery witness changed only by a vendor plugin refresh (vendor configuration entries) and was not blocked: ${JSON.stringify(s.config)}. Enabled vendor skill copies and every other change still block. Refresh the binding with skills hook install --agent codex --apply, with a fresh discovery review for a reviewed binding.`);
     // Several appended vendor rules, by name and by exact vendor path.
     append(s, `[[skills.config]]\npath = ${JSON.stringify(join(s.vendor, "sites", "1.0.2", "skills", "x", "SKILL.md"))}\nenabled = false\n`);
     expect(assertManagedAgentBridge("codex", live(s)).codexDiscoveryChanges).toEqual([{ kind: "input", path: s.config }]);
@@ -175,6 +175,20 @@ describe("B3: only changes a vendor plugin refresh provably makes are tolerated"
       ["dot-named version directory", s => { codex(at(s, ".1.0.3")); put(join(at(s, ".1.0.3"), "skills", "x", "SKILL.md"), payload("x")); }],
       ["hidden marketplace directory", s => put(join(s.vendor, ".staging", "sites", "1.0.3", "skills", "x", "SKILL.md"), payload("x"))],
       ["symlinked version outside the cache", s => { const outside = join(s.home, "outside-plugin"); codex(outside, { hooks: "./startup.json" }); startup(outside); symlinkSync(outside, at(s, "1.0.9")); }],
+      // F3: MCP, command, agent, connector and unknown declarations need their own review.
+      ["MCP declaration file", s => { codex(at(s)); put(join(at(s), ".mcp.json"), JSON.stringify({ mcpServers: {} })); }],
+      ["inline MCP servers", s => codex(at(s), { mcpServers: { x: { command: "true" } } })],
+      ["MCP servers by path", s => { codex(at(s), { mcpServers: "./.mcp.json" }); put(join(at(s), ".mcp.json"), JSON.stringify({ mcpServers: {} })); }],
+      ["default commands directory", s => { codex(at(s)); put(join(at(s), "commands", "c.md"), "synthetic command"); }],
+      ["default agents directory", s => { codex(at(s)); put(join(at(s), "agents", "a.md"), "synthetic agent"); }],
+      ["manifest agents", s => codex(at(s), { agents: "./more-agents" })],
+      ["unknown manifest key", s => codex(at(s), { $schema: "https://example.invalid/plugin.json" })],
+      ["second file beside the Codex manifest", s => { codex(at(s)); put(join(at(s), ".codex-plugin", "notes.json"), "{}"); }],
+      ["connector declaration without its file", s => codex(at(s), { apps: "./.app.json" })],
+      ["connector declaration at another path", s => { codex(at(s), { apps: "./apps.json" }); put(join(at(s), "apps.json"), '{"apps":{}}'); }],
+      ["connector file without a declaration", s => { codex(at(s)); put(join(at(s), ".app.json"), '{"apps":{}}'); }],
+      ["root hooks file", s => { codex(at(s)); startup(at(s)); put(join(at(s), "hooks.json"), "{}"); }],
+      ["differently cased hooks directory", s => { codex(at(s)); put(join(at(s), "Hooks", "hooks.json"), "{}"); }],
     ];
     for (const [label, make] of refused) {
       const s = reviewed();

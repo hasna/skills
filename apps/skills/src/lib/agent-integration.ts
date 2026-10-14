@@ -9,7 +9,7 @@ import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
 import { captureCodexSemanticCacheWitness, codexLocalMarketplaceMapsPlugin, type CodexSemanticCacheAppOnlyParent, type CodexSemanticCacheReviewedHookParent } from "./codex-semantic-cache-witness.js";
 import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
 import type { NativeDiscoveryWitnessChange, NativeDiscoveryWitnessKind, NativeDiscoveryWitnessTolerance } from "./native-discovery-witness-change.js";
-import { CODEX_REMOTE_VENDOR_MARKETPLACES, codexVendorMarketplace, codexVendorSubtreeHookFree } from "./codex-vendor-refresh.js";
+import { CODEX_REMOTE_VENDOR_MARKETPLACES, codexVendorMarketplace, codexVendorPluginRefreshSafe, codexVendorSubtreeHookFree } from "./codex-vendor-refresh.js";
 import { isCodexNativeSkillDisabled } from "./codex-native-skill-catalog.js";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -1605,28 +1605,16 @@ export function isInertCodexPluginCacheCopy(entry: NativeSkillEntry, cache: stri
   return classifiedCodexPluginCacheCopy(entry, cache, read, document => !allowedHostPaths.includes(document));
 }
 
-/** Whether a skill directory holds another SKILL.md in any subdirectory. Fails
- * closed: links, special files, read errors and an oversized tree count as nested. */
-function nestedSkillDocument(root: string): boolean {
-  let entries = 0;
-  const visit = (path: string, depth: number): boolean => {
-    if (depth > 32) return true;
-    for (const name of readdirSync(path)) {
-      if (++entries > 10000) return true;
-      const child = join(path, name), stat = lstatSync(child);
-      if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) return true;
-      if (stat.isDirectory() ? visit(child, depth + 1) : depth > 0 && name.toLowerCase() === "skill.md") return true;
-    }
-    return false;
-  };
-  try { return visit(root, 0); } catch { return true; }
-}
-
 /** A vendor plugin-cache copy that Codex configuration provably disables, so its
  * payload never loads natively. Vendor means: classified installed-plugin content
  * in an allowlisted OpenAI marketplace (exact names), with the native remote
  * install receipt for remote marketplaces, no Skills-managed or Hasna marker,
- * and no other SKILL.md nested below it. Disabled means: a `[[skills.config]]`
+ * and a plugin whose every cached version passes the fail-closed refresh check
+ * (codexVendorPluginRefreshSafe: one Codex manifest with only known keys, no
+ * hooks, MCP, command, agent or extension declaration, no other manifest
+ * location, no link and no skill hidden from the inventory or nested in
+ * another). Classification reads only the Codex manifest, so without that check
+ * a version could load payloads no rule here covers. Disabled means: a `[[skills.config]]`
  * rule names its exact SKILL.md path or its plugin-qualified name with
  * `enabled = false` (the native ordered evaluation agrees), and no matching rule
  * enables it. A whole-plugin `[plugins."<id>"] enabled = false` table is never
@@ -1640,8 +1628,9 @@ export function isInertCodexVendorPluginCopy(entry: NativeSkillEntry, cache: str
     return classifiedCodexPluginCacheCopy(entry, cache, read, (document, identity) => {
       if (identity.pluginId !== `${identity.namespace}@${marketplace}`) return false;
       if (CODEX_REMOTE_VENDOR_MARKETPLACES.includes(marketplace) && codexRemoteInstallReceipt(identity.pluginParent, read) === null) return false;
-      // A nested skill would load under its own name, which no rule here covers.
-      if (nestedSkillDocument(entry.path)) return false;
+      // Every version of the plugin, including this copy's root, must hold only
+      // what the inventory and this rule account for; a fresh budget per copy.
+      if (!codexVendorPluginRefreshSafe(identity.pluginParent)) return false;
       if (!Array.isArray(rules)) return false;
       // Native path rules canonicalize through links; so does this pre-check.
       const canonical = (path: string) => { try { return realpathSync.native(path); } catch { return resolve(path); } };
@@ -1677,7 +1666,7 @@ export function codexPromptDriftWarning(report: ManagedBridgeReport): string | u
   const one = changes.length === 1;
   const kinds = [...new Set(changes.map(change => change.kind === "input" ? "vendor configuration entries" : "vendor plugin cache membership"))].join(", ");
   const paths = [...new Set(changes.flatMap(change => change.path === null ? [] : [change.path]))];
-  return `Skills warning: ${changes.length} reviewed Codex discovery ${one ? "witness" : "witnesses"} changed only by a vendor plugin refresh (${kinds}) and ${one ? "was" : "were"} not blocked${paths.length ? `: ${nativeSkillPathList(paths, true)}` : ""}. Enabled vendor skill copies and every other change still block. Refresh the binding with skills hook install --agent codex and a fresh discovery review.`;
+  return `Skills warning: ${changes.length} recorded Codex discovery ${one ? "witness" : "witnesses"} changed only by a vendor plugin refresh (${kinds}) and ${one ? "was" : "were"} not blocked${paths.length ? `: ${nativeSkillPathList(paths, true)}` : ""}. Enabled vendor skill copies and every other change still block. Refresh the binding with skills hook install --agent codex --apply, with a fresh discovery review for a reviewed binding.`;
 }
 
 /** Run before any prompt context load. Missing ownership or reappearing native
@@ -1756,6 +1745,8 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
   // hook has tolerated a witness change, the strict guard would refuse the whole
   // state, so no strict exemption is being kept: plugin-cache copies are then
   // exempt only through this narrow classifier. Read after discovery verification.
+  // The inventory's sibling-alias check never uses it: a linked version gains
+  // nothing from this rule, exactly as on every other guard call.
   const inertVendorCopy = (entry: NativeSkillEntry): boolean => agent === "codex" && options.codexPromptHook === true && entry.vendor && entry.path.startsWith(vendorCache + sep)
     && isInertCodexVendorPluginCopy(entry, vendorCache, codexConfig.skills?.config, path => new TextDecoder("utf-8", { fatal: true }).decode(readNativeBytes(path, 1024 * 1024)));
   const vendorOnlyCacheCopy = (entry: NativeSkillEntry): boolean => (witnessTolerance?.changes.length ?? 0) > 0 && entry.path.startsWith(vendorCache + sep);
@@ -1802,7 +1793,7 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
       installationInputRoots=reviewedCodexPluginSourceRoots(canonicalAgentPath(join(home,".codex/plugins/cache"),aliases),discovery.codexInstallationInputs?.plugins ?? [],path=>new TextDecoder("utf-8",{fatal:true}).decode(readNativeBytes(path,1024*1024))); }
     catch { throw new Error("NATIVE_SKILL_DRIFT: native installation input identity changed; review discovery and catalog"); }
   }
-  const inventory = inventoryNativeSkills(home, { includeVendor: true, guardHermes: agent === "hermes", agents: [agent], projectDirs: [...roots], agentRoots: discovery.roots.map(path => ({ agent, path })), allowRootAliases: aliases.length > 0, disabledVendorPaths: agent === "codex" ? disabledCodexSkillPaths(codexConfig, aliases) : [], disabledVendorSkill: entry => vendorOnlyCacheCopy(entry) ? inertVendorCopy(entry) : disabledPlugin(entry) || inertVendorCopy(entry), codexInstallationInputRoots: installationInputRoots });
+  const inventory = inventoryNativeSkills(home, { includeVendor: true, guardHermes: agent === "hermes", agents: [agent], projectDirs: [...roots], agentRoots: discovery.roots.map(path => ({ agent, path })), allowRootAliases: aliases.length > 0, disabledVendorPaths: agent === "codex" ? disabledCodexSkillPaths(codexConfig, aliases) : [], disabledVendorSkill: entry => !vendorOnlyCacheCopy(entry) && disabledPlugin(entry), codexInstallationInputRoots: installationInputRoots });
   const unexpected = inventory.filter(entry => visible(entry) && !entry.bridge && !disabledVendorSkill(entry));
   // Codex native policy adapter: consulted only when a Codex hook supplied native
   // policy input and the guard would otherwise refuse. A verified restricted

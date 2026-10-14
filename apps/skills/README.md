@@ -227,7 +227,10 @@ copy is then exempt when every condition holds:
 - it is package-classified plugin content in `openai-bundled`, `openai-curated`
   or `openai-curated-remote` (exact names), with Codex's remote install receipt
   for the remote marketplace;
-- it carries no Skills or Hasna marker and no other `SKILL.md` below it;
+- it carries no Skills or Hasna marker;
+- every cached version of its plugin passes the vendor refresh check described
+  below for membership changes, so the plugin can load nothing that the
+  inventory and this rule do not account for, and no version is a link;
 - a `[[skills.config]]` rule names its exact path or its plugin-qualified name
   with `enabled = false`, and no matching rule enables it.
 
@@ -242,8 +245,8 @@ the hook tolerates one of the witness changes below, a state the strict guard
 refuses outright, plugin-cache copies are exempt only through this vendor rule.
 
 Instead of editing by hand, `skills hook native-catalog` followed by
-`skills hook install --agent codex --codex-native-catalog <file>` writes the same
-rules through the guarded install path.
+`skills hook install --agent codex --codex-native-catalog <file> --apply` writes
+the same rules through the guarded install path.
 
 The hook also tolerates, with a visible `systemMessage` warning, only the
 discovery-witness changes such a refresh provably makes:
@@ -252,13 +255,21 @@ discovery-witness changes such a refresh provably makes:
   vendor flag reproduces the reviewed digest. Candidates are tried smallest edit
   first, at most 128; with a typed settings witness that covers any change to up
   to two of at most eight vendor plugin tables. A change beyond the bound refuses;
-- directory membership changes under an allowlisted vendor marketplace in which
-  every plugin version has exactly one manifest, `.codex-plugin/plugin.json`,
-  that declares no hooks (path, list or inline), commands, extensions or
-  non-default skills path, with no `hooks` directory, no root, `.claude-plugin`
-  or `.cursor-plugin` manifest, no link and no `SKILL.md` that the inventory
-  cannot see (below a dot-named or `node_modules` directory, or nested in
-  another skill).
+- directory membership changes under an allowlisted vendor marketplace that
+  passes the vendor refresh check: every plugin version has exactly one
+  manifest, `.codex-plugin/plugin.json`, alone in its directory, whose keys are
+  only `name`, `version`, `description`, `author`, `homepage`, `repository`,
+  `license`, `keywords`, `interface`, `skills` (the default `./skills/` only) and
+  `apps`. So hooks in any form, commands, agents, extensions, MCP servers and
+  unknown keys refuse. There is no `hooks`, `commands` or `agents` directory, no
+  `hooks.json` or `.mcp.json` (names compared without regard to case), no root,
+  `.claude-plugin` or `.cursor-plugin` manifest, no link
+  and no `SKILL.md` that the inventory cannot see (below a dot-named or
+  `node_modules` directory, or nested in another skill). One exception keeps
+  today's vendor plugins working: every current OpenAI vendor plugin declares
+  its connector as `apps = "./.app.json"`, so exactly that declaration with a
+  regular `.app.json` file is allowed; any other connector path, or the file
+  without the declaration, refuses.
 
 Every other copy and change still refuses with `NATIVE_SKILL_DRIFT`, including:
 - user, project, `.system` and Hasna-marketplace copies that the guard does not

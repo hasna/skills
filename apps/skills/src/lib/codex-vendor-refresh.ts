@@ -27,20 +27,28 @@ export function codexVendorMarketplace(cache: string, path: string): string | nu
   return CODEX_VENDOR_MARKETPLACES.includes(parts[0]!) ? parts[0]! : null;
 }
 
-/** Every manifest location Codex 0.162.1 reads in a plugin root, besides the
- * `.codex-plugin/plugin.json` a vendor refresh writes (see
- * codex-hook-mcp-dependencies.ts), plus the default hooks location. */
-const OTHER_PLUGIN_CONTROLS: readonly string[] = Object.freeze(["plugin.json", ".claude-plugin", ".cursor-plugin", "hooks"]);
-/** Manifest keys that add hooks, commands or another skill or extension root. */
-const ROOT_CHANGING_MANIFEST_KEYS: readonly string[] = Object.freeze(["hooks", "commands", "skills", "extensions"]);
+/** Root entries a vendor refresh never needs: every other manifest location
+ * Codex 0.162.1 reads besides `.codex-plugin/plugin.json` (see
+ * codex-hook-mcp-dependencies.ts), the default hooks location and a root hooks
+ * file, and the MCP, command and agent locations. Matched without regard to
+ * case, so a case-insensitive file system cannot alias one. */
+const OTHER_PLUGIN_CONTROLS: readonly string[] = Object.freeze(["plugin.json", ".claude-plugin", ".cursor-plugin", "hooks", "hooks.json", ".mcp.json", "commands", "agents"]);
+/** The only manifest keys a vendor refresh may carry: identity and display
+ * metadata, the default skills root and the reviewed `.app.json` connector
+ * declaration that every current vendor plugin has. Any other key (hooks,
+ * commands, extensions, MCP servers, agents and unknown keys) refuses. */
+const VENDOR_MANIFEST_KEYS: readonly string[] = Object.freeze(["name", "version", "description", "author", "homepage", "repository", "license", "keywords", "interface", "skills", "apps"]);
 /** The default skills root, which vendor manifests spell out. */
 const DEFAULT_SKILLS_PATHS: readonly string[] = Object.freeze(["./skills", "./skills/"]);
+const VENDOR_APP_DECLARATION = "./.app.json";
 const MAX_SUBTREE_ENTRIES = 20000;
 const MAX_SUBTREE_DEPTH = 32;
 /** Directory names the native inventory skips, so a SKILL.md below one is never inventoried. */
 const hiddenName = (name: string): boolean => name.startsWith(".") || name === "node_modules";
 const isSkillDocument = (name: string): boolean => name.toLowerCase() === "skill.md";
 const present = (path: string): boolean => lstatSync(path, { throwIfNoEntry: false }) !== undefined;
+const holdsOtherControl = (path: string): boolean => readdirSync(path).some(name => OTHER_PLUGIN_CONTROLS.includes(name.toLowerCase()));
+const regularFile = (path: string): boolean => { const stat = lstatSync(path, { throwIfNoEntry: false }); return Boolean(stat?.isFile() && !stat.isSymbolicLink()); };
 
 /** Below a plugin root: real directories and regular files only, and every
  * SKILL.md is its own visible inventory entry (no hidden or `node_modules`
@@ -61,61 +69,77 @@ function pluginTreeVisible(path: string, hidden: boolean, insideSkill: boolean, 
 }
 
 /** A plugin version root a vendor refresh can add without review: its only
- * manifest is a regular `.codex-plugin/plugin.json` that declares no hooks
- * (in any form), commands, extensions or non-default skills path; there is no
- * hooks directory and no root, Claude or Cursor manifest; every skill in it is
- * visible to the native inventory. */
-function vendorPluginRootRefreshSafe(root: string, budget: { remaining: number }): boolean {
-  if (OTHER_PLUGIN_CONTROLS.some(name => present(join(root, name)))) return false;
-  if (!directory(join(root, ".codex-plugin"))) return false;
-  const manifest = join(root, ".codex-plugin", "plugin.json"), stat = lstatSync(manifest, { throwIfNoEntry: false });
-  if (!stat?.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) return false;
-  const text = readFileSync(manifest, "utf8");
-  // Codex refuses duplicate decoded keys; so does this check, before reading any key.
-  hashNativeJsonControls(text);
-  const value: unknown = JSON.parse(text);
-  if (!record(value) || ROOT_CHANGING_MANIFEST_KEYS.some(key => key !== "skills" && Object.hasOwn(value, key))) return false;
-  if (Object.hasOwn(value, "skills") && !(typeof value.skills === "string" && DEFAULT_SKILLS_PATHS.includes(value.skills))) return false;
-  return pluginTreeVisible(root, false, false, 0, budget);
+ * manifest is a regular `.codex-plugin/plugin.json` (alone in its directory,
+ * no duplicate keys) whose keys are all in VENDOR_MANIFEST_KEYS, with the
+ * default skills root and, when present, exactly the `./.app.json` connector
+ * declaration backed by a regular `.app.json`; there is no hooks, MCP, command
+ * or agent location and no root, Claude or Cursor manifest; every skill in it
+ * is visible to the native inventory. Errors and bounds refuse. */
+export function codexVendorPluginRootRefreshSafe(root: string, budget: { remaining: number } = { remaining: MAX_SUBTREE_ENTRIES }): boolean {
+  try {
+    if (!directory(root) || holdsOtherControl(root)) return false;
+    if (!directory(join(root, ".codex-plugin"))) return false;
+    const controls = readdirSync(join(root, ".codex-plugin"));
+    if (controls.length !== 1 || controls[0] !== "plugin.json") return false;
+    const manifest = join(root, ".codex-plugin", "plugin.json"), stat = lstatSync(manifest, { throwIfNoEntry: false });
+    if (!stat?.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) return false;
+    const text = readFileSync(manifest, "utf8");
+    // Codex refuses duplicate decoded keys; so does this check, before reading any key.
+    hashNativeJsonControls(text);
+    const value: unknown = JSON.parse(text);
+    if (!record(value) || Object.keys(value).some(key => !VENDOR_MANIFEST_KEYS.includes(key))) return false;
+    if (Object.hasOwn(value, "skills") && !(typeof value.skills === "string" && DEFAULT_SKILLS_PATHS.includes(value.skills))) return false;
+    const app = join(root, ".app.json");
+    if (Object.hasOwn(value, "apps") ? value.apps !== VENDOR_APP_DECLARATION || !regularFile(app) : present(app)) return false;
+    return pluginTreeVisible(root, false, false, 0, budget);
+  } catch { return false; }
+}
+
+/** The real directories directly below a vendor marketplace or plugin directory,
+ * or null when any entry is a link, a special file, a SKILL.md file or a hidden
+ * (or `node_modules`) directory. Regular files are allowed: the native remote
+ * install receipt sits beside a plugin's versions. */
+function vendorMembers(path: string, budget: { remaining: number }): string[] | null {
+  const directories: string[] = [];
+  for (const name of readdirSync(path)) {
+    if (--budget.remaining < 0) return null;
+    const stat = lstatSync(join(path, name));
+    if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) return null;
+    if (stat.isFile()) { if (isSkillDocument(name)) return null; continue; }
+    if (hiddenName(name)) return null;
+    directories.push(join(path, name));
+  }
+  return directories;
+}
+
+/** True only when every cached version of one vendor plugin
+ * (`<cache>/<marketplace>/<plugin>`) passes codexVendorPluginRootRefreshSafe,
+ * the plugin directory carries no manifest, hooks, MCP, command or agent
+ * location of its own, and no version is a link. Errors and bounds refuse. */
+export function codexVendorPluginRefreshSafe(parent: string, budget: { remaining: number } = { remaining: MAX_SUBTREE_ENTRIES }): boolean {
+  try {
+    if (!directory(parent) || holdsOtherControl(parent) || present(join(parent, ".codex-plugin"))) return false;
+    const versions = vendorMembers(parent, budget);
+    return versions !== null && versions.every(version => codexVendorPluginRootRefreshSafe(version, budget));
+  } catch { return false; }
 }
 
 /** True only when every plugin in a vendor marketplace subtree could have been
- * added by a routine vendor refresh: each `<marketplace>/<plugin>/<version>`
- * root passes vendorPluginRootRefreshSafe, plugin parents carry no manifest or
- * hooks of their own, and no level holds a link, special file or hidden
- * directory. Plugin hooks and other skill roots need their own review, so a
- * membership change that adds them is never a routine vendor refresh. The
- * whole marketplace is checked, not only new versions, so anything unexpected
- * anywhere refuses. Bounded; links are never followed; errors refuse. */
+ * added by a routine vendor refresh: each plugin passes
+ * codexVendorPluginRefreshSafe and the marketplace holds no link, special file
+ * or hidden directory. Plugin hooks and other skill roots need their own
+ * review, so a membership change that adds them is never a routine vendor
+ * refresh. The whole marketplace is checked, not only new versions, so anything
+ * unexpected anywhere refuses. Bounded; links are never followed; errors refuse. */
 export function codexVendorSubtreeHookFree(cache: string, path: string): boolean {
   const marketplace = codexVendorMarketplace(cache, path);
   if (!marketplace) return false;
   const root = join(cache, marketplace), budget = { remaining: MAX_SUBTREE_ENTRIES };
-  // Regular files are allowed beside plugins and versions (the native remote
-  // install receipt sits beside versions); everything else must be a real directory.
-  const members = (directoryPath: string): string[] | null => {
-    const directories: string[] = [];
-    for (const name of readdirSync(directoryPath)) {
-      if (--budget.remaining < 0) return null;
-      const stat = lstatSync(join(directoryPath, name));
-      if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) return null;
-      if (stat.isFile()) { if (isSkillDocument(name)) return null; continue; }
-      if (hiddenName(name)) return null;
-      directories.push(join(directoryPath, name));
-    }
-    return directories;
-  };
   try {
     if (!directory(root)) return false;
     // <marketplace>/<plugin>/<version> are the only plugin root depths Codex uses.
-    const plugins = members(root);
-    if (!plugins) return false;
-    for (const parent of plugins) {
-      if (OTHER_PLUGIN_CONTROLS.some(name => present(join(parent, name))) || present(join(parent, ".codex-plugin"))) return false;
-      const versions = members(parent);
-      if (!versions || versions.some(version => !vendorPluginRootRefreshSafe(version, budget))) return false;
-    }
-    return true;
+    const plugins = vendorMembers(root, budget);
+    return plugins !== null && plugins.every(parent => codexVendorPluginRefreshSafe(parent, budget));
   } catch { return false; }
 }
 

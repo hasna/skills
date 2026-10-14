@@ -276,6 +276,65 @@ describe("B2: vendor classification is an exact allowlist", () => {
     }
   });
 
+  test("F1/F3: a name-disabled copy gets no vendor exemption when its plugin can load what the inventory cannot see", () => {
+    const hooks = JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: "true" }] }] } });
+    const manifest = (root: string, extra: Record<string, unknown> = {}) => put(join(root, ".codex-plugin", "plugin.json"), JSON.stringify({ name: "sites", version: "1.0.3", ...extra }));
+    const shapes: Record<string, (root: string) => void> = {
+      "skills list with a hidden root": root => { manifest(root, { skills: ["./skills", "./.payload"] }); put(join(root, ".payload", "evil", "SKILL.md"), payload("evil")); },
+      "migrated command skills": root => put(join(root, ".codex-plugin", "migrated-command-skills", "evil", "SKILL.md"), payload("evil")),
+      "root Agent Plugins manifest with hooks": root => { put(join(root, "plugin.json"), JSON.stringify({ $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json", name: "sites", version: "1.0.3", hooks: "./h.json" })); put(join(root, "h.json"), hooks); },
+      "manifest extensions": root => manifest(root, { extensions: { "com.openai": { onboardingSkill: "evil" } } }),
+      "Claude manifest with hooks": root => { put(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "sites", version: "1.0.3", hooks: "./h.json" })); put(join(root, "h.json"), hooks); },
+      "MCP declaration file": root => put(join(root, ".mcp.json"), JSON.stringify({ mcpServers: {} })),
+      "inline MCP servers": root => manifest(root, { mcpServers: { x: { command: "true" } } }),
+      "default commands directory": root => put(join(root, "commands", "c.md"), "synthetic command"),
+      "default agents directory": root => put(join(root, "agents", "a.md"), "synthetic agent"),
+    };
+    const station = (binding: string) => {
+      const s = home(`skills-vendor-addver-${binding}-`);
+      put(s.config, byName("sites:x"));
+      if (binding === "auto") applyAgentIntegration(planAgentIntegration({ ...opts(s), agents: ["codex"] }));
+      else applyAgentIntegration(planAgentIntegration({ ...opts(s), agents: ["codex"], discoveryInputs: { version: 1, agents: [{ agent: "codex", roots: binding === "v3roots" ? [s.cache] : [], sources: [captureCodexSettingsV3(s.config)], pluginHooks: "reviewed-no-skill-injection" }] } }));
+      // A remote sync deposits a version with a visible, name-disabled skill.
+      const root = join(s.cache, "openai-curated", "sites", "1.0.3"), copy = join(root, "skills", "x");
+      manifest(root); put(join(copy, "SKILL.md"), payload("x"));
+      return { s, root, copy };
+    };
+    for (const binding of ["auto", "v3", "v3roots"]) {
+      // Control: a clean added version is exempt by the name rule on the live hook only.
+      const clean = station(binding);
+      const blocked = `NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ${JSON.stringify(clean.copy)}`;
+      expect(refusal(() => assertManagedAgentBridge("codex", opts(clean.s)))).toStartWith(blocked);
+      expect(assertManagedAgentBridge("codex", live(clean.s))).toEqual({ codexInertVendorCopies: [clean.copy], codexDiscoveryChanges: [] });
+      for (const [label, make] of Object.entries(shapes)) {
+        const { s, root, copy } = station(binding);
+        make(root);
+        const strict = refusal(() => assertManagedAgentBridge("codex", opts(s)));
+        expect([binding, label, strict.startsWith(`NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ${JSON.stringify(copy)}`)]).toEqual([binding, label, true]);
+        expect([binding, label, refusal(() => assertManagedAgentBridge("codex", live(s)))]).toEqual([binding, label, strict]);
+      }
+    }
+  });
+
+  test("F2: a linked sibling version gains nothing from the vendor rule; the guard's own exact-path rule is unchanged", () => {
+    const cases: Array<[string, (root: string) => string]> = [
+      ["name", () => byName("sites:x")],
+      ["path", root => byPath(join(root, "skills", "x"))],
+    ];
+    for (const [label, rule] of cases) {
+      const s = reviewedV3();
+      const parent = join(s.cache, "openai-curated", "sites"), root = join(parent, "1.0.2");
+      put(join(root, ".codex-plugin", "plugin.json"), JSON.stringify({ name: "sites", version: "1.0.2" }));
+      put(join(root, "skills", "x", "SKILL.md"), payload("x"));
+      symlinkSync(root, join(parent, "1.0.3"));
+      append(s, rule(root));
+      const strict = refusal(() => assertManagedAgentBridge("codex", opts(s)));
+      expect([label, refusal(() => assertManagedAgentBridge("codex", live(s)))]).toEqual([label, strict]);
+      // The strict guard refuses the link unless an exact-path disable covers every target skill.
+      expect([label, strict === "ACCEPTED"]).toEqual([label, label === "path"]);
+    }
+  });
+
   test("unclassified cache documents and symlinked cache segments refuse", () => {
     // An unclassified document has no plugin-qualified name to disable.
     const loose = reviewedV3();
@@ -365,7 +424,7 @@ describe("scope and warning text", () => {
     const tricky = [0x200b, 0xfeff, 0x2060, 0x202e, 0x2028, 0x0085].map(code => `/c/a${ch(code)}b`);
     const changes = [...tricky, "/c/line\nbreak", "/c/" + "x".repeat(2000)].map(path => ({ kind: "membership" as const, path }));
     const warning = codexPromptDriftWarning({ codexInertVendorCopies: [], codexDiscoveryChanges: [{ kind: "input", path: "/c/config.toml" }, ...changes, { kind: "membership", path: null }] })!;
-    expect(warning.startsWith("Skills warning: 10 reviewed Codex discovery witnesses changed only by a vendor plugin refresh (vendor configuration entries, vendor plugin cache membership) and were not blocked: ")).toBe(true);
+    expect(warning.startsWith("Skills warning: 10 recorded Codex discovery witnesses changed only by a vendor plugin refresh (vendor configuration entries, vendor plugin cache membership) and were not blocked: ")).toBe(true);
     for (const code of [0x200b, 0xfeff, 0x2060, 0x202e, 0x2028, 0x0085]) expect(warning.includes(ch(code))).toBe(false);
     expect(warning).toContain(`"/c/a${bs}u200bb"`);
     expect(warning).toContain(`"/c/a${bs}ufeffb"`);

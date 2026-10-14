@@ -95,7 +95,7 @@ test("station04 replay from an isolated cwd: a qualified-name disable delivers c
     expect(result.stdout).not.toContain("Synthetic native instructions");
     // The appended vendor rule changed the automatic configuration witness; it is
     // tolerated as a vendor refresh entry and named, never silently adopted.
-    expect(result.value.systemMessage).toStartWith("Skills warning: 1 reviewed Codex discovery witness changed only by a vendor plugin refresh (vendor configuration entries) and was not blocked: ");
+    expect(result.value.systemMessage).toStartWith("Skills warning: 1 recorded Codex discovery witness changed only by a vendor plugin refresh (vendor configuration entries) and was not blocked: ");
   }
   // The exact-path disable already present on station04 works the same way.
   f.setConfig(`[[skills.config]]\npath = ${JSON.stringify(join(f.copy, "SKILL.md"))}\nenabled = false\n`);
