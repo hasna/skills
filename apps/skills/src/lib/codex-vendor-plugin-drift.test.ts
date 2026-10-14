@@ -316,6 +316,32 @@ describe("B2: vendor classification is an exact allowlist", () => {
     }
   });
 
+  test("N4: a malformed connector file in any version of the plugin removes the vendor exemption", () => {
+    const valid = '{"apps":{"sites":{"id":"synthetic_sites_connector","required":true}}}';
+    const bad: Array<[string, string | Buffer]> = [
+      ["valid (control)", valid],
+      ["malformed JSON", '{"apps":'],
+      ["oversized", valid + " ".repeat(1024 * 1024)],
+      ["unknown key", '{"apps":{"sites":{"id":"synthetic_sites_connector","command":"true"}}}'],
+      ["duplicate keys", '{"apps":{"sites":{"id":"a"}},"apps":{"sites":{"id":"b"}}}'],
+      ["wrong type", '{"apps":{"sites":{"id":7}}}'],
+      ["non-UTF-8 bytes", Buffer.concat([Buffer.from('{"apps":{"sites":{"id":"x","category":"'), Buffer.from([0xc3, 0x28]), Buffer.from('"}}}')])],
+    ];
+    for (const [label, bytes] of bad) {
+      const s = reviewedV3();
+      const [copy] = plugin(s, { marketplace: "openai-curated", receipt: false });
+      // Another cached version of the same plugin declares a connector.
+      const sibling = join(s.cache, "openai-curated", "sites", "1.0.1");
+      put(join(sibling, ".codex-plugin", "plugin.json"), JSON.stringify({ name: "sites", version: "1.0.1", apps: "./.app.json" }));
+      writeFileSync(join(sibling, ".app.json"), bytes);
+      append(s, byName("sites:sites-remix"));
+      const outcome = refusal(() => assertManagedAgentBridge("codex", live(s)));
+      if (label === "valid (control)") expect([label, outcome]).toEqual([label, "ACCEPTED"]);
+      else expect([label, outcome]).toEqual([label, expect.stringMatching(/^NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: /)]);
+      if (label !== "valid (control)") expect(outcome).toContain(JSON.stringify(copy));
+    }
+  });
+
   test("F2: a linked sibling version gains nothing from the vendor rule; the guard's own exact-path rule is unchanged", () => {
     const cases: Array<[string, (root: string) => string]> = [
       ["name", () => byName("sites:x")],

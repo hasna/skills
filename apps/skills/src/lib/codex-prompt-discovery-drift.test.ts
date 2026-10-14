@@ -56,6 +56,21 @@ function reviewed(directories: (s: Station) => string[] = s => [s.vendor]): Stat
 }
 const append = (s: Station, rows: string) => writeFileSync(s.config, `${read(s.config).trimEnd()}\n\n${rows}`);
 const nameRule = (name: string, enabled = false) => `[[skills.config]]\nname = ${JSON.stringify(name)}\nenabled = ${enabled}\n`;
+/** Connector files a vendor refresh may not carry: each fails the strict
+ * `.app.json` validation that reviewed plugin controls apply. */
+const VALID_CONNECTOR = '{"apps":{"sites":{"id":"synthetic_sites_connector","required":true}}}';
+const BAD_CONNECTORS: Array<[string, string | Buffer]> = [
+  ["malformed JSON", '{"apps":{"sites":{"id":"synthetic_sites_connector"}'],
+  ["oversized", VALID_CONNECTOR + " ".repeat(1024 * 1024)],
+  ["unknown top-level key", '{"apps":{"sites":{"id":"synthetic_sites_connector"}},"hooks":{}}'],
+  ["unknown app key", '{"apps":{"sites":{"id":"synthetic_sites_connector","command":"true"}}}'],
+  ["duplicate keys", '{"apps":{"sites":{"id":"synthetic_sites_connector"}},"apps":{"sites":{"id":"other_connector"}}}'],
+  ["wrong id type", '{"apps":{"sites":{"id":7}}}'],
+  ["wrong required type", '{"apps":{"sites":{"id":"synthetic_sites_connector","required":"yes"}}}'],
+  ["apps as a list", '{"apps":[{"id":"synthetic_sites_connector"}]}'],
+  ["empty apps", '{"apps":{}}'],
+  ["non-UTF-8 bytes", Buffer.concat([Buffer.from('{"apps":{"sites":{"id":"synthetic_sites_connector","category":"'), Buffer.from([0xff, 0xfe]), Buffer.from('"}}}')])],
+];
 const INPUT = (s: Station) => `NATIVE_SKILL_DRIFT: Native discovery input changed; run skills hook install with a fresh discovery review: ${s.config}`;
 function changePolicy(s: Station, change: (bridge: any) => void): void {
   const snapshot = readManagedSkillPolicySnapshot(s.dataDir)!;
@@ -189,6 +204,9 @@ describe("B3: only changes a vendor plugin refresh provably makes are tolerated"
       ["connector file without a declaration", s => { codex(at(s)); put(join(at(s), ".app.json"), '{"apps":{}}'); }],
       ["root hooks file", s => { codex(at(s)); startup(at(s)); put(join(at(s), "hooks.json"), "{}"); }],
       ["differently cased hooks directory", s => { codex(at(s)); put(join(at(s), "Hooks", "hooks.json"), "{}"); }],
+      // The connector declaration is validated as strictly as reviewed plugin
+      // controls are: any malformed, oversized or schema-unknown file refuses.
+      ...BAD_CONNECTORS.map(([label, bytes]): [string, (s: Station) => void] => [`connector ${label}`, s => { codex(at(s), { apps: "./.app.json" }); mkdirSync(at(s), { recursive: true }); writeFileSync(join(at(s), ".app.json"), bytes); }]),
     ];
     for (const [label, make] of refused) {
       const s = reviewed();

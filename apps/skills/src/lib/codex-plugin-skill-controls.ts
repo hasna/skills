@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { isCodexLocalStdioMcpServer } from "./codex-local-mcp-controls.js";
 import { hashNativeJsonControls } from "./claude-settings-witness.js";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
 import { codexPluginSourceIsConfigControlled, isCodexNativeSkillDisabled, projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, remotePluginIdentifier, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
 export interface CodexPluginSkillControl { name:string; pluginId:string; namespace:string; pluginParent:string; manifestSha256:string; appSha256?:string; mcpSha256?:string; remotePluginId?:string; skillsOnly?:true }
@@ -52,6 +52,19 @@ function appControls(path:string, read:Read):string {
       || (entry.required!==undefined && typeof entry.required!=="boolean")) refuse();
   }
   return sha256;
+}
+/** Whether a vendor refresh's `.app.json` connector declaration is valid under
+ * the same appControls validation rootControls applies (duplicate keys, the
+ * single `apps` object, app names, `id`/`category`/`required` only, types and
+ * caps), read as a regular, unlinked file of at most 1 MiB in strict UTF-8.
+ * Every failure is false. */
+export function codexAppDeclarationValid(path:string):boolean {
+  try {
+    const stat=lstatSync(path,{throwIfNoEntry:false});
+    if (!stat?.isFile() || stat.isSymbolicLink() || stat.size>1024*1024) return false;
+    appControls(path,file=>new TextDecoder("utf-8",{fatal:true}).decode(readFileSync(file)));
+    return true;
+  } catch { return false; }
 }
 /** Codex 0.160 local stdio controls, including its optional tool metadata.
  * The complete declaration stays fingerprinted; no command or env is resolved. */

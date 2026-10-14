@@ -267,9 +267,12 @@ discovery-witness changes such a refresh provably makes:
   and no `SKILL.md` that the inventory cannot see (below a dot-named or
   `node_modules` directory, or nested in another skill). One exception keeps
   today's vendor plugins working: every current OpenAI vendor plugin declares
-  its connector as `apps = "./.app.json"`, so exactly that declaration with a
-  regular `.app.json` file is allowed; any other connector path, or the file
-  without the declaration, refuses.
+  its connector as `apps = "./.app.json"`, so exactly that declaration is
+  allowed when `.app.json` is a regular file of at most 1 MiB, strict UTF-8, that
+  passes the same connector validation reviewed plugin controls use (one `apps`
+  object; app entries with only `id`, `category` and `required`, of the right
+  types; no duplicate keys). Any other connector path, a file that fails that
+  validation, or the file without the declaration refuses.
 
 Every other copy and change still refuses with `NATIVE_SKILL_DRIFT`, including:
 - user, project, `.system` and Hasna-marketplace copies that the guard does not

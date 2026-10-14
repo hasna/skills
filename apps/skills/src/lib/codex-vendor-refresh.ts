@@ -2,6 +2,7 @@ import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { hashNativeJsonControls } from "./claude-settings-witness.js";
+import { codexAppDeclarationValid } from "./codex-plugin-skill-controls.js";
 
 /** OpenAI's own Codex plugin marketplaces, by their exact native names in Codex
  * 0.162.1. Only these hold vendor plugin copies; every other marketplace,
@@ -48,7 +49,6 @@ const hiddenName = (name: string): boolean => name.startsWith(".") || name === "
 const isSkillDocument = (name: string): boolean => name.toLowerCase() === "skill.md";
 const present = (path: string): boolean => lstatSync(path, { throwIfNoEntry: false }) !== undefined;
 const holdsOtherControl = (path: string): boolean => readdirSync(path).some(name => OTHER_PLUGIN_CONTROLS.includes(name.toLowerCase()));
-const regularFile = (path: string): boolean => { const stat = lstatSync(path, { throwIfNoEntry: false }); return Boolean(stat?.isFile() && !stat.isSymbolicLink()); };
 
 /** Below a plugin root: real directories and regular files only, and every
  * SKILL.md is its own visible inventory entry (no hidden or `node_modules`
@@ -72,7 +72,8 @@ function pluginTreeVisible(path: string, hidden: boolean, insideSkill: boolean, 
  * manifest is a regular `.codex-plugin/plugin.json` (alone in its directory,
  * no duplicate keys) whose keys are all in VENDOR_MANIFEST_KEYS, with the
  * default skills root and, when present, exactly the `./.app.json` connector
- * declaration backed by a regular `.app.json`; there is no hooks, MCP, command
+ * declaration backed by an `.app.json` that passes the strict connector
+ * validation rootControls applies (codexAppDeclarationValid); there is no hooks, MCP, command
  * or agent location and no root, Claude or Cursor manifest; every skill in it
  * is visible to the native inventory. Errors and bounds refuse. */
 export function codexVendorPluginRootRefreshSafe(root: string, budget: { remaining: number } = { remaining: MAX_SUBTREE_ENTRIES }): boolean {
@@ -90,7 +91,7 @@ export function codexVendorPluginRootRefreshSafe(root: string, budget: { remaini
     if (!record(value) || Object.keys(value).some(key => !VENDOR_MANIFEST_KEYS.includes(key))) return false;
     if (Object.hasOwn(value, "skills") && !(typeof value.skills === "string" && DEFAULT_SKILLS_PATHS.includes(value.skills))) return false;
     const app = join(root, ".app.json");
-    if (Object.hasOwn(value, "apps") ? value.apps !== VENDOR_APP_DECLARATION || !regularFile(app) : present(app)) return false;
+    if (Object.hasOwn(value, "apps") ? value.apps !== VENDOR_APP_DECLARATION || !codexAppDeclarationValid(app) : present(app)) return false;
     return pluginTreeVisible(root, false, false, 0, budget);
   } catch { return false; }
 }
