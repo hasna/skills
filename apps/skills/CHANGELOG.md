@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Accept a Claude prospective review when the project `.claude/settings.json` or `.claude/settings.local.json` is absent with a null preimage, the reviewed discovery sources omit it, and no other expected source (such as the target settings) shares its path. Each exempt file is re-checked as absent after discovery and again before the result. Every present settings and registration source is still required.
+
 ## 0.10.71
 
 - Admit the user-scoped Claude directory marketplace writer on the exact 2.1.276, 2.1.278, 2.1.282, 2.1.287, 2.1.296 and 2.1.299 versions measured on the fleet. Keep 2.1.293 support and reject unmeasured versions and project scope.
