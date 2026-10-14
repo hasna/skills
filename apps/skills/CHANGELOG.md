@@ -16,6 +16,10 @@
 
   These are classified at their source as typed witness changes, never by message text. Every other copy and change, and every install, trust, migrate and sync check, still refuse with unchanged messages. Nothing is recorded or rebound.
 
+## 0.10.71
+
+- Admit the user-scoped Claude directory marketplace writer on the exact 2.1.276, 2.1.278, 2.1.282, 2.1.287, 2.1.296 and 2.1.299 versions measured on the fleet. Keep 2.1.293 support and reject unmeasured versions and project scope.
+
 ## 0.10.70
 
 - Add opt-in V6 Codex settings witnesses that bind reviewed hook declarations and their referenced local stdio MCP providers, including higher-precedence project overrides. Preserve V1–V5 meanings, harmless display changes and unrelated ordinary MCP changes; refuse unsupported routes and unproved source populations without automatically migrating existing witnesses.
