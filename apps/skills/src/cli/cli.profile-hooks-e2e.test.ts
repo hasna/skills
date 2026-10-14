@@ -1035,3 +1035,206 @@ test("profile epochs require explicit caller opt-in and leave the legacy wire sh
     expect(json(join(sessions, readdirSync(sessions)[0]!)).profile.selections[0].authorizationEpoch).toBe(epoch);
   } finally { await f.close(); }
 });
+
+// Managed-hook session pin migration, end to end: release-compiled CLI, real
+// authenticated HTTP store, installed native hook commands. A legacy pin (no
+// lifecycle epochs) whose loaded skill moved to a new version is refused by
+// renewal; the hook migrates it, delivers current context and names the
+// retired skill exactly once.
+async function legacyExpiredPinsAfterUpgrade(f: Awaited<ReturnType<typeof fixture>>, sessionIds: string[]) {
+  const first = await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+  await f.a.ok(["sync", "--json"]);
+  const sessions = join(f.a.data, "selection-cache", "sessions");
+  const pins = [];
+  for (const sessionId of sessionIds) {
+    await f.a.hook("claude", "UserPromptSubmit", { session_id: sessionId, prompt: "$review-code" });
+    const receiptPath = readdirSync(sessions).map(name => join(sessions, name)).find(path => json(path).sessionId === sessionId)!;
+    const old = json(receiptPath); old.verifiedAt = new Date(0).toISOString();
+    for (const selection of old.profile.selections) delete selection.authorizationEpoch;
+    put(receiptPath, JSON.stringify(old));
+    pins.push({ sessionId, receiptPath, old, before: readFileSync(receiptPath) });
+  }
+  // The new version is published but not synced, so the migrated context also exercises the authenticated cache fallback.
+  await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[1]!.file, "--if-match", first.revision, "--json"]);
+  return pins;
+}
+
+test("installed Claude, Codex and Sumi prompt hooks migrate a refused pin, deliver current context and name the retired skill once", async () => {
+  const f = await fixture();
+  try {
+    await f.a.install();
+    const archives = join(f.a.data, "selection-cache", "session-reconciliations");
+    const agents = ["claude", "codex", "sumi"] as const;
+    const pins = await legacyExpiredPinsAfterUpgrade(f, agents.map(agent => `migrate-${agent}`));
+    for (const [index, agent] of agents.entries()) {
+      const pin = pins[index]!, sessionId = pin.sessionId;
+      const prompt = { cwd: f.a.project, session_id: sessionId, hook_event_name: "UserPromptSubmit", prompt: "$review-code" };
+      // The Sumi plugin admits each prompt (output discarded), then restores
+      // context for each model request with an empty prompt; only that is shown.
+      const sumi = (text: string) => f.a.ok(["hook", "user-prompt", "--agent", "sumi", "--selection-profile", "engineering"], { stdin: { ...prompt, prompt: text, parent_session_id: null, restore: true } });
+      const invoke = async () => {
+        if (agent !== "sumi") return f.a.hook(agent, "UserPromptSubmit", prompt);
+        const admitted = await sumi("$review-code");
+        expect(JSON.stringify(admitted)).not.toContain("pin was migrated");
+        return sumi("");
+      };
+      const archivedBefore = existsSync(archives) ? readdirSync(archives).length : 0;
+      const result = await invoke();
+      expect(result.decision).toBeUndefined(); expect(result.systemMessage).toBeUndefined();
+      const context = result.hookSpecificOutput.additionalContext as string;
+      expect(context).toContain("Skills: this session's pin was migrated to the current engineering profile");
+      expect(context).toContain("- review-code@1.0.0: now 2.0.0; reload with skills load review-code@2.0.0 --selection-profile engineering if it is still needed.");
+      expect(context).toContain("Published 2.0.0"); expect(context).not.toContain("Published 1.0.0");
+      expect(JSON.stringify(result)).not.toContain("SESSION_RECONCILIATION_REQUIRED");
+      const current = json(pin.receiptPath);
+      expect(current.profile.profileRevision).not.toBe(pin.old.profile.profileRevision);
+      expect(current.profile.selections.map((selection: any) => selection.version)).toEqual(["2.0.0"]);
+      expect(current.loaded).toHaveLength(1); expect(current.loaded).not.toEqual(pin.old.loaded);
+      const added = readdirSync(archives).filter(name => JSON.parse(readFileSync(join(archives, name, "receipt.json"), "utf8")).plan.sessionId === sessionId);
+      expect(readdirSync(archives)).toHaveLength(archivedBefore + 1); expect(added).toHaveLength(1);
+      expect(readFileSync(join(archives, added[0]!, "original.json"))).toEqual(pin.before);
+      // Told once; later prompts carry no repeated notice and no refusal.
+      const again = await invoke();
+      expect(JSON.stringify(again)).not.toContain("pin was migrated"); expect(again.decision).toBeUndefined(); expect(again.systemMessage).toBeUndefined();
+    }
+  } finally { await f.close(); }
+});
+
+test("the station opt-out keeps today's refusal and pin; turning it back on migrates", async () => {
+  const f = await fixture();
+  try {
+    await f.a.install();
+    const pin = (await legacyExpiredPinsAfterUpgrade(f, ["parent-session"]))[0]!;
+    // The hook reads only the global setting, so a project-scope opt-out is refused rather than ignored.
+    const projectScope = await f.a.run(["config", "set", "sessionPinMigration", "off", "--json"]);
+    expect(projectScope.exitCode).toBe(1);
+    expect(JSON.parse(projectScope.stdout).error).toContain("Use: skills config set sessionPinMigration <auto|off> --global");
+    expect(existsSync(join(f.a.project, "skills.config.json"))).toBe(false);
+    expect((await f.a.ok(["config", "set", "sessionPinMigration", "off", "--global", "--json"])).value).toBe("off");
+    for (const agent of ["claude", "codex"] as const) {
+      const refused = await f.a.hook(agent, "UserPromptSubmit", { prompt: "$review-code" });
+      expect(refused.decision).toBeUndefined();
+      expect(refused.systemMessage).toContain("[SESSION_RECONCILIATION_REQUIRED]");
+      expect(refused.systemMessage).toContain("re-checked with the authority within five minutes");
+      expect(JSON.stringify(refused)).not.toContain("Published"); expect(JSON.stringify(refused)).not.toContain("pin was migrated");
+      expect(readFileSync(pin.receiptPath)).toEqual(pin.before);
+    }
+    expect(existsSync(join(f.a.data, "selection-cache", "session-reconciliations"))).toBe(false);
+    await f.a.ok(["config", "set", "sessionPinMigration", "auto", "--global", "--json"]);
+    const migrated = await f.a.hook("claude", "UserPromptSubmit", { prompt: "$review-code" });
+    expect(migrated.hookSpecificOutput.additionalContext).toContain("- review-code@1.0.0: now 2.0.0");
+    expect(json(pin.receiptPath).profile.selections[0].version).toBe("2.0.0");
+  } finally { await f.close(); }
+});
+
+test("a session pinned by an intentional project lock keeps today's refusal wherever it prompts from", async () => {
+  const f = await fixture();
+  try {
+    await f.a.install();
+    const first = await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+    // `skills sync --project` records the exact selected versions in the project's lock.
+    await f.a.ok(["sync", "--project", "--json"]);
+    const lockPath = join(f.a.project, ".skills", "selection.lock.json");
+    await f.a.hook("claude", "UserPromptSubmit", { session_id: "locked-session", prompt: "$review-code" });
+    const sessions = join(f.a.data, "selection-cache", "sessions");
+    const receiptPath = readdirSync(sessions).map(name => join(sessions, name)).find(path => json(path).sessionId === "locked-session")!;
+    const old = json(receiptPath);
+    expect(old.profile).toEqual(json(lockPath).profile);
+    expect(old.projectLock).toEqual({ path: lockPath, sha256: createHash("sha256").update(readFileSync(lockPath)).digest("hex") });
+    old.verifiedAt = new Date(0).toISOString();
+    for (const selection of old.profile.selections) delete selection.authorizationEpoch;
+    put(receiptPath, JSON.stringify(old));
+    await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[1]!.file, "--if-match", first.revision, "--json"]);
+    const before = readFileSync(receiptPath), lockBefore = readFileSync(lockPath);
+    for (const agent of ["claude", "codex"] as const) {
+      const refused = await f.a.hook(agent, "UserPromptSubmit", { session_id: "locked-session", prompt: "$review-code" });
+      expect(refused.decision).toBeUndefined();
+      expect(refused.systemMessage).toContain("[SESSION_RECONCILIATION_REQUIRED]");
+      expect(JSON.stringify(refused)).not.toContain("Published 2.0.0"); expect(JSON.stringify(refused)).not.toContain("pin was migrated");
+      expect(readFileSync(receiptPath)).toEqual(before); expect(readFileSync(lockPath)).toEqual(lockBefore);
+    }
+    // The agent changes directory: a subdirectory of the project, then an unrelated directory.
+    const subdirectory = join(f.a.project, "src"), elsewhere = join(f.root, "elsewhere");
+    mkdirSync(subdirectory); mkdirSync(elsewhere);
+    for (const cwd of [subdirectory, elsewhere]) {
+      const refused = await f.a.hook("claude", "UserPromptSubmit", { session_id: "locked-session", cwd, prompt: "$review-code" });
+      expect(refused.systemMessage).toContain("[SESSION_RECONCILIATION_REQUIRED]"); expect(JSON.stringify(refused)).not.toContain("Published 2.0.0");
+      expect(readFileSync(receiptPath)).toEqual(before);
+    }
+    expect(existsSync(join(f.a.data, "selection-cache", "session-reconciliations"))).toBe(false);
+    // A receipt written before provenance existed: the lock above the prompt's directory still keeps the refusal.
+    const legacy = json(receiptPath); delete legacy.projectLock; put(receiptPath, JSON.stringify(legacy));
+    const legacyBefore = readFileSync(receiptPath);
+    const ancestor = await f.a.hook("claude", "UserPromptSubmit", { session_id: "locked-session", cwd: subdirectory, prompt: "$review-code" });
+    expect(ancestor.systemMessage).toContain("[SESSION_RECONCILIATION_REQUIRED]"); expect(readFileSync(receiptPath)).toEqual(legacyBefore);
+    // Control: that legacy receipt, prompted from a directory with no lock on its path, migrates.
+    const migrated = await f.a.hook("claude", "UserPromptSubmit", { session_id: "locked-session", cwd: elsewhere, prompt: "$review-code" });
+    expect(migrated.hookSpecificOutput.additionalContext).toContain("- review-code@1.0.0: now 2.0.0");
+    expect(json(receiptPath).profile.selections[0].version).toBe("2.0.0");
+    expect(readFileSync(lockPath)).toEqual(lockBefore);
+  } finally { await f.close(); }
+});
+
+test("a removed loaded skill is retired by migration while identity and integrity refusals stay unchanged", async () => {
+  const f = await fixture();
+  try {
+    await f.a.install();
+    const first = await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+    await f.a.ok(["sync", "--json"]);
+    await f.a.hook("claude", "UserPromptSubmit", { prompt: "$review-code" });
+    const sessions = join(f.a.data, "selection-cache", "sessions"), receiptPath = join(sessions, readdirSync(sessions)[0]!);
+    const expired = json(receiptPath); expired.verifiedAt = new Date(0).toISOString(); put(receiptPath, JSON.stringify(expired));
+    // A receipt naming another authority is refused before any migration.
+    const foreign = structuredClone(expired); foreign.profile.authority = "https://other.example.com/api/v1";
+    for (const selection of foreign.profile.selections) selection.authority = foreign.profile.authority;
+    foreign.loaded = []; put(receiptPath, JSON.stringify(foreign));
+    const mismatch = await f.a.hook("claude", "UserPromptSubmit", { prompt: "$review-code" });
+    expect(mismatch.decision).toBe("block"); expect(mismatch.reason).toContain("[PROFILE_IDENTITY_MISMATCH]");
+    expect(readFileSync(receiptPath, "utf8")).toBe(JSON.stringify(foreign));
+    put(receiptPath, JSON.stringify(expired));
+    const empty = join(f.root, "empty.json"); put(empty, JSON.stringify({ selections: [] }));
+    await f.a.ok(["profiles", "set", "engineering", "--file", empty, "--if-match", first.revision, "--json"]);
+    const result = await f.a.hook("claude", "UserPromptSubmit", { prompt: "continue" });
+    expect(result.decision).toBeUndefined(); expect(result.systemMessage).toBeUndefined();
+    expect(result.hookSpecificOutput.additionalContext).toContain("- review-code@1.0.0: no longer selected.");
+    expect(JSON.stringify(result)).not.toContain("Published");
+    expect(json(receiptPath).profile.selections).toEqual([]); expect(json(receiptPath).loaded).toEqual([]);
+  } finally { await f.close(); }
+});
+
+test("a subagent's own <parent>:<agent> pin migrates through SubagentStart without changing the parent pin", async () => {
+  const f = await fixture();
+  try {
+    await f.a.install();
+    const pin = (await legacyExpiredPinsAfterUpgrade(f, ["parent-session"]))[0]!;
+    // Recreate the parent's original fresh pin, start the child from it, then expire both.
+    put(pin.receiptPath, JSON.stringify({ ...pin.old, verifiedAt: new Date().toISOString() }));
+    await f.a.hook("claude", "SubagentStart", { agent_id: "child-agent" });
+    const sessions = join(f.a.data, "selection-cache", "sessions");
+    const childPath = readdirSync(sessions).map(name => join(sessions, name)).find(path => json(path).sessionId === "parent-session:child-agent")!;
+    const child = json(childPath); child.verifiedAt = new Date(0).toISOString(); put(childPath, JSON.stringify(child));
+    const parent = json(pin.receiptPath); parent.verifiedAt = new Date(0).toISOString(); put(pin.receiptPath, JSON.stringify(parent));
+    const parentBefore = readFileSync(pin.receiptPath);
+    const result = await f.a.hook("claude", "SubagentStart", { agent_id: "child-agent", prompt: "$review-code" });
+    expect(result.systemMessage).toBeUndefined();
+    expect(result.hookSpecificOutput.additionalContext).toContain("- review-code@1.0.0: now 2.0.0");
+    const migrated = json(childPath);
+    expect(migrated.parent).toEqual(child.parent); expect(migrated.profile.selections[0].version).toBe("2.0.0");
+    expect(readFileSync(pin.receiptPath)).toEqual(parentBefore);
+  } finally { await f.close(); }
+});
+
+test("installed Cursor hooks migrate on a prompt and name the retired skill at session start, where Cursor shows context", async () => {
+  const f = await fixture();
+  try {
+    await f.a.install();
+    const pin = (await legacyExpiredPinsAfterUpgrade(f, ["cursor-session"]))[0]!;
+    const cursor = (event: string, extra: Record<string, unknown> = {}) => f.a.ok(["hook", "user-prompt", "--agent", "cursor", "--selection-profile", "engineering", "--event", event],
+      { stdin: { conversation_id: "cursor-session", workspace_roots: [f.a.project], hook_event_name: event, ...extra } });
+    expect(await cursor("beforeSubmitPrompt", { prompt: "$review-code" })).toEqual({ continue: true });
+    expect(json(pin.receiptPath).profile.selections[0].version).toBe("2.0.0");
+    const started = await cursor("sessionStart");
+    expect(started.additional_context).toContain("- review-code@1.0.0: now 2.0.0");
+    expect(JSON.stringify(await cursor("sessionStart"))).not.toContain("pin was migrated");
+  } finally { await f.close(); }
+});

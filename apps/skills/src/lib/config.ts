@@ -8,7 +8,7 @@
  * Values from the project config override global config.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, statSync, writeFileSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { RETIRED_CONFIG_KEYS, assertNoRetiredConfigKeys } from "./retired-settings.js";
 import { getDataRoot } from "./app-home.js";
@@ -46,12 +46,15 @@ export interface SkillsConfig {
   defaultScope?: "global" | "project";
   format?: "compact" | "json" | "csv";
   extensionsDir?: string;
+  /** Managed hooks, global scope only: "auto" (default) migrates a refused expired session pin; "off" keeps the refusal. */
+  sessionPinMigration?: "auto" | "off";
 }
 
 const ENUM_KEYS: Partial<Record<keyof SkillsConfig, string[]>> = {
   defaultAgent: ["claude", "codex", "gemini", "pi", "opencode", "all"],
   defaultScope: ["global", "project"],
   format: ["compact", "json", "csv"],
+  sessionPinMigration: ["auto", "off"],
 };
 
 const STRING_KEYS = ["extensionsDir"] as const satisfies readonly (keyof SkillsConfig)[];
@@ -193,6 +196,46 @@ function readConfigFile(path: string): Partial<SkillsConfig> {
 }
 
 /**
+ * Managed hooks migrate a session pin whose renewal was refused only because
+ * its profile moved on, unless the station turns that off with
+ * `skills config set sessionPinMigration off --global`. Only the global
+ * configuration is read: the prompt hook never reads a project-controlled file
+ * for this.
+ *
+ * This reads the file itself instead of readConfigFile, which returns {} for
+ * an unreadable or malformed file. An opt-out must survive a damaged file, so
+ * "auto" needs one of two confirmed states. Either lstat finds no entry at the
+ * path and its directory exists, or the entry is a regular file (not a
+ * symlink), opened without following links, holding a JSON object without the
+ * key or with exactly "auto". Everything else keeps the refusal: a dangling or
+ * other symlink, a directory or other non-regular entry, a missing or dangling
+ * data directory, any read error, a parse error (including a truncated write),
+ * a non-object document, a retired key, or a value other than "auto" or "off".
+ */
+export function sessionPinMigrationEnabled(): boolean {
+  const path = getConfigPathReadOnly("global");
+  let text: string;
+  try {
+    const entry = lstatSync(path, { throwIfNoEntry: false });
+    if (!entry) return statSync(dirname(path)).isDirectory();
+    if (!entry.isFile()) return false;
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const opened = fstatSync(fd);
+      if (!opened.isFile() || opened.dev !== entry.dev || opened.ino !== entry.ino) return false;
+      text = readFileSync(fd, "utf-8");
+    } finally { closeSync(fd); }
+  } catch { return false; }
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return false;
+    assertNoRetiredConfigKeys(parsed as Record<string, unknown>, getConfigPathReadOnly("global"));
+    if (!Object.hasOwn(parsed, "sessionPinMigration")) return true;
+    return (parsed as Record<string, unknown>).sessionPinMigration === "auto";
+  } catch { return false; }
+}
+
+/**
  * Load merged config: project-local overrides global
  */
 export function loadConfig(): SkillsConfig {
@@ -213,6 +256,13 @@ export function saveConfig(key: string, value: string, scope: ConfigScope = "pro
 
   if (!validKeys().includes(key)) {
     throw new Error(`Unknown config key: ${key}. Valid keys: ${validKeys().join(", ")}`);
+  }
+
+  // The managed hook reads this key only from the global configuration (see
+  // sessionPinMigrationEnabled). A project value would report success and do
+  // nothing, so refuse it and name the scope that takes effect.
+  if (key === "sessionPinMigration" && scope !== "global") {
+    throw new Error(`${key} is read only from the global configuration. Use: skills config set ${key} <auto|off> --global`);
   }
 
   const normalized = normalizeConfigValue(key as keyof SkillsConfig, value);

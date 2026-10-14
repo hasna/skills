@@ -6,7 +6,7 @@
  * state, credential or session is read.
  */
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash, randomUUID } from "node:crypto";
@@ -68,18 +68,18 @@ function station(api: Authority, verifiedAt = new Date(Date.now() - 25 * 60 * 60
   writeSelectionJson(receiptPath, { schemaVersion: 1, verifiedAt: verifiedAt.toISOString(), profile: pinned, sessionId: SESSION,
     generation: 3, loaded: pinned.selections.slice(0, LOADED).map(selectionKey) });
   const before = readFileSync(receiptPath);
-  async function prompt() {
+  async function prompt(extra: string[] = []) {
     const started = performance.now();
-    const child = Bun.spawn([process.execPath, "--no-env-file", binary, "context", "--stdin", "--json", "--selection-profile", "fleet", "--cached", "--auto-reconcile-safe"], {
+    const child = Bun.spawn([process.execPath, "--no-env-file", binary, "context", "--stdin", "--json", "--selection-profile", "fleet", "--cached", "--auto-reconcile-safe", ...extra], {
       cwd: project, env, stdout: "pipe", stderr: "pipe",
       stdin: new Blob([JSON.stringify({ session_id: SESSION, hook_event_name: "UserPromptSubmit", prompt: "continue the current task", cwd: project })]),
     });
     const timer = setTimeout(() => child.kill("SIGKILL"), 15_000);
     try {
       const [stdout, , exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-      let code: string | undefined;
-      try { code = JSON.parse(stdout)?.error?.code; } catch { code = "UNPARSED_OUTPUT"; }
-      return { code: code ?? (exitCode === 0 ? "OK" : `EXIT_${exitCode}`), ms: Math.round(performance.now() - started), resolves: api.resolves() };
+      let code: string | undefined, retired: number | undefined;
+      try { const parsed = JSON.parse(stdout); code = parsed?.error?.code; retired = parsed?.sessionPinMigration?.retiredLoadedCount; } catch { code = "UNPARSED_OUTPUT"; }
+      return { code: code ?? (exitCode === 0 ? "OK" : `EXIT_${exitCode}`), ms: Math.round(performance.now() - started), resolves: api.resolves(), retired };
     } finally { clearTimeout(timer); }
   }
   return { cacheDir, receiptPath, before, prompt, profileBytes: Buffer.byteLength(JSON.stringify(pinned)) };
@@ -90,9 +90,9 @@ const current = (authority: string) => {
   profile.selections.splice(17, 1); // a pinned, unloaded selection was removed
   return profile;
 };
-async function prompts(count: number, s: ReturnType<typeof station>) {
+async function prompts(count: number, s: ReturnType<typeof station>, extra: string[] = []) {
   const results = [];
-  for (let index = 0; index < count; index++) results.push(await s.prompt());
+  for (let index = 0; index < count; index++) results.push(await s.prompt(extra));
   return results;
 }
 function report(name: string, s: ReturnType<typeof station>, results: Array<{ code: string; ms: number; resolves: number }>) {
@@ -111,6 +111,38 @@ test("a definitive refusal is not re-resolved on every prompt and never interlea
     expect(Math.max(...results.slice(1).map(result => result.ms))).toBeLessThan(1500);
     expect(readFileSync(s.receiptPath)).toEqual(s.before);
     expect(existsSync(join(s.cacheDir, "session-reconciliations"))).toBe(false);
+  } finally { api.close(); }
+}, 60_000);
+
+test("with the managed hook's migration flag, a deterministic migration refusal is remembered too", async () => {
+  // A loaded selection was deleted and restored with identical bytes: its
+  // lifecycle epoch rotated, so renewal refuses and migration refuses too.
+  const rotated = (authority: string) => {
+    const profile = fleetProfile(authority, "current-revision");
+    profile.selections[17] = { ...profile.selections[17]!, authorizationEpoch: hex("rotated-epoch-17").slice(0, 32) };
+    return profile;
+  };
+  // First resolve answers inside the budget; the next ones would exceed it.
+  const api = authority(rotated, [1300, 4300, 4300, 1300, 1300]);
+  try {
+    const s = station(api), results = await prompts(5, s, ["--auto-migrate-session-pin"]);
+    report("refused pin and refused migration, variable authority latency", s, results);
+    expect(results.map(result => result.code)).toEqual(Array(5).fill("SESSION_RECONCILIATION_REQUIRED"));
+    expect(api.resolves()).toBe(1);
+    expect(Math.max(...results.slice(1).map(result => result.ms))).toBeLessThan(1500);
+    expect(readFileSync(s.receiptPath)).toEqual(s.before);
+    expect(existsSync(join(s.cacheDir, "session-reconciliations"))).toBe(false);
+  } finally { api.close(); }
+}, 60_000);
+
+test("with the migration flag, a budget timeout is still retried, not cached", async () => {
+  const api = authority(current, [4500]);
+  try {
+    const s = station(api), results = await prompts(2, s, ["--auto-migrate-session-pin"]);
+    report("migration flag, authority slower than the renewal budget", s, results);
+    expect(results.map(result => result.code)).toEqual(["SESSION_RENEWAL_TIMEOUT", "SESSION_RENEWAL_TIMEOUT"]);
+    expect(api.resolves()).toBe(2);
+    expect(readFileSync(s.receiptPath)).toEqual(s.before);
   } finally { api.close(); }
 }, 60_000);
 
@@ -143,5 +175,28 @@ test("baseline: a fresh session's cached context makes no authority request", as
     report("fresh pin", s, results);
     expect(results[0]!.code).toBe("OK");
     expect(api.resolves()).toBe(0);
+  } finally { api.close(); }
+}, 60_000);
+
+test("the managed hook's automatic migration finishes inside the renewal budget for a production-sized pin", async () => {
+  // The same refused pin as above: selection 17, one of the 251 loaded, was
+  // removed. The authority answers at a latency that still fits one renewal read.
+  const api = authority(current, [1300]);
+  try {
+    const s = station(api), results = await prompts(3, s, ["--auto-migrate-session-pin"]);
+    report("refused pin, automatic migration", s, results);
+    expect(results.map(result => result.code)).toEqual(["OK", "OK", "OK"]);
+    // One authority read migrates; the migrated pin is fresh, so later prompts read nothing.
+    expect(api.resolves()).toBe(1);
+    expect(results[0]!.ms).toBeLessThan(4000);
+    const migrated = JSON.parse(readFileSync(s.receiptPath, "utf8"));
+    expect(migrated.profile.profileRevision).toBe("current-revision");
+    expect(migrated.loaded).toHaveLength(LOADED - 1);
+    expect(readdirSync(join(s.cacheDir, "session-reconciliations"))).toHaveLength(1);
+    expect(results.map(result => result.retired)).toEqual([1, undefined, undefined]);
+    // The context command leaves the notice for the managed hook to deliver to the agent.
+    const notices = join(s.cacheDir, "session-pin-migration-notices");
+    const notice = JSON.parse(readFileSync(join(notices, readdirSync(notices)[0]!), "utf8"));
+    expect(notice.retired).toEqual([{ slug: "fixture-skill-0017", version: "1.0.0" }]); expect(notice.deliveredAt).toBeUndefined();
   } finally { api.close(); }
 }, 60_000);
