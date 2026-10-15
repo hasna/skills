@@ -20,6 +20,7 @@ export function corpusFixture(enrolled = true, build: CorpusFixtureBuild = "admi
 import { lstatSync, readFileSync, existsSync, writeFileSync, mkdirSync, mkdtempSync, appendFileSync } from "node:fs";
 const fixtureHome = ${JSON.stringify(home)}, build = ${JSON.stringify(build)};
 const probeMode = existsSync(fixtureHome + "/probe-mode") ? readFileSync(fixtureHome + "/probe-mode", "utf8") : "";
+if (process.argv[2] === "help" || process.argv[2] === "--version") appendFileSync(fixtureHome + "/probe-log", process.argv.slice(2).join(" ") + "\\n");
 if (build === "upstream") {
   const aliases = (process.env.CODEX_HOME || fixtureHome + "/.codex") + "/tmp/arg0";
   mkdirSync(aliases, { recursive: true, mode: 0o700 });

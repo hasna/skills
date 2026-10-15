@@ -884,14 +884,17 @@ admission (see `docs/codex-corpus-writers.md`).
 
 Upstream Codex builds that lack `corpus-admission-inspect`, such as 0.160.0 and
 0.162.1, use an interim fallback instead: an exclusive Skills-owned lock at
-`<parent of the Codex home>/.hasna/skills/codex-corpus-locks/`, outside the Codex
-home and independent of data-root overrides, recorded as
+`<realpath(dirname(codex home))>/.hasna/skills/codex-corpus-locks/`, outside the
+Codex home and independent of data-root overrides, recorded as
 `nativeAdmission: "unavailable"` with the probe record in every receipt. The
 probe record identifies the selected executable file (for npm installs, the
 launcher script), not the vendor binary it starts. Its guarantee is weaker.
 Upstream Codex's own refresh writes are not coordinated with that lock, only
 Skills writers exclude each other, and preimage checks refuse only the races they
-detect. The fallback is retired in the first release after the Harnesses
+detect. For a project-level `.codex`, or a symlinked `~/.codex`, the lock and the
+probe home (which holds upstream's helper-alias symlinks) live under the target's
+parent, such as `<project>/.hasna/skills/`; ignore `.hasna/skills/codex-*` there.
+The fallback is retired in the first release after the Harnesses
 enrollment/inspect route is live for that build line.
 
 The capture refuses an existing output file, writes mode `0600`, verifies the

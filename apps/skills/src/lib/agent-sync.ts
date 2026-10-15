@@ -1,4 +1,4 @@
-import { codexAdmissionReceipt, codexCorpusRootForPath, withCodexCorpusWrite, type CodexAdmissionReceipt, type CodexAdmissionRecordOptions, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
+import { codexAdmissionReceipt, codexAdmissionRecord, codexCorpusRootForPath, withCodexCorpusWrite, type CodexAdmissionReceipt, type CodexAdmissionRecordOptions, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
 /**
  * `skills sync` — the last mile: write skills from this machine's corpus
  * (the migrated owner-layout cache ~/.hasna/skills/skills/<name>/, or the
@@ -573,12 +573,13 @@ function writeManagedSkillDirUnlocked(dir: string, skillMd: string, options: Man
 /** Returns only whether it removed; pass `onCodexAdmission` to receive the admission
  * record. Without it, a Codex home without native admission refuses as before. */
 export function removeManagedAgentSkill(skill: string, agent: SyncAgent, homeDir: string = homedir(), options: CodexCorpusWriteOptions & CodexAdmissionRecordOptions = {}): boolean {
+  const record = codexAdmissionRecord(options);
   const dir = join(agentGlobalSkillsDir(agent, homeDir), skill);
   const root = codexCorpusRootForPath(dir);
   return withCodexCorpusWrite(root ? [root] : [], (_assertCurrent, admission) => {
-    if (admission) options.onCodexAdmission?.(admission);
+    record.deliver(admission);
     return removeManagedAgentSkillUnlocked(skill, agent, homeDir, options);
-  }, options, { fallback: options.onCodexAdmission !== undefined });
+  }, options, record.policy);
 }
 
 function removeManagedAgentSkillUnlocked(skill: string, agent: SyncAgent, homeDir: string = homedir(), options: CodexCorpusWriteOptions = {}): boolean {

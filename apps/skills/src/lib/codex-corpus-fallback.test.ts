@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { dirname, join, relative } from "node:path";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { admitCorpusFixture, corpusFixture } from "./codex-corpus.fixture.js";
-import { acquireCodexCorpusWrite, withCodexCorpusWrite, withCodexCorpusWriteAsync, type CodexAdmissionProbe, type CodexCorpusAdmission } from "./codex-corpus-write.js";
+import { acquireCodexCorpusWrite, withCodexCorpusWrite, withCodexCorpusWriteAsync, type CodexAdmissionProbe, type CodexCorpusAdmission, type CodexCorpusLease } from "./codex-corpus-write.js";
 import { removeManagedAgentSkill, writeManagedAgentSkill, writeManagedSkillDir } from "./agent-sync.js";
 import { removeSkillForAgent } from "./installer.js";
 import { applyAgentIntegration, archiveNativeSkills, inventoryNativeSkills, planAgentIntegration } from "./agent-integration.js";
@@ -183,6 +183,17 @@ try { withCodexCorpusWrite([${JSON.stringify(f.root)}], () => console.log("ENTER
     if (variant === "group-writable") expect(readdirSync(join(f.home, ".hasna"))).toEqual([]);
   });
 
+  test("a group- or world-writable ancestor above the parent refuses before probing or creating anything", () => {
+    const f = upstream(), outer = join(f.home, "outer"), root = join(outer, "inner", ".codex");
+    mkdirSync(root, { recursive: true, mode: 0o700 }); chmodSync(outer, 0o770);
+    let called = false;
+    expect(() => withCodexCorpusWrite([root], () => { called = true; }, f.options)).toThrow(new Error(`${REFUSAL} (skills-lock-unavailable)`));
+    expect(called).toBe(false);
+    expect(existsSync(join(f.home, "probe-log"))).toBe(false);
+    expect(readdirSync(join(outer, "inner"))).toEqual([".codex"]);
+    expect(readdirSync(root)).toEqual([]);
+  });
+
   test("an alias and its physical home share one lock and both stay rechecked", () => {
     const f = upstream(), alias = join(f.home, "codex-alias"), elsewhere = join(f.home, "elsewhere");
     symlinkSync(f.root, alias); mkdirSync(elsewhere, { mode: 0o700 });
@@ -281,6 +292,15 @@ describe("fallback receipts", () => {
     const installOptions = { agent: "codex" as const, scope: "project" as const, projectDir: f.home, ...f.options };
     expect(() => removeManagedAgentSkill("sample", "codex", f.home, f.options)).toThrow(new Error(REFUSAL));
     expect(() => removeSkillForAgent("installed", installOptions)).toThrow(new Error(REFUSAL));
+    expect(() => removeManagedAgentSkill("sample", "codex", f.home, { ...f.options, onCodexAdmission: undefined })).toThrow(new Error(REFUSAL));
+    expect(() => removeSkillForAgent("installed", { ...installOptions, onCodexAdmission: undefined })).toThrow(new Error(REFUSAL));
+    // Only a function enables the fallback; any other value refuses before anything is probed or created.
+    for (const value of [null, "record", 1, {}, true]) {
+      expect(() => removeManagedAgentSkill("sample", "codex", f.home, { ...f.options, onCodexAdmission: value as any })).toThrow("CODEX_CORPUS_ADMISSION_RECORD_INVALID");
+      expect(() => removeSkillForAgent("installed", { ...installOptions, onCodexAdmission: value as any })).toThrow("CODEX_CORPUS_ADMISSION_RECORD_INVALID");
+    }
+    expect(existsSync(join(f.home, "probe-log"))).toBe(false);
+    expect(existsSync(join(f.home, ".hasna"))).toBe(false);
     expect(() => removeManagedAgentSkill("sample", "codex", f.home, { ...f.options, onCodexAdmission: () => { throw new Error("record refused"); } })).toThrow("record refused");
     expect(readFileSync(join(managed, "SKILL.md"), "utf8")).toBe("original\n");
     expect(readFileSync(join(installed, "SKILL.md"), "utf8")).toBe("original\n");
@@ -305,6 +325,24 @@ describe("fallback receipts", () => {
       assertCurrent();
     }, f.options);
     expect(existsSync(join(f.root, ".native-corpus-admission.flock-v1"))).toBe(false);
+  });
+
+  test("reuse ends when the owning transaction closes, even while a nested holder still runs", async () => {
+    const f = upstream(); let nested: CodexCorpusLease | undefined, later!: Promise<string>;
+    await withCodexCorpusWriteAsync([f.root], async () => {
+      // Like a native client whose child outlives the transaction.
+      nested = acquireCodexCorpusWrite([f.root], f.options);
+      // A timer scheduled inside the transaction fires after it has closed.
+      later = new Promise(resolve => setTimeout(() => {
+        try { withCodexCorpusWrite([f.root], () => {}, f.options); resolve("entered"); }
+        catch (error) { resolve((error as Error).message); }
+      }, 50));
+    }, f.options);
+    expect(await later).toBe(`${REFUSAL} (writer-busy)`);
+    nested!.close();
+    let entered = false;
+    withCodexCorpusWrite([f.root], () => { entered = true; }, f.options);
+    expect(entered).toBe(true);
   });
 
   test("a nested native client whose close is unconfirmed keeps the writer lock until its child exits", async () => {

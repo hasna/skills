@@ -39,6 +39,16 @@ export interface CodexAdmissionRecordOptions { onCodexAdmission?: (admission: Co
 /** Gate policy for one transaction; writers without a receipt disable the fallback. */
 export interface CodexCorpusWritePolicy { fallback?: boolean }
 
+/** Reads `onCodexAdmission` once. Only a function enables the fallback and receives the
+ * record; any other defined value refuses before anything happens. */
+export function codexAdmissionRecord(options: CodexAdmissionRecordOptions): { policy: CodexCorpusWritePolicy; deliver(admission: CodexCorpusAdmission | undefined): void } {
+  const record: unknown = options.onCodexAdmission;
+  if (record !== undefined && typeof record !== "function") throw new Error("CODEX_CORPUS_ADMISSION_RECORD_INVALID: onCodexAdmission must be a function");
+  return { policy: { fallback: typeof record === "function" }, deliver(admission) {
+    if (admission && typeof record === "function") (record as (value: CodexCorpusAdmission) => void)(admission);
+  } };
+}
+
 /** Receipt fields for a write made under the interim fallback; native-path receipts are unchanged. */
 export function codexAdmissionReceipt(admission: CodexCorpusAdmission | undefined): CodexAdmissionReceipt {
   return admission?.nativeAdmission === "unavailable" && admission.probe
@@ -128,13 +138,15 @@ const UNRECOGNIZED = /^error: unrecognized subcommand 'corpus-admission-inspect'
 const VERSION = /^codex-cli (?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})(?:-[0-9A-Za-z-]{1,32}(?:\.[0-9A-Za-z-]{1,32}){0,7})?$/;
 const LOCK_DIRECTORY = "codex-corpus-locks", PROBE_HOME = "codex-probe-home";
 /** One descriptor per corpus root, shared by a transaction and its own nested native
- * client; it closes only when every holder, including a still-running child, releases it. */
+ * client while the transaction is open; it closes only when every holder, including a
+ * still-running child, releases it. */
 interface Hold { lock: KernelLock; refs: number }
 interface HoldRef { hold: Hold; released: boolean }
 const retain = (hold: Hold): HoldRef => { hold.refs++; return { hold, released: false }; };
 const release = (ref: HoldRef): void => { if (ref.released) return; ref.released = true; if (--ref.hold.refs === 0) ref.hold.lock.close(); };
-const enclosing = new AsyncLocalStorage<ReadonlyMap<string, Hold>>();
-const leaseHolds = new WeakMap<CodexCorpusLease, ReadonlyMap<string, Hold>>();
+/** Each enclosing lease's own share, so reuse ends when that lease closes. */
+const enclosing = new AsyncLocalStorage<ReadonlyMap<string, HoldRef>>();
+const leaseHolds = new WeakMap<CodexCorpusLease, ReadonlyMap<string, HoldRef>>();
 const contains = (base: string, path: string): boolean => {
   const distance = relative(base, path);
   return distance === "" || (!distance.startsWith(`..${sep}`) && distance !== ".." && !isAbsolute(distance));
@@ -155,12 +167,20 @@ function skillsState(root: string, leaf: string, roots: readonly string[]): { pa
   const chain = [realpathSync(dirname(root))];
   for (const part of [".hasna", "skills", leaf]) chain.push(join(chain.at(-1)!, part));
   const path = chain.at(-1)!;
+  const uid = process.getuid!();
   const verify = () => {
     if (roots.some(item => contains(item, path)) || codexCorpusRootForPath(path) !== undefined) fail();
+    // Ancestors above the parent use the kernel lock's own rule, so nothing is probed
+    // or created where the lock would later refuse.
+    for (let ancestor = dirname(chain[0]!); ; ancestor = dirname(ancestor)) {
+      const stat = lstatSync(ancestor), sticky = stat.uid === 0 && (stat.mode & 0o1000) !== 0;
+      if (!stat.isDirectory() || (stat.uid !== uid && stat.uid !== 0) || ((stat.mode & 0o022) !== 0 && !sticky)) fail();
+      if (dirname(ancestor) === ancestor) break;
+    }
     for (const component of chain) {
       const stat = lstatSync(component, { throwIfNoEntry: false });
       if (!stat) return;
-      if (!stat.isDirectory() || (stat.uid !== process.getuid!() && stat.uid !== 0) || (stat.mode & 0o022) !== 0) fail();
+      if (!stat.isDirectory() || (stat.uid !== uid && stat.uid !== 0) || (stat.mode & 0o022) !== 0 || (component === path && stat.uid !== uid)) fail();
     }
   };
   verify();
@@ -224,8 +244,8 @@ function acquireFallback(inputs: Array<{ input: string; root: string }>, options
       // An alias and its physical path share one descriptor; both inputs stay rechecked.
       const id = identity(root), key = rootLockKey(root, id);
       if (!refs.has(key)) {
-        const outer = enclosing.getStore()?.get(key);
-        if (outer && outer.refs > 0) refs.set(key, retain(outer));
+        const owner = enclosing.getStore()?.get(key);
+        if (owner && !owner.released) refs.set(key, retain(owner.hold));
         else {
           const lock = new KernelLock(locks.get(root)!.ensure(), key, { mode: "exclusive" });
           refs.set(key, retain({ lock, refs: 0 }));
@@ -249,7 +269,7 @@ function acquireFallback(inputs: Array<{ input: string; root: string }>, options
     const lease: CodexCorpusLease = { assertCurrent, close, admission: { nativeAdmission: "unavailable", probe: {
       kind: "help-unrecognized-subcommand", executable: native.path, sha256: native.sha256, size: native.size, version: version!, probeExitCode: 2, controlExitCode: 0,
     } } };
-    leaseHolds.set(lease, new Map([...refs].map(([key, ref]) => [key, ref.hold])));
+    leaseHolds.set(lease, refs);
     return lease;
   } catch {
     close(); return fail(reason); // Never expose native diagnostics or corpus contents.
