@@ -3,7 +3,7 @@ import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import pkg from "../../package.json" with { type: "json" };
 import { TEST_CATALOG, writeTestCatalog } from "../lib/private-corpus-test-utils.js";
-import { DEFAULT_TEST_TIMEOUT_MS, withoutDataDirOverrideEnv } from "../test-preload.js";
+import { DEFAULT_TEST_TIMEOUT_MS, withoutDataDirOverrideEnv, withoutNativeDiscoverySelectors } from "../test-preload.js";
 
 export const CLI_PATH = join(import.meta.dir, "index.tsx");
 export const EXPECTED_ALL_SKILL_COUNT = TEST_CATALOG.length;
@@ -68,7 +68,7 @@ function testEnv(env: Record<string, string>): Record<string, string> {
   // a missing credential, and a test that spawns a CLI to assert fail-closed
   // behaviour passes its own environment without it.
   return {
-    ...withoutDataDirOverrideEnv({ ...process.env }),
+    ...withoutNativeDiscoverySelectors(withoutDataDirOverrideEnv({ ...process.env })),
     HOME: CLEAN_CLI_HOME,
     ...env,
     NO_COLOR: "1",

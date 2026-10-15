@@ -12,7 +12,7 @@ import * as launcherModule from "./runtime-launcher.js";
 import * as nodeFs from "node:fs";
 import { version as prerequisiteTargetVersion } from "../../../package.json";
 import { installSumiPathsFixture } from "../../lib/sumi-paths.fixture.js";
-import { useDefaultTestTimeout } from "../../test-preload.js";
+import { useDefaultTestTimeout, useIsolatedNativeDiscoverySelectors } from "../../test-preload.js";
 
 useDefaultTestTimeout();
 
@@ -1468,6 +1468,8 @@ else { writeFileSync(${JSON.stringify(log)}, "unexpected"); process.exit(83); }
 });
 
 describe("target runtime activation prerequisites", () => {
+  useIsolatedNativeDiscoverySelectors();
+
   async function targetUpdate(version: string, options: Parameters<typeof updateCopyfileRuntime>[1]) {
     const prior = process.env.HASNA_SKILLS_DIR;
     process.env.HASNA_SKILLS_DIR = join(options!.homeDir!, ".hasna/skills");

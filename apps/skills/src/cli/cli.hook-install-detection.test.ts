@@ -22,6 +22,20 @@ test("default hook install plans only present Claude and Codex without a Sumi re
   expect(existsSync(join(f.home, ".hasna", "skills", "agent-policy.json"))).toBe(false);
 });
 
+test.each(["SUMI_HOME", "SUMI_CONFIG_DIR", "XDG_CONFIG_HOME"])("CLI fixtures discard inherited %s but honor explicit selection", async key => {
+  const f = fixture(); mkdirSync(join(f.home, ".claude")); mkdirSync(join(f.home, ".codex"));
+  const selected = join(f.home, "ambient"); mkdirSync(join(selected, "sumi"), { recursive: true });
+  const previous = process.env[key];
+  try {
+    process.env[key] = selected;
+    const clean = await f.run(); expect(clean.exitCode).toBe(0);
+    expect(JSON.parse(clean.stdout).discovery.map((entry: any) => entry.agent)).toEqual(["claude", "codex"]);
+    const explicit = await f.run([], { [key]: selected }); expect(explicit.exitCode).toBe(1);
+    expect(explicit.stderr).toContain("SUMI_PATH_RESOLVER_UNAVAILABLE");
+    expect(existsSync(join(f.home, ".hasna", "skills", "agent-policy.json"))).toBe(false);
+  } finally { if (previous === undefined) delete process.env[key]; else process.env[key] = previous; }
+});
+
 test("explicit all remains strict about the Sumi resolver even when Sumi is absent", async () => {
   const f = fixture(); mkdirSync(join(f.home, ".claude"));
   const result = await f.run(["--agent", "all"]); expect(result.exitCode).toBe(1);
