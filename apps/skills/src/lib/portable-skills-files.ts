@@ -394,6 +394,16 @@ function ensurePackageJson(skillPath: string, manifest: PortableSkillManifest): 
  * locally, so `port` must never fabricate executable stubs (package.json, bin,
  * src/index.ts, tsconfig.json, AGENTS.md). Apart from aligning declared names
  * after an import rename, it preserves the copied prose and metadata.
+ *
+ * "Metadata" includes what the candidate declared in skill.json. An instruction
+ * skill may legitimately bundle a helper command (and inputs for it) — the
+ * validator permits a package.json bin on an instruction skill for exactly that
+ * reason — so declared `commands` and `inputs` are carried through verbatim and
+ * only an absent declaration becomes an explicit empty array. Forcing them to []
+ * here silently erased the declaration on disk: writeSkillJsonWithHash() merges
+ * the rebuilt manifest over the copied candidate skill.json, so the candidate's
+ * own array was destroyed and the manifest was left self-inconsistent
+ * (runtime.entrypoint still naming an entry no command declared).
  */
 export function ensureInstructionSkillFiles(skillPath: string, manifest: PortableSkillManifest): PortableSkillManifest {
   const next: PortableSkillManifest = {
@@ -404,8 +414,8 @@ export function ensureInstructionSkillFiles(skillPath: string, manifest: Portabl
     displayName: manifest.displayName ?? displayName(manifest.name),
     category: manifest.category ?? "Development Tools",
     tags: manifest.tags?.length ? manifest.tags : ["custom", manifest.name],
-    inputs: [],
-    commands: [],
+    inputs: Array.isArray(manifest.inputs) ? manifest.inputs : [],
+    commands: Array.isArray(manifest.commands) ? manifest.commands : [],
   };
 
   // Change only the copied declaration when import chooses a new identity.
@@ -510,8 +520,9 @@ export function renderSkillJsonObject(manifest: PortableSkillManifest): Record<s
     category: manifest.category ?? "Development Tools",
     tags: manifest.tags ?? ["custom", manifest.name],
     ...(manifest.kind ? { kind: manifest.kind } : {}),
-    // Instruction skills declare no inputs or commands; empty arrays make that
-    // explicit and schema-valid.
+    // The arrays are always written so the shape is explicit and schema-valid.
+    // They are empty only when nothing was declared (a scaffolded instruction
+    // skill); an imported one keeps any declared inputs and helper commands.
     inputs: manifest.inputs,
     commands: manifest.commands,
     ...(manifest.runtime ? { runtime: manifest.runtime } : {}),
