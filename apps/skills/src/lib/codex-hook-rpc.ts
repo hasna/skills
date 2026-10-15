@@ -8,6 +8,13 @@ import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
 
 export { SUPPORTED_CODEX_HOOK_VERSIONS } from "./codex-native-compatibility.js";
 
+/** The exact summary the Codex app-server sends in its `configWarning`
+ * notification when non-strict startup cannot load the configuration and falls
+ * back to defaults (rust-v0.162.1 app-server/src/lib.rs). Only versions whose
+ * protocol was verified connect (supportsCodexNativeCapability below). */
+const CODEX_CONFIG_FALLBACK_SUMMARY = "Invalid configuration; using defaults.";
+const CODEX_CONFIG_INVALID = "CODEX_HOOK_TRUST_NATIVE_CONFIG_INVALID: Codex could not load its configuration and fell back to defaults; repair config.toml (run codex once to see the error) and retry";
+
 export interface CodexHookRpc {
   version: string;
   processId?: number;
@@ -39,7 +46,17 @@ export async function connectCodexHookRpc(options: { command: string; home: stri
   if (options.codexHome === undefined) delete env.CODEX_HOME;
   else env.CODEX_HOME = options.codexHome;
   const corpusLease = acquireCodexCorpusWrite([options.codexHome ?? join(options.home, ".codex")], { codexCommand: binary });
-  const child = spawn(binary, ["app-server", "--strict-config", "--stdio"], {
+  // No `--strict-config`: it turns every key this Codex build does not know into
+  // a startup error, so a valid owner key read by a newer Codex or another tool
+  // (station01: `skills.native_allowed_paths`) refused enrollment. Codex itself
+  // runs non-strict, ignoring such keys, so this client now sees the same
+  // configuration the real consumer loads. What strict mode also guarded, a
+  // silent fallback to default settings when the configuration is invalid, stays
+  // fail-closed without it: that fallback is refused below by its startup
+  // notification, every per-request load reports its own error (hooks/list and
+  // skills/list `errors`, config/read failure), and hook trust enrollment and
+  // reconciliation require config/read to return the exact user layer they parsed.
+  const child = spawn(binary, ["app-server", "--stdio"], {
     cwd: options.home,
     env,
     stdio: ["pipe", "pipe", "pipe"],
@@ -47,10 +64,10 @@ export async function connectCodexHookRpc(options: { command: string; home: stri
   let childClosed = false;
   const actualClose = new Promise<void>(resolve => child.once("close", () => { childClosed = true; corpusLease.close(); resolve(); }));
   const pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
-  let nextId = 1, buffer = Buffer.alloc(0), stopped = false, diagnosticBytes = 0;
+  let nextId = 1, buffer = Buffer.alloc(0), stopped = false, diagnosticBytes = 0, configInvalid = false;
   const fail = () => {
     stopped = true;
-    for (const value of pending.values()) { clearTimeout(value.timer); value.reject(new Error("CODEX_HOOK_TRUST_NATIVE_RPC_FAILED")); }
+    for (const value of pending.values()) { clearTimeout(value.timer); value.reject(new Error(configInvalid ? CODEX_CONFIG_INVALID : "CODEX_HOOK_TRUST_NATIVE_RPC_FAILED")); }
     pending.clear();
   };
   child.on("error", fail); child.on("exit", fail); child.stdin.on("error", fail);
@@ -64,6 +81,10 @@ export async function connectCodexHookRpc(options: { command: string; home: stri
       let value: any;
       try { value = JSON.parse(line.toString("utf8")); } catch { fail(); child.kill(); return; }
       if (!value || typeof value !== "object" || Array.isArray(value)) { fail(); child.kill(); return; }
+      // Non-strict startup that could not load the configuration continues on
+      // defaults and says so once (codex-rs app-server/src/lib.rs). Refuse the
+      // whole connection; never forward its details, which may hold config text.
+      if (!("id" in value) && value.method === "configWarning" && value.params?.summary === CODEX_CONFIG_FALLBACK_SUMMARY) { configInvalid = true; fail(); child.kill(); return; }
       const waiting = pending.get(value.id);
       if (!waiting) continue;
       pending.delete(value.id); clearTimeout(waiting.timer);
@@ -76,7 +97,7 @@ export async function connectCodexHookRpc(options: { command: string; home: stri
     version,
     processId: child.pid,
     request(method, params) {
-      if (stopped) return Promise.reject(new Error("CODEX_HOOK_TRUST_NATIVE_RPC_CLOSED"));
+      if (stopped) return Promise.reject(new Error(configInvalid ? CODEX_CONFIG_INVALID : "CODEX_HOOK_TRUST_NATIVE_RPC_CLOSED"));
       return new Promise((resolve, reject) => {
         const id = nextId++;
         const timer = setTimeout(() => { fail(); child.kill(); }, timeoutMs);
@@ -100,5 +121,5 @@ export async function connectCodexHookRpc(options: { command: string; home: stri
     if (typeof initialized?.userAgent !== "string" || !(initialized.userAgent === `skills-native-hook-enrollment/${nativeVersion}` || initialized.userAgent.startsWith(`skills-native-hook-enrollment/${nativeVersion} `))) throw new Error("CODEX_HOOK_TRUST_NATIVE_VERSION_MISMATCH");
     child.stdin.write('{"method":"initialized"}\n');
     return rpc;
-  } catch { await rpc.close(); throw new Error("CODEX_HOOK_TRUST_NATIVE_UNSUPPORTED: native hooks/list and versioned config writes are required"); }
+  } catch { await rpc.close(); throw new Error(configInvalid ? CODEX_CONFIG_INVALID : "CODEX_HOOK_TRUST_NATIVE_UNSUPPORTED: native hooks/list and versioned config writes are required"); }
 }
