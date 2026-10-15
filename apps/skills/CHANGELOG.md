@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Patch Changes
+
+- Stop existing reviewed Codex bindings from raising `NATIVE_SKILL_DRIFT` after every Codex launch. Codex 0.162.1 (`tui/src/screen_reader.rs`) writes the boolean `tui.screen_reader_detection_done` receipt into `config.toml` on every TUI or desktop launch while the key is missing, which changed the digest of every `codex-settings-v1` to `codex-settings-v5` witness. Verification of those witnesses now also accepts a document that differs from the reviewed one only by that receipt, added, removed or flipped (V6 already omitted it). Each case is proven by reproducing the stored digest under the witness's own unchanged digest function, so no digest changes meaning and verification alone records or rebinds nothing. A non-boolean receipt, any other TUI key (including the `animations = false` Codex adds when it detects a screen reader) and every other change still drift, including Codex's `[projects."<dir>"]` trust entries. A planned Skills write to `config.toml` rebinds the witness to the written document and may adopt only that receipt; a receipt beside any other difference refuses the write. On the live prompt hook, a vendor plugin refresh that coincides with the receipt keeps its visible warning.
+
 ## 0.10.72
 
 ### Patch Changes
