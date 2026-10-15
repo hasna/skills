@@ -58,6 +58,8 @@ function fixtureFor(options: {
   writeSession?: { authority?: string; workspaceId?: string; profileRevision?: string };
   /** Emit an incomplete station receipt, which the HTTP reader accepts. */
   omitStationField?: "profileId" | "profileRevision";
+  /** Emit an unsupported value (null / empty string) where a string is expected. */
+  badStationField?: { field: "profileId" | "profileRevision" | "workspaceId"; value: null | "" };
 }): Fixture {
   const token = randomUUID(), requests: string[] = [];
   let origin = "http://127.0.0.1";
@@ -73,6 +75,7 @@ function fixtureFor(options: {
       selections: selections(options.appliedRevision, options.appliedVersions, authority),
     } as Record<string, unknown>;
     if (options.omitStationField) delete body[options.omitStationField];
+    if (options.badStationField) body[options.badStationField.field] = options.badStationField.value;
     return body as unknown as StationSkillState;
   };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
@@ -282,6 +285,42 @@ for (const omitted of ["profileId", "profileRevision"] as const) {
     expect(receipt.consumers[0]).toMatchObject({ source: "local-receipt", status: "current" });
     rmSync(f.home, { recursive: true, force: true });
   });
+}
+
+/**
+ * DEFECT CONTROL (F4 boundary). `undefined` is not the only unsupported shape the
+ * HTTP reader passes through: `null` and `""` arrive the same way. Testing for
+ * `undefined` alone let them fall through to the revision equality, where they
+ * failed and were reported `behind`/`REVISION_BEHIND` with a drift row. Every
+ * unsupported identity/revision value must be unverified with no drift, and the
+ * receipt must not echo the unsupported value back.
+ */
+for (const [label, value] of [["null", null], ["empty string", ""]] as const) {
+  for (const field of ["profileRevision", "profileId", "workspaceId"] as const) {
+    test(`an unsupported station ${field} (${label}) is unverified with no drift`, async () => {
+      const f = fixtureFor({
+        appliedRevision: APPLIED, appliedVersions: APPLIED_VERSIONS, syncSnapshot: true, writeSession: {},
+        badStationField: { field, value },
+      });
+      const { stdout, stderr, exitCode } = await f.cli(["provenance", "--selection-profile", PROFILE, "--station", STATION, "--session", f.sessionId, "--json"]);
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      const receipt = JSON.parse(stdout);
+      const station = receipt.consumers[1];
+      expect(station).toMatchObject({ source: "authority-receipt", status: "unverified", reasonCode: "INCOMPLETE_RECEIPT" });
+      expect(station.status).not.toBe("current");
+      expect(station.status).not.toBe("behind");
+      expect(station.reasonCode).not.toBe("REVISION_BEHIND");
+      expect(station.reasonCode).not.toBe("CURRENT_SCHEMA_MATCH");
+      // The unsupported value is not echoed back into the receipt.
+      expect(station[field]).toBeUndefined();
+      expect(receipt.drift.filter((row: { source: string }) => row.source === "authority-receipt")).toEqual([]);
+      // Unrelated consumers keep their own truth.
+      expect(receipt.consumers[0]).toMatchObject({ source: "local-receipt", status: "current" });
+      expect(receipt.consumers[2]).toMatchObject({ source: "session-receipt", status: "pinned" });
+      rmSync(f.home, { recursive: true, force: true });
+    });
+  }
 }
 
 test("drift is bounded so one receipt cannot carry an unbounded list", () => {

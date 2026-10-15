@@ -217,9 +217,29 @@ const REQUIRED_IDENTITY: Record<SelectionProvenanceSource, readonly IdentityFiel
   // The authority's station state records the workspace, not an authority.
   "authority-receipt": ["profileId", "profileRevision", "workspaceId"],
 };
-/** Fields that cannot be compared, because one side does not record them. */
+/**
+ * A value this comparison can use: a nonempty string. `undefined` is not the
+ * only unsupported shape a JSON authority can send — `null`, `""` and a number
+ * all arrive through the same reader — and testing for `undefined` alone let a
+ * null or empty revision fall through to the revision equality, where it failed
+ * and was reported `behind` with a drift row. An unsupported field is not a
+ * mismatch and not an older revision: it is uncomparable.
+ */
+function supportedIdentityValue(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
+}
+/** Fields that cannot be compared, because one side does not record a supported value. */
 function uncomparableFields(observed: Identity, reference: Identity, required: readonly IdentityField[]): IdentityField[] {
-  return required.filter(field => observed[field] === undefined || reference[field] === undefined);
+  return required.filter(field => !supportedIdentityValue(observed[field]) || !supportedIdentityValue(reference[field]));
+}
+/** Echo only supported identity values into the receipt, never null or empty. */
+function supportedIdentityFields(source: Record<string, unknown>): Identity {
+  const out: Record<string, string> = {};
+  for (const field of ["profileId", "profileRevision", "authority", "workspaceId"] as const) {
+    const value = source[field];
+    if (supportedIdentityValue(value)) out[field] = value;
+  }
+  return out;
 }
 function revisionReason(labelText: string, observed: string | undefined, reference: string | undefined, status: SelectionProvenanceStatus): string {
   const seen = label(observed);
@@ -236,8 +256,12 @@ async function resolveReference(input: SelectionProvenanceInput, options: Select
     }
     if (!receipt) return { profileId: input.profileId, source: "unavailable", reasonCode: "REFERENCE_UNAVAILABLE", reason: `${because} Nothing is synced locally either, so no consumer can be compared.`, selections: noSelections };
     return {
-      profileId: receipt.profile.profileId, profileRevision: receipt.profile.profileRevision, selectionCount: receipt.profile.selections.length,
-      authority: receipt.profile.authority, workspaceId: receipt.profile.workspaceId,
+      // `profileId` is required on the receipt, and a validated snapshot always carries a
+      // nonempty one; the optional identity fields are guarded so an unsupported value is
+      // never echoed as if it were comparable.
+      profileId: receipt.profile.profileId,
+      ...supportedIdentityFields({ profileRevision: receipt.profile.profileRevision, authority: receipt.profile.authority, workspaceId: receipt.profile.workspaceId }),
+      selectionCount: receipt.profile.selections.length,
       observedAt: receipt.verifiedAt, source: "synced-snapshot", reasonCode,
       reason: `${because} Comparisons use the locally synced snapshot (posted work is not proof of adoption), so every consumer below is reported unverified rather than current.`,
       selections: receipt.profile.selections,
@@ -279,9 +303,7 @@ function activationConsumer(input: SelectionProvenanceInput, reference: Referenc
   if (!receipt) return refuse("NO_LOCAL_RECEIPT", `This machine holds no activated snapshot for profile ${label(input.profileId)}.`);
   const profile = receipt.profile;
   const observed: SelectionProvenanceConsumer = {
-    ...base, profileId: profile.profileId, profileRevision: profile.profileRevision,
-    ...(profile.authority === undefined ? {} : { authority: profile.authority }),
-    ...(profile.workspaceId === undefined ? {} : { workspaceId: profile.workspaceId }),
+    ...base, ...supportedIdentityFields({ profileId: profile.profileId, profileRevision: profile.profileRevision, authority: profile.authority, workspaceId: profile.workspaceId }),
     observedAt: receipt.verifiedAt, selectionCount: profile.selections.length,
   };
   if (!sameIdentity(observed, reference)) {
@@ -323,8 +345,7 @@ async function stationConsumer(input: SelectionProvenanceInput, reference: Refer
   if (!attempted.ok) return refuse("READ_REFUSED", `The authority did not answer for station ${label(input.stationId)}.`);
   const station = attempted.value;
   const observed: SelectionProvenanceConsumer = {
-    ...base, profileId: station.profileId, profileRevision: station.profileRevision,
-    ...(station.workspaceId === undefined ? {} : { workspaceId: station.workspaceId }),
+    ...base, ...supportedIdentityFields({ profileId: station.profileId, profileRevision: station.profileRevision, workspaceId: station.workspaceId }),
     observedAt: station.appliedAt, selectionCount: station.selections.length,
   };
   if (!sameIdentity(observed, reference)) {
@@ -363,9 +384,7 @@ function sessionConsumer(input: SelectionProvenanceInput, reference: Reference, 
   }
   const consumed = session.selections.filter(selection => selection.loaded).map(selection => ({ slug: selection.slug, version: selection.version, bundleDigest: selection.bundleDigest }));
   const observed: SelectionProvenanceConsumer = {
-    ...base, profileId: session.profileId, profileRevision: session.profileRevision,
-    ...(session.authority === undefined ? {} : { authority: session.authority }),
-    ...(session.workspaceId === undefined ? {} : { workspaceId: session.workspaceId }),
+    ...base, ...supportedIdentityFields({ profileId: session.profileId, profileRevision: session.profileRevision, authority: session.authority, workspaceId: session.workspaceId }),
     observedAt: session.verifiedAt, selectionCount: session.selectionCount, loadedCount: session.loadedCount, consumed,
   };
   if (!sameIdentity(observed, reference)) {
@@ -419,9 +438,9 @@ export async function readSelectionProvenance(input: SelectionProvenanceInput, o
     selectionProfile: input.profileId,
     selected: {
       profileId: reference.profileId,
-      ...(reference.profileRevision === undefined ? {} : { profileRevision: reference.profileRevision, selectionCount: reference.selectionCount }),
-      ...(reference.authority === undefined ? {} : { authority: reference.authority }),
-      ...(reference.workspaceId === undefined ? {} : { workspaceId: reference.workspaceId }),
+      ...(supportedIdentityValue(reference.profileRevision) ? { profileRevision: reference.profileRevision, selectionCount: reference.selectionCount } : {}),
+      ...(supportedIdentityValue(reference.authority) ? { authority: reference.authority } : {}),
+      ...(supportedIdentityValue(reference.workspaceId) ? { workspaceId: reference.workspaceId } : {}),
       ...(reference.observedAt === undefined ? {} : { observedAt: reference.observedAt }),
       source: reference.source, reasonCode: reference.reasonCode, reason: reference.reason,
     },
