@@ -722,6 +722,12 @@ export function captureDiscoveryPathSources(paths: string[]): DiscoverySource[] 
     : { path, hashMode: "path-bytes", sha256: hashDiscoveryPathFile(path, budget) });
 }
 
+/** Top-level keys whose presence, at any value, makes a project Claude settings
+ * file a higher-precedence discovery source that needs review. Claude 2.1.300
+ * rewrites `additionalMarketplaces` into `extraKnownMarketplaces` on every
+ * settings read, including local settings, so the alias counts as well. */
+export const CLAUDE_PROJECT_DISCOVERY_KEYS = Object.freeze(["enabledPlugins", "extraKnownMarketplaces", "additionalMarketplaces", "skillOverrides"] as const);
+
 /** Project settings can introduce a higher-precedence discovery source. Until
  * its native merge format is supported, refuse that layer rather than certify
  * the home-only inventory. Ordinary unrelated project settings remain usable. */
@@ -760,7 +766,7 @@ export function assertProjectDiscovery(agent: IntegrationAgent, directories: str
         const providerOverride = config.mcp_servers !== undefined && (!config.mcp_servers || typeof config.mcp_servers !== "object" || Array.isArray(config.mcp_servers) || Object.keys(config.mcp_servers).some(name => referenced.has(name)));
         if (declaredHooks || providerOverride) throw new Error(`NATIVE_SKILL_DRIFT: higher-precedence project hook dependency requires review: ${path}`);
       }
-      const keys = agent === "claude" ? ["enabledPlugins", "extraKnownMarketplaces", "skillOverrides"]
+      const keys: readonly string[] = agent === "claude" ? CLAUDE_PROJECT_DISCOVERY_KEYS
         : agent === "codex" ? ["plugins", "marketplaces", "skills"]
         : agent === "gemini" ? ["skills", "extensions"]
         : agent === "opencode" ? ["plugin", "skills"] : agent === "sumi" ? ["plugin", "plugins", "skills", "permissions"] : ["hooks"];
