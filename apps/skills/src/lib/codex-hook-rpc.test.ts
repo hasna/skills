@@ -160,3 +160,56 @@ test("native transport refuses a writable launcher before executing it", async (
     await expect(connectCodexHookRpc({ command, home, codexHome: home })).rejects.toThrow("UNSAFE_EXECUTABLE");
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
+
+/** A native server that, like Codex 0.162.1 started with `--strict-config`,
+ * refuses a valid owner key this build does not know (station01:
+ * `skills.native_allowed_paths`), and otherwise serves the protocol. */
+function unknownKeyFixture(home: string, argvFile: string, warnings: { before?: string[]; after?: string[] } = {}): string {
+  const command = join(home, "codex");
+  const notify = (summaries: string[] = []) => summaries.map(summary => JSON.stringify({ method: "configWarning", params: { summary, details: "synthetic detail token-not-for-output" } }) + "\n").join("");
+  writeFileSync(command, `#!/usr/bin/env bun
+import { createInterface } from "node:readline";
+import { writeFileSync } from "node:fs";
+if (process.argv[2] === "--version") { console.log("codex-cli 0.162.1"); process.exit(0); }
+writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2)));
+if (process.argv.includes("--strict-config")) { process.stderr.write("Error: unknown configuration field skills.native_allowed_paths\\n"); process.exit(1); }
+for await (const line of createInterface({ input: process.stdin })) {
+  const request = JSON.parse(line);
+  if (request.method === "initialize") process.stdout.write(${JSON.stringify(notify(warnings.before))} + JSON.stringify({ id: request.id, result: { userAgent: "skills-native-hook-enrollment/0.162.1 synthetic" } }) + "\\n" + ${JSON.stringify(notify(warnings.after))});
+  if (request.method === "hooks/list") console.log(JSON.stringify({ id: request.id, result: { data: [{ cwd: request.params.cwds[0], hooks: [], errors: [], warnings: [] }] } }));
+}
+`, { mode: 0o700 });
+  return command;
+}
+
+test("native transport runs Codex non-strict, so a valid owner key this build does not know cannot refuse enrollment", async () => {
+  const home = mkdtempSync(join(tmpdir(), "skills-rpc-unknown-key-")), argvFile = join(home, "argv.json");
+  try {
+    admitCorpusFixture(home); admitCorpusFixture(join(home, ".codex"));
+    writeOriginal(join(home, ".codex", "config.toml"), '[skills]\nnative_allowed_paths = ["/synthetic/allowed"]\n');
+    const rpc = await connectCodexHookRpc({ command: unknownKeyFixture(home, argvFile), home });
+    try {
+      expect(JSON.parse(readFileSync(argvFile, "utf8"))).toEqual(["app-server", "--stdio"]);
+      expect(await rpc.request("hooks/list", { cwds: [home] })).toEqual({ data: [{ cwd: home, hooks: [], errors: [], warnings: [] }] });
+    } finally { await rpc.close(); }
+    // Unrelated startup warnings (for example sqlite recovery or sandbox notices) do not refuse.
+    const warned = await connectCodexHookRpc({ command: unknownKeyFixture(home, argvFile, { after: ["Recovered the local state database.", "Invalid configuration"] }), home });
+    try { expect(await warned.request("hooks/list", { cwds: [home] })).toEqual({ data: [{ cwd: home, hooks: [], errors: [], warnings: [] }] }); } finally { await warned.close(); }
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+for (const order of ["before", "after"] as const) test(`a non-strict startup that falls back to default configuration refuses the connection (warning ${order} the initialize response)`, async () => {
+  const home = mkdtempSync(join(tmpdir(), "skills-rpc-config-fallback-")), argvFile = join(home, "argv.json");
+  const expected = "CODEX_HOOK_TRUST_NATIVE_CONFIG_INVALID: Codex could not load its configuration and fell back to defaults; repair config.toml (run codex once to see the error) and retry";
+  try {
+    admitCorpusFixture(home); admitCorpusFixture(join(home, ".codex"));
+    const command = unknownKeyFixture(home, argvFile, { [order]: ["Invalid configuration; using defaults."] });
+    let message = "";
+    try {
+      const rpc = await connectCodexHookRpc({ command, home });
+      try { await rpc.request("hooks/list", { cwds: [home] }); message = "ACCEPTED"; } catch (error) { message = (error as Error).message; } finally { await rpc.close().catch(() => {}); }
+    } catch (error) { message = (error as Error).message; }
+    expect(message).toBe(expected);
+    expect(message).not.toContain("token-not-for-output");
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
