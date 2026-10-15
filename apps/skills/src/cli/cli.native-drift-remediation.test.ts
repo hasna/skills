@@ -97,4 +97,18 @@ test("the drift refusal names remediation that works on a station whose configur
   const accepted = await s.hook();
   expect(accepted.decision).toBeUndefined();
   expect(accepted.reason).toBeUndefined();
+
+  // A strict guard call (hook install reusing the saved review, as trust enrolment
+  // also does) ignores the hand-added name rule, so it names a refreshed binding
+  // rather than repeating the rule.
+  const reused = await s.run(["hook", "install", "--agent", "codex", "--apply", "--json"]);
+  expect([reused.status, reused.stderr.trim()]).toEqual([1, `NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ${JSON.stringify(vendor)}. This check, unlike the live Codex prompt hook, does not accept a hand-added Codex name rule for a plugin-cache copy, so refresh the binding instead: skills hook install --agent codex --discovery-inputs <reviewed-file> --apply, with a fresh discovery review. It disables and records each copy.`]);
+  // The named step works, and the saved review is reusable again afterwards.
+  const fresh = join(scratch, `review-${Math.random().toString(36).slice(2)}.json`);
+  writeFileSync(fresh, JSON.stringify({ version: 1, agents: [{ agent: "codex", roots: [], sources: [captureCodexSettingsV4(s.config)], pluginHooks: "reviewed-no-skill-injection" }] }));
+  const refreshed = await s.run(["hook", "install", "--agent", "codex", "--discovery-inputs", fresh, "--apply", "--json"]);
+  expect([refreshed.status, refreshed.stderr]).toEqual([0, ""]);
+  const again = await s.run(["hook", "install", "--agent", "codex", "--apply", "--json"]);
+  expect([again.status, again.stderr]).toEqual([0, ""]);
+  expect((await s.hook()).decision).toBeUndefined();
 });
