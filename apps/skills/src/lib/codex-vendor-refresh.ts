@@ -44,15 +44,16 @@ const DEFAULT_SKILLS_PATHS: readonly string[] = Object.freeze(["./skills", "./sk
 const VENDOR_APP_DECLARATION = "./.app.json";
 const MAX_SUBTREE_ENTRIES = 20000;
 const MAX_SUBTREE_DEPTH = 32;
-/** Directory names the native inventory skips, so a SKILL.md below one is never inventoried. */
+/** Directory names a routine refresh never admits a SKILL.md below: Codex skips
+ * dot-named ones, and loads `node_modules` skills, which always need a fresh review. */
 const hiddenName = (name: string): boolean => name.startsWith(".") || name === "node_modules";
 const isSkillDocument = (name: string): boolean => name.toLowerCase() === "skill.md";
 const present = (path: string): boolean => lstatSync(path, { throwIfNoEntry: false }) !== undefined;
 const holdsOtherControl = (path: string): boolean => readdirSync(path).some(name => OTHER_PLUGIN_CONTROLS.includes(name.toLowerCase()));
 
 /** Below a plugin root: real directories and regular files only, and every
- * SKILL.md is its own visible inventory entry (no hidden or `node_modules`
- * ancestor, no SKILL.md nested below another skill). Links refuse. */
+ * SKILL.md is its own inventory entry (no hidden or `node_modules` ancestor,
+ * no SKILL.md nested below another skill). Links refuse. */
 function pluginTreeVisible(path: string, hidden: boolean, insideSkill: boolean, depth: number, budget: { remaining: number }): boolean {
   if (depth > MAX_SUBTREE_DEPTH) return false;
   const names = readdirSync(path);

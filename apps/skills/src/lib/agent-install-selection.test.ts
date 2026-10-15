@@ -114,5 +114,5 @@ test("runtime Claude native drift recovery names only the selected adapter", () 
   const skill = join(f.home, ".claude", "skills", "unmanaged"); mkdirSync(skill);
   writeFileSync(join(skill, "SKILL.md"), "Synthetic native instructions\n");
   expect(() => assertManagedAgentBridge("claude", { home: f.home, dataDir: f.dataDir, projectDir: f.home }))
-    .toThrow("Review skills migrate native --agent claude --project");
+    .toThrow("For user and project copies, review skills migrate native --agent claude --project <working-directory> --include-unmanaged --json");
 });
