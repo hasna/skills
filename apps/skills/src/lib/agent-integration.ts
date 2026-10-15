@@ -11,6 +11,7 @@ import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
 import type { NativeDiscoveryWitnessChange, NativeDiscoveryWitnessKind, NativeDiscoveryWitnessTolerance } from "./native-discovery-witness-change.js";
 import { CODEX_REMOTE_VENDOR_MARKETPLACES, codexVendorMarketplace, codexVendorPluginRefreshSafe, codexVendorSubtreeHookFree } from "./codex-vendor-refresh.js";
 import { isCodexNativeSkillDisabled } from "./codex-native-skill-catalog.js";
+import { codexPluginCacheSkillTree } from "./codex-node-modules.js";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { existsSync, lstatSync, statSync, mkdirSync, readFileSync, readdirSync, opendirSync, readlinkSync, realpathSync, renameSync, rmdirSync, writeFileSync, unlinkSync, chmodSync, openSync, closeSync, fsyncSync, fstatSync, readSync, constants, linkSync, type BigIntStats, type Dirent } from "node:fs";
@@ -436,7 +437,10 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
     // of their names. Never recurse through an alias to discover its contents.
     if (pluginCache) children.sort((a, b) => Number(a.isSymbolicLink()) - Number(b.isSymbolicLink()));
     for (const { name } of children) {
-      if (name === "node_modules") continue;
+      // Codex loads skills below node_modules in its skill roots, and in its
+      // plugin cache wherever that can be a plugin skill root
+      // (codex-node-modules.ts). Elsewhere it stays an unscanned dependency tree.
+      if (name === "node_modules" && !(agent === "codex" && (!pluginCache || codexPluginCacheSkillTree(join(path, name), depth + 1)))) continue;
       if (name.startsWith(".") && name !== ".system" && agent !== "hermes" && agent !== "sumi" && !(options.guardHermes && `${path}${sep}`.includes(`${sep}.agents${sep}skills${sep}`))) continue;
       const isVendor = vendor || name === ".system";
       if (isVendor && !options.includeVendor) continue;
