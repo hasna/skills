@@ -195,7 +195,7 @@ plugin dependency declarations refuse because this validator does not resolve
 or review unselected external plugins.
 The request may declare `functionHooksEnv: "1"`; without that declaration the
 environment document is preserved unchanged. For a measured Claude 2.1.276,
-2.1.278, 2.1.282, 2.1.287, 2.1.293, 2.1.296 or 2.1.299 user-scoped install,
+2.1.278, 2.1.282, 2.1.287, 2.1.293, 2.1.296, 2.1.299 or 2.1.300 user-scoped install,
 `candidate.settingsMarketplaceSource: "directory"`
 explicitly declares the native settings registration. Skills derives
 `extraKnownMarketplaces[candidate.marketplace].source` from the exact frozen
@@ -248,6 +248,49 @@ the caller's no-skill-injection assessment is not a semantic hook review, and
 structural refusal checks do not prove hook behavior. Recheck all preimages and
 candidate closure immediately before the first native mutation. The validator
 does not claim native install atomicity or crash recovery.
+
+The reviewed discovery inputs must bind every current Claude settings and
+registration source: the user settings, both project settings files,
+`known_marketplaces.json` and `installed_plugins.json`. A project
+`.claude/settings.json` or `.claude/settings.local.json` that the reviewed
+sources omit is exempt only when no other expected source (the target settings
+or the user settings) shares its path, and it is either:
+
+- absent, with a null preimage; or
+- present, and all of the following hold:
+  - its current bytes match its preimage SHA-256; a mismatch refuses with
+    `<name> preimage changed`;
+  - those exact bytes are strict UTF-8 without a byte-order mark and parse as
+    one JSON object within the native JSON witness limits (no comments,
+    trailing commas, trailing content or duplicate keys at any depth);
+  - none of `enabledPlugins`, `extraKnownMarketplaces`,
+    `additionalMarketplaces` or `skillOverrides` is present at any value,
+    including `null`, `{}` and `[]`;
+  - every top-level key is on the exemption allowlist with its type:
+    `permissions` (an object), `outputStyle`, `model`, `theme` and
+    `effortLevel` (strings), and `verbose` and `spinnerTipsEnabled` (booleans);
+  - `permissions` holds only `allow`, `deny` and `ask` (arrays of strings) and
+    `defaultMode` (a string).
+
+Anything else keeps the file required, including `env` (Claude reads
+`CLAUDE_CODE_PLUGIN_DIRS` from it), `hooks`, `permissions.additionalDirectories`
+(Claude loads skills, commands and agents from those directories), `__proto__`
+and unknown keys. The allowlist names settings reviewed as not configuring
+plugins, marketplaces, skills, hooks, extra directories or the environment. It
+does not prove that Claude cannot discover anything from the file; a setting
+joins it only after that review.
+
+This covers the permissions-only `~/.claude/settings.local.json` that Claude
+writes when it saves a permission rule during a user-scope install, whose
+project path is the Claude home. A present unreviewed file that fails the parse,
+discovery-key or allowlist checks refuses and names the reason. Each exempt file
+is re-checked against its exact preimage (still absent, or the same bytes) after
+discovery and again before the result, so a change, creation or removal in
+between refuses. The live hooks' project check still runs on top; it refuses
+any of the four discovery keys (`additionalMarketplaces` included, because
+Claude 2.1.300 rewrites it into `extraKnownMarketplaces` on every settings read)
+and its other project skill and hook settings. The user settings and both
+registries are never exempt.
 
 The optional release manifest witness binds the complete supplied release.json
 file bytes, path and SHA-256 in the request/receipt. Harnesses remains

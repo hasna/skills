@@ -740,11 +740,15 @@ receipt is written. Hermes native shell-hook trust is the exception: it is the
 user's own consent and no Skills write creates it, so it stays a pre-write
 condition. One implementation serves both halves, so they cannot drift apart.
 
-A reviewed binding always carries a whole-file witness for the agent
-configuration beside its projected fields, so unchanged projected fields do not
-excuse a change outside them: a drifted review is never silently reused as an
-automatic one, a fresh explicit discovery review is the supported route, and a
-witness refresh is not.
+Because that recheck includes the managed bridge, `hook install` cannot reuse a
+saved review on a host whose bridge has since broken, and in that form it cannot
+repair its own precondition. It refuses and names the reachable form,
+`skills hook install --agent <agent> --discovery-inputs <review> --apply`, which
+skips the retained-review precheck and rebuilds the bridge from the review in the
+same transaction. A reviewed binding always carries a whole-file witness for the
+agent configuration beside its projected fields, so unchanged projected fields do
+not excuse a change outside them: a fresh explicit discovery review, not a
+witness refresh, is the supported route.
 
 For reviewed Claude plugins, `skills integration plugin plan`, `admit` and
 `resolve` provide a command-source admission boundary before native discovery.
@@ -753,6 +757,25 @@ Skills storage. Native projections retain ordinary components, and a typed
 receipt permits only verified registry/cache transitions. See
 [plugin admission](docs/plugin-admission.md) for the package, review and runtime
 contracts; these commands do not change live agent registrations or settings.
+
+The read-only `skills hook review-claude-candidate` check requires its reviewed
+discovery inputs to bind the user settings, both project settings files and
+both plugin registries. A project `.claude/settings.json` or
+`.claude/settings.local.json` that the review omits is exempt only when no other
+expected source shares its path and it is either absent, or present with exact
+preimage bytes that parse strictly as one JSON object (strict UTF-8, no
+byte-order mark, comments, trailing content or duplicate keys) and carry only
+allowlisted settings: `permissions` with `allow`, `deny`, `ask` and
+`defaultMode`, plus `outputStyle`, `model`, `theme`, `effortLevel`, `verbose`
+and `spinnerTipsEnabled`. Any discovery key (`enabledPlugins`,
+`extraKnownMarketplaces`, `additionalMarketplaces`, `skillOverrides`), `env`,
+`hooks`, `permissions.additionalDirectories` or unknown key keeps the file
+required. The allowlist is a reviewed list of settings, not a proof that Claude
+cannot discover anything from the file. This admits the permissions-only
+`~/.claude/settings.local.json` that Claude writes when it saves a permission
+rule. Each exempt file is re-checked against its exact preimage until the
+result; user settings and the registries are never exempt. See
+[prospective Claude candidate review](docs/plugin-admission.md#prospective-claude-candidate-review).
 
 If your home `.claude` or `.codex` directory intentionally links to another
 directory within your home, add `--allow-root-aliases` to hook installation and
@@ -1313,12 +1336,25 @@ skills provenance --station station-example --json
 ```
 
 Every consumer is classified `current`, `behind`, `pinned` or `unverified`, and
-always carries the reason; `drift` lists the bundles whose exact versions differ.
-The command reads and never writes a pin, receipt, cache entry or station
-record, and it renders no skill payload and no credential. With `--cached`, or
-when the authority cannot be read, the reference is the locally synced snapshot
-and every consumer is reported `unverified` rather than `current` — a local
-snapshot cannot establish adoption.
+always carries a stable `reasonCode` and its reason. Identity is part of the
+comparison: a revision that matches under a different authority, workspace or
+profile is `IDENTITY_MISMATCH`, not `current`, so a foreign pin is never
+reported as adopted and is never diffed. Each receipt source declares the
+identity fields it must record, so a receipt that omits one — or carries `null` or
+an empty string where a nonempty string is required, which the HTTP reader also
+passes through — is `INCOMPLETE_RECEIPT`, not `current` and not `behind`: an
+absent revision is not an older revision. The local activation is named as this
+machine and the authority receipt as the station named on the command line; the
+two are never collapsed into one id. The receipt also states what it does not
+attest — published version and digest evidence, native discovery and locks, and
+live consumer adoption — rather than letting a clean-looking result imply them.
+`drift` lists the bundles whose exact versions differ. The command reads and
+never writes a pin, receipt, cache entry or station record, and it renders no
+skill payload and no credential: a reader's exception text is never carried,
+only a fixed diagnostic code, because bounding foreign text is not redacting it.
+With `--cached`, or when the authority cannot be read, the reference is the
+locally synced snapshot and every consumer is reported `unverified` rather than
+`current` — a local snapshot cannot establish adoption.
 
 After hook installation has enabled CLI loading, pull operations obey the same
 profile. `--all` refreshes its selected versions rather than the full catalog,
