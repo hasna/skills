@@ -729,15 +729,22 @@ file; drift still requires a fresh explicit review. Explicit discovery inputs
 take precedence, including when their `agents` array omits a previously reviewed
 agent. The default `--agent all` still includes every supported adapter.
 
-Because that recheck includes the managed bridge, `hook install` cannot reuse a
-saved review on a host whose bridge has since broken, and in that form it cannot
-repair its own precondition. It refuses and names the reachable form,
-`skills hook install --agent <agent> --discovery-inputs <review> --apply`, which
-skips the retained-review precheck and rebuilds the bridge from the review in the
-same transaction. A reviewed binding always carries a whole-file witness for the
-agent configuration beside its projected fields, so unchanged projected fields do
-not excuse a change outside them: a fresh explicit discovery review, not a
-witness refresh, is the supported route.
+That recheck has two halves, and only one of them gates reuse. BINDING CUSTODY —
+the same managed bridge, home, alias set, agent, command/profile binding and
+reviewed discovery — must hold before a saved review is reused, or the plan
+refuses and names a fresh explicit review. Bridge PROTECTION — the native plugin
+bytes, the permission and hook rules and the bundled-skill switches — is written
+by the same plan, so it is asserted in full after the writes instead of gating
+the repair that fixes it; a plan that does not repair it is refused before the
+receipt is written. Hermes native shell-hook trust is the exception: it is the
+user's own consent and no Skills write creates it, so it stays a pre-write
+condition. One implementation serves both halves, so they cannot drift apart.
+
+A reviewed binding always carries a whole-file witness for the agent
+configuration beside its projected fields, so unchanged projected fields do not
+excuse a change outside them: a drifted review is never silently reused as an
+automatic one, a fresh explicit discovery review is the supported route, and a
+witness refresh is not.
 
 For reviewed Claude plugins, `skills integration plugin plan`, `admit` and
 `resolve` provide a command-source admission boundary before native discovery.
