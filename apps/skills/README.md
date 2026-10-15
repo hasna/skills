@@ -729,6 +729,16 @@ file; drift still requires a fresh explicit review. Explicit discovery inputs
 take precedence, including when their `agents` array omits a previously reviewed
 agent. The default `--agent all` still includes every supported adapter.
 
+Because that recheck includes the managed bridge, `hook install` cannot reuse a
+saved review on a host whose bridge has since broken, and in that form it cannot
+repair its own precondition. It refuses and names the reachable form,
+`skills hook install --agent <agent> --discovery-inputs <review> --apply`, which
+skips the retained-review precheck and rebuilds the bridge from the review in the
+same transaction. A reviewed binding always carries a whole-file witness for the
+agent configuration beside its projected fields, so unchanged projected fields do
+not excuse a change outside them: a fresh explicit discovery review, not a
+witness refresh, is the supported route.
+
 For reviewed Claude plugins, `skills integration plugin plan`, `admit` and
 `resolve` provide a command-source admission boundary before native discovery.
 Original packages and migrated skill/command prompts remain in private versioned
@@ -1291,6 +1301,50 @@ for the named station; it is not a native-folder snapshot in this mode.
 `skills install --selection-profile default` without skill names also syncs the
 whole selection.
 
+### Reading provenance instead of trusting one record
+
+Applying a record is not adoption, and the four facts below are different. Only
+`skills provenance` reports them together, read-only:
+
+- `selected` — the shared profile the authority serves right now;
+- `activated` — the snapshot this machine last verified and activated, which is
+  what its hooks, `skills context` and `skills load` resolve from;
+- `applied` — the station receipt the authority holds. Only an explicit
+  `skills sync` writes it; the managed hook keeps station reporting off its
+  blocking lifecycle path on purpose, so this record legitimately lags the
+  activation and is not by itself evidence that a machine is adrift;
+- `pinned` — the exact immutable profile revision one live session holds. A
+  session keeps its revision when the profile moves on, so an older pin is
+  custody by design, not drift;
+- `consumed` — the skills that session actually loaded, at their exact versions.
+
+```bash
+skills provenance --json
+skills provenance --session <session-id> --json
+skills provenance --station station-example --json
+```
+
+Every consumer is classified `current`, `behind`, `pinned` or `unverified`, and
+always carries a stable `reasonCode` and its reason. Identity is part of the
+comparison: a revision that matches under a different authority, workspace or
+profile is `IDENTITY_MISMATCH`, not `current`, so a foreign pin is never
+reported as adopted and is never diffed. Each receipt source declares the
+identity fields it must record, so a receipt that omits one — or carries `null` or
+an empty string where a nonempty string is required, which the HTTP reader also
+passes through — is `INCOMPLETE_RECEIPT`, not `current` and not `behind`: an
+absent revision is not an older revision. The local activation is named as this
+machine and the authority receipt as the station named on the command line; the
+two are never collapsed into one id. The receipt also states what it does not
+attest — published version and digest evidence, native discovery and locks, and
+live consumer adoption — rather than letting a clean-looking result imply them.
+`drift` lists the bundles whose exact versions differ. The command reads and
+never writes a pin, receipt, cache entry or station record, and it renders no
+skill payload and no credential: a reader's exception text is never carried,
+only a fixed diagnostic code, because bounding foreign text is not redacting it.
+With `--cached`, or when the authority cannot be read, the reference is the
+locally synced snapshot and every consumer is reported `unverified` rather than
+`current` — a local snapshot cannot establish adoption.
+
 After hook installation has enabled CLI loading, pull operations obey the same
 profile. `--all` refreshes its selected versions rather than the full catalog,
 and a named pull must belong to that profile:
@@ -1695,6 +1749,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills context <prompt> --selection-profile <id>` | | Resolve instructions matching the prompt and profile triggers |
 | `skills hook install --selection-profile <id>` | | Plan bridges and hooks for configured/detected consumers; `--agent <agent>` selects one, explicit `--agent all` requires every adapter; `--apply` installs them, then restart and trust the hooks |
 | `skills sessions show <id> --json` | | Inspect one session's exact profile revision and receipt hash without loading payloads |
+| `skills provenance [--session <id>] [--station <id>] --json` | `--cached` | Read-only receipt of the selected, activated, applied, pinned and actually loaded skill versions, each with its status and reason; writes nothing |
 | `skills sessions reconcile <id> --from-profile <id> --from-revision <rev> --receipt-sha256 <sha> --selection-profile <id> --profile-revision <rev>` | | Plan an explicit migration of one live session; `--apply --plan-digest <digest> --plan-issued-at <time> --plan-expires-at <time>` (within five minutes) preserves its old receipt and applies the reviewed replacement |
 | `skills hook agents --json` | | Report maintained adapters and explicit coverage limits |
 | `skills migrate native` | | Inventory native copies; `--apply` archives managed copies, with explicit `--include-unmanaged`, `--include-vendor`, or reviewed `--target-manifest` selection |

@@ -123,6 +123,9 @@ const { registerPluginAdmission } = await import("./commands/plugin-admission.js
 registerPluginAdmission(program);
 const { registerProfiles } = await import("./commands/profiles.js");
 registerProfiles(program);
+
+const { registerProvenance } = await import("./commands/provenance.js");
+registerProvenance(program);
 const { registerGrants } = await import("./commands/grants.js");
 registerGrants(program);
 
