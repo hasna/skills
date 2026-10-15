@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { applyAgentIntegration, assertManagedAgentBridge, planAgentIntegration } from "./agent-integration.js";
@@ -131,5 +131,24 @@ test("a reviewed binding must carry the whole-file configuration witness, projec
     policy.bridge.discovery.sumi.sources = policy.bridge.discovery.sumi.sources.filter((source: { path: string; format?: string }) => !(source.path === f.configPath && source.format === undefined));
     put(f.policyPath, `${JSON.stringify(policy, null, 2)}\n`);
     expect(() => f.plan()).toThrow("retained review is missing the full agent configuration source");
+  } finally { f.restore(); }
+});
+
+for (const phase of ["plan", "apply"] as const) test(`an unexpected native copy refuses before ${phase} can repair protection or create backups`, () => {
+  const f = sumiFixture();
+  try {
+    rmSync(f.pluginPath);
+    const pending = phase === "apply" ? f.plan() : undefined;
+    const copy = join(f.home, ".agents", "skills", "unreviewed", "SKILL.md");
+    const content = "---\nname: unreviewed\ndescription: Synthetic unexpected native copy\n---\nDo not execute.\n";
+    put(copy, content);
+    const policyBefore = read(f.policyPath);
+    const migrationRoot = join(f.dataDir, "migration");
+    const backupsBefore = readdirSync(migrationRoot).sort();
+    expect(() => pending ? applyAgentIntegration(pending) : f.plan()).toThrow("1 unexpected native skill copies");
+    expect(read(f.policyPath)).toBe(policyBefore);
+    expect(read(copy)).toBe(content);
+    expect(existsSync(f.pluginPath)).toBe(false);
+    expect(readdirSync(migrationRoot).sort()).toEqual(backupsBefore);
   } finally { f.restore(); }
 });

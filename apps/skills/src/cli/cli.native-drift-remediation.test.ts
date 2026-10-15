@@ -1,6 +1,6 @@
 import { installSumiPathsFixture } from "../lib/sumi-paths.fixture.js";
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { buildCliFixture } from "./cli-build.fixture.js";
@@ -107,7 +107,15 @@ test("the drift refusal names remediation that works on a station whose configur
   // A strict guard call (hook install reusing the saved review, as trust enrolment
   // also does) ignores the hand-added name rule, so it names a refreshed binding
   // rather than repeating the rule.
+  const configBeforeReuse = readFileSync(s.config, "utf8");
+  const policyPath = join(s.home, ".hasna", "skills", "agent-policy.json");
+  const migrationRoot = join(s.home, ".hasna", "skills", "migration");
+  const policyBeforeReuse = readFileSync(policyPath, "utf8");
+  const backupsBeforeReuse = readdirSync(migrationRoot).sort();
   const reused = await s.run(["hook", "install", "--agent", "codex", "--apply", "--json"]);
+  expect(readFileSync(s.config, "utf8")).toBe(configBeforeReuse);
+  expect(readFileSync(policyPath, "utf8")).toBe(policyBeforeReuse);
+  expect(readdirSync(migrationRoot).sort()).toEqual(backupsBeforeReuse);
   expect([reused.status, reused.stderr.trim()]).toEqual([1, `NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ${JSON.stringify(vendor)}. This check, unlike the live Codex prompt hook, does not accept a hand-added Codex name rule for a plugin-cache copy, so refresh the binding instead: skills hook install --agent codex --discovery-inputs <reviewed-file> --apply, with a fresh discovery review. It disables and records each copy.`]);
   // The named step works, and the saved review is reusable again afterwards.
   const refreshed = await s.run(["hook", "install", "--agent", "codex", "--discovery-inputs", freshReview(s.config), "--apply", "--json"]);
@@ -135,4 +143,14 @@ test("on a reviewed binding, removing an enabling rule is followed by the named 
   expect((await s.hook()).decision).toBeUndefined();
   const reused = await s.run(["hook", "install", "--agent", "codex", "--apply", "--json"]);
   expect([reused.status, reused.stderr]).toEqual([0, ""]);
+});
+
+test("a saved Codex review still repairs missing prompt hooks", async () => {
+  const s = await station();
+  const hooks = join(s.home, ".codex", "hooks.json");
+  rmSync(hooks);
+  const repaired = await s.run(["hook", "install", "--agent", "codex", "--apply", "--json"]);
+  expect([repaired.status, repaired.stderr]).toEqual([0, ""]);
+  expect(existsSync(hooks)).toBe(true);
+  expect((await s.hook()).decision).toBeUndefined();
 });

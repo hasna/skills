@@ -629,21 +629,18 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     const executable = discoveryExecutable(agent) ?? (prior ? recordedDiscoveryExecutable(agent, prior) : null);
     executables.set(agent, executable);
     const retainedReview: AgentDiscoveryBinding | undefined = options.discoveryInputs === undefined && policy.bridge?.discovery?.[agent]?.method === "reviewed" ? {...policy.bridge.discovery[agent], ...(agent==="codex" ? {codexDisabledPluginSkills:policy.bridge.codexPluginSkills ?? []} : {})} : undefined;
-    if (retainedReview) {
-      // A saved review is reused only while its BINDING CUSTODY holds: the same
-      // managed bridge, home, alias set, agent, command/profile binding and
-      // reviewed discovery. Bridge protection is checked in full after the
-      // writes instead, because this command is the documented repair for
-      // changed protection and refusing reuse here is what made the repair
-      // circular. A drifted review itself is never reused as something else;
-      // that still requires a fresh explicit --discovery-inputs review.
-      assertUnrepairableBridgeProtection(assertManagedBridgeCustody(agent, { home, dataDir, projectDir: options.projectDir ?? home }), agent);
-      retainedAgents.push(agent);
+    try {
+      if (retainedReview) {
+        // Reuse may repair bridge protection, but cannot silently enroll a new
+        // native copy or discovery input by changing it before validation.
+        assertRetainedReviewState(agent, { home, dataDir, projectDir: options.projectDir ?? home });
+        retainedAgents.push(agent);
+      }
+      return resolveAgentDiscovery({ home, agent, reviewed: options.discoveryInputs, retainedReview, canonical: path => canonicalAgentPath(path, aliases), executable });
     }
-    try { return resolveAgentDiscovery({ home, agent, reviewed: options.discoveryInputs, retainedReview, canonical: path => canonicalAgentPath(path, aliases), executable }); }
     catch (error) {
       // An unresolvable runtime is an environment gap, not drift: keep its code.
-      if (isDiscoveryRootUnresolved(error) || error instanceof SumiPathResolverError) throw error;
+      if (isDiscoveryRootUnresolved(error) || error instanceof SumiPathResolverError || error instanceof NativeSkillCopiesDriftError) throw error;
       // A reused review that no longer verifies cannot be repaired by this command: plain
       // `hook install` re-enters this same assertion, so name the explicit review form.
       if (!retainedReview) throw error;
@@ -1366,10 +1363,9 @@ function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: Code
   assertCurrent(); recheckRootAliases(aliases);
   // Verify the old trust before writing. An explicit command/profile change
   // still uses the ordinary native approval flow for its newly installed hook.
-  // Custody plus the protection this install cannot write; the rest of the
-  // bridge protection is proven AFTER the writes below, because those writes
-  // are what repair it.
-  for (const agent of plan.retainedReviewChecks?.agents ?? []) assertUnrepairableBridgeProtection(assertManagedBridgeCustody(agent, { ...plan.retainedReviewChecks!, dataDir: plan.dataDir }), agent);
+  // Recheck custody, discovery and unexpected copies before backups or writes.
+  // Only the repairable bridge protection waits for the post-write proof.
+  for (const agent of plan.retainedReviewChecks?.agents ?? []) assertRetainedReviewState(agent, { ...plan.retainedReviewChecks!, dataDir: plan.dataDir });
   if (plan.reviewArtifactMigration) {
     const verified = planReviewedArtifactMigration(plan.reviewArtifactMigration);
     if (JSON.stringify(verified.changes) !== JSON.stringify(plan.changes)
@@ -1863,10 +1859,21 @@ function assertUnrepairableBridgeProtection(custody: ManagedBridgeCustody, agent
   assertHermesProtection(home, config, command, profile, supervisor);
 }
 
+/** Both planning and application validate the original native state. Repairable
+ * hook/plugin protection is deliberately checked only after installation. */
+function assertRetainedReviewState(agent: IntegrationAgent, options: ManagedBridgeOptions): void {
+  const custody = assertManagedBridgeCustody(agent, options);
+  assertUnrepairableBridgeProtection(custody, agent);
+  assertManagedNativeDiscovery(custody, agent, options);
+}
+
+// Preserve the specific copy-remediation message instead of appending the
+// generic retained-discovery repair, which can duplicate or contradict it.
+class NativeSkillCopiesDriftError extends Error {}
+
 function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options: ManagedBridgeOptions = {}, provenDiscovery?: AgentDiscoveryBinding): ManagedBridgeReport {
   const custody = assertManagedBridgeCustody(agent, options, provenDiscovery);
-  const { home, dataDir, binding, aliases, expected, roots, discovery, configPath, config, command, profile } = custody;
-  const visible = (entry: NativeSkillEntry) => entry.agent === agent || (["codex", "gemini", "opencode", "hermes", "sumi"].includes(agent) && entry.path.includes(`${sep}.agents${sep}skills${sep}`)) || (["opencode", "sumi"].includes(agent) && entry.agent === "claude");
+  const { home, aliases, expected, discovery, config, command, profile } = custody;
   if (agent === "hermes") {
     assertUnrepairableBridgeProtection(custody, agent);
   } else if (agent === "sumi") {
@@ -1882,6 +1889,22 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
     if (agent === "claude" && config.syncClaudeAiSkills !== false) throw new Error("NATIVE_SKILL_DRIFT: Claude account skill synchronization is not disabled (syncClaudeAiSkills); run skills hook install to prevent native copies from returning");
     if (agent === "gemini" && (config.hooksConfig?.enabled === false || config.skills?.enabled !== true || !["antigravity-support", "skill-creator"].every(name => config.skills?.disabled?.includes(name)) || config.skills?.disabled?.includes(CLI_BRIDGE_NAME))) throw new Error("NATIVE_SKILL_DRIFT: Gemini bridge or bundled-skill protection changed; run skills hook install");
   }
+  if (agent === "codex") {
+    const codexConfig = Bun.TOML.parse(readOptional(canonicalAgentPath(join(home, ".codex", "config.toml"), aliases)) ?? "") as { skills?: { bundled?: { enabled?: boolean }; config?: Array<{ path?: string; name?: string; enabled?: boolean }> } };
+    if (codexConfig.skills?.bundled?.enabled !== false) throw new Error("NATIVE_SKILL_DRIFT: Codex bundled skill reseeding is not disabled (skills.bundled.enabled); run skills hook install");
+    const setting = (path: string) => (codexConfig.skills?.config ?? []).filter(entry => typeof entry.path === "string" && [path, join(path, "SKILL.md")].includes(canonicalAgentPath(entry.path, aliases)));
+    if ([...setting(expected), ...(codexConfig.skills?.config ?? []).filter(entry => typeof entry.name === "string" && entry.name.trim() === CLI_BRIDGE_NAME)].some(entry => entry.enabled === false)) throw new Error("NATIVE_SKILL_DRIFT: the Codex CLI bridge is disabled; run skills hook install");
+  }
+  if (agent === "gemini" && discovery && !discovery.builtinNames?.every(name => config.skills.disabled.includes(name))) throw new Error("NATIVE_SKILL_DRIFT: an installed Gemini builtin is not disabled");
+  return assertManagedNativeDiscovery(custody, agent, options);
+}
+
+/** Native/discovery state is never repaired implicitly by reusing a review.
+ * Share this validator with the full guard, including its live-hook-only policy
+ * and vendor exceptions. Install callers pass neither exception. */
+function assertManagedNativeDiscovery(custody: ManagedBridgeCustody, agent: IntegrationAgent, options: ManagedBridgeOptions): ManagedBridgeReport {
+  const { home, dataDir, binding, aliases, expected, roots, discovery } = custody;
+  const visible = (entry: NativeSkillEntry) => entry.agent === agent || (["codex", "gemini", "opencode", "hermes", "sumi"].includes(agent) && entry.path.includes(`${sep}.agents${sep}skills${sep}`)) || (["opencode", "sumi"].includes(agent) && entry.agent === "claude");
   const codexPath = canonicalAgentPath(join(home, ".codex", "config.toml"), aliases);
   // Live Codex prompt hook only: tolerate a changed reviewed witness only when it
   // is provably a vendor plugin refresh (appended vendor disable rows or vendor
@@ -1895,9 +1918,6 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
   } : undefined;
   if (options.codexDiscoveryRecovery && (agent !== "codex" || options.codexDiscoveryRecovery.configPath !== codexPath)) throw new Error("NATIVE_SKILL_DRIFT: Codex trust recovery names a different configuration root");
   const codexConfig = agent === "codex" ? Bun.TOML.parse(readOptional(codexPath) ?? "") as { plugins?: unknown; skills?: { bundled?: { enabled?: boolean }; config?: Array<{ path?: string; name?: string; enabled?: boolean }> } } : {};
-  if (agent === "codex" && codexConfig.skills?.bundled?.enabled !== false) throw new Error("NATIVE_SKILL_DRIFT: Codex bundled skill reseeding is not disabled (skills.bundled.enabled); run skills hook install");
-  const setting = (path: string) => (codexConfig.skills?.config ?? []).filter(entry => typeof entry.path === "string" && [path, join(path, "SKILL.md")].includes(canonicalAgentPath(entry.path, aliases)));
-  if (agent === "codex" && [...setting(expected), ...(codexConfig.skills?.config ?? []).filter(entry => typeof entry.name === "string" && entry.name.trim() === CLI_BRIDGE_NAME)].some(entry => entry.enabled === false)) throw new Error("NATIVE_SKILL_DRIFT: the Codex CLI bridge is disabled; run skills hook install");
   if (agent === "codex" && !reviewedCodexPluginCapabilitiesUnchanged(canonicalAgentPath(join(home,".codex/plugins/cache"),aliases),binding.codexPluginSkills ?? [],path=>new TextDecoder("utf-8",{fatal:true}).decode(readNativeBytes(path,1024*1024)),codexConfig.skills?.config ?? [])) throw new Error("NATIVE_SKILL_DRIFT: reviewed native plugin capability controls changed; run skills hook install with a fresh discovery review");
   const disabledPlugin = (entry: NativeSkillEntry): boolean => {
     if (agent !== "codex" || !entry.vendor) return false;
@@ -1944,7 +1964,6 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
     return Array.isArray(binding.disabledBuiltins) && binding.disabledBuiltins.some((item: any) => item.path === entry.path && item.hash === entry.hash);
   };
   if (!discovery || discovery.agent !== agent) throw new Error("NATIVE_SKILL_DRIFT: native discovery coverage is missing; run skills hook install");
-  if (agent === "gemini" && !discovery.builtinNames?.every(name => config.skills.disabled.includes(name))) throw new Error("NATIVE_SKILL_DRIFT: an installed Gemini builtin is not disabled");
   try {
     verifyAgentDiscovery(agent==="codex" ? {...discovery,codexDisabledPluginSkills:binding.codexPluginSkills ?? []} : discovery, options.codexDiscoveryRecovery, aliases, witnessTolerance);
     if (agent === "sumi" && discovery.method === "reviewed") resolveAgentDiscovery({ home, agent, retainedReview: discovery, canonical: path => canonicalAgentPath(path, aliases) });
@@ -1998,7 +2017,7 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
     // Strict callers (every guard call except the live Codex prompt hook) accept
     // no hand-added name rule, so they get the refreshed-binding step instead.
     const remediation = nativeSkillRemediation(agent, blocking, { cache: vendorCache, config: codexPath, aliases: aliases.length > 0, strict: options.codexPromptHook !== true, automatic: discovery.method === "automatic", toleratedChange: (witnessTolerance?.changes.length ?? 0) > 0, rules: codexConfig.skills?.config, enrolled: entry => (binding.codexPluginSkills ?? []).some((control: CodexPluginSkillControl) => entry.path.startsWith(control.pluginParent + sep)), keepsConfig: rows => { try { const text = readOptional(codexPath) ?? ""; return discoveryTextKeepsWitness(discovery, codexPath, `${text.trimEnd()}${text.trim() ? "\n\n" : ""}${rows.join("\n")}`); } catch { return false; } }, read: path => new TextDecoder("utf-8", { fatal: true }).decode(readNativeBytes(path, 1024 * 1024)) });
-    throw new Error(`NATIVE_SKILL_DRIFT: ${blocking.length} unexpected native skill copies were found: ${nativeSkillPathList(blocking.map(entry => entry.path))}. ${remediation}${adapterRefusal ? ` Native policy adapter refused: ${adapterRefusal}` : ""}`);
+    throw new NativeSkillCopiesDriftError(`NATIVE_SKILL_DRIFT: ${blocking.length} unexpected native skill copies were found: ${nativeSkillPathList(blocking.map(entry => entry.path))}. ${remediation}${adapterRefusal ? ` Native policy adapter refused: ${adapterRefusal}` : ""}`);
   }
   recheckRootAliases(aliases);
   // The automatic closure can re-report a source verifyAgentDiscovery collected.
