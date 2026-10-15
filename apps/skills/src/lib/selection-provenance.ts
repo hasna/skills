@@ -60,12 +60,14 @@ export type SelectionProvenanceReason =
   | "REVISION_BEHIND"
   | "PINNED_BY_DESIGN"
   | "IDENTITY_MISMATCH"
+  | "INCOMPLETE_RECEIPT"
   | "DIFFERENT_PROFILE"
   | "NO_LOCAL_RECEIPT"
   | "NO_SESSION_NAMED"
   | "NO_SESSION_RECEIPT"
   | "NO_STATION_RECEIPT"
   | "READ_REFUSED"
+  | "REFERENCE_FROM_AUTHORITY"
   | "REFERENCE_NOT_AUTHORITY"
   | "REFERENCE_UNAVAILABLE"
   | "NO_STATION_REPORTED";
@@ -201,10 +203,23 @@ function sameIdentity(observed: Identity, reference: Identity): boolean {
  * authority's station receipt records only the workspace, so requiring an
  * authority of it would mark every station unverified. A field that cannot be
  * compared is never treated as matching.
+ *
+ * An INCOMPLETE receipt is neither current nor behind: an absent revision is not
+ * an older revision, and an absent profile id is not the selected profile. The
+ * normal HTTP reader accepts a shape that omits either, so presence is checked
+ * before any comparison rather than inferred from it.
  */
-type IdentityField = "authority" | "workspaceId";
-function identityCompared(observed: Identity, reference: Identity, required: readonly IdentityField[]): boolean {
-  return required.every(field => observed[field] !== undefined && reference[field] !== undefined);
+type IdentityField = "profileId" | "profileRevision" | "authority" | "workspaceId";
+/** The identity fields each receipt source is expected to record. */
+const REQUIRED_IDENTITY: Record<SelectionProvenanceSource, readonly IdentityField[]> = {
+  "local-receipt": ["profileId", "profileRevision", "authority", "workspaceId"],
+  "session-receipt": ["profileId", "profileRevision", "authority", "workspaceId"],
+  // The authority's station state records the workspace, not an authority.
+  "authority-receipt": ["profileId", "profileRevision", "workspaceId"],
+};
+/** Fields that cannot be compared, because one side does not record them. */
+function uncomparableFields(observed: Identity, reference: Identity, required: readonly IdentityField[]): IdentityField[] {
+  return required.filter(field => observed[field] === undefined || reference[field] === undefined);
 }
 function revisionReason(labelText: string, observed: string | undefined, reference: string | undefined, status: SelectionProvenanceStatus): string {
   const seen = label(observed);
@@ -247,7 +262,7 @@ async function resolveReference(input: SelectionProvenanceInput, options: Select
     profileId: profile.profileId, profileRevision: profile.profileRevision, selectionCount: profile.selections.length,
     ...(profile.authority === undefined ? {} : { authority: profile.authority }),
     ...(profile.workspaceId === undefined ? {} : { workspaceId: profile.workspaceId }),
-    source: "authority", reasonCode: "REFERENCE_NOT_AUTHORITY", reason: `Read from the authority for profile ${label(profile.profileId)}.`, selections: profile.selections,
+    source: "authority", reasonCode: "REFERENCE_FROM_AUTHORITY", reason: `Read from the authority for profile ${label(profile.profileId)}.`, selections: profile.selections,
   };
 }
 
@@ -275,8 +290,9 @@ function activationConsumer(input: SelectionProvenanceInput, reference: Referenc
   if (reference.source !== "authority") {
     return { consumer: { ...observed, status: "unverified", reasonCode: reference.reasonCode, reason: `${reference.reason} This snapshot alone cannot say whether the machine is current.` }, compared: noSelections };
   }
-  if (!identityCompared(observed, reference, ["authority", "workspaceId"])) {
-    return { consumer: { ...observed, status: "unverified", reasonCode: "IDENTITY_MISMATCH", reason: `The activated snapshot omits an identity field the selected profile records, so its identity cannot be compared; it is not reported current.` }, compared: noSelections };
+  const missingActivation = uncomparableFields(observed, reference, REQUIRED_IDENTITY["local-receipt"]);
+  if (missingActivation.length > 0) {
+    return { consumer: { ...observed, status: "unverified", reasonCode: "INCOMPLETE_RECEIPT", reason: `This machine's activated snapshot does not record ${missingActivation.join(", ")}, so its identity and revision cannot be compared; it is reported unverified rather than current or behind.` }, compared: noSelections };
   }
   const status: SelectionProvenanceStatus = sameRevision(profile.profileRevision, reference.profileRevision) ? "current" : "behind";
   return {
@@ -314,8 +330,9 @@ async function stationConsumer(input: SelectionProvenanceInput, reference: Refer
   if (!sameIdentity(observed, reference)) {
     return { consumer: { ...observed, status: "unverified", reasonCode: "IDENTITY_MISMATCH", reason: `Station ${label(input.stationId)} last applied a different selection identity: it differs in profile or workspace from the selected profile.` }, compared: noSelections };
   }
-  if (!identityCompared(observed, reference, ["workspaceId"])) {
-    return { consumer: { ...observed, status: "unverified", reasonCode: "IDENTITY_MISMATCH", reason: `The receipt the authority holds for station ${label(input.stationId)} does not record the workspace the selected profile binds, so its identity cannot be compared; it is not reported current.` }, compared: noSelections };
+  const missing = uncomparableFields(observed, reference, REQUIRED_IDENTITY["authority-receipt"]);
+  if (missing.length > 0) {
+    return { consumer: { ...observed, status: "unverified", reasonCode: "INCOMPLETE_RECEIPT", reason: `The receipt the authority holds for station ${label(input.stationId)} does not record ${missing.join(", ")}, so its identity and revision cannot be compared; it is reported unverified rather than current or behind.` }, compared: noSelections };
   }
   if (sameRevision(station.profileRevision, reference.profileRevision)) {
     return { consumer: { ...observed, status: "current", reasonCode: "CURRENT_SCHEMA_MATCH", reason: revisionReason(`The receipt the authority holds for station ${label(input.stationId)}`, station.profileRevision, reference.profileRevision, "current") }, compared: station.selections };
@@ -357,8 +374,9 @@ function sessionConsumer(input: SelectionProvenanceInput, reference: Reference, 
   if (reference.source !== "authority") {
     return { consumer: { ...observed, status: "unverified", reasonCode: reference.reasonCode, reason: `${reference.reason} This pin alone cannot say whether the session is current.` }, compared: noSelections };
   }
-  if (!identityCompared(observed, reference, ["authority", "workspaceId"])) {
-    return { consumer: { ...observed, status: "unverified", reasonCode: "IDENTITY_MISMATCH", reason: "The session receipt omits an identity field the selected profile records, so its identity cannot be compared; it is not reported current." }, compared: noSelections };
+  const missingPin = uncomparableFields(observed, reference, REQUIRED_IDENTITY["session-receipt"]);
+  if (missingPin.length > 0) {
+    return { consumer: { ...observed, status: "unverified", reasonCode: "INCOMPLETE_RECEIPT", reason: `The session receipt does not record ${missingPin.join(", ")}, so its identity and revision cannot be compared; it is reported unverified rather than current, pinned or behind.` }, compared: noSelections };
   }
   if (sameRevision(session.profileRevision, reference.profileRevision)) {
     return {

@@ -1328,7 +1328,10 @@ Every consumer is classified `current`, `behind`, `pinned` or `unverified`, and
 always carries a stable `reasonCode` and its reason. Identity is part of the
 comparison: a revision that matches under a different authority, workspace or
 profile is `IDENTITY_MISMATCH`, not `current`, so a foreign pin is never
-reported as adopted and is never diffed. The local activation is named as this
+reported as adopted and is never diffed. Each receipt source declares the
+identity fields it must record, so a receipt that omits one — which the HTTP
+reader accepts — is `INCOMPLETE_RECEIPT`, not `current` and not `behind`: an
+absent revision is not an older revision. The local activation is named as this
 machine and the authority receipt as the station named on the command line; the
 two are never collapsed into one id. The receipt also states what it does not
 attest — published version and digest evidence, native discovery and locks, and

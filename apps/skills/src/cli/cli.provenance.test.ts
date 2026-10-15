@@ -56,6 +56,8 @@ interface Fixture {
 function fixtureFor(options: {
   appliedRevision: string; appliedVersions: Record<string, string>; syncSnapshot: boolean;
   writeSession?: { authority?: string; workspaceId?: string; profileRevision?: string };
+  /** Emit an incomplete station receipt, which the HTTP reader accepts. */
+  omitStationField?: "profileId" | "profileRevision";
 }): Fixture {
   const token = randomUUID(), requests: string[] = [];
   let origin = "http://127.0.0.1";
@@ -64,11 +66,15 @@ function fixtureFor(options: {
     authority, workspaceId: WORKSPACE, profileId: PROFILE, profileRevision: SELECTED,
     selections: selections(SELECTED, SELECTED_VERSIONS, authority),
   });
-  const stationBody = (id: string): StationSkillState => ({
-    stationId: id, workspaceId: WORKSPACE, actorId: "actor-fixture", profileId: PROFILE,
-    profileRevision: options.appliedRevision, appliedAt: "2026-01-02T00:00:00Z",
-    selections: selections(options.appliedRevision, options.appliedVersions, authority),
-  });
+  const stationBody = (id: string): StationSkillState => {
+    const body = {
+      stationId: id, workspaceId: WORKSPACE, actorId: "actor-fixture", profileId: PROFILE,
+      profileRevision: options.appliedRevision, appliedAt: "2026-01-02T00:00:00Z",
+      selections: selections(options.appliedRevision, options.appliedVersions, authority),
+    } as Record<string, unknown>;
+    if (options.omitStationField) delete body[options.omitStationField];
+    return body as unknown as StationSkillState;
+  };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
     const raw = new URL(request.url).pathname;
     const path = raw.replace(/^\/api/, "");
@@ -244,6 +250,39 @@ test("a reader failure is a fixed code, never the exception message", async () =
   expect(receipt.consumers.map(consumer => consumer.reasonCode)).toEqual(["NO_LOCAL_RECEIPT", "REFERENCE_NOT_AUTHORITY", "READ_REFUSED"]);
   expect(receipt.drift).toEqual([]);
 });
+
+/**
+ * DEFECT CONTROL (changed-contract rereview). The normal HTTP reader accepts a
+ * station receipt that omits `profileId` or `profileRevision`. An absent field is
+ * not a match and not an older revision: both shapes must be unverified with no
+ * drift, never `current`/`CURRENT_SCHEMA_MATCH` or `behind`/`REVISION_BEHIND`.
+ */
+for (const omitted of ["profileId", "profileRevision"] as const) {
+  test(`an incomplete station receipt is unverified with no drift: missing ${omitted}`, async () => {
+    const f = fixtureFor({
+      appliedRevision: APPLIED, appliedVersions: APPLIED_VERSIONS, syncSnapshot: true, writeSession: {},
+      omitStationField: omitted,
+    });
+    const { stdout, stderr, exitCode } = await f.cli(["provenance", "--selection-profile", PROFILE, "--station", STATION, "--session", f.sessionId, "--json"]);
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    const receipt = JSON.parse(stdout);
+    const station = receipt.consumers[1];
+    expect(station).toMatchObject({ source: "authority-receipt", idKind: "requested-station", status: "unverified", reasonCode: "INCOMPLETE_RECEIPT" });
+    // The two wrong answers this control exists to prevent.
+    expect(station.status).not.toBe("current");
+    expect(station.reasonCode).not.toBe("CURRENT_SCHEMA_MATCH");
+    expect(station.status).not.toBe("behind");
+    expect(station.reasonCode).not.toBe("REVISION_BEHIND");
+    expect(station.reason).toContain(omitted);
+    // No drift may be derived from a receipt that cannot be compared.
+    expect(receipt.drift.filter((row: { source: string }) => row.source === "authority-receipt")).toEqual([]);
+    // The other consumers are unaffected: the session stays pinned by design.
+    expect(receipt.consumers[2]).toMatchObject({ source: "session-receipt", status: "pinned" });
+    expect(receipt.consumers[0]).toMatchObject({ source: "local-receipt", status: "current" });
+    rmSync(f.home, { recursive: true, force: true });
+  });
+}
 
 test("drift is bounded so one receipt cannot carry an unbounded list", () => {
   expect(PROVENANCE_DRIFT_LIMIT).toBeGreaterThan(0);
