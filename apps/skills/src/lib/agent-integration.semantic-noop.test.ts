@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { applyAgentIntegration, planAgentIntegration } from "./agent-integration.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
+import { corpusFixture } from "./codex-corpus.fixture.js";
 
 useDefaultTestTimeout();
 const fixtures: string[] = [];
@@ -51,6 +52,8 @@ test("a real disabled-rule addition still requires corpus admission", () => {
   const plan = planAgentIntegration(f.options), change = plan.changes.find(change => change.path === f.configPath)!;
   expect(change).toBeDefined();
   expect((Bun.TOML.parse(change.after) as any).skills.config).toContainEqual({ path: extra, enabled: false });
-  expect(() => applyAgentIntegration(plan)).toThrow("CODEX_CORPUS_ADMISSION_REQUIRED");
+  // Select an admission-capable fixture build explicitly: an ambient upstream
+  // Codex on PATH would now qualify for the interim fallback.
+  expect(() => applyAgentIntegration(plan, corpusFixture(false).options)).toThrow("CODEX_CORPUS_ADMISSION_REQUIRED");
   expect(readFileSync(f.configPath, "utf8")).toBe(f.original);
 });

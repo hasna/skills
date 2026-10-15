@@ -23,6 +23,8 @@ import { captureClaudeMarketplaceRegistryV2 } from "../../lib/claude-marketplace
 import { captureClaudeMarketplaceEntry } from "../../lib/claude-marketplace-entry-witness.js";
 import { reviewClaudeProspectiveCandidate, type ClaudeProspectiveReviewRequest } from "../../lib/claude-prospective-review.js";
 import { captureCodexNativeSkillCatalog } from "../../lib/codex-native-skill-catalog.js";
+import { connectCodexHookRpc } from "../../lib/codex-hook-rpc.js";
+import { codexAdmissionReceipt, type CodexCorpusAdmission } from "../../lib/codex-corpus-write.js";
 import { selfSpawnCommand } from "../../lib/self-spawn.js";
 import { sessionPinMigrationEnabled } from "../../lib/config.js";
 import { captureClaudeInstallerRequest, safeClaudeInstallerCaptureError } from "./claude-installer-capture.js";
@@ -169,11 +171,13 @@ export function registerAgentIntegration(parent: Command): void {
       try {
         if (!isAbsolute(options.cwd) || !isAbsolute(options.output)) throw new Error("CODEX_NATIVE_SKILL_CATALOG_ABSOLUTE_PATH_REQUIRED");
         if (existsSync(options.output)) throw new Error("CODEX_NATIVE_SKILL_CATALOG_OUTPUT_EXISTS");
+        // The receipt, never the reviewed catalog bytes, records a fallback admission.
+        let admission: CodexCorpusAdmission | undefined;
         const catalog = await captureCodexNativeSkillCatalog({
           command: options.codexCommand, home: homedir(),
           ...(process.env.CODEX_HOME === undefined ? {} : { codexHome: process.env.CODEX_HOME }),
           cwd: options.cwd,
-        });
+        }, async connection => { const rpc = await connectCodexHookRpc(connection); admission = rpc.admission; return rpc; });
         const bytes = JSON.stringify(catalog, null, 2) + "\n";
         try { writeFileSync(options.output, bytes, { flag: "wx", mode: 0o600 }); }
         catch (error) {
@@ -184,7 +188,7 @@ export function registerAgentIntegration(parent: Command): void {
         if (!written.isFile() || written.isSymbolicLink() || (written.mode & 0o077) !== 0
           || readFileSync(options.output, "utf8") !== bytes) throw new Error("CODEX_NATIVE_SKILL_CATALOG_READBACK_FAILED");
         const receipt = { version: catalog.version, cwd: catalog.cwd, skillCount: catalog.skills.length,
-          output: options.output, bytes: Buffer.byteLength(bytes), sha256: createHash("sha256").update(bytes).digest("hex") };
+          output: options.output, bytes: Buffer.byteLength(bytes), sha256: createHash("sha256").update(bytes).digest("hex"), ...codexAdmissionReceipt(admission) };
         await writeCliOutput(options.json ? JSON.stringify(receipt) : `Captured ${receipt.skillCount} native Codex skill(s) in ${receipt.output}.`);
       } catch (error) {
         const message = error instanceof Error && /^[A-Z][A-Z0-9_]{2,120}$/.test(error.message)

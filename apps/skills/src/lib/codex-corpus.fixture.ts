@@ -5,14 +5,33 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 const fixtures: string[] = [];
 afterEach(() => { for (const path of fixtures.splice(0)) rmSync(path, { recursive: true, force: true }); });
-export function corpusFixture(enrolled = true) {
+/** `admission` answers the native help probe; `upstream` emulates Codex 0.160.0/0.162.1,
+ * which has no `corpus-admission-inspect`. `<home>/probe-mode` injects probe anomalies. */
+export type CorpusFixtureBuild = "admission" | "upstream";
+export function corpusFixture(enrolled = true, build: CorpusFixtureBuild = "admission") {
   const home = mkdtempSync(join(tmpdir(), "corpus-admission-")); fixtures.push(home);
   const root = join(home, ".codex"); mkdirSync(root, { mode: 0o700 });
   if (enrolled) { const lock = new KernelLock(root, ".native-corpus-admission"); lock.close(); }
   const command = join(home, "native-fixture");
   // A protocol fixture, not proof of a released native implementation.
   writeFileSync(command, `#!${process.execPath}
-import { lstatSync, readFileSync, existsSync } from "node:fs";
+import { lstatSync, readFileSync, existsSync, writeFileSync } from "node:fs";
+const fixtureHome = ${JSON.stringify(home)}, build = ${JSON.stringify(build)};
+const probeMode = existsSync(fixtureHome + "/probe-mode") ? readFileSync(fixtureHome + "/probe-mode", "utf8") : "";
+if (process.argv[2] === "--version" && probeMode === "bad-version") { console.log("codex-cli 0.160.0 (unreviewed build text)"); process.exit(0); }
+if (process.argv[2] === "help" && process.argv.length === 4) {
+  if (probeMode === "timeout") await new Promise(resolve => setTimeout(resolve, 60000));
+  if (process.argv[3] === "exec") process.exit(probeMode === "control-fail" ? 1 : 0);
+  if (process.argv[3] === "corpus-admission-inspect") {
+    if (build === "admission" || probeMode === "help-0") { console.log("Inspect native corpus admission"); process.exit(0); }
+    if (probeMode === "stdout-noise") console.log("unexpected");
+    const name = probeMode === "wrong-text" ? "corpus-admission-inspector" : "corpus-admission-inspect";
+    process.stderr.write("error: unrecognized subcommand '" + name + "'\\n\\nUsage: codex [OPTIONS] [PROMPT]\\n       codex [OPTIONS] <COMMAND> [ARGS]\\n\\nFor more information, try '--help'.\\n");
+    process.exit(probeMode === "exit-1" ? 1 : 2);
+  }
+}
+// Upstream parses an unknown leading word as a prompt; record any such call.
+if (build === "upstream" && process.argv[2] === "corpus-admission-inspect") { writeFileSync(fixtureHome + "/inspect-invoked", ""); process.exit(2); }
 if (process.argv[2] === "--version") { console.log("codex-cli 0.160.0"); process.exit(0); }
 if (process.argv[2] === "app-server") {
   let buffer="";
@@ -43,8 +62,8 @@ export function admitCorpusFixture(root: string): void {
   new KernelLock(root,".native-corpus-admission").close();
 }
 /** An explicit PATH component for children that deliberately replace their environment. */
-export function corpusInspectorPathFixture(): string {
-  const f=corpusFixture(false);
+export function corpusInspectorPathFixture(build: CorpusFixtureBuild = "admission"): string {
+  const f=corpusFixture(false, build);
   renameSync(f.command,join(f.home,"codex"));
   return f.home;
 }
@@ -59,8 +78,9 @@ export function wrapNativeInspectionFixture(script: string): string {
   if(!script.startsWith("#!")) return script;
   const f=corpusFixture(false), end=script.indexOf("\n"), head=script.slice(0,end+1), body=script.slice(end+1);
   const command="'"+f.command.replaceAll("'", "'\\''")+"'";
+  // An admission build also answers the fallback's help probe and control.
   const query=head.includes("/bin/sh")
-    ? `if [ "$1" = "corpus-admission-inspect" ]; then exec ${command} "$@"; fi\n`
-    : `if(process.argv[2]==="corpus-admission-inspect"){process.stdout.write(require("node:child_process").execFileSync(${JSON.stringify(f.command)},process.argv.slice(2)));process.exit(0); }\n`;
+    ? `if [ "$1" = "corpus-admission-inspect" ]; then exec ${command} "$@"; fi\nif [ "$#" = 2 ] && [ "$1" = "help" ] && { [ "$2" = "corpus-admission-inspect" ] || [ "$2" = "exec" ]; }; then exit 0; fi\n`
+    : `if(process.argv[2]==="corpus-admission-inspect"){process.stdout.write(require("node:child_process").execFileSync(${JSON.stringify(f.command)},process.argv.slice(2)));process.exit(0); }\nif(process.argv.length===4&&process.argv[2]==="help"&&["corpus-admission-inspect","exec"].includes(process.argv[3]))process.exit(0);\n`;
   return head+query+body;
 }

@@ -1,4 +1,4 @@
-import { codexCorpusRootForPath, withCodexCorpusWrite, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
+import { codexCorpusRootForPath, withCodexCorpusWrite, type CodexAdmissionReceipt, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
 /**
  * Skill setup and project preferences.
  *
@@ -30,7 +30,7 @@ import {
   type SkillsProjectConfig,
 } from "./project-state.js";
 
-export interface InstallResult {
+export interface InstallResult extends CodexAdmissionReceipt {
   skill: string;
   success: boolean;
   error?: string;
@@ -372,10 +372,11 @@ export function installSkillForAgent(
     force: options.overwrite,
     codexCommand: options.codexCommand, codexSha256: options.codexSha256,
   });
+  const fallback = result.nativeAdmission ? { nativeAdmission: result.nativeAdmission, nativeAdmissionProbe: result.nativeAdmissionProbe } : {};
   if (result.action === "skip") {
-    return { skill: canonicalName, success: false, error: result.reason ?? "skipped", path: result.path };
+    return { skill: canonicalName, success: false, error: result.reason ?? "skipped", path: result.path, ...fallback };
   }
-  return { skill: canonicalName, success: true, path: result.path };
+  return { skill: canonicalName, success: true, path: result.path, ...fallback };
 }
 
 export function removeSkillForAgent(name: string, options: AgentInstallOptions): boolean {

@@ -35,7 +35,7 @@ import { resolveCorpusRoot } from "./home-migration.js";
 import { hashSkillMarkdownFile } from "./skill-hash.js";
 import type { PortableSkillOptions } from "./portable-skills.js";
 import { normalizePortableSkillName } from "./portable-skills-files.js";
-import { codexCorpusRootForPath, withCodexCorpusWrite, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
+import { codexAdmissionReceipt, codexCorpusRootForPath, withCodexCorpusWrite, type CodexAdmissionReceipt, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
 
 export const CONFLICTS_LEDGER_FILE = "conflicts.json";
 export const ROLLBACK_DIRNAME = "rollback";
@@ -77,7 +77,7 @@ export interface AdoptionOptions extends PortableSkillOptions, CodexCorpusWriteO
   apply?: boolean;
 }
 
-export interface AdoptionResult extends AdoptionScan {
+export interface AdoptionResult extends AdoptionScan, CodexAdmissionReceipt {
   applied: boolean;
   /** Rollback record path, when markers were written. */
   rollbackFile?: string;
@@ -91,7 +91,7 @@ export interface RollbackMarker {
   marker: SyncMarker;
 }
 
-export interface RollbackRecord {
+export interface RollbackRecord extends CodexAdmissionReceipt {
   version: 1;
   mode: "adopt" | "prune";
   timestamp: string;
@@ -103,7 +103,7 @@ export interface PruneCandidate extends RollbackMarker {
   home: string;
 }
 
-export interface PruneResult {
+export interface PruneResult extends CodexAdmissionReceipt {
   candidates: PruneCandidate[];
   pruned: number;
   dryRun: boolean;
@@ -258,11 +258,11 @@ function appendConflictsLedger(appDir: string, conflicts: HomeConflict[]): void 
  * every directory removed (mode "prune"), so both operations are auditable
  * from a single machine-readable file. Deleted resource bytes are not stored.
  */
-export function writeRollbackRecord(mode: "adopt" | "prune", entries: RollbackMarker[], appDir: string = getDataDir()): string {
+export function writeRollbackRecord(mode: "adopt" | "prune", entries: RollbackMarker[], appDir: string = getDataDir(), admission: CodexAdmissionReceipt = {}): string {
   const dir = join(appDir, ROLLBACK_DIRNAME);
   mkdirSync(dir, { recursive: true });
   const file = join(dir, `${mode}-${Date.now()}.json`);
-  const record: RollbackRecord = { version: 1, mode, timestamp: new Date().toISOString(), entries };
+  const record: RollbackRecord = { version: 1, mode, timestamp: new Date().toISOString(), entries, ...admission };
   writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`);
   return file;
 }
@@ -281,8 +281,9 @@ export function adoptUnmarkedHomes(options: AdoptionOptions = {}): AdoptionResul
 
   const appDir = options.homeDir ? join(options.homeDir, ".hasna", "skills") : getDataDir();
   const roots = scan.adoptable.map(entry => codexCorpusRootForPath(entry.path)).filter((root): root is string => !!root);
-  return withCodexCorpusWrite(roots, (assertCurrent) => {
+  return withCodexCorpusWrite(roots, (assertCurrent, admission) => {
     assertCurrent();
+    const fallback = codexAdmissionReceipt(admission);
     const canonical = indexCanonicalCorpus(resolveCorpusRoot(options));
     const markers: RollbackMarker[] = scan.adoptable.map((entry) => {
       const root = codexCorpusRootForPath(entry.path);
@@ -301,7 +302,7 @@ export function adoptUnmarkedHomes(options: AdoptionOptions = {}): AdoptionResul
     assertCurrent();
     let rollbackFile: string | undefined;
     if (markers.length > 0) {
-      rollbackFile = writeRollbackRecord("adopt", markers, appDir);
+      rollbackFile = writeRollbackRecord("adopt", markers, appDir, fallback);
     }
     for (const entry of markers) {
       assertCurrent();
@@ -312,7 +313,7 @@ export function adoptUnmarkedHomes(options: AdoptionOptions = {}): AdoptionResul
     }
     assertCurrent();
     appendConflictsLedger(appDir, scan.conflicts);
-    return { ...scan, applied: true, rollbackFile };
+    return { ...scan, applied: true, rollbackFile, ...fallback };
   }, options);
 }
 
@@ -396,12 +397,14 @@ export function pruneStrayHomes(options: AdoptionOptions = {}): PruneResult {
 
   const appDir = options.homeDir ? join(options.homeDir, ".hasna", "skills") : getDataDir();
   const roots = candidates.map(candidate => codexCorpusRootForPath(candidate.path)).filter((root): root is string => !!root);
-  return withCodexCorpusWrite(roots, (assertCurrent) => {
+  return withCodexCorpusWrite(roots, (assertCurrent, admission) => {
     assertCurrent();
+    const fallback = codexAdmissionReceipt(admission);
     const rollbackFile = writeRollbackRecord(
       "prune",
       candidates.map(({ agent, skill, path, hash, marker }) => ({ agent, skill, path, hash, marker })),
       appDir,
+      fallback,
     );
     let pruned = 0;
     for (const candidate of candidates) {
@@ -417,6 +420,6 @@ export function pruneStrayHomes(options: AdoptionOptions = {}): PruneResult {
       if (existsSync(candidate.path)) throw new Error("Skill prune readback failed");
       pruned++;
     }
-    return { candidates, pruned, dryRun: false, rollbackFile };
+    return { candidates, pruned, dryRun: false, rollbackFile, ...fallback };
   }, options);
 }

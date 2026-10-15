@@ -1,4 +1,4 @@
-import { withCodexCorpusWriteAsync } from "./codex-corpus-write.js";
+import { codexAdmissionReceipt, withCodexCorpusWriteAsync, type CodexCorpusAdmission } from "./codex-corpus-write.js";
 import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -185,7 +185,7 @@ export async function reconcileCodexNativeHooks(options: CodexNativeHookReconcil
     const recoveryPlanDigest = recoveryPlan ? makePlanDigest(recoveryPlan) : undefined;
     if (recovery?.reviewedPlanDigest !== undefined) need(recovery.reviewedPlanDigest === recoveryPlanDigest, "RECONCILE_RECOVERY_PLAN_CHANGED");
     const preview = !!recovery && recovery.reviewedPlanDigest === undefined;
-    const receipt = { version: 1, status: preview ? "recovery-review-required" : supersededBinding ? "superseded" : "reconciled", reconciled: !preview, supersededBinding, automaticRollback: false, journal, planDigest: intent.planDigest, nativeVersion: rpc.version, nativeStateVerified: !nativeTrustPending, nativeTrustPending, bindingRefreshRequired: !!configDiscoveryRecovery, nativeExecutionVerified: false, configSha256: currentConfig.sha256, hooksSha256: hooksCurrent.sha256, policySha256: policyBefore.sha256, policyBeforeSha256: policyBefore.sha256, policyCurrentSha256: policyCurrent.sha256, previousSkillsCli: intent.skillsCli, skillsCli: skillsCli.receipt, releaseProof: options.releaseProof, nativeInventoryScope: recordedNativeHooks ? "complete" : "declared-managed-hooks-only", unrelatedNativeHooksPreserved: !!recordedNativeHooks, unrelatedSettingsAndCommentsPreserved: true, ...(recoveryPlan ? { recoveryPlan, recoveryPlanDigest } : {}) };
+    const receipt = { version: 1, status: preview ? "recovery-review-required" : supersededBinding ? "superseded" : "reconciled", reconciled: !preview, supersededBinding, automaticRollback: false, journal, planDigest: intent.planDigest, nativeVersion: rpc.version, nativeStateVerified: !nativeTrustPending, nativeTrustPending, bindingRefreshRequired: !!configDiscoveryRecovery, nativeExecutionVerified: false, configSha256: currentConfig.sha256, hooksSha256: hooksCurrent.sha256, policySha256: policyBefore.sha256, policyBeforeSha256: policyBefore.sha256, policyCurrentSha256: policyCurrent.sha256, previousSkillsCli: intent.skillsCli, skillsCli: skillsCli.receipt, releaseProof: options.releaseProof, nativeInventoryScope: recordedNativeHooks ? "complete" : "declared-managed-hooks-only", unrelatedNativeHooksPreserved: !!recordedNativeHooks, unrelatedSettingsAndCommentsPreserved: true, ...(recoveryPlan ? { recoveryPlan, recoveryPlanDigest } : {}), ...codexAdmissionReceipt(rpc.admission) };
     if (preview) return receipt;
     save(join(journal, "receipt.json"), json(receipt));
     return receipt;
@@ -199,10 +199,10 @@ export async function reconcileCodexNativeHooks(options: CodexNativeHookReconcil
  * explicit authorization of exact owned commands, never a broad trust bypass. */
 export async function enrollCodexNativeHooks(options: CodexNativeHookTrustOptions = {}, connect: Connect = connectCodexHookRpc) {
   const home = resolve(options.home ?? homedir());
-  return withCodexCorpusWriteAsync([join(home, ".codex")], () => enrollCodexNativeHooksUnlocked(options, connect), options);
+  return withCodexCorpusWriteAsync([join(home, ".codex")], (_assertCurrent, admission) => enrollCodexNativeHooksUnlocked(options, connect, admission), options);
 }
 
-async function enrollCodexNativeHooksUnlocked(options: CodexNativeHookTrustOptions, connect: Connect) {
+async function enrollCodexNativeHooksUnlocked(options: CodexNativeHookTrustOptions, connect: Connect, admission?: CodexCorpusAdmission) {
   let rpc: CodexHookRpc | undefined, journal: string | undefined;
   try {
     const home = resolve(options.home ?? homedir()), dataDir = resolve(options.dataDir ?? getDataDirReadOnly());
@@ -268,7 +268,7 @@ async function enrollCodexNativeHooksUnlocked(options: CodexNativeHookTrustOptio
     checkInputs();
     const digestInput = { version: 1, home, configPath, ...(nativeConfigPath !== configPath ? { nativeConfigPath } : {}), configSha256: configFile.sha256, configVersion: layers[0].version, policySha256: policyFile.sha256, hooksSha256: hooksFile.sha256, skillsCli: skillsCli.receipt, nativeVersion: rpc.version, declarations: expected, admitted };
     const planDigest = makePlanDigest(digestInput);
-    const baseReceipt = { planDigest, skillsCli: skillsCli.receipt, nativeVersion: rpc.version, nativeConfigPath, ownedNativeProcessId: rpc.processId, agent: "codex", applied: false, planned, nativeEligible: planned.length === 0, bindingRefreshRequired: false, transport: "owned-stdio-process", existingSessionsReloaded: false, nativeExecutionVerified: false };
+    const baseReceipt = { planDigest, skillsCli: skillsCli.receipt, nativeVersion: rpc.version, nativeConfigPath, ownedNativeProcessId: rpc.processId, agent: "codex", applied: false, planned, nativeEligible: planned.length === 0, bindingRefreshRequired: false, transport: "owned-stdio-process", existingSessionsReloaded: false, nativeExecutionVerified: false, ...codexAdmissionReceipt(admission) };
     if (options.apply) need(options.reviewedPlanDigest === planDigest, "PLAN_CHANGED: run the dry-run again and pass its reviewed --plan-digest with --apply");
     const parent = join(dataDir, "native-hook-trust");
     const st = lstatSync(parent, { throwIfNoEntry: false });

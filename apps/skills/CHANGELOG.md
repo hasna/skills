@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Patch Changes
+
+- Let Skills write into a Codex home on upstream Codex builds that have no `corpus-admission-inspect`, such as 0.160.0 and 0.162.1, through a bounded interim fallback. Every write previously required the native admission lock and inspection, which these builds never provide, so `skills hook install --agent codex --discovery-inputs <file> --apply` and native catalog capture always refused with `CODEX_CORPUS_ADMISSION_REQUIRED`. The fallback applies only when the native lock path does not exist, the selected executable passes the existing identity checks (including `codexSha256`), `codex help corpus-admission-inspect` exits 2 with the exact unrecognized-subcommand line and the control `codex help exec` exits 0; any other outcome refuses as before. It holds an exclusive Skills-owned kernel lock in the Skills data root, keyed by the home's physical identity, and creates nothing under the Codex home. Preimage, rollback and readback checks are unchanged, and lease rechecks also verify the lock, the home's identity and the executable. Every receipt or JSON result from a fallback write records `nativeAdmission: "unavailable"` with the probe record; native-route receipts are unchanged, and refusals may name one fixed reason. The guarantee is weaker than native admission: upstream Codex's own refresh writes are not coordinated, only Skills writers exclude each other, and preimage checks refuse only the races they detect. The fallback is retired in the first release after the Harnesses enrollment/inspect route is live for that build line.
+
 ## 0.10.74
 
 ### Patch Changes

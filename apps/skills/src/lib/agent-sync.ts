@@ -1,4 +1,4 @@
-import { codexCorpusRootForPath, withCodexCorpusWrite, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
+import { codexAdmissionReceipt, codexCorpusRootForPath, withCodexCorpusWrite, type CodexAdmissionReceipt, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
 /**
  * `skills sync` — the last mile: write skills from this machine's corpus
  * (the migrated owner-layout cache ~/.hasna/skills/skills/<name>/, or the
@@ -177,7 +177,7 @@ export function pointerSkillMd(name: string, description: string): string {
 
 export type SyncActionKind = "create" | "update" | "skip";
 
-export interface AgentSyncAction {
+export interface AgentSyncAction extends CodexAdmissionReceipt {
   skill: string;
   agent: SyncAgent;
   path: string;
@@ -412,10 +412,11 @@ export function writeManagedAgentSkill(params: WriteManagedAgentSkillParams): Ag
     path: result.path,
     action: result.action,
     ...(result.reason ? { reason: result.reason } : {}),
+    ...(result.nativeAdmission ? { nativeAdmission: result.nativeAdmission, nativeAdmissionProbe: result.nativeAdmissionProbe } : {}),
   };
 }
 
-export interface ManagedDirWriteResult {
+export interface ManagedDirWriteResult extends CodexAdmissionReceipt {
   action: SyncActionKind;
   path: string;
   reason?: string;
@@ -443,7 +444,10 @@ export function writeManagedSkillDir(
   options: ManagedDirWriteOptions,
 ): ManagedDirWriteResult {
   const root = options.dryRun ? undefined : codexCorpusRootForPath(dir);
-  return withCodexCorpusWrite(root ? [root] : [], (assertCurrent) => writeManagedSkillDirUnlocked(dir, skillMd, options, assertCurrent), options);
+  return withCodexCorpusWrite(root ? [root] : [], (assertCurrent, admission) => {
+    const result = writeManagedSkillDirUnlocked(dir, skillMd, options, assertCurrent);
+    return { ...result, ...codexAdmissionReceipt(admission) };
+  }, options);
 }
 
 function writeManagedSkillDirUnlocked(dir: string, skillMd: string, options: ManagedDirWriteOptions, assertCurrent: () => void): ManagedDirWriteResult {
