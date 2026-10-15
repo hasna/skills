@@ -91,10 +91,24 @@ existing Codewith conventions):
   `package.json`, a non-empty `bin`, and `src/index.ts`. `skills run` executes it.
 - `kind: instruction` — a `SKILL.md`-primary prose skill for coding agents.
   `package.json`, `bin`, and `src/` are all optional. Instruction skills may still
-  bundle optional helper scripts (a `bin`/`src` is permitted, not forbidden), but
-  they are consumed by agents via `SKILL.md`, not executed. `skills run` on an
-  instruction skill returns a clear "not runnable — instruction skill" error
-  instead of executing a stub.
+  bundle optional helper scripts (a `bin`/`src` is permitted, not forbidden) and
+  are consumed by agents via `SKILL.md`. `skills run` refuses a prose-only
+  instruction skill with a clear "not runnable — instruction skill" error instead
+  of executing a stub.
+- An instruction skill may instead declare the one operation it ships: the first
+  `commands` entry, naming its helper, together with an explicit `runtime`
+  contract. `skills run` then executes exactly that declared entrypoint from the
+  selected bundle — the same immutable object, digest receipt, argument,
+  timeout, output and no-ambient-credential contract an executable skill gets —
+  and still refuses the skill when it declares no operation or no runtime. The
+  declared command entry is the authority: it must be a regular file in the
+  selected bundle, and a `runtime.entrypoint` that disagrees with it is an
+  inconsistent declaration that refuses (`LOCAL_ENTRYPOINT_MISMATCH`) rather than
+  running the other file. A declared entry missing from the bundle refuses
+  (`LOCAL_ENTRYPOINT_MISSING`) and is never substituted, and the mutable
+  authoring corpus is never executed. Executable skills keep their own
+  precedence (`runtime.entrypoint`, then `package.json` bin) unchanged, and cloud
+  execution keeps requiring an executable skill version.
 
 New scaffolds always record their selected kind. Legacy local readers retain
 their executable fallback, while the legacy publication API retains its
