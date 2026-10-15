@@ -1,8 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.10.74
 
 ### Patch Changes
+
+- Run an instruction skill through its explicitly declared first command and supported runtime while keeping prose-only instructions non-executable. CLI, MCP and local execution use the same entrypoint validation; a missing command file or conflicting runtime entrypoint refuses before execution. Existing selection custody, runtime restrictions and secret binding checks remain in force.
+
+- Preserve declared command and input arrays when porting instruction skills through the existing manifest normalizers. A declared command whose entry file is missing now fails validation instead of succeeding after silently discarding the declaration. Nested fields still follow the existing parser normalization.
 
 - Validate the original native skill inventory before reusing a saved discovery review, both while planning and immediately before applying a bridge reinstall. An unexpected Codex vendor copy previously gained an exact-path disable before the post-write check, so strict reinstall incorrectly reported success. The shared discovery guard now refuses before configuration, policy or backup writes while keeping genuine bridge protection repairs available. Strict-copy remediation remains exact; live prompt vendor exceptions and verified native-policy handling are unchanged.
 
