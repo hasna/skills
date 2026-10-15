@@ -301,28 +301,46 @@ test("discovery-binding retains a pruned retired version while the registered si
   expect(result.directories).toEqual(binding.directories.map((directory: any, index: number) => ({ index, path: directory.path, status: "current" })));
 });
 
-test("discovery-binding reports typed orphan markers as presence witnesses before and after pruning", async () => {
+test("discovery-binding follows Claude's orphan marker lifecycle with the marker predicate and agrees with the hook at every step", async () => {
   const f = reviewedClaudeBinding("binding-orphan-markers");
+  const [retiredMarker, activeMarker] = f.markers as [string, string];
   expect(f.markers.map(path => f.stored().sources.find((source: any) => source.path === path)?.hashMode)).toEqual([ORPHAN_MODE, ORPHAN_MODE]);
-  // Claude rewrites the marker timestamp at each start; presence is still current.
+  const hookAccepts = () => { try { f.hook(); return true; } catch (error) { expect(String(error)).toContain("NATIVE_SKILL_DRIFT"); return false; } };
+  /** One step: the hook and the operation give the same verdict, and every
+   * marker row has the expected status (and reason, for drift). */
+  const step = async (accepted: boolean, markers: Array<[string, string, string?]>) => {
+    expect(hookAccepts()).toBe(accepted);
+    const result = (await f.verify()).receipt.result;
+    expect(result.ok).toBe(accepted);
+    for (const [path, status, reason] of markers) {
+      const row = result.sources.find((item: any) => item.path === path);
+      expect(row).toMatchObject({ hashMode: ORPHAN_MODE, status, ...(reason ? { reason } : {}) });
+      if (status === "drift") expect(result.failures).toContainEqual({ kind: "source", index: row.index, path, reason });
+      if (status === "retained-absent") expect(row.retention).toEqual({ rule: "absent-retired-claude-version", root: f.retired, witness: ORPHAN_MODE });
+    }
+    if (!accepted) expect(result.failures).toContainEqual({ kind: "binding", reason: "DISCOVERY_REFUSED" });
+    return result;
+  };
+  // Claude rewrites the timestamp at each start and may replace the file's inode.
   for (const marker of f.markers) put(marker, "1791981121000");
-  let result = (await f.verify()).receipt.result;
-  expect(result.ok).toBe(true);
-  for (const marker of f.markers) expect(result.sources.find((row: any) => row.path === marker)).toMatchObject({ hashMode: ORPHAN_MODE, status: "current" });
+  put(join(f.home, "next-marker"), "1791981122000"); renameSync(join(f.home, "next-marker"), activeMarker);
+  await step(true, [[retiredMarker, "current"], [activeMarker, "current"]]);
+  // A byte-order mark before the timestamp is not a Claude marker.
+  writeFileSync(activeMarker, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("1791981120000")]));
+  await step(false, [[activeMarker, "drift", "MARKER_INVALID"]]);
+  put(activeMarker, "1791981123000");
+  await step(true, [[activeMarker, "current"]]);
+  // Claude deletes the marker while its version directory stays: drift.
+  rmSync(retiredMarker);
+  await step(false, [[retiredMarker, "drift", "MISSING"]]);
+  // Claude then deletes the whole orphaned version: retained beside the installed sibling.
   f.prune();
-  result = (await f.verify()).receipt.result;
-  expect(result.ok).toBe(true);
-  expect(result.sources.find((row: any) => row.path === f.markers[0])).toMatchObject({
-    hashMode: ORPHAN_MODE, status: "retained-absent", retention: { rule: "absent-retired-claude-version", root: f.retired, witness: ORPHAN_MODE },
-  });
-  expect(result.sources.find((row: any) => row.path === f.markers[1])).toMatchObject({ hashMode: ORPHAN_MODE, status: "current" });
-  // A malformed marker on the registered version is not a presence witness.
-  put(f.markers[1]!, "not-a-timestamp");
-  expect(() => f.hook()).toThrow("NATIVE_SKILL_DRIFT");
-  result = (await f.verify()).receipt.result;
-  expect(result.ok).toBe(false);
-  expect(result.failures).toContainEqual({ kind: "source", index: expect.any(Number), path: f.markers[1], reason: "CHANGED" });
-  expect(result.failures).toContainEqual({ kind: "binding", reason: "DISCOVERY_REFUSED" });
+  await step(true, [[retiredMarker, "retained-absent"], [activeMarker, "current"]]);
+  // A recreated version directory is checked again, file by file.
+  put(f.manifests[0]!, JSON.stringify({ name: "plugin", version: "1.0.0" })); mkdirSync(join(f.retired, "skills"));
+  await step(false, [[retiredMarker, "drift", "MISSING"]]);
+  put(retiredMarker, "1791981124000");
+  await step(true, [[retiredMarker, "current"], [activeMarker, "current"]]);
 });
 
 test("discovery-binding fails closed when a file outside the retained-version rule is missing", async () => {
@@ -336,7 +354,7 @@ test("discovery-binding fails closed when a file outside the retained-version ru
   expect(result.failures).toContainEqual({ kind: "source", index: expect.any(Number), path: activeManifest, reason: "MISSING" });
   // Without a current registered sibling, the pruned version is not retained either.
   expect(result.sources.some((row: any) => row.status === "retained-absent")).toBe(false);
-  expect(statusOf(result, f.manifests[0]!)).toEqual(["failed"]);
+  expect(statusOf(result, f.manifests[0]!)).toEqual(["drift"]);
   expect(result.failures).toContainEqual({ kind: "binding", reason: "DISCOVERY_REFUSED" });
   put(activeManifest, manifestText);
   expect((await f.verify()).receipt.result.ok).toBe(true);
@@ -354,7 +372,7 @@ test.each(["claude-settings-v4", "bytes"] as const)("discovery-binding never ret
   const settingsRows = result.sources.filter((row: any) => row.path === f.settings);
   expect(settingsRows.length).toBeGreaterThan(1);
   for (const row of settingsRows) {
-    expect(row).toMatchObject({ status: "failed", reason: "MISSING" });
+    expect(row).toMatchObject({ status: "drift", reason: "MISSING" });
     expect(result.failures).toContainEqual({ kind: "source", index: row.index, path: f.settings, reason: "MISSING" });
   }
   // Without unchanged settings the retired version is not retained either.
@@ -378,7 +396,7 @@ test.each(["claude-settings-v4", "bytes"] as const)("discovery-binding reports c
     const rows = result.sources.filter((row: any) => row.path === path);
     expect(rows.length).toBeGreaterThan(0);
     for (const row of rows) {
-      expect(row).toMatchObject({ status: "failed", reason: "CHANGED" });
+      expect(row).toMatchObject({ status: "drift", reason: "CHANGED" });
       expect(result.failures).toContainEqual({ kind: "source", index: row.index, path, reason: "CHANGED" });
     }
     expect(rows.every((row: any) => row.status !== "retained-absent")).toBe(true);

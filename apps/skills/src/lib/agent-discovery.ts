@@ -598,21 +598,26 @@ function claudeControlSource(source: DiscoverySource): boolean {
 export type ClaudeDiscoverySourceVerdict =
   | { status: "current" }
   | { status: "retained-absent"; root: string; witness: RetainedAbsentWitness }
-  | { status: "failed"; reason: "MISSING" | "APPEARED" | "CHANGED" | "REFUSED" };
+  | { status: "drift"; reason: "MISSING" | "APPEARED" | "CHANGED" | "MARKER_INVALID" | "REFUSED" };
 /** Read-only, per-source report on a stored Claude discovery binding, in
  * stored order. A source is retained only through the same absent retired
  * version rule and predicate verifyAgentDiscovery applies; a refused rule
- * retains nothing. This report never accepts a binding by itself: a caller
- * must also require verifyAgentDiscovery to accept the same binding. */
+ * retains nothing. Every other source is checked by its own witness, exactly
+ * as verification checks it (a typed orphan marker by the marker predicate).
+ * This report never accepts a binding by itself: a caller must also require
+ * verifyAgentDiscovery to accept the same binding. */
 export function classifyClaudeDiscoverySources(binding: AgentDiscoveryBinding): ClaudeDiscoverySourceVerdict[] {
   if (!binding || binding.agent !== "claude" || !Array.isArray(binding.sources)) throw new Error("Invalid Claude discovery binding");
   let absentRoots: string[];
   try { absentRoots = absentRetiredClaudeRoots(binding); } catch { absentRoots = []; }
-  // A witness that refuses the current file (typed settings, a malformed
-  // marker, a symlink) and one whose digest differs both fail as CHANGED.
-  const failure = (path: string): ClaudeDiscoverySourceVerdict => {
-    try { return { status: "failed", reason: lstatSync(path, { throwIfNoEntry: false }) ? "CHANGED" : "MISSING" }; }
-    catch { return { status: "failed", reason: "REFUSED" }; }
+  // A present file the witness refuses is CHANGED: typed settings refuse any
+  // change. A typed orphan marker accepts every valid timestamp, so its refusal
+  // is MARKER_INVALID (not a regular, user-owned 13-digit timestamp file).
+  const drift = (source: DiscoverySource, refused: boolean): ClaudeDiscoverySourceVerdict => {
+    try {
+      if (!lstatSync(source.path, { throwIfNoEntry: false })) return { status: "drift", reason: "MISSING" };
+      return { status: "drift", reason: refused && source.hashMode === CLAUDE_ORPHAN_MARKER_MODE ? "MARKER_INVALID" : "CHANGED" };
+    } catch { return { status: "drift", reason: "REFUSED" }; }
   };
   const budget = discoveryByteBudget();
   return binding.sources.map((source): ClaudeDiscoverySourceVerdict => {
@@ -620,9 +625,9 @@ export function classifyClaudeDiscoverySources(binding: AgentDiscoveryBinding): 
     if (root !== undefined) return { status: "retained-absent", root, witness: retainableAbsentWitness(source)! };
     let current: string | null;
     try { current = projected(source, undefined, budget); }
-    catch { return failure(source.path); }
+    catch { return drift(source, true); }
     if (current === source.sha256) return { status: "current" };
-    return source.sha256 === null ? { status: "failed", reason: "APPEARED" } : failure(source.path);
+    return source.sha256 === null ? { status: "drift", reason: "APPEARED" } : drift(source, false);
   });
 }
 function codexInstallationRoots(binding:AgentDiscoveryBinding):string[] {

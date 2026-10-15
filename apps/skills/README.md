@@ -1129,32 +1129,68 @@ The receipt's `result`:
     witness is retained: `path-bytes`, field projections and typed settings
     or registry witnesses stay checked. Settings and registry files are
     never retained.
-  - `failed`, with `reason`: `MISSING` (the path is absent and the rule does
+  - `drift`, with `reason`: `MISSING` (the path is absent and the rule does
     not retain it), `APPEARED` (the stored witness pins absence and the path
     now exists), `CHANGED` (the path exists but its witness does not
     reproduce the stored digest or refuses the current file, for example
-    edited settings, a symlink or a malformed marker) or `REFUSED` (the
-    path's presence could not be determined).
+    edited settings or a symlink), `MARKER_INVALID` (a
+    `claude-plugin-orphaned-at-v1` marker exists but is not a valid Claude
+    marker; see below) or `REFUSED` (the path's presence could not be
+    determined).
 - `directories` has one row per stored directory membership witness, with
-  `status` `current`, or `failed` with `reason` `MEMBERSHIP_CHANGED` or
+  `status` `current`, or `drift` with `reason` `MEMBERSHIP_CHANGED` or
   `REFUSED`.
-- `failures` lists every failed source and directory as
+- `failures` lists every drifted source and directory as
   `{ "kind": "source" | "directory", "index", "path", "reason" }`, followed by
   `{ "kind": "binding", "reason": "DISCOVERY_REFUSED" }` whenever the hook's
   own discovery verification refuses the binding. That covers checks no single
   row shows, such as a changed root alias, a retired directory that reappeared
-  or an invalid witness combination.
+  during verification or an invalid witness combination.
 - `ok` is `true` only when `failures` is empty: the hook's verification
   accepts the binding, every source is `current` or `retained-absent` and
   every directory is `current`.
 
 `ok: false` is a completed verification and still exits 0, so the caller
-reads which witnesses failed and why. Installers must require `ok === true`.
+reads which witnesses drifted and why. Installers must require `ok === true`.
 To bind the result, compare each `sources` row (`index`, `path`, `hashMode`,
 `format`, `sha256`) with the binding they read themselves, compare
 `discoverySha256` with the `candidate` capture and `policySha256` with the
 policy bytes they review, and repeat the call immediately before the first
 native change, because the verdict describes one moment.
+
+Claude writes `.orphaned_at` at the root of a plugin-cache version it plans to
+delete (`<...>/.claude/plugins/cache/<marketplace>/<plugin>/<version>/.orphaned_at`),
+rewrites its timestamp at each start, may replace the file, and later deletes
+the marker or the whole version. A fresh Skills discovery review binds such a
+marker as `claude-plugin-orphaned-at-v1`, a witness of its presence only, and
+`discovery-binding` reports it with that witness's own check, exactly as the
+hook does:
+
+- A rewritten timestamp or a replaced file (new inode) is `current`, provided
+  the marker is a regular, non-symlink file owned by the current user whose
+  content is exactly 13 ASCII digits without a leading zero (no byte-order
+  mark, no newline).
+- Any other content, a symlink or another owner is `drift` with
+  `MARKER_INVALID`.
+- A deleted marker whose version directory still exists is `drift` with
+  `MISSING`; the hook refuses this state too.
+- When Claude deletes the whole version directory and the registered sibling
+  version stays bound and current, the marker and every other retainable
+  witness below that directory are `retained-absent` under
+  `absent-retired-claude-version`.
+- A recreated version directory is no longer absent, so each of its witnesses
+  is checked again: a valid marker and an unchanged manifest are `current`,
+  and a missing marker is `drift` with `MISSING`.
+- Marker witnesses stored by an older review as `bytes` or `path-bytes` keep
+  their exact meaning and report `CHANGED` once Claude rewrites the marker,
+  until a fresh discovery review rebinds them as typed witnesses.
+
+Installers must not restore, copy back or rewrite `.orphaned_at` files, or any
+other witness file, to make a binding verify. A restored file has a new inode,
+which a `path-bytes` witness rejects, and it can hide a change Claude made. Act
+on the `discovery-binding` result instead. When it reports drift, the binding
+needs a fresh Skills discovery review (`skills hook install` with fresh
+`--discovery-inputs`), not a file repair.
 
 Refusal codes for this operation, besides the shared request and producer
 codes (`INVALID_REQUEST_FILE`, `INVALID_REQUEST_JSON`, `INVALID_REQUEST`,

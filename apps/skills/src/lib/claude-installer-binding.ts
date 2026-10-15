@@ -24,7 +24,7 @@ export class ClaudeDiscoveryBindingRefusal extends Error {
   constructor(code: ClaudeDiscoveryBindingRefusalCode) { super(code); this.code = code; }
 }
 
-export type ClaudeBindingSourceFailure = "MISSING" | "APPEARED" | "CHANGED" | "REFUSED";
+export type ClaudeBindingSourceFailure = "MISSING" | "APPEARED" | "CHANGED" | "MARKER_INVALID" | "REFUSED";
 export type ClaudeBindingDirectoryFailure = "MEMBERSHIP_CHANGED" | "REFUSED";
 export interface ClaudeBindingSourceReport {
   index: number;
@@ -32,11 +32,11 @@ export interface ClaudeBindingSourceReport {
   hashMode: string | null;
   format: string | null;
   sha256: string | null;
-  status: "current" | "retained-absent" | "failed";
+  status: "current" | "retained-absent" | "drift";
   retention?: { rule: typeof ABSENT_RETIRED_CLAUDE_VERSION_RULE; root: string; witness: RetainedAbsentWitness };
   reason?: ClaudeBindingSourceFailure;
 }
-export interface ClaudeBindingDirectoryReport { index: number; path: string; status: "current" | "failed"; reason?: ClaudeBindingDirectoryFailure }
+export interface ClaudeBindingDirectoryReport { index: number; path: string; status: "current" | "drift"; reason?: ClaudeBindingDirectoryFailure }
 export type ClaudeBindingFailure =
   | { kind: "source"; index: number; path: string; reason: ClaudeBindingSourceFailure }
   | { kind: "directory"; index: number; path: string; reason: ClaudeBindingDirectoryFailure }
@@ -94,19 +94,19 @@ export function verifyClaudeInstallerDiscoveryBinding(policyPath: string): Claud
     const verdict = verdicts[index]!;
     const row = { index, path: source.path, hashMode: source.hashMode ?? null, format: source.format ?? null, sha256: source.sha256, status: verdict.status };
     if (verdict.status === "retained-absent") return { ...row, retention: { rule: ABSENT_RETIRED_CLAUDE_VERSION_RULE, root: verdict.root, witness: verdict.witness } };
-    return verdict.status === "failed" ? { ...row, reason: verdict.reason } : row;
+    return verdict.status === "drift" ? { ...row, reason: verdict.reason } : row;
   });
   const stored = binding.directories ?? [];
   let captured: Array<{ sha256: string | null }> | null;
   try { captured = captureDiscoveryDirectories(stored.map(directory => directory.path)); } catch { captured = null; }
   const directories = stored.map((directory, index): ClaudeBindingDirectoryReport => {
     const row = { index, path: directory.path };
-    if (captured === null) return { ...row, status: "failed", reason: "REFUSED" };
-    return captured[index]!.sha256 === directory.sha256 ? { ...row, status: "current" } : { ...row, status: "failed", reason: "MEMBERSHIP_CHANGED" };
+    if (captured === null) return { ...row, status: "drift", reason: "REFUSED" };
+    return captured[index]!.sha256 === directory.sha256 ? { ...row, status: "current" } : { ...row, status: "drift", reason: "MEMBERSHIP_CHANGED" };
   });
   const failures: ClaudeBindingFailure[] = [
-    ...sources.flatMap(row => row.status === "failed" ? [{ kind: "source" as const, index: row.index, path: row.path, reason: row.reason! }] : []),
-    ...directories.flatMap(row => row.status === "failed" ? [{ kind: "directory" as const, index: row.index, path: row.path, reason: row.reason! }] : []),
+    ...sources.flatMap(row => row.status === "drift" ? [{ kind: "source" as const, index: row.index, path: row.path, reason: row.reason! }] : []),
+    ...directories.flatMap(row => row.status === "drift" ? [{ kind: "directory" as const, index: row.index, path: row.path, reason: row.reason! }] : []),
     ...(accepted ? [] : [{ kind: "binding" as const, reason: "DISCOVERY_REFUSED" as const }]),
   ];
   // Like the candidate capture, the verdict is a point-in-time witness only if
