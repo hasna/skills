@@ -2871,6 +2871,17 @@ Review the plan before adding `--apply`; the original review preimage must match
 its original mode, and unrelated changes refuse. This preserves the native
 configuration, root aliases, other witnesses and active session pins.
 
+Verifying a typed Codex settings witness from `codex-settings-v1` to
+`codex-settings-v5` also accepts the one write Codex 0.162.1 makes on its own
+first TUI or desktop launch: the boolean `tui.screen_reader_detection_done`
+receipt, added, removed or flipped (V6 already omits it). No digest changes
+meaning, and verification alone records or rebinds nothing. A non-boolean receipt, any other TUI key
+(including the `animations = false` Codex adds when it detects a screen
+reader) and every other change still drift, including Codex's
+`[projects."<dir>"]` trust entries. A planned Skills write to `config.toml`
+rebinds the witness to the written document, which adopts at most that
+receipt.
+
 `claude-settings-v4` is an explicit successor to `claude-settings-v3`. It
 additionally ignores only a top-level `theme` whose value is exactly one of the
 documented built-in values (`auto`, `dark`, `light`, `dark-daltonized`,

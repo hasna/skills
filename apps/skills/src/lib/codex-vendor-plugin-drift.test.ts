@@ -644,6 +644,23 @@ describe("G: every config-edit step, followed as named, clears the refusal on ea
     expect([mode, label, refusal(() => assertManagedAgentBridge("codex", opts(s)))]).toEqual([mode, label, "ACCEPTED"]);
   };
 
+  test("the screen-reader receipt Codex writes on launch, which typed witnesses tolerate, adds no follow-up", () => {
+    for (const mode of typed as Array<keyof typeof witnesses>) {
+      const s = reviewedWith(mode);
+      append(s, "[tui]\nscreen_reader_detection_done = true\n");
+      const [copy] = plugin(s);
+      expect([mode, refusal(() => assertManagedAgentBridge("codex", live(s)))]).toEqual([mode, VENDOR_BLOCK(s, copy!)]);
+      append(s, byName("sites:sites-remix"));
+      expect([mode, refusal(() => assertManagedAgentBridge("codex", live(s)))]).toEqual([mode, "ACCEPTED"]);
+      const t = reviewedWith(mode);
+      append(t, "[tui]\nscreen_reader_detection_done = true\n");
+      const other = acme(t);
+      expect([mode, refusal(() => assertManagedAgentBridge("codex", live(t)))]).toEqual([mode, PATH_BLOCK(t, other)]);
+      append(t, byPath(other));
+      finish(t, mode, "receipt path", "");
+    }
+  });
+
   for (const mode of Object.keys(witnesses) as Array<keyof typeof witnesses>) test(`${mode} witness`, () => {
     const follow = typed.includes(mode) ? "" : REVIEWED_FOLLOW_UP;
     {
