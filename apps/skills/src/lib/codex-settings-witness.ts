@@ -31,8 +31,13 @@
  * service-tier, native personality and model-advertised plan/reasoning effort selections plus the
  * schema-validated ordinary local stdio MCP projection. Reserved Apps, remote,
  * auth, HTTP, unknown and unsupported MCP contracts remain fully bound.
+ *
+ * Verification (not the digest) of V1-V5 also tolerates the one write Codex
+ * makes on its own launch, the boolean `tui.screen_reader_detection_done`
+ * receipt, so an existing binding survives it without a rebind. See
+ * codexSettingsToleratesScreenReaderReceipt; every digest value is unchanged.
  */
-import { hashCodexSettingsReplacement as hashCodexSettingsReplacementV1 } from "./codex-settings-witness-v1.js";
+import { hashCodexSettingsReplacement as hashCodexSettingsReplacementV1, prepareCodexSettingsV1, finishCodexSettingsV1 } from "./codex-settings-witness-v1.js";
 export { captureCodexSettings, hashCodexSettingsReplacement } from "./codex-settings-witness-v1.js";
 import { captureCodexHookMcpDependencies, type CodexReviewedHookSource, type CodexHookMcpDependencies } from "./codex-hook-mcp-dependencies.js";
 import { isCodexLocalStdioMcpServer } from "./codex-local-mcp-controls.js";
@@ -231,7 +236,12 @@ function projectStatusLine(config: Record<string, any>): void {
   // Every accepted item is a quoted string: it contributes no numeric spelling
   // tokens. Keep the original source so unrelated numeric syntax stays bound.
 }
-function settingsDigest(text: string, version: 2 | 3 | 4 | 5 | 6 = 2, dependencies?: CodexHookMcpDependencies): string {
+type SettingsVersion = 2 | 3 | 4 | 5 | 6;
+/** A parsed document after the text-bound projections of its version, before
+ * the documented structural normalization. `numericSource` feeds V2-V5 numeric
+ * spellings; V6 has embedded its numeric provenance in `config` already. */
+interface PreparedSettings { config: Record<string, any>; numericSource: string; dependencies?: CodexHookMcpDependencies }
+function prepareSettings(text: string, version: SettingsVersion, dependencies?: CodexHookMcpDependencies): PreparedSettings {
   let config: any;
   try { config = Bun.TOML.parse(text); } catch { throw new Error("Invalid Codex settings witness"); }
   need(isRecord(config));
@@ -259,16 +269,96 @@ function settingsDigest(text: string, version: 2 | 3 | 4 | 5 | 6 = 2, dependenci
     if (isRecord(counts) && Object.keys(counts).length <= 256 && Object.entries(counts).every(([name, value]) => typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 0xffffffff && codexIntegerToken(tokens, ["tui", "model_availability_nux", name]))) delete config.tui.model_availability_nux;
     // Native Tui Option<bool>: either value records the completed accessibility probe.
     if (isRecord(config.tui) && typeof config.tui.screen_reader_detection_done === "boolean") delete config.tui.screen_reader_detection_done;
-    config = embedCodexNumericTokens(config, tokens);
-    normalize(config, 6);
-    if (isRecord(config.tui) && !Object.keys(config.tui).length) delete config.tui;
-    return sha(`hasna.skills.codex-settings.v6\0${JSON.stringify([canonical(config), canonical(dependencies)])}`);
+    return { config: embedCodexNumericTokens(config, tokens), numericSource: text, dependencies };
   }
   const mcp = version >= 3 ? projectRegularCodexMcp(config, text) : { config, numericSource: text };
-  const projected = version >= 4 ? projectModelAvailabilityNux(mcp.config, mcp.numericSource) : mcp;
-  normalize(projected.config, version);
-  const values = [canonical(projected.config), numericTokens(projected.numericSource)];
+  return version >= 4 ? projectModelAvailabilityNux(mcp.config, mcp.numericSource) : mcp;
+}
+/** Normalize and hash a prepared document. Mutates `prepared.config`. */
+function finishSettings(prepared: PreparedSettings, version: SettingsVersion): string {
+  const config = prepared.config;
+  if (version === 6) {
+    normalize(config, 6);
+    if (isRecord(config.tui) && !Object.keys(config.tui).length) delete config.tui;
+    return sha(`hasna.skills.codex-settings.v6\0${JSON.stringify([canonical(config), canonical(prepared.dependencies)])}`);
+  }
+  normalize(config, version);
+  const values = [canonical(config), numericTokens(prepared.numericSource)];
   return sha(`hasna.skills.codex-settings.v${version}\0${JSON.stringify(values)}`);
+}
+function settingsDigest(text: string, version: SettingsVersion = 2, dependencies?: CodexHookMcpDependencies): string {
+  return finishSettings(prepareSettings(text, version, dependencies), version);
+}
+
+/** Codex 0.162.1 tui/src/screen_reader.rs writes this Option<bool> receipt
+ * (`doc["tui"]["screen_reader_detection_done"] = true`) on the first TUI or
+ * desktop launch whose user config lacks it, creating `[tui]` when needed;
+ * either value skips the probe. V6 already omits a boolean receipt. */
+const SCREEN_READER_RECEIPT = "screen_reader_detection_done";
+/** Typed modes whose digests bind the receipt. */
+export type CodexReceiptSettingsMode = "codex-settings-v1" | "codex-settings-v2" | "codex-settings-v3" | "codex-settings-v4" | "codex-settings-v5";
+/** How a current document relates to a typed V1-V5 witness's reviewed digest.
+ * `screen-reader-receipt` is the only tolerated difference. */
+export type CodexSettingsWitnessMatch = "exact" | "screen-reader-receipt";
+/** Copy parsed records and arrays; keep every other value (dates) as the same
+ * immutable leaf. */
+function cloneTree<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(cloneTree) as T;
+  if (isRecord(value) && [Object.prototype, null].includes(Object.getPrototypeOf(value))) return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, cloneTree(child)])) as T;
+  return value;
+}
+type Edit = (config: Record<string, any>) => void;
+/** Every way the reviewed document can have held the receipt when the current
+ * one differs from it only there: absent (Codex added it, possibly creating an
+ * otherwise empty `[tui]`), or present with either boolean. Each edit touches
+ * only `tui.screen_reader_detection_done` and, when that empties it, `[tui]`.
+ * A non-boolean value or a non-table `tui` yields no edit, so it stays bound. */
+function receiptEdits(config: Record<string, any>): Edit[] {
+  const tui = config.tui;
+  const set = (value: boolean): Edit => target => { if (!isRecord(target.tui)) target.tui = {}; target.tui[SCREEN_READER_RECEIPT] = value; };
+  if (tui === undefined || isRecord(tui) && !Object.hasOwn(tui, SCREEN_READER_RECEIPT)) return [set(true), set(false)];
+  if (!isRecord(tui) || typeof tui[SCREEN_READER_RECEIPT] !== "boolean") return [];
+  const remove = (dropEmpty: boolean): Edit => target => {
+    delete target.tui[SCREEN_READER_RECEIPT];
+    if (dropEmpty && !Object.keys(target.tui).length) delete target.tui;
+  };
+  return [remove(true), ...(Object.keys(tui).length === 1 ? [remove(false)] : []), set(!tui[SCREEN_READER_RECEIPT])];
+}
+/** True when `text` differs from the document a typed V1-V5 witness reviewed
+ * only by the boolean screen-reader receipt, proven by reproducing `expected`
+ * under the witness's own unchanged digest from the current document with the
+ * receipt edited back. The text-bound projections (local MCP rows, V4 counts,
+ * numeric spelling) run once on the current text; a receipt line holds no
+ * numeric token. Digest values never change and nothing is recorded. Any other
+ * TUI key, a non-boolean value and every other difference stay bound.
+ * Fail-closed: errors return false. */
+export function codexSettingsToleratesScreenReaderReceipt(text: string, hashMode: CodexReceiptSettingsMode, expected: string): boolean {
+  try {
+    if (Buffer.byteLength(text) > 1024 * 1024 || !/^[a-f0-9]{64}$/.test(expected)) return false;
+    if (hashMode === "codex-settings-v1") {
+      const prepared = prepareCodexSettingsV1(text);
+      return receiptEdits(prepared.config).some(edit => { const candidate = cloneTree(prepared.config); edit(candidate); return finishCodexSettingsV1(candidate, prepared.tokens) === expected; });
+    }
+    const version = Number(hashMode.slice("codex-settings-v".length)) as SettingsVersion;
+    if (![2, 3, 4, 5].includes(version)) return false;
+    const prepared = prepareSettings(text, version);
+    return receiptEdits(prepared.config).some(edit => {
+      const candidate = cloneTree(prepared.config); edit(candidate);
+      // V4/V5 treat an empty `[tui]` as absent; keep that meaning after the edit.
+      if (version >= 4 && isRecord(candidate.tui) && !Object.keys(candidate.tui).length) delete candidate.tui;
+      return finishSettings({ ...prepared, config: candidate }, version) === expected;
+    });
+  } catch { return false; }
+}
+/** Read a typed V1-V5 settings witness file once and classify it against the
+ * reviewed digest: `exact`, `screen-reader-receipt` (the only tolerated
+ * difference), or null (drift). */
+export function codexSettingsWitnessMatch(path: string, hashMode: CodexReceiptSettingsMode, expected: string, budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }): CodexSettingsWitnessMatch | null {
+  const text = readNativeSettingsWitnessFile(path, budget, "config.toml");
+  need(Buffer.byteLength(text) <= 1024 * 1024);
+  const exact = hashMode === "codex-settings-v1" ? hashCodexSettingsReplacementV1(text) : settingsDigest(text, Number(hashMode.slice("codex-settings-v".length)) as SettingsVersion);
+  if (exact === expected) return "exact";
+  return codexSettingsToleratesScreenReaderReceipt(text, hashMode, expected) ? "screen-reader-receipt" : null;
 }
 export function hashCodexSettingsReplacementV2(text: string, budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }): string {
   need(Buffer.byteLength(text) <= 1024 * 1024 && budget.remaining >= Buffer.byteLength(text)); budget.remaining -= Buffer.byteLength(text);
