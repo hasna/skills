@@ -270,8 +270,12 @@ skills hook capture-claude-installer --request /absolute/request.json --json
 The UTF-8 request is a bounded JSON object with schema
 `skills.claude-installer-capture/v1`, the exact configured `commandPath`, one
 fixed `operation` (`settings`, `marketplace-registry`, `managed-plugin-registry`,
-`path-bytes`, `discovery-directories`, `plugin-manifest`, or `candidate`), and
-only that operation's documented inputs. The result uses
+`path-bytes`, `discovery-directories`, `plugin-manifest`, `candidate`, or
+`discovery-binding`), and only that operation's documented inputs. The
+`discovery-binding` operation verifies the stored Claude discovery binding as a
+whole, including witnesses retained under an absent retired plugin-cache
+version; its request and result contract is in the README section
+"Claude installer witness CLI". The result uses
 `skills.claude-installer-capture-result/v1` and contains a Skills producer
 receipt plus the selected existing witness result. Candidate manifests include
 their plugin name, canonical path, `hashMode: "claude-plugin-manifest-v1"`, and

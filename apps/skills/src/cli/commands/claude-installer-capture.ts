@@ -7,6 +7,7 @@ import { captureClaudeInstallerCandidate } from "../../lib/claude-prospective-re
 import { captureDiscoveryDirectories, captureDiscoveryPathSources } from "../../lib/agent-discovery.js";
 import { captureManagedPluginRegistry } from "../../lib/plugin-discovery.js";
 import { captureSkillsCliProducerIdentity } from "../../lib/codex-hook-trust-identity.js";
+import { ClaudeDiscoveryBindingRefusal, verifyClaudeInstallerDiscoveryBinding, type ClaudeDiscoveryBindingRefusalCode } from "../../lib/claude-installer-binding.js";
 
 const REQUEST_SCHEMA = "skills.claude-installer-capture/v1";
 const RESULT_SCHEMA = "skills.claude-installer-capture-result/v1";
@@ -70,10 +71,18 @@ function captureOwned(operation: string, operationCapture: () => unknown): unkno
     throw new CaptureRefusal(messages[operation] ?? "CAPTURE_REJECTED: selected operation did not accept its input");
   }
 }
+const DISCOVERY_BINDING_REFUSALS: Record<ClaudeDiscoveryBindingRefusalCode, string> = {
+  POLICY_PATH_MISMATCH: "POLICY_PATH_MISMATCH: policyPath must equal agent-policy.json in the package-owned Skills data directory",
+  POLICY_UNAVAILABLE: "POLICY_UNAVAILABLE: the package-owned Skills policy file is absent",
+  POLICY_UNREADABLE: "POLICY_UNREADABLE: the Skills policy must be a regular, bounded, valid managed policy file",
+  BINDING_UNAVAILABLE: "BINDING_UNAVAILABLE: the Skills policy stores no Claude discovery binding at bridge.discovery.claude",
+  BINDING_INVALID: "BINDING_INVALID: the stored Claude discovery binding or its root aliases do not match the binding schema",
+  POLICY_CHANGED: "POLICY_CHANGED: the Skills policy changed during verification; rerun the request",
+};
 function capture(request: JsonObject): unknown {
   need(request.schema === REQUEST_SCHEMA, `INVALID_SCHEMA: schema must be ${REQUEST_SCHEMA}`);
   canonicalPath(request.commandPath);
-  need(typeof request.operation === "string", "INVALID_OPERATION: operation must be settings, marketplace-registry, managed-plugin-registry, path-bytes, discovery-directories, plugin-manifest, or candidate");
+  need(typeof request.operation === "string", "INVALID_OPERATION: operation must be settings, marketplace-registry, managed-plugin-registry, path-bytes, discovery-directories, plugin-manifest, candidate, or discovery-binding");
   switch (request.operation) {
     case "settings": {
       exactKeys(request, ["schema", "commandPath", "operation", "kind", "path"], "settings");
@@ -117,7 +126,16 @@ function capture(request: JsonObject): unknown {
       canonicalPath(request.root); canonicalPath(request.policyPath);
       return captureOwned("candidate", () => captureClaudeInstallerCandidate(request.root as string, request.policyPath as string));
     }
-    default: throw new CaptureRefusal("INVALID_OPERATION: operation must be settings, marketplace-registry, managed-plugin-registry, path-bytes, discovery-directories, plugin-manifest, or candidate");
+    case "discovery-binding": {
+      exactKeys(request, ["schema", "commandPath", "operation", "policyPath"], "discovery-binding");
+      canonicalPath(request.policyPath);
+      try { return verifyClaudeInstallerDiscoveryBinding(request.policyPath as string); }
+      catch (error) {
+        if (error instanceof ClaudeDiscoveryBindingRefusal) throw new CaptureRefusal(DISCOVERY_BINDING_REFUSALS[error.code]);
+        throw new CaptureRefusal("DISCOVERY_BINDING_REJECTED: the stored Claude discovery binding could not be verified; rerun after checking the Skills policy");
+      }
+    }
+    default: throw new CaptureRefusal("INVALID_OPERATION: operation must be settings, marketplace-registry, managed-plugin-registry, path-bytes, discovery-directories, plugin-manifest, candidate, or discovery-binding");
   }
 }
 

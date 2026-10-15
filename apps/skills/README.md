@@ -1009,6 +1009,173 @@ reports an incomplete outcome, inspect `sessions show` and the preserved
 operation receipt before retrying. The archive contains both original and
 prepared bytes even if the final receipt write fails.
 
+### Claude installer witness CLI (`capture-claude-installer`)
+
+```text
+skills hook capture-claude-installer --request /absolute/request.json --json
+```
+
+Installers obtain Skills-owned witnesses through the configured Skills command
+instead of reimplementing them. Every request is a JSON object of at most
+64 KiB with exactly the keys of one operation: `schema`
+(`skills.claude-installer-capture/v1`), `commandPath` (the normalized absolute
+path of the configured Skills command), `operation`, and that operation's
+inputs. The command checks that `commandPath` resolves to this installed
+`@hasna/skills` CLI and runtime, before and after the operation, and prints
+one receipt on stdout with exit status 0:
+
+```json
+{
+  "schema": "skills.claude-installer-capture-result/v1",
+  "producer": {
+    "schema": "skills.cli-producer-identity/v1",
+    "configuredCommandPath": "<commandPath>",
+    "physicalLauncher": { "path": "<absolute>", "sha256": "<64 hex>" },
+    "runtimeEntry": { "path": "<absolute>", "sha256": "<64 hex>" },
+    "runtime": { "path": "<absolute>", "sha256": "<64 hex>" },
+    "package": { "name": "@hasna/skills", "version": "<x.y.z>", "manifestSha256": "<64 hex>" }
+  },
+  "operation": "<operation>",
+  "result": {}
+}
+```
+
+A refusal prints nothing on stdout, exits 1 and writes one line to stderr,
+`CODE: fixed text`, which never echoes request or file contents. The
+per-file operations (`settings`, `marketplace-registry`,
+`managed-plugin-registry`, `path-bytes`, `discovery-directories`,
+`plugin-manifest` and `candidate`) are described in
+[docs/plugin-admission.md](docs/plugin-admission.md#claude-installer-witness-cli).
+
+#### Verify the stored Claude discovery binding (`discovery-binding`)
+
+`discovery-binding` checks the Claude discovery binding stored in the Skills
+policy (`bridge.discovery.claude` in `agent-policy.json`) with the discovery
+verification the managed prompt hook runs on it: the root alias recheck,
+`verifyAgentDiscovery` and, for an automatic binding, the automatic closure
+check. It then reports every stored witness. An installer calls it once
+instead of re-capturing each stored witness. Per-file capture requires every
+file to exist, so it refuses witnesses that Skills keeps on purpose after
+Claude deletes a retired plugin-cache version; this operation reports those as
+`retained-absent`. It does not check the bridge files, hook commands or
+project-directory settings, which the hook checks separately.
+
+The request has exactly these keys:
+
+```json
+{
+  "schema": "skills.claude-installer-capture/v1",
+  "commandPath": "/home/me/.local/bin/skills",
+  "operation": "discovery-binding",
+  "policyPath": "/home/me/.hasna/skills/agent-policy.json"
+}
+```
+
+`policyPath` must equal `agent-policy.json` in the data directory the installed
+package resolves (`$HASNA_SKILLS_DIR`, default `~/.hasna/skills`), as for the
+`candidate` operation.
+
+The receipt's `result`:
+
+```json
+{
+  "schema": "skills.claude-discovery-binding-verification/v1",
+  "ok": true,
+  "policySha256": "<64 hex>",
+  "discoverySha256": "<64 hex>",
+  "agent": "claude",
+  "method": "reviewed",
+  "rootCount": 2,
+  "sources": [
+    { "index": 0, "path": "/home/me/.claude/settings.json", "hashMode": "claude-settings-v4", "format": null, "sha256": "<64 hex>", "status": "current" },
+    { "index": 3, "path": "/home/me/.claude/plugins/cache/market/plugin/1.0.0/.claude-plugin/plugin.json", "hashMode": "claude-plugin-manifest-v1", "format": null, "sha256": "<64 hex>",
+      "status": "retained-absent", "retention": { "rule": "absent-retired-claude-version", "root": "/home/me/.claude/plugins/cache/market/plugin/1.0.0", "witness": "claude-plugin-manifest-v1" } }
+  ],
+  "directories": [ { "index": 0, "path": "/home/me/.claude/plugins/cache/market/plugin/2.0.0", "status": "current" } ],
+  "failures": []
+}
+```
+
+- `policySha256` is the SHA-256 of the exact policy file bytes that were
+  verified. It is the value a prospective review request passes as
+  `skills.policySha256`. The policy is read again before the result is
+  returned; if it changed, the request is refused.
+- `discoverySha256` is `hashClaudeDiscoveryBinding` of the stored binding, the
+  same digest the `candidate` operation returns.
+- `agent`, `method` (`reviewed` or `automatic`) and `rootCount` (the number of
+  stored discovery roots) come from the stored binding.
+- `sources` has one row per stored source, in stored order. `index` is the
+  position in `bridge.discovery.claude.sources`. `path`, `hashMode`, `format`
+  and `sha256` repeat the stored values: `hashMode` is `null` for a legacy
+  full-file witness without a mode, `format` is `null` unless the source is a
+  field projection (Claude reviews also keep the automatic `json` projection of
+  `settings.json`), and a `null` `sha256` pins absence. `status` is one of:
+  - `current`: the source's own witness reproduces the stored digest now.
+  - `retained-absent`: the file was not read, because the
+    `absent-retired-claude-version` rule keeps its stored digest. The rule
+    holds when the whole version directory `retention.root`
+    (`<...>/.claude/plugins/cache/<marketplace>/<plugin>/<version>`) is absent,
+    the reviewed witnesses of `settings.json` and
+    `plugins/installed_plugins.json` are current, settings enable the plugin
+    and no settings hook names that directory, every registration of the
+    plugin is a valid user or project row for one existing sibling version in
+    the same plugin directory (with a user row among them), no registration of
+    any plugin points into or contains the absent directory, and the sibling's
+    `.claude-plugin/plugin.json` is bound and current. It applies only to
+    reviewed bindings. `retention.witness` names the retained witness class:
+    `bytes` (a full byte witness, `hashMode` `null` or `bytes`),
+    `claude-plugin-manifest-v1` or `claude-plugin-orphaned-at-v1` (the typed
+    presence witness of a version-root `.orphaned_at` marker). No other
+    witness is retained: `path-bytes`, field projections and typed settings
+    or registry witnesses stay checked. Settings and registry files are
+    never retained.
+  - `failed`, with `reason`: `MISSING` (the path is absent and the rule does
+    not retain it), `APPEARED` (the stored witness pins absence and the path
+    now exists), `CHANGED` (the path exists but its witness does not
+    reproduce the stored digest or refuses the current file, for example
+    edited settings, a symlink or a malformed marker) or `REFUSED` (the
+    path's presence could not be determined).
+- `directories` has one row per stored directory membership witness, with
+  `status` `current`, or `failed` with `reason` `MEMBERSHIP_CHANGED` or
+  `REFUSED`.
+- `failures` lists every failed source and directory as
+  `{ "kind": "source" | "directory", "index", "path", "reason" }`, followed by
+  `{ "kind": "binding", "reason": "DISCOVERY_REFUSED" }` whenever the hook's
+  own discovery verification refuses the binding. That covers checks no single
+  row shows, such as a changed root alias, a retired directory that reappeared
+  or an invalid witness combination.
+- `ok` is `true` only when `failures` is empty: the hook's verification
+  accepts the binding, every source is `current` or `retained-absent` and
+  every directory is `current`.
+
+`ok: false` is a completed verification and still exits 0, so the caller
+reads which witnesses failed and why. Installers must require `ok === true`.
+To bind the result, compare each `sources` row (`index`, `path`, `hashMode`,
+`format`, `sha256`) with the binding they read themselves, compare
+`discoverySha256` with the `candidate` capture and `policySha256` with the
+policy bytes they review, and repeat the call immediately before the first
+native change, because the verdict describes one moment.
+
+Refusal codes for this operation, besides the shared request and producer
+codes (`INVALID_REQUEST_FILE`, `INVALID_REQUEST_JSON`, `INVALID_REQUEST`,
+`INVALID_SCHEMA`, `INVALID_REQUEST_FIELDS`, `INVALID_PATH`,
+`PRODUCER_UNVERIFIED`, `PRODUCER_CHANGED` and `CAPTURE_REJECTED`):
+
+- `POLICY_PATH_MISMATCH`: `policyPath` is not the package-owned policy path.
+- `POLICY_UNAVAILABLE`: the policy file is absent.
+- `POLICY_UNREADABLE`: the policy is not a regular, bounded, valid managed
+  policy file.
+- `BINDING_UNAVAILABLE`: the policy stores no Claude discovery binding.
+- `BINDING_INVALID`: the stored binding is not a Claude binding with a
+  `reviewed` or `automatic` method, or its sources, directories or root
+  aliases do not match the binding schema.
+- `POLICY_CHANGED`: the policy changed while it was being verified.
+- `DISCOVERY_BINDING_REJECTED`: any other failure.
+
+The operation is read-only. It reads the policy and the stored witness paths
+and directories. It writes no file, cache, selection pin or policy, and it does
+not start Claude or change native state.
+
 ## Profiles, station sync and rollback
 
 ```bash

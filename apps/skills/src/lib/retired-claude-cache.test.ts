@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { captureClaudeSettingsV3 } from "./claude-settings-witness.js";
 import { hashClaudePluginManifest } from "./claude-plugin-manifest-witness.js";
-import { verifyAgentDiscovery, rebindAgentDiscovery, type AgentDiscoveryBinding } from "./agent-discovery.js";
+import { classifyClaudeDiscoverySources, verifyAgentDiscovery, rebindAgentDiscovery, type AgentDiscoveryBinding } from "./agent-discovery.js";
 const put=(path:string,text:string)=>{mkdirSync(dirname(path),{recursive:true});writeFileSync(path,text);};
 const hash=(path:string)=>createHash("sha256").update(readFileSync(path)).digest("hex");
 test("semantic manifest alone proves an absent retired version while preserving its original digest",()=>{
@@ -97,5 +97,39 @@ test("retired Claude cache absence accepts matching user and canonical project r
   const manyProjectRows=Array.from({length:65},(_,index)=>({...rows[1],projectPath:join(home,`project-${index}`)}));
   put(registry,JSON.stringify({version:2,plugins:{"vendor@probe":[rows[0],...manyProjectRows]}}));
   expect(()=>verifyAgentDiscovery(freshBinding())).not.toThrow();
+ } finally {rmSync(home,{recursive:true,force:true});}
+});
+
+test("the installer source report retains exactly the sources verification retains",()=>{
+ const home=mkdtempSync(join(tmpdir(),"skills-retired-claude-report-"));
+ try {
+  const parent=join(home,".claude/plugins/cache/probe/vendor"),old=join(parent,"1.0.0"),active=join(parent,"2.0.0");
+  const settings=join(home,".claude/settings.json"),registry=join(home,".claude/plugins/installed_plugins.json");
+  put(settings,JSON.stringify({enabledPlugins:{"vendor@probe":true}}));
+  put(registry,JSON.stringify({version:2,plugins:{"vendor@probe":[{scope:"user",installPath:active,version:"2.0.0"}]}}));
+  const manifests=[old,active].map(root=>join(root,".claude-plugin/plugin.json"));
+  for(const path of manifests) put(path,JSON.stringify({name:"vendor"}));
+  put(join(old,"hooks/hooks.json"),'{"hooks":{}}');
+  const sources=[captureClaudeSettingsV3(settings),{path:registry,sha256:hash(registry)},...manifests.map(path=>({path,hashMode:"claude-plugin-manifest-v1" as const,sha256:hashClaudePluginManifest(readFileSync(path,"utf8"))})),{path:join(old,"hooks/hooks.json"),sha256:hash(join(old,"hooks/hooks.json"))}];
+  const binding:AgentDiscoveryBinding={agent:"claude",method:"reviewed",roots:[old,active],sources};
+  expect(classifyClaudeDiscoverySources(binding).map(verdict=>verdict.status)).toEqual(["current","current","current","current","current"]);
+  renameSync(old,join(home,"preserved-old"));
+  expect(()=>verifyAgentDiscovery(binding)).not.toThrow();
+  expect(classifyClaudeDiscoverySources(binding)).toEqual([
+   {status:"current"},{status:"current"},
+   {status:"retained-absent",root:old,witness:"claude-plugin-manifest-v1"},{status:"current"},
+   {status:"retained-absent",root:old,witness:"bytes"},
+  ]);
+  // A witness class the rule does not retain fails in both, with the reason.
+  const unsupported={...binding,sources:sources.map(source=>source.path===manifests[0] ? {...source,hashMode:"path-bytes" as const} : source)};
+  expect(()=>verifyAgentDiscovery(unsupported)).toThrow();
+  expect(classifyClaudeDiscoverySources(unsupported)[2]).toEqual({status:"failed",reason:"MISSING"});
+  // Changed settings disable the rule for every retired source.
+  put(settings,JSON.stringify({enabledPlugins:{"vendor@probe":true,"other@probe":true}}));
+  expect(()=>verifyAgentDiscovery(binding)).toThrow();
+  expect(classifyClaudeDiscoverySources(binding)).toEqual([
+   {status:"failed",reason:"CHANGED"},{status:"current"},
+   {status:"failed",reason:"MISSING"},{status:"current"},{status:"failed",reason:"MISSING"},
+  ]);
  } finally {rmSync(home,{recursive:true,force:true});}
 });
