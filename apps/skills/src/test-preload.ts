@@ -116,6 +116,37 @@ export function useDefaultTestTimeout(): void {
   setDefaultTimeout(effectiveTimeout);
 }
 
+// A temporary HOME does not override native provider selectors. Fixtures that
+// model an unconfigured consumer must not inherit the runner's Sumi/XDG roots.
+const NATIVE_DISCOVERY_SELECTORS = [
+  "SUMI_HOME", "SUMI_CONFIG_DIR", "SUMI_CONFIG", "SUMI_CONFIG_CONTENT",
+  "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME",
+] as const;
+
+export function withoutNativeDiscoverySelectors<T extends Record<string, string | undefined>>(env: T): T {
+  const copy = { ...env };
+  for (const key of NATIVE_DISCOVERY_SELECTORS) delete copy[key];
+  return copy;
+}
+
+/** Direct runtime fixtures may set selectors inside a test, but start clean. */
+export function useIsolatedNativeDiscoverySelectors(): void {
+  const previous = new Map<string, string | undefined>();
+  beforeEach(() => {
+    for (const key of NATIVE_DISCOVERY_SELECTORS) {
+      previous.set(key, process.env[key]);
+      delete process.env[key];
+    }
+  });
+  afterEach(() => {
+    for (const key of NATIVE_DISCOVERY_SELECTORS) {
+      const value = previous.get(key);
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    previous.clear();
+  });
+}
+
 /** Writer tests now consult native discovery as well as the Skills data dir.
  * Give those files a separate account home; their explicit per-test home
  * overrides still take precedence. Never inspect the developer's plugins. */
