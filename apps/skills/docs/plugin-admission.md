@@ -249,6 +249,30 @@ structural refusal checks do not prove hook behavior. Recheck all preimages and
 candidate closure immediately before the first native mutation. The validator
 does not claim native install atomicity or crash recovery.
 
+The reviewed discovery inputs must bind every current Claude settings and
+registration source: the user settings, both project settings files,
+`known_marketplaces.json` and `installed_plugins.json`. A project
+`.claude/settings.json` or `.claude/settings.local.json` that the reviewed
+sources omit is exempt only when it cannot add discovery, as the live hooks'
+project check accepts it, and only when no other expected source (the target
+settings or the user settings) shares its path:
+
+- absent, with a null preimage; or
+- present, with a preimage SHA-256 that matches its current bytes, where those
+  exact bytes are strict UTF-8 without a byte-order mark and parse as one JSON
+  object within the native JSON witness limits (no comments, trailing commas,
+  trailing content or duplicate keys at any depth), and none of
+  `enabledPlugins`, `extraKnownMarketplaces` or `skillOverrides` is present at
+  any value, including `null`, `{}` and `[]`.
+
+This covers the permissions-only `~/.claude/settings.local.json` that Claude
+writes when it saves a permission rule during a user-scope install, whose
+project path is the Claude home. A present unreviewed file that fails a check
+refuses and names the reason. Each exempt file is re-checked against its exact
+preimage (still absent, or the same bytes) after discovery and again before the
+result, so a change in between refuses. The live hooks' other project checks
+still apply, and the user settings and both registries are never exempt.
+
 The optional release manifest witness binds the complete supplied release.json
 file bytes, path and SHA-256 in the request/receipt. Harnesses remains
 responsible for verifying that its release options correspond to every

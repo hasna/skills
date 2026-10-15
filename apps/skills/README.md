@@ -737,6 +737,20 @@ receipt permits only verified registry/cache transitions. See
 [plugin admission](docs/plugin-admission.md) for the package, review and runtime
 contracts; these commands do not change live agent registrations or settings.
 
+The read-only `skills hook review-claude-candidate` check requires its reviewed
+discovery inputs to bind the user settings, both project settings files and
+both plugin registries. A project `.claude/settings.json` or
+`.claude/settings.local.json` that the review omits is exempt only when no other
+expected source shares its path and it is either absent or present with exact
+preimage bytes that parse strictly as one JSON object (strict UTF-8, no
+byte-order mark, comments, trailing content or duplicate keys) carrying none of
+`enabledPlugins`, `extraKnownMarketplaces` or `skillOverrides` at any value.
+This admits the permissions-only `~/.claude/settings.local.json` that Claude
+writes when it saves a permission rule. Each exempt file is re-checked against
+its exact preimage until the result; user settings and the registries are never
+exempt. See
+[prospective Claude candidate review](docs/plugin-admission.md#prospective-claude-candidate-review).
+
 If your home `.claude` or `.codex` directory intentionally links to another
 directory within your home, add `--allow-root-aliases` to hook installation and
 native migration. The plan records and rechecks the exact link and target;

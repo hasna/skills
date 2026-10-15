@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve, join as pathJoin } from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -697,12 +697,12 @@ test("an absent project settings.local.json with a null preimage need not be a r
   expect(review(f.request).accepted).toBe(true);
 });
 
-test("a present project settings.local.json must still be a reviewed discovery source", () => {
+test("a present unreviewed project settings.local.json carrying a discovery key must still be a reviewed source", () => {
   const f = fixture();
-  put(f.projectSettingsLocal, JSON.stringify({ permissions: {} }));
-  f.request.preimages.projectSettingsLocal.sha256 = sha(readFileSync(f.projectSettingsLocal));
   rebindDiscovery(f, false);
-  expect(() => review(f.request)).toThrow("does not bind every current user/project Claude settings and registration source");
+  put(f.projectSettingsLocal, JSON.stringify({ permissions: {}, enabledPlugins: {} }));
+  f.request.preimages.projectSettingsLocal.sha256 = sha(readFileSync(f.projectSettingsLocal));
+  expect(() => review(f.request)).toThrow("does not bind every current user/project Claude settings and registration source: the unreviewed projectSettingsLocal carries the Claude discovery key enabledPlugins");
 });
 
 test("a project settings.local.json absent at review but present now still refuses", () => {
@@ -742,11 +742,12 @@ test("both absent project settings files with null preimages need not be reviewe
   expect(review(f.request).accepted).toBe(true);
 });
 
-test("a present project settings.json must still be a reviewed discovery source", () => {
+test("a present unreviewed project settings.json carrying a discovery key must still be a reviewed source", () => {
   const f = fixture();
   rebindDiscovery(f, false, false);
-  expect(f.request.preimages.projectSettings.sha256).not.toBeNull();
-  expect(() => review(f.request)).toThrow("does not bind every current user/project Claude settings and registration source");
+  put(f.projectSettings, JSON.stringify({ permissions: { allow: ["Read"] }, skillOverrides: null }));
+  f.request.preimages.projectSettings.sha256 = sha(readFileSync(f.projectSettings));
+  expect(() => review(f.request)).toThrow("does not bind every current user/project Claude settings and registration source: the unreviewed projectSettings carries the Claude discovery key skillOverrides");
 });
 
 test("an exempt absent project settings.json created during discovery still refuses", async () => {
@@ -782,4 +783,203 @@ test("an exempt absent project settings.json created after discovery still refus
   } finally {
     spy.mockRestore();
   }
+});
+
+// Claude saves permission rules to the project .claude/settings.local.json. A
+// present file that the reviewed discovery does not bind is exempt only when it
+// carries no Claude project discovery key, as assertProjectDiscovery accepts it
+// on the live hooks; it stays bound to its exact preimage bytes.
+const PERMISSIONS_ONLY = JSON.stringify({ permissions: { allow: ["Bash(git status:*)", "Read(/tmp/**)"], deny: [], defaultMode: "default" } });
+
+function writePreimage(f: ReturnType<typeof fixture>, name: "projectSettings" | "projectSettingsLocal", content: string | Buffer): void {
+  const path = f.request.preimages[name].path;
+  mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, content);
+  f.request.preimages[name].sha256 = sha(readFileSync(path));
+}
+
+// The station07 shape: a user-scope install whose project path is the Claude
+// home, so the project settings.json is the bound user settings and only the
+// home .claude/settings.local.json can be exempt.
+function homeProject(f: ReturnType<typeof fixture>, bindLocal: boolean): string {
+  const local = join(f.home, ".claude/settings.local.json");
+  const options = { home: f.home, dataDir: f.dataDir, projectDir: f.home, agents: ["claude" as const], command: "/fixture/skills" };
+  const prior = JSON.parse(readFileSync(join(f.dataDir, "agent-policy.json"), "utf8")).bridge.discovery.claude;
+  const discoveryInputs: ReviewedDiscoveryInputs = { version: 1, agents: [{
+    agent: "claude", roots: prior.roots, sources: [captureClaudeSettingsV4(f.settings), ...captureDiscoveryPathSources([...(bindLocal ? [local] : []), f.known, f.installed])],
+    pluginHooks: "reviewed-no-skill-injection",
+  }] };
+  applyAgentIntegration(planAgentIntegration({ ...options, discoveryInputs }));
+  const binding = resolveAgentDiscovery({ home: f.home, agent: "claude", reviewed: discoveryInputs });
+  f.request.scope.projectPath = f.home;
+  f.request.preimages.projectSettings = { path: f.settings, sha256: sha(readFileSync(f.settings)) };
+  f.request.preimages.projectSettingsLocal = { path: local, sha256: lstatSync(local, { throwIfNoEntry: false }) ? sha(readFileSync(local)) : null };
+  f.request.skills.discoveryInputs = discoveryInputs;
+  f.request.skills.discoverySha256 = sha(JSON.stringify(binding));
+  f.request.skills.policySha256 = sha(readFileSync(join(f.dataDir, "agent-policy.json")));
+  return local;
+}
+
+test("a present permissions-only home settings.local.json need not be a reviewed source for a user-scope install", () => {
+  const f = fixture();
+  put(join(f.home, ".claude/settings.local.json"), PERMISSIONS_ONLY);
+  const local = homeProject(f, false);
+  expect(f.request.preimages.projectSettingsLocal.sha256).toBe(sha(PERMISSIONS_ONLY));
+  const receipt = review(f.request);
+  expect(receipt.accepted).toBe(true);
+  expect(receipt.preimages.find(row => row.name === "project-settings-local")).toEqual({ name: "project-settings-local", path: local, sha256: sha(PERMISSIONS_ONLY) });
+  expect(readFileSync(local, "utf8")).toBe(PERMISSIONS_ONLY);
+});
+
+test("present permissions-only project settings files need not be reviewed sources", () => {
+  const f = fixture();
+  writePreimage(f, "projectSettingsLocal", PERMISSIONS_ONLY);
+  rebindDiscovery(f, false);
+  expect(review(f.request).accepted).toBe(true);
+  rebindDiscovery(f, false, false);
+  expect(f.request.preimages.projectSettings.sha256).not.toBeNull();
+  expect(review(f.request).accepted).toBe(true);
+});
+
+test("a present project settings file that is reviewed still binds through discovery", () => {
+  const f = fixture();
+  writePreimage(f, "projectSettingsLocal", PERMISSIONS_ONLY);
+  rebindDiscovery(f, true);
+  expect(f.request.skills.discoveryInputs.agents[0]!.sources.some(source => source.path === f.projectSettingsLocal && source.sha256 !== null)).toBe(true);
+  expect(review(f.request).accepted).toBe(true);
+  const g = fixture();
+  put(join(g.home, ".claude/settings.local.json"), PERMISSIONS_ONLY);
+  homeProject(g, true);
+  expect(review(g.request).accepted).toBe(true);
+});
+
+test("each Claude discovery key at any value keeps an unreviewed present project settings file required", () => {
+  const f = fixture();
+  rebindDiscovery(f, false, false);
+  const g = fixture();
+  homeProject(g, false);
+  for (const key of ["enabledPlugins", "extraKnownMarketplaces", "skillOverrides"]) {
+    for (const value of [null, {}, [], false, 0, "", { "demo@fixture-market": true }]) {
+      const content = JSON.stringify({ permissions: { allow: ["Read"] }, [key]: value });
+      for (const [target, name] of [[f, "projectSettings"], [f, "projectSettingsLocal"], [g, "projectSettingsLocal"]] as const) {
+        writePreimage(target, name, content);
+        expect(() => review(target.request)).toThrow(`does not bind every current user/project Claude settings and registration source: the unreviewed ${name} carries the Claude discovery key ${key}`);
+        writePreimage(target, name, PERMISSIONS_ONLY);
+      }
+    }
+  }
+  expect(review(f.request).accepted).toBe(true);
+  expect(review(g.request).accepted).toBe(true);
+});
+
+test("an unreviewed present project settings file that Claude may parse differently refuses", () => {
+  const f = fixture();
+  rebindDiscovery(f, false);
+  const cases: Array<[string | Buffer, string]> = [
+    ["", "is not one bounded strict JSON object"],
+    ["{\"permissions\":{}", "is not one bounded strict JSON object"],
+    ["{\"permissions\":{},}", "is not one bounded strict JSON object"],
+    ["// saved by Claude\n{\"permissions\":{}}", "is not one bounded strict JSON object"],
+    ["{\"permissions\":{} /* c */}", "is not one bounded strict JSON object"],
+    ["{\"permissions\":{}} trailing", "is not one bounded strict JSON object"],
+    ["{\"permissions\":{},\"permissions\":{}}", "is not one bounded strict JSON object"],
+    ["{\"permissions\":{\"allow\":[],\"allow\":[]}}", "is not one bounded strict JSON object"],
+    ["[]", "is not one bounded strict JSON object"],
+    ["null", "is not one bounded strict JSON object"],
+    ["\"permissions\"", "is not one bounded strict JSON object"],
+    [Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(PERMISSIONS_ONLY)]), "begins with a UTF-8 byte-order mark"],
+    [Buffer.concat([Buffer.from("{\"permissions\":{\"allow\":[\""), Buffer.from([0xff, 0xfe]), Buffer.from("\"]}}")]), "is not strict UTF-8"],
+  ];
+  for (const [content, reason] of cases) {
+    writePreimage(f, "projectSettingsLocal", content);
+    expect(() => review(f.request)).toThrow(`the unreviewed projectSettingsLocal ${reason}`);
+  }
+  writePreimage(f, "projectSettingsLocal", PERMISSIONS_ONLY);
+  expect(review(f.request).accepted).toBe(true);
+});
+
+test("an unreviewed keyless project settings file still meets the live hooks' other project checks", () => {
+  const f = fixture();
+  rebindDiscovery(f, false);
+  writePreimage(f, "projectSettingsLocal", JSON.stringify({ permissions: { deny: ["Skill"] } }));
+  expect(() => review(f.request)).toThrow("NATIVE_SKILL_DRIFT: higher-precedence project skill or hook configuration requires review");
+});
+
+test("an unreviewed present settings.local.json whose bytes differ from its preimage refuses", () => {
+  const f = fixture();
+  writePreimage(f, "projectSettingsLocal", PERMISSIONS_ONLY);
+  rebindDiscovery(f, false);
+  put(f.projectSettingsLocal, JSON.stringify({ permissions: { allow: ["Bash"] } }));
+  expect(() => review(f.request)).toThrow("projectSettingsLocal preimage changed");
+});
+
+test("an exempt present settings.local.json changed during discovery still refuses", async () => {
+  const discovery = await import("./agent-discovery.js");
+  const f = fixture();
+  writePreimage(f, "projectSettingsLocal", PERMISSIONS_ONLY);
+  rebindDiscovery(f, false);
+  const original = discovery.verifyAgentDiscovery;
+  const spy = spyOn(discovery, "verifyAgentDiscovery").mockImplementation(((binding: any) => {
+    put(f.projectSettingsLocal, JSON.stringify({ permissions: { allow: ["Bash"] } }));
+    return (original as any)(binding);
+  }) as any);
+  try {
+    expect(() => review(f.request)).toThrow("projectSettingsLocal preimage changed");
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+test("an exempt present project settings.json changed after discovery still refuses before the result", async () => {
+  const discovery = await import("./agent-discovery.js");
+  const f = fixture();
+  rebindDiscovery(f, false, false);
+  const original = discovery.assertProjectDiscovery;
+  const spy = spyOn(discovery, "assertProjectDiscovery").mockImplementation(((...args: any[]) => {
+    const result = (original as any)(...args);
+    put(f.projectSettings, JSON.stringify({ permissions: { allow: ["Read"] }, enabledPlugins: {} }));
+    return result;
+  }) as any);
+  try {
+    expect(() => review(f.request)).toThrow("projectSettings preimage changed");
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+test("an exempt present settings.local.json removed after discovery still refuses before the result", async () => {
+  const discovery = await import("./agent-discovery.js");
+  const f = fixture();
+  put(join(f.home, ".claude/settings.local.json"), PERMISSIONS_ONLY);
+  const local = homeProject(f, false);
+  const original = discovery.assertProjectDiscovery;
+  const spy = spyOn(discovery, "assertProjectDiscovery").mockImplementation(((...args: any[]) => {
+    const result = (original as any)(...args);
+    rmSync(local);
+    return result;
+  }) as any);
+  try {
+    expect(() => review(f.request)).toThrow("projectSettingsLocal preimage changed");
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+test("user settings and registration sources missing from the reviewed binding still refuse", () => {
+  for (const shape of ["project-directory", "home-project"] as const) {
+    const f = fixture();
+    if (shape === "home-project") { put(join(f.home, ".claude/settings.local.json"), PERMISSIONS_ONLY); homeProject(f, false); }
+    expect(review(f.request).accepted).toBe(true);
+    for (const omitted of [f.settings, f.known, f.installed]) {
+      const request = structuredClone(f.request);
+      request.skills.discoveryInputs.agents[0]!.sources = request.skills.discoveryInputs.agents[0]!.sources.filter(source => source.path !== omitted);
+      expect(() => review(request)).toThrow(/does not bind every current user\/project Claude settings and registration source$/);
+    }
+  }
+});
+
+test("the project-scope target settings is never exempt", () => {
+  const f = fixture("project");
+  rebindDiscovery(f, true, false);
+  expect(f.request.preimages.settings.path).toBe(f.projectSettings);
+  expect(() => review(f.request)).toThrow(/does not bind every current user\/project Claude settings and registration source$/);
 });

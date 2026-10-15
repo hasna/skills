@@ -7,10 +7,11 @@ import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
+import { assertProjectDiscovery, CLAUDE_PROJECT_DISCOVERY_KEYS, resolveAgentDiscovery, verifyAgentDiscovery, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
 import { canonicalAgentPath, recheckRootAliases, type AgentRootAlias } from "./agent-integration.js";
 import { captureClaudeMarketplaceEntry } from "./claude-marketplace-entry-witness.js";
 import { captureClaudePluginManifestFile, hashClaudePluginManifest } from "./claude-plugin-manifest-witness.js";
+import { parseNativeJsonObject } from "./claude-settings-witness.js";
 import { readManagedSkillPolicySnapshot } from "./managed-policy.js";
 import { getDataDirReadOnly } from "./config.js";
 import { hashExecutableFile } from "./codex-native-skill-policy.js";
@@ -209,6 +210,28 @@ function readWitness(path: string, expected: string | null, name: string): void 
   if (!stat?.isFile() || stat.isSymbolicLink() || sha(safeFile(path, name)) !== expected) refuse(`${name} preimage changed`);
 }
 
+/** Classify a present project Claude settings file that the reviewed discovery
+ * does not bind, from the exact bytes its preimage SHA-256 names. The parse is
+ * at least as strict as the live hooks' assertProjectDiscovery (JSON.parse of
+ * the file text): strict UTF-8 without a byte-order mark, then one bounded JSON
+ * object with no comments, trailing commas, trailing content or duplicate keys
+ * at any depth. Key presence is assertProjectDiscovery's own test,
+ * `config[key] !== undefined`, so a discovery key at any value (including
+ * null, {} or []) counts. Returns null when the file carries none of
+ * CLAUDE_PROJECT_DISCOVERY_KEYS, otherwise why it cannot be exempt. */
+function unreviewedProjectSettingsRefusal(path: string, expected: string, name: string): string | null {
+  const bytes = safeFile(path, name);
+  if (sha(bytes) !== expected) refuse(`${name} preimage changed`);
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "begins with a UTF-8 byte-order mark";
+  let text: string;
+  try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); } catch { return "is not strict UTF-8"; }
+  let config: unknown;
+  try { parseNativeJsonObject(text); config = JSON.parse(text); } catch { return "is not one bounded strict JSON object"; }
+  if (!object(config)) return "is not one bounded strict JSON object";
+  const present = CLAUDE_PROJECT_DISCOVERY_KEYS.find(key => (config as Record<string, unknown>)[key] !== undefined);
+  return present === undefined ? null : `carries the Claude discovery key ${present}`;
+}
+
 function jsonFile(path: string, name: string): Record<string, any> | null {
   const stat = lstatSync(path, { throwIfNoEntry: false });
   if (!stat) return null;
@@ -382,27 +405,37 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
   if (!request.review || request.review.pluginHooks !== "reviewed-no-skill-injection") refuse("an explicit no-skill-injection review is required");
   if (request.skills.discoveryInputs?.version !== 1 || !Array.isArray(request.skills.discoveryInputs.agents) || request.skills.discoveryInputs.agents.length !== 1 || request.skills.discoveryInputs.agents[0]?.agent !== "claude" || request.skills.discoveryInputs.agents[0]?.pluginHooks !== "reviewed-no-skill-injection") refuse("one explicit reviewed Claude discovery binding is required");
   const reviewedPaths = new Set(request.skills.discoveryInputs.agents[0]!.sources.map(source => source.path));
-  // An absent project settings file has nothing to review: its null preimage
-  // was just re-checked by readWitness. Only the two project settings files
-  // qualify, and only when no other expected source (such as the delta's
-  // target settings or the user settings) shares the path.
-  const exemptAbsent = (["projectSettings", "projectSettingsLocal"] as const).filter(name =>
-    request.preimages[name].sha256 === null
-    && !Object.entries(expectedPaths).some(([other, path]) => other !== name && path === expectedPaths[name])
+  // A project settings file the reviewed discovery does not bind is exempt
+  // from the required sources only when it cannot add discovery, as the live
+  // hooks' assertProjectDiscovery accepts it: absent with a null preimage
+  // (just re-checked by readWitness), or present with exact preimage bytes
+  // that carry no Claude project discovery key. Only the two project settings
+  // files qualify, and only when no other expected source (such as the delta's
+  // target settings or the user settings) shares the path. User settings and
+  // both registries are always required. A candidate that is not exempt
+  // refuses here, so every file left in `exempt` is exempt.
+  const exempt = (["projectSettings", "projectSettingsLocal"] as const).filter(name =>
+    !Object.entries(expectedPaths).some(([other, path]) => other !== name && path === expectedPaths[name])
     && !reviewedPaths.has(expectedPaths[name]));
+  for (const name of exempt) {
+    const expected = request.preimages[name].sha256;
+    const reason = expected === null ? null : unreviewedProjectSettingsRefusal(expectedPaths[name], expected, name);
+    if (reason !== null) refuse(`Skills discovery review does not bind every current user/project Claude settings and registration source: the unreviewed ${name} ${reason}`);
+  }
   const requiredPaths = new Set(Object.values(expectedPaths));
-  for (const name of exemptAbsent) requiredPaths.delete(expectedPaths[name]);
+  for (const name of exempt) requiredPaths.delete(expectedPaths[name]);
   for (const path of requiredPaths) if (!reviewedPaths.has(path)) refuse("Skills discovery review does not bind every current user/project Claude settings and registration source");
-  // An exempt file must stay absent through discovery and until the result is
-  // produced; re-check after each read.
-  const assertExemptStillAbsent = () => { for (const name of exemptAbsent) readWitness(expectedPaths[name], null, name); };
+  // An exempt file must stay at its exact preimage (still absent, or the same
+  // classified bytes) through discovery and until the result is produced;
+  // re-check after each read.
+  const assertExemptUnchanged = () => { for (const name of exempt) readWitness(expectedPaths[name], request.preimages[name].sha256, name); };
   const binding = resolveAgentDiscovery({ home: request.native.home, agent: "claude", canonical, reviewed: request.skills.discoveryInputs });
   verifyAgentDiscovery(binding);
   if (hashClaudeDiscoveryBinding(binding) !== request.skills.discoverySha256) refuse("Skills discovery preimage differs from its reviewed binding");
   assertProjectDiscovery("claude", [request.scope.projectPath], request.native.home, canonical, binding);
   const stored = snapshot.value.bridge?.discovery?.claude;
   if (!stored || !isDeepStrictEqual(stored, binding) || snapshot.value.bridge?.home !== request.native.home) refuse("Skills policy does not bind the reviewed current Claude discovery");
-  assertExemptStillAbsent();
+  assertExemptUnchanged();
 
   const delta = request.delta;
   keys(delta, ["settingsAfter", "knownMarketplacesAfter", "installedPluginsAfter"], "complete semantic delta");
@@ -557,7 +590,7 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
   }
   if (!isDeepStrictEqual(delta.installedPluginsAfter, installedAfter)) refuse("complete installed plugin document changes an unrelated registration or has target rows not derived from every selected candidate");
 
-  assertExemptStillAbsent();
+  assertExemptUnchanged();
   const semanticDocumentsSha256 = sha(canonicalJson({ settings: settingsAfter, knownMarketplaces: marketplacesAfter, installedPlugins: installedAfter }));
   const exactPreimages = Object.keys(expectedPaths).map(name => ({ name, path: expectedPaths[name as keyof typeof expectedPaths], sha256: request.preimages[name as keyof typeof expectedPaths].sha256 }));
   const expectedPostStateSha256 = sha(canonicalJson({ paths: expectedPaths, targetSettingsPath: expectedPaths.settings, semanticDocumentsSha256, currentPreimages: exactPreimages }));
