@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Patch Changes
+
+- Stop a valid owner configuration key that this Codex build does not know from breaking native hook trust enrollment, reconciliation and native catalog capture. Skills started its owned `codex app-server` with `--strict-config`, which turns every unknown key into a startup error; station01 failed on `skills.native_allowed_paths`. It now starts the app server the way Codex itself runs, non-strict, so such keys are ignored exactly as in the real consumer. What strict mode also prevented stays refused: when non-strict startup cannot load the configuration and falls back to defaults, its `Invalid configuration; using defaults.` startup notification now fails the whole connection with `CODEX_HOOK_TRUST_NATIVE_CONFIG_INVALID` (details are never forwarded), every per-request load still reports its own error (`hooks/list` and `skills/list` errors, a failed `config/read`), and enrollment and reconciliation still require `config/read` to return exactly the user layer Skills parsed.
+
 ## 0.10.72
 
 ### Patch Changes
