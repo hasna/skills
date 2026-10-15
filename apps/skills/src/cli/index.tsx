@@ -13,6 +13,7 @@ import { getCompactSkillDiscovery } from "../lib/discovery.js";
 import { isSkillsFleetCredentialError } from "../lib/fleet-credentials.js";
 import { requireSkillsReadAccess } from "../lib/read-access.js";
 import { optionPrefix } from "./option-boundary.js";
+import { permitStrayArguments, rejectStrayArguments } from "./stray-arguments.js";
 import { recordEnvironmentProfile } from "./profile-selection.js";
 import { selectCliSkillsCredentialProfile } from "../lib/cli-credential-profile.js";
 
@@ -35,7 +36,8 @@ program.hook("preAction", () => {
 });
 
 // ── Interactive TUI (default) ──
-program
+permitStrayArguments(
+  program
   .command("interactive", { isDefault: true })
   .alias("i")
   // A stray first argument means a verb that does not exist: commander
@@ -43,8 +45,9 @@ program
   // it fall through to the TUI (or its non-TTY discovery render) is a silent
   // rc=0 for a phantom verb (BUG e3997558). Reject it loudly, naming the
   // verbs that DO exist, derived from the program rather than hardcoded so
-  // the message cannot rot.
-  .allowExcessArguments(true)
+  // the message cannot rot. permitStrayArguments keeps this command out of the
+  // shared pass below, which would otherwise replace this sentence with a bare
+  // arity error.
   .description("Interactive skill browser (TUI)")
   .action(async (_options: unknown, command: Command) => {
     const stray = command.args[0];
@@ -80,7 +83,8 @@ program
       return;
     }
     render(<App initialAccess={access} />);
-  });
+  }),
+);
 
 // ── Command groups ──
 const { registerInstall } = await import("./commands/install.js");
@@ -165,6 +169,10 @@ const { registerRegistryReconcile } = await import("./commands/registry-reconcil
 registerRegistryReconcile(program);
 
 registerEventsCommands(program as any, { source: "skills" });
+
+// Every command is registered, so the phantom-verb pass can run: a verb that
+// declares no argument refuses the stray word instead of ignoring it.
+rejectStrayArguments(program);
 
 // Registration supplies option arity: a required value may itself be -- or
 // --no-color. Preserve those values and all executable arguments after --.
