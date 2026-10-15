@@ -107,7 +107,19 @@ async function handleInfoError(name: string, options: { json: boolean; remote?: 
   // A credential refusal is not "skill not found": printing the not-found
   // shape for it would send the operator looking for a typo in the name.
   if (isSkillsFleetCredentialError(error)) return handleReadRefusal(error);
-  const notFound = await resolveRemoteNotFound(name, options.remote, (error as Error).message);
+  // Suggest from the corpus the read actually used. handleInfo resolves
+  // `remote` as `options.remote || access.mode === "hosted"` and does not hand
+  // that back, so an implicit hosted read was reported through the LOCAL
+  // corpus: the operator got the transport sentence and no candidate for a name
+  // the hosted catalogue owns. Resolve the same predicate here rather than
+  // reusing the raw flag, and keep the local answer if that resolution fails.
+  let remote = options.remote === true;
+  if (!remote) {
+    try {
+      remote = (await requireSkillsReadAccess()).mode === "hosted";
+    } catch { /* keep the local-corpus suggestion rather than mask the read error */ }
+  }
+  const notFound = await resolveRemoteNotFound(name, remote, (error as Error).message);
   if (options.json) console.log(JSON.stringify(notFound));
   else skillNotFound(name, notFound.similar);
   process.exitCode = 1;

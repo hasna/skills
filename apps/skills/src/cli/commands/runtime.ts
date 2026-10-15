@@ -15,6 +15,7 @@ import { basename, dirname, isAbsolute, join } from "path";
 import { createInterface } from "readline";
 import type { Command } from "commander";
 import { getSkill, findSimilarSkills } from "../../lib/registry.js";
+import { permitStrayArguments } from "../stray-arguments.js";
 import { runSkill } from "../../lib/skillinfo.js";
 import { SEMVER_PATTERN } from "../../lib/skill-contract.js";
 import {
@@ -170,15 +171,17 @@ export function registerRuntime(parent: Command) {
     .action((runId: string, options: { json: boolean }) => handleExportsDownload(runId, options));
 
   // MCP
-  parent
+  permitStrayArguments(
+    parent
     .command("mcp")
     .option("--register <agent>", "Register MCP server with agent")
     .option("--json", "Output registration result as JSON", false)
     // Reject stray positionals ourselves: commander's default is version-
     // dependent (v13+ allows excess arguments silently), and a phantom verb
     // like `skills mcp connect` must fail loudly, not exit rc=0 with zero
-    // bytes (BUG e3997558).
-    .allowExcessArguments(true)
+    // bytes (BUG e3997558). permitStrayArguments keeps this command out of the
+    // shared pass, which would otherwise replace this sentence with a bare
+    // arity error.
     .description("Start MCP server (stdio) or register with an agent")
     .action(async (options: { register?: string; json: boolean }, command: Command) => {
       const stray = command.args[0];
@@ -193,7 +196,8 @@ export function registerRuntime(parent: Command) {
         process.exit(1);
       }
       await handleMcp(options);
-    });
+    }),
+  );
 
   const setup = parent
     .command("setup")
