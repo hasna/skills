@@ -7,7 +7,7 @@ import chalk from "chalk";
 import { createHash, randomUUID } from "node:crypto";
 import { CloudExecutionClient } from "../../lib/cloud-executions.js";
 import { requiresCliSkillLoading } from "../../lib/managed-policy.js";
-import { resolveSelectedRun, executeSelectedLocal, prepareSelectedSecretBindings } from "../../lib/selected-run.js";
+import { resolveSelectedRun, executeSelectedLocal, prepareSelectedSecretBindings, instructionRunRefusal } from "../../lib/selected-run.js";
 import { readSelectedSecretBindings } from "../../lib/execution-secrets.js";
 import { selectedProfileId, contextResolverOptions } from "./context.js";
 import { lstatSync, mkdirSync, readFileSync, writeFileSync } from "fs";
@@ -612,7 +612,10 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       const selected = managed || options.target === "local" ? await resolveSelectedRun(version ? `${slug}@${version}` : slug, selectedProfileId(options.selectionProfile), {
         ...contextResolverOptions({ cached: options.cached }), projectDir: process.cwd(), sessionId: options.session,
       }) : undefined;
-      if (selected?.kind === "instruction") throw new Error("This selected skill contains instructions. Use skills load instead of skills run.");
+      if (selected?.kind === "instruction") {
+        const refusal = instructionRunRefusal(selected.manifest, (path) => selected.entries.some((entry) => entry.path === path));
+        if (refusal) throw new Error(refusal.message);
+      }
       if (selected) { slug = selected.selection.slug; version = selected.selection.version; }
       if (options.target !== "cloud") {
         if (!selected) throw new Error("A selected skill is required for managed execution");
@@ -626,6 +629,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
         process.exitCode = result.exitCode;
         return;
       }
+      if (selected?.kind === "instruction") throw new Error("Cloud execution requires an executable skill version; run the declared operation locally on a managed station, or use skills load for the instructions.");
       if (args.length || options.remote || options.file?.length) throw new Error("Cloud execution accepts structured --input only");
       if (!version || options.input === undefined) throw new Error("Use skills run --target cloud --input '<json>' <skill>@<version>");
       const timeoutMs = Number(options.pollTimeoutMs ?? "300000"), intervalMs = Number(options.pollIntervalMs ?? "1000");

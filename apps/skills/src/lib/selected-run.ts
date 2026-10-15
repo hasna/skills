@@ -29,6 +29,71 @@ export async function resolveSelectedRun(spec: string, profileId: string, option
   const entries = await readSelectedEntries(selection, context, options);
   return { selection, profileId: context.receipt.profile.profileId, entries, ...describeEntries(entries), cacheDir: selectionCacheRoot(options) };
 }
+/**
+ * The operation an instruction skill declares, if it declares one.
+ *
+ * An instruction skill is prose-first: agents follow SKILL.md, and `skills run`
+ * refuses it. Its manifest may still declare the one operation it ships — the
+ * first `commands` entry, naming the helper — together with an explicit runtime
+ * contract in `runtime` (`runtime` plus its `version`/`timeout` policy). Such a
+ * skill is runnable through that declared operation, and only through it: the
+ * executed file is exactly the entry the selected command declares, it must be a
+ * regular file in the selected bundle, and a `runtime.entrypoint` that disagrees
+ * with it is an inconsistent declaration that refuses (see
+ * {@link instructionEntrypointMismatch}) rather than quietly running the other
+ * file. An instruction skill that declares no operation — no command, a
+ * non-string or empty entry, or no runtime contract — keeps the prose-only
+ * refusal (`skills load`, never `skills run`), so an instruction bundle is never
+ * mistaken for a runnable stub.
+ */
+export function declaredOperation(manifest: Record<string, any>): { entry: string } | null {
+  const entry = instructionCommandEntry(manifest);
+  if (!entry) return null;
+  const runtime = manifest.runtime;
+  if (!runtime || typeof runtime !== "object" || Array.isArray(runtime)) return null;
+  if (runtime.runtime !== "bun" && runtime.runtime !== "node" && runtime.runtime !== "python3") return null;
+  if (instructionEntrypointMismatch(manifest)) return null;
+  return { entry };
+}
+/**
+ * The entry the instruction skill's declared command names, when it names one.
+ * The first `commands` entry is the operation: nothing else in the manifest
+ * selects what an instruction skill runs.
+ */
+export function instructionCommandEntry(manifest: Record<string, any>): string | null {
+  const commands = Array.isArray(manifest.commands) ? manifest.commands : [];
+  const command = commands[0];
+  if (!command || typeof command !== "object" || typeof command.entry !== "string" || command.entry.length === 0) return null;
+  return command.entry;
+}
+/**
+ * A declared `runtime.entrypoint` that disagrees with the declared command entry,
+ * for an instruction skill. The command entry is the authority, so a disagreement
+ * is an inconsistent declaration: it refuses, and the disagreeing file never runs.
+ */
+export function instructionEntrypointMismatch(manifest: Record<string, any>): string | null {
+  const entry = instructionCommandEntry(manifest);
+  const declared = manifest.runtime;
+  if (!entry || !declared || typeof declared !== "object" || Array.isArray(declared)) return null;
+  const runtimeEntrypoint = (declared as Record<string, unknown>).entrypoint;
+  return typeof runtimeEntrypoint === "string" && runtimeEntrypoint !== entry ? runtimeEntrypoint : null;
+}
+/**
+ * Why an instruction skill cannot run locally, if it cannot. `isBundledFile` says
+ * whether a path is a regular file in the selected bundle, so a declared command
+ * entry that is not there is refused by name instead of being substituted. The
+ * CLI, the MCP tool and the local executor all ask this one function, so the
+ * reason and the code cannot drift between them. A runnable instruction skill
+ * (declared command, agreeing runtime, entry present in the bundle) returns null.
+ */
+export function instructionRunRefusal(manifest: Record<string, any>, isBundledFile: (path: string) => boolean): { code: string; message: string } | null {
+  const declaredEntry = instructionCommandEntry(manifest);
+  if (declaredEntry && !isBundledFile(declaredEntry)) return { code: "LOCAL_ENTRYPOINT_MISSING", message: `This selected instruction skill declares its operation entry as ${declaredEntry}, which is not a regular file in the selected bundle; a different runtime.entrypoint never substitutes for it.` };
+  const mismatch = instructionEntrypointMismatch(manifest);
+  if (mismatch) return { code: "LOCAL_ENTRYPOINT_MISMATCH", message: `This selected instruction skill declares its operation entry as ${declaredEntry}, but its runtime.entrypoint is ${mismatch}; the two must agree.` };
+  if (!declaredOperation(manifest)) return { code: "INSTRUCTION_SKILL", message: "This selected skill contains instructions. Use skills load instead of skills run." };
+  return null;
+}
 export interface SelectedLocalRunOptions {
   args?: string[];
   input?: unknown;
@@ -49,7 +114,7 @@ export async function prepareSelectedSecretBindings(selected: ResolvedSelectedRu
   const entries = await readCachedSelection(selected.selection, { cacheDir: selected.cacheDir });
   if (!entries) throw new SkillSelectionError("CACHED_BUNDLE_MISSING", "The selected execution bundle is not cached.");
   const { kind, manifest } = describeEntries(entries);
-  if (kind !== "executable") throw new SkillSelectionError("INSTRUCTION_SKILL", "Instruction skills do not accept execution secret bindings.");
+  if (kind !== "executable" && !declaredOperation(manifest)) throw new SkillSelectionError("INSTRUCTION_SKILL", "Instruction skills do not accept execution secret bindings.");
   const names = declaredSecretNames(manifest.runtime?.env);
   if (!names.length) throw new SkillSelectionError("NO_DECLARED_SECRETS", "This selected executable does not declare any environment references.");
   return selectedSecretBindingsTemplate({ selection: selected.selection, profileId: selected.profileId, cwd }, names);
@@ -60,7 +125,14 @@ export async function executeSelectedLocal(selected: ResolvedSelectedRun, option
   const entries = await readCachedSelection(selection, { cacheDir: selected.cacheDir });
   if (!entries) throw new SkillSelectionError("CACHED_BUNDLE_MISSING", "The selected local execution bundle is not cached.");
   const { kind, manifest, packageJson } = describeEntries(entries);
-  if (kind === "instruction") throw new SkillSelectionError("INSTRUCTION_SKILL", "This selected skill contains instructions. Use skills load instead of skills run.");
+  const operation = declaredOperation(manifest);
+  if (kind === "instruction") {
+    // The command entry is the authority and must be a file in the selected bundle; a declared
+    // runtime.entrypoint never substitutes for it, and a disagreement is an inconsistent
+    // declaration. Both refuse here, before anything is executed.
+    const refusal = instructionRunRefusal(manifest, (path) => entries.some((entry) => entry.path === path));
+    if (refusal) throw new SkillSelectionError(refusal.code, refusal.message);
+  }
   const runtime = manifest.runtime ?? {};
   if (!runtime || typeof runtime !== "object" || Array.isArray(runtime)) throw new SkillSelectionError("INVALID_SKILL_MANIFEST", "The selected runtime declaration is invalid.");
   if ((runtime.sandbox !== undefined && runtime.sandbox !== "full") || runtime.needs_network === false) {
@@ -76,8 +148,15 @@ export async function executeSelectedLocal(selected: ResolvedSelectedRun, option
   if (!["bun", "node", "python3"].includes(runtimeName)) throw new SkillSelectionError("LOCAL_RUNTIME_UNAVAILABLE", "The selected local runtime is unsupported.");
   const executable = runtimeName === "bun" ? process.execPath : Bun.which(runtimeName);
   if (!executable) throw new SkillSelectionError("LOCAL_RUNTIME_UNAVAILABLE", "The selected runtime is not installed on this station.");
-  const declaredEntry = runtime.entrypoint ?? (typeof packageJson.bin === "string" ? packageJson.bin : packageJson.bin && typeof packageJson.bin === "object" ? Object.values(packageJson.bin)[0] : undefined);
-  if (typeof declaredEntry !== "string" || !entries.some((entry) => entry.path === declaredEntry)) throw new SkillSelectionError("LOCAL_ENTRYPOINT_MISSING", "The selected bundle must declare a regular-file entrypoint in its runtime manifest or package bin.");
+  // The declared command entry is the authority for an instruction skill and is already checked to
+  // exist in the selected bundle above; `runtime.entrypoint` can never substitute for it (a
+  // disagreement refuses before this point). An executable skill keeps the runtime entrypoint, then
+  // its package bin. Neither ever falls back to a guessed path.
+  const declaredEntry = (kind === "instruction" ? operation?.entry : undefined) ?? runtime.entrypoint
+    ?? (typeof packageJson.bin === "string" ? packageJson.bin : packageJson.bin && typeof packageJson.bin === "object" ? Object.values(packageJson.bin)[0] : undefined);
+  if (typeof declaredEntry !== "string" || !entries.some((entry) => entry.path === declaredEntry)) throw new SkillSelectionError("LOCAL_ENTRYPOINT_MISSING", kind === "instruction"
+    ? "The selected instruction skill must declare the operation entrypoint it ships in its manifest, and that declared entry must be a regular file in the selected bundle; a different runtime.entrypoint never substitutes for it."
+    : "The selected bundle must declare a regular-file entrypoint in its runtime manifest or package bin.");
   const args = options.args ?? [];
   if (args.length > 128 || args.some((arg) => typeof arg !== "string" || arg.length > 16_384 || arg.includes("\0"))) throw new SkillSelectionError("INVALID_RUN_INPUT", "Local skill arguments exceed their limits.");
   const input = JSON.stringify(options.input ?? {});
@@ -133,7 +212,7 @@ export async function executeSelectedLocal(selected: ResolvedSelectedRun, option
   const result = await subprocess([executable, ...(runtimeName === "bun" ? ["--no-env-file"] : []), join(runDirectory, declaredEntry), ...args], runDirectory, { ...env, ...secretEnv }, input, timeoutMs);
   result.stdout = redactExecutionSecrets(result.stdout, secretEnv);
   result.stderr = redactExecutionSecrets(result.stderr, secretEnv);
-  const receipt = { selection, target: "local" as const, runtime: runtimeName, inputDigest: `sha256:${createHash("sha256").update(input).digest("hex")}`, runDirectory,
+  const receipt = { selection, target: "local" as const, runtime: runtimeName, entrypoint: declaredEntry, inputDigest: `sha256:${createHash("sha256").update(input).digest("hex")}`, runDirectory,
     ...(executionGrant ? {executionGrant} : {}),
     ...(bindings ? { secretBinding: { schema: bindings.schema, selection: bindings.selection, consumer: bindings.consumer, secretsAuthority: bindings.secretsAuthority, bindings: bindings.bindings } } : {}), ...result };
   writeFileSync(join(runDirectory, ".execution-receipt.json"), JSON.stringify({ ...receipt, stdout: undefined, stderr: undefined }), { mode: 0o600 });
