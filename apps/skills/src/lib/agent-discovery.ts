@@ -9,7 +9,7 @@ import type { IntegrationAgent } from "./agent-adapters.js";
 import { captureDiscoveryDirectories, captureDiscoveryDirectoryProjection, verifyDiscoveryDirectoryProjection, verifyDiscoveryDirectories, type DiscoveryDirectory, type DiscoveryDirectoryProjection } from "./agent-discovery-directories.js";
 import { discoveryByteBudget, hashRawDiscoveryFile } from "./agent-discovery-bytes.js";
 import { pluginExecutableDigest } from "./plugin-projection-store.js";
-import { captureCodexSettingsV6 } from "./codex-settings-witness.js";
+import { captureCodexSettingsV6, codexSettingsToleratesScreenReaderReceipt, codexSettingsWitnessMatch, type CodexSettingsWitnessMatch } from "./codex-settings-witness.js";
 import { captureCodexHookMcpDependencies, type CodexReviewedHookSource } from "./codex-hook-mcp-dependencies.js";
 import { hashDiscoveryPathFile } from "./agent-discovery-path-bytes.js";
 import { CLAUDE_ORPHAN_MARKER_MODE, hashClaudePluginCacheOrphanMarker, isClaudePluginCacheOrphanMarker } from "./claude-plugin-cache-marker.js";
@@ -22,7 +22,7 @@ import { captureClaudeMarketplaceRegistry, captureClaudeMarketplaceRegistryV2 } 
 import { captureClaudeMarketplaceEntry, claudeMarketplaceEntrySourceValid } from "./claude-marketplace-entry-witness.js";
 import { hashNativeJsonControls, captureClaudeSettings, captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4, hashClaudeSettingsReplacement, hashClaudeSettingsReplacementV2, hashClaudeSettingsReplacementV3, hashClaudeSettingsReplacementV4 } from "./claude-settings-witness.js";
 import { assertCodexHookDiscoveryRecovery, verifiesCodexHookDiscoverySource, type CodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery.js";
-import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4, captureCodexSettingsV5, hashCodexSettingsReplacement, hashCodexSettingsReplacementV2, hashCodexSettingsReplacementV3, hashCodexSettingsReplacementV4, hashCodexSettingsReplacementV5, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
+import { hashCodexSettingsReplacement, hashCodexSettingsReplacementV2, hashCodexSettingsReplacementV3, hashCodexSettingsReplacementV4, hashCodexSettingsReplacementV5, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
 import { absentDisabledCodexPluginParent, reviewedDisabledCodexPluginParent, reviewedRetiredCodexRoot, reviewedCodexPluginCapabilitiesUnchanged, reviewedCodexPluginSourceRoots, type CodexPluginSkillControl, type CodexPluginSourceInput } from "./codex-plugin-skill-controls.js";
 import { sumiConfigDirectory, sumiConfigPath } from "./agent-sumi.js";
 import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
@@ -245,9 +245,11 @@ function projected(source: DiscoverySource, changes?: Map<string, string>, budge
   }
   if ((source.hashMode === "codex-settings-v1" || source.hashMode === "codex-settings-v2" || (source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4" || source.hashMode === "codex-settings-v5"))) {
     if (source.format !== undefined || source.fields !== undefined || source.managedPlugins !== undefined || typeof source.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(source.sha256)) throw new Error("Codex settings witnesses require exact typed metadata");
-    const current = (source.hashMode === "codex-settings-v5" ? captureCodexSettingsV5 : source.hashMode === "codex-settings-v4" ? captureCodexSettingsV4 : source.hashMode === "codex-settings-v3" ? captureCodexSettingsV3 : source.hashMode === "codex-settings-v2" ? captureCodexSettingsV2 : captureCodexSettings)(source.path, budget).sha256;
-    if (current !== source.sha256) throw new NativeDiscoveryWitnessChange("input", source.path, `Native discovery input changed; run skills hook install with a fresh discovery review: ${source.path}`);
-    return changes?.has(source.path) ? (source.hashMode === "codex-settings-v5" ? hashCodexSettingsReplacementV5 : source.hashMode === "codex-settings-v4" ? hashCodexSettingsReplacementV4 : source.hashMode === "codex-settings-v3" ? hashCodexSettingsReplacementV3 : source.hashMode === "codex-settings-v2" ? hashCodexSettingsReplacementV2 : hashCodexSettingsReplacement)(changes.get(source.path)!, budget) : current;
+    // The exact digest, or a document that differs from the reviewed one only by
+    // the boolean screen-reader receipt Codex writes on launch. The stored digest
+    // keeps its meaning.
+    if (codexSettingsWitnessMatch(source.path, source.hashMode, source.sha256, budget) === null) throw new NativeDiscoveryWitnessChange("input", source.path, `Native discovery input changed; run skills hook install with a fresh discovery review: ${source.path}`);
+    return changes?.has(source.path) ? (source.hashMode === "codex-settings-v5" ? hashCodexSettingsReplacementV5 : source.hashMode === "codex-settings-v4" ? hashCodexSettingsReplacementV4 : source.hashMode === "codex-settings-v3" ? hashCodexSettingsReplacementV3 : source.hashMode === "codex-settings-v2" ? hashCodexSettingsReplacementV2 : hashCodexSettingsReplacement)(changes.get(source.path)!, budget) : source.sha256;
   }
   if ((source.hashMode === "claude-settings-v1" || source.hashMode === "claude-settings-v2" || (source.hashMode === "claude-settings-v3" || source.hashMode === "claude-settings-v4"))) {
     if (source.format !== undefined || source.fields !== undefined || source.managedPlugins !== undefined || typeof source.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(source.sha256)) throw new Error("Claude settings witnesses require exact typed metadata");
@@ -598,6 +600,8 @@ function assertMarketplaceBinding(binding: AgentDiscoveryBinding, source: Discov
   if ((source.hashMode === "claude-marketplace-registry" || source.hashMode === "claude-marketplace-registry-v2") && (binding.agent !== "claude" || binding.method !== "reviewed")) throw new Error("Claude marketplace witnesses require explicit reviewed Claude discovery");
   if (source.hashMode === "claude-marketplace-entry-v1" && (binding.agent !== "claude" || binding.method !== "reviewed" || !claudeMarketplaceEntrySourceValid(source))) throw new Error("Claude marketplace entry witnesses require explicit reviewed Claude discovery of one named entry");
 }
+/** Typed settings classifications a planned write may adopt into the reviewed baseline. */
+const ADOPTABLE_SETTINGS_MATCHES: readonly CodexSettingsWitnessMatch[] = Object.freeze(["exact", "screen-reader-receipt"]);
 export function rebindAgentDiscovery(binding: AgentDiscoveryBinding, changes: Map<string, string>): AgentDiscoveryBinding {
   const semanticCache = verifyCodexSemanticCacheDiscovery(binding);
   const budget = discoveryByteBudget();
@@ -613,6 +617,13 @@ export function rebindAgentDiscovery(binding: AgentDiscoveryBinding, changes: Ma
     // Only a planned write may change its witness. Do not adopt source drift
     // between initial validation and hook rendering, including raw witnesses.
     if (!changes.has(source.path) && !(source.hashMode === "codex-settings-v6" && source.hookSources!.some(hook => changes.has(hook.path))) && sha256 !== source.sha256) throw new Error(`Native discovery input changed; run skills hook install with a fresh discovery review: ${source.path}`);
+    // A planned write rebinds a typed V1-V5 witness to the written document,
+    // so a difference the witness only tolerated is adopted with it. Allow only
+    // the boolean screen-reader receipt; any future tolerance needs a fresh
+    // review before adoption. Application re-checks the exact preimage, so the
+    // adopted base is the document classified here.
+    if (changes.has(source.path) && (source.hashMode === "codex-settings-v1" || source.hashMode === "codex-settings-v2" || source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4" || source.hashMode === "codex-settings-v5")
+      && !ADOPTABLE_SETTINGS_MATCHES.includes(codexSettingsWitnessMatch(source.path, source.hashMode, source.sha256!, budget) as CodexSettingsWitnessMatch)) throw new Error(`Native discovery input changed; run skills hook install with a fresh discovery review: ${source.path}`);
     return source.hashMode === "codex-settings-v6"
       ? { ...source, ...captureCodexSettingsV6(source.path, source.hookSources!, budget, changes) } : { ...source, sha256 };
   }) };
@@ -813,7 +824,11 @@ export function codexVendorConfigChangeOnly(source: DiscoverySource, cache: stri
     // Typed V2-V5 settings digests already exclude disable-only rows, so row
     // removal cannot change them; skipping it only narrows the search.
     const rowsAffectDigest = !["codex-settings-v2", "codex-settings-v3", "codex-settings-v4", "codex-settings-v5"].includes(source.hashMode ?? "");
-    return codexVendorConfigCandidates(text, cache, { rowsAffectDigest }).some(candidate => replacementDigest(source, candidate) === source.sha256);
+    // A vendor refresh can coincide with the screen-reader receipt a typed
+    // witness tolerates everywhere; prove the remainder under that same tolerance.
+    const typed = source.hashMode === "codex-settings-v1" || source.hashMode === "codex-settings-v2" || source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4" || source.hashMode === "codex-settings-v5" ? source.hashMode : undefined;
+    return codexVendorConfigCandidates(text, cache, { rowsAffectDigest }).some(candidate => replacementDigest(source, candidate) === source.sha256
+      || typed !== undefined && codexSettingsToleratesScreenReaderReceipt(candidate, typed, source.sha256!));
   } catch { return false; }
 }
 /** The digest a source's own mode would record for `text`, without consulting the file. */

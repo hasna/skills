@@ -44,9 +44,20 @@ function canonical(value: unknown, depth = 0, budget = { remaining: 65536 }): un
 }
 export function hashCodexSettingsReplacement(text: string, budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }): string {
   need(Buffer.byteLength(text) <= 1024 * 1024 && budget.remaining >= Buffer.byteLength(text)); budget.remaining -= Buffer.byteLength(text);
+  const prepared = prepareCodexSettingsV1(text);
+  return finishCodexSettingsV1(prepared.config, prepared.tokens);
+}
+/** The parsed document and numeric spellings a V1 digest binds, before the
+ * documented inference fields are removed. Callers that edit the structure
+ * (codexSettingsToleratesScreenReaderReceipt) finish each edited copy separately. */
+export function prepareCodexSettingsV1(text: string): { config: Record<string, any>; tokens: string[] } {
   let config: any;
   try { config = Bun.TOML.parse(text); } catch { throw new Error("Invalid Codex settings witness"); }
   need(config && typeof config === "object" && !Array.isArray(config));
+  return { config, tokens: numericTokens(text) };
+}
+/** The V1 digest of a prepared structure. Mutates `config`. */
+export function finishCodexSettingsV1(config: Record<string, any>, tokens: string[]): string {
   if (Object.hasOwn(config, "model")) {
     need(typeof config.model === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(config.model)); delete config.model;
   }
@@ -55,7 +66,7 @@ export function hashCodexSettingsReplacement(text: string, budget: ClaudeSetting
   }
   // All plugin, hook, skills, provider, project trust, environment and unknown
   // fields remain bound. Legacy raw witnesses are never interpreted here.
-  return sha(`hasna.skills.codex-settings.v1\0${JSON.stringify([canonical(config), numericTokens(text)])}`);
+  return sha(`hasna.skills.codex-settings.v1\0${JSON.stringify([canonical(config), tokens])}`);
 }
 export function captureCodexSettings(path: string, budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }): { path: string; hashMode: "codex-settings-v1"; sha256: string } {
   const text = readNativeSettingsWitnessFile(path, budget, "config.toml");
