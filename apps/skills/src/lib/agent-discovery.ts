@@ -844,6 +844,19 @@ function replacementDigest(source: DiscoverySource, text: string): string | null
   if (source.hashMode === "codex-settings-v5") return hashCodexSettingsReplacementV5(text, budget);
   return null;
 }
+/** Whether replacing `path` with `text` leaves every recorded witness of it
+ * satisfied, judged by each source's own digest mode without touching the file,
+ * with the same screen-reader receipt tolerance typed V1-V5 verification applies.
+ * Fails closed: a review artifact, managed-plugin or hook-source witness, a
+ * semantic cache binding of the file, or an unsupported mode counts as changed. */
+export function discoveryTextKeepsWitness(binding: Pick<AgentDiscoveryBinding, "sources" | "codexSemanticCache">, path: string, text: string): boolean {
+  if (binding.codexSemanticCache?.configPath === path) return false;
+  return binding.sources.filter(source => source.path === path).every(source => {
+    if (source.reviewArtifact !== undefined || source.managedPlugins !== undefined || source.hookSources !== undefined || typeof source.sha256 !== "string") return false;
+    const typed = source.hashMode === "codex-settings-v1" || source.hashMode === "codex-settings-v2" || source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4" || source.hashMode === "codex-settings-v5" ? source.hashMode : undefined;
+    try { return replacementDigest(source, text) === source.sha256 || typed !== undefined && codexSettingsToleratesScreenReaderReceipt(text, typed, source.sha256); } catch { return false; }
+  });
+}
 
 /** `executable` is the agent's runtime: omitted, it is resolved through PATH;
  * a value (or null for none) is used as given, so verification never depends

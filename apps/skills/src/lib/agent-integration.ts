@@ -19,7 +19,7 @@ import { homedir } from "node:os";
 import { getDataDir, getDataDirReadOnly } from "./config.js";
 import { requiresCliSkillLoading, readManagedSkillPolicySnapshot, serializeManagedSkillPolicy, parseManagedSkillPolicy } from "./managed-policy.js";
 import { CLI_BRIDGE_NAME, CLI_BRIDGE_FILES, CLI_BRIDGE_DIGEST, CLI_BRIDGE_VERSION, isOwnedCliBridge } from "./agent-bridge.js";
-import { assertProjectDiscovery, codexVendorConfigChangeOnly, discoveryExecutable, recordedDiscoveryExecutable, isDiscoveryRootUnresolved, resolveAgentDiscovery, verifyAgentDiscovery, verifyAutomaticDiscoveryClosure, type DiscoveryExecutable, rebindAgentDiscovery, captureDiscoveryDirectories, captureRetiredCodexDiscovery, projectNativeDiscoveryFields, codexSemanticCacheSourceRole, codexSemanticCacheDirectoryRole, assertCodexSemanticCacheHookSafety, type AgentDiscoveryBinding, type DiscoverySource, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
+import { assertProjectDiscovery, codexVendorConfigChangeOnly, discoveryTextKeepsWitness, discoveryExecutable, recordedDiscoveryExecutable, isDiscoveryRootUnresolved, resolveAgentDiscovery, verifyAgentDiscovery, verifyAutomaticDiscoveryClosure, type DiscoveryExecutable, rebindAgentDiscovery, captureDiscoveryDirectories, captureRetiredCodexDiscovery, projectNativeDiscoveryFields, codexSemanticCacheSourceRole, codexSemanticCacheDirectoryRole, assertCodexSemanticCacheHookSafety, type AgentDiscoveryBinding, type DiscoverySource, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderAgentHookCommand, renderOpenCodePlugin, type IntegrationAgent } from "./agent-adapters.js";
 import { assertCodexPathConfigEditable, CODEX_SKILL_CONFIG_SECTIONS, disableCodexBundledSkills, normalizeCodexInlinePathConfig } from "./agent-codex.js";
 
@@ -1657,6 +1657,103 @@ function nativeSkillPathList(paths: readonly string[], invisible = false): strin
   return `${shown.join(", ")}${remaining ? `; ${remaining} more` : ""}`;
 }
 
+/** Remediation for blocking native skill copies, grouped by what actually works
+ * for the guard call that refused (bounded, escaped like the path list):
+ *   - user and project copies: `skills migrate native` without `--include-vendor`.
+ *     It inventories the working directory and its ancestors and never resolves
+ *     configured plugins, so a hook-bearing plugin does not refuse it.
+ *   - live Codex prompt hook only: a copy in an OpenAI vendor marketplace of the
+ *     Codex plugin cache that a plugin-qualified name rule would make inert. The
+ *     offer is exact: the copy must pass isInertCodexVendorPluginCopy with that
+ *     rule appended to the current rules (no Skills-managed or Hasna marker, the
+ *     remote install receipt, plugin refresh safety and no enabling rule). Codex
+ *     refreshes these caches on its own, so archiving does not last; the name
+ *     rule also covers later versions.
+ *   - other plugin-cache copies in the live hook: an exact-path disable rule,
+ *     which the guard accepts for a plugin Skills has not enrolled while the
+ *     recorded configuration is unchanged.
+ *   - a refreshed binding (`skills hook install`, with a fresh discovery review
+ *     for a reviewed binding, and a fresh native catalog for a plugin Skills
+ *     enrolled), which writes and records the disables itself, for: every
+ *     plugin-cache copy on a strict guard call (hook install reusing a saved
+ *     review, trust enrolment and reconciliation, witness upgrades), which
+ *     accepts no hand-added name rule; Codex system skills, which migration never
+ *     archives; copies of an enrolled plugin, whose skills only a reviewed
+ *     catalog exempts; and plugin-cache copies after the hook tolerated a vendor
+ *     configuration change.
+ *   - other vendor copies: `--include-vendor`, which resolves configured plugin
+ *     discovery and so needs a reviewed `--discovery-inputs` file whenever a
+ *     configured plugin declares hooks.
+ * A config-edit step is followed by the refreshed binding whenever the edit
+ * changes the recorded config witness: always on an automatic binding and when
+ * an enabling rule must be removed (enabled rows count in every witness), and
+ * otherwise when the binding's own digest mode would change with the appended
+ * rows (`keepsConfig`; raw, `bytes` and `codex-settings-v1` count disable rows,
+ * typed V2-V5 do not). */
+function nativeSkillRemediation(agent: IntegrationAgent, blocking: readonly NativeSkillEntry[], context: { cache: string; config: string; aliases: boolean; strict: boolean; automatic: boolean; toleratedChange: boolean; rules: unknown; enrolled: (entry: NativeSkillEntry) => boolean; keepsConfig: (rows: readonly string[]) => boolean; read: (path: string) => string }): string {
+  const quote = (value: string) => nativeSkillPathList([value], true);
+  const codex = agent === "codex";
+  const system = blocking.filter(entry => codex && entry.system === true);
+  const cacheCopies = blocking.filter(entry => codex && !system.includes(entry) && entry.path.startsWith(context.cache + sep));
+  // The qualified name a disable rule needs, only when that rule appended to the
+  // current rules would make the live hook accept the copy; null otherwise.
+  const nameRule = (entry: NativeSkillEntry): string | null => {
+    if (context.strict || codexVendorMarketplace(context.cache, entry.path) === null) return null;
+    if (context.rules !== undefined && !Array.isArray(context.rules)) return null;
+    try {
+      const identity = classifyCodexPluginCacheDocument(join(entry.path, "SKILL.md"), context.cache, context.read);
+      if (!identity) return null;
+      const rules = [...((context.rules as unknown[] | undefined) ?? []), { name: identity.name, enabled: false }];
+      return isInertCodexVendorPluginCopy(entry, context.cache, rules, context.read) ? identity.name : null;
+    } catch { return null; }
+  };
+  const named = cacheCopies.flatMap(entry => { const name = nameRule(entry); return name ? [{ entry, name }] : []; });
+  const unnamed = cacheCopies.filter(entry => !named.some(item => item.entry === entry));
+  const refresh = unnamed.filter(entry => context.strict || context.toleratedChange || context.enrolled(entry));
+  const byPath = unnamed.filter(entry => !refresh.includes(entry));
+  const otherVendor = blocking.filter(entry => entry.vendor && !system.includes(entry) && !cacheCopies.includes(entry));
+  const user = blocking.filter(entry => !entry.vendor && !system.includes(entry) && !cacheCopies.includes(entry));
+  // The refreshed binding; a plugin Skills enrolled also needs a fresh catalog.
+  const install = (catalog: boolean) => {
+    const fresh = [...(context.automatic ? [] : ["discovery review"]), ...(catalog ? ["native catalog"] : [])];
+    return `skills hook install --agent codex${catalog ? " --codex-native-catalog <reviewed-catalog>" : ""}${context.automatic ? "" : " --discovery-inputs <reviewed-file>"} --apply${fresh.length ? `, with a fresh ${fresh.join(" and ")}` : ""}`;
+  };
+  // Said after a config edit that changes what the binding recorded, so the edit
+  // alone would only trade this refusal for a changed-discovery-input refusal.
+  const followUp = (rows: readonly string[], entries: readonly NativeSkillEntry[], removesRules = false) =>
+    context.automatic || removesRules || !context.keepsConfig(rows)
+      ? ` ${context.automatic ? "This automatic binding" : "The reviewed binding"} records that file, so follow the edit with ${install(entries.some(context.enrolled))}.`
+      : "";
+  const row = (selector: string) => `[[skills.config]]\n${selector}\nenabled = false\n`;
+  const steps: string[] = [];
+  if (user.length) steps.push(`For user and project copies, review skills migrate native --agent ${agent} --project <working-directory> --include-unmanaged${context.aliases ? " --allow-root-aliases" : ""} --json before continuing; it inventories that directory and its ancestors. Use --apply after reviewing the archive plan.`);
+  if (named.length) {
+    const names = [...new Set(named.map(item => item.name))];
+    const rows = names.map(name => row(`name = ${JSON.stringify(name)}`));
+    steps.push(`Codex refreshes OpenAI marketplace copies on its own, so disable each in Codex instead: add [[skills.config]] with name = ${nativeSkillPathList(names, true)}${names.length > 1 ? " (one rule per name)" : ""} and enabled = false to ${quote(context.config)}. Codex then never loads it and the Codex prompt hook accepts it.${followUp(rows, named.map(item => item.entry))}`);
+  }
+  if (byPath.length) {
+    // Skills honours no exact-path disable while any name rule enables a skill,
+    // nor one paired with a rule that enables the same document.
+    const rules = Array.isArray(context.rules) ? context.rules : [];
+    const enabling = rules.some((rule: any) => rule?.enabled !== false && (typeof rule?.name === "string" || (typeof rule?.path === "string" && byPath.some(entry => [entry.path, join(entry.path, "SKILL.md")].includes(resolve(rule.path))))));
+    const rows = byPath.map(entry => row(`path = ${JSON.stringify(join(entry.path, "SKILL.md"))}`));
+    steps.push(`For other Codex plugin-cache copies, add [[skills.config]] with the exact path of each SKILL.md and enabled = false to ${quote(context.config)}, or remove the plugin in Codex.${enabling ? " First remove the [[skills.config]] rules there that enable skills; no path rule counts while one does." : ""}${followUp(rows, byPath, enabling)}`);
+  }
+  if (system.length || refresh.length) {
+    const reasons = [
+      ...(system.length ? ["Codex system skills are never archived by skills migrate native"] : []),
+      ...(context.strict && refresh.length ? ["this check, unlike the live Codex prompt hook, does not accept a hand-added Codex name rule for a plugin-cache copy"] : []),
+      ...(!context.strict && context.toleratedChange && refresh.length ? ["plugin-cache copies keep their exact-path exemption only while the recorded configuration is unchanged"] : []),
+      ...(refresh.some(context.enrolled) ? ["only a fresh native catalog review exempts a skill of a plugin Skills has enrolled"] : []),
+    ];
+    const sentence = reasons.join("; ");
+    steps.push(`${sentence[0]!.toUpperCase()}${sentence.slice(1)}, so refresh the binding instead: ${install(refresh.some(context.enrolled))}. It disables and records each copy.`);
+  }
+  if (otherVendor.length) steps.push(`For other vendor copies, review skills migrate native --agent ${agent} --project <working-directory> --include-vendor --discovery-inputs <reviewed-file> --json; --include-vendor requires a reviewed --discovery-inputs file when a configured plugin declares hooks.`);
+  return steps.join(" ");
+}
+
 /** Visible, non-blocking warning for the discovery-witness changes the live Codex
  * prompt hook tolerated as a vendor plugin refresh, or undefined when there were
  * none. One bounded line; paths only, never payloads or file contents. */
@@ -1829,7 +1926,10 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
   if (unexpected.length > inert.length + inertVendor.length) {
     // The adapter is all-or-nothing, so only exempted vendor copies leave the list.
     const blocking = unexpected.filter(entry => !inertVendor.includes(entry));
-    throw new Error(`NATIVE_SKILL_DRIFT: ${blocking.length} unexpected native skill copies were found: ${nativeSkillPathList(blocking.map(entry => entry.path))}. Review skills migrate native --agent ${agent} --project <working-directory> --include-unmanaged --include-vendor --json before continuing; it inventories that directory and its ancestors. Use --apply after reviewing the archive plan.${adapterRefusal ? ` Native policy adapter refused: ${adapterRefusal}` : ""}`);
+    // Strict callers (every guard call except the live Codex prompt hook) accept
+    // no hand-added name rule, so they get the refreshed-binding step instead.
+    const remediation = nativeSkillRemediation(agent, blocking, { cache: vendorCache, config: codexPath, aliases: aliases.length > 0, strict: options.codexPromptHook !== true, automatic: discovery.method === "automatic", toleratedChange: (witnessTolerance?.changes.length ?? 0) > 0, rules: codexConfig.skills?.config, enrolled: entry => (binding.codexPluginSkills ?? []).some((control: CodexPluginSkillControl) => entry.path.startsWith(control.pluginParent + sep)), keepsConfig: rows => { try { const text = readOptional(codexPath) ?? ""; return discoveryTextKeepsWitness(discovery, codexPath, `${text.trimEnd()}${text.trim() ? "\n\n" : ""}${rows.join("\n")}`); } catch { return false; } }, read: path => new TextDecoder("utf-8", { fatal: true }).decode(readNativeBytes(path, 1024 * 1024)) });
+    throw new Error(`NATIVE_SKILL_DRIFT: ${blocking.length} unexpected native skill copies were found: ${nativeSkillPathList(blocking.map(entry => entry.path))}. ${remediation}${adapterRefusal ? ` Native policy adapter refused: ${adapterRefusal}` : ""}`);
   }
   recheckRootAliases(aliases);
   // The automatic closure can re-report a source verifyAgentDiscovery collected.

@@ -113,6 +113,27 @@ skills hook install --selection-profile default --json
 skills hook install --selection-profile default --apply --json
 ```
 
+`--include-vendor` resolves configured plugin discovery, so it needs a reviewed
+`--discovery-inputs` file when a configured plugin declares hooks. Without it,
+`skills migrate native --include-unmanaged` archives user and project copies
+only. Migration never archives Codex system skills (`.codex/skills/.system`),
+even with `--include-vendor`. Codex refreshes its OpenAI marketplace plugin
+caches on its own; retire those copies with a Codex `[[skills.config]]` rule
+(`name = "<plugin>:<skill>"` or the exact `path` of the `SKILL.md`, with
+`enabled = false`) rather than by archiving. The live Codex prompt hook accepts
+a name rule only for a copy with no Hasna marker, its remote install receipt, a
+refresh-safe plugin and no rule that enables it. Other checks (`skills hook
+install` reusing a saved review, `skills hook trust`) do not accept a
+hand-added name rule; for them, and for system skills, run `skills hook install
+--agent codex --discovery-inputs <file> --apply` with a fresh discovery review
+(no `--discovery-inputs` on an automatic binding; add a fresh
+`--codex-native-catalog <file>` for a plugin Skills has enrolled), which writes
+and records the disables. Run the same refresh after editing `config.toml` when
+the binding's recorded configuration witness counts the edit: on automatic
+bindings, after removing a rule that enables skills, and on reviewed bindings
+whose witness counts disable rows. A `NATIVE_SKILL_DRIFT` refusal names the
+step for each copy it lists, including that follow-up.
+
 Without `--agent`, hook installation selects configured or detected consumers:
 existing managed bridge bindings, provider-specific home configuration, or an
 installed native CLI found through PATH. Detection reads metadata and never
