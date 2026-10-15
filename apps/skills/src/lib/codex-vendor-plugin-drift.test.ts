@@ -4,7 +4,8 @@ import { dirname, join, relative, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { planAgentIntegration, applyAgentIntegration, assertManagedAgentBridge, inventoryNativeSkills, archiveNativeSkills, isInertCodexVendorPluginCopy, codexPromptDriftWarning } from "./agent-integration.js";
-import { captureCodexSettingsV3 } from "./codex-settings-witness.js";
+import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4, captureCodexSettingsV5 } from "./codex-settings-witness.js";
+import { createHash } from "node:crypto";
 import { readManagedSkillPolicySnapshot } from "./managed-policy.js";
 import { codexNativePolicyReceiptPath } from "./codex-native-skill-policy.js";
 import { CODEX_VENDOR_MARKETPLACES } from "./codex-vendor-refresh.js";
@@ -27,7 +28,10 @@ const VENDOR_BLOCK = (s: { config: string }, copy: string, name = "sites:sites-r
 /** The refusal for one blocking plugin-cache copy that only an exact-path rule retires. */
 const PATH_BLOCK = (s: { config: string }, copy: string) => `NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ${JSON.stringify(copy)}. For other Codex plugin-cache copies, add [[skills.config]] with the exact path of each SKILL.md and enabled = false to ${JSON.stringify(s.config)}, or remove the plugin in Codex.`;
 /** What an automatic binding adds after a config-edit step. */
-const REINSTALL = " This automatic binding records that file, so follow the edit with skills hook install --agent codex --apply, which records fresh discovery.";
+const REINSTALL = " This automatic binding records that file, so follow the edit with skills hook install --agent codex --apply.";
+/** What a reviewed binding adds after a config-edit step that changes its recorded config witness. */
+const REVIEWED_FOLLOW_UP = " The reviewed binding records that file, so follow the edit with skills hook install --agent codex --discovery-inputs <reviewed-file> --apply, with a fresh discovery review.";
+const FIRST_REMOVE = " First remove the [[skills.config]] rules there that enable skills; no path rule counts while one does.";
 /** The refreshed-binding step: reasons, then the exact install command. */
 const STRICT_REASON = "This check, unlike the live Codex prompt hook, does not accept a hand-added Codex name rule for a plugin-cache copy";
 const REFRESH = (copy: string, reasons: string, step: "reviewed" | "automatic" | "catalog") => `NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ${JSON.stringify(copy)}. ${reasons}, so refresh the binding instead: ${{ reviewed: "skills hook install --agent codex --discovery-inputs <reviewed-file> --apply, with a fresh discovery review", automatic: "skills hook install --agent codex --apply", catalog: "skills hook install --agent codex --codex-native-catalog <reviewed-catalog> --discovery-inputs <reviewed-file> --apply, with a fresh discovery review and native catalog" }[step]}. It disables and records each copy.`;
@@ -142,7 +146,9 @@ describe("B1: the live prompt hook exempts only vendor copies Codex configuratio
     // table alone never exempts the copy. The table itself is a tolerated vendor
     // disable; the copy it fails to retire still blocks, naming only that copy.
     writeFileSync(s.config, s.installed); append(s, `[plugins."sites@openai-curated-remote"]\nenabled = false\n`);
-    expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toBe(VENDOR_BLOCK(s, s.copy));
+    // The table already differs from what the binding recorded, so the name rule
+    // is followed by a refreshed binding (with a catalog for this enrolled plugin).
+    expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toBe(`${VENDOR_BLOCK(s, s.copy)} The reviewed binding records that file, so follow the edit with skills hook install --agent codex --codex-native-catalog <reviewed-catalog> --discovery-inputs <reviewed-file> --apply, with a fresh discovery review and native catalog.`);
     expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toBe(`NATIVE_SKILL_DRIFT: Native discovery input changed; run skills hook install with a fresh discovery review: ${s.config}`);
     // With a qualified-name disable beside it, the name rule is what exempts the copy.
     append(s, byName("sites:sites-remix"));
@@ -280,7 +286,8 @@ describe("B2: vendor classification is an exact allowlist", () => {
       const s = reviewedV3();
       const [copy] = plugin(s, { marketplace, receipt });
       append(s, `[plugins."sites@${marketplace}"]\nenabled = false\n`);
-      expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toBe(VENDOR_BLOCK(s, copy!));
+      // The table already differs from what the binding recorded, so a refresh follows the rule.
+      expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toBe(`${VENDOR_BLOCK(s, copy!)}${REVIEWED_FOLLOW_UP}`);
       // An exact-path or qualified-name rule is what retires it.
       append(s, byName("sites:sites-remix"));
       expect(assertManagedAgentBridge("codex", live(s)).codexInertVendorCopies).toEqual([copy!]);
@@ -553,7 +560,7 @@ describe("E: the refusal names the step that works for the calling guard and the
       const s = binding === "reviewed" ? reviewedV3() : automatic();
       const builtin = join(s.home, ".codex", "skills", ".system", "builtin");
       put(join(builtin, "SKILL.md"), payload("builtin"));
-      const expected = REFRESH(builtin, "Skills migrate native never archives Codex system skills", binding);
+      const expected = REFRESH(builtin, "Codex system skills are never archived by skills migrate native", binding);
       expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toBe(expected);
       expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toBe(expected);
       expect(expected).not.toContain("--include-vendor");
@@ -588,12 +595,6 @@ describe("E: the refusal names the step that works for the calling guard and the
       expect([label, refusal(() => assertManagedAgentBridge("codex", live(s)))]).toEqual([label, "ACCEPTED"]);
       expect([label, refusal(() => assertManagedAgentBridge("codex", opts(s)))]).toEqual([label, "ACCEPTED"]);
     }
-    // A rule that enables the copy defeats both rules; the advice says to remove it.
-    const s = home("skills-vendor-enabling-");
-    put(s.config, `[[skills.config]]\nname = "sites:sites-remix"\nenabled = true\n`);
-    applyAgentIntegration(planAgentIntegration({ ...opts(s), agents: ["codex"], discoveryInputs: freshV3(s) }));
-    const [copy] = plugin(s);
-    expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toBe(`${PATH_BLOCK(s, copy!)} First remove the [[skills.config]] rules there that enable skills; no path rule counts while one does.`);
   });
 
   test("F4: on an automatic binding each config-edit step says a re-install follows, and that re-install works", () => {
@@ -616,5 +617,69 @@ describe("E: the refusal names the step that works for the calling guard and the
     applyAgentIntegration(planAgentIntegration({ ...opts(t), agents: ["codex"] }));
     expect(refusal(() => assertManagedAgentBridge("codex", opts(t)))).toBe("ACCEPTED");
     expect(refusal(() => assertManagedAgentBridge("codex", live(t)))).toBe("ACCEPTED");
+  });
+});
+
+describe("G: every config-edit step, followed as named, clears the refusal on each recorded config witness", () => {
+  const sha = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
+  // Typed V2-V5 digests ignore disable-only rows; raw, bytes and V1 count them.
+  const witnesses = {
+    v2: (path: string) => captureCodexSettingsV2(path), v3: (path: string) => captureCodexSettingsV3(path), v4: (path: string) => captureCodexSettingsV4(path), v5: (path: string) => captureCodexSettingsV5(path),
+    v1: (path: string) => captureCodexSettings(path), bytes: (path: string) => ({ path, hashMode: "bytes" as const, sha256: sha(readFileSync(path)) }), raw: (path: string) => ({ path, sha256: sha(read(path)) }),
+  };
+  const typed = ["v2", "v3", "v4", "v5"];
+  const reviewedWith = (mode: keyof typeof witnesses, initial = "") => {
+    const s = home(`skills-vendor-witness-${mode}-`);
+    put(s.config, initial);
+    applyAgentIntegration(planAgentIntegration({ ...opts(s), agents: ["codex"], discoveryInputs: { version: 1, agents: [{ agent: "codex", roots: [], sources: [witnesses[mode](s.config) as any], pluginHooks: "reviewed-no-skill-injection" }] } }));
+    expect([mode, refusal(() => assertManagedAgentBridge("codex", opts(s)))]).toEqual([mode, "ACCEPTED"]);
+    return s;
+  };
+  const acme = (s: Station) => plugin(s, { marketplace: "acme", name: "tool", version: "1.0.0", skills: ["tool"], receipt: false })[0]!;
+  const enablingRow = (name: string) => `[[skills.config]]\nname = ${JSON.stringify(name)}\nenabled = true\n`;
+  /** Follow the named follow-up, when there is one, then require both guards to accept. */
+  const finish = (s: Station, mode: string, label: string, message: string) => {
+    if (message.endsWith(REVIEWED_FOLLOW_UP)) applyAgentIntegration(planAgentIntegration({ ...opts(s), agents: ["codex"], discoveryInputs: freshV3(s) }));
+    expect([mode, label, refusal(() => assertManagedAgentBridge("codex", live(s)))]).toEqual([mode, label, "ACCEPTED"]);
+    expect([mode, label, refusal(() => assertManagedAgentBridge("codex", opts(s)))]).toEqual([mode, label, "ACCEPTED"]);
+  };
+
+  for (const mode of Object.keys(witnesses) as Array<keyof typeof witnesses>) test(`${mode} witness`, () => {
+    const follow = typed.includes(mode) ? "" : REVIEWED_FOLLOW_UP;
+    {
+      // Vendor copy: the name rule. On a typed witness the live hook accepts it at
+      // once; the strict guard, by design, names its own refreshed binding.
+      const s = reviewedWith(mode);
+      const [copy] = plugin(s);
+      const message = refusal(() => assertManagedAgentBridge("codex", live(s)));
+      expect([mode, "vendor", message]).toEqual([mode, "vendor", `${VENDOR_BLOCK(s, copy!)}${follow}`]);
+      append(s, byName("sites:sites-remix"));
+      if (follow) finish(s, mode, "vendor", message);
+      else {
+        expect([mode, "vendor", refusal(() => assertManagedAgentBridge("codex", live(s)))]).toEqual([mode, "vendor", "ACCEPTED"]);
+        expect([mode, "vendor", refusal(() => assertManagedAgentBridge("codex", opts(s)))]).toEqual([mode, "vendor", REFRESH(copy!, STRICT_REASON, "reviewed")]);
+      }
+    }
+    {
+      // Non-vendor plugin-cache copy: the exact-path rule.
+      const s = reviewedWith(mode);
+      const copy = acme(s);
+      const message = refusal(() => assertManagedAgentBridge("codex", live(s)));
+      expect([mode, "path", message]).toEqual([mode, "path", `${PATH_BLOCK(s, copy)}${follow}`]);
+      append(s, byPath(copy));
+      finish(s, mode, "path", message);
+    }
+    for (const [label, enabled, make] of [["enabling rule for the copy", "sites:sites-remix", (s: Station) => plugin(s)[0]!], ["unrelated enabling rule", "other:thing", acme]] as const) {
+      // Removing an enabled row changes every witness, so the reviewed binding is always refreshed.
+      const s = reviewedWith(mode, enablingRow(enabled));
+      const copy = make(s);
+      const message = refusal(() => assertManagedAgentBridge("codex", live(s)));
+      expect([mode, label, message]).toEqual([mode, label, `${PATH_BLOCK(s, copy)}${FIRST_REMOVE}${REVIEWED_FOLLOW_UP}`]);
+      writeFileSync(s.config, read(s.config).replace(enablingRow(enabled), ""));
+      append(s, byPath(copy));
+      // The edit alone is not enough here; the named follow-up is.
+      expect([mode, label, refusal(() => assertManagedAgentBridge("codex", live(s)))]).toEqual([mode, label, `NATIVE_SKILL_DRIFT: Native discovery input changed; run skills hook install with a fresh discovery review: ${s.config}`]);
+      finish(s, mode, label, message);
+    }
   });
 });

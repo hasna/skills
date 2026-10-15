@@ -126,8 +126,13 @@ refresh-safe plugin and no rule that enables it. Other checks (`skills hook
 install` reusing a saved review, `skills hook trust`) do not accept a
 hand-added name rule; for them, and for system skills, run `skills hook install
 --agent codex --discovery-inputs <file> --apply` with a fresh discovery review
-(no `--discovery-inputs` on an automatic binding), which writes and records the
-disables. A `NATIVE_SKILL_DRIFT` refusal names the step for each copy it lists.
+(no `--discovery-inputs` on an automatic binding; add a fresh
+`--codex-native-catalog <file>` for a plugin Skills has enrolled), which writes
+and records the disables. Run the same refresh after editing `config.toml` when
+the binding's recorded configuration witness counts the edit: on automatic
+bindings, after removing a rule that enables skills, and on reviewed bindings
+whose witness counts disable rows. A `NATIVE_SKILL_DRIFT` refusal names the
+step for each copy it lists, including that follow-up.
 
 Without `--agent`, hook installation selects configured or detected consumers:
 existing managed bridge bindings, provider-specific home configuration, or an
