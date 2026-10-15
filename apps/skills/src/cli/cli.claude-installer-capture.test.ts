@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, copyFileSync, lstatSync, readdirSync, renameSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { buildCliFixture } from "./cli-build.fixture.js";
 import { renderPinnedLauncher } from "./commands/runtime-launcher.js";
@@ -234,24 +234,28 @@ const fileSha = (path: string) => createHash("sha256").update(readFileSync(path)
  * cache plugin with a retired 1.0.0 and the registered 2.0.0, each with the
  * Claude-written version-root .orphaned_at marker, and a typed (default) or
  * byte settings witness. Each fixture has its own Skills data directory, so
- * the stored policy is exactly what Skills wrote. */
-function reviewedClaudeBinding(name: string, settingsWitness: "claude-settings-v4" | "bytes" = "claude-settings-v4") {
+ * the stored policy is exactly what Skills wrote. With `hooks`, each version
+ * also has `hooks/hooks.json` and the retired manifest declares a second hook
+ * file, all bound as reviewed byte witnesses. */
+function reviewedClaudeBinding(name: string, settingsWitness: "claude-settings-v4" | "bytes" = "claude-settings-v4", hooks = false) {
   const home = join(scratch, name), claude = join(home, ".claude"), skillsDir = join(home, "skills-data");
   const parent = join(claude, "plugins/cache/market/plugin"), retired = join(parent, "1.0.0"), active = join(parent, "2.0.0");
   const settings = join(claude, "settings.json"), registry = join(claude, "plugins/installed_plugins.json");
   put(settings, JSON.stringify({ enabledPlugins: { "plugin@market": true } }));
   put(registry, JSON.stringify({ version: 2, plugins: { "plugin@market": [{ scope: "user", installPath: active, version: "2.0.0" }] } }));
   for (const root of [retired, active]) {
-    put(join(root, ".claude-plugin/plugin.json"), JSON.stringify({ name: "plugin", version: basename(root) }));
+    put(join(root, ".claude-plugin/plugin.json"), JSON.stringify({ name: "plugin", version: basename(root), ...(hooks && root === retired ? { hooks: "./hooks/extra.json" } : {}) }));
     mkdirSync(join(root, "skills"), { recursive: true });
     put(join(root, ".orphaned_at"), "1791981120000");
   }
+  const hookFiles = hooks ? [join(retired, "hooks/hooks.json"), join(retired, "hooks/extra.json"), join(active, "hooks/hooks.json")] : [];
+  for (const path of hookFiles) put(path, JSON.stringify({ hooks: {} }));
   const manifests = [retired, active].map(root => join(root, ".claude-plugin/plugin.json"));
   const markers = [retired, active].map(root => join(root, ".orphaned_at"));
   const options = { home, dataDir: skillsDir, projectDir: home, agents: ["claude" as const], command: "/fixture/skills" };
   applyAgentIntegration(planAgentIntegration({ ...options, discoveryInputs: { version: 1, agents: [{
     agent: "claude", roots: [join(retired, "skills"), join(active, "skills")], pluginHooks: "reviewed-no-skill-injection",
-    sources: [settingsWitness === "bytes" ? captureDiscoveryByteSources([settings])[0]! : captureClaudeSettingsV4(settings), ...captureDiscoveryByteSources([registry, ...manifests]), ...captureDiscoveryPathSources(markers)],
+    sources: [settingsWitness === "bytes" ? captureDiscoveryByteSources([settings])[0]! : captureClaudeSettingsV4(settings), ...captureDiscoveryByteSources([registry, ...manifests, ...hookFiles]), ...captureDiscoveryPathSources(markers)],
     directories: captureDiscoveryDirectories([active]),
   }] } }));
   const policyPath = join(skillsDir, "agent-policy.json");
@@ -262,7 +266,7 @@ function reviewedClaudeBinding(name: string, settingsWitness: "claude-settings-v
     return { ...output, receipt: output.exitCode === 0 ? JSON.parse(output.stdout) : undefined };
   };
   const hook = () => assertManagedAgentBridge("claude", options);
-  return { home, claude, skillsDir, retired, active, settings, registry, manifests, markers, policyPath, stored, prune, verify, hook };
+  return { home, claude, skillsDir, retired, active, settings, registry, manifests, markers, hookFiles, policyPath, stored, prune, verify, hook };
 }
 const statusOf = (result: any, path: string, hashMode?: string) => result.sources.filter((row: any) => row.path === path && (hashMode === undefined || row.hashMode === hashMode)).map((row: any) => row.status);
 
@@ -465,4 +469,136 @@ test("discovery-binding writes nothing: no file, cache or selection pin in the d
     expect(treeSnapshot(f.skillsDir)).toEqual(beforeData);
     expect(treeSnapshot(f.claude)).toEqual(beforeNative);
   }
+});
+
+type LegacyMode = "omitted" | "bytes";
+/** A stored binding as an older Skills review left it: the retired 1.0.0
+ * version's plugin manifest (unless kept as `claude-plugin-manifest-v1`) and its
+ * version-root `.orphaned_at` marker are full byte witnesses with no mode
+ * (`omitted`) or `bytes`, beside the retired hook files' byte witnesses and the
+ * typed witnesses of the registered 2.0.0. The hook accepts it as stored. */
+function legacyRetainedClaudeBinding(name: string, manifestMode: LegacyMode | "claude-plugin-manifest-v1", markerMode: LegacyMode) {
+  const f = reviewedClaudeBinding(name, "claude-settings-v4", true);
+  const [retiredManifest, retiredMarker] = [f.manifests[0]!, f.markers[0]!];
+  const legacy = (path: string, mode: LegacyMode) => ({ path, sha256: fileSha(path), ...(mode === "bytes" ? { hashMode: "bytes" } : {}) });
+  const policy = JSON.parse(readFileSync(f.policyPath, "utf8"));
+  policy.bridge.discovery.claude.sources = policy.bridge.discovery.claude.sources.map((source: any) =>
+    source.path === retiredManifest && manifestMode !== "claude-plugin-manifest-v1" ? legacy(retiredManifest, manifestMode)
+      : source.path === retiredMarker ? legacy(retiredMarker, markerMode) : source);
+  writeFileSync(f.policyPath, JSON.stringify(policy));
+  expect(() => f.hook()).not.toThrow();
+  const retiredHooks = f.hookFiles.filter(path => path.startsWith(f.retired + "/"));
+  /** Each witness below the retired version with the retention class the rule names. */
+  const retainedWitnesses = [
+    [retiredManifest, manifestMode === "claude-plugin-manifest-v1" ? manifestMode : "bytes"],
+    ...retiredHooks.map(path => [path, "bytes"]),
+    [retiredMarker, "bytes"],
+  ].sort();
+  return { ...f, retainedWitnesses };
+}
+/** The installer's review: the stored full-file witnesses, roots and directory
+ * witnesses passed back unchanged. Field projections are not review inputs. */
+function installerReview(binding: any) {
+  return { version: 1, agents: [{ agent: "claude", roots: binding.roots, sources: binding.sources.filter((source: any) => source.format === undefined), directories: binding.directories, pluginHooks: "reviewed-no-skill-injection" }] };
+}
+/** `skills hook install --agent claude --discovery-inputs <file> --apply`
+ * through the built CLI, in the fixture's home and Skills data directory. */
+async function hookInstall(f: { home: string; skillsDir: string }, review: unknown) {
+  const reviewPath = join(scratch, `${basename(f.home)}-review.json`);
+  writeFileSync(reviewPath, JSON.stringify(review), { mode: 0o600 });
+  const child = Bun.spawn([process.execPath, "--no-env-file", entry, "hook", "install", "--agent", "claude", "--discovery-inputs", reviewPath, "--apply", "--json"], {
+    cwd: f.home,
+    env: { PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`, HOME: f.home, USERPROFILE: f.home, TMPDIR: temp, HASNA_SKILLS_DIR: f.skillsDir, NO_COLOR: "1" },
+    stdin: "ignore", stdout: "pipe", stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  return { stdout, stderr, exitCode };
+}
+const retainedRows = (result: any) => result.sources.filter((row: any) => row.status === "retained-absent").map((row: any) => [row.path, row.retention.witness]).sort();
+
+test.each([["omitted", "bytes"], ["bytes", "omitted"], ["claude-plugin-manifest-v1", "bytes"]] as const)("hook install accepts the stored retained witnesses discovery-binding verified (manifest %s, marker %s) and stores them unchanged", async (manifestMode, markerMode) => {
+  const f = legacyRetainedClaudeBinding(`binding-installer-review-${manifestMode}-${markerMode}`, manifestMode, markerMode);
+  f.prune();
+  expect(() => f.hook()).not.toThrow();
+  const before = (await f.verify()).receipt.result;
+  expect(before).toMatchObject({ ok: true, failures: [] });
+  expect(retainedRows(before)).toEqual(f.retainedWitnesses);
+  // The installer reviews the stored witnesses discovery-binding just verified.
+  const stored = f.stored();
+  const installed = await hookInstall(f, installerReview(stored));
+  expect(installed.stderr).toBe(""); expect(installed.exitCode).toBe(0);
+  // No manifest projection or marker conversion: the reinstalled binding is the
+  // stored one, so each retained byte witness keeps its historical meaning.
+  expect(f.stored()).toEqual(stored);
+  expect(() => f.hook()).not.toThrow();
+  const after = (await f.verify()).receipt.result;
+  expect(after).toMatchObject({ ok: true, failures: [] });
+  expect(retainedRows(after)).toEqual(f.retainedWitnesses);
+});
+
+test("hook install still refuses a missing manifest that the retained-version rule does not cover", async () => {
+  const f = legacyRetainedClaudeBinding("binding-installer-review-missing", "omitted", "bytes");
+  f.prune();
+  const review = installerReview(f.stored());
+  /** The install refuses at the first changed witness it checks and writes
+   * nothing; discovery-binding reports every missing witness and retains none. */
+  const refused = async (first: string, missing: string[]) => {
+    const policyBefore = readFileSync(f.policyPath);
+    const output = await hookInstall(f, review);
+    expect(output.exitCode).toBe(1); expect(output.stdout).toBe("");
+    expect(output.stderr).toContain(first);
+    expect(readFileSync(f.policyPath)).toEqual(policyBefore);
+    const result = (await f.verify()).receipt.result;
+    expect(result.ok).toBe(false);
+    expect(retainedRows(result)).toEqual([]);
+    for (const path of missing) expect(result.failures).toContainEqual({ kind: "source", index: expect.any(Number), path, reason: "MISSING" });
+  };
+  // The registered version is never retained, and without its manifest the
+  // retired version is not retained either.
+  const activeManifest = f.manifests[1]!, activeText = readFileSync(activeManifest, "utf8");
+  rmSync(activeManifest);
+  // Its directory membership witness is checked first.
+  await refused(`Native discovery directory membership changed; run skills hook install with a fresh discovery review: ${f.active}`, [f.manifests[0]!, activeManifest]);
+  put(activeManifest, activeText);
+  expect((await hookInstall(f, review)).exitCode).toBe(0);
+  // A retired version directory that still exists is not retained: only the
+  // whole version may be absent.
+  renameSync(join(f.home, "pruned-1.0.0"), f.retired);
+  rmSync(f.manifests[0]!);
+  await refused(`Native discovery input changed; run skills hook install with a fresh discovery review: ${f.manifests[0]}`, [f.manifests[0]!]);
+});
+
+test("a retired version recreated after the installer review is checked file by file again", async () => {
+  const f = legacyRetainedClaudeBinding("binding-installer-review-recreated", "omitted", "bytes");
+  f.prune();
+  const review = installerReview(f.stored());
+  expect((await hookInstall(f, review)).exitCode).toBe(0);
+  // The version directory reappears without its files: every retained witness drifts.
+  mkdirSync(join(f.retired, "skills"), { recursive: true });
+  expect(() => f.hook()).toThrow("NATIVE_SKILL_DRIFT");
+  let result = (await f.verify()).receipt.result;
+  expect(result.ok).toBe(false);
+  expect(retainedRows(result)).toEqual([]);
+  for (const [path] of f.retainedWitnesses) expect(result.sources.find((row: any) => row.path === path)).toMatchObject({ status: "drift", reason: "MISSING" });
+  const refused = await hookInstall(f, review);
+  expect(refused.exitCode).toBe(1); expect(refused.stderr).toContain("Native discovery input changed");
+  // Restored with other bytes, the legacy byte witness reports the change.
+  for (const [path] of f.retainedWitnesses) put(path, readFileSync(join(f.home, "pruned-1.0.0", relative(f.retired, path)), "utf8"));
+  put(f.manifests[0]!, JSON.stringify({ name: "plugin", version: "1.0.0", hooks: "./hooks/other.json" }));
+  expect(() => f.hook()).toThrow("NATIVE_SKILL_DRIFT");
+  result = (await f.verify()).receipt.result;
+  expect(result.sources.find((row: any) => row.path === f.manifests[0])).toMatchObject({ hashMode: null, status: "drift", reason: "CHANGED" });
+  // Restored with the reviewed bytes, every witness is current again.
+  put(f.manifests[0]!, readFileSync(join(f.home, "pruned-1.0.0/.claude-plugin/plugin.json"), "utf8"));
+  expect(() => f.hook()).not.toThrow();
+  result = (await f.verify()).receipt.result;
+  expect(result).toMatchObject({ ok: true, failures: [] });
+  for (const [path] of f.retainedWitnesses) expect(statusOf(result, path)).toEqual(["current"]);
+  // A present version gets the ordinary fresh-review treatment again: the
+  // manifest is projected and the marker becomes its typed presence witness.
+  expect((await hookInstall(f, review)).exitCode).toBe(0);
+  const reviewed = f.stored().sources;
+  expect(reviewed.find((source: any) => source.path === f.manifests[0])?.hashMode).toBe("claude-plugin-manifest-v1");
+  expect(reviewed.find((source: any) => source.path === f.markers[0])).toEqual({ path: f.markers[0], hashMode: ORPHAN_MODE, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) });
+  expect((await f.verify()).receipt.result).toMatchObject({ ok: true, failures: [] });
 });

@@ -661,6 +661,10 @@ non-null `sha256`, Skills also requires plain byte witnesses for that plugin's
 `hooks/hooks.json` (when present) and any string `hooks` target in the
 manifest. A manifest listed as `claude-plugin-manifest-v1` (the form Skills
 writes into the stored policy) or as `path-bytes` triggers no such requirement.
+A source that the `absent-retired-claude-version` rule retains (see
+[`discovery-binding`](#verify-the-stored-claude-discovery-binding-discovery-binding))
+is stored exactly as listed: Skills does not project its manifest, require its
+hook files or convert its marker, because the file no longer exists.
 The version-root `.orphaned_at` timestamp that Claude rewrites at startup is
 bound by presence only, as `claude-plugin-orphaned-at-v1`, and is still
 strictly validated; see
@@ -1232,6 +1236,13 @@ To bind the result, compare each `sources` row (`index`, `path`, `hashMode`,
 `discoverySha256` with the `candidate` capture and `policySha256` with the
 policy bytes they review, and repeat the call immediately before the first
 native change, because the verdict describes one moment.
+
+An installer that then passes the stored full-file sources (rows with `format`
+`null`), roots and directory witnesses back to `skills hook install --agent
+claude --discovery-inputs <file>` gets the same retention: `hook install`
+retains each `retained-absent` source with the same rule and stores it
+unchanged, so a historical `bytes` witness keeps its meaning. Every other
+source is checked and, for a fresh review, typed as usual.
 
 Claude writes `.orphaned_at` at the root of a plugin-cache version it plans to
 delete (`<...>/.claude/plugins/cache/<marketplace>/<plugin>/<version>/.orphaned_at`),
