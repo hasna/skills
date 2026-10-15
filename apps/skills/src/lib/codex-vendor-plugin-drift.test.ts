@@ -482,3 +482,32 @@ describe("scope and warning text", () => {
     expect(codexPromptDriftWarning({ codexInertVendorCopies: [], codexDiscoveryChanges: [{ kind: "membership", path: "/c/caf\u00e9-\u0219" }] })).toContain(`"/c/caf\u00e9-\u0219"`);
   });
 });
+
+describe("D: disable rows for vendor skills that are new or gone", () => {
+  test("a new vendor skill name already disabled by name never blocks the live hook; rows for removed versions, skills and plugins never block", () => {
+    // A refresh that adds a new skill (sites:sites in a new 1.0.x version) whose qualified name Codex config already disables.
+    const s = reviewedV3();
+    append(s, byName("sites:sites"));
+    const [copy] = plugin(s, { version: "1.0.4", skills: ["sites"] });
+    expect(assertManagedAgentBridge("codex", live(s)).codexInertVendorCopies).toEqual([copy!]);
+    // Rows naming versions, skills, plugins and marketplaces that no longer exist are inert in both guards.
+    const stale = [
+      byPath(join(s.cache, "openai-curated-remote", "sites", "1.0.1", "skills", "sites")),
+      byPath(join(s.cache, "openai-curated-remote", "gone", "0.1.0", "skills", "x")),
+      byPath(join(s.home, ".codex", "skills", "removed-user-skill")),
+      byName("gone:skill"),
+      byName("sites:retired-skill"),
+    ].join("\n");
+    append(s, stale);
+    expect(assertManagedAgentBridge("codex", live(s)).codexInertVendorCopies).toEqual([copy!]);
+    const t = reviewedV3();
+    append(t, stale);
+    expect(refusal(() => assertManagedAgentBridge("codex", opts(t)))).toBe("ACCEPTED");
+    expect(assertManagedAgentBridge("codex", live(t))).toEqual({ codexInertVendorCopies: [], codexDiscoveryChanges: [] });
+    // Station04: the enrolled plugin's old version and its path rule are gone; only the new copy needs a rule.
+    const u = station04();
+    expect(read(u.config)).toContain(join(u.parent, "1.0.1", "skills", "sites", "SKILL.md"));
+    append(u, byName("sites:sites-remix"));
+    expect(assertManagedAgentBridge("codex", live(u)).codexInertVendorCopies).toEqual([u.copy]);
+  });
+});
