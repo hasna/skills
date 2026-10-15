@@ -311,7 +311,8 @@ What the software currently enforces is narrower:
   non-null hash. A non-string `hooks` value and a `hooks` target outside the
   plugin root are refused. A manifest listed as `claude-plugin-manifest-v1`
   (the form Skills writes into the stored policy) or as `path-bytes` triggers
-  no hook-file requirement. Nothing else is required.
+  no hook-file requirement, and neither does a manifest the absent retired
+  version rule below retains. Nothing else is required.
 - A `hooks/hooks.json` that is absent at review time and appears later is
   detected if the review pins it with `sha256: null` or covers it with a
   reviewed `directories` membership witness on the plugin root or its `hooks/`
@@ -340,7 +341,7 @@ What the software currently enforces is narrower:
   `captureDiscoveryPathSources` (including the installer `path-bytes`
   operation) produces a `claude-plugin-orphaned-at-v1` witness, and a fresh
   explicit review converts a plain byte or `path-bytes` witness of it to that
-  form. The witness binds the marker's presence or absence, not its bytes or
+  form, unless the absent retired version rule below retains it. The witness binds the marker's presence or absence, not its bytes or
   inode. Every capture and check still requires a regular, non-symlink file
   owned by the current user, at most 32 bytes, matching `^[1-9][0-9]{12}$`.
   The name stays in `directories` membership, so other added or removed names
@@ -349,17 +350,20 @@ What the software currently enforces is narrower:
   that binds the marker's bytes keeps that meaning and needs one fresh review.
 - An entirely absent retired Claude version root exempts only its plain byte
   sources (`hashMode` omitted or `"bytes"`, with no `format`, `fields` or
-  `managedPlugins`) and a present `claude-plugin-orphaned-at-v1` marker. Such a
-  source with a non-null `sha256` is also the only
+  `managedPlugins`), its `.claude-plugin/plugin.json` as a
+  `claude-plugin-manifest-v1` witness and a present
+  `claude-plugin-orphaned-at-v1` marker. Such a source with a non-null
+  `sha256` is also the only
   thing that identifies the root, and the root qualifies only while it stays
   entirely absent and the reviewed settings and registry select a different,
   verified version. Every other source under that root is re-hashed as usual,
   and one whose file existed at review no longer matches its hash, so the
-  check refuses. That includes the plugin manifest in the
-  `claude-plugin-manifest-v1` form Skills stores, so a stored review that lists
-  the retired version's manifest refuses until a fresh review replaces it. A
-  `directories` witness that covers the retired root is not exempt either. If
-  the root reappears, its sources are checked again.
+  check refuses. A `directories` witness that covers the retired root is not
+  exempt either. An explicit review (`--discovery-inputs`) keeps each exempt
+  source exactly as listed: it does not project a byte-witnessed manifest,
+  require its hook files or convert a byte-witnessed marker, so a historical
+  byte witness keeps its meaning. If the root reappears, its sources are
+  checked again.
 - It is detection-only. Later checks re-hash the stored sources and re-walk any
   reviewed `directories` witnesses. Drift makes the
   Skills hooks refuse with `NATIVE_SKILL_DRIFT`; it does not stop, unload or

@@ -594,6 +594,13 @@ function claudeControlSource(source: DiscoverySource): boolean {
   return CLAUDE_CONTROL_WITNESS_MODES.has(source.hashMode ?? "")
     || CLAUDE_CONTROL_FILES.has(basename(source.path)) && !source.path.includes(`${sep}.claude${sep}plugins${sep}cache${sep}`);
 }
+/** The absent retired Claude version root that retains `source`, or undefined:
+ * the retention predicate verification applies, never for a control source.
+ * The installer report and an explicit review both use it, so a source one of
+ * them retains is retained by the other. */
+function retainedAbsentClaudeRoot(absentRoots: readonly string[], source: DiscoverySource): string | undefined {
+  return claudeControlSource(source) ? undefined : retainedAbsentRoot(absentRoots, source);
+}
 /** One stored Claude discovery source as an installer sees it. */
 export type ClaudeDiscoverySourceVerdict =
   | { status: "current" }
@@ -621,7 +628,7 @@ export function classifyClaudeDiscoverySources(binding: AgentDiscoveryBinding): 
   };
   const budget = discoveryByteBudget();
   return binding.sources.map((source): ClaudeDiscoverySourceVerdict => {
-    const root = claudeControlSource(source) ? undefined : retainedAbsentRoot(absentRoots, source);
+    const root = retainedAbsentClaudeRoot(absentRoots, source);
     if (root !== undefined) return { status: "retained-absent", root, witness: retainableAbsentWitness(source)! };
     let current: string | null;
     try { current = projected(source, undefined, budget); }
@@ -1025,7 +1032,13 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
     const reviewedSources = supersedesSettingsProjection(agent, review.sources, canonical(configPath))
       ? sources.filter(source => !isSupersededSettingsProjection(agent, canonical(configPath), source))
       : sources;
+    // Verification above retained these sources without reading them, because
+    // their whole retired Claude version is absent. Keep each one exactly as
+    // supplied: projecting a manifest or converting a marker would read a file
+    // that no longer exists and change the meaning of a historical witness.
+    const absentRoots = absentRetiredClaudeRoots(supplied);
     const reviewedSourcesWithManifestProjection = review.sources.map(source => {
+      if (retainedAbsentClaudeRoot(absentRoots, source) !== undefined) return source;
       // The supplied raw/path witness was verified above. A fresh explicit
       // review may replace it with typed native presence; retained bindings
       // never silently change the meaning of historical byte witnesses.
@@ -1058,6 +1071,7 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
       return { path: source.path, sha256: manifestSha256, hashMode: "claude-plugin-manifest-v1" as const };
     });
     if (agent === "claude") assertReviewedClaudeCacheClosures(home, config, review, canonical);
+    for (const root of absentRoots) { safe(root); if (lstatSync(root, { throwIfNoEntry: false })) throw new Error("Retired native materialization changed during discovery review"); }
     const combined = [...reviewedSources, ...reviewedSourcesWithManifestProjection];
     const unique = combined.filter((source, index) => combined.findIndex(candidate => isDeepStrictEqual(candidate, source)) === index);
     return { ...supplied, roots: [...new Set([...roots, ...supplied.roots])].sort(), sources: unique, ...(agent === "gemini" ? { builtinNames } : {}) };
