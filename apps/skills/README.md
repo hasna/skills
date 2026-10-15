@@ -113,6 +113,14 @@ skills hook install --selection-profile default --json
 skills hook install --selection-profile default --apply --json
 ```
 
+`--include-vendor` resolves configured plugin discovery, so it needs a reviewed
+`--discovery-inputs` file when a configured plugin declares hooks. Without it,
+`skills migrate native --include-unmanaged` archives user and project copies
+only. Codex refreshes its OpenAI marketplace plugin caches on its own; retire
+those copies with a Codex `[[skills.config]]` rule (`name = "<plugin>:<skill>"`
+or the exact `path` of the `SKILL.md`, with `enabled = false`) rather than by
+archiving. A `NATIVE_SKILL_DRIFT` refusal names the step for each copy it lists.
+
 Without `--agent`, hook installation selects configured or detected consumers:
 existing managed bridge bindings, provider-specific home configuration, or an
 installed native CLI found through PATH. Detection reads metadata and never

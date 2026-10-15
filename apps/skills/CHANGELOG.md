@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Patch Changes
+
+- Make the `NATIVE_SKILL_DRIFT` refusal for unexpected native skill copies name remediation that works. It recommended `skills migrate native --agent <agent> --project <working-directory> --include-unmanaged --include-vendor --json`, which on 0.10.72 refuses (`plugin hooks require a separate no-skill-injection review`) whenever a configured plugin declares hooks, because `--include-vendor` resolves configured plugin discovery. The refusal now names one step per kind of copy it lists:
+  - user and project copies: the same command without `--include-vendor` (plus `--allow-root-aliases` when the binding records root aliases), which never resolves configured plugins;
+  - copies in an OpenAI Codex marketplace (`openai-bundled`, `openai-curated`, `openai-curated-remote`): a Codex `[[skills.config]]` disable rule with the copy's plugin-qualified name, for example `name = "sites:sites"` (the exact `SKILL.md` path when the copy cannot be classified), in the named `config.toml`. Codex refreshes these caches on its own, and the live Codex prompt hook already accepts a disabled vendor copy;
+  - other Codex plugin-cache copies: an exact-path disable rule, or a refreshed binding when the hook has tolerated a vendor configuration change;
+  - other vendor copies: `--include-vendor` with a reviewed `--discovery-inputs` file.
+
+  Names and paths are escaped and bounded like the path list. No guard decision changed. New tests confirm that a new vendor skill whose qualified name Codex config already disables does not block the live Codex prompt hook, and that disable rows for removed versions, skills, plugins and marketplaces block neither the live hook nor the strict guard.
+
 ## 0.10.72
 
 ### Patch Changes

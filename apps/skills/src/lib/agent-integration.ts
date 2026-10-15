@@ -1657,6 +1657,46 @@ function nativeSkillPathList(paths: readonly string[], invisible = false): strin
   return `${shown.join(", ")}${remaining ? `; ${remaining} more` : ""}`;
 }
 
+/** Remediation for blocking native skill copies, grouped by what actually works
+ * on Skills 0.10.72+ (bounded, escaped like the path list):
+ *   - user and project copies: `skills migrate native` without `--include-vendor`.
+ *     It inventories the working directory and its ancestors and never resolves
+ *     configured plugins, so a hook-bearing plugin does not refuse it.
+ *   - copies in an OpenAI vendor marketplace of the Codex plugin cache: a Codex
+ *     disable rule. Codex refreshes these caches on its own, so archiving does not
+ *     last; a plugin-qualified name rule also covers later versions, and the live
+ *     Codex prompt hook accepts a disabled copy (isInertCodexVendorPluginCopy).
+ *   - other Codex plugin-cache copies: an exact-path disable rule, which every
+ *     guard call accepts for a plugin Skills has not enrolled.
+ *   - other vendor copies: `--include-vendor`, which resolves configured plugin
+ *     discovery and so needs a reviewed `--discovery-inputs` file whenever a
+ *     configured plugin declares hooks. */
+function nativeSkillRemediation(agent: IntegrationAgent, blocking: readonly NativeSkillEntry[], context: { cache: string; config: string; aliases: boolean; toleratedChange: boolean; read: (path: string) => string }): string {
+  const quote = (value: string) => nativeSkillPathList([value], true);
+  const cacheCopy = (entry: NativeSkillEntry) => agent === "codex" && entry.path.startsWith(context.cache + sep);
+  const vendorMarketplace = blocking.filter(entry => cacheCopy(entry) && codexVendorMarketplace(context.cache, entry.path) !== null);
+  const otherCache = blocking.filter(entry => cacheCopy(entry) && !vendorMarketplace.includes(entry));
+  const otherVendor = blocking.filter(entry => entry.vendor && !cacheCopy(entry));
+  const user = blocking.filter(entry => !entry.vendor && !cacheCopy(entry));
+  const steps: string[] = [];
+  if (user.length) steps.push(`For user and project copies, review skills migrate native --agent ${agent} --project <working-directory> --include-unmanaged${context.aliases ? " --allow-root-aliases" : ""} --json before continuing; it inventories that directory and its ancestors. Use --apply after reviewing the archive plan.`);
+  if (vendorMarketplace.length) {
+    // Classification reads only each copy's own manifest and document; if any
+    // copy cannot be classified, fall back to the exact-path rule, which needs no name.
+    const identities = vendorMarketplace.map(entry => { try { return classifyCodexPluginCacheDocument(join(entry.path, "SKILL.md"), context.cache, context.read); } catch { return null; } });
+    const names = [...new Set(identities.flatMap(identity => identity ? [identity.name] : []))];
+    const selector = identities.every(identity => identity !== null)
+      ? `name = ${nativeSkillPathList(names, true)}${names.length > 1 ? " (one rule per name)" : ""}`
+      : "the exact path of its SKILL.md";
+    steps.push(`Codex refreshes OpenAI marketplace copies on its own, so disable each in Codex instead: add [[skills.config]] with ${selector} and enabled = false to ${quote(context.config)}. Codex then never loads it and the Codex prompt hook accepts it.`);
+  }
+  if (otherCache.length) steps.push(context.toleratedChange
+    ? `Other Codex plugin-cache copies keep their exact-path exemption only while the reviewed configuration is unchanged; refresh the binding with skills hook install --agent codex --apply, with a fresh discovery review for a reviewed binding.`
+    : `For other Codex plugin-cache copies, add [[skills.config]] with the exact path of each SKILL.md and enabled = false to ${quote(context.config)}, or remove the plugin in Codex.`);
+  if (otherVendor.length) steps.push(`For other vendor copies, review skills migrate native --agent ${agent} --project <working-directory> --include-vendor --discovery-inputs <reviewed-file> --json; --include-vendor requires a reviewed --discovery-inputs file when a configured plugin declares hooks.`);
+  return steps.join(" ");
+}
+
 /** Visible, non-blocking warning for the discovery-witness changes the live Codex
  * prompt hook tolerated as a vendor plugin refresh, or undefined when there were
  * none. One bounded line; paths only, never payloads or file contents. */
@@ -1829,7 +1869,8 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
   if (unexpected.length > inert.length + inertVendor.length) {
     // The adapter is all-or-nothing, so only exempted vendor copies leave the list.
     const blocking = unexpected.filter(entry => !inertVendor.includes(entry));
-    throw new Error(`NATIVE_SKILL_DRIFT: ${blocking.length} unexpected native skill copies were found: ${nativeSkillPathList(blocking.map(entry => entry.path))}. Review skills migrate native --agent ${agent} --project <working-directory> --include-unmanaged --include-vendor --json before continuing; it inventories that directory and its ancestors. Use --apply after reviewing the archive plan.${adapterRefusal ? ` Native policy adapter refused: ${adapterRefusal}` : ""}`);
+    const remediation = nativeSkillRemediation(agent, blocking, { cache: vendorCache, config: codexPath, aliases: aliases.length > 0, toleratedChange: (witnessTolerance?.changes.length ?? 0) > 0, read: path => new TextDecoder("utf-8", { fatal: true }).decode(readNativeBytes(path, 1024 * 1024)) });
+    throw new Error(`NATIVE_SKILL_DRIFT: ${blocking.length} unexpected native skill copies were found: ${nativeSkillPathList(blocking.map(entry => entry.path))}. ${remediation}${adapterRefusal ? ` Native policy adapter refused: ${adapterRefusal}` : ""}`);
   }
   recheckRootAliases(aliases);
   // The automatic closure can re-report a source verifyAgentDiscovery collected.
