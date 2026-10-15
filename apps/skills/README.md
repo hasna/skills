@@ -264,8 +264,8 @@ discovery-witness changes such a refresh provably makes:
   unknown keys refuse. There is no `hooks`, `commands` or `agents` directory, no
   `hooks.json` or `.mcp.json` (names compared without regard to case), no root,
   `.claude-plugin` or `.cursor-plugin` manifest, no link
-  and no `SKILL.md` that the inventory cannot see (below a dot-named or
-  `node_modules` directory, or nested in another skill). One exception keeps
+  and no `SKILL.md` below a dot-named or `node_modules` directory, or nested
+  in another skill. One exception keeps
   today's vendor plugins working: every current OpenAI vendor plugin declares
   its connector as `apps = "./.app.json"`, so exactly that declaration is
   allowed when `.app.json` is a regular file of at most 1 MiB, strict UTF-8, that
@@ -540,6 +540,20 @@ directory levels; the ordinary native-root limit remains unchanged. Each invento
 is bounded to 20,000 discovery entries and 4 MiB of UTF-8 path metadata before
 directory entries are retained or sorted. Unsupported special files and unsafe
 directory links are refused.
+
+Codex 0.162.1 loads `SKILL.md` files below `node_modules` inside its skill
+roots, so Codex inventory and the prompt guard walk `node_modules` in
+`~/.codex/skills`, `~/.agents/skills`, each project's `.codex/skills` and
+`.agents/skills` and configured plugin skill roots. In `~/.codex/plugins/cache`
+they walk it only where it can lie in a plugin skill root: below a version's
+default `skills` directory or a manifest-declared skills path, or as a
+marketplace, plugin or version directory named `node_modules`; an unreadable
+manifest walks every `node_modules` in its version. Dot-named directories such
+as `node_modules/.pnpm`, a plugin version's own dependencies and any
+`node_modules` outside a skill root stay unscanned, because Codex does not load
+them; other agents' roots keep skipping `node_modules`. Depth limits are
+unchanged: Codex reads six directory levels below a root, and an ordinary root
+records a skill four levels down and refuses anything deeper.
 
 Native archives persist a version 2 recovery journal before moving payloads;
 `migrate native --json --apply` returns its `receiptPath`. The journal records
