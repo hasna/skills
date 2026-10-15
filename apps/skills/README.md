@@ -733,6 +733,17 @@ file; drift still requires a fresh explicit review. Explicit discovery inputs
 take precedence, including when their `agents` array omits a previously reviewed
 agent. The default `--agent all` still includes every supported adapter.
 
+That recheck has two halves, and only one of them gates reuse. BINDING CUSTODY —
+the same managed bridge, home, alias set, agent, command/profile binding and
+reviewed discovery — must hold before a saved review is reused, or the plan
+refuses and names a fresh explicit review. Bridge PROTECTION — the native plugin
+bytes, the permission and hook rules and the bundled-skill switches — is written
+by the same plan, so it is asserted in full after the writes instead of gating
+the repair that fixes it; a plan that does not repair it is refused before the
+receipt is written. Hermes native shell-hook trust is the exception: it is the
+user's own consent and no Skills write creates it, so it stays a pre-write
+condition. One implementation serves both halves, so they cannot drift apart.
+
 Because that recheck includes the managed bridge, `hook install` cannot reuse a
 saved review on a host whose bridge has since broken, and in that form it cannot
 repair its own precondition. It refuses and names the reachable form,

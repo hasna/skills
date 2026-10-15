@@ -630,22 +630,25 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     executables.set(agent, executable);
     const retainedReview: AgentDiscoveryBinding | undefined = options.discoveryInputs === undefined && policy.bridge?.discovery?.[agent]?.method === "reviewed" ? {...policy.bridge.discovery[agent], ...(agent==="codex" ? {codexDisabledPluginSkills:policy.bridge.codexPluginSkills ?? []} : {})} : undefined;
     if (retainedReview) {
-      // A saved review is usable only in its current managed home, with the
-      // original bridge protections, aliases and native trust still intact.
-      // This command is also the documented repair for a changed bridge, so a
-      // refusal here must not name itself: it names the explicit review form
-      // that bypasses this precheck instead.
-      try { assertManagedAgentBridge(agent, { home, dataDir, projectDir: options.projectDir ?? home }); }
-      catch (error) {
-        // An unresolvable runtime is an environment gap, not drift: keep its code.
-        if (isDiscoveryRootUnresolved(error) || error instanceof SumiPathResolverError) throw error;
-        // Keep exactly one NATIVE_SKILL_DRIFT prefix: the CLI classify by it.
-        const condition = (error as Error).message.replace(/^NATIVE_SKILL_DRIFT: /, "");
-        throw new Error(`NATIVE_SKILL_DRIFT: ${condition}. A saved ${agent} discovery review is reused only while the bridge protections it was taken with still verify, so this command cannot reuse or repair it here; run skills hook install --agent ${agent} --discovery-inputs <review> --apply with a fresh discovery review, or repair that bridge condition first.`);
-      }
+      // A saved review is reused only while its BINDING CUSTODY holds: the same
+      // managed bridge, home, alias set, agent, command/profile binding and
+      // reviewed discovery. Bridge protection is checked in full after the
+      // writes instead, because this command is the documented repair for
+      // changed protection and refusing reuse here is what made the repair
+      // circular. A drifted review itself is never reused as something else;
+      // that still requires a fresh explicit --discovery-inputs review.
+      assertUnrepairableBridgeProtection(assertManagedBridgeCustody(agent, { home, dataDir, projectDir: options.projectDir ?? home }), agent);
       retainedAgents.push(agent);
     }
-    return resolveAgentDiscovery({ home, agent, reviewed: options.discoveryInputs, retainedReview, canonical: path => canonicalAgentPath(path, aliases), executable });
+    try { return resolveAgentDiscovery({ home, agent, reviewed: options.discoveryInputs, retainedReview, canonical: path => canonicalAgentPath(path, aliases), executable }); }
+    catch (error) {
+      // An unresolvable runtime is an environment gap, not drift: keep its code.
+      if (isDiscoveryRootUnresolved(error) || error instanceof SumiPathResolverError) throw error;
+      // A reused review that no longer verifies cannot be repaired by this command: plain
+      // `hook install` re-enters this same assertion, so name the explicit review form.
+      if (!retainedReview) throw error;
+      throw new Error(`NATIVE_SKILL_DRIFT: ${(error as Error).message.replace(/^NATIVE_SKILL_DRIFT: /, "")}. This agent reuses a saved discovery review and that review no longer verifies, so a fresh explicit review is required: skills hook install --agent ${agent} --discovery-inputs <review> --apply.`);
+    }
   });
   const codexConfigBefore = options.agents.includes("codex") ? readOptional(canonicalAgentPath(join(home, ".codex", "config.toml"), aliases)) : null;
   const codexConfig = Bun.TOML.parse(codexConfigBefore ?? "") as { plugins?: unknown; skills?: { config?: Array<{ path?: string; enabled?: boolean }> } };
@@ -1363,7 +1366,10 @@ function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: Code
   assertCurrent(); recheckRootAliases(aliases);
   // Verify the old trust before writing. An explicit command/profile change
   // still uses the ordinary native approval flow for its newly installed hook.
-  for (const agent of plan.retainedReviewChecks?.agents ?? []) assertManagedAgentBridge(agent, { ...plan.retainedReviewChecks!, dataDir: plan.dataDir });
+  // Custody plus the protection this install cannot write; the rest of the
+  // bridge protection is proven AFTER the writes below, because those writes
+  // are what repair it.
+  for (const agent of plan.retainedReviewChecks?.agents ?? []) assertUnrepairableBridgeProtection(assertManagedBridgeCustody(agent, { ...plan.retainedReviewChecks!, dataDir: plan.dataDir }), agent);
   if (plan.reviewArtifactMigration) {
     const verified = planReviewedArtifactMigration(plan.reviewArtifactMigration);
     if (JSON.stringify(verified.changes) !== JSON.stringify(plan.changes)
@@ -1396,6 +1402,10 @@ function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: Code
   const backupRoot = join(plan.dataDir, "migration", randomUUID()), backups: string[] = [], written: AgentConfigChange[] = [], createdDirectories = new Set<string>();
   if (!plan.changes.length) {
     assertCurrent(); recheckRootAliases(aliases);
+    // A plan with nothing to write cannot prove a repair, so the current bridge is the only
+    // evidence this path has. Without it, custody-gated reuse would report a successful
+    // install for a binding whose protection was never repaired.
+    for (const agent of plan.retainedReviewChecks?.agents ?? []) assertManagedAgentBridge(agent, { ...plan.retainedReviewChecks!, dataDir: plan.dataDir });
     return { changed: [], backups, ...(aliases.length ? { rootAliases: aliases } : {}) };
   }
   assertSafePath(backupRoot); mkdirSync(backupRoot, { recursive: true, mode: 0o700 }); chmodSync(backupRoot, 0o700);
@@ -1428,6 +1438,11 @@ function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: Code
       else verifyAgentDiscovery(binding, undefined, aliases);
     }
     for (const agent of plan.managedAgentChecks?.agents ?? []) assertManagedAgentBridge(agent, { home: plan.managedAgentChecks!.home, dataDir: plan.dataDir, projectDir: plan.managedAgentChecks!.projectDir ?? plan.managedAgentChecks!.home });
+    // The post-write proof that a reused reviewed binding is fully protected
+    // again. A plan that did not repair the protection fails here and is
+    // compensated, so custody-gating the pre-write check above cannot let a
+    // broken bridge become a configured one.
+    for (const agent of plan.retainedReviewChecks?.agents ?? []) assertManagedAgentBridge(agent, { ...plan.retainedReviewChecks!, dataDir: plan.dataDir });
     atomicWrite(join(backupRoot, "receipt.json"), JSON.stringify({ version: 1, changes: written.map(change => ({ path: change.path, beforeHash: change.before === null ? null : sha(change.before), afterHash: sha(change.after) })), backups, ...(plan.cacheWitnessUpgrade ? { cacheWitnessUpgrade: plan.cacheWitnessUpgrade } : {}), ...(plan.retainedReviewArtifacts?.length ? { retainedReviewArtifacts: plan.retainedReviewArtifacts.map(item => ({ path: item.path, ...item.artifact })) } : {}), ...(aliases.length ? { rootAliases: aliases } : {}) }) + "\n");
   } catch (error) {
     assertCurrent();
@@ -1786,7 +1801,27 @@ export function assertManagedAgentBridge(agent: IntegrationAgent, options: Manag
   return assertManagedAgentBridgeWithDiscovery(agent, options);
 }
 
-function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options: ManagedBridgeOptions = {}, provenDiscovery?: AgentDiscoveryBinding): ManagedBridgeReport {
+/**
+ * The binding-custody half of the managed bridge check. It answers one
+ * question: does this saved review still belong to this host — the same bridge
+ * binding, home, alias set, agent, command/profile binding and reviewed
+ * discovery? Custody must hold before a saved review is reused.
+ *
+ * Bridge PROTECTION (the native plugin bytes, the permission or hook rules and
+ * the bundled-skill switches) is deliberately NOT part of custody. Protection is
+ * repairable by the very install that reuses the review, so gating reuse on it
+ * would refuse the repair command in the state it exists to repair; the
+ * protection is asserted in full after the writes, by
+ * {@link assertManagedAgentBridge}.
+ *
+ * One implementation, called by both, so the two halves cannot drift apart.
+ */
+interface ManagedBridgeCustody {
+  home: string; dataDir: string; binding: any; aliases: AgentRootAlias[]; expected: string;
+  roots: string[]; discovery: AgentDiscoveryBinding | undefined;
+  configPath: string; config: any; command: string; profile: string;
+}
+function assertManagedBridgeCustody(agent: IntegrationAgent, options: ManagedBridgeOptions = {}, provenDiscovery?: AgentDiscoveryBinding): ManagedBridgeCustody {
   const home = resolve(options.home ?? homedir()), dataDir = options.dataDir ?? getDataDirReadOnly();
   assertSafePath(join(dataDir, "agent-policy.json"));
   const snapshot = readManagedSkillPolicySnapshot(dataDir);
@@ -1799,7 +1834,6 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
   const expected = canonicalAgentPath(join(nativeAgentRoot(home, agent, options.projectDir ?? process.cwd()), CLI_BRIDGE_NAME), aliases);
   if (!isOwnedCliBridge(expected, [expected])) throw new Error("NATIVE_SKILL_DRIFT: the native Skills bridge is missing or modified; repair it before continuing");
   const roots = projectAncestorDirectories([options.projectDir ?? process.cwd(), ...(options.projectDirs ?? []), ...(agent === "hermes" && process.env.TERMINAL_CWD ? [process.cwd()] : [])]);
-  const visible = (entry: NativeSkillEntry) => entry.agent === agent || (["codex", "gemini", "opencode", "hermes", "sumi"].includes(agent) && entry.path.includes(`${sep}.agents${sep}skills${sep}`)) || (["opencode", "sumi"].includes(agent) && entry.agent === "claude");
   const discovery: AgentDiscoveryBinding | undefined = provenDiscovery ?? binding.discovery?.[agent];
   assertProjectDiscovery(agent, [...roots], home, path => canonicalAgentPath(path, aliases), discovery);
   for (const source of discovery?.sources ?? []) if (source.reviewArtifact !== undefined) {
@@ -1810,10 +1844,31 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
   const command = binding.commands?.[agent], profile = binding.profiles?.[agent];
   if (typeof command !== "string" || typeof profile !== "string") throw new Error("NATIVE_SKILL_DRIFT: the native hook command/profile binding is missing");
   if (options.profileId !== undefined && options.profileId !== profile) throw new Error("NATIVE_SKILL_DRIFT: the hook selection profile differs from its managed binding; restart the native client after reviewing skills hook install");
+  return { home, dataDir, binding, aliases, expected, roots, discovery, configPath, config, command, profile };
+}
+
+/**
+ * Protection this install cannot write, so it must hold before a plan is offered
+ * and again before anything is applied. Hermes native shell-hook trust is the
+ * user's own consent, obtained through Hermes' approval flow: no Skills write
+ * creates it, so deferring it to the post-write proof would hand the operator a
+ * plan that can only fail. Everything else in the protection half is written by
+ * the same plan, so it is proven after the writes instead.
+ */
+function assertUnrepairableBridgeProtection(custody: ManagedBridgeCustody, agent: IntegrationAgent): void {
+  if (agent !== "hermes") return;
+  const { home, dataDir, binding, config, command, profile } = custody;
+  const supervisor = binding.supervisors?.hermes;
+  if (supervisor?.path !== join(dataDir, "agent-hooks", "hermes.js") || supervisor?.sha256 !== sha(renderHermesSupervisor(command, profile))) throw new Error("NATIVE_SKILL_DRIFT: Hermes supervisor binding changed; run skills hook install");
+  assertHermesProtection(home, config, command, profile, supervisor);
+}
+
+function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options: ManagedBridgeOptions = {}, provenDiscovery?: AgentDiscoveryBinding): ManagedBridgeReport {
+  const custody = assertManagedBridgeCustody(agent, options, provenDiscovery);
+  const { home, dataDir, binding, aliases, expected, roots, discovery, configPath, config, command, profile } = custody;
+  const visible = (entry: NativeSkillEntry) => entry.agent === agent || (["codex", "gemini", "opencode", "hermes", "sumi"].includes(agent) && entry.path.includes(`${sep}.agents${sep}skills${sep}`)) || (["opencode", "sumi"].includes(agent) && entry.agent === "claude");
   if (agent === "hermes") {
-    const supervisor = binding.supervisors?.hermes;
-    if (supervisor?.path !== join(dataDir, "agent-hooks", "hermes.js") || supervisor?.sha256 !== sha(renderHermesSupervisor(command, profile))) throw new Error("NATIVE_SKILL_DRIFT: Hermes supervisor binding changed; run skills hook install");
-    assertHermesProtection(home, config, command, profile, supervisor);
+    assertUnrepairableBridgeProtection(custody, agent);
   } else if (agent === "sumi") {
     if (JSON.stringify(config.permissions?.filter((rule: any) => rule.action === "skill")) !== JSON.stringify(SUMI_SKILL_PERMISSIONS) || !isManagedSumiPlugin(readOptional(join(sumiConfigDirectory(home, process.env, options.projectDir ?? process.cwd()), "plugins", "skills-cli.js")), command, profile)) throw new Error("NATIVE_SKILL_DRIFT: Sumi bridge protection changed; run skills hook install");
   } else if (agent === "opencode") {
