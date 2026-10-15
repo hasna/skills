@@ -741,14 +741,19 @@ The read-only `skills hook review-claude-candidate` check requires its reviewed
 discovery inputs to bind the user settings, both project settings files and
 both plugin registries. A project `.claude/settings.json` or
 `.claude/settings.local.json` that the review omits is exempt only when no other
-expected source shares its path and it is either absent or present with exact
+expected source shares its path and it is either absent, or present with exact
 preimage bytes that parse strictly as one JSON object (strict UTF-8, no
-byte-order mark, comments, trailing content or duplicate keys) carrying none of
-`enabledPlugins`, `extraKnownMarketplaces` or `skillOverrides` at any value.
-This admits the permissions-only `~/.claude/settings.local.json` that Claude
-writes when it saves a permission rule. Each exempt file is re-checked against
-its exact preimage until the result; user settings and the registries are never
-exempt. See
+byte-order mark, comments, trailing content or duplicate keys) and carry only
+allowlisted settings: `permissions` with `allow`, `deny`, `ask` and
+`defaultMode`, plus `outputStyle`, `model`, `theme`, `effortLevel`, `verbose`
+and `spinnerTipsEnabled`. Any discovery key (`enabledPlugins`,
+`extraKnownMarketplaces`, `additionalMarketplaces`, `skillOverrides`), `env`,
+`hooks`, `permissions.additionalDirectories` or unknown key keeps the file
+required. The allowlist is a reviewed list of settings, not a proof that Claude
+cannot discover anything from the file. This admits the permissions-only
+`~/.claude/settings.local.json` that Claude writes when it saves a permission
+rule. Each exempt file is re-checked against its exact preimage until the
+result; user settings and the registries are never exempt. See
 [prospective Claude candidate review](docs/plugin-admission.md#prospective-claude-candidate-review).
 
 If your home `.claude` or `.codex` directory intentionally links to another

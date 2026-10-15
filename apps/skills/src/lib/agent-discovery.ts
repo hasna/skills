@@ -723,8 +723,10 @@ export function captureDiscoveryPathSources(paths: string[]): DiscoverySource[] 
 }
 
 /** Top-level keys whose presence, at any value, makes a project Claude settings
- * file a higher-precedence discovery source that needs review. */
-export const CLAUDE_PROJECT_DISCOVERY_KEYS = Object.freeze(["enabledPlugins", "extraKnownMarketplaces", "skillOverrides"] as const);
+ * file a higher-precedence discovery source that needs review. Claude 2.1.300
+ * rewrites `additionalMarketplaces` into `extraKnownMarketplaces` on every
+ * settings read, including local settings, so the alias counts as well. */
+export const CLAUDE_PROJECT_DISCOVERY_KEYS = Object.freeze(["enabledPlugins", "extraKnownMarketplaces", "additionalMarketplaces", "skillOverrides"] as const);
 
 /** Project settings can introduce a higher-precedence discovery source. Until
  * its native merge format is supported, refuse that layer rather than certify

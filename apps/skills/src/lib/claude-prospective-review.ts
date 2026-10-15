@@ -210,6 +210,22 @@ function readWitness(path: string, expected: string | null, name: string): void 
   if (!stat?.isFile() || stat.isSymbolicLink() || sha(safeFile(path, name)) !== expected) refuse(`${name} preimage changed`);
 }
 
+/** The only settings an unreviewed project settings file may carry and still be
+ * exempt, with the JSON type each must have. This is an allowlist of settings
+ * reviewed as not naming plugins, marketplaces, skills, hooks, extra
+ * directories or environment variables; it is not a proof that Claude cannot
+ * discover anything from the file. Anything else keeps the file required,
+ * including `env` (Claude reads CLAUDE_CODE_PLUGIN_DIRS from it), `hooks`,
+ * `permissions.additionalDirectories` (Claude loads skills, commands and agents
+ * from those directories), `__proto__` and every unknown key. */
+const EXEMPT_PROJECT_SETTINGS = new Map<string, "object" | "string" | "boolean">([
+  ["permissions", "object"], ["outputStyle", "string"], ["model", "string"], ["theme", "string"],
+  ["effortLevel", "string"], ["verbose", "boolean"], ["spinnerTipsEnabled", "boolean"],
+]);
+const EXEMPT_PROJECT_PERMISSIONS = new Map<string, "string" | "strings">([
+  ["allow", "strings"], ["deny", "strings"], ["ask", "strings"], ["defaultMode", "string"],
+]);
+
 /** Classify a present project Claude settings file that the reviewed discovery
  * does not bind, from the exact bytes its preimage SHA-256 names. The parse is
  * at least as strict as the live hooks' assertProjectDiscovery (JSON.parse of
@@ -217,8 +233,9 @@ function readWitness(path: string, expected: string | null, name: string): void 
  * object with no comments, trailing commas, trailing content or duplicate keys
  * at any depth. Key presence is assertProjectDiscovery's own test,
  * `config[key] !== undefined`, so a discovery key at any value (including
- * null, {} or []) counts. Returns null when the file carries none of
- * CLAUDE_PROJECT_DISCOVERY_KEYS, otherwise why it cannot be exempt. */
+ * null, {} or []) counts. Every top-level key and every `permissions` key must
+ * then be on the exemption allowlist with its expected type. Returns null when
+ * the file is exempt, otherwise why it is not. */
 function unreviewedProjectSettingsRefusal(path: string, expected: string, name: string): string | null {
   const bytes = safeFile(path, name);
   if (sha(bytes) !== expected) refuse(`${name} preimage changed`);
@@ -229,7 +246,18 @@ function unreviewedProjectSettingsRefusal(path: string, expected: string, name: 
   try { parseNativeJsonObject(text); config = JSON.parse(text); } catch { return "is not one bounded strict JSON object"; }
   if (!object(config)) return "is not one bounded strict JSON object";
   const present = CLAUDE_PROJECT_DISCOVERY_KEYS.find(key => (config as Record<string, unknown>)[key] !== undefined);
-  return present === undefined ? null : `carries the Claude discovery key ${present}`;
+  if (present !== undefined) return `carries the Claude discovery key ${present}`;
+  for (const [key, value] of Object.entries(config)) {
+    const type = EXEMPT_PROJECT_SETTINGS.get(key);
+    if (type === undefined) return `carries the top-level key ${JSON.stringify(key)}, which is not on the exemption allowlist`;
+    if (type === "object" ? !object(value) : typeof value !== type) return `carries ${key} with a type the exemption allowlist does not accept`;
+  }
+  for (const [key, value] of Object.entries((config as Record<string, unknown>).permissions ?? {})) {
+    const type = EXEMPT_PROJECT_PERMISSIONS.get(key);
+    if (type === undefined) return `carries the permissions key ${JSON.stringify(key)}, which is not on the exemption allowlist`;
+    if (type === "string" ? typeof value !== "string" : !Array.isArray(value) || value.some(item => typeof item !== "string")) return `carries permissions.${key} with a type the exemption allowlist does not accept`;
+  }
+  return null;
 }
 
 function jsonFile(path: string, name: string): Record<string, any> | null {
@@ -406,14 +434,15 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
   if (request.skills.discoveryInputs?.version !== 1 || !Array.isArray(request.skills.discoveryInputs.agents) || request.skills.discoveryInputs.agents.length !== 1 || request.skills.discoveryInputs.agents[0]?.agent !== "claude" || request.skills.discoveryInputs.agents[0]?.pluginHooks !== "reviewed-no-skill-injection") refuse("one explicit reviewed Claude discovery binding is required");
   const reviewedPaths = new Set(request.skills.discoveryInputs.agents[0]!.sources.map(source => source.path));
   // A project settings file the reviewed discovery does not bind is exempt
-  // from the required sources only when it cannot add discovery, as the live
-  // hooks' assertProjectDiscovery accepts it: absent with a null preimage
+  // from the required sources only when it is absent with a null preimage
   // (just re-checked by readWitness), or present with exact preimage bytes
-  // that carry no Claude project discovery key. Only the two project settings
-  // files qualify, and only when no other expected source (such as the delta's
-  // target settings or the user settings) shares the path. User settings and
-  // both registries are always required. A candidate that is not exempt
-  // refuses here, so every file left in `exempt` is exempt.
+  // that carry no Claude project discovery key and nothing outside the
+  // exemption allowlist. Only the two project settings files qualify, and only
+  // when no other expected source (such as the delta's target settings or the
+  // user settings) shares the path. User settings and both registries are
+  // always required, and assertProjectDiscovery below still applies. A
+  // candidate that is not exempt refuses here, so every file left in `exempt`
+  // is exempt.
   const exempt = (["projectSettings", "projectSettingsLocal"] as const).filter(name =>
     !Object.entries(expectedPaths).some(([other, path]) => other !== name && path === expectedPaths[name])
     && !reviewedPaths.has(expectedPaths[name]));
