@@ -3,6 +3,7 @@ import { createProfileClient, type ProfileClient } from "./profile-client.js";
 import type { ResolvedSkillProfile, ResolvedSkillSelection } from "../types/skill-selection.js";
 import type { SkillBundleEntry } from "./skill-bundle.js";
 import { getSkillRequirementsFromContent } from "./skillinfo.js";
+import { findCloseSkillNames } from "./search.js";
 import { readSelectedDocument } from "./selected-document.js";
 import {
   activateSelectionProfile, assertFreshCachedProfile, cacheSelectionBundle, projectSelectionLockPath,
@@ -134,9 +135,47 @@ export function exactProfileSelection(spec: string, profile: ResolvedSkillProfil
   const at = spec.lastIndexOf("@");
   const slug = at > 0 ? spec.slice(0, at) : spec;
   const version = at > 0 ? spec.slice(at + 1) : undefined;
-  const selection = profile.selections.find((entry) => (entry.slug === slug || entry.aliases?.includes(slug)) && (version === undefined || version === entry.version));
-  if (!selection || version === "") throw new SkillSelectionError("SKILL_NOT_SELECTED", "The requested exact skill version is not selected by this profile or project lock.");
+  // Resolve the name first and the version second: a wrong version for a name
+  // that resolves is a different refusal from a name that resolves to nothing,
+  // and one `find` over both fields reported the first as the second.
+  const named = profile.selections.filter((entry) => entry.slug === slug || entry.aliases?.includes(slug));
+  if (version === "") throw new SkillSelectionError("SKILL_NOT_SELECTED", emptyVersionRefusal(spec));
+  if (named.length === 0) throw new SkillSelectionError("SKILL_NOT_SELECTED", unknownNameRefusal(slug, profile));
+  const selection = version === undefined ? named[0] : named.find((entry) => entry.version === version);
+  if (!selection) throw new SkillSelectionError("SKILL_NOT_SELECTED", wrongVersionRefusal(slug, version!, named));
   return selection;
+}
+
+const ACCEPTED_FORM = "Accepted form: '<slug>' or '<slug>@<version>'.";
+
+function emptyVersionRefusal(spec: string): string {
+  return `The requested name '${spec}' has an empty version. ${ACCEPTED_FORM}`;
+}
+
+function wrongVersionRefusal(slug: string, version: string, named: ResolvedSkillSelection[]): string {
+  const versions = [...new Set(named.map((entry) => entry.version))].sort();
+  const canonical = named[0]!.slug;
+  return `Skill '${slug}' is selected at version '${versions.join("', '")}', but '${version}' was requested. `
+    + `Accepted form: '${canonical}@${versions[0]}'.`;
+}
+
+/**
+ * The refusal names what was refused and the form that is accepted.
+ *
+ * One sentence covered every cause before, and it named the wrong one: a name
+ * that is in no profile at all was reported as "not selected by this profile or
+ * project lock", which sends the reader to the profile and project lock to look
+ * for a selection that was never there. That is how a survey read an existing
+ * canonical procedure as missing (Agents Audit A27). The close matches come
+ * from the profile's own accepted names — canonical slugs and aliases — so a
+ * suggestion cannot point outside the authority that just refused.
+ */
+function unknownNameRefusal(slug: string, profile: ResolvedSkillProfile): string {
+  const names = profile.selections.flatMap((entry) => [entry.slug, ...(entry.aliases ?? [])]);
+  const close = findCloseSkillNames(slug, names);
+  const hint = close.length > 0 ? ` Did you mean: ${close.join(", ")}?` : "";
+  return `Skill '${slug}' is not selected by this Skills profile or project lock.${hint} `
+    + `Read the accepted names with 'skills search <term>' or 'skills list --all --json'; accept one with 'skills pin <name>'. ${ACCEPTED_FORM}`;
 }
 export async function loadSelectedSkill(spec: string, profileId: string, options: SelectionResolverOptions & { file?: string } = {}) {
   const context = await resolveSelectionContext(profileId, options);

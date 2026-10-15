@@ -121,13 +121,62 @@ export function searchSkills(query: string, registry: SkillMeta[] = loadRegistry
 }
 
 /**
+ * Bounded close canonical names for a refused name, strongest evidence first:
+ *
+ *  0. the exact name;
+ *  1. a hyphen-delimited containment — the candidate owns the query as a whole
+ *     leading or trailing segment (`fleet-refresh` → `instructions-fleet-refresh`);
+ *  2. a multi-word token subset of the candidate;
+ *  3. the edit-distance rule that was the only signal before.
+ *
+ * Containment is what edit distance cannot see, and it is the case that cost
+ * real time: the canonical name that owns a shorter name as its trailing
+ * segment is 13 edits from the short name, so a caller naming the procedure by
+ * its last words was told the procedure did not exist (Agents Audit A27). The
+ * distance pass still runs and fills any slots containment leaves, so a
+ * distance-only miss — including every query under three characters — keeps the
+ * answer it has always had.
+ */
+export function findCloseSkillNames(query: string, names: readonly string[], maxResults = 3): string[] {
+  if (maxResults <= 0) return [];
+  const q = query.trim().toLowerCase();
+  if (q.length === 0) return [];
+  const tokens = q.split("-").filter(Boolean);
+
+  // Containment is evidence only from three characters; below that a whole
+  // name would be a "segment" of far too many others. The scan is skipped for
+  // short queries, never the distance pass below, which answers them exactly as
+  // it did before this function existed (its threshold is `max(3, ...)`, so a
+  // one- or two-character query still gets its distance matches).
+  const ranked: Array<[string, number]> = [];
+  if (q.length >= 3) {
+    for (const name of names) {
+      const candidate = name.toLowerCase();
+      const rank = candidate === q ? 0
+        : candidate.endsWith(`-${q}`) || candidate.startsWith(`${q}-`) ? 1
+        : tokens.length > 1 && tokens.every((token) => candidate.split("-").includes(token)) ? 2
+        : undefined;
+      if (rank !== undefined) ranked.push([name, rank]);
+    }
+  }
+  ranked.sort((a, b) => a[1] - b[1] || a[0].length - b[0].length || a[0].localeCompare(b[0]));
+
+  const found = ranked.slice(0, maxResults).map(([name]) => name);
+  if (found.length === maxResults) return found;
+
+  const taken = new Set(found);
+  const threshold = Math.max(3, Math.floor(q.length / 2));
+  const byDistance = names
+    .filter((name) => !taken.has(name))
+    .map((name) => ({ name, distance: editDistance(q, name.toLowerCase()) }))
+    .filter((entry) => entry.distance <= threshold)
+    .sort((a, b) => a.distance - b.distance || a.name.localeCompare(b.name));
+  return [...found, ...byDistance.slice(0, maxResults - found.length).map((entry) => entry.name)];
+}
+
+/**
  * Find skills with names similar to the given query (for "did you mean?" suggestions).
  */
 export function findSimilarSkills(query: string, maxResults = 3, registry: SkillMeta[] = loadRegistry()): string[] {
-  const q = query.toLowerCase();
-  const scored = registry
-    .map(s => ({ name: s.name, dist: editDistance(q, s.name.toLowerCase()) }))
-    .filter(s => s.dist <= Math.max(3, Math.floor(q.length / 2)))
-    .sort((a, b) => a.dist - b.dist);
-  return scored.slice(0, maxResults).map(s => s.name);
+  return findCloseSkillNames(query, registry.map((skill) => skill.name), maxResults);
 }
