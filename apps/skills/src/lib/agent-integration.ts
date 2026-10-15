@@ -639,6 +639,9 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
       catch (error) {
         // An unresolvable runtime is an environment gap, not drift: keep its code.
         if (isDiscoveryRootUnresolved(error) || error instanceof SumiPathResolverError) throw error;
+        // A native copy refusal already names the step that works for this
+        // strict call; appending a second remediation would repeat it.
+        if (error instanceof NativeSkillCopiesDriftError) throw error;
         // Keep exactly one NATIVE_SKILL_DRIFT prefix: the CLI classify by it.
         const condition = (error as Error).message.replace(/^NATIVE_SKILL_DRIFT: /, "");
         throw new Error(`NATIVE_SKILL_DRIFT: ${condition}. A saved ${agent} discovery review is reused only while the bridge protections it was taken with still verify, so this command cannot reuse or repair it here; run skills hook install --agent ${agent} --discovery-inputs <review> --apply with a fresh discovery review, or repair that bridge condition first.`);
@@ -1782,6 +1785,9 @@ export function codexPromptDriftWarning(report: ManagedBridgeReport): string | u
 
 /** Run before any prompt context load. Missing ownership or reappearing native
  * discovery files require repair; verified cache availability is not an override. */
+/** Unexpected native skill copies; the message names each copy's working remediation. */
+class NativeSkillCopiesDriftError extends Error {}
+
 export function assertManagedAgentBridge(agent: IntegrationAgent, options: ManagedBridgeOptions = {}): ManagedBridgeReport {
   return assertManagedAgentBridgeWithDiscovery(agent, options);
 }
@@ -1943,7 +1949,7 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
     // Strict callers (every guard call except the live Codex prompt hook) accept
     // no hand-added name rule, so they get the refreshed-binding step instead.
     const remediation = nativeSkillRemediation(agent, blocking, { cache: vendorCache, config: codexPath, aliases: aliases.length > 0, strict: options.codexPromptHook !== true, automatic: discovery.method === "automatic", toleratedChange: (witnessTolerance?.changes.length ?? 0) > 0, rules: codexConfig.skills?.config, enrolled: entry => (binding.codexPluginSkills ?? []).some((control: CodexPluginSkillControl) => entry.path.startsWith(control.pluginParent + sep)), keepsConfig: rows => { try { const text = readOptional(codexPath) ?? ""; return discoveryTextKeepsWitness(discovery, codexPath, `${text.trimEnd()}${text.trim() ? "\n\n" : ""}${rows.join("\n")}`); } catch { return false; } }, read: path => new TextDecoder("utf-8", { fatal: true }).decode(readNativeBytes(path, 1024 * 1024)) });
-    throw new Error(`NATIVE_SKILL_DRIFT: ${blocking.length} unexpected native skill copies were found: ${nativeSkillPathList(blocking.map(entry => entry.path))}. ${remediation}${adapterRefusal ? ` Native policy adapter refused: ${adapterRefusal}` : ""}`);
+    throw new NativeSkillCopiesDriftError(`NATIVE_SKILL_DRIFT: ${blocking.length} unexpected native skill copies were found: ${nativeSkillPathList(blocking.map(entry => entry.path))}. ${remediation}${adapterRefusal ? ` Native policy adapter refused: ${adapterRefusal}` : ""}`);
   }
   recheckRootAliases(aliases);
   // The automatic closure can re-report a source verifyAgentDiscovery collected.
