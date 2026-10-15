@@ -1325,12 +1325,21 @@ skills provenance --station station-example --json
 ```
 
 Every consumer is classified `current`, `behind`, `pinned` or `unverified`, and
-always carries the reason; `drift` lists the bundles whose exact versions differ.
-The command reads and never writes a pin, receipt, cache entry or station
-record, and it renders no skill payload and no credential. With `--cached`, or
-when the authority cannot be read, the reference is the locally synced snapshot
-and every consumer is reported `unverified` rather than `current` — a local
-snapshot cannot establish adoption.
+always carries a stable `reasonCode` and its reason. Identity is part of the
+comparison: a revision that matches under a different authority, workspace or
+profile is `IDENTITY_MISMATCH`, not `current`, so a foreign pin is never
+reported as adopted and is never diffed. The local activation is named as this
+machine and the authority receipt as the station named on the command line; the
+two are never collapsed into one id. The receipt also states what it does not
+attest — published version and digest evidence, native discovery and locks, and
+live consumer adoption — rather than letting a clean-looking result imply them.
+`drift` lists the bundles whose exact versions differ. The command reads and
+never writes a pin, receipt, cache entry or station record, and it renders no
+skill payload and no credential: a reader's exception text is never carried,
+only a fixed diagnostic code, because bounding foreign text is not redacting it.
+With `--cached`, or when the authority cannot be read, the reference is the
+locally synced snapshot and every consumer is reported `unverified` rather than
+`current` — a local snapshot cannot establish adoption.
 
 After hook installation has enabled CLI loading, pull operations obey the same
 profile. `--all` refreshes its selected versions rather than the full catalog,

@@ -34,8 +34,13 @@ export function provenanceLines(receipt: SelectionProvenanceReceipt): string[] {
 }
 function consumerLines(consumer: SelectionProvenanceConsumer): string[] {
   const label = consumer.kind === "session" ? "Pinned" : consumer.source === "local-receipt" ? "Activated" : "Applied";
-  const identity = consumer.kind === "session" ? `session ${consumer.id}` : consumer.source === "local-receipt" ? "this machine" : `station ${consumer.id}`;
-  const lines = [`${label}: ${identity} ${consumer.profileRevision ?? "no receipt"} [${consumer.status}]`, `  ${consumer.reason}`];
+  // The local activation is named as this host; only the authority receipt is the
+  // requested station. Printing one id for both is what made a local snapshot
+  // read as a remote station's.
+  const identity = consumer.kind === "session" ? `session ${consumer.id}`
+    : consumer.idKind === "local-host" ? `this machine (${consumer.id})`
+    : `station ${consumer.id}`;
+  const lines = [`${label}: ${identity} ${consumer.profileRevision ?? "no receipt"} [${consumer.status}] ${consumer.reasonCode}`, `  ${consumer.reason}`];
   if (consumer.kind === "session" && consumer.consumed) {
     lines.push(`Consumed: ${consumer.loadedCount ?? 0} of ${consumer.selectionCount ?? 0} selections loaded`);
     for (const selection of consumer.consumed) lines.push(`- ${selection.slug}@${selection.version} ${selection.bundleDigest}`);
@@ -53,9 +58,14 @@ export function registerProvenance(parent: Command): void {
     .option("--json", "Return the receipt as JSON", false)
     .action(async (options: ProvenanceCommandOptions) => {
       try {
+        // The host this command runs on and the station named on the command line
+        // are different facts; they coincide only because --station defaults to
+        // this host. Never let --station relabel the local activation.
+        const localStationId = process.env.HASNA_STATION ?? hostname();
         const receipt = await readSelectionProvenance({
           profileId: selectedProfileId(options.selectionProfile),
-          stationId: options.station ?? process.env.HASNA_STATION ?? hostname(),
+          localStationId,
+          stationId: options.station ?? localStationId,
           ...(options.session === undefined ? {} : { sessionId: options.session }),
           ...(options.cached ? { cached: true } : {}),
         });
