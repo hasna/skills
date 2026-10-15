@@ -1,4 +1,4 @@
-import { codexAdmissionReceipt, codexCorpusRootForPath, withCodexCorpusWrite, type CodexAdmissionReceipt, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
+import { codexAdmissionReceipt, codexCorpusRootForPath, withCodexCorpusWrite, type CodexAdmissionReceipt, type CodexAdmissionRecordOptions, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
 /**
  * `skills sync` — the last mile: write skills from this machine's corpus
  * (the migrated owner-layout cache ~/.hasna/skills/skills/<name>/, or the
@@ -570,10 +570,15 @@ function writeManagedSkillDirUnlocked(dir: string, skillMd: string, options: Man
  * did not write (no valid Skills ownership marker). Foreign or malformed markers
  * grant no deletion authority, and removal has no force override.
  */
-export function removeManagedAgentSkill(skill: string, agent: SyncAgent, homeDir: string = homedir(), options: CodexCorpusWriteOptions = {}): boolean {
+/** Returns only whether it removed; pass `onCodexAdmission` to receive the admission
+ * record. Without it, a Codex home without native admission refuses as before. */
+export function removeManagedAgentSkill(skill: string, agent: SyncAgent, homeDir: string = homedir(), options: CodexCorpusWriteOptions & CodexAdmissionRecordOptions = {}): boolean {
   const dir = join(agentGlobalSkillsDir(agent, homeDir), skill);
   const root = codexCorpusRootForPath(dir);
-  return withCodexCorpusWrite(root ? [root] : [], () => removeManagedAgentSkillUnlocked(skill, agent, homeDir, options), options);
+  return withCodexCorpusWrite(root ? [root] : [], (_assertCurrent, admission) => {
+    if (admission) options.onCodexAdmission?.(admission);
+    return removeManagedAgentSkillUnlocked(skill, agent, homeDir, options);
+  }, options, { fallback: options.onCodexAdmission !== undefined });
 }
 
 function removeManagedAgentSkillUnlocked(skill: string, agent: SyncAgent, homeDir: string = homedir(), options: CodexCorpusWriteOptions = {}): boolean {

@@ -286,7 +286,7 @@ async function enrollCodexNativeHooksUnlocked(options: CodexNativeHookTrustOptio
     save(join(journal, "config.before.toml"), configFile.bytes);
     save(join(journal, "hooks.before.json"), hooksFile.bytes);
     save(join(journal, "policy.before.json"), policyFile.bytes);
-    save(join(journal, "intent.json"), json({ ...digestInput, planDigest, hooks: planned, nativeHooks: discovered.map(safeNativeHook) }));
+    save(join(journal, "intent.json"), json({ ...digestInput, planDigest, hooks: planned, nativeHooks: discovered.map(safeNativeHook), ...codexAdmissionReceipt(admission) }));
     need(isDeepStrictEqual(admit(await list()), admitted), "NATIVE_DISCOVERY_CHANGED"); checkInputs();
     let result: any;
     try { result = await rpc.request("config/batchWrite", { edits: [{ keyPath: "hooks.state", value: Object.fromEntries(planned.map(h => [h.key, { enabled: true, trusted_hash: h.currentHash }])), mergeStrategy: "upsert" }], filePath: configPath, expectedVersion: layers[0].version, reloadUserConfig: true }); }
@@ -314,7 +314,7 @@ async function enrollCodexNativeHooksUnlocked(options: CodexNativeHookTrustOptio
     save(join(journal, "receipt.json"), json(receipt)); return receipt;
   } catch (error) {
     const message = error instanceof Error && error.message.startsWith("CODEX_HOOK_TRUST_") ? error.message : "CODEX_HOOK_TRUST_REFUSED: verify managed bridge installation and native Codex support";
-    if (journal) { try { save(join(journal, "stopped.json"), json({ error: message.split(":")[0], automaticRollback: false, reconcileBeforeRetry: true })); } catch { /* Preserve original refusal; never print configuration. */ } }
+    if (journal) { try { save(join(journal, "stopped.json"), json({ error: message.split(":")[0], automaticRollback: false, reconcileBeforeRetry: true, ...codexAdmissionReceipt(admission) })); } catch { /* Preserve original refusal; never print configuration. */ } }
     throw new Error(message);
   } finally { await rpc?.close(); }
 }

@@ -6,7 +6,9 @@ import { join } from "node:path";
 const fixtures: string[] = [];
 afterEach(() => { for (const path of fixtures.splice(0)) rmSync(path, { recursive: true, force: true }); });
 /** `admission` answers the native help probe; `upstream` emulates Codex 0.160.0/0.162.1,
- * which has no `corpus-admission-inspect`. `<home>/probe-mode` injects probe anomalies. */
+ * which has no `corpus-admission-inspect` and, on every launch, creates helper
+ * aliases under `$CODEX_HOME/tmp/arg0` (this fixture's own `.codex` when unset,
+ * never the account's). `<home>/probe-mode` injects probe anomalies. */
 export type CorpusFixtureBuild = "admission" | "upstream";
 export function corpusFixture(enrolled = true, build: CorpusFixtureBuild = "admission") {
   const home = mkdtempSync(join(tmpdir(), "corpus-admission-")); fixtures.push(home);
@@ -15,14 +17,23 @@ export function corpusFixture(enrolled = true, build: CorpusFixtureBuild = "admi
   const command = join(home, "native-fixture");
   // A protocol fixture, not proof of a released native implementation.
   writeFileSync(command, `#!${process.execPath}
-import { lstatSync, readFileSync, existsSync, writeFileSync } from "node:fs";
+import { lstatSync, readFileSync, existsSync, writeFileSync, mkdirSync, mkdtempSync, appendFileSync } from "node:fs";
 const fixtureHome = ${JSON.stringify(home)}, build = ${JSON.stringify(build)};
 const probeMode = existsSync(fixtureHome + "/probe-mode") ? readFileSync(fixtureHome + "/probe-mode", "utf8") : "";
+if (build === "upstream") {
+  const aliases = (process.env.CODEX_HOME || fixtureHome + "/.codex") + "/tmp/arg0";
+  mkdirSync(aliases, { recursive: true, mode: 0o700 });
+  const directory = mkdtempSync(aliases + "/codex-arg0");
+  for (const name of [".lock", "apply_patch", "applypatch", "codex-linux-sandbox", "codex-execve-wrapper"]) writeFileSync(directory + "/" + name, "");
+}
 if (process.argv[2] === "--version" && probeMode === "bad-version") { console.log("codex-cli 0.160.0 (unreviewed build text)"); process.exit(0); }
+if (process.argv[2] === "--version" && probeMode === "prerelease-version") { console.log("codex-cli 0.163.0-alpha.2"); process.exit(0); }
 if (process.argv[2] === "help" && process.argv.length === 4) {
   if (probeMode === "timeout") await new Promise(resolve => setTimeout(resolve, 60000));
-  if (process.argv[3] === "exec") process.exit(probeMode === "control-fail" ? 1 : 0);
+  if (process.argv[3] === "exec") { if (probeMode === "control-signal") process.kill(process.pid, "SIGTERM"); process.exit(probeMode === "control-fail" ? 1 : 0); }
   if (process.argv[3] === "corpus-admission-inspect") {
+    if (probeMode === "signal") process.kill(process.pid, "SIGTERM");
+    if (probeMode === "swap") appendFileSync(process.argv[1], "\\n// replaced during the probe\\n");
     if (build === "admission" || probeMode === "help-0") { console.log("Inspect native corpus admission"); process.exit(0); }
     if (probeMode === "stdout-noise") console.log("unexpected");
     const name = probeMode === "wrong-text" ? "corpus-admission-inspector" : "corpus-admission-inspect";
@@ -36,7 +47,12 @@ if (process.argv[2] === "--version") { console.log("codex-cli 0.160.0"); process
 if (process.argv[2] === "app-server") {
   let buffer="";
   process.stdin.on("data",bytes=>{buffer+=bytes.toString();for (;;) {const end=buffer.indexOf("\\n");if(end<0)break;const line=buffer.slice(0,end);buffer=buffer.slice(end+1);const request=JSON.parse(line);if(request.id)console.log(JSON.stringify({id:request.id,result:{userAgent:request.params.clientInfo.name+"/0.160.0"}}));}});
-  process.stdin.on("end",()=>{setTimeout(()=>process.exit(0),250);});
+  // app-server-linger: ignore SIGTERM after stdin closes until the test releases it (bounded).
+  process.stdin.on("end",()=>{
+    if (!existsSync(fixtureHome+"/app-server-linger")) { setTimeout(()=>process.exit(0),250); return; }
+    process.on("SIGTERM",()=>{}); const started=Date.now();
+    setInterval(()=>{ if (existsSync(fixtureHome+"/app-server-release") || Date.now()-started>25000) process.exit(0); },50);
+  });
 } else {
 const home = process.argv.at(-1);
 if (process.argv[2] !== "corpus-admission-inspect" || process.argv[3] !== "--home") process.exit(2);

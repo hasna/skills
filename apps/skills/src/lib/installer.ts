@@ -1,4 +1,4 @@
-import { codexCorpusRootForPath, withCodexCorpusWrite, type CodexAdmissionReceipt, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
+import { codexCorpusRootForPath, withCodexCorpusWrite, type CodexAdmissionReceipt, type CodexAdmissionRecordOptions, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
 /**
  * Skill setup and project preferences.
  *
@@ -379,10 +379,15 @@ export function installSkillForAgent(
   return { skill: canonicalName, success: true, path: result.path, ...fallback };
 }
 
-export function removeSkillForAgent(name: string, options: AgentInstallOptions): boolean {
+/** Returns only whether it removed; pass `onCodexAdmission` to receive the admission
+ * record. Without it, a Codex home without native admission refuses as before. */
+export function removeSkillForAgent(name: string, options: AgentInstallOptions & CodexAdmissionRecordOptions): boolean {
   const dir = getAgentSkillPath(name, options.agent, options.scope ?? "global", options.projectDir);
   const root = codexCorpusRootForPath(dir);
-  return withCodexCorpusWrite(root ? [root] : [], () => removeSkillForAgentUnlocked(name, options), options);
+  return withCodexCorpusWrite(root ? [root] : [], (_assertCurrent, admission) => {
+    if (admission) options.onCodexAdmission?.(admission);
+    return removeSkillForAgentUnlocked(name, options);
+  }, options, { fallback: options.onCodexAdmission !== undefined });
 }
 
 function removeSkillForAgentUnlocked(name: string, options: AgentInstallOptions): boolean {

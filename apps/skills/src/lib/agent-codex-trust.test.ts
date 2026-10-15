@@ -352,7 +352,7 @@ test("native reconciliation resolves an effective partial write only after nativ
   expect(receipt.reconciled).toBe(true); const saved = JSON.parse(readFileSync(join(journal, "receipt.json"), "utf8")); expect(saved.nativeStateVerified).toBe(true); expect(saved.nativeExecutionVerified).toBe(false); expect(f.calls.some(call => call.method === "config/batchWrite")).toBe(false);
 });
 
-test("trust enrolment under the interim Codex admission fallback records it in the plan, receipt and journal", async () => {
+test("trust enrolment under the interim Codex admission fallback records it in the plan, receipt and every journal record", async () => {
   const f = fixture(), upstream = corpusFixture(false, "upstream");
   // An upstream Codex home: no native admission lock and no inspect command.
   rmSync(join(f.home, ".codex", ".native-corpus-admission.flock-v1"));
@@ -361,9 +361,21 @@ test("trust enrolment under the interim Codex admission fallback records it in t
   expect([plan.nativeAdmission, plan.nativeAdmissionProbe?.kind, plan.nativeAdmissionProbe?.version]).toEqual(["unavailable", "help-unrecognized-subcommand", "codex-cli 0.160.0"]);
   const applied: any = await enrollCodexNativeHooks({ ...options, apply: true, reviewedPlanDigest: plan.planDigest }, f.connect);
   expect([applied.applied, applied.nativeAdmission]).toEqual([true, "unavailable"]);
-  const saved = JSON.parse(readFileSync(join(applied.journal, "receipt.json"), "utf8"));
-  expect([saved.nativeAdmission, saved.nativeAdmissionProbe]).toEqual(["unavailable", plan.nativeAdmissionProbe]);
+  for (const name of ["receipt.json", "intent.json"]) {
+    const saved = JSON.parse(readFileSync(join(applied.journal, name), "utf8"));
+    expect([saved.nativeAdmission, saved.nativeAdmissionProbe]).toEqual(["unavailable", plan.nativeAdmissionProbe]);
+  }
   expect(existsSync(join(f.home, ".codex", ".native-corpus-admission.flock-v1"))).toBe(false);
+  // A stopped fallback write records the admission in its intent and stop record too.
+  const g = fixture();
+  rmSync(join(g.home, ".codex", ".native-corpus-admission.flock-v1"));
+  const stoppedPlan = await enrollCodexNativeHooks({ ...g, codexCommand: upstream.command }, g.connect); g.setMode("writeOverride");
+  await expect(enrollCodexNativeHooks({ ...g, codexCommand: upstream.command, apply: true, reviewedPlanDigest: stoppedPlan.planDigest }, g.connect)).rejects.toThrow("NATIVE_WRITE_OVERRIDDEN");
+  const [stopped] = readdirSync(join(g.dataDir, "native-hook-trust"));
+  for (const name of ["intent.json", "stopped.json"]) {
+    const saved = JSON.parse(readFileSync(join(g.dataDir, "native-hook-trust", stopped!, name), "utf8"));
+    expect([saved.nativeAdmission, saved.nativeAdmissionProbe]).toEqual(["unavailable", stoppedPlan.nativeAdmissionProbe]);
+  }
 });
 
 test("native reconciliation through a fallback-admitted client records the fallback", async () => {
