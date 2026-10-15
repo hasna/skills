@@ -29,5 +29,8 @@ test("skills in Codex's openai-curated-remote plugin cache stop the guard and ar
   put(join(plugin, ".codex-remote-plugin-install.json"), JSON.stringify({ schema_version: 1, remote_plugin_id: `plugins~Plugin_${"sites".padEnd(32, "0")}` }));
   for (const name of ["sites-building", "sites-hosting", "sites-mcp", "sites-preview-troubleshooting"]) put(join(plugin, "0.1.75", "skills", name, "SKILL.md"), payload(name));
   expect(() => assertManagedAgentBridge("codex", f)).toThrow(/NATIVE_SKILL_DRIFT: 4 unexpected native skill copies/);
+  // The live Codex prompt hook stops these enabled vendor copies too: its opt-in
+  // exempts only copies that Codex configuration disables.
+  expect(() => assertManagedAgentBridge("codex", { ...f, codexPromptHook: true })).toThrow(/NATIVE_SKILL_DRIFT: 4 unexpected native skill copies/);
   expect(existsSync(join(f.dataDir, "agent-hooks", "codex-vendor-cache-acceptance.json"))).toBe(false);
 });

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { isCodexLocalStdioMcpServer } from "./codex-local-mcp-controls.js";
 import { hashNativeJsonControls } from "./claude-settings-witness.js";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
 import { codexPluginSourceIsConfigControlled, isCodexNativeSkillDisabled, projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, remotePluginIdentifier, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
 export interface CodexPluginSkillControl { name:string; pluginId:string; namespace:string; pluginParent:string; manifestSha256:string; appSha256?:string; mcpSha256?:string; remotePluginId?:string; skillsOnly?:true }
@@ -16,19 +16,26 @@ const identifier = (v:unknown):v is string => typeof v === "string" && /^[A-Za-z
 const CODEX_DEFAULT_AGENT_PLUGIN_VERSION = "1.0.0";
 function refuse():never { throw new Error("CODEX_NATIVE_SKILL_IDENTITY_UNSUPPORTED: review native plugin names and hook controls"); }
 type Read = (path:string) => string;
+/** The remote plugin identifier from the exact native install receipt Codex
+ * writes beside a remote plugin's versions, or null when it is absent or invalid. */
+export function codexRemoteInstallReceipt(parent:string, read:Read):string|null {
+  try {
+    if (!lstatSync(parent).isDirectory() || realpathSync(parent)!==parent) return null;
+    const path=join(parent,".codex-remote-plugin-install.json"), stat=lstatSync(path,{throwIfNoEntry:false});
+    if (!stat?.isFile() || stat.isSymbolicLink() || stat.size>16384) return null;
+    const text=read(path);
+    hashNativeJsonControls(text); // Reject duplicate decoded keys as Codex serde does.
+    const value=JSON.parse(text);
+    return value && typeof value==="object" && !Array.isArray(value) && Object.keys(value).length===2 && value.schema_version===1
+      && remotePluginIdentifier(value.remote_plugin_id) ? value.remote_plugin_id : null;
+  } catch { return null; }
+}
 /** Codex's schema-1 receipt identifies a remote installation, not its current
  * version. It can support review of an explicitly denied cache materialization;
  * it never establishes that the materialization is the native selected root. */
 function remoteInstallationMatches(parent:string, remotePluginId:string, read:Read):boolean {
   try {
-    if (!remotePluginIdentifier(remotePluginId) || !lstatSync(parent).isDirectory() || realpathSync(parent)!==parent) return false;
-    const path=join(parent,".codex-remote-plugin-install.json"), stat=lstatSync(path,{throwIfNoEntry:false});
-    if (!stat?.isFile() || stat.isSymbolicLink() || stat.size>16384) return false;
-    const text=read(path);
-    hashNativeJsonControls(text); // Reject duplicate decoded keys as Codex serde does.
-    const value=JSON.parse(text);
-    return Boolean(value && typeof value==="object" && !Array.isArray(value)
-      && Object.keys(value).length===2 && value.schema_version===1 && value.remote_plugin_id===remotePluginId);
+    return remotePluginIdentifier(remotePluginId) && codexRemoteInstallReceipt(parent,read)===remotePluginId;
   } catch { return false; }
 }
 function appControls(path:string, read:Read):string {
@@ -45,6 +52,19 @@ function appControls(path:string, read:Read):string {
       || (entry.required!==undefined && typeof entry.required!=="boolean")) refuse();
   }
   return sha256;
+}
+/** Whether a vendor refresh's `.app.json` connector declaration is valid under
+ * the same appControls validation rootControls applies (duplicate keys, the
+ * single `apps` object, app names, `id`/`category`/`required` only, types and
+ * caps), read as a regular, unlinked file of at most 1 MiB in strict UTF-8.
+ * Every failure is false. */
+export function codexAppDeclarationValid(path:string):boolean {
+  try {
+    const stat=lstatSync(path,{throwIfNoEntry:false});
+    if (!stat?.isFile() || stat.isSymbolicLink() || stat.size>1024*1024) return false;
+    appControls(path,file=>new TextDecoder("utf-8",{fatal:true}).decode(readFileSync(file)));
+    return true;
+  } catch { return false; }
 }
 /** Codex 0.160 local stdio controls, including its optional tool metadata.
  * The complete declaration stays fingerprinted; no command or env is resolved. */

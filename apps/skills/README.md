@@ -207,6 +207,82 @@ is recorded at `agent-hooks/codex-native-policy-acceptance.json`; user,
 repository and project copies still refuse, and format or digest checks never
 prove the runtime policy on their own.
 
+A Codex plugin refresh can deposit a new vendor skill in `~/.codex/plugins/cache`
+(for example `openai-curated-remote/sites/1.0.2-remix-b.1/skills/sites-remix`).
+Skill payloads still reach agents only through the Skills CLI, so an enabled
+vendor copy keeps blocking the Codex prompt hook. Retire it by disabling it in
+`~/.codex/config.toml`. The plugin-qualified name survives later version
+directories, so prefer it:
+
+```toml
+[[skills.config]]
+name = "sites:sites-remix"
+enabled = false
+```
+
+An exact `path = ".../sites/1.0.2-remix-b.1/skills/sites-remix/SKILL.md"` rule
+also works, but only for that version. On the live Codex prompt hook only, a
+copy is then exempt when every condition holds:
+
+- it is package-classified plugin content in `openai-bundled`, `openai-curated`
+  or `openai-curated-remote` (exact names), with Codex's remote install receipt
+  for the remote marketplace;
+- it carries no Skills or Hasna marker;
+- every cached version of its plugin passes the vendor refresh check described
+  below for membership changes, so the plugin can load nothing that the
+  inventory and this rule do not account for, and no version is a link;
+- a `[[skills.config]]` rule names its exact path or its plugin-qualified name
+  with `enabled = false`, and no matching rule enables it.
+
+A whole-plugin `[plugins."sites@openai-curated-remote"] enabled = false` table
+is not enough on its own: remote state can enable a locally disabled remote
+plugin, and a cache copy carries no proof that its plugin source is
+configuration-controlled, so the copy keeps blocking until a path or name rule
+retires it. This exemption only adds to the guard's existing ones; every copy
+that the guard already accepts, such as an exact-path disable in any plugin-cache
+marketplace or a reviewed plugin control, stays accepted on the live hook. Once
+the hook tolerates one of the witness changes below, a state the strict guard
+refuses outright, plugin-cache copies are exempt only through this vendor rule.
+
+Instead of editing by hand, `skills hook native-catalog` followed by
+`skills hook install --agent codex --codex-native-catalog <file> --apply` writes
+the same rules through the guarded install path.
+
+The hook also tolerates, with a visible `systemMessage` warning, only the
+discovery-witness changes such a refresh provably makes:
+- appended vendor disable rules or vendor plugin disables in `config.toml`,
+  accepted when removing exactly those entries or restoring a formerly enabled
+  vendor flag reproduces the reviewed digest. Candidates are tried smallest edit
+  first, at most 128; with a typed settings witness that covers any change to up
+  to two of at most eight vendor plugin tables. A change beyond the bound refuses;
+- directory membership changes under an allowlisted vendor marketplace that
+  passes the vendor refresh check: every plugin version has exactly one
+  manifest, `.codex-plugin/plugin.json`, alone in its directory, whose keys are
+  only `name`, `version`, `description`, `author`, `homepage`, `repository`,
+  `license`, `keywords`, `interface`, `skills` (the default `./skills/` only) and
+  `apps`. So hooks in any form, commands, agents, extensions, MCP servers and
+  unknown keys refuse. There is no `hooks`, `commands` or `agents` directory, no
+  `hooks.json` or `.mcp.json` (names compared without regard to case), no root,
+  `.claude-plugin` or `.cursor-plugin` manifest, no link
+  and no `SKILL.md` that the inventory cannot see (below a dot-named or
+  `node_modules` directory, or nested in another skill). One exception keeps
+  today's vendor plugins working: every current OpenAI vendor plugin declares
+  its connector as `apps = "./.app.json"`, so exactly that declaration is
+  allowed when `.app.json` is a regular file of at most 1 MiB, strict UTF-8, that
+  passes the same connector validation reviewed plugin controls use (one `apps`
+  object; app entries with only `id`, `category` and `required`, of the right
+  types; no duplicate keys). Any other connector path, a file that fails that
+  validation, or the file without the declaration refuses.
+
+Every other copy and change still refuses with `NATIVE_SKILL_DRIFT`, including:
+- user, project, `.system` and Hasna-marketplace copies that the guard does not
+  already exempt;
+- an enabled vendor copy whose plugin is only disabled by a whole-plugin table;
+- capability-control changes and whole-cache membership changes;
+- plugin activation, including a vendor plugin gaining `enabled = true`;
+- missing coverage and changed roots;
+- every install, trust, migrate and sync check.
+
 Native hook invocations must use their installed adapter's selection profile.
 An old client command or environment override naming another profile refuses
 before synchronization or context loading. Review the hook installation and

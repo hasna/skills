@@ -10,7 +10,7 @@ import { normalizeHermesHookInput, assertHermesTool } from "../../lib/agent-herm
 import { parseSkillContextInput, selectedProfileId } from "./context.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, normalizeAgentHookEvent } from "../../lib/agent-adapters.js";
 import { detectedIntegrationAgents } from "../../lib/agent-install-selection.js";
-import { planAgentIntegration, planClaudeManagedHookProjection, planAgentSettingsWitnessUpgrade, planCodexSemanticCacheWitnessUpgrade, planReviewedArtifactMigration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, hookContextOutput, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, type IntegrationAgent } from "../../lib/agent-integration.js";
+import { planAgentIntegration, planClaudeManagedHookProjection, planAgentSettingsWitnessUpgrade, planCodexSemanticCacheWitnessUpgrade, planReviewedArtifactMigration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, codexPromptDriftWarning, hookContextOutput, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, type IntegrationAgent } from "../../lib/agent-integration.js";
 import { enrollCodexNativeHooks, reconcileCodexNativeHooks } from "../../lib/agent-codex-trust.js";
 import { codexNativeHookEnvelopeFromInput, CODEX_NATIVE_POLICY_FD_ENV } from "../../lib/codex-native-skill-policy.js";
 import { planCodexNativeTrust, applyCodexNativeTrust, previewCodexNativeTrust } from "../../lib/codex-native-trust.js";
@@ -413,6 +413,8 @@ export function registerAgentIntegration(parent: Command): void {
       let selectionProfile: string | undefined;
       let verifiedContextBoundary = false;
       let nativeEvent = event;
+      // Visible, non-blocking Codex notice for vendor-refresh witness changes.
+      let driftWarning: string | undefined;
       try {
         if (agents(options.agent).length !== 1) throw new Error("A hook invocation requires one agent");
         // Keep the exact raw stdin bytes: the native policy adapter hashes them
@@ -456,7 +458,12 @@ export function registerAgentIntegration(parent: Command): void {
         // events. Hand the exact native fields and the stdin digest to the guard's
         // adapter; every other agent, event and guard call keeps today's behaviour.
         const codexNativePolicy = options.agent === "codex" ? codexNativeHookEnvelopeFromInput(input, event, inputBytes, process.env[CODEX_NATIVE_POLICY_FD_ENV]) : undefined;
-        assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile, ...(codexNativePolicy ? { codexNativePolicy: { ...codexNativePolicy, deadlineMs: deadline } } : {}) });
+        // Only this live Codex context path opts in: vendor copies that Codex
+        // configuration disables are exempt, and witness changes a vendor plugin
+        // refresh provably makes warn. Enabled vendor copies, every other drift
+        // and every other guard call still refuse.
+        const bridge = assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile, ...(codexNativePolicy ? { codexNativePolicy: { ...codexNativePolicy, deadlineMs: deadline } } : {}), ...(options.agent === "codex" ? { codexPromptHook: true } : {}) });
+        if (options.agent === "codex") driftWarning = codexPromptDriftWarning(bridge);
         if (typeof input.prompt === "string") input.prompt = normalizeAgentHookPrompt(options.agent, nativeEvent, input.prompt);
         // Validate every context field before a timeout or API refusal can be
         // classified as optional delivery failure. No unchecked input continues.
@@ -493,7 +500,7 @@ export function registerAgentIntegration(parent: Command): void {
           await writeCliOutput(JSON.stringify(event === "SessionStart" ? { additional_context: output.hookSpecificOutput?.additionalContext ?? "" } : { continue: true }));
         } else {
           if (options.agent === "gemini" && output.hookSpecificOutput) output.hookSpecificOutput.hookEventName = nativeEvent;
-          await writeCliOutput(JSON.stringify(output));
+          await writeCliOutput(JSON.stringify(driftWarning ? { systemMessage: driftWarning, ...output } : output));
         }
       } catch (error) {
         if (verifiedContextBoundary && isOptionalHookContextFailure(error)) {
@@ -505,7 +512,7 @@ export function registerAgentIntegration(parent: Command): void {
           else {
             const output = hookContextOutput(event, { context: unavailable }) as any;
             if (options.agent === "gemini" && output.hookSpecificOutput) output.hookSpecificOutput.hookEventName = nativeEvent ?? event;
-            await writeCliOutput(JSON.stringify({ systemMessage: unavailable, ...output }));
+            await writeCliOutput(JSON.stringify({ systemMessage: driftWarning ? `${unavailable}\n${driftWarning}` : unavailable, ...output }));
           }
           return;
         }
