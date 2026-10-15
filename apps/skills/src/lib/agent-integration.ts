@@ -24,7 +24,7 @@ import { assertProjectDiscovery, codexVendorConfigChangeOnly, discoveryTextKeeps
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderAgentHookCommand, renderOpenCodePlugin, type IntegrationAgent } from "./agent-adapters.js";
 import { assertCodexPathConfigEditable, CODEX_SKILL_CONFIG_SECTIONS, disableCodexBundledSkills, normalizeCodexInlinePathConfig } from "./agent-codex.js";
 
-import { sumiConfigDirectory, sumiConfigPath, sumiBridgeRoot, sumiSkillRoots, renderSumiPlugin, isManagedSumiPlugin, SUMI_SKILL_PERMISSIONS } from "./agent-sumi.js";
+import { sumiConfigDirectory, sumiConfigPath, sumiBridgeRoot, sumiSkillRoots, renderSumiPlugin, isManagedSumiPlugin, SUMI_SKILL_PERMISSIONS, SumiPathResolverError } from "./agent-sumi.js";
 import { HERMES_OPT_OUT, parseHermesConfig, configureHermesHooks, assertHermesProtection, renderHermesSupervisor, assertNoHermesLegacyShadow, type HermesSupervisorBinding } from "./agent-hermes.js";
 import type { CodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery.js";
 import { assertClaudeHookEventsReplacement, type ClaudeCoordinatedHookEvent } from "./claude-settings-witness.js";
@@ -632,7 +632,17 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     if (retainedReview) {
       // A saved review is usable only in its current managed home, with the
       // original bridge protections, aliases and native trust still intact.
-      assertManagedAgentBridge(agent, { home, dataDir, projectDir: options.projectDir ?? home });
+      // This command is also the documented repair for a changed bridge, so a
+      // refusal here must not name itself: it names the explicit review form
+      // that bypasses this precheck instead.
+      try { assertManagedAgentBridge(agent, { home, dataDir, projectDir: options.projectDir ?? home }); }
+      catch (error) {
+        // An unresolvable runtime is an environment gap, not drift: keep its code.
+        if (isDiscoveryRootUnresolved(error) || error instanceof SumiPathResolverError) throw error;
+        // Keep exactly one NATIVE_SKILL_DRIFT prefix: the CLI classify by it.
+        const condition = (error as Error).message.replace(/^NATIVE_SKILL_DRIFT: /, "");
+        throw new Error(`NATIVE_SKILL_DRIFT: ${condition}. A saved ${agent} discovery review is reused only while the bridge protections it was taken with still verify, so this command cannot reuse or repair it here; run skills hook install --agent ${agent} --discovery-inputs <review> --apply with a fresh discovery review, or repair that bridge condition first.`);
+      }
       retainedAgents.push(agent);
     }
     return resolveAgentDiscovery({ home, agent, reviewed: options.discoveryInputs, retainedReview, canonical: path => canonicalAgentPath(path, aliases), executable });
