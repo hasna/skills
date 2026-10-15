@@ -367,15 +367,26 @@ export function captureRetiredCodexDiscovery(binding:AgentDiscoveryBinding, cont
     && isDeepStrictEqual(previous.directories.map(item=>item.path),directories.map(item=>item.path))) return {...current,codexRetiredMaterializations:previous};
   return {...current,codexRetiredMaterializations:{roots,parents,directories:captureDiscoveryDirectoryProjection(directories.map(item=>item.path),roots)}};
 }
-/** Only full byte witnesses, the installer's full manifest projection and a
- * present version-root orphan marker may retain their reviewed digest beneath
- * a positively verified absent root. */
+/** The witness class that may keep its reviewed digest beneath a positively
+ * verified absent root: a full byte witness, the installer's full manifest
+ * projection or a present version-root orphan marker. Null for every other
+ * source, which must stay current. */
+export type RetainedAbsentWitness = "bytes" | "claude-plugin-manifest-v1" | typeof CLAUDE_ORPHAN_MARKER_MODE;
+function retainableAbsentWitness(source: DiscoverySource): RetainedAbsentWitness | null {
+  if (source.format!==undefined || source.fields!==undefined || source.managedPlugins!==undefined) return null;
+  if ([undefined,"bytes"].includes(source.hashMode)) return "bytes";
+  if (source.hashMode==="claude-plugin-manifest-v1" && source.sha256!==null
+    && source.path.endsWith(join(sep,".claude-plugin","plugin.json"))) return "claude-plugin-manifest-v1";
+  if (source.hashMode===CLAUDE_ORPHAN_MARKER_MODE && source.sha256!==null && isClaudePluginCacheOrphanMarker(source.path)) return CLAUDE_ORPHAN_MARKER_MODE;
+  return null;
+}
 function retainableAbsentSource(source: DiscoverySource): boolean {
-  if (source.format!==undefined || source.fields!==undefined || source.managedPlugins!==undefined) return false;
-  return [undefined,"bytes"].includes(source.hashMode)
-    || source.hashMode==="claude-plugin-manifest-v1" && source.sha256!==null
-      && source.path.endsWith(join(sep,".claude-plugin","plugin.json"))
-    || source.hashMode===CLAUDE_ORPHAN_MARKER_MODE && source.sha256!==null && isClaudePluginCacheOrphanMarker(source.path);
+  return retainableAbsentWitness(source)!==null;
+}
+/** The one retention predicate: the absent root that exempts `source`, or
+ * undefined. Verification, rebinding and the installer report all use it. */
+function retainedAbsentRoot(absentRoots: readonly string[], source: DiscoverySource): string | undefined {
+  return retainableAbsentSource(source) ? absentRoots.find(root=>source.path.startsWith(root+sep)) : undefined;
 }
 /** Retain historical witnesses only when the entire old Claude version is absent
  * and unchanged native settings/registry select a different extant user root.
@@ -561,7 +572,7 @@ export function verifyAgentDiscovery(binding: AgentDiscoveryBinding, codexRecove
     // positively attested installation role binds current source identity.
     // These bodies/directories are not native loading inputs.
     if (installationInput(source.path)) { safe(source.path); continue; }
-    if (absentRoots.some(root=>source.path.startsWith(root+sep)) && retainableAbsentSource(source)) { safe(source.path); continue; }
+    if (retainedAbsentRoot(absentRoots, source)!==undefined) { safe(source.path); continue; }
     let current: string | null;
     try { current = projected(source, undefined, budget); }
     catch (error) {
@@ -574,6 +585,50 @@ export function verifyAgentDiscovery(binding: AgentDiscoveryBinding, codexRecove
   }
   for (const root of binding.roots) safe(root);
   for (const root of absentRoots) { safe(root); if (lstatSync(root,{throwIfNoEntry:false})) throw new Error("Retired native materialization changed during discovery verification"); }
+}
+/** Witness modes and native files the retained-root rule itself reads. They
+ * are never retained, whatever the rule says, so they are always checked. */
+const CLAUDE_CONTROL_WITNESS_MODES: ReadonlySet<string> = new Set(["claude-settings-v1", "claude-settings-v2", "claude-settings-v3", "claude-settings-v4", "claude-marketplace-registry", "claude-marketplace-registry-v2", "claude-marketplace-entry-v1", "claude-plugin-registry"]);
+const CLAUDE_CONTROL_FILES: ReadonlySet<string> = new Set(["settings.json", "settings.local.json", "installed_plugins.json", "known_marketplaces.json"]);
+function claudeControlSource(source: DiscoverySource): boolean {
+  return CLAUDE_CONTROL_WITNESS_MODES.has(source.hashMode ?? "")
+    || CLAUDE_CONTROL_FILES.has(basename(source.path)) && !source.path.includes(`${sep}.claude${sep}plugins${sep}cache${sep}`);
+}
+/** One stored Claude discovery source as an installer sees it. */
+export type ClaudeDiscoverySourceVerdict =
+  | { status: "current" }
+  | { status: "retained-absent"; root: string; witness: RetainedAbsentWitness }
+  | { status: "drift"; reason: "MISSING" | "APPEARED" | "CHANGED" | "MARKER_INVALID" | "REFUSED" };
+/** Read-only, per-source report on a stored Claude discovery binding, in
+ * stored order. A source is retained only through the same absent retired
+ * version rule and predicate verifyAgentDiscovery applies; a refused rule
+ * retains nothing. Every other source is checked by its own witness, exactly
+ * as verification checks it (a typed orphan marker by the marker predicate).
+ * This report never accepts a binding by itself: a caller must also require
+ * verifyAgentDiscovery to accept the same binding. */
+export function classifyClaudeDiscoverySources(binding: AgentDiscoveryBinding): ClaudeDiscoverySourceVerdict[] {
+  if (!binding || binding.agent !== "claude" || !Array.isArray(binding.sources)) throw new Error("Invalid Claude discovery binding");
+  let absentRoots: string[];
+  try { absentRoots = absentRetiredClaudeRoots(binding); } catch { absentRoots = []; }
+  // A present file the witness refuses is CHANGED: typed settings refuse any
+  // change. A typed orphan marker accepts every valid timestamp, so its refusal
+  // is MARKER_INVALID (not a regular, user-owned 13-digit timestamp file).
+  const drift = (source: DiscoverySource, refused: boolean): ClaudeDiscoverySourceVerdict => {
+    try {
+      if (!lstatSync(source.path, { throwIfNoEntry: false })) return { status: "drift", reason: "MISSING" };
+      return { status: "drift", reason: refused && source.hashMode === CLAUDE_ORPHAN_MARKER_MODE ? "MARKER_INVALID" : "CHANGED" };
+    } catch { return { status: "drift", reason: "REFUSED" }; }
+  };
+  const budget = discoveryByteBudget();
+  return binding.sources.map((source): ClaudeDiscoverySourceVerdict => {
+    const root = claudeControlSource(source) ? undefined : retainedAbsentRoot(absentRoots, source);
+    if (root !== undefined) return { status: "retained-absent", root, witness: retainableAbsentWitness(source)! };
+    let current: string | null;
+    try { current = projected(source, undefined, budget); }
+    catch { return drift(source, true); }
+    if (current === source.sha256) return { status: "current" };
+    return source.sha256 === null ? { status: "drift", reason: "APPEARED" } : drift(source, false);
+  });
 }
 function codexInstallationRoots(binding:AgentDiscoveryBinding):string[] {
   const proof=binding.codexInstallationInputs;
@@ -612,7 +667,7 @@ export function rebindAgentDiscovery(binding: AgentDiscoveryBinding, changes: Ma
       if (changes.has(source.path)) throw new Error("Codex semantic cache sources cannot be written by hook rendering");
       return source;
     }
-    if (!changes.has(source.path) && (installationRoots.some(root=>source.path.startsWith(root+sep)) || absentRoots.some(root=>source.path.startsWith(root+sep)) && retainableAbsentSource(source))) return source;
+    if (!changes.has(source.path) && (installationRoots.some(root=>source.path.startsWith(root+sep)) || retainedAbsentRoot(absentRoots, source)!==undefined)) return source;
     const sha256 = projected(source, changes, budget);
     // Only a planned write may change its witness. Do not adopt source drift
     // between initial validation and hook rendering, including raw witnesses.
