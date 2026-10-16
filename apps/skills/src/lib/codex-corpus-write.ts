@@ -2,8 +2,9 @@ import { KernelLock } from "@hasna/contracts/kernel-lock";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { accessSync, constants, lstatSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { accessSync, constants, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { getDataDirReadOnly } from "./config.js";
 
 const KEY = ".native-corpus-admission";
 /** Fixed refusal vocabulary for the interim fallback; never native text. */
@@ -39,13 +40,20 @@ export interface CodexAdmissionRecordOptions { onCodexAdmission?: (admission: Co
 /** Gate policy for one transaction; writers without a receipt disable the fallback. */
 export interface CodexCorpusWritePolicy { fallback?: boolean }
 
-/** Reads `onCodexAdmission` once. Only a function enables the fallback and receives the
- * record; any other defined value refuses before anything happens. */
+/** Reads `onCodexAdmission` once. Only a synchronous function enables the fallback and
+ * receives the record; any other defined value refuses before anything happens, and a
+ * callback that returns a thenable refuses before anything is removed. */
 export function codexAdmissionRecord(options: CodexAdmissionRecordOptions): { policy: CodexCorpusWritePolicy; deliver(admission: CodexCorpusAdmission | undefined): void } {
   const record: unknown = options.onCodexAdmission;
-  if (record !== undefined && typeof record !== "function") throw new Error("CODEX_CORPUS_ADMISSION_RECORD_INVALID: onCodexAdmission must be a function");
+  const invalid = (): never => { throw new Error("CODEX_CORPUS_ADMISSION_RECORD_INVALID: onCodexAdmission must be a synchronous function"); };
+  if (record !== undefined && typeof record !== "function") invalid();
   return { policy: { fallback: typeof record === "function" }, deliver(admission) {
-    if (admission && typeof record === "function") (record as (value: CodexCorpusAdmission) => void)(admission);
+    if (!admission || typeof record !== "function") return;
+    const result: unknown = (record as (value: CodexCorpusAdmission) => unknown)(admission);
+    if (result !== null && (typeof result === "object" || typeof result === "function") && typeof (result as { then?: unknown }).then === "function") {
+      Promise.resolve(result).catch(() => {}); // Refused below; never leave its rejection unhandled.
+      invalid();
+    }
   } };
 }
 
@@ -136,7 +144,7 @@ function executable(options: CodexCorpusWriteOptions): { path: string; sha256: s
 const PROBE = { timeout: 5000, maxBuffer: 4096, killSignal: "SIGKILL" as const, encoding: "utf8" as const };
 const UNRECOGNIZED = /^error: unrecognized subcommand 'corpus-admission-inspect'(?:\r?\n|$)/;
 const VERSION = /^codex-cli (?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})(?:-[0-9A-Za-z-]{1,32}(?:\.[0-9A-Za-z-]{1,32}){0,7})?$/;
-const LOCK_DIRECTORY = "codex-corpus-locks", PROBE_HOME = "codex-probe-home";
+const LOCK_DIRECTORY = "codex-corpus-locks", PROBE_PARENT = "codex-probe-homes";
 /** One descriptor per corpus root, shared by a transaction and its own nested native
  * client while the transaction is open; it closes only when every holder, including a
  * still-running child, releases it. */
@@ -195,25 +203,73 @@ function skillsState(root: string, leaf: string, roots: readonly string[]): { pa
     return path;
   } };
 }
-/** Probes see only PATH, HOME and a private Skills-owned CODEX_HOME, so upstream's
- * per-launch helper aliases never land in a Codex home. */
-function probe(path: string, args: string[], home: string, stdio: "pipe" | "ignore") {
-  const env: Record<string, string> = { CODEX_HOME: home };
-  for (const key of ["PATH", "HOME"]) if (process.env[key] !== undefined) env[key] = process.env[key]!;
-  return spawnSync(path, args, { ...PROBE, cwd: home, env, stdio: ["ignore", stdio, stdio] });
+/** The per-user parent for probe homes in the Skills data root, outside project trees and
+ * Codex homes. Probe homes need no cross-writer consistency, so data-root overrides apply.
+ * Every component from `/` down is validated before anything is created. */
+function probeParent(roots: readonly string[]): string {
+  const dataRoot = resolve(getDataDirReadOnly()), path = join(dataRoot, PROBE_PARENT), uid = process.getuid!();
+  const chain: string[] = [];
+  for (let component = path; ; component = dirname(component)) { chain.unshift(component); if (dirname(component) === component) break; }
+  const verify = () => {
+    if (roots.some(item => contains(item, path)) || codexCorpusRootForPath(path) !== undefined) fail();
+    for (const component of chain) {
+      const stat = lstatSync(component, { throwIfNoEntry: false });
+      if (!stat) return;
+      const skills = contains(dataRoot, component), sticky = !skills && stat.uid === 0 && (stat.mode & 0o1000) !== 0;
+      if (!stat.isDirectory() || (stat.uid !== uid && (skills || stat.uid !== 0)) || ((stat.mode & 0o022) !== 0 && !sticky)) fail();
+    }
+  };
+  verify();
+  for (const component of chain) {
+    if (lstatSync(component, { throwIfNoEntry: false })) continue;
+    try { mkdirSync(component, { mode: 0o700 }); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  }
+  verify();
+  if (realpathSync(path) !== path) fail();
+  return path;
+}
+type ProbeHome = { path: string; dev: bigint; ino: bigint };
+/** Created in this acquisition, owner-only, at its original identity, with no alias in its chain. */
+function probeHomeIntact(home: ProbeHome, empty: boolean): boolean {
+  const stat = lstatSync(home.path, { bigint: true, throwIfNoEntry: false });
+  return !!stat && stat.isDirectory() && stat.dev === home.dev && stat.ino === home.ino && stat.uid === BigInt(process.getuid!())
+    && (stat.mode & 0o777n) === 0o700n && realpathSync(home.path) === home.path && (!empty || readdirSync(home.path).length === 0);
+}
+/** Only the exact directory created for this probe is removed, and only while it keeps
+ * its identity; removal never follows a symlink. Failure leaves it in place. */
+function removeProbeHome(home: ProbeHome): void {
+  try {
+    const stat = lstatSync(home.path, { bigint: true });
+    if (stat.isDirectory() && stat.dev === home.dev && stat.ino === home.ino) rmSync(home.path, { recursive: true, force: true });
+  } catch { /* The write never depends on probe-home cleanup. */ }
+}
+/** Each probe gets a fresh, empty, Skills-created CODEX_HOME and only PATH and HOME, so
+ * upstream's per-launch helper aliases and its `.env` never touch a Codex home or a
+ * directory Skills did not create in this acquisition. */
+function probe(path: string, args: string[], parent: string, stdio: "pipe" | "ignore") {
+  const created = mkdtempSync(join(parent, "probe-")), stat = lstatSync(created, { bigint: true });
+  const home: ProbeHome = { path: created, dev: stat.dev, ino: stat.ino };
+  try {
+    if (!probeHomeIntact(home, true)) return undefined;
+    const env: Record<string, string> = { CODEX_HOME: home.path };
+    for (const key of ["PATH", "HOME"]) if (process.env[key] !== undefined) env[key] = process.env[key]!;
+    const result = spawnSync(path, args, { ...PROBE, cwd: home.path, env, stdio: ["ignore", stdio, stdio] });
+    return probeHomeIntact(home, false) ? result : undefined;
+  } finally { removeProbeHome(home); }
 }
 /** Only the `help` form is probed: an upstream build treats an unknown leading word as a prompt. */
-function probeAdmissionCommand(path: string, home: string): "absent" | "present" | "inconclusive" {
-  const help = probe(path, ["help", "corpus-admission-inspect"], home, "pipe");
-  if (help.error || help.signal !== null) return "inconclusive";
+function probeAdmissionCommand(path: string, parent: string): "absent" | "present" | "inconclusive" {
+  const help = probe(path, ["help", "corpus-admission-inspect"], parent, "pipe");
+  if (!help || help.error || help.signal !== null) return "inconclusive";
   if (help.status === 0) return "present";
   if (help.status !== 2 || help.stdout !== "" || typeof help.stderr !== "string" || !UNRECOGNIZED.test(help.stderr)) return "inconclusive";
-  const control = probe(path, ["help", "exec"], home, "ignore");
-  return !control.error && control.signal === null && control.status === 0 ? "absent" : "inconclusive";
+  const control = probe(path, ["help", "exec"], parent, "ignore");
+  return control && !control.error && control.signal === null && control.status === 0 ? "absent" : "inconclusive";
 }
-function strictVersion(path: string, home: string): string | undefined {
-  const result = probe(path, ["--version"], home, "pipe");
-  if (result.error || result.signal !== null || result.status !== 0 || typeof result.stdout !== "string") return undefined;
+function strictVersion(path: string, parent: string): string | undefined {
+  const result = probe(path, ["--version"], parent, "pipe");
+  if (!result || result.error || result.signal !== null || result.status !== 0 || typeof result.stdout !== "string") return undefined;
   const line = result.stdout.replace(/\r?\n$/, "");
   return VERSION.test(line) ? line : undefined;
 }
@@ -230,12 +286,12 @@ function acquireFallback(inputs: Array<{ input: string; root: string }>, options
     reason = "skills-lock-unavailable";
     const roots = inputs.map(item => item.root);
     const locks = new Map(roots.map(root => [root, skillsState(root, LOCK_DIRECTORY, roots)]));
-    const home = skillsState(roots[0]!, PROBE_HOME, roots).ensure();
+    const parent = probeParent(roots);
     reason = "probe-inconclusive";
-    const state = probeAdmissionCommand(native.path, home);
+    const state = probeAdmissionCommand(native.path, parent);
     if (state === "present") reason = "command-present";
     if (state !== "absent") fail();
-    const version = strictVersion(native.path, home);
+    const version = strictVersion(native.path, parent);
     if (version === undefined) fail();
     reason = "executable-unverified";
     native.assertCurrent();

@@ -55,9 +55,9 @@ test("hook install applies on an upstream Codex build through the interim fallba
   // Nothing native was bootstrapped; the exclusive lock lives in Skills state.
   expect(existsSync(join(s.corpus, ".native-corpus-admission.flock-v1"))).toBe(false);
   expect(readdirSync(join(s.data, "codex-corpus-locks"))).toEqual([expect.stringMatching(/^codex-corpus-[a-f0-9]{64}\.flock-v1$/)]);
-  // Upstream's per-launch helper aliases went to the private probe home, not the Codex home.
+  // Upstream's per-launch helper aliases went to fresh probe homes in the data root, which were removed.
   expect(existsSync(join(s.corpus, "tmp"))).toBe(false);
-  expect(readdirSync(join(s.data, "codex-probe-home", "tmp", "arg0")).length).toBeGreaterThan(0);
+  expect(readdirSync(join(s.data, "codex-probe-homes"))).toEqual([]);
   expect(existsSync(join(s.inspector, "inspect-invoked"))).toBe(false);
   expect(existsSync(join(s.corpus, "hooks.json"))).toBe(true);
 });

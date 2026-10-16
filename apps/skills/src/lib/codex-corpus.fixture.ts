@@ -17,10 +17,12 @@ export function corpusFixture(enrolled = true, build: CorpusFixtureBuild = "admi
   const command = join(home, "native-fixture");
   // A protocol fixture, not proof of a released native implementation.
   writeFileSync(command, `#!${process.execPath}
-import { lstatSync, readFileSync, existsSync, writeFileSync, mkdirSync, mkdtempSync, appendFileSync } from "node:fs";
+import { lstatSync, readFileSync, existsSync, writeFileSync, mkdirSync, mkdtempSync, appendFileSync, renameSync, symlinkSync } from "node:fs";
 const fixtureHome = ${JSON.stringify(home)}, build = ${JSON.stringify(build)};
 const probeMode = existsSync(fixtureHome + "/probe-mode") ? readFileSync(fixtureHome + "/probe-mode", "utf8") : "";
-if (process.argv[2] === "help" || process.argv[2] === "--version") appendFileSync(fixtureHome + "/probe-log", process.argv.slice(2).join(" ") + "\\n");
+// probe-log records each probe and its CODEX_HOME; upstream also reads $CODEX_HOME/.env.
+if (process.argv[2] === "help" || process.argv[2] === "--version") appendFileSync(fixtureHome + "/probe-log", process.argv.slice(2).join(" ") + "\\t" + (process.env.CODEX_HOME ?? "") + "\\n");
+if (process.env.CODEX_HOME && existsSync(process.env.CODEX_HOME + "/.env")) appendFileSync(fixtureHome + "/probe-log", "env-read\\t" + process.env.CODEX_HOME + "\\n");
 if (build === "upstream") {
   const aliases = (process.env.CODEX_HOME || fixtureHome + "/.codex") + "/tmp/arg0";
   mkdirSync(aliases, { recursive: true, mode: 0o700 });
@@ -34,6 +36,8 @@ if (process.argv[2] === "help" && process.argv.length === 4) {
   if (process.argv[3] === "exec") { if (probeMode === "control-signal") process.kill(process.pid, "SIGTERM"); process.exit(probeMode === "control-fail" ? 1 : 0); }
   if (process.argv[3] === "corpus-admission-inspect") {
     if (probeMode === "signal") process.kill(process.pid, "SIGTERM");
+    // swap-home: replace this probe's CODEX_HOME with a symlink to <home>/victim.
+    if (probeMode === "swap-home") { renameSync(process.env.CODEX_HOME, process.env.CODEX_HOME + ".moved"); symlinkSync(fixtureHome + "/victim", process.env.CODEX_HOME); }
     if (probeMode === "swap") appendFileSync(process.argv[1], "\\n// replaced during the probe\\n");
     if (build === "admission" || probeMode === "help-0") { console.log("Inspect native corpus admission"); process.exit(0); }
     if (probeMode === "stdout-noise") console.log("unexpected");

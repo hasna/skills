@@ -891,9 +891,10 @@ probe record identifies the selected executable file (for npm installs, the
 launcher script), not the vendor binary it starts. Its guarantee is weaker.
 Upstream Codex's own refresh writes are not coordinated with that lock, only
 Skills writers exclude each other, and preimage checks refuse only the races they
-detect. For a project-level `.codex`, or a symlinked `~/.codex`, the lock and the
-probe home (which holds upstream's helper-alias symlinks) live under the target's
-parent, such as `<project>/.hasna/skills/`; ignore `.hasna/skills/codex-*` there.
+detect. For a project-level `.codex`, or a symlinked `~/.codex`, the lock lives
+under the target's parent, such as `<project>/.hasna/skills/codex-corpus-locks/`;
+ignore that folder there. Probes run with a fresh, Skills-created `CODEX_HOME` in
+`<Skills data root>/codex-probe-homes/`, removed after each probe.
 The fallback is retired in the first release after the Harnesses
 enrollment/inspect route is live for that build line.
 

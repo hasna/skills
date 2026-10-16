@@ -42,6 +42,14 @@ function skillsLockPath(root: string): string {
   const physical = realpathSync(root), stat = lstatSync(physical, { bigint: true });
   return join(stateDir(root, "codex-corpus-locks"), `codex-corpus-${sha(`${physical}\0${stat.dev}\0${stat.ino}`)}.flock-v1`);
 }
+/** Probe homes are fresh per probe, under the Skills data root. */
+const probeParent = () => join(getDataDir(), "codex-probe-homes");
+/** Every CODEX_HOME the fixture saw, in probe order; any `.env` read is reported as a failure. */
+function probeHomes(home: string): string[] {
+  const log = existsSync(join(home, "probe-log")) ? readFileSync(join(home, "probe-log"), "utf8").trim().split("\n") : [];
+  expect(log.filter(line => line.startsWith("env-read"))).toEqual([]);
+  return log.map(line => line.split("\t")[1]!);
+}
 function upstream() {
   const f = corpusFixture(false, "upstream");
   mkdirSync(join(f.root, "skills", "unrelated"), { recursive: true, mode: 0o700 });
@@ -64,14 +72,20 @@ describe("interim fallback for Codex builds without native admission", () => {
     expect(result.nativeAdmission).toBe("unavailable");
     expect(result.nativeAdmissionProbe).toEqual(expectedProbe(f.command));
     expect(readFileSync(join(dir, "SKILL.md"), "utf8")).toBe("hello\n");
-    // Upstream's per-launch helper aliases land in the private probe home, never the corpus.
+    // Upstream's per-launch helper aliases land in fresh probe homes in the data root, never the corpus.
     expect(tree(f.root, ["skills/sample"])).toEqual(before);
-    expect(readdirSync(join(stateDir(f.root, "codex-probe-home"), "tmp", "arg0")).length).toBeGreaterThan(0);
+    const homes = probeHomes(f.home);
+    expect(homes).toHaveLength(3);
+    expect(new Set(homes).size).toBe(3);
+    for (const home of homes) { expect(home.startsWith(join(probeParent(), "probe-"))).toBe(true); expect(existsSync(home)).toBe(false); }
+    expect(readdirSync(probeParent())).toEqual([]);
+    expect(lstatSync(probeParent()).mode & 0o777).toBe(0o700);
+    expect(readdirSync(join(dirname(realpathSync(f.root)), ".hasna", "skills"))).toEqual(["codex-corpus-locks"]);
     expect(existsSync(join(f.root, ".native-corpus-admission.flock-v1"))).toBe(false);
     const lock = lstatSync(skillsLockPath(f.root));
     expect(lock.isFile() && (lock.mode & 0o077) === 0).toBe(true);
     expect(readdirSync(stateDir(f.root, "codex-corpus-locks"))).toEqual([relative(stateDir(f.root, "codex-corpus-locks"), skillsLockPath(f.root))]);
-    for (const leaf of ["codex-corpus-locks", "codex-probe-home"]) expect(lstatSync(stateDir(f.root, leaf)).mode & 0o777).toBe(0o700);
+    expect(lstatSync(stateDir(f.root, "codex-corpus-locks")).mode & 0o777).toBe(0o700);
     expect(existsSync(join(getDataDir(), "codex-corpus-locks"))).toBe(false);
     expect(existsSync(join(f.home, "inspect-invoked"))).toBe(false);
     // The receipt carries the fixed probe record only, never native output.
@@ -152,20 +166,23 @@ try { withCodexCorpusWrite([${JSON.stringify(f.root)}], () => console.log("ENTER
     const child = Bun.spawn([process.execPath, "--no-env-file", "-e", script], { cwd: f.home, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     expect([stdout.trim(), stderr, status]).toEqual([`${REFUSAL} (writer-busy)`, "", 0]);
-    expect(readdirSync(other)).toEqual([]);
+    // Its probe homes went to its own data root and were removed; the lock did not move there.
+    expect(readdirSync(other)).toEqual(["a"]);
+    expect(readdirSync(join(other, "a"))).toEqual(["codex-probe-homes"]);
+    expect(readdirSync(join(other, "a", "codex-probe-homes"))).toEqual([]);
     expect(entered).toBe(0);
     release(); await first;
     withCodexCorpusWrite([f.root], () => { entered++; }, f.options);
     expect(entered).toBe(1);
   });
 
-  test("a data-root override inside the Codex home does not relocate the lock or create anything there", () => {
+  test("a data-root override inside a Codex home refuses for probe homes and creates nothing there", () => {
     const f = upstream(), before = tree(f.root), previous = process.env.HASNA_SKILLS_DIR;
     process.env.HASNA_SKILLS_DIR = join(f.root, "skills-data");
-    try { withCodexCorpusWrite([f.root], () => {}, f.options); }
+    try { expect(() => withCodexCorpusWrite([f.root], () => {}, f.options)).toThrow(new Error(`${REFUSAL} (skills-lock-unavailable)`)); }
     finally { if (previous === undefined) delete process.env.HASNA_SKILLS_DIR; else process.env.HASNA_SKILLS_DIR = previous; }
     expect(tree(f.root)).toEqual(before);
-    expect(lstatSync(skillsLockPath(f.root)).isFile()).toBe(true);
+    expect(existsSync(join(f.home, "probe-log"))).toBe(false);
   });
 
   for (const variant of ["own-home-alias", "own-home-alias-existing", "other-home-alias", "nested-in-other-home", "group-writable"] as const) test(`an unsafe Skills state location refuses before anything is created (${variant})`, () => {
@@ -192,6 +209,56 @@ try { withCodexCorpusWrite([${JSON.stringify(f.root)}], () => console.log("ENTER
     expect(existsSync(join(f.home, "probe-log"))).toBe(false);
     expect(readdirSync(join(outer, "inner"))).toEqual([".codex"]);
     expect(readdirSync(root)).toEqual([]);
+  });
+
+  for (const target of ["enrolled-home", "arbitrary"] as const) test(`a pre-seeded project probe home with a symlinked tmp and .env is never used (${target})`, () => {
+    const f = upstream(), enrolled = corpusFixture(true), arbitrary = join(f.home, "arbitrary"), seeded = join(f.home, ".hasna", "skills", "codex-probe-home");
+    mkdirSync(arbitrary, { mode: 0o700 }); mkdirSync(seeded, { recursive: true, mode: 0o700 });
+    symlinkSync(target === "enrolled-home" ? enrolled.root : arbitrary, join(seeded, "tmp"));
+    writeFileSync(join(seeded, ".env"), "SYNTHETIC_INJECTED=1\n", { mode: 0o600 });
+    const before = { enrolled: tree(enrolled.root), arbitrary: tree(arbitrary), seeded: tree(seeded) };
+    const result = writeManagedSkillDir(join(f.root, "skills", "sample"), "hello\n", { skill: "sample", ...f.options });
+    expect(result.nativeAdmission).toBe("unavailable");
+    expect({ enrolled: tree(enrolled.root), arbitrary: tree(arbitrary), seeded: tree(seeded) }).toEqual(before);
+    for (const home of probeHomes(f.home)) expect(home.startsWith(join(probeParent(), "probe-"))).toBe(true);
+  });
+
+  test("a symlinked probe parent refuses, and a symlink inside it is ignored", () => {
+    const f = upstream(), enrolled = corpusFixture(true), elsewhere = join(f.home, "elsewhere");
+    mkdirSync(elsewhere, { mode: 0o700 });
+    symlinkSync(elsewhere, probeParent());
+    expect(() => withCodexCorpusWrite([f.root], () => {}, f.options)).toThrow(new Error(`${REFUSAL} (skills-lock-unavailable)`));
+    expect(readdirSync(elsewhere)).toEqual([]);
+    expect(existsSync(join(f.home, "probe-log"))).toBe(false);
+    const g = upstream(), before = tree(enrolled.root);
+    renameSync(probeParent(), join(f.home, "parent-alias"));
+    mkdirSync(probeParent(), { mode: 0o700 }); symlinkSync(enrolled.root, join(probeParent(), "probe-seeded"));
+    withCodexCorpusWrite([g.root], () => {}, g.options);
+    expect(readdirSync(probeParent())).toEqual(["probe-seeded"]);
+    expect(tree(enrolled.root)).toEqual(before);
+    for (const home of probeHomes(g.home)) expect(home).not.toBe(join(probeParent(), "probe-seeded"));
+  });
+
+  test("probe homes are removed after each probe and never accumulate", () => {
+    const f = upstream(), before = tree(f.root);
+    for (const name of ["one", "two", "three"]) {
+      writeManagedSkillDir(join(f.root, "skills", name), "hello\n", { skill: name, ...f.options });
+      expect(readdirSync(probeParent())).toEqual([]);
+    }
+    const homes = probeHomes(f.home);
+    expect(homes).toHaveLength(9); expect(new Set(homes).size).toBe(9);
+    for (const home of homes) expect(existsSync(home)).toBe(false);
+    expect(tree(f.root, ["skills/one", "skills/two", "skills/three"])).toEqual(before);
+  });
+
+  test("a probe home replaced by a symlink during the probe refuses and is not followed on cleanup", () => {
+    const f = upstream(), victim = join(f.home, "victim"), before = tree(f.root);
+    mkdirSync(victim, { mode: 0o700 }); writeFileSync(join(victim, "keep"), "kept\n");
+    writeFileSync(join(f.home, "probe-mode"), "swap-home");
+    expect(() => withCodexCorpusWrite([f.root], () => {}, f.options)).toThrow(new Error(`${REFUSAL} (probe-inconclusive)`));
+    expect(readdirSync(victim)).toEqual(["keep"]);
+    expect(readFileSync(join(victim, "keep"), "utf8")).toBe("kept\n");
+    expect(tree(f.root)).toEqual(before);
   });
 
   test("an alias and its physical home share one lock and both stay rechecked", () => {
@@ -302,6 +369,11 @@ describe("fallback receipts", () => {
     expect(existsSync(join(f.home, "probe-log"))).toBe(false);
     expect(existsSync(join(f.home, ".hasna"))).toBe(false);
     expect(() => removeManagedAgentSkill("sample", "codex", f.home, { ...f.options, onCodexAdmission: () => { throw new Error("record refused"); } })).toThrow("record refused");
+    // The record must be taken synchronously: a thenable result refuses before anything is removed.
+    for (const callback of [async () => {}, async () => { throw new Error("rejected record"); }, () => ({ then() {} })]) {
+      expect(() => removeManagedAgentSkill("sample", "codex", f.home, { ...f.options, onCodexAdmission: callback as any })).toThrow("CODEX_CORPUS_ADMISSION_RECORD_INVALID");
+      expect(() => removeSkillForAgent("installed", { ...installOptions, onCodexAdmission: callback as any })).toThrow("CODEX_CORPUS_ADMISSION_RECORD_INVALID");
+    }
     expect(readFileSync(join(managed, "SKILL.md"), "utf8")).toBe("original\n");
     expect(readFileSync(join(installed, "SKILL.md"), "utf8")).toBe("original\n");
     const records: Array<{ admission: CodexCorpusAdmission; present: boolean }> = [];
