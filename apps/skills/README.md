@@ -82,7 +82,7 @@ credentials file) always stays on that gateway and is never sent anywhere else.
 The gateway has no interactive login service, so on such a station
 `skills login` says so and sends nothing. A stored gateway credential or vault
 reference is preserved even with `--url`. Use a separate credential profile for
-Skills.md: `skills --profile skillsmd login`. Later product commands use that
+customer sign-in: `skills --profile skillsmd login`. Later product commands use that
 profile too, for example `skills --profile skillsmd whoami --json`; fleet
 commands keep their original configuration.
 Obtain a workspace API key through your administrator's provisioning process
