@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import Spinner from "ink-spinner";
-import { gatewaySignInRefusal, resolveSkillsSignInOrigin } from "../../lib/fleet-credentials.js";
+import { captureSkillsSignInTarget, gatewaySignInRefusal } from "../../lib/fleet-credentials.js";
+import { skillsProfileCommand } from "../../lib/credential-profile-command.js";
 import {
   openVerificationPage,
   persistSignIn,
@@ -94,7 +95,7 @@ export function AccountView({ action, argument, onDone }: AccountViewProps) {
         return;
       }
 
-      const target = resolveSkillsSignInOrigin(process.env, {}, argument);
+      const target = captureSkillsSignInTarget(process.env, {}, argument);
       const refusal = gatewaySignInRefusal(target);
       if (refusal) throw refusal;
       const start = await startDeviceAuthorization(target.origin);
@@ -103,13 +104,13 @@ export function AccountView({ action, argument, onDone }: AccountViewProps) {
       update({ kind: "waiting", userCode: start.userCode, url, origin: target.origin });
       openVerificationPage(url, target.origin);
       const outcome = await pollDeviceAuthorization({
-        poll: () => pollDeviceToken(target.origin, start.deviceCode),
+        poll: () => { target.unchanged?.(); return pollDeviceToken(target.origin, start.deviceCode); },
         intervalSeconds: start.interval,
         deadline: Date.now() + start.expiresIn * 1000,
         signal: controller.signal,
       });
       if (outcome.status === "authorized") {
-        await persistSignIn(outcome.result, target.origin);
+        await persistSignIn(outcome.result, target.origin, process.env, "sign-in", target.unchanged);
         const email = outcome.result.user?.email;
         update({
           kind: "done",
@@ -117,16 +118,17 @@ export function AccountView({ action, argument, onDone }: AccountViewProps) {
           lines: [
             { text: email ? `Signed in as ${email}` : "Signed in", tone: "good" },
             { text: `Server: ${target.origin}`, tone: "dim" },
-            { text: "Register Skills with your agents from a shell: skills setup agents", tone: "dim" },
+            { text: `Register Skills with your agents from a shell: ${skillsProfileCommand("setup agents", process.env, target.origin)}`, tone: "dim" },
           ],
         });
         return;
       }
+      const retry = argument !== undefined ? `/login ${target.origin}` : "/login";
       const ended = {
-        expired: "The sign-in code expired before it was approved. Type /login to start again.",
-        invalid: "The server no longer recognises this sign-in code. Type /login to start again.",
+        expired: `The sign-in code expired before it was approved. Type ${retry} to start again.`,
+        invalid: `The server no longer recognises this sign-in code. Type ${retry} to start again.`,
         denied: "Sign-in was denied in the browser.",
-        timeout: "Sign-in timed out. Type /login to start again.",
+        timeout: `Sign-in timed out. Type ${retry} to start again.`,
         cancelled: "Sign-in cancelled.",
       }[outcome.status];
       update({ kind: "done", changed: false, lines: [{ text: ended, tone: "bad" }] });

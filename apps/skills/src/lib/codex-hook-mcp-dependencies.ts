@@ -7,6 +7,7 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { readNativeSettingsWitnessFile, hashNativeJsonControls } from "./claude-settings-witness.js";
 import { captureDiscoveryDirectoryProjection } from "./agent-discovery-directories.js";
 import { discoveryByteBudget, hashRawDiscoveryFile } from "./agent-discovery-bytes.js";
+import { CODEX_PLUGIN_MANIFEST_LOCATIONS } from "./codex-plugin-capability-paths.js";
 
 export interface CodexReviewedHookSource { path: string; sha256: string | null }
 export interface CodexHookMcpDependencies { sources: CodexReviewedHookSource[]; servers: string[] }
@@ -133,17 +134,18 @@ export function captureCodexHookMcpDependencies(configPath: string, reviewed: re
   const selectionBudget = { remaining: 65536 };
   for (const [identity, versions] of candidates) {
     const root = join(cacheRoot, identity, selectCodexPluginVersion(versions, selectionBudget));
-    // Native AgentPlugin root format precedes both legacy manifest locations.
-    // Its extension/executor contract is outside this stdio-only witness.
-    const agent = read(join(root, "plugin.json"));
+    // Native AgentPlugin root format precedes the legacy manifest locations
+    // (CODEX_PLUGIN_MANIFEST_LOCATIONS, shared with the vendor-refresh guard and
+    // the semantic cache witness). Its extension/executor contract is outside
+    // this stdio-only witness.
+    const [agentPluginManifest, ...legacyManifests] = CODEX_PLUGIN_MANIFEST_LOCATIONS;
+    const agent = read(join(root, agentPluginManifest!));
     if (agent !== null) {
       const schema = JSON.parse(agent).$schema;
       need(typeof schema !== "string" || !schema.startsWith("https://agent-plugins.org/schemas/"));
     }
-    const codex = read(join(root, ".codex-plugin/plugin.json"));
-    const claude = read(join(root, ".claude-plugin/plugin.json"));
-    const cursor = read(join(root, ".cursor-plugin/plugin.json"));
-    const text = codex ?? claude ?? cursor;
+    // Read (and so bind) every legacy location; the first present one is the manifest.
+    const text = legacyManifests.map(location => read(join(root, location))).find(value => value !== null) ?? null;
     if (text === null) continue; // All native legacy manifest locations absent.
     const manifest = JSON.parse(text!); need(record(manifest));
     function declaration(value: unknown): void {

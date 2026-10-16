@@ -5,9 +5,10 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { createInterface } from "readline";
 import { getAuthConfig, getAuthIdentity, getApiUrl, getAuthFilePath, saveAuthConfig } from "../../lib/auth-store.js";
-import { gatewaySignInRefusal, resolveSkillsFleet, resolveSkillsConnection, resolveSkillsSignInOrigin, SkillsFleetCredentialError, SKILLS_API_KEY_ENV, SKILLS_API_URL_ENV, type SignInTarget } from "../../lib/fleet-credentials.js";
+import { captureSkillsSignInTarget, gatewaySignInRefusal, resolveSkillsFleet, resolveSkillsConnection, SkillsFleetCredentialError, SKILLS_API_KEY_ENV, SKILLS_API_URL_ENV, type SignInTarget } from "../../lib/fleet-credentials.js";
 import { RemoteSkillsClient } from "../../lib/remote-client.js";
 import { getEnvironmentProfile } from "../profile-selection.js";
+import { skillsProfileCommand, skillsShellArgument } from "../../lib/credential-profile-command.js";
 import type { RemoteSkillsAccess } from "../../lib/remote-permissions.js";
 import {
   clearPendingDeviceSignIn,
@@ -187,11 +188,11 @@ function printWhoami(payload: Record<string, unknown>): void {
 /**
  * Where this sign-in goes, or null after reporting why it cannot go anywhere.
  * A target on the internal gateway (which has no sign-in service) is refused
- * here, before any request, naming what to unset.
+ * here, before any request, preserving the existing fleet configuration.
  */
 function signInTarget(url: string | undefined, json?: boolean): SignInTarget | null {
   try {
-    const target = resolveSkillsSignInOrigin(process.env, {}, url);
+    const target = captureSkillsSignInTarget(process.env, {}, url);
     const refusal = gatewaySignInRefusal(target);
     if (refusal) throw refusal;
     return target;
@@ -203,7 +204,11 @@ function signInTarget(url: string | undefined, json?: boolean): SignInTarget | n
 
 /** The flag that selects this target again, for a printed follow-up command. */
 function targetFlag(target: SignInTarget): string {
-  return target.source === "--url" ? ` --url ${target.origin}` : "";
+  return target.source === "--url" ? ` --url ${skillsShellArgument(target.origin)}` : "";
+}
+
+function skillsCommand(command: string, target: SignInTarget): string {
+  return skillsProfileCommand(command, process.env, target.origin);
 }
 
 /**
@@ -221,7 +226,7 @@ async function finishSignIn(result: SignInResult, target: SignInTarget, json?: b
       ...(organization ? { organization } : {}),
       ...(result.firstLogin !== undefined ? { firstLogin: result.firstLogin } : {}),
       apiUrl: target.origin,
-      next: ["skills setup agents"],
+      next: [skillsCommand("setup agents", target)],
     }));
     return;
   }
@@ -232,21 +237,21 @@ async function finishSignIn(result: SignInResult, target: SignInTarget, json?: b
   // The real path, not an assumed one: HASNA_HOME / HASNA_CONFIG_HOME relocate
   // the credentials file the shared ladder reads.
   console.log(chalk.dim(`  API key saved to ${getAuthFilePath()}`));
-  await offerAgentSetup();
+  await offerAgentSetup(target);
 }
 
-async function offerAgentSetup(): Promise<void> {
+async function offerAgentSetup(target: SignInTarget): Promise<void> {
   // Optional: declining or interrupting it never turns a completed sign-in into a failure.
   const before = process.exitCode;
-  const answer = await prompt("\nRegister Skills with your coding agents now (skills setup agents)? [Y/n] ");
+  const answer = await prompt(`\nRegister Skills with your coding agents now (${skillsCommand("setup agents", target)})? [Y/n] `);
   if (answer === null) {
     // `undefined` does not reset an exit code once set, so restore explicitly.
     process.exitCode = before ?? 0;
-    console.log(chalk.dim("\nSkipped. Run it any time: skills setup agents"));
+    console.log(chalk.dim(`\nSkipped. Run it any time: ${skillsCommand("setup agents", target)}`));
     return;
   }
   if (answer !== "" && !/^y(es)?$/i.test(answer)) {
-    console.log(chalk.dim("Skipped. Run it any time: skills setup agents"));
+    console.log(chalk.dim(`Skipped. Run it any time: ${skillsCommand("setup agents", target)}`));
     return;
   }
   // Sign-in already succeeded; an agent that is not installed must not turn
@@ -326,7 +331,7 @@ async function doLogin(email: string, code: string | undefined, json: boolean | 
     if (!json) console.log(chalk.green("✓ Code sent to " + email));
 
     if (json || !isTTY || !process.stderr.isTTY) {
-      console.log(JSON.stringify({ status: "code_sent", email, message: `Supply the fresh six-digit code on stdin to: skills login --email ${email} --code-stdin${targetFlag(target)}` }));
+      console.log(JSON.stringify({ status: "code_sent", email, message: `Supply the fresh six-digit code on stdin to: ${skillsCommand("login", target)} --email ${skillsShellArgument(email)} --code-stdin${targetFlag(target)}` }));
       return;
     }
 
@@ -337,6 +342,7 @@ async function doLogin(email: string, code: string | undefined, json: boolean | 
 
   let verifyRes: any;
   try {
+    target.unchanged?.();
     verifyRes = await apiRequest("/api/auth/verify", {
       method: "POST",
       body: JSON.stringify({ email, code }),
@@ -352,7 +358,7 @@ async function doLogin(email: string, code: string | undefined, json: boolean | 
   }
 
   try {
-    await persistSignIn(verifyRes, origin, env, "sign-in");
+    await persistSignIn(verifyRes, origin, env, "sign-in", target.unchanged);
   } catch (err) {
     writeCommandError(err, "Login succeeded but API key creation failed", json);
     return;
@@ -384,6 +390,7 @@ async function doApiKeyLogin(apiKey: string | true, json: boolean | undefined, t
 
   let whoami: any;
   try {
+    target.unchanged?.();
     whoami = await apiRequest("/api/auth/whoami", {
       headers: { Authorization: `Bearer ${trimmed}` },
     }, origin);
@@ -402,22 +409,23 @@ async function doApiKeyLogin(apiKey: string | true, json: boolean | undefined, t
   // field with a placeholder both invents a fact about the user and, when the
   // placeholder names a deployment variant, hands every later reader of
   // `auth.json` a fingerprint of the instance the key belongs to.
-  saveAuthConfig({
+  try { saveAuthConfig({
     apiKey: trimmed,
     ...(email ? { email } : {}),
     ...(orgId ? { orgId } : {}),
     ...(orgSlug ? { orgSlug } : {}),
     ...(userId ? { userId } : {}),
-  }, env, origin, "api-key");
+  }, env, origin, "api-key", target.unchanged); }
+  catch (error) { writeCommandError(error, "API key verified but the selected profile changed", json); return; }
 
   if (json || !isTTY) {
-    console.log(JSON.stringify({ ...identity, status: "authenticated", apiUrl: origin, next: ["skills setup agents"] }, null, 2));
+    console.log(JSON.stringify({ ...identity, status: "authenticated", apiUrl: origin, next: [skillsCommand("setup agents", target)] }, null, 2));
     return;
   }
 
   printWhoami(identity);
   console.log(chalk.dim(`Server: ${origin}`));
-  await offerAgentSetup();
+  await offerAgentSetup(target);
 }
 
 interface DeviceLoginOptions {
@@ -445,7 +453,7 @@ async function doDeviceLogin(options: DeviceLoginOptions, target: SignInTarget) 
   const origin = target.origin;
   const json = Boolean(options.json);
   const interactive = Boolean(isTTY && !json);
-  const next = `skills login --poll${targetFlag(target)}`;
+  const next = `${skillsCommand("login", target)} --poll${targetFlag(target)}`;
 
   // `--poll` finishes the session a headless `skills login --device` started:
   // the code the user already approved must not be thrown away for a new one.
@@ -456,7 +464,7 @@ async function doDeviceLogin(options: DeviceLoginOptions, target: SignInTarget) 
     const others = pendingDeviceSignInOrigins(env).filter((other) => other !== origin);
     if (others.length > 0) {
       writeCommandError(new Error(
-        `No pending sign-in for ${origin}. Pending: ${others.map((other) => `skills login --poll --url ${other}`).join("; ")}`,
+        `No pending sign-in for ${origin}. Pending: ${others.map((other) => `${skillsProfileCommand("login", process.env, other)} --poll --url ${skillsShellArgument(other)}`).join("; ")}`,
       ), "No pending sign-in", json);
       return;
     }
@@ -513,7 +521,7 @@ async function doDeviceLogin(options: DeviceLoginOptions, target: SignInTarget) 
   try {
     const deviceCode = session.deviceCode;
     outcome = await pollDeviceAuthorization({
-      poll: () => pollDeviceToken(origin, deviceCode),
+      poll: () => { target.unchanged?.(); return pollDeviceToken(origin, deviceCode); },
       intervalSeconds: session.interval,
       deadline: Math.min(Date.now() + timeoutMs, session.expiresAt),
       onSlowDown: (intervalMs) => {
@@ -527,8 +535,8 @@ async function doDeviceLogin(options: DeviceLoginOptions, target: SignInTarget) 
 
   if (outcome.status !== "authorized") {
     const ended: Record<typeof outcome.status, string> = {
-      expired: "The sign-in code expired before it was approved. Start again: skills login",
-      invalid: "The server no longer recognises this sign-in code. Start again: skills login",
+      expired: `The sign-in code expired before it was approved. Start again: ${skillsCommand("login", target)}${targetFlag(target)}`,
+      invalid: `The server no longer recognises this sign-in code. Start again: ${skillsCommand("login", target)}${targetFlag(target)}`,
       denied: "Sign-in was denied in the browser.",
       timeout: `Device login timed out before browser authentication completed. Resume with: ${next}`,
       cancelled: "Sign-in cancelled.",
@@ -544,7 +552,7 @@ async function doDeviceLogin(options: DeviceLoginOptions, target: SignInTarget) 
   }
 
   try {
-    await persistSignIn(outcome.result, origin, env, "sign-in");
+    await persistSignIn(outcome.result, origin, env, "sign-in", target.unchanged);
   } catch (err) {
     writeCommandError(err, "Login succeeded but API key creation failed", json);
     return;
