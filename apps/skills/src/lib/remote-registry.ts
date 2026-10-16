@@ -29,11 +29,12 @@ const remoteAvailabilitySchema = z.object({
 }).passthrough();
 
 const remoteSkillSchema = z.object({
+  id: z.string().regex(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/).optional(),
   name: z.string().min(1).optional(),
   slug: z.string().min(1).optional(),
   displayName: z.string().optional(),
   description: z.string().optional(),
-  category: z.string().optional(),
+  category: z.string().nullable().optional(),
   tags: z.array(z.string()).optional(),
   dependencies: z.array(z.string()).optional(),
   version: z.string().optional(),
@@ -136,6 +137,7 @@ function normalizeRemoteSkill(skill: z.infer<typeof remoteSkillSchema>): SkillMe
   const name = skill.name || skill.slug;
   if (!name) throw new Error("Remote skill requires name or slug");
   return {
+    ...(skill.id !== undefined ? { id: skill.id } : {}),
     name,
     displayName: skill.displayName || titleize(name),
     description: skill.description || "",

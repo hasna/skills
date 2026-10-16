@@ -3,6 +3,7 @@ import { useDefaultTestTimeout } from "../test-preload.js";
 import { RemotePrivatePublicationsClient } from "./remote-private-publications.js";
 import type { CreatePrivateSkillInput as RootInput, CreatedPrivateSkill as RootResult } from "../index.js";
 import type { CreatePrivateSkillInput as SdkInput, CreatedPrivateSkill as SdkResult } from "../sdk/index.js";
+import { loadRemoteRegistry, loadRemoteSkill, parseRemoteRegistryPayload, parseRemoteSkillPayload } from "./remote-registry.js";
 
 useDefaultTestTimeout();
 const origin = "http://127.0.0.1:1";
@@ -106,4 +107,45 @@ test("a create deadline bounds an unresponsive response without another POST", a
   let calls = 0; mockFetch(() => { calls++; return new Promise(() => {}); });
   await expect(client().createSkill(input(), { timeoutMs: 5 })).rejects.toMatchObject({ code: "SKILL_CREATE_UNCONFIRMED", uncertain: true });
   expect(calls).toBe(1);
+});
+
+test("metadata accepts a missing category and retains only an optional validated server UUID", () => {
+  const row = response();
+  expect(parseRemoteRegistryPayload([row])[0]).toMatchObject({ id: skillId, category: "Remote" });
+  expect(parseRemoteSkillPayload(row)).toMatchObject({ id: skillId, category: "Remote" });
+  const { id: _id, ...withoutId } = row;
+  expect(parseRemoteSkillPayload(withoutId).id).toBeUndefined();
+  for (const id of [null, "not-an-id", "44444444-4444-4444-8444-444444444444\nforeign"]) {
+    expect(() => parseRemoteSkillPayload({ ...row, id })).toThrow("expected skills contract");
+  }
+});
+
+test("an ambiguous create is recovered by metadata lookup and its UUID targets the publication", async () => {
+  let created: ReturnType<typeof response> | undefined;
+  const calls: string[] = [];
+  const hash = "a".repeat(64);
+  const declaration = { idempotencyKey: "55555555-5555-4555-8555-555555555555", version: "1.0.0", expectedCurrentVersionId: null,
+    manifestText: JSON.stringify({ standard: "hasna.skill.v1", name: "my-private-skill", description: "Fixture", kind: "instruction", version: "1.0.0", provenance: { content_hash: hash } }),
+    archiveSha256: hash, archiveByteSize: 1 };
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    const target = new URL(String(url)); expect(target.origin).toBe(origin);
+    expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${session.token}`);
+    calls.push(`${init?.method ?? "GET"} ${target.pathname}`);
+    if (target.pathname === "/api/v1/skills" && init?.method === "POST") { created = response(); throw new Error("Lost synthetic create response"); }
+    if (target.pathname === "/api/v1/skills" && !init?.method) return Response.json([created]);
+    if (target.pathname === "/api/v1/skills/my-private-skill") return Response.json(created);
+    if (target.pathname === "/api/v1/capabilities") return Response.json({ contractVersion: 1, apiVersion: 1, privatePublishing: {
+      contractVersion: 1, enabled: true, authentication: "interactive-session", maxArchiveBytes: 16777216, uploadMaxTtlSeconds: 300, executionEnabled: false } });
+    expect(target.pathname).toBe(`/api/v1/skills/${skillId}/publication-uploads`); expect(init?.method).toBe("POST");
+    return Response.json({ upload: { id: "66666666-6666-4666-8666-666666666666", skillId, version: "1.0.0", expectedCurrentVersionId: null,
+      archiveSha256: hash, archiveByteSize: 1, state: "awaiting_upload", expiresAt: "2030-01-01T00:00:00Z", createdAt: "2026-10-16T00:00:00Z", versionId: null } }, { status: 201 });
+  }) as typeof fetch;
+  const publisher = client();
+  await expect(publisher.createSkill(input())).rejects.toMatchObject({ uncertain: true });
+  const options = { apiUrl: origin, authToken: session.token };
+  const listed = (await loadRemoteRegistry(options))[0]!;
+  const detail = await loadRemoteSkill(listed.name, options);
+  expect(detail.id).toBe(listed.id); expect(detail.id).toBe(skillId);
+  expect((await publisher.begin(detail.id!, declaration)).skillId).toBe(skillId);
+  expect(calls.filter(call => call === "POST /api/v1/skills")).toHaveLength(1);
 });

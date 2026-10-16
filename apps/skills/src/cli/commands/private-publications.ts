@@ -1,8 +1,7 @@
 import type { Command } from "commander";
 import { resolve } from "node:path";
 import { RemoteSkillsAuthClient } from "../../lib/remote-auth.js";
-import { getApiUrl } from "../../lib/auth-store.js";
-import { privatePublicationCustomerError, privatePublicationSession } from "../../lib/private-publication-customer.js";
+import { privatePublicationCustomerError, preparePrivatePublicationSession } from "../../lib/private-publication-customer.js";
 import { preparePrivatePublication, continuePrivatePublication, inspectPrivatePublication, type PrivatePublicationResult } from "../../lib/private-publication-recovery.js";
 import { checkedPrivateSkillCreate, PrivatePublicationError, publicationUuid } from "../../lib/remote-private-publications.js";
 import { promptCode, readCode } from "./customer-verification.js";
@@ -52,12 +51,13 @@ export function registerPrivatePublications(parent: Command) {
       try {
         const body = checkedPrivateSkillCreate({ slug, displayName: options.displayName, description: options.description, visibility: options.visibility, confirm: options.confirm });
         verifySessionOptions(options);
+        const context = options.userId ? { userId: options.userId, membershipId: options.membershipId! } : undefined;
+        const pending = preparePrivatePublicationSession(context);
         let code: string | null;
         if (options.codeStdin) code = await readCode();
-        else { await new RemoteSkillsAuthClient(getApiUrl("Create private skills")).requestCode(options.email); code = await promptCode(); }
+        else { await new RemoteSkillsAuthClient(pending.origin).requestCode(options.email); code = await promptCode(); }
         if (code === null) return;
-        const context = options.userId ? { userId: options.userId, membershipId: options.membershipId! } : undefined;
-        const client = await privatePublicationSession(options.email, code, context);
+        const client = await pending.verify(options.email, code);
         const result = await client.createSkill({ ...body, confirm: true });
         if (options.json) console.log(JSON.stringify(result));
         else { console.log(`Created ${result.visibility} skill: ${result.slug}`); console.log(`Skill ID: ${result.id}`); }
@@ -115,12 +115,13 @@ export function registerPrivatePublications(parent: Command) {
       const options = (action === "publish" ? args[1] : args[0]) as Options;
       try {
         verifyOptions(options, action);
+        const context = options.userId ? { userId: options.userId, membershipId: options.membershipId! } : undefined;
+        const pending = preparePrivatePublicationSession(context);
         let code: string | null;
         if (options.codeStdin) code = await readCode();
-        else { await new RemoteSkillsAuthClient(getApiUrl("Publish private skills")).requestCode(options.email); code = await promptCode(); }
+        else { await new RemoteSkillsAuthClient(pending.origin).requestCode(options.email); code = await promptCode(); }
         if (code === null) return;
-        const context = options.userId ? { userId: options.userId, membershipId: options.membershipId! } : undefined;
-        const client = await privatePublicationSession(options.email, code, context), directory = resolve(options.recoveryDir);
+        const client = await pending.verify(options.email, code), directory = resolve(options.recoveryDir);
         if (action === "publish") await preparePrivatePublication(client, resolve(args[0] as string), directory,
           { skillId: options.skillId!, expectedCurrentVersionId: options.expectedCurrentVersion ?? null, idempotencyKey: options.idempotencyKey });
         const result = action === "publish" || action === "resume"

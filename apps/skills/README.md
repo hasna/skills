@@ -2359,8 +2359,13 @@ verification; an API key cannot create or publish a private skill. Use
 descriptions are limited to 8192 UTF-8 bytes. JSON returns only validated IDs,
 the slug, visibility and source type, bound to the selected workspace. Creation
 does not write a recovery directory or save the session. If its result is
-uncertain, inspect that workspace for the same slug before creating again;
-the command never retries its create POST automatically.
+uncertain, run `skills --profile customer info my-skill --remote --json` on
+the same workspace to recover its validated `id`, then use that ID with
+`publication publish --skill-id`. `list --remote --json` also includes server
+UUIDs when supplied. Newly created rows with no category display as `Remote`.
+Do not repeat creation to recover a lost result; the command never retries its
+create POST automatically. The selected profile, origin and credential files
+are captured before code entry; a change during that wait refuses the action.
 
 Without an enrolled named profile, also supply the observed `--user-id` and
 `--membership-id`. `publication resume` and `publication cancel` use the same
