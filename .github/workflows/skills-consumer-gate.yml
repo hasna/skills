@@ -66,11 +66,11 @@ jobs:
           umask 022
           bun run build
 
-      - name: Unit tests for MCP registration, tools/list, and gate helpers
+      - name: Unit tests for MCP registration, tools/list, private create, and gate helpers
         working-directory: apps/skills
         env:
           NO_COLOR: "1"
-        run: bun test --timeout 30000 src/mcp/package-tool-list.test.ts src/lib/mcp-zod-bundle.test.ts src/lib/release-candidate-archive.test.ts src/cli/commands/runtime-mcp-registration.test.ts
+        run: bun test --timeout 30000 src/mcp/package-tool-list.test.ts src/lib/mcp-zod-bundle.test.ts src/lib/release-candidate-archive.test.ts src/cli/commands/runtime-mcp-registration.test.ts src/cli/cli.private-skill-create.test.ts
 
       - name: Run package-owned prepack gates
         working-directory: apps/skills
