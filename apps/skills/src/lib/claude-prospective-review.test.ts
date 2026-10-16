@@ -341,7 +341,7 @@ test("a malformed current settings marketplace map or selected row cannot be nor
 });
 
 test("settings marketplace mutation is explicit and restricted to the measured native operation", () => {
-  for (const version of ["2.1.292", "2.1.294", "2.1.295", "2.1.297", "2.1.298", "2.1.301", "2.1.293-beta", "2.1.296+local", "2.1.300-beta", "2.1.300+local"]) {
+  for (const version of ["2.1.292", "2.1.294", "2.1.295", "2.1.297", "2.1.298", "2.1.302", "2.1.293-beta", "2.1.296+local", "2.1.300-beta", "2.1.300+local", "2.1.301-beta", "2.1.301+local"]) {
     const f = fixture(); f.request.native.executable.version = version;
     f.request.candidate.settingsMarketplaceSource = "directory";
     expect(() => review(f.request)).toThrow("measured Claude user-scope writer");
@@ -357,7 +357,7 @@ test("settings marketplace mutation is explicit and restricted to the measured n
 });
 
 test("measured fleet Claude writers accept the declared directory operation", () => {
-  for (const version of ["2.1.276", "2.1.278", "2.1.282", "2.1.287", "2.1.293", "2.1.296", "2.1.299", "2.1.300"]) {
+  for (const version of ["2.1.276", "2.1.278", "2.1.282", "2.1.287", "2.1.293", "2.1.296", "2.1.299", "2.1.300", "2.1.301"]) {
     const f = fixture();
     f.request.native.executable.version = `${version} (Claude Code)`;
     f.request.candidate.settingsMarketplaceSource = "directory";
