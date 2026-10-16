@@ -10,7 +10,7 @@ import { hashNativeJsonControls } from "./claude-settings-witness.js";
 import { inventoryNativeSkills } from "./agent-integration.js";
 import { reviewedCodexPluginSourceRoots } from "./codex-plugin-skill-controls.js";
 import { assertAgentPolicyCollections } from "./agent-policy-limits.js";
-import { captureDiscoveryDirectories } from "./agent-discovery.js";
+import { captureDiscoveryDirectories, resolveAgentDiscovery } from "./agent-discovery.js";
 import { parseManagedSkillPolicy } from "./managed-policy.js";
 import { admitCorpusFixture, installCorpusInspectorFixture } from "./codex-corpus.fixture.js";
 import { captureCodexSettingsV3 } from "./codex-settings-witness.js";
@@ -440,6 +440,26 @@ test("codex-cli 0.163.0 reviewed inactivity requires an explicit plugin disable,
      expect(isReviewedCodexPluginInactive(document,cache,reviewed.inactivePlugins,defaultOnly,rules,read)).toBe(false);
  }
  expect(()=>reviewCodexPluginControls({...catalog,version:"codex-cli 0.163.1"},[document],cache,home,read,rules,{"inactive@probe":{enabled:false}})).toThrow("IDENTITY_UNSUPPORTED");
+});
+
+// 0.163.0 `[plugins._default] enabled = false` only disables entries that omit
+// `enabled`, and automatic discovery already refuses every such entry. Skipping
+// that disabling default therefore cannot hide an active plugin; any other
+// `_default` form, or an entry without explicit enablement, still refuses.
+test("automatic Codex discovery skips only a disabling plugin default and refuses every entry the default could affect", () => {
+ const discover=(text:string)=>{
+   const home=mkdtempSync(join(tmpdir(),"skills-default-plugin-discovery-")); roots.push(home);
+   put(join(home,".codex/config.toml"),'model = "synthetic"\n'+text);
+   return ()=>resolveAgentDiscovery({home,agent:"codex"});
+ };
+ for (const [text,refusal] of [
+   ['[plugins._default]\nenabled = true\n',"enabled plugin marketplace is not an explicit local source"],
+   ['[plugins._default]\n',"unsupported plugin enablement"],
+   ['[plugins._default]\nenabled = false\n[plugins."vendor@probe"]\n',"unsupported plugin enablement"],
+   ['[plugins."vendor@probe"]\n',"unsupported plugin enablement"],
+ ] as const) expect(discover(text)).toThrow(refusal);
+ for (const text of ['[plugins._default]\nenabled = false\n','[plugins._default]\nenabled = false\n[plugins."vendor@probe"]\nenabled = false\n'])
+   expect(discover(text)).not.toThrow();
 });
 
 for (const nativeVersion of ["codex-cli 0.160.0", "codex-cli 0.160.1", "codex-cli 0.161.0", "codex-cli 0.162.0", "codex-cli 0.162.1", "codex-cli 0.163.0"]) for (const rootKind of ["plugin", "skills"] as const) test(`native ${nativeVersion} local installation inputs remain inventory-only with a configured ${rootKind} root`, () => {
