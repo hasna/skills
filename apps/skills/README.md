@@ -2342,12 +2342,25 @@ current version UUID (or `--expect-empty`). Request a code with `auth signup`
 first, then enter it over stdin; do not put verification codes in shell history.
 
 ```sh
+skills --profile customer publication create my-skill --display-name "My skill" \
+  --email you@example.com --code-stdin --confirm --json
 skills --profile customer publication publish ./my-skill \
   --skill-id <skill-uuid> --expect-empty --recovery-dir "$PWD/publication-receipt" \
   --email you@example.com --code-stdin --confirm --json
 skills --profile customer publication status --recovery-dir "$PWD/publication-receipt" \
   --email you@example.com --code-stdin --json
 ```
+
+`publication create` creates an empty private skill and returns its `id` for
+`publication publish --skill-id`. It requires Pro and fresh interactive session
+verification; an API key cannot create or publish a private skill. Use
+`--visibility team` for a team skill. Slugs use lowercase kebab-case (at most
+128 characters), display names are nonempty (at most 256 characters), and
+descriptions are limited to 8192 UTF-8 bytes. JSON returns only validated IDs,
+the slug, visibility and source type, bound to the selected workspace. Creation
+does not write a recovery directory or save the session. If its result is
+uncertain, inspect that workspace for the same slug before creating again;
+the command never retries its create POST automatically.
 
 Without an enrolled named profile, also supply the observed `--user-id` and
 `--membership-id`. `publication resume` and `publication cancel` use the same
@@ -2366,7 +2379,10 @@ server's current boolean capability; it does not authorize an individual run.
 
 The SDK exports `RemotePrivatePublicationsClient` through both the root and
 `./sdk`; `RemoteSkillsAuthClient.openPrivatePublications` creates one from fresh
-workspace verification. The shared `preparePrivatePublication`,
+workspace verification. Call its `createSkill({ slug, displayName, confirm: true })`
+with optional `description` and `visibility` to obtain the validated skill ID.
+`CreatePrivateSkillInput` and `CreatedPrivateSkill` are exported by both entry
+points. The shared `preparePrivatePublication`,
 `continuePrivatePublication`, `inspectPrivatePublication`, and
 `readPrivatePublicationRecovery` functions implement the same durable workflow.
 MCP exposes `publish_private_skill`, `get_private_publication`,
