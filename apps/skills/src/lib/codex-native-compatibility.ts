@@ -29,6 +29,11 @@ const MEASURED_CODEX_CAPABILITIES: Readonly<Record<string, readonly CodexNativeC
   // skills, plugin and config contracts to rust-v0.162.0 (c1382380).
   // This exact entry preserves runtime validation and separate corpus admission.
   "codex-cli 0.162.1": ["hooks", "qualified-skill-catalog", "installed-plugin-review"],
+  // rust-v0.163.0 (83086188; npm linux-arm64 binary sha256 8a96f66d) emits
+  // byte-identical schemas for every method Skills calls and matches 0.162.1 in
+  // native hook trust, catalog and plugin probes. Its new `[plugins._default]`
+  // can disable an entry without `enabled`; reviewed inactivity stays explicit.
+  "codex-cli 0.163.0": ["hooks", "qualified-skill-catalog", "installed-plugin-review"],
 };
 
 /** `installed-plugin-review`: the 0.160 `plugin/installed` source identities and
