@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.77
+
+### Patch Changes
+
+- Preserve internal gateway credentials during customer sign-in. Refuse replacing a fleet credential before starting authentication, keep the selected profile and API origin stable while waiting for approval, and give profile-specific recovery commands in the CLI and TUI.
+
 ## 0.10.76
 
 ### Patch Changes
