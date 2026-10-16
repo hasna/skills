@@ -85,6 +85,7 @@ import { captureSkillsCredentialFiles, readSkillsInstanceMetadata, selectedSkill
 import { selectedCliSkillsCredentialProfile } from "./cli-credential-profile.js";
 import { isSkillsLocalOptIn, selectsSkillsLocalMode, SKILLS_LOCAL_OPT_IN_ENV_KEYS } from "./local-opt-in.js";
 import { SKILLS_PRODUCT_DEFAULT_ORIGIN } from "./product-default.js";
+import { skillsApiUrlEnvironment } from "./credential-profile-command.js";
 
 /** The app slug: the Keychain service, the `~/.hasna/<app>` folder, the gateway path. */
 export const SKILLS_APP = "skills";
@@ -814,7 +815,7 @@ export function gatewaySignInRefusal(target: SignInTarget): SkillsFleetCredentia
   const cause = target.credentialSource
     ? `${target.credentialSource} holds a Skills credential for the internal gateway`
     : target.source === "--url" ? "--url names the internal gateway" : `${target.source} selects the internal gateway`;
-  const command = (SKILLS_API_URL_ENV_KEYS.includes(target.source) ? `${SKILLS_API_URL_ENV}=${SKILLS_PRODUCT_DEFAULT_ORIGIN} ` : "") +
+  const command = (SKILLS_API_URL_ENV_KEYS.includes(target.source) ? `${skillsApiUrlEnvironment(SKILLS_PRODUCT_DEFAULT_ORIGIN)} ` : "") +
     "skills --profile <new-profile> login";
   return new SkillsFleetCredentialError(
     `${cause}, which has no sign-in service. Nothing was sent. ` +
@@ -829,6 +830,8 @@ export function assertSkillsSignInCredentialReplaceable(env: Env = process.env, 
   const files = skillsProfileCredentialFiles(env, profile);
   const verifyUnchanged = captureSkillsCredentialFiles(files);
   const gateway = normalizeSkillsApiOrigin(defaultFleetGatewayBaseUrl(SKILLS_APP));
+  const command = (SKILLS_API_URL_ENV_KEYS.some(name => env[name]?.trim()) ? `${skillsApiUrlEnvironment(SKILLS_PRODUCT_DEFAULT_ORIGIN)} ` : "") +
+    "skills --profile <new-profile> login";
   for (const file of files) {
     if (!skillsFileHasCredential(file)) continue;
     const metadata = readSkillsInstanceMetadata(file);
@@ -836,9 +839,9 @@ export function assertSkillsSignInCredentialReplaceable(env: Env = process.env, 
     if (skillsFileHasVaultReference(file) || !instance || normalizeSkillsApiOrigin(instance) === gateway) {
       throw new SkillsFleetCredentialError(
         "The selected profile contains a protected fleet credential or vault reference. Nothing was sent or changed. " +
-          "Use a separate profile for product sign-in: skills --profile <new-profile> login.",
+          `Use a separate profile for product sign-in: ${command}.`,
         "STORED_CREDENTIAL_PROTECTED",
-        ["skills --profile <new-profile> login"],
+        [command],
       );
     }
   }
@@ -912,7 +915,7 @@ export function resolveSkillsSignInOrigin(
       const origin = explicitSignInOrigin(explicitUrl);
       const storedHere = declared ? skillsProfileCredentialFiles(snapshot, profile).includes(declared.source) : false;
       if (declared && !storedHere && normalizeSkillsApiOrigin(declared.value) !== origin) {
-        const command = `${SKILLS_API_URL_ENV}=${origin} skills --profile <new-profile> login`;
+        const command = `${skillsApiUrlEnvironment(origin)} skills --profile <new-profile> login`;
         throw new SkillsFleetCredentialError(
           `--url ${origin} conflicts with ${declared.source}, which outranks the saved configuration and would ` +
             `shadow the key this sign-in stores. Keep the existing configuration and use a separate process and profile: ${command}.`,

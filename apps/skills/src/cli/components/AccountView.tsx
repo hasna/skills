@@ -104,7 +104,7 @@ export function AccountView({ action, argument, onDone }: AccountViewProps) {
       update({ kind: "waiting", userCode: start.userCode, url, origin: target.origin });
       openVerificationPage(url, target.origin);
       const outcome = await pollDeviceAuthorization({
-        poll: () => pollDeviceToken(target.origin, start.deviceCode),
+        poll: () => { target.unchanged?.(); return pollDeviceToken(target.origin, start.deviceCode); },
         intervalSeconds: start.interval,
         deadline: Date.now() + start.expiresIn * 1000,
         signal: controller.signal,
@@ -118,7 +118,7 @@ export function AccountView({ action, argument, onDone }: AccountViewProps) {
           lines: [
             { text: email ? `Signed in as ${email}` : "Signed in", tone: "good" },
             { text: `Server: ${target.origin}`, tone: "dim" },
-            { text: `Register Skills with your agents from a shell: ${skillsProfileCommand("setup agents")}`, tone: "dim" },
+            { text: `Register Skills with your agents from a shell: ${skillsProfileCommand("setup agents", process.env, target.origin)}`, tone: "dim" },
           ],
         });
         return;
