@@ -5,6 +5,13 @@ import { validatePortableManifestContract } from "./skill-contract.js";
 import type { PortableSkillManifest } from "./portable-skills.js";
 
 export const PRIVATE_PUBLICATION_MAX_BYTES = 16 * 1024 * 1024;
+export interface CreatePrivateSkillInput {
+  slug: string; displayName: string; description?: string; visibility?: "private" | "team"; confirm: true;
+}
+/** Only validated identifiers and enums are returned; server free text stays private. */
+export interface CreatedPrivateSkill {
+  id: string; slug: string; visibility: "private" | "team"; sourceType: "private_hosted"; ownerOrganizationId: string;
+}
 export type PrivatePublicationState = "awaiting_upload" | "queued" | "verifying" | "needs_attention" | "committed" | "rejected" | "cancelled" | "expired";
 export interface PrivatePublicationDeclaration {
   idempotencyKey: string; version: string; expectedCurrentVersionId: string | null;
@@ -25,6 +32,16 @@ export interface PrivatePublishingCapability {
 export interface PrivatePublicationUpload {
   method: "PUT"; uploadUrl: string; headers: Readonly<Record<string, string>>; expiresAt: string;
 }
+const skillCreateFailures = {
+  INVALID_SLUG: [400, "Provide a lowercase kebab-case skill slug."],
+  INVALID_DISPLAY_NAME: [400, "Provide a nonempty skill display name."],
+  INVALID_VISIBILITY: [400, "Use private or team visibility for source publication."],
+  SESSION_EXPIRED: [401, "Sign in again before creating a private skill."],
+  INTERACTIVE_SESSION_REQUIRED: [403, "An interactive account session is required to create a private skill."],
+  ACCOUNT_UNAVAILABLE: [403, "The current account membership cannot create a private skill."],
+  PLAN_REQUIRED: [403, "Private and team skills require the Pro plan."],
+  SLUG_CONFLICT: [409, "This skill slug already exists. Inspect the existing skill before publishing."],
+} as const;
 const failures = {
   INVALID_REQUEST: [400, "The publication request is invalid."],
   SESSION_EXPIRED: [401, "Sign in again to manage this publication."],
@@ -60,6 +77,24 @@ const exact = (v: unknown, keys: string[]): v is Record<string, unknown> => reco
 const date = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d\d-\d\dT[0-9:.]+(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(v) && Number.isFinite(Date.parse(v));
 export const publicationSha256 = (bytes: Uint8Array | string): string => createHash("sha256").update(bytes).digest("hex");
 
+/** Validate and capture before verification or any await. Confirmation is local only. */
+export function checkedPrivateSkillCreate(value: unknown): Omit<Required<CreatePrivateSkillInput>, "confirm"> {
+  const refuse = (field: string, accepted: string): never => { throw new PrivatePublicationError("INVALID_SKILL_CREATE_INPUT", `Invalid ${field}. ${accepted}`); };
+  if (!record(value) || !Object.keys(value).every(key => ["slug", "displayName", "description", "visibility", "confirm"].includes(key)))
+    return refuse("create input", "Provide only slug, displayName, description, visibility and confirm.");
+  if (value.confirm !== true) throw new PrivatePublicationError("SKILL_CREATE_CONFIRM_REQUIRED", "Explicit confirmation is required to create this skill.");
+  if (typeof value.slug !== "string" || value.slug.length > 128 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.slug))
+    return refuse("slug", "Use lowercase kebab-case, at most 128 characters.");
+  if (typeof value.displayName !== "string" || !value.displayName.trim() || value.displayName.length > 256 || /[\p{Cc}\p{Cs}\u2028\u2029]/u.test(value.displayName))
+    return refuse("displayName", "Use nonempty text, at most 256 characters, without control characters.");
+  if (value.description !== undefined && (typeof value.description !== "string" || Buffer.byteLength(value.description) > 8192
+    || /[\p{Cc}\p{Cs}]/u.test(value.description.replace(/[\r\n\t]/g, ""))))
+    return refuse("description", "Use text of at most 8192 UTF-8 bytes, without control characters other than tabs and newlines.");
+  if (value.visibility !== undefined && value.visibility !== "private" && value.visibility !== "team")
+    return refuse("visibility", "Use private or team.");
+  return Object.freeze({ slug: value.slug, displayName: value.displayName.trim(), description: value.description ?? "", visibility: value.visibility ?? "private" }) as Omit<Required<CreatePrivateSkillInput>, "confirm">;
+}
+
 export function checkedPublicationDeclaration(value: unknown): PrivatePublicationDeclaration {
   if (!exact(value, ["idempotencyKey", "version", "expectedCurrentVersionId", "manifestText", "archiveSha256", "archiveByteSize"])
     || !publicationUuid(value.idempotencyKey) || !(value.expectedCurrentVersionId === null || publicationUuid(value.expectedCurrentVersionId))
@@ -88,10 +123,12 @@ export function checkedPublicationView(value: unknown, skillId: string, intentId
 }
 
 /** Deadline covers headers and EOF. Cancellation never awaits an untrusted cancel hook. */
-async function boundedJson(url: string, init: RequestInit, token: string, mutation: boolean, budget = 15000, signal?: AbortSignal): Promise<unknown> {
+async function boundedJson(url: string, init: RequestInit, token: string, mutation: boolean, budget = 15000, signal?: AbortSignal, create = false): Promise<unknown> {
   const controller = new AbortController(); let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let response: Response | undefined;
-  const timeout = new PrivatePublicationError("PUBLICATION_UNCONFIRMED", "No confirmed publication result. Inspect the saved intent before retrying.", mutation);
+  const timeout = new PrivatePublicationError(create ? "SKILL_CREATE_UNCONFIRMED" : "PUBLICATION_UNCONFIRMED",
+    create ? "Skill creation could not be confirmed. Inspect the workspace for this slug before another create; do not retry automatically."
+      : "No confirmed publication result. Inspect the saved intent before retrying.", mutation);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let abort: (() => void) | undefined;
   try {
@@ -107,10 +144,16 @@ async function boundedJson(url: string, init: RequestInit, token: string, mutati
       const bytes = Buffer.concat(chunks); let body: unknown;
       try { body = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); } catch { return invalid(); }
       if (!response.ok) {
-        const code = record(body) && typeof body.code === "string" && Object.hasOwn(failures, body.code) ? body.code as keyof typeof failures : null;
-        if (code && failures[code][0] === response.status) throw new PrivatePublicationError(code, failures[code][1], mutation && code === "PUBLICATION_UNCERTAIN", response.status);
+        const known: Readonly<Record<string, readonly [number, string]>> = create ? skillCreateFailures : failures;
+        const code = record(body) && typeof body.code === "string" && Object.hasOwn(known, body.code) ? body.code : null;
+        if (code && known[code]![0] === response.status) throw new PrivatePublicationError(code, known[code]![1], mutation && code === "PUBLICATION_UNCERTAIN", response.status);
+        if (create) {
+          if (response.status >= 500) throw timeout;
+          throw new PrivatePublicationError("SKILL_CREATE_REQUEST_FAILED", "The server refused skill creation.", false, response.status);
+        }
         throw new PrivatePublicationError("PUBLICATION_REQUEST_FAILED", "The publication request was refused. Inspect its status before retrying.", mutation && response.status >= 500, response.status);
       }
+      if (create && response.status !== 201) return invalid();
       return body;
     })(), new Promise<never>((_, reject) => {
       abort = () => { controller.abort(); reject(timeout); };
@@ -141,6 +184,18 @@ export class RemotePrivatePublicationsClient {
     this.apiOrigin = normalizeSkillsApiOrigin(apiUrl); this.#token = checked.token;
     this.organizationId = checked.organization.id; this.userId = checked.user.id; this.membershipId = checked.user.membershipId;
     Object.freeze(this);
+  }
+  /** One session-only POST. An uncertain result must be inspected, never replayed. */
+  async createSkill(input: CreatePrivateSkillInput, options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<CreatedPrivateSkill> {
+    const body = checkedPrivateSkillCreate(input);
+    if (options.timeoutMs !== undefined && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1 || options.timeoutMs > 15000))
+      throw new PrivatePublicationError("INVALID_SKILL_CREATE_INPUT", "Invalid timeoutMs. Use an integer from 1 to 15000.");
+    const value = await boundedJson(skillsApiRequestUrl(this.apiOrigin, "/api/v1/skills"), { method: "POST", body: JSON.stringify(body) },
+      this.#token, true, options.timeoutMs, options.signal, true);
+    if (!record(value) || !publicationUuid(value.id) || value.slug !== body.slug || value.displayName !== body.displayName || value.description !== body.description
+      || value.visibility !== body.visibility || value.sourceType !== "private_hosted" || !record(value.metadata) || value.metadata.ownerOrganizationId !== this.organizationId)
+      throw new PrivatePublicationError("SKILL_CREATE_UNCONFIRMED", "Skill creation returned an unbound result. Inspect the workspace for this slug before another create; do not retry automatically.", true);
+    return Object.freeze({ id: value.id, slug: body.slug, visibility: body.visibility, sourceType: "private_hosted", ownerOrganizationId: this.organizationId });
   }
   async getCapability(options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<PrivatePublishingCapability> {
     if (options.timeoutMs !== undefined && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1 || options.timeoutMs > 15000)) return bad();

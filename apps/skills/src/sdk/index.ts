@@ -97,6 +97,7 @@ export { InvitationEmailInputError, RemoteInvitationEmailError, RemoteInvitation
   type RequestInvitationEmailChallenge, type AcceptInvitationEmailChallenge, type RemoteInvitationEmailChallenge,
   type RemoteInvitationEmailAcceptance, type RemoteInvitationEmailErrorCode } from "../lib/remote-invitation-recovery.js";
 export { RemotePrivatePublicationsClient, PrivatePublicationError, PRIVATE_PUBLICATION_MAX_BYTES,
+  type CreatePrivateSkillInput, type CreatedPrivateSkill,
   type PrivatePublicationDeclaration, type PrivatePublicationView, type PrivatePublicationState, type PrivatePublishingCapability } from "../lib/remote-private-publications.js";
 export { preparePrivatePublication, readPrivatePublicationRecovery, continuePrivatePublication, inspectPrivatePublication,
   type PrivatePublicationRecovery, type PrivatePublicationResult } from "../lib/private-publication-recovery.js";

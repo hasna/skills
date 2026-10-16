@@ -14,6 +14,8 @@ export type SkillSource =
   | "extension";
 
 export interface SkillMeta {
+  /** Immutable server UUID, when supplied and validated by a remote metadata read. */
+  id?: string;
   name: string;
   displayName: string;
   description: string;

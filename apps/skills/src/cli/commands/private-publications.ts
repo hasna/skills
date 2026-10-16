@@ -1,18 +1,23 @@
 import type { Command } from "commander";
 import { resolve } from "node:path";
 import { RemoteSkillsAuthClient } from "../../lib/remote-auth.js";
-import { getApiUrl } from "../../lib/auth-store.js";
-import { privatePublicationCustomerError, privatePublicationSession } from "../../lib/private-publication-customer.js";
+import { privatePublicationCustomerError, preparePrivatePublicationSession } from "../../lib/private-publication-customer.js";
 import { preparePrivatePublication, continuePrivatePublication, inspectPrivatePublication, type PrivatePublicationResult } from "../../lib/private-publication-recovery.js";
-import { PrivatePublicationError, publicationUuid } from "../../lib/remote-private-publications.js";
+import { checkedPrivateSkillCreate, PrivatePublicationError, publicationUuid } from "../../lib/remote-private-publications.js";
 import { promptCode, readCode } from "./customer-verification.js";
 
-type Options = { email: string; userId?: string; membershipId?: string; codeStdin?: boolean; json?: boolean; confirm?: boolean;
+type VerificationOptions = { email: string; userId?: string; membershipId?: string; codeStdin?: boolean; json?: boolean; confirm?: boolean };
+type Options = VerificationOptions & {
   recoveryDir: string; skillId?: string; expectedCurrentVersion?: string; expectEmpty?: boolean; idempotencyKey?: string; waitSeconds?: string };
-function verifyOptions(options: Options, action: string) {
+function verifySessionOptions(options: VerificationOptions) {
   if ((options.userId === undefined) !== (options.membershipId === undefined)
     || (options.userId !== undefined && (!publicationUuid(options.userId) || !publicationUuid(options.membershipId))))
     throw new PrivatePublicationError("PUBLICATION_CONTEXT_REQUIRED", "Provide both observed --user-id and --membership-id UUIDs.");
+  if (!options.codeStdin && (options.json || !process.stdin.isTTY || !process.stderr.isTTY))
+    throw new PrivatePublicationError("PUBLICATION_CODE_REQUIRED", "Use --code-stdin with a fresh code for noninteractive publishing.");
+}
+function verifyOptions(options: Options, action: string) {
+  verifySessionOptions(options);
   if ((action === "publish" || action === "resume" || action === "cancel") && options.confirm !== true)
     throw new PrivatePublicationError("PUBLICATION_CONFIRM_REQUIRED", "Use --confirm to approve this publication action.");
   if (action === "publish" && (!publicationUuid(options.skillId) || Boolean(options.expectEmpty) === (options.expectedCurrentVersion !== undefined)
@@ -21,8 +26,6 @@ function verifyOptions(options: Options, action: string) {
     throw new PrivatePublicationError("INVALID_PUBLICATION_INPUT", "Provide --skill-id and exactly one of --expect-empty or --expected-current-version; optional --idempotency-key must be a UUID.");
   if (options.waitSeconds !== undefined && (!/^(?:0|[1-9]\d{0,2})$/.test(options.waitSeconds) || Number(options.waitSeconds) > 300))
     throw new PrivatePublicationError("INVALID_PUBLICATION_INPUT", "Use --wait-seconds from 0 to 300.");
-  if (!options.codeStdin && (options.json || !process.stdin.isTTY || !process.stderr.isTTY))
-    throw new PrivatePublicationError("PUBLICATION_CODE_REQUIRED", "Use --code-stdin with a fresh code for noninteractive publishing.");
 }
 function print(result: PrivatePublicationResult, json?: boolean) {
   if (json) console.log(JSON.stringify(result));
@@ -31,7 +34,40 @@ function print(result: PrivatePublicationResult, json?: boolean) {
   if (!result.committed && !["cancelled", "expired"].includes(result.state)) process.exitCode = 2;
 }
 export function registerPrivatePublications(parent: Command) {
-  const group = parent.command("publication").description("Publish and reconcile private source versions on a compatible hosted server; execution is separate");
+  const group = parent.command("publication").description("Create private skills, publish and reconcile source versions on a compatible hosted server; execution is separate");
+  group.command("create").allowExcessArguments(false)
+    .description("Create a private or team skill using fresh session verification (requires Pro)")
+    .argument("<slug>", "Lowercase kebab-case skill slug")
+    .requiredOption("--display-name <name>", "Skill display name")
+    .option("--description <text>", "Skill description", "")
+    .option("--visibility <visibility>", "private or team", "private")
+    .requiredOption("--email <email>", "Account email for fresh interactive verification")
+    .option("--user-id <uuid>", "Observed account UUID (required without an enrolled named profile)")
+    .option("--membership-id <uuid>", "Observed workspace membership UUID")
+    .option("--code-stdin", "Read a fresh six-digit verification code from stdin")
+    .option("--confirm", "Explicitly approve skill creation")
+    .option("--json", "Output validated skill identifiers without credentials or server free text")
+    .action(async (slug: string, options: VerificationOptions & { displayName: string; description: string; visibility: string }) => {
+      try {
+        const body = checkedPrivateSkillCreate({ slug, displayName: options.displayName, description: options.description, visibility: options.visibility, confirm: options.confirm });
+        verifySessionOptions(options);
+        const context = options.userId ? { userId: options.userId, membershipId: options.membershipId! } : undefined;
+        const pending = preparePrivatePublicationSession(context);
+        let code: string | null;
+        if (options.codeStdin) code = await readCode();
+        else { await new RemoteSkillsAuthClient(pending.origin).requestCode(options.email); code = await promptCode(); }
+        if (code === null) return;
+        const client = await pending.verify(options.email, code);
+        const result = await client.createSkill({ ...body, confirm: true });
+        if (options.json) console.log(JSON.stringify(result));
+        else { console.log(`Created ${result.visibility} skill: ${result.slug}`); console.log(`Skill ID: ${result.id}`); }
+      } catch (error) {
+        const result = error instanceof PrivatePublicationError ? privatePublicationCustomerError(error)
+          : { error: "Unable to verify the selected account and workspace for skill creation. Check the server, membership and fresh code; no credential was saved.", code: "SKILL_CREATE_SESSION_UNAVAILABLE", uncertain: false };
+        if (options.json) console.log(JSON.stringify(result)); else console.error(result.error);
+        process.exitCode = 1;
+      }
+    });
   const publishCommand = group.command("publish").allowExcessArguments(false)
       .description("Publish private source with explicit current-version comparison")
       .requiredOption("--recovery-dir <directory>", "New recovery directory for publish; existing directory for other actions")
@@ -79,12 +115,13 @@ export function registerPrivatePublications(parent: Command) {
       const options = (action === "publish" ? args[1] : args[0]) as Options;
       try {
         verifyOptions(options, action);
+        const context = options.userId ? { userId: options.userId, membershipId: options.membershipId! } : undefined;
+        const pending = preparePrivatePublicationSession(context);
         let code: string | null;
         if (options.codeStdin) code = await readCode();
-        else { await new RemoteSkillsAuthClient(getApiUrl("Publish private skills")).requestCode(options.email); code = await promptCode(); }
+        else { await new RemoteSkillsAuthClient(pending.origin).requestCode(options.email); code = await promptCode(); }
         if (code === null) return;
-        const context = options.userId ? { userId: options.userId, membershipId: options.membershipId! } : undefined;
-        const client = await privatePublicationSession(options.email, code, context), directory = resolve(options.recoveryDir);
+        const client = await pending.verify(options.email, code), directory = resolve(options.recoveryDir);
         if (action === "publish") await preparePrivatePublication(client, resolve(args[0] as string), directory,
           { skillId: options.skillId!, expectedCurrentVersionId: options.expectedCurrentVersion ?? null, idempotencyKey: options.idempotencyKey });
         const result = action === "publish" || action === "resume"

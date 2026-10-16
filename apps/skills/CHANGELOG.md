@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add `skills publication create <slug>` for private or team skills with Pro access, explicit confirmation and fresh interactive verification bound to the captured profile and server. Remote list/info preserve validated skill IDs and accept uncategorized skills. After an uncertain create, recover the ID with `skills --profile <profile> info <slug> --remote --json` before publishing.
+
 ## 0.10.77
 
 ### Patch Changes
