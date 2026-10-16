@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmdirSync, 
 import { randomUUID } from "node:crypto";
 import { homedir } from "os";
 import { dirname, isAbsolute, join } from "path";
-import { isDeepStrictEqual } from "node:util";
+import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
 import { AGENT_TARGETS, resolveAgents, type AgentTarget } from "../../lib/installer.js";
 import { skillsShellArgument } from "../../lib/credential-profile-command.js";
 import { skillsMcpRegistrationEnvironment } from "../../lib/mcp-registration-environment.js";
@@ -103,13 +103,30 @@ async function registerClaudeMcp(command: string, server: Record<string, unknown
       }
       return bytes;
     });
-    let exitCode: number | undefined;
-    try {
-      const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
-      // Native output may contain credentials. Never render it or use it to
-      // decide whether a failed add is an existing-name refusal.
-      [, , exitCode] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-    } catch { /* An unavailable CLI can use the same guarded config upsert. */ }
+    let exitCode: number | undefined, duplicateAccepted = false, cliUnavailable = false;
+    const proc = (() => {
+      try { return Bun.spawn(args, { stdout: "pipe", stderr: "pipe" }); }
+      catch (error) {
+        // Only a missing executable supports configuring before CLI installation.
+        // Other spawn errors must not bypass native admission.
+        if (!isPlainObject(error) || error.code !== "ENOENT") throw new Error();
+        cliUnavailable = true;
+        return undefined;
+      }
+    })();
+    if (proc) {
+      // Keep native output private. Claude 2.1.301 performs its enterprise
+      // admission checks before this exact user-scope duplicate refusal.
+      const [stdout, stderr, status] = await Promise.all([
+        new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
+      ]);
+      exitCode = status;
+      const diagnostic = stripVTControlCharacters(stderr).trim();
+      duplicateAccepted = exitCode === 1 && stdout.trim() === ""
+        && (diagnostic === `MCP server ${MCP_SERVER_NAME} already exists in user config`
+          || diagnostic === `Error: MCP server ${MCP_SERVER_NAME} already exists in user config`);
+      if (exitCode !== 0 && !duplicateAccepted) throw new Error();
+    }
     return withClaudeConfigLock(path, () => {
       if (claudeUserConfigPath() !== path) throw new Error();
       const current = readClaudeConfig(path);
@@ -119,6 +136,7 @@ async function registerClaudeMcp(command: string, server: Record<string, unknown
         if (!isDeepStrictEqual(withoutClaudeSkills(previous), withoutClaudeSkills(data))
           || !isPlainObject(actual) || !isDeepStrictEqual({ ...actual, env: actual.env ?? {} }, desired)) throw new Error();
       } else {
+        if (!cliUnavailable && (!duplicateAccepted || !isPlainObject(previous.mcpServers) || !previous.mcpServers[MCP_SERVER_NAME])) throw new Error();
         // Do not overwrite any change made while awaiting the CLI, including
         // partial writes from a failed add or another Claude process.
         if (before === null ? current !== null : current === null || !current.equals(before)) throw new Error();
@@ -138,7 +156,7 @@ async function registerClaudeMcp(command: string, server: Record<string, unknown
     });
   } catch {
     return { agent: "claude", success: false, command: cliCommand,
-      error: "Could not safely update the Claude user MCP configuration; close competing config writers and retry" };
+      error: "Could not safely update the Claude user MCP configuration; native admission or config checks refused the update" };
   }
 }
 
@@ -294,8 +312,8 @@ function upsertTomlSection(content: string, header: string, body: string): strin
   return `${result.join("\n")}\n`;
 }
 
-function withoutSkillsMcp(config: Record<string, unknown>): Record<string, unknown> {
-  const preserved = { ...config };
+function withoutSkillsMcp(config: object): Record<string, unknown> {
+  const preserved: Record<string, unknown> = { ...config };
   if (isPlainObject(preserved.mcp_servers)) {
     const servers = { ...preserved.mcp_servers }; delete servers[MCP_SERVER_NAME];
     if (Object.keys(servers).length) preserved.mcp_servers = servers;

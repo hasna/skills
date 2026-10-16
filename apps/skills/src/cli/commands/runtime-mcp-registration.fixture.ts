@@ -22,7 +22,7 @@ const mode = process.argv[2];
 const origin = "http://127.0.0.1:9/customer", fleetOrigin = "http://127.0.0.1:9/internal";
 const fleetKey = randomUUID(), customerKey = randomUUID(), unrelatedKey = randomUUID();
 let requests = 0, nativeCalls = 0;
-globalThis.fetch = (async () => { requests++; throw new Error("Fixture network is disabled"); }) as typeof fetch;
+globalThis.fetch = (async () => { requests++; throw new Error("Fixture network is disabled"); }) as unknown as typeof fetch;
 Bun.spawnSync = (() => { throw new Error("Fixture native process refused"); }) as typeof Bun.spawnSync;
 const deny = () => { throw new Error("Fixture native process refused"); };
 for (const name of ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"] as const)
@@ -79,7 +79,8 @@ assert.notEqual(broken.args[0], "skills");
 assert.equal(broken.opts().env.includes("skills"), true);
 Bun.spawn = ((command: string[]) => {
   assert.equal(command[0], "claude"); nativeCalls++; nativeArguments.push(command);
-  if (mode === "claude-unavailable") throw new Error(unrelatedKey);
+  if (mode === "claude-unavailable") throw Object.assign(new Error(unrelatedKey), { code: "ENOENT" });
+  if (mode === "claude-spawn-refused") throw Object.assign(new Error(unrelatedKey), { code: "EACCES" });
   // Match the real native option contract: --env consumes every following
   // non-option operand. Without --transport, it consumes the server name.
   const parser = nativeParser();
@@ -92,8 +93,17 @@ Bun.spawn = ((command: string[]) => {
   }
   optionBoundaryVerified = true;
   const data = JSON.parse(readFileSync(files.claude!, "utf8"));
-  let status = 1;
-  if (Object.hasOwn(data.mcpServers, "skills")) duplicateRefused = true;
+  let status = 1, stderr = "", stdout = "";
+  // Native policy admission precedes duplicate-name detection, even when a
+  // user registration already exists. Neither refusal permits a config write.
+  if (mode === "claude-policy-refused") {
+    stderr = 'Cannot add MCP server "skills": not allowed by enterprise policy'; stdout = unrelatedKey;
+  } else if (mode === "claude-blocked") {
+    stderr = 'Cannot add MCP server "skills": server is explicitly blocked by enterprise policy';
+  } else if (mode === "claude-unknown-refusal") stderr = unrelatedKey;
+  else if (Object.hasOwn(data.mcpServers, "skills")) {
+    duplicateRefused = true; stderr = "MCP server skills already exists in user config\n";
+  }
   else {
     assert.equal(mode, "claude-native");
     data.mcpServers.skills = { type: "stdio", command: parser.args[1], args: parser.args.slice(2), env };
@@ -108,7 +118,7 @@ Bun.spawn = ((command: string[]) => {
   const backups = readdirSync(dirname(files.claude!)).filter(name => name.startsWith(basename(files.claude!) + ".skills-mcp-") && name.endsWith(".backup"));
   assert.equal(backups.length, 1);
   assert.equal(readFileSync(join(dirname(files.claude!), backups[0]!)).equals(originals.get(files.claude!)!), true);
-  return { stdout: new Blob(["fixture child output"]).stream(), stderr: new Blob([unrelatedKey]).stream(),
+  return { stdout: new Blob([stdout]).stream(), stderr: new Blob([stderr]).stream(),
     exited: Promise.resolve(status) };
 }) as unknown as typeof Bun.spawn;
 
@@ -122,7 +132,7 @@ if (!defaultMode) {
 const transient = ["transient", "gateway"].includes(mode!);
 if (transient) process.env.HASNA_SKILLS_API_URL = origin + "/api/v1";
 if (mode === "bad-url") {
-  const unsafe = new URL("https://example.invalid/"); unsafe.searchParams.set("token", unrelatedKey);
+  const unsafe = new URL(origin); unsafe.searchParams.set("token", unrelatedKey);
   process.env.HASNA_SKILLS_API_URL = unsafe.href;
 }
 if (mode === "aliases") { process.env.HASNA_SKILLS_API_URL = origin; process.env.SKILLS_API_URL = fleetOrigin; }
@@ -151,7 +161,8 @@ if (mode === "setup") {
 } else await handleMcp({ register: "all", json: true });
 
 const refused = mode === "bad-url" || mode === "aliases";
-const claudeRefused = ["claude-drift", "claude-locked", "claude-late-lock"].includes(mode!);
+const admissionRefused = ["claude-policy-refused", "claude-blocked", "claude-unknown-refusal", "claude-spawn-refused"].includes(mode!);
+const claudeRefused = admissionRefused || ["claude-drift", "claude-locked", "claude-late-lock"].includes(mode!);
 if (refused) {
   assert.equal(process.exitCode, 1); assert.equal(nativeCalls, 0);
   for (const [path, bytes] of originals) assert.equal(readFileSync(path).equals(bytes), true);
@@ -213,8 +224,8 @@ if (refused) {
   if (nativeCalls) {
     assert(nativeArguments[0]!.includes("--stdio"));
     assert.equal(nativeArguments[0]!.includes("HASNA_PROFILE=old-profile"), false);
-    assert.equal(optionBoundaryVerified, mode !== "claude-unavailable");
-    assert.equal(duplicateRefused, !["claude-native", "claude-unavailable"].includes(mode!));
+    assert.equal(optionBoundaryVerified, !["claude-unavailable", "claude-spawn-refused"].includes(mode!));
+    assert.equal(duplicateRefused, !admissionRefused && !["claude-native", "claude-unavailable"].includes(mode!));
   }
 }
 assert.equal(readFileSync(inactiveClaude).equals(inactiveBefore), true);

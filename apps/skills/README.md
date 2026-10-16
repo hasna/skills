@@ -2035,6 +2035,9 @@ Stable command shapes:
   `.config.json`). Before changing an existing file it preserves and reads back
   a mode-0600 sibling `.skills-mcp-<id>.backup`. A competing native config lock
   or a changed config refuses the update; retry after the other writer finishes.
+  A native policy or unknown refusal also fails closed. Updating an existing
+  entry requires Claude's exact admitted duplicate-name refusal; configuring
+  before CLI installation is supported only when the executable is missing.
 
 ## Query a caller-owned catalog
 
