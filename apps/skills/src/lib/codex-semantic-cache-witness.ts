@@ -19,8 +19,19 @@ import {
   type CodexPluginSkillControl,
 } from "./codex-plugin-skill-controls.js";
 import { isCodexNativeSkillDisabled, type CodexNativeSkill } from "./codex-native-skill-catalog.js";
+import {
+  CODEX_PLUGIN_MANIFEST_DIRECTORIES,
+  codexPluginRootCapabilityEntry,
+  foldCodexPluginEntryName,
+  isCodexSkillDocumentName,
+} from "./codex-plugin-capability-paths.js";
 
 export const CODEX_SEMANTIC_CACHE_WITNESS_SCHEMA = "hasna.codex-semantic-cache-witness.v1" as const;
+/** The version-root capability entries this witness binds by content: the
+ * Codex manifest, the connector and MCP declarations, and the hooks directory
+ * of an explicitly reviewed hook parent. Every other entry in
+ * CODEX_PLUGIN_ROOT_CAPABILITY_ENTRIES refuses semantic mode when present. */
+const SEMANTIC_BOUND_ROOT_ENTRIES: readonly string[] = Object.freeze([".codex-plugin", ".app.json", ".mcp.json", "hooks"]);
 
 export interface CodexSemanticCacheControl {
   pluginId: string;
@@ -584,22 +595,37 @@ function assertParents(cacheRoot: string, controls: CodexSemanticCacheControl[],
 
   // Only the package's recognized direct plugin-root locations may carry
   // native capability files. A nested or orphaned control-looking file is not
-  // silently reclassified as an inert asset.
+  // silently reclassified as an inert asset. Every capability location Codex
+  // reads (codex-plugin-capability-paths.ts) is either bound below or refused;
+  // names compare without regard to case.
   for (const member of members) {
     const parts = relative(cacheRoot, member).split(sep);
     if (parts.length < 3) continue;
     const parent = join(cacheRoot, parts[0]!, parts[1]!);
     const root = join(parent, parts[2]!);
-    const base = parts[parts.length - 1]!;
-    if (parts.includes(".codex-plugin") && (parts.length < 4 || parts[3] !== ".codex-plugin"
+    const base = parts[parts.length - 1]!, folded = foldCodexPluginEntryName(base);
+    // A capability name directly below a plugin parent is never a version
+    // materialization, and a skill document there is never inert.
+    if (parts.length === 3 && (codexPluginRootCapabilityEntry(base) !== null || isCodexSkillDocumentName(base))) refuse();
+    // Version-root capability entries: only the exact lowercase spelling of a
+    // location this witness binds may exist. The Agent Plugins root manifest,
+    // the Claude and Cursor manifests, a root hooks file and the command and
+    // agent directories are never bound, so their presence refuses.
+    const rootEntry = parts.length >= 4 ? codexPluginRootCapabilityEntry(parts[3]!) : null;
+    if (rootEntry !== null && rootEntry !== parts[3]) refuse();
+    if (rootEntry !== null && !SEMANTIC_BOUND_ROOT_ENTRIES.includes(rootEntry)) refuse();
+    // Only an exact SKILL.md is classified and name-bound below.
+    if (isCodexSkillDocumentName(base) && base !== "SKILL.md") refuse();
+    // A manifest directory is admitted only as the bound `.codex-plugin/plugin.json`.
+    if (parts.some(part => CODEX_PLUGIN_MANIFEST_DIRECTORIES.includes(foldCodexPluginEntryName(part))) && (parts.length < 4 || parts[3] !== ".codex-plugin"
       || (parts.length === 4 ? base !== ".codex-plugin" : parts.length !== 5 || base !== "plugin.json"))) refuse();
-    if ([".app.json", ".mcp.json"].includes(base) && (parts.length !== 4 || dirname(member) !== root)) refuse();
-    if ([".app.json", ".mcp.json"].includes(base)
+    if ([".app.json", ".mcp.json"].includes(folded) && (parts.length !== 4 || dirname(member) !== root)) refuse();
+    if ([".app.json", ".mcp.json"].includes(folded)
       && hookParents.some(reviewed => reviewed.pluginParent === parent)) refuse();
     // Application templates can contain ordinary hooks/ source directories.
     // Native hook catalogs remain controls at any depth; the direct plugin
     // hooks/ directory also requires its explicitly reviewed hook role.
-    if ((parts[3] === "hooks" || base === "hooks.json") && (![4, 5].includes(parts.length) || parts[3] !== "hooks"
+    if ((rootEntry === "hooks" || folded === "hooks.json") && (![4, 5].includes(parts.length) || parts[3] !== "hooks"
       || (parts.length === 4 ? base !== "hooks" : base !== "hooks.json")
       || !hookParents.some(reviewed => reviewed.pluginParent === join(cacheRoot, parts[0]!, parts[1]!)))) refuse();
   }
