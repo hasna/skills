@@ -114,7 +114,7 @@ if (mode === "setup") {
 const refused = mode === "bad-url" || mode === "aliases";
 if (refused) {
   assert.equal(process.exitCode, 1); assert.equal(nativeCalls, 0);
-  for (const [path, bytes] of originals) assert.deepEqual(readFileSync(path), bytes);
+  for (const [path, bytes] of originals) assert.equal(readFileSync(path).equals(bytes), true);
 } else {
   assert.equal(process.exitCode ?? 0, mode === "invalid-toml" ? 1 : 0);
   assert.equal(nativeCalls, 1);
@@ -125,7 +125,7 @@ if (refused) {
   const { assertSkillsMcpConfigured } = await import("../../mcp/index.js");
   const { isMcpStdioMode } = await import("../../mcp/http.js");
   for (const [agent, path] of Object.entries(files)) {
-    if (agent === "codex" && mode === "invalid-toml") { assert.deepEqual(readFileSync(path), originals.get(path)); continue; }
+    if (agent === "codex" && mode === "invalid-toml") { assert.equal(readFileSync(path).equals(originals.get(path)!), true); continue; }
     let server: { command: string | string[]; args?: string[]; env?: Record<string, string>; environment?: Record<string, string> };
     if (agent === "codex") {
       const parsed = Bun.TOML.parse(readFileSync(path, "utf8")) as any;
@@ -136,7 +136,7 @@ if (refused) {
     } else {
       const parsed = JSON.parse(readFileSync(path, "utf8"));
       const container = agent === "opencode" ? parsed.mcp : parsed.mcpServers;
-      server = container.skills; assert.deepEqual(container.other, unrelated);
+      server = container.skills; assert.equal(JSON.stringify(container.other) === JSON.stringify(unrelated), true);
       assert.equal(agent === "opencode" ? parsed.theme : parsed.retained, agent === "opencode" ? "system" : true);
     }
     const args = Array.isArray(server.command) ? server.command.slice(1) : server.args;
@@ -161,8 +161,8 @@ if (refused) {
   assert(nativeArguments[0]!.includes("--stdio"));
   assert.equal(nativeArguments[0]!.includes("HASNA_PROFILE=old-profile"), false);
 }
-assert.deepEqual(readFileSync(credentials), credentialBefore);
-assert.deepEqual(readFileSync(credentials + "-customer"), customerBefore);
+assert.equal(readFileSync(credentials).equals(credentialBefore), true);
+assert.equal(readFileSync(credentials + "-customer").equals(customerBefore), true);
 assert.equal(requests, mode === "auth" ? 1 : 0);
 const rendered = logs.join("\n");
 for (const secret of [fleetKey, customerKey, unrelatedKey]) assert.equal(rendered.includes(secret), false);
