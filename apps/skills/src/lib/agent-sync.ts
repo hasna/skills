@@ -1,4 +1,4 @@
-import { codexCorpusRootForPath, withCodexCorpusWrite, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
+import { codexAdmissionReceipt, codexAdmissionRecord, codexCorpusRootForPath, withCodexCorpusWrite, type CodexAdmissionReceipt, type CodexAdmissionRecordOptions, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
 /**
  * `skills sync` — the last mile: write skills from this machine's corpus
  * (the migrated owner-layout cache ~/.hasna/skills/skills/<name>/, or the
@@ -177,7 +177,7 @@ export function pointerSkillMd(name: string, description: string): string {
 
 export type SyncActionKind = "create" | "update" | "skip";
 
-export interface AgentSyncAction {
+export interface AgentSyncAction extends CodexAdmissionReceipt {
   skill: string;
   agent: SyncAgent;
   path: string;
@@ -412,10 +412,11 @@ export function writeManagedAgentSkill(params: WriteManagedAgentSkillParams): Ag
     path: result.path,
     action: result.action,
     ...(result.reason ? { reason: result.reason } : {}),
+    ...(result.nativeAdmission ? { nativeAdmission: result.nativeAdmission, nativeAdmissionProbe: result.nativeAdmissionProbe } : {}),
   };
 }
 
-export interface ManagedDirWriteResult {
+export interface ManagedDirWriteResult extends CodexAdmissionReceipt {
   action: SyncActionKind;
   path: string;
   reason?: string;
@@ -443,7 +444,10 @@ export function writeManagedSkillDir(
   options: ManagedDirWriteOptions,
 ): ManagedDirWriteResult {
   const root = options.dryRun ? undefined : codexCorpusRootForPath(dir);
-  return withCodexCorpusWrite(root ? [root] : [], (assertCurrent) => writeManagedSkillDirUnlocked(dir, skillMd, options, assertCurrent), options);
+  return withCodexCorpusWrite(root ? [root] : [], (assertCurrent, admission) => {
+    const result = writeManagedSkillDirUnlocked(dir, skillMd, options, assertCurrent);
+    return { ...result, ...codexAdmissionReceipt(admission) };
+  }, options);
 }
 
 function writeManagedSkillDirUnlocked(dir: string, skillMd: string, options: ManagedDirWriteOptions, assertCurrent: () => void): ManagedDirWriteResult {
@@ -566,10 +570,16 @@ function writeManagedSkillDirUnlocked(dir: string, skillMd: string, options: Man
  * did not write (no valid Skills ownership marker). Foreign or malformed markers
  * grant no deletion authority, and removal has no force override.
  */
-export function removeManagedAgentSkill(skill: string, agent: SyncAgent, homeDir: string = homedir(), options: CodexCorpusWriteOptions = {}): boolean {
+/** Returns only whether it removed; pass `onCodexAdmission` to receive the admission
+ * record. Without it, a Codex home without native admission refuses as before. */
+export function removeManagedAgentSkill(skill: string, agent: SyncAgent, homeDir: string = homedir(), options: CodexCorpusWriteOptions & CodexAdmissionRecordOptions = {}): boolean {
+  const record = codexAdmissionRecord(options);
   const dir = join(agentGlobalSkillsDir(agent, homeDir), skill);
   const root = codexCorpusRootForPath(dir);
-  return withCodexCorpusWrite(root ? [root] : [], () => removeManagedAgentSkillUnlocked(skill, agent, homeDir, options), options);
+  return withCodexCorpusWrite(root ? [root] : [], (_assertCurrent, admission) => {
+    record.deliver(admission);
+    return removeManagedAgentSkillUnlocked(skill, agent, homeDir, options);
+  }, options, record.policy);
 }
 
 function removeManagedAgentSkillUnlocked(skill: string, agent: SyncAgent, homeDir: string = homedir(), options: CodexCorpusWriteOptions = {}): boolean {

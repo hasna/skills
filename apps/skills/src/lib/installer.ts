@@ -1,4 +1,4 @@
-import { codexCorpusRootForPath, withCodexCorpusWrite, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
+import { codexAdmissionRecord, codexCorpusRootForPath, withCodexCorpusWrite, type CodexAdmissionReceipt, type CodexAdmissionRecordOptions, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
 /**
  * Skill setup and project preferences.
  *
@@ -30,7 +30,7 @@ import {
   type SkillsProjectConfig,
 } from "./project-state.js";
 
-export interface InstallResult {
+export interface InstallResult extends CodexAdmissionReceipt {
   skill: string;
   success: boolean;
   error?: string;
@@ -372,16 +372,23 @@ export function installSkillForAgent(
     force: options.overwrite,
     codexCommand: options.codexCommand, codexSha256: options.codexSha256,
   });
+  const fallback = result.nativeAdmission ? { nativeAdmission: result.nativeAdmission, nativeAdmissionProbe: result.nativeAdmissionProbe } : {};
   if (result.action === "skip") {
-    return { skill: canonicalName, success: false, error: result.reason ?? "skipped", path: result.path };
+    return { skill: canonicalName, success: false, error: result.reason ?? "skipped", path: result.path, ...fallback };
   }
-  return { skill: canonicalName, success: true, path: result.path };
+  return { skill: canonicalName, success: true, path: result.path, ...fallback };
 }
 
-export function removeSkillForAgent(name: string, options: AgentInstallOptions): boolean {
+/** Returns only whether it removed; pass `onCodexAdmission` to receive the admission
+ * record. Without it, a Codex home without native admission refuses as before. */
+export function removeSkillForAgent(name: string, options: AgentInstallOptions & CodexAdmissionRecordOptions): boolean {
+  const record = codexAdmissionRecord(options);
   const dir = getAgentSkillPath(name, options.agent, options.scope ?? "global", options.projectDir);
   const root = codexCorpusRootForPath(dir);
-  return withCodexCorpusWrite(root ? [root] : [], () => removeSkillForAgentUnlocked(name, options), options);
+  return withCodexCorpusWrite(root ? [root] : [], (_assertCurrent, admission) => {
+    record.deliver(admission);
+    return removeSkillForAgentUnlocked(name, options);
+  }, options, record.policy);
 }
 
 function removeSkillForAgentUnlocked(name: string, options: AgentInstallOptions): boolean {

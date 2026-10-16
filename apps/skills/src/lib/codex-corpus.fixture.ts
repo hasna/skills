@@ -5,19 +5,59 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 const fixtures: string[] = [];
 afterEach(() => { for (const path of fixtures.splice(0)) rmSync(path, { recursive: true, force: true }); });
-export function corpusFixture(enrolled = true) {
+/** `admission` answers the native help probe; `upstream` emulates Codex 0.160.0/0.162.1,
+ * which has no `corpus-admission-inspect` and, on every launch, creates helper
+ * aliases under `$CODEX_HOME/tmp/arg0` (this fixture's own `.codex` when unset,
+ * never the account's). `<home>/probe-mode` injects probe anomalies. */
+export type CorpusFixtureBuild = "admission" | "upstream";
+export function corpusFixture(enrolled = true, build: CorpusFixtureBuild = "admission") {
   const home = mkdtempSync(join(tmpdir(), "corpus-admission-")); fixtures.push(home);
   const root = join(home, ".codex"); mkdirSync(root, { mode: 0o700 });
   if (enrolled) { const lock = new KernelLock(root, ".native-corpus-admission"); lock.close(); }
   const command = join(home, "native-fixture");
   // A protocol fixture, not proof of a released native implementation.
   writeFileSync(command, `#!${process.execPath}
-import { lstatSync, readFileSync, existsSync } from "node:fs";
+import { lstatSync, readFileSync, existsSync, writeFileSync, mkdirSync, mkdtempSync, appendFileSync, renameSync, symlinkSync } from "node:fs";
+const fixtureHome = ${JSON.stringify(home)}, build = ${JSON.stringify(build)};
+const probeMode = existsSync(fixtureHome + "/probe-mode") ? readFileSync(fixtureHome + "/probe-mode", "utf8") : "";
+// probe-log records each probe and its CODEX_HOME; upstream also reads $CODEX_HOME/.env.
+if (process.argv[2] === "help" || process.argv[2] === "--version") appendFileSync(fixtureHome + "/probe-log", process.argv.slice(2).join(" ") + "\\t" + (process.env.CODEX_HOME ?? "") + "\\n");
+if (process.env.CODEX_HOME && existsSync(process.env.CODEX_HOME + "/.env")) appendFileSync(fixtureHome + "/probe-log", "env-read\\t" + process.env.CODEX_HOME + "\\n");
+if (build === "upstream") {
+  const aliases = (process.env.CODEX_HOME || fixtureHome + "/.codex") + "/tmp/arg0";
+  mkdirSync(aliases, { recursive: true, mode: 0o700 });
+  const directory = mkdtempSync(aliases + "/codex-arg0");
+  for (const name of [".lock", "apply_patch", "applypatch", "codex-linux-sandbox", "codex-execve-wrapper"]) writeFileSync(directory + "/" + name, "");
+}
+if (process.argv[2] === "--version" && probeMode === "bad-version") { console.log("codex-cli 0.160.0 (unreviewed build text)"); process.exit(0); }
+if (process.argv[2] === "--version" && probeMode === "prerelease-version") { console.log("codex-cli 0.163.0-alpha.2"); process.exit(0); }
+if (process.argv[2] === "help" && process.argv.length === 4) {
+  if (probeMode === "timeout") await new Promise(resolve => setTimeout(resolve, 60000));
+  if (process.argv[3] === "exec") { if (probeMode === "control-signal") process.kill(process.pid, "SIGTERM"); process.exit(probeMode === "control-fail" ? 1 : 0); }
+  if (process.argv[3] === "corpus-admission-inspect") {
+    if (probeMode === "signal") process.kill(process.pid, "SIGTERM");
+    // swap-home: replace this probe's CODEX_HOME with a symlink to <home>/victim.
+    if (probeMode === "swap-home") { renameSync(process.env.CODEX_HOME, process.env.CODEX_HOME + ".moved"); symlinkSync(fixtureHome + "/victim", process.env.CODEX_HOME); }
+    if (probeMode === "swap") appendFileSync(process.argv[1], "\\n// replaced during the probe\\n");
+    if (build === "admission" || probeMode === "help-0") { console.log("Inspect native corpus admission"); process.exit(0); }
+    if (probeMode === "stdout-noise") console.log("unexpected");
+    const name = probeMode === "wrong-text" ? "corpus-admission-inspector" : "corpus-admission-inspect";
+    process.stderr.write("error: unrecognized subcommand '" + name + "'\\n\\nUsage: codex [OPTIONS] [PROMPT]\\n       codex [OPTIONS] <COMMAND> [ARGS]\\n\\nFor more information, try '--help'.\\n");
+    process.exit(probeMode === "exit-1" ? 1 : 2);
+  }
+}
+// Upstream parses an unknown leading word as a prompt; record any such call.
+if (build === "upstream" && process.argv[2] === "corpus-admission-inspect") { writeFileSync(fixtureHome + "/inspect-invoked", ""); process.exit(2); }
 if (process.argv[2] === "--version") { console.log("codex-cli 0.160.0"); process.exit(0); }
 if (process.argv[2] === "app-server") {
   let buffer="";
   process.stdin.on("data",bytes=>{buffer+=bytes.toString();for (;;) {const end=buffer.indexOf("\\n");if(end<0)break;const line=buffer.slice(0,end);buffer=buffer.slice(end+1);const request=JSON.parse(line);if(request.id)console.log(JSON.stringify({id:request.id,result:{userAgent:request.params.clientInfo.name+"/0.160.0"}}));}});
-  process.stdin.on("end",()=>{setTimeout(()=>process.exit(0),250);});
+  // app-server-linger: ignore SIGTERM after stdin closes until the test releases it (bounded).
+  process.stdin.on("end",()=>{
+    if (!existsSync(fixtureHome+"/app-server-linger")) { setTimeout(()=>process.exit(0),250); return; }
+    process.on("SIGTERM",()=>{}); const started=Date.now();
+    setInterval(()=>{ if (existsSync(fixtureHome+"/app-server-release") || Date.now()-started>25000) process.exit(0); },50);
+  });
 } else {
 const home = process.argv.at(-1);
 if (process.argv[2] !== "corpus-admission-inspect" || process.argv[3] !== "--home") process.exit(2);
@@ -43,8 +83,8 @@ export function admitCorpusFixture(root: string): void {
   new KernelLock(root,".native-corpus-admission").close();
 }
 /** An explicit PATH component for children that deliberately replace their environment. */
-export function corpusInspectorPathFixture(): string {
-  const f=corpusFixture(false);
+export function corpusInspectorPathFixture(build: CorpusFixtureBuild = "admission"): string {
+  const f=corpusFixture(false, build);
   renameSync(f.command,join(f.home,"codex"));
   return f.home;
 }
@@ -59,8 +99,9 @@ export function wrapNativeInspectionFixture(script: string): string {
   if(!script.startsWith("#!")) return script;
   const f=corpusFixture(false), end=script.indexOf("\n"), head=script.slice(0,end+1), body=script.slice(end+1);
   const command="'"+f.command.replaceAll("'", "'\\''")+"'";
+  // An admission build also answers the fallback's help probe and control.
   const query=head.includes("/bin/sh")
-    ? `if [ "$1" = "corpus-admission-inspect" ]; then exec ${command} "$@"; fi\n`
-    : `if(process.argv[2]==="corpus-admission-inspect"){process.stdout.write(require("node:child_process").execFileSync(${JSON.stringify(f.command)},process.argv.slice(2)));process.exit(0); }\n`;
+    ? `if [ "$1" = "corpus-admission-inspect" ]; then exec ${command} "$@"; fi\nif [ "$#" = 2 ] && [ "$1" = "help" ] && { [ "$2" = "corpus-admission-inspect" ] || [ "$2" = "exec" ]; }; then exit 0; fi\n`
+    : `if(process.argv[2]==="corpus-admission-inspect"){process.stdout.write(require("node:child_process").execFileSync(${JSON.stringify(f.command)},process.argv.slice(2)));process.exit(0); }\nif(process.argv.length===4&&process.argv[2]==="help"&&["corpus-admission-inspect","exec"].includes(process.argv[3]))process.exit(0);\n`;
   return head+query+body;
 }

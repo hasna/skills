@@ -1,5 +1,5 @@
 import { upgradeSumiSettingsWitness, readSumiSettingsPreimage, SUMI_DISCOVERY_PROJECTION_FIELDS } from "./sumi-settings-witness.js";
-import { codexCorpusRootForPath, withCodexCorpusWrite, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
+import { codexAdmissionReceipt, codexCorpusRootForPath, withCodexCorpusWrite, type CodexAdmissionReceipt, type CodexCorpusAdmission, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
 import { reviewCodexPluginControls, reviewedCodexPluginSourceRoots, isReviewedCodexPluginInactive, isReviewedCodexPluginSkillDisabled, reviewedCodexPluginCapabilitiesUnchanged, disableReviewedCodexPluginNames, absentDisabledCodexPluginParent, classifyCodexPluginCacheDocument, codexRemoteInstallReceipt, type CodexPluginCacheDocumentIdentity, type ReviewedCodexSkillDenial, type CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
 import { verifyCodexNativeSkillPolicy, parseCodexNativeHookEnvelope, recordCodexNativePolicyAcceptance, type CodexNativeHookEnvelope, type ProcessInspector, type NativePolicyHelperRunner } from "./codex-native-skill-policy.js";
 import { projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
@@ -1341,16 +1341,17 @@ export function planReviewedArtifactMigration(options: ReviewArtifactMigration):
     managedAgentChecks: { home, projectDir: options.projectDir ?? home, agents: ["codex"] } };
 }
 
-export function applyAgentIntegration(plan: AgentIntegrationPlan, options: CodexCorpusWriteOptions = {}): { changed: string[]; backups: string[]; rootAliases?: AgentRootAlias[] } {
+export function applyAgentIntegration(plan: AgentIntegrationPlan, options: CodexCorpusWriteOptions = {}): { changed: string[]; backups: string[]; rootAliases?: AgentRootAlias[] } & CodexAdmissionReceipt {
   const roots = plan.changes.flatMap(change => {
     const lexical = codexCorpusRootForPath(change.path);
     const alias = plan.rootAliases?.find(item => item.agent === "codex" && (change.path === item.target || change.path.startsWith(item.target + "/")));
     return lexical ? [lexical] : alias ? [alias.alias] : [];
   });
-  return withCodexCorpusWrite(roots, (assertCurrent) => applyAgentIntegrationUnlocked(plan, options, assertCurrent), options);
+  return withCodexCorpusWrite(roots, (assertCurrent, admission) => applyAgentIntegrationUnlocked(plan, options, assertCurrent, admission), options);
 }
 
-function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: CodexCorpusWriteOptions = {}, assertCurrent: () => void): { changed: string[]; backups: string[]; rootAliases?: AgentRootAlias[] } {
+function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: CodexCorpusWriteOptions = {}, assertCurrent: () => void, admission?: CodexCorpusAdmission): { changed: string[]; backups: string[]; rootAliases?: AgentRootAlias[] } & CodexAdmissionReceipt {
+  const fallback = codexAdmissionReceipt(admission);
   for (const source of plan.reviewArtifactSources ?? []) verifyReviewArtifactOriginal(source.path, source.sha256);
   for (const source of plan.observedNativeSources ?? []) if (nativeSourceDigest(source.path) !== source.sha256) throw new Error("Native identity source changed after planning");
   if (plan.observedSettings && readOptional(plan.observedSettings.path) !== plan.observedSettings.before) throw new Error("Native settings changed after witness planning");
@@ -1402,7 +1403,7 @@ function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: Code
     // evidence this path has. Without it, custody-gated reuse would report a successful
     // install for a binding whose protection was never repaired.
     for (const agent of plan.retainedReviewChecks?.agents ?? []) assertManagedAgentBridge(agent, { ...plan.retainedReviewChecks!, dataDir: plan.dataDir });
-    return { changed: [], backups, ...(aliases.length ? { rootAliases: aliases } : {}) };
+    return { changed: [], backups, ...(aliases.length ? { rootAliases: aliases } : {}), ...fallback };
   }
   assertSafePath(backupRoot); mkdirSync(backupRoot, { recursive: true, mode: 0o700 }); chmodSync(backupRoot, 0o700);
   for (const [index, change] of plan.changes.entries()) if (change.before !== null) {
@@ -1439,7 +1440,7 @@ function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: Code
     // compensated, so custody-gating the pre-write check above cannot let a
     // broken bridge become a configured one.
     for (const agent of plan.retainedReviewChecks?.agents ?? []) assertManagedAgentBridge(agent, { ...plan.retainedReviewChecks!, dataDir: plan.dataDir });
-    atomicWrite(join(backupRoot, "receipt.json"), JSON.stringify({ version: 1, changes: written.map(change => ({ path: change.path, beforeHash: change.before === null ? null : sha(change.before), afterHash: sha(change.after) })), backups, ...(plan.cacheWitnessUpgrade ? { cacheWitnessUpgrade: plan.cacheWitnessUpgrade } : {}), ...(plan.retainedReviewArtifacts?.length ? { retainedReviewArtifacts: plan.retainedReviewArtifacts.map(item => ({ path: item.path, ...item.artifact })) } : {}), ...(aliases.length ? { rootAliases: aliases } : {}) }) + "\n");
+    atomicWrite(join(backupRoot, "receipt.json"), JSON.stringify({ version: 1, changes: written.map(change => ({ path: change.path, beforeHash: change.before === null ? null : sha(change.before), afterHash: sha(change.after) })), backups, ...(plan.cacheWitnessUpgrade ? { cacheWitnessUpgrade: plan.cacheWitnessUpgrade } : {}), ...(plan.retainedReviewArtifacts?.length ? { retainedReviewArtifacts: plan.retainedReviewArtifacts.map(item => ({ path: item.path, ...item.artifact })) } : {}), ...(aliases.length ? { rootAliases: aliases } : {}), ...fallback }) + "\n");
   } catch (error) {
     assertCurrent();
     for (const change of written.reverse()) {
@@ -1458,7 +1459,7 @@ function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: Code
     }
     throw error;
   }
-  return { changed: plan.changes.map(change => change.path), backups, ...(aliases.length ? { rootAliases: aliases } : {}) };
+  return { changed: plan.changes.map(change => change.path), backups, ...(aliases.length ? { rootAliases: aliases } : {}), ...fallback };
 }
 
 function syncArchiveDirectory(path: string): void {
@@ -1482,7 +1483,7 @@ function writeArchiveJournal(path: string, value: unknown): void {
   }
 }
 
-export function archiveNativeSkills(inventory: NativeSkillEntry[], options: CodexCorpusWriteOptions & { dataDir?: string; includeUnmanaged?: boolean; includeVendor?: boolean; allowRootAliases?: boolean; targetManifest?: NativeMigrationTargetManifest }): { entries: Array<{ source: string; archive: string; hash: string; discoveryOnly?: boolean }>; receiptPath?: string; rootAliases?: AgentRootAlias[]; targetManifest?: { schema: string; digest: string; targetCount: number } } {
+export function archiveNativeSkills(inventory: NativeSkillEntry[], options: CodexCorpusWriteOptions & { dataDir?: string; includeUnmanaged?: boolean; includeVendor?: boolean; allowRootAliases?: boolean; targetManifest?: NativeMigrationTargetManifest }): { entries: Array<{ source: string; archive: string; hash: string; discoveryOnly?: boolean }>; receiptPath?: string; rootAliases?: AgentRootAlias[]; targetManifest?: { schema: string; digest: string; targetCount: number } } & CodexAdmissionReceipt {
   const selected = options.targetManifest ? selectNativeMigrationTargets(inventory, options.targetManifest)
     : inventory.filter(entry => !entry.bridge && !entry.system && (entry.vendor ? options.includeVendor : entry.managed || options.includeUnmanaged));
   const roots = selected.flatMap(entry => {
@@ -1494,10 +1495,11 @@ export function archiveNativeSkills(inventory: NativeSkillEntry[], options: Code
     if (!root && !owner && (entry.agent === "codex" || isCodexSkillDiscoveryInput(entry.path))) throw new Error("CODEX_CORPUS_ROOT_UNVERIFIED");
     return [...new Set([root, owner].filter((value): value is string => value !== undefined))];
   });
-  return withCodexCorpusWrite(roots, (assertCurrent) => archiveNativeSkillsUnlocked(inventory, options, assertCurrent), options);
+  return withCodexCorpusWrite(roots, (assertCurrent, admission) => archiveNativeSkillsUnlocked(inventory, options, assertCurrent, admission), options);
 }
 
-function archiveNativeSkillsUnlocked(inventory: NativeSkillEntry[], options: CodexCorpusWriteOptions & { dataDir?: string; includeUnmanaged?: boolean; includeVendor?: boolean; allowRootAliases?: boolean; targetManifest?: NativeMigrationTargetManifest }, assertCurrent: () => void): { entries: Array<{ source: string; archive: string; hash: string; discoveryOnly?: boolean }>; receiptPath?: string; rootAliases?: AgentRootAlias[]; targetManifest?: { schema: string; digest: string; targetCount: number } } {
+function archiveNativeSkillsUnlocked(inventory: NativeSkillEntry[], options: CodexCorpusWriteOptions & { dataDir?: string; includeUnmanaged?: boolean; includeVendor?: boolean; allowRootAliases?: boolean; targetManifest?: NativeMigrationTargetManifest }, assertCurrent: () => void, admission?: CodexCorpusAdmission): { entries: Array<{ source: string; archive: string; hash: string; discoveryOnly?: boolean }>; receiptPath?: string; rootAliases?: AgentRootAlias[]; targetManifest?: { schema: string; digest: string; targetCount: number } } & CodexAdmissionReceipt {
+  const fallback = codexAdmissionReceipt(admission);
   const aliases = [...new Map(inventory.filter(entry => entry.rootAlias).map(entry => [entry.rootAlias!.alias, entry.rootAlias!])).values()];
   if (aliases.length && !options.allowRootAliases) throw new Error("Native migration requires explicit allowRootAliases for agent root aliases");
   assertCurrent(); recheckRootAliases(aliases);
@@ -1513,7 +1515,7 @@ function archiveNativeSkillsUnlocked(inventory: NativeSkillEntry[], options: Cod
     : inventory.filter(entry => !entry.bridge && !entry.system && (entry.vendor ? options.includeVendor : entry.managed || options.includeUnmanaged));
   for (const entry of selected) if (treeHash(entry.path) !== entry.hash) throw new Error(`Native skill changed after planning: ${entry.path}`);
   const targetManifest = options.targetManifest ? { schema: options.targetManifest.schema, digest: options.targetManifest.digest, targetCount: options.targetManifest.targets.length } : undefined;
-  if (!selected.length) return { entries: [], ...(targetManifest ? { targetManifest } : {}), ...(aliases.length ? { rootAliases: aliases } : {}) };
+  if (!selected.length) return { entries: [], ...(targetManifest ? { targetManifest } : {}), ...(aliases.length ? { rootAliases: aliases } : {}), ...fallback };
   const operationId = randomUUID(), archiveRoot = join(options.dataDir ?? getDataDir(), "migration", operationId, "native"), receiptPath = join(archiveRoot, "receipt.json");
   type Move = { source: string; archive: string; hash: string; discoveryOnly?: boolean; status: "planned" | "moving" | "archived" | "restored" | "recovery-required"; conflict?: string };
   const entries: Move[] = selected.map((entry, index) => ({
@@ -1522,7 +1524,7 @@ function archiveNativeSkillsUnlocked(inventory: NativeSkillEntry[], options: Cod
     hash: entry.vendor ? sha(readNativeBytes(join(entry.path, "SKILL.md"))) : entry.hash,
     ...(entry.vendor ? { discoveryOnly: true } : {}), status: "planned",
   }));
-  const journal = { version: 2, operationId, status: "planned", entries, ...(targetManifest ? { targetManifest } : {}), ...(aliases.length ? { rootAliases: aliases } : {}) };
+  const journal = { version: 2, operationId, status: "planned", entries, ...(targetManifest ? { targetManifest } : {}), ...(aliases.length ? { rootAliases: aliases } : {}), ...fallback };
   const moved: Move[] = [];
   const verifyArchive = (entry: Move): void => {
     assertSafePath(entry.archive);
@@ -1577,7 +1579,7 @@ function archiveNativeSkillsUnlocked(inventory: NativeSkillEntry[], options: Cod
     try { writeArchiveJournal(receiptPath, journal); } catch { /* Inspect the last durable intent before retrying. */ }
     throw new Error(`Native archive failed; inspect the recovery journal at ${receiptPath} before retrying.`, { cause: error });
   }
-  return { entries: entries.map(({ status, conflict, ...entry }) => entry), receiptPath, ...(targetManifest ? { targetManifest } : {}), ...(aliases.length ? { rootAliases: aliases } : {}) };
+  return { entries: entries.map(({ status, conflict, ...entry }) => entry), receiptPath, ...(targetManifest ? { targetManifest } : {}), ...(aliases.length ? { rootAliases: aliases } : {}), ...fallback };
 }
 
 /** Native hook input for the Codex policy adapter. Only the Codex hook paths that

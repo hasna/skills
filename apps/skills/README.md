@@ -882,8 +882,25 @@ handshake alone does not establish those semantics. Admitting a release does not
 admit its corpus: the transport still requires the existing native corpus
 admission (see `docs/codex-corpus-writers.md`).
 
+Upstream Codex builds that lack `corpus-admission-inspect`, such as 0.160.0 and
+0.162.1, use an interim fallback instead: an exclusive Skills-owned lock at
+`<realpath(dirname(codex home))>/.hasna/skills/codex-corpus-locks/`, outside the
+Codex home and independent of data-root overrides, recorded as
+`nativeAdmission: "unavailable"` with the probe record in every receipt. The
+probe record identifies the selected executable file (for npm installs, the
+launcher script), not the vendor binary it starts. Its guarantee is weaker.
+Upstream Codex's own refresh writes are not coordinated with that lock, only
+Skills writers exclude each other, and preimage checks refuse only the races they
+detect. For a project-level `.codex`, or a symlinked `~/.codex`, the lock lives
+under the target's parent, such as `<project>/.hasna/skills/codex-corpus-locks/`;
+ignore that folder there. Probes run with a fresh, Skills-created `CODEX_HOME` in
+`<Skills data root>/codex-probe-homes/`, removed after each probe.
+The fallback is retired in the first release after the Harnesses
+enrollment/inspect route is live for that build line.
+
 The capture refuses an existing output file, writes mode `0600`, verifies the
-exact bytes, and reports only version, directory, count, file path and SHA-256.
+exact bytes, and reports only version, directory, count, file path and SHA-256,
+plus the admission record when the interim fallback applies.
 Its safe catalog shape is `{version,cwd,skills,plugins}`; skills have
 `{name,path,enabled,pluginId}` and plugins have
 `{id,name,installed,enabled,localVersion}`. Older reviewed catalogs without

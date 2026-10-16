@@ -1,4 +1,4 @@
-import { admitCorpusFixture, installCorpusInspectorFixture } from "./codex-corpus.fixture.js";
+import { admitCorpusFixture, corpusFixture, installCorpusInspectorFixture } from "./codex-corpus.fixture.js";
 import { useDefaultTestTimeout, withoutDataDirOverrideEnv } from "../test-preload.js";
 useDefaultTestTimeout();
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -350,6 +350,48 @@ test("native reconciliation resolves an effective partial write only after nativ
   writeFileSync(join(journal, "intent.json"), JSON.stringify({ ...intentFor(f, plan, hooksText, policyText), beforeSha256: createHash("sha256").update(f.before).digest("hex"), expectedVersion: `sha256:${"b".repeat(64)}` }) + "\n", { mode: 0o600 });
   const receipt = await reconcileCodexNativeHooks({ home: f.home, dataDir: f.dataDir, codexCommand: "codex", journal, reviewedSkillsCli: f.reviewedSkillsCli }, f.connect);
   expect(receipt.reconciled).toBe(true); const saved = JSON.parse(readFileSync(join(journal, "receipt.json"), "utf8")); expect(saved.nativeStateVerified).toBe(true); expect(saved.nativeExecutionVerified).toBe(false); expect(f.calls.some(call => call.method === "config/batchWrite")).toBe(false);
+});
+
+test("trust enrolment under the interim Codex admission fallback records it in the plan, receipt and every journal record", async () => {
+  const f = fixture(), upstream = corpusFixture(false, "upstream");
+  // An upstream Codex home: no native admission lock and no inspect command.
+  rmSync(join(f.home, ".codex", ".native-corpus-admission.flock-v1"));
+  const options = { ...f, codexCommand: upstream.command };
+  const plan = await enrollCodexNativeHooks(options, f.connect);
+  expect([plan.nativeAdmission, plan.nativeAdmissionProbe?.kind, plan.nativeAdmissionProbe?.version]).toEqual(["unavailable", "help-unrecognized-subcommand", "codex-cli 0.160.0"]);
+  const applied: any = await enrollCodexNativeHooks({ ...options, apply: true, reviewedPlanDigest: plan.planDigest }, f.connect);
+  expect([applied.applied, applied.nativeAdmission]).toEqual([true, "unavailable"]);
+  for (const name of ["receipt.json", "intent.json"]) {
+    const saved = JSON.parse(readFileSync(join(applied.journal, name), "utf8"));
+    expect([saved.nativeAdmission, saved.nativeAdmissionProbe]).toEqual(["unavailable", plan.nativeAdmissionProbe]);
+  }
+  expect(existsSync(join(f.home, ".codex", ".native-corpus-admission.flock-v1"))).toBe(false);
+  // A stopped fallback write records the admission in its intent and stop record too.
+  const g = fixture();
+  rmSync(join(g.home, ".codex", ".native-corpus-admission.flock-v1"));
+  const stoppedPlan = await enrollCodexNativeHooks({ ...g, codexCommand: upstream.command }, g.connect); g.setMode("writeOverride");
+  await expect(enrollCodexNativeHooks({ ...g, codexCommand: upstream.command, apply: true, reviewedPlanDigest: stoppedPlan.planDigest }, g.connect)).rejects.toThrow("NATIVE_WRITE_OVERRIDDEN");
+  const [stopped] = readdirSync(join(g.dataDir, "native-hook-trust"));
+  for (const name of ["intent.json", "stopped.json"]) {
+    const saved = JSON.parse(readFileSync(join(g.dataDir, "native-hook-trust", stopped!, name), "utf8"));
+    expect([saved.nativeAdmission, saved.nativeAdmissionProbe]).toEqual(["unavailable", stoppedPlan.nativeAdmissionProbe]);
+  }
+});
+
+test("native reconciliation through a fallback-admitted client records the fallback", async () => {
+  const f = fixture(), plan = await enrollCodexNativeHooks(f, f.connect), journal = join(f.dataDir, "native-hook-trust", "22222222-2222-4222-8222-222222222222");
+  mkdirSync(journal, { recursive: true, mode: 0o700 });
+  const policyPath = join(f.dataDir, "agent-policy.json"), hooksText = readFileSync(f.hooksPath), policyText = readFileSync(policyPath);
+  writeFileSync(join(journal, "config.before.toml"), f.before, { mode: 0o600 }); writeFileSync(join(journal, "hooks.before.json"), hooksText, { mode: 0o600 }); writeFileSync(join(journal, "policy.before.json"), policyText, { mode: 0o600 });
+  writeFileSync(join(journal, "stopped.json"), JSON.stringify({ error: "CODEX_HOOK_TRUST_PRESERVATION_FAILED", automaticRollback: false, reconcileBeforeRetry: true }) + "\n", { mode: 0o600 });
+  const configAfter = f.before.replaceAll("enabled = false # preserve managed comment", "enabled = true # preserve managed comment"); writeFileSync(f.configPath, configAfter, { mode: 0o600 }); f.entries.forEach(entry => { entry.enabled = true; });
+  writeFileSync(join(journal, "intent.json"), JSON.stringify({ ...intentFor(f, plan, hooksText, policyText), beforeSha256: createHash("sha256").update(f.before).digest("hex"), expectedVersion: `sha256:${"b".repeat(64)}` }) + "\n", { mode: 0o600 });
+  const probe = { kind: "help-unrecognized-subcommand" as const, executable: "/synthetic/codex", sha256: "e".repeat(64), size: 1, version: "codex-cli 0.154.0", probeExitCode: 2 as const, controlExitCode: 0 as const };
+  const connect = async (options: { codexHome?: string }) => ({ ...(await f.connect(options)), admission: { nativeAdmission: "unavailable" as const, probe } });
+  const receipt = await reconcileCodexNativeHooks({ home: f.home, dataDir: f.dataDir, codexCommand: "codex", journal, reviewedSkillsCli: f.reviewedSkillsCli }, connect as any);
+  expect([receipt.reconciled, receipt.nativeAdmission, receipt.nativeAdmissionProbe]).toEqual([true, "unavailable", probe]);
+  const saved = JSON.parse(readFileSync(join(journal, "receipt.json"), "utf8"));
+  expect([saved.nativeAdmission, saved.nativeAdmissionProbe]).toEqual(["unavailable", probe]);
 });
 
 test("native reconciliation supersedes a stale journal only for an exact Codex binding migration", async () => {

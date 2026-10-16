@@ -1,4 +1,4 @@
-import { acquireCodexCorpusWrite } from "./codex-corpus-write.js";
+import { acquireCodexCorpusWrite, type CodexCorpusAdmission } from "./codex-corpus-write.js";
 import { join } from "node:path";
 import { execFile, spawn } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
@@ -18,6 +18,8 @@ const CODEX_CONFIG_INVALID = "CODEX_HOOK_TRUST_NATIVE_CONFIG_INVALID: Codex coul
 export interface CodexHookRpc {
   version: string;
   processId?: number;
+  /** How the owned client's corpus lease was admitted; absent on synthetic clients. */
+  admission?: CodexCorpusAdmission;
   request(method: string, params: unknown): Promise<any>;
   close(): Promise<void>;
 }
@@ -96,6 +98,7 @@ export async function connectCodexHookRpc(options: { command: string; home: stri
   const rpc: CodexHookRpc = {
     version,
     processId: child.pid,
+    admission: corpusLease.admission,
     request(method, params) {
       if (stopped) return Promise.reject(new Error(configInvalid ? CODEX_CONFIG_INVALID : "CODEX_HOOK_TRUST_NATIVE_RPC_CLOSED"));
       return new Promise((resolve, reject) => {
