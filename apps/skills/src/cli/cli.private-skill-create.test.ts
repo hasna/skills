@@ -13,7 +13,7 @@ const args = ["publication", "create", "my-private-skill", "--display-name", "My
 async function run(scenario = "success", command = args, code = "123456\n", rowFile?: string) {
   const home = mkdtempSync(join(root, "home-")), trace = join(home, "trace.jsonl"), waiting = join(home, "waiting");
   const pendingCode = scenario.endsWith("-change"), metadataRead = ["info", "list"].includes(command[0]!);
-  const child = Bun.spawn([process.execPath, "--no-env-file", "--no-install", join(import.meta.dir, "private-skill-create.fixture.ts"), ...command], {
+  const child = Bun.spawn([process.execPath, "--no-env-file", "--no-install", join(import.meta.dir, "..", "..", "test", "fixtures", "private-skill-create.fixture.ts"), ...command], {
     cwd: home, env: { HOME: home, TMPDIR: process.env.TMPDIR!, HASNA_HOME: join(home, ".hasna"), HASNA_CONFIG_HOME: join(home, "config"),
       HASNA_SKILLS_DIR: join(home, "data"), HASNA_SKILLS_API_URL: "http://127.0.0.1:1", HASNA_STATION: "synthetic-no-keychain", NO_COLOR: "1",
       PATH: "/usr/bin:/bin", SKILLS_CREATE_SCENARIO: scenario, SKILLS_CREATE_TRACE: trace, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
