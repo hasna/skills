@@ -2,13 +2,13 @@ import { selectedSkillsProfile } from "./instance-credentials.js";
 import { clientTransportEnvKeys } from "@hasna/contracts/client";
 
 const urlKeys = clientTransportEnvKeys("skills").apiUrlKeys;
-function shellArgument(value: string): string {
+export function skillsShellArgument(value: string): string {
   return /^[A-Za-z0-9._:/-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 /** Set every supported URL alias consistently for this invocation only. */
 export function skillsApiUrlEnvironment(origin: string): string {
-  return urlKeys.map(name => `${name}=${shellArgument(origin)}`).join(" ");
+  return urlKeys.map(name => `${name}=${skillsShellArgument(origin)}`).join(" ");
 }
 
 /** Keep copied CLI commands on the credential profile selected by CLI or environment. */

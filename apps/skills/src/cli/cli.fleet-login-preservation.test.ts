@@ -79,7 +79,8 @@ globalThis.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
   if (url.protocol === "data:") return originalFetch(input, init);
   requests.push({ origin: url.origin, path: url.pathname });
-  if (url.origin !== SKILLS_PRODUCT_DEFAULT_ORIGIN) throw Error("Unexpected fixture authority");
+  if (url.origin !== (process.env.FLEET_TUI_ORIGIN || SKILLS_PRODUCT_DEFAULT_ORIGIN)) throw Error("Unexpected fixture authority");
+  if (process.env.FLEET_TUI_END === "expired" && url.pathname === "/api/auth/device/token") return Response.json({ error: "expired_token" });
   const lateStage = process.env.FLEET_LATE_STAGE;
   const latePath = { verify: "/api/auth/verify", issue: "/api/auth/keys", device: "/api/auth/device/token", "device-pending": "/api/auth/device/token", "api-key": "/api/auth/whoami" }[lateStage];
   if (latePath === url.pathname) provisionLateCredential();
@@ -103,7 +104,7 @@ process.on("exit", () => {
 });
 `);
   const tui = join(root, "tui.tsx");
-  if (args[0] === "tui") await writeFile(tui, `
+  if (args[0]?.startsWith("tui")) await writeFile(tui, `
 import React from ${JSON.stringify(import.meta.resolve("react"))};
 import { render } from ${JSON.stringify(import.meta.resolve("ink"))};
 import { PassThrough } from "node:stream";
@@ -119,24 +120,27 @@ input.isTTY = true; input.setRawMode = () => input; input.ref = () => input; inp
 output.isTTY = true; output.columns = 200; output.rows = 40;
 let rendered = "";
 output.on("data", chunk => { rendered += chunk.toString(); });
-const app = render(React.createElement(AccountView, { action: "login", onDone: () => {} }),
+const app = render(React.createElement(AccountView, { action: "login", argument: process.env.FLEET_TUI_ORIGIN, onDone: () => {} }),
   { stdin: input, stdout: output, stderr: errors, exitOnCtrlC: false, patchConsole: false, debug: true });
 try {
   const deadline = Date.now() + 5000;
-  while (!rendered.includes("Register Skills with your agents from a shell:") && Date.now() < deadline) await Bun.sleep(20);
-  console.log(JSON.stringify({ renderedProfileSetup: rendered.includes("skills --profile skillsmd setup agents") }));
+  const expired = process.env.FLEET_TUI_END === "expired";
+  while (!rendered.includes(expired ? "expired before it was approved" : "Register Skills with your agents from a shell:") && Date.now() < deadline) await Bun.sleep(20);
+  console.log(JSON.stringify(expired ? { renderedRetry: rendered.includes("/login " + process.env.FLEET_TUI_ORIGIN) }
+    : { renderedProfileSetup: rendered.includes("skills --profile skillsmd setup agents") }));
 } finally { app.unmount(); input.destroy(); output.destroy(); errors.destroy(); }
 `);
   try {
     const invoke = async (command: string[], overrides: Record<string, string> = {}) => {
     const child = Bun.spawn([process.execPath, "--no-env-file", "--preload", preload,
-      ...(command[0] === "tui" ? [tui] : [resolve(import.meta.dir, "index.tsx"), ...command])], {
+      ...(command[0]?.startsWith("tui") ? [tui] : [resolve(import.meta.dir, "index.tsx"), ...command])], {
       cwd: root, stdin: "pipe", stdout: "pipe", stderr: "pipe",
       env: { HOME: home, HASNA_HOME: join(home, ".hasna"), HASNA_CONFIG_HOME: join(home, "config"),
         HASNA_SKILLS_DIR: join(home, "data"), HASNA_STATION: "fleet-login-fixture",
         PATH: "/usr/bin:/bin", TMPDIR: root, NO_COLOR: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", FLEET_LOGIN_SEED: seed,
         ...(seedProfile ? { FLEET_LOGIN_PROFILE: seedProfile } : {}),
         ...(late ? { FLEET_LATE_CREDENTIAL: late.credential, FLEET_LATE_STAGE: late.stage } : {}),
+        ...(command[0] === "tui-expired" ? { FLEET_TUI_END: "expired", FLEET_TUI_ORIGIN: "http://127.0.0.1:9" } : {}),
         ...(gatewayShell ? { [gatewayShell]: defaultFleetGatewayBaseUrl("skills") } : {}), ...overrides },
     });
     child.stdin.write("123456\n"); child.stdin.end();
@@ -260,6 +264,25 @@ test("TUI login renders setup instructions for the same named profile", async ()
     requests: [{ origin: SKILLS_PRODUCT_DEFAULT_ORIGIN, path: "/api/auth/device/start" },
       { origin: SKILLS_PRODUCT_DEFAULT_ORIGIN, path: "/api/auth/device/token" }],
     files: ["credentials", "credentials-skillsmd", "identity-skillsmd.json"] });
+});
+
+test("TUI retry retains the explicit self-hosted authority without persisting a credential", async () => {
+  const value = await signIn("gateway", ["tui-expired"]);
+  expect(value.exitCode).toBe(0);
+  expect(JSON.parse(value.stdout)).toEqual({ renderedRetry: true });
+  expect(value.receipt).toMatchObject({ originalUnchanged: true, selectedExists: false,
+    requests: [{ origin: "http://127.0.0.1:9", path: "/api/auth/device/start" },
+      { origin: "http://127.0.0.1:9", path: "/api/auth/device/token" }], files: ["credentials"] });
+});
+
+test("email continuation quotes an apostrophe without changing the account address", async () => {
+  const value = await signIn("gateway", ["--profile", "skillsmd", "login", "--email", "o'connor@example.invalid", "--json"]);
+  expect(value.exitCode).toBe(0);
+  const output = JSON.parse(value.stdout);
+  expect(output.email).toBe("o'connor@example.invalid");
+  expect(output.message).toContain("--email 'o'\\''connor@example.invalid' --code-stdin");
+  expect(value.receipt).toMatchObject({ originalUnchanged: true, selectedExists: false,
+    requests: [{ origin: SKILLS_PRODUCT_DEFAULT_ORIGIN, path: "/api/auth/login" }], files: ["credentials"] });
 });
 
 test("an explicit product URL preserves the default profile's gateway credential", async () => {

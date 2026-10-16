@@ -8,7 +8,7 @@ import { getAuthConfig, getAuthIdentity, getApiUrl, getAuthFilePath, saveAuthCon
 import { captureSkillsSignInTarget, gatewaySignInRefusal, resolveSkillsFleet, resolveSkillsConnection, SkillsFleetCredentialError, SKILLS_API_KEY_ENV, SKILLS_API_URL_ENV, type SignInTarget } from "../../lib/fleet-credentials.js";
 import { RemoteSkillsClient } from "../../lib/remote-client.js";
 import { getEnvironmentProfile } from "../profile-selection.js";
-import { skillsProfileCommand } from "../../lib/credential-profile-command.js";
+import { skillsProfileCommand, skillsShellArgument } from "../../lib/credential-profile-command.js";
 import type { RemoteSkillsAccess } from "../../lib/remote-permissions.js";
 import {
   clearPendingDeviceSignIn,
@@ -204,7 +204,7 @@ function signInTarget(url: string | undefined, json?: boolean): SignInTarget | n
 
 /** The flag that selects this target again, for a printed follow-up command. */
 function targetFlag(target: SignInTarget): string {
-  return target.source === "--url" ? ` --url ${target.origin}` : "";
+  return target.source === "--url" ? ` --url ${skillsShellArgument(target.origin)}` : "";
 }
 
 function skillsCommand(command: string, target: SignInTarget): string {
@@ -331,7 +331,7 @@ async function doLogin(email: string, code: string | undefined, json: boolean | 
     if (!json) console.log(chalk.green("✓ Code sent to " + email));
 
     if (json || !isTTY || !process.stderr.isTTY) {
-      console.log(JSON.stringify({ status: "code_sent", email, message: `Supply the fresh six-digit code on stdin to: ${skillsCommand("login", target)} --email ${email} --code-stdin${targetFlag(target)}` }));
+      console.log(JSON.stringify({ status: "code_sent", email, message: `Supply the fresh six-digit code on stdin to: ${skillsCommand("login", target)} --email ${skillsShellArgument(email)} --code-stdin${targetFlag(target)}` }));
       return;
     }
 
@@ -464,7 +464,7 @@ async function doDeviceLogin(options: DeviceLoginOptions, target: SignInTarget) 
     const others = pendingDeviceSignInOrigins(env).filter((other) => other !== origin);
     if (others.length > 0) {
       writeCommandError(new Error(
-        `No pending sign-in for ${origin}. Pending: ${others.map((other) => `${skillsProfileCommand("login", process.env, other)} --poll --url ${other}`).join("; ")}`,
+        `No pending sign-in for ${origin}. Pending: ${others.map((other) => `${skillsProfileCommand("login", process.env, other)} --poll --url ${skillsShellArgument(other)}`).join("; ")}`,
       ), "No pending sign-in", json);
       return;
     }

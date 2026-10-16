@@ -123,11 +123,12 @@ export function AccountView({ action, argument, onDone }: AccountViewProps) {
         });
         return;
       }
+      const retry = argument !== undefined ? `/login ${target.origin}` : "/login";
       const ended = {
-        expired: "The sign-in code expired before it was approved. Type /login to start again.",
-        invalid: "The server no longer recognises this sign-in code. Type /login to start again.",
+        expired: `The sign-in code expired before it was approved. Type ${retry} to start again.`,
+        invalid: `The server no longer recognises this sign-in code. Type ${retry} to start again.`,
         denied: "Sign-in was denied in the browser.",
-        timeout: "Sign-in timed out. Type /login to start again.",
+        timeout: `Sign-in timed out. Type ${retry} to start again.`,
         cancelled: "Sign-in cancelled.",
       }[outcome.status];
       update({ kind: "done", changed: false, lines: [{ text: ended, tone: "bad" }] });
