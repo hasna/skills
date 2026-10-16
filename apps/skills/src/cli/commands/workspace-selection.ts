@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { getApiUrl } from "../../lib/auth-store.js";
+import { SkillsFleetCredentialError } from "../../lib/fleet-credentials.js";
 import { RemoteSkillsAuthClient } from "../../lib/remote-auth.js";
 import { prepareWorkspaceEnrollment, WorkspaceProfileError } from "../../lib/workspace-profile.js";
 import { NameInputError, promptCode, readCode } from "./customer-verification.js";
@@ -13,6 +14,12 @@ async function codeFor(client: RemoteSkillsAuthClient, options: Options): Promis
   return promptCode();
 }
 function errorResult(error: unknown, json?: boolean) {
+  if (error instanceof SkillsFleetCredentialError) {
+    if (json) console.log(JSON.stringify({ error: error.message, code: error.code, next: error.next }));
+    else console.error(error.message);
+    process.exitCode = 1;
+    return;
+  }
   const message = error instanceof NameInputError || error instanceof WorkspaceProfileError ? error.message
     : "Unable to complete workspace sign-in. Check the selected server, profile, account and fresh verification code.";
   if (json) console.log(JSON.stringify({ error: message })); else console.error(message);

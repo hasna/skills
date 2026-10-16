@@ -80,7 +80,11 @@ Stations provisioned with a fleet key keep using the internal gateway
 no recorded URL (the Keychain item, `HASNA_SKILLS_API_KEY` alone, or an older
 credentials file) always stays on that gateway and is never sent anywhere else.
 The gateway has no interactive login service, so on such a station
-`skills login` says so, sends nothing, and names the credential to unset first.
+`skills login` says so and sends nothing. A stored gateway credential or vault
+reference is preserved even with `--url`. Use a separate credential profile for
+customer sign-in: `skills --profile skillsmd login`. Later product commands use that
+profile too, for example `skills --profile skillsmd whoami --json`; fleet
+commands keep their original configuration.
 Obtain a workspace API key through your administrator's provisioning process
 and configure it using the [credential resolution](#credentials) below. Check
 the selected identity and available capabilities before syncing:

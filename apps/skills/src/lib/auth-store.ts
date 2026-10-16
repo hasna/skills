@@ -28,9 +28,10 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { defaultFleetGatewayBaseUrl } from "@hasna/contracts/client";
-import { SKILLS_BOUND_API_URL, selectedSkillsProfile } from "./instance-credentials.js";
+import { captureSkillsCredentialFiles, SKILLS_BOUND_API_URL, selectedSkillsProfile, skillsProfileCredentialFiles } from "./instance-credentials.js";
 
 import {
+  assertSkillsSignInCredentialReplaceable,
   requireSkillsApiOrigin,
   resolveSkillsApiKey,
   resolveSkillsFleet,
@@ -148,7 +149,8 @@ export function getAuthConfigReadOnly(env: Env = process.env, options: SkillsFle
 }
 
 /** Merge `values` into the credentials file, atomically, at mode 0600. */
-function writeCredentialValues(values: Record<string, string | null>, env: Env = process.env): string {
+function writeCredentialValues(values: Record<string, string | null>, env: Env = process.env, beforeWrite?: () => void): string {
+  beforeWrite?.();
   const file = skillsCredentialFilePath(env);
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
 
@@ -179,9 +181,14 @@ function writeCredentialValues(values: Record<string, string | null>, env: Env =
   // Written through a sibling temp file so a reader never sees a half-written
   // credential, and created 0600 from the start so it is never briefly readable.
   const temp = `${file}.tmp-${process.pid}`;
-  writeFileSync(temp, body, { mode: 0o600 });
-  chmodSync(temp, 0o600);
-  renameSync(temp, file);
+  writeFileSync(temp, body, { mode: 0o600, flag: "wx" });
+  try {
+    chmodSync(temp, 0o600);
+    beforeWrite?.();
+    renameSync(temp, file);
+  } finally {
+    try { unlinkSync(temp); } catch {}
+  }
   return file;
 }
 
@@ -243,7 +250,13 @@ function safeOrigin(url: string): string | null {
  */
 export type StoredKeyIssuer = "sign-in" | "api-key";
 
-export function saveAuthConfig(config: StoredAuthConfig, env: Env = process.env, authenticatedOrigin?: string, issuedBy?: StoredKeyIssuer): string {
+export function saveAuthConfig(config: StoredAuthConfig, env: Env = process.env, authenticatedOrigin?: string, issuedBy?: StoredKeyIssuer, assertUnchanged?: () => void): string {
+  const unchanged = assertUnchanged ?? captureSkillsCredentialFiles(skillsProfileCredentialFiles(env));
+  const beforeWrite = () => {
+    unchanged();
+    if (issuedBy) assertSkillsSignInCredentialReplaceable(env);
+  };
+  beforeWrite();
   const apiKey = config.apiKey.trim();
   if (!apiKey) throw new Error("Refusing to store an empty Skills API key.");
   if (/[^\t\x20-\x7e]/.test(apiKey)) {
@@ -260,7 +273,7 @@ export function saveAuthConfig(config: StoredAuthConfig, env: Env = process.env,
   // Recorded only for a sign-in flow (an issuer is given); other writers keep
   // the file exactly as before.
   const urlWrittenByLogin = issuedBy !== undefined && (!previousUrl || safeOrigin(previousUrl) !== apiUrl || loginWroteBefore);
-  const file = writeCredentialValues({ SKILLS_API_KEY: null, SKILLS_API_URL: null, [SKILLS_API_KEY_REF]: null, [SKILLS_API_KEY_ENV]: apiKey, [SKILLS_BOUND_API_URL]: apiUrl, [SKILLS_API_URL_ENV]: apiUrl }, env);
+  const file = writeCredentialValues({ SKILLS_API_KEY: null, SKILLS_API_URL: null, [SKILLS_API_KEY_REF]: null, [SKILLS_API_KEY_ENV]: apiKey, [SKILLS_BOUND_API_URL]: apiUrl, [SKILLS_API_URL_ENV]: apiUrl }, env, beforeWrite);
 
   const identity: AuthIdentity = {};
   for (const field of ["email", "orgId", "orgSlug", "userId"] as const) {
