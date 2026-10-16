@@ -138,7 +138,7 @@ if (mode === "bad-url") {
 if (mode === "aliases") { process.env.HASNA_SKILLS_API_URL = origin; process.env.SKILLS_API_URL = fleetOrigin; }
 if (mode === "setup") {
   const { registerRuntime } = await import("./runtime.js");
-  const program = new Command(); registerRuntime(program);
+  const program = new Command().enablePositionalOptions(); registerRuntime(program);
   await program.parseAsync(["setup", "--api-url", origin + "/api/v1", "agents", "--json"], { from: "user" });
 } else if (mode === "auth") {
   const { mock } = await import("bun:test");
@@ -246,6 +246,7 @@ if (!["auth", "setup"].includes(mode!)) {
     if (!claudeRefused) assert.equal(claude.path, files.claude);
   }
 }
+selectCliSkillsCredentialProfile(undefined);
 assert.deepEqual(skillsMcpRegistrationEnvironment({}), {});
 console.log = output; console.error = errors; process.exitCode = 0;
 console.log(JSON.stringify({ mode, adapters: refused ? 0 : mode === "invalid-toml" || claudeRefused ? 6 : 7, refused, consumerSelectionVerified: !refused,
