@@ -99,3 +99,9 @@ export function skillsFileHasCredential(file: string): boolean {
   if (text === null) return false;
   return /^\s*(?:export\s+)?(?:HASNA_SKILLS_API_KEY|SKILLS_API_KEY|HASNA_SKILLS_API_KEY_REF)\s*=\s*\S/m.test(text);
 }
+
+/** A stored vault reference must survive interactive sign-in unchanged. */
+export function skillsFileHasVaultReference(file: string): boolean {
+  const text = readMetadataText(file);
+  return text !== null && /^\s*(?:export\s+)?HASNA_SKILLS_API_KEY_REF\s*=\s*\S/m.test(text);
+}

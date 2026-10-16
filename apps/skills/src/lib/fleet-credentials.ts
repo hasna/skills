@@ -81,7 +81,7 @@ import {
   toV1BaseUrl,
 } from "@hasna/contracts/client";
 import type { CredentialChainOptions, CredentialTier, KeychainTierOptions, ResolvedCredential } from "./client-types.js";
-import { captureSkillsCredentialFiles, readSkillsInstanceMetadata, selectedSkillsProfile, skillsFileHasCredential, skillsProfileCredentialFiles } from "./instance-credentials.js";
+import { captureSkillsCredentialFiles, readSkillsInstanceMetadata, selectedSkillsProfile, skillsFileHasCredential, skillsFileHasVaultReference, skillsProfileCredentialFiles } from "./instance-credentials.js";
 import { selectedCliSkillsCredentialProfile } from "./cli-credential-profile.js";
 import { isSkillsLocalOptIn, selectsSkillsLocalMode, SKILLS_LOCAL_OPT_IN_ENV_KEYS } from "./local-opt-in.js";
 import { SKILLS_PRODUCT_DEFAULT_ORIGIN } from "./product-default.js";
@@ -167,7 +167,7 @@ export interface LocalSkillsFleet {
 export type SkillsFleet = HostedSkillsFleet | LocalSkillsFleet;
 
 /** Machine-readable reasons a hosted resolution was refused. */
-export type SkillsFleetErrorCode = "MISSING_API_CREDENTIAL" | "INVALID_API_URL" | "INSTANCE_CREDENTIAL_MISMATCH" | "GATEWAY_AUTH_UNAVAILABLE";
+export type SkillsFleetErrorCode = "MISSING_API_CREDENTIAL" | "INVALID_API_URL" | "INSTANCE_CREDENTIAL_MISMATCH" | "GATEWAY_AUTH_UNAVAILABLE" | "STORED_CREDENTIAL_PROTECTED";
 
 /**
  * A configured install could not produce a usable hosted client.
@@ -804,22 +804,41 @@ export interface SignInTarget {
 
 /**
  * The refusal for a sign-in that would target the internal gateway, which has
- * no sign-in service — or null. It names what to unset or remove, and never
- * suggests pointing this machine at the product server while an internal
- * credential is still configured. Nothing is sent either way.
+ * no sign-in service — or null. Use a separate profile for product sign-in,
+ * preserving the existing fleet configuration. Nothing is sent either way.
  */
 export function gatewaySignInRefusal(target: SignInTarget): SkillsFleetCredentialError | null {
   if (normalizeSkillsApiOrigin(target.origin) !== normalizeSkillsApiOrigin(defaultFleetGatewayBaseUrl(SKILLS_APP))) return null;
   const cause = target.credentialSource
     ? `${target.credentialSource} holds a Skills credential for the internal gateway`
     : target.source === "--url" ? "--url names the internal gateway" : `${target.source} selects the internal gateway`;
-  const unset = target.credentialSource ?? (target.source === "--url" ? null : target.source);
   return new SkillsFleetCredentialError(
-    `${cause}, which has no sign-in service. Nothing was sent.` +
-      (unset ? ` To sign in to the default server instead, first unset ${unset} (or remove it from where it is stored), then run: skills login.` : ""),
+    `${cause}, which has no sign-in service. Nothing was sent. ` +
+      "Keep the fleet configuration and use a separate profile for product sign-in: skills --profile <new-profile> login.",
     "GATEWAY_AUTH_UNAVAILABLE",
-    unset ? [`unset ${unset}`, "skills login"] : undefined,
+    ["skills --profile <new-profile> login"],
   );
+}
+
+/** Refuse before sign-in traffic can replace a selected fleet key or vault reference. */
+function assertSignInCredentialReplaceable(env: Env, profile?: string): void {
+  const files = skillsProfileCredentialFiles(env, profile);
+  const verifyUnchanged = captureSkillsCredentialFiles(files);
+  const gateway = normalizeSkillsApiOrigin(defaultFleetGatewayBaseUrl(SKILLS_APP));
+  for (const file of files) {
+    if (!skillsFileHasCredential(file)) continue;
+    const metadata = readSkillsInstanceMetadata(file);
+    const instance = metadata.binding ?? metadata.apiUrl;
+    if (skillsFileHasVaultReference(file) || !instance || normalizeSkillsApiOrigin(instance) === gateway) {
+      throw new SkillsFleetCredentialError(
+        "The selected profile contains a protected fleet credential or vault reference. Nothing was sent or changed. " +
+          "Use a separate profile for product sign-in: skills --profile <new-profile> login.",
+        "STORED_CREDENTIAL_PROTECTED",
+        ["skills --profile <new-profile> login"],
+      );
+    }
+  }
+  verifyUnchanged();
 }
 
 /**
@@ -859,7 +878,8 @@ function explicitSignInOrigin(url: string): string {
  *   1. `--url <origin>` — an explicit choice for this sign-in. It is refused when
  *      an outranking URL (the environment or the Keychain) names a different
  *      instance, because the key it mints would be shadowed the moment it is
- *      saved. A URL in the credentials file is what a sign-in replaces.
+ *      saved. A URL in the credentials file is replaceable only when it does
+ *      not protect a fleet credential or vault reference.
  *   2. a configured URL — environment, profile or credentials file, Keychain.
  *   3. the instance an already-stored credential belongs to. A legacy internal
  *      key with no recorded URL belongs to the fleet gateway, so a machine that
@@ -879,6 +899,7 @@ export function resolveSkillsSignInOrigin(
     const snapshot = snapshotSkillsEnvironment(env);
     const resolvedOptions = snapshotSkillsOptions(env, options);
     const profile = resolvedOptions.credentials?.profile;
+    assertSignInCredentialReplaceable(snapshot, profile);
     const configured = configuredSkillsApiUrl(snapshot, resolvedOptions.credentials?.keychain, profile);
     // A selected profile with no URL of its own reports the gateway as its
     // "default"; that is a fallback, not a configuration, so it does not win here.
