@@ -11,6 +11,7 @@ import { hashNativeJsonControls } from "./claude-settings-witness.js";
 import { serializeManagedSkillPolicy, parseManagedSkillPolicy } from "./managed-policy.js";
 import type { CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
 import { buildCliFixture } from "../cli/cli-build.fixture.js";
+import { CODEX_CAPABILITY_PATH_MUTATIONS, copyMaterialization } from "./codex-plugin-capability-paths.fixture.js";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -422,3 +423,56 @@ test("the built cache CLI previews the exact roles and refuses unguarded apply o
   expect(readFileSync(f.policyPath, "utf8")).toBe(hook.policy);
   expect(readFileSync(f.config, "utf8")).toBe(f.settings);
 }, 30000);
+
+const refusalOf = (action: () => unknown): string => { try { action(); return "accepted"; } catch (error) { return (error as Error).message; } };
+
+/** The three semantic roles: a skill parent, an app-only parent and a reviewed
+ * local-marketplace hook parent (the hasna-codex bridge shape). */
+const capabilityTargets = [
+  { label: "skill parent market/vendor", hookParent: false, setup: (f: ReturnType<typeof fixture>) => ({ options: f.options, reviewed: f.skill.root, namespace: "vendor", bump: () => f.addSkill("2.0.0").root }) },
+  { label: "app-only parent market/connector", hookParent: false, setup: (f: ReturnType<typeof fixture>) => ({ options: f.options, reviewed: f.appRoot, namespace: "connector", bump: () => f.addApp("2.0.0") }) },
+  { label: "local hook parent fixture-market/relay", hookParent: true, setup: (f: ReturnType<typeof fixture>) => {
+    const local = addLocalMarketplaceHookParent(f);
+    return { options: local.options, reviewed: local.root, namespace: "relay", bump: () => { const root = join(local.parent, "0.2.0"); copyMaterialization(local.root, root); return root; } };
+  } },
+] as const;
+
+test("guard-time verification of a stored semantic binding refuses every capability path Codex reads in a new version", () => {
+  for (const mutation of CODEX_CAPABILITY_PATH_MUTATIONS) for (const target of capabilityTargets) {
+    if (target.hookParent && !mutation.appliesToHookParent) continue;
+    const f = fixture(), t = target.setup(f);
+    const next = planCodexSemanticCacheWitnessUpgrade(t.options).discoveryAfter![0]!;
+    const root = t.bump();
+    expect([target.label, refusalOf(() => verifyAgentDiscovery(next))]).toEqual([target.label, "accepted"]);
+    mutation.apply(root, t.namespace);
+    expect([target.label, mutation.label, refusalOf(() => verifyAgentDiscovery(next))])
+      .toEqual([target.label, mutation.label, expect.stringContaining("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED")]);
+  }
+});
+
+test("rebind-cache refuses to capture a semantic binding while any capability path is present, without writing", () => {
+  for (const mutation of CODEX_CAPABILITY_PATH_MUTATIONS) for (const target of capabilityTargets) {
+    if (target.hookParent && !mutation.appliesToHookParent) continue;
+    const f = fixture(), t = target.setup(f), policy = readFileSync(f.policyPath, "utf8");
+    expect(() => planCodexSemanticCacheWitnessUpgrade(t.options)).not.toThrow();
+    mutation.apply(t.reviewed, t.namespace);
+    const refusal = refusalOf(() => planCodexSemanticCacheWitnessUpgrade(t.options));
+    // Hook parents enumerate every materialization against enrolled full-byte
+    // sources first, so a capability-named copy refuses there before capture.
+    expect([target.label, mutation.label, refusal]).toEqual([target.label, mutation.label,
+      target.hookParent && mutation.label.startsWith("capability-named") ? expect.stringContaining("prior full identity source") : expect.stringContaining("CODEX_SEMANTIC_CACHE_WITNESS_UNSUPPORTED")]);
+    expect(readFileSync(f.policyPath, "utf8")).toBe(policy);
+  }
+});
+
+test("positive control: version bumps and an identical receipt rewrite keep a stored semantic binding valid", () => {
+  for (const target of capabilityTargets) {
+    const f = fixture(), t = target.setup(f);
+    const next = planCodexSemanticCacheWitnessUpgrade(t.options).discoveryAfter![0]!;
+    t.bump();
+    expect([target.label, refusalOf(() => verifyAgentDiscovery(next))]).toEqual([target.label, "accepted"]);
+    const receipt = join(f.parent, ".codex-remote-plugin-install.json");
+    writeFileSync(receipt, readFileSync(receipt, "utf8"));
+    expect([target.label, refusalOf(() => verifyAgentDiscovery(next))]).toEqual([target.label, "accepted"]);
+  }
+});
