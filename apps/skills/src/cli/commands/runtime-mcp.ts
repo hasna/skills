@@ -2,7 +2,10 @@ import chalk from "chalk";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join } from "path";
+import { isDeepStrictEqual } from "node:util";
 import { AGENT_TARGETS, resolveAgents, type AgentTarget } from "../../lib/installer.js";
+import { skillsShellArgument } from "../../lib/credential-profile-command.js";
+import { skillsMcpRegistrationEnvironment } from "../../lib/mcp-registration-environment.js";
 
 const MCP_SERVER_NAME = "skills";
 const MCP_COMMAND_NAME = "skills-mcp";
@@ -16,11 +19,13 @@ interface McpRegistrationResult {
   error?: string;
 }
 
-export async function handleMcp(options: { register?: string; json: boolean }) {
+export async function handleMcp(options: { register?: string; json: boolean; apiUrl?: string }) {
   if (options.register) {
     let agents: AgentTarget[];
+    let environment: Record<string, string>;
     try {
       agents = resolveAgents(options.register);
+      environment = skillsMcpRegistrationEnvironment(process.env, options.apiUrl);
     } catch (err) {
       const error = (err as Error).message;
       if (options.json) {
@@ -35,7 +40,7 @@ export async function handleMcp(options: { register?: string; json: boolean }) {
     const command = findCommandOnPath(MCP_COMMAND_NAME);
     const results: McpRegistrationResult[] = [];
     for (const agent of agents) {
-      const result = await registerMcpForAgent(agent, command);
+      const result = await registerMcpForAgent(agent, command, environment);
       results.push(result);
       if (!options.json) {
         const label = result.path ? `${agent} (${result.path})` : agent;
@@ -57,47 +62,37 @@ export async function handleMcp(options: { register?: string; json: boolean }) {
   await startMcpStdio();
 }
 
-async function registerMcpForAgent(agent: AgentTarget, command: string): Promise<McpRegistrationResult> {
+async function registerMcpForAgent(agent: AgentTarget, command: string, environment: Record<string, string>): Promise<McpRegistrationResult> {
+  const server = { command, args: ["--stdio"], ...(Object.keys(environment).length ? { env: environment } : {}) };
   switch (agent) {
     case "claude":
-      return registerClaudeMcp(command);
+      return registerClaudeMcp(command, server, environment);
     case "codex":
-      return registerCodexMcp(command);
+      return registerCodexMcp(command, environment);
     case "gemini":
-      return registerJsonMcpServer(agent, join(homedir(), ".gemini", "settings.json"), "mcpServers", {
-        command,
-        args: [],
-      });
+      return registerJsonMcpServer(agent, join(homedir(), ".gemini", "settings.json"), "mcpServers", server);
     case "pi":
-      return registerJsonMcpServer(agent, join(homedir(), ".pi", "agent", "mcp.json"), "mcpServers", {
-        command,
-        args: [],
-      });
+      return registerJsonMcpServer(agent, join(homedir(), ".pi", "agent", "mcp.json"), "mcpServers", server);
     case "opencode":
-      return registerOpenCodeMcp(command);
+      return registerOpenCodeMcp(command, environment);
     case "cursor":
-      return registerJsonMcpServer(agent, join(homedir(), ".cursor", "mcp.json"), "mcpServers", {
-        command,
-        args: [],
-      });
+      return registerJsonMcpServer(agent, join(homedir(), ".cursor", "mcp.json"), "mcpServers", server);
     case "windsurf":
-      return registerJsonMcpServer(agent, join(homedir(), ".windsurf", "mcp.json"), "mcpServers", {
-        command,
-        args: [],
-      });
+      return registerJsonMcpServer(agent, join(homedir(), ".windsurf", "mcp.json"), "mcpServers", server);
     default:
       return { agent, success: false, error: `Unknown agent: ${agent}. Available: ${AGENT_TARGETS.join(", ")}, all` };
   }
 }
 
-async function registerClaudeMcp(command: string): Promise<McpRegistrationResult> {
-  const cliCommand = `claude mcp add -s user ${MCP_SERVER_NAME} -- ${command}`;
+async function registerClaudeMcp(command: string, server: Record<string, unknown>, environment: Record<string, string>): Promise<McpRegistrationResult> {
+  const args = ["claude", "mcp", "add", "-s", "user", ...Object.entries(environment).flatMap(([key, value]) => ["--env", `${key}=${value}`]), MCP_SERVER_NAME, "--", command, "--stdio"];
+  const cliCommand = args.map(skillsShellArgument).join(" ");
   try {
-    const proc = Bun.spawn(["claude", "mcp", "add", "-s", "user", MCP_SERVER_NAME, "--", command], {
+    const proc = Bun.spawn(args, {
       stdout: "pipe",
       stderr: "pipe",
     });
-    const [stdout, stderr, exitCode] = await Promise.all([
+    const [, , exitCode] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
       proc.exited,
@@ -105,51 +100,50 @@ async function registerClaudeMcp(command: string): Promise<McpRegistrationResult
     if (exitCode === 0) {
       return { agent: "claude", success: true, command: cliCommand };
     }
-    const fallback = registerJsonMcpServer("claude", join(homedir(), ".claude", ".mcp.json"), "mcpServers", {
-      command,
-      args: [],
-    });
+    const fallback = registerJsonMcpServer("claude", join(homedir(), ".claude", ".mcp.json"), "mcpServers", server);
     return {
       ...fallback,
       command: cliCommand,
-      error: fallback.success ? undefined : `claude exited with ${exitCode}: ${(stderr || stdout).trim()}`,
+      error: fallback.success ? undefined : "Claude MCP registration failed; its configuration was not updated",
     };
   } catch (err) {
-    const fallback = registerJsonMcpServer("claude", join(homedir(), ".claude", ".mcp.json"), "mcpServers", {
-      command,
-      args: [],
-    });
+    const fallback = registerJsonMcpServer("claude", join(homedir(), ".claude", ".mcp.json"), "mcpServers", server);
     return {
       ...fallback,
       command: cliCommand,
-      error: fallback.success ? undefined : (err as Error).message,
+      error: fallback.success ? undefined : "Claude MCP registration failed; its configuration was not updated",
     };
   }
 }
 
-function registerCodexMcp(command: string): McpRegistrationResult {
+function registerCodexMcp(command: string, environment: Record<string, string>): McpRegistrationResult {
   const path = join(homedir(), ".codex", "config.toml");
-  const config = `[mcp_servers.${MCP_SERVER_NAME}]\ncommand = ${JSON.stringify(command)}`;
+  const body = `command = ${JSON.stringify(command)}\nargs = ["--stdio"]${Object.keys(environment).length
+    ? `\nenv = { ${Object.entries(environment).map(([key, value]) => `${JSON.stringify(key)} = ${JSON.stringify(value)}`).join(", ")} }` : ""}`;
+  const config = `[mcp_servers.${MCP_SERVER_NAME}]\n${body}`;
   try {
     const current = existsSync(path) ? readFileSync(path, "utf-8") : "";
-    writeTextFile(path, upsertTomlSection(current, `[mcp_servers.${MCP_SERVER_NAME}]`, `command = ${JSON.stringify(command)}`));
+    // Validate before and after replacing our table, including an old env subtable.
+    const before = Bun.TOML.parse(current);
+    const next = upsertTomlSection(current, `[mcp_servers.${MCP_SERVER_NAME}]`, body);
+    const after = Bun.TOML.parse(next);
+    if (!isDeepStrictEqual(withoutSkillsMcp(before), withoutSkillsMcp(after))) throw new Error();
+    writeTextFile(path, next);
     return { agent: "codex", success: true, path, config };
   } catch (err) {
-    return { agent: "codex", success: false, path, config, error: (err as Error).message };
+    return { agent: "codex", success: false, path, config, error: "Could not update the Codex MCP configuration" };
   }
 }
 
-function registerOpenCodeMcp(command: string): McpRegistrationResult {
+function registerOpenCodeMcp(command: string, environment: Record<string, string>): McpRegistrationResult {
   const path = join(homedir(), ".config", "opencode", "opencode.json");
+  const server = { type: "local", command: [command, "--stdio"], enabled: true,
+    ...(Object.keys(environment).length ? { environment } : {}) };
   const config = JSON.stringify(
     {
       $schema: "https://opencode.ai/config.json",
       mcp: {
-        [MCP_SERVER_NAME]: {
-          type: "local",
-          command: [command],
-          enabled: true,
-        },
+        [MCP_SERVER_NAME]: server,
       },
     },
     null,
@@ -160,16 +154,12 @@ function registerOpenCodeMcp(command: string): McpRegistrationResult {
     const data = readJsonObject(path);
     if (!data.$schema) data.$schema = "https://opencode.ai/config.json";
     const mcp = isPlainObject(data.mcp) ? data.mcp : {};
-    mcp[MCP_SERVER_NAME] = {
-      type: "local",
-      command: [command],
-      enabled: true,
-    };
+    mcp[MCP_SERVER_NAME] = server;
     data.mcp = mcp;
     writeJsonObject(path, data);
     return { agent: "opencode", success: true, path, config };
   } catch (err) {
-    return { agent: "opencode", success: false, path, config, error: (err as Error).message };
+    return { agent: "opencode", success: false, path, config, error: "Could not update the OpenCode MCP configuration" };
   }
 }
 
@@ -188,7 +178,7 @@ function registerJsonMcpServer(
     writeJsonObject(path, data);
     return { agent, success: true, path, config };
   } catch (err) {
-    return { agent, success: false, path, config, error: (err as Error).message };
+    return { agent, success: false, path, config, error: "Could not update the agent MCP configuration" };
   }
 }
 
@@ -213,20 +203,26 @@ function writeTextFile(path: string, content: string) {
 function upsertTomlSection(content: string, header: string, body: string): string {
   const sectionLines = [header, ...body.trim().split(/\r?\n/)];
   const lines = content.trimEnd() ? content.trimEnd().split(/\r?\n/) : [];
-  const start = lines.findIndex((line) => line.trim() === header);
-  if (start === -1) {
-    const prefix = lines.length ? [...lines, ""] : [];
-    return [...prefix, ...sectionLines, ""].join("\n");
-  }
-  let end = lines.length;
-  for (let i = start + 1; i < lines.length; i++) {
-    if (/^\s*\[[^\]]+\]\s*$/.test(lines[i])) {
-      end = i;
-      break;
+  const result: string[] = []; let owned = false, inserted = false;
+  for (const line of lines) {
+    if (/^\s*\[/.test(line)) {
+      owned = /^\s*\[\s*(?:mcp_servers|"mcp_servers"|'mcp_servers')\s*\.\s*(?:skills|"skills"|'skills')\s*(?:\.|\])/.test(line);
+      if (owned && !inserted) { result.push(...sectionLines, ""); inserted = true; }
     }
+    if (!owned) result.push(line);
   }
-  lines.splice(start, end - start, ...sectionLines);
-  return `${lines.join("\n")}\n`;
+  if (!inserted) result.push(...(result.length ? [""] : []), ...sectionLines);
+  return `${result.join("\n")}\n`;
+}
+
+function withoutSkillsMcp(config: Record<string, unknown>): Record<string, unknown> {
+  const preserved = { ...config };
+  if (isPlainObject(preserved.mcp_servers)) {
+    const servers = { ...preserved.mcp_servers }; delete servers[MCP_SERVER_NAME];
+    if (Object.keys(servers).length) preserved.mcp_servers = servers;
+    else delete preserved.mcp_servers;
+  }
+  return preserved;
 }
 
 function findCommandOnPath(command: string): string {

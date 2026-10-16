@@ -257,7 +257,7 @@ async function offerAgentSetup(target: SignInTarget): Promise<void> {
   // Sign-in already succeeded; an agent that is not installed must not turn
   // that into a failed command. Each registration prints its own result.
   const { handleMcp } = await import("./runtime-mcp.js");
-  await handleMcp({ register: "all", json: false });
+  await handleMcp({ register: "all", json: false, apiUrl: target.origin });
   process.exitCode = before ?? 0;
 }
 

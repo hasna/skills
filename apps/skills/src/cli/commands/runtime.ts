@@ -211,7 +211,9 @@ export function registerRuntime(parent: Command) {
     .command("agents")
     .option("--json", "Output registration result as JSON", false)
     .description("Register the Skills MCP server with all supported agents")
-    .action(async (options: { json: boolean }) => handleMcp({ register: "all", json: options.json }));
+    .action(async (options: { json: boolean }, command: Command) => handleMcp({
+      register: "all", json: options.json, apiUrl: command.parent?.opts<SetupCommandOptions>().apiUrl,
+    }));
 
   // Self-update
   parent

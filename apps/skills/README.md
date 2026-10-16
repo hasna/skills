@@ -2276,6 +2276,15 @@ skills mcp --register claude    # Auto-register with Claude Code
 skills mcp --register all       # Register with all supported agents
 ```
 
+Register from the same credential profile you use for the product, for example
+`skills --profile customer setup agents`. Registrations retain that profile and
+any invocation-specific API origin, including
+`skills setup --api-url <origin> agents`, and start `skills-mcp --stdio`. Supported configuration-home overrides
+are retained so the later process resolves the same credential files. Keys,
+sessions and vault values are never copied into agent configuration. With no
+selectors, the MCP process keeps its usual credential resolution. Existing
+credential-to-origin checks still refuse a key bound to a different instance.
+
 ## Skills API
 
 Use a named profile for each independently operated instance. A commercial Skills instance
