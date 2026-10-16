@@ -19,7 +19,9 @@ for (const mode of ["profile", "environment-profile", "transient", "default", "c
     const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 20_000);
     try {
       const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-      expect(timedOut).toBe(false); expect(stderr.length).toBe(0); expect(code).toBe(0);
+      const diagnostic = JSON.stringify({ exit: Number.isInteger(code) ? code : null,
+        location: stderr.match(/runtime-mcp-registration\.fixture\.ts:[0-9]{1,7}:[0-9]{1,7}(?![0-9])/)?.[0] ?? "unavailable" });
+      expect(timedOut, diagnostic).toBe(false); expect(stderr.length, diagnostic).toBe(0); expect(code, diagnostic).toBe(0);
       const receipt = JSON.parse(stdout);
       expect(receipt).toMatchObject({ mode, unrelatedEntriesPreserved: true, credentialsUnchanged: true, credentialsNotDisclosed: true, networkCalls: 0 });
       expect(receipt.adapters).toBe(["bad-url", "aliases"].includes(mode) ? 0 : ["invalid-toml", "claude-drift", "claude-locked", "claude-late-lock", "claude-policy-refused", "claude-blocked", "claude-unknown-refusal", "claude-spawn-refused"].includes(mode) ? 6 : 7);
