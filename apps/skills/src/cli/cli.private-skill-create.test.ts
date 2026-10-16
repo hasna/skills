@@ -19,27 +19,36 @@ async function run(scenario = "success", command = args, code = "123456\n", rowF
       PATH: "/usr/bin:/bin", SKILLS_CREATE_SCENARIO: scenario, SKILLS_CREATE_TRACE: trace, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
       SKILLS_CREATE_WAITING: waiting, ...(rowFile ? { SKILLS_CREATE_ROW: rowFile } : {}),
       ...(metadataRead ? { HASNA_SKILLS_API_KEY_OVERRIDE: "synthetic-metadata-key" } : {}) },
-    stdin: pendingCode ? "pipe" : new Blob([code]), stdout: "pipe", stderr: "pipe",
+    stdin: "pipe", stdout: "pipe", stderr: "pipe",
   });
-  if (pendingCode) {
-    try {
+  // Feed process.stdin through the same pipe as the pending-code controls.
+  try {
+    if (pendingCode) {
       for (let i = 0; i < 200 && !existsSync(waiting); i++) await Bun.sleep(10);
       expect(existsSync(waiting)).toBe(true);
-      (child.stdin as import("bun").FileSink).write(code);
-    } finally { (child.stdin as import("bun").FileSink).end(); }
-  }
+    }
+    (child.stdin as import("bun").FileSink).write(code);
+  } finally { (child.stdin as import("bun").FileSink).end(); }
   const [stdout, stderr, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
   const calls = existsSync(trace) ? readFileSync(trace, "utf8").trim().split("\n").map(line => JSON.parse(line)) : [];
   expect(stdout + stderr).not.toContain("synthetic-session"); expect(stdout + stderr).not.toContain("capability=");
   expect(stdout + stderr).not.toContain("123456");
   if (!pendingCode) expect(readdirSync(home)).toEqual(existsSync(trace) ? ["trace.jsonl"] : []);
-  return { stdout, stderr, status, calls };
+  const diagnostic = JSON.stringify({
+    scenario: ["success", "pro-refused", "session-refused", "auth-refused", "foreign-tenant", "lost-response", "profile-change", "origin-change", "credential-file-change"].includes(scenario) ? scenario : "unknown",
+    exit: Number.isInteger(status) ? status : null, requestCount: calls.length,
+    requests: calls.slice(0, 16).map(call => ({
+      path: ["/api/auth/verify", "/api/auth/whoami", "/api/v1/account/workspaces/switch", "/api/v1/skills", "/api/v1/skills/my-private-skill"].includes(call?.path) ? call.path : "unrecognized-route",
+      method: ["GET", "POST"].includes(call?.method) ? call.method : "unrecognized-method", authenticated: call?.authenticated === true,
+    })),
+  });
+  return { stdout, stderr, status, calls, diagnostic };
 }
 
 test("real create command verifies, selects workspace and returns the new private skill ID", async () => {
   const result = await run();
-  expect(result.status).toBe(0); expect(result.stderr).toBe("");
-  expect(JSON.parse(result.stdout)).toEqual({ id: "44444444-4444-4444-8444-444444444444", slug: "my-private-skill", visibility: "private",
+  expect(result.status, result.diagnostic).toBe(0); expect(result.stderr, result.diagnostic).toBe("");
+  expect(JSON.parse(result.stdout), result.diagnostic).toEqual({ id: "44444444-4444-4444-8444-444444444444", slug: "my-private-skill", visibility: "private",
     sourceType: "private_hosted", ownerOrganizationId: "33333333-3333-4333-8333-333333333333" });
   expect(result.calls.map(call => call.path)).toEqual(["/api/auth/verify", "/api/auth/whoami", "/api/v1/account/workspaces/switch", "/api/auth/whoami", "/api/v1/skills"]);
   expect(result.calls.slice(1).every(call => call.authenticated)).toBe(true);
@@ -48,38 +57,38 @@ test("real create command verifies, selects workspace and returns the new privat
 test("create rejects missing consent, malformed slug, visibility, context and code before authentication", async () => {
   for (const command of [args.filter(arg => arg !== "--confirm"), args.map(arg => arg === "my-private-skill" ? "bad--slug" : arg),
     [...args, "--visibility", "public"], args.map(arg => arg.startsWith("22222222") ? "bad-context" : arg)]) {
-    const result = await run("success", command); expect(result.status).toBe(1); expect(result.calls).toEqual([]);
+    const result = await run("success", command); expect(result.status, result.diagnostic).toBe(1); expect(result.calls, result.diagnostic).toEqual([]);
   }
-  const badCode = await run("success", args, "invalid\n"); expect(badCode.status).toBe(1); expect(badCode.calls).toEqual([]);
+  const badCode = await run("success", args, "invalid\n"); expect(badCode.status, badCode.diagnostic).toBe(1); expect(badCode.calls, badCode.diagnostic).toEqual([]);
 });
 
 test("create reports Pro and session refusals safely with one create POST", async () => {
   for (const [scenario, code] of [["pro-refused", "PLAN_REQUIRED"], ["session-refused", "INTERACTIVE_SESSION_REQUIRED"]]) {
-    const result = await run(scenario); expect(result.status).toBe(1);
-    expect(JSON.parse(result.stdout)).toMatchObject({ code, uncertain: false });
+    const result = await run(scenario); expect(result.status, result.diagnostic).toBe(1);
+    expect(JSON.parse(result.stdout), result.diagnostic).toMatchObject({ code, uncertain: false });
     expect(result.calls.filter(call => call.path === "/api/v1/skills")).toHaveLength(1);
   }
-  const auth = await run("auth-refused"); expect(auth.status).toBe(1); expect(auth.calls).toHaveLength(1);
+  const auth = await run("auth-refused"); expect(auth.status, auth.diagnostic).toBe(1); expect(auth.calls, auth.diagnostic).toHaveLength(1);
 });
 
 test("create refuses foreign tenant responses and preserves lost-response uncertainty without retry", async () => {
   for (const scenario of ["foreign-tenant", "lost-response"]) {
-    const result = await run(scenario); expect(result.status).toBe(1);
-    expect(JSON.parse(result.stdout)).toMatchObject({ code: "SKILL_CREATE_UNCONFIRMED", uncertain: true });
+    const result = await run(scenario); expect(result.status, result.diagnostic).toBe(1);
+    expect(JSON.parse(result.stdout), result.diagnostic).toMatchObject({ code: "SKILL_CREATE_UNCONFIRMED", uncertain: true });
     expect(result.calls.filter(call => call.path === "/api/v1/skills")).toHaveLength(1);
   }
 });
 
 test("plain create output contains the usable skill ID and no foreign free text", async () => {
   const result = await run("success", args.filter(arg => arg !== "--json"));
-  expect(result.status).toBe(0); expect(result.stdout).toContain("44444444-4444-4444-8444-444444444444");
-  expect(result.stdout).toContain("my-private-skill");
+  expect(result.status, result.diagnostic).toBe(0); expect(result.stdout, result.diagnostic).toContain("44444444-4444-4444-8444-444444444444");
+  expect(result.stdout, result.diagnostic).toContain("my-private-skill");
 });
 
 for (const scenario of ["profile-change", "origin-change", "credential-file-change"]) {
   test(`pending-code ${scenario} refuses before any traffic`, async () => {
     const result = await run(scenario);
-    expect(result.status).toBe(1); expect(result.calls).toEqual([]);
+    expect(result.status, result.diagnostic).toBe(1); expect(result.calls, result.diagnostic).toEqual([]);
   });
 }
 
@@ -87,13 +96,13 @@ test("created and ambiguously created rows remain discoverable through ordinary 
   for (const scenario of ["success", "lost-response"]) {
     const row = join(root, `${scenario}.json`);
     const created = await run(scenario, args, "123456\n", row);
-    expect(created.status).toBe(scenario === "success" ? 0 : 1);
+    expect(created.status, created.diagnostic).toBe(scenario === "success" ? 0 : 1);
     const listed = await run("success", ["list", "--remote", "--json"], "", row);
-    expect(listed.status).toBe(0);
+    expect(listed.status, listed.diagnostic).toBe(0);
     const item = JSON.parse(listed.stdout)[0];
-    expect(item).toMatchObject({ id: "44444444-4444-4444-8444-444444444444", name: "my-private-skill", category: "Remote" });
+    expect(item, created.diagnostic + " " + listed.diagnostic).toMatchObject({ id: "44444444-4444-4444-8444-444444444444", name: "my-private-skill", category: "Remote" });
     const detail = await run("success", ["info", "my-private-skill", "--remote", "--json"], "", row);
-    expect(detail.status).toBe(0); expect(JSON.parse(detail.stdout).id).toBe(item.id);
+    expect(detail.status, detail.diagnostic).toBe(0); expect(JSON.parse(detail.stdout).id).toBe(item.id);
     expect(created.calls.filter(call => call.path === "/api/v1/skills" && call.method === "POST")).toHaveLength(1);
   }
 });
