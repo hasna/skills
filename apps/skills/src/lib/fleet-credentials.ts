@@ -821,7 +821,7 @@ export function gatewaySignInRefusal(target: SignInTarget): SkillsFleetCredentia
 }
 
 /** Refuse before sign-in traffic can replace a selected fleet key or vault reference. */
-function assertSignInCredentialReplaceable(env: Env, profile?: string): void {
+export function assertSkillsSignInCredentialReplaceable(env: Env = process.env, profile?: string): void {
   const files = skillsProfileCredentialFiles(env, profile);
   const verifyUnchanged = captureSkillsCredentialFiles(files);
   const gateway = normalizeSkillsApiOrigin(defaultFleetGatewayBaseUrl(SKILLS_APP));
@@ -899,7 +899,7 @@ export function resolveSkillsSignInOrigin(
     const snapshot = snapshotSkillsEnvironment(env);
     const resolvedOptions = snapshotSkillsOptions(env, options);
     const profile = resolvedOptions.credentials?.profile;
-    assertSignInCredentialReplaceable(snapshot, profile);
+    assertSkillsSignInCredentialReplaceable(snapshot, profile);
     const configured = configuredSkillsApiUrl(snapshot, resolvedOptions.credentials?.keychain, profile);
     // A selected profile with no URL of its own reports the gateway as its
     // "default"; that is a fallback, not a configuration, so it does not win here.

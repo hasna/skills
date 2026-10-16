@@ -8,6 +8,7 @@ import { getAuthConfig, getAuthIdentity, getApiUrl, getAuthFilePath, saveAuthCon
 import { gatewaySignInRefusal, resolveSkillsFleet, resolveSkillsConnection, resolveSkillsSignInOrigin, SkillsFleetCredentialError, SKILLS_API_KEY_ENV, SKILLS_API_URL_ENV, type SignInTarget } from "../../lib/fleet-credentials.js";
 import { RemoteSkillsClient } from "../../lib/remote-client.js";
 import { getEnvironmentProfile } from "../profile-selection.js";
+import { selectedSkillsProfile } from "../../lib/instance-credentials.js";
 import type { RemoteSkillsAccess } from "../../lib/remote-permissions.js";
 import {
   clearPendingDeviceSignIn,
@@ -206,6 +207,12 @@ function targetFlag(target: SignInTarget): string {
   return target.source === "--url" ? ` --url ${target.origin}` : "";
 }
 
+/** Printed follow-ups must retain the profile that owns this sign-in. */
+function skillsCommand(command: string): string {
+  const profile = selectedSkillsProfile(process.env);
+  return `skills${profile ? ` --profile ${profile}` : ""} ${command}`;
+}
+
 /**
  * Print a completed sign-in and, on a terminal, offer the agent MCP setup so
  * the account "just works" in Claude, Codex and the rest. Non-interactive runs
@@ -221,7 +228,7 @@ async function finishSignIn(result: SignInResult, target: SignInTarget, json?: b
       ...(organization ? { organization } : {}),
       ...(result.firstLogin !== undefined ? { firstLogin: result.firstLogin } : {}),
       apiUrl: target.origin,
-      next: ["skills setup agents"],
+      next: [skillsCommand("setup agents")],
     }));
     return;
   }
@@ -238,15 +245,15 @@ async function finishSignIn(result: SignInResult, target: SignInTarget, json?: b
 async function offerAgentSetup(): Promise<void> {
   // Optional: declining or interrupting it never turns a completed sign-in into a failure.
   const before = process.exitCode;
-  const answer = await prompt("\nRegister Skills with your coding agents now (skills setup agents)? [Y/n] ");
+  const answer = await prompt(`\nRegister Skills with your coding agents now (${skillsCommand("setup agents")})? [Y/n] `);
   if (answer === null) {
     // `undefined` does not reset an exit code once set, so restore explicitly.
     process.exitCode = before ?? 0;
-    console.log(chalk.dim("\nSkipped. Run it any time: skills setup agents"));
+    console.log(chalk.dim(`\nSkipped. Run it any time: ${skillsCommand("setup agents")}`));
     return;
   }
   if (answer !== "" && !/^y(es)?$/i.test(answer)) {
-    console.log(chalk.dim("Skipped. Run it any time: skills setup agents"));
+    console.log(chalk.dim(`Skipped. Run it any time: ${skillsCommand("setup agents")}`));
     return;
   }
   // Sign-in already succeeded; an agent that is not installed must not turn
@@ -326,7 +333,7 @@ async function doLogin(email: string, code: string | undefined, json: boolean | 
     if (!json) console.log(chalk.green("✓ Code sent to " + email));
 
     if (json || !isTTY || !process.stderr.isTTY) {
-      console.log(JSON.stringify({ status: "code_sent", email, message: `Supply the fresh six-digit code on stdin to: skills login --email ${email} --code-stdin${targetFlag(target)}` }));
+      console.log(JSON.stringify({ status: "code_sent", email, message: `Supply the fresh six-digit code on stdin to: ${skillsCommand("login")} --email ${email} --code-stdin${targetFlag(target)}` }));
       return;
     }
 
@@ -411,7 +418,7 @@ async function doApiKeyLogin(apiKey: string | true, json: boolean | undefined, t
   }, env, origin, "api-key");
 
   if (json || !isTTY) {
-    console.log(JSON.stringify({ ...identity, status: "authenticated", apiUrl: origin, next: ["skills setup agents"] }, null, 2));
+    console.log(JSON.stringify({ ...identity, status: "authenticated", apiUrl: origin, next: [skillsCommand("setup agents")] }, null, 2));
     return;
   }
 
@@ -445,7 +452,7 @@ async function doDeviceLogin(options: DeviceLoginOptions, target: SignInTarget) 
   const origin = target.origin;
   const json = Boolean(options.json);
   const interactive = Boolean(isTTY && !json);
-  const next = `skills login --poll${targetFlag(target)}`;
+  const next = `${skillsCommand("login")} --poll${targetFlag(target)}`;
 
   // `--poll` finishes the session a headless `skills login --device` started:
   // the code the user already approved must not be thrown away for a new one.
@@ -456,7 +463,7 @@ async function doDeviceLogin(options: DeviceLoginOptions, target: SignInTarget) 
     const others = pendingDeviceSignInOrigins(env).filter((other) => other !== origin);
     if (others.length > 0) {
       writeCommandError(new Error(
-        `No pending sign-in for ${origin}. Pending: ${others.map((other) => `skills login --poll --url ${other}`).join("; ")}`,
+        `No pending sign-in for ${origin}. Pending: ${others.map((other) => `${skillsCommand("login")} --poll --url ${other}`).join("; ")}`,
       ), "No pending sign-in", json);
       return;
     }
@@ -527,8 +534,8 @@ async function doDeviceLogin(options: DeviceLoginOptions, target: SignInTarget) 
 
   if (outcome.status !== "authorized") {
     const ended: Record<typeof outcome.status, string> = {
-      expired: "The sign-in code expired before it was approved. Start again: skills login",
-      invalid: "The server no longer recognises this sign-in code. Start again: skills login",
+      expired: `The sign-in code expired before it was approved. Start again: ${skillsCommand("login")}${targetFlag(target)}`,
+      invalid: `The server no longer recognises this sign-in code. Start again: ${skillsCommand("login")}${targetFlag(target)}`,
       denied: "Sign-in was denied in the browser.",
       timeout: `Device login timed out before browser authentication completed. Resume with: ${next}`,
       cancelled: "Sign-in cancelled.",

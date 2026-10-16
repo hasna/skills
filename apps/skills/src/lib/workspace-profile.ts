@@ -1,7 +1,7 @@
 import { constants, closeSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, type Stats } from "node:fs";
 import { dirname, join } from "node:path";
 import { getApiUrl, getAuthFilePath, getIdentityFilePath } from "./auth-store.js";
-import { resolveSkillsConnection, SkillsFleetCredentialError } from "./fleet-credentials.js";
+import { assertSkillsSignInCredentialReplaceable, resolveSkillsConnection, SkillsFleetCredentialError } from "./fleet-credentials.js";
 import { captureSkillsCredentialFiles, selectedSkillsProfile, skillsProfileCredentialFiles } from "./instance-credentials.js";
 import { RemoteSkillsClient } from "./remote-client.js";
 import { RemoteSkillsAuthClient } from "./remote-auth.js";
@@ -65,6 +65,7 @@ export async function prepareWorkspaceEnrollment(membershipId: string, source: E
   workspaceExpectedUserId(membershipId);
   const env = { ...source }, profile = selectedSkillsProfile(env);
   if (!profile) return fail("Workspace login requires an explicit HASNA_PROFILE name.");
+  assertSkillsSignInCredentialReplaceable(env);
   if (["HASNA_SKILLS_API_KEY_OVERRIDE", "HASNA_SKILLS_API_KEY_REF", "HASNA_SKILLS_API_KEY", "SKILLS_API_KEY"].some(name => env[name]?.trim()))
     return fail("Clear injected API keys before enrolling a named workspace profile.");
   const origin = getApiUrl("Sign in to a workspace", env);
