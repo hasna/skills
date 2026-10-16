@@ -800,6 +800,8 @@ export interface SignInTarget {
   source: string;
   /** Set when an already-resolving credential decided the origin: its source NAME, never a value. */
   credentialSource?: string;
+  /** A captured sign-in carries this through approval and persistence. */
+  unchanged?: () => void;
 }
 
 /**
@@ -812,11 +814,13 @@ export function gatewaySignInRefusal(target: SignInTarget): SkillsFleetCredentia
   const cause = target.credentialSource
     ? `${target.credentialSource} holds a Skills credential for the internal gateway`
     : target.source === "--url" ? "--url names the internal gateway" : `${target.source} selects the internal gateway`;
+  const command = (SKILLS_API_URL_ENV_KEYS.includes(target.source) ? `${SKILLS_API_URL_ENV}=${SKILLS_PRODUCT_DEFAULT_ORIGIN} ` : "") +
+    "skills --profile <new-profile> login";
   return new SkillsFleetCredentialError(
     `${cause}, which has no sign-in service. Nothing was sent. ` +
-      "Keep the fleet configuration and use a separate profile for product sign-in: skills --profile <new-profile> login.",
+      `Keep the fleet configuration and use a separate profile for product sign-in: ${command}.`,
     "GATEWAY_AUTH_UNAVAILABLE",
-    ["skills --profile <new-profile> login"],
+    [command],
   );
 }
 
@@ -908,10 +912,12 @@ export function resolveSkillsSignInOrigin(
       const origin = explicitSignInOrigin(explicitUrl);
       const storedHere = declared ? skillsProfileCredentialFiles(snapshot, profile).includes(declared.source) : false;
       if (declared && !storedHere && normalizeSkillsApiOrigin(declared.value) !== origin) {
+        const command = `${SKILLS_API_URL_ENV}=${origin} skills --profile <new-profile> login`;
         throw new SkillsFleetCredentialError(
           `--url ${origin} conflicts with ${declared.source}, which outranks the saved configuration and would ` +
-            `shadow the key this sign-in stores. Unset ${declared.source} or pass the same URL.`,
+            `shadow the key this sign-in stores. Keep the existing configuration and use a separate process and profile: ${command}.`,
           "INVALID_API_URL",
+          [command],
         );
       }
       return { origin, source: "--url" };
@@ -942,6 +948,16 @@ export function resolveSkillsSignInOrigin(
     if (isClientTransportConfigurationError(error)) throw new SkillsFleetCredentialError((error as Error).message, "INVALID_API_URL");
     throw error;
   }
+}
+
+/** Retain the selected credential's exact file state across a multi-step sign-in. */
+export function captureSkillsSignInTarget(env: Env = process.env, options: SkillsFleetOptions = {}, explicitUrl?: string): SignInTarget {
+  const snapshot = snapshotSkillsEnvironment(env);
+  const profile = options.credentials?.profile ?? selectedCliSkillsCredentialProfile();
+  const unchanged = captureSkillsCredentialFiles(skillsProfileCredentialFiles(snapshot, profile));
+  const target = resolveSkillsSignInOrigin(env, options, explicitUrl);
+  unchanged();
+  return { ...target, unchanged };
 }
 
 /**

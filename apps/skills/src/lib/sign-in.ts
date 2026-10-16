@@ -24,8 +24,8 @@ import { basename, dirname, join } from "node:path";
 
 import { resolveCredential } from "@hasna/contracts/client";
 import { deleteStoredCredential, readStoredCredential, saveAuthConfig, type StoredCredentialOrigin, type StoredKeyIssuer } from "./auth-store.js";
-import { isSkillsFleetCredentialError, resolveSkillsConnection, skillsCredentialFilePath, type SkillsFleetOptions } from "./fleet-credentials.js";
-import { selectedSkillsProfile } from "./instance-credentials.js";
+import { assertSkillsSignInCredentialReplaceable, isSkillsFleetCredentialError, resolveSkillsConnection, skillsCredentialFilePath, type SkillsFleetOptions } from "./fleet-credentials.js";
+import { captureSkillsCredentialFiles, selectedSkillsProfile, skillsProfileCredentialFiles } from "./instance-credentials.js";
 import { selectedCliSkillsCredentialProfile } from "./cli-credential-profile.js";
 import { SKILLS_PRODUCT_DEFAULT_ORIGIN } from "./product-default.js";
 import { HostedApiError, RemoteSkillsAuthClient } from "./remote-auth.js";
@@ -367,7 +367,11 @@ export async function persistSignIn(
   origin: string,
   env: Env = process.env,
   issuedBy: StoredKeyIssuer = "sign-in",
+  assertUnchanged?: () => void,
 ): Promise<string> {
+  const unchanged = assertUnchanged ?? captureSkillsCredentialFiles(skillsProfileCredentialFiles(env));
+  unchanged();
+  assertSkillsSignInCredentialReplaceable(env);
   let apiKey = typeof result.apiKey === "string" && result.apiKey.trim() ? result.apiKey : undefined;
   if (!apiKey && typeof result.token === "string" && result.token) {
     const created = await new RemoteSkillsAuthClient(origin).request("/api/auth/keys", {
@@ -384,7 +388,7 @@ export async function persistSignIn(
     ...(boundedText(result.organization?.id) ? { orgId: result.organization!.id } : {}),
     ...(boundedText(result.organization?.slug) ? { orgSlug: result.organization!.slug } : {}),
     ...(boundedText(result.user?.id) ? { userId: result.user!.id } : {}),
-  }, env, origin, issuedBy);
+  }, env, origin, issuedBy, unchanged);
 }
 
 // ── Signing out ─────────────────────────────────────────────────────────────

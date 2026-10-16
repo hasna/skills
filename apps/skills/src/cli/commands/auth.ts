@@ -5,10 +5,10 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { createInterface } from "readline";
 import { getAuthConfig, getAuthIdentity, getApiUrl, getAuthFilePath, saveAuthConfig } from "../../lib/auth-store.js";
-import { gatewaySignInRefusal, resolveSkillsFleet, resolveSkillsConnection, resolveSkillsSignInOrigin, SkillsFleetCredentialError, SKILLS_API_KEY_ENV, SKILLS_API_URL_ENV, type SignInTarget } from "../../lib/fleet-credentials.js";
+import { captureSkillsSignInTarget, gatewaySignInRefusal, resolveSkillsFleet, resolveSkillsConnection, SkillsFleetCredentialError, SKILLS_API_KEY_ENV, SKILLS_API_URL_ENV, type SignInTarget } from "../../lib/fleet-credentials.js";
 import { RemoteSkillsClient } from "../../lib/remote-client.js";
 import { getEnvironmentProfile } from "../profile-selection.js";
-import { selectedSkillsProfile } from "../../lib/instance-credentials.js";
+import { skillsProfileCommand as skillsCommand } from "../../lib/credential-profile-command.js";
 import type { RemoteSkillsAccess } from "../../lib/remote-permissions.js";
 import {
   clearPendingDeviceSignIn,
@@ -192,7 +192,7 @@ function printWhoami(payload: Record<string, unknown>): void {
  */
 function signInTarget(url: string | undefined, json?: boolean): SignInTarget | null {
   try {
-    const target = resolveSkillsSignInOrigin(process.env, {}, url);
+    const target = captureSkillsSignInTarget(process.env, {}, url);
     const refusal = gatewaySignInRefusal(target);
     if (refusal) throw refusal;
     return target;
@@ -205,12 +205,6 @@ function signInTarget(url: string | undefined, json?: boolean): SignInTarget | n
 /** The flag that selects this target again, for a printed follow-up command. */
 function targetFlag(target: SignInTarget): string {
   return target.source === "--url" ? ` --url ${target.origin}` : "";
-}
-
-/** Printed follow-ups must retain the profile that owns this sign-in. */
-function skillsCommand(command: string): string {
-  const profile = selectedSkillsProfile(process.env);
-  return `skills${profile ? ` --profile ${profile}` : ""} ${command}`;
 }
 
 /**
@@ -359,7 +353,7 @@ async function doLogin(email: string, code: string | undefined, json: boolean | 
   }
 
   try {
-    await persistSignIn(verifyRes, origin, env, "sign-in");
+    await persistSignIn(verifyRes, origin, env, "sign-in", target.unchanged);
   } catch (err) {
     writeCommandError(err, "Login succeeded but API key creation failed", json);
     return;
@@ -415,7 +409,7 @@ async function doApiKeyLogin(apiKey: string | true, json: boolean | undefined, t
     ...(orgId ? { orgId } : {}),
     ...(orgSlug ? { orgSlug } : {}),
     ...(userId ? { userId } : {}),
-  }, env, origin, "api-key");
+  }, env, origin, "api-key", target.unchanged);
 
   if (json || !isTTY) {
     console.log(JSON.stringify({ ...identity, status: "authenticated", apiUrl: origin, next: [skillsCommand("setup agents")] }, null, 2));
@@ -551,7 +545,7 @@ async function doDeviceLogin(options: DeviceLoginOptions, target: SignInTarget) 
   }
 
   try {
-    await persistSignIn(outcome.result, origin, env, "sign-in");
+    await persistSignIn(outcome.result, origin, env, "sign-in", target.unchanged);
   } catch (err) {
     writeCommandError(err, "Login succeeded but API key creation failed", json);
     return;

@@ -15,10 +15,22 @@ test("a gateway target recommends a separate profile without removing configurat
   expect(refusal?.code).toBe("GATEWAY_AUTH_UNAVAILABLE");
   expect(refusal?.message).toContain("--profile <new-profile> login");
   expect(refusal?.message).not.toMatch(/unset|remove/i);
-  expect(refusal?.next).toEqual(["skills --profile <new-profile> login"]);
+  expect(refusal?.next).toEqual([`HASNA_SKILLS_API_URL=${SKILLS_PRODUCT_DEFAULT_ORIGIN} skills --profile <new-profile> login`]);
 });
 
-async function signIn(seed: "gateway" | "vault" | "legacy", args: string[], seedProfile?: string, continuation?: "email" | "device") {
+test("an explicit URL conflict preserves gateway configuration and offers a process-scoped profile command", () => {
+  try {
+    resolveSkillsSignInOrigin({ HASNA_SKILLS_API_URL: defaultFleetGatewayBaseUrl("skills") },
+      { credentials: { keychain: { enabled: false } } }, SKILLS_PRODUCT_DEFAULT_ORIGIN);
+    throw Error("Expected an explicit URL conflict");
+  } catch (error) {
+    expect(error).toMatchObject({ code: "INVALID_API_URL", next: [`HASNA_SKILLS_API_URL=${SKILLS_PRODUCT_DEFAULT_ORIGIN} skills --profile <new-profile> login`] });
+    expect((error as Error).message).not.toMatch(/unset|remove/i);
+  }
+});
+
+async function signIn(seed: "gateway" | "vault" | "legacy", args: string[], seedProfile?: string, continuation?: "email" | "device",
+  late?: { credential: "gateway" | "vault"; stage: "verify" | "issue" | "device" | "api-key" }) {
   const root = await mkdtemp(join(tmpdir(), "skills-fleet-login-")), home = join(root, "home");
   await mkdir(home);
   const receipt = join(root, "receipt.json"), preload = join(root, "preload.ts");
@@ -48,41 +60,80 @@ const original = seed === "vault"
 mkdirSync(dirname(originalPath), { recursive: true, mode: 0o700 });
 if (!existsSync(originalPath)) writeFileSync(originalPath, original, { mode: 0o600 });
 const requests = [];
+let lateOriginal;
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
   if (url.protocol === "data:") return originalFetch(input, init);
   requests.push({ origin: url.origin, path: url.pathname });
   if (url.origin !== SKILLS_PRODUCT_DEFAULT_ORIGIN) throw Error("Unexpected fixture authority");
+  const lateStage = process.env.FLEET_LATE_STAGE;
+  const latePath = { verify: "/api/auth/verify", issue: "/api/auth/keys", device: "/api/auth/device/token", "api-key": "/api/auth/whoami" }[lateStage];
+  if (latePath === url.pathname) {
+    lateOriginal = process.env.FLEET_LATE_CREDENTIAL === "vault"
+      ? "HASNA_SKILLS_API_KEY_REF=fixture/skills/late-key\\n"
+      : "HASNA_SKILLS_API_KEY=" + key + "\\nHASNA_SKILLS_BOUND_API_URL=" + defaultFleetGatewayBaseUrl("skills") + "\\n";
+    writeFileSync(getAuthFilePath(), lateOriginal, { mode: 0o600 });
+  }
   if (url.pathname === "/api/auth/login") return Response.json({ success: true });
   if (url.pathname === "/api/auth/device/start") return Response.json({ deviceCode: "inert-device-capability", userCode: "FIXTURE-CODE",
     verificationUri: SKILLS_PRODUCT_DEFAULT_ORIGIN + "/login", expiresIn: 600, interval: 1 });
+  if (url.pathname === "/api/auth/verify" && ["verify", "issue"].includes(lateStage)) return Response.json({ token: "inert-session-capability", firstLogin: false });
+  if (url.pathname === "/api/auth/keys") return Response.json({ key: "inert-profile-key" });
+  if (url.pathname === "/api/auth/whoami") return Response.json({ user: { id: "fixture-user" } });
   if (["/api/auth/verify", "/api/auth/device/token"].includes(url.pathname)) return Response.json({ apiKey: "inert-profile-key", firstLogin: false });
   throw Error("Unexpected fixture route");
 };
 process.on("exit", () => {
   const selectedPath = getAuthFilePath();
   writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ requests, vaultCalls, vaultProbeMeasured,
+    lateCredentialPreserved: lateOriginal ? readFileSync(selectedPath, "utf8") === lateOriginal : null,
     originalUnchanged: readFileSync(originalPath, "utf8") === original,
     selectedFile: basename(selectedPath), selectedExists: existsSync(selectedPath),
     files: readdirSync(dirname(originalPath)).sort() }), { mode: 0o600 });
 });
 `);
+  const tui = join(root, "tui.tsx");
+  if (args[0] === "tui") await writeFile(tui, `
+import React from ${JSON.stringify(import.meta.resolve("react"))};
+import { render } from ${JSON.stringify(import.meta.resolve("ink"))};
+import { PassThrough } from "node:stream";
+import { mock } from "bun:test";
+import * as signIn from ${JSON.stringify(resolve(import.meta.dir, "../lib/sign-in.ts"))};
+import { selectCliSkillsCredentialProfile } from ${JSON.stringify(resolve(import.meta.dir, "../lib/cli-credential-profile.ts"))};
+const methods = { ...signIn };
+mock.module(${JSON.stringify(resolve(import.meta.dir, "../lib/sign-in.ts"))}, () => ({ ...methods, openVerificationPage: () => false }));
+selectCliSkillsCredentialProfile("skillsmd");
+const { AccountView } = await import(${JSON.stringify(resolve(import.meta.dir, "components/AccountView.tsx"))});
+const input = new PassThrough(), output = new PassThrough(), errors = new PassThrough();
+input.isTTY = true; input.setRawMode = () => input; input.ref = () => input; input.unref = () => input;
+output.isTTY = true; output.columns = 200; output.rows = 40;
+let rendered = "";
+output.on("data", chunk => { rendered += chunk.toString(); });
+const app = render(React.createElement(AccountView, { action: "login", onDone: () => {} }),
+  { stdin: input, stdout: output, stderr: errors, exitOnCtrlC: false, patchConsole: false, debug: true });
+try {
+  const deadline = Date.now() + 5000;
+  while (!rendered.includes("Register Skills with your agents from a shell:") && Date.now() < deadline) await Bun.sleep(20);
+  console.log(JSON.stringify({ renderedProfileSetup: rendered.includes("skills --profile skillsmd setup agents") }));
+} finally { app.unmount(); input.destroy(); output.destroy(); errors.destroy(); }
+`);
   try {
     const invoke = async (command: string[]) => {
     const child = Bun.spawn([process.execPath, "--no-env-file", "--preload", preload,
-      resolve(import.meta.dir, "index.tsx"), ...command], {
+      ...(command[0] === "tui" ? [tui] : [resolve(import.meta.dir, "index.tsx"), ...command])], {
       cwd: root, stdin: "pipe", stdout: "pipe", stderr: "pipe",
       env: { HOME: home, HASNA_HOME: join(home, ".hasna"), HASNA_CONFIG_HOME: join(home, "config"),
         HASNA_SKILLS_DIR: join(home, "data"), HASNA_STATION: "fleet-login-fixture",
         PATH: "/usr/bin:/bin", TMPDIR: root, NO_COLOR: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", FLEET_LOGIN_SEED: seed,
-        ...(seedProfile ? { FLEET_LOGIN_PROFILE: seedProfile } : {}) },
+        ...(seedProfile ? { FLEET_LOGIN_PROFILE: seedProfile } : {}),
+        ...(late ? { FLEET_LATE_CREDENTIAL: late.credential, FLEET_LATE_STAGE: late.stage } : {}) },
     });
     child.stdin.write("123456\n"); child.stdin.end();
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
     ]);
-    for (const inert of ["inert-fleet-key", "inert-profile-key", "fixture/skills/api-key", "inert-device-capability"]) expect(stdout + stderr).not.toContain(inert);
+    for (const inert of ["inert-fleet-key", "inert-profile-key", "fixture/skills/api-key", "inert-device-capability", "inert-session-capability"]) expect(stdout + stderr).not.toContain(inert);
     const recorded = JSON.parse(await readFile(receipt, "utf8"));
     expect(recorded.vaultProbeMeasured).toBe(true);
     return { stdout, stderr, exitCode, receipt: recorded };
@@ -97,6 +148,23 @@ process.on("exit", () => {
     const second = await invoke([...command.split(" ").slice(1), "--json"]);
     return { ...second, first };
   } finally { await rm(root, { recursive: true, force: true }); }
+}
+
+for (const credential of ["gateway", "vault"] as const) {
+  for (const stage of ["verify", "issue", "device", "api-key"] as const) {
+    test(`a ${credential} credential provisioned during ${stage} is preserved at completion`, async () => {
+      const device = stage === "device";
+      const flags = device ? ["--device"] : stage === "api-key" ? ["--api-key"] : ["--email", "fixture@example.invalid", "--code-stdin"];
+      const value = await signIn("gateway", ["--profile", "skillsmd", "login", ...flags, "--json"], undefined,
+        device ? "device" : undefined, { credential, stage });
+      expect(value.exitCode).toBe(1);
+      expect(value.stdout + value.stderr).toContain("configuration changed");
+      expect(value.receipt).toMatchObject({ originalUnchanged: true, lateCredentialPreserved: true, vaultCalls: 0 });
+      expect(value.receipt.files).not.toContain("identity-skillsmd.json");
+      expect(value.receipt.requests.map((request: { path: string }) => request.path)).toEqual(stage === "issue"
+        ? ["/api/auth/verify", "/api/auth/keys"] : [stage === "verify" ? "/api/auth/verify" : stage === "device" ? "/api/auth/device/token" : "/api/auth/whoami"]);
+    });
+  }
 }
 
 test("gateway refusal points to a separate profile and preserves the fleet credential", async () => {
@@ -145,6 +213,16 @@ test("a new --profile login defaults to the product and writes only its own cred
   expect(value.exitCode).toBe(0);
   expect(value.receipt).toMatchObject({ originalUnchanged: true, selectedFile: "credentials-skillsmd", selectedExists: true,
     requests: [{ origin: SKILLS_PRODUCT_DEFAULT_ORIGIN, path: "/api/auth/verify" }],
+    files: ["credentials", "credentials-skillsmd", "identity-skillsmd.json"] });
+});
+
+test("TUI login renders setup instructions for the same named profile", async () => {
+  const value = await signIn("gateway", ["tui"]);
+  expect(value.exitCode).toBe(0);
+  expect(JSON.parse(value.stdout)).toEqual({ renderedProfileSetup: true });
+  expect(value.receipt).toMatchObject({ originalUnchanged: true, selectedFile: "credentials-skillsmd", selectedExists: true,
+    requests: [{ origin: SKILLS_PRODUCT_DEFAULT_ORIGIN, path: "/api/auth/device/start" },
+      { origin: SKILLS_PRODUCT_DEFAULT_ORIGIN, path: "/api/auth/device/token" }],
     files: ["credentials", "credentials-skillsmd", "identity-skillsmd.json"] });
 });
 
