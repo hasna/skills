@@ -3,6 +3,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { hashNativeJsonControls } from "./claude-settings-witness.js";
 import { codexAppDeclarationValid } from "./codex-plugin-skill-controls.js";
+import { CODEX_PLUGIN_ROOT_CAPABILITY_ENTRIES, codexPluginRootCapabilityEntry, isCodexSkillDocumentName } from "./codex-plugin-capability-paths.js";
 
 /** OpenAI's own Codex plugin marketplaces, by their exact native names in Codex
  * 0.162.1. Only these hold vendor plugin copies; every other marketplace,
@@ -28,12 +29,14 @@ export function codexVendorMarketplace(cache: string, path: string): string | nu
   return CODEX_VENDOR_MARKETPLACES.includes(parts[0]!) ? parts[0]! : null;
 }
 
-/** Root entries a vendor refresh never needs: every other manifest location
- * Codex 0.162.1 reads besides `.codex-plugin/plugin.json` (see
- * codex-hook-mcp-dependencies.ts), the default hooks location and a root hooks
- * file, and the MCP, command and agent locations. Matched without regard to
- * case, so a case-insensitive file system cannot alias one. */
-const OTHER_PLUGIN_CONTROLS: readonly string[] = Object.freeze(["plugin.json", ".claude-plugin", ".cursor-plugin", "hooks", "hooks.json", ".mcp.json", "commands", "agents"]);
+/** Root entries a vendor refresh never needs: every capability location Codex
+ * reads (CODEX_PLUGIN_ROOT_CAPABILITY_ENTRIES, shared with the semantic cache
+ * witness) except the `.codex-plugin` manifest and the `.app.json` connector
+ * declaration it validates below. That is every other manifest location, the
+ * default hooks location and a root hooks file, and the MCP, command and agent
+ * locations. Matched without regard to case, so a case-insensitive file system
+ * cannot alias one. */
+const OTHER_PLUGIN_CONTROLS: readonly string[] = Object.freeze(CODEX_PLUGIN_ROOT_CAPABILITY_ENTRIES.filter(entry => entry !== ".codex-plugin" && entry !== ".app.json"));
 /** The only manifest keys a vendor refresh may carry: identity and display
  * metadata, the default skills root and the reviewed `.app.json` connector
  * declaration that every current vendor plugin has. Any other key (hooks,
@@ -47,9 +50,9 @@ const MAX_SUBTREE_DEPTH = 32;
 /** Directory names a routine refresh never admits a SKILL.md below: Codex skips
  * dot-named ones, and loads `node_modules` skills, which always need a fresh review. */
 const hiddenName = (name: string): boolean => name.startsWith(".") || name === "node_modules";
-const isSkillDocument = (name: string): boolean => name.toLowerCase() === "skill.md";
+const isSkillDocument = isCodexSkillDocumentName;
 const present = (path: string): boolean => lstatSync(path, { throwIfNoEntry: false }) !== undefined;
-const holdsOtherControl = (path: string): boolean => readdirSync(path).some(name => OTHER_PLUGIN_CONTROLS.includes(name.toLowerCase()));
+const holdsOtherControl = (path: string): boolean => readdirSync(path).some(name => OTHER_PLUGIN_CONTROLS.includes(codexPluginRootCapabilityEntry(name) ?? ""));
 
 /** Below a plugin root: real directories and regular files only, and every
  * SKILL.md is its own inventory entry (no hidden or `node_modules` ancestor,
