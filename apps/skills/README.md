@@ -2030,6 +2030,11 @@ Stable command shapes:
   snapshot plan.
 - MCP registration: `mcp --register <agent> --json` returns
   `{ "registered": number, "results": [...] }`.
+  Claude re-registration updates only `mcpServers.skills` in the active user
+  `.claude.json` (respecting `CLAUDE_CONFIG_DIR` and an active legacy
+  `.config.json`). Before changing an existing file it preserves and reads back
+  a mode-0600 sibling `.skills-mcp-<id>.backup`. A competing native config lock
+  or a changed config refuses the update; retry after the other writer finishes.
 
 ## Query a caller-owned catalog
 

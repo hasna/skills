@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import childProcess from "node:child_process";
@@ -41,8 +41,12 @@ write(credentials, `HASNA_SKILLS_API_KEY=${fleetKey}\nHASNA_SKILLS_API_URL=${fle
 write(credentials + "-customer", `HASNA_SKILLS_API_KEY=${customerKey}\nHASNA_SKILLS_API_URL=${mode === "gateway" ? "https://api.hasna.com/skills" : origin}\n`);
 const credentialBefore = readFileSync(credentials);
 const customerBefore = readFileSync(credentials + "-customer");
+if (mode === "claude-config-dir") process.env.CLAUDE_CONFIG_DIR = join(root, "claude-config");
+if (mode === "claude-custom-oauth") process.env.CLAUDE_CODE_CUSTOM_OAUTH_URL = "http://127.0.0.1:9/oauth";
 const files: Record<string, string> = {
-  claude: join(homedir(), ".claude", ".mcp.json"), codex: join(homedir(), ".codex", "config.toml"),
+  claude: mode === "claude-legacy" ? join(homedir(), ".claude", ".config.json")
+    : join(process.env.CLAUDE_CONFIG_DIR || homedir(), mode === "claude-custom-oauth" ? ".claude-custom-oauth.json" : ".claude.json"),
+  codex: join(homedir(), ".codex", "config.toml"),
   gemini: join(homedir(), ".gemini", "settings.json"), pi: join(homedir(), ".pi", "agent", "mcp.json"),
   opencode: join(homedir(), ".config", "opencode", "opencode.json"), cursor: join(homedir(), ".cursor", "mcp.json"),
   windsurf: join(homedir(), ".windsurf", "mcp.json"),
@@ -53,24 +57,59 @@ for (const [agent, path] of Object.entries(files)) {
   if (agent === "codex") write(path, mode === "invalid-toml" ? `broken = [${JSON.stringify(unrelatedKey)}\n` : codexBefore);
   else write(path, JSON.stringify(agent === "opencode"
     ? { theme: "system", mcp: { other: unrelated, skills: { type: "local", command: ["/old"], environment: { HASNA_PROFILE: "old-profile" } } } }
-    : { retained: true, mcpServers: { other: unrelated, skills: { command: "/old", env: { HASNA_PROFILE: "old-profile" } } } }));
+    : { retained: true, ...(agent === "claude" ? { projects: { "/owned/project": { trust: true } }, opaqueNativeState: unrelatedKey } : {}),
+      mcpServers: { other: unrelated, ...(agent === "claude" && mode === "claude-native" ? {} : { skills: { command: "/old", env: { HASNA_PROFILE: "old-profile" } } }) } }));
 }
 const originals = new Map(Object.values(files).map(path => [path, readFileSync(path)]));
+// This obsolete fallback must remain untouched even when native add fails.
+const inactiveClaude = join(homedir(), ".claude", ".mcp.json");
+write(inactiveClaude, JSON.stringify({ untouched: unrelatedKey }));
+const inactiveBefore = readFileSync(inactiveClaude);
+if (mode === "claude-legacy") write(join(homedir(), ".claude.json"), JSON.stringify({ modernInactive: unrelatedKey }));
+const modernBefore = mode === "claude-legacy" ? readFileSync(join(homedir(), ".claude.json")) : undefined;
+if (mode === "claude-locked") mkdirSync(`${files.claude}.lock`);
 const nativeArguments: string[][] = [];
+let duplicateRefused = false, optionBoundaryVerified = false;
+const nativeParser = () => new Command().exitOverride().configureOutput({ writeOut() {}, writeErr() {} })
+  .argument("<name>").argument("<command>").argument("[args...]")
+  .option("-s, --scope <scope>").option("-e, --env <env...>").option("-t, --transport <transport>");
+// Negative control: the original argv loses the server name to --env.
+const broken = nativeParser().parse(["--env", "HASNA_PROFILE=customer", "skills", "--", "skills-mcp", "--stdio"], { from: "user" });
+assert.notEqual(broken.args[0], "skills");
+assert.equal(broken.opts().env.includes("skills"), true);
 Bun.spawn = ((command: string[]) => {
   assert.equal(command[0], "claude"); nativeCalls++; nativeArguments.push(command);
-  if (mode === "claude-native") {
-    const env: Record<string, string> = {};
-    for (let i = 0; i < command.length; i++) if (command[i] === "--env") {
-      const item = command[++i]!, split = item.indexOf("="); env[item.slice(0, split)] = item.slice(split + 1);
-    }
-    const separator = command.indexOf("--"); assert(separator > 0);
-    const data = JSON.parse(readFileSync(files.claude!, "utf8"));
-    data.mcpServers.skills = { command: command[separator + 1], args: command.slice(separator + 2), env };
+  if (mode === "claude-unavailable") throw new Error(unrelatedKey);
+  // Match the real native option contract: --env consumes every following
+  // non-option operand. Without --transport, it consumes the server name.
+  const parser = nativeParser();
+  parser.parse(command.slice(3), { from: "user" });
+  assert.equal(parser.args[0], "skills"); assert.equal(parser.opts().transport, "stdio");
+  assert.deepEqual(parser.args.slice(1), ["skills-mcp", "--stdio"]);
+  const env: Record<string, string> = {};
+  for (const item of parser.opts().env ?? []) {
+    const split = item.indexOf("="); assert(split > 0); env[item.slice(0, split)] = item.slice(split + 1);
+  }
+  optionBoundaryVerified = true;
+  const data = JSON.parse(readFileSync(files.claude!, "utf8"));
+  let status = 1;
+  if (Object.hasOwn(data.mcpServers, "skills")) duplicateRefused = true;
+  else {
+    assert.equal(mode, "claude-native");
+    data.mcpServers.skills = { type: "stdio", command: parser.args[1], args: parser.args.slice(2), env };
+    write(files.claude!, JSON.stringify(data)); status = 0;
+  }
+  if (mode === "claude-drift") {
+    data.concurrentNativeChange = true;
     write(files.claude!, JSON.stringify(data));
   }
+  if (mode === "claude-late-lock") mkdirSync(`${files.claude}.lock`);
+  // The full original must already be preserved and read back before add.
+  const backups = readdirSync(dirname(files.claude!)).filter(name => name.startsWith(basename(files.claude!) + ".skills-mcp-") && name.endsWith(".backup"));
+  assert.equal(backups.length, 1);
+  assert.equal(readFileSync(join(dirname(files.claude!), backups[0]!)).equals(originals.get(files.claude!)!), true);
   return { stdout: new Blob(["fixture child output"]).stream(), stderr: new Blob([unrelatedKey]).stream(),
-    exited: Promise.resolve(mode === "claude-native" ? 0 : 1) };
+    exited: Promise.resolve(status) };
 }) as unknown as typeof Bun.spawn;
 
 const logs: string[] = [], output = console.log, errors = console.error;
@@ -112,12 +151,13 @@ if (mode === "setup") {
 } else await handleMcp({ register: "all", json: true });
 
 const refused = mode === "bad-url" || mode === "aliases";
+const claudeRefused = ["claude-drift", "claude-locked", "claude-late-lock"].includes(mode!);
 if (refused) {
   assert.equal(process.exitCode, 1); assert.equal(nativeCalls, 0);
   for (const [path, bytes] of originals) assert.equal(readFileSync(path).equals(bytes), true);
 } else {
-  assert.equal(process.exitCode ?? 0, mode === "invalid-toml" ? 1 : 0);
-  assert.equal(nativeCalls, 1);
+  assert.equal(process.exitCode ?? 0, mode === "invalid-toml" || claudeRefused ? 1 : 0);
+  assert.equal(nativeCalls, mode === "claude-locked" ? 0 : 1);
   const expectedProfile = defaultMode ? undefined : mode === "auth" ? "signed-in" : "customer";
   const expectedOrigin = defaultMode ? fleetOrigin : origin;
   // Fresh consumer selection has no in-process CLI profile singleton.
@@ -125,8 +165,15 @@ if (refused) {
   const { assertSkillsMcpConfigured } = await import("../../mcp/index.js");
   const { isMcpStdioMode } = await import("../../mcp/http.js");
   for (const [agent, path] of Object.entries(files)) {
+    if (agent === "claude" && claudeRefused) {
+      if (mode === "claude-drift") {
+        const expected = JSON.parse(originals.get(path)!.toString()); expected.concurrentNativeChange = true;
+        assert.equal(JSON.stringify(JSON.parse(readFileSync(path, "utf8"))) === JSON.stringify(expected), true);
+      } else assert.equal(readFileSync(path).equals(originals.get(path)!), true);
+      continue;
+    }
     if (agent === "codex" && mode === "invalid-toml") { assert.equal(readFileSync(path).equals(originals.get(path)!), true); continue; }
-    let server: { command: string | string[]; args?: string[]; env?: Record<string, string>; environment?: Record<string, string> };
+    let server: { type?: string; command: string | string[]; args?: string[]; env?: Record<string, string>; environment?: Record<string, string> };
     if (agent === "codex") {
       const parsed = Bun.TOML.parse(readFileSync(path, "utf8")) as any;
       server = parsed.mcp_servers.skills;
@@ -138,6 +185,11 @@ if (refused) {
       const container = agent === "opencode" ? parsed.mcp : parsed.mcpServers;
       server = container.skills; assert.equal(JSON.stringify(container.other) === JSON.stringify(unrelated), true);
       assert.equal(agent === "opencode" ? parsed.theme : parsed.retained, agent === "opencode" ? "system" : true);
+      if (agent === "claude") {
+        assert.deepEqual(parsed.projects, { "/owned/project": { trust: true } });
+        assert.equal(parsed.opaqueNativeState === unrelatedKey, true);
+        assert.equal(server.type, "stdio");
+      }
     }
     const args = Array.isArray(server.command) ? server.command.slice(1) : server.args;
     assert.deepEqual(args, ["--stdio"]); assert.equal(isMcpStdioMode(args!), true); assert.equal(isMcpStdioMode([]), false);
@@ -158,16 +210,33 @@ if (refused) {
       assert.throws(() => resolveSkillsFleet({ ...fresh, HASNA_PROFILE: "missing-profile" }));
     }
   }
-  assert(nativeArguments[0]!.includes("--stdio"));
-  assert.equal(nativeArguments[0]!.includes("HASNA_PROFILE=old-profile"), false);
+  if (nativeCalls) {
+    assert(nativeArguments[0]!.includes("--stdio"));
+    assert.equal(nativeArguments[0]!.includes("HASNA_PROFILE=old-profile"), false);
+    assert.equal(optionBoundaryVerified, mode !== "claude-unavailable");
+    assert.equal(duplicateRefused, !["claude-native", "claude-unavailable"].includes(mode!));
+  }
 }
+assert.equal(readFileSync(inactiveClaude).equals(inactiveBefore), true);
+if (modernBefore) assert.equal(readFileSync(join(homedir(), ".claude.json")).equals(modernBefore), true);
+if (mode === "claude-config-dir" || mode === "claude-custom-oauth") assert.equal(existsSync(join(homedir(), ".claude.json")), false);
+assert.equal(existsSync(`${files.claude}.lock`), ["claude-locked", "claude-late-lock"].includes(mode!));
 assert.equal(readFileSync(credentials).equals(credentialBefore), true);
 assert.equal(readFileSync(credentials + "-customer").equals(customerBefore), true);
 assert.equal(requests, mode === "auth" ? 1 : 0);
 const rendered = logs.join("\n");
 for (const secret of [fleetKey, customerKey, unrelatedKey]) assert.equal(rendered.includes(secret), false);
+if (!["auth", "setup"].includes(mode!)) {
+  const result = JSON.parse(rendered);
+  assert.equal(result.registered, refused ? 0 : mode === "invalid-toml" || claudeRefused ? 6 : 7);
+  if (!refused) {
+    const claude = result.results.find((entry: { agent: string }) => entry.agent === "claude");
+    assert.equal(claude.success, !claudeRefused);
+    if (!claudeRefused) assert.equal(claude.path, files.claude);
+  }
+}
 assert.deepEqual(skillsMcpRegistrationEnvironment({}), {});
 console.log = output; console.error = errors; process.exitCode = 0;
-console.log(JSON.stringify({ mode, adapters: refused ? 0 : mode === "invalid-toml" ? 6 : 7, refused, consumerSelectionVerified: !refused,
+console.log(JSON.stringify({ mode, adapters: refused ? 0 : mode === "invalid-toml" || claudeRefused ? 6 : 7, refused, consumerSelectionVerified: !refused,
   stdioSelected: !refused, unrelatedEntriesPreserved: true, credentialsUnchanged: true, credentialsNotDisclosed: true,
   networkCalls: 0, mockedAuthRequests: requests }));
