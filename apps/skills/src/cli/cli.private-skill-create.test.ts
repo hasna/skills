@@ -19,15 +19,16 @@ async function run(scenario = "success", command = args, code = "123456\n", rowF
       PATH: "/usr/bin:/bin", SKILLS_CREATE_SCENARIO: scenario, SKILLS_CREATE_TRACE: trace, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
       SKILLS_CREATE_WAITING: waiting, ...(rowFile ? { SKILLS_CREATE_ROW: rowFile } : {}),
       ...(metadataRead ? { HASNA_SKILLS_API_KEY_OVERRIDE: "synthetic-metadata-key" } : {}) },
-    stdin: pendingCode ? "pipe" : new Blob([code]), stdout: "pipe", stderr: "pipe",
+    stdin: "pipe", stdout: "pipe", stderr: "pipe",
   });
-  if (pendingCode) {
-    try {
+  // Feed process.stdin through the same pipe as the pending-code controls.
+  try {
+    if (pendingCode) {
       for (let i = 0; i < 200 && !existsSync(waiting); i++) await Bun.sleep(10);
       expect(existsSync(waiting)).toBe(true);
-      (child.stdin as import("bun").FileSink).write(code);
-    } finally { (child.stdin as import("bun").FileSink).end(); }
-  }
+    }
+    (child.stdin as import("bun").FileSink).write(code);
+  } finally { (child.stdin as import("bun").FileSink).end(); }
   const [stdout, stderr, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
   const calls = existsSync(trace) ? readFileSync(trace, "utf8").trim().split("\n").map(line => JSON.parse(line)) : [];
   expect(stdout + stderr).not.toContain("synthetic-session"); expect(stdout + stderr).not.toContain("capability=");
