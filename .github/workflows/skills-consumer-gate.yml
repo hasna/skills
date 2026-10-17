@@ -66,6 +66,10 @@ jobs:
           umask 022
           bun run build
 
+      - name: Credential-free Claude 2.1.302 native MCP registration (network isolated)
+        working-directory: apps/skills
+        run: bun --no-env-file --no-install scripts/probe-claude-mcp-registration.ts
+
       - name: Unit tests for MCP registration, tools/list, private create, and gate helpers
         working-directory: apps/skills
         env:
