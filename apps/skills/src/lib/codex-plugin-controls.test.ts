@@ -14,6 +14,7 @@ import { captureDiscoveryDirectories, resolveAgentDiscovery } from "./agent-disc
 import { parseManagedSkillPolicy } from "./managed-policy.js";
 import { admitCorpusFixture, installCorpusInspectorFixture } from "./codex-corpus.fixture.js";
 import { captureCodexSettingsV3 } from "./codex-settings-witness.js";
+import { captureCodexRemoteReceiptSnapshot } from "./codex-native-skill-catalog.js";
 useDefaultTestTimeout();
 let restoreInspector: () => void;
 beforeEach(() => { restoreInspector = installCorpusInspectorFixture(); });
@@ -30,7 +31,7 @@ test("reviewed qualified native plugin name remains denied after cache version r
  applyAgentIntegration(planAgentIntegration({...f,agents:["codex"]}));
  add(next,"3.0.0");
  expect(()=>assertManagedAgentBridge("codex",f)).toThrow("NATIVE_SKILL_DRIFT");
- const receipt={version:"codex-cli 0.159.2",cwd:home,skills:[{name:"vendor:deploy",path:join(old,"skills/deploy/SKILL.md"),enabled:false,pluginId:"vendor@probe"}],plugins:[{id:"vendor@probe",name:"vendor",installed:true,enabled:true,localVersion:"1.0.0"}]};
+ const receipt={version:"codex-cli 0.159.2",cwd:home,remoteReceipts:captureCodexRemoteReceiptSnapshot(join(home,".codex/plugins/cache")),skills:[{name:"vendor:deploy",path:join(old,"skills/deploy/SKILL.md"),enabled:false,pluginId:"vendor@probe"}],plugins:[{id:"vendor@probe",name:"vendor",installed:true,enabled:true,localVersion:"1.0.0"}]};
  const plan=planAgentIntegration({...f,agents:["codex"],codexNativeCatalog:receipt}); applyAgentIntegration(plan);
  const config=join(home,".codex/config.toml"), before=readFileSync(config,"utf8");
  expect(before).toContain('name = "vendor:deploy"');expect(before).toContain(JSON.stringify(join(old,"skills/deploy/SKILL.md")));
@@ -45,21 +46,24 @@ test("reviewed qualified native plugin name remains denied after cache version r
  rmSync(join(next,"skills/unknown"),{recursive:true});
  put(config,before+'\n[[skills.config]]\nname = "vendor:deploy"\nenabled = true\n');expect(()=>assertManagedAgentBridge("codex",f)).toThrow("NATIVE_SKILL_DRIFT");
 });
-test("legacy listed catalog remains valid without plugins while omitted identity refuses",()=>{
+test("a legacy listed catalog without plugins or a pre-start receipt snapshot must be re-captured; with one, omitted identity still refuses",()=>{
  const home=mkdtempSync(join(tmpdir(),"skills-plugin-legacy-catalog-")); roots.push(home); admitCorpusFixture(join(home, ".codex"));
  const cache=join(home,".codex/plugins/cache"), root=join(cache,"probe/vendor/1.0.0"), document=join(root,"skills/deploy/SKILL.md");
  put(join(root,".codex-plugin/plugin.json"),'{"name":"vendor","version":"1.0.0"}');
  put(document,'---\nname: deploy\ndescription: Synthetic legacy catalog\n---\nFixture');
  const catalog={version:"codex-cli 0.159.2",cwd:home,skills:[{name:"vendor:deploy",path:document,enabled:false,pluginId:"vendor@probe"}]};
  const read=(path:string)=>readFileSync(path,"utf8"), rules=[{path:document,enabled:false}];
- expect(reviewCodexPluginSkillControls(catalog,[document],cache,home,read,rules)).toHaveLength(1);
- expect(()=>reviewCodexPluginSkillControls({...catalog,skills:[]},[document],cache,home,read,rules)).toThrow("IDENTITY_UNSUPPORTED");
+ // An older capture carries no reading of the remote receipts taken before Codex started.
+ expect(()=>reviewCodexPluginSkillControls(catalog,[document],cache,home,read,rules)).toThrow("CODEX_REMOTE_RECEIPT_SNAPSHOT_REQUIRED");
+ const captured={...catalog,remoteReceipts:captureCodexRemoteReceiptSnapshot(cache)};
+ expect(reviewCodexPluginSkillControls(captured,[document],cache,home,read,rules)).toHaveLength(1);
+ expect(()=>reviewCodexPluginSkillControls({...captured,skills:[]},[document],cache,home,read,rules)).toThrow("IDENTITY_UNSUPPORTED");
 });
 test("reviewed native names reject bare names, unexpected namespace and conflicting enable",()=>{
  const home=mkdtempSync(join(tmpdir(),"skills-plugin-boundary-")); roots.push(home); admitCorpusFixture(join(home, ".codex")); const f={home,dataDir:join(home,"data"),projectDir:home};
  const root=join(home,".codex/plugins/cache/probe/vendor/1.0.0"),document=join(root,"skills/deploy/SKILL.md");
  put(join(root,".codex-plugin/plugin.json"),'{"name":"vendor","version":"1.0.0"}');put(document,'---\nname: deploy\ndescription: Synthetic\n---\nfixture');
- const catalog={version:"codex-cli 0.159.2",cwd:home,skills:[{name:"deploy",path:document,enabled:true,pluginId:"vendor@probe"}],plugins:[{id:"vendor@probe",name:"vendor",installed:true,enabled:true,localVersion:"1.0.0"}]};
+ const catalog={version:"codex-cli 0.159.2",cwd:home,remoteReceipts:captureCodexRemoteReceiptSnapshot(join(home,".codex/plugins/cache")),skills:[{name:"deploy",path:document,enabled:true,pluginId:"vendor@probe"}],plugins:[{id:"vendor@probe",name:"vendor",installed:true,enabled:true,localVersion:"1.0.0"}]};
  expect(()=>planAgentIntegration({...f,agents:["codex"],codexNativeCatalog:catalog})).toThrow("IDENTITY_UNSUPPORTED");
  put(join(home,".codex/config.toml"),'[[skills.config]]\nname = "vendor:deploy"\nenabled = true\n');
  expect(()=>planAgentIntegration({...f,agents:["codex"],codexNativeCatalog:{...catalog,skills:[{...catalog.skills[0]!,name:"vendor:deploy"}]}})).toThrow("NAME_CONFLICT");
@@ -79,7 +83,7 @@ test("reviewed Pages app declarations stay exactly bound across plugin cache ver
   };
   const old=add("1.0.0"), documents=names.map(name=>join(old,"skills",name,"SKILL.md"));
   const read=(path:string)=>readFileSync(path,"utf8");
-  const catalog={version:"codex-cli 0.159.2",cwd:home,skills:documents.map((path,i)=>({name:`pages:${names[i]}`,path,enabled:false,pluginId:"pages@probe"})),plugins:[{id:"pages@probe",name:"pages",installed:true,enabled:true,localVersion:"1.0.0"}]};
+  const catalog={version:"codex-cli 0.159.2",cwd:home,remoteReceipts:captureCodexRemoteReceiptSnapshot(join(home,".codex/plugins/cache")),skills:documents.map((path,i)=>({name:`pages:${names[i]}`,path,enabled:false,pluginId:"pages@probe"})),plugins:[{id:"pages@probe",name:"pages",installed:true,enabled:true,localVersion:"1.0.0"}]};
   const controls=reviewCodexPluginSkillControls(catalog,documents,cache,home,read,[]);
   expect(controls).toHaveLength(4);
   expect(new Set(controls.map(control=>control.appSha256)).size).toBe(1);
@@ -120,7 +124,7 @@ test("native app controls refuse unsupported schema, references and newly appear
   const manifest=join(root,".codex-plugin/plugin.json"), appPath=join(root,".app.json"), app='{"apps":{"pages":{"id":"synthetic_pages_connector","required":true}}}';
   put(manifest,'{"name":"pages","version":"1.0.0"}');
   put(document,'---\nname: write-page\ndescription: Synthetic Pages\n---\nDisabled body');
-  const read=(path:string)=>readFileSync(path,"utf8"), catalog={version:"codex-cli 0.159.2",cwd:home,skills:[{name:"pages:write-page",path:document,enabled:false,pluginId:"pages@probe"}],plugins:[{id:"pages@probe",name:"pages",installed:true,enabled:true,localVersion:"1.0.0"}]};
+  const read=(path:string)=>readFileSync(path,"utf8"), catalog={version:"codex-cli 0.159.2",cwd:home,remoteReceipts:captureCodexRemoteReceiptSnapshot(join(home,".codex/plugins/cache")),skills:[{name:"pages:write-page",path:document,enabled:false,pluginId:"pages@probe"}],plugins:[{id:"pages@probe",name:"pages",installed:true,enabled:true,localVersion:"1.0.0"}]};
   const productionPlan=()=>planAgentIntegration({home,dataDir:join(home,"data"),projectDir:home,agents:["codex"],codexNativeCatalog:catalog});
   const review=()=>reviewCodexPluginSkillControls(catalog,[document],cache,home,read,[]);
   const legacy=review(), rules=[{name:"pages:write-page",enabled:false}];
@@ -164,7 +168,7 @@ for (const nativeVersion of ["codex-cli 0.159.2", "codex-cli 0.160.0"]) test(`pa
   const add=(version:string)=>{const root=join(parent,version);put(join(root,".codex-plugin/plugin.json"),JSON.stringify({name:"codex-browser-recorder",version}));put(join(root,"skills/record-browser/SKILL.md"),payload);return root;};
   add("0.4.0");
   put(config,`[[skills.config]]\npath = ${JSON.stringify(document)}\nenabled = false\n`);
-  const catalog={version:nativeVersion,cwd:home,skills:[],plugins:[{id:"codex-browser-recorder@openai-curated-remote",name:"codex-browser-recorder",installed:true,enabled:true,localVersion:"0.4.0"}]};
+  const catalog={version:nativeVersion,cwd:home,remoteReceipts:captureCodexRemoteReceiptSnapshot(join(home,".codex/plugins/cache")),skills:[],plugins:[{id:"codex-browser-recorder@openai-curated-remote",name:"codex-browser-recorder",installed:true,enabled:true,localVersion:"0.4.0"}]};
   const read=(path:string)=>readFileSync(path,"utf8");
   const plan=planAgentIntegration({...f,agents:["codex"],codexNativeCatalog:catalog});
   applyAgentIntegration(plan);
@@ -192,7 +196,7 @@ for (const nativeVersion of ["codex-cli 0.159.2", "codex-cli 0.160.0"]) test(`pa
   const defaultRoot=join(cache,"probe/default-plugin/1.0.0"), defaultPath=join(defaultRoot,"skills/default-skill/SKILL.md");
   put(join(defaultRoot,".codex-plugin/plugin.json"),JSON.stringify({name:"default-plugin"}));
   put(defaultPath,"---\nname: default-skill\ndescription: Default version compatibility\n---\nFixture\n");
-  const defaultControls=reviewCodexPluginSkillControls({version:nativeVersion,cwd:home,skills:[],plugins:[{id:"default-plugin@probe",name:"default-plugin",installed:true,enabled:true,localVersion:"1.0.0"}]},[defaultPath],cache,home,read,[{path:defaultPath,enabled:false}]);
+  const defaultControls=reviewCodexPluginSkillControls({version:nativeVersion,cwd:home,remoteReceipts:captureCodexRemoteReceiptSnapshot(join(home,".codex/plugins/cache")),skills:[],plugins:[{id:"default-plugin@probe",name:"default-plugin",installed:true,enabled:true,localVersion:"1.0.0"}]},[defaultPath],cache,home,read,[{path:defaultPath,enabled:false}]);
   expect(defaultControls.map(control=>control.name)).toEqual(["default-plugin:default-skill"]);
 });
 
@@ -204,7 +208,7 @@ test("remote null-version denied materialization binds the native installation r
  put(document,"---\nname: write-page\ndescription: Synthetic denied Pages fixture\n---\nFixture\n");
  const remotePluginId="plugins~Plugin_00000000000000000000000000000001";
  put(join(parent,".codex-remote-plugin-install.json"),JSON.stringify({schema_version:1,remote_plugin_id:remotePluginId}));
- const catalog={version:"codex-cli 0.160.0",cwd:home,skills:[],plugins:[{id:"pages@openai-curated-remote",name:"pages",installed:true,enabled:true,localVersion:null,remotePluginId,sourceType:"remote" as const}]};
+ const catalog={version:"codex-cli 0.160.0",cwd:home,skills:[],plugins:[{id:"pages@openai-curated-remote",name:"pages",installed:true,enabled:true,localVersion:null,remotePluginId,sourceType:"remote" as const}],remoteReceipts:captureCodexRemoteReceiptSnapshot(cache)};
  const read=(path:string)=>readFileSync(path,"utf8"), rules=[{path:document,enabled:false}];
  const controls=reviewCodexPluginSkillControls(catalog,[document],cache,home,read,rules);
  expect(controls.map(control=>control.name)).toEqual(["pages:write-page"]);
@@ -260,7 +264,7 @@ function remoteNameDisabledRefresh(nativeVersion="codex-cli 0.160.0") {
  put(config,`model = "synthetic"\n[plugins."recorder@openai-curated-remote"]\nenabled = true\n[[skills.config]]\npath = ${JSON.stringify(oldDocument)}\nenabled = false\n[[skills.config]]\nname = "recorder:record-browser"\nenabled = false\n`);
  const f={home,dataDir:join(home,"data"),projectDir:home};
  const plugin={id:"recorder@openai-curated-remote",name:"recorder",installed:true,enabled:true,localVersion:null,remotePluginId,sourceType:"remote" as const};
- const catalog={version:nativeVersion,cwd:home,skills:[] as Array<{name:string;path:string;enabled:boolean;pluginId:string|null}>,plugins:[plugin]};
+ const catalog={version:nativeVersion,cwd:home,skills:[] as Array<{name:string;path:string;enabled:boolean;pluginId:string|null}>,plugins:[plugin],remoteReceipts:captureCodexRemoteReceiptSnapshot(cache)};
  const freshReview=()=>({version:1 as const,agents:[{agent:"codex" as const,roots:[cache],sources:[captureCodexSettingsV3(config),{path:manifest,sha256:createHash("sha256").update(readFileSync(manifest)).digest("hex")}],pluginHooks:"reviewed-no-skill-injection" as const}]});
  // Enroll the original, then simulate Codex replacing its synthetic cache.
  const originalReview={version:1 as const,agents:[{agent:"codex" as const,roots:[cache],sources:[captureCodexSettingsV3(config)],pluginHooks:"reviewed-no-skill-injection" as const}]};
@@ -347,7 +351,7 @@ for (const nativeVersion of ["codex-cli 0.160.0", "codex-cli 0.160.1", "codex-cl
  put(inactive,"---\nname: inert-skill\ndescription: Synthetic inactive plugin fixture\n---\nFixture\n");
  put(join(activeRoot,".codex-plugin/plugin.json"),JSON.stringify({name:"active",version:"1.0.0"}));
  put(active,"---\nname: active-skill\ndescription: Synthetic active plugin fixture\n---\nFixture\n");
- const catalog={version:nativeVersion,cwd:home,skills:[{name:"active:active-skill",path:active,enabled:true,pluginId:"active@probe"}],plugins:[
+ const catalog={version:nativeVersion,cwd:home,remoteReceipts:captureCodexRemoteReceiptSnapshot(join(home,".codex/plugins/cache")),skills:[{name:"active:active-skill",path:active,enabled:true,pluginId:"active@probe"}],plugins:[
    {id:"inactive@probe",name:"inactive",installed:true,enabled:false,localVersion:"1.0.0",sourceType:"local" as const,sourceSha256:hashNativeJsonControls(JSON.stringify({type:"local",path:join(home,"source/inactive")})),sourcePath:join(home,"source/inactive")},
    {id:"active@probe",name:"active",installed:true,enabled:true,localVersion:"1.0.0"}]};
  const read=(path:string)=>readFileSync(path,"utf8"), rules=[{path:inactive,enabled:false}], settings={"inactive@probe":{enabled:false}};
@@ -426,7 +430,7 @@ test("codex-cli 0.163.0 reviewed inactivity requires an explicit plugin disable,
  put(join(source,".codex-plugin/plugin.json"),JSON.stringify({name:"inactive",version:"1.0.0"}));
  put(document,"---\nname: inert-skill\ndescription: Synthetic default-policy fixture\n---\nFixture\n");
  // The native inventory a 0.163.0 default-disabled installation reports.
- const catalog={version:"codex-cli 0.163.0",cwd:home,skills:[],plugins:[{id:"inactive@probe",name:"inactive",installed:true,enabled:false,localVersion:"1.0.0",
+ const catalog={version:"codex-cli 0.163.0",cwd:home,remoteReceipts:captureCodexRemoteReceiptSnapshot(join(home,".codex/plugins/cache")),skills:[],plugins:[{id:"inactive@probe",name:"inactive",installed:true,enabled:false,localVersion:"1.0.0",
    sourceType:"local" as const,sourceSha256:hashNativeJsonControls(JSON.stringify({type:"local",path:source})),sourcePath:source}]};
  const read=(path:string)=>readFileSync(path,"utf8"), rules=[{path:document,enabled:false}];
  const review=(settings:unknown)=>reviewCodexPluginControls(catalog,[document],cache,home,read,rules,settings);
@@ -472,7 +476,7 @@ for (const nativeVersion of ["codex-cli 0.160.0", "codex-cli 0.160.1", "codex-cl
  put(sourceDoc,'---\nname: deploy\ndescription: Synthetic installation input\n---\nDifferent input body');
  const config=join(home,".codex/config.toml");put(config,"");
  const read=(path:string)=>readFileSync(path,"utf8"), hash=(path:string)=>createHash("sha256").update(read(path)).digest("hex");
- const catalog={version:nativeVersion,cwd:home,skills:[{name:"vendor:deploy",path:installedDoc,enabled:true,pluginId:"vendor@probe"}],plugins:[{id:"vendor@probe",name:"vendor",installed:true,enabled:true,localVersion:"1.0.0",sourceType:"local" as const,sourcePath:sourceRoot,sourceSha256:hashNativeJsonControls(JSON.stringify({type:"local",path:sourceRoot}))}]};
+ const catalog={version:nativeVersion,cwd:home,remoteReceipts:captureCodexRemoteReceiptSnapshot(join(home,".codex/plugins/cache")),skills:[{name:"vendor:deploy",path:installedDoc,enabled:true,pluginId:"vendor@probe"}],plugins:[{id:"vendor@probe",name:"vendor",installed:true,enabled:true,localVersion:"1.0.0",sourceType:"local" as const,sourcePath:sourceRoot,sourceSha256:hashNativeJsonControls(JSON.stringify({type:"local",path:sourceRoot}))}]};
  const review=reviewCodexPluginControls(catalog,[installedDoc,sourceDoc],cache,home,read,[]);
  expect(review.skills).toHaveLength(1);expect(review.sourceInputs).toHaveLength(1);
  const sourceRoots=reviewedCodexPluginSourceRoots(cache,review.sourceInputs,read);
@@ -532,7 +536,7 @@ test("native review accepts an empty plugin cache while preserving catalog and c
  const cache=join(home,".codex/plugins/cache"), bridge=join(home,".codex/skills/skills-cli/SKILL.md"), system=join(home,".codex/skills/.system/probe/SKILL.md");
  applyAgentIntegration(planAgentIntegration({home,dataDir:join(home,"data"),projectDir:home,agents:["codex"]}));
  put(system,"---\nname: probe\ndescription: Synthetic system skill\n---\nFixture");
- const catalog={version:"codex-cli 0.160.0",cwd:home,skills:[{name:"skills-cli",path:bridge,enabled:true,pluginId:null}],plugins:[]};
+ const catalog={version:"codex-cli 0.160.0",cwd:home,remoteReceipts:captureCodexRemoteReceiptSnapshot(join(home,".codex/plugins/cache")),skills:[{name:"skills-cli",path:bridge,enabled:true,pluginId:null}],plugins:[]};
  const read=(path:string)=>readFileSync(path,"utf8");
  expect(reviewCodexPluginSkillControls(catalog,[],cache,home,read,[])).toEqual([]);
  expect(reviewCodexPluginSkillControls(catalog,[bridge,system],cache,home,read,[])).toEqual([]);
@@ -570,7 +574,7 @@ test("reviewed stdio MCP capabilities stay available and bound when only the nat
   put(join(r,"skills/deploy/SKILL.md"),"---\nname: deploy\ndescription: Synthetic MCP skill fixture\n---\nDisabled body");
  };
  add(root,"1.0.0");
- const read=(path:string)=>readFileSync(path,"utf8"), catalog={version:"codex-cli 0.160.0",cwd:home,skills:[{name:"vendor:deploy",path:document,enabled:false,pluginId:"vendor@probe"}],plugins:[{id:"vendor@probe",name:"vendor",installed:true,enabled:true,localVersion:"1.0.0"}]};
+ const read=(path:string)=>readFileSync(path,"utf8"), catalog={version:"codex-cli 0.160.0",cwd:home,remoteReceipts:captureCodexRemoteReceiptSnapshot(join(home,".codex/plugins/cache")),skills:[{name:"vendor:deploy",path:document,enabled:false,pluginId:"vendor@probe"}],plugins:[{id:"vendor@probe",name:"vendor",installed:true,enabled:true,localVersion:"1.0.0"}]};
  const controls=reviewCodexPluginSkillControls(catalog,[document],cache,home,read,[]);
  expect(controls[0]?.mcpSha256).toMatch(/^[a-f0-9]{64}$/);
  expect(()=>assertAgentPolicyCollections({bridge:{codexPluginSkills:controls}})).not.toThrow();
@@ -624,7 +628,7 @@ test("Codex stdio tool metadata preserves capabilities during exact skill denial
  const text=JSON.stringify({mcpServers:{probe:server}}), read=(path:string)=>readFileSync(path,"utf8");
  const add=(dir:string,version:string)=>{put(join(dir,".codex-plugin/plugin.json"),JSON.stringify({name:"vendor",version,mcpServers:"./.mcp.json"}));put(join(dir,".mcp.json"),text);put(join(dir,"skills/deploy/SKILL.md"),"---\nname: deploy\ndescription: Synthetic tool metadata\n---\nDisabled body");};
  add(root,"1.0.0");
- const catalog={version:"codex-cli 0.160.0",cwd:home,skills:[{name:"vendor:deploy",path:document,enabled:false,pluginId:"vendor@probe"}],plugins:[{id:"vendor@probe",name:"vendor",installed:true,enabled:true,localVersion:"1.0.0"}]};
+ const catalog={version:"codex-cli 0.160.0",cwd:home,remoteReceipts:captureCodexRemoteReceiptSnapshot(join(home,".codex/plugins/cache")),skills:[{name:"vendor:deploy",path:document,enabled:false,pluginId:"vendor@probe"}],plugins:[{id:"vendor@probe",name:"vendor",installed:true,enabled:true,localVersion:"1.0.0"}]};
  const review=()=>reviewCodexPluginSkillControls(catalog,[document],cache,home,read,[]), controls=review();
  const plan=planAgentIntegration({...f,agents:["codex"],codexNativeCatalog:catalog});
  expect(plan.changes.some(change=>change.path===mcp)).toBe(false);

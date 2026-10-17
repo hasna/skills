@@ -6,7 +6,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
 import { CODEX_PLUGIN_DEFAULT_SKILLS_PATHS, CODEX_PLUGIN_MANIFEST_DIRECTORIES, CODEX_PLUGIN_MANIFEST_KNOWN_KEYS, CODEX_PLUGIN_MANIFEST_LOCATIONS, codexPluginRootCapabilityEntry, foldCodexPluginEntryName, isCodexSkillDocumentName } from "./codex-plugin-capability-paths.js";
-import { codexPluginSourceIsConfigControlled, isCodexNativeSkillDisabled, projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, remotePluginIdentifier, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
+import { canonicalCacheRoot, codexPluginSourceIsConfigControlled, isCodexNativeSkillDisabled, projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, projectCodexRemoteReceiptSnapshot, remotePluginIdentifier, type CodexNativeSkillCatalog, type CodexRemoteReceiptSnapshot } from "./codex-native-skill-catalog.js";
 export interface CodexPluginSkillControl { name:string; pluginId:string; namespace:string; pluginParent:string; manifestSha256:string; appSha256?:string; mcpSha256?:string; remotePluginId?:string; skillsOnly?:true }
 /** A native nonremote installation disabled by the witnessed configuration.
  * Its cache is inert; this makes no claim about reviewed hook capabilities. */
@@ -42,16 +42,32 @@ function remoteInstallationMatches(parent:string, remotePluginId:string, read:Re
 /** Named install refusals for a plugin Codex's catalog reports as remote. */
 export const CODEX_REMOTE_RECEIPT_MISSING = "CODEX_REMOTE_RECEIPT_MISSING";
 export const CODEX_REMOTE_RECEIPT_MISMATCH = "CODEX_REMOTE_RECEIPT_MISMATCH";
-/** The catalog's remote identity when the exact native install receipt beside
- * the plugin's versions matches it. Otherwise refuse: MISSING when no receipt
- * entry exists, MISMATCH when one exists but is invalid, aliased or names
- * another installation. The message names only the catalog plugin id. */
-function requireRemoteInstallReceipt(parent:string, plugin:{ id:string; remotePluginId?:string }, read:Read):string {
-  if (plugin.remotePluginId!==undefined && remoteInstallationMatches(parent,plugin.remotePluginId,read)) return plugin.remotePluginId;
-  let missing=false;
-  try { missing=!lstatSync(join(parent,".codex-remote-plugin-install.json"),{throwIfNoEntry:false}); } catch { /* an unreadable entry is present and unmatched */ }
-  const [code,kind]=missing ? [CODEX_REMOTE_RECEIPT_MISSING,"missing"] : [CODEX_REMOTE_RECEIPT_MISMATCH,"mismatch"];
-  throw new Error(`${code}: remote plugin ${JSON.stringify(plugin.id)} has no matching install receipt (${kind}); repair the receipt (reinstall the plugin in Codex), then re-enroll it with \`skills hook install\` to record it`);
+export const CODEX_REMOTE_RECEIPT_SNAPSHOT_REQUIRED = "CODEX_REMOTE_RECEIPT_SNAPSHOT_REQUIRED";
+function receiptRefusal(code:string, pluginId:string, kind:"missing"|"mismatch"):never {
+  throw new Error(`${code}: remote plugin ${JSON.stringify(pluginId)} has no matching install receipt (${kind}); repair the receipt (reinstall the plugin in Codex), then re-enroll it with \`skills hook install\` to record it`);
+}
+/** The catalog's remote identity, decided by the receipt as it was on disk
+ * before the capture started Codex: the app-server rewrites receipts on start,
+ * so current bytes can only confirm. MISSING when it was absent then, MISMATCH
+ * when its identity was invalid or differed from the catalog's. The current
+ * receipt must also still match. Messages name only the catalog plugin id. */
+function requireRemoteInstallReceipt(parent:string, plugin:{ id:string; remotePluginId?:string }, snapshot:CodexRemoteReceiptSnapshot, read:Read):string {
+  const observed=snapshot.plugins.find(item=>item.pluginId===plugin.id);
+  if (!observed || observed.receipt==="absent") receiptRefusal(CODEX_REMOTE_RECEIPT_MISSING,plugin.id,"missing");
+  if (plugin.remotePluginId===undefined || observed.remotePluginId!==plugin.remotePluginId) receiptRefusal(CODEX_REMOTE_RECEIPT_MISMATCH,plugin.id,"mismatch");
+  if (!remoteInstallationMatches(parent,plugin.remotePluginId!,read)) {
+    let missing=false;
+    try { missing=!lstatSync(join(parent,".codex-remote-plugin-install.json"),{throwIfNoEntry:false}); } catch { /* an unreadable entry is present and unmatched */ }
+    receiptRefusal(missing ? CODEX_REMOTE_RECEIPT_MISSING : CODEX_REMOTE_RECEIPT_MISMATCH,plugin.id,missing ? "missing" : "mismatch");
+  }
+  return plugin.remotePluginId!;
+}
+/** The catalog's pre-start receipt snapshot for this exact plugin cache, or a
+ * refusal: an older capture, or one of another Codex home, cannot show it. */
+function requireRemoteReceiptSnapshot(catalog:CodexNativeSkillCatalog, cache:string):CodexRemoteReceiptSnapshot {
+  const snapshot=projectCodexRemoteReceiptSnapshot(catalog.remoteReceipts);
+  if (!snapshot || snapshot.cacheRoot!==canonicalCacheRoot(cache)) throw new Error(`${CODEX_REMOTE_RECEIPT_SNAPSHOT_REQUIRED}: the native catalog has no remote install receipt snapshot read before Codex started for this plugin cache; re-capture it with \`skills hook native-catalog\``);
+  return snapshot;
 }
 function appControls(path:string, read:Read):string {
   const text=read(path);
@@ -288,6 +304,9 @@ export function reviewedCodexPluginCapabilitiesUnchanged(cache:string, controls:
 export function reviewCodexPluginControls(catalog:CodexNativeSkillCatalog, documents:string[], cache:string, cwd:string, read:Read, rules:unknown, pluginSettings?:unknown, plannedRules?:unknown, denials:ReviewedCodexSkillDenial[]=[]): { skills:CodexPluginSkillControl[]; inactivePlugins:CodexInactivePluginControl[]; sourceInputs:CodexPluginSourceInput[] } {
   if (!supportsCodexNativeCapability(catalog?.version, "qualified-skill-catalog") || catalog.cwd!==cwd) refuse();
   const installedPluginReview=supportsCodexNativeCapability(catalog.version, "installed-plugin-review");
+  // A catalog without the receipt reading taken before its capture started
+  // Codex is an older capture: re-capture it. Remote receipts are decided on it.
+  const receiptSnapshot=requireRemoteReceiptSnapshot(catalog,cache);
   if (!Array.isArray(denials) || denials.length>4096 || new Set(denials.map(item=>item?.path)).size!==denials.length
     || denials.some(item=>!item || Object.keys(item).sort().join(",")!=="name,path,sha256" || typeof item.name!=="string" || typeof item.path!=="string" || !/^[a-f0-9]{64}$/.test(item.sha256))) refuse();
   const usedDenials=new Set<string>();
@@ -354,7 +373,7 @@ export function reviewCodexPluginControls(catalog:CodexNativeSkillCatalog, docum
     // mismatched receipt refuses. A plugin the catalog does not report as
     // remote has no receipt and is not checked here.
     const remote=installed.length===1 && installed[0]!.sourceType==="remote" ? installed[0]! : undefined;
-    const receiptPluginId=remote ? requireRemoteInstallReceipt(parsed.pluginParent,remote,read) : undefined;
+    const receiptPluginId=remote ? requireRemoteInstallReceipt(parsed.pluginParent,remote,receiptSnapshot,read) : undefined;
     let remotePluginId:string|undefined;
     if (listed.length===1) {
       if (listed[0]!.name!==parsed.name || listed[0]!.pluginId!==expectedPluginId) refuse();

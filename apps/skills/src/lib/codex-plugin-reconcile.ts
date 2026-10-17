@@ -9,8 +9,8 @@
 import { realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { applyCodexPluginReconcile, CodexPluginReconcileRefusal, planCodexPluginNameReconcile, type CodexReconcileApplyOptions } from "./agent-integration.js";
-import { captureCodexNativeSkillCatalog, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
-import { CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, CODEX_REMOTE_RECEIPT_MISMATCH, CODEX_REMOTE_RECEIPT_MISSING } from "./codex-plugin-skill-controls.js";
+import { captureCodexNativeSkillCatalog, captureCodexRemoteReceiptSnapshot, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
+import { CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, CODEX_REMOTE_RECEIPT_MISMATCH, CODEX_REMOTE_RECEIPT_MISSING, CODEX_REMOTE_RECEIPT_SNAPSHOT_REQUIRED } from "./codex-plugin-skill-controls.js";
 import { getDataDirReadOnly } from "./config.js";
 
 export const CODEX_RECONCILE_RESULT_SCHEMA = "hasna.skills-codex-reconcile.v1" as const;
@@ -54,7 +54,7 @@ const REFUSAL_CODES = new Set([
   "CODEX_RECONCILE_SEMANTIC_CACHE_UNSUPPORTED", "CODEX_RECONCILE_CODEX_HOME_UNSUPPORTED", "CODEX_RECONCILE_PLAN_CHANGED",
   "CODEX_RECONCILE_SYMLINK_REFUSED", "CODEX_RECONCILE_NATIVE_WRITER_UNAVAILABLE", "CODEX_RECONCILE_NATIVE_CONFIG_MISMATCH",
   "CODEX_RECONCILE_NATIVE_WRITE_REFUSED",
-  CODEX_REMOTE_RECEIPT_MISSING, CODEX_REMOTE_RECEIPT_MISMATCH,
+  CODEX_REMOTE_RECEIPT_MISSING, CODEX_REMOTE_RECEIPT_MISMATCH, CODEX_REMOTE_RECEIPT_SNAPSHOT_REQUIRED,
 ]);
 
 /** Bounded, single-line diagnostic text. Errors here carry codes and paths,
@@ -104,8 +104,12 @@ export async function runCodexPluginReconcile(options: CodexReconcileOptions): P
       if (canonical(options.codexHome) !== canonical(join(home, ".codex"))) throw new CodexPluginReconcileRefusal("CODEX_RECONCILE_CODEX_HOME_UNSUPPORTED", "CODEX_HOME names a Codex home other than the one the Skills binding reviews");
     }
     const capture = options.captureCatalog ?? captureCodexNativeSkillCatalog;
+    // Read remote install receipts before the capture starts Codex: its
+    // app-server rewrites them on start, and the review decides on this state.
+    const remoteReceipts = captureCodexRemoteReceiptSnapshot(join(home, ".codex/plugins/cache"));
     // The catalog read holds and releases its own corpus lease before any write.
-    const catalog = await capture({ command: options.codexCommand ?? "codex", home, ...(options.codexHome === undefined ? {} : { codexHome: options.codexHome }), cwd: projectDir });
+    const captured = await capture({ command: options.codexCommand ?? "codex", home, ...(options.codexHome === undefined ? {} : { codexHome: options.codexHome }), cwd: projectDir });
+    const catalog: CodexNativeSkillCatalog = captured && typeof captured === "object" ? { ...captured, remoteReceipts } : captured;
     base.codexVersion = typeof catalog?.version === "string" ? catalog.version : null;
     const { plan, report } = planCodexPluginNameReconcile({ home, dataDir, projectDir, catalog });
     const counts = { enrolled: report.enrolled.length, alreadyEnrolled: report.alreadyEnrolled, denied: report.denied.length, pathDenied: report.pathDenied.length, skipped: report.skipped, allowed: report.allowed.length };

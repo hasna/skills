@@ -1,6 +1,7 @@
 import { test, expect, beforeEach, afterEach, describe } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { captureCodexRemoteReceiptSnapshot } from "./codex-native-skill-catalog.js";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { useDefaultTestTimeout } from "../test-preload.js";
@@ -262,7 +263,7 @@ describe("B3: only changes a vendor plugin refresh provably makes are tolerated"
     put(join(root, ".codex-plugin", "plugin.json"), JSON.stringify({ name: "pages", version: "1.0.0", apps: "./.app.json" })); put(join(root, ".app.json"), app);
     put(join(root, "..", ".codex-remote-plugin-install.json"), JSON.stringify({ schema_version: 1, remote_plugin_id: "plugins_synthetic_00_0000000000000000000" }));
     for (const name of names) put(join(root, "skills", name, "SKILL.md"), payload(name));
-    const catalog = { version: "codex-cli 0.162.1", cwd: s.home, skills: [], plugins: [{ id: "pages@openai-curated-remote", name: "pages", installed: true, enabled: true, localVersion: null, remotePluginId: "plugins_synthetic_00_0000000000000000000", sourceType: "remote" as const }] };
+    const catalog = { version: "codex-cli 0.162.1", cwd: s.home, skills: [], plugins: [{ id: "pages@openai-curated-remote", name: "pages", installed: true, enabled: true, localVersion: null, remotePluginId: "plugins_synthetic_00_0000000000000000000", sourceType: "remote" as const }], remoteReceipts: captureCodexRemoteReceiptSnapshot(join(s.home, ".codex/plugins/cache")) };
     put(s.config, names.map(name => `[[skills.config]]\npath = ${JSON.stringify(join(root, "skills", name, "SKILL.md"))}\nenabled = false\n`).join("\n"));
     applyAgentIntegration(planAgentIntegration({ ...opts(s), agents: ["codex"], codexNativeCatalog: catalog }));
     expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toBe("ACCEPTED");

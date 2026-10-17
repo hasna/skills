@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { captureCodexRemoteReceiptSnapshot } from "./codex-native-skill-catalog.js";
 import { tmpdir } from "node:os";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { planAgentIntegration, applyAgentIntegration, assertManagedAgentBridge } from "./agent-integration.js";
@@ -51,7 +52,7 @@ const project = (s: Station, name = "work") => { const dir = join(s.home, "repos
 const stored = (s: Station) => readManagedSkillPolicySnapshot(s.dataDir)!.value.bridge.discovery.codex.sources.find((source: any) => source.path === s.config && source.hashMode === "codex-settings-v4").sha256 as string;
 /** A planned Skills write to config.toml without a fresh discovery review:
  * enrolling the vendor plugin from a native catalog adds a qualified-name disable row. */
-const plannedWrite = (s: Station) => refusal(() => applyAgentIntegration(planAgentIntegration({ home: s.home, dataDir: s.dataDir, projectDir: s.home, agents: ["codex"], codexNativeCatalog: { version: "codex-cli 0.160.0", cwd: s.home, skills: [], plugins: [{ id: "sites@openai-curated-remote", name: "sites", installed: true, enabled: true, localVersion: null, remotePluginId: REMOTE_ID, sourceType: "remote" as const }] } })));
+const plannedWrite = (s: Station) => refusal(() => applyAgentIntegration(planAgentIntegration({ home: s.home, dataDir: s.dataDir, projectDir: s.home, agents: ["codex"], codexNativeCatalog: { version: "codex-cli 0.160.0", cwd: s.home, skills: [], plugins: [{ id: "sites@openai-curated-remote", name: "sites", installed: true, enabled: true, localVersion: null, remotePluginId: REMOTE_ID, sourceType: "remote" as const }], remoteReceipts: captureCodexRemoteReceiptSnapshot(join(s.home, ".codex/plugins/cache")) } })));
 
 describe("the Codex screen-reader receipt keeps existing typed bindings current without a rebind", () => {
   for (const mode of Object.keys(CAPTURES) as Array<keyof typeof CAPTURES>) test(`${mode}: the receipt alone is accepted by the strict guard and the live hook`, () => {

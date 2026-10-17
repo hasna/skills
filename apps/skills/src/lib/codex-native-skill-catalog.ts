@@ -1,5 +1,6 @@
-import { realpathSync } from "node:fs";
-import { isAbsolute, normalize } from "node:path";
+import { createHash } from "node:crypto";
+import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, normalize } from "node:path";
 import { connectCodexHookRpc, type CodexHookRpc } from "./codex-hook-rpc.js";
 import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
 import { hashNativeJsonControls } from "./claude-settings-witness.js";
@@ -18,7 +19,20 @@ export interface CodexNativeSkillCatalog {
   skills: CodexNativeSkill[];
   /** Added in 0.10.20; older reviewed skills/list receipts remain valid for listed skills. */
   plugins?: CodexInstalledPlugin[];
+  /** Remote install receipts read before the capture started any Codex process. */
+  remoteReceipts?: CodexRemoteReceiptSnapshot;
 }
+
+/** Schema of the remote install receipt snapshot embedded in a captured catalog. */
+export const CODEX_REMOTE_RECEIPT_SNAPSHOT_SCHEMA = "hasna.skills-codex-remote-receipts.v1" as const;
+/** One plugin cache parent's native remote install receipt as it was on disk
+ * before Codex started. `remotePluginId` is null when the receipt is not a
+ * strictly valid schema-1 receipt; `sha256` is null when it is not a regular,
+ * unlinked file of at most 16 KiB. */
+export type CodexRemoteReceiptObservation =
+  | { pluginId: string; receipt: "absent" }
+  | { pluginId: string; receipt: "present"; sha256: string | null; remotePluginId: string | null; mtimeMs: number };
+export interface CodexRemoteReceiptSnapshot { schema: typeof CODEX_REMOTE_RECEIPT_SNAPSHOT_SCHEMA; cacheRoot: string; plugins: CodexRemoteReceiptObservation[] }
 
 /** Safe installed-plugin identity needed when Codex hides a path-disabled skill. */
 export interface CodexInstalledPlugin {
@@ -134,6 +148,68 @@ export function projectCodexInstalledPluginEntries(value: unknown): CodexInstall
   });
 }
 
+const PLUGIN_SEGMENT = /^[A-Za-z0-9_-]{1,64}$/;
+/** Read every plugin cache parent's native remote install receipt. Call it
+ * before any Codex process starts: starting the app-server rewrites each remote
+ * plugin's receipt to its own state, so a later read observes healed bytes and
+ * cannot show a receipt that was missing or stale. Never follows an alias. */
+export function captureCodexRemoteReceiptSnapshot(cache: string): CodexRemoteReceiptSnapshot {
+  const cacheRoot = canonicalCacheRoot(cache), plugins: CodexRemoteReceiptObservation[] = [];
+  const directories = (path: string): string[] => {
+    const stat = lstatSync(path, { throwIfNoEntry: false });
+    if (!stat?.isDirectory() || stat.isSymbolicLink()) return [];
+    return readdirSync(path).filter(name => PLUGIN_SEGMENT.test(name) && lstatSync(join(path, name)).isDirectory()).sort();
+  };
+  for (const market of directories(cacheRoot)) for (const name of directories(join(cacheRoot, market))) {
+    if (plugins.length >= MAX_SKILLS) refuse();
+    const pluginId = `${name}@${market}`, path = join(cacheRoot, market, name, ".codex-remote-plugin-install.json");
+    const stat = lstatSync(path, { throwIfNoEntry: false });
+    if (!stat) { plugins.push({ pluginId, receipt: "absent" }); continue; }
+    let sha256: string | null = null, remotePluginId: string | null = null;
+    if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 16384) {
+      try {
+        const bytes = readFileSync(path);
+        sha256 = createHash("sha256").update(bytes).digest("hex");
+        const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+        hashNativeJsonControls(text); // Reject duplicate decoded keys as Codex serde does.
+        const value = JSON.parse(text);
+        if (object(value) && Object.keys(value).length === 2 && value.schema_version === 1 && remotePluginIdentifier(value.remote_plugin_id)) remotePluginId = value.remote_plugin_id;
+      } catch { /* present, unreadable or invalid: no identity */ }
+    }
+    plugins.push({ pluginId, receipt: "present", sha256, remotePluginId, mtimeMs: stat.mtimeMs });
+  }
+  return { schema: CODEX_REMOTE_RECEIPT_SNAPSHOT_SCHEMA, cacheRoot, plugins };
+}
+
+/** The plugin cache identity a snapshot is bound to: the real path of its
+ * deepest existing ancestor plus the rest, so an absent cache still compares. */
+export function canonicalCacheRoot(cache: string): string {
+  const rest: string[] = [];
+  for (let cursor = normalize(cache); ; cursor = dirname(cursor)) {
+    try { return join(realpathSync(cursor), ...rest.reverse()); } catch { /* not present yet */ }
+    if (dirname(cursor) === cursor) return normalize(cache);
+    rest.push(basename(cursor));
+  }
+}
+
+/** Validate an embedded snapshot when a review consumes it; null when invalid. */
+export function projectCodexRemoteReceiptSnapshot(value: unknown): CodexRemoteReceiptSnapshot | null {
+  const keys = (item: Record<string, unknown>, names: string[]) => Object.keys(item).length === names.length && names.every(name => Object.hasOwn(item, name));
+  if (!object(value) || !keys(value, ["schema", "cacheRoot", "plugins"]) || value.schema !== CODEX_REMOTE_RECEIPT_SNAPSHOT_SCHEMA
+    || !absolutePath(value.cacheRoot) || !Array.isArray(value.plugins) || value.plugins.length > MAX_SKILLS) return null;
+  const ids = new Set<string>();
+  for (const item of value.plugins as unknown[]) {
+    if (!object(item) || typeof item.pluginId !== "string" || !/^[A-Za-z0-9_-]{1,64}@[A-Za-z0-9_-]{1,64}$/.test(item.pluginId) || ids.has(item.pluginId)) return null;
+    ids.add(item.pluginId);
+    if (item.receipt === "absent" ? !keys(item, ["pluginId", "receipt"])
+      : item.receipt !== "present" || !keys(item, ["pluginId", "receipt", "sha256", "remotePluginId", "mtimeMs"])
+        || (item.sha256 !== null && (typeof item.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(item.sha256)))
+        || (item.remotePluginId !== null && !remotePluginIdentifier(item.remotePluginId))
+        || typeof item.mtimeMs !== "number" || !Number.isFinite(item.mtimeMs)) return null;
+  }
+  return value as unknown as CodexRemoteReceiptSnapshot;
+}
+
 /** Read one consumer's catalog through an owned, bounded native client. The RPC
  * transport owns request deadlines and child shutdown. Native discovery can
  * maintain its own caches; callers must constrain writes when requiring isolation. */
@@ -142,6 +218,8 @@ export async function captureCodexNativeSkillCatalog(
   connect: (options: { command: string; home: string; codexHome?: string; timeoutMs?: number }) => Promise<CodexHookRpc> = connectCodexHookRpc,
 ): Promise<CodexNativeSkillCatalog> {
   if (!absolutePath(options.cwd) || !absolutePath(options.home)) refuse();
+  // Before the native client starts: its app-server heals remote receipts.
+  const remoteReceipts = captureCodexRemoteReceiptSnapshot(join(options.codexHome ?? join(options.home, ".codex"), "plugins", "cache"));
   const rpc = await connect({ command: options.command, home: options.home,
     ...(options.codexHome === undefined ? {} : { codexHome: options.codexHome }),
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }) });
@@ -150,7 +228,7 @@ export async function captureCodexNativeSkillCatalog(
     const response: unknown = await rpc.request("skills/list", { cwds: [options.cwd], forceReload: true });
     const installed: unknown = await rpc.request("plugin/installed", { cwds: [options.cwd] });
     return { version: rpc.version, cwd: options.cwd, skills: projectCodexNativeSkillCatalog(response, options.cwd),
-      plugins: projectCodexInstalledPlugins(installed) };
+      plugins: projectCodexInstalledPlugins(installed), remoteReceipts };
   } finally {
     await rpc.close();
   }

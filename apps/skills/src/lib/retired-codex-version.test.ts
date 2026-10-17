@@ -1,6 +1,7 @@
 import { test, expect } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { captureCodexRemoteReceiptSnapshot } from "./codex-native-skill-catalog.js";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { planAgentIntegration, applyAgentIntegration, assertManagedAgentBridge } from "./agent-integration.js";
@@ -28,7 +29,7 @@ for (const includeDirectories of [false,true]) test(`a planner-created review pe
     put(document,"---\nname: record-browser\ndescription: Synthetic regression fixture\n---\nFixture\n");
     put(receipt,JSON.stringify({schema_version:1,remote_plugin_id:remotePluginId}));
     put(config,`[plugins."recorder@openai-curated-remote"]\nenabled = true\n[[skills.config]]\nname = "recorder:record-browser"\nenabled = false\n`);
-    const catalog={version:"codex-cli 0.160.0",cwd:home,skills:[],plugins:[{id:"recorder@openai-curated-remote",name:"recorder",installed:true,enabled:true,localVersion:null,remotePluginId,sourceType:"remote" as const}]};
+    const catalog={version:"codex-cli 0.160.0",cwd:home,skills:[],plugins:[{id:"recorder@openai-curated-remote",name:"recorder",installed:true,enabled:true,localVersion:null,remotePluginId,sourceType:"remote" as const}],remoteReceipts:captureCodexRemoteReceiptSnapshot(cache)};
     const review={version:1 as const,agents:[{agent:"codex" as const,roots:[cache],sources:[captureCodexSettingsV3(config),...[oldManifest,manifest,receipt].map(path=>({path,sha256:hash(path)}))],...(includeDirectories ? {directories:captureDiscoveryDirectories([parent])}:{}),pluginHooks:"reviewed-no-skill-injection" as const}]};
     const plan=planAgentIntegration({...f,agents:["codex"],codexNativeCatalog:catalog,discoveryInputs:review});
     applyAgentIntegration(plan);

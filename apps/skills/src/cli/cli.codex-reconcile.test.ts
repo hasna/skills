@@ -7,6 +7,7 @@ import { useDefaultTestTimeout } from "../test-preload.js";
 import { admitCorpusFixture, installCorpusInspectorFixture, wrapNativeInspectionFixture } from "../lib/codex-corpus.fixture.js";
 import { applyAgentIntegration, assertManagedAgentBridge, planAgentIntegration } from "../lib/agent-integration.js";
 import { captureCodexSettingsV3 } from "../lib/codex-settings-witness.js";
+import { captureCodexRemoteReceiptSnapshot } from "../lib/codex-native-skill-catalog.js";
 
 useDefaultTestTimeout();
 let restoreInspector: () => void;
@@ -40,7 +41,7 @@ function station() {
   const plugin = { id: PLUGIN, name: "pages", installed: true, enabled: true, localVersion: null, remotePluginId: REMOTE, sourceType: "remote" as const };
   const review = { version: 1 as const, agents: [{ agent: "codex" as const, roots: [cache], sources: [captureCodexSettingsV3(config)], pluginHooks: "reviewed-no-skill-injection" as const }] };
   applyAgentIntegration(planAgentIntegration({ home, dataDir, projectDir: home, agents: ["codex"], discoveryInputs: review,
-    codexNativeCatalog: { version: "codex-cli 0.163.0", cwd: home, plugins: [plugin], skills: [{ name: "pages:write-page", path: join(first, "skills/write-page/SKILL.md"), enabled: true, pluginId: PLUGIN }] } }));
+    codexNativeCatalog: { version: "codex-cli 0.163.0", cwd: home, plugins: [plugin], skills: [{ name: "pages:write-page", path: join(first, "skills/write-page/SKILL.md"), enabled: true, pluginId: PLUGIN }], remoteReceipts: captureCodexRemoteReceiptSnapshot(cache) } }));
   const command = join(root, "codex"), skillsFile = join(root, "skills.json"), writesFile = join(root, "writes.jsonl"), conflictFlag = join(root, "conflict");
   writeFileSync(command, wrapNativeInspectionFixture(`#!/usr/bin/env bun
 import { createInterface } from "node:readline";

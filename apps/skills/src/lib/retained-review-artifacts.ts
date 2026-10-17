@@ -51,7 +51,7 @@ function readExact(path: string): string {
 function catalogDigest(text: string): string {
   let catalog: any; try { catalog = JSON.parse(text); } catch { return refuse(); }
   need(catalog && typeof catalog === "object" && !Array.isArray(catalog)
-    && Object.keys(catalog).every(key => ["version", "cwd", "skills", "plugins"].includes(key))
+    && Object.keys(catalog).every(key => ["version", "cwd", "skills", "plugins", "remoteReceipts"].includes(key))
     && typeof catalog.version === "string" && supportsCodexNativeCapability(catalog.version, "installed-plugin-review"));
   const skills = projectCodexNativeSkillCatalog({ data: [{ cwd: catalog.cwd, errors: [], skills: catalog.skills }] }, catalog.cwd);
   const plugins = catalog.plugins === undefined ? undefined : projectCodexInstalledPluginEntries(catalog.plugins);
