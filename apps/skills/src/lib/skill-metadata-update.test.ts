@@ -1,12 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
 import { RemoteSkillsClient } from "./remote-client.js";
 import { revisionIdOf, type RevisionContent } from "./revision.js";
-import { metadataPatch, metadataSnapshot } from "./skill-metadata-update.js";
+import { metadataPatch, metadataPlan, metadataSnapshot } from "./skill-metadata-update.js";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
-function fixture(options: { permission?: boolean; etag?: boolean; outcome?: "transport" | "500" | "409" | "alter-body" } = {}) {
-  let content: RevisionContent = { slug: "fixture-skill", displayName: "Fixture", description: "Synthetic", category: "Development Tools", tags: ["old"],
+function fixture(options: { permission?: boolean; etag?: boolean; outcome?: "transport" | "500" | "409" | "alter-body"; servedSlug?: string } = {}) {
+  let content: RevisionContent = { slug: options.servedSlug ?? "fixture-skill", displayName: "Fixture", description: "Synthetic", category: "Development Tools", tags: ["old"],
     source: "custom", kind: "instruction", version: "1.0.0", skillMd: "Synthetic instruction body", bundleSha256: "a".repeat(64), bundleByteSize: 42 };
   const original = structuredClone(content);
   const calls: Array<{ method: string; body?: any; guard?: string | null }> = [];
@@ -108,4 +108,25 @@ test("published tags preserve their strings while malformed arrays and changed r
     const malformed = { ...content, tags }, revisionId = revisionIdOf(malformed as unknown as RevisionContent);
     expect(() => metadataSnapshot({ ...malformed, publishedSource: content.source, revisionId }, `"${revisionId}"`)).toThrow();
   }
+});
+for (const [field, value] of [["skillMd", "Tampered body that was never published"], ["description", "Tampered description"], ["category", "Tampered"],
+  ["tags", ["tampered"]], ["version", "9.9.9"], ["bundleSha256", "b".repeat(64)]] as const) test(`a plan whose before.${field} no longer matches its expected revision refuses before PATCH`, async () => {
+  const f = fixture(); const plan = await f.client.prepareSkillMetadataUpdate("fixture-skill", { category: "Productivity & Organization" });
+  const tampered = { ...plan, before: { ...plan.before, [field]: value } };
+  // metadataPlan re-validates before through metadataSnapshot bound to expectedRevisionId, so the refusal carries its code.
+  expect(() => metadataPlan(tampered)).toThrow(expect.objectContaining({ code: "INVALID_METADATA_SNAPSHOT" }));
+  await expect(f.client.applySkillMetadataUpdate(tampered)).rejects.toMatchObject({ code: "INVALID_METADATA_SNAPSHOT" });
+  expect(f.calls.some(call => call.method === "PATCH")).toBe(false);
+  expect(f.current()).toEqual(f.original);
+});
+test("preview refuses a readback whose slug differs from the requested slug", async () => {
+  const f = fixture({ servedSlug: "other-skill" });
+  await expect(f.client.prepareSkillMetadataUpdate("fixture-skill", { tags: [] })).rejects.toMatchObject({ code: "INVALID_METADATA_SNAPSHOT" });
+  expect(f.calls.map(call => call.method)).toEqual(["GET"]);
+});
+test("a plan that changes nothing returns unchanged without sending a PATCH", async () => {
+  const f = fixture(); const plan = await f.client.prepareSkillMetadataUpdate("fixture-skill", { category: f.original.category, tags: [...f.original.tags] });
+  expect(await f.client.applySkillMetadataUpdate(plan)).toEqual({ status: "unchanged", revisionId: revisionIdOf(f.original) });
+  expect(f.calls.map(call => call.method)).toEqual(["GET", "GET"]);
+  expect(f.current()).toEqual(f.original);
 });

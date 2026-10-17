@@ -35,3 +35,12 @@ test("an executable manifest stays executable even when frontmatter says instruc
  const missing = validatePortableSkillDirectory(skill.name, skill.path);
  expect(missing.valid).toBe(false); expect(missing.issues.some(issue => issue.code === "package.missing")).toBe(true);
 });
+test("an unreadable skill.json is reported as portable.manifest_invalid instead of throwing", () => {
+ const root = mkdtempSync(join(tmpdir(), "portable-broken-")); roots.push(root);
+ writeFileSync(join(root, "SKILL.md"), "---\nname: broken-fixture\ndescription: Fixture\n---\nSynthetic instructions.\n");
+ writeFileSync(join(root, "skill.json"), "[]\n");
+ const result = validatePortableSkillDirectory("broken-fixture", root);
+ expect(result.valid).toBe(false);
+ expect(result.metadata.portableManifest).toBeUndefined();
+ expect(result.issues.filter(issue => issue.code === "portable.manifest_invalid").map(issue => issue.message)).toEqual(["skill.json must contain a JSON object"]);
+});

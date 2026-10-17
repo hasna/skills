@@ -1,12 +1,13 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { Command } from "commander";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import * as remote from "../lib/remote-client.js";
 import * as output from "./output.js";
 import { revisionIdOf, type RevisionContent } from "../lib/revision.js";
 import { registerMetadata } from "./commands/metadata.js";
+import { SkillMetadataUpdateError } from "../lib/skill-metadata-update.js";
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 test("CLI preview preserves a private original without writing remotely, and apply sends one guarded correction", async () => {
@@ -40,4 +41,72 @@ test("CLI preview preserves a private original without writing remotely, and app
     expect(methods.filter(method => method === "PATCH")).toHaveLength(1);
     expect(JSON.parse(rendered.at(-1)!)).toMatchObject({ status: "applied" });
   } finally { factory.mockRestore(); writer.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+});
+
+/** Synthetic registry plus captured CLI effects; restore() must run in finally. */
+function cliFixture() {
+  let content: RevisionContent = { slug: "fixture-skill", displayName: "Fixture", description: "Synthetic", category: "old", tags: [], source: "custom", kind: "instruction", version: "1.0.0", skillMd: "Synthetic body excluded from output" };
+  const requests: string[] = [], rendered: string[] = [], errors: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    const path = new URL(String(input)).pathname, method = init?.method ?? "GET";
+    requests.push(`${method} ${path}`);
+    if (path.endsWith("whoami")) return Response.json({ organization: { id: "fixture-org" } });
+    if (path.endsWith("capabilities")) return Response.json({ contractVersion: 1, apiVersion: 1, capabilities: ["skills.registry"], permissions: { publish: true } });
+    if (method === "PATCH") content = { ...content, ...JSON.parse(String(init?.body)) };
+    return Response.json({ ...content, source: "remote", publishedSource: content.source, revisionId: revisionIdOf(content) }, { headers: { ETag: `"${revisionIdOf(content)}"` } });
+  }) as typeof fetch;
+  const factory = spyOn(remote, "createRemoteSkillsClient").mockResolvedValue(new remote.RemoteSkillsClient("synthetic", "https://example.invalid"));
+  const writer = spyOn(output, "writeCliOutput").mockImplementation(async value => { rendered.push(String(value)); });
+  const stderr = spyOn(console, "error").mockImplementation((...args: unknown[]) => { errors.push(args.map(String).join(" ")); });
+  const priorExitCode = process.exitCode;
+  process.exitCode = 0;
+  const root = mkdtempSync(join(tmpdir(), "metadata-cli-"));
+  return { root, requests, rendered, errors,
+    patches: () => requests.filter(request => request.startsWith("PATCH ")),
+    run: async (...args: string[]) => { const program = new Command(); registerMetadata(program); await program.parseAsync(["metadata", ...args], { from: "user" }); },
+    restore: () => { factory.mockRestore(); writer.mockRestore(); stderr.mockRestore(); process.exitCode = priorExitCode ?? 0; rmSync(root, { recursive: true, force: true }); } };
+}
+test("CLI preview never overwrites an existing plan file, exits non-zero and sends no PATCH", async () => {
+  const f = cliFixture();
+  try {
+    const saved = join(f.root, "review-plan.json");
+    const known = Buffer.from("Operator-owned bytes that a preview must never replace\n");
+    writeFileSync(saved, known, { mode: 0o600 });
+    await f.run("preview", "fixture-skill", "--category", "new", "--save", saved);
+    expect(readFileSync(saved)).toEqual(known);
+    expect(f.patches()).toEqual([]);
+    expect(process.exitCode).toBe(1);
+    expect(f.rendered).toEqual([]);
+  } finally { f.restore(); }
+});
+test("CLI apply refuses a saved plan whose before no longer matches its expected revision, before any PATCH", async () => {
+  const f = cliFixture();
+  try {
+    const saved = join(f.root, "review-plan.json"), tampered = join(f.root, "tampered-plan.json");
+    await f.run("preview", "fixture-skill", "--category", "new", "--save", saved);
+    expect(process.exitCode).toBe(0);
+    const plan = JSON.parse(readFileSync(saved, "utf8"));
+    writeFileSync(tampered, `${JSON.stringify({ ...plan, before: { ...plan.before, skillMd: "Tampered body that was never published" } })}\n`, { mode: 0o600 });
+    await f.run("apply", "--file", tampered);
+    expect(f.patches()).toEqual([]);
+    expect(process.exitCode).toBe(1);
+    expect(f.errors.at(-1)).toBe(new SkillMetadataUpdateError("INVALID_METADATA_SNAPSHOT").message);
+    // Positive control: the untampered saved plan still applies once.
+    process.exitCode = 0;
+    await f.run("apply", "--file", saved);
+    expect(process.exitCode).toBe(0);
+    expect(f.patches()).toHaveLength(1);
+    expect(JSON.parse(f.rendered.at(-1)!)).toMatchObject({ status: "applied" });
+  } finally { f.restore(); }
+});
+for (const tags of ["not json", "\"solo\"", "[1]", "[\"x\",\"x\"]", "{}"]) test(`CLI preview with invalid --tags ${JSON.stringify(tags)} exits non-zero with no plan file and no network call`, async () => {
+  const f = cliFixture();
+  try {
+    const saved = join(f.root, "review-plan.json");
+    await f.run("preview", "fixture-skill", "--tags", tags, "--save", saved);
+    expect(process.exitCode).toBe(1);
+    expect(existsSync(saved)).toBe(false);
+    expect(f.requests).toEqual([]);
+    expect(f.rendered).toEqual([]);
+  } finally { f.restore(); }
 });
