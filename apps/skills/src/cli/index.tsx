@@ -138,6 +138,8 @@ registerHydrate(program);
 
 const { registerPortableSkillCommands } = await import("./commands/portable-skills.js");
 registerPortableSkillCommands(program);
+const { registerMetadata } = await import("./commands/metadata.js");
+registerMetadata(program);
 
 const { registerSchedule } = await import("./commands/schedule.js");
 registerSchedule(program);

@@ -63,6 +63,7 @@ export * from "./spend.js";
 export * from "./offline.js";
 export * from "./execution/index.js";
 export { RemoteSkillsClient, createRemoteSkillsClient, RemoteRequestError, RemoteCreditCheckoutError, RemoteRouteUnsupportedError, RemoteCapabilityUnavailableError, RemoteQuoteUnavailableError, RemoteWorkspaceMemberError } from "../lib/remote-client.js";
+export { SkillMetadataUpdateError, metadataPlanSummary, type SkillMetadataPatch, type SkillMetadataUpdatePlan } from "../lib/skill-metadata-update.js";
 export { RemoteSkillsPermissionError, type RemoteSkillsAccess, type RemoteSkillsPermissions } from "../lib/remote-permissions.js";
 export * from "../lib/remote-recurring-contract.js";
 export { RecurringInputError, RemoteRecurringError, RemoteRecurringUnavailableError, RemoteRecurringReadError, RemoteRecurringUnconfirmedError } from "../lib/remote-recurring.js";
