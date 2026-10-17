@@ -217,20 +217,20 @@ test("remote null-version denied materialization binds the native installation r
  applyAgentIntegration(plan);
  expect(read(join(home,".codex/config.toml"))).toContain('name = "pages:write-page"');
  expect(()=>assertManagedAgentBridge("codex",f)).not.toThrow();
- for (const plugin of [{...catalog.plugins[0]!,remotePluginId:undefined},{...catalog.plugins[0]!,sourceType:undefined},{...catalog.plugins[0]!,installed:false},{...catalog.plugins[0]!,enabled:false},{...catalog.plugins[0]!,remotePluginId:"plugins~Plugin_00000000000000000000000000000002"}])
-   expect(()=>reviewCodexPluginSkillControls({...catalog,plugins:[plugin]},[document],cache,home,read,rules)).toThrow("IDENTITY_UNSUPPORTED");
+ for (const [plugin,code] of [[{...catalog.plugins[0]!,remotePluginId:undefined},"CODEX_REMOTE_RECEIPT_MISMATCH"],[{...catalog.plugins[0]!,sourceType:undefined},"IDENTITY_UNSUPPORTED"],[{...catalog.plugins[0]!,installed:false},"IDENTITY_UNSUPPORTED"],[{...catalog.plugins[0]!,enabled:false},"IDENTITY_UNSUPPORTED"],[{...catalog.plugins[0]!,remotePluginId:"plugins~Plugin_00000000000000000000000000000002"},"CODEX_REMOTE_RECEIPT_MISMATCH"]] as const)
+   expect(()=>reviewCodexPluginSkillControls({...catalog,plugins:[plugin]},[document],cache,home,read,rules)).toThrow(code);
  expect(()=>reviewCodexPluginSkillControls(catalog,[document],cache,home,read,[])).toThrow("IDENTITY_UNSUPPORTED");
  expect(()=>reviewCodexPluginSkillControls(catalog,[document],cache,home,read,[...rules,{name:"pages:write-page",enabled:true}])).toThrow("IDENTITY_UNSUPPORTED");
  const receipt=join(parent,".codex-remote-plugin-install.json");
  for (const metadata of [{schema_version:2,remote_plugin_id:remotePluginId},{schema_version:1,remote_plugin_id:remotePluginId,unknown:true},{schema_version:1},{remote_plugin_id:remotePluginId}]) {
    put(receipt,JSON.stringify(metadata));
-   expect(()=>reviewCodexPluginSkillControls(catalog,[document],cache,home,read,rules)).toThrow("IDENTITY_UNSUPPORTED");
+   expect(()=>reviewCodexPluginSkillControls(catalog,[document],cache,home,read,rules)).toThrow("CODEX_REMOTE_RECEIPT_MISMATCH");
  }
  put(receipt,`{"schema_version":1,"remote_plugin_id":"wrong","remote_plugin_id":${JSON.stringify(remotePluginId)}}`);
- expect(()=>reviewCodexPluginSkillControls(catalog,[document],cache,home,read,rules)).toThrow("IDENTITY_UNSUPPORTED");
+ expect(()=>reviewCodexPluginSkillControls(catalog,[document],cache,home,read,rules)).toThrow("CODEX_REMOTE_RECEIPT_MISMATCH");
  const preservedReceipt=join(home,"receipt-copy.json");put(preservedReceipt,JSON.stringify({schema_version:1,remote_plugin_id:remotePluginId}));
  rmSync(receipt);symlinkSync(preservedReceipt,receipt);
- expect(()=>reviewCodexPluginSkillControls(catalog,[document],cache,home,read,rules)).toThrow("IDENTITY_UNSUPPORTED");
+ expect(()=>reviewCodexPluginSkillControls(catalog,[document],cache,home,read,rules)).toThrow("CODEX_REMOTE_RECEIPT_MISMATCH");
  expect(reviewedCodexPluginCapabilitiesUnchanged(cache,controls,read)).toBe(false);
  rmSync(receipt);put(receipt,JSON.stringify({schema_version:1,remote_plugin_id:remotePluginId}));
  const historical=join(parent,"0.1.17"), stale=join(historical,"skills/write-page/SKILL.md");
@@ -243,7 +243,7 @@ test("remote null-version denied materialization binds the native installation r
  put(join(parent,".codex-remote-plugin-install.json"),JSON.stringify({schema_version:1,remote_plugin_id:"plugins~Plugin_00000000000000000000000000000002"}));
  expect(reviewedCodexPluginCapabilitiesUnchanged(cache,controls,read)).toBe(false);
  expect(isReviewedCodexPluginSkillDisabled(document,cache,controls,rules,read)).toBe(false);
- expect(()=>reviewCodexPluginSkillControls(catalog,[document],cache,home,read,rules)).toThrow("IDENTITY_UNSUPPORTED");
+ expect(()=>reviewCodexPluginSkillControls(catalog,[document],cache,home,read,rules)).toThrow("CODEX_REMOTE_RECEIPT_MISMATCH");
 });
 
 function remoteNameDisabledRefresh(nativeVersion="codex-cli 0.160.0") {
@@ -298,8 +298,8 @@ test("planned remote refresh deny never substitutes for fresh identity, existing
  expect(()=>planAgentIntegration({...options(),codexNativeCatalog:undefined})).toThrow("NATIVE_SKILL_DRIFT"); unchanged();
  const read=(path:string)=>readFileSync(path,"utf8"), rules=(Bun.TOML.parse(before) as any).skills.config;
  expect(()=>reviewCodexPluginControls(catalog,[document],join(f.home,".codex/plugins/cache"),f.home,read,rules)).toThrow("IDENTITY_UNSUPPORTED");
- for(const plugin of [{...catalog.plugins[0]!,installed:false},{...catalog.plugins[0]!,enabled:false},{...catalog.plugins[0]!,remotePluginId:undefined},{...catalog.plugins[0]!,remotePluginId:"plugins~Plugin_00000000000000000000000000000004"},{...catalog.plugins[0]!,localVersion:"0.4.1"},{...catalog.plugins[0]!,sourceType:undefined}]) {
-   expect(()=>planAgentIntegration({...options(),codexNativeCatalog:{...catalog,plugins:[plugin]}})).toThrow("IDENTITY_UNSUPPORTED"); unchanged();
+ for(const [plugin,code] of [[{...catalog.plugins[0]!,installed:false},"IDENTITY_UNSUPPORTED"],[{...catalog.plugins[0]!,enabled:false},"IDENTITY_UNSUPPORTED"],[{...catalog.plugins[0]!,remotePluginId:undefined},"CODEX_REMOTE_RECEIPT_MISMATCH"],[{...catalog.plugins[0]!,remotePluginId:"plugins~Plugin_00000000000000000000000000000004"},"CODEX_REMOTE_RECEIPT_MISMATCH"],[{...catalog.plugins[0]!,localVersion:"0.4.1"},"IDENTITY_UNSUPPORTED"],[{...catalog.plugins[0]!,sourceType:undefined},"IDENTITY_UNSUPPORTED"]] as const) {
+   expect(()=>planAgentIntegration({...options(),codexNativeCatalog:{...catalog,plugins:[plugin]}})).toThrow(code); unchanged();
  }
  expect(()=>planAgentIntegration({...options(),codexNativeCatalog:{...catalog,plugins:[catalog.plugins[0]!,catalog.plugins[0]!]}})).toThrow("IDENTITY_UNSUPPORTED"); unchanged();
  for(const extra of ['[[skills.config]]\nname = "recorder:record-browser"\nenabled = true\n',`[[skills.config]]\npath = ${JSON.stringify(document)}\nenabled = true\n`]) {

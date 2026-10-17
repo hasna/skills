@@ -39,6 +39,20 @@ function remoteInstallationMatches(parent:string, remotePluginId:string, read:Re
     return remotePluginIdentifier(remotePluginId) && codexRemoteInstallReceipt(parent,read)===remotePluginId;
   } catch { return false; }
 }
+/** Named install refusals for a plugin Codex's catalog reports as remote. */
+export const CODEX_REMOTE_RECEIPT_MISSING = "CODEX_REMOTE_RECEIPT_MISSING";
+export const CODEX_REMOTE_RECEIPT_MISMATCH = "CODEX_REMOTE_RECEIPT_MISMATCH";
+/** The catalog's remote identity when the exact native install receipt beside
+ * the plugin's versions matches it. Otherwise refuse: MISSING when no receipt
+ * entry exists, MISMATCH when one exists but is invalid, aliased or names
+ * another installation. The message names only the catalog plugin id. */
+function requireRemoteInstallReceipt(parent:string, plugin:{ id:string; remotePluginId?:string }, read:Read):string {
+  if (plugin.remotePluginId!==undefined && remoteInstallationMatches(parent,plugin.remotePluginId,read)) return plugin.remotePluginId;
+  let missing=false;
+  try { missing=!lstatSync(join(parent,".codex-remote-plugin-install.json"),{throwIfNoEntry:false}); } catch { /* an unreadable entry is present and unmatched */ }
+  const [code,kind]=missing ? [CODEX_REMOTE_RECEIPT_MISSING,"missing"] : [CODEX_REMOTE_RECEIPT_MISMATCH,"mismatch"];
+  throw new Error(`${code}: remote plugin ${JSON.stringify(plugin.id)} has no matching install receipt (${kind}); repair the receipt (reinstall the plugin in Codex), then re-enroll it with \`skills hook install\` to record it`);
+}
 function appControls(path:string, read:Read):string {
   const text=read(path);
   let value:any, sha256:string; try { sha256=hashNativeJsonControls(text); value=JSON.parse(text); } catch { refuse(); }
@@ -334,6 +348,13 @@ export function reviewCodexPluginControls(catalog:CodexNativeSkillCatalog, docum
     }
     const parsed={name:located.name,pluginParent:located.pluginParent,...rootControls(located.root,read)};
     if (parsed.namespace!==located.namespace) refuse();
+    // A plugin Codex's catalog reports as remote binds its exact native install
+    // receipt on every control (listed or omitted, whatever its localVersion),
+    // so a later receipt change is a reviewed capability change; an absent or
+    // mismatched receipt refuses. A plugin the catalog does not report as
+    // remote has no receipt and is not checked here.
+    const remote=installed.length===1 && installed[0]!.sourceType==="remote" ? installed[0]! : undefined;
+    const receiptPluginId=remote ? requireRemoteInstallReceipt(parsed.pluginParent,remote,read) : undefined;
     let remotePluginId:string|undefined;
     if (listed.length===1) {
       if (listed[0]!.name!==parsed.name || listed[0]!.pluginId!==expectedPluginId) refuse();
@@ -376,14 +397,6 @@ export function reviewCodexPluginControls(catalog:CodexNativeSkillCatalog, docum
       if (!explicitDeny && ((!exactPathDeny && !plannedPathDeny) || !isCodexNativeSkillDisabled(nativeSkill,rules))) refuse();
     }
     const skillsOnly=!parsed.appSha256 && !parsed.mcpSha256 && JSON.parse(read(join(located.root,".codex-plugin/plugin.json"))).hooks===undefined;
-    // Bind the exact native remote installation on every control of a remote
-    // plugin, listed or omitted and whatever its localVersion, so a later
-    // receipt change is a reviewed capability change. Only an identity the
-    // on-disk receipt matches is recorded. This adds no review or deny path:
-    // the omitted null-version branch above still refuses an unmatched receipt.
-    const remote=installed.length===1 ? installed[0]! : undefined;
-    const receiptPluginId=remotePluginId ?? (remote?.sourceType==="remote" && remote.remotePluginId
-      && remoteInstallationMatches(parsed.pluginParent,remote.remotePluginId,read) ? remote.remotePluginId : undefined);
     result.push({...parsed,pluginId:expectedPluginId,...(receiptPluginId ? {remotePluginId:receiptPluginId} : {}),...(skillsOnly ? {skillsOnly:true as const} : {})});
   }
   if (usedDenials.size!==denials.length) refuse();
