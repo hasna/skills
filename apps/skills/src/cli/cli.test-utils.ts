@@ -99,12 +99,18 @@ export async function runCliInCwd(
   args: string[],
   cwd: string,
   env: Record<string, string> = {},
+  options: { isolated?: boolean; preload?: string } = {},
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", ...args], {
+  // Native-integration fixtures supply their entire environment explicitly:
+  // neither the caller's PATH/credentials nor a discovered .env may enter it.
+  const command = options.isolated
+    ? [process.execPath, "--no-env-file", "--no-install", ...(options.preload ? ["--preload", options.preload] : []), "run", CLI_PATH, "--", ...args]
+    : ["bun", "run", CLI_PATH, "--", ...args];
+  const proc = Bun.spawn(command, {
     stdout: "pipe",
     stderr: "pipe",
     cwd,
-    env: testEnv(env),
+    env: options.isolated ? env : testEnv(env),
   });
   const stdout = await new Response(proc.stdout).text();
   const stderr = await new Response(proc.stderr).text();
