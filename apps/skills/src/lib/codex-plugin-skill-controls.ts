@@ -5,6 +5,7 @@ import { hashNativeJsonControls } from "./claude-settings-witness.js";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
+import { CODEX_PLUGIN_DEFAULT_SKILLS_PATHS, CODEX_PLUGIN_MANIFEST_DIRECTORIES, CODEX_PLUGIN_MANIFEST_KNOWN_KEYS, CODEX_PLUGIN_MANIFEST_LOCATIONS, codexPluginRootCapabilityEntry, foldCodexPluginEntryName, isCodexSkillDocumentName } from "./codex-plugin-capability-paths.js";
 import { codexPluginSourceIsConfigControlled, isCodexNativeSkillDisabled, projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, remotePluginIdentifier, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
 export interface CodexPluginSkillControl { name:string; pluginId:string; namespace:string; pluginParent:string; manifestSha256:string; appSha256?:string; mcpSha256?:string; remotePluginId?:string; skillsOnly?:true }
 /** A native nonremote installation disabled by the witnessed configuration.
@@ -429,6 +430,225 @@ export function isReviewedCodexPluginSkillDisabled(document:string, cache:string
   const reviewed=controls.find(item=>item.name===parsed.name && item.namespace===parsed.namespace && item.pluginParent===parsed.pluginParent && item.manifestSha256===parsed.manifestSha256 && item.appSha256===parsed.appSha256 && item.mcpSha256===parsed.mcpSha256);
   if (!reviewed || (reviewed.remotePluginId !== undefined && !remoteInstallationMatches(reviewed.pluginParent,reviewed.remotePluginId,read))) return false;
   return isCodexNativeSkillDisabled({name:parsed.name,path:document,pluginId:reviewed.pluginId,enabled:true},rules);
+}
+/** Refusal code for a plugin change that touches more than its skill names: a
+ * new or changed app, MCP, hooks, manifest or remote installation capability. */
+export const CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED = "CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED";
+export type CodexPluginCapabilityReason = "app" | "mcp" | "hooks" | "commands" | "agents" | "manifest" | "manifest-location" | "remote" | "unsupported";
+const capabilityRefusal = (detail:string):never => { throw new Error(`${CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED}: ${detail}; it stays quarantined until reviewed with skills hook install and a fresh native catalog and discovery review`); };
+/** Version roots of one plugin cache parent; a `latest` alias must name a sibling. */
+function pluginVersionRoots(parent:string):string[]|null {
+  const names=readdirSync(parent); if (names.length>4096) return null;
+  const roots:string[]=[];
+  for (const name of names) {
+    if (name===".codex-remote-plugin-install.json") continue;
+    const root=join(parent,name), stat=lstatSync(root);
+    if (stat.isSymbolicLink()) {
+      const target=resolve(parent,readlinkSync(root));
+      if (name!=="latest" || dirname(target)!==parent || !lstatSync(target,{throwIfNoEntry:false})?.isDirectory()) return null;
+      continue;
+    }
+    if (!stat.isDirectory()) return null;
+    roots.push(root);
+  }
+  return roots;
+}
+/** The capability kind a shared root capability entry denotes. Membership comes
+ * only from codex-plugin-capability-paths.ts; an entry added there and not named
+ * here is still refused, as unsupported. */
+function capabilityKind(entry:string):CodexPluginCapabilityReason {
+  if (CODEX_PLUGIN_MANIFEST_LOCATIONS.includes(entry) || CODEX_PLUGIN_MANIFEST_DIRECTORIES.includes(entry)) return "manifest-location";
+  return entry==="hooks" || entry==="hooks.json" ? "hooks" : entry===".mcp.json" ? "mcp" : entry===".app.json" ? "app"
+    : entry==="commands" ? "commands" : entry==="agents" ? "agents" : "unsupported";
+}
+/** Declaration files that stay capability controls at any depth: the shared root
+ * capability entries that are JSON files and not a manifest location. */
+const nestedControlEntry=(name:string):string|null => {
+  const entry=codexPluginRootCapabilityEntry(name);
+  return entry!==null && entry.endsWith(".json") && !CODEX_PLUGIN_MANIFEST_LOCATIONS.includes(entry) ? entry : null;
+};
+/** The kind a manifest key outside the shared metadata set declares. */
+const manifestKeyKind=(key:string):CodexPluginCapabilityReason => key==="hooks" ? "hooks" : key==="mcpServers" ? "mcp" : key==="apps" ? "app" : key==="commands" ? "commands" : key==="agents" ? "agents" : "unsupported";
+/** Strict, read-only scan of one plugin version root against every location Codex
+ * reads (codex-plugin-capability-paths.ts): direct entries matched without regard
+ * to case, declaration files and manifest directories at any depth, skill
+ * documents not spelled exactly SKILL.md, and links or special files anywhere.
+ * `reviewed` (an enrolled plugin): the exact `.codex-plugin` manifest is bound
+ * by the reviewed tuple, as are an exact root `.app.json` or `.mcp.json` when the
+ * tuple declares one. Otherwise the manifest's own capability keys count too.
+ * Returns the manifest path read, or null when there is none to read. */
+function scanCodexPluginRoot(root:string, read:Read, reasons:Set<CodexPluginCapabilityReason>, reviewed?:{ app:boolean; mcp:boolean }):string|null {
+  let entries=0;
+  const walk=(directory:string, depth:number):void => {
+    if (depth>64) { reasons.add("unsupported"); return; }
+    for (const name of readdirSync(directory)) {
+      if (++entries>16384) { reasons.add("unsupported"); return; }
+      const path=join(directory,name), stat=lstatSync(path);
+      if (stat.isSymbolicLink() || !stat.isDirectory() && !stat.isFile()) { reasons.add("unsupported"); continue; }
+      if (isCodexSkillDocumentName(name) && name!=="SKILL.md") reasons.add("unsupported");
+      const control=nestedControlEntry(name);
+      if (control) reasons.add(capabilityKind(control));
+      if (CODEX_PLUGIN_MANIFEST_DIRECTORIES.includes(foldCodexPluginEntryName(name))) reasons.add("manifest-location");
+      if (stat.isDirectory()) walk(path,depth+1);
+    }
+  };
+  for (const name of readdirSync(root)) {
+    if (++entries>16384) { reasons.add("unsupported"); break; }
+    const path=join(root,name), stat=lstatSync(path);
+    if (stat.isSymbolicLink() || !stat.isDirectory() && !stat.isFile()) { reasons.add("unsupported"); continue; }
+    if (isCodexSkillDocumentName(name) && name!=="SKILL.md") reasons.add("unsupported");
+    const entry=codexPluginRootCapabilityEntry(name);
+    if (entry===".codex-plugin" && name===".codex-plugin" && stat.isDirectory()) {
+      const inside=readdirSync(path);
+      if (inside.length!==1 || inside[0]!=="plugin.json" || !lstatSync(join(path,"plugin.json")).isFile()) reasons.add("manifest-location");
+      continue;
+    }
+    if (entry!==null) {
+      const bound=reviewed && stat.isFile() && (name===".app.json" && reviewed.app || name===".mcp.json" && reviewed.mcp);
+      if (!bound) reasons.add(capabilityKind(entry));
+      continue;
+    }
+    if (stat.isDirectory()) walk(path,1);
+  }
+  const manifestPath=join(root,".codex-plugin","plugin.json");
+  const manifestStat=lstatSync(manifestPath,{throwIfNoEntry:false});
+  if (!manifestStat?.isFile() || manifestStat.isSymbolicLink()) { reasons.add("unsupported"); return null; }
+  if (reviewed) return manifestPath;
+  try {
+    const text=read(manifestPath); hashNativeJsonControls(text);
+    const manifest=JSON.parse(text);
+    if (!manifest || typeof manifest!=="object" || Array.isArray(manifest)) { reasons.add("unsupported"); return null; }
+    // Allowlist, not a denylist: every key outside the shared metadata set (and
+    // `apps`, the connector capability) counts, so an unknown declaration refuses.
+    for (const key of Object.keys(manifest)) if (key==="apps" || !CODEX_PLUGIN_MANIFEST_KNOWN_KEYS.includes(key)) reasons.add(manifestKeyKind(key));
+    // A skills source outside the plugin's own skills directory loads unreviewed skills.
+    if (manifest.skills!==undefined && !CODEX_PLUGIN_DEFAULT_SKILLS_PATHS.includes(manifest.skills)) reasons.add("unsupported");
+    return manifestPath;
+  } catch { reasons.add("unsupported"); return null; }
+}
+/** Strict scan of a plugin cache parent: only version roots, the native install
+ * receipt and a `latest` alias to a sibling may sit beside the versions. A
+ * capability-named or skill-document-named entry is never a materialization. */
+function scanCodexPluginParent(parent:string, read:Read, reasons:Set<CodexPluginCapabilityReason>, reviewed?:{ app:boolean; mcp:boolean }):string[] {
+  const manifests:string[]=[];
+  const stat=lstatSync(parent,{throwIfNoEntry:false});
+  if (!stat?.isDirectory() || stat.isSymbolicLink() || realpathSync(parent)!==parent) { reasons.add("unsupported"); return manifests; }
+  const names=readdirSync(parent);
+  if (names.length>4096) { reasons.add("unsupported"); return manifests; }
+  for (const name of names) {
+    const path=join(parent,name), entry=lstatSync(path);
+    if (name===".codex-remote-plugin-install.json") { if (!entry.isFile()) reasons.add("unsupported"); continue; }
+    if (entry.isSymbolicLink()) {
+      const target=resolve(parent,readlinkSync(path));
+      if (name!=="latest" || dirname(target)!==parent || !lstatSync(target,{throwIfNoEntry:false})?.isDirectory()) reasons.add("unsupported");
+      continue;
+    }
+    if (!entry.isDirectory() || !/^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/.test(name) || codexPluginRootCapabilityEntry(name)!==null || isCodexSkillDocumentName(name)) {
+      const capability=codexPluginRootCapabilityEntry(name);
+      reasons.add(capability===null ? "unsupported" : capabilityKind(capability));
+      continue;
+    }
+    const manifest=scanCodexPluginRoot(path,read,reasons,reviewed);
+    if (manifest) manifests.push(manifest);
+  }
+  if (!manifests.length) reasons.add("unsupported");
+  return manifests.sort();
+}
+/** Why a plugin Skills has not enrolled needs a review before its skills can be
+ * enrolled automatically. Empty only when every version root holds nothing but
+ * a supported skills-only manifest and skills. A remote installation is not
+ * itself a capability; its receipt is checked separately. */
+export function unenrolledCodexPluginCapabilities(parent:string, read:Read):CodexPluginCapabilityReason[] {
+  return unenrolledCodexPluginEvidence(parent,read).reasons;
+}
+/** The same classification with its evidence: every manifest path read. A
+ * skills-only result (no reasons) always names at least one manifest. */
+export function unenrolledCodexPluginEvidence(parent:string, read:Read):{ reasons:CodexPluginCapabilityReason[]; manifests:string[] } {
+  const reasons=new Set<CodexPluginCapabilityReason>();
+  let manifests:string[]=[];
+  try {
+    manifests=scanCodexPluginParent(parent,read,reasons);
+    for (const manifest of manifests) { try { rootControls(dirname(dirname(manifest)),read); } catch { reasons.add("unsupported"); } }
+  } catch { reasons.add("unsupported"); }
+  if (!manifests.length) reasons.add("unsupported");
+  return { reasons:[...reasons].sort(), manifests };
+}
+/** Capability evidence for a plugin root outside the plugin cache (a Codex
+ * runtime), where the version-directory contract does not apply. */
+export function codexPluginRootEvidence(root:string, read:Read):{ reasons:CodexPluginCapabilityReason[]; manifests:string[] } {
+  const reasons=new Set<CodexPluginCapabilityReason>();
+  let manifest:string|null=null;
+  try { manifest=scanCodexPluginRoot(root,read,reasons); } catch { reasons.add("unsupported"); }
+  if (!manifest) reasons.add("unsupported");
+  return { reasons:[...reasons].sort(), manifests:manifest ? [manifest] : [] };
+}
+/** The strict scan for an enrolled plugin, run in addition to the reviewed-tuple
+ * check over every current version root: anything the reviewed tuple does not
+ * bind (a root plugin.json, hooks.json, commands/ or agents/, another manifest
+ * directory, a case variant, a nested declaration, a link) is a capability. */
+export function enrolledCodexPluginStrictChanges(parentControls:CodexPluginSkillControl[], read:Read):CodexPluginCapabilityReason[] {
+  const template=parentControls[0];
+  if (!template) return ["unsupported"];
+  const reasons=new Set<CodexPluginCapabilityReason>();
+  try { scanCodexPluginParent(template.pluginParent,read,reasons,{ app:template.appSha256!==undefined, mcp:template.mcpSha256!==undefined }); }
+  catch { reasons.add("unsupported"); }
+  return [...reasons].sort();
+}
+/** Which capability of an enrolled plugin parent no longer matches its reviewed
+ * controls. Empty exactly when reviewedCodexPluginCapabilitiesUnchanged accepts it. */
+export function codexPluginCapabilityChanges(cache:string, parentControls:CodexPluginSkillControl[], read:Read, rules?:unknown):CodexPluginCapabilityReason[] {
+  if (reviewedCodexPluginCapabilitiesUnchanged(cache,parentControls,read,rules)) return [];
+  const reasons=new Set<CodexPluginCapabilityReason>(), template=parentControls[0];
+  try {
+    if (!template) return ["unsupported"];
+    if (template.remotePluginId!==undefined && codexRemoteInstallReceipt(template.pluginParent,read)!==template.remotePluginId) reasons.add("remote");
+    const roots=pluginVersionRoots(template.pluginParent);
+    if (!roots) reasons.add("unsupported");
+    for (const root of roots ?? []) {
+      let parsed:CodexPluginRootControls;
+      try { parsed=rootControls(root,read); } catch {
+        // Unparseable under the reviewed parser: name only what the reviewed tuple does not cover.
+        const declared=new Set<CodexPluginCapabilityReason>(); scanCodexPluginRoot(root,read,declared,{ app:template.appSha256!==undefined, mcp:template.mcpSha256!==undefined });
+        const added=[...declared];
+        for (const reason of added.length ? added : ["unsupported" as const]) reasons.add(reason);
+        continue;
+      }
+      if (parsed.namespace!==template.namespace || parsed.manifestSha256!==template.manifestSha256) reasons.add("manifest");
+      if (parsed.appSha256!==template.appSha256) reasons.add("app");
+      if (parsed.mcpSha256!==template.mcpSha256) reasons.add("mcp");
+    }
+  } catch { reasons.add("unsupported"); }
+  if (!reasons.size) reasons.add("unsupported");
+  return [...reasons].sort();
+}
+/** Add newly enrolled qualified names to the reviewed control set. Never removes
+ * or changes an existing control. A name under an enrolled plugin parent takes
+ * that parent's reviewed identity, and the native review must report the same
+ * capability tuple for it; a name under a plugin Skills has not enrolled is
+ * admitted only for a skills-only plugin, and binds `remoteIdentities[parent]`,
+ * the caller-verified native install receipt, when the plugin is remote. */
+export function mergeReconciledCodexPluginControls(prior:CodexPluginSkillControl[], reviewed:CodexPluginSkillControl[], names:string[], remoteIdentities:Record<string,string>={}):CodexPluginSkillControl[] {
+  if (!Array.isArray(prior) || !Array.isArray(reviewed) || !Array.isArray(names) || prior.length+names.length>4096) refuse();
+  const tuple=(control:CodexPluginSkillControl) => JSON.stringify([control.namespace,control.pluginId,control.pluginParent,control.manifestSha256,control.appSha256 ?? null,control.mcpSha256 ?? null]);
+  for (const control of reviewed) {
+    const enrolled=prior.filter(item=>item.pluginParent===control.pluginParent);
+    if (enrolled.some(item=>tuple(item)!==tuple(control) || item.remotePluginId!==undefined && control.remotePluginId!==undefined && item.remotePluginId!==control.remotePluginId)) capabilityRefusal(`plugin ${JSON.stringify(control.pluginId)} changed a reviewed capability`);
+  }
+  const result=[...prior];
+  for (const name of [...new Set(names)].sort()) {
+    if (prior.some(item=>item.name===name)) continue;
+    const matches=reviewed.filter(item=>item.name===name);
+    if (matches.length!==1) refuse();
+    const control=matches[0]!, template=prior.find(item=>item.pluginParent===control.pluginParent);
+    if (template) { result.push({...template,name}); continue; }
+    if (control.skillsOnly!==true || control.appSha256!==undefined || control.mcpSha256!==undefined) capabilityRefusal(`plugin ${JSON.stringify(control.pluginId)} is not enrolled and carries a capability`);
+    const remote=Object.hasOwn(remoteIdentities,control.pluginParent) ? remoteIdentities[control.pluginParent] : undefined;
+    const receipt=lstatSync(join(control.pluginParent,".codex-remote-plugin-install.json"),{throwIfNoEntry:false});
+    if (Boolean(receipt)!==(remote!==undefined) || remote!==undefined && (!remotePluginIdentifier(remote) || control.remotePluginId!==undefined && control.remotePluginId!==remote)) capabilityRefusal(`plugin ${JSON.stringify(control.pluginId)} has an unverified remote installation`);
+    result.push(remote===undefined ? control : {...control,remotePluginId:remote});
+  }
+  if (new Set(result.map(item=>item.name)).size!==result.length) refuse();
+  return result;
 }
 export function disableReviewedCodexPluginNames(text:string, controls:CodexPluginSkillControl[]):string {
   const rules=(Bun.TOML.parse(text) as any).skills?.config??[];

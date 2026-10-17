@@ -1109,6 +1109,206 @@ reports an incomplete outcome, inspect `sessions show` and the preserved
 operation receipt before retrying. The archive contains both original and
 prepared bytes even if the final receipt write fails.
 
+### Codex plugin skill name reconcile (`hook codex-reconcile`)
+
+A Codex or plugin update can add skill names to a plugin Skills already
+enrolled, or bump its manifest version. The strict guard then refuses with
+`NATIVE_SKILL_DRIFT`. Run the package-owned reconcile instead of turning guards
+off:
+
+```bash
+skills hook codex-reconcile --json          # read-only preview
+skills hook codex-reconcile --apply --json  # write, then prove the guard passes
+```
+
+It reads Codex's qualified skill and installed-plugin catalog through the same
+owned client as `skills hook native-catalog` (`--codex-command <path>`, default
+`codex`). It then runs the full strict guard and collects the plugin-cache copies
+the guard refuses. The work it does:
+
+- It enrolls each new qualified name of an enrolled plugin whose capability
+  tuple is unchanged, and denies it in `~/.codex/config.toml` with
+  `[[skills.config]] name = "<plugin>:<skill>"` and `enabled = false`.
+- It enrolls a plugin Skills had not enrolled only when every version is
+  skills-only. Its native install receipt is bound when the plugin is remote and
+  the native catalog reports that same remote installation. A receipt the catalog
+  does not confirm refuses as `remote`.
+- It denies skills that Codex loads from its runtime cache
+  (`~/.cache/codex-runtimes`) by their stable qualified name. A skill there with
+  no stable qualified name gets an exact path deny instead, listed in
+  `pathDenied` with the reason `no-qualified-name`. No plugin control exists for
+  runtime-cache skills.
+- It classifies every installed plugin that is active, including plugins the
+  saved binding does not know: each one enabled with `enabled = true` under
+  `[plugins]`, each one config disables that is not inactive by the rule
+  below, and each one the native catalog reports installed and enabled. That
+  holds even when none of the plugin's skills block today. Installed means the
+  plugin has a directory in the plugin cache; an enabled plugin with no cache
+  directory has nothing to classify yet. An enabled plugin id that is not
+  `<name>@<marketplace>` (letters, digits, `_` and `-`) refuses as
+  `unsupported`. A known plugin is enrolled, reviewed inactive, an installation
+  input, or a semantic-cache role. It can also be known through a full witness
+  under its exact cache parent, or through a full witness of a reviewed local
+  marketplace that maps exactly that plugin, together with a full witness of the
+  manifest that marketplace row points to. A manifest witness elsewhere that
+  only shares the plugin's name does not count. Every other enabled plugin is
+  scanned like a new plugin, and one that carries a capability refuses.
+- It leaves an inactive plugin unenrolled and never refuses because of one.
+  Inactive uses the same rule as the reviewed plugin controls, because config
+  alone cannot prove a plugin is off (remote reconciliation can enable a plugin
+  while config still disables it): `[plugins]` sets `enabled = false`, the
+  native catalog reports the plugin installed and disabled, its source is
+  config-controlled (a local, git or npm source with a source fingerprint, no
+  remote identity and not a remote marketplace), and the catalog lists none of
+  its skills. Any other plugin is active and gets every capability and receipt
+  check. The guard does not trust a plugin-level disable alone, so an inactive
+  plugin's cache copies keep exact path denies, listed with the reason
+  `plugin-disabled`.
+- For a reviewed binding whose full-byte witnesses name an enrolled plugin's
+  manifest, app, MCP or skill files (byte-witness bindings), it re-captures
+  those witnesses in the new version root once the capability tuple is proven
+  unchanged and the strict scan below finds nothing beyond that tuple. This
+  reconcile handles skills-only manifest bumps for byte-witness bindings. `skills hook rebind-cache` does not: it still refuses bindings that
+  never had exact cache-directory coverage.
+
+The plan comes from the reviewed `hook install` planner. Apply holds the corpus
+lock, re-plans from the same catalog, checks every preimage and keeps private
+backups with readback. The deny rows are written by Codex's own writer, not by
+Skills: an owned `codex app-server` reads the user layer (`config/read`), and
+`config/batchWrite` writes `skills.config` with that layer's `expectedVersion`
+and `reloadUserConfig: true`. A concurrent Codex writer, such as the desktop
+app, makes the write refuse with `CODEX_RECONCILE_NATIVE_WRITE_REFUSED` instead
+of being overwritten, and this run writes nothing else. With no Codex writer
+reachable the run refuses with `CODEX_RECONCILE_NATIVE_WRITER_UNAVAILABLE`; it
+never falls back to a direct file write. The managed policy is written in the
+Skills transaction only after `config.toml` reads back as exactly the planned
+configuration. If a step fails, the policy is restored while it still holds this
+run's bytes, and `config.toml` is restored only through Codex's writer, only
+while Codex still reports this run's version; otherwise the result is
+`CODEX_RECONCILE_COMPENSATION_INCOMPLETE` and names the private backup. Only an
+error answer from Codex counts as a refusal. When Codex does not answer (a
+timeout or a lost app-server), or answers without a valid config version, the
+write cannot be verified: the result is `CODEX_RECONCILE_NATIVE_WRITE_UNCERTAIN`,
+naming the deny rows that may remain and the private backup, and the policy is
+not written. The next run finishes the policy without another config write once
+Codex reports those skills disabled. After the policy write, the run re-checks
+the written state, and either outcome below compensates both writes. A new
+capability location that appeared while Codex was writing (a root `hooks.json`,
+`commands/`, `agents/` or another manifest directory) refuses with
+`CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED`. A change to a manifest, `.app.json`
+or remote install receipt that the plan observed ends as the error
+`CODEX_RECONCILE_FAILED` ("Native identity source changed during application").
+A plugin Codex uninstalled after it was enrolled stays unchanged, as the guard
+treats it, while its retained controls are remote, skills-only and denied by
+name, and the native catalog no longer reports it enabled. The receipt records each writer and Codex's new
+config version. The run finishes only when the strict guard accepts the written
+state. The plan may
+append disable rows to the Codex configuration. In the managed policy it may
+only add the new controls and refresh the configuration and re-captured cache
+witnesses. Anything else refuses with `CODEX_RECONCILE_SCOPE_EXCEEDED`. The
+reconcile never adds an allow entry.
+
+The allowed set is computed from Codex's own report, not from a simulation of
+the existing configuration. Every skill the native catalog reports as enabled
+counts as allowed unless a disable row this run appends matches it. The run
+succeeds only when that leaves exactly the bridge. A skill Codex still reports
+enabled despite a deny row already in the configuration it read (an ineffective
+deny, or a wrong name) refuses with `CODEX_NATIVE_SKILL_ALLOWED_SET_INVALID`.
+The catalog is read before the write, so the result shows what Codex reported
+then plus the rows this run appended. Run the reconcile again to confirm Codex
+applied them: `unchanged` means a fresh catalog reports every denied skill
+disabled.
+
+Unsupported boundary: a change that touches more than skill names stays
+quarantined until a person reviews it. That covers a new or changed app, MCP
+declaration, hooks, manifest content other than `version`, or remote install
+receipt of an enrolled plugin. It also covers a plugin Skills has not enrolled
+that carries an app, MCP or hooks. The plugin stays disabled, or its skills stay
+denied, as they already were. The command refuses with
+`CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED`, writes nothing, and lists each plugin
+with its capability kinds (`app`, `mcp`, `hooks`, `commands`, `agents`,
+`manifest`, `manifest-location`, `remote`, `unsupported`). The reconcile is what
+refuses these cases; the guard alone does not catch every one yet. The guard
+blocks new skill copies of a plugin it does not know, and blocks with
+`NATIVE_SKILL_DRIFT: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED: ...` when an
+enrolled plugin's reviewed tuple changes (its manifest apart from `version`, a
+declared app or MCP file, or its remote receipt). It does not yet notice an
+enrolled plugin gaining a root `hooks.json`, `commands/`, `agents/` or another
+manifest directory in place, without a version or skill change. The reconcile
+refuses those, including when they appear while it is writing, and the guard
+gap is tracked as a follow-up (UW-00793). Review the plugin with
+`skills hook install --agent codex --discovery-inputs <reviewed-file>
+--codex-native-catalog <reviewed-catalog> --apply`.
+
+Reviewer check, the method rule for capability classification. Confirm each
+point before accepting a reconcile result or a change to it:
+
+- Every version root is scanned against the shared location sets in
+  `codex-plugin-capability-paths.ts`, the single source, without regard to
+  case. The scan covers every manifest location Codex reads. The Agent Plugins
+  root `plugin.json` comes first, then `.codex-plugin`, `.claude-plugin` and
+  `.cursor-plugin`. It also covers `hooks/`, `hooks.json`, `.mcp.json`,
+  `.app.json`, `commands/` and `agents/`. Declaration files and manifest
+  directories count at any depth. A skill document not spelled exactly
+  `SKILL.md` counts, and so does any link or special file. Capability-named
+  entries beside the versions count too.
+- `.codex-plugin` must hold exactly `plugin.json`. A new plugin's manifest may
+  carry only the shared metadata keys. `apps` counts as the app capability,
+  every other key counts as a capability or unsupported, and `skills` must be
+  the default `./skills` root. Inline manifest hooks count: a missing
+  `hooks.json` is never evidence of no hooks. `chrome@openai-bundled` declares
+  its `mcp_tool` hooks only in its manifest.
+- An enrolled plugin gets the same strict scan over every current version root,
+  as well as the reviewed-tuple check. Only the reviewed `.codex-plugin`
+  manifest, and an exact root `.app.json` or `.mcp.json` its tuple declares, are
+  bound. Anything else refuses. The witness rebase runs only for a plugin that
+  passes both checks.
+- Every skills-only result cites the manifest paths that were read, in
+  `classified[].manifests`. Every refusal entry carries `manifests` the same
+  way. A root whose manifest cannot be read is `unsupported`, never skills-only.
+- Every installed plugin enabled in `[plugins]` is classified, not only the
+  ones the current binding knows, and an enabled id that does not parse
+  refuses.
+
+These also refuse and write nothing:
+
+- `CODEX_RECONCILE_DISCOVERY_REVIEW_REQUIRED`: a binding with no recorded
+  installed-plugin catalog review. That is the older shape. It needs a fresh full
+  discovery review.
+- `CODEX_NATIVE_SKILL_NAME_CONFLICT`: an existing `[[skills.config]]` rule that
+  is not `enabled = false` and either names a skill this run enrolls, denies or
+  already controls (including the catalog name of a skill it denies by path),
+  or has a path that resolves to a document this run denies. Those documents
+  are the plugin-cache copies it handles and the runtime-cache skills it denies,
+  by name or by path. Enable rules for any other skill are left to the strict
+  guard.
+- `CODEX_NATIVE_SKILL_ALLOWED_SET_INVALID`: a skill other than the bridge that
+  the native catalog reports enabled and no row appended by this run disables.
+- `CODEX_NATIVE_SKILL_CATALOG_UNSUPPORTED_VERSION` or
+  `CODEX_HOOK_TRUST_NATIVE_UNSUPPORTED_VERSION`: an unmeasured Codex release.
+- `NATIVE_SKILL_DRIFT`: copies outside the plugin cache, or any other drift.
+- `CODEX_RECONCILE_SYMLINK_REFUSED`: a link in a native path.
+- `CODEX_RECONCILE_NATIVE_WRITER_UNAVAILABLE`: no Codex app-server could be
+  started to write the deny rows.
+- `CODEX_RECONCILE_NATIVE_CONFIG_MISMATCH`: Codex reports a user configuration
+  other than the one the run planned against.
+- `CODEX_RECONCILE_NATIVE_WRITE_REFUSED`: Codex refused the versioned write, for
+  example because `config.toml` changed after Codex read it.
+- `CODEX_RECONCILE_SEMANTIC_CACHE_UNSUPPORTED`: a binding that uses the semantic
+  cache witness.
+
+Every invocation prints exactly one JSON line with `schema`
+(`hasna.skills-codex-reconcile.v1`), `mode` (`preview` or `apply`) and
+`outcome`. The outcome is `applied`, `unchanged`, `planned` (preview only),
+`refused` or `error`. `code` and `message` are present exactly when the outcome
+is refused or error. The line also carries `counts` (`enrolled`,
+`alreadyEnrolled`, `denied`, `pathDenied`, `skipped`, `allowed`), `enrolled`,
+`denied`, `pathDenied`, `inactive`, `classified`, `rebasedWitnesses`, `allowed` (always
+`["skills-cli"]` on success), `refusals`, `changes`, and on apply `receipt` and
+`backups`. The exit status is 0 for applied, unchanged and planned, 2 for
+refused and 1 for error. A second apply returns `unchanged`. The command never
+retries within one invocation and never disables a guard.
+
 ### Claude installer witness CLI (`capture-claude-installer`)
 
 ```text
@@ -1795,6 +1995,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills provenance [--session <id>] [--station <id>] --json` | `--cached` | Read-only receipt of the selected, activated, applied, pinned and actually loaded skill versions, each with its status and reason; writes nothing |
 | `skills sessions reconcile <id> --from-profile <id> --from-revision <rev> --receipt-sha256 <sha> --selection-profile <id> --profile-revision <rev>` | | Plan an explicit migration of one live session; `--apply --plan-digest <digest> --plan-issued-at <time> --plan-expires-at <time>` (within five minutes) preserves its old receipt and applies the reviewed replacement |
 | `skills hook agents --json` | | Report maintained adapters and explicit coverage limits |
+| `skills hook codex-reconcile` | `--apply`, `--codex-command <path>`, `--json` | Deny every Codex plugin skill except the bridge by stable qualified name; enroll skills-only plugin changes, refuse capability changes with `CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED`; one JSON line per run |
 | `skills migrate native` | | Inventory native copies; `--apply` archives managed copies, with explicit `--include-unmanaged`, `--include-vendor`, or reviewed `--target-manifest` selection |
 | `skills pull --all --selection-profile <id>` | | With CLI loading active, refresh the selected profile into the verified cache |
 | `skills review-export <slug@version> --output <path>` | | Export one immutable hosted bundle to a private archive for review without selecting it |
