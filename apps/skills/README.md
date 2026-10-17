@@ -1192,8 +1192,15 @@ write cannot be verified: the result is `CODEX_RECONCILE_NATIVE_WRITE_UNCERTAIN`
 naming the deny rows that may remain and the private backup, and the policy is
 not written. The next run finishes the policy without another config write once
 Codex reports those skills disabled. After the policy write, the run re-checks
-the enrolled plugins' capabilities on the written state; a capability that
-appeared while Codex was writing refuses and both writes are compensated. The receipt records each writer and Codex's new
+the written state, and either outcome below compensates both writes. A new
+capability location that appeared while Codex was writing (a root `hooks.json`,
+`commands/`, `agents/` or another manifest directory) refuses with
+`CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED`. A change to a manifest, `.app.json`
+or remote install receipt that the plan observed ends as the error
+`CODEX_RECONCILE_FAILED` ("Native identity source changed during application").
+A plugin Codex uninstalled after it was enrolled stays unchanged, as the guard
+treats it, while its retained controls are remote, skills-only and denied by
+name, and the native catalog no longer reports it enabled. The receipt records each writer and Codex's new
 config version. The run finishes only when the strict guard accepts the written
 state. The plan may
 append disable rows to the Codex configuration. In the managed policy it may

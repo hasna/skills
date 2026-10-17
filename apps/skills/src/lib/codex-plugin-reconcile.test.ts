@@ -1057,3 +1057,83 @@ test("an unverifiable write is reported as uncertain, never as a refusal, naming
   expect(blocks(late, false)).toBe(false);
 });
 
+// ---- Fourth review (e7880cb6): a plugin Codex uninstalled, and message robustness.
+/** Enroll templates@openai-curated-remote (remote, skills-only) through the reconcile, then let Codex uninstall it. */
+async function enrollThenUninstallTemplates(station: ReturnType<typeof enrolledStation>) {
+  const id = "templates@openai-curated-remote", remote = "plugins~Plugin_00000000000000000000000000000757";
+  const parent = join(station.cache, "openai-curated-remote/templates"), root = join(parent, "0.1.6");
+  put(join(parent, ".codex-remote-plugin-install.json"), JSON.stringify({ schema_version: 1, remote_plugin_id: remote }));
+  put(join(root, ".codex-plugin/plugin.json"), JSON.stringify({ name: "templates", version: "0.1.6" }));
+  put(join(root, "skills/report/SKILL.md"), payload("report"));
+  const templates = { id, name: "templates", installed: true, enabled: true, localVersion: null, remotePluginId: remote, sourceType: "remote" as const };
+  expect(await station.run(true, station.catalog([station.skill(root, "report", id, "templates")], { plugins: [station.plugin, templates] }))).toMatchObject({ outcome: "applied", enrolled: ["templates:report"] });
+  // Codex 0.163 PluginStore::uninstall removes <CODEX_HOME>/plugins/cache/<marketplace>/<plugin>.
+  rmSync(parent, { recursive: true });
+  return { id, templates };
+}
+
+test("a plugin Codex uninstalled after the reconcile enrolled it is unchanged, as the guard treats it, and other bumps still apply", async () => {
+  const station = enrolledStation();
+  await enrollThenUninstallTemplates(station);
+  expect(blocks(station, false)).toBe(false);
+  expect(await station.run(true, station.catalog([]))).toMatchObject({ outcome: "unchanged" });
+  // A skills-only bump of another enrolled plugin still enrolls; the post-write check exempts the absent parent too.
+  const root = refresh(station, "1.1.0", BUMPED);
+  expect(await station.run(true, newNames(station, root))).toMatchObject({ outcome: "applied", enrolled: NEW });
+  expect(blocks(station, false)).toBe(false);
+});
+
+test("an absent enrolled plugin the native catalog still reports installed and enabled is not exempt and refuses", async () => {
+  const station = enrolledStation(), { id, templates } = await enrollThenUninstallTemplates(station);
+  const before = station.snapshot();
+  expect(await station.run(true, station.catalog([], { plugins: [station.plugin, templates] }))).toMatchObject({ outcome: "refused", code: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, refusals: [{ pluginId: id, reasons: ["unsupported"] }] });
+  expect(station.snapshot()).toEqual(before);
+});
+
+test("an uncertain write over an unparseable config.toml stays uncertain and names the private backup", async () => {
+  const station = enrolledStation(), root = refresh(station, "1.1.0", BUMPED), policyBefore = readFileSync(station.policy, "utf8");
+  // A timed-out write that leaves config.toml unparseable (for example half-written by another client).
+  const broken = fakeCodexWriter(station.config, { write: (call, current, emulated) => call === 0 ? `${current}\n[[[not toml\n` : emulated, loseResponse: call => call === 0 });
+  const result = await station.run(true, newNames(station, root), broken.connect);
+  expect(result).toMatchObject({ outcome: "error", code: "CODEX_RECONCILE_NATIVE_WRITE_UNCERTAIN" });
+  expect(result.message).toContain("may still receive this run's deny rows");
+  expect(result.message).toContain("private backup: ");
+  expect(readFileSync(station.policy, "utf8")).toBe(policyBefore);
+});
+
+test("a restore that Codex does not confirm is reported as unconfirmed, keeping COMPENSATION_INCOMPLETE", async () => {
+  const station = enrolledStation(), root = refresh(station, "1.1.0", BUMPED), policyBefore = readFileSync(station.policy, "utf8");
+  const writer = fakeCodexWriter(station.config, { status: call => call === 0 ? "okOverridden" : "ok", loseResponse: call => call === 1 });
+  const result = await station.run(true, newNames(station, root), writer.connect);
+  expect(result).toMatchObject({ outcome: "error", code: "CODEX_RECONCILE_COMPENSATION_INCOMPLETE" });
+  expect(result.message).toContain("did not confirm the restore of config.toml");
+  expect(result.message).not.toContain("refused to restore");
+  expect(writer.log.writes).toHaveLength(2);
+  expect(readFileSync(station.policy, "utf8")).toBe(policyBefore);
+});
+
+test("a manifest, app or receipt change landing while Codex writes is an error with both writes compensated", async () => {
+  for (const [label, mutate] of [
+    ["manifest", (root: string) => put(join(root, ".codex-plugin/plugin.json"), JSON.stringify({ name: "pages", version: "1.1.0", description: "Changed while writing", apps: "./.app.json" }))],
+    [".app.json", (root: string) => put(join(root, ".app.json"), '{"apps":{"pages":{"id":"another_connector","required":true}}}')],
+    ["remote receipt", (root: string) => put(join(dirname(root), ".codex-remote-plugin-install.json"), JSON.stringify({ schema_version: 1, remote_plugin_id: "plugins~Plugin_00000000000000000000000000000995" }))],
+  ] as const) {
+    const station = enrolledStation(), root = refresh(station, "1.1.0", BUMPED);
+    const configBefore = readFileSync(station.config, "utf8"), policyBefore = readFileSync(station.policy, "utf8"), receiptsBefore = receipts(station);
+    const writer = fakeCodexWriter(station.config, { afterWrite: call => { if (call === 0) mutate(root); } });
+    const result = await station.run(true, newNames(station, root), writer.connect);
+    expect({ label, outcome: result.outcome, code: result.code, identity: String(result.message).includes("Native identity source changed during application") }).toEqual({ label, outcome: "error", code: "CODEX_RECONCILE_FAILED", identity: true });
+    expect({ label, writes: writer.log.writes.length, config: readFileSync(station.config, "utf8") === configBefore, policy: readFileSync(station.policy, "utf8") === policyBefore, receipts: receipts(station).length === receiptsBefore.length })
+      .toEqual({ label, writes: 2, config: true, policy: true, receipts: true });
+  }
+});
+
+test("an absent enrolled plugin whose controls are not remote, skills-only and denied by name is not exempt and refuses", async () => {
+  // Pages is enrolled with an app: an uninstalled Pages has no reviewed disabled identity to keep.
+  const station = enrolledStation();
+  rmSync(station.parent, { recursive: true });
+  const before = station.snapshot();
+  expect(await station.run(true, station.catalog([]))).toMatchObject({ outcome: "refused", code: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, refusals: [{ pluginId: PLUGIN, reasons: ["unsupported"] }] });
+  expect(station.snapshot()).toEqual(before);
+});
+

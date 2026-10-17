@@ -1517,7 +1517,7 @@ export function planCodexPluginNameReconcile(request: CodexPluginReconcileReques
   // The witness rebase below runs only when both pass.
   const capabilityRefusals = priorParents.flatMap(parent => {
     const group = prior.filter(control => control.pluginParent === parent);
-    const reasons = [...new Set([...codexPluginCapabilityChanges(cache, group, read, rules), ...enrolledCodexPluginStrictChanges(group, read)])].sort();
+    const reasons = [...new Set([...codexPluginCapabilityChanges(cache, group, read, rules), ...codexReconcileStrictChanges(cache, group, read, rules, catalog)])].sort();
     return reasons.length ? [{ pluginId: group[0]!.pluginId, reasons, manifests: [] as string[] }] : [];
   });
   if (capabilityRefusals.length) throw new CodexPluginReconcileRefusal(CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, "an enrolled Codex plugin changed a reviewed app, MCP, hooks, manifest or remote capability; it stays quarantined until reviewed with skills hook install and a fresh native catalog and discovery review", capabilityRefusals);
@@ -1766,6 +1766,18 @@ function verifyIntegrationPlanAfterWrite(plan: AgentIntegrationPlan, aliases: Ag
   if (plan.codexReconcile) assertReconciledPluginCapabilities(plan, aliases);
 }
 
+/** The strict scan of one enrolled plugin parent, with the guard's own
+ * exemption (absentDisabledCodexPluginParent): a parent Codex uninstalled whose
+ * retained controls are all remote, skills-only and denied by name has nothing
+ * left to scan and is unchanged. Never while the native catalog still reports
+ * that plugin installed and enabled. `rules` are the rules of the state checked. */
+function codexReconcileStrictChanges(cache: string, group: CodexPluginSkillControl[], read: (path: string) => string, rules: unknown, catalog: CodexNativeSkillCatalog): string[] {
+  const control = group[0]!;
+  const reportedEnabled = (Array.isArray(catalog.plugins) ? catalog.plugins : []).some((plugin: any) => plugin?.id === control.pluginId && plugin.installed === true && plugin.enabled === true);
+  if (!reportedEnabled && absentDisabledCodexPluginParent(cache, control.pluginParent, group, rules)) return [];
+  return enrolledCodexPluginStrictChanges(group, read);
+}
+
 /** The reconcile's enrolled-plugin checks (the reviewed tuple and the strict
  * scan of every version root) against the state just written, with the
  * written controls. A capability that appeared after the locked re-plan, while
@@ -1779,7 +1791,7 @@ function assertReconciledPluginCapabilities(plan: AgentIntegrationPlan, aliases:
   const controls: CodexPluginSkillControl[] = policyText ? parseManagedSkillPolicy(policyText).bridge?.codexPluginSkills ?? [] : [];
   const refusals = [...new Set(controls.map(control => control.pluginParent))].sort().flatMap(parent => {
     const group = controls.filter(control => control.pluginParent === parent);
-    const reasons = [...new Set([...enrolledCodexPluginStrictChanges(group, read), ...codexPluginCapabilityChanges(cache, group, read, rules)])].sort();
+    const reasons = [...new Set([...codexReconcileStrictChanges(cache, group, read, rules, plan.codexReconcile!.request.catalog), ...codexPluginCapabilityChanges(cache, group, read, rules)])].sort();
     return reasons.length ? [{ pluginId: group[0]!.pluginId, reasons, manifests: [] as string[] }] : [];
   });
   if (refusals.length) throw new CodexPluginReconcileRefusal(CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, "an enrolled Codex plugin gained a capability while the reconcile was writing; the writes are compensated and the plugin stays quarantined until reviewed with skills hook install and a fresh native catalog and discovery review", refusals);
@@ -1855,7 +1867,8 @@ const codexSkillRows = (text: string | null): unknown[] | null => { const rows =
 /** Structural equality that ignores an empty [skills] table a native clear leaves behind. */
 function codexConfigStructureEqual(actual: string | null, expected: string | null): boolean {
   const strip = (value: any) => { if (value?.skills && typeof value.skills === "object" && !Array.isArray(value.skills) && !Object.keys(value.skills).length) delete value.skills; return value; };
-  return isDeepStrictEqual(strip(tomlStructure(actual)), strip(tomlStructure(expected)));
+  // Unparseable TOML (for example a half-written file) never equals a plan.
+  try { return isDeepStrictEqual(strip(tomlStructure(actual)), strip(tomlStructure(expected))); } catch { return false; }
 }
 
 /** Apply a Codex name reconcile. The deny rows go through Codex's own writer
@@ -1976,7 +1989,7 @@ async function applyCodexPluginReconcileUnlocked(plan: AgentIntegrationPlan, opt
           const restored = await rpc.request("config/batchWrite", { edits: [{ keyPath: "skills.config", value: codexSkillRows(configChange.before), mergeStrategy: "replace" }], filePath: configChange.path, expectedVersion: nativeVersion, reloadUserConfig: true });
           if (restored?.status !== "ok" || !codexConfigStructureEqual(currentText(configChange.path), configChange.before)) incomplete = "Codex did not restore config.toml to its preimage";
         }
-      } catch { incomplete = "Codex refused to restore config.toml, so its deny rows were left in place"; }
+      } catch { incomplete = "Codex did not confirm the restore of config.toml (it refused or did not answer), so its deny rows may remain"; }
     }
     if (incomplete) {
       // Something this run wrote may remain, so this is never a plain refusal.
