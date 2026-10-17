@@ -6,9 +6,9 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { assertTestStartupIsolation } from "../../test-isolation.fixture.js";
 
-const root = resolve(process.env.GUARDED_CONFIG_FIXTURE_ROOT!);
-assert(basename(root).startsWith("skills-mcp-guarded-"));
-assert.equal(homedir(), join(root, "home"));
+const requestedRoot = resolve(process.env.GUARDED_CONFIG_FIXTURE_ROOT!);
+assert(basename(requestedRoot).startsWith("skills-mcp-guarded-"));
+assert.equal(homedir(), join(requestedRoot, "home"));
 assert.equal(process.env.HASNA_SKILLS_API_URL, "http://127.0.0.1:9");
 assert.equal(process.env.SKILLS_API_URL, "http://127.0.0.1:9");
 assertTestStartupIsolation();
@@ -26,18 +26,24 @@ Bun.spawnSync = (() => { throw Error("FIXTURE_PROCESS_REFUSED"); }) as typeof Bu
 for (const method of ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"] as const)
   (childProcess as unknown as Record<string, unknown>)[method] = () => { throw Error("FIXTURE_PROCESS_REFUSED"); };
 syncBuiltinESMExports();
+const { canonicalSystemPath } = await import("../../lib/agent-integration.js");
+const root = canonicalSystemPath(requestedRoot);
 const { handleMcp } = await import("./runtime-mcp.js");
 const native = {
   openSync: fs.openSync, closeSync: fs.closeSync, readFileSync: fs.readFileSync,
   writeFileSync: fs.writeFileSync, fsyncSync: fs.fsyncSync, renameSync: fs.renameSync,
 };
-const modes = ["atomic", "new", "race", "new-race", "locked", "symlink", "parent-symlink", "hardlink",
+const modes = ["atomic", "new", "race", "new-race", "locked", "symlink", "parent-symlink", "home-ancestor-symlink", "hardlink",
   "invalid", "invalid-container", "backup-readback", "temp-write", "final-readback"] as const;
 const receipts = [];
 for (const mode of modes) {
   const initiallyMissing = mode === "new" || mode === "new-race";
-  const home = join(root, mode);
+  let home = join(root, mode);
   fs.mkdirSync(home, { mode: 0o700 });
+  if (mode === "home-ancestor-symlink") {
+    fs.mkdirSync(join(home, "nested"), { mode: 0o700 });
+    const alias = home + "-alias"; fs.symlinkSync(home, alias); home = join(alias, "nested");
+  }
   process.env.HOME = home;
   process.env.HASNA_HOME = join(home, ".hasna");
   process.env.HASNA_CONFIG_HOME = join(home, "config");
@@ -73,8 +79,8 @@ for (const mode of modes) {
   fs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
     const [file] = args;
     assert.equal(typeof file, "string");
-    assert(resolve(file as string).startsWith(root + "/"));
-    if (file === path) {
+    if (file === path || !resolve(file as string).startsWith(root + "/")) {
+      // The existing macOS verifier may open OS-owned alias parents read-only.
       assert.equal(typeof args[1], "number");
       assert.equal(Number(args[1]) & (fs.constants.O_WRONLY | fs.constants.O_RDWR | fs.constants.O_TRUNC | fs.constants.O_CREAT), 0);
     }
@@ -151,7 +157,7 @@ for (const mode of modes) {
     assert.deepEqual(agent === "opencode" ? server.command : server.args, agent === "opencode" ? ["skills-mcp", "--stdio"] : ["--stdio"]);
   } else {
     assert.equal(typeof result.results[0].error, "string"); assert(result.results[0].error.includes("safely update"));
-    const reason = mode === "locked" ? "locked" : ["symlink", "parent-symlink", "hardlink"].includes(mode) ? "unsafe"
+    const reason = mode === "locked" ? "locked" : ["symlink", "parent-symlink", "home-ancestor-symlink", "hardlink"].includes(mode) ? "unsafe"
       : ["invalid", "invalid-container"].includes(mode) ? "invalid" : mode === "backup-readback" ? "preserve and verify"
       : mode === "temp-write" ? "prepare" : mode === "final-readback" ? "verify the committed" : "changed";
     assert(result.results[0].error.includes(reason));

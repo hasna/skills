@@ -63,7 +63,7 @@ for (const agent of ["codex", "gemini", "pi", "opencode", "cursor", "windsurf"])
       const diagnostic = JSON.stringify({ exit: Number.isInteger(code) ? code : null,
         location: stderr.match(/runtime-mcp-guarded-writes\.fixture\.ts:[0-9]{1,7}:[0-9]{1,7}(?![0-9])/)?.[0] ?? "unavailable" });
       expect(timedOut, diagnostic).toBe(false); expect(stderr.length, diagnostic).toBe(0); expect(code, diagnostic).toBe(0);
-      expect(JSON.parse(stdout)).toEqual({ agent, cases: 13, networkCalls: 0, syntheticOnly: true });
+      expect(JSON.parse(stdout)).toEqual({ agent, cases: 14, networkCalls: 0, syntheticOnly: true });
     } finally {
       clearTimeout(timer);
       if (child.exitCode === null) { child.kill("SIGKILL"); await child.exited; }

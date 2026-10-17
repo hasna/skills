@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs, { type BigIntStats } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { canonicalSystemPath } from "./agent-integration.js";
 
 type Refusal = "UNSAFE_PATH" | "OWNERSHIP_UNAVAILABLE" | "LOCKED" | "INVALID_CONFIG" | "BACKUP_FAILED"
   | "WRITE_FAILED" | "CONFIG_CHANGED" | "VERIFY_FAILED";
@@ -58,14 +59,24 @@ function unchanged(before: Snapshot | null, current: Snapshot | null): boolean {
 }
 
 function parentWitnesses(path: string): Array<{ path: string; info: BigIntStats }> {
-  const home = resolve(homedir()), local = relative(home, path);
+  const home = canonicalSystemPath(homedir()), local = relative(home, path);
   if (!isAbsolute(path) || resolve(path) !== path || !local || local === ".." || local.startsWith(".." + sep)) throw new Error();
-  const parents = [home];
+  const parents: string[] = [];
+  for (let ancestor = home; ; ancestor = dirname(ancestor)) {
+    parents.unshift(ancestor);
+    if (ancestor === dirname(ancestor)) break;
+  }
   for (const part of relative(home, dirname(path)).split(sep).filter(Boolean)) parents.push(join(parents[parents.length - 1]!, part));
   return parents.map(path => {
-    if (!statOrMissing(path)) fs.mkdirSync(path, { mode: 0o700 });
+    if (!statOrMissing(path)) {
+      if (!path.startsWith(home + sep)) throw new Error();
+      fs.mkdirSync(path, { mode: 0o700 });
+    }
     const info = fs.lstatSync(path, { bigint: true });
-    if (!info.isDirectory() || info.uid !== owner() || (info.mode & 0o022n) !== 0n) throw new Error();
+    const privatePath = path === home || path.startsWith(home + sep);
+    const stickySystemParent = !privatePath && info.uid === 0n && (info.mode & 0o1000n) !== 0n;
+    if (!info.isDirectory() || (privatePath ? info.uid !== owner() : info.uid !== owner() && info.uid !== 0n)
+      || ((info.mode & 0o022n) !== 0n && !stickySystemParent)) throw new Error();
     return { path, info };
   });
 }
@@ -94,6 +105,9 @@ export function guardedAgentConfigWrite(path: string, transform: (current: Buffe
     refusal = "OWNERSHIP_UNAVAILABLE";
     if (typeof process.getuid !== "function") throw new Error();
     refusal = "UNSAFE_PATH";
+    if (!isAbsolute(path) || resolve(path) !== path) throw new Error();
+    // Reuse the owning macOS alias/ACL verifier; never hide arbitrary symlinks.
+    path = canonicalSystemPath(path);
     const parents = parentWitnesses(path);
     refusal = "LOCKED";
     const lockPath = path + ".skills-mcp.lock";
