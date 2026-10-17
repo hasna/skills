@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { RemoteSkillsClient } from "./remote-client.js";
 import { revisionIdOf, type RevisionContent } from "./revision.js";
-import { metadataPatch } from "./skill-metadata-update.js";
+import { metadataPatch, metadataSnapshot } from "./skill-metadata-update.js";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -79,5 +79,19 @@ test("authority/organization and missing revision guards cannot be substituted",
   expect(f.calls.some(call => call.method === "PATCH")).toBe(false);
 });
 test("unknown patch fields and invalid tags refuse", () => {
-  for (const value of [{ version: "2.0.0" }, { tags: [1] }, { tags: ["x", "x"] }, { category: "" }, {}]) expect(() => metadataPatch(value)).toThrow();
+  for (const value of [{ version: "2.0.0" }, { tags: [1] }, { tags: ["x", "x"] }, { category: "" }, {},
+    { category: "x".repeat(513) }, { category: "First\nSecond" }, { tags: ["x".repeat(513)] }, { tags: ["First\nSecond"] }]) {
+    expect(() => metadataPatch(value)).toThrow();
+  }
+});
+for (const field of ["displayName", "description", "category", "source"] as const) test(`published ${field} content is preserved while invalid types and revisions refuse`, () => {
+  const content: RevisionContent = { slug: "fixture-skill", displayName: "Fixture", description: "Synthetic", category: "old", tags: [],
+    source: "custom", kind: "instruction", [field]: `${"x".repeat(700)}\nPublished details` };
+  const revisionId = revisionIdOf(content), etag = `"${revisionId}"`;
+  const snapshot = { ...content, publishedSource: content.source, revisionId };
+  expect(metadataSnapshot(snapshot, etag).content).toEqual(content);
+  const serverField = field === "source" ? "publishedSource" : field;
+  for (const value of [null, 42, undefined, {}, "Changed after revision"]) {
+    expect(() => metadataSnapshot({ ...snapshot, [serverField]: value }, etag)).toThrow();
+  }
 });

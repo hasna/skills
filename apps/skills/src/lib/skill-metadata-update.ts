@@ -34,7 +34,7 @@ export function metadataPatch(value: unknown): SkillMetadataPatch {
 /** Normalize exactly the owning registry's revision fields, never arbitrary extras. */
 export function metadataSnapshot(value: unknown, etag: string | null): { content: RevisionContent; revisionId: string } {
   if (!object(value) || !text(value.slug) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.slug)
-    || ![value.displayName, value.description, value.category, value.publishedSource].every(text)
+    || ![value.displayName, value.description, value.category, value.publishedSource].every(field => typeof field === "string")
     || !Array.isArray(value.tags) || value.tags.some(tag => !text(tag))
     || !["instruction", "executable"].includes(String(value.kind))
     || typeof value.revisionId !== "string" || !REVISION_ID_PATTERN.test(value.revisionId)

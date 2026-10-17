@@ -5,10 +5,14 @@ import { MemoryGovernanceStore } from "../sdk/governance-store.js";
 import { publicPrincipal } from "./auth.js";
 import { RemoteSkillsClient } from "../lib/remote-client.js";
 
-test("owned client and server compose a guarded category/tags update without changing the publication", async () => {
+for (const [label, description] of [
+  ["short", "Synthetic"],
+  ["long", "x".repeat(700)],
+  ["multiline", "First line\nSecond line"],
+] as const) test(`owned client and server preserve a ${label} description during a guarded metadata update`, async () => {
   const principal = publicPrincipal({ orgId: "fixture-org", scopes: ["skills:read", "skills:publish"], role: "owner" });
   const store = new MemorySkillsStore([{ token: "synthetic", principal }]);
-  await store.publishSkill({ principal, slug: "fixture-skill", displayName: "Fixture", description: "Synthetic", category: "old", tags: [],
+  await store.publishSkill({ principal, slug: "fixture-skill", displayName: "Fixture", description, category: "old", tags: [],
     source: "custom", kind: "instruction", version: "1.0.0", skillMd: "Synthetic instruction body" });
   const original = await store.getSkill(principal, "fixture-skill");
   const handler = await createSkillsFetchHandler({ store, governanceStore: new MemoryGovernanceStore(), runtime: null,
@@ -23,9 +27,11 @@ test("owned client and server compose a guarded category/tags update without cha
     const client = new RemoteSkillsClient("synthetic", "https://example.invalid");
     const plan = await client.prepareSkillMetadataUpdate("fixture-skill", { category: "new", tags: ["curated"] });
     expect(methods.every(method => method === "GET")).toBe(true);
+    expect(plan.before.description).toBe(description);
     expect(await client.applySkillMetadataUpdate(plan)).toMatchObject({ status: "applied" });
     const current = await store.getSkill(principal, "fixture-skill");
     expect(current?.category).toBe("new"); expect(current?.tags).toEqual(["curated"]);
+    expect(current?.description).toBe(description);
     expect(current?.skillMd).toBe(original?.skillMd); expect(current?.version).toBe(original?.version);
     expect(current?.bundleSha256).toBe(original?.bundleSha256);
     await expect(client.applySkillMetadataUpdate(plan)).rejects.toMatchObject({ code: "METADATA_REVISION_CONFLICT" });
