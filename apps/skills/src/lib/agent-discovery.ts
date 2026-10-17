@@ -354,8 +354,11 @@ function retiredCodexRoots(binding:AgentDiscoveryBinding, tolerance?:NativeDisco
  * version roots is replaced, in its own digest mode, by the same role's file in
  * every current version root. Every other witness is kept unchanged, so any
  * other change still refuses when the rebased binding is verified. */
-export function rebaseCodexEnrolledCacheWitnesses(binding: AgentDiscoveryBinding, cache: string, parents: readonly string[]): { binding: AgentDiscoveryBinding; rebased: string[] } {
+export function rebaseCodexEnrolledCacheWitnesses(binding: AgentDiscoveryBinding, cache: string, parents: readonly string[], strictlySkillsOnly: (parent: string) => boolean): { binding: AgentDiscoveryBinding; rebased: string[] } {
   if (binding.agent !== "codex" || binding.method !== "reviewed" || binding.codexSemanticCache || !parents.length) return { binding, rebased: [] };
+  // Gate: a parent's witnesses move only when the caller's strict capability scan
+  // finds nothing beyond its reviewed tuple in every current version root.
+  const eligible = parents.filter(parent => strictlySkillsOnly(parent));
   const budget = discoveryByteBudget(), replaced = new Set<string>(), additions = new Map<string, DiscoverySource>();
   const role = (relativeParts: string[]) => [".codex-plugin/plugin.json", ".app.json", ".mcp.json"].includes(relativeParts.join("/"))
     || (relativeParts.length >= 3 && relativeParts[0] === "skills" && relativeParts.at(-1) === "SKILL.md");
@@ -365,7 +368,7 @@ export function rebaseCodexEnrolledCacheWitnesses(binding: AgentDiscoveryBinding
     const parts = relative(cache, source.path).split(sep);
     if (parts.length < 4 || parts.some(part => !part || part === "." || part === "..")) continue;
     const parent = join(cache, parts[0]!, parts[1]!), relativeParts = parts.slice(3);
-    if (!parents.includes(parent) || !role(relativeParts) || projected(source, undefined, budget) === source.sha256) continue;
+    if (!eligible.includes(parent) || !role(relativeParts) || projected(source, undefined, budget) === source.sha256) continue;
     replaced.add(source.path);
     for (const version of readdirSync(parent).sort()) {
       if (version === ".codex-remote-plugin-install.json") continue;

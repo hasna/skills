@@ -1129,9 +1129,10 @@ the guard refuses. The work it does:
 - It enrolls each new qualified name of an enrolled plugin whose capability
   tuple is unchanged, and denies it in `~/.codex/config.toml` with
   `[[skills.config]] name = "<plugin>:<skill>"` and `enabled = false`.
-- It enrolls a plugin Skills had not enrolled when every version is skills-only,
-  with no app, MCP or hooks declaration, and binds its native install receipt
-  when it is remote.
+- It enrolls a plugin Skills had not enrolled only when every version is
+  skills-only. Its native install receipt is bound when the plugin is remote and
+  the native catalog reports that same remote installation. A receipt the catalog
+  does not confirm refuses as `remote`.
 - It denies skills that Codex loads from its runtime cache
   (`~/.cache/codex-runtimes`) by their stable qualified name. A skill there with
   no stable qualified name gets an exact path deny instead, listed in
@@ -1140,9 +1141,12 @@ the guard refuses. The work it does:
 - It classifies every plugin explicitly enabled with `enabled = true` under
   `[plugins]`, including plugins the saved binding does not know. That holds
   even when none of the plugin's skills block today. A known plugin is enrolled,
-  reviewed inactive, an installation input, a semantic-cache role, or has a
-  full witness under its cache parent or of its manifest. An enabled
-  capability-bearing plugin that the binding does not know refuses.
+  reviewed inactive, an installation input, or a semantic-cache role. It can
+  also be known through a full witness under its exact cache parent, or through
+  a reviewed local marketplace that maps exactly that plugin with its manifest
+  witnessed. A manifest witness elsewhere that only shares the plugin's name
+  does not count. An enabled capability-bearing plugin that the binding does not
+  know refuses.
 - It leaves a plugin explicitly disabled with `enabled = false` under
   `[plugins]` unenrolled. It never refuses because of one. The guard does not
   trust a plugin-level disable alone, so that plugin's cache copies keep exact
@@ -1150,8 +1154,8 @@ the guard refuses. The work it does:
 - For a reviewed binding whose full-byte witnesses name an enrolled plugin's
   manifest, app, MCP or skill files (byte-witness bindings), it re-captures
   those witnesses in the new version root once the capability tuple is proven
-  unchanged. This reconcile handles skills-only manifest bumps for byte-witness
-  bindings. `skills hook rebind-cache` does not: it still refuses bindings that
+  unchanged and the strict scan below finds nothing beyond that tuple. This
+  reconcile handles skills-only manifest bumps for byte-witness bindings. `skills hook rebind-cache` does not: it still refuses bindings that
   never had exact cache-directory coverage.
 
 The writes go through the reviewed `hook install` planner and transaction:
@@ -1171,8 +1175,8 @@ receipt of an enrolled plugin. It also covers a plugin Skills has not enrolled
 that carries an app, MCP or hooks. The plugin stays disabled, or its skills stay
 denied, as they already were. The command refuses with
 `CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED`, writes nothing, and lists each plugin
-with its capability kinds (`app`, `mcp`, `hooks`, `manifest`, `remote`,
-`unsupported`). The guard keeps blocking with
+with its capability kinds (`app`, `mcp`, `hooks`, `commands`, `agents`,
+`manifest`, `manifest-location`, `remote`, `unsupported`). The guard keeps blocking with
 `NATIVE_SKILL_DRIFT: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED: ...`. Review the
 plugin with `skills hook install --agent codex --discovery-inputs
 <reviewed-file> --codex-native-catalog <reviewed-catalog> --apply`.
@@ -1180,11 +1184,26 @@ plugin with `skills hook install --agent codex --discovery-inputs
 Reviewer check, the method rule for capability classification. Confirm each
 point before accepting a reconcile result or a change to it:
 
-- Each version root's `.codex-plugin/plugin.json` is read for its own `hooks`,
-  `mcpServers`, `apps` and `commands` keys. The `hooks/`, `hooks.json`,
-  `.mcp.json` and `.app.json` files are checked too. Inline manifest hooks
-  count: a missing `hooks.json` is never evidence of no hooks.
-  `chrome@openai-bundled` declares its `mcp_tool` hooks only in its manifest.
+- Every version root is scanned against the shared location sets in
+  `codex-plugin-capability-paths.ts`, the single source, without regard to
+  case. The scan covers every manifest location Codex reads. The Agent Plugins
+  root `plugin.json` comes first, then `.codex-plugin`, `.claude-plugin` and
+  `.cursor-plugin`. It also covers `hooks/`, `hooks.json`, `.mcp.json`,
+  `.app.json`, `commands/` and `agents/`. Declaration files and manifest
+  directories count at any depth. A skill document not spelled exactly
+  `SKILL.md` counts, and so does any link or special file. Capability-named
+  entries beside the versions count too.
+- `.codex-plugin` must hold exactly `plugin.json`. A new plugin's manifest may
+  carry only the shared metadata keys. `apps` counts as the app capability,
+  every other key counts as a capability or unsupported, and `skills` must be
+  the default `./skills` root. Inline manifest hooks count: a missing
+  `hooks.json` is never evidence of no hooks. `chrome@openai-bundled` declares
+  its `mcp_tool` hooks only in its manifest.
+- An enrolled plugin gets the same strict scan over every current version root,
+  as well as the reviewed-tuple check. Only the reviewed `.codex-plugin`
+  manifest, and an exact root `.app.json` or `.mcp.json` its tuple declares, are
+  bound. Anything else refuses. The witness rebase runs only for a plugin that
+  passes both checks.
 - Every skills-only result cites the manifest paths that were read, in
   `classified[].manifests`. Every refusal entry carries `manifests` the same
   way. A root whose manifest cannot be read is `unsupported`, never skills-only.
@@ -1203,6 +1222,9 @@ These also refuse and write nothing:
 - `CODEX_NATIVE_SKILL_CATALOG_UNSUPPORTED_VERSION` or
   `CODEX_HOOK_TRUST_NATIVE_UNSUPPORTED_VERSION`: an unmeasured Codex release.
 - `NATIVE_SKILL_DRIFT`: copies outside the plugin cache, or any other drift.
+- `CODEX_RECONCILE_SYMLINK_REFUSED`: a link in a native path.
+- `CODEX_NATIVE_SKILL_NAME_CONFLICT` also covers an explicit enable rule for the
+  catalog name of a skill the reconcile would deny by path.
 - `CODEX_RECONCILE_SEMANTIC_CACHE_UNSUPPORTED`: a binding that uses the semantic
   cache witness.
 

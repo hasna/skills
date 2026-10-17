@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { admitCorpusFixture, installCorpusInspectorFixture } from "./codex-corpus.fixture.js";
 import { applyAgentIntegration, assertCodexReconcileScope, assertManagedAgentBridge, planAgentIntegration, planCodexPluginNameReconcile } from "./agent-integration.js";
 import { captureCodexSettingsV3 } from "./codex-settings-witness.js";
-import { captureDiscoveryByteSources } from "./agent-discovery.js";
+import { captureDiscoveryByteSources, rebaseCodexEnrolledCacheWitnesses } from "./agent-discovery.js";
+import { CODEX_CAPABILITY_PATH_MUTATIONS, CODEX_INERT_NESTED_NAMES } from "./codex-plugin-capability-paths.fixture.js";
+import { codexPluginCapabilityChanges, codexPluginRootEvidence, enrolledCodexPluginStrictChanges, unenrolledCodexPluginEvidence } from "./codex-plugin-skill-controls.js";
 import { CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, mergeReconciledCodexPluginControls, type CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
 import { runCodexPluginReconcile, type CodexReconcileResult } from "./codex-plugin-reconcile.js";
 import type { CodexNativeSkill, CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
@@ -396,10 +398,20 @@ test("the reconcile scope admits only appended disable rows and the bounded poli
 
 test("every plugin enabled in [plugins] is classified, including ones the binding does not know; inline manifest hooks without hooks.json refuse", async () => {
   const hookPlugin = (cache: string) => join(cache, "hasna-internal-bridge/hasna-codex/0.1.0");
+  const home = (cache: string) => dirname(dirname(dirname(cache)));
+  const marketplace = (cache: string) => join(home(cache), "bridge-src/.agents/plugins/marketplace.json"), sourceManifest = (cache: string) => join(home(cache), "bridge-src/plugins/hasna-codex/.codex-plugin/plugin.json");
+  const decoy = (cache: string) => join(home(cache), "decoy/chrome/.codex-plugin/plugin.json");
   const station = enrolledStation(undefined, ['pages@openai-curated-remote', 'hasna-codex@hasna-internal-bridge', 'chrome@openai-bundled', 'notes@local-market'].map(id => `[plugins.${JSON.stringify(id)}]\nenabled = true\n`).join(""), true, {
-    // A reviewed hook plugin the binding knows through a full manifest witness.
-    prepare: cache => { const root = hookPlugin(cache); put(join(root, ".codex-plugin/plugin.json"), JSON.stringify({ name: "hasna-codex", version: "0.1.0", hooks: "./hooks/hooks.json" })); put(join(root, "hooks/hooks.json"), '{"hooks":{}}'); },
-    witnesses: cache => [join(hookPlugin(cache), ".codex-plugin/plugin.json")],
+    // A reviewed hook plugin the binding knows only through an exact reviewed
+    // local marketplace mapping and its source manifest (the station02 shape),
+    // plus a decoy manifest witness that merely shares chrome's plugin name.
+    prepare: cache => {
+      const manifest = JSON.stringify({ name: "hasna-codex", version: "0.1.0", hooks: "./hooks/hooks.json" }), root = hookPlugin(cache);
+      put(join(root, ".codex-plugin/plugin.json"), manifest); put(join(root, "hooks/hooks.json"), '{"hooks":{}}');
+      put(marketplace(cache), JSON.stringify({ name: "hasna-internal-bridge", interface: { displayName: "Synthetic bridge" }, plugins: [{ name: "hasna-codex", source: { source: "local", path: "./plugins/hasna-codex" } }] }));
+      put(sourceManifest(cache), manifest); put(decoy(cache), JSON.stringify({ name: "chrome", version: "1.0.0" }));
+    },
+    witnesses: cache => [marketplace(cache), sourceManifest(cache), decoy(cache)],
   });
   const add = (market: string, name: string, manifest: Record<string, unknown>) => {
     const root = join(station.cache, market, name, "1.0.0");
@@ -420,5 +432,111 @@ test("every plugin enabled in [plugins] is classified, including ones the bindin
   rmSync(join(station.cache, "openai-bundled"), { recursive: true });
   const settled = await station.run(true, station.catalog([]));
   expect(settled).toMatchObject({ outcome: "unchanged", classified: [{ pluginId: "notes@local-market", capabilities: [], manifests: [join(notes, ".codex-plugin/plugin.json")] }] });
+  expect(station.snapshot()).toEqual(before);
+});
+
+// ---- Capability-path corpus: every location Codex reads must refuse on every path.
+const cacheWitnesses = (station: ReturnType<typeof enrolledStation>) => (JSON.parse(readFileSync(station.policy, "utf8")).bridge.discovery.codex.sources as Array<{ path: string; sha256: string | null }>).filter(source => source.path.startsWith(station.cache + sep));
+const blocks = (station: ReturnType<typeof enrolledStation>, live: boolean) => { try { assertManagedAgentBridge("codex", { ...station.options, ...(live ? { codexPromptHook: true } : {}) }); return false; } catch { return true; } };
+function addNotesPlugin(station: ReturnType<typeof enrolledStation>) {
+  const root = join(station.cache, "local-market/notes/1.0.0"), id = "notes@local-market";
+  put(join(root, ".codex-plugin/plugin.json"), JSON.stringify({ name: "notes", version: "1.0.0" }));
+  put(join(root, "skills/draft/SKILL.md"), payload("draft"));
+  return { root, id, catalog: station.catalog([station.skill(root, "draft", id, "notes")], { plugins: [station.plugin, { id, name: "notes", installed: true, enabled: true, localVersion: "1.0.0" }] }) };
+}
+async function expectRefusedAndStillBlocked(station: ReturnType<typeof enrolledStation>, catalog: CodexNativeSkillCatalog, byteWitnesses: boolean) {
+  const before = station.snapshot(), witnesses = cacheWitnesses(station);
+  if (byteWitnesses) expect(witnesses.length).toBe(4);
+  expect(blocks(station, true)).toBe(true);
+  const result = await station.run(true, catalog);
+  expect(result).toMatchObject({ outcome: "refused", code: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, changes: [], enrolled: [], rebasedWitnesses: 0 });
+  expect(station.snapshot()).toEqual(before);
+  // The byte witnesses are still present and unchanged: no rebase happened.
+  expect(cacheWitnesses(station)).toEqual(witnesses);
+  expect(blocks(station, true)).toBe(true);
+  expect(blocks(station, false)).toBe(true);
+}
+for (const mutation of CODEX_CAPABILITY_PATH_MUTATIONS) {
+  test(`must refuse, new plugin, live hook stays BLOCK: ${mutation.label}`, async () => {
+    const station = enrolledStation(), { root, catalog } = addNotesPlugin(station);
+    mutation.apply(root, "notes");
+    await expectRefusedAndStillBlocked(station, catalog, false);
+  });
+  for (const byteWitnesses of [false, true]) test(`must refuse, enrolled bump${byteWitnesses ? " with byte witnesses" : ""}, live hook stays BLOCK: ${mutation.label}`, async () => {
+    const station = enrolledStation(undefined, "", true, { byteWitnesses });
+    const root = refresh(station, "1.1.0", byteWitnesses ? ["maintain-space", "write-page"] : ["maintain-space", "write-page", "publish-page"]);
+    mutation.apply(root, "pages");
+    await expectRefusedAndStillBlocked(station, station.catalog(byteWitnesses ? [] : [station.skill(root, "publish-page")]), byteWitnesses);
+  });
+}
+for (const name of CODEX_INERT_NESTED_NAMES) test(`an inert nested ${name} stays enrollable on the new-plugin and byte-witness bump paths`, async () => {
+  const station = enrolledStation(), { root, catalog } = addNotesPlugin(station);
+  put(join(root, name), "inert");
+  expect(await station.run(true, catalog)).toMatchObject({ outcome: "applied", enrolled: ["notes:draft"] });
+  expect(blocks(station, false)).toBe(false);
+  const bumped = enrolledStation(undefined, "", true, { byteWitnesses: true });
+  put(join(refresh(bumped, "1.1.0", ["maintain-space", "write-page"]), name), "inert");
+  expect(await bumped.run(true, bumped.catalog([]))).toMatchObject({ outcome: "applied", rebasedWitnesses: 4 });
+  expect(blocks(bumped, false)).toBe(false);
+});
+
+test("strict classification refuses links, extra manifest-directory entries, unknown manifest keys and outside skill sources", () => {
+  const home = mkdtempSync(join(tmpdir(), "skills-codex-classify-")); roots.push(home);
+  const read = (path: string) => readFileSync(path, "utf8");
+  const plugin = (name: string, manifest: Record<string, unknown> = {}, files: Record<string, string> = {}) => {
+    const parent = join(home, "cache/market", name), root = join(parent, "1.0.0");
+    put(join(root, ".codex-plugin/plugin.json"), JSON.stringify({ name, version: "1.0.0", ...manifest }));
+    put(join(root, "skills", name, "SKILL.md"), payload(name));
+    for (const [path, text] of Object.entries(files)) put(join(root, path), text);
+    return { parent, root };
+  };
+  const clean = plugin("clean", { description: "Synthetic", skills: "./skills/" });
+  expect(unenrolledCodexPluginEvidence(clean.parent, read)).toEqual({ reasons: [], manifests: [join(clean.root, ".codex-plugin/plugin.json")] });
+  const linked = plugin("linked"); symlinkSync(join(linked.root, "skills/linked/SKILL.md"), join(linked.root, "assets-link"));
+  expect(unenrolledCodexPluginEvidence(linked.parent, read).reasons).toContain("unsupported");
+  const nestedLink = plugin("nested-link", {}, { "assets/readme.txt": "inert" }); symlinkSync(join(nestedLink.root, "assets/readme.txt"), join(nestedLink.root, "assets/alias.txt"));
+  expect(unenrolledCodexPluginEvidence(nestedLink.parent, read).reasons).toContain("unsupported");
+  expect(unenrolledCodexPluginEvidence(plugin("root-doc", {}, { "Skill.md": payload("root-doc") }).parent, read).reasons).toEqual(["unsupported"]);
+  expect(unenrolledCodexPluginEvidence(plugin("extra", {}, { ".codex-plugin/extra.json": "{}" }).parent, read).reasons).toContain("manifest-location");
+  expect(unenrolledCodexPluginEvidence(plugin("nested-codex", {}, { "assets/starter/.codex-plugin/plugin.json": "{}" }).parent, read).reasons).toContain("manifest-location");
+  expect(unenrolledCodexPluginEvidence(plugin("unknown-key", { extensions: { synthetic: true } }).parent, read).reasons).toEqual(["unsupported"]);
+  expect(unenrolledCodexPluginEvidence(plugin("agents-key", { agents: "./agents" }).parent, read).reasons).toContain("agents");
+  expect(unenrolledCodexPluginEvidence(plugin("outside", { skills: "../../../outside" }).parent, read).reasons).toEqual(["unsupported"]);
+  const runtime = join(home, "runtime");
+  put(join(runtime, ".codex-plugin/plugin.json"), JSON.stringify({ name: "runtime", version: "26.1" })); put(join(runtime, "skills/pdf/SKILL.md"), payload("pdf"));
+  expect(codexPluginRootEvidence(runtime, read).reasons).toEqual([]);
+  put(join(runtime, "plugin.json"), JSON.stringify({ name: "runtime", mcpServers: { x: { command: "node" } } }));
+  expect(codexPluginRootEvidence(runtime, read).reasons).toEqual(["manifest-location"]);
+});
+
+test("the witness rebase moves nothing for a plugin that fails the strict scan, even when called directly", () => {
+  for (const [label, files, expected] of [["clean", {}, 4], ["root hooks.json", { "hooks.json": '{"hooks":{}}' }, 0], ["root plugin.json", { "plugin.json": JSON.stringify({ name: "pages", mcpServers: { x: { command: "node" } } }) }, 0]] as const) {
+    const station = enrolledStation(undefined, "", true, { byteWitnesses: true });
+    refresh(station, "1.1.0", ["maintain-space", "write-page"], {}, files as Record<string, string>);
+    const bridge = JSON.parse(readFileSync(station.policy, "utf8")).bridge, controls: CodexPluginSkillControl[] = bridge.codexPluginSkills;
+    const read = (path: string) => readFileSync(path, "utf8"), rules = (Bun.TOML.parse(readFileSync(station.config, "utf8")) as any).skills.config;
+    const gate = (parent: string) => { const group = controls.filter(control => control.pluginParent === parent); return codexPluginCapabilityChanges(station.cache, group, read, rules).length === 0 && enrolledCodexPluginStrictChanges(group, read).length === 0; };
+    const result = rebaseCodexEnrolledCacheWitnesses({ ...bridge.discovery.codex, codexDisabledPluginSkills: controls }, station.cache, [station.parent], gate);
+    expect({ label, rebased: result.rebased.length }).toEqual({ label, rebased: expected });
+  }
+});
+
+test("A26: an explicit name enable rule for a runtime skill with no qualified name conflicts instead of gaining a path deny", async () => {
+  const station = enrolledStation(undefined, '[[skills.config]]\nname = "spreadsheets"\nenabled = true\n');
+  const runtime = join(station.home, ".cache/codex-runtimes/openai-primary-runtime/26.1");
+  put(join(runtime, ".codex-plugin/plugin.json"), JSON.stringify({ name: "openai-primary-runtime", version: "26.1" }));
+  put(join(runtime, "skills/spreadsheets/SKILL.md"), payload("spreadsheets"));
+  const before = station.snapshot();
+  const result = await station.run(true, station.catalog([{ name: "spreadsheets", path: join(runtime, "skills/spreadsheets/SKILL.md"), enabled: true, pluginId: null }]));
+  expect(result).toMatchObject({ outcome: "refused", code: "CODEX_NATIVE_SKILL_NAME_CONFLICT", changes: [] });
+  expect(result.message).toContain('"spreadsheets"');
+  expect(station.snapshot()).toEqual(before);
+});
+
+test("A27: a remote receipt the native catalog does not confirm is never recorded as the plugin's remote identity", async () => {
+  const station = enrolledStation(), { catalog } = addNotesPlugin(station);
+  put(join(station.cache, "local-market/notes/.codex-remote-plugin-install.json"), JSON.stringify({ schema_version: 1, remote_plugin_id: "plugins~Plugin_00000000000000000000000000000999" }));
+  const before = station.snapshot();
+  expect(await station.run(true, catalog)).toMatchObject({ outcome: "refused", code: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, refusals: [{ pluginId: "notes@local-market", reasons: ["remote"] }] });
   expect(station.snapshot()).toEqual(before);
 });

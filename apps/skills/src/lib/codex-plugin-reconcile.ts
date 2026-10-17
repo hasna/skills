@@ -51,6 +51,7 @@ const REFUSAL_CODES = new Set([
   "CODEX_NATIVE_SKILL_IDENTITY_UNSUPPORTED", "CODEX_NATIVE_SKILL_ALLOWED_SET_INVALID", "CODEX_NATIVE_SKILL_CATALOG_UNSUPPORTED_VERSION",
   "CODEX_NATIVE_SKILL_CATALOG_INVALID", "CODEX_HOOK_TRUST_NATIVE_UNSUPPORTED_VERSION", "CODEX_RECONCILE_SCOPE_EXCEEDED",
   "CODEX_RECONCILE_SEMANTIC_CACHE_UNSUPPORTED", "CODEX_RECONCILE_CODEX_HOME_UNSUPPORTED", "CODEX_RECONCILE_PLAN_CHANGED",
+  "CODEX_RECONCILE_SYMLINK_REFUSED",
 ]);
 
 /** Bounded, single-line diagnostic text. Errors here carry codes and paths,
@@ -66,7 +67,8 @@ export function classifyCodexReconcileError(error: unknown): Pick<CodexReconcile
   // The guard keeps its NATIVE_SKILL_DRIFT prefix for native hooks; a named
   // code directly after it is the more precise reason.
   const outer = /^([A-Z][A-Z0-9_]{2,80})(?::|$)/.exec(text)?.[1], inner = /^NATIVE_SKILL_DRIFT: ([A-Z][A-Z0-9_]{2,80}):/.exec(text)?.[1];
-  const code = inner && REFUSAL_CODES.has(inner) ? inner : outer ?? "CODEX_RECONCILE_FAILED";
+  // Link refusals from the native path checks carry no code of their own.
+  const code = inner && REFUSAL_CODES.has(inner) ? inner : outer ?? (/\bsymlink\b/i.test(text) ? "CODEX_RECONCILE_SYMLINK_REFUSED" : "CODEX_RECONCILE_FAILED");
   return { outcome: REFUSAL_CODES.has(code) ? "refused" : "error", code, message: boundedMessage(text) };
 }
 
