@@ -38,7 +38,7 @@ const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
  * rows (written as appended text, as Codex's formatting-preserving writer does),
  * and a restore to a preimage it has already read. `behaviour` injects a
  * concurrent writer, a different result, an override status or no daemon. */
-function fakeCodexWriter(config: string, behaviour: { unavailable?: boolean; refuseRead?: boolean; layerConfig?: (config: any) => any; beforeWrite?: (call: number) => void; write?: (call: number, current: string, emulated: string) => string; status?: (call: number) => string; afterWrite?: (call: number) => void; loseResponse?: (call: number) => boolean } = {}) {
+function fakeCodexWriter(config: string, behaviour: { unavailable?: boolean; refuseRead?: boolean; layerConfig?: (config: any) => any; beforeWrite?: (call: number) => void; write?: (call: number, current: string, emulated: string) => string; status?: (call: number) => string; afterWrite?: (call: number) => void; loseResponse?: (call: number) => boolean; respond?: (call: number, response: { status: string; version: string; filePath: string }) => unknown } = {}) {
   const log = { connects: 0, reads: 0, writes: [] as any[], closes: 0 };
   const seen = new Map<string, string>();
   const version = (text: string) => `sha256:${sha256(text)}`;
@@ -72,7 +72,8 @@ function fakeCodexWriter(config: string, behaviour: { unavailable?: boolean; ref
       writeFileSync(config, next); seen.set(version(next), next);
       behaviour.afterWrite?.(call);
       if (behaviour.loseResponse?.(call)) throw new Error("CODEX_HOOK_TRUST_NATIVE_RPC_FAILED");
-      return { status: behaviour.status?.(call) ?? "ok", version: version(next), filePath: params.filePath };
+      const response = { status: behaviour.status?.(call) ?? "ok", version: version(next), filePath: params.filePath };
+      return behaviour.respond ? behaviour.respond(call, response) : response;
     }, async close() { log.closes++; } };
   };
   return { connect, log };
@@ -1001,5 +1002,58 @@ test("a skills-only plugin config disables but Codex reports enabled is active: 
   const before = station.snapshot();
   expect(await station.run(true, { ...catalog, skills: catalog.skills.filter(skill => skill.pluginId !== id), plugins })).toMatchObject({ outcome: "refused", code: "CODEX_NATIVE_SKILL_IDENTITY_UNSUPPORTED", inactive: [], pathDenied: [], changes: [] });
   expect(station.snapshot()).toEqual(before);
+});
+
+// ---- Third review (b74ff9d5): the post-write proof, its compensation, and unverifiable writes.
+for (const [label, mutate, expected] of [
+  ["a late skill copy", (root: string) => put(join(root, "skills/late-arrival/SKILL.md"), payload("late-arrival")), { outcome: "refused", code: "NATIVE_SKILL_DRIFT" }],
+  ["a late root hooks.json", (root: string) => put(join(root, "hooks.json"), '{"hooks":{}}'), { outcome: "refused", code: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, refusals: [{ pluginId: PLUGIN, reasons: ["hooks"] }] }],
+] as const) test(`post-write proof: ${label} landing while Codex writes is caught after the policy write, and both writes are compensated`, async () => {
+  // afterWrite runs inside Codex's write, after the locked re-plan and before the
+  // policy write: exactly the window only the post-write proof covers.
+  const station = enrolledStation(), root = refresh(station, "1.1.0", BUMPED);
+  const configBefore = readFileSync(station.config, "utf8"), policyBefore = readFileSync(station.policy, "utf8"), receiptsBefore = receipts(station);
+  const writer = fakeCodexWriter(station.config, { afterWrite: call => { if (call === 0) mutate(root); } });
+  const result = await station.run(true, newNames(station, root), writer.connect);
+  expect(result).toMatchObject({ ...expected, changes: [] });
+  expect(writer.log.writes).toHaveLength(2);
+  // The second write is the restore: bound to the version Codex returned for this run's write.
+  expect(writer.log.writes[1].expectedVersion).not.toBe(writer.log.writes[0].expectedVersion);
+  expect(writer.log.writes[1].edits[0].value).toEqual(plain(Bun.TOML.parse(configBefore)).skills.config);
+  expect(readFileSync(station.config, "utf8")).toBe(configBefore);
+  expect(readFileSync(station.policy, "utf8")).toBe(policyBefore);
+  expect(receipts(station)).toEqual(receiptsBefore);
+  expect(blocks(station, false)).toBe(true);
+});
+
+test("an unverifiable write is reported as uncertain, never as a refusal, naming the deny rows and the private backup", async () => {
+  // Codex answers ok after the rows landed, but with no config version.
+  const station = enrolledStation(), root = refresh(station, "1.1.0", BUMPED), policyBefore = readFileSync(station.policy, "utf8");
+  const versionless = fakeCodexWriter(station.config, { respond: (_call, response) => ({ status: response.status, filePath: response.filePath }) });
+  const result = await station.run(true, newNames(station, root), versionless.connect);
+  expect(result).toMatchObject({ outcome: "error", code: "CODEX_RECONCILE_NATIVE_WRITE_UNCERTAIN" });
+  expect(result.message).toContain("without a valid config version");
+  expect(result.message).toContain("private backup: ");
+  expect(result.message).toContain("holds this run's deny rows");
+  expect(result.message).toContain("pages:manage-schedules");
+  expect(versionless.log.writes).toHaveLength(1);
+  expect(readFileSync(station.config, "utf8").includes("pages:publish-page")).toBe(true);
+  expect(readFileSync(station.policy, "utf8")).toBe(policyBefore);
+  // A write that times out and lands after the check is uncertain too, not refused.
+  const late = enrolledStation(), lateRoot = refresh(late, "1.1.0", BUMPED), latePolicy = readFileSync(late.policy, "utf8");
+  const planned = planCodexPluginNameReconcile({ ...late.options, catalog: newNames(late, lateRoot) }).plan!.changes.find(change => change.path === late.config)!.after;
+  const timeout = fakeCodexWriter(late.config, { write: (call, current, emulated) => call === 0 ? current : emulated, loseResponse: call => call === 0 });
+  const timedOut = await late.run(true, newNames(late, lateRoot), timeout.connect);
+  expect(timedOut).toMatchObject({ outcome: "error", code: "CODEX_RECONCILE_NATIVE_WRITE_UNCERTAIN" });
+  expect(timedOut.message).toContain("did not answer the config write");
+  expect(timedOut.message).toContain("may still receive this run's deny rows");
+  expect(timedOut.message).toContain("private backup: ");
+  expect(readFileSync(late.policy, "utf8")).toBe(latePolicy);
+  // The write lands later; the next run sees Codex report the skills disabled and finishes the policy only.
+  writeFileSync(late.config, planned);
+  const finish = fakeCodexWriter(late.config), reported = newNames(late, lateRoot);
+  expect(await late.run(true, { ...reported, skills: reported.skills.map(skill => skill.pluginId === null ? skill : { ...skill, enabled: false }) }, finish.connect)).toMatchObject({ outcome: "applied", enrolled: NEW });
+  expect(finish.log.writes).toEqual([]);
+  expect(blocks(late, false)).toBe(false);
 });
 

@@ -1185,10 +1185,15 @@ Skills transaction only after `config.toml` reads back as exactly the planned
 configuration. If a step fails, the policy is restored while it still holds this
 run's bytes, and `config.toml` is restored only through Codex's writer, only
 while Codex still reports this run's version; otherwise the result is
-`CODEX_RECONCILE_COMPENSATION_INCOMPLETE` and names the private backup. If
-Codex does not confirm a write that did land, the result is
-`CODEX_RECONCILE_NATIVE_WRITE_UNCERTAIN`, and the next run finishes the policy
-without another config write. The receipt records each writer and Codex's new
+`CODEX_RECONCILE_COMPENSATION_INCOMPLETE` and names the private backup. Only an
+error answer from Codex counts as a refusal. When Codex does not answer (a
+timeout or a lost app-server), or answers without a valid config version, the
+write cannot be verified: the result is `CODEX_RECONCILE_NATIVE_WRITE_UNCERTAIN`,
+naming the deny rows that may remain and the private backup, and the policy is
+not written. The next run finishes the policy without another config write once
+Codex reports those skills disabled. After the policy write, the run re-checks
+the enrolled plugins' capabilities on the written state; a capability that
+appeared while Codex was writing refuses and both writes are compensated. The receipt records each writer and Codex's new
 config version. The run finishes only when the strict guard accepts the written
 state. The plan may
 append disable rows to the Codex configuration. In the managed policy it may
@@ -1215,10 +1220,18 @@ that carries an app, MCP or hooks. The plugin stays disabled, or its skills stay
 denied, as they already were. The command refuses with
 `CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED`, writes nothing, and lists each plugin
 with its capability kinds (`app`, `mcp`, `hooks`, `commands`, `agents`,
-`manifest`, `manifest-location`, `remote`, `unsupported`). The guard keeps blocking with
-`NATIVE_SKILL_DRIFT: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED: ...`. Review the
-plugin with `skills hook install --agent codex --discovery-inputs
-<reviewed-file> --codex-native-catalog <reviewed-catalog> --apply`.
+`manifest`, `manifest-location`, `remote`, `unsupported`). The reconcile is what
+refuses these cases; the guard alone does not catch every one yet. The guard
+blocks new skill copies of a plugin it does not know, and blocks with
+`NATIVE_SKILL_DRIFT: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED: ...` when an
+enrolled plugin's reviewed tuple changes (its manifest apart from `version`, a
+declared app or MCP file, or its remote receipt). It does not yet notice an
+enrolled plugin gaining a root `hooks.json`, `commands/`, `agents/` or another
+manifest directory in place, without a version or skill change. The reconcile
+refuses those, including when they appear while it is writing, and the guard
+gap is tracked as a follow-up (UW-00793). Review the plugin with
+`skills hook install --agent codex --discovery-inputs <reviewed-file>
+--codex-native-catalog <reviewed-catalog> --apply`.
 
 Reviewer check, the method rule for capability classification. Confirm each
 point before accepting a reconcile result or a change to it:

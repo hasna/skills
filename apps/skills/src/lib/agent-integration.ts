@@ -1761,6 +1761,28 @@ function verifyIntegrationPlanAfterWrite(plan: AgentIntegrationPlan, aliases: Ag
   // A reconcile is complete only when the strict guard, with no reconcile
   // allowance, accepts the written state; otherwise every write is compensated.
   if (plan.codexReconcile) assertManagedAgentBridge("codex", { home: plan.codexReconcile.request.home, dataDir: plan.dataDir, projectDir: plan.codexReconcile.request.projectDir });
+  // The guard does not yet bind every capability location of an enrolled
+  // plugin, so a reconcile re-runs its own capability checks on the written state.
+  if (plan.codexReconcile) assertReconciledPluginCapabilities(plan, aliases);
+}
+
+/** The reconcile's enrolled-plugin checks (the reviewed tuple and the strict
+ * scan of every version root) against the state just written, with the
+ * written controls. A capability that appeared after the locked re-plan, while
+ * Codex was writing, refuses here and the caller compensates both writes. */
+function assertReconciledPluginCapabilities(plan: AgentIntegrationPlan, aliases: AgentRootAlias[]): void {
+  const home = plan.codexReconcile!.request.home;
+  const cache = canonicalAgentPath(join(home, ".codex/plugins/cache"), aliases), configPath = canonicalAgentPath(join(home, ".codex/config.toml"), aliases);
+  const read = (path: string) => new TextDecoder("utf-8", { fatal: true }).decode(readNativeBytes(path, 1024 * 1024));
+  const rules = (Bun.TOML.parse(readOptional(configPath) ?? "") as any).skills?.config ?? [];
+  const policyText = readManagedSkillPolicySnapshot(plan.dataDir)?.text;
+  const controls: CodexPluginSkillControl[] = policyText ? parseManagedSkillPolicy(policyText).bridge?.codexPluginSkills ?? [] : [];
+  const refusals = [...new Set(controls.map(control => control.pluginParent))].sort().flatMap(parent => {
+    const group = controls.filter(control => control.pluginParent === parent);
+    const reasons = [...new Set([...enrolledCodexPluginStrictChanges(group, read), ...codexPluginCapabilityChanges(cache, group, read, rules)])].sort();
+    return reasons.length ? [{ pluginId: group[0]!.pluginId, reasons, manifests: [] as string[] }] : [];
+  });
+  if (refusals.length) throw new CodexPluginReconcileRefusal(CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, "an enrolled Codex plugin gained a capability while the reconcile was writing; the writes are compensated and the plugin stays quarantined until reviewed with skills hook install and a fresh native catalog and discovery review", refusals);
 }
 
 function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: CodexCorpusWriteOptions = {}, assertCurrent: () => void, admission?: CodexCorpusAdmission): { changed: string[]; backups: string[]; rootAliases?: AgentRootAlias[] } & CodexAdmissionReceipt {
@@ -1892,18 +1914,27 @@ async function applyCodexPluginReconcileUnlocked(plan: AgentIntegrationPlan, opt
     if (configChange) {
       assertCurrent(); recheckRootAliases(aliases);
       if (currentText(configChange.path) !== configChange.before) throw new Error(`Configuration changed after planning: ${configChange.path}`);
+      // An unverifiable write is never reported as a refusal: it names the deny
+      // rows that may remain and the private backup, and the policy stays unwritten.
+      const appended = (codexSkillRows(configChange.after) ?? []).slice((codexSkillRows(configChange.before) ?? []).length) as any[];
+      const byName = appended.filter(row => typeof row?.name === "string").map(row => row.name as string), byPath = appended.length - byName.length;
+      const rows = `${byName.length} by name${byName.length ? ` (${nativeSkillPathList(byName)})` : ""} and ${byPath} by exact path`;
+      const uncertain = (reason: string) => new Error(`CODEX_RECONCILE_NATIVE_WRITE_UNCERTAIN: ${reason}; the policy was not written (private backup: ${backupRoot}); config.toml ${codexConfigStructureEqual(currentText(configChange.path), configChange.after) ? "holds" : "may still receive"} this run's deny rows: ${rows}. Run the reconcile again: it finishes the policy once Codex reports those skills disabled`);
       let result: any;
       try {
         result = await rpc!.request("config/batchWrite", { edits: [{ keyPath: "skills.config", value: codexSkillRows(configChange.after) ?? [], mergeStrategy: "replace" }], filePath: configChange.path, expectedVersion, reloadUserConfig: true });
-      } catch {
-        // A refusal (an expectedVersion conflict included) leaves the file as
-        // Codex last wrote it. Only the planned result on disk means this run's
-        // write may have landed without a confirmation.
-        if (!codexConfigStructureEqual(currentText(configChange.path), configChange.after)) throw new CodexPluginReconcileRefusal("CODEX_RECONCILE_NATIVE_WRITE_REFUSED", "Codex refused the versioned config write (for example, config.toml changed since Codex read it); this run wrote no deny row and no policy. Run the reconcile again");
-        throw new Error(`CODEX_RECONCILE_NATIVE_WRITE_UNCERTAIN: Codex did not confirm the config write, but config.toml holds the planned deny rows; the policy was not written. Run the reconcile again to finish (private backup: ${backupRoot})`);
+      } catch (error) {
+        // Only Codex's own error answer is a refusal: it refuses before writing
+        // (an expectedVersion conflict included). A timeout or a lost app-server
+        // leaves the outcome open, because the write may still land.
+        const refused = error instanceof Error && error.message.startsWith("CODEX_HOOK_TRUST_NATIVE_RPC_REFUSED");
+        if (refused && !codexConfigStructureEqual(currentText(configChange.path), configChange.after)) throw new CodexPluginReconcileRefusal("CODEX_RECONCILE_NATIVE_WRITE_REFUSED", "Codex refused the versioned config write (for example, config.toml changed since Codex read it); this run wrote no deny row and no policy. Run the reconcile again");
+        throw uncertain(refused ? "Codex refused the config write, but config.toml holds the planned deny rows" : "Codex did not answer the config write");
       }
       if (typeof result?.version === "string" && /^sha256:[a-f0-9]{64}$/.test(result.version)) nativeVersion = result.version;
-      if (result?.status !== "ok" || result.filePath !== configChange.path || !nativeVersion) throw new Error("CODEX_RECONCILE_NATIVE_WRITE_OVERRIDDEN: Codex did not confirm a plain user-layer write of the deny rows (another configuration layer may override them)");
+      // Without Codex's new version the write can be neither verified nor restored through Codex.
+      if (!nativeVersion) throw uncertain("Codex answered the config write without a valid config version");
+      if (result?.status !== "ok" || result.filePath !== configChange.path) throw new Error("CODEX_RECONCILE_NATIVE_WRITE_OVERRIDDEN: Codex did not confirm a plain user-layer write of the deny rows (another configuration layer may override them)");
       // Readback: the file must hold exactly the planned configuration.
       if (!codexConfigStructureEqual(currentText(configChange.path), configChange.after)) throw new Error("CODEX_RECONCILE_NATIVE_READBACK_FAILED: config.toml after Codex's write differs from the planned configuration");
     }
