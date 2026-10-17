@@ -1,8 +1,10 @@
 import { upgradeSumiSettingsWitness, readSumiSettingsPreimage, SUMI_DISCOVERY_PROJECTION_FIELDS } from "./sumi-settings-witness.js";
-import { codexAdmissionReceipt, codexCorpusRootForPath, withCodexCorpusWrite, type CodexAdmissionReceipt, type CodexCorpusAdmission, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
+import { codexAdmissionReceipt, codexCorpusRootForPath, withCodexCorpusWrite, withCodexCorpusWriteAsync, type CodexAdmissionReceipt, type CodexCorpusAdmission, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
+import { connectCodexHookRpc, type CodexHookRpc } from "./codex-hook-rpc.js";
+import { codexNativeConfigEqual } from "./codex-native-config.js";
 import { reviewCodexPluginControls, reviewedCodexPluginSourceRoots, isReviewedCodexPluginInactive, isReviewedCodexPluginSkillDisabled, reviewedCodexPluginCapabilitiesUnchanged, disableReviewedCodexPluginNames, absentDisabledCodexPluginParent, classifyCodexPluginCacheDocument, codexRemoteInstallReceipt, mergeReconciledCodexPluginControls, unenrolledCodexPluginEvidence, codexPluginRootEvidence, codexPluginCapabilityChanges, enrolledCodexPluginStrictChanges, CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, type CodexPluginCacheDocumentIdentity, type ReviewedCodexSkillDenial, type CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
 import { verifyCodexNativeSkillPolicy, parseCodexNativeHookEnvelope, recordCodexNativePolicyAcceptance, type CodexNativeHookEnvelope, type ProcessInspector, type NativePolicyHelperRunner } from "./codex-native-skill-policy.js";
-import { projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
+import { codexPluginSourceIsConfigControlled, projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
 import { upgradeCodexSettingsWitness, upgradeCodexSettingsWitnessV3, upgradeCodexSettingsWitnessV4, upgradeCodexSettingsWitnessV5, readCodexSettingsPreimage, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
 import { upgradeClaudeSettingsWitness, upgradeClaudeSettingsWitnessV4, hashNativeJsonControls } from "./claude-settings-witness.js";
 import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
@@ -1543,7 +1545,17 @@ export function planCodexPluginNameReconcile(request: CodexPluginReconcileReques
   const outside = collected.blocking.filter(entry => !cacheParent(entry));
   if (outside.length) throw new CodexPluginReconcileRefusal("NATIVE_SKILL_DRIFT", `native skill copies outside the Codex plugin cache need their own review: ${nativeSkillPathList(outside.map(item => item.path))}; this command enrolls plugin skills only (see skills migrate native, or a fresh discovery review for runtime roots)`);
   const copies = collected.blocking.map(entry => ({ entry, ...cacheParent(entry)!, identity: identityOf(entry) }));
-  const pluginDisabled = (pluginId: string) => config.plugins?.[pluginId]?.enabled === false;
+  // Inactive follows the same rule as the reviewed plugin controls: config alone
+  // never proves a plugin is off, because remote reconciliation can enable it
+  // while config stays disabled. Codex must report it installed and disabled,
+  // its source must be config-controlled, config must disable it, and the
+  // catalog must list none of its skills. Anything else is active and is
+  // classified with every capability and receipt check.
+  const pluginInactive = (pluginId: string) => {
+    const entries = installed.filter(item => item.id === pluginId);
+    return config.plugins?.[pluginId]?.enabled === false && entries.length === 1 && entries[0]!.installed && !entries[0]!.enabled
+      && codexPluginSourceIsConfigControlled(entries[0]!) && !catalog.skills.some(skill => skill.pluginId === pluginId);
+  };
   const refusals: Array<{ pluginId: string; reasons: string[]; manifests: string[] }> = [], inactive = new Set<string>(), enrollableParents: string[] = [], remoteIdentities: Record<string, string> = {};
   const classified: CodexPluginReconcileReport["classified"] = [];
   const refuse = (pluginId: string, reasons: Iterable<string>, manifests: string[]) => { if (!refusals.some(item => item.pluginId === pluginId)) refusals.push({ pluginId, reasons: [...new Set(reasons)].sort(), manifests }); };
@@ -1554,10 +1566,10 @@ export function planCodexPluginNameReconcile(request: CodexPluginReconcileReques
       if (group.some(copy => !copy.identity)) throw new CodexPluginReconcileRefusal("CODEX_NATIVE_SKILL_IDENTITY_UNSUPPORTED", `a skill document of the enrolled plugin ${JSON.stringify(pluginId)} has no supported qualified name: ${nativeSkillPathList(group.filter(copy => !copy.identity).map(copy => copy.entry.path))}`);
       continue;
     }
-    // Explicitly disabled: Codex loads none of its capabilities. The guard does
-    // not trust a plugin-level disable alone, so the reviewed planner keeps its
-    // exact-path denies; nothing is enrolled and nothing refuses.
-    if (pluginDisabled(pluginId)) {
+    // Inactive (the rule above): Codex loads none of its capabilities. The guard
+    // does not trust a plugin-level disable alone, so the reviewed planner keeps
+    // its exact-path denies; nothing is enrolled and nothing refuses.
+    if (pluginInactive(pluginId)) {
       inactive.add(pluginId);
       for (const copy of group) pathDenied.push({ name: copy.identity?.name ?? basename(copy.entry.path), path: join(copy.entry.path, "SKILL.md"), reason: "plugin-disabled" });
       continue;
@@ -1575,16 +1587,23 @@ export function planCodexPluginNameReconcile(request: CodexPluginReconcileReques
     if (reasons.size) refuse(pluginId, reasons, evidence.manifests);
     else { enrollableParents.push(parent); classified.push({ pluginId, capabilities: [], manifests: evidence.manifests }); }
   }
-  // Census: every plugin explicitly enabled in [plugins] that the saved binding
-  // does not know is classified, even when none of its skills is blocking now.
+  // Census: every plugin enabled in [plugins], every plugin config disables but
+  // that is not inactive by the rule above, and every plugin Codex reports
+  // installed and enabled, that the saved binding does not know, is classified,
+  // even when none of its skills is blocking now.
   // Known means enrolled, inactive, an installation input, a semantic cache
   // role, a full witness under its exact cache parent, or a reviewed local
   // marketplace that maps it with that row's manifest witnessed. An enabled id
   // that maps to no single cache parent refuses; one not installed is skipped.
   const savedSources: DiscoverySource[] = savedDiscovery?.sources ?? [];
   const semanticParents = [...(savedDiscovery?.codexSemanticCache?.appOnlyParents ?? []), ...(savedDiscovery?.codexSemanticCache?.reviewedHookParents ?? [])].map(role => role.pluginParent);
-  for (const [pluginId, settings] of Object.entries((config.plugins ?? {}) as Record<string, any>).sort(([a], [b]) => a.localeCompare(b))) {
-    if (settings?.enabled !== true || refusals.some(item => item.pluginId === pluginId) || classified.some(item => item.pluginId === pluginId)) continue;
+  const configuredPlugins = Object.entries((config.plugins ?? {}) as Record<string, any>);
+  const censusIds = new Set([
+    ...configuredPlugins.filter(([pluginId, settings]) => settings?.enabled === true || (settings?.enabled === false && !pluginInactive(pluginId))).map(([pluginId]) => pluginId),
+    ...installed.filter(item => item.installed && item.enabled).map(item => item.id),
+  ]);
+  for (const pluginId of [...censusIds].sort()) {
+    if (refusals.some(item => item.pluginId === pluginId) || classified.some(item => item.pluginId === pluginId)) continue;
     const at = pluginId.lastIndexOf("@"), name = pluginId.slice(0, at), market = pluginId.slice(at + 1);
     if (at < 1 || ![name, market].every(part => /^[A-Za-z0-9_-]{1,64}$/.test(part))) { refuse(pluginId, ["unsupported"], []); continue; }
     const parent = join(cache, market, name);
@@ -1610,7 +1629,6 @@ export function planCodexPluginNameReconcile(request: CodexPluginReconcileReques
     const root = codexRuntimePluginRoot(document, runtimeCache);
     if (!root) continue;
     const pluginId = skill.pluginId ?? `${basename(root)}@codex-runtime`;
-    if (skill.pluginId !== null && pluginDisabled(skill.pluginId)) { inactive.add(skill.pluginId); continue; }
     const evidence = codexPluginRootEvidence(root, read);
     if (evidence.reasons.length) { refuse(pluginId, evidence.reasons, evidence.manifests); continue; }
     if (!classified.some(item => item.pluginId === pluginId)) classified.push({ pluginId, capabilities: [], manifests: evidence.manifests });
@@ -1653,6 +1671,9 @@ export function planCodexPluginNameReconcile(request: CodexPluginReconcileReques
 }
 
 export function applyAgentIntegration(plan: AgentIntegrationPlan, options: CodexCorpusWriteOptions = {}): { changed: string[]; backups: string[]; rootAliases?: AgentRootAlias[] } & CodexAdmissionReceipt {
+  // A Codex name reconcile writes config.toml only through Codex's own
+  // versioned writer; never through this file writer.
+  if (plan.codexReconcile) throw new Error("CODEX_RECONCILE_NATIVE_WRITER_REQUIRED: a Codex name reconcile is applied only with applyCodexPluginReconcile, through Codex's versioned config writer");
   const roots = plan.changes.flatMap(change => {
     const lexical = codexCorpusRootForPath(change.path);
     const alias = plan.rootAliases?.find(item => item.agent === "codex" && (change.path === item.target || change.path.startsWith(item.target + "/")));
@@ -1661,8 +1682,10 @@ export function applyAgentIntegration(plan: AgentIntegrationPlan, options: Codex
   return withCodexCorpusWrite(roots, (assertCurrent, admission) => applyAgentIntegrationUnlocked(plan, options, assertCurrent, admission), options);
 }
 
-function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: CodexCorpusWriteOptions = {}, assertCurrent: () => void, admission?: CodexCorpusAdmission): { changed: string[]; backups: string[]; rootAliases?: AgentRootAlias[] } & CodexAdmissionReceipt {
-  const fallback = codexAdmissionReceipt(admission);
+/** Every check an integration plan needs under the corpus lock before backups
+ * or writes: original sources, custody, the locked re-plans, the reviewed
+ * discovery and the exact preimages. Shared by both apply paths. */
+function verifyIntegrationPlanBeforeWrite(plan: AgentIntegrationPlan, assertCurrent: () => void): { policyPath: string; aliases: AgentRootAlias[]; currentText: (path: string) => string | null } {
   for (const source of plan.reviewArtifactSources ?? []) verifyReviewArtifactOriginal(source.path, source.sha256);
   for (const source of plan.observedNativeSources ?? []) if (nativeSourceDigest(source.path) !== source.sha256) throw new Error("Native identity source changed after planning");
   if (plan.observedSettings && readOptional(plan.observedSettings.path) !== plan.observedSettings.before) throw new Error("Native settings changed after witness planning");
@@ -1716,6 +1739,33 @@ function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: Code
   }
   if (plan.observedPolicy && currentText(plan.observedPolicy.path) !== plan.observedPolicy.before) throw new Error("Agent policy changed after planning");
   for (const change of plan.changes) if (currentText(change.path) !== change.before) throw new Error(`Configuration changed after planning: ${change.path}`);
+  return { policyPath, aliases, currentText };
+}
+
+/** Every post-write proof an integration plan needs after its writes and before
+ * its receipt; a failure is compensated by the caller. Shared by both apply paths. */
+function verifyIntegrationPlanAfterWrite(plan: AgentIntegrationPlan, aliases: AgentRootAlias[]): void {
+  for (const source of plan.reviewArtifactSources ?? []) verifyReviewArtifactOriginal(source.path, source.sha256);
+  for (const source of plan.observedNativeSources ?? []) if (nativeSourceDigest(source.path) !== source.sha256) throw new Error("Native identity source changed during application");
+  if (plan.observedSettings && readOptional(plan.observedSettings.path) !== plan.observedSettings.before) throw new Error("Native settings changed during witness application");
+  for (const binding of plan.discoveryAfter ?? []) {
+    if (plan.managedAgentChecks) verifyCoordinatedDiscovery(binding, plan.managedAgentChecks.home, aliases, plan.discoveryExecutables?.[binding.agent]);
+    else verifyAgentDiscovery(binding, undefined, aliases);
+  }
+  for (const agent of plan.managedAgentChecks?.agents ?? []) assertManagedAgentBridge(agent, { home: plan.managedAgentChecks!.home, dataDir: plan.dataDir, projectDir: plan.managedAgentChecks!.projectDir ?? plan.managedAgentChecks!.home });
+  // The post-write proof that a reused reviewed binding is fully protected
+  // again. A plan that did not repair the protection fails here and is
+  // compensated, so custody-gating the pre-write check above cannot let a
+  // broken bridge become a configured one.
+  for (const agent of plan.retainedReviewChecks?.agents ?? []) assertManagedAgentBridge(agent, { ...plan.retainedReviewChecks!, dataDir: plan.dataDir });
+  // A reconcile is complete only when the strict guard, with no reconcile
+  // allowance, accepts the written state; otherwise every write is compensated.
+  if (plan.codexReconcile) assertManagedAgentBridge("codex", { home: plan.codexReconcile.request.home, dataDir: plan.dataDir, projectDir: plan.codexReconcile.request.projectDir });
+}
+
+function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: CodexCorpusWriteOptions = {}, assertCurrent: () => void, admission?: CodexCorpusAdmission): { changed: string[]; backups: string[]; rootAliases?: AgentRootAlias[] } & CodexAdmissionReceipt {
+  const fallback = codexAdmissionReceipt(admission);
+  const { aliases, currentText } = verifyIntegrationPlanBeforeWrite(plan, assertCurrent);
   const backupRoot = join(plan.dataDir, "migration", randomUUID()), backups: string[] = [], written: AgentConfigChange[] = [], createdDirectories = new Set<string>();
   if (!plan.changes.length) {
     assertCurrent(); recheckRootAliases(aliases);
@@ -1747,22 +1797,7 @@ function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: Code
       } else { atomicWrite(change.path, after); written.push({ path: change.path, before: change.before, after }); }
     }
     assertCurrent(); recheckRootAliases(aliases);
-    for (const source of plan.reviewArtifactSources ?? []) verifyReviewArtifactOriginal(source.path, source.sha256);
-    for (const source of plan.observedNativeSources ?? []) if (nativeSourceDigest(source.path) !== source.sha256) throw new Error("Native identity source changed during application");
-    if (plan.observedSettings && readOptional(plan.observedSettings.path) !== plan.observedSettings.before) throw new Error("Native settings changed during witness application");
-    for (const binding of plan.discoveryAfter ?? []) {
-      if (plan.managedAgentChecks) verifyCoordinatedDiscovery(binding, plan.managedAgentChecks.home, aliases, plan.discoveryExecutables?.[binding.agent]);
-      else verifyAgentDiscovery(binding, undefined, aliases);
-    }
-    for (const agent of plan.managedAgentChecks?.agents ?? []) assertManagedAgentBridge(agent, { home: plan.managedAgentChecks!.home, dataDir: plan.dataDir, projectDir: plan.managedAgentChecks!.projectDir ?? plan.managedAgentChecks!.home });
-    // The post-write proof that a reused reviewed binding is fully protected
-    // again. A plan that did not repair the protection fails here and is
-    // compensated, so custody-gating the pre-write check above cannot let a
-    // broken bridge become a configured one.
-    for (const agent of plan.retainedReviewChecks?.agents ?? []) assertManagedAgentBridge(agent, { ...plan.retainedReviewChecks!, dataDir: plan.dataDir });
-    // A reconcile is complete only when the strict guard, with no reconcile
-    // allowance, accepts the written state; otherwise every write is compensated.
-    if (plan.codexReconcile) assertManagedAgentBridge("codex", { home: plan.codexReconcile.request.home, dataDir: plan.dataDir, projectDir: plan.codexReconcile.request.projectDir });
+    verifyIntegrationPlanAfterWrite(plan, aliases);
     atomicWrite(join(backupRoot, "receipt.json"), JSON.stringify({ version: 1, changes: written.map(change => ({ path: change.path, beforeHash: change.before === null ? null : sha(change.before), afterHash: sha(change.after) })), backups, ...(plan.cacheWitnessUpgrade ? { cacheWitnessUpgrade: plan.cacheWitnessUpgrade } : {}), ...(plan.codexReconcile ? { codexReconcile: { codexVersion: plan.codexReconcile.request.catalog.version, enrolled: plan.codexReconcile.names } } : {}), ...(plan.retainedReviewArtifacts?.length ? { retainedReviewArtifacts: plan.retainedReviewArtifacts.map(item => ({ path: item.path, ...item.artifact })) } : {}), ...(aliases.length ? { rootAliases: aliases } : {}), ...fallback }) + "\n");
   } catch (error) {
     assertCurrent();
@@ -1783,6 +1818,144 @@ function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: Code
     throw error;
   }
   return { changed: plan.changes.map(change => change.path), backups, ...(aliases.length ? { rootAliases: aliases } : {}), ...fallback };
+}
+
+export interface CodexReconcileApplyOptions extends CodexCorpusWriteOptions {
+  /** The Codex home the owned app-server uses; omit for the default ~/.codex. */
+  codexHome?: string;
+  /** Test seam for the owned Codex app-server; production starts `codex app-server`. */
+  connect?: typeof connectCodexHookRpc;
+}
+export interface CodexReconcileApplyResult extends CodexAdmissionReceipt { changed: string[]; backups: string[]; receipt?: string; nativeConfigVersion?: string; rootAliases?: AgentRootAlias[] }
+const tomlStructure = (text: string | null): any => JSON.parse(JSON.stringify(Bun.TOML.parse(text ?? "")));
+/** The [[skills.config]] rows a config text holds, for a whole-array native write. */
+const codexSkillRows = (text: string | null): unknown[] | null => { const rows = tomlStructure(text).skills?.config; return Array.isArray(rows) ? rows : null; };
+/** Structural equality that ignores an empty [skills] table a native clear leaves behind. */
+function codexConfigStructureEqual(actual: string | null, expected: string | null): boolean {
+  const strip = (value: any) => { if (value?.skills && typeof value.skills === "object" && !Array.isArray(value.skills) && !Object.keys(value.skills).length) delete value.skills; return value; };
+  return isDeepStrictEqual(strip(tomlStructure(actual)), strip(tomlStructure(expected)));
+}
+
+/** Apply a Codex name reconcile. The deny rows go through Codex's own writer
+ * (`config/batchWrite` with the user layer's `expectedVersion` and
+ * `reloadUserConfig`), so a concurrent Codex writer such as the desktop app
+ * makes the write refuse instead of being overwritten. The policy is written in
+ * the Skills transaction only after the config readback matches the plan.
+ * Either failure is compensated; the config is restored only through Codex's
+ * writer and only when nobody changed it since this run's write. */
+export async function applyCodexPluginReconcile(plan: AgentIntegrationPlan, options: CodexReconcileApplyOptions = {}): Promise<CodexReconcileApplyResult> {
+  const reconcile = plan.codexReconcile;
+  if (!reconcile) throw new Error("CODEX_RECONCILE_FAILED: not a Codex name reconcile plan");
+  if (plan.reviewArtifactMigration || plan.cacheWitnessUpgrade || plan.settingsWitnessUpgrade || plan.retainedReviewArtifacts?.length) throw new Error("CODEX_RECONCILE_FAILED: a Codex name reconcile plan carries no other migration");
+  const roots = [...new Set([join(reconcile.request.home, ".codex"), ...plan.changes.flatMap(change => {
+    const lexical = codexCorpusRootForPath(change.path);
+    const alias = plan.rootAliases?.find(item => item.agent === "codex" && (change.path === item.target || change.path.startsWith(item.target + "/")));
+    return lexical ? [lexical] : alias ? [alias.alias] : [];
+  })])];
+  return withCodexCorpusWriteAsync(roots, (assertCurrent, admission) => applyCodexPluginReconcileUnlocked(plan, options, assertCurrent, admission), options);
+}
+
+async function applyCodexPluginReconcileUnlocked(plan: AgentIntegrationPlan, options: CodexReconcileApplyOptions, assertCurrent: () => void, admission?: CodexCorpusAdmission): Promise<CodexReconcileApplyResult> {
+  const fallback = codexAdmissionReceipt(admission);
+  const { policyPath, aliases, currentText } = verifyIntegrationPlanBeforeWrite(plan, assertCurrent);
+  const reconcile = plan.codexReconcile!, home = reconcile.request.home;
+  const configPath = canonicalAgentPath(join(home, ".codex", "config.toml"), aliases);
+  // Codex canonicalizes an explicit CODEX_HOME; its default ~/.codex stays lexical.
+  const codexHome = options.codexHome === undefined ? undefined : realpathSync(options.codexHome);
+  const nativeConfigPath = join(codexHome ?? join(home, ".codex"), "config.toml");
+  const configChange = plan.changes.find(change => resolve(change.path) === resolve(configPath));
+  const policyChange = plan.changes.find(change => resolve(change.path) === resolve(policyPath));
+  if (!plan.changes.length || plan.changes.some(change => change !== configChange && change !== policyChange)) throw new CodexPluginReconcileRefusal("CODEX_RECONCILE_SCOPE_EXCEEDED", "a Codex name reconcile writes only config.toml and the managed policy; run skills hook install to review this change");
+  let rpc: CodexHookRpc | undefined, expectedVersion: string | undefined;
+  if (configChange) {
+    // Codex's writer first: without it the deny rows cannot be written safely.
+    try { rpc = await (options.connect ?? connectCodexHookRpc)({ command: options.codexCommand ?? "codex", home, ...(codexHome === undefined ? {} : { codexHome }) }); }
+    catch { throw new CodexPluginReconcileRefusal("CODEX_RECONCILE_NATIVE_WRITER_UNAVAILABLE", "Codex's own config writer (codex app-server) could not be started, so the deny rows were not written; nothing was written. Install a supported Codex or pass --codex-command"); }
+    try {
+      let layers: any[] | undefined;
+      try { layers = (await rpc.request("config/read", { includeLayers: true, cwd: home }))?.layers?.filter((layer: any) => layer?.name?.type === "user" && layer.name.file === nativeConfigPath && !layer.name.profile); } catch { layers = undefined; }
+      if (layers?.length !== 1 || typeof layers[0].version !== "string" || !/^sha256:[a-f0-9]{64}$/.test(layers[0].version) || layers[0].disabledReason
+        || !codexNativeConfigEqual(layers[0].config, tomlStructure(configChange.before))) throw new CodexPluginReconcileRefusal("CODEX_RECONCILE_NATIVE_CONFIG_MISMATCH", "Codex reports a user configuration that differs from the one this run planned against; nothing was written. Run the reconcile again");
+      expectedVersion = layers[0].version;
+    } catch (error) { await rpc.close().catch(() => {}); throw error; }
+  }
+  const backupRoot = join(plan.dataDir, "migration", randomUUID()), backups: string[] = [];
+  let nativeVersion: string | undefined, policyWritten = false;
+  try {
+    assertSafePath(backupRoot); mkdirSync(backupRoot, { recursive: true, mode: 0o700 }); chmodSync(backupRoot, 0o700);
+    for (const [index, change] of plan.changes.entries()) if (change.before !== null) {
+      const backup = join(backupRoot, `${index}-${sha(change.path).slice(0, 12)}.backup`);
+      writeFileSync(backup, change.before, { mode: 0o600, flag: "wx" });
+      if (readFileSync(backup, "utf8") !== change.before) throw new Error("Native configuration preservation readback failed");
+      backups.push(backup);
+    }
+    if (configChange) {
+      assertCurrent(); recheckRootAliases(aliases);
+      if (currentText(configChange.path) !== configChange.before) throw new Error(`Configuration changed after planning: ${configChange.path}`);
+      let result: any;
+      try {
+        result = await rpc!.request("config/batchWrite", { edits: [{ keyPath: "skills.config", value: codexSkillRows(configChange.after) ?? [], mergeStrategy: "replace" }], filePath: configChange.path, expectedVersion, reloadUserConfig: true });
+      } catch {
+        // A refusal (an expectedVersion conflict included) leaves the file as
+        // Codex last wrote it. Only the planned result on disk means this run's
+        // write may have landed without a confirmation.
+        if (!codexConfigStructureEqual(currentText(configChange.path), configChange.after)) throw new CodexPluginReconcileRefusal("CODEX_RECONCILE_NATIVE_WRITE_REFUSED", "Codex refused the versioned config write (for example, config.toml changed since Codex read it); this run wrote no deny row and no policy. Run the reconcile again");
+        throw new Error(`CODEX_RECONCILE_NATIVE_WRITE_UNCERTAIN: Codex did not confirm the config write, but config.toml holds the planned deny rows; the policy was not written. Run the reconcile again to finish (private backup: ${backupRoot})`);
+      }
+      if (typeof result?.version === "string" && /^sha256:[a-f0-9]{64}$/.test(result.version)) nativeVersion = result.version;
+      if (result?.status !== "ok" || result.filePath !== configChange.path || !nativeVersion) throw new Error("CODEX_RECONCILE_NATIVE_WRITE_OVERRIDDEN: Codex did not confirm a plain user-layer write of the deny rows (another configuration layer may override them)");
+      // Readback: the file must hold exactly the planned configuration.
+      if (!codexConfigStructureEqual(currentText(configChange.path), configChange.after)) throw new Error("CODEX_RECONCILE_NATIVE_READBACK_FAILED: config.toml after Codex's write differs from the planned configuration");
+    }
+    // The policy is written only after the config readback matches, and only if
+    // the planned discovery witnesses hold for the configuration on disk.
+    for (const binding of plan.discoveryAfter ?? []) {
+      if (plan.managedAgentChecks) verifyCoordinatedDiscovery(binding, plan.managedAgentChecks.home, aliases, plan.discoveryExecutables?.[binding.agent]);
+      else verifyAgentDiscovery(binding, undefined, aliases);
+    }
+    if (policyChange) {
+      assertCurrent(); recheckRootAliases(aliases);
+      if (currentText(policyChange.path) !== policyChange.before) throw new Error(`Configuration changed after planning: ${policyChange.path}`);
+      atomicWrite(policyChange.path, policyChange.after); policyWritten = true;
+    }
+    assertCurrent(); recheckRootAliases(aliases);
+    verifyIntegrationPlanAfterWrite(plan, aliases);
+    const configAfter = configChange ? currentText(configChange.path) : null;
+    const receipt = join(backupRoot, "receipt.json");
+    atomicWrite(receipt, JSON.stringify({ version: 1, changes: [
+      ...(configChange ? [{ path: configChange.path, beforeHash: configChange.before === null ? null : sha(configChange.before), afterHash: configAfter === null ? null : sha(configAfter), writer: "codex:config/batchWrite", nativeConfigVersion: nativeVersion }] : []),
+      ...(policyChange ? [{ path: policyChange.path, beforeHash: policyChange.before === null ? null : sha(policyChange.before), afterHash: sha(policyChange.after), writer: "skills" }] : []),
+    ], backups, codexReconcile: { codexVersion: reconcile.request.catalog.version, enrolled: reconcile.names }, ...(aliases.length ? { rootAliases: aliases } : {}), ...fallback }) + "\n");
+    return { changed: plan.changes.map(change => change.path), backups, receipt, ...(nativeVersion ? { nativeConfigVersion: nativeVersion } : {}), ...(aliases.length ? { rootAliases: aliases } : {}), ...fallback };
+  } catch (error) {
+    let incomplete: string | undefined;
+    // Do not erase a concurrent user's edit: restore the policy only while it
+    // still holds this run's bytes.
+    if (policyWritten && policyChange) {
+      try { if (currentText(policyChange.path) === policyChange.after) { if (policyChange.before === null) unlinkSync(policyChange.path); else atomicWrite(policyChange.path, policyChange.before); } else incomplete = "the managed policy changed after this run wrote it"; }
+      catch { incomplete = "the managed policy could not be restored"; }
+    }
+    // Restore config only through Codex's writer, and only when Codex still
+    // reports this run's version: a newer write belongs to someone else.
+    if (nativeVersion && configChange && rpc) {
+      try {
+        const layers = (await rpc.request("config/read", { includeLayers: true, cwd: home }))?.layers?.filter((layer: any) => layer?.name?.type === "user" && layer.name.file === nativeConfigPath && !layer.name.profile);
+        if (layers?.length !== 1 || layers[0].version !== nativeVersion) incomplete = "config.toml changed after this run's write, so its deny rows were left in place";
+        else {
+          const restored = await rpc.request("config/batchWrite", { edits: [{ keyPath: "skills.config", value: codexSkillRows(configChange.before), mergeStrategy: "replace" }], filePath: configChange.path, expectedVersion: nativeVersion, reloadUserConfig: true });
+          if (restored?.status !== "ok" || !codexConfigStructureEqual(currentText(configChange.path), configChange.before)) incomplete = "Codex did not restore config.toml to its preimage";
+        }
+      } catch { incomplete = "Codex refused to restore config.toml, so its deny rows were left in place"; }
+    }
+    if (incomplete) {
+      // Something this run wrote may remain, so this is never a plain refusal.
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`CODEX_RECONCILE_COMPENSATION_INCOMPLETE: ${incomplete} (private backup: ${backupRoot}); after: ${message}`);
+    }
+    throw error;
+  } finally {
+    await rpc?.close().catch(() => {});
+  }
 }
 
 function syncArchiveDirectory(path: string): void {

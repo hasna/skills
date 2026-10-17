@@ -41,15 +41,29 @@ function station() {
   const review = { version: 1 as const, agents: [{ agent: "codex" as const, roots: [cache], sources: [captureCodexSettingsV3(config)], pluginHooks: "reviewed-no-skill-injection" as const }] };
   applyAgentIntegration(planAgentIntegration({ home, dataDir, projectDir: home, agents: ["codex"], discoveryInputs: review,
     codexNativeCatalog: { version: "codex-cli 0.163.0", cwd: home, plugins: [plugin], skills: [{ name: "pages:write-page", path: join(first, "skills/write-page/SKILL.md"), enabled: true, pluginId: PLUGIN }] } }));
-  const command = join(root, "codex"), skillsFile = join(root, "skills.json");
+  const command = join(root, "codex"), skillsFile = join(root, "skills.json"), writesFile = join(root, "writes.jsonl"), conflictFlag = join(root, "conflict");
   writeFileSync(command, wrapNativeInspectionFixture(`#!/usr/bin/env bun
 import { createInterface } from "node:readline";
-import { readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+const config = ${JSON.stringify(config)}, version = (text) => "sha256:" + createHash("sha256").update(text).digest("hex");
 if (process.argv[2] === "--version") { console.log("codex-cli 0.163.0"); process.exit(0); }
 for await (const line of createInterface({ input: process.stdin })) {
   const request = JSON.parse(line);
   if (request.method === "initialize") console.log(JSON.stringify({ id: request.id, result: { userAgent: "skills-native-hook-enrollment/0.163.0 synthetic" } }));
   if (request.method === "skills/list") console.log(JSON.stringify({ id: request.id, result: { data: [{ cwd: request.params.cwds[0], errors: [], skills: JSON.parse(readFileSync(${JSON.stringify(skillsFile)}, "utf8")) }] } }));
+  // Codex's own versioned writer: expectedVersion is the user layer's content hash.
+  if (request.method === "config/read") { const text = readFileSync(config, "utf8"); console.log(JSON.stringify({ id: request.id, result: { config: Bun.TOML.parse(text), layers: [{ name: { type: "user", file: config }, version: version(text), config: Bun.TOML.parse(text) }] } })); }
+  if (request.method === "config/batchWrite") {
+    appendFileSync(${JSON.stringify(writesFile)}, JSON.stringify(request.params) + "\\n");
+    if (existsSync(${JSON.stringify(conflictFlag)})) appendFileSync(config, "\\n# written by another Codex client\\n");
+    const text = readFileSync(config, "utf8");
+    if (request.params.expectedVersion !== version(text)) { console.log(JSON.stringify({ id: request.id, error: { code: -32600, message: "Configuration was modified since last read." } })); continue; }
+    const existing = Bun.TOML.parse(text).skills?.config ?? [];
+    const next = text + request.params.edits[0].value.slice(existing.length).map(row => "\\n[[skills.config]]\\n" + Object.entries(row).map(([key, value]) => key + " = " + JSON.stringify(value)).join("\\n") + "\\n").join("");
+    writeFileSync(config, next);
+    console.log(JSON.stringify({ id: request.id, result: { status: "ok", version: version(next), filePath: request.params.filePath } }));
+  }
   if (request.method === "plugin/installed") console.log(JSON.stringify({ id: request.id, result: { marketplaces: [{ name: "openai-curated-remote", plugins: [{ id: ${JSON.stringify(PLUGIN)}, name: "pages", installed: true, enabled: true, localVersion: null, remotePluginId: ${JSON.stringify(REMOTE)}, source: { type: "remote" } }] }], marketplaceLoadErrors: [] } }));
 }
 `), { mode: 0o700 });
@@ -68,7 +82,8 @@ for await (const line of createInterface({ input: process.stdin })) {
     expect(stderr).toBe("");
     return { exitCode, result: JSON.parse(lines[0]!) };
   };
-  return { home, dataDir, config, first, parent, materialize, listSkills, run, options: { home, dataDir, projectDir: home } };
+  const writes = () => { try { return readFileSync(writesFile, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line)); } catch { return []; } };
+  return { home, dataDir, config, first, parent, materialize, listSkills, run, writes, conflictFlag, options: { home, dataDir, projectDir: home } };
 }
 
 test("built CLI emits exactly one JSON result per outcome with matching exit codes", async () => {
@@ -80,9 +95,20 @@ test("built CLI emits exactly one JSON result per outcome with matching exit cod
   const config = readFileSync(s.config, "utf8");
   expect(await s.run()).toMatchObject({ exitCode: 0, result: { outcome: "planned", enrolled: ["pages:publish-page"] } });
   expect(readFileSync(s.config, "utf8")).toBe(config);
+  // A concurrent Codex write between read and write: the versioned write refuses, exit 2, nothing written.
+  writeFileSync(s.conflictFlag, "");
+  expect(await s.run("--apply", "--json")).toMatchObject({ exitCode: 2, result: { outcome: "refused", code: "CODEX_RECONCILE_NATIVE_WRITE_REFUSED", changes: [] } });
+  expect(readFileSync(s.config, "utf8").includes("pages:publish-page")).toBe(false);
+  rmSync(s.conflictFlag);
+  const raced = readFileSync(s.config, "utf8");
   const applied = await s.run("--apply", "--json");
   expect(applied).toMatchObject({ exitCode: 0, result: { outcome: "applied", mode: "apply", enrolled: ["pages:publish-page"], counts: { enrolled: 1, alreadyEnrolled: 1, allowed: 1 } } });
   expect(applied.result.code).toBeUndefined();
+  // The deny row went through Codex's writer, bound to the version Codex read.
+  const sent = s.writes().at(-1);
+  expect(sent).toMatchObject({ filePath: s.config, reloadUserConfig: true, edits: [{ keyPath: "skills.config", mergeStrategy: "replace" }] });
+  expect(sent.expectedVersion).toBe(`sha256:${new Bun.CryptoHasher("sha256").update(raced).digest("hex")}`);
+  expect(readFileSync(s.config, "utf8").startsWith(raced)).toBe(true);
   expect(() => assertManagedAgentBridge("codex", s.options)).not.toThrow();
   // Codex still reporting the denied skill as enabled means the deny did not take: refuse, never pass.
   expect(await s.run("--apply")).toMatchObject({ exitCode: 2, result: { outcome: "refused", code: "CODEX_NATIVE_SKILL_ALLOWED_SET_INVALID", changes: [] } });

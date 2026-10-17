@@ -1138,8 +1138,10 @@ the guard refuses. The work it does:
   no stable qualified name gets an exact path deny instead, listed in
   `pathDenied` with the reason `no-qualified-name`. No plugin control exists for
   runtime-cache skills.
-- It classifies every installed plugin explicitly enabled with `enabled = true`
-  under `[plugins]`, including plugins the saved binding does not know. That
+- It classifies every installed plugin that is active, including plugins the
+  saved binding does not know: each one enabled with `enabled = true` under
+  `[plugins]`, each one config disables that is not inactive by the rule
+  below, and each one the native catalog reports installed and enabled. That
   holds even when none of the plugin's skills block today. Installed means the
   plugin has a directory in the plugin cache; an enabled plugin with no cache
   directory has nothing to classify yet. An enabled plugin id that is not
@@ -1151,10 +1153,17 @@ the guard refuses. The work it does:
   manifest that marketplace row points to. A manifest witness elsewhere that
   only shares the plugin's name does not count. Every other enabled plugin is
   scanned like a new plugin, and one that carries a capability refuses.
-- It leaves a plugin explicitly disabled with `enabled = false` under
-  `[plugins]` unenrolled. It never refuses because of one. The guard does not
-  trust a plugin-level disable alone, so that plugin's cache copies keep exact
-  path denies, listed with the reason `plugin-disabled`.
+- It leaves an inactive plugin unenrolled and never refuses because of one.
+  Inactive uses the same rule as the reviewed plugin controls, because config
+  alone cannot prove a plugin is off (remote reconciliation can enable a plugin
+  while config still disables it): `[plugins]` sets `enabled = false`, the
+  native catalog reports the plugin installed and disabled, its source is
+  config-controlled (a local, git or npm source with a source fingerprint, no
+  remote identity and not a remote marketplace), and the catalog lists none of
+  its skills. Any other plugin is active and gets every capability and receipt
+  check. The guard does not trust a plugin-level disable alone, so an inactive
+  plugin's cache copies keep exact path denies, listed with the reason
+  `plugin-disabled`.
 - For a reviewed binding whose full-byte witnesses name an enrolled plugin's
   manifest, app, MCP or skill files (byte-witness bindings), it re-captures
   those witnesses in the new version root once the capability tuple is proven
@@ -1162,10 +1171,26 @@ the guard refuses. The work it does:
   reconcile handles skills-only manifest bumps for byte-witness bindings. `skills hook rebind-cache` does not: it still refuses bindings that
   never had exact cache-directory coverage.
 
-The writes go through the reviewed `hook install` planner and transaction:
-kernel lock, preimage checks, private backups with readback, a receipt and
-compensation on failure. Apply re-plans under the lock from the same catalog. It
-finishes only when the strict guard accepts the written state. The plan may
+The plan comes from the reviewed `hook install` planner. Apply holds the corpus
+lock, re-plans from the same catalog, checks every preimage and keeps private
+backups with readback. The deny rows are written by Codex's own writer, not by
+Skills: an owned `codex app-server` reads the user layer (`config/read`), and
+`config/batchWrite` writes `skills.config` with that layer's `expectedVersion`
+and `reloadUserConfig: true`. A concurrent Codex writer, such as the desktop
+app, makes the write refuse with `CODEX_RECONCILE_NATIVE_WRITE_REFUSED` instead
+of being overwritten, and this run writes nothing else. With no Codex writer
+reachable the run refuses with `CODEX_RECONCILE_NATIVE_WRITER_UNAVAILABLE`; it
+never falls back to a direct file write. The managed policy is written in the
+Skills transaction only after `config.toml` reads back as exactly the planned
+configuration. If a step fails, the policy is restored while it still holds this
+run's bytes, and `config.toml` is restored only through Codex's writer, only
+while Codex still reports this run's version; otherwise the result is
+`CODEX_RECONCILE_COMPENSATION_INCOMPLETE` and names the private backup. If
+Codex does not confirm a write that did land, the result is
+`CODEX_RECONCILE_NATIVE_WRITE_UNCERTAIN`, and the next run finishes the policy
+without another config write. The receipt records each writer and Codex's new
+config version. The run finishes only when the strict guard accepts the written
+state. The plan may
 append disable rows to the Codex configuration. In the managed policy it may
 only add the new controls and refresh the configuration and re-captured cache
 witnesses. Anything else refuses with `CODEX_RECONCILE_SCOPE_EXCEEDED`. The
@@ -1243,6 +1268,12 @@ These also refuse and write nothing:
   `CODEX_HOOK_TRUST_NATIVE_UNSUPPORTED_VERSION`: an unmeasured Codex release.
 - `NATIVE_SKILL_DRIFT`: copies outside the plugin cache, or any other drift.
 - `CODEX_RECONCILE_SYMLINK_REFUSED`: a link in a native path.
+- `CODEX_RECONCILE_NATIVE_WRITER_UNAVAILABLE`: no Codex app-server could be
+  started to write the deny rows.
+- `CODEX_RECONCILE_NATIVE_CONFIG_MISMATCH`: Codex reports a user configuration
+  other than the one the run planned against.
+- `CODEX_RECONCILE_NATIVE_WRITE_REFUSED`: Codex refused the versioned write, for
+  example because `config.toml` changed after Codex read it.
 - `CODEX_RECONCILE_SEMANTIC_CACHE_UNSUPPORTED`: a binding that uses the semantic
   cache witness.
 

@@ -1,13 +1,14 @@
 /**
  * `skills hook codex-reconcile`: the package-owned reconcile for Codex plugin
  * skill names. One invocation captures the native catalog once, plans once and,
- * with apply, writes once through the reviewed writer. It never retries, never
+ * with apply, writes once: the deny rows through Codex's own versioned config
+ * writer, then the managed policy through the reviewed transaction. It never retries, never
  * disables a guard and never enables a skill; every outcome is one bounded
  * result object, so an unattended caller cannot mistake silence for success.
  */
 import { realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { applyAgentIntegration, CodexPluginReconcileRefusal, planCodexPluginNameReconcile } from "./agent-integration.js";
+import { applyCodexPluginReconcile, CodexPluginReconcileRefusal, planCodexPluginNameReconcile, type CodexReconcileApplyOptions } from "./agent-integration.js";
 import { captureCodexNativeSkillCatalog, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
 import { CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED } from "./codex-plugin-skill-controls.js";
 import { getDataDirReadOnly } from "./config.js";
@@ -29,7 +30,7 @@ export interface CodexReconcileResult {
   denied: string[];
   /** Skills denied by exact path, each with why no stable qualified name covers it. */
   pathDenied: Array<{ name: string; path: string; reason: "plugin-disabled" | "no-qualified-name" }>;
-  /** Plugins explicitly disabled in [plugins]: neither enrolled nor refused. */
+  /** Inactive plugins (config disables them and Codex reports them disabled from a config-controlled source): neither enrolled nor refused. */
   inactive: string[];
   /** Plugins classified skills-only, each citing the manifest paths that were read. */
   classified: Array<{ pluginId: string; capabilities: string[]; manifests: string[] }>;
@@ -51,7 +52,8 @@ const REFUSAL_CODES = new Set([
   "CODEX_NATIVE_SKILL_IDENTITY_UNSUPPORTED", "CODEX_NATIVE_SKILL_ALLOWED_SET_INVALID", "CODEX_NATIVE_SKILL_CATALOG_UNSUPPORTED_VERSION",
   "CODEX_NATIVE_SKILL_CATALOG_INVALID", "CODEX_HOOK_TRUST_NATIVE_UNSUPPORTED_VERSION", "CODEX_RECONCILE_SCOPE_EXCEEDED",
   "CODEX_RECONCILE_SEMANTIC_CACHE_UNSUPPORTED", "CODEX_RECONCILE_CODEX_HOME_UNSUPPORTED", "CODEX_RECONCILE_PLAN_CHANGED",
-  "CODEX_RECONCILE_SYMLINK_REFUSED",
+  "CODEX_RECONCILE_SYMLINK_REFUSED", "CODEX_RECONCILE_NATIVE_WRITER_UNAVAILABLE", "CODEX_RECONCILE_NATIVE_CONFIG_MISMATCH",
+  "CODEX_RECONCILE_NATIVE_WRITE_REFUSED",
 ]);
 
 /** Bounded, single-line diagnostic text. Errors here carry codes and paths,
@@ -86,6 +88,8 @@ export interface CodexReconcileOptions {
   codexHome?: string;
   /** Test seam for the native catalog read; production uses the Codex app-server. */
   captureCatalog?: (options: { command: string; home: string; codexHome?: string; cwd: string }) => Promise<CodexNativeSkillCatalog>;
+  /** Test seam for Codex's own config writer; production starts `codex app-server`. */
+  connect?: CodexReconcileApplyOptions["connect"];
 }
 
 export async function runCodexPluginReconcile(options: CodexReconcileOptions): Promise<CodexReconcileResult> {
@@ -109,9 +113,9 @@ export async function runCodexPluginReconcile(options: CodexReconcileOptions): P
     if (!plan) return { ...reported, outcome: "unchanged" };
     const changes = plan.changes.map(change => change.path);
     if (!options.apply) return { ...reported, outcome: "planned", changes };
-    const applied = applyAgentIntegration(plan);
-    const receipt = applied.backups.length ? join(applied.backups[0]!, "..", "receipt.json") : undefined;
-    return { ...reported, outcome: "applied", changes: applied.changed, ...(receipt ? { receipt: resolve(receipt) } : {}), backups: applied.backups };
+    // Deny rows go through Codex's own versioned writer; never a direct file write.
+    const applied = await applyCodexPluginReconcile(plan, { ...(options.codexCommand === undefined ? {} : { codexCommand: options.codexCommand }), ...(options.codexHome === undefined ? {} : { codexHome: options.codexHome }), ...(options.connect ? { connect: options.connect } : {}) });
+    return { ...reported, outcome: "applied", changes: applied.changed, ...(applied.receipt ? { receipt: resolve(applied.receipt) } : {}), backups: applied.backups };
   } catch (error) {
     return { ...base, ...classifyCodexReconcileError(error) } as CodexReconcileResult;
   }
