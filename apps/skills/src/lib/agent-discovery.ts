@@ -347,6 +347,40 @@ function retiredCodexRoots(binding:AgentDiscoveryBinding, tolerance?:NativeDisco
   }
   return proof.roots;
 }
+/** Codex name reconcile only, after the caller verified that every enrolled
+ * plugin parent in `parents` kept its reviewed capability tuple (manifest apart
+ * from its version, app, MCP and remote receipt). A stale full-byte witness of a
+ * manifest, app or MCP declaration or skill document under one of those parents'
+ * version roots is replaced, in its own digest mode, by the same role's file in
+ * every current version root. Every other witness is kept unchanged, so any
+ * other change still refuses when the rebased binding is verified. */
+export function rebaseCodexEnrolledCacheWitnesses(binding: AgentDiscoveryBinding, cache: string, parents: readonly string[]): { binding: AgentDiscoveryBinding; rebased: string[] } {
+  if (binding.agent !== "codex" || binding.method !== "reviewed" || binding.codexSemanticCache || !parents.length) return { binding, rebased: [] };
+  const budget = discoveryByteBudget(), replaced = new Set<string>(), additions = new Map<string, DiscoverySource>();
+  const role = (relativeParts: string[]) => [".codex-plugin/plugin.json", ".app.json", ".mcp.json"].includes(relativeParts.join("/"))
+    || (relativeParts.length >= 3 && relativeParts[0] === "skills" && relativeParts.at(-1) === "SKILL.md");
+  for (const source of binding.sources) {
+    if (source.sha256 === null || source.format !== undefined || source.fields !== undefined || source.reviewArtifact !== undefined
+      || source.managedPlugins !== undefined || source.hookSources !== undefined || (source.hashMode !== undefined && source.hashMode !== "bytes")) continue;
+    const parts = relative(cache, source.path).split(sep);
+    if (parts.length < 4 || parts.some(part => !part || part === "." || part === "..")) continue;
+    const parent = join(cache, parts[0]!, parts[1]!), relativeParts = parts.slice(3);
+    if (!parents.includes(parent) || !role(relativeParts) || projected(source, undefined, budget) === source.sha256) continue;
+    replaced.add(source.path);
+    for (const version of readdirSync(parent).sort()) {
+      if (version === ".codex-remote-plugin-install.json") continue;
+      const root = join(parent, version), path = join(root, ...relativeParts);
+      if (!lstatSync(root).isDirectory() || lstatSync(root).isSymbolicLink() || !lstatSync(path, { throwIfNoEntry: false })?.isFile()) continue;
+      const fresh: DiscoverySource = { path, sha256: null, ...(source.hashMode ? { hashMode: source.hashMode } : {}) };
+      fresh.sha256 = projected(fresh, undefined, budget);
+      additions.set(path, fresh);
+    }
+  }
+  if (!replaced.size) return { binding, rebased: [] };
+  const sources = binding.sources.filter(source => !replaced.has(source.path));
+  const fresh = [...additions.values()].filter(addition => !sources.some(source => source.path === addition.path));
+  return { binding: { ...binding, sources: [...sources, ...fresh] }, rebased: [...replaced].sort() };
+}
 /** Called only after the owning planner validated discovery and capabilities.
  * New roots must already be body-free; absent roots need the prior typed proof. */
 export function captureRetiredCodexDiscovery(binding:AgentDiscoveryBinding, controls:CodexPluginSkillControl[], rules:unknown):AgentDiscoveryBinding {

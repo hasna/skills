@@ -1,6 +1,6 @@
 import { upgradeSumiSettingsWitness, readSumiSettingsPreimage, SUMI_DISCOVERY_PROJECTION_FIELDS } from "./sumi-settings-witness.js";
 import { codexAdmissionReceipt, codexCorpusRootForPath, withCodexCorpusWrite, type CodexAdmissionReceipt, type CodexCorpusAdmission, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
-import { reviewCodexPluginControls, reviewedCodexPluginSourceRoots, isReviewedCodexPluginInactive, isReviewedCodexPluginSkillDisabled, reviewedCodexPluginCapabilitiesUnchanged, disableReviewedCodexPluginNames, absentDisabledCodexPluginParent, classifyCodexPluginCacheDocument, codexRemoteInstallReceipt, type CodexPluginCacheDocumentIdentity, type ReviewedCodexSkillDenial, type CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
+import { reviewCodexPluginControls, reviewedCodexPluginSourceRoots, isReviewedCodexPluginInactive, isReviewedCodexPluginSkillDisabled, reviewedCodexPluginCapabilitiesUnchanged, disableReviewedCodexPluginNames, absentDisabledCodexPluginParent, classifyCodexPluginCacheDocument, codexRemoteInstallReceipt, mergeReconciledCodexPluginControls, unenrolledCodexPluginEvidence, codexPluginRootEvidence, codexPluginCapabilityChanges, CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, type CodexPluginCacheDocumentIdentity, type ReviewedCodexSkillDenial, type CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
 import { verifyCodexNativeSkillPolicy, parseCodexNativeHookEnvelope, recordCodexNativePolicyAcceptance, type CodexNativeHookEnvelope, type ProcessInspector, type NativePolicyHelperRunner } from "./codex-native-skill-policy.js";
 import { projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
 import { upgradeCodexSettingsWitness, upgradeCodexSettingsWitnessV3, upgradeCodexSettingsWitnessV4, upgradeCodexSettingsWitnessV5, readCodexSettingsPreimage, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
@@ -20,7 +20,7 @@ import { homedir } from "node:os";
 import { getDataDir, getDataDirReadOnly } from "./config.js";
 import { requiresCliSkillLoading, readManagedSkillPolicySnapshot, serializeManagedSkillPolicy, parseManagedSkillPolicy } from "./managed-policy.js";
 import { CLI_BRIDGE_NAME, CLI_BRIDGE_FILES, CLI_BRIDGE_DIGEST, CLI_BRIDGE_VERSION, isOwnedCliBridge } from "./agent-bridge.js";
-import { assertProjectDiscovery, codexVendorConfigChangeOnly, discoveryTextKeepsWitness, discoveryExecutable, recordedDiscoveryExecutable, isDiscoveryRootUnresolved, resolveAgentDiscovery, verifyAgentDiscovery, verifyAutomaticDiscoveryClosure, type DiscoveryExecutable, rebindAgentDiscovery, captureDiscoveryDirectories, captureRetiredCodexDiscovery, projectNativeDiscoveryFields, codexSemanticCacheSourceRole, codexSemanticCacheDirectoryRole, assertCodexSemanticCacheHookSafety, type AgentDiscoveryBinding, type DiscoverySource, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
+import { assertProjectDiscovery, rebaseCodexEnrolledCacheWitnesses, codexVendorConfigChangeOnly, discoveryTextKeepsWitness, discoveryExecutable, recordedDiscoveryExecutable, isDiscoveryRootUnresolved, resolveAgentDiscovery, verifyAgentDiscovery, verifyAutomaticDiscoveryClosure, type DiscoveryExecutable, rebindAgentDiscovery, captureDiscoveryDirectories, captureRetiredCodexDiscovery, projectNativeDiscoveryFields, codexSemanticCacheSourceRole, codexSemanticCacheDirectoryRole, assertCodexSemanticCacheHookSafety, type AgentDiscoveryBinding, type DiscoverySource, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderAgentHookCommand, renderOpenCodePlugin, type IntegrationAgent } from "./agent-adapters.js";
 import { assertCodexPathConfigEditable, CODEX_SKILL_CONFIG_SECTIONS, disableCodexBundledSkills, normalizeCodexInlinePathConfig } from "./agent-codex.js";
 
@@ -39,7 +39,7 @@ export interface NativeSkillEntry { agent: string; path: string; hash: string; m
 export interface NativeMigrationTarget { agent: string; projectRoot: string; path: string; treeSha256: string; vendor?: true }
 export interface NativeMigrationTargetManifest { schema: "hasna.skills-native-migration-targets.v1"; targets: NativeMigrationTarget[]; digest: string }
 export interface AgentConfigChange { path: string; before: string | null; after: string }
-export interface AgentIntegrationPlan { cacheWitnessUpgrade?: CodexSemanticCacheUpgrade; reviewArtifactSources?: Array<{ path: string; sha256: string }>; retainedReviewArtifacts?: ReviewArtifactChange[]; reviewArtifactMigration?: ReviewArtifactMigration; observedNativeSources?: Array<{ path: string; sha256: string | null }>; codexPluginSkillReview?: { version: string; cwd: string; catalogSha256: string; configSha256: string | null }; observedSettings?: { path: string; before: string }; settingsWitnessUpgrade?: { agent: "claude" | "codex" | "sumi"; path: string; fromHashMode: string; fromSha256: string; toHashMode: string; toSha256: string; reviewedPreimage: string; currentSettingsSha256: string; replacedWitnesses: Array<{ hashMode: string; sha256: string }> }; dataDir: string; profileId: string; changes: AgentConfigChange[]; nativeSkills: NativeSkillEntry[]; observedPolicy?: { path: string; before: string | null }; discoveryBefore?: AgentDiscoveryBinding[]; discoveryAfter?: AgentDiscoveryBinding[]; discoveryExecutables?: Record<string, DiscoveryExecutable>; rootAliases?: AgentRootAlias[]; managedAgentChecks?: { home: string; projectDir?: string; agents: IntegrationAgent[] }; retainedReviewChecks?: { home: string; projectDir: string; agents: IntegrationAgent[] } }
+export interface AgentIntegrationPlan { codexReconcile?: CodexPluginReconcilePlanState; cacheWitnessUpgrade?: CodexSemanticCacheUpgrade; reviewArtifactSources?: Array<{ path: string; sha256: string }>; retainedReviewArtifacts?: ReviewArtifactChange[]; reviewArtifactMigration?: ReviewArtifactMigration; observedNativeSources?: Array<{ path: string; sha256: string | null }>; codexPluginSkillReview?: { version: string; cwd: string; catalogSha256: string; configSha256: string | null }; observedSettings?: { path: string; before: string }; settingsWitnessUpgrade?: { agent: "claude" | "codex" | "sumi"; path: string; fromHashMode: string; fromSha256: string; toHashMode: string; toSha256: string; reviewedPreimage: string; currentSettingsSha256: string; replacedWitnesses: Array<{ hashMode: string; sha256: string }> }; dataDir: string; profileId: string; changes: AgentConfigChange[]; nativeSkills: NativeSkillEntry[]; observedPolicy?: { path: string; before: string | null }; discoveryBefore?: AgentDiscoveryBinding[]; discoveryAfter?: AgentDiscoveryBinding[]; discoveryExecutables?: Record<string, DiscoveryExecutable>; rootAliases?: AgentRootAlias[]; managedAgentChecks?: { home: string; projectDir?: string; agents: IntegrationAgent[] }; retainedReviewChecks?: { home: string; projectDir: string; agents: IntegrationAgent[] } }
 
 const sha = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
 const HOOK_EVENTS: readonly ContextHookEvent[] = ["UserPromptSubmit", "SessionStart", "SubagentStart"];
@@ -592,9 +592,14 @@ function assertCodexInstallationInputs(home:string, projectDirs:string[], inputs
 }
 
 /** Planning is read-only; credentials and unrelated settings never appear in CLI output. */
-export function planAgentIntegration(options: { home?: string; dataDir?: string; agents: IntegrationAgent[]; command?: string; profileId?: string; includeVendor?: boolean; projectDir?: string; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean; reviewedCacheAlias?: string; codexNativeCatalog?: CodexNativeSkillCatalog; codexSkillDenials?: ReviewedCodexSkillDenial[] }): AgentIntegrationPlan {
+export function planAgentIntegration(options: { home?: string; dataDir?: string; agents: IntegrationAgent[]; command?: string; profileId?: string; includeVendor?: boolean; projectDir?: string; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean; reviewedCacheAlias?: string; codexNativeCatalog?: CodexNativeSkillCatalog; codexSkillDenials?: ReviewedCodexSkillDenial[]; codexReconcile?: CodexPluginReconcileInput }): AgentIntegrationPlan {
   if (options.discoveryInputs?.agents.some(review => review.reviewArtifacts !== undefined && !options.agents.includes(review.agent))) throw new Error("REVIEW_ARTIFACT_INVALID");
   if (options.codexSkillDenials !== undefined && (!options.codexNativeCatalog || !options.discoveryInputs || !options.agents.includes("codex"))) throw new Error("Explicit Codex skill denials require a fresh native catalog and discovery review");
+  // The name reconcile reuses this reviewed planner for one exact purpose: it
+  // never brings a new discovery review, explicit denial or another agent.
+  if (options.codexReconcile !== undefined && (!options.codexNativeCatalog || options.discoveryInputs !== undefined || options.codexSkillDenials !== undefined
+    || options.agents.length !== 1 || options.agents[0] !== "codex" || options.command !== undefined || options.profileId !== undefined)) throw new Error("Codex name reconcile plans only the Codex agent from a fresh native catalog and its saved review");
+  const reconcileCopies = options.codexReconcile ? new Map(options.codexReconcile.copies.map(copy => [copy.path, copy.hash])) : undefined;
   const home = options.home ?? homedir(), dataDir = options.dataDir ?? getDataDirReadOnly();
   const aliases = rootAliases(home, options.allowRootAliases);
   const policyPath = join(dataDir, "agent-policy.json"); assertSafePath(policyPath);
@@ -628,12 +633,16 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     // missing or unreadable one is treated as no record.
     const executable = discoveryExecutable(agent) ?? (prior ? recordedDiscoveryExecutable(agent, prior) : null);
     executables.set(agent, executable);
-    const retainedReview: AgentDiscoveryBinding | undefined = options.discoveryInputs === undefined && policy.bridge?.discovery?.[agent]?.method === "reviewed" ? {...policy.bridge.discovery[agent], ...(agent==="codex" ? {codexDisabledPluginSkills:policy.bridge.codexPluginSkills ?? []} : {})} : undefined;
+    // A reconcile may substitute the saved review with only its enrolled-plugin
+    // cache witnesses re-captured; that binding is verified like the saved one.
+    const reconcileDiscovery = agent === "codex" ? options.codexReconcile?.discovery : undefined;
+    if (reconcileDiscovery && (reconcileDiscovery.agent !== "codex" || reconcileDiscovery.method !== "reviewed" || policy.bridge?.discovery?.codex?.method !== "reviewed")) throw new Error("Codex name reconcile can rebase only a saved reviewed binding");
+    const retainedReview: AgentDiscoveryBinding | undefined = options.discoveryInputs === undefined && policy.bridge?.discovery?.[agent]?.method === "reviewed" ? {...(reconcileDiscovery ?? policy.bridge.discovery[agent]), ...(agent==="codex" ? {codexDisabledPluginSkills:policy.bridge.codexPluginSkills ?? []} : {})} : undefined;
     try {
       if (retainedReview) {
         // Reuse may repair bridge protection, but cannot silently enroll a new
         // native copy or discovery input by changing it before validation.
-        assertRetainedReviewState(agent, { home, dataDir, projectDir: options.projectDir ?? home });
+        assertRetainedReviewState(agent, { home, dataDir, projectDir: options.projectDir ?? home }, agent === "codex" ? reconcileCopies : undefined, reconcileDiscovery);
         retainedAgents.push(agent);
       }
       return resolveAgentDiscovery({ home, agent, reviewed: options.discoveryInputs, retainedReview, canonical: path => canonicalAgentPath(path, aliases), executable });
@@ -658,9 +667,17 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     : undefined;
   const plannedCodexRules = codexPathConfig === undefined ? undefined : (Bun.TOML.parse(codexPathConfig) as any).skills?.config ?? [];
   const observedNativeSources: Array<{ path: string; sha256: string | null }> = [];
-  const codexPluginControls: ReturnType<typeof reviewCodexPluginControls> = options.codexNativeCatalog
-    ? reviewCodexPluginControls(options.codexNativeCatalog, nativeSkills.filter(entry=>entry.agent==="codex" && entry.vendor).map(entry=>join(entry.path,"SKILL.md")), canonicalAgentPath(join(home,".codex/plugins/cache"),aliases), resolve(options.projectDir ?? home), path=>{const bytes=readNativeBytes(path,1024*1024); observedNativeSources.push({path,sha256:sha(bytes)}); return new TextDecoder("utf-8",{fatal:true}).decode(bytes); }, codexConfig.skills?.config ?? [], codexConfig.plugins, plannedCodexRules, options.codexSkillDenials)
-    : {skills:policy.bridge?.codexPluginSkills ?? [],inactivePlugins:policy.bridge?.codexInactivePlugins ?? [],sourceInputs:policy.bridge?.discovery?.codex?.codexInstallationInputs?.plugins ?? []};
+  // A reconcile reviews only the plugins it enrolls or already enrolled. Other
+  // plugin-cache copies keep the exact-path denies planned above, and the saved
+  // inactive-plugin and installation-input reviews carry over unchanged.
+  const reconcileParents = options.codexReconcile ? new Set(options.codexReconcile.parents) : undefined;
+  const reviewedPluginDocuments = nativeSkills.filter(entry=>entry.agent==="codex" && entry.vendor && (!reconcileParents || [...reconcileParents].some(parent=>entry.path.startsWith(parent+sep)))).map(entry=>join(entry.path,"SKILL.md"));
+  const reviewedPluginControls: ReturnType<typeof reviewCodexPluginControls> | undefined = options.codexNativeCatalog
+    ? reviewCodexPluginControls(options.codexNativeCatalog, reviewedPluginDocuments, canonicalAgentPath(join(home,".codex/plugins/cache"),aliases), resolve(options.projectDir ?? home), path=>{const bytes=readNativeBytes(path,1024*1024); observedNativeSources.push({path,sha256:sha(bytes)}); return new TextDecoder("utf-8",{fatal:true}).decode(bytes); }, codexConfig.skills?.config ?? [], codexConfig.plugins, plannedCodexRules, options.codexSkillDenials)
+    : undefined;
+  const savedPluginControls = {skills:policy.bridge?.codexPluginSkills ?? [],inactivePlugins:policy.bridge?.codexInactivePlugins ?? [],sourceInputs:policy.bridge?.discovery?.codex?.codexInstallationInputs?.plugins ?? []};
+  const codexPluginControls: ReturnType<typeof reviewCodexPluginControls> = reviewedPluginControls === undefined ? savedPluginControls
+    : options.codexReconcile ? {...savedPluginControls,skills:reviewedPluginControls.skills} : reviewedPluginControls;
   const cache=canonicalAgentPath(join(home,".codex/plugins/cache"),aliases);
   const retired=(policy.bridge?.codexPluginSkills ?? []).filter((control:CodexPluginSkillControl)=>absentDisabledCodexPluginParent(cache,control.pluginParent,policy.bridge.codexPluginSkills,codexConfig.skills?.config ?? []));
   for (const denial of options.codexSkillDenials ?? []) {
@@ -674,11 +691,15 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     const files=[join(root,".codex-plugin/plugin.json"),...(control.appSha256 ? [join(root,".app.json")] : []),...(control.mcpSha256 ? [join(root,".mcp.json")] : [])];
     for (const path of files) if (!review?.sources.some(source=>source.path===path && source.format===undefined && source.fields===undefined && [undefined,"bytes"].includes(source.hashMode) && source.sha256===sha(readNativeBytes(path,1024*1024)))) throw new Error("Explicit Codex denial requires current full manifest and capability discovery witnesses");
   }
-  const codexPluginSkills: CodexPluginSkillControl[] = [...codexPluginControls.skills,...retired.filter((control:CodexPluginSkillControl)=>!codexPluginControls.skills.some(item=>item.name===control.name))];
+  // A reconcile adds the exact new names to the saved controls; it never drops
+  // or rewrites one, so a fresh catalog cannot silently replace a review.
+  const codexPluginSkills: CodexPluginSkillControl[] = options.codexReconcile
+    ? mergeReconciledCodexPluginControls(policy.bridge?.codexPluginSkills ?? [], codexPluginControls.skills, options.codexReconcile.names, options.codexReconcile.remoteIdentities)
+    : [...codexPluginControls.skills,...retired.filter((control:CodexPluginSkillControl)=>!codexPluginControls.skills.some(item=>item.name===control.name))];
   for (const discovery of discoveries) if (discovery.agent==="codex" && discovery.method==="reviewed") discovery.codexDisabledPluginSkills=codexPluginSkills;
   if (options.agents.includes("codex") && !options.codexNativeCatalog && codexPluginSkills.length
     && !reviewedCodexPluginCapabilitiesUnchanged(canonicalAgentPath(join(home,".codex/plugins/cache"),aliases),codexPluginSkills,path=>new TextDecoder("utf-8",{fatal:true}).decode(readNativeBytes(path,1024*1024)),codexConfig.skills?.config ?? [])) {
-    throw new Error("NATIVE_SKILL_DRIFT: reviewed native plugin capability controls changed; provide a fresh native catalog and discovery review");
+    throw new Error(`NATIVE_SKILL_DRIFT: ${CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED}: reviewed native plugin capability controls changed; provide a fresh native catalog and discovery review`);
   }
   const codexInactivePlugins = codexPluginControls.inactivePlugins;
   const codexDiscovery=discoveries.find(binding=>binding.agent==="codex");
@@ -739,7 +760,11 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     if (agent === "codex") {
       const configPath = canonicalAgentPath(join(home, ".codex", "config.toml"), aliases), previous = readOptional(configPath);
       if (previous !== codexConfigBefore) throw new Error(`Configuration changed during planning: ${configPath}`);
-      const next = disableReviewedCodexPluginNames(codexPathConfig!, codexPluginSkills);
+      let next = disableReviewedCodexPluginNames(codexPathConfig!, codexPluginSkills);
+      // Reconcile only: runtime-cache skills Codex loads that no plugin control
+      // covers. Deny-only rows: a stable qualified name, else the exact path.
+      for (const name of options.codexReconcile?.nameDenies ?? []) if (!((Bun.TOML.parse(next) as any).skills?.config ?? []).some((rule:any)=>rule.name===name && rule.enabled===false)) next+=`\n[[skills.config]]\nname = ${JSON.stringify(name)}\nenabled = false\n`;
+      for (const path of options.codexReconcile?.pathDenies ?? []) if (!((Bun.TOML.parse(next) as any).skills?.config ?? []).some((rule:any)=>rule.path===path && rule.enabled===false)) next+=`\n[[skills.config]]\npath = ${JSON.stringify(path)}\nenabled = false\n`;
       if (next !== (previous ?? "")) {
         if (previous !== null && isDeepStrictEqual(Bun.TOML.parse(previous), Bun.TOML.parse(next))) {
           // Native config writers may use inline tables. Preserve equivalent
@@ -750,13 +775,14 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
       }
     }
   }
-  const codexPluginSkillReview = options.codexNativeCatalog ? { version: options.codexNativeCatalog.version, cwd: options.codexNativeCatalog.cwd, catalogSha256: sha(JSON.stringify({version:options.codexNativeCatalog.version,cwd:options.codexNativeCatalog.cwd,skills:projectCodexNativeSkillCatalog({data:[{cwd:options.codexNativeCatalog.cwd,errors:[],skills:options.codexNativeCatalog.skills}]},options.codexNativeCatalog.cwd),...(options.codexNativeCatalog.plugins === undefined ? {} : {plugins:projectCodexInstalledPluginEntries(options.codexNativeCatalog.plugins)})})), configSha256: changes.find(change=>change.path===canonicalAgentPath(join(home,".codex/config.toml"),aliases))?.before === null ? null : sha(readOptional(canonicalAgentPath(join(home,".codex/config.toml"),aliases)) ?? "") } : policy.bridge?.codexPluginSkillReview;
+  // A reconcile records itself in its receipt; the last reviewed catalog stays the review of record.
+  const codexPluginSkillReview = options.codexNativeCatalog && !options.codexReconcile ? { version: options.codexNativeCatalog.version, cwd: options.codexNativeCatalog.cwd, catalogSha256: sha(JSON.stringify({version:options.codexNativeCatalog.version,cwd:options.codexNativeCatalog.cwd,skills:projectCodexNativeSkillCatalog({data:[{cwd:options.codexNativeCatalog.cwd,errors:[],skills:options.codexNativeCatalog.skills}]},options.codexNativeCatalog.cwd),...(options.codexNativeCatalog.plugins === undefined ? {} : {plugins:projectCodexInstalledPluginEntries(options.codexNativeCatalog.plugins)})})), configSha256: changes.find(change=>change.path===canonicalAgentPath(join(home,".codex/config.toml"),aliases))?.before === null ? null : sha(readOptional(canonicalAgentPath(join(home,".codex/config.toml"),aliases)) ?? "") } : policy.bridge?.codexPluginSkillReview;
   const discoveryAfter = discoveries.map(binding => {
     const rebound=rebindAgentDiscovery(binding, new Map(changes.map(change => [change.path, change.after])));
     if (binding.agent!=="codex") return rebound;
     const {codexInstallationInputs:previousInputs,...current}=rebound;
     const inputs=codexPluginSourceInputs.map(input=>input.sourceRoot);
-    const directories=options.codexNativeCatalog || !previousInputs ? captureDiscoveryDirectories((binding.directories ?? []).filter(directory=>inputs.some(root=>root.startsWith(directory.path+sep))).map(directory=>directory.path),inputs) : previousInputs.directories;
+    const directories=(options.codexNativeCatalog && !options.codexReconcile) || !previousInputs ? captureDiscoveryDirectories((binding.directories ?? []).filter(directory=>inputs.some(root=>root.startsWith(directory.path+sep))).map(directory=>directory.path),inputs) : previousInputs.directories;
     const installed=codexPluginSourceInputs.length ? {...current,codexInstallationInputs:{version:codexPluginSkillReview.version,catalogSha256:codexPluginSkillReview.catalogSha256,plugins:codexPluginSourceInputs,...(directories?.length ? {directories} : {})}} : current;
     return captureRetiredCodexDiscovery(installed,codexPluginSkills,(Bun.TOML.parse(changes.find(change=>change.path===canonicalAgentPath(join(home,".codex/config.toml"),aliases))?.after ?? codexConfigBefore ?? "") as any).skills?.config ?? []);
   });
@@ -1341,6 +1367,258 @@ export function planReviewedArtifactMigration(options: ReviewArtifactMigration):
     managedAgentChecks: { home, projectDir: options.projectDir ?? home, agents: ["codex"] } };
 }
 
+/** Exact copies, names and deny rows one Codex name reconcile plans. */
+export interface CodexPluginReconcileInput {
+  copies: Array<{ path: string; hash: string }>;
+  /** New qualified names added to the reviewed controls. */
+  names: string[];
+  /** Plugin parents whose documents the reconcile reviews: enrolled and newly enrolled. */
+  parents: string[];
+  /** Caller-verified native install receipts of newly enrolled remote parents. */
+  remoteIdentities: Record<string, string>;
+  /** Catalog-only skills outside the plugin cache: deny-only rows, no control. */
+  nameDenies: string[];
+  pathDenies: string[];
+  /** The saved review with stale enrolled-plugin cache witnesses re-captured. */
+  discovery?: AgentDiscoveryBinding;
+}
+export interface CodexPluginReconcileRequest { home: string; dataDir: string; projectDir: string; catalog: CodexNativeSkillCatalog }
+export interface CodexPluginReconcilePlanState extends CodexPluginReconcileInput { request: CodexPluginReconcileRequest }
+/** What the strict guard refused, collected for the reconcile instead of thrown. */
+interface CodexReconcileCollection { custody?: ManagedBridgeCustody; blocking: NativeSkillEntry[]; inventory: NativeSkillEntry[] }
+export interface CodexPluginReconcileReport {
+  codexVersion: string;
+  /** Qualified names this reconcile adds to the reviewed controls and denies by name. */
+  enrolled: string[];
+  /** Qualified names already enrolled before this reconcile. */
+  alreadyEnrolled: number;
+  /** Catalog skills outside the plugin cache (Codex runtime plugins) denied by their stable qualified name. */
+  denied: string[];
+  /** Skills denied by exact path because no stable qualified name covers them, with the reason. */
+  pathDenied: Array<{ name: string; path: string; reason: "plugin-disabled" | "no-qualified-name" }>;
+  /** Plugins explicitly disabled in [plugins]: no enrollment and no refusal. */
+  inactive: string[];
+  /** Every plugin this run classified as skills-only, citing the manifests read. */
+  classified: Array<{ pluginId: string; capabilities: string[]; manifests: string[] }>;
+  /** Reviewed cache witnesses re-captured after a skills-only version change. */
+  rebasedWitnesses: number;
+  /** Plugin-cache skill names left as they are: an existing path rule or an inactive plugin already makes them inert. */
+  skipped: number;
+  /** Native skills Codex loads after the reconcile; always exactly the bridge. */
+  allowed: string[];
+}
+/** A refusal: nothing was written and the guard keeps blocking with `code`. */
+export class CodexPluginReconcileRefusal extends Error {
+  constructor(readonly code: string, detail: string, readonly refusals: Array<{ pluginId: string; reasons: string[]; manifests?: string[] }> = []) { super(`${code}: ${detail}`); }
+}
+/** The only native skills Codex loads under `rules`: the bridge, or a refusal. */
+function codexReconcileAllowedSkills(catalog: CodexNativeSkillCatalog, rules: unknown, bridgeDocument: string): string[] {
+  const canonical = (path: string) => { try { return realpathSync(path); } catch { return resolve(path); } };
+  const allowed = catalog.skills.filter(skill => skill.enabled === true && !isCodexNativeSkillDisabled(skill, rules));
+  if (allowed.length !== 1 || allowed[0]!.name !== CLI_BRIDGE_NAME || allowed[0]!.pluginId !== null || canonical(allowed[0]!.path) !== canonical(bridgeDocument)) {
+    throw new CodexPluginReconcileRefusal("CODEX_NATIVE_SKILL_ALLOWED_SET_INVALID", `Codex would load ${allowed.length} native skill(s) (${nativeSkillPathList(allowed.map(skill => skill.name))}), not only the ${CLI_BRIDGE_NAME} bridge; nothing was written`);
+  }
+  return [CLI_BRIDGE_NAME];
+}
+/** The reconcile writes only appended disable rows and the bounded policy fields
+ * that record them; anything else is a different review and refuses. */
+export function assertCodexReconcileScope(plan: AgentIntegrationPlan, scope: { configPath: string; policyPath: string; prior: CodexPluginSkillControl[]; names: string[]; discovery: AgentDiscoveryBinding }): void {
+  const exceeded = (detail: string): never => { throw new CodexPluginReconcileRefusal("CODEX_RECONCILE_SCOPE_EXCEEDED", `${detail}; run skills hook install to review this change`); };
+  for (const change of plan.changes) if (![scope.configPath, scope.policyPath].includes(resolve(change.path))) exceeded(`the plan would also write ${nativeSkillPathList([change.path])}`);
+  const config = plan.changes.find(change => resolve(change.path) === scope.configPath);
+  if (config) {
+    const before = Bun.TOML.parse(config.before ?? "") as any, after = Bun.TOML.parse(config.after) as any;
+    const beforeRules = before.skills?.config ?? [], afterRules = after.skills?.config ?? [];
+    const rest = (value: any) => { const copy = structuredClone(value); if (copy.skills) { delete copy.skills.config; if (!Object.keys(copy.skills).length) delete copy.skills; } return copy; };
+    if (!isDeepStrictEqual(rest(before), rest(after)) || !Array.isArray(beforeRules) || !Array.isArray(afterRules) || afterRules.length < beforeRules.length
+      || !isDeepStrictEqual(afterRules.slice(0, beforeRules.length), beforeRules)
+      || afterRules.slice(beforeRules.length).some((rule: any) => !rule || rule.enabled !== false || Object.keys(rule).length !== 2 || (typeof rule.name === "string") === (typeof rule.path === "string"))) exceeded("the Codex configuration change is not only appended disable rules");
+  }
+  const policy = plan.changes.find(change => resolve(change.path) === scope.policyPath);
+  if (!policy) return;
+  if (policy.before === null) exceeded("the managed policy has no prior binding");
+  const before = JSON.parse(policy.before!) as Record<string, any>, after = JSON.parse(policy.after) as Record<string, any>;
+  const { bridge: beforeBridge, ...beforeRest } = before, { bridge: afterBridge, ...afterRest } = after;
+  if (!isDeepStrictEqual(beforeRest, afterRest)) exceeded("the managed policy would change outside the Codex bridge");
+  const recorded = new Set(["codexPluginSkills", "codexInactivePlugins", "discovery"]);
+  for (const key of new Set([...Object.keys(beforeBridge ?? {}), ...Object.keys(afterBridge ?? {})])) if (!recorded.has(key) && !isDeepStrictEqual(beforeBridge?.[key], afterBridge?.[key])) exceeded(`the managed bridge field ${JSON.stringify(key)} would change`);
+  if (!isDeepStrictEqual(beforeBridge?.codexInactivePlugins ?? [], afterBridge?.codexInactivePlugins ?? [])) exceeded("the inactive plugin review would change");
+  const controls: CodexPluginSkillControl[] = afterBridge?.codexPluginSkills ?? [];
+  if (!isDeepStrictEqual(controls.slice(0, scope.prior.length), scope.prior) || !isDeepStrictEqual(controls.slice(scope.prior.length).map(control => control.name), [...scope.names].sort())) exceeded("the reviewed plugin controls would change beyond the new names");
+  const { codex: _beforeCodex, ...beforeOthers } = beforeBridge?.discovery ?? {}, { codex: afterCodex, ...afterOthers } = afterBridge?.discovery ?? {};
+  if (!isDeepStrictEqual(beforeOthers, afterOthers)) exceeded("another agent's discovery would change");
+  // The retired-parent proof is derived by captureRetiredCodexDiscovery from the
+  // controls: enrolling a remote skills-only parent may add parents, never roots.
+  const shape = (binding: any) => { const { codexDisabledPluginSkills: _controls, codexRetiredMaterializations: _retired, sources, ...rest } = binding ?? {}; return { rest, sources: (sources ?? []).map((source: DiscoverySource) => source.path === scope.configPath ? { ...source, sha256: null } : source) }; };
+  if (!isDeepStrictEqual(shape(scope.discovery), shape(afterCodex))) exceeded("the Codex discovery review would change beyond the written configuration witness and re-captured cache witnesses");
+  const retiredBefore = scope.discovery?.codexRetiredMaterializations, retiredAfter = afterCodex?.codexRetiredMaterializations;
+  const controlParents = new Set(controls.map(control => control.pluginParent));
+  if (!isDeepStrictEqual(retiredBefore?.roots ?? [], retiredAfter?.roots ?? []) || (retiredBefore?.parents ?? []).some((parent: string) => !(retiredAfter?.parents ?? []).includes(parent))
+    || (retiredAfter?.parents ?? []).some((parent: string) => !controlParents.has(parent))) exceeded("the retired Codex materialization proof would change beyond enrolled parents");
+}
+/** The Codex runtime plugin root holding a catalog skill, or null outside one. */
+function codexRuntimePluginRoot(document: string, runtimeCache: string): string | null {
+  if (!document.startsWith(runtimeCache + sep) || basename(document) !== "SKILL.md") return null;
+  for (let root = dirname(dirname(document)), depth = 0; root.startsWith(runtimeCache + sep) && depth < 12; root = dirname(root), depth++) {
+    if (lstatSync(join(root, ".codex-plugin/plugin.json"), { throwIfNoEntry: false })?.isFile()) return root;
+  }
+  return null;
+}
+/** Read-only plan for `skills hook codex-reconcile`. Enumerates the plugin-cache
+ * skills the strict guard refuses and the catalog skills Codex would load from
+ * its runtime cache; enrolls plugin-cache names whose capability tuple is
+ * unchanged (or a not yet enrolled skills-only plugin), denies runtime skills by
+ * qualified name (by exact path, reported, when Codex gives none), and refreshes
+ * the reviewed binding through planAgentIntegration. A null plan means nothing
+ * needs writing. Every refusal writes nothing. */
+export function planCodexPluginNameReconcile(request: CodexPluginReconcileRequest): { plan: AgentIntegrationPlan | null; report: CodexPluginReconcileReport } {
+  const home = resolve(request.home), dataDir = request.dataDir, projectDir = resolve(request.projectDir), catalog = request.catalog;
+  if (!catalog || typeof catalog !== "object" || !supportsCodexNativeCapability(catalog.version, "qualified-skill-catalog") || !Array.isArray(catalog.plugins)) throw new CodexPluginReconcileRefusal("CODEX_NATIVE_SKILL_CATALOG_UNSUPPORTED_VERSION", "this Codex release has no reviewed qualified skill and installed-plugin catalog");
+  if (catalog.cwd !== projectDir) throw new CodexPluginReconcileRefusal("CODEX_NATIVE_SKILL_CATALOG_INVALID", "the native catalog was captured for another working directory");
+  projectCodexNativeSkillCatalog({ data: [{ cwd: catalog.cwd, errors: [], skills: catalog.skills }] }, catalog.cwd);
+  const installed = projectCodexInstalledPluginEntries(catalog.plugins);
+  const options = { home, dataDir, projectDir };
+  const custody = assertManagedBridgeCustody("codex", options), aliases = custody.aliases, binding = custody.binding;
+  // A binding that never recorded an installed-plugin catalog review has no
+  // reviewed plugin baseline to reconcile against; never guess one.
+  if (!supportsCodexNativeCapability(binding.codexPluginSkillReview?.version, "installed-plugin-review")) throw new CodexPluginReconcileRefusal("CODEX_RECONCILE_DISCOVERY_REVIEW_REQUIRED", "this Codex binding predates the installed-plugin catalog review, so a fresh full discovery review is required: skills hook install --agent codex --discovery-inputs <reviewed-file> --codex-native-catalog <reviewed-catalog> --apply");
+  const cache = canonicalAgentPath(join(home, ".codex/plugins/cache"), aliases), configPath = canonicalAgentPath(join(home, ".codex/config.toml"), aliases), policyPath = join(dataDir, "agent-policy.json");
+  const runtimeCacheLexical = canonicalAgentPath(join(home, ".cache/codex-runtimes"), aliases);
+  const runtimeCache = (() => { try { return realpathSync(runtimeCacheLexical); } catch { return runtimeCacheLexical; } })();
+  const read = (path: string) => new TextDecoder("utf-8", { fatal: true }).decode(readNativeBytes(path, 1024 * 1024));
+  const configText = readOptional(configPath), config = Bun.TOML.parse(configText ?? "") as any, rules = config.skills?.config ?? [];
+  const prior: CodexPluginSkillControl[] = binding.codexPluginSkills ?? [];
+  const priorParents = [...new Set(prior.map(control => control.pluginParent))];
+  // Capability first: an enrolled plugin that moved an app, MCP, hooks,
+  // manifest or remote capability refuses before anything else is considered.
+  const capabilityRefusals = priorParents.flatMap(parent => {
+    const group = prior.filter(control => control.pluginParent === parent), reasons = codexPluginCapabilityChanges(cache, group, read, rules);
+    return reasons.length ? [{ pluginId: group[0]!.pluginId, reasons }] : [];
+  });
+  if (capabilityRefusals.length) throw new CodexPluginReconcileRefusal(CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, "an enrolled Codex plugin changed a reviewed app, MCP, hooks, manifest or remote capability; it stays quarantined until reviewed with skills hook install and a fresh native catalog and discovery review", capabilityRefusals);
+  // Capability tuples are unchanged, so stale byte witnesses of those plugins'
+  // version materializations are re-captured; the rebased review is verified below.
+  const savedDiscovery: AgentDiscoveryBinding | undefined = binding.discovery?.codex;
+  const rebase = savedDiscovery ? rebaseCodexEnrolledCacheWitnesses({ ...savedDiscovery, codexDisabledPluginSkills: prior }, cache, priorParents) : { binding: savedDiscovery, rebased: [] as string[] };
+  const discovery = rebase.rebased.length ? (() => { const { codexDisabledPluginSkills: _controls, ...rest } = rebase.binding!; return rest as AgentDiscoveryBinding; })() : undefined;
+  const collected: CodexReconcileCollection = { blocking: [], inventory: [] };
+  try { assertManagedAgentBridgeWithDiscovery("codex", options, discovery, collected); }
+  catch (error) {
+    if (error instanceof Error && error.message.includes(`${CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED}:`)) throw new CodexPluginReconcileRefusal(CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, "an enrolled Codex plugin changed a reviewed capability; it stays quarantined until reviewed with skills hook install and a fresh native catalog and discovery review");
+    throw error;
+  }
+  const identityOf = (entry: NativeSkillEntry) => entry.agent === "codex" && entry.vendor && !entry.system && !entry.bridge && entry.path.startsWith(cache + sep)
+    ? classifyCodexPluginCacheDocument(join(entry.path, "SKILL.md"), cache, read) : null;
+  // The plugin a cache copy belongs to comes from the cache layout; the strict
+  // parser's identity (qualified name) exists only for a supported plugin root.
+  const cacheParent = (entry: NativeSkillEntry) => {
+    if (entry.agent !== "codex" || !entry.vendor || entry.system || entry.bridge || !entry.path.startsWith(cache + sep)) return null;
+    const parts = relative(cache, entry.path).split(sep);
+    return parts.length >= 4 && parts.slice(0, 2).every(part => /^[A-Za-z0-9_-]{1,64}$/.test(part)) ? { parent: join(cache, parts[0]!, parts[1]!), pluginId: `${parts[1]}@${parts[0]}` } : null;
+  };
+  const outside = collected.blocking.filter(entry => !cacheParent(entry));
+  if (outside.length) throw new CodexPluginReconcileRefusal("NATIVE_SKILL_DRIFT", `native skill copies outside the Codex plugin cache need their own review: ${nativeSkillPathList(outside.map(item => item.path))}; this command enrolls plugin skills only (see skills migrate native, or a fresh discovery review for runtime roots)`);
+  const copies = collected.blocking.map(entry => ({ entry, ...cacheParent(entry)!, identity: identityOf(entry) }));
+  const pluginDisabled = (pluginId: string) => config.plugins?.[pluginId]?.enabled === false;
+  const refusals: Array<{ pluginId: string; reasons: string[]; manifests: string[] }> = [], inactive = new Set<string>(), enrollableParents: string[] = [], remoteIdentities: Record<string, string> = {};
+  const classified: CodexPluginReconcileReport["classified"] = [];
+  const refuse = (pluginId: string, reasons: Iterable<string>, manifests: string[]) => { if (!refusals.some(item => item.pluginId === pluginId)) refusals.push({ pluginId, reasons: [...new Set(reasons)].sort(), manifests }); };
+  const pathDenied: CodexPluginReconcileReport["pathDenied"] = [];
+  for (const parent of [...new Set(copies.map(copy => copy.parent))].sort()) {
+    const group = copies.filter(copy => copy.parent === parent), pluginId = group[0]!.pluginId;
+    if (priorParents.includes(parent)) {
+      if (group.some(copy => !copy.identity)) throw new CodexPluginReconcileRefusal("CODEX_NATIVE_SKILL_IDENTITY_UNSUPPORTED", `a skill document of the enrolled plugin ${JSON.stringify(pluginId)} has no supported qualified name: ${nativeSkillPathList(group.filter(copy => !copy.identity).map(copy => copy.entry.path))}`);
+      continue;
+    }
+    // Explicitly disabled: Codex loads none of its capabilities. The guard does
+    // not trust a plugin-level disable alone, so the reviewed planner keeps its
+    // exact-path denies; nothing is enrolled and nothing refuses.
+    if (pluginDisabled(pluginId)) {
+      inactive.add(pluginId);
+      for (const copy of group) pathDenied.push({ name: copy.identity?.name ?? basename(copy.entry.path), path: join(copy.entry.path, "SKILL.md"), reason: "plugin-disabled" });
+      continue;
+    }
+    const evidence = unenrolledCodexPluginEvidence(parent, read), reasons = new Set<string>(evidence.reasons);
+    if (group.some(copy => !copy.identity) && !reasons.size) reasons.add("unsupported");
+    const plugin = installed.find(item => item.id === pluginId), receipt = lstatSync(join(parent, ".codex-remote-plugin-install.json"), { throwIfNoEntry: false });
+    if (receipt) {
+      const identity = codexRemoteInstallReceipt(parent, read);
+      if (identity === null || (plugin?.remotePluginId !== undefined && plugin.remotePluginId !== identity)) reasons.add("remote");
+      else remoteIdentities[parent] = identity;
+    } else if (plugin?.sourceType === "remote" || plugin?.remotePluginId !== undefined) reasons.add("remote");
+    if (reasons.size) refuse(pluginId, reasons, evidence.manifests);
+    else { enrollableParents.push(parent); classified.push({ pluginId, capabilities: [], manifests: evidence.manifests }); }
+  }
+  // Census: every plugin explicitly enabled in [plugins] that the saved binding
+  // does not know is classified, even when none of its skills is blocking now.
+  // Known means enrolled, inactive, an installation input, a semantic cache
+  // role, a witness under its cache parent, or a full witness of its manifest.
+  const savedSources: DiscoverySource[] = savedDiscovery?.sources ?? [];
+  const semanticParents = [...(savedDiscovery?.codexSemanticCache?.appOnlyParents ?? []), ...(savedDiscovery?.codexSemanticCache?.reviewedHookParents ?? [])].map(role => role.pluginParent);
+  for (const [pluginId, settings] of Object.entries((config.plugins ?? {}) as Record<string, any>).sort(([a], [b]) => a.localeCompare(b))) {
+    if (settings?.enabled !== true || refusals.some(item => item.pluginId === pluginId) || classified.some(item => item.pluginId === pluginId)) continue;
+    const at = pluginId.lastIndexOf("@"), name = pluginId.slice(0, at), market = pluginId.slice(at + 1);
+    if (at < 1 || ![name, market].every(part => /^[A-Za-z0-9_-]{1,64}$/.test(part))) continue;
+    const parent = join(cache, market, name);
+    if (!lstatSync(parent, { throwIfNoEntry: false })?.isDirectory()) continue;
+    const known = priorParents.includes(parent) || semanticParents.includes(parent)
+      || (binding.codexInactivePlugins ?? []).some((control: { pluginId: string }) => control.pluginId === pluginId)
+      || (savedDiscovery?.codexInstallationInputs?.plugins ?? []).some(input => input.pluginId === pluginId)
+      || savedSources.some(source => source.sha256 !== null && (source.path.startsWith(parent + sep) || source.path.endsWith(join(sep, name, ".codex-plugin", "plugin.json"))));
+    if (known) continue;
+    const evidence = unenrolledCodexPluginEvidence(parent, read);
+    if (evidence.reasons.length) refuse(pluginId, evidence.reasons, evidence.manifests);
+    else classified.push({ pluginId, capabilities: [], manifests: evidence.manifests });
+  }
+  // Catalog skills Codex would load from its runtime cache, which the guard's
+  // plugin controls do not cover: deny each by its stable qualified name.
+  const nameDenies = new Set<string>(), pathDenies = new Set<string>(), denied = new Set<string>();
+  for (const skill of catalog.skills) {
+    if (skill.enabled !== true || skill.name === CLI_BRIDGE_NAME && skill.pluginId === null || isCodexNativeSkillDisabled(skill, rules)) continue;
+    let document: string; try { document = realpathSync(skill.path); } catch { continue; }
+    const root = codexRuntimePluginRoot(document, runtimeCache);
+    if (!root) continue;
+    const pluginId = skill.pluginId ?? `${basename(root)}@codex-runtime`;
+    if (skill.pluginId !== null && pluginDisabled(skill.pluginId)) { inactive.add(skill.pluginId); continue; }
+    const evidence = codexPluginRootEvidence(root, read);
+    if (evidence.reasons.length) { refuse(pluginId, evidence.reasons, evidence.manifests); continue; }
+    if (!classified.some(item => item.pluginId === pluginId)) classified.push({ pluginId, capabilities: [], manifests: evidence.manifests });
+    let namespace: string | null = null; try { namespace = JSON.parse(read(join(root, ".codex-plugin/plugin.json")))?.name ?? null; } catch { /* unqualified below */ }
+    const qualified = skill.pluginId !== null && typeof namespace === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(namespace) && skill.pluginId.slice(0, skill.pluginId.lastIndexOf("@")) === namespace
+      && skill.name.startsWith(`${namespace}:`) && /^[A-Za-z0-9_-]{1,64}$/.test(skill.name.slice(namespace.length + 1));
+    if (qualified) { nameDenies.add(skill.name); denied.add(skill.name); }
+    else { pathDenies.add(document); pathDenied.push({ name: skill.name, path: document, reason: "no-qualified-name" }); }
+  }
+  if (refusals.length) throw new CodexPluginReconcileRefusal(CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, "a Codex plugin Skills has not enrolled carries an app, MCP or hooks capability (or an unverified remote installation); its skills stay quarantined until reviewed with skills hook install and a fresh native catalog and discovery review", refusals.sort((a, b) => a.pluginId.localeCompare(b.pluginId)));
+  const priorNames = new Set(prior.map(control => control.name));
+  const names = [...new Set(copies.filter(copy => priorParents.includes(copy.parent) || enrollableParents.includes(copy.parent)).map(copy => copy.identity!.name))].filter(name => !priorNames.has(name)).sort();
+  // Never override an explicit enable rule, by name or by exact path.
+  const canonicalRule = (path: string) => { try { return realpathSync(path); } catch { return resolve(path); } };
+  for (const name of [...priorNames, ...names, ...nameDenies]) if (Array.isArray(rules) && rules.some((rule: any) => typeof rule?.name === "string" && rule.name.trim() === name && rule.enabled !== false)) throw new CodexPluginReconcileRefusal("CODEX_NATIVE_SKILL_NAME_CONFLICT", `an existing [[skills.config]] rule enables ${JSON.stringify(name)}; review it before reconciling`);
+  const deniedPaths = [...pathDenies, ...copies.map(copy => join(copy.entry.path, "SKILL.md"))];
+  if (Array.isArray(rules) && rules.some((rule: any) => typeof rule?.path === "string" && rule.enabled !== false && deniedPaths.includes(canonicalRule(rule.path)))) throw new CodexPluginReconcileRefusal("CODEX_NATIVE_SKILL_NAME_CONFLICT", "an existing [[skills.config]] rule enables a skill path this reconcile would deny; review it before reconciling");
+  const missingDenies = prior.filter(control => !(Array.isArray(rules) && rules.some((rule: any) => typeof rule?.name === "string" && rule.name.trim() === control.name && rule.enabled === false)));
+  const bridgeDocument = join(custody.expected, "SKILL.md");
+  const report = (enrolledNames: string[], plannedRules: unknown): CodexPluginReconcileReport => {
+    const controlled = new Set([...priorNames, ...enrolledNames, ...pathDenied.map(item => item.name)]);
+    const skipped = new Set(collected.inventory.flatMap(entry => { const identity = identityOf(entry); return identity && !controlled.has(identity.name) ? [identity.name] : []; }));
+    return { codexVersion: catalog.version, enrolled: enrolledNames, alreadyEnrolled: priorNames.size, denied: [...denied].sort(), pathDenied: pathDenied.sort((a, b) => a.path.localeCompare(b.path)),
+      inactive: [...inactive].sort(), classified: [...classified].sort((a, b) => a.pluginId.localeCompare(b.pluginId)), rebasedWitnesses: rebase.rebased.length, skipped: skipped.size, allowed: codexReconcileAllowedSkills(catalog, plannedRules, bridgeDocument) };
+  };
+  if (!copies.length && !missingDenies.length && !nameDenies.size && !pathDenies.size && !rebase.rebased.length) return { plan: null, report: report([], rules) };
+  if (savedDiscovery?.codexSemanticCache) throw new CodexPluginReconcileRefusal("CODEX_RECONCILE_SEMANTIC_CACHE_UNSUPPORTED", "this binding uses the semantic cache witness, which binds the complete name set; refresh it with a fresh skills hook install review");
+  const input: CodexPluginReconcileInput = { copies: copies.map(copy => ({ path: copy.entry.path, hash: copy.entry.hash })).sort((a, b) => a.path.localeCompare(b.path)), names,
+    parents: [...priorParents, ...enrollableParents].sort(), remoteIdentities, nameDenies: [...nameDenies].sort(), pathDenies: [...pathDenies].sort(), ...(discovery ? { discovery } : {}) };
+  const plan = planAgentIntegration({ home, dataDir, projectDir, agents: ["codex"], codexNativeCatalog: catalog, codexReconcile: input });
+  assertCodexReconcileScope(plan, { configPath, policyPath, prior, names, discovery: discovery ?? savedDiscovery! });
+  const configChange = plan.changes.find(change => resolve(change.path) === configPath);
+  const plannedRules = configChange ? (Bun.TOML.parse(configChange.after) as any).skills?.config ?? [] : rules;
+  const result = report(names, plannedRules);
+  if (!plan.changes.length) throw new Error("CODEX_RECONCILE_FAILED: the reconcile found work but planned no change");
+  plan.codexReconcile = { ...input, request: { home, dataDir, projectDir, catalog } };
+  return { plan, report: result };
+}
+
 export function applyAgentIntegration(plan: AgentIntegrationPlan, options: CodexCorpusWriteOptions = {}): { changed: string[]; backups: string[]; rootAliases?: AgentRootAlias[] } & CodexAdmissionReceipt {
   const roots = plan.changes.flatMap(change => {
     const lexical = codexCorpusRootForPath(change.path);
@@ -1366,7 +1644,16 @@ function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: Code
   // still uses the ordinary native approval flow for its newly installed hook.
   // Recheck custody, discovery and unexpected copies before backups or writes.
   // Only the repairable bridge protection waits for the post-write proof.
-  for (const agent of plan.retainedReviewChecks?.agents ?? []) assertRetainedReviewState(agent, { ...plan.retainedReviewChecks!, dataDir: plan.dataDir });
+  const reconcileCopies = plan.codexReconcile ? new Map(plan.codexReconcile.copies.map(copy => [copy.path, copy.hash])) : undefined;
+  for (const agent of plan.retainedReviewChecks?.agents ?? []) assertRetainedReviewState(agent, { ...plan.retainedReviewChecks!, dataDir: plan.dataDir }, agent === "codex" ? reconcileCopies : undefined, agent === "codex" ? plan.codexReconcile?.discovery : undefined);
+  if (plan.codexReconcile) {
+    // Re-derive the whole reconcile under the corpus lock from the same native
+    // catalog; any native, configuration or policy movement refuses the write.
+    const verified = planCodexPluginNameReconcile(plan.codexReconcile.request).plan;
+    if (!verified || JSON.stringify(verified.changes) !== JSON.stringify(plan.changes)
+      || JSON.stringify(verified.discoveryAfter) !== JSON.stringify(plan.discoveryAfter)
+      || JSON.stringify(verified.codexReconcile) !== JSON.stringify(plan.codexReconcile)) throw new Error("CODEX_RECONCILE_PLAN_CHANGED: native state changed after the Codex name reconcile was planned; run it again");
+  }
   if (plan.reviewArtifactMigration) {
     const verified = planReviewedArtifactMigration(plan.reviewArtifactMigration);
     if (JSON.stringify(verified.changes) !== JSON.stringify(plan.changes)
@@ -1440,7 +1727,10 @@ function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: Code
     // compensated, so custody-gating the pre-write check above cannot let a
     // broken bridge become a configured one.
     for (const agent of plan.retainedReviewChecks?.agents ?? []) assertManagedAgentBridge(agent, { ...plan.retainedReviewChecks!, dataDir: plan.dataDir });
-    atomicWrite(join(backupRoot, "receipt.json"), JSON.stringify({ version: 1, changes: written.map(change => ({ path: change.path, beforeHash: change.before === null ? null : sha(change.before), afterHash: sha(change.after) })), backups, ...(plan.cacheWitnessUpgrade ? { cacheWitnessUpgrade: plan.cacheWitnessUpgrade } : {}), ...(plan.retainedReviewArtifacts?.length ? { retainedReviewArtifacts: plan.retainedReviewArtifacts.map(item => ({ path: item.path, ...item.artifact })) } : {}), ...(aliases.length ? { rootAliases: aliases } : {}), ...fallback }) + "\n");
+    // A reconcile is complete only when the strict guard, with no reconcile
+    // allowance, accepts the written state; otherwise every write is compensated.
+    if (plan.codexReconcile) assertManagedAgentBridge("codex", { home: plan.codexReconcile.request.home, dataDir: plan.dataDir, projectDir: plan.codexReconcile.request.projectDir });
+    atomicWrite(join(backupRoot, "receipt.json"), JSON.stringify({ version: 1, changes: written.map(change => ({ path: change.path, beforeHash: change.before === null ? null : sha(change.before), afterHash: sha(change.after) })), backups, ...(plan.cacheWitnessUpgrade ? { cacheWitnessUpgrade: plan.cacheWitnessUpgrade } : {}), ...(plan.codexReconcile ? { codexReconcile: { codexVersion: plan.codexReconcile.request.catalog.version, enrolled: plan.codexReconcile.names } } : {}), ...(plan.retainedReviewArtifacts?.length ? { retainedReviewArtifacts: plan.retainedReviewArtifacts.map(item => ({ path: item.path, ...item.artifact })) } : {}), ...(aliases.length ? { rootAliases: aliases } : {}), ...fallback }) + "\n");
   } catch (error) {
     assertCurrent();
     for (const change of written.reverse()) {
@@ -1862,18 +2152,24 @@ function assertUnrepairableBridgeProtection(custody: ManagedBridgeCustody, agent
 }
 
 /** Both planning and application validate the original native state. Repairable
- * hook/plugin protection is deliberately checked only after installation. */
-function assertRetainedReviewState(agent: IntegrationAgent, options: ManagedBridgeOptions): void {
-  const custody = assertManagedBridgeCustody(agent, options);
+ * hook/plugin protection is deliberately checked only after installation.
+ * `reconcileCopies` (Codex name reconcile only) names the exact plugin-cache
+ * copies, by canonical path and tree hash, that the plan enrolls; any other
+ * unexpected copy, or a changed one, still refuses. */
+function assertRetainedReviewState(agent: IntegrationAgent, options: ManagedBridgeOptions, reconcileCopies?: ReadonlyMap<string, string>, reconcileDiscovery?: AgentDiscoveryBinding): void {
+  const custody = assertManagedBridgeCustody(agent, options, reconcileCopies ? reconcileDiscovery : undefined);
   assertUnrepairableBridgeProtection(custody, agent);
-  assertManagedNativeDiscovery(custody, agent, options);
+  if (!reconcileCopies) { assertManagedNativeDiscovery(custody, agent, options); return; }
+  const collected: CodexReconcileCollection = { blocking: [], inventory: [] };
+  assertManagedNativeDiscovery(custody, agent, options, collected);
+  if (collected.blocking.some(entry => reconcileCopies.get(entry.path) !== entry.hash)) throw new NativeSkillCopiesDriftError("NATIVE_SKILL_DRIFT: native skill copies changed after the Codex name reconcile was planned; run skills hook codex-reconcile again");
 }
 
 // Preserve the specific copy-remediation message instead of appending the
 // generic retained-discovery repair, which can duplicate or contradict it.
 class NativeSkillCopiesDriftError extends Error {}
 
-function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options: ManagedBridgeOptions = {}, provenDiscovery?: AgentDiscoveryBinding): ManagedBridgeReport {
+function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options: ManagedBridgeOptions = {}, provenDiscovery?: AgentDiscoveryBinding, collect?: CodexReconcileCollection): ManagedBridgeReport {
   const custody = assertManagedBridgeCustody(agent, options, provenDiscovery);
   const { home, aliases, expected, discovery, config, command, profile } = custody;
   if (agent === "hermes") {
@@ -1898,13 +2194,13 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
     if ([...setting(expected), ...(codexConfig.skills?.config ?? []).filter(entry => typeof entry.name === "string" && entry.name.trim() === CLI_BRIDGE_NAME)].some(entry => entry.enabled === false)) throw new Error("NATIVE_SKILL_DRIFT: the Codex CLI bridge is disabled; run skills hook install");
   }
   if (agent === "gemini" && discovery && !discovery.builtinNames?.every(name => config.skills.disabled.includes(name))) throw new Error("NATIVE_SKILL_DRIFT: an installed Gemini builtin is not disabled");
-  return assertManagedNativeDiscovery(custody, agent, options);
+  return assertManagedNativeDiscovery(custody, agent, options, collect);
 }
 
 /** Native/discovery state is never repaired implicitly by reusing a review.
  * Share this validator with the full guard, including its live-hook-only policy
  * and vendor exceptions. Install callers pass neither exception. */
-function assertManagedNativeDiscovery(custody: ManagedBridgeCustody, agent: IntegrationAgent, options: ManagedBridgeOptions): ManagedBridgeReport {
+function assertManagedNativeDiscovery(custody: ManagedBridgeCustody, agent: IntegrationAgent, options: ManagedBridgeOptions, collect?: CodexReconcileCollection): ManagedBridgeReport {
   const { home, dataDir, binding, aliases, expected, roots, discovery } = custody;
   const visible = (entry: NativeSkillEntry) => entry.agent === agent || (["codex", "gemini", "opencode", "hermes", "sumi"].includes(agent) && entry.path.includes(`${sep}.agents${sep}skills${sep}`)) || (["opencode", "sumi"].includes(agent) && entry.agent === "claude");
   const codexPath = canonicalAgentPath(join(home, ".codex", "config.toml"), aliases);
@@ -1920,7 +2216,7 @@ function assertManagedNativeDiscovery(custody: ManagedBridgeCustody, agent: Inte
   } : undefined;
   if (options.codexDiscoveryRecovery && (agent !== "codex" || options.codexDiscoveryRecovery.configPath !== codexPath)) throw new Error("NATIVE_SKILL_DRIFT: Codex trust recovery names a different configuration root");
   const codexConfig = agent === "codex" ? Bun.TOML.parse(readOptional(codexPath) ?? "") as { plugins?: unknown; skills?: { bundled?: { enabled?: boolean }; config?: Array<{ path?: string; name?: string; enabled?: boolean }> } } : {};
-  if (agent === "codex" && !reviewedCodexPluginCapabilitiesUnchanged(canonicalAgentPath(join(home,".codex/plugins/cache"),aliases),binding.codexPluginSkills ?? [],path=>new TextDecoder("utf-8",{fatal:true}).decode(readNativeBytes(path,1024*1024)),codexConfig.skills?.config ?? [])) throw new Error("NATIVE_SKILL_DRIFT: reviewed native plugin capability controls changed; run skills hook install with a fresh discovery review");
+  if (agent === "codex" && !reviewedCodexPluginCapabilitiesUnchanged(canonicalAgentPath(join(home,".codex/plugins/cache"),aliases),binding.codexPluginSkills ?? [],path=>new TextDecoder("utf-8",{fatal:true}).decode(readNativeBytes(path,1024*1024)),codexConfig.skills?.config ?? [])) throw new Error(`NATIVE_SKILL_DRIFT: ${CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED}: reviewed native plugin capability controls changed; run skills hook install with a fresh discovery review`);
   const disabledPlugin = (entry: NativeSkillEntry): boolean => {
     if (agent !== "codex" || !entry.vendor) return false;
     const document=join(entry.path,"SKILL.md"), cache=canonicalAgentPath(join(home,".codex/plugins/cache"),aliases), read=(path:string)=>new TextDecoder("utf-8",{fatal:true}).decode(readNativeBytes(path,1024*1024));
@@ -2013,7 +2309,11 @@ function assertManagedNativeDiscovery(custody: ManagedBridgeCustody, agent: Inte
   if (agent === "codex" && options.codexPromptHook === true && unexpected.length > inert.length) {
     inertVendor = unexpected.filter(entry => !inert.includes(entry) && inertVendorCopy(entry));
   }
-  if (unexpected.length > inert.length + inertVendor.length) {
+  if (collect) { collect.custody = custody; collect.inventory = inventory; }
+  // Codex name reconcile only: report the copies this strict check refuses for
+  // classification instead of refusing; every other check above still throws.
+  if (collect && agent === "codex" && !options.codexPromptHook && !options.codexNativePolicy) collect.blocking = unexpected;
+  else if (unexpected.length > inert.length + inertVendor.length) {
     // The adapter is all-or-nothing, so only exempted vendor copies leave the list.
     const blocking = unexpected.filter(entry => !inertVendor.includes(entry));
     // Strict callers (every guard call except the live Codex prompt hook) accept

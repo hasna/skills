@@ -267,7 +267,7 @@ describe("B3: only changes a vendor plugin refresh provably makes are tolerated"
     applyAgentIntegration(planAgentIntegration({ ...opts(s), agents: ["codex"], codexNativeCatalog: catalog }));
     expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toBe("ACCEPTED");
     put(join(root, ".app.json"), app.replace("true", "false"));
-    const capability = "NATIVE_SKILL_DRIFT: reviewed native plugin capability controls changed; run skills hook install with a fresh discovery review";
+    const capability = "NATIVE_SKILL_DRIFT: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED: reviewed native plugin capability controls changed; run skills hook install with a fresh discovery review";
     expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toBe(capability);
     expect(refusal(() => assertManagedAgentBridge("codex", live(s)))).toBe(capability);
   });
