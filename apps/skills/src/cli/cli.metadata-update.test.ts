@@ -61,7 +61,7 @@ function cliFixture() {
   const priorExitCode = process.exitCode;
   process.exitCode = 0;
   const root = mkdtempSync(join(tmpdir(), "metadata-cli-"));
-  return { root, requests, rendered, errors,
+  return { root, requests, rendered, errors, current: () => content,
     patches: () => requests.filter(request => request.startsWith("PATCH ")),
     run: async (...args: string[]) => { const program = new Command(); registerMetadata(program); await program.parseAsync(["metadata", ...args], { from: "user" }); },
     restore: () => { factory.mockRestore(); writer.mockRestore(); stderr.mockRestore(); process.exitCode = priorExitCode ?? 0; rmSync(root, { recursive: true, force: true }); } };
@@ -108,5 +108,21 @@ for (const tags of ["not json", "\"solo\"", "[1]", "[\"x\",\"x\"]", "{}"]) test(
     expect(existsSync(saved)).toBe(false);
     expect(f.requests).toEqual([]);
     expect(f.rendered).toEqual([]);
+  } finally { f.restore(); }
+});
+for (const [field, value] of [["skillMd", "INJECTED body"], ["version", "9.9.9"]] as const) test(`CLI apply refuses a saved plan whose patch carries ${field}, before any PATCH`, async () => {
+  const f = cliFixture();
+  try {
+    const saved = join(f.root, "review-plan.json"), tampered = join(f.root, "tampered-plan.json");
+    await f.run("preview", "fixture-skill", "--category", "new", "--save", saved);
+    expect(process.exitCode).toBe(0);
+    const original = structuredClone(f.current());
+    const plan = JSON.parse(readFileSync(saved, "utf8"));
+    writeFileSync(tampered, `${JSON.stringify({ ...plan, patch: { ...plan.patch, [field]: value } })}\n`, { mode: 0o600 });
+    await f.run("apply", "--file", tampered);
+    expect(f.patches()).toEqual([]);
+    expect(f.current()).toEqual(original);
+    expect(process.exitCode).toBe(1);
+    expect(f.errors.at(-1)).toBe(new SkillMetadataUpdateError("INVALID_METADATA_PATCH").message);
   } finally { f.restore(); }
 });

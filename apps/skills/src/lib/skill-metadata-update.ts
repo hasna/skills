@@ -25,11 +25,17 @@ export class SkillMetadataUpdateError extends Error {
 }
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const text = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 512 && !/[\x00-\x1f\x7f]/.test(value);
+/** Read category and tags once into a plain copy, then validate and return only that copy. */
 export function metadataPatch(value: unknown): SkillMetadataPatch {
-  if (!object(value) || !Object.keys(value).length || Object.keys(value).some(key => !["category", "tags"].includes(key))) throw new SkillMetadataUpdateError("INVALID_METADATA_PATCH");
-  if (Object.hasOwn(value, "category") && !text(value.category)) throw new SkillMetadataUpdateError("INVALID_METADATA_PATCH");
-  if (Object.hasOwn(value, "tags") && (!Array.isArray(value.tags) || value.tags.length > 100 || value.tags.some(tag => !text(tag)) || new Set(value.tags).size !== value.tags.length)) throw new SkillMetadataUpdateError("INVALID_METADATA_PATCH");
-  return structuredClone(value) as SkillMetadataPatch;
+  if (!object(value)) throw new SkillMetadataUpdateError("INVALID_METADATA_PATCH");
+  const keys = Object.keys(value);
+  if (!keys.length || keys.some(key => !["category", "tags"].includes(key))) throw new SkillMetadataUpdateError("INVALID_METADATA_PATCH");
+  const copy: { category?: unknown; tags?: unknown } = {};
+  if (Object.hasOwn(value, "category")) copy.category = value.category;
+  if (Object.hasOwn(value, "tags")) { const tags = value.tags; copy.tags = Array.isArray(tags) ? Array.from(tags) : tags; }
+  if (Object.hasOwn(copy, "category") && !text(copy.category)) throw new SkillMetadataUpdateError("INVALID_METADATA_PATCH");
+  if (Object.hasOwn(copy, "tags") && (!Array.isArray(copy.tags) || copy.tags.length > 100 || copy.tags.some(tag => !text(tag)) || new Set(copy.tags).size !== copy.tags.length)) throw new SkillMetadataUpdateError("INVALID_METADATA_PATCH");
+  return copy as SkillMetadataPatch;
 }
 /** Normalize exactly the owning registry's revision fields, never arbitrary extras. */
 export function metadataSnapshot(value: unknown, etag: string | null): { content: RevisionContent; revisionId: string } {

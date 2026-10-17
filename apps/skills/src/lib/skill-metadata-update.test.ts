@@ -5,31 +5,36 @@ import { metadataPatch, metadataPlan, metadataSnapshot } from "./skill-metadata-
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
-function fixture(options: { permission?: boolean; etag?: boolean; outcome?: "transport" | "500" | "409" | "alter-body"; servedSlug?: string } = {}) {
+/** Well-formed quoted revision that names no fixture content. */
+const mismatchedEtag = `"${"0".repeat(64)}"`;
+function fixture(options: { permission?: boolean; permissions?: "absent" | "without-publish"; etag?: boolean; outcome?: "transport" | "500" | "409" | "alter-body" | "mismatch-etag-after-patch"; servedSlug?: string } = {}) {
   let content: RevisionContent = { slug: options.servedSlug ?? "fixture-skill", displayName: "Fixture", description: "Synthetic", category: "Development Tools", tags: ["old"],
     source: "custom", kind: "instruction", version: "1.0.0", skillMd: "Synthetic instruction body", bundleSha256: "a".repeat(64), bundleByteSize: 42 };
   const original = structuredClone(content);
   const calls: Array<{ method: string; body?: any; guard?: string | null }> = [];
+  let etagOverride: string | undefined;
   globalThis.fetch = (async (input, init) => {
     const path = new URL(String(input)).pathname, method = init?.method ?? "GET";
     if (path.endsWith("/whoami")) return Response.json({ organization: { id: "fixture-org" } });
-    if (path.endsWith("/capabilities")) return Response.json({ contractVersion: 1, apiVersion: 1, capabilities: ["skills.registry"], permissions: { publish: options.permission ?? true } });
+    if (path.endsWith("/capabilities")) return Response.json({ contractVersion: 1, apiVersion: 1, capabilities: ["skills.registry"],
+      ...(options.permissions === "absent" ? {} : { permissions: options.permissions === "without-publish" ? { read: true } : { publish: options.permission ?? true } }) });
     if (!path.endsWith("/fixture-skill")) throw Error("Unexpected endpoint");
     const payload = () => ({ ...content, source: "remote", publishedSource: content.source, revisionId: revisionIdOf(content) });
-    const headers = (): Record<string, string> => options.etag === false ? {} : { ETag: `"${revisionIdOf(content)}"` };
+    const headers = (): Record<string, string> => options.etag === false ? {} : { ETag: etagOverride ?? `"${revisionIdOf(content)}"` };
     calls.push({ method, ...(method === "PATCH" ? { body: JSON.parse(String(init?.body)), guard: new Headers(init?.headers).get("if-match") } : {}) });
     if (method === "PATCH") {
       if (options.outcome === "409") return Response.json({ code: "REVISION_CONFLICT" }, { status: 409 });
       expect(new Headers(init?.headers).get("if-match")).toBe(`"${revisionIdOf(content)}"`);
       content = { ...content, ...JSON.parse(String(init?.body)) };
       if (options.outcome === "alter-body") content.skillMd = "Unexpected changed body";
+      if (options.outcome === "mismatch-etag-after-patch") etagOverride = mismatchedEtag;
       if (options.outcome === "transport") throw new TypeError("Synthetic connection reset after commit");
       if (options.outcome === "500") return new Response(null, { status: 500 });
     }
     return Response.json(payload(), { headers: headers() });
   }) as typeof fetch;
   return { client: new RemoteSkillsClient("synthetic", "https://example.invalid"), calls, original, current: () => content,
-    change: () => { content = { ...content, description: "Concurrent change" }; } };
+    change: () => { content = { ...content, description: "Concurrent change" }; }, mismatchEtag: () => { etagOverride = mismatchedEtag; } };
 }
 test("preview is read-only; apply sends only category/tags with the exact ETag and preserves body/version/bundle", async () => {
   const f = fixture();
@@ -129,4 +134,41 @@ test("a plan that changes nothing returns unchanged without sending a PATCH", as
   expect(await f.client.applySkillMetadataUpdate(plan)).toEqual({ status: "unchanged", revisionId: revisionIdOf(f.original) });
   expect(f.calls.map(call => call.method)).toEqual(["GET", "GET"]);
   expect(f.current()).toEqual(f.original);
+});
+test("a present but mismatched server ETag refuses preview", async () => {
+  const f = fixture(); f.mismatchEtag();
+  await expect(f.client.prepareSkillMetadataUpdate("fixture-skill", { tags: [] })).rejects.toMatchObject({ code: "INVALID_METADATA_SNAPSHOT" });
+  expect(f.calls.map(call => call.method)).toEqual(["GET"]);
+});
+test("a present but mismatched server ETag at apply refuses before PATCH", async () => {
+  const f = fixture(); const plan = await f.client.prepareSkillMetadataUpdate("fixture-skill", { tags: [] }); f.mismatchEtag();
+  await expect(f.client.applySkillMetadataUpdate(plan)).rejects.toMatchObject({ code: "INVALID_METADATA_SNAPSHOT" });
+  expect(f.calls.some(call => call.method === "PATCH")).toBe(false);
+  expect(f.current()).toEqual(f.original);
+});
+test("a mismatched ETag on the write response and readback is never confirmation", async () => {
+  const f = fixture({ outcome: "mismatch-etag-after-patch" }); const plan = await f.client.prepareSkillMetadataUpdate("fixture-skill", { tags: [] });
+  await expect(f.client.applySkillMetadataUpdate(plan)).rejects.toMatchObject({ code: "METADATA_UPDATE_UNCONFIRMED" });
+  expect(f.calls.filter(call => call.method === "PATCH")).toHaveLength(1);
+});
+for (const permissions of ["absent", "without-publish"] as const) test(`capabilities ${permissions === "absent" ? "with no permissions field" : "with permissions but no publish"} refuse before PATCH`, async () => {
+  const f = fixture({ permissions }); const plan = await f.client.prepareSkillMetadataUpdate("fixture-skill", { tags: [] });
+  await expect(f.client.applySkillMetadataUpdate(plan)).rejects.toMatchObject({ code: "SKILLS_PERMISSION_DENIED" });
+  expect(f.calls.some(call => call.method === "PATCH")).toBe(false);
+  expect(f.current()).toEqual(f.original);
+});
+test("a patch whose getters change between reads is captured once and only the validated value is sent", async () => {
+  const invalid = `${"x".repeat(611)}\n`;
+  const shifting = () => {
+    let categoryReads = 0, tagsReads = 0;
+    return { get category() { return categoryReads++ === 0 ? "Productivity & Organization" : invalid; },
+      get tags() { return tagsReads++ === 0 ? ["curated"] : [invalid]; } };
+  };
+  const validated = { category: "Productivity & Organization", tags: ["curated"] };
+  expect(metadataPatch(shifting())).toEqual(validated);
+  const f = fixture(); const plan = await f.client.prepareSkillMetadataUpdate("fixture-skill", shifting());
+  expect(plan.patch).toEqual(validated);
+  expect(await f.client.applySkillMetadataUpdate(plan)).toMatchObject({ status: "applied" });
+  expect(f.calls.filter(call => call.method === "PATCH").map(call => call.body)).toEqual([validated]);
+  expect(f.current()).toMatchObject(validated);
 });
