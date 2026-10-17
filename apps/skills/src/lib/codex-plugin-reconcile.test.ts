@@ -621,7 +621,7 @@ test("B1: a skill Codex still reports enabled despite an existing deny row count
 /** Appends `[[skills.config]]` rows to the station config and re-runs the reviewed install, so the review binds them. */
 function reviewWithRows(station: ReturnType<typeof enrolledStation>, rows: string) {
   writeFileSync(station.config, `${readFileSync(station.config, "utf8")}${rows}`);
-  const enrollment: CodexNativeSkillCatalog = { version: "codex-cli 0.163.0", cwd: station.home, plugins: [station.plugin], skills: ["maintain-space", "write-page"].map(name => station.skill(station.first, name)) };
+  const enrollment: CodexNativeSkillCatalog = { version: "codex-cli 0.163.0", cwd: station.home, plugins: [station.plugin], skills: ["maintain-space", "write-page"].map(name => station.skill(station.first, name)), remoteReceipts: captureCodexRemoteReceiptSnapshot(station.cache) };
   const review = { version: 1 as const, agents: [{ agent: "codex" as const, roots: [station.cache], sources: [captureCodexSettingsV3(station.config)], pluginHooks: "reviewed-no-skill-injection" as const }] };
   applyAgentIntegration(planAgentIntegration({ ...station.options, agents: ["codex"], codexNativeCatalog: enrollment, discoveryInputs: review }));
   expect(blocks(station, false)).toBe(false);
@@ -684,7 +684,7 @@ test("M25: a cosmetic reformat of ~/.codex/hooks.json makes the plan exceed its 
 
 test("M39: apply re-plans under the lock, so a capability added after planning refuses the write", async () => {
   const station = enrolledStation(), root = refresh(station, "1.1.0", BUMPED);
-  const { plan } = planCodexPluginNameReconcile({ ...station.options, catalog: station.catalog(["manage-schedules", "organize-space", "publish-page"].map(name => station.skill(root, name))) });
+  const { plan } = planCodexPluginNameReconcile({ ...station.options, catalog: { ...station.catalog(["manage-schedules", "organize-space", "publish-page"].map(name => station.skill(root, name))), remoteReceipts: captureCodexRemoteReceiptSnapshot(station.cache) } });
   // The retained-review post-write strict guard also covers reconcile writes.
   expect(plan!.retainedReviewChecks?.agents).toEqual(["codex"]);
   const before = station.snapshot();
@@ -831,7 +831,7 @@ test("K34: a binding that uses the semantic cache witness refuses with its own c
 
 test("A2: the deny rows go through Codex's versioned writer, and the policy follows only after the config readback", async () => {
   const station = enrolledStation(), root = refresh(station, "1.1.0", BUMPED), configBefore = readFileSync(station.config, "utf8"), policyBefore = readFileSync(station.policy, "utf8");
-  const planned = planCodexPluginNameReconcile({ ...station.options, catalog: newNames(station, root) }).plan!.changes.find(change => change.path === station.config)!.after;
+  const planned = planCodexPluginNameReconcile({ ...station.options, catalog: { ...newNames(station, root), remoteReceipts: captureCodexRemoteReceiptSnapshot(station.cache) } }).plan!.changes.find(change => change.path === station.config)!.after;
   const result = await station.run(true, newNames(station, root));
   expect(result).toMatchObject({ outcome: "applied", enrolled: NEW });
   const configAfter = readFileSync(station.config, "utf8");
@@ -871,7 +871,7 @@ test("A2: with no Codex writer reachable the reconcile refuses with a named code
   expect(result).toMatchObject({ outcome: "refused", code: "CODEX_RECONCILE_NATIVE_WRITER_UNAVAILABLE", changes: [] });
   expect(station.snapshot()).toEqual(before);
   // The ordinary file writer refuses a reconcile plan outright.
-  const { plan } = planCodexPluginNameReconcile({ ...station.options, catalog: newNames(station, root) });
+  const { plan } = planCodexPluginNameReconcile({ ...station.options, catalog: { ...newNames(station, root), remoteReceipts: captureCodexRemoteReceiptSnapshot(station.cache) } });
   expect(() => applyAgentIntegration(plan!)).toThrow("CODEX_RECONCILE_NATIVE_WRITER_REQUIRED");
   expect(station.snapshot()).toEqual(before);
   // A Codex that reports a different user configuration also refuses before any write.
@@ -1042,7 +1042,7 @@ test("an unverifiable write is reported as uncertain, never as a refusal, naming
   expect(readFileSync(station.policy, "utf8")).toBe(policyBefore);
   // A write that times out and lands after the check is uncertain too, not refused.
   const late = enrolledStation(), lateRoot = refresh(late, "1.1.0", BUMPED), latePolicy = readFileSync(late.policy, "utf8");
-  const planned = planCodexPluginNameReconcile({ ...late.options, catalog: newNames(late, lateRoot) }).plan!.changes.find(change => change.path === late.config)!.after;
+  const planned = planCodexPluginNameReconcile({ ...late.options, catalog: { ...newNames(late, lateRoot), remoteReceipts: captureCodexRemoteReceiptSnapshot(late.cache) } }).plan!.changes.find(change => change.path === late.config)!.after;
   const timeout = fakeCodexWriter(late.config, { write: (call, current, emulated) => call === 0 ? current : emulated, loseResponse: call => call === 0 });
   const timedOut = await late.run(true, newNames(late, lateRoot), timeout.connect);
   expect(timedOut).toMatchObject({ outcome: "error", code: "CODEX_RECONCILE_NATIVE_WRITE_UNCERTAIN" });
@@ -1131,10 +1131,11 @@ test("a manifest, app or receipt change landing while Codex writes is an error w
 
 test("an absent enrolled plugin whose controls are not remote, skills-only and denied by name is not exempt and refuses", async () => {
   // Pages is enrolled with an app: an uninstalled Pages has no reviewed disabled identity to keep.
+  // Every control records the remote receipt, so its absence also reports `remote`.
   const station = enrolledStation();
   rmSync(station.parent, { recursive: true });
   const before = station.snapshot();
-  expect(await station.run(true, station.catalog([]))).toMatchObject({ outcome: "refused", code: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, refusals: [{ pluginId: PLUGIN, reasons: ["unsupported"] }] });
+  expect(await station.run(true, station.catalog([]))).toMatchObject({ outcome: "refused", code: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, refusals: [{ pluginId: PLUGIN, reasons: ["remote", "unsupported"] }] });
   expect(station.snapshot()).toEqual(before);
 });
 
@@ -1343,3 +1344,52 @@ for (const [label, kept] of [
   expect(station.controls().map(control => control.remotePluginId !== undefined)).toEqual([...kept]);
   await expectRemoteReceiptChangeCaught(station);
 });
+
+// ---- #139 reviewer B's non-blocking uninstall cases, in this suite's style.
+/** Enroll a remote skills-only plugin `atlas` (skill `plan`) in `market` through the reconcile. */
+async function enrollRemoteAtlas(station: ReturnType<typeof enrolledStation>, market = "openai-curated-remote") {
+  const id = `atlas@${market}`, remote = "plugins~Plugin_00000000000000000000000000000888";
+  const parent = join(station.cache, market, "atlas"), root = join(parent, "2.0.0");
+  put(join(parent, ".codex-remote-plugin-install.json"), JSON.stringify({ schema_version: 1, remote_plugin_id: remote }));
+  put(join(root, ".codex-plugin/plugin.json"), JSON.stringify({ name: "atlas", version: "2.0.0" }));
+  put(join(root, "skills/plan/SKILL.md"), payload("plan"));
+  const row = { id, name: "atlas", installed: true, enabled: true, localVersion: null, remotePluginId: remote, sourceType: "remote" as const };
+  expect(await station.run(true, station.catalog([station.skill(root, "plan", id, "atlas")], { plugins: [station.plugin, row] }))).toMatchObject({ outcome: "applied", enrolled: ["atlas:plan"] });
+  return { id, parent, root, row };
+}
+
+test("an uninstalled plugin stays exempt when Codex reports it installed but disabled, or not installed at all", async () => {
+  const station = enrolledStation(), atlas = await enrollRemoteAtlas(station);
+  rmSync(atlas.parent, { recursive: true });
+  expect(await station.run(true, station.catalog([], { plugins: [station.plugin, { ...atlas.row, enabled: false }] }))).toMatchObject({ outcome: "unchanged" });
+  expect(await station.run(true, station.catalog([], { plugins: [station.plugin, { ...atlas.row, installed: false }] }))).toMatchObject({ outcome: "unchanged" });
+});
+
+test("an uninstalled plugin stays exempt when only a plugin of the same name in another marketplace is reported enabled", async () => {
+  // The catalog check keys on the exact plugin id; nothing of the other marketplace is materialized.
+  const station = enrolledStation(), atlas = await enrollRemoteAtlas(station);
+  rmSync(atlas.parent, { recursive: true });
+  expect(await station.run(true, station.catalog([], { plugins: [station.plugin, { ...atlas.row, id: "atlas@openai-curated" }] }))).toMatchObject({ outcome: "unchanged" });
+});
+
+test("a plugin Codex uninstalls during the write, while the plan's catalog reports it enabled, refuses after the write and both writes are compensated", async () => {
+  // Codex refreshes atlas to a body-free materialization the guard still accepts.
+  const station = enrolledStation(), atlas = await enrollRemoteAtlas(station);
+  rmSync(join(atlas.root, "skills"), { recursive: true });
+  const root = refresh(station, "1.1.0", BUMPED);
+  const configBefore = readFileSync(station.config, "utf8"), policyBefore = readFileSync(station.policy, "utf8"), receiptsBefore = receipts(station);
+  const writer = fakeCodexWriter(station.config, { afterWrite: call => { if (call === 0) rmSync(atlas.parent, { recursive: true }); } });
+  const reported = station.catalog(newNames(station, root).skills.slice(1), { plugins: [station.plugin, atlas.row] });
+  const result = await station.run(true, reported, writer.connect);
+  expect(result).toMatchObject({ outcome: "refused", code: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, refusals: [{ pluginId: atlas.id, reasons: ["unsupported"] }] });
+  expect(result.message).toContain("was removed while the reconcile was writing");
+  expect(result.message).not.toContain("gained a capability");
+  expect(writer.log.writes).toHaveLength(2);
+  expect(readFileSync(station.config, "utf8")).toBe(configBefore);
+  expect(readFileSync(station.policy, "utf8")).toBe(policyBefore);
+  expect(receipts(station)).toEqual(receiptsBefore);
+  // A fresh catalog no longer reports the uninstalled plugin: the bump applies.
+  expect(await station.run(true, newNames(station, root))).toMatchObject({ outcome: "applied", enrolled: NEW });
+  expect(blocks(station, false)).toBe(false);
+});
+

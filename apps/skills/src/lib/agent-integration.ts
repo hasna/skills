@@ -1794,7 +1794,10 @@ function assertReconciledPluginCapabilities(plan: AgentIntegrationPlan, aliases:
     const reasons = [...new Set([...codexReconcileStrictChanges(cache, group, read, rules, plan.codexReconcile!.request.catalog), ...codexPluginCapabilityChanges(cache, group, read, rules)])].sort();
     return reasons.length ? [{ pluginId: group[0]!.pluginId, reasons, manifests: [] as string[] }] : [];
   });
-  if (refusals.length) throw new CodexPluginReconcileRefusal(CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, "an enrolled Codex plugin gained a capability while the reconcile was writing; the writes are compensated and the plugin stays quarantined until reviewed with skills hook install and a fresh native catalog and discovery review", refusals);
+  // A parent that vanished while the catalog still reports its plugin enabled was
+  // uninstalled during the write: say so rather than claim a gained capability.
+  const removed = refusals.some(refusal => !lstatSync(controls.find(control => control.pluginId === refusal.pluginId)!.pluginParent, { throwIfNoEntry: false }));
+  if (refusals.length) throw new CodexPluginReconcileRefusal(CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, `${removed ? "an enrolled Codex plugin was removed while the reconcile was writing, though the native catalog still reports it enabled; re-capture the catalog and run the reconcile again" : "an enrolled Codex plugin gained a capability while the reconcile was writing; it stays quarantined until reviewed with skills hook install and a fresh native catalog and discovery review"}; the writes are compensated`, refusals);
 }
 
 function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: CodexCorpusWriteOptions = {}, assertCurrent: () => void, admission?: CodexCorpusAdmission): { changed: string[]; backups: string[]; rootAliases?: AgentRootAlias[] } & CodexAdmissionReceipt {
