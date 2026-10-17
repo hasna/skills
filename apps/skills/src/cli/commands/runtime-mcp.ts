@@ -133,7 +133,7 @@ async function registerClaudeMcp(command: string, server: Record<string, unknown
       const previous = parseClaudeConfig(before), data = parseClaudeConfig(current);
       if (exitCode === 0) {
         const actual = isPlainObject(data.mcpServers) ? data.mcpServers[MCP_SERVER_NAME] : undefined;
-        if (!isDeepStrictEqual(withoutClaudeSkills(previous), withoutClaudeSkills(data))
+        if (!claudeNativeConfigPreserved(previous, data)
           || !isPlainObject(actual) || !isDeepStrictEqual({ ...actual, env: actual.env ?? {} }, desired)) throw new Error();
       } else {
         if (!cliUnavailable && (!duplicateAccepted || !isPlainObject(previous.mcpServers) || !previous.mcpServers[MCP_SERVER_NAME])) throw new Error();
@@ -188,6 +188,40 @@ function parseClaudeConfig(bytes: Buffer | null): Record<string, unknown> {
   const data = bytes === null ? {} : JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   if (!isPlainObject(data) || (data.mcpServers !== undefined && !isPlainObject(data.mcpServers))) throw new Error();
   return data;
+}
+
+// Claude 2.1.302 initializes this metadata during a successful native add.
+// Only new fields may use this contract; every original field stays exact.
+function claudeNativeConfigPreserved(before: Record<string, unknown>, after: Record<string, unknown>): boolean {
+  const previous = withoutClaudeSkills(before), current = withoutClaudeSkills(after);
+  for (const key of Object.keys(current)) {
+    if (Object.hasOwn(previous, key)) continue;
+    if (!isClaudeBootstrapAddition(key, current[key])) return false;
+    delete current[key];
+  }
+  return isDeepStrictEqual(previous, current);
+}
+
+function isClaudeBootstrapAddition(key: string, value: unknown): boolean {
+  switch (key) {
+    case "firstStartTime":
+      return typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
+        && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
+    case "firstStartVersion":
+      return typeof value === "string" && /^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(value);
+    case "machineID":
+      return typeof value === "string" && /^[0-9a-f]{64}$/i.test(value);
+    case "opusProMigrationComplete":
+    case "sonnet1m45MigrationComplete":
+    case "hasResetAutoModeOptInForDefaultOffer":
+      return value === true;
+    case "seenNotifications":
+      return isPlainObject(value) && Object.keys(value).length === 0;
+    case "migrationVersion":
+      return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+    default:
+      return false;
+  }
 }
 
 function withoutClaudeSkills(data: Record<string, unknown>): Record<string, unknown> {
