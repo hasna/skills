@@ -95,3 +95,17 @@ for (const field of ["displayName", "description", "category", "source"] as cons
     expect(() => metadataSnapshot({ ...snapshot, [serverField]: value }, etag)).toThrow();
   }
 });
+test("published tags preserve their strings while malformed arrays and changed revisions refuse", () => {
+  const content: RevisionContent = { slug: "fixture-skill", displayName: "Fixture", description: "Synthetic", category: "old", tags: [],
+    source: "custom", kind: "instruction" };
+  for (const tags of [["x".repeat(700)], ["First line\nSecond line"], []]) {
+    const published = { ...content, tags }, revisionId = revisionIdOf(published), etag = `"${revisionId}"`;
+    const snapshot = { ...published, publishedSource: published.source, revisionId };
+    expect(metadataSnapshot(snapshot, etag).content.tags).toEqual(tags);
+    expect(() => metadataSnapshot({ ...snapshot, tags: ["Changed after revision"] }, etag)).toThrow();
+  }
+  for (const tags of [null, "tag", [42], [null], [{}], [undefined]]) {
+    const malformed = { ...content, tags }, revisionId = revisionIdOf(malformed as unknown as RevisionContent);
+    expect(() => metadataSnapshot({ ...malformed, publishedSource: content.source, revisionId }, `"${revisionId}"`)).toThrow();
+  }
+});
