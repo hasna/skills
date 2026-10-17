@@ -7,7 +7,8 @@ const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 /** Well-formed quoted revision that names no fixture content. */
 const mismatchedEtag = `"${"0".repeat(64)}"`;
-function fixture(options: { permission?: boolean; permissions?: "absent" | "without-publish"; etag?: boolean; outcome?: "transport" | "500" | "409" | "alter-body" | "mismatch-etag-after-patch"; servedSlug?: string } = {}) {
+function fixture(options: { permission?: boolean; permissions?: "absent" | "without-publish"; etag?: boolean; outcome?: "transport" | "500" | "unparseable" | "409" | "alter-body" | "mismatch-etag-after-patch"
+  | "500-uncommitted" | "transport-uncommitted" | "unparseable-uncommitted"; servedSlug?: string } = {}) {
   let content: RevisionContent = { slug: options.servedSlug ?? "fixture-skill", displayName: "Fixture", description: "Synthetic", category: "Development Tools", tags: ["old"],
     source: "custom", kind: "instruction", version: "1.0.0", skillMd: "Synthetic instruction body", bundleSha256: "a".repeat(64), bundleByteSize: 42 };
   const original = structuredClone(content);
@@ -24,12 +25,16 @@ function fixture(options: { permission?: boolean; permissions?: "absent" | "with
     calls.push({ method, ...(method === "PATCH" ? { body: JSON.parse(String(init?.body)), guard: new Headers(init?.headers).get("if-match") } : {}) });
     if (method === "PATCH") {
       if (options.outcome === "409") return Response.json({ code: "REVISION_CONFLICT" }, { status: 409 });
+      if (options.outcome === "500-uncommitted") return new Response(null, { status: 500 });
+      if (options.outcome === "transport-uncommitted") throw new TypeError("Synthetic connection reset before commit");
+      if (options.outcome === "unparseable-uncommitted") return new Response("not json", { status: 200 });
       expect(new Headers(init?.headers).get("if-match")).toBe(`"${revisionIdOf(content)}"`);
       content = { ...content, ...JSON.parse(String(init?.body)) };
       if (options.outcome === "alter-body") content.skillMd = "Unexpected changed body";
       if (options.outcome === "mismatch-etag-after-patch") etagOverride = mismatchedEtag;
       if (options.outcome === "transport") throw new TypeError("Synthetic connection reset after commit");
       if (options.outcome === "500") return new Response(null, { status: 500 });
+      if (options.outcome === "unparseable") return new Response("not json", { status: 200 });
     }
     return Response.json(payload(), { headers: headers() });
   }) as typeof fetch;
@@ -44,9 +49,10 @@ test("preview is read-only; apply sends only category/tags with the exact ETag a
   expect(JSON.parse(plan.originalDocument).skillMd).toBe(f.original.skillMd);
   expect(await f.client.applySkillMetadataUpdate(plan)).toMatchObject({ status: "applied", revisionId: revisionIdOf(f.current()) });
   expect(f.calls.filter(call => call.method === "PATCH").map(call => call.body)).toEqual([{ category: "Productivity & Organization", tags: ["new"] }]);
+  expect(f.calls.map(call => call.method)).toEqual(["GET", "GET", "PATCH", "GET"]);
   expect({ ...f.current(), category: f.original.category, tags: f.original.tags }).toEqual(f.original);
 });
-for (const outcome of ["transport", "500"] as const) test(`an ambiguous ${outcome} commit is reconciled once with no duplicate PATCH`, async () => {
+for (const outcome of ["transport", "500", "unparseable"] as const) test(`an ambiguous ${outcome} commit is reconciled once with no duplicate PATCH`, async () => {
   const f = fixture({ outcome }); const plan = await f.client.prepareSkillMetadataUpdate("fixture-skill", { tags: [] });
   expect(await f.client.applySkillMetadataUpdate(plan)).toMatchObject({ status: "reconciled" });
   expect(f.calls.filter(call => call.method === "PATCH")).toHaveLength(1);
@@ -171,4 +177,34 @@ test("a patch whose getters change between reads is captured once and only the v
   expect(await f.client.applySkillMetadataUpdate(plan)).toMatchObject({ status: "applied" });
   expect(f.calls.filter(call => call.method === "PATCH").map(call => call.body)).toEqual([validated]);
   expect(f.current()).toMatchObject(validated);
+});
+for (const outcome of ["500-uncommitted", "transport-uncommitted", "unparseable-uncommitted"] as const) test(`an ambiguous ${outcome.replace("-uncommitted", "")} PATCH that did not commit is unconfirmed after one PATCH and one readback`, async () => {
+  const f = fixture({ outcome }); const plan = await f.client.prepareSkillMetadataUpdate("fixture-skill", { tags: [] });
+  await expect(f.client.applySkillMetadataUpdate(plan)).rejects.toMatchObject({ code: "METADATA_UPDATE_UNCONFIRMED" });
+  expect(f.calls.map(call => call.method)).toEqual(["GET", "GET", "PATCH", "GET"]);
+  expect(f.current()).toEqual(f.original);
+});
+for (const [field, value] of [["skillMd", "Tampered preserved body"], ["description", "Tampered description"], ["version", "9.9.9"]] as const) test(`a plan whose originalDocument keeps its revisionId but has an edited ${field} refuses before PATCH`, async () => {
+  const f = fixture(); const plan = await f.client.prepareSkillMetadataUpdate("fixture-skill", { tags: [] });
+  const document = JSON.parse(plan.originalDocument);
+  expect(document.revisionId).toBe(plan.expectedRevisionId);
+  const tampered = { ...plan, originalDocument: JSON.stringify({ ...document, [field]: value }) };
+  // The preserved original is re-hashed, so an intact revisionId field cannot vouch for edited content.
+  expect(() => metadataPlan(tampered)).toThrow(expect.objectContaining({ code: "INVALID_METADATA_SNAPSHOT" }));
+  await expect(f.client.applySkillMetadataUpdate(tampered)).rejects.toMatchObject({ code: "INVALID_METADATA_SNAPSHOT" });
+  expect(f.calls.some(call => call.method === "PATCH")).toBe(false);
+  expect(f.current()).toEqual(f.original);
+});
+test("tags accept at most 100 entries", () => {
+  const tags = (count: number) => Array.from({ length: count }, (_, index) => `tag-${index}`);
+  expect(metadataPatch({ tags: tags(100) }).tags).toEqual(tags(100));
+  expect(() => metadataPatch({ tags: tags(101) })).toThrow(expect.objectContaining({ code: "INVALID_METADATA_PATCH" }));
+});
+test("non-array tags refuse with the patch code", () => {
+  for (const tags of ["solo", 5, null, {}]) expect(() => metadataPatch({ tags })).toThrow(expect.objectContaining({ code: "INVALID_METADATA_PATCH" }));
+});
+test("the validated patch owns its tags array", () => {
+  const tags = ["curated"]; const patch = metadataPatch({ tags });
+  tags.push("First line\nSecond line");
+  expect(patch.tags).toEqual(["curated"]);
 });

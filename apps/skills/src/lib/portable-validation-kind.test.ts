@@ -44,3 +44,10 @@ test("an unreadable skill.json is reported as portable.manifest_invalid instead 
  expect(result.metadata.portableManifest).toBeUndefined();
  expect(result.issues.filter(issue => issue.code === "portable.manifest_invalid").map(issue => issue.message)).toEqual(["skill.json must contain a JSON object"]);
 });
+test("a skill that declares no kind anywhere validates as executable", () => {
+ const root = mkdtempSync(join(tmpdir(), "portable-undeclared-")); roots.push(root);
+ writeFileSync(join(root, "SKILL.md"), "---\nname: undeclared-fixture\ndescription: Fixture\n---\nSynthetic docs.\n");
+ const result = validatePortableSkillDirectory("undeclared-fixture", root);
+ expect(result.metadata.kind).toBe("executable");
+ expect(result.issues.some(issue => issue.code === "package.missing")).toBe(true);
+});

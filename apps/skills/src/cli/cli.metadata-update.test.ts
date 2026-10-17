@@ -1,6 +1,6 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { Command } from "commander";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import * as remote from "../lib/remote-client.js";
@@ -124,5 +124,68 @@ for (const [field, value] of [["skillMd", "INJECTED body"], ["version", "9.9.9"]
     expect(f.current()).toEqual(original);
     expect(process.exitCode).toBe(1);
     expect(f.errors.at(-1)).toBe(new SkillMetadataUpdateError("INVALID_METADATA_PATCH").message);
+  } finally { f.restore(); }
+});
+test("CLI preview refuses a dangling symlink as --save and creates no target", async () => {
+  const f = cliFixture();
+  try {
+    const target = join(f.root, "elsewhere.json"), link = join(f.root, "review-plan.json");
+    symlinkSync(target, link);
+    await f.run("preview", "fixture-skill", "--category", "new", "--save", link);
+    expect(existsSync(target)).toBe(false);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(link)).toBe(target);
+    expect(f.patches()).toEqual([]);
+    expect(process.exitCode).toBe(1);
+    expect(f.rendered).toEqual([]);
+  } finally { f.restore(); }
+});
+test("CLI preview refuses a --save symlink to an existing file and leaves that file unchanged", async () => {
+  const f = cliFixture();
+  try {
+    const victim = join(f.root, "operator-notes.txt"), link = join(f.root, "review-plan.json");
+    const known = Buffer.from("Operator-owned bytes behind a symlink\n");
+    writeFileSync(victim, known, { mode: 0o600 }); symlinkSync(victim, link);
+    await f.run("preview", "fixture-skill", "--category", "new", "--save", link);
+    expect(readFileSync(victim)).toEqual(known);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(f.patches()).toEqual([]);
+    expect(process.exitCode).toBe(1);
+    expect(f.rendered).toEqual([]);
+  } finally { f.restore(); }
+});
+test("CLI apply refuses a symlinked plan with no network call", async () => {
+  const f = cliFixture();
+  try {
+    const saved = join(f.root, "review-plan.json"), link = join(f.root, "linked-plan.json");
+    await f.run("preview", "fixture-skill", "--category", "new", "--save", saved);
+    expect(process.exitCode).toBe(0);
+    symlinkSync(saved, link);
+    const requestsBeforeApply = f.requests.length;
+    await f.run("apply", "--file", link);
+    expect(f.requests).toHaveLength(requestsBeforeApply);
+    expect(process.exitCode).toBe(1);
+    expect(f.rendered).toHaveLength(1);
+  } finally { f.restore(); }
+});
+test("CLI apply refuses a missing plan with no network call", async () => {
+  const f = cliFixture();
+  try {
+    await f.run("apply", "--file", join(f.root, "absent-plan.json"));
+    expect(f.requests).toEqual([]);
+    expect(process.exitCode).toBe(1);
+    expect(f.rendered).toEqual([]);
+  } finally { f.restore(); }
+});
+for (const kind of ["directory", "fifo"] as const) test(`CLI apply refuses a ${kind} as the plan with the plan error and no network call`, async () => {
+  const f = cliFixture();
+  try {
+    const path = join(f.root, `plan-${kind}`);
+    if (kind === "directory") mkdirSync(path);
+    else expect(Bun.spawnSync(["mkfifo", path]).exitCode).toBe(0);
+    await f.run("apply", "--file", path);
+    expect(f.requests).toEqual([]);
+    expect(process.exitCode).toBe(1);
+    expect(f.errors.at(-1)).toBe(new SkillMetadataUpdateError("INVALID_METADATA_PLAN").message);
   } finally { f.restore(); }
 });
