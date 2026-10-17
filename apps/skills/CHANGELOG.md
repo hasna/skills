@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.10.78
+
+### Patch Changes
 
 - Preserve the selected credential profile and transient API origin when registering Skills with coding agents, including post-login setup. Registrations explicitly start stdio, retain unrelated MCP configuration, and keep credentials in the existing resolver rather than agent config. Claude re-registration updates its active user config with verified preservation and refuses competing writes.
 
