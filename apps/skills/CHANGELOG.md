@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add `skills metadata preview <slug> --category <c> --tags <json> --save <plan>` and `skills metadata apply --file <plan>` to correct a published skill's category and tags without publishing a bundle. Preview only reads and saves a private plan that preserves the original instruction body. Apply sends only category and tags, and requires the same authority and organization, publish permission, the exact current metadata revision and a matching server ETag. Body, kind, version and bundle identity must stay unchanged, and conflicts refuse. An uncertain PATCH is read back once and never resubmitted; an unconfirmed readback reports `METADATA_UPDATE_UNCONFIRMED`. The SDK exposes `RemoteSkillsClient.prepareSkillMetadataUpdate`, `applySkillMetadataUpdate` and the body-free `metadataPlanSummary`. Validation now resolves a portable skill's `kind` from `skill.json` before the directory checks run, so instruction skills no longer report executable-only package and source findings.
+
 ## 0.10.80
 
 ### Patch Changes
