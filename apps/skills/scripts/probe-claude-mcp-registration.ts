@@ -15,8 +15,15 @@ const SHA1 = "2ddf60cd10f29b7d44e70fb6fa3cbcebcb569202";
 const INTEGRITY = "sha512-+d4RUq3E3K+3/J4MysB3z4QXA4rkDNt70VYpTLE6kJCnUe/Z6SB8VJsVJG/NV4bECrvkxkLHjXk+vrgBstfZkw==";
 const ORIGIN = "http://127.0.0.1:9";
 const OUTPUT_LIMIT = 1024 * 1024;
+// Publicly attested names only: this controls diagnostics, never admission.
+// https://github.com/anthropics/claude-code/issues/62634
+// https://github.com/anthropics/claude-code/issues/75419
+// https://github.com/anthropics/claude-code/issues/87534
 const SAFE_NATIVE_FIELDS = new Set(["numStartups", "installMethod", "autoUpdates", "userID", "firstStartTime",
-  "hasCompletedOnboarding", "lastOnboardingVersion", "cachedStatsigGates", "cachedGrowthBookFeatures", "projects"]);
+  "hasCompletedOnboarding", "lastOnboardingVersion", "cachedStatsigGates", "cachedGrowthBookFeatures", "projects",
+  "migrationVersion", "opusProMigrationComplete", "sonnet1m45MigrationComplete", "seenNotifications",
+  "unpinOpus47LaunchEffort", "cachedExperimentFeatures", "cachedExtraUsageDisabledReason", "skillUsage",
+  "machineID", "hasResetAutoModeOptInForDefaultOffer"]);
 let stage = "admission";
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const save = (file: string, bytes: string | Uint8Array) => {
