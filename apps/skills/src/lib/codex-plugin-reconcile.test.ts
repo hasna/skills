@@ -12,9 +12,10 @@ import { captureCodexSettingsV3 } from "./codex-settings-witness.js";
 import { captureDiscoveryByteSources, captureDiscoveryDirectories, rebaseCodexEnrolledCacheWitnesses } from "./agent-discovery.js";
 import { CODEX_CAPABILITY_PATH_MUTATIONS, CODEX_INERT_NESTED_NAMES } from "./codex-plugin-capability-paths.fixture.js";
 import { codexPluginCapabilityChanges, codexPluginRootEvidence, enrolledCodexPluginStrictChanges, unenrolledCodexPluginEvidence } from "./codex-plugin-skill-controls.js";
-import { CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, mergeReconciledCodexPluginControls, type CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
+import { CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, CODEX_REMOTE_RECEIPT_MISMATCH, CODEX_REMOTE_RECEIPT_MISSING, mergeReconciledCodexPluginControls, type CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
+import { hashNativeJsonControls } from "./claude-settings-witness.js";
 import { runCodexPluginReconcile, type CodexReconcileResult } from "./codex-plugin-reconcile.js";
-import type { CodexNativeSkill, CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
+import { captureCodexRemoteReceiptSnapshot, type CodexInstalledPlugin, type CodexNativeSkill, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
 
 useDefaultTestTimeout();
 let restoreInspector: () => void;
@@ -82,7 +83,7 @@ function fakeCodexWriter(config: string, behaviour: { unavailable?: boolean; ref
 /** A reviewed Codex binding that enrolled one remote, app-bearing plugin (the
  * station shape: a typed settings witness and qualified-name controls).
  * `listed`: Codex listed the skills at enrollment. Otherwise they were already
- * path-denied and omitted, so the controls also record the remote installation. */
+ * path-denied and omitted. Either way the controls record the remote installation. */
 function enrolledStation(initialNames = ["maintain-space", "write-page"], extraConfig = "", listed = true, shape: { catalogReview?: boolean; byteWitnesses?: boolean; directories?: boolean; prepare?: (cache: string) => void; witnesses?: (cache: string) => string[] } = {}) {
   const home = mkdtempSync(join(tmpdir(), "skills-codex-reconcile-")); roots.push(home);
   admitCorpusFixture(join(home, ".codex"));
@@ -108,7 +109,7 @@ function enrolledStation(initialNames = ["maintain-space", "write-page"], extraC
   const byteSources = captureDiscoveryByteSources([...(shape.byteWitnesses ? [join(first, ".codex-plugin/plugin.json"), join(first, ".app.json"), ...initialNames.map(name => join(first, "skills", name, "SKILL.md"))] : []), ...(shape.witnesses?.(cache) ?? [])]);
   const review = { version: 1 as const, agents: [{ agent: "codex" as const, roots: [cache], sources: [captureCodexSettingsV3(config), ...byteSources], ...(shape.directories ? { directories: captureDiscoveryDirectories([cache]) } : {}), pluginHooks: "reviewed-no-skill-injection" as const }] };
   // catalogReview false: the older binding shape that never recorded an installed-plugin catalog review.
-  applyAgentIntegration(planAgentIntegration({ home, dataDir, projectDir: home, agents: ["codex"], ...(shape.catalogReview === false ? {} : { codexNativeCatalog: enrollment }), discoveryInputs: review }));
+  applyAgentIntegration(planAgentIntegration({ home, dataDir, projectDir: home, agents: ["codex"], ...(shape.catalogReview === false ? {} : { codexNativeCatalog: { ...enrollment, remoteReceipts: captureCodexRemoteReceiptSnapshot(cache) } }), discoveryInputs: review }));
   const options = { home, dataDir, projectDir: home };
   /** What Codex reports after a refresh: enabled (undenied) skills plus the bridge. */
   const catalog = (enabled: CodexNativeSkill[], overrides: Partial<CodexNativeSkillCatalog> = {}): CodexNativeSkillCatalog => ({ version: "codex-cli 0.163.0", cwd: home, plugins: [plugin],
@@ -154,7 +155,7 @@ for (const listed of [true, false]) test(`a plugin version bump that adds 3 skil
   const controls: CodexPluginSkillControl[] = JSON.parse(readFileSync(station.policy, "utf8")).bridge.codexPluginSkills;
   expect(controls.map(control => control.name)).toEqual(["pages:maintain-space", "pages:write-page", ...NEW]);
   expect(new Set(controls.map(control => JSON.stringify([control.manifestSha256, control.appSha256, control.remotePluginId ?? null, control.skillsOnly ?? null]))).size).toBe(1);
-  expect(controls.every(control => control.remotePluginId === (listed ? undefined : REMOTE))).toBe(true);
+  expect(controls.every(control => control.remotePluginId === REMOTE)).toBe(true);
   expect(() => assertManagedAgentBridge("codex", station.options)).not.toThrow();
   expect(() => assertManagedAgentBridge("codex", { ...station.options, codexPromptHook: true })).not.toThrow();
 
@@ -282,7 +283,7 @@ test("unknown Codex versions, other copies and a stale plan refuse without writi
   expect(station.snapshot()).toEqual(before);
   rmSync(join(station.home, ".codex/skills/user-copy"), { recursive: true });
   // A copy that appears after planning refuses the reviewed transaction.
-  const { plan } = planCodexPluginNameReconcile({ ...station.options, catalog: station.catalog(enabled) });
+  const { plan } = planCodexPluginNameReconcile({ ...station.options, catalog: { ...station.catalog(enabled), remoteReceipts: captureCodexRemoteReceiptSnapshot(station.cache) } });
   put(join(root, "skills/late-arrival/SKILL.md"), payload("late-arrival"));
   await expect(applyCodexPluginReconcile(plan!, { connect: station.writer.connect })).rejects.toThrow("NATIVE_SKILL_DRIFT");
   expect(station.snapshot()).toEqual(before);
@@ -430,7 +431,7 @@ test("a byte-witness binding (station04 shape) with a skills-only version bump r
 test("the reconcile scope admits only appended disable rows and the bounded policy record, never an allow entry", () => {
   const station = enrolledStation();
   const root = refresh(station, "1.1.0", BUMPED);
-  const { plan } = planCodexPluginNameReconcile({ ...station.options, catalog: station.catalog(["manage-schedules", "organize-space", "publish-page"].map(name => station.skill(root, name))) });
+  const { plan } = planCodexPluginNameReconcile({ ...station.options, catalog: { ...station.catalog(["manage-schedules", "organize-space", "publish-page"].map(name => station.skill(root, name))), remoteReceipts: captureCodexRemoteReceiptSnapshot(station.cache) } });
   const policy = JSON.parse(readFileSync(station.policy, "utf8"));
   const scope = { configPath: station.config, policyPath: station.policy, prior: policy.bridge.codexPluginSkills, names: NEW, discovery: policy.bridge.discovery.codex };
   expect(() => assertCodexReconcileScope(plan!, scope)).not.toThrow();
@@ -620,7 +621,7 @@ test("B1: a skill Codex still reports enabled despite an existing deny row count
 /** Appends `[[skills.config]]` rows to the station config and re-runs the reviewed install, so the review binds them. */
 function reviewWithRows(station: ReturnType<typeof enrolledStation>, rows: string) {
   writeFileSync(station.config, `${readFileSync(station.config, "utf8")}${rows}`);
-  const enrollment: CodexNativeSkillCatalog = { version: "codex-cli 0.163.0", cwd: station.home, plugins: [station.plugin], skills: ["maintain-space", "write-page"].map(name => station.skill(station.first, name)) };
+  const enrollment: CodexNativeSkillCatalog = { version: "codex-cli 0.163.0", cwd: station.home, plugins: [station.plugin], skills: ["maintain-space", "write-page"].map(name => station.skill(station.first, name)), remoteReceipts: captureCodexRemoteReceiptSnapshot(station.cache) };
   const review = { version: 1 as const, agents: [{ agent: "codex" as const, roots: [station.cache], sources: [captureCodexSettingsV3(station.config)], pluginHooks: "reviewed-no-skill-injection" as const }] };
   applyAgentIntegration(planAgentIntegration({ ...station.options, agents: ["codex"], codexNativeCatalog: enrollment, discoveryInputs: review }));
   expect(blocks(station, false)).toBe(false);
@@ -683,7 +684,7 @@ test("M25: a cosmetic reformat of ~/.codex/hooks.json makes the plan exceed its 
 
 test("M39: apply re-plans under the lock, so a capability added after planning refuses the write", async () => {
   const station = enrolledStation(), root = refresh(station, "1.1.0", BUMPED);
-  const { plan } = planCodexPluginNameReconcile({ ...station.options, catalog: station.catalog(["manage-schedules", "organize-space", "publish-page"].map(name => station.skill(root, name))) });
+  const { plan } = planCodexPluginNameReconcile({ ...station.options, catalog: { ...station.catalog(["manage-schedules", "organize-space", "publish-page"].map(name => station.skill(root, name))), remoteReceipts: captureCodexRemoteReceiptSnapshot(station.cache) } });
   // The retained-review post-write strict guard also covers reconcile writes.
   expect(plan!.retainedReviewChecks?.agents).toEqual(["codex"]);
   const before = station.snapshot();
@@ -830,7 +831,7 @@ test("K34: a binding that uses the semantic cache witness refuses with its own c
 
 test("A2: the deny rows go through Codex's versioned writer, and the policy follows only after the config readback", async () => {
   const station = enrolledStation(), root = refresh(station, "1.1.0", BUMPED), configBefore = readFileSync(station.config, "utf8"), policyBefore = readFileSync(station.policy, "utf8");
-  const planned = planCodexPluginNameReconcile({ ...station.options, catalog: newNames(station, root) }).plan!.changes.find(change => change.path === station.config)!.after;
+  const planned = planCodexPluginNameReconcile({ ...station.options, catalog: { ...newNames(station, root), remoteReceipts: captureCodexRemoteReceiptSnapshot(station.cache) } }).plan!.changes.find(change => change.path === station.config)!.after;
   const result = await station.run(true, newNames(station, root));
   expect(result).toMatchObject({ outcome: "applied", enrolled: NEW });
   const configAfter = readFileSync(station.config, "utf8");
@@ -870,7 +871,7 @@ test("A2: with no Codex writer reachable the reconcile refuses with a named code
   expect(result).toMatchObject({ outcome: "refused", code: "CODEX_RECONCILE_NATIVE_WRITER_UNAVAILABLE", changes: [] });
   expect(station.snapshot()).toEqual(before);
   // The ordinary file writer refuses a reconcile plan outright.
-  const { plan } = planCodexPluginNameReconcile({ ...station.options, catalog: newNames(station, root) });
+  const { plan } = planCodexPluginNameReconcile({ ...station.options, catalog: { ...newNames(station, root), remoteReceipts: captureCodexRemoteReceiptSnapshot(station.cache) } });
   expect(() => applyAgentIntegration(plan!)).toThrow("CODEX_RECONCILE_NATIVE_WRITER_REQUIRED");
   expect(station.snapshot()).toEqual(before);
   // A Codex that reports a different user configuration also refuses before any write.
@@ -1016,6 +1017,11 @@ for (const [label, mutate, expected] of [
   const writer = fakeCodexWriter(station.config, { afterWrite: call => { if (call === 0) mutate(root); } });
   const result = await station.run(true, newNames(station, root), writer.connect);
   expect(result).toMatchObject({ ...expected, changes: [] });
+  // The proof words the refused plugin by what happened to it.
+  if (expected.code === CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED) {
+    expect(result.message).toContain(`"${PLUGIN}" gained a capability`);
+    expect(result.message).not.toContain("was removed");
+  }
   expect(writer.log.writes).toHaveLength(2);
   // The second write is the restore: bound to the version Codex returned for this run's write.
   expect(writer.log.writes[1].expectedVersion).not.toBe(writer.log.writes[0].expectedVersion);
@@ -1041,7 +1047,7 @@ test("an unverifiable write is reported as uncertain, never as a refusal, naming
   expect(readFileSync(station.policy, "utf8")).toBe(policyBefore);
   // A write that times out and lands after the check is uncertain too, not refused.
   const late = enrolledStation(), lateRoot = refresh(late, "1.1.0", BUMPED), latePolicy = readFileSync(late.policy, "utf8");
-  const planned = planCodexPluginNameReconcile({ ...late.options, catalog: newNames(late, lateRoot) }).plan!.changes.find(change => change.path === late.config)!.after;
+  const planned = planCodexPluginNameReconcile({ ...late.options, catalog: { ...newNames(late, lateRoot), remoteReceipts: captureCodexRemoteReceiptSnapshot(late.cache) } }).plan!.changes.find(change => change.path === late.config)!.after;
   const timeout = fakeCodexWriter(late.config, { write: (call, current, emulated) => call === 0 ? current : emulated, loseResponse: call => call === 0 });
   const timedOut = await late.run(true, newNames(late, lateRoot), timeout.connect);
   expect(timedOut).toMatchObject({ outcome: "error", code: "CODEX_RECONCILE_NATIVE_WRITE_UNCERTAIN" });
@@ -1130,10 +1136,533 @@ test("a manifest, app or receipt change landing while Codex writes is an error w
 
 test("an absent enrolled plugin whose controls are not remote, skills-only and denied by name is not exempt and refuses", async () => {
   // Pages is enrolled with an app: an uninstalled Pages has no reviewed disabled identity to keep.
+  // Every control records the remote receipt, so its absence also reports `remote`.
   const station = enrolledStation();
   rmSync(station.parent, { recursive: true });
   const before = station.snapshot();
-  expect(await station.run(true, station.catalog([]))).toMatchObject({ outcome: "refused", code: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, refusals: [{ pluginId: PLUGIN, reasons: ["unsupported"] }] });
+  expect(await station.run(true, station.catalog([]))).toMatchObject({ outcome: "refused", code: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, refusals: [{ pluginId: PLUGIN, reasons: ["remote", "unsupported"] }] });
   expect(station.snapshot()).toEqual(before);
 });
 
+const TEMPLATES = "templates@openai-curated-remote", TEMPLATES_REMOTE = "plugins~Plugin_00000000000000000000000000000761";
+const OTHER_REMOTE = "plugins~Plugin_00000000000000000000000000000762";
+/** The openai-templates shape (station02): a remote plugin that carries an app,
+ * enrolled by its first reviewed `hook install`. `localVersion` is what Codex
+ * reports for it (null: the receipt-bound omitted path). `listed` skills are
+ * listed and enabled at enrollment; `omitted` ones are already path-denied and
+ * omitted. `receipt` is the on-disk native install receipt (null: absent).
+ * `locals` adds plugins Codex does not report as remote: no receipt exists.
+ * `remote: false` leaves the remote plugin out entirely. `row` overrides fields
+ * of the remote plugin's catalog row (for example its source type). */
+type LocalPlugin = { name: string; source: "local" | "unreported"; listed: string[]; omitted: string[] };
+function templatesStation(localVersion: string | null, listed: string[], omitted: string[], shape: { receipt?: string | null; locals?: LocalPlugin[]; remote?: false; row?: Partial<CodexInstalledPlugin> } = {}) {
+  const home = mkdtempSync(join(tmpdir(), "skills-codex-templates-")); roots.push(home);
+  admitCorpusFixture(join(home, ".codex"));
+  const dataDir = join(home, "data"), cache = join(home, ".codex/plugins/cache"), parent = join(cache, "openai-curated-remote/templates"), root = join(parent, "0.1.6");
+  const config = join(home, ".codex/config.toml"), policy = join(dataDir, "agent-policy.json"), receiptPath = join(parent, ".codex-remote-plugin-install.json");
+  const doc = (name: string, at = root) => join(at, "skills", name, "SKILL.md");
+  const writeReceipt = (id: string) => put(receiptPath, JSON.stringify({ schema_version: 1, remote_plugin_id: id }));
+  const plugin: CodexInstalledPlugin = { id: TEMPLATES, name: "templates", installed: true, enabled: true, localVersion, remotePluginId: TEMPLATES_REMOTE, sourceType: "remote", ...shape.row };
+  const plugins: NonNullable<CodexNativeSkillCatalog["plugins"]> = [], skills: CodexNativeSkill[] = [], denied: string[] = [];
+  if (shape.remote !== false) {
+    put(join(root, ".codex-plugin/plugin.json"), JSON.stringify({ name: "templates", version: "0.1.6", description: "Synthetic Templates plugin", apps: "./.app.json" }));
+    put(join(root, ".app.json"), APP.replaceAll("pages", "templates"));
+    for (const name of [...listed, ...omitted]) put(doc(name), payload(name));
+    const receipt = shape.receipt === undefined ? TEMPLATES_REMOTE : shape.receipt;
+    if (receipt !== null) writeReceipt(receipt);
+    plugins.push(plugin);
+    skills.push(...listed.map(name => ({ name: `templates:${name}`, path: doc(name), enabled: true, pluginId: TEMPLATES })));
+    denied.push(...omitted.map(name => doc(name)));
+  }
+  for (const local of shape.locals ?? []) {
+    const id = `${local.name}@local-market`, at = join(cache, "local-market", local.name, "1.0.0"), sourcePath = join(home, "sources", local.name);
+    put(join(at, ".codex-plugin/plugin.json"), JSON.stringify({ name: local.name, version: "1.0.0" }));
+    for (const name of [...local.listed, ...local.omitted]) put(doc(name, at), payload(name));
+    plugins.push({ id, name: local.name, installed: true, enabled: true, localVersion: "1.0.0",
+      ...(local.source === "local" ? { sourceType: "local" as const, sourceSha256: hashNativeJsonControls(JSON.stringify({ type: "local", path: sourcePath })), sourcePath } : {}) });
+    skills.push(...local.listed.map(name => ({ name: `${local.name}:${name}`, path: doc(name, at), enabled: true, pluginId: id })));
+    denied.push(...local.omitted.map(name => doc(name, at)));
+  }
+  put(config, `model = "synthetic"\n${denied.map(path => `[[skills.config]]\npath = ${JSON.stringify(path)}\nenabled = false\n`).join("")}`);
+  const reported: CodexNativeSkillCatalog = { version: "codex-cli 0.163.0", cwd: home, plugins, skills };
+  // A fresh discovery review of the current configuration, as each reviewed install takes.
+  const review = () => ({ version: 1 as const, agents: [{ agent: "codex" as const, roots: [cache], sources: [captureCodexSettingsV3(config)], pluginHooks: "reviewed-no-skill-injection" as const }] });
+  const options = { home, dataDir, projectDir: home };
+  /** One reviewed enrollment. `skills hook native-catalog` reads the remote
+   * receipts before it starts Codex; its app-server then rewrites them to the
+   * catalog's identity (`heal`); `skills hook install --agent codex
+   * --discovery-inputs <review> --codex-native-catalog <catalog> --apply` then
+   * consumes that catalog. `snapshot: false` is an older capture without the
+   * pre-start snapshot; `cacheRoot` relabels it as another Codex home's.
+   * `rewrite` replaces the receipt after the reading (null removes it).
+   * `row` overrides the remote plugin's catalog row for this capture only. */
+  const install = (capture: { heal?: boolean; snapshot?: false; cacheRoot?: string; rewrite?: string | null; row?: Partial<CodexInstalledPlugin> } = {}) => {
+    const remoteReceipts = captureCodexRemoteReceiptSnapshot(cache);
+    if (capture.heal) writeReceipt(TEMPLATES_REMOTE);
+    if (capture.rewrite !== undefined) { rmSync(receiptPath, { recursive: true, force: true }); if (capture.rewrite !== null) writeReceipt(capture.rewrite); }
+    const enrollment = { ...reported, plugins: plugins.map(row => row.id === TEMPLATES ? { ...row, ...capture.row } : row) };
+    const catalog = capture.snapshot === false ? enrollment : { ...enrollment, remoteReceipts: capture.cacheRoot === undefined ? remoteReceipts : { ...remoteReceipts, cacheRoot: capture.cacheRoot } };
+    return applyAgentIntegration(planAgentIntegration({ ...options, agents: ["codex"], codexNativeCatalog: catalog, discoveryInputs: review() }));
+  };
+  const controls = (): CodexPluginSkillControl[] => JSON.parse(readFileSync(policy, "utf8")).bridge.codexPluginSkills;
+  const bridge = join(home, ".codex/skills/skills-cli/SKILL.md");
+  /** Codex's catalog after enrollment: the bridge plus any newly listed skills.
+   * `heal`: the capture's app-server rewrites the receipt to the catalog's identity.
+   * `row` overrides the remote plugin's catalog row for this capture only. */
+  // Codex's own config writer is the synthetic one; no real Codex starts.
+  const writer = fakeCodexWriter(config);
+  const catalog = (enabled: CodexNativeSkill[] = [], row: Partial<CodexInstalledPlugin> = {}): CodexNativeSkillCatalog => ({ version: "codex-cli 0.163.0", cwd: home,
+    plugins: plugins.map(item => item.id === TEMPLATES ? { ...item, ...row } : item), skills: [{ name: "skills-cli", path: bridge, enabled: true, pluginId: null }, ...enabled] });
+  const reconcile = (apply: boolean, enabled: CodexNativeSkill[] = [], heal = false, row: Partial<CodexInstalledPlugin> = {}) => runCodexPluginReconcile({ apply, home, dataDir, projectDir: home, connect: writer.connect, captureCatalog: async () => {
+    if (heal) writeReceipt(TEMPLATES_REMOTE);
+    return catalog(enabled, row);
+  } });
+  /** A new skill name Codex adds to the installed remote materialization. */
+  const addSkill = (name: string): CodexNativeSkill => { put(doc(name), payload(name)); return { name: `templates:${name}`, path: doc(name), enabled: true, pluginId: TEMPLATES }; };
+  const read = (path: string) => readFileSync(path, "utf8");
+  const changes = () => codexPluginCapabilityChanges(cache, controls().filter(control => control.pluginId === TEMPLATES), read, (Bun.TOML.parse(readFileSync(config, "utf8")) as any).skills?.config ?? []);
+  /** Rewrite the stored controls, as a policy written before this fix could hold them. */
+  const storeControls = (edit: (controls: CodexPluginSkillControl[]) => void) => {
+    const value = JSON.parse(readFileSync(policy, "utf8")); edit(value.bridge.codexPluginSkills); writeFileSync(policy, JSON.stringify(value, null, 2));
+  };
+  /** Exact configuration and policy bytes (policy null while absent). */
+  const bytes = () => ({ config: readFileSync(config, "utf8"), policy: existsSync(policy) ? readFileSync(policy, "utf8") : null });
+  return { home, dataDir, cache, config, policy, parent, receiptPath, options, install, controls, catalog, reconcile, addSkill, changes, writeReceipt, storeControls, bytes };
+}
+const strictGuards = (station: ReturnType<typeof templatesStation>) => [() => assertManagedAgentBridge("codex", station.options), () => assertManagedAgentBridge("codex", { ...station.options, codexPromptHook: true })];
+async function expectRemoteReceiptChangeCaught(station: ReturnType<typeof templatesStation>) {
+  for (const guard of strictGuards(station)) expect(guard).not.toThrow();
+  expect(await station.reconcile(true)).toMatchObject({ outcome: "unchanged" });
+  station.writeReceipt(OTHER_REMOTE);
+  for (const guard of strictGuards(station)) expect(guard).toThrow(`NATIVE_SKILL_DRIFT: ${CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED}: reviewed native plugin capability controls changed`);
+  // The only capability the guard can be refusing is the bound receipt.
+  expect(station.changes()).toEqual(["remote"]);
+  const before = { config: readFileSync(station.config, "utf8"), policy: readFileSync(station.policy, "utf8") };
+  for (const apply of [false, true]) {
+    const result = await station.reconcile(apply);
+    expect(result).toMatchObject({ outcome: "refused", code: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, enrolled: [], changes: [], refusals: [{ pluginId: TEMPLATES, reasons: ["remote"] }] });
+    expect({ config: readFileSync(station.config, "utf8"), policy: readFileSync(station.policy, "utf8") }).toEqual(before);
+  }
+  // Positive control: restoring the reviewed receipt clears both refusals.
+  station.writeReceipt(TEMPLATES_REMOTE);
+  for (const guard of strictGuards(station)) expect(guard).not.toThrow();
+  expect(station.changes()).toEqual([]);
+  expect(await station.reconcile(true)).toMatchObject({ outcome: "unchanged" });
+}
+
+for (const [label, localVersion, listed, omitted] of [
+  ["null localVersion: two listed and enabled, one omitted", null, ["make-deck", "make-report"], ["make-sheet"]],
+  ["reported localVersion: one listed and enabled, two omitted", "0.1.6", ["make-deck"], ["make-report", "make-sheet"]],
+] as const) test(`openai-templates first hook install records the remote receipt on every control (${label}), and a later receipt change is caught by the guard and the reconcile`, async () => {
+  const station = templatesStation(localVersion, [...listed], [...omitted]);
+  station.install();
+  const controls = station.controls();
+  expect(controls.map(control => control.name).sort()).toEqual([...listed, ...omitted].map(name => `templates:${name}`).sort());
+  expect(controls).toHaveLength(3);
+  for (const control of controls) expect(control).toMatchObject({ pluginId: TEMPLATES, remotePluginId: TEMPLATES_REMOTE });
+  expect(controls.every(control => control.appSha256 !== undefined && control.skillsOnly === undefined)).toBe(true);
+  await expectRemoteReceiptChangeCaught(station);
+});
+
+/** The refusal message, which must carry the named code and nothing of the receipt. */
+function refusal(run: () => unknown): string {
+  try { run(); } catch (error) { return (error as Error).message; }
+  throw new Error("expected a refusal");
+}
+const receiptRefusal = (code: string, kind: string) => new RegExp(`^${code}: remote plugin "${TEMPLATES}" has no matching install receipt \\(${kind}\\); .*\`skills hook install\``);
+const RECEIPT_CASES = [["missing", CODEX_REMOTE_RECEIPT_MISSING], ["mismatch", CODEX_REMOTE_RECEIPT_MISMATCH]] as const;
+const CONTROL_PATHS = [
+  ["listed and enabled", null, ["make-deck"], []],
+  ["omitted with no localVersion", null, [], ["make-sheet"]],
+  ["omitted under a reported localVersion", "0.1.6", [], ["make-sheet"]],
+  ["listed, omitted and localVersion together", "0.1.6", ["make-deck"], ["make-report", "make-sheet"]],
+] as const;
+for (const heal of [false, true]) for (const [kind, code] of RECEIPT_CASES) for (const [label, localVersion, listed, omitted] of CONTROL_PATHS) test(`a remote plugin whose receipt was ${kind} before Codex started refuses at install with ${code} (${label}; the app-server ${heal ? "rewrote" : "left"} the receipt before install) and writes nothing`, () => {
+  // First enrollment: nothing is written and no policy appears.
+  const fresh = templatesStation(localVersion, [...listed], [...omitted], { receipt: kind === "missing" ? null : OTHER_REMOTE });
+  const before = fresh.bytes();
+  expect(before.policy).toBeNull();
+  const message = refusal(() => fresh.install({ heal }));
+  expect(message).toMatch(receiptRefusal(code, kind));
+  expect(message).not.toContain("plugins~");
+  expect(fresh.bytes()).toEqual(before);
+  // The healed receipt now matches the catalog; only the pre-start snapshot shows it was not.
+  if (heal) expect(readFileSync(fresh.receiptPath, "utf8")).toContain(TEMPLATES_REMOTE);
+  // Re-enrollment over a reviewed policy: configuration and policy bytes stay identical.
+  const enrolled = templatesStation(localVersion, [...listed], [...omitted]);
+  enrolled.install();
+  expect(enrolled.controls().every(control => control.remotePluginId === TEMPLATES_REMOTE)).toBe(true);
+  expect(() => enrolled.install({ heal })).not.toThrow();
+  const reviewed = enrolled.bytes();
+  if (kind === "missing") rmSync(enrolled.receiptPath); else enrolled.writeReceipt(OTHER_REMOTE);
+  expect(refusal(() => enrolled.install({ heal }))).toMatch(receiptRefusal(code, kind));
+  expect(enrolled.bytes()).toEqual(reviewed);
+});
+
+test("a catalog without a pre-start receipt snapshot (an older capture), or with one of another Codex home, refuses and writes nothing", () => {
+  for (const capture of [{ snapshot: false as const }, { cacheRoot: "/elsewhere/.codex/plugins/cache" }]) {
+    const station = templatesStation(null, ["make-deck"], ["make-sheet"]);
+    const before = station.bytes();
+    const message = refusal(() => station.install(capture));
+    expect(message).toMatch(/^CODEX_REMOTE_RECEIPT_SNAPSHOT_REQUIRED: .*re-capture it with `skills hook native-catalog`/);
+    expect(station.bytes()).toEqual(before);
+  }
+});
+
+test("plugins Codex does not report as remote have no receipt and never trip either receipt code", () => {
+  const locals: LocalPlugin[] = [{ name: "notes", source: "local", listed: ["draft"], omitted: ["archive"] }, { name: "drafts", source: "unreported", listed: ["outline"], omitted: ["review"] }];
+  const station = templatesStation("0.1.6", ["make-deck"], ["make-sheet"], { locals });
+  for (const name of ["notes", "drafts"]) expect(existsSync(join(station.home, ".codex/plugins/cache/local-market", name, ".codex-remote-plugin-install.json"))).toBe(false);
+  station.install();
+  const controls = station.controls();
+  expect(controls.map(control => control.name).sort()).toEqual(["drafts:outline", "drafts:review", "notes:archive", "notes:draft", "templates:make-deck", "templates:make-sheet"]);
+  for (const control of controls) expect(control.remotePluginId).toBe(control.pluginId === TEMPLATES ? TEMPLATES_REMOTE : undefined);
+  for (const guard of strictGuards(station)) expect(guard).not.toThrow();
+  // With no remote plugin at all, local plugins enroll; the catalog still needs its pre-start snapshot.
+  const local = templatesStation(null, [], [], { locals, remote: false });
+  const before = local.bytes();
+  expect(refusal(() => local.install({ snapshot: false }))).toMatch(/^CODEX_REMOTE_RECEIPT_SNAPSHOT_REQUIRED: /);
+  expect(local.bytes()).toEqual(before);
+  local.install();
+  expect(local.controls().some(control => control.remotePluginId !== undefined)).toBe(false);
+  for (const guard of strictGuards(local)) expect(guard).not.toThrow();
+});
+
+test("a reconcile of a policy stored before this fix refuses with the named receipt code when the receipt is gone, and writes nothing", async () => {
+  const station = templatesStation(null, ["make-deck", "make-report"], ["make-sheet"]);
+  station.install();
+  // Pre-fix listed enrollment: no control recorded the receipt.
+  station.storeControls(controls => { for (const control of controls) delete control.remotePluginId; });
+  rmSync(station.receiptPath);
+  const added = station.addSkill("make-chart");
+  const before = station.bytes();
+  for (const heal of [false, true]) for (const apply of [false, true]) {
+    // heal: the capture's app-server rewrites the receipt; the reconcile read it before.
+    if (heal) expect(existsSync(station.receiptPath)).toBe(false);
+    const result = await station.reconcile(apply, [added], heal);
+    expect(result).toMatchObject({ outcome: "refused", code: CODEX_REMOTE_RECEIPT_MISSING, enrolled: [], changes: [] });
+    expect(result.message).toMatch(receiptRefusal(CODEX_REMOTE_RECEIPT_MISSING, "missing"));
+    expect(station.bytes()).toEqual(before);
+    if (heal) rmSync(station.receiptPath);
+  }
+});
+
+/** Stored control shapes a policy written before every control recorded the receipt can hold. */
+const UNBOUND_SHAPES = [
+  ["no control carries the id", [false, false, false]],
+  ["the first control lacks the id, two carry it", [false, true, true]],
+  ["only a non-first control carries the id", [false, true, false]],
+  ["only the last control carries the id", [false, false, true]],
+] as const;
+function storeUnbound(station: ReturnType<typeof templatesStation>, kept: readonly boolean[]) {
+  station.storeControls(controls => { expect(controls).toHaveLength(3); controls.forEach((control, index) => { if (!kept[index]) delete control.remotePluginId; }); });
+  expect(station.controls().map(control => control.remotePluginId !== undefined)).toEqual([...kept]);
+}
+for (const [label, kept] of UNBOUND_SHAPES) test(`stored controls not all bound (${label}): the guard checks the bound ones, and the reconcile binds the verified receipt onto every control, writing only the policy`, async () => {
+  const station = templatesStation(null, ["make-deck", "make-report"], ["make-sheet"]);
+  station.install();
+  storeUnbound(station, kept);
+  const stored = station.controls();
+  // The guard checks every bound control and tolerates unbound ones (the documented residual).
+  for (const guard of strictGuards(station)) expect(guard).not.toThrow();
+  if (kept.some(Boolean)) {
+    station.writeReceipt(OTHER_REMOTE);
+    for (const guard of strictGuards(station)) expect(guard).toThrow(CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED);
+    station.writeReceipt(TEMPLATES_REMOTE);
+  }
+  const before = station.bytes();
+  expect(await station.reconcile(false)).toMatchObject({ outcome: "planned", bound: [TEMPLATES], enrolled: [], changes: [station.policy] });
+  expect(station.bytes()).toEqual(before);
+  expect(await station.reconcile(true)).toMatchObject({ outcome: "applied", bound: [TEMPLATES], enrolled: [], changes: [station.policy] });
+  expect(readFileSync(station.config, "utf8")).toBe(before.config);
+  // Only the receipt binding changed, and only on the controls that lacked it.
+  expect(station.controls()).toEqual(stored.map(control => ({ ...control, remotePluginId: TEMPLATES_REMOTE })));
+  await expectRemoteReceiptChangeCaught(station);
+});
+
+for (const [label, kept] of UNBOUND_SHAPES) test(`a new name of a remote plugin whose stored controls are not all bound (${label}) is written with the verified receipt, and every control ends bound`, async () => {
+  const station = templatesStation(null, ["make-deck", "make-report"], ["make-sheet"]);
+  station.install();
+  storeUnbound(station, kept);
+  const added = station.addSkill("make-chart");
+  expect(await station.reconcile(true, [added])).toMatchObject({ outcome: "applied", enrolled: ["templates:make-chart"], bound: [TEMPLATES] });
+  expect(station.controls().map(control => [control.name, control.remotePluginId])).toEqual(["make-deck", "make-report", "make-sheet", "make-chart"].map(name => [`templates:${name}`, TEMPLATES_REMOTE]));
+  // A later receipt change is caught through every control, the new one included.
+  station.writeReceipt(OTHER_REMOTE);
+  for (const guard of strictGuards(station)) expect(guard).toThrow(CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED);
+  station.storeControls(controls => { for (const control of controls) if (control.name !== "templates:make-chart") delete control.remotePluginId; });
+  for (const guard of strictGuards(station)) expect(guard).toThrow(CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED);
+});
+
+for (const [kind, code] of RECEIPT_CASES) for (const [label, kept] of UNBOUND_SHAPES.slice(0, 2)) test(`stored controls not all bound (${label}) are never bound from a receipt that was ${kind === "missing" ? "missing" : "another installation's"} before Codex started: the reconcile refuses and writes nothing, also when the capture healed it`, async () => {
+  const station = templatesStation(null, ["make-deck", "make-report"], ["make-sheet"]);
+  station.install();
+  storeUnbound(station, kept);
+  // A bound control makes it a reviewed receipt change; with none bound, the fresh-install proof names the receipt code.
+  const expected = kept.some(Boolean) ? { code: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, refusals: [{ pluginId: TEMPLATES, reasons: ["remote"] }] } : { code };
+  for (const heal of [false, true]) for (const apply of [false, true]) {
+    if (kind === "missing") rmSync(station.receiptPath, { force: true }); else station.writeReceipt(OTHER_REMOTE);
+    const before = station.bytes();
+    const result = await station.reconcile(apply, [], heal);
+    expect(result).toMatchObject({ outcome: "refused", ...expected, bound: [], changes: [] });
+    if (!kept.some(Boolean)) expect(result.message).toMatch(receiptRefusal(code, kind));
+    expect(station.bytes()).toEqual(before);
+  }
+});
+
+test("a plugin the catalog no longer reports as remote is never bound by the reconcile: partly bound controls refuse as remote, wholly unbound ones stay as they are", async () => {
+  const unreported = { sourceType: undefined, remotePluginId: undefined };
+  const partial = templatesStation(null, ["make-deck", "make-report"], ["make-sheet"]);
+  partial.install();
+  storeUnbound(partial, [false, true, true]);
+  const before = partial.bytes();
+  expect(await partial.reconcile(true, [], false, unreported)).toMatchObject({ outcome: "refused", code: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, refusals: [{ pluginId: TEMPLATES, reasons: ["remote"] }], changes: [] });
+  expect(partial.bytes()).toEqual(before);
+  const legacy = templatesStation(null, ["make-deck", "make-report"], ["make-sheet"]);
+  legacy.install();
+  storeUnbound(legacy, [false, false, false]);
+  expect(await legacy.reconcile(true, [], false, unreported)).toMatchObject({ outcome: "unchanged", bound: [] });
+});
+
+// ---- #139 reviewer B's non-blocking uninstall cases, in this suite's style.
+/** Enroll a remote skills-only plugin `atlas` (skill `plan`) in `market` through the reconcile. */
+async function enrollRemoteAtlas(station: ReturnType<typeof enrolledStation>, market = "openai-curated-remote") {
+  const id = `atlas@${market}`, remote = "plugins~Plugin_00000000000000000000000000000888";
+  const parent = join(station.cache, market, "atlas"), root = join(parent, "2.0.0");
+  put(join(parent, ".codex-remote-plugin-install.json"), JSON.stringify({ schema_version: 1, remote_plugin_id: remote }));
+  put(join(root, ".codex-plugin/plugin.json"), JSON.stringify({ name: "atlas", version: "2.0.0" }));
+  put(join(root, "skills/plan/SKILL.md"), payload("plan"));
+  const row = { id, name: "atlas", installed: true, enabled: true, localVersion: null, remotePluginId: remote, sourceType: "remote" as const };
+  expect(await station.run(true, station.catalog([station.skill(root, "plan", id, "atlas")], { plugins: [station.plugin, row] }))).toMatchObject({ outcome: "applied", enrolled: ["atlas:plan"] });
+  return { id, parent, root, row };
+}
+
+test("an uninstalled plugin stays exempt when Codex reports it installed but disabled, or not installed at all", async () => {
+  const station = enrolledStation(), atlas = await enrollRemoteAtlas(station);
+  rmSync(atlas.parent, { recursive: true });
+  expect(await station.run(true, station.catalog([], { plugins: [station.plugin, { ...atlas.row, enabled: false }] }))).toMatchObject({ outcome: "unchanged" });
+  expect(await station.run(true, station.catalog([], { plugins: [station.plugin, { ...atlas.row, installed: false }] }))).toMatchObject({ outcome: "unchanged" });
+});
+
+test("an uninstalled plugin stays exempt when only a plugin of the same name in another marketplace is reported enabled", async () => {
+  // The catalog check keys on the exact plugin id; nothing of the other marketplace is materialized.
+  const station = enrolledStation(), atlas = await enrollRemoteAtlas(station);
+  rmSync(atlas.parent, { recursive: true });
+  expect(await station.run(true, station.catalog([], { plugins: [station.plugin, { ...atlas.row, id: "atlas@openai-curated" }] }))).toMatchObject({ outcome: "unchanged" });
+});
+
+test("a plugin Codex uninstalls during the write, while the plan's catalog reports it enabled, refuses after the write and both writes are compensated", async () => {
+  // Codex refreshes atlas to a body-free materialization the guard still accepts.
+  const station = enrolledStation(), atlas = await enrollRemoteAtlas(station);
+  rmSync(join(atlas.root, "skills"), { recursive: true });
+  const root = refresh(station, "1.1.0", BUMPED);
+  const configBefore = readFileSync(station.config, "utf8"), policyBefore = readFileSync(station.policy, "utf8"), receiptsBefore = receipts(station);
+  const writer = fakeCodexWriter(station.config, { afterWrite: call => { if (call === 0) rmSync(atlas.parent, { recursive: true }); } });
+  const reported = station.catalog(newNames(station, root).skills.slice(1), { plugins: [station.plugin, atlas.row] });
+  const result = await station.run(true, reported, writer.connect);
+  expect(result).toMatchObject({ outcome: "refused", code: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, refusals: [{ pluginId: atlas.id, reasons: ["unsupported"] }] });
+  expect(result.message).toContain(`"${atlas.id}" was removed while the native catalog still reports it enabled`);
+  expect(result.message).not.toContain("gained a capability");
+  expect(writer.log.writes).toHaveLength(2);
+  expect(readFileSync(station.config, "utf8")).toBe(configBefore);
+  expect(readFileSync(station.policy, "utf8")).toBe(policyBefore);
+  expect(receipts(station)).toEqual(receiptsBefore);
+  // A fresh catalog no longer reports the uninstalled plugin: the bump applies.
+  expect(await station.run(true, newNames(station, root))).toMatchObject({ outcome: "applied", enrolled: NEW });
+  expect(blocks(station, false)).toBe(false);
+});
+
+
+// ---- One remote rule (#141 review A, B1): a remote source or any remote identity counts as remote.
+const ATLAS_REMOTE = "plugins~Plugin_00000000000000000000000000000889";
+/** A skills-only plugin `atlas` (skill `plan`) Skills has not enrolled, in the
+ * remote marketplace. `receipt` is on disk before the run reads it (null: absent). */
+function addAtlas(station: ReturnType<typeof enrolledStation>, receipt: string | null) {
+  const id = "atlas@openai-curated-remote", parent = join(station.cache, "openai-curated-remote/atlas"), root = join(parent, "2.0.0");
+  const receiptPath = join(parent, ".codex-remote-plugin-install.json");
+  put(join(root, ".codex-plugin/plugin.json"), JSON.stringify({ name: "atlas", version: "2.0.0" }));
+  put(join(root, "skills/plan/SKILL.md"), payload("plan"));
+  if (receipt !== null) put(receiptPath, JSON.stringify({ schema_version: 1, remote_plugin_id: receipt }));
+  const controls = () => (JSON.parse(readFileSync(station.policy, "utf8")).bridge.codexPluginSkills as CodexPluginSkillControl[]).filter(control => control.pluginId === id);
+  return { id, root, receiptPath, controls };
+}
+const REMOTE_IDENTITY_ROWS = [
+  ["a remote source", { sourceType: "remote" as const }],
+  ["no source type", {}],
+  ["a git source", gitSource],
+] as const;
+for (const [label, source] of REMOTE_IDENTITY_ROWS) test(`a new plugin Codex reports with a remote identity and ${label} binds only a receipt read before Codex started`, async () => {
+  const healed = enrolledStation(), atlas = addAtlas(healed, null);
+  const row = { id: atlas.id, name: "atlas", installed: true, enabled: true, localVersion: "2.0.0", remotePluginId: ATLAS_REMOTE, ...source };
+  const catalog = healed.catalog([healed.skill(atlas.root, "plan", atlas.id, "atlas")], { plugins: [healed.plugin, row] });
+  const before = healed.snapshot();
+  for (const apply of [false, true]) {
+    rmSync(atlas.receiptPath, { force: true });
+    // Absent before Codex started; the capture's app-server writes a matching receipt.
+    const result = await runCodexPluginReconcile({ apply, home: healed.home, dataDir: healed.dataDir, projectDir: healed.home, connect: healed.writer.connect,
+      captureCatalog: async () => { put(atlas.receiptPath, JSON.stringify({ schema_version: 1, remote_plugin_id: ATLAS_REMOTE })); return catalog; } });
+    expect(result).toMatchObject({ outcome: "refused", code: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, enrolled: [], changes: [], refusals: [{ pluginId: atlas.id, reasons: ["remote"] }] });
+    expect(healed.snapshot()).toEqual(before);
+  }
+  // Present and matching before Codex started: enrolled with that identity on its control.
+  const present = enrolledStation(), at = addAtlas(present, ATLAS_REMOTE);
+  expect(await present.run(true, present.catalog([present.skill(at.root, "plan", at.id, "atlas")], { plugins: [present.plugin, row] }))).toMatchObject({ outcome: "applied", enrolled: ["atlas:plan"] });
+  expect(at.controls().map(control => control.remotePluginId)).toEqual([ATLAS_REMOTE]);
+  expect(() => assertManagedAgentBridge("codex", present.options)).not.toThrow();
+});
+
+test("a config-disabled plugin Codex reports disabled from a git source is still active when Codex reports a remote identity for it", async () => {
+  const station = enrolledStation(undefined, '[plugins."relay@local-market"]\nenabled = false\n');
+  addRelayPlugin(station, "relay@local-market");
+  const before = station.snapshot();
+  const row = { id: "relay@local-market", name: "relay", installed: true, enabled: false, localVersion: "1.0.0", ...gitSource, remotePluginId: "plugins~Plugin_00000000000000000000000000000777" };
+  expect(await station.run(true, station.catalog([], { plugins: [station.plugin, row] }))).toMatchObject({ outcome: "refused", code: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, inactive: [], pathDenied: [], refusals: [{ pluginId: "relay@local-market" }] });
+  expect(station.snapshot()).toEqual(before);
+});
+
+for (const kind of ["absent", "another installation's"] as const) test(`an enrolled remote plugin whose receipt was ${kind} before Codex started refuses as remote with nothing else to write, though the capture healed it`, async () => {
+  const station = enrolledStation(), receipt = join(station.parent, ".codex-remote-plugin-install.json"), reviewed = readFileSync(receipt, "utf8");
+  const before = station.snapshot();
+  for (const apply of [false, true]) {
+    if (kind === "absent") rmSync(receipt); else writeFileSync(receipt, JSON.stringify({ schema_version: 1, remote_plugin_id: "plugins~Plugin_00000000000000000000000000000111" }));
+    const result = await runCodexPluginReconcile({ apply, home: station.home, dataDir: station.dataDir, projectDir: station.home, connect: station.writer.connect,
+      captureCatalog: async () => { writeFileSync(receipt, reviewed); return station.catalog([]); } });
+    expect(result).toMatchObject({ outcome: "refused", code: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, changes: [], refusals: [{ pluginId: PLUGIN, reasons: ["remote"] }] });
+    expect(station.snapshot()).toEqual(before);
+  }
+  // Positive control: the next run reads the healed receipt before Codex starts.
+  expect(await station.run(true, station.catalog([]))).toMatchObject({ outcome: "unchanged" });
+  // A direct plan without the pre-start reading cannot show it, so it refuses even with nothing to write.
+  expect(() => planCodexPluginNameReconcile({ ...station.options, catalog: station.catalog([]) })).toThrow(/^CODEX_REMOTE_RECEIPT_SNAPSHOT_REQUIRED: /);
+  expect(planCodexPluginNameReconcile({ ...station.options, catalog: { ...station.catalog([]), remoteReceipts: captureCodexRemoteReceiptSnapshot(station.cache) } }).plan).toBeNull();
+});
+
+const UNREPORTED_REMOTE_SOURCES = [
+  ["no source type", { sourceType: undefined }],
+  ["a git source", { sourceType: "git" as const, sourceSha256: "e".repeat(64) }],
+] as const;
+for (const [source, row] of UNREPORTED_REMOTE_SOURCES) for (const [label, localVersion, listed, omitted] of CONTROL_PATHS) test(`hook install treats a plugin Codex reports with a remote identity and ${source} as remote (${label}): every control records the receipt, and a receipt missing or another installation's before Codex started refuses`, async () => {
+  const station = templatesStation(localVersion, [...listed], [...omitted], { row });
+  station.install();
+  expect(station.controls()).toHaveLength(listed.length + omitted.length);
+  for (const control of station.controls()) expect(control).toMatchObject({ pluginId: TEMPLATES, remotePluginId: TEMPLATES_REMOTE });
+  await expectRemoteReceiptChangeCaught(station);
+  for (const [kind, code] of RECEIPT_CASES) {
+    const fresh = templatesStation(localVersion, [...listed], [...omitted], { row, receipt: kind === "missing" ? null : OTHER_REMOTE });
+    const before = fresh.bytes();
+    expect(refusal(() => fresh.install({ heal: true }))).toMatch(receiptRefusal(code, kind));
+    expect(fresh.bytes()).toEqual(before);
+  }
+});
+
+test("a re-install whose catalog drops the remote source but keeps the remote identity still decides on the receipt and keeps the binding", () => {
+  const station = templatesStation(null, ["make-deck"], []);
+  station.install();
+  station.writeReceipt(OTHER_REMOTE);
+  const reviewed = station.bytes();
+  expect(refusal(() => station.install({ row: { sourceType: undefined } }))).toMatch(receiptRefusal(CODEX_REMOTE_RECEIPT_MISMATCH, "mismatch"));
+  expect(station.bytes()).toEqual(reviewed);
+  station.writeReceipt(TEMPLATES_REMOTE);
+  station.install({ row: { sourceType: undefined } });
+  expect(station.controls().map(control => control.remotePluginId)).toEqual([TEMPLATES_REMOTE]);
+});
+
+// ---- #141 review B: the current check after the pre-start reading, and strict schema-1 receipts.
+test("a receipt rewritten after the pre-start reading is decided by the current check: another installation's refuses as MISMATCH, a removed one as MISSING", () => {
+  for (const [rewrite, code, kind] of [[OTHER_REMOTE, CODEX_REMOTE_RECEIPT_MISMATCH, "mismatch"], [null, CODEX_REMOTE_RECEIPT_MISSING, "missing"]] as const) for (const localVersion of [null, "0.1.6"] as const) {
+    const station = templatesStation(localVersion, ["make-deck"], ["make-sheet"]);
+    const before = station.bytes();
+    expect(refusal(() => station.install({ rewrite }))).toMatch(receiptRefusal(code, kind));
+    expect(station.bytes()).toEqual(before);
+  }
+  // Positive control: the same identity in other bytes (key order, spacing, a newer write) enrolls.
+  const station = templatesStation(null, ["make-deck"], ["make-sheet"]);
+  writeFileSync(station.receiptPath, `{ "remote_plugin_id" : "${TEMPLATES_REMOTE}" ,\n  "schema_version" : 1 }\n`);
+  station.install({ rewrite: TEMPLATES_REMOTE });
+  expect(station.controls().map(control => control.remotePluginId)).toEqual([TEMPLATES_REMOTE, TEMPLATES_REMOTE]);
+});
+
+const NOT_SCHEMA_1: Array<[string, (path: string, home: string) => void]> = [
+  ["an extra key", path => writeFileSync(path, JSON.stringify({ schema_version: 1, remote_plugin_id: TEMPLATES_REMOTE, extra: true }))],
+  ["the id under another key", path => writeFileSync(path, JSON.stringify({ schema_version: 1, remotePluginId: TEMPLATES_REMOTE }))],
+  ["schema 2", path => writeFileSync(path, JSON.stringify({ schema_version: 2, remote_plugin_id: TEMPLATES_REMOTE }))],
+  ["the schema as a string", path => writeFileSync(path, JSON.stringify({ schema_version: "1", remote_plugin_id: TEMPLATES_REMOTE }))],
+  ["a repeated id key whose last value matches", path => writeFileSync(path, `{"schema_version":1,"remote_plugin_id":"${OTHER_REMOTE}","remote_plugin_id":"${TEMPLATES_REMOTE}"}`)],
+  ["an id outside the identifier syntax", path => writeFileSync(path, JSON.stringify({ schema_version: 1, remote_plugin_id: `${TEMPLATES_REMOTE}.x` }))],
+  ["an array", path => writeFileSync(path, JSON.stringify([1, TEMPLATES_REMOTE]))],
+  ["an empty file", path => writeFileSync(path, "")],
+  ["invalid UTF-8", path => writeFileSync(path, Buffer.from([0x7b, 0xff, 0x7d]))],
+  ["more than 16 KiB", path => writeFileSync(path, JSON.stringify({ schema_version: 1, remote_plugin_id: TEMPLATES_REMOTE }) + " ".repeat(17000))],
+  ["a directory", path => mkdirSync(path)],
+  ["a link to a valid receipt", (path, home) => { const target = join(home, "valid-receipt.json"); writeFileSync(target, JSON.stringify({ schema_version: 1, remote_plugin_id: TEMPLATES_REMOTE })); symlinkSync(target, path); }],
+];
+for (const [label, write] of NOT_SCHEMA_1) test(`a receipt that is not a strict schema-1 receipt (${label}) refuses as MISMATCH at install, also when the app-server rewrote it before install`, () => {
+  for (const rewrite of [undefined, TEMPLATES_REMOTE]) {
+    const station = templatesStation(null, ["make-deck"], ["make-sheet"], { receipt: null });
+    write(station.receiptPath, station.home);
+    const before = station.bytes();
+    expect(refusal(() => station.install(rewrite === undefined ? {} : { rewrite }))).toMatch(receiptRefusal(CODEX_REMOTE_RECEIPT_MISMATCH, "mismatch"));
+    expect(station.bytes()).toEqual(before);
+  }
+});
+
+test("the merge binds a new name only to a parent's verified receipt: never from an unbound or unevenly bound template, never to another id", () => {
+  const station = templatesStation(null, ["make-deck", "make-report"], ["make-sheet"]);
+  station.install();
+  const prior = station.controls(), parent = prior[0]!.pluginParent, reviewed = [...prior, { ...prior[0]!, name: "templates:make-chart" }];
+  const strip = (controls: CodexPluginSkillControl[]) => controls.map(({ remotePluginId: _id, ...control }) => control as CodexPluginSkillControl);
+  // Stored without the receipt that the review verified: refuses unless the caller heals the parent.
+  expect(() => mergeReconciledCodexPluginControls(strip(prior), reviewed, ["templates:make-chart"])).toThrow(CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED);
+  expect(mergeReconciledCodexPluginControls(strip(prior), reviewed, ["templates:make-chart"], { [parent]: TEMPLATES_REMOTE }).map(control => control.remotePluginId)).toEqual(Array(4).fill(TEMPLATES_REMOTE));
+  // Unevenly bound, with no id from the review: refuses rather than copy the first control.
+  expect(() => mergeReconciledCodexPluginControls([...strip(prior.slice(0, 1)), ...prior.slice(1)], strip(reviewed), ["templates:make-chart"])).toThrow(CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED);
+  // A heal never replaces an id a stored control already carries.
+  expect(() => mergeReconciledCodexPluginControls(prior, reviewed, ["templates:make-chart"], { [parent]: OTHER_REMOTE })).toThrow(CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED);
+});
+
+test("the reconcile scope admits a stored control gaining only its parent's verified receipt", () => {
+  const station = templatesStation(null, ["make-deck", "make-report"], ["make-sheet"]);
+  station.install();
+  storeUnbound(station, [false, true, true]);
+  const { plan, report } = planCodexPluginNameReconcile({ ...station.options, catalog: { ...station.catalog(), remoteReceipts: captureCodexRemoteReceiptSnapshot(station.cache) } });
+  expect(report.bound).toEqual([TEMPLATES]);
+  const policy = JSON.parse(readFileSync(station.policy, "utf8")), parent = policy.bridge.codexPluginSkills[0].pluginParent;
+  const scope = { configPath: station.config, policyPath: station.policy, prior: policy.bridge.codexPluginSkills, names: [], remoteIdentities: { [parent]: TEMPLATES_REMOTE }, discovery: policy.bridge.discovery.codex };
+  expect(() => assertCodexReconcileScope(plan!, scope)).not.toThrow();
+  // Without the verified identity, or with another one, the same plan exceeds its scope.
+  for (const remoteIdentities of [{}, { [parent]: OTHER_REMOTE }]) expect(() => assertCodexReconcileScope(plan!, { ...scope, remoteIdentities })).toThrow("CODEX_RECONCILE_SCOPE_EXCEEDED");
+  const withPolicy = (edit: (value: any) => void) => ({ ...plan!, changes: plan!.changes.map(change => { if (change.path !== station.policy) return change; const value = JSON.parse(change.after); edit(value); return { ...change, after: JSON.stringify(value) }; }) });
+  for (const changed of [
+    withPolicy(value => { value.bridge.codexPluginSkills[0].manifestSha256 = "0".repeat(64); }),
+    withPolicy(value => { value.bridge.codexPluginSkills[1].remotePluginId = OTHER_REMOTE; }),
+    withPolicy(value => { delete value.bridge.codexPluginSkills[2].remotePluginId; }),
+  ]) expect(() => assertCodexReconcileScope(changed, scope)).toThrow("CODEX_RECONCILE_SCOPE_EXCEEDED");
+});
+
+test("a fresh hook install also binds the verified receipt onto every control stored without it", () => {
+  for (const [, kept] of UNBOUND_SHAPES) {
+    const station = templatesStation(null, ["make-deck", "make-report"], ["make-sheet"]);
+    station.install();
+    storeUnbound(station, kept);
+    station.install();
+    expect(station.controls().map(control => control.remotePluginId)).toEqual([TEMPLATES_REMOTE, TEMPLATES_REMOTE, TEMPLATES_REMOTE]);
+  }
+});
+
+test("a heal needs the receipt proof itself, also for a plugin with no skill document left for the review to check", async () => {
+  // Codex left the plugin's version without skill bodies; its controls were stored without the receipt.
+  const station = templatesStation(null, ["make-deck", "make-report"], ["make-sheet"]);
+  station.install();
+  storeUnbound(station, [false, false, false]);
+  rmSync(join(station.parent, "0.1.6", "skills"), { recursive: true });
+  for (const guard of strictGuards(station)) expect(guard).not.toThrow();
+  // Absent before Codex started and rewritten by the capture: refuses and binds nothing.
+  rmSync(station.receiptPath);
+  const before = station.bytes();
+  const result = await station.reconcile(true, [], true);
+  expect(result).toMatchObject({ outcome: "refused", code: CODEX_REMOTE_RECEIPT_MISSING, bound: [], changes: [] });
+  expect(station.bytes()).toEqual(before);
+  // Positive control: present before Codex started, so the reconcile binds it.
+  expect(await station.reconcile(true)).toMatchObject({ outcome: "applied", bound: [TEMPLATES], enrolled: [] });
+  expect(station.controls().map(control => control.remotePluginId)).toEqual([TEMPLATES_REMOTE, TEMPLATES_REMOTE, TEMPLATES_REMOTE]);
+});

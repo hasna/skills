@@ -1,6 +1,7 @@
 import { test, expect, beforeEach, afterEach, describe } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
+import { captureCodexRemoteReceiptSnapshot } from "./codex-native-skill-catalog.js";
 import { tmpdir } from "node:os";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { planAgentIntegration, applyAgentIntegration, assertManagedAgentBridge, inventoryNativeSkills, archiveNativeSkills, isInertCodexVendorPluginCopy, codexPromptDriftWarning } from "./agent-integration.js";
@@ -90,7 +91,7 @@ function station04(): Station & { parent: string; copy: string; installed: strin
   put(oldDocument, payload("sites"));
   put(join(parent, ".codex-remote-plugin-install.json"), JSON.stringify({ schema_version: 1, remote_plugin_id: REMOTE_ID }));
   put(s.config, `[[skills.config]]\npath = ${JSON.stringify(oldDocument)}\nenabled = false\n`);
-  const catalog = { version: "codex-cli 0.162.1", cwd: s.home, skills: [], plugins: [{ id: "sites@openai-curated-remote", name: "sites", installed: true, enabled: true, localVersion: null, remotePluginId: REMOTE_ID, sourceType: "remote" as const }] };
+  const catalog = { version: "codex-cli 0.162.1", cwd: s.home, skills: [], plugins: [{ id: "sites@openai-curated-remote", name: "sites", installed: true, enabled: true, localVersion: null, remotePluginId: REMOTE_ID, sourceType: "remote" as const }], remoteReceipts: captureCodexRemoteReceiptSnapshot(s.cache) };
   const review = { version: 1 as const, agents: [{ agent: "codex" as const, roots: [s.cache], sources: [captureCodexSettingsV3(s.config)], pluginHooks: "reviewed-no-skill-injection" as const }] };
   applyAgentIntegration(planAgentIntegration({ ...opts(s), agents: ["codex"], codexNativeCatalog: catalog, discoveryInputs: review }));
   const bridge = readManagedSkillPolicySnapshot(s.dataDir)!.value.bridge;
@@ -183,7 +184,7 @@ describe("operator path: the guarded install writes the disable outside the prom
   test("a fresh native catalog makes skills hook install add the qualified-name disable; the strict guard then passes", () => {
     const s = station04();
     expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toMatch(UNEXPECTED(1));
-    const catalog = { version: "codex-cli 0.162.1", cwd: s.home, skills: [{ name: "sites:sites-remix", path: join(s.copy, "SKILL.md"), enabled: true, pluginId: "sites@openai-curated-remote" }], plugins: [{ id: "sites@openai-curated-remote", name: "sites", installed: true, enabled: true, localVersion: "1.0.2-remix-b.1", remotePluginId: REMOTE_ID, sourceType: "remote" as const }] };
+    const catalog = { version: "codex-cli 0.162.1", cwd: s.home, skills: [{ name: "sites:sites-remix", path: join(s.copy, "SKILL.md"), enabled: true, pluginId: "sites@openai-curated-remote" }], plugins: [{ id: "sites@openai-curated-remote", name: "sites", installed: true, enabled: true, localVersion: "1.0.2-remix-b.1", remotePluginId: REMOTE_ID, sourceType: "remote" as const }], remoteReceipts: captureCodexRemoteReceiptSnapshot(s.cache) };
     const review = { version: 1 as const, agents: [{ agent: "codex" as const, roots: [s.cache], sources: [captureCodexSettingsV3(s.config)], pluginHooks: "reviewed-no-skill-injection" as const }] };
     const plan = planAgentIntegration({ ...opts(s), agents: ["codex"], codexNativeCatalog: catalog, discoveryInputs: review });
     const change = plan.changes.find(item => item.path === s.config)!;
@@ -263,7 +264,7 @@ describe("B2: vendor classification is an exact allowlist", () => {
       return root;
     };
     const original = add("1.0.0"); put(s.config, "");
-    const catalog = { version: "codex-cli 0.159.2", cwd: s.home, skills: names.map(name => ({ name: `pages:${name}`, path: join(original, "skills", name, "SKILL.md"), enabled: true, pluginId: "pages@probe" })), plugins: [{ id: "pages@probe", name: "pages", installed: true, enabled: true, localVersion: "1.0.0" }] };
+    const catalog = { version: "codex-cli 0.159.2", cwd: s.home, remoteReceipts: captureCodexRemoteReceiptSnapshot(s.cache), skills: names.map(name => ({ name: `pages:${name}`, path: join(original, "skills", name, "SKILL.md"), enabled: true, pluginId: "pages@probe" })), plugins: [{ id: "pages@probe", name: "pages", installed: true, enabled: true, localVersion: "1.0.0" }] };
     applyAgentIntegration(planAgentIntegration({ ...opts(s), agents: ["codex"], codexNativeCatalog: catalog }));
     add("2.0.0");
     expect(refusal(() => assertManagedAgentBridge("codex", opts(s)))).toBe("ACCEPTED");

@@ -1130,9 +1130,26 @@ the guard refuses. The work it does:
   tuple is unchanged, and denies it in `~/.codex/config.toml` with
   `[[skills.config]] name = "<plugin>:<skill>"` and `enabled = false`.
 - It enrolls a plugin Skills had not enrolled only when every version is
-  skills-only. Its native install receipt is bound when the plugin is remote and
-  the native catalog reports that same remote installation. A receipt the catalog
-  does not confirm refuses as `remote`.
+  skills-only. A plugin is remote when the native catalog reports a remote
+  source or any remote identity (`remotePluginId`), whatever else it says about
+  the source; this one rule also governs the install review and the inactive
+  rule. A remote plugin's install receipt is bound only when the receipt read
+  before Codex started named the catalog's identity and the current receipt
+  still does, because starting Codex rewrites receipts. Any other remote plugin,
+  and a receipt beside a plugin the catalog does not report as remote, refuses
+  as `remote`.
+- It binds the verified install receipt onto every control of an enrolled
+  remote plugin whose stored controls lack it (policies written before every
+  control recorded one), and lists the plugin in `bound`. The proof is the one
+  a fresh `hook install` uses: the pre-start reading and the current receipt
+  both name the catalog's identity, and every control that already carries one
+  agrees. Otherwise it refuses with `CODEX_REMOTE_RECEIPT_MISSING`,
+  `CODEX_REMOTE_RECEIPT_MISMATCH` or reason `remote`, and writes nothing. A new
+  name of an enrolled plugin always carries the plugin's receipt. A plugin the
+  catalog no longer reports as remote whose controls are only partly bound
+  refuses as `remote`. An enrolled plugin whose bound receipt was absent or
+  named another installation before Codex started refuses as `remote`, even
+  when nothing else needs writing.
 - It denies skills that Codex loads from its runtime cache
   (`~/.cache/codex-runtimes`) by their stable qualified name. A skill there with
   no stable qualified name gets an exact path deny instead, listed in
@@ -1205,8 +1222,15 @@ config version. The run finishes only when the strict guard accepts the written
 state. The plan may
 append disable rows to the Codex configuration. In the managed policy it may
 only add the new controls and refresh the configuration and re-captured cache
-witnesses. Anything else refuses with `CODEX_RECONCILE_SCOPE_EXCEEDED`. The
-reconcile never adds an allow entry.
+witnesses, and bind a verified receipt onto stored controls that lack one.
+Anything else refuses with `CODEX_RECONCILE_SCOPE_EXCEEDED`. The reconcile
+never adds an allow entry.
+
+Residual: the strict guard checks every control that carries a receipt, and it
+still tolerates a plugin none of whose controls carries one, because policies
+written before receipts were recorded have none and refusing them would block
+every Codex session on upgrade. Such a plugin is receipt-protected only after a
+reconcile or `skills hook install` binds its receipt.
 
 The allowed set is computed from Codex's own report, not from a simulation of
 the existing configuration. Every skill the native catalog reports as enabled
@@ -1303,7 +1327,7 @@ Every invocation prints exactly one JSON line with `schema`
 `refused` or `error`. `code` and `message` are present exactly when the outcome
 is refused or error. The line also carries `counts` (`enrolled`,
 `alreadyEnrolled`, `denied`, `pathDenied`, `skipped`, `allowed`), `enrolled`,
-`denied`, `pathDenied`, `inactive`, `classified`, `rebasedWitnesses`, `allowed` (always
+`denied`, `pathDenied`, `inactive`, `classified`, `rebasedWitnesses`, `bound`, `allowed` (always
 `["skills-cli"]` on success), `refusals`, `changes`, and on apply `receipt` and
 `backups`. The exit status is 0 for applied, unchanged and planned, 2 for
 refused and 1 for error. A second apply returns `unchanged`. The command never

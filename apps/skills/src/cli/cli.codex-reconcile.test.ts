@@ -7,6 +7,7 @@ import { useDefaultTestTimeout } from "../test-preload.js";
 import { admitCorpusFixture, installCorpusInspectorFixture, wrapNativeInspectionFixture } from "../lib/codex-corpus.fixture.js";
 import { applyAgentIntegration, assertManagedAgentBridge, planAgentIntegration } from "../lib/agent-integration.js";
 import { captureCodexSettingsV3 } from "../lib/codex-settings-witness.js";
+import { captureCodexRemoteReceiptSnapshot } from "../lib/codex-native-skill-catalog.js";
 
 useDefaultTestTimeout();
 let restoreInspector: () => void;
@@ -40,7 +41,7 @@ function station() {
   const plugin = { id: PLUGIN, name: "pages", installed: true, enabled: true, localVersion: null, remotePluginId: REMOTE, sourceType: "remote" as const };
   const review = { version: 1 as const, agents: [{ agent: "codex" as const, roots: [cache], sources: [captureCodexSettingsV3(config)], pluginHooks: "reviewed-no-skill-injection" as const }] };
   applyAgentIntegration(planAgentIntegration({ home, dataDir, projectDir: home, agents: ["codex"], discoveryInputs: review,
-    codexNativeCatalog: { version: "codex-cli 0.163.0", cwd: home, plugins: [plugin], skills: [{ name: "pages:write-page", path: join(first, "skills/write-page/SKILL.md"), enabled: true, pluginId: PLUGIN }] } }));
+    codexNativeCatalog: { version: "codex-cli 0.163.0", cwd: home, plugins: [plugin], skills: [{ name: "pages:write-page", path: join(first, "skills/write-page/SKILL.md"), enabled: true, pluginId: PLUGIN }], remoteReceipts: captureCodexRemoteReceiptSnapshot(cache) } }));
   const command = join(root, "codex"), skillsFile = join(root, "skills.json"), writesFile = join(root, "writes.jsonl"), conflictFlag = join(root, "conflict");
   writeFileSync(command, wrapNativeInspectionFixture(`#!/usr/bin/env bun
 import { createInterface } from "node:readline";
@@ -133,4 +134,17 @@ test("built CLI reports an unavailable native client as one error result", async
   expect(lines).toHaveLength(1);
   expect(JSON.parse(lines[0]!)).toMatchObject({ outcome: "error", mode: "apply", enrolled: [], changes: [] });
   expect(typeof JSON.parse(lines[0]!).code).toBe("string");
+});
+
+test("built CLI refuses a remote receipt change of a plugin enrolled from listed skills with reason remote", async () => {
+  const s = station();
+  // The first reviewed hook install enrolled a listed skill and bound the receipt.
+  const controls = JSON.parse(readFileSync(join(s.dataDir, "agent-policy.json"), "utf8")).bridge.codexPluginSkills;
+  expect(controls).toEqual([expect.objectContaining({ name: "pages:write-page", pluginId: PLUGIN, remotePluginId: REMOTE })]);
+  expect(await s.run("--apply", "--json")).toMatchObject({ exitCode: 0, result: { outcome: "unchanged" } });
+  put(join(s.parent, ".codex-remote-plugin-install.json"), JSON.stringify({ schema_version: 1, remote_plugin_id: "plugins~Plugin_00000000000000000000000000000763" }));
+  const settled = readFileSync(s.config, "utf8");
+  expect(await s.run("--apply", "--json")).toMatchObject({ exitCode: 2, result: { outcome: "refused", code: "CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED", refusals: [{ pluginId: PLUGIN, reasons: ["remote"] }] } });
+  expect(readFileSync(s.config, "utf8")).toBe(settled);
+  expect(() => assertManagedAgentBridge("codex", s.options)).toThrow("CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED");
 });

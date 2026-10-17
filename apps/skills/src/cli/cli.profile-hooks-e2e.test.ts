@@ -2,6 +2,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { captureCodexRemoteReceiptSnapshot } from "../lib/codex-native-skill-catalog.js";
 import { tmpdir } from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 import { buildCliFixture } from "./cli-build.fixture.js";
@@ -947,7 +948,7 @@ test("installed Codex prompt continues after reviewed Pages app and qualified sk
   const app='{"apps":{"pages":{"id":"synthetic_pages_connector","required":true}}}';
   const add=(version:string,skills=names)=>{const root=join(parent,version);put(join(root,".codex-plugin/plugin.json"),JSON.stringify({name:"pages",version,apps:"./.app.json"}));put(join(root,".app.json"),app);for(const name of skills)put(join(root,"skills",name,"SKILL.md"),`---\nname: ${name}\ndescription: Synthetic native fixture\n---\nUNMANAGED_NATIVE_PAYLOAD\n`);return root;};
   const original=add("1.0.0"), file=join(f.root,"native-review.json");
-  put(file,JSON.stringify({version:"codex-cli 0.159.2",cwd:f.a.project,skills:names.map(name=>({name:`pages:${name}`,path:join(original,"skills",name,"SKILL.md"),enabled:true,pluginId:"pages@probe"})),plugins:[{id:"pages@probe",name:"pages",installed:true,enabled:true,localVersion:"1.0.0"}]}));
+  put(file,JSON.stringify({version:"codex-cli 0.159.2",cwd:f.a.project,remoteReceipts:captureCodexRemoteReceiptSnapshot(join(f.a.home,".codex/plugins/cache")),skills:names.map(name=>({name:`pages:${name}`,path:join(original,"skills",name,"SKILL.md"),enabled:true,pluginId:"pages@probe"})),plugins:[{id:"pages@probe",name:"pages",installed:true,enabled:true,localVersion:"1.0.0"}]}));
   const receipt=await f.a.ok(["hook","install","--agent","codex","--codex-native-catalog",file,"--apply","--json"]);
   expect(receipt.codexPluginSkills).toHaveLength(4);expect(receipt.codexPluginSkills[0].name).toBe("pages:maintain-space");expect(receipt.codexPluginSkills[0].appSha256).toMatch(/^[a-f0-9]{64}$/);expect(receipt.codexPluginSkillReview.version).toBe("codex-cli 0.159.2");
   for (const version of ["3.0.0","4.0.0"]) {

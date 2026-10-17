@@ -1,7 +1,11 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import type { CodexHookRpc } from "./codex-hook-rpc.js";
-import { codexPluginSourceIsConfigControlled, captureCodexNativeSkillCatalog, isCodexNativeSkillDisabled, projectCodexInstalledPlugins, projectCodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
+import { CODEX_REMOTE_RECEIPT_SNAPSHOT_SCHEMA, captureCodexRemoteReceiptSnapshot, codexPluginSourceIsConfigControlled, captureCodexNativeSkillCatalog, isCodexNativeSkillDisabled, projectCodexInstalledPlugins, projectCodexNativeSkillCatalog, projectCodexRemoteReceiptSnapshot } from "./codex-native-skill-catalog.js";
 
 useDefaultTestTimeout();
 
@@ -71,7 +75,8 @@ for (const nativeVersion of ["codex-cli 0.159.2", "codex-cli 0.160.0", "codex-cl
   const result = await captureCodexNativeSkillCatalog(options, async value => { connected = value; return rpc; });
   expect(connected).toEqual({ command: "codex", home: "/synthetic/home", timeoutMs: 3000 });
   expect(calls).toEqual([["skills/list", { cwds: [cwd], forceReload: true }], ["plugin/installed", { cwds: [cwd] }]]);
-  expect(result).toEqual({ version: nativeVersion, cwd, skills: [vendor, bridge], plugins: [{ id: "vendor@probe", name: "vendor", installed: true, enabled: true, localVersion: "3.0.0" }] });
+  expect(result).toEqual({ version: nativeVersion, cwd, skills: [vendor, bridge], plugins: [{ id: "vendor@probe", name: "vendor", installed: true, enabled: true, localVersion: "3.0.0" }],
+    remoteReceipts: { schema: CODEX_REMOTE_RECEIPT_SNAPSHOT_SCHEMA, cacheRoot: "/synthetic/home/.codex/plugins/cache", plugins: [] } });
   expect(closed).toBe(1);
 });
 
@@ -134,4 +139,55 @@ test("0.162.1 compatibility never converts a transport admission refusal into a 
     throw new Error("CODEX_CORPUS_ADMISSION_REQUIRED");
   })).rejects.toThrow("CODEX_CORPUS_ADMISSION_REQUIRED");
   expect(connected).toBe(1);
+});
+
+// Synthetic fixtures only, under the test TMPDIR, removed with it.
+const homes: string[] = [];
+afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
+const receiptText = (id: string) => JSON.stringify({ schema_version: 1, remote_plugin_id: id });
+const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+
+test("capture reads every remote install receipt before it starts Codex, whose app-server then rewrites them", async () => {
+  const home = mkdtempSync(join(tmpdir(), "skills-receipt-snapshot-")); homes.push(home);
+  const cache = join(home, ".codex/plugins/cache"), parent = (plugin: string) => join(cache, "openai-curated-remote", plugin);
+  const receipt = (plugin: string) => join(parent(plugin), ".codex-remote-plugin-install.json");
+  for (const plugin of ["templates", "pages", "sites", "docs", "decks"]) mkdirSync(parent(plugin), { recursive: true });
+  mkdirSync(join(cache, "local-market/notes"), { recursive: true });
+  writeFileSync(receipt("pages"), receiptText("plugins~Stale_0001"));
+  const duplicate = '{"schema_version":1,"remote_plugin_id":"plugins~A","remote_plugin_id":"plugins~B"}';
+  writeFileSync(receipt("sites"), duplicate);
+  writeFileSync(join(home, "elsewhere.json"), receiptText("plugins~Aliased_0001")); symlinkSync(join(home, "elsewhere.json"), receipt("docs"));
+  writeFileSync(receipt("decks"), receiptText("plugins~Current_0005"));
+  const rpc: CodexHookRpc = { version: "codex-cli 0.163.0", request: async method => method === "skills/list" ? response() : installed, close: async () => {} };
+  const result = await captureCodexNativeSkillCatalog({ command: "codex", home, cwd }, async () => {
+    // What starting the app-server does: every remote plugin's receipt is rewritten to its own state.
+    for (const plugin of ["templates", "pages", "sites", "docs", "decks"]) { rmSync(receipt(plugin), { force: true }); writeFileSync(receipt(plugin), receiptText(`plugins~Healed_${plugin}`)); }
+    return rpc;
+  });
+  const snapshot = result.remoteReceipts!;
+  expect(snapshot.schema).toBe(CODEX_REMOTE_RECEIPT_SNAPSHOT_SCHEMA);
+  expect(snapshot.cacheRoot).toBe(cache);
+  const byId = Object.fromEntries(snapshot.plugins.map(item => [item.pluginId, item]));
+  expect(Object.keys(byId).sort()).toEqual(["decks@openai-curated-remote", "docs@openai-curated-remote", "notes@local-market", "pages@openai-curated-remote", "sites@openai-curated-remote", "templates@openai-curated-remote"]);
+  expect(byId["templates@openai-curated-remote"]).toEqual({ pluginId: "templates@openai-curated-remote", receipt: "absent" });
+  expect(byId["notes@local-market"]).toEqual({ pluginId: "notes@local-market", receipt: "absent" });
+  expect(byId["pages@openai-curated-remote"]).toMatchObject({ receipt: "present", sha256: sha(receiptText("plugins~Stale_0001")), remotePluginId: "plugins~Stale_0001" });
+  expect(byId["sites@openai-curated-remote"]).toMatchObject({ receipt: "present", sha256: sha(duplicate), remotePluginId: null });
+  expect(byId["docs@openai-curated-remote"]).toMatchObject({ receipt: "present", sha256: null, remotePluginId: null });
+  expect(byId["decks@openai-curated-remote"]).toMatchObject({ receipt: "present", remotePluginId: "plugins~Current_0005" });
+  for (const item of snapshot.plugins) if (item.receipt === "present") expect(Number.isFinite(item.mtimeMs)).toBe(true);
+  expect(JSON.stringify(snapshot)).not.toContain("Healed");
+  // The same reader, called now, observes only the healed state.
+  expect(captureCodexRemoteReceiptSnapshot(cache).plugins.filter(item => item.receipt === "present").map(item => item.receipt === "present" && item.remotePluginId)).toEqual(["plugins~Healed_decks", "plugins~Healed_docs", "plugins~Healed_pages", "plugins~Healed_sites", "plugins~Healed_templates"]);
+});
+
+test("an embedded receipt snapshot is validated exactly when a review consumes it", () => {
+  const valid = { schema: CODEX_REMOTE_RECEIPT_SNAPSHOT_SCHEMA, cacheRoot: "/synthetic/cache", plugins: [{ pluginId: "pages@openai-curated-remote", receipt: "absent" }, { pluginId: "sites@openai-curated-remote", receipt: "present", sha256: "a".repeat(64), remotePluginId: "plugins~Sites", mtimeMs: 1 }] };
+  expect(projectCodexRemoteReceiptSnapshot(valid) as unknown).toEqual(valid);
+  for (const bad of [undefined, null, [], { ...valid, schema: "hasna.skills-codex-remote-receipts.v2" }, { ...valid, cacheRoot: "relative" }, { ...valid, extra: true },
+    { ...valid, plugins: [valid.plugins[0], valid.plugins[0]] }, { ...valid, plugins: [{ pluginId: "pages", receipt: "absent" }] },
+    { ...valid, plugins: [{ ...valid.plugins[0], sha256: null }] }, { ...valid, plugins: [{ ...valid.plugins[1], remotePluginId: "bad.id" }] },
+    { ...valid, plugins: [{ ...valid.plugins[1], sha256: "A".repeat(64) }] }, { ...valid, plugins: [{ ...valid.plugins[1], mtimeMs: "1" }] },
+    { ...valid, plugins: [{ pluginId: "sites@openai-curated-remote", receipt: "present", sha256: null, remotePluginId: null }] }, { ...valid, plugins: [{ pluginId: "x@y", receipt: "unknown" }] }])
+    expect(projectCodexRemoteReceiptSnapshot(bad)).toBeNull();
 });
