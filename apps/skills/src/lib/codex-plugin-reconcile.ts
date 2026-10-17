@@ -36,6 +36,8 @@ export interface CodexReconcileResult {
   classified: Array<{ pluginId: string; capabilities: string[]; manifests: string[] }>;
   /** Reviewed cache witnesses re-captured after a skills-only version change. */
   rebasedWitnesses: number;
+  /** Enrolled remote plugins whose controls, stored without the install receipt, gain the verified one. */
+  bound: string[];
   /** Native skills Codex loads afterwards; exactly the bridge, or the result is refused. */
   allowed: string[];
   /** Plugins whose capability kinds need a review, with the manifests read (refused only). */
@@ -77,7 +79,7 @@ export function classifyCodexReconcileError(error: unknown): Pick<CodexReconcile
 
 function emptyResult(mode: CodexReconcileResult["mode"]): Omit<CodexReconcileResult, "outcome"> {
   return { schema: CODEX_RECONCILE_RESULT_SCHEMA, mode, codexVersion: null, counts: { enrolled: 0, alreadyEnrolled: 0, denied: 0, pathDenied: 0, skipped: 0, allowed: 0 },
-    enrolled: [], denied: [], pathDenied: [], inactive: [], classified: [], rebasedWitnesses: 0, allowed: [], changes: [] };
+    enrolled: [], denied: [], pathDenied: [], inactive: [], classified: [], rebasedWitnesses: 0, bound: [], allowed: [], changes: [] };
 }
 
 export interface CodexReconcileOptions {
@@ -114,7 +116,7 @@ export async function runCodexPluginReconcile(options: CodexReconcileOptions): P
     const { plan, report } = planCodexPluginNameReconcile({ home, dataDir, projectDir, catalog });
     const counts = { enrolled: report.enrolled.length, alreadyEnrolled: report.alreadyEnrolled, denied: report.denied.length, pathDenied: report.pathDenied.length, skipped: report.skipped, allowed: report.allowed.length };
     const reported = { ...base, codexVersion: report.codexVersion, counts, enrolled: report.enrolled, denied: report.denied, pathDenied: report.pathDenied,
-      inactive: report.inactive, classified: report.classified, rebasedWitnesses: report.rebasedWitnesses, allowed: report.allowed };
+      inactive: report.inactive, classified: report.classified, rebasedWitnesses: report.rebasedWitnesses, bound: report.bound, allowed: report.allowed };
     if (!plan) return { ...reported, outcome: "unchanged" };
     const changes = plan.changes.map(change => change.path);
     if (!options.apply) return { ...reported, outcome: "planned", changes };

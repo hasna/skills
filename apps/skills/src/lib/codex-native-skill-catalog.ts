@@ -50,13 +50,21 @@ export interface CodexInstalledPlugin {
   sourcePath?: string;
 }
 
+/** The one remote rule for every receipt decision (install review, reconcile
+ * and the inactive rule): Codex reports a remote source, or reports any remote
+ * identity. A projected row can keep its remotePluginId while a missing or
+ * unrecognized source projects to no sourceType, so the id alone counts. */
+export function codexPluginIsRemote(plugin: Pick<CodexInstalledPlugin,"sourceType"|"remotePluginId"> | undefined): boolean {
+  return plugin !== undefined && (plugin.sourceType === "remote" || plugin.remotePluginId !== undefined);
+}
+
 /** Codex 0.160 derives remote installed keys from these native scope realms.
  * A nonremote declaration in one of them cannot prove config-owned enablement:
  * remote reconciliation may replace enabled even while config stays disabled. */
 export function codexPluginSourceIsConfigControlled(plugin: Pick<CodexInstalledPlugin,"id"|"sourceType"|"sourceSha256"|"remotePluginId">): boolean {
   const remoteRealms=["openai-curated-remote","created-by-me-remote","workspace-directory","workspace-shared-with-me","workspace-shared-with-me-private","workspace-shared-with-me-unlisted"];
   return Boolean(plugin.sourceType && ["local","git","npm"].includes(plugin.sourceType)
-    && plugin.sourceSha256 && /^[a-f0-9]{64}$/.test(plugin.sourceSha256) && !plugin.remotePluginId
+    && plugin.sourceSha256 && /^[a-f0-9]{64}$/.test(plugin.sourceSha256) && !codexPluginIsRemote(plugin)
     && !remoteRealms.includes(plugin.id.slice(plugin.id.lastIndexOf("@")+1)));
 }
 

@@ -6,7 +6,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
 import { CODEX_PLUGIN_DEFAULT_SKILLS_PATHS, CODEX_PLUGIN_MANIFEST_DIRECTORIES, CODEX_PLUGIN_MANIFEST_KNOWN_KEYS, CODEX_PLUGIN_MANIFEST_LOCATIONS, codexPluginRootCapabilityEntry, foldCodexPluginEntryName, isCodexSkillDocumentName } from "./codex-plugin-capability-paths.js";
-import { canonicalCacheRoot, codexPluginSourceIsConfigControlled, isCodexNativeSkillDisabled, projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, projectCodexRemoteReceiptSnapshot, remotePluginIdentifier, type CodexNativeSkillCatalog, type CodexRemoteReceiptSnapshot } from "./codex-native-skill-catalog.js";
+import { canonicalCacheRoot, codexPluginIsRemote, codexPluginSourceIsConfigControlled, isCodexNativeSkillDisabled, projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, projectCodexRemoteReceiptSnapshot, remotePluginIdentifier, type CodexInstalledPlugin, type CodexNativeSkillCatalog, type CodexRemoteReceiptSnapshot } from "./codex-native-skill-catalog.js";
 export interface CodexPluginSkillControl { name:string; pluginId:string; namespace:string; pluginParent:string; manifestSha256:string; appSha256?:string; mcpSha256?:string; remotePluginId?:string; skillsOnly?:true }
 /** A native nonremote installation disabled by the witnessed configuration.
  * Its cache is inert; this makes no claim about reviewed hook capabilities. */
@@ -61,6 +61,43 @@ function requireRemoteInstallReceipt(parent:string, plugin:{ id:string; remotePl
     receiptRefusal(missing ? CODEX_REMOTE_RECEIPT_MISSING : CODEX_REMOTE_RECEIPT_MISMATCH,plugin.id,missing ? "missing" : "mismatch");
   }
   return plugin.remotePluginId!;
+}
+/** The remote identity the reconcile may bind for a plugin Codex reports as
+ * remote: the catalog's id when the receipt read before Codex started named it
+ * and the current receipt still does; null otherwise. A catalog without a
+ * valid pre-start reading for this cache refuses (SNAPSHOT_REQUIRED). */
+export function codexPreStartRemoteReceipt(catalog:CodexNativeSkillCatalog, cache:string, parent:string, plugin:{ id:string; remotePluginId?:string }, read:Read):string|null {
+  const observed=requireRemoteReceiptSnapshot(catalog,cache).plugins.find(item=>item.pluginId===plugin.id);
+  if (!observed || observed.receipt!=="present" || plugin.remotePluginId===undefined || observed.remotePluginId!==plugin.remotePluginId) return null;
+  return remoteInstallationMatches(parent,plugin.remotePluginId,read) ? plugin.remotePluginId : null;
+}
+/** Whether an enrolled parent's bound receipt was not there, with that id,
+ * before Codex started. Applies when a control binds a receipt and the parent
+ * exists (an absent parent is left to its own rules); a catalog without a
+ * valid pre-start reading for this cache then refuses (SNAPSHOT_REQUIRED). */
+export function codexPreStartReceiptChanged(catalog:CodexNativeSkillCatalog, cache:string, parentControls:CodexPluginSkillControl[]):boolean {
+  const template=parentControls[0];
+  if (!template || !parentControls.some(control=>control.remotePluginId!==undefined) || !lstatSync(template.pluginParent,{throwIfNoEntry:false})) return false;
+  const observed=requireRemoteReceiptSnapshot(catalog,cache).plugins.find(item=>item.pluginId===template.pluginId);
+  return parentControls.some(control=>control.remotePluginId!==undefined && (!observed || observed.receipt!=="present" || observed.remotePluginId!==control.remotePluginId));
+}
+/** What a reconcile does with an enrolled parent whose stored controls do not
+ * all carry its receipt (policies stored before every control recorded it).
+ * A plugin Codex reports as remote is healed: every control gets the catalog's
+ * id, on exactly the fresh-install proof (requireRemoteInstallReceipt: the
+ * pre-start reading and the current receipt both name it; MISSING or MISMATCH
+ * otherwise), and only when every bound control already agrees ("refuse").
+ * A plugin Codex does not report as remote refuses when only some controls are
+ * bound. null: nothing to heal (every control bound, none bound and not
+ * reported remote, or the parent is absent and left to its own rules). */
+export function codexStoredReceiptHeal(catalog:CodexNativeSkillCatalog, cache:string, parentControls:CodexPluginSkillControl[], plugin:CodexInstalledPlugin|undefined, read:Read):{ heal:string }|"refuse"|null {
+  const template=parentControls[0];
+  if (!template || !lstatSync(template.pluginParent,{throwIfNoEntry:false})) return null;
+  const unbound=parentControls.filter(control=>control.remotePluginId===undefined).length;
+  if (!unbound) return null;
+  if (!codexPluginIsRemote(plugin)) return unbound===parentControls.length ? null : "refuse";
+  const identity=requireRemoteInstallReceipt(template.pluginParent,plugin!,requireRemoteReceiptSnapshot(catalog,cache),read);
+  return parentControls.every(control=>control.remotePluginId===undefined || control.remotePluginId===identity) ? { heal:identity } : "refuse";
 }
 /** The catalog's pre-start receipt snapshot for this exact plugin cache, or a
  * refusal: an older capture, or one of another Codex home, cannot show it. */
@@ -367,12 +404,12 @@ export function reviewCodexPluginControls(catalog:CodexNativeSkillCatalog, docum
     }
     const parsed={name:located.name,pluginParent:located.pluginParent,...rootControls(located.root,read)};
     if (parsed.namespace!==located.namespace) refuse();
-    // A plugin Codex's catalog reports as remote binds its exact native install
-    // receipt on every control (listed or omitted, whatever its localVersion),
-    // so a later receipt change is a reviewed capability change; an absent or
-    // mismatched receipt refuses. A plugin the catalog does not report as
-    // remote has no receipt and is not checked here.
-    const remote=installed.length===1 && installed[0]!.sourceType==="remote" ? installed[0]! : undefined;
+    // A plugin Codex's catalog reports as remote (codexPluginIsRemote: a remote
+    // source or any remote id) binds its exact native install receipt on every
+    // control (listed or omitted, whatever its localVersion), so a later
+    // receipt change is a reviewed capability change; an absent or mismatched
+    // receipt refuses. Any other plugin has no receipt and is not checked here.
+    const remote=installed.length===1 && codexPluginIsRemote(installed[0]) ? installed[0]! : undefined;
     const receiptPluginId=remote ? requireRemoteInstallReceipt(parsed.pluginParent,remote,receiptSnapshot,read) : undefined;
     let remotePluginId:string|undefined;
     if (listed.length===1) {
@@ -388,7 +425,7 @@ export function reviewCodexPluginControls(catalog:CodexNativeSkillCatalog, docum
         // plugin/read exposes no local root. Do not infer either from latest or
         // advertised metadata. Review only an already denied materialization,
         // tied to the exact native remote installation and bound capabilities.
-        if (plugin.sourceType!=="remote" || !plugin.remotePluginId
+        if (!codexPluginIsRemote(plugin) || !plugin.remotePluginId
           || !remoteInstallationMatches(parsed.pluginParent,plugin.remotePluginId,read)
           || !lstatSync(document).isFile() || realpathSync(document)!==document) refuse();
         remotePluginId=plugin.remotePluginId;
@@ -664,11 +701,13 @@ export function codexPluginCapabilityChanges(cache:string, parentControls:CodexP
   return [...reasons].sort();
 }
 /** Add newly enrolled qualified names to the reviewed control set. Never removes
- * or changes an existing control. A name under an enrolled plugin parent takes
- * that parent's reviewed identity, and the native review must report the same
- * capability tuple for it; a name under a plugin Skills has not enrolled is
- * admitted only for a skills-only plugin, and binds `remoteIdentities[parent]`,
- * the caller-verified native install receipt, when the plugin is remote. */
+ * an existing control, and changes one only to bind `remoteIdentities[parent]`,
+ * the caller-verified native install receipt, onto an enrolled control stored
+ * without it (codexStoredReceiptHeal). A name under an enrolled plugin parent
+ * takes that parent's reviewed identity, and the native review must report the
+ * same capability tuple for it; it never drops a receipt the review verified.
+ * A name under a plugin Skills has not enrolled is admitted only for a
+ * skills-only plugin, and binds `remoteIdentities[parent]` when it is remote. */
 export function mergeReconciledCodexPluginControls(prior:CodexPluginSkillControl[], reviewed:CodexPluginSkillControl[], names:string[], remoteIdentities:Record<string,string>={}):CodexPluginSkillControl[] {
   if (!Array.isArray(prior) || !Array.isArray(reviewed) || !Array.isArray(names) || prior.length+names.length>4096) refuse();
   const tuple=(control:CodexPluginSkillControl) => JSON.stringify([control.namespace,control.pluginId,control.pluginParent,control.manifestSha256,control.appSha256 ?? null,control.mcpSha256 ?? null]);
@@ -676,13 +715,25 @@ export function mergeReconciledCodexPluginControls(prior:CodexPluginSkillControl
     const enrolled=prior.filter(item=>item.pluginParent===control.pluginParent);
     if (enrolled.some(item=>tuple(item)!==tuple(control) || item.remotePluginId!==undefined && control.remotePluginId!==undefined && item.remotePluginId!==control.remotePluginId)) capabilityRefusal(`plugin ${JSON.stringify(control.pluginId)} changed a reviewed capability`);
   }
-  const result=[...prior];
+  const healed=prior.map(item=>{
+    if (!Object.hasOwn(remoteIdentities,item.pluginParent)) return item;
+    const remote=remoteIdentities[item.pluginParent];
+    if (!remotePluginIdentifier(remote) || item.remotePluginId!==undefined && item.remotePluginId!==remote) capabilityRefusal(`plugin ${JSON.stringify(item.pluginId)} has an unverified remote installation`);
+    return item.remotePluginId===undefined ? {...item,remotePluginId:remote} : item;
+  });
+  const result=[...healed];
   for (const name of [...new Set(names)].sort()) {
     if (prior.some(item=>item.name===name)) continue;
     const matches=reviewed.filter(item=>item.name===name);
     if (matches.length!==1) refuse();
-    const control=matches[0]!, template=prior.find(item=>item.pluginParent===control.pluginParent);
-    if (template) { result.push({...template,name}); continue; }
+    const control=matches[0]!, template=healed.find(item=>item.pluginParent===control.pluginParent);
+    if (template) {
+      // A new name copies its parent's bound receipt: the parent's controls must
+      // agree on it, and it must be the one the review verified, if any.
+      if (healed.some(item=>item.pluginParent===control.pluginParent && item.remotePluginId!==template.remotePluginId)
+        || control.remotePluginId!==undefined && template.remotePluginId!==control.remotePluginId) capabilityRefusal(`plugin ${JSON.stringify(control.pluginId)} has an unverified remote installation`);
+      result.push({...template,name}); continue;
+    }
     if (control.skillsOnly!==true || control.appSha256!==undefined || control.mcpSha256!==undefined) capabilityRefusal(`plugin ${JSON.stringify(control.pluginId)} is not enrolled and carries a capability`);
     const remote=Object.hasOwn(remoteIdentities,control.pluginParent) ? remoteIdentities[control.pluginParent] : undefined;
     const receipt=lstatSync(join(control.pluginParent,".codex-remote-plugin-install.json"),{throwIfNoEntry:false});
