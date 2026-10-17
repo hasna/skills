@@ -540,3 +540,132 @@ test("A27: a remote receipt the native catalog does not confirm is never recorde
   expect(await station.run(true, catalog)).toMatchObject({ outcome: "refused", code: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, refusals: [{ pluginId: "notes@local-market", reasons: ["remote"] }] });
   expect(station.snapshot()).toEqual(before);
 });
+
+// ---- Correctness review (f26578aa): B1, B3 and the surviving mutants.
+const runtimePdf = (station: ReturnType<typeof enrolledStation>) => {
+  const runtime = join(station.home, ".cache/codex-runtimes/openai-primary-runtime/26.1");
+  put(join(runtime, ".codex-plugin/plugin.json"), JSON.stringify({ name: "openai-primary-runtime", version: "26.1" }));
+  put(join(runtime, "skills/pdf/SKILL.md"), payload("pdf"));
+  return { name: "openai-primary-runtime:pdf", path: join(runtime, "skills/pdf/SKILL.md"), enabled: true, pluginId: "openai-primary-runtime@codex-runtimes" };
+};
+
+test("B1: a skill Codex still reports enabled despite an existing deny row counts as allowed and refuses", async () => {
+  const station = enrolledStation(), root = refresh(station, "1.1.0", BUMPED), pdf = runtimePdf(station);
+  expect(await station.run(true, station.catalog([...["manage-schedules", "organize-space", "publish-page"].map(name => station.skill(root, name)), pdf]))).toMatchObject({ outcome: "applied", denied: [pdf.name] });
+  const settled = station.snapshot();
+  // A fresh catalog in which Codex ignored the deny rows: never `unchanged`.
+  for (const stale of [[station.skill(root, "publish-page")], [pdf]]) {
+    const result = await station.run(true, station.catalog(stale));
+    expect(result).toMatchObject({ outcome: "refused", code: "CODEX_NATIVE_SKILL_ALLOWED_SET_INVALID", changes: [] });
+    expect(result.message).toContain(stale[0]!.name);
+    expect(station.snapshot()).toEqual(settled);
+  }
+  expect(await station.run(true, station.catalog([{ ...pdf, enabled: false }]))).toMatchObject({ outcome: "unchanged" });
+});
+
+/** Appends `[[skills.config]]` rows to the station config and re-runs the reviewed install, so the review binds them. */
+function reviewWithRows(station: ReturnType<typeof enrolledStation>, rows: string) {
+  writeFileSync(station.config, `${readFileSync(station.config, "utf8")}${rows}`);
+  const enrollment: CodexNativeSkillCatalog = { version: "codex-cli 0.163.0", cwd: station.home, plugins: [station.plugin], skills: ["maintain-space", "write-page"].map(name => station.skill(station.first, name)) };
+  const review = { version: 1 as const, agents: [{ agent: "codex" as const, roots: [station.cache], sources: [captureCodexSettingsV3(station.config)], pluginHooks: "reviewed-no-skill-injection" as const }] };
+  applyAgentIntegration(planAgentIntegration({ ...station.options, agents: ["codex"], codexNativeCatalog: enrollment, discoveryInputs: review }));
+  expect(blocks(station, false)).toBe(false);
+}
+const enableRow = (path: string) => `\n[[skills.config]]\npath = ${JSON.stringify(path)}\nenabled = true\n`;
+
+test("B3: a reviewed explicit path enable rule conflicts for runtime skills denied by name or by path and for plugin-cache copies", async () => {
+  const cases: Array<[string, (station: ReturnType<typeof enrolledStation>) => CodexNativeSkillCatalog]> = [
+    ["qualified runtime skill", station => { const pdf = runtimePdf(station); reviewWithRows(station, enableRow(pdf.path)); return station.catalog([pdf]); }],
+    ["unqualified runtime skill", station => { const pdf = runtimePdf(station); reviewWithRows(station, enableRow(pdf.path)); return station.catalog([{ ...pdf, name: "pdf", pluginId: null }]); }],
+    ["runtime skill whose reviewed name deny Codex ignores", station => { const pdf = runtimePdf(station); reviewWithRows(station, `${enableRow(pdf.path)}\n[[skills.config]]\nname = ${JSON.stringify(pdf.name)}\nenabled = false\n`); return station.catalog([pdf]); }],
+    ["new plugin-cache name", station => { reviewWithRows(station, enableRow(join(station.parent, "1.1.0/skills/publish-page/SKILL.md"))); const root = refresh(station, "1.1.0", BUMPED); return station.catalog(["manage-schedules", "organize-space", "publish-page"].map(name => station.skill(root, name))); }],
+  ];
+  for (const [label, arrange] of cases) {
+    const station = enrolledStation(), catalog = arrange(station), before = station.snapshot();
+    const result = await station.run(true, catalog);
+    expect({ label, outcome: result.outcome, code: result.code, changes: result.changes }).toEqual({ label, outcome: "refused", code: "CODEX_NATIVE_SKILL_NAME_CONFLICT", changes: [] });
+    expect(result.message).toContain("skill path");
+    expect(station.snapshot()).toEqual(before);
+  }
+});
+
+test("M14: a remote receipt that disagrees with the catalog's remote identity refuses and binds nothing", async () => {
+  const station = enrolledStation(), { catalog, id } = addNotesPlugin(station);
+  put(join(station.cache, "local-market/notes/.codex-remote-plugin-install.json"), JSON.stringify({ schema_version: 1, remote_plugin_id: "plugins~Plugin_00000000000000000000000000000998" }));
+  const plugins = catalog.plugins!.map(plugin => plugin.id === id ? { ...plugin, localVersion: null, remotePluginId: "plugins~Plugin_00000000000000000000000000000997", sourceType: "remote" as const } : plugin);
+  const before = station.snapshot();
+  expect(await station.run(true, { ...catalog, plugins })).toMatchObject({ outcome: "refused", code: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, refusals: [{ pluginId: id, reasons: ["remote"] }] });
+  expect(station.snapshot()).toEqual(before);
+});
+
+test("M16: an in-place change to a witnessed but unenrolled hook plugin is never re-captured", async () => {
+  const hookRoot = (cache: string) => join(cache, "hasna-internal-bridge/hasna-codex/0.1.0");
+  const station = enrolledStation(undefined, '[plugins."hasna-codex@hasna-internal-bridge"]\nenabled = true\n', true, {
+    prepare: cache => { put(join(hookRoot(cache), ".codex-plugin/plugin.json"), JSON.stringify({ name: "hasna-codex", version: "0.1.0", hooks: "./hooks/hooks.json" })); put(join(hookRoot(cache), "hooks/hooks.json"), '{"hooks":{}}'); },
+    witnesses: cache => [join(hookRoot(cache), ".codex-plugin/plugin.json")],
+  });
+  expect(blocks(station, false)).toBe(false);
+  put(join(hookRoot(station.cache), ".codex-plugin/plugin.json"), JSON.stringify({ name: "hasna-codex", version: "0.1.0", hooks: "./hooks/hooks.json", mcpServers: "./.mcp.json" }));
+  put(join(hookRoot(station.cache), ".mcp.json"), '{"mcpServers":{"added":{"command":"node"}}}');
+  const before = station.snapshot(), witnesses = cacheWitnesses(station);
+  expect(await station.run(true, station.catalog([]))).toMatchObject({ outcome: "refused", code: "NATIVE_SKILL_DRIFT", rebasedWitnesses: 0, changes: [] });
+  expect(station.snapshot()).toEqual(before);
+  expect(cacheWitnesses(station)).toEqual(witnesses);
+  expect(blocks(station, true)).toBe(true);
+});
+
+test("M25: a cosmetic reformat of ~/.codex/hooks.json makes the plan exceed its scope and refuse without rewriting it", async () => {
+  const station = enrolledStation(), hooks = join(station.home, ".codex/hooks.json");
+  writeFileSync(hooks, JSON.stringify(JSON.parse(readFileSync(hooks, "utf8"))));
+  const root = refresh(station, "1.1.0", BUMPED), reformatted = readFileSync(hooks, "utf8"), before = station.snapshot();
+  expect(blocks(station, false)).toBe(true);
+  expect(await station.run(true, station.catalog([station.skill(root, "publish-page"), station.skill(root, "manage-schedules"), station.skill(root, "organize-space")]))).toMatchObject({ outcome: "refused", code: "CODEX_RECONCILE_SCOPE_EXCEEDED", changes: [] });
+  expect(readFileSync(hooks, "utf8")).toBe(reformatted);
+  expect(station.snapshot()).toEqual(before);
+});
+
+test("M39: apply re-plans under the lock, so a capability added after planning refuses the write", async () => {
+  const station = enrolledStation(), root = refresh(station, "1.1.0", BUMPED);
+  const { plan } = planCodexPluginNameReconcile({ ...station.options, catalog: station.catalog(["manage-schedules", "organize-space", "publish-page"].map(name => station.skill(root, name))) });
+  // The retained-review post-write strict guard also covers reconcile writes.
+  expect(plan!.retainedReviewChecks?.agents).toEqual(["codex"]);
+  const before = station.snapshot();
+  put(join(root, "hooks.json"), '{"hooks":{}}');
+  expect(() => applyAgentIntegration(plan!)).toThrow(CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED);
+  expect(station.snapshot()).toEqual(before);
+});
+
+test("each capability declaration on a new plugin refuses with its exact kind", async () => {
+  // Each declaration reports its own kind. Forms the reviewed-controls shape check
+  // cannot bind (inline objects, a hooks directory) also report "unsupported".
+  const cases: Array<[string, Record<string, string>, Record<string, unknown>, string[]]> = [
+    [".mcp.json declaration", { ".mcp.json": '{"mcpServers":{"tool":{"command":"node"}}}' }, { mcpServers: "./.mcp.json" }, ["mcp"]],
+    [".app.json declaration", { ".app.json": APP }, { apps: "./.app.json" }, ["app"]],
+    ["inline mcpServers", {}, { mcpServers: { tool: { command: "node" } } }, ["mcp", "unsupported"]],
+    ["inline apps", {}, { apps: { pages: { id: "synthetic" } } }, ["app", "unsupported"]],
+    ["inline hooks", {}, { hooks: { Stop: [] } }, ["hooks", "unsupported"]],
+    ["hooks.json file", { "hooks.json": '{"hooks":{}}' }, {}, ["hooks"]],
+    ["hooks directory", { "hooks/hooks.json": '{"hooks":{}}' }, {}, ["hooks", "unsupported"]],
+    ["commands directory", { "commands/deploy.md": "synthetic" }, {}, ["commands"]],
+    ["agents directory", { "agents/reviewer.md": "synthetic" }, {}, ["agents"]],
+  ];
+  const seen: unknown[] = [], expected: unknown[] = [];
+  for (const [label, files, manifest, reasons] of cases) {
+    const station = enrolledStation(), { root, id, catalog } = addNotesPlugin(station);
+    put(join(root, ".codex-plugin/plugin.json"), JSON.stringify({ name: "notes", version: "1.0.0", ...manifest }));
+    for (const [path, text] of Object.entries(files)) put(join(root, path), text);
+    const before = station.snapshot(), result = await station.run(true, catalog);
+    seen.push({ label, outcome: result.outcome, code: result.code, refusals: result.refusals?.map(item => ({ pluginId: item.pluginId, reasons: item.reasons })), unchanged: JSON.stringify(station.snapshot()) === JSON.stringify(before) });
+    expected.push({ label, outcome: "refused", code: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, refusals: [{ pluginId: id, reasons }], unchanged: true });
+  }
+  expect(seen).toEqual(expected);
+});
+
+test("census: an enabled plugin id that maps to no single cache parent refuses; an enabled plugin not installed is skipped", async () => {
+  const odd = enrolledStation(undefined, '[plugins."odd.name@market"]\nenabled = true\n'), before = odd.snapshot();
+  expect(await odd.run(true, odd.catalog([]))).toMatchObject({ outcome: "refused", code: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, changes: [], refusals: [{ pluginId: "odd.name@market", reasons: ["unsupported"] }] });
+  expect(odd.snapshot()).toEqual(before);
+  const absent = enrolledStation(undefined, '[plugins."absent@market"]\nenabled = true\n');
+  expect(await absent.run(true, absent.catalog([]))).toMatchObject({ outcome: "unchanged", classified: [] });
+});
+

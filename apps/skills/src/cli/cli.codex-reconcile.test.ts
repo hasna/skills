@@ -84,6 +84,9 @@ test("built CLI emits exactly one JSON result per outcome with matching exit cod
   expect(applied).toMatchObject({ exitCode: 0, result: { outcome: "applied", mode: "apply", enrolled: ["pages:publish-page"], counts: { enrolled: 1, alreadyEnrolled: 1, allowed: 1 } } });
   expect(applied.result.code).toBeUndefined();
   expect(() => assertManagedAgentBridge("codex", s.options)).not.toThrow();
+  // Codex still reporting the denied skill as enabled means the deny did not take: refuse, never pass.
+  expect(await s.run("--apply")).toMatchObject({ exitCode: 2, result: { outcome: "refused", code: "CODEX_NATIVE_SKILL_ALLOWED_SET_INVALID", changes: [] } });
+  s.listSkills([{ name: "pages:publish-page", path: join(next, "skills/publish-page/SKILL.md"), enabled: false, pluginId: PLUGIN }]);
   expect(await s.run("--apply")).toMatchObject({ exitCode: 0, result: { outcome: "unchanged", enrolled: [] } });
   // A capability change refuses with exit 2 and the named code; nothing is written.
   put(join(next, ".app.json"), '{"apps":{"pages":{"id":"another_connector"}}}');

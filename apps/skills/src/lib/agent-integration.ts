@@ -1411,10 +1411,13 @@ export interface CodexPluginReconcileReport {
 export class CodexPluginReconcileRefusal extends Error {
   constructor(readonly code: string, detail: string, readonly refusals: Array<{ pluginId: string; reasons: string[]; manifests?: string[] }> = []) { super(`${code}: ${detail}`); }
 }
-/** The only native skills Codex loads under `rules`: the bridge, or a refusal. */
-function codexReconcileAllowedSkills(catalog: CodexNativeSkillCatalog, rules: unknown, bridgeDocument: string): string[] {
+/** The native skills Codex reported enabled, less those disabled by the rows
+ * this run appends: the bridge, or a refusal. Rules already in the config Codex
+ * read are never simulated; a skill Codex still reports enabled despite one
+ * counts as allowed, so an ineffective deny (or a wrong name guess) refuses. */
+function codexReconcileAllowedSkills(catalog: CodexNativeSkillCatalog, appendedRules: unknown, bridgeDocument: string): string[] {
   const canonical = (path: string) => { try { return realpathSync(path); } catch { return resolve(path); } };
-  const allowed = catalog.skills.filter(skill => skill.enabled === true && !isCodexNativeSkillDisabled(skill, rules));
+  const allowed = catalog.skills.filter(skill => skill.enabled === true && !isCodexNativeSkillDisabled(skill, appendedRules));
   if (allowed.length !== 1 || allowed[0]!.name !== CLI_BRIDGE_NAME || allowed[0]!.pluginId !== null || canonical(allowed[0]!.path) !== canonical(bridgeDocument)) {
     throw new CodexPluginReconcileRefusal("CODEX_NATIVE_SKILL_ALLOWED_SET_INVALID", `Codex would load ${allowed.length} native skill(s) (${nativeSkillPathList(allowed.map(skill => skill.name))}), not only the ${CLI_BRIDGE_NAME} bridge; nothing was written`);
   }
@@ -1575,13 +1578,15 @@ export function planCodexPluginNameReconcile(request: CodexPluginReconcileReques
   // Census: every plugin explicitly enabled in [plugins] that the saved binding
   // does not know is classified, even when none of its skills is blocking now.
   // Known means enrolled, inactive, an installation input, a semantic cache
-  // role, a witness under its cache parent, or a full witness of its manifest.
+  // role, a full witness under its exact cache parent, or a reviewed local
+  // marketplace that maps it with that row's manifest witnessed. An enabled id
+  // that maps to no single cache parent refuses; one not installed is skipped.
   const savedSources: DiscoverySource[] = savedDiscovery?.sources ?? [];
   const semanticParents = [...(savedDiscovery?.codexSemanticCache?.appOnlyParents ?? []), ...(savedDiscovery?.codexSemanticCache?.reviewedHookParents ?? [])].map(role => role.pluginParent);
   for (const [pluginId, settings] of Object.entries((config.plugins ?? {}) as Record<string, any>).sort(([a], [b]) => a.localeCompare(b))) {
     if (settings?.enabled !== true || refusals.some(item => item.pluginId === pluginId) || classified.some(item => item.pluginId === pluginId)) continue;
     const at = pluginId.lastIndexOf("@"), name = pluginId.slice(0, at), market = pluginId.slice(at + 1);
-    if (at < 1 || ![name, market].every(part => /^[A-Za-z0-9_-]{1,64}$/.test(part))) continue;
+    if (at < 1 || ![name, market].every(part => /^[A-Za-z0-9_-]{1,64}$/.test(part))) { refuse(pluginId, ["unsupported"], []); continue; }
     const parent = join(cache, market, name);
     if (!lstatSync(parent, { throwIfNoEntry: false })?.isDirectory()) continue;
     const known = priorParents.includes(parent) || semanticParents.includes(parent)
@@ -1596,9 +1601,11 @@ export function planCodexPluginNameReconcile(request: CodexPluginReconcileReques
   }
   // Catalog skills Codex would load from its runtime cache, which the guard's
   // plugin controls do not cover: deny each by its stable qualified name.
-  const nameDenies = new Set<string>(), pathDenies = new Set<string>(), denied = new Set<string>();
+  const nameDenies = new Set<string>(), pathDenies = new Set<string>(), denied = new Set<string>(), runtimeNameDeniedDocuments = new Set<string>();
   for (const skill of catalog.skills) {
-    if (skill.enabled !== true || skill.name === CLI_BRIDGE_NAME && skill.pluginId === null || isCodexNativeSkillDisabled(skill, rules)) continue;
+    // Codex's own report decides: an enabled skill is acted on even when a deny
+    // row already exists, and the allowed-set check then refuses if it stays enabled.
+    if (skill.enabled !== true || skill.name === CLI_BRIDGE_NAME && skill.pluginId === null) continue;
     let document: string; try { document = realpathSync(skill.path); } catch { continue; }
     const root = codexRuntimePluginRoot(document, runtimeCache);
     if (!root) continue;
@@ -1610,7 +1617,7 @@ export function planCodexPluginNameReconcile(request: CodexPluginReconcileReques
     let namespace: string | null = null; try { namespace = JSON.parse(read(join(root, ".codex-plugin/plugin.json")))?.name ?? null; } catch { /* unqualified below */ }
     const qualified = skill.pluginId !== null && typeof namespace === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(namespace) && skill.pluginId.slice(0, skill.pluginId.lastIndexOf("@")) === namespace
       && skill.name.startsWith(`${namespace}:`) && /^[A-Za-z0-9_-]{1,64}$/.test(skill.name.slice(namespace.length + 1));
-    if (qualified) { nameDenies.add(skill.name); denied.add(skill.name); }
+    if (qualified) { nameDenies.add(skill.name); denied.add(skill.name); runtimeNameDeniedDocuments.add(document); }
     else { pathDenies.add(document); pathDenied.push({ name: skill.name, path: document, reason: "no-qualified-name" }); }
   }
   if (refusals.length) throw new CodexPluginReconcileRefusal(CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, "a Codex plugin Skills has not enrolled carries an app, MCP or hooks capability (or an unverified remote installation); its skills stay quarantined until reviewed with skills hook install and a fresh native catalog and discovery review", refusals.sort((a, b) => a.pluginId.localeCompare(b.pluginId)));
@@ -1620,25 +1627,26 @@ export function planCodexPluginNameReconcile(request: CodexPluginReconcileReques
   // includes the catalog name of every skill this run would deny by path.
   const canonicalRule = (path: string) => { try { return realpathSync(path); } catch { return resolve(path); } };
   for (const name of [...priorNames, ...names, ...nameDenies, ...pathDenied.map(item => item.name)]) if (Array.isArray(rules) && rules.some((rule: any) => typeof rule?.name === "string" && rule.name.trim() === name && rule.enabled !== false)) throw new CodexPluginReconcileRefusal("CODEX_NATIVE_SKILL_NAME_CONFLICT", `an existing [[skills.config]] rule enables ${JSON.stringify(name)}; review it before reconciling`);
-  const deniedPaths = [...pathDenies, ...copies.map(copy => join(copy.entry.path, "SKILL.md"))];
+  const deniedPaths = [...pathDenies, ...runtimeNameDeniedDocuments, ...copies.map(copy => join(copy.entry.path, "SKILL.md"))];
   if (Array.isArray(rules) && rules.some((rule: any) => typeof rule?.path === "string" && rule.enabled !== false && deniedPaths.includes(canonicalRule(rule.path)))) throw new CodexPluginReconcileRefusal("CODEX_NATIVE_SKILL_NAME_CONFLICT", "an existing [[skills.config]] rule enables a skill path this reconcile would deny; review it before reconciling");
   const missingDenies = prior.filter(control => !(Array.isArray(rules) && rules.some((rule: any) => typeof rule?.name === "string" && rule.name.trim() === control.name && rule.enabled === false)));
   const bridgeDocument = join(custody.expected, "SKILL.md");
-  const report = (enrolledNames: string[], plannedRules: unknown): CodexPluginReconcileReport => {
+  const report = (enrolledNames: string[], appendedRules: unknown): CodexPluginReconcileReport => {
     const controlled = new Set([...priorNames, ...enrolledNames, ...pathDenied.map(item => item.name)]);
     const skipped = new Set(collected.inventory.flatMap(entry => { const identity = identityOf(entry); return identity && !controlled.has(identity.name) ? [identity.name] : []; }));
     return { codexVersion: catalog.version, enrolled: enrolledNames, alreadyEnrolled: priorNames.size, denied: [...denied].sort(), pathDenied: pathDenied.sort((a, b) => a.path.localeCompare(b.path)),
-      inactive: [...inactive].sort(), classified: [...classified].sort((a, b) => a.pluginId.localeCompare(b.pluginId)), rebasedWitnesses: rebase.rebased.length, skipped: skipped.size, allowed: codexReconcileAllowedSkills(catalog, plannedRules, bridgeDocument) };
+      inactive: [...inactive].sort(), classified: [...classified].sort((a, b) => a.pluginId.localeCompare(b.pluginId)), rebasedWitnesses: rebase.rebased.length, skipped: skipped.size, allowed: codexReconcileAllowedSkills(catalog, appendedRules, bridgeDocument) };
   };
-  if (!copies.length && !missingDenies.length && !nameDenies.size && !pathDenies.size && !rebase.rebased.length) return { plan: null, report: report([], rules) };
+  if (!copies.length && !missingDenies.length && !nameDenies.size && !pathDenies.size && !rebase.rebased.length) return { plan: null, report: report([], []) };
   if (savedDiscovery?.codexSemanticCache) throw new CodexPluginReconcileRefusal("CODEX_RECONCILE_SEMANTIC_CACHE_UNSUPPORTED", "this binding uses the semantic cache witness, which binds the complete name set; refresh it with a fresh skills hook install review");
   const input: CodexPluginReconcileInput = { copies: copies.map(copy => ({ path: copy.entry.path, hash: copy.entry.hash })).sort((a, b) => a.path.localeCompare(b.path)), names,
     parents: [...priorParents, ...enrollableParents].sort(), remoteIdentities, nameDenies: [...nameDenies].sort(), pathDenies: [...pathDenies].sort(), ...(discovery ? { discovery } : {}) };
   const plan = planAgentIntegration({ home, dataDir, projectDir, agents: ["codex"], codexNativeCatalog: catalog, codexReconcile: input });
   assertCodexReconcileScope(plan, { configPath, policyPath, prior, names, discovery: discovery ?? savedDiscovery! });
   const configChange = plan.changes.find(change => resolve(change.path) === configPath);
-  const plannedRules = configChange ? (Bun.TOML.parse(configChange.after) as any).skills?.config ?? [] : rules;
-  const result = report(names, plannedRules);
+  // Append-only is enforced by the scope check above, so the new rows are the tail.
+  const plannedRules: unknown[] = configChange ? (Bun.TOML.parse(configChange.after) as any).skills?.config ?? [] : [];
+  const result = report(names, configChange ? plannedRules.slice(Array.isArray(rules) ? rules.length : 0) : []);
   if (!plan.changes.length) throw new Error("CODEX_RECONCILE_FAILED: the reconcile found work but planned no change");
   plan.codexReconcile = { ...input, request: { home, dataDir, projectDir, catalog } };
   return { plan, report: result };

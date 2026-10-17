@@ -1138,15 +1138,19 @@ the guard refuses. The work it does:
   no stable qualified name gets an exact path deny instead, listed in
   `pathDenied` with the reason `no-qualified-name`. No plugin control exists for
   runtime-cache skills.
-- It classifies every plugin explicitly enabled with `enabled = true` under
-  `[plugins]`, including plugins the saved binding does not know. That holds
-  even when none of the plugin's skills block today. A known plugin is enrolled,
-  reviewed inactive, an installation input, or a semantic-cache role. It can
-  also be known through a full witness under its exact cache parent, or through
-  a reviewed local marketplace that maps exactly that plugin with its manifest
-  witnessed. A manifest witness elsewhere that only shares the plugin's name
-  does not count. An enabled capability-bearing plugin that the binding does not
-  know refuses.
+- It classifies every installed plugin explicitly enabled with `enabled = true`
+  under `[plugins]`, including plugins the saved binding does not know. That
+  holds even when none of the plugin's skills block today. Installed means the
+  plugin has a directory in the plugin cache; an enabled plugin with no cache
+  directory has nothing to classify yet. An enabled plugin id that is not
+  `<name>@<marketplace>` (letters, digits, `_` and `-`) refuses as
+  `unsupported`. A known plugin is enrolled, reviewed inactive, an installation
+  input, or a semantic-cache role. It can also be known through a full witness
+  under its exact cache parent, or through a full witness of a reviewed local
+  marketplace that maps exactly that plugin, together with a full witness of the
+  manifest that marketplace row points to. A manifest witness elsewhere that
+  only shares the plugin's name does not count. Every other enabled plugin is
+  scanned like a new plugin, and one that carries a capability refuses.
 - It leaves a plugin explicitly disabled with `enabled = false` under
   `[plugins]` unenrolled. It never refuses because of one. The guard does not
   trust a plugin-level disable alone, so that plugin's cache copies keep exact
@@ -1165,8 +1169,18 @@ finishes only when the strict guard accepts the written state. The plan may
 append disable rows to the Codex configuration. In the managed policy it may
 only add the new controls and refresh the configuration and re-captured cache
 witnesses. Anything else refuses with `CODEX_RECONCILE_SCOPE_EXCEEDED`. The
-reconcile never adds an allow entry, and the bridge stays the only skill Codex
-loads.
+reconcile never adds an allow entry.
+
+The allowed set is computed from Codex's own report, not from a simulation of
+the existing configuration. Every skill the native catalog reports as enabled
+counts as allowed unless a disable row this run appends matches it. The run
+succeeds only when that leaves exactly the bridge. A skill Codex still reports
+enabled despite a deny row already in the configuration it read (an ineffective
+deny, or a wrong name) refuses with `CODEX_NATIVE_SKILL_ALLOWED_SET_INVALID`.
+The catalog is read before the write, so the result shows what Codex reported
+then plus the rows this run appended. Run the reconcile again to confirm Codex
+applied them: `unchanged` means a fresh catalog reports every denied skill
+disabled.
 
 Unsupported boundary: a change that touches more than skill names stays
 quarantined until a person reviews it. That covers a new or changed app, MCP
@@ -1207,24 +1221,28 @@ point before accepting a reconcile result or a change to it:
 - Every skills-only result cites the manifest paths that were read, in
   `classified[].manifests`. Every refusal entry carries `manifests` the same
   way. A root whose manifest cannot be read is `unsupported`, never skills-only.
-- Every plugin enabled in `[plugins]` is classified, not only the ones the
-  current binding knows.
+- Every installed plugin enabled in `[plugins]` is classified, not only the
+  ones the current binding knows, and an enabled id that does not parse
+  refuses.
 
 These also refuse and write nothing:
 
 - `CODEX_RECONCILE_DISCOVERY_REVIEW_REQUIRED`: a binding with no recorded
   installed-plugin catalog review. That is the older shape. It needs a fresh full
   discovery review.
-- `CODEX_NATIVE_SKILL_NAME_CONFLICT`: an explicit enable rule, by name or exact
-  path.
-- `CODEX_NATIVE_SKILL_ALLOWED_SET_INVALID`: the result would let Codex load
-  anything except the bridge.
+- `CODEX_NATIVE_SKILL_NAME_CONFLICT`: an existing `[[skills.config]]` rule that
+  is not `enabled = false` and either names a skill this run enrolls, denies or
+  already controls (including the catalog name of a skill it denies by path),
+  or has a path that resolves to a document this run denies. Those documents
+  are the plugin-cache copies it handles and the runtime-cache skills it denies,
+  by name or by path. Enable rules for any other skill are left to the strict
+  guard.
+- `CODEX_NATIVE_SKILL_ALLOWED_SET_INVALID`: a skill other than the bridge that
+  the native catalog reports enabled and no row appended by this run disables.
 - `CODEX_NATIVE_SKILL_CATALOG_UNSUPPORTED_VERSION` or
   `CODEX_HOOK_TRUST_NATIVE_UNSUPPORTED_VERSION`: an unmeasured Codex release.
 - `NATIVE_SKILL_DRIFT`: copies outside the plugin cache, or any other drift.
 - `CODEX_RECONCILE_SYMLINK_REFUSED`: a link in a native path.
-- `CODEX_NATIVE_SKILL_NAME_CONFLICT` also covers an explicit enable rule for the
-  catalog name of a skill the reconcile would deny by path.
 - `CODEX_RECONCILE_SEMANTIC_CACHE_UNSUPPORTED`: a binding that uses the semantic
   cache witness.
 
