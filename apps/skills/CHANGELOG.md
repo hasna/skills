@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Admit the user-scoped Claude directory marketplace writer on the exact 2.1.301 and 2.1.302 versions. In synthetic homes, their `plugin marketplace add` and `plugin install` writes to `settings.json`, `known_marketplaces.json`, `installed_plugins.json` and the plugin cache match 2.1.300 byte for byte, after normalizing the home path and generated timestamps. Unmeasured versions such as 2.1.303, suffixed 2.1.301 and 2.1.302 builds, and project scope still refuse.
+
 ## 0.10.78
 
 ### Patch Changes

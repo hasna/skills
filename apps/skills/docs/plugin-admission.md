@@ -195,7 +195,7 @@ plugin dependency declarations refuse because this validator does not resolve
 or review unselected external plugins.
 The request may declare `functionHooksEnv: "1"`; without that declaration the
 environment document is preserved unchanged. For a measured Claude 2.1.276,
-2.1.278, 2.1.282, 2.1.287, 2.1.293, 2.1.296, 2.1.299 or 2.1.300 user-scoped install,
+2.1.278, 2.1.282, 2.1.287, 2.1.293, 2.1.296, 2.1.299, 2.1.300, 2.1.301 or 2.1.302 user-scoped install,
 `candidate.settingsMarketplaceSource: "directory"`
 explicitly declares the native settings registration. Skills derives
 `extraKnownMarketplaces[candidate.marketplace].source` from the exact frozen
