@@ -178,6 +178,28 @@ test("a patch whose getters change between reads is captured once and only the v
   expect(f.calls.filter(call => call.method === "PATCH").map(call => call.body)).toEqual([validated]);
   expect(f.current()).toMatchObject(validated);
 });
+// The server's PATCH also accepts skillMd, version, kind and description, so apply must send the copy it validated before its first await.
+test("apply sends its validated patch copy even when the caller mutates the plan after calling apply", async () => {
+  const validated = { category: "Productivity & Organization" };
+  const f = fixture(); const plan = await f.client.prepareSkillMetadataUpdate("fixture-skill", { ...validated });
+  const pending = f.client.applySkillMetadataUpdate(plan);
+  (plan.patch as Record<string, unknown>).skillMd = "Injected after validation";
+  const result = await pending.catch((error: unknown) => error);
+  expect(f.calls.filter(call => call.method === "PATCH").map(call => call.body)).toEqual([validated]);
+  expect(f.current()).toEqual({ ...f.original, ...validated });
+  expect(result).toMatchObject({ status: "applied" });
+});
+test("a plan handed straight to apply whose getters shift after validation sends only the validated copy", async () => {
+  const validated = { category: "Productivity & Organization" };
+  const f = fixture(); const prepared = await f.client.prepareSkillMetadataUpdate("fixture-skill", { ...validated });
+  let patchReads = 0, categoryReads = 0;
+  const shiftingPatch = { get category() { return categoryReads++ === 0 ? validated.category : "Shifted after validation"; } };
+  const plan = { ...prepared, get patch() { return patchReads++ === 0 ? shiftingPatch : { ...validated, skillMd: "Injected after validation" }; } };
+  const result = await f.client.applySkillMetadataUpdate(plan).catch((error: unknown) => error);
+  expect(f.calls.filter(call => call.method === "PATCH").map(call => call.body)).toEqual([validated]);
+  expect(f.current()).toEqual({ ...f.original, ...validated });
+  expect(result).toMatchObject({ status: "applied" });
+});
 for (const outcome of ["500-uncommitted", "transport-uncommitted", "unparseable-uncommitted"] as const) test(`an ambiguous ${outcome.replace("-uncommitted", "")} PATCH that did not commit is unconfirmed after one PATCH and one readback`, async () => {
   const f = fixture({ outcome }); const plan = await f.client.prepareSkillMetadataUpdate("fixture-skill", { tags: [] });
   await expect(f.client.applySkillMetadataUpdate(plan)).rejects.toMatchObject({ code: "METADATA_UPDATE_UNCONFIRMED" });
