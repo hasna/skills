@@ -8,6 +8,8 @@ import { AGENT_TARGETS, resolveAgents, type AgentTarget } from "../../lib/instal
 import { skillsShellArgument } from "../../lib/credential-profile-command.js";
 import { skillsMcpRegistrationEnvironment } from "../../lib/mcp-registration-environment.js";
 
+import { guardedAgentConfigWrite, guardedAgentConfigRefusal } from "../../lib/guarded-agent-config.js";
+
 const MCP_SERVER_NAME = "skills";
 const MCP_COMMAND_NAME = "skills-mcp";
 
@@ -253,16 +255,18 @@ function registerCodexMcp(command: string, environment: Record<string, string>):
     ? `\nenv = { ${Object.entries(environment).map(([key, value]) => `${JSON.stringify(key)} = ${JSON.stringify(value)}`).join(", ")} }` : ""}`;
   const config = `[mcp_servers.${MCP_SERVER_NAME}]\n${body}`;
   try {
-    const current = existsSync(path) ? readFileSync(path, "utf-8") : "";
-    // Validate before and after replacing our table, including an old env subtable.
-    const before = Bun.TOML.parse(current);
-    const next = upsertTomlSection(current, `[mcp_servers.${MCP_SERVER_NAME}]`, body);
-    const after = Bun.TOML.parse(next);
-    if (!isDeepStrictEqual(withoutSkillsMcp(before), withoutSkillsMcp(after))) throw new Error();
-    writeTextFile(path, next);
+    guardedAgentConfigWrite(path, bytes => {
+      const current = bytes === null ? "" : new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      // Validate before and after replacing our table, including an old env subtable.
+      const before = Bun.TOML.parse(current);
+      const next = upsertTomlSection(current, `[mcp_servers.${MCP_SERVER_NAME}]`, body);
+      const after = Bun.TOML.parse(next);
+      if (!isDeepStrictEqual(withoutSkillsMcp(before), withoutSkillsMcp(after))) throw new Error();
+      return next;
+    });
     return { agent: "codex", success: true, path, config };
   } catch (err) {
-    return { agent: "codex", success: false, path, config, error: "Could not update the Codex MCP configuration" };
+    return { agent: "codex", success: false, path, config, error: "Could not safely update the Codex MCP configuration: " + guardedAgentConfigRefusal(err) };
   }
 }
 
@@ -282,15 +286,18 @@ function registerOpenCodeMcp(command: string, environment: Record<string, string
   );
 
   try {
-    const data = readJsonObject(path);
-    if (!data.$schema) data.$schema = "https://opencode.ai/config.json";
-    const mcp = isPlainObject(data.mcp) ? data.mcp : {};
-    mcp[MCP_SERVER_NAME] = server;
-    data.mcp = mcp;
-    writeJsonObject(path, data);
+    guardedAgentConfigWrite(path, bytes => {
+      const data = parseJsonObject(bytes);
+      if (data.$schema === undefined) data.$schema = "https://opencode.ai/config.json";
+      if (data.mcp !== undefined && !isPlainObject(data.mcp)) throw new Error();
+      const mcp = isPlainObject(data.mcp) ? data.mcp : {};
+      mcp[MCP_SERVER_NAME] = server;
+      data.mcp = mcp;
+      return `${JSON.stringify(data, null, 2)}\n`;
+    });
     return { agent: "opencode", success: true, path, config };
   } catch (err) {
-    return { agent: "opencode", success: false, path, config, error: "Could not update the OpenCode MCP configuration" };
+    return { agent: "opencode", success: false, path, config, error: "Could not safely update the OpenCode MCP configuration: " + guardedAgentConfigRefusal(err) };
   }
 }
 
@@ -302,33 +309,26 @@ function registerJsonMcpServer(
 ): McpRegistrationResult {
   const config = JSON.stringify({ [containerKey]: { [MCP_SERVER_NAME]: server } }, null, 2);
   try {
-    const data = readJsonObject(path);
-    const servers = isPlainObject(data[containerKey]) ? (data[containerKey] as Record<string, unknown>) : {};
-    servers[MCP_SERVER_NAME] = server;
-    data[containerKey] = servers;
-    writeJsonObject(path, data);
+    guardedAgentConfigWrite(path, bytes => {
+      const data = parseJsonObject(bytes);
+      if (data[containerKey] !== undefined && !isPlainObject(data[containerKey])) throw new Error();
+      const servers = isPlainObject(data[containerKey]) ? (data[containerKey] as Record<string, unknown>) : {};
+      servers[MCP_SERVER_NAME] = server;
+      data[containerKey] = servers;
+      return `${JSON.stringify(data, null, 2)}\n`;
+    });
     return { agent, success: true, path, config };
   } catch (err) {
-    return { agent, success: false, path, config, error: "Could not update the agent MCP configuration" };
+    return { agent, success: false, path, config, error: "Could not safely update the agent MCP configuration: " + guardedAgentConfigRefusal(err) };
   }
 }
 
-function readJsonObject(path: string): Record<string, unknown> {
-  if (!existsSync(path)) return {};
-  const raw = readFileSync(path, "utf-8").trim();
+function parseJsonObject(bytes: Buffer | null): Record<string, unknown> {
+  const raw = bytes === null ? "" : new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
   if (!raw) return {};
   const parsed = JSON.parse(raw);
-  if (!isPlainObject(parsed)) throw new Error(`${path} must contain a JSON object`);
+  if (!isPlainObject(parsed)) throw new Error("Expected a JSON object");
   return parsed;
-}
-
-function writeJsonObject(path: string, data: Record<string, unknown>) {
-  writeTextFile(path, `${JSON.stringify(data, null, 2)}\n`);
-}
-
-function writeTextFile(path: string, content: string) {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, content.endsWith("\n") ? content : `${content}\n`);
 }
 
 function upsertTomlSection(content: string, header: string, body: string): string {

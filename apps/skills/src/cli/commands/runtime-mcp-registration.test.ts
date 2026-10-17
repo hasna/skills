@@ -40,3 +40,35 @@ for (const mode of [...bootstrapModes, "profile", "environment-profile", "transi
     }
   });
 }
+
+for (const agent of ["codex", "gemini", "pi", "opencode", "cursor", "windsurf"]) {
+  test("direct MCP config writes preserve originals and refuse unsafe changes: " + agent, async () => {
+    const root = mkdtempSync(join(tmpdir(), "skills-mcp-guarded-"));
+    for (const name of ["home", "tmp"]) mkdirSync(join(root, name), { mode: 0o700 });
+    const child = Bun.spawn([process.execPath, "--no-env-file", "--no-install",
+      resolve(import.meta.dir, "runtime-mcp-guarded-writes.fixture.ts"), agent], {
+      cwd: root, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+      env: { HOME: join(root, "home"), TMPDIR: join(root, "tmp"), PATH: "/nonexistent-fixture-bin",
+        HASNA_HOME: join(root, "home", ".hasna"), HASNA_CONFIG_HOME: join(root, "home", "config"),
+        HASNA_SKILLS_API_URL: "http://127.0.0.1:9", SKILLS_API_URL: "http://127.0.0.1:9",
+        HASNA_STATION: "guarded-config-fixture", NO_COLOR: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
+        GUARDED_CONFIG_FIXTURE_ROOT: root },
+    });
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 20_000);
+    try {
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+      ]);
+      const diagnostic = JSON.stringify({ exit: Number.isInteger(code) ? code : null,
+        location: stderr.match(/runtime-mcp-guarded-writes\.fixture\.ts:[0-9]{1,7}:[0-9]{1,7}(?![0-9])/)?.[0] ?? "unavailable" });
+      expect(timedOut, diagnostic).toBe(false); expect(stderr.length, diagnostic).toBe(0); expect(code, diagnostic).toBe(0);
+      expect(JSON.parse(stdout)).toEqual({ agent, cases: 13, networkCalls: 0, syntheticOnly: true });
+    } finally {
+      clearTimeout(timer);
+      if (child.exitCode === null) { child.kill("SIGKILL"); await child.exited; }
+      // Only this fresh sandbox's synthetic HOME, config, backups and output.
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
