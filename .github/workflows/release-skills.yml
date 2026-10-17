@@ -211,9 +211,35 @@ jobs:
             }
           '
           test_log="$RUNNER_TEMP/skills-test.log"
+          native_stub_dir="$(mktemp -d "$RUNNER_TEMP/skills-native-cli-guard.XXXXXX")"
+          cat > "$native_stub_dir/claude" <<'STUB'
+          #!/bin/sh
+          set -eu
+          printf 'called\n' > "${SKILLS_TEST_CLAUDE_SENTINEL:?}"
+          printf '%s\n' 'UNEXPECTED_NATIVE_CLAUDE_CALL' >&2
+          exit 97
+          STUB
+          chmod 700 "$native_stub_dir/claude"
+          # Prove the sentinel detects a call before relying on a zero. Keep
+          # this separate control marker; no fixture files need to be deleted.
+          control_status=0
+          SKILLS_TEST_CLAUDE_SENTINEL="$native_stub_dir/control.called" "$native_stub_dir/claude" 2>/dev/null || control_status=$?
+          test "$control_status" -eq 97
+          test "$(cat "$native_stub_dir/control.called")" = called
+          export SKILLS_TEST_CLAUDE_SENTINEL="$native_stub_dir/full-suite.called"
+          export PATH="$native_stub_dir:$PATH"
           # File publication does not invoke package lifecycle hooks. Run the
           # unchanged package-owned gate here, before the archive is sealed.
+          set +e
           bun run prepublishOnly 2>&1 | tee "$test_log"
+          test_statuses=("${PIPESTATUS[@]}")
+          set -e
+          test "${#test_statuses[@]}" -eq 2
+          printf 'Full-suite exit=%s; log exit=%s\n' "${test_statuses[0]}" "${test_statuses[1]}"
+          if [ "${test_statuses[0]}" -ne 0 ]; then exit "${test_statuses[0]}"; fi
+          if [ "${test_statuses[1]}" -ne 0 ]; then exit "${test_statuses[1]}"; fi
+          test ! -e "$SKILLS_TEST_CLAUDE_SENTINEL"
+          printf '%s\n' 'Full-suite native Claude sentinel: no calls'
           grep -F '(pass) PostgreSQL enrollment has no initialization writes and retains atomic CAS, audit, replay and rollback' "$test_log"
           grep -F '(pass) isolated PostgreSQL inspection is bounded, ordered, sanitized and enforced read-only' "$test_log"
 
