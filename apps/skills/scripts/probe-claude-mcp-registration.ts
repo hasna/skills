@@ -24,6 +24,9 @@ const SAFE_NATIVE_FIELDS = new Set(["numStartups", "installMethod", "autoUpdates
   "migrationVersion", "opusProMigrationComplete", "sonnet1m45MigrationComplete", "seenNotifications",
   "unpinOpus47LaunchEffort", "cachedExperimentFeatures", "cachedExtraUsageDisabledReason", "skillUsage",
   "machineID", "hasResetAutoModeOptInForDefaultOffer"]);
+// A candidate is diagnostic vocabulary only when the exact verified artifact
+// contains it and the independent synthetic config adds that same literal.
+const STARTUP_VERSION_FIELDS = ["firstStartVersion", "firstStartClaudeVersion", "firstStartClaudeCodeVersion"] as const;
 let stage = "admission";
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const save = (file: string, bytes: string | Uint8Array) => {
@@ -114,7 +117,7 @@ function capture(file: string, bytes: Uint8Array) {
   assert(scan.status === 0 && scan.complete); return scan;
 }
 
-function configSummary(file: string, original: Buffer) {
+function configSummary(file: string, original: Buffer, nativeVocabulary: Set<string>) {
   const bytes = readFileSync(file); const scan = scanned(bytes); assert(scan.status === 0 && scan.complete);
   const before = JSON.parse(original.toString()), after = JSON.parse(bytes.toString());
   const selectors = after.mcpServers?.skills?.env ?? {};
@@ -127,9 +130,25 @@ function configSummary(file: string, original: Buffer) {
   const changes = [...new Set([...Object.keys(before), ...Object.keys(after)])]
     .filter(key => key !== "mcpServers" && !isDeepStrictEqual(before[key], after[key]));
   const type = (value: unknown) => value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
-  const safeChanges = changes.map(key => ({ field: SAFE_NATIVE_FIELDS.has(key) ? key : "withheld",
+  const safeChanges = changes.map(key => ({ field: SAFE_NATIVE_FIELDS.has(key) || (nativeVocabulary.has(key) && !Object.hasOwn(before, key)) ? key : "withheld",
     before: type(before[key]), after: type(after[key]) }));
-  return { scan, unrelatedConfigPreserved: isDeepStrictEqual(outside(before), outside(after)),
+  const plainObject = (value: unknown): value is Record<string, unknown> => value !== null
+    && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
+  const utcTimestamp = (value: unknown) => typeof value === "string"
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
+    && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
+  const bootstrapShape = {
+    firstStartTimeUtcTimestamp: utcTimestamp(after.firstStartTime),
+    startupVersionMatchesPinned: STARTUP_VERSION_FIELDS.some(key => nativeVocabulary.has(key) && after[key] === VERSION),
+    machineIdHex64: typeof after.machineID === "string" && /^[0-9a-f]{64}$/i.test(after.machineID),
+    opusProMigrationCompleteTrue: after.opusProMigrationComplete === true,
+    sonnet1m45MigrationCompleteTrue: after.sonnet1m45MigrationComplete === true,
+    seenNotificationsPlainObject: plainObject(after.seenNotifications),
+    seenNotificationsEmpty: plainObject(after.seenNotifications) && Object.keys(after.seenNotifications).length === 0,
+    hasResetAutoModeOptInForDefaultOfferTrue: after.hasResetAutoModeOptInForDefaultOffer === true,
+    migrationVersionNonnegativeInteger: Number.isSafeInteger(after.migrationVersion) && after.migrationVersion >= 0,
+  };
+  return { scan, bootstrapShape, unrelatedConfigPreserved: isDeepStrictEqual(outside(before), outside(after)),
     seededConfigPreserved: isDeepStrictEqual(before.fixturePreserved, after.fixturePreserved)
       && isDeepStrictEqual(before.mcpServers.other, after.mcpServers?.other),
     changedTopLevelFields: safeChanges,
@@ -152,6 +171,10 @@ async function exercise(root: string, binary: string, skills: string, outerNames
   assert.equal(readFileSync("/proc/net/route", "utf8").trim().split("\n").length, 1);
   stage = "isolation-effective-capabilities";
   assert.equal(BigInt("0x" + /^CapEff:\s*([0-9a-f]+)$/im.exec(readFileSync("/proc/self/status", "utf8"))![1]), 0n);
+  // The parent has verified the exact package archive before this child starts.
+  // Literal membership emits no artifact bytes or dynamic property names.
+  const nativeBytes = readFileSync(binary);
+  const nativeVocabulary = new Set(STARTUP_VERSION_FIELDS.filter(name => nativeBytes.includes(Buffer.from(name))));
   const results = [];
   for (const kind of ["direct", "skills"] as const) {
     stage = `case-${kind}`;
@@ -170,7 +193,7 @@ async function exercise(root: string, binary: string, skills: string, outerNames
     const nativeScans = [scanned(nativeStdout), scanned(nativeStderr)];
     assert(nativeScans.every(value => value.status === 0 && value.complete));
     const native = JSON.parse(readFileSync(join(f.directory, "records", "add.json"), "utf8"));
-    const config = configSummary(f.config, f.original);
+    const config = configSummary(f.config, f.original, nativeVocabulary);
     const diagnostic = nativeStderr.toString().replace(/\x1b\[[0-9;]*m/g, "").trim();
     results.push({ kind, commandExit: result.exit, commandTimedOut: result.timedOut,
       nativeExit: native.exit, nativeTimedOut: native.timedOut, stdoutScan, stderrScan, nativeScans, config,
