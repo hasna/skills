@@ -1,5 +1,5 @@
 import { requestInvitationEmail, type RequestInvitationEmailChallenge, type AcceptInvitationEmailChallenge } from "./remote-invitation-recovery.js";
-import { RemotePrivatePublicationsClient } from "./remote-private-publications.js";
+import { RemotePrivatePublicationsClient, RemotePrivateSkillHistoryClient } from "./remote-private-publications.js";
 import { invitationInput, type ListRemoteWorkspaceInvitations, type IssueRemoteWorkspaceInvitation,
   type ResendRemoteWorkspaceInvitation, type RevokeRemoteWorkspaceInvitation, type AcceptRemoteWorkspaceInvitation } from "./remote-invitations.js";
 import { workspaceLeaveInput, type LeaveRemoteWorkspace } from "./remote-workspace-leave.js";
@@ -109,6 +109,11 @@ export class RemoteSkillsAuthClient {
   async openPrivatePublications(email: string, code: string, context: RemoteWorkspaceContext): Promise<RemotePrivatePublicationsClient> {
     const origin = this.apiOrigin, captured = workspaceContext(context);
     return new RemotePrivatePublicationsClient(origin, await this.switchWorkspace(email, code, captured));
+  }
+  /** Fresh workspace-bound, read-only private history session; no key is created or saved. */
+  async openPrivateSkillHistory(email: string, code: string, context: RemoteWorkspaceContext): Promise<RemotePrivateSkillHistoryClient> {
+    const origin = this.apiOrigin, captured = workspaceContext(context);
+    return new RemotePrivateSkillHistoryClient(origin, await this.switchWorkspace(email, code, captured));
   }
   requestInvitationEmailChallenge(input: RequestInvitationEmailChallenge) { return requestInvitationEmail(this.apiOrigin, "challenge", input); }
   acceptInvitationEmailChallenge(input: AcceptInvitationEmailChallenge) { return requestInvitationEmail(this.apiOrigin, "accept", input); }

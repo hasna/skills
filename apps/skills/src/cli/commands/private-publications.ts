@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { resolve } from "node:path";
 import { RemoteSkillsAuthClient } from "../../lib/remote-auth.js";
-import { privatePublicationCustomerError, preparePrivatePublicationSession } from "../../lib/private-publication-customer.js";
+import { privatePublicationCustomerError, preparePrivatePublicationSession, preparePrivateSkillHistorySession } from "../../lib/private-publication-customer.js";
 import { preparePrivatePublication, continuePrivatePublication, inspectPrivatePublication, type PrivatePublicationResult } from "../../lib/private-publication-recovery.js";
 import { checkedPrivateSkillCreate, PrivatePublicationError, publicationUuid } from "../../lib/remote-private-publications.js";
 import { promptCode, readCode } from "./customer-verification.js";
@@ -14,7 +14,7 @@ function verifySessionOptions(options: VerificationOptions) {
     || (options.userId !== undefined && (!publicationUuid(options.userId) || !publicationUuid(options.membershipId))))
     throw new PrivatePublicationError("PUBLICATION_CONTEXT_REQUIRED", "Provide both observed --user-id and --membership-id UUIDs.");
   if (!options.codeStdin && (options.json || !process.stdin.isTTY || !process.stderr.isTTY))
-    throw new PrivatePublicationError("PUBLICATION_CODE_REQUIRED", "Use --code-stdin with a fresh code for noninteractive publishing.");
+    throw new PrivatePublicationError("PUBLICATION_CODE_REQUIRED", "Use --code-stdin with a fresh code for noninteractive private-skill commands.");
 }
 function verifyOptions(options: Options, action: string) {
   verifySessionOptions(options);
@@ -64,6 +64,45 @@ export function registerPrivatePublications(parent: Command) {
       } catch (error) {
         const result = error instanceof PrivatePublicationError ? privatePublicationCustomerError(error)
           : { error: "Unable to verify the selected account and workspace for skill creation. Check the server, membership and fresh code; no credential was saved.", code: "SKILL_CREATE_SESSION_UNAVAILABLE", uncertain: false };
+        if (options.json) console.log(JSON.stringify(result)); else console.error(result.error);
+        process.exitCode = 1;
+      }
+    });
+  group.command("versions").allowExcessArguments(false)
+    .description("Read one page of a private skill's versions and current version using fresh interactive sign-in")
+    .argument("<skill-id>", "Private or team skill UUID from the workspace catalog or create result")
+    .requiredOption("--email <email>", "Account email for fresh interactive verification")
+    .option("--user-id <uuid>", "Observed account UUID (required without an enrolled named profile)")
+    .option("--membership-id <uuid>", "Observed workspace membership UUID")
+    .option("--code-stdin", "Read a fresh six-digit verification code from stdin")
+    .option("--limit <count>", "Page size from 1 to 50", "20")
+    .option("--cursor <uuid>", "Read the next page using its returned cursor")
+    .option("--json", "Output validated history metadata without credentials or source content")
+    .action(async (skillId: string, options: VerificationOptions & { limit: string; cursor?: string }) => {
+      try {
+        if (!publicationUuid(skillId) || !/^[1-9]\d?$/.test(options.limit) || Number(options.limit) > 50
+          || (options.cursor !== undefined && !publicationUuid(options.cursor)))
+          throw new PrivatePublicationError("INVALID_PRIVATE_HISTORY_INPUT", "Provide a private skill UUID, --limit from 1 to 50, and an optional UUID --cursor.");
+        verifySessionOptions(options);
+        const context = options.userId ? { userId: options.userId, membershipId: options.membershipId! } : undefined;
+        const pending = preparePrivateSkillHistorySession(context);
+        let code: string | null;
+        if (options.codeStdin) code = await readCode();
+        else { await new RemoteSkillsAuthClient(pending.origin).requestCode(options.email); code = await promptCode(); }
+        if (code === null) return;
+        const client = await pending.verify(options.email, code);
+        const history = await client.listVersions(skillId, { limit: Number(options.limit), cursor: options.cursor });
+        if (options.json) console.log(JSON.stringify(history));
+        else {
+          console.log(`Private versions of ${history.slug} (${history.skillId})`);
+          console.log(`Current version: ${history.currentVersion ?? "Not published yet"}`);
+          if (!history.versions.length) console.log("No versions on this page.");
+          for (const version of history.versions) console.log(`  ${version.version}${version.id === history.currentVersionId ? " (current)" : ""}  published: ${version.releasedAt ?? "Not released"}  created: ${version.createdAt}`);
+          if (history.nextCursor) console.log(`More versions: repeat this command with --cursor ${history.nextCursor} and fresh verification.`);
+        }
+      } catch (error) {
+        const result = error instanceof PrivatePublicationError ? privatePublicationCustomerError(error)
+          : { error: "Unable to read private version history. Check the selected account, workspace and fresh verification; no skill or credential was changed.", code: "PRIVATE_HISTORY_UNAVAILABLE", uncertain: false };
         if (options.json) console.log(JSON.stringify(result)); else console.error(result.error);
         process.exitCode = 1;
       }

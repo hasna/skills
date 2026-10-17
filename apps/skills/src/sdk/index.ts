@@ -96,7 +96,8 @@ export { WorkspaceInvitationInputError, RemoteWorkspaceInvitationError, RemoteWo
 export { InvitationEmailInputError, RemoteInvitationEmailError, RemoteInvitationEmailUnconfirmedError,
   type RequestInvitationEmailChallenge, type AcceptInvitationEmailChallenge, type RemoteInvitationEmailChallenge,
   type RemoteInvitationEmailAcceptance, type RemoteInvitationEmailErrorCode } from "../lib/remote-invitation-recovery.js";
-export { RemotePrivatePublicationsClient, PrivatePublicationError, PRIVATE_PUBLICATION_MAX_BYTES,
+export { RemotePrivatePublicationsClient, RemotePrivateSkillHistoryClient, PrivatePublicationError, PRIVATE_PUBLICATION_MAX_BYTES,
+  type PrivateSkillVersion, type PrivateSkillVersionHistory, type PrivateSkillVersionHistoryOptions,
   type CreatePrivateSkillInput, type CreatedPrivateSkill,
   type PrivatePublicationDeclaration, type PrivatePublicationView, type PrivatePublicationState, type PrivatePublishingCapability } from "../lib/remote-private-publications.js";
 export { preparePrivatePublication, readPrivatePublicationRecovery, continuePrivatePublication, inspectPrivatePublication,

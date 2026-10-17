@@ -2403,6 +2403,41 @@ Publication recovery results report `executionEnabled: null` because their durab
 receipts contain no server capability observation. Use `getCapability()` for the
 server's current boolean capability; it does not authorize an individual run.
 
+Private version history is a separate read-only command. Use the private skill
+UUID returned by creation or workspace metadata, with the same named customer
+profile or observed account/membership IDs and fresh verification:
+
+```sh
+skills --profile customer publication versions <skill-uuid> \
+  --email you@example.com --code-stdin --limit 20 --json
+```
+
+It reads one page from the existing interactive
+`GET /api/v1/skills/<skill-uuid>/versions` route. JSON preserves the current
+version and version UUID, version rows, exact creation/release dates and
+`nextCursor`. A missing release date stays null. Supply `--cursor <nextCursor>`
+and fresh verification for another page; null means the end. An empty page does
+not imply an unpublished skill: the current version is shown separately. Human
+output marks the current version and shows the cursor when more rows exist.
+Errors return no partial history and make no automatic retry. Viewer memberships
+can read history without gaining publication rights. No recovery directory,
+API key creation, source read or credential write is needed.
+
+The existing `skills versions <name>` remains the public slug/API-key history
+command. It does not decode private interactive history. Publication status
+continues to inspect an exact saved intent with `publication status`; version
+history does not discover the latest publication attempt or authorize execution.
+
+The read-only `RemotePrivateSkillHistoryClient` and `PrivateSkillVersionHistory`
+are exported from both root and `./sdk`. Obtain one with
+`RemoteSkillsAuthClient.openPrivateSkillHistory(email, code, context)` through
+fresh interactive workspace verification, then call
+`listVersions(skillId, { limit, cursor, signal, timeoutMs })`. Its session stays
+private and no credentials are saved. Target/profile and membership checks are
+shared with publication sign-in; gateway credentials are not sent to another
+instance. The SDK returns only bound history metadata and keeps the same
+one-page pagination contract as the CLI.
+
 The SDK exports `RemotePrivatePublicationsClient` through both the root and
 `./sdk`; `RemoteSkillsAuthClient.openPrivatePublications` creates one from fresh
 workspace verification. Call its `createSkill({ slug, displayName, confirm: true })`
