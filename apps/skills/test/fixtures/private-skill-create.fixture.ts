@@ -2,9 +2,9 @@ import { Command } from "commander";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { registerPrivatePublications } from "./commands/private-publications.js";
-import { registerBrowse } from "./commands/list.js";
-import { registerIntrospect } from "./commands/introspect.js";
+import { registerPrivatePublications } from "../../src/cli/commands/private-publications.js";
+import { registerBrowse } from "../../src/cli/commands/list.js";
+import { registerIntrospect } from "../../src/cli/commands/introspect.js";
 
 // Real command, auth/session factory and SDK; only the transport is synthetic.
 // Every probe pins a closed loopback target and cannot reach another origin.
