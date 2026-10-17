@@ -104,7 +104,7 @@ export async function runCliInCwd(
   // Native-integration fixtures supply their entire environment explicitly:
   // neither the caller's PATH/credentials nor a discovered .env may enter it.
   const command = options.isolated
-    ? [process.execPath, "--no-env-file", "--no-install", ...(options.preload ? ["--preload", options.preload] : []), "run", CLI_PATH, "--", ...args]
+    ? [process.execPath, "--no-env-file", "--no-install", ...(options.preload ? ["--preload", options.preload] : []), CLI_PATH, ...args]
     : ["bun", "run", CLI_PATH, "--", ...args];
   const proc = Bun.spawn(command, {
     stdout: "pipe",
