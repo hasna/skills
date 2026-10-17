@@ -120,6 +120,17 @@ test("published tags preserve their strings while malformed arrays and changed r
     expect(() => metadataSnapshot({ ...malformed, publishedSource: content.source, revisionId }, `"${revisionId}"`)).toThrow();
   }
 });
+test("snapshots accept every slug the server grammar admits and refuse the rest", () => {
+  const snapshotFor = (slug: string) => {
+    const content: RevisionContent = { slug, displayName: "Fixture", description: "Synthetic", category: "old", tags: [], source: "custom", kind: "instruction" };
+    const revisionId = revisionIdOf(content);
+    return () => metadataSnapshot({ ...content, publishedSource: content.source, revisionId }, `"${revisionId}"`);
+  };
+  for (const slug of ["fixture-skill", "legacy.skill", "legacy_skill", "legacy--skill", "a", "0-trailing-"]) expect(snapshotFor(slug)().content.slug).toBe(slug);
+  for (const slug of ["", "-leading", ".hidden", "_private", "Upper", "with/slash", "with space", "tab\tslug"]) {
+    expect(snapshotFor(slug)).toThrow(expect.objectContaining({ code: "INVALID_METADATA_SNAPSHOT" }));
+  }
+});
 for (const [field, value] of [["skillMd", "Tampered body that was never published"], ["description", "Tampered description"], ["category", "Tampered"],
   ["tags", ["tampered"]], ["version", "9.9.9"], ["bundleSha256", "b".repeat(64)]] as const) test(`a plan whose before.${field} no longer matches its expected revision refuses before PATCH`, async () => {
   const f = fixture(); const plan = await f.client.prepareSkillMetadataUpdate("fixture-skill", { category: "Productivity & Organization" });
