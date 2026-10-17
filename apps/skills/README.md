@@ -2030,6 +2030,14 @@ Stable command shapes:
   snapshot plan.
 - MCP registration: `mcp --register <agent> --json` returns
   `{ "registered": number, "results": [...] }`.
+  Claude re-registration updates only `mcpServers.skills` in the active user
+  `.claude.json` (respecting `CLAUDE_CONFIG_DIR` and an active legacy
+  `.config.json`). Before changing an existing file it preserves and reads back
+  a mode-0600 sibling `.skills-mcp-<id>.backup`. A competing native config lock
+  or a changed config refuses the update; retry after the other writer finishes.
+  A native policy or unknown refusal also fails closed. Updating an existing
+  entry requires Claude's exact admitted duplicate-name refusal; configuring
+  before CLI installation is supported only when the executable is missing.
 
 ## Query a caller-owned catalog
 
@@ -2275,6 +2283,15 @@ full records only when needed.
 skills mcp --register claude    # Auto-register with Claude Code
 skills mcp --register all       # Register with all supported agents
 ```
+
+Register from the same credential profile you use for the product, for example
+`skills --profile customer setup agents`. Registrations retain that profile and
+any invocation-specific API origin, including
+`skills setup --api-url <origin> agents`, and start `skills-mcp --stdio`. Supported configuration-home overrides
+are retained so the later process resolves the same credential files. Keys,
+sessions and vault values are never copied into agent configuration. With no
+selectors, the MCP process keeps its usual credential resolution. Existing
+credential-to-origin checks still refuse a key bound to a different instance.
 
 ## Skills API
 
