@@ -133,11 +133,15 @@ function configSummary(file: string, original: Buffer) {
 }
 
 async function exercise(root: string, binary: string, skills: string, outerNamespace: string, uid: number) {
-  stage = "network-namespace";
+  stage = "isolation-uid";
   assert(process.getuid?.() === uid && process.geteuid?.() === uid && uid !== 0);
+  stage = "isolation-namespace-binding";
   assert.notEqual(readlinkSync("/proc/self/ns/net"), outerNamespace);
+  stage = "isolation-interface-view";
   assert.deepEqual(readdirSync("/sys/class/net"), ["lo"]);
+  stage = "isolation-routes";
   assert.equal(readFileSync("/proc/net/route", "utf8").trim().split("\n").length, 1);
+  stage = "isolation-effective-capabilities";
   assert.equal(BigInt("0x" + /^CapEff:\s*([0-9a-f]+)$/im.exec(readFileSync("/proc/self/status", "utf8"))![1]), 0n);
   const results = [];
   for (const kind of ["direct", "skills"] as const) {
