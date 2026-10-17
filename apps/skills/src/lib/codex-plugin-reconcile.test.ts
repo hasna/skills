@@ -82,7 +82,7 @@ function fakeCodexWriter(config: string, behaviour: { unavailable?: boolean; ref
 /** A reviewed Codex binding that enrolled one remote, app-bearing plugin (the
  * station shape: a typed settings witness and qualified-name controls).
  * `listed`: Codex listed the skills at enrollment. Otherwise they were already
- * path-denied and omitted, so the controls also record the remote installation. */
+ * path-denied and omitted. Either way the controls record the remote installation. */
 function enrolledStation(initialNames = ["maintain-space", "write-page"], extraConfig = "", listed = true, shape: { catalogReview?: boolean; byteWitnesses?: boolean; directories?: boolean; prepare?: (cache: string) => void; witnesses?: (cache: string) => string[] } = {}) {
   const home = mkdtempSync(join(tmpdir(), "skills-codex-reconcile-")); roots.push(home);
   admitCorpusFixture(join(home, ".codex"));
@@ -154,7 +154,7 @@ for (const listed of [true, false]) test(`a plugin version bump that adds 3 skil
   const controls: CodexPluginSkillControl[] = JSON.parse(readFileSync(station.policy, "utf8")).bridge.codexPluginSkills;
   expect(controls.map(control => control.name)).toEqual(["pages:maintain-space", "pages:write-page", ...NEW]);
   expect(new Set(controls.map(control => JSON.stringify([control.manifestSha256, control.appSha256, control.remotePluginId ?? null, control.skillsOnly ?? null]))).size).toBe(1);
-  expect(controls.every(control => control.remotePluginId === (listed ? undefined : REMOTE))).toBe(true);
+  expect(controls.every(control => control.remotePluginId === REMOTE)).toBe(true);
   expect(() => assertManagedAgentBridge("codex", station.options)).not.toThrow();
   expect(() => assertManagedAgentBridge("codex", { ...station.options, codexPromptHook: true })).not.toThrow();
 
@@ -1137,3 +1137,107 @@ test("an absent enrolled plugin whose controls are not remote, skills-only and d
   expect(station.snapshot()).toEqual(before);
 });
 
+const TEMPLATES = "templates@openai-curated-remote", TEMPLATES_REMOTE = "plugins~Plugin_00000000000000000000000000000761";
+const OTHER_REMOTE = "plugins~Plugin_00000000000000000000000000000762";
+/** The openai-templates shape (station02): a remote plugin that carries an app,
+ * enrolled by its first reviewed `hook install`. `localVersion` is what Codex
+ * reports for it (null: the receipt-bound omitted path). `listed` skills are
+ * listed and enabled at enrollment; `omitted` ones are already path-denied and
+ * omitted. `receipt` is the on-disk native install receipt (null: absent). */
+function templatesStation(localVersion: string | null, listed: string[], omitted: string[], receipt: string | null = TEMPLATES_REMOTE, source: { sourceType?: "remote" } = { sourceType: "remote" }) {
+  const home = mkdtempSync(join(tmpdir(), "skills-codex-templates-")); roots.push(home);
+  admitCorpusFixture(join(home, ".codex"));
+  const dataDir = join(home, "data"), cache = join(home, ".codex/plugins/cache"), parent = join(cache, "openai-curated-remote/templates"), root = join(parent, "0.1.6");
+  const config = join(home, ".codex/config.toml"), policy = join(dataDir, "agent-policy.json"), receiptPath = join(parent, ".codex-remote-plugin-install.json");
+  const doc = (name: string) => join(root, "skills", name, "SKILL.md");
+  put(join(root, ".codex-plugin/plugin.json"), JSON.stringify({ name: "templates", version: "0.1.6", description: "Synthetic Templates plugin", apps: "./.app.json" }));
+  put(join(root, ".app.json"), APP.replaceAll("pages", "templates"));
+  for (const name of [...listed, ...omitted]) put(doc(name), payload(name));
+  const writeReceipt = (id: string) => put(receiptPath, JSON.stringify({ schema_version: 1, remote_plugin_id: id }));
+  if (receipt !== null) writeReceipt(receipt);
+  put(config, `model = "synthetic"\n${omitted.map(name => `[[skills.config]]\npath = ${JSON.stringify(doc(name))}\nenabled = false\n`).join("")}`);
+  const plugin = { id: TEMPLATES, name: "templates", installed: true, enabled: true, localVersion, remotePluginId: TEMPLATES_REMOTE, ...source };
+  const enrollment: CodexNativeSkillCatalog = { version: "codex-cli 0.163.0", cwd: home, plugins: [plugin], skills: listed.map(name => ({ name: `templates:${name}`, path: doc(name), enabled: true, pluginId: TEMPLATES })) };
+  const review = { version: 1 as const, agents: [{ agent: "codex" as const, roots: [cache], sources: [captureCodexSettingsV3(config)], pluginHooks: "reviewed-no-skill-injection" as const }] };
+  const options = { home, dataDir, projectDir: home };
+  // What `skills hook install --agent codex --discovery-inputs <review> --codex-native-catalog <catalog> --apply` runs.
+  const install = () => applyAgentIntegration(planAgentIntegration({ ...options, agents: ["codex"], codexNativeCatalog: enrollment, discoveryInputs: review }));
+  const controls = (): CodexPluginSkillControl[] => JSON.parse(readFileSync(policy, "utf8")).bridge.codexPluginSkills;
+  const bridge = join(home, ".codex/skills/skills-cli/SKILL.md");
+  const reconcile = (apply: boolean) => runCodexPluginReconcile({ apply, home, dataDir, projectDir: home, captureCatalog: async () => ({ version: "codex-cli 0.163.0", cwd: home, plugins: [plugin],
+    skills: [{ name: "skills-cli", path: bridge, enabled: true, pluginId: null }] }) });
+  const read = (path: string) => readFileSync(path, "utf8");
+  const changes = () => codexPluginCapabilityChanges(cache, controls(), read, (Bun.TOML.parse(readFileSync(config, "utf8")) as any).skills?.config ?? []);
+  /** Rewrite the stored controls, as a policy written before this fix could hold them. */
+  const storeControls = (edit: (controls: CodexPluginSkillControl[]) => void) => {
+    const value = JSON.parse(readFileSync(policy, "utf8")); edit(value.bridge.codexPluginSkills); writeFileSync(policy, JSON.stringify(value, null, 2));
+  };
+  return { home, dataDir, config, policy, parent, options, install, controls, reconcile, changes, writeReceipt, storeControls };
+}
+const strictGuards = (station: ReturnType<typeof templatesStation>) => [() => assertManagedAgentBridge("codex", station.options), () => assertManagedAgentBridge("codex", { ...station.options, codexPromptHook: true })];
+async function expectRemoteReceiptChangeCaught(station: ReturnType<typeof templatesStation>) {
+  for (const guard of strictGuards(station)) expect(guard).not.toThrow();
+  expect(await station.reconcile(true)).toMatchObject({ outcome: "unchanged" });
+  station.writeReceipt(OTHER_REMOTE);
+  for (const guard of strictGuards(station)) expect(guard).toThrow(`NATIVE_SKILL_DRIFT: ${CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED}: reviewed native plugin capability controls changed`);
+  // The only capability the guard can be refusing is the bound receipt.
+  expect(station.changes()).toEqual(["remote"]);
+  const before = { config: readFileSync(station.config, "utf8"), policy: readFileSync(station.policy, "utf8") };
+  for (const apply of [false, true]) {
+    const result = await station.reconcile(apply);
+    expect(result).toMatchObject({ outcome: "refused", code: CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, enrolled: [], changes: [], refusals: [{ pluginId: TEMPLATES, reasons: ["remote"] }] });
+    expect({ config: readFileSync(station.config, "utf8"), policy: readFileSync(station.policy, "utf8") }).toEqual(before);
+  }
+  // Positive control: restoring the reviewed receipt clears both refusals.
+  station.writeReceipt(TEMPLATES_REMOTE);
+  for (const guard of strictGuards(station)) expect(guard).not.toThrow();
+  expect(station.changes()).toEqual([]);
+  expect(await station.reconcile(true)).toMatchObject({ outcome: "unchanged" });
+}
+
+for (const [label, localVersion, listed, omitted] of [
+  ["null localVersion: two listed and enabled, one omitted", null, ["make-deck", "make-report"], ["make-sheet"]],
+  ["reported localVersion: one listed and enabled, two omitted", "0.1.6", ["make-deck"], ["make-report", "make-sheet"]],
+] as const) test(`openai-templates first hook install records the remote receipt on every control (${label}), and a later receipt change is caught by the guard and the reconcile`, async () => {
+  const station = templatesStation(localVersion, [...listed], [...omitted]);
+  station.install();
+  const controls = station.controls();
+  expect(controls.map(control => control.name).sort()).toEqual([...listed, ...omitted].map(name => `templates:${name}`).sort());
+  expect(controls).toHaveLength(3);
+  for (const control of controls) expect(control).toMatchObject({ pluginId: TEMPLATES, remotePluginId: TEMPLATES_REMOTE });
+  expect(controls.every(control => control.appSha256 !== undefined && control.skillsOnly === undefined)).toBe(true);
+  await expectRemoteReceiptChangeCaught(station);
+});
+
+test("openai-templates install with an absent or mismatched receipt still refuses on the receipt-bound omitted path and writes nothing", () => {
+  for (const receipt of [null, OTHER_REMOTE]) {
+    const station = templatesStation(null, ["make-deck", "make-report"], ["make-sheet"], receipt);
+    const config = readFileSync(station.config, "utf8");
+    expect(() => station.install()).toThrow("CODEX_NATIVE_SKILL_IDENTITY_UNSUPPORTED");
+    expect(readFileSync(station.config, "utf8")).toBe(config);
+    expect(existsSync(station.policy)).toBe(false);
+  }
+});
+
+test("a receipt that does not match the catalog's remote identity, or a plugin the catalog does not report as remote, is never recorded on listed or reported-localVersion controls", () => {
+  for (const [receipt, source] of [[null, undefined], [OTHER_REMOTE, undefined], [TEMPLATES_REMOTE, {}]] as const) {
+    const station = templatesStation("0.1.6", ["make-deck"], ["make-report", "make-sheet"], receipt, source);
+    station.install();
+    const controls = station.controls();
+    expect(controls).toHaveLength(3);
+    expect(controls.some(control => control.remotePluginId !== undefined)).toBe(false);
+  }
+});
+
+for (const [label, kept] of [
+  ["the first control lacks the id, two carry it", [false, true, true]],
+  ["only a non-first control carries the id", [false, true, false]],
+  ["only the last control carries the id", [false, false, true]],
+] as const) test(`mixed stored controls (${label}): a receipt change is caught by the strict guard and the reconcile reports remote`, async () => {
+  const station = templatesStation(null, ["make-deck", "make-report"], ["make-sheet"]);
+  station.install();
+  // A policy stored before every control recorded the receipt.
+  station.storeControls(controls => { expect(controls).toHaveLength(3); controls.forEach((control, index) => { if (!kept[index]) delete control.remotePluginId; }); });
+  expect(station.controls().map(control => control.remotePluginId !== undefined)).toEqual([...kept]);
+  await expectRemoteReceiptChangeCaught(station);
+});

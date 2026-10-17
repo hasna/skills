@@ -134,3 +134,16 @@ test("built CLI reports an unavailable native client as one error result", async
   expect(JSON.parse(lines[0]!)).toMatchObject({ outcome: "error", mode: "apply", enrolled: [], changes: [] });
   expect(typeof JSON.parse(lines[0]!).code).toBe("string");
 });
+
+test("built CLI refuses a remote receipt change of a plugin enrolled from listed skills with reason remote", async () => {
+  const s = station();
+  // The first reviewed hook install enrolled a listed skill and bound the receipt.
+  const controls = JSON.parse(readFileSync(join(s.dataDir, "agent-policy.json"), "utf8")).bridge.codexPluginSkills;
+  expect(controls).toEqual([expect.objectContaining({ name: "pages:write-page", pluginId: PLUGIN, remotePluginId: REMOTE })]);
+  expect(await s.run("--apply", "--json")).toMatchObject({ exitCode: 0, result: { outcome: "unchanged" } });
+  put(join(s.parent, ".codex-remote-plugin-install.json"), JSON.stringify({ schema_version: 1, remote_plugin_id: "plugins~Plugin_00000000000000000000000000000763" }));
+  const settled = readFileSync(s.config, "utf8");
+  expect(await s.run("--apply", "--json")).toMatchObject({ exitCode: 2, result: { outcome: "refused", code: "CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED", refusals: [{ pluginId: PLUGIN, reasons: ["remote"] }] } });
+  expect(readFileSync(s.config, "utf8")).toBe(settled);
+  expect(() => assertManagedAgentBridge("codex", s.options)).toThrow("CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED");
+});

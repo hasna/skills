@@ -376,7 +376,15 @@ export function reviewCodexPluginControls(catalog:CodexNativeSkillCatalog, docum
       if (!explicitDeny && ((!exactPathDeny && !plannedPathDeny) || !isCodexNativeSkillDisabled(nativeSkill,rules))) refuse();
     }
     const skillsOnly=!parsed.appSha256 && !parsed.mcpSha256 && JSON.parse(read(join(located.root,".codex-plugin/plugin.json"))).hooks===undefined;
-    result.push({...parsed,pluginId:expectedPluginId,...(remotePluginId ? {remotePluginId} : {}),...(skillsOnly ? {skillsOnly:true as const} : {})});
+    // Bind the exact native remote installation on every control of a remote
+    // plugin, listed or omitted and whatever its localVersion, so a later
+    // receipt change is a reviewed capability change. Only an identity the
+    // on-disk receipt matches is recorded. This adds no review or deny path:
+    // the omitted null-version branch above still refuses an unmatched receipt.
+    const remote=installed.length===1 ? installed[0]! : undefined;
+    const receiptPluginId=remotePluginId ?? (remote?.sourceType==="remote" && remote.remotePluginId
+      && remoteInstallationMatches(parsed.pluginParent,remote.remotePluginId,read) ? remote.remotePluginId : undefined);
+    result.push({...parsed,pluginId:expectedPluginId,...(receiptPluginId ? {remotePluginId:receiptPluginId} : {}),...(skillsOnly ? {skillsOnly:true as const} : {})});
   }
   if (usedDenials.size!==denials.length) refuse();
   if ((!result.length && documents.some(document=>document.startsWith(cache+sep) && !inertDocuments.has(document)))
@@ -601,7 +609,9 @@ export function codexPluginCapabilityChanges(cache:string, parentControls:CodexP
   const reasons=new Set<CodexPluginCapabilityReason>(), template=parentControls[0];
   try {
     if (!template) return ["unsupported"];
-    if (template.remotePluginId!==undefined && codexRemoteInstallReceipt(template.pluginParent,read)!==template.remotePluginId) reasons.add("remote");
+    // Any control may carry the bound receipt (policies stored before every
+    // control recorded it can be mixed); one mismatch is a remote change.
+    if (parentControls.some(control=>control.remotePluginId!==undefined && codexRemoteInstallReceipt(control.pluginParent,read)!==control.remotePluginId)) reasons.add("remote");
     const roots=pluginVersionRoots(template.pluginParent);
     if (!roots) reasons.add("unsupported");
     for (const root of roots ?? []) {
