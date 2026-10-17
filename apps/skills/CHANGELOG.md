@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.80
+
+### Patch Changes
+
+- Fix `skills setup agents` for Claude Code 2.1.302 (PLA8-00523). A successful native `claude mcp add` on 2.1.302 initializes first-start metadata in `~/.claude.json` (`firstStartTime`, `firstStartVersion`, `machineID`, migration flags, an empty `seenNotifications`, `migrationVersion`), and Skills rejected that as an unexpected change. Only those new keys, with exact value shapes, are now accepted; every pre-existing field must still be unchanged, and any other new key still refuses. The consumer gate now runs the real Claude 2.1.302 registration, direct and through `skills setup agents`.
+
 ## 0.10.79
 
 ### Patch Changes
