@@ -69,7 +69,21 @@ describe("stray positionals on verbs that declare no argument", () => {
       const guard = join(root, "guard.ts");
       writeFileSync(guard, `
 const spawn = Bun.spawn;
-globalThis.fetch = (() => { throw Error("SETUP_DISPATCH_NETWORK_REFUSED"); }) as typeof fetch;
+const fetchEmbedded = globalThis.fetch;
+globalThis.fetch = (async (input, init) => {
+  try {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+    // Match consumer-credentials.ts: Ink/Yoga loads only bounded embedded WASM.
+    if (request.method !== "GET" || url.protocol !== "data:"
+        || !url.href.startsWith("data:application/octet-stream;base64,") || url.href.length > 1024 * 1024
+        || request.headers.has("authorization") || request.headers.has("x-api-key"))
+      throw Error("SETUP_DISPATCH_NETWORK_REFUSED");
+    return await fetchEmbedded(request);
+  } catch {
+    throw Error("SETUP_DISPATCH_NETWORK_REFUSED");
+  }
+}) as typeof fetch;
 Bun.spawn = ((command, options) => {
   if (!Array.isArray(command) || command[0] !== "claude" || process.env.PATH !== ${JSON.stringify(bin)})
     throw Error("SETUP_DISPATCH_SUBPROCESS_REFUSED");

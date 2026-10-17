@@ -2,7 +2,7 @@
 /** CI-only native CLI integration; deliberately outside unit-test discovery. */
 import { strict as assert } from "node:assert";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { userInfo } from "node:os";
 import { isDeepStrictEqual } from "node:util";
@@ -138,7 +138,9 @@ async function exercise(root: string, binary: string, skills: string, outerNames
   stage = "isolation-namespace-binding";
   assert.notEqual(readlinkSync("/proc/self/ns/net"), outerNamespace);
   stage = "isolation-interface-view";
-  assert.deepEqual(readdirSync("/sys/class/net"), ["lo"]);
+  const interfaces = readFileSync("/proc/self/net/dev", "utf8").trim().split("\n").slice(2)
+    .map(line => line.split(":")[0]!.trim());
+  assert.deepEqual(interfaces, ["lo"]);
   stage = "isolation-routes";
   assert.equal(readFileSync("/proc/net/route", "utf8").trim().split("\n").length, 1);
   stage = "isolation-effective-capabilities";
