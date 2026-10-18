@@ -184,6 +184,23 @@ export interface PrivateSkillVersionHistoryOptions { limit?: number; cursor?: st
 const historyInput = (): never => { throw new PrivatePublicationError("INVALID_PRIVATE_HISTORY_INPUT", "Provide a private skill UUID, limit from 1 to 50, and an optional UUID cursor; timeoutMs must be from 1 to 15000."); };
 const historyResponse = (): never => { throw new PrivatePublicationError("INVALID_PRIVATE_HISTORY_RESPONSE", "The server returned invalid private version history."); };
 const historyText = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 128 && !/[\p{Cc}\p{Cs}\u2028\u2029]/u.test(value);
+// Raw PostgreSQL timestamp text is metadata, not a JS Date: retain its exact
+// microseconds and offset. The existing publication timestamp contract stays separate.
+function historyDate(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const parts = /^(\d{4})-(\d{2})-(\d{2})(T| )(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-](\d{2})(?::(\d{2}))?)$/.exec(value);
+  if (!parts) return false;
+  const [, y, m, d, separator, h, minute, second, fraction, zone, offsetHour, offsetMinute] = parts;
+  // PostgreSQL ISO DateStyle uses a space and an hour-only or colon offset;
+  // existing JSON ISO values use T and Z or a colon offset.
+  if (separator === " " ? zone === "Z" || (fraction?.length ?? 0) > 6 : zone !== "Z" && offsetMinute === undefined) return false;
+  const year = Number(y), month = Number(m), day = Number(d);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return year > 0 && month >= 1 && month <= 12 && day >= 1 && day <= days[month - 1]!
+    && Number(h) <= 23 && Number(minute) <= 59 && Number(second) <= 59
+    && (zone === "Z" || (Number(offsetHour) <= 23 && Number(offsetMinute ?? 0) <= 59));
+}
 function privateHistory(value: unknown, organizationId: string, skillId: string, limit: number, cursor?: string): PrivateSkillVersionHistory {
   if (!record(value) || value.organizationId !== organizationId || value.skillId !== skillId
     || typeof value.slug !== "string" || !/^[a-z0-9-]+$/.test(value.slug)
@@ -194,7 +211,7 @@ function privateHistory(value: unknown, organizationId: string, skillId: string,
   const seen = new Set<string>(); let previous = cursor;
   const versions = value.versions.map(row => {
     if (!record(row) || !publicationUuid(row.id) || seen.has(row.id) || (previous !== undefined && row.id >= previous)
-      || !historyText(row.version) || !(row.releasedAt === null || date(row.releasedAt)) || !date(row.createdAt)
+      || !historyText(row.version) || !(row.releasedAt === null || historyDate(row.releasedAt)) || !historyDate(row.createdAt)
       || (row.id === value.currentVersionId) !== (row.version === value.currentVersion)) return historyResponse();
     seen.add(row.id); previous = row.id;
     return Object.freeze({ id: row.id, version: row.version, releasedAt: row.releasedAt, createdAt: row.createdAt }) as PrivateSkillVersion;

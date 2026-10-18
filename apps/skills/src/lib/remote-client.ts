@@ -22,7 +22,9 @@ import { describeRemoteFiles, readBoundedResponse, sha256, MAX_REMOTE_FILE_BYTES
 import { creditCheckoutFailure, creditCheckoutMessages, creditCheckoutRequestKey, type RemoteCreditCheckout, type RemoteCreditCheckoutOptions, type RemoteCreditCheckoutErrorCode } from "./remote-credit-checkout.js";
 import { customerNamePatch, parseUpdatedProfile, parseUpdatedWorkspace, type UpdateRemoteProfile, type UpdateRemoteWorkspace } from "./remote-profile.js";
 import { quoteUnavailableMessages, readQuoteUnavailableCode, type RemoteQuoteUnavailableCode } from "./remote-quote-errors.js";
-import { parseSkillsAccess, assertSkillsPermission, type RemoteSkillsAccess } from "./remote-permissions.js";
+import { parseSkillsAccess, assertSkillsPermission, RemoteSkillsPermissionError, type RemoteSkillsAccess } from "./remote-permissions.js";
+import { metadataPatch, metadataPlan, metadataSnapshot, SkillMetadataUpdateError, type SkillMetadataPatch, type SkillMetadataUpdatePlan } from "./skill-metadata-update.js";
+import { revisionIdOf } from "./revision.js";
 export type { RemoteQuoteUnavailableCode } from "./remote-quote-errors.js";
 
 /**
@@ -255,6 +257,68 @@ export class RemoteSkillsClient {
     const res = await this.request(`/api/v1/skills/${slug}`);
     if (!res.ok) return null;
     return res.json();
+  }
+
+  private async metadataOrganization(): Promise<string> {
+    const identity = await this.getIdentity();
+    const organization = identity.organization as { id?: unknown } | undefined;
+    if (typeof organization?.id !== "string" || !organization.id) throw new SkillMetadataUpdateError("INVALID_METADATA_SNAPSHOT");
+    return organization.id;
+  }
+
+  private async readMetadataSnapshot(slug: string) {
+    const response = await this.request(`/api/v1/skills/${encodeURIComponent(slug)}`);
+    if (!response.ok) throw new RemoteRequestError("/api/v1/skills/:slug", response.status);
+    const bytes = await readBoundedResponse(response, 2 * 1024 * 1024);
+    const originalDocument = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    let value: unknown;
+    try { value = JSON.parse(originalDocument); }
+    catch { throw new SkillMetadataUpdateError("INVALID_METADATA_SNAPSHOT"); }
+    const snapshot = metadataSnapshot(value, response.headers.get("etag"));
+    if (snapshot.content.slug !== slug) throw new SkillMetadataUpdateError("INVALID_METADATA_SNAPSHOT");
+    return { ...snapshot, originalDocument };
+  }
+
+  /** Read-only preview. Save this complete private original before applying it. */
+  async prepareSkillMetadataUpdate(slug: string, patch: SkillMetadataPatch): Promise<SkillMetadataUpdatePlan> {
+    const captured = metadataPatch(patch);
+    const organizationId = await this.metadataOrganization();
+    const snapshot = await this.readMetadataSnapshot(slug);
+    return metadataPlan({ schemaVersion: 1, authority: this.apiUrl, organizationId, expectedRevisionId: snapshot.revisionId,
+      originalDocument: snapshot.originalDocument, before: snapshot.content, patch: captured });
+  }
+
+  /** One guarded PATCH; an uncertain response is reconciled by readback, never retried. */
+  async applySkillMetadataUpdate(input: SkillMetadataUpdatePlan): Promise<{ status: "applied" | "reconciled" | "unchanged"; revisionId: string }> {
+    const plan = metadataPlan(input);
+    if (plan.authority !== this.apiUrl || await this.metadataOrganization() !== plan.organizationId) throw new SkillMetadataUpdateError("INVALID_METADATA_PLAN");
+    const access = await this.getCapabilities({ refresh: true });
+    if (access.permissions?.publish !== true) throw new RemoteSkillsPermissionError("publish");
+    const current = await this.readMetadataSnapshot(plan.before.slug);
+    if (current.revisionId !== plan.expectedRevisionId) throw new SkillMetadataUpdateError("METADATA_REVISION_CONFLICT");
+    const expected = revisionIdOf({ ...plan.before, ...plan.patch });
+    if (expected === current.revisionId) return { status: "unchanged", revisionId: expected };
+    let uncertain = false;
+    try {
+      const response = await this.request(`/api/v1/skills/${encodeURIComponent(plan.before.slug)}`, {
+        method: "PATCH", headers: { "If-Match": `"${plan.expectedRevisionId}"` }, body: JSON.stringify(plan.patch),
+      });
+      if (!response.ok && response.status < 500) throw new RemoteRequestError("/api/v1/skills/:slug", response.status);
+      if (!response.ok) uncertain = true;
+      else {
+        const bytes = await readBoundedResponse(response, 2 * 1024 * 1024);
+        const written = metadataSnapshot(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)), response.headers.get("etag"));
+        if (written.revisionId !== expected) throw new SkillMetadataUpdateError("METADATA_UPDATE_UNCONFIRMED");
+      }
+    } catch (error) {
+      if (error instanceof RemoteRequestError && error.status < 500) throw error;
+      uncertain = true;
+    }
+    let verified;
+    try { verified = await this.readMetadataSnapshot(plan.before.slug); }
+    catch { throw new SkillMetadataUpdateError("METADATA_UPDATE_UNCONFIRMED"); }
+    if (verified.revisionId !== expected) throw new SkillMetadataUpdateError("METADATA_UPDATE_UNCONFIRMED");
+    return { status: uncertain ? "reconciled" : "applied", revisionId: expected };
   }
 
   /**

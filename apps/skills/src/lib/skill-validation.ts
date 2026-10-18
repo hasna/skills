@@ -246,14 +246,15 @@ export function parseSkillFrontmatter(content: string): SkillFrontmatter | null 
 export function validateSkillDirectory(
   name: string,
   skillPath: string,
-  registryMeta?: SkillMeta
+  registryMeta?: SkillMeta,
+  options: { kind?: SkillKind } = {}
 ): SkillValidationResult {
   const bareName = name;
   const issues: SkillValidationMessage[] = [];
   const warnings: SkillValidationMessage[] = [];
   let packageDeclaresHosted = false;
   let packageSkillSource: string | undefined;
-  let resolvedKind: SkillKind = "executable";
+  let resolvedKind: SkillKind = options.kind ?? "executable";
   const metadata: SkillValidationResult["metadata"] = {
     binCommands: [],
     docFiles: [],
@@ -317,7 +318,7 @@ export function validateSkillDirectory(
       }
       if (frontmatter.kind !== undefined) {
         if ((VALID_SKILL_KINDS as readonly string[]).includes(frontmatter.kind)) {
-          resolvedKind = frontmatter.kind as SkillKind;
+          if (options.kind === undefined) resolvedKind = frontmatter.kind as SkillKind;
         } else {
           add(issues, "skill.kind_invalid", `SKILL.md kind '${frontmatter.kind}' is not one of: ${VALID_SKILL_KINDS.join(", ")}`);
         }

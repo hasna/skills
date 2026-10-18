@@ -27,6 +27,16 @@ export const CODEX_PLUGIN_ROOT_CAPABILITY_ENTRIES: readonly string[] = Object.fr
   "plugin.json", ".codex-plugin", ".claude-plugin", ".cursor-plugin", "hooks", "hooks.json", ".mcp.json", ".app.json", "commands", "agents",
 ]);
 
+/** The only Codex manifest keys that are identity and display metadata, the
+ * default skills root and the reviewed `.app.json` connector declaration. Any
+ * other key (hooks, commands, extensions, MCP servers, agents, unknown keys)
+ * is a capability or unreviewed. The vendor-refresh guard admits exactly these;
+ * the Codex name reconcile treats `apps` as the app capability. */
+export const CODEX_PLUGIN_MANIFEST_KNOWN_KEYS: readonly string[] = Object.freeze(["name", "version", "description", "author", "homepage", "repository", "license", "keywords", "interface", "skills", "apps"]);
+
+/** The default skills root, which vendor manifests spell out. */
+export const CODEX_PLUGIN_DEFAULT_SKILLS_PATHS: readonly string[] = Object.freeze(["./skills", "./skills/"]);
+
 /** Case-insensitive comparison form. Upper- then lower-casing also folds the
  * Kelvin sign, long s and dotless i onto their ASCII letters, so a name a
  * case-insensitive file system could open as a capability entry folds onto it. */

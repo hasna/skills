@@ -23,6 +23,7 @@ import { captureClaudeMarketplaceRegistryV2 } from "../../lib/claude-marketplace
 import { captureClaudeMarketplaceEntry } from "../../lib/claude-marketplace-entry-witness.js";
 import { reviewClaudeProspectiveCandidate, type ClaudeProspectiveReviewRequest } from "../../lib/claude-prospective-review.js";
 import { captureCodexNativeSkillCatalog } from "../../lib/codex-native-skill-catalog.js";
+import { runCodexPluginReconcile } from "../../lib/codex-plugin-reconcile.js";
 import { connectCodexHookRpc } from "../../lib/codex-hook-rpc.js";
 import { codexAdmissionReceipt, type CodexCorpusAdmission } from "../../lib/codex-corpus-write.js";
 import { selfSpawnCommand } from "../../lib/self-spawn.js";
@@ -196,6 +197,18 @@ export function registerAgentIntegration(parent: Command): void {
         console.error(message);
         process.exitCode = 1;
       }
+    });
+  hook.command("codex-reconcile")
+    .option("--apply", "Write the name denies and refresh the reviewed binding; defaults to a read-only preview", false)
+    .option("--codex-command <path>", "Installed Codex executable used for the native skill catalog", "codex")
+    .option("--json", "Emit the single JSON result line (the only output format)", false)
+    .description("Deny every Codex plugin skill except the Skills bridge by stable qualified name; skills-only plugin changes are enrolled, capability changes refuse")
+    .action(async (options: { apply: boolean; codexCommand: string }) => {
+      // Exactly one JSON line on stdout for every outcome; nothing else is printed.
+      const result = await runCodexPluginReconcile({ apply: options.apply, codexCommand: options.codexCommand, home: homedir(), projectDir: process.cwd(),
+        ...(process.env.CODEX_HOME === undefined ? {} : { codexHome: process.env.CODEX_HOME }) });
+      await writeCliOutput(JSON.stringify(result));
+      process.exitCode = result.outcome === "refused" ? 2 : result.outcome === "error" ? 1 : 0;
     });
   hook.command("witness")
     .requiredOption("--kind <kind>", "codex-settings-v6, executable-v1, sumi-settings-v1, claude-settings-v4, claude-settings-v3, claude-settings-v2, codex-settings-v5, codex-settings-v4, codex-settings-v3, codex-settings-v2, codex-settings-v1, claude-marketplace-registry-v2 or claude-marketplace-entry-v1")

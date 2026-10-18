@@ -47,6 +47,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   log({ event: "request", path: allowed.includes(path) ? path : "unknown", method: ["GET", "POST"].includes(method) ? method : "unknown", authenticated, metadata });
   if (path === "/api/auth/verify") {
     assert.equal(method, "POST"); assert.equal(headers.has("authorization"), false);
+    assert.deepEqual(JSON.parse(String(init?.body)), { email: "fixture@example.test", code: "908172" });
     if (scenario === "auth-refused") return Response.json({ error: token }, { status: 401 });
     const user = scenario === "foreign-account" ? { ...identity.user, id: skillId } : identity.user;
     return Response.json({ token, user });
@@ -66,6 +67,12 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
     if (scenario === "invalid-json") return new Response(token);
     const versions = [{ id: currentId, version: "1.1.0", releasedAt: "2026-10-17T09:00:00.123456Z", createdAt: "2026-10-17T08:00:00.654321+00:00" },
       { id: olderId, version: "1.0.0", releasedAt: null, createdAt: "2026-10-16T08:00:00Z" }];
+    if (scenario === "postgres") Object.assign(versions[0]!, {
+      releasedAt: "2026-10-17 09:00:00.123456+00", createdAt: "2026-10-17 08:00:00.654321+05:30" });
+    if (scenario === "postgres-hour") Object.assign(versions[0]!, {
+      releasedAt: "2026-10-17 09:00:00-04", createdAt: "2026-10-17 08:00:00+03" });
+    if (scenario === "invalid-date") versions[0]!.createdAt = "2026-02-30 08:00:00+00";
+    if (scenario === "invalid-date-offset") versions[0]!.releasedAt = "2026-10-17 08:00:00+24:00";
     const page = target.searchParams.get("cursor") === currentId ? [versions[1]] : versions;
     const empty = scenario === "empty";
     return Response.json({ organizationId: scenario === "foreign-tenant" ? userId : organizationId, skillId, slug: "my-private-skill",

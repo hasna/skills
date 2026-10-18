@@ -11,7 +11,7 @@ const skillId = "44444444-4444-4444-8444-444444444444", currentId = "77777777-77
 const olderId = "66666666-6666-4666-8666-666666666666";
 const args = ["publication", "versions", skillId, "--email", "fixture@example.test", "--user-id", "11111111-1111-4111-8111-111111111111",
   "--membership-id", "22222222-2222-4222-8222-222222222222", "--code-stdin", "--json"];
-async function run(scenario = "success", command = args, code = "123456\n") {
+async function run(scenario = "success", command = args, code = "908172\n") {
   const home = mkdtempSync(join(root, "home-")), trace = join(home, "trace.jsonl");
   const child = Bun.spawn([process.execPath, "--no-env-file", "--no-install", join(import.meta.dir, "..", "..", "test", "fixtures", "private-skill-history.fixture.ts"), ...command], {
     cwd: home, env: { HOME: home, USERPROFILE: home, TMPDIR: home, HASNA_HOME: join(home, ".hasna"), HASNA_CONFIG_HOME: join(home, "config"),
@@ -27,7 +27,7 @@ async function run(scenario = "success", command = args, code = "123456\n") {
   const diagnostic = JSON.stringify({ exit: status, requestCount: calls.length, nativeUnexpected: entries.some(row => row.event === "unexpected-native") });
   expect(entries.filter(row => row.event === "guards"), diagnostic).toEqual([{ event: "guards", nativeControls: 2, targetControls: 1 }]);
   expect(entries.some(row => row.event === "unexpected-native"), diagnostic).toBe(false);
-  for (const marker of ["synthetic-history-session", "synthetic-profile-key", "capability=", "123456"]) expect((stdout + stderr).includes(marker), diagnostic).toBe(false);
+  for (const marker of ["synthetic-history-session", "synthetic-profile-key", "capability=", "908172"]) expect((stdout + stderr).includes(marker), diagnostic).toBe(false);
   if (!["profile", "profile-change", "credential-file-change", "gateway-bound"].includes(scenario)) expect(readdirSync(home), diagnostic).toEqual(["trace.jsonl"]);
   return { stdout, stderr, status, calls, diagnostic };
 }
@@ -39,6 +39,18 @@ test("private versions command verifies the account, selects its workspace and m
   expect(history.versions[0].releasedAt).toBe("2026-10-17T09:00:00.123456Z");
   expect(result.calls.map(row => row.path)).toEqual(["/api/auth/verify", "/api/auth/whoami", "/api/v1/account/workspaces/switch", "/api/auth/whoami", `/api/v1/skills/${skillId}/versions`]);
   expect(result.calls.slice(1).every(row => row.authenticated), result.diagnostic).toBe(true);
+});
+test("JSON and human CLI output retain PostgreSQL dates and nullable releases without changing precision or offsets", async () => {
+  for (const [scenario, releasedAt, createdAt] of [
+    ["postgres", "2026-10-17 09:00:00.123456+00", "2026-10-17 08:00:00.654321+05:30"],
+    ["postgres-hour", "2026-10-17 09:00:00-04", "2026-10-17 08:00:00+03"],
+  ]) {
+    const result = await run(scenario); expect(result.status, result.diagnostic).toBe(0);
+    const page = JSON.parse(result.stdout); expect(page.versions[0]).toMatchObject({ releasedAt, createdAt });
+    expect(page.versions[1].releasedAt).toBeNull(); expect(page.currentVersionId).toBe(currentId);
+    const human = await run(scenario, args.filter(arg => arg !== "--json")); expect(human.status, human.diagnostic).toBe(0);
+    for (const value of [releasedAt!, createdAt!, "1.1.0 (current)"]) expect(human.stdout.includes(value), human.diagnostic).toBe(true);
+  }
 });
 test("history pagination and empty results remain explicit rather than pretending to be complete or published", async () => {
   const page = await run("success", [...args, "--limit", "1", "--cursor", currentId]);
@@ -68,7 +80,7 @@ test("invalid IDs, context, pagination, unknown options and invalid code refuse 
   const badCode = await run("success", args, "invalid\n"); expect(badCode.status, badCode.diagnostic).toBe(1); expect(badCode.calls).toEqual([]);
 });
 test("auth, binding, foreign ownership and read errors never print partial history or retry a read", async () => {
-  for (const scenario of ["auth-refused", "foreign-account", "foreign-membership", "foreign-tenant", "not-found", "read-refused", "invalid-json"]) {
+  for (const scenario of ["auth-refused", "foreign-account", "foreign-membership", "foreign-tenant", "not-found", "read-refused", "invalid-json", "invalid-date", "invalid-date-offset"]) {
     const result = await run(scenario); expect(result.status, result.diagnostic).toBe(1);
     expect(JSON.parse(result.stdout).uncertain).toBe(false); expect("versions" in JSON.parse(result.stdout)).toBe(false);
     expect(result.calls.filter(row => row.path.endsWith("/versions")).length).toBeLessThanOrEqual(1);

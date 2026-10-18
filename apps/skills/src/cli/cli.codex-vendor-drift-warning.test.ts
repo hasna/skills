@@ -2,6 +2,7 @@ import { installSumiPathsFixture } from "../lib/sumi-paths.fixture.js";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { captureCodexRemoteReceiptSnapshot } from "../lib/codex-native-skill-catalog.js";
 import { tmpdir } from "node:os";
 import { buildCliFixture } from "./cli-build.fixture.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
@@ -53,7 +54,7 @@ async function station04() {
   put(join(parent, ".codex-remote-plugin-install.json"), JSON.stringify({ schema_version: 1, remote_plugin_id: REMOTE_ID }));
   writeFileSync(config, `${readFileSync(config, "utf8").trimEnd()}\n\n[[skills.config]]\npath = ${JSON.stringify(oldDocument)}\nenabled = false\n`);
   const catalog = join(scratch, `catalog-${Math.random().toString(36).slice(2)}.json`);
-  writeFileSync(catalog, JSON.stringify({ version: "codex-cli 0.160.0", cwd: home, skills: [], plugins: [{ id: "sites@openai-curated-remote", name: "sites", installed: true, enabled: true, localVersion: null, remotePluginId: REMOTE_ID, sourceType: "remote" }] }));
+  writeFileSync(catalog, JSON.stringify({ version: "codex-cli 0.160.0", cwd: home, skills: [], plugins: [{ id: "sites@openai-curated-remote", name: "sites", installed: true, enabled: true, localVersion: null, remotePluginId: REMOTE_ID, sourceType: "remote" }], remoteReceipts: captureCodexRemoteReceiptSnapshot(join(home, ".codex", "plugins", "cache")) }));
   const receipt = await run(["hook", "install", "--agent", "codex", "--codex-native-catalog", catalog, "--apply", "--json"]);
   expect(receipt.value.codexPluginSkills.map((control: any) => control.name)).toEqual(["sites:sites"]);
   const installed = readFileSync(config, "utf8");
