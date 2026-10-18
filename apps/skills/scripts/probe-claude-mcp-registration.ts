@@ -59,7 +59,7 @@ async function run(command: string[], cwd: string, env: Record<string, string>, 
   } finally { clearTimeout(timer); stop(); }
 }
 
-function fixture(root: string, name: string, binary: string, seeded = true) {
+function fixture(root: string, name: string, binary: string, seeded = true, disableNonessentialTraffic = true) {
   const directory = join(root, name);
   mkdirSync(directory, { mode: 0o700 });
   for (const part of ["home", "config", "cache", "state", "tmp", "cwd", "bin", "records"])
@@ -78,7 +78,7 @@ function fixture(root: string, name: string, binary: string, seeded = true) {
     HASNA_HOME: join(directory, "home", ".hasna"), HASNA_CONFIG_HOME: join(directory, "home", "config"),
     HASNA_PROFILE: "claude-probe", HASNA_SKILLS_API_URL: ORIGIN, SKILLS_API_URL: ORIGIN,
     HASNA_STATION: "claude-mcp-probe-no-keychain", NO_COLOR: "1", TERM: "dumb",
-    BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", ...(disableNonessentialTraffic ? { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" } : {}),
     CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1", DISABLE_AUTOUPDATER: "1", DISABLE_UPDATES: "1" };
   // This wrapper can launch only this verified binary's version/add commands.
   // Native stdout/stderr stay private even when the Skills adapter refuses.
@@ -182,9 +182,9 @@ async function exercise(root: string, binary: string, skills: string, outerNames
   const nativeBytes = readFileSync(binary);
   const nativeVocabulary = new Set(STARTUP_VERSION_FIELDS.filter(name => nativeBytes.includes(Buffer.from(name))));
   const results = [];
-  for (const kind of ["direct", "skills", "first-run-direct", "first-run-skills"] as const) {
+  for (const kind of ["direct", "skills", "first-run-direct", "first-run-skills", "default-traffic-direct", "default-traffic-skills"] as const) {
     stage = `case-${kind}`;
-    const f = fixture(root, kind, binary, !kind.startsWith("first-run-"));
+    const f = fixture(root, kind, binary, kind === "direct" || kind === "skills", !kind.startsWith("default-traffic-"));
     const selected = ["HASNA_PROFILE", "HASNA_HOME", "HASNA_CONFIG_HOME", "HASNA_SKILLS_API_URL", "SKILLS_API_URL"] as const;
     const args = ["mcp", "add", "-s", "user", ...selected.flatMap(key => ["--env", `${key}=${f.env[key]}`]),
       "--transport", "stdio", "skills", "--", "skills-mcp", "--stdio"];
@@ -201,7 +201,7 @@ async function exercise(root: string, binary: string, skills: string, outerNames
     const native = JSON.parse(readFileSync(join(f.directory, "records", "add.json"), "utf8"));
     const config = configSummary(f.config, f.original, nativeVocabulary);
     const diagnostic = nativeStderr.toString().replace(/\x1b\[[0-9;]*m/g, "").trim();
-    results.push({ kind, commandExit: result.exit, commandTimedOut: result.timedOut,
+    results.push({ kind, nonessentialTrafficDisabled: Object.hasOwn(f.env, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"), commandExit: result.exit, commandTimedOut: result.timedOut,
       nativeExit: native.exit, nativeTimedOut: native.timedOut, stdoutScan, stderrScan, nativeScans, config,
       nativeDiagnostic: /^(?:Error: )?MCP server skills already exists in user config$/.test(diagnostic)
         ? "DUPLICATE_USER_SERVER" : native.exit === 0 ? "NATIVE_SUCCESS" : "OTHER_NATIVE_REFUSAL" });
