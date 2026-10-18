@@ -419,29 +419,55 @@ test("built CLI refuses revoked HTTP access without silent cache fallback and co
   } finally { await f.close(); }
 });
 
-test("native hooks explain a project/session profile conflict without changing its pin or fetching a replacement", async () => {
-  const f = await fixture();
+for (const agent of ["claude", "codex"] as const) for (const event of ["UserPromptSubmit", "SessionStart", "SubagentStart"]) test(`${agent} ${event} continues a project/session profile conflict without changing its pin or fetching a replacement`, async () => {
+  const f = await fixture("", agent === "codex");
   try {
-    await f.a.install();
+    await f.a.ok(["hook", "install", "--agent", agent, "--selection-profile", "engineering", "--command", executable, "--apply", "--json"]);
     await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
     await f.a.ok(["sync", "--json"]);
-    await f.a.hook("claude", "UserPromptSubmit", { prompt: "review this patch" });
+    await f.a.hook(agent, "UserPromptSubmit", { prompt: "review this patch" });
     const sessions = join(f.a.data, "selection-cache", "sessions");
     const receiptPath = join(sessions, readdirSync(sessions)[0]!);
     const before = readFileSync(receiptPath, "utf8");
     await f.a.ok(["profiles", "set", "default", "--file", f.versions[1]!.file, "--json"]);
     await f.a.ok(["sync", "--selection-profile", "default", "--project", "--json"]);
-    await f.a.ok(["hook", "install", "--agent", "claude", "--selection-profile", "default", "--command", executable, "--apply", "--json"]);
+    await f.a.ok(["hook", "install", "--agent", agent, "--selection-profile", "default", "--command", executable, "--apply", "--json"]);
     const requests = f.requests.length;
-    const denied = await f.a.hook("claude", "UserPromptSubmit", { prompt: "continue" });
-    expect(denied.decision).toBe("block");
-    expect(denied.reason).toContain("[PROFILE_LOCK_MISMATCH]");
-    expect(denied.reason).toContain("profile=engineering");
-    expect(denied.reason).toContain("skills sessions show <session-id> --json");
-    expect(denied.reason).toContain("Sync alone does not change that pin");
-    expect(denied.reason).not.toContain(f.a.project);
-    expect(denied.reason).not.toContain("parent-session");
-    expect(f.requests).toHaveLength(requests);
+    const unavailable = await f.a.hook(agent, event, { prompt: "continue", ...(event === "SubagentStart" ? { agent_id: "conflicting-child" } : {}) });
+    expect(unavailable.decision).toBeUndefined();
+    expect(unavailable.continue).not.toBe(false);
+    expect(unavailable.systemMessage).toContain("[PROFILE_LOCK_MISMATCH]");
+    expect(unavailable.systemMessage).toContain("profile=engineering");
+    expect(unavailable.systemMessage).toContain("skills sessions show <session-id> --json");
+    expect(unavailable.systemMessage).toContain("Sync alone does not change that pin");
+    expect(unavailable.systemMessage).toContain("Ordinary work may continue");
+    expect(unavailable.systemMessage).toContain("Do not perform actions that depend on unavailable Skills instructions");
+    expect(unavailable.systemMessage).toContain("Do not substitute native, unmanaged or stale payloads");
+    expect(JSON.stringify(unavailable)).not.toContain("Published");
+    expect(unavailable.systemMessage).not.toContain(f.a.project);
+    expect(unavailable.systemMessage).not.toContain("parent-session");
+    // SessionStart still authenticates the configured profile; the refused
+    // context never fetches replacement selections or rewrites this pin.
+    expect(f.requests.slice(requests)).toEqual(event === "SessionStart" ? ["GET /api/v1/profiles/default/resolve"] : []);
+    expect(readFileSync(receiptPath, "utf8")).toBe(before);
+    for (const operation of ["load", "context", "run"]) {
+      const explicit = await f.a.run([operation, "review-code", "--session", "parent-session", "--selection-profile", "engineering", "--cached", "--json"]);
+      expect(explicit.exitCode).toBe(1);
+      expect(explicit.stdout).toContain(operation === "run" ? "pinned to a different Skills profile" : "PROFILE_LOCK_MISMATCH");
+      expect(explicit.stdout).not.toContain("Published");
+      expect(readFileSync(receiptPath, "utf8")).toBe(before);
+    }
+    expect(f.requests.slice(requests)).toEqual(event === "SessionStart" ? ["GET /api/v1/profiles/default/resolve"] : []);
+    const malformed = await f.a.hook(agent, "UserPromptSubmit", { prompt: 12 });
+    expect(malformed.decision).toBe("block");
+    expect(malformed.hookSpecificOutput).toBeUndefined();
+    put(join(f.a.home, `.${agent}`, "skills", "unreviewed", "SKILL.md"), "Unmanaged native instructions must never load.\n");
+    const native = await f.a.hook(agent, "UserPromptSubmit", { prompt: "continue" });
+    expect(native.decision).toBe("block");
+    expect(native.reason).toContain("NATIVE_SKILL_DRIFT");
+    expect(native.hookSpecificOutput).toBeUndefined();
+    expect(JSON.stringify(native)).not.toContain("Unmanaged native instructions");
+    expect(f.requests.slice(requests)).toEqual(event === "SessionStart" ? ["GET /api/v1/profiles/default/resolve"] : []);
     expect(readFileSync(receiptPath, "utf8")).toBe(before);
   } finally { await f.close(); }
 });

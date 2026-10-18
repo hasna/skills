@@ -51,13 +51,13 @@ async function fixture() {
 test("hook diagnostics allow only known codes and never echo foreign child messages or stderr", async () => {
   const f = await fixture();
   const foreign = "fixture-private-value /private/credential-store\nBearer fixture-only-value $(false)";
-  for (const code of ["PROFILE_LOCK_MISMATCH", "UNKNOWN_FOREIGN_CODE", `PROFILE_LOCK_MISMATCH\n${foreign}`]) {
+  for (const code of ["PROFILE_IDENTITY_MISMATCH", "UNKNOWN_FOREIGN_CODE", `PROFILE_IDENTITY_MISMATCH\n${foreign}`]) {
     for (const event of ["UserPromptSubmit", "SessionStart"]) {
       const result = await f.hook({ SKILLS_TEST_CHILD_STDOUT: JSON.stringify({ error: { code, message: foreign } }), SKILLS_TEST_CHILD_STDERR: foreign }, event);
       expect(result.stdout).not.toContain("fixture-private-value");
       expect(result.stdout).not.toContain("credential-store");
       expect(result.stdout).not.toContain("UNKNOWN_FOREIGN_CODE");
-      expect(result.stdout).toContain(code === "PROFILE_LOCK_MISMATCH" ? "[PROFILE_LOCK_MISMATCH]" : "[SKILLS_CONTEXT_FAILED]");
+      expect(result.stdout).toContain(code === "PROFILE_IDENTITY_MISMATCH" ? "[PROFILE_IDENTITY_MISMATCH]" : "[SKILLS_CONTEXT_FAILED]");
       expect(result.stdout).toContain("profile=engineering");
       if (event === "SessionStart") expect(result.value.continue).toBe(false);
       else expect(result.value.decision).toBe("block");
@@ -101,7 +101,7 @@ test("lifecycle sync may use the remaining budget while context retains a reserv
 
 test("typed delivery failures continue every maintained lifecycle without child payload or native fallback", async () => {
   const f = await fixture();
-  const unavailable = ["SKILLS_API_CREDENTIAL_UNAVAILABLE", "SKILLS_API_UNAVAILABLE", "SKILLS_API_UNAUTHORIZED", "SKILLS_API_FORBIDDEN", "SKILLS_API_RESOURCE_UNAVAILABLE", "SESSION_RECONCILIATION_REQUIRED", "SESSION_RENEWAL_TIMEOUT", "SESSION_WRITE_BUSY", "SESSION_CONTEXT_CONFLICT", "SESSION_PARENT_CHANGED"];
+  const unavailable = ["SKILLS_API_CREDENTIAL_UNAVAILABLE", "SKILLS_API_UNAVAILABLE", "SKILLS_API_UNAUTHORIZED", "SKILLS_API_FORBIDDEN", "SKILLS_API_RESOURCE_UNAVAILABLE", "PROFILE_LOCK_MISMATCH", "SESSION_RECONCILIATION_REQUIRED", "SESSION_RENEWAL_TIMEOUT", "SESSION_WRITE_BUSY", "SESSION_CONTEXT_CONFLICT", "SESSION_PARENT_CHANGED"];
   for (const agent of ["claude", "codex"]) for (const event of ["UserPromptSubmit", "SessionStart", "SubagentStart"]) for (const code of unavailable) {
     const result = await f.hook({ SKILLS_TEST_CHILD_STDOUT: JSON.stringify({ error: { code, message: "untrusted fixture message" }, context: "Forbidden fixture payload" }) }, event, agent);
     expect(result.value.decision).toBeUndefined(); expect(result.value.continue).not.toBe(false);
