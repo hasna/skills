@@ -64,7 +64,7 @@ function fixture(root: string, name: string, binary: string, seeded = true) {
   mkdirSync(directory, { mode: 0o700 });
   for (const part of ["home", "config", "cache", "state", "tmp", "cwd", "bin", "records"])
     mkdirSync(join(directory, part), { mode: 0o700 });
-  const config = join(directory, "config", ".claude.json");
+  const config = join(directory, seeded ? "config" : "home", ".claude.json");
   const original = seeded ? Buffer.from(JSON.stringify({ fixturePreserved: { value: "synthetic-only" },
     mcpServers: { other: { type: "stdio", command: "fixture-other", args: [] } } })) : null;
   if (original !== null) save(config, original);
@@ -72,7 +72,7 @@ function fixture(root: string, name: string, binary: string, seeded = true) {
   save(join(directory, "original.private.json"), original ?? "null");
   assert(original === null ? !existsSync(config) : readFileSync(config).equals(original));
   const env = { HOME: join(directory, "home"), USERPROFILE: join(directory, "home"),
-    CLAUDE_CONFIG_DIR: join(directory, "config"), XDG_CONFIG_HOME: join(directory, "config"),
+    ...(seeded ? { CLAUDE_CONFIG_DIR: join(directory, "config") } : {}), XDG_CONFIG_HOME: join(directory, "config"),
     XDG_CACHE_HOME: join(directory, "cache"), XDG_STATE_HOME: join(directory, "state"),
     TMPDIR: join(directory, "tmp"), PATH: `${join(directory, "bin")}:${dirname(process.execPath)}:/usr/bin:/bin`,
     HASNA_HOME: join(directory, "home", ".hasna"), HASNA_CONFIG_HOME: join(directory, "home", "config"),
