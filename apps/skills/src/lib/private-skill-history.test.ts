@@ -39,12 +39,13 @@ test("private SDK history projects only bound metadata, exact dates and current 
   expect(Object.isFrozen(root.versions)).toBe(true);
 });
 test("private history retains PostgreSQL wire timestamps, offset spelling, fractions and nullable release dates", async () => {
-  for (const [createdAt, releasedAt] of [
+  const timestamps: ReadonlyArray<readonly [createdAt: string, releasedAt: string | null]> = [
     ["2026-10-17 08:00:00.654321+00", "2026-10-17 09:00:00.123456+00"],
     ["2026-10-17 08:00:00+03", "2026-10-17 09:00:00.1-04"],
     ["2026-10-17 08:00:00.654321+05:30", "2026-10-17 09:00:00.123456-04:30"],
     ["2024-02-29T08:00:00.123456789Z", null],
-  ]) {
+  ];
+  for (const [createdAt, releasedAt] of timestamps) {
     const versions = [{ ...rows[0], createdAt, releasedAt }, rows[1]];
     const calls = transport(() => Response.json({ ...history(), versions }));
     expect((await client().listVersions(skillId)).versions).toEqual(versions); expect(calls()).toBe(1);
@@ -57,7 +58,7 @@ test("private history rejects impossible dates, malformed offsets and unsupporte
     "2026-10-17 08:00:00+24", "2026-10-17 08:00:00+05:60", "2026-10-17 08:00:00.1234567+00",
     "2026-10-17T08:00:00", "2026-10-17 08:00:00+00 trailing", "2026-10-17T08:00:00Z\n",
   ]) {
-    const calls = transport(() => Response.json({ ...history(), versions: [{ ...rows[0], [field]: value }] }));
+    const calls = transport(() => Response.json({ ...history(), versions: [{ ...rows[0], [field]: value }, rows[1]] }));
     await expect(client().listVersions(skillId)).rejects.toMatchObject({ code: "INVALID_PRIVATE_HISTORY_RESPONSE", uncertain: false });
     expect(calls()).toBe(1);
   }
