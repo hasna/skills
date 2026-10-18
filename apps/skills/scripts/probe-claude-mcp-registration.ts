@@ -2,7 +2,7 @@
 /** CI-only native CLI integration; deliberately outside unit-test discovery. */
 import { strict as assert } from "node:assert";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { userInfo } from "node:os";
 import { isDeepStrictEqual } from "node:util";
@@ -196,6 +196,63 @@ function setupAdapterSummary(stdout: Uint8Array) {
   } catch { return unavailable(); }
 }
 
+// Metadata-only diagnostics run in the already admitted isolated child. They
+// never read xattr values or configure an agent, and cannot change acceptance.
+function syntheticAncestorAccessAudit(home: string) {
+  let stage = "platform", index = 0, role = "ancestor";
+  const rows = [], number = (value: unknown, min: number, max: number) =>
+    typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max ? value : null;
+  try {
+    if (process.platform !== "linux") return { collection: "failed", stage };
+    const paths: string[] = [];
+    for (let path = home; ; path = dirname(path)) {
+      if (paths.length === 64) return { collection: "failed", stage: "ancestor-bound" };
+      paths.unshift(path); if (dirname(path) === path) break;
+    }
+    stage = "ffi-binding";
+    const { dlopen, read, ptr } = require("bun:ffi") as typeof import("bun:ffi");
+    stage = "ffi-library";
+    const library = dlopen("libc.so.6", {
+      fgetxattr: { args: ["i32", "ptr", "ptr", "u64"], returns: "i64" },
+      __errno_location: { args: [], returns: "ptr" },
+    });
+    try {
+      stage = "errno-binding";
+      const errno = library.symbols.__errno_location();
+      if (!errno) return { collection: "failed", stage };
+      for (; index < paths.length; index++) {
+        role = index === paths.length - 1 ? "synthetic-home" : "ancestor";
+        const path = paths[index]!;
+        stage = "path-stat";
+        const before = lstatSync(path, { bigint: true });
+        if (!before.isDirectory()) return { collection: "failed", stage: "directory-kind", role, index };
+        const identity = (info: typeof before) => `${info.dev}:${info.ino}:${info.uid}:${info.gid}:${info.mode}`;
+        stage = "descriptor-open";
+        const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+        try {
+          stage = "descriptor-stat";
+          const descriptorIdentitySame = identity(before) === identity(fstatSync(fd, { bigint: true }));
+          const queries = [];
+          for (const attribute of ["access", "default"] as const) {
+            stage = attribute === "access" ? "access-query" : "default-query";
+            const name = Buffer.from(`system.posix_acl_${attribute}\0`);
+            const result = Number(library.symbols.fgetxattr(fd, ptr(name), null, 0));
+            queries.push({ stage, result: number(result, -1, 16 * 1024 * 1024), errno: number(read.i32(errno), 0, 4095) });
+          }
+          stage = "path-recheck";
+          rows.push({ role, index, descriptorIdentitySame,
+            descriptorIdentityStillSame: identity(before) === identity(fstatSync(fd, { bigint: true })),
+            pathIdentitySame: identity(before) === identity(lstatSync(path, { bigint: true })), queries });
+        } finally { closeSync(fd); }
+      }
+      return { collection: "complete", rows };
+    } finally { library.close(); }
+  } catch (error) {
+    return { collection: "failed", stage, role, index,
+      errno: number((error as { errno?: unknown } | null)?.errno, -4095, 4095), rows };
+  }
+}
+
 async function exercise(root: string, binary: string, skills: string, outerNamespace: string, uid: number) {
   stage = "isolation-uid";
   assert(process.getuid?.() === uid && process.geteuid?.() === uid && uid !== 0);
@@ -217,6 +274,7 @@ async function exercise(root: string, binary: string, skills: string, outerNames
   for (const kind of ["direct", "skills"] as const) {
     stage = `case-${kind}`;
     const f = fixture(root, kind, binary);
+    const accessMetadataAudit = kind === "skills" ? syntheticAncestorAccessAudit(f.env.HOME) : undefined;
     const selected = ["HASNA_PROFILE", "HASNA_HOME", "HASNA_CONFIG_HOME", "HASNA_SKILLS_API_URL", "SKILLS_API_URL"] as const;
     const args = ["mcp", "add", "-s", "user", ...selected.flatMap(key => ["--env", `${key}=${f.env[key]}`]),
       "--transport", "stdio", "skills", "--", "skills-mcp", "--stdio"];
@@ -234,7 +292,7 @@ async function exercise(root: string, binary: string, skills: string, outerNames
     const config = configSummary(f.config, f.original, nativeVocabulary);
     const diagnostic = nativeStderr.toString().replace(/\x1b\[[0-9;]*m/g, "").trim();
     results.push({ kind, commandExit: result.exit, commandTimedOut: result.timedOut,
-      ...(kind === "skills" ? { setupAdapters: setupAdapterSummary(result.stdout) } : {}),
+      ...(kind === "skills" ? { setupAdapters: setupAdapterSummary(result.stdout), accessMetadataAudit } : {}),
       nativeExit: native.exit, nativeTimedOut: native.timedOut, stdoutScan, stderrScan, nativeScans, config,
       nativeDiagnostic: /^(?:Error: )?MCP server skills already exists in user config$/.test(diagnostic)
         ? "DUPLICATE_USER_SERVER" : native.exit === 0 ? "NATIVE_SUCCESS" : "OTHER_NATIVE_REFUSAL" });
