@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.84
+
+### Patch Changes
+
+- Leave the user's Claude config as it was when `skills setup agents` refuses (PLA8-00535). After a refused native `claude mcp add` on an existing `~/.claude.json`, Skills now restores the byte-exact original atomically, with the same path, mode, owner and group, and verifies it, but only when every difference is one the native add itself makes: our `skills` entry, Claude's measured `theme` drop, or first-start keys. The rewrite is kept beside the file as `.skills-mcp-<id>.rewrite` and the original backup stays in place. The result reports `CLAUDE_CONFIG_RESTORED`. A change another writer could have made, such as a concurrent session's save or logout, is left as found and reported as `CLAUDE_CONFIG_CHANGED_UNEXPECTEDLY` with both paths. A hardlinked file is refused with `CLAUDE_CONFIG_RESTORE_REFUSED`. The exit stays non-zero, and the human output prints the code.
+- Guard direct agent configuration writes (PLA8-00522). The Codex, OpenCode and JSON-file MCP adapters (Gemini, Pi, Cursor, Windsurf) now write through one transaction: owned-path checks, a lock that never removes a foreign lock, a verified backup of the original, an atomic replace that preserves access metadata, and verification of the committed bytes. A refusal names its reason, for example a locked or changed configuration, and keeps the evidence beside the original.
+
 ## 0.10.83
 
 ### Patch Changes
