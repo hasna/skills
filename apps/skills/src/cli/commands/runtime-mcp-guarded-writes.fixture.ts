@@ -177,7 +177,7 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
     }
     return result;
   }) as typeof fs.fstatSync;
-  fs.lstatSync = ((...args: Parameters<typeof fs.lstatSync>) => {
+  (fs as unknown as Record<string, unknown>).lstatSync = ((...args: Parameters<typeof fs.lstatSync>) => {
     const info = native.lstatSync(...args); return info ? reflectGroup(info) : info;
   }) as typeof fs.lstatSync;
   fs.fchownSync = ((fd: number, uid: number, gid: number) => {
