@@ -41,7 +41,7 @@ export function hashClaudePluginCacheOrphanMarker(path: string, budget?: Discove
   const before = lstatSync(path, { throwIfNoEntry: false });
   if (!before) return null;
   const uid = process.getuid?.();
-  if (!before.isFile() || uid === undefined || before.uid !== uid || before.size > 32) throw new Error("Invalid Claude orphan marker file or owner");
+  if (!before.isFile() || uid === undefined || before.uid !== uid || before.size > 32 || (before.mode & 0o111) !== 0) throw new Error("Invalid Claude orphan marker file or owner");
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const opened = fstatSync(fd);

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { lstatSync, opendirSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { AGENT_POLICY_LIMITS } from "./agent-policy-limits.js";
+import { hashClaudePluginCacheOrphanMarker, isClaudePluginCacheOrphanMarker } from "./claude-plugin-cache-marker.js";
 import { NativeDiscoveryWitnessChange, witnessChanged, type NativeDiscoveryWitnessTolerance } from "./native-discovery-witness-change.js";
 
 /** Recursive path/type membership only; source-file hashes bind reviewed bytes. */
@@ -19,7 +20,7 @@ function safe(path: string): void {
 function same(before: Stats, after: Stats | undefined): boolean {
   return Boolean(after && after.isDirectory() && before.dev === after.dev && before.ino === after.ino && before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs);
 }
-function capture(path: string, budget: Budget, excludedRoots: readonly string[], omittedRoots: readonly string[] = [], rows?:string[]): DiscoveryDirectory {
+function capture(path: string, budget: Budget, excludedRoots: readonly string[], omittedRoots: readonly string[] = [], rows?:string[], claudeMarkers?: "omit" | "retain"): DiscoveryDirectory {
   safe(path);
   if (omittedRoots.some(root=>path===root || path.startsWith(root+"/"))) return {path,sha256:null};
   const root = lstatSync(path, { throwIfNoEntry: false });
@@ -42,6 +43,13 @@ function capture(path: string, budget: Budget, excludedRoots: readonly string[],
       need(child.length <= AGENT_POLICY_LIMITS.pathCharacters, "Native discovery directory path limit exceeded");
       const stat = lstatSync(child);
       need(stat.isFile() || stat.isDirectory(), "Refusing symlink or special native discovery directory member");
+      if (claudeMarkers && isClaudePluginCacheOrphanMarker(child)) {
+        // Claude adds/removes this cleanup timestamp independently of plugin
+        // discovery. Validate its exact role on every read, including when
+        // comparing an old inventory that retained the marker's membership.
+        need(hashClaudePluginCacheOrphanMarker(child) !== null, "Claude orphan marker changed while reading directory");
+        if (claudeMarkers === "omit") continue;
+      }
       const row = JSON.stringify([childRelative, stat.isDirectory() ? "directory" : "file"]) + "\n";
       budget.bytes += Buffer.byteLength(row);
       need(budget.bytes <= AGENT_POLICY_LIMITS.discoveryDirectoryBytes, "Native discovery directory metadata limit exceeded");
@@ -94,12 +102,16 @@ export function verifyDiscoveryDirectoryProjection(directories:DiscoveryDirector
     witnessChanged(new NativeDiscoveryWitnessChange("membership", directories[i]!.path, "Native discovery directory membership changed outside retired Codex roots"), tolerance, tolerance?.acceptsMembership(directories[i]!.path) === true);
   }
 }
-/** Read-only capture; callers must review both membership and source bytes. */
-export function captureDiscoveryDirectories(paths: string[], excludedRoots: readonly string[] = []): DiscoveryDirectory[] {
+function captureOrdinaryDirectories(paths: string[], excludedRoots: readonly string[], claudeMarkers: "omit" | "retain"): DiscoveryDirectory[] {
   need(Array.isArray(paths) && paths.length <= AGENT_POLICY_LIMITS.discoveryDirectories && new Set(paths).size === paths.length, "Invalid native discovery directory collection");
   const budget: Budget = { entries: 0, bytes: 0 };
   for (const root of excludedRoots) safe(root);
-  return paths.map(path => capture(path, budget, excludedRoots));
+  return paths.map(path => capture(path, budget, excludedRoots, [], undefined, claudeMarkers));
+}
+/** Read-only membership capture, excluding validated Claude cleanup markers.
+ * Callers must still review source bytes; projected inventories remain exact. */
+export function captureDiscoveryDirectories(paths: string[], excludedRoots: readonly string[] = []): DiscoveryDirectory[] {
+  return captureOrdinaryDirectories(paths, excludedRoots, "omit");
 }
 /** A membership change is a NativeDiscoveryWitnessChange: thrown, unless the
  * live Codex prompt hook's tolerance accepts it. Invalid collections always throw. */
@@ -107,7 +119,13 @@ export function verifyDiscoveryDirectories(directories: DiscoveryDirectory[], ex
   need(Array.isArray(directories) && directories.length <= AGENT_POLICY_LIMITS.discoveryDirectories, "Invalid native discovery directory collection");
   for (const directory of directories) need(directory && typeof directory === "object" && (directory.sha256 === null || typeof directory.sha256 === "string" && /^[a-f0-9]{64}$/.test(directory.sha256)), "Invalid native discovery directory digest");
   const current = captureDiscoveryDirectories(directories.map(directory => directory.path), excludedRoots);
+  let legacy: DiscoveryDirectory[] | undefined;
   for (let i = 0; i < directories.length; i++) if (current[i]!.sha256 !== directories[i]!.sha256) {
+    // Keep an unchanged legacy witness without rewriting the policy. Invalid
+    // markers still throw; removal from a marker-including legacy inventory
+    // remains drift because its historical role cannot be recovered from a hash.
+    legacy ??= captureOrdinaryDirectories(directories.map(directory => directory.path), excludedRoots, "retain");
+    if (legacy[i]!.sha256 === directories[i]!.sha256) continue;
     witnessChanged(new NativeDiscoveryWitnessChange("membership", directories[i]!.path, `Native discovery directory membership changed; run skills hook install with a fresh discovery review: ${directories[i]!.path}`), tolerance, tolerance?.acceptsMembership(directories[i]!.path) === true);
   }
 }
