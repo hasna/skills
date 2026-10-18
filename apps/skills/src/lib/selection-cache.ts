@@ -153,8 +153,9 @@ export function readSelectionJson<T>(path: string, maximumBytes = MAX_PROFILE_DO
 
 async function verifiedEntries(selection: ResolvedSkillSelection, bytes: Uint8Array, signal?: AbortSignal, deadline?: number): Promise<SkillBundleEntry[]> {
   if (`sha256:${sha256Hex(bytes)}` !== selection.bundleDigest) throw new SkillSelectionError("BUNDLE_DIGEST_MISMATCH", "The skill bundle does not match its selected digest.");
-  // Round up: the inspection deadline (now + remaining) must never fall before
-  // the caller's deadline, so an inner timeout is never reported early.
+  // Round up: the inspection deadline (now + remaining) never falls before the
+  // caller's deadline. The one exception is the per-bundle ceiling below, which
+  // can end a slow inspection before the caller's deadline (PLA8-00560).
   const remaining = deadline === undefined ? undefined : Math.ceil(deadline - performance.now());
   signal?.throwIfAborted();
   if (remaining !== undefined && remaining <= 0) throw new SkillBundleInspectionError("BUNDLE_TIMEOUT", "Bundle inspection deadline exceeded");

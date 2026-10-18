@@ -161,6 +161,26 @@ test("a renewal budget timeout has its own code and is retried, not cached", asy
   } finally { api.close(); }
 }, 60_000);
 
+test("a managed hook's smaller renewal budget makes the child report its own timeout inside it", async () => {
+  const api = authority(current, [PAST_BUDGET_MS]);
+  try {
+    const s = station(api), results = [await s.prompt(["--renewal-budget-ms", "3000"])];
+    report("renewal budget 3000 ms from the hook, authority slower than the default budget", s, results);
+    expect(results.map(result => result.code)).toEqual(["SESSION_RENEWAL_TIMEOUT"]);
+    expect(results[0]!.ms).toBeLessThan(5_000);
+    expect(readFileSync(s.receiptPath)).toEqual(s.before);
+  } finally { api.close(); }
+}, 60_000);
+
+test("an invalid renewal budget is refused before any authority read", async () => {
+  const api = authority(current, [1300]);
+  try {
+    const s = station(api), results = [await s.prompt(["--renewal-budget-ms", "9s"])];
+    expect(results.map(result => result.code)).toEqual(["INVALID_CONTEXT_INPUT"]);
+    expect(api.resolves()).toBe(0);
+  } finally { api.close(); }
+}, 60_000);
+
 test("an authority HTTP failure keeps the network failure code", async () => {
   const api = authority(current, [50], 503);
   try {

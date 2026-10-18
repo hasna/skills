@@ -326,29 +326,56 @@ test("before the deadline a deadline-shaped error is not relabelled", async () =
 // x 300 ms at concurrency 4 = 16 batches = ~4.8 s, over the old 4-second budget
 // and inside the 9-second one. It asserts the delivered outcome, not that a call
 // succeeded: the pin must come back renewed, never SESSION_RENEWAL_TIMEOUT.
-test("a pin whose changed selections exceed the old 4-second budget still renews", async () => {
+function churnPin(changed: number, readMs: number) {
   const root = mkdtempSync(join(tmpdir(), "skills-pin-renewal-churn-")); roots.push(root);
   const source = join(root, "source"), cacheDir = join(root, "cache"); mkdirSync(source);
   writeFileSync(join(source, "SKILL.md"), "---\nname: churn\ndescription: Churn\nkind: instruction\n---\nHistorical body.\n");
   writeFileSync(join(source, "package.json"), JSON.stringify({ name: "churn", version: "1.0.0", skills: { kind: "instruction" } }));
   const bundle = packSkillBundle(source);
   const authority = "https://skills.example.com/api/v1";
-  const CHANGED = 64, READ_MS = 300;
   const previous = (index: number) => ({ authority, workspaceId: "org-test", profileRevision: "old", slug: `skill-${index}`,
     version: "1.0.0", bundleDigest: `sha256:${bundle.sha256}`, triggers: { keywords: ["churn"] }, authorizationEpoch: "e".repeat(32) });
   const oldProfile: ResolvedSkillProfile = { authority, workspaceId: "org-test", profileId: "fleet", profileRevision: "old",
-    selections: Array.from({ length: CHANGED }, (_, index) => previous(index)) };
+    selections: Array.from({ length: changed }, (_, index) => previous(index)) };
   const target: ResolvedSkillProfile = { ...structuredClone(oldProfile), profileRevision: "current",
     selections: oldProfile.selections.map(selection => ({ ...selection, version: "2.0.0", bundleDigest: `sha256:${"b".repeat(64)}`, profileRevision: "current" })) };
   const old = { schemaVersion: 1 as const, verifiedAt: new Date(0).toISOString(), profile: oldProfile, sessionId: "session", generation: 7,
     loaded: [selectionKey(oldProfile.selections[0]!)] };
   writeSelectionJson(sessionReceiptPath("session", { cacheDir }), old);
   const response = () => new Response(bundle.bytes, { headers: { "X-Skill-Authorization-Epoch": "e".repeat(32), "X-Skill-Version": "1.0.0", "X-Skill-Bundle-Sha256": bundle.sha256 } });
-  let reads = 0;
-  const client: ProfileClient = { authority, supportsPinRenewal: async () => true, resolveProfile: async () => target,
-    getBundle: async () => { reads++; await new Promise(resolve => setTimeout(resolve, READ_MS)); return response(); },
+  const counts = { resolves: 0, reads: 0 };
+  const client: ProfileClient = { authority, supportsPinRenewal: async () => true, resolveProfile: async () => { counts.resolves++; return target; },
+    getBundle: async () => { counts.reads++; await new Promise(resolve => setTimeout(resolve, readMs)); return response(); },
     recordStation: async () => { throw Error("No station write permitted"); } };
-  const outcome = await renewSkillSessionPin("session", "fleet", { cacheDir, client }).catch(error => error);
+  return { cacheDir, client, counts };
+}
+
+test("a pin whose changed selections exceed the old 4-second budget still renews", async () => {
+  const CHANGED = 64, f = churnPin(CHANGED, 300);
+  const outcome = await renewSkillSessionPin("session", "fleet", { cacheDir: f.cacheDir, client: f.client }).catch(error => error);
   expect(outcome).toEqual({ outcome: "renewed" });
-  expect(reads).toBe(CHANGED);
+  expect(f.counts.reads).toBe(CHANGED);
 }, 30_000);
+
+// After a lifecycle sync the managed hook has less than the full window left.
+// The renewal must then report its own timeout inside the caller's budget, so
+// the outer layer never kills it while it is still within the default budget.
+test("a caller's smaller budget bounds the renewal, which reports its own timeout", async () => {
+  const f = churnPin(64, 300), started = performance.now();
+  const outcome = await renewSkillSessionPin("session", "fleet", { cacheDir: f.cacheDir, client: f.client, budgetMs: 1_000 }).catch(error => error);
+  const elapsed = performance.now() - started;
+  expect(outcome).toBeInstanceOf(SkillSelectionError);
+  expect((outcome as SkillSelectionError).code).toBe("SESSION_RENEWAL_TIMEOUT");
+  expect(elapsed).toBeGreaterThanOrEqual(900);
+  expect(elapsed).toBeLessThan(2_500);
+  expect(f.counts.reads).toBeLessThan(64);
+}, 30_000);
+
+test("a caller with no budget left gets the renewal timeout without an authority read", async () => {
+  for (const budgetMs of [0, -5]) {
+    const f = churnPin(4, 10);
+    const outcome = await renewSkillSessionPin("session", "fleet", { cacheDir: f.cacheDir, client: f.client, budgetMs }).catch(error => error);
+    expect((outcome as SkillSelectionError).code).toBe("SESSION_RENEWAL_TIMEOUT");
+    expect(f.counts).toEqual({ resolves: 0, reads: 0 });
+  }
+});

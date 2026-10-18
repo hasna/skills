@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
 import { hermesHookDefinitions, renderHermesSupervisor } from "./agent-hermes.js";
-import { MANAGED_HOOK_DEADLINE_MS, SESSION_CONTEXT_CHILD_CEILING_MS, SESSION_RENEWAL_TIMEOUT_MS } from "./session-reconciliation.js";
+import {
+  MANAGED_HOOK_DEADLINE_MS, MANAGED_HOOK_EXIT_RESERVE_MS, managedContextChildLimits, SESSION_CONTEXT_CHILD_CEILING_MS,
+  SESSION_CONTEXT_CHILD_RESERVE_MS, SESSION_RENEWAL_TIMEOUT_MS,
+} from "./session-reconciliation.js";
 
 // These bounds are anchored outside the renewal budget, so a change to the
 // budget alone cannot keep them green. Re-verify a source before changing it.
@@ -21,18 +24,33 @@ test("the renewal budget covers the measured cold renewal reads", () => {
   expect(SESSION_RENEWAL_TIMEOUT_MS).toBeGreaterThanOrEqual(MEASURED_COLD_RENEWAL_READS_MS);
 });
 
-test("each managed-hook timeout sits inside the one that encloses it", () => {
+test("each managed-hook timeout sits inside the one that encloses it, with its reserve", () => {
   expect(hermesKill).not.toBeNull();
   const hermesKillMs = Number(hermesKill![1]);
-  expect(SESSION_RENEWAL_TIMEOUT_MS).toBeLessThan(SESSION_CONTEXT_CHILD_CEILING_MS);
-  expect(SESSION_CONTEXT_CHILD_CEILING_MS).toBeLessThan(MANAGED_HOOK_DEADLINE_MS);
-  // Currently equal (12 s each): zero headroom, not a margin. The supervisor's
-  // timer starts at spawn, before the hook sets its own deadline, so at the
-  // limit the supervisor kills the hook first, early by the hook's startup
-  // time, and no deadline diagnostic is written. Raising the supervisor timer
-  // changes installed bytes on stations (PLA8-00559); until then this only
-  // stops the gap from getting worse.
+  // Each layer keeps the reserve it needs to report before the next one acts.
+  expect(SESSION_RENEWAL_TIMEOUT_MS + SESSION_CONTEXT_CHILD_RESERVE_MS).toBeLessThanOrEqual(SESSION_CONTEXT_CHILD_CEILING_MS);
+  expect(SESSION_CONTEXT_CHILD_CEILING_MS + MANAGED_HOOK_EXIT_RESERVE_MS).toBeLessThanOrEqual(MANAGED_HOOK_DEADLINE_MS);
+  // The hook deadline and the supervisor kill are currently equal (12 s each),
+  // and the supervisor's timer starts at spawn, before the hook sets its own
+  // deadline. The hook stops its child MANAGED_HOOK_EXIT_RESERVE_MS before its
+  // deadline, so it reports first only while its startup is shorter than that
+  // reserve. Raising the supervisor timer changes installed bytes on stations
+  // (PLA8-00559).
   expect(MANAGED_HOOK_DEADLINE_MS).toBeLessThanOrEqual(hermesKillMs);
+  expect(MANAGED_HOOK_DEADLINE_MS - MANAGED_HOOK_EXIT_RESERVE_MS).toBeLessThan(hermesKillMs);
   expect(hermesKillMs).toBeLessThan(hermesHookTimeoutMs);
   expect(SESSION_RENEWAL_TIMEOUT_MS).toBeLessThan(hermesKillMs);
+});
+
+test("context child limits keep every layer inside the time the hook has left", () => {
+  // A full prompt window, after the hook's own startup, keeps the whole budget.
+  expect(managedContextChildLimits(MANAGED_HOOK_DEADLINE_MS - 500).renewalBudgetMs).toBe(SESSION_RENEWAL_TIMEOUT_MS);
+  for (let remaining = -1_000; remaining <= MANAGED_HOOK_DEADLINE_MS; remaining += 50) {
+    const { childMs, renewalBudgetMs } = managedContextChildLimits(remaining);
+    expect(childMs).toBeLessThanOrEqual(SESSION_CONTEXT_CHILD_CEILING_MS);
+    expect(childMs + MANAGED_HOOK_EXIT_RESERVE_MS).toBeLessThanOrEqual(remaining);
+    expect(renewalBudgetMs).toBeGreaterThanOrEqual(0);
+    expect(renewalBudgetMs).toBeLessThanOrEqual(SESSION_RENEWAL_TIMEOUT_MS);
+    if (renewalBudgetMs > 0) expect(renewalBudgetMs + SESSION_CONTEXT_CHILD_RESERVE_MS).toBeLessThanOrEqual(childMs);
+  }
 });
