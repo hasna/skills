@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { randomUUID } from "node:crypto";
-import { existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import childProcess from "node:child_process";
@@ -85,11 +85,14 @@ for (const [agent, path] of Object.entries(files)) {
     ? { theme: "system", mcp: { other: unrelated, skills: { type: "local", command: ["/old"], environment: { HASNA_PROFILE: "old-profile" } } } }
     : { retained: true, ...(agent === "claude" ? { projects: { "/owned/project": { trust: true } }, opaqueNativeState: unrelatedKey,
         ...(mode === "claude-native-bootstrap-existing" ? bootstrap : {}),
+        ...(mode === "claude-native-bootstrap-existing-theme-drop" ? { theme: "dark" } : {}),
         ...(mode === "claude-native-bootstrap-existing-userid-change" ? { userID: "1".repeat(64) } : {}),
         ...(mode === "claude-native-bootstrap-existing-change" ? { firstStartTime: "2026-10-16T00:00:00.000Z" } : {}) } : {}),
       mcpServers: { other: unrelated, ...(agent === "claude" && nativeFresh ? {} : { skills: { command: "/old", env: { HASNA_PROFILE: "old-profile" } } }) } }));
 }
 if (mode === "claude-first-run-dangling-link") symlinkSync(join(root, "missing-native-config"), files.claude!);
+if (mode === "claude-native-bootstrap-existing-theme-drop") chmodSync(files.claude!, 0o640);
+const claudeModeBefore = firstRunMode ? undefined : lstatSync(files.claude!).mode & 0o7777;
 const originals = new Map(Object.values(files).map(path => [path, path === files.claude && firstRunMode ? null : readFileSync(path)]));
 // This obsolete fallback must remain untouched even when native add fails.
 const inactiveClaude = join(homedir(), ".claude", ".mcp.json");
@@ -158,6 +161,9 @@ Bun.spawn = ((command: string[]) => {
       if (mode === "claude-native-bootstrap-existing-userid-change") data.userID = "2".repeat(64);
       if (mode === "claude-native-bootstrap-unknown") data.unrecognizedNativeAddition = true;
       if (mode === "claude-native-bootstrap-existing-remove") delete data.retained;
+      // Claude 2.1.302 measured on station01: a native add dropped the user's theme key.
+      if (mode === "claude-native-bootstrap-existing-theme-drop") delete data.theme;
+      if (mode === "claude-native-bootstrap-no-skills-entry") delete data.mcpServers.skills;
       if (mode === "claude-native-bootstrap-unrelated-change") data.mcpServers.other.args = ["native-drift"];
       if (mode === "claude-native-bootstrap-wrong-server") data.mcpServers.skills.env.HASNA_PROFILE = "wrong-profile";
     }
@@ -246,9 +252,18 @@ if (refused) {
         continue;
       }
       if (bootstrapRefused) {
-        // Refusing native drift must not overwrite its postimage or its backup.
-        assert(nativePostimage); assert.equal(readFileSync(path).equals(nativePostimage), true);
-        assert.equal(readFileSync(path).equals(originals.get(path)!), false);
+        assert(nativePostimage);
+        const backups = readdirSync(dirname(path)).filter(name => name.startsWith(basename(path) + ".skills-mcp-") && name.endsWith(".backup"));
+        assert.equal(backups.length, 1); assert.equal(readFileSync(join(dirname(path), backups[0]!)).equals(originals.get(path)!), true);
+        assert.equal(readdirSync(dirname(path)).some(name => name.startsWith(basename(path) + ".skills-mcp-") && name.endsWith(".tmp")), false);
+        if (mode === "claude-native-bootstrap-no-skills-entry") {
+          // Without our own add in it, the rewrite is not ours to undo: left as found.
+          assert.equal(readFileSync(path).equals(nativePostimage), true);
+        } else {
+          // A refused native rewrite of an existing file is restored byte for byte, with its mode.
+          assert.equal(readFileSync(path).equals(originals.get(path)!), true);
+          assert.equal(lstatSync(path).mode & 0o7777, claudeModeBefore);
+        }
       } else if (mode === "claude-drift") {
         const expected = JSON.parse(originals.get(path)!.toString()); expected.concurrentNativeChange = true;
         assert.equal(JSON.stringify(JSON.parse(readFileSync(path, "utf8"))) === JSON.stringify(expected), true);
@@ -324,11 +339,18 @@ if (!["auth", "setup"].includes(mode!)) {
     const claude = result.results.find((entry: { agent: string }) => entry.agent === "claude");
     assert.equal(claude.success, !claudeRefused);
     if (!claudeRefused) assert.equal(claude.path, files.claude);
+    if (bootstrapRefused || mode === "claude-drift") {
+      const restored = bootstrapRefused && mode !== "claude-native-bootstrap-no-skills-entry";
+      assert.equal(claude.code, restored ? "CLAUDE_CONFIG_RESTORED" : "CLAUDE_CONFIG_CHANGED_UNEXPECTEDLY");
+      assert.equal(claude.backup.startsWith(files.claude + ".skills-mcp-") && claude.backup.endsWith(".backup"), true);
+      assert.equal(claude.error.includes(files.claude!) && claude.error.includes(claude.backup), true);
+      assert.equal(claude.error.includes("restored"), restored);
+    }
   }
 }
 selectCliSkillsCredentialProfile(undefined);
 assert.deepEqual(skillsMcpRegistrationEnvironment({}), {});
 console.log = output; console.error = errors; process.exitCode = 0;
 console.log(JSON.stringify({ mode, adapters: refused ? 0 : mode === "invalid-toml" || claudeRefused ? 6 : 7, refused, consumerSelectionVerified: !refused,
-  stdioSelected: !refused, unrelatedEntriesPreserved: mode !== "claude-native-bootstrap-unrelated-change", credentialsUnchanged: true, credentialsNotDisclosed: true,
+  stdioSelected: !refused, unrelatedEntriesPreserved: true, credentialsUnchanged: true, credentialsNotDisclosed: true,
   networkCalls: 0, mockedAuthRequests: requests }));

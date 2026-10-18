@@ -1,5 +1,5 @@
 import chalk from "chalk";
-import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmdirSync, statSync, writeFileSync, type BigIntStats } from "fs";
+import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmdirSync, statSync, writeFileSync, type BigIntStats } from "fs";
 import { randomUUID } from "node:crypto";
 import { homedir } from "os";
 import { dirname, isAbsolute, join } from "path";
@@ -19,7 +19,11 @@ interface McpRegistrationResult {
   config?: string;
   command?: string;
   error?: string;
+  code?: string;
+  backup?: string;
 }
+
+interface ClaudePreimage { bytes: Buffer; mode: number; uid: number; backup: string }
 
 export async function handleMcp(options: { register?: string; json: boolean; apiUrl?: string }) {
   if (options.register) {
@@ -94,6 +98,7 @@ async function registerClaudeMcp(command: string, server: Record<string, unknown
   try {
     const path = claudeUserConfigPath();
     const firstRun = lstatSync(path, { throwIfNoEntry: false }) === undefined ? claudeFirstRunPathWitness(path) : undefined;
+    let preimage: ClaudePreimage | undefined;
     // Preserve the active original before either the native CLI or our upsert.
     const before = withClaudeConfigLock(path, () => {
       if (claudeUserConfigPath() !== path) throw new Error();
@@ -101,9 +106,11 @@ async function registerClaudeMcp(command: string, server: Record<string, unknown
       const bytes = readClaudeConfig(path);
       if (firstRun && bytes !== null) throw new Error();
       if (bytes !== null) {
+        const info = lstatSync(path);
         const backup = `${path}.skills-mcp-${randomUUID()}.backup`;
         writeFileSync(backup, bytes, { flag: "wx", mode: 0o600 });
         if (!readFileSync(backup).equals(bytes)) throw new Error();
+        preimage = { bytes, mode: info.mode & 0o7777, uid: info.uid, backup };
       }
       return bytes;
     });
@@ -138,12 +145,22 @@ async function registerClaudeMcp(command: string, server: Record<string, unknown
       if (exitCode === 0) {
         const actual = isPlainObject(data.mcpServers) ? data.mcpServers[MCP_SERVER_NAME] : undefined;
         if (!claudeNativeConfigPreserved(previous, data, firstRun !== undefined && before === null)
-          || !isPlainObject(actual) || !isDeepStrictEqual({ ...actual, env: actual.env ?? {} }, desired)) throw new Error();
+          || !isPlainObject(actual) || !isDeepStrictEqual({ ...actual, env: actual.env ?? {} }, desired)) {
+          // A refusal must leave an existing file as the user had it. Only a
+          // rewrite that carries our own native add is restored; anything else
+          // is left as found next to the preserved original.
+          if (!preimage) throw new Error();
+          if (current === null || actual === undefined) return claudeConfigLeft(path, preimage, cliCommand);
+          return restoreClaudePreimage(path, preimage, current, cliCommand);
+        }
       } else {
         if (!cliUnavailable && (!duplicateAccepted || !isPlainObject(previous.mcpServers) || !previous.mcpServers[MCP_SERVER_NAME])) throw new Error();
         // Do not overwrite any change made while awaiting the CLI, including
         // partial writes from a failed add or another Claude process.
-        if (before === null ? current !== null : current === null || !current.equals(before)) throw new Error();
+        if (before === null ? current !== null : current === null || !current.equals(before)) {
+          if (!preimage) throw new Error();
+          return claudeConfigLeft(path, preimage, cliCommand);
+        }
         data.mcpServers = { ...(data.mcpServers as Record<string, unknown> | undefined), [MCP_SERVER_NAME]: desired };
         const next = Buffer.from(`${JSON.stringify(data, null, 2)}\n`);
         const temporary = `${path}.skills-mcp-${randomUUID()}.tmp`;
@@ -162,6 +179,30 @@ async function registerClaudeMcp(command: string, server: Record<string, unknown
     return { agent: "claude", success: false, command: cliCommand,
       error: "Could not safely update the Claude user MCP configuration; native admission or config checks refused the update" };
   }
+}
+
+// Return the preserved original only when the live file is still exactly the
+// native rewrite we observed and the owner and mode can be kept.
+function restoreClaudePreimage(path: string, preimage: ClaudePreimage, observed: Buffer, command: string): McpRegistrationResult {
+  if (preimage.uid !== process.getuid?.()) {
+    return { agent: "claude", success: false, path, command, backup: preimage.backup, code: "CLAUDE_CONFIG_RESTORE_REFUSED",
+      error: `Claude's native update changed other settings in ${path}, and the original cannot be restored with its owner; the file was left as found and the original is preserved at ${preimage.backup}` };
+  }
+  const temporary = `${path}.skills-mcp-${randomUUID()}.tmp`;
+  writeFileSync(temporary, preimage.bytes, { flag: "wx", mode: 0o600 });
+  chmodSync(temporary, preimage.mode);
+  if (!readFileSync(temporary).equals(preimage.bytes)) throw new Error();
+  const latest = readClaudeConfig(path);
+  if (claudeUserConfigPath() !== path || latest === null || !latest.equals(observed)) return claudeConfigLeft(path, preimage, command);
+  renameSync(temporary, path);
+  if (!readFileSync(path).equals(preimage.bytes) || (lstatSync(path).mode & 0o7777) !== preimage.mode) throw new Error();
+  return { agent: "claude", success: false, path, command, backup: preimage.backup, code: "CLAUDE_CONFIG_RESTORED",
+    error: `Claude's native update also changed other settings in ${path}, so the skills MCP registration was refused and the original file was restored; its backup is kept at ${preimage.backup}` };
+}
+
+function claudeConfigLeft(path: string, preimage: ClaudePreimage, command: string): McpRegistrationResult {
+  return { agent: "claude", success: false, path, command, backup: preimage.backup, code: "CLAUDE_CONFIG_CHANGED_UNEXPECTEDLY",
+    error: `${path} changed during the update for a reason this command cannot attribute to its own Claude call, so it was left as found; the original is preserved at ${preimage.backup}` };
 }
 
 // Claude Code 2.1.301: global config selection (v_/b), including the legacy
