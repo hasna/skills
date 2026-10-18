@@ -40,13 +40,13 @@ const native = {
 const modes = ["atomic", "new", "race", "new-race", "cas-stat-race", "locked", "symlink", "parent-symlink", "home-ancestor-symlink", "hardlink",
   "invalid", "invalid-container", "backup-readback", "temp-write", "final-readback", "group-preserved", "group-refused",
   "acl-deny-directory", "acl-allow-directory", "acl-deny-file", "acl-allow-file", "acl-backup-inherit-allow", "acl-temp-inherit-allow", "acl-unknown", "acl-read-error",
-  "linux-acl-absent", "linux-acl-file", "linux-acl-directory", "linux-acl-default", "linux-acl-error", "linux-acl-unsupported"] as const;
+  "linux-acl-absent", "linux-acl-file", "linux-acl-directory", "linux-acl-default", "linux-acl-ancestor-default", "linux-acl-create-parent-default", "linux-acl-error", "linux-acl-unsupported"] as const;
 const receipts = [];
 assert(modes.some(mode => mode === requestedMode));
 // Native home resolution is established before module initialization. Each case
 // runs in its own fresh child; changing HOME inside an initialized process is not isolation.
 for (const mode of modes.filter(mode => mode === requestedMode)) {
-  const initiallyMissing = mode === "new" || mode === "new-race";
+  const initiallyMissing = mode === "new" || mode === "new-race" || mode === "linux-acl-create-parent-default";
   const home = requestedMode === "home-ancestor-symlink" ? join(root, "home-alias", "nested") : join(root, "home");
   const path = join(home, ...paths[agent]!);
   const other = { command: "fixture-other", args: ["keep"], env: { KEEP: "synthetic" } };
@@ -57,7 +57,7 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
   const original = Buffer.from(mode === "invalid" ? "[invalid"
     : mode === "invalid-container" ? agent === "codex" ? "mcp_servers = 0\n" : JSON.stringify({ retained: true, [container]: [] })
     : valid);
-  fs.mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  if (mode !== "linux-acl-create-parent-default") fs.mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const foreign = join(home, "foreign-original");
   if (mode === "parent-symlink") {
     // The real directory was created by this isolated fixture and is empty.
@@ -84,7 +84,7 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
   if (syntheticGid !== undefined) groupByInode.set(native.lstatSync(path, { bigint: true }).ino, syntheticGid);
   const linuxAclMode = mode.startsWith("linux-acl-");
   const aclMode = mode.startsWith("acl-") || linuxAclMode;
-  const emptyAclChecked = new Set<bigint>(); let aclCalls = 0, specificAclObserved = false;
+  const emptyAclChecked = new Set<bigint>(); let aclCalls = 0, specificAclObserved = false, ancestorAccessChecked = false;
   const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
   if (aclMode) {
     // Exercise the owning Darwin ACL reader's finite policy on Linux too.
@@ -100,9 +100,11 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
           fgetxattr: (fd: number, pointer: number) => {
             aclCalls++; const target = descriptors.get(fd), attribute = (cells.get(pointer) as Buffer).toString("utf8").replace(/\0$/, ""); errno = 61;
             if (!["system.posix_acl_access", "system.posix_acl_default"].includes(attribute)) { instrumentationFailures++; return 0n; }
+            if (mode === "linux-acl-ancestor-default" && target === home && attribute === "system.posix_acl_access") ancestorAccessChecked = true;
             if ((mode === "linux-acl-file" && target === path && attribute === "system.posix_acl_access")
               || (mode === "linux-acl-directory" && target === home && attribute === "system.posix_acl_access")
-              || (mode === "linux-acl-default" && target === home && attribute === "system.posix_acl_default")) {
+              || (mode === "linux-acl-default" && target === dirname(path) && attribute === "system.posix_acl_default")
+              || (["linux-acl-ancestor-default", "linux-acl-create-parent-default"].includes(mode) && target === home && attribute === "system.posix_acl_default")) {
               specificAclObserved = true; return 8n;
             }
             if (target === home && ["linux-acl-error", "linux-acl-unsupported"].includes(mode)) {
@@ -266,8 +268,9 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
   try { await handleMcp({ register: agent, json: true, apiUrl: "http://127.0.0.1:9" }); }
   finally { console.log = output; Object.assign(fs, native); Object.defineProperty(process, "platform", platform); syncBuiltinESMExports(); }
   assert.equal(instrumentationFailures, 0);
-  if (aclMode) { assert(aclCalls > 0); if (mode !== "linux-acl-absent") assert(specificAclObserved); }
-  const success = ["atomic", "new", "group-preserved", "acl-deny-directory", "linux-acl-absent"].includes(mode);
+  if (aclMode) { assert(aclCalls > 0); if (!["linux-acl-absent", "linux-acl-ancestor-default"].includes(mode)) assert(specificAclObserved); }
+  if (mode === "linux-acl-ancestor-default") { assert(ancestorAccessChecked); assert.equal(specificAclObserved, false); }
+  const success = ["atomic", "new", "group-preserved", "acl-deny-directory", "linux-acl-absent", "linux-acl-ancestor-default"].includes(mode);
   const result = JSON.parse(logs.join("\n"));
   assert.equal(result.registered, success ? 1 : 0); assert.equal(result.results[0].success, success);
   assert.equal(process.exitCode ?? 0, success ? 0 : 1); process.exitCode = 0;
@@ -294,7 +297,11 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
       : ["temp-write", "group-refused", "acl-temp-inherit-allow"].includes(mode) ? "prepare" : mode === "final-readback" ? "verify the committed" : "changed";
     assert(result.results[0].error.includes(reason));
     if (mode === "final-readback") { assert.equal(replacements, 1); assert(finalRead); }
-    else { assert.equal(replacements, 0); assert(native.readFileSync(path).equals(raced ? concurrent : original)); }
+    else {
+      assert.equal(replacements, 0);
+      if (initiallyMissing && !raced) assert(!fs.existsSync(path));
+      else assert(native.readFileSync(path).equals(raced ? concurrent : original));
+    }
   }
   if (!success && mode !== "final-readback") assert.equal(renameAttempts, 0);
   if (mode.startsWith("group-")) {
@@ -304,6 +311,7 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
   }
   if (mode === "acl-backup-inherit-allow") assert(![...written].some(file => file.endsWith(".backup")));
   if (mode === "acl-temp-inherit-allow") assert(![...written].some(file => file.endsWith(".tmp")));
+  if (mode === "linux-acl-create-parent-default") { assert(!fs.existsSync(join(home, paths[agent]![0]!))); assert.equal(written.size, 0); }
   if (mode === "cas-stat-race") { assert(casRead); assert(raced); assert.equal(renameAttempts, 0); assert.equal(replacements, 0); assert(native.readFileSync(path).equals(concurrent)); }
   if (mode === "locked") assert.equal(native.readFileSync(join(lock, "foreign-owner"), "utf8"), "synthetic owner");
   else assert(!fs.existsSync(lock));

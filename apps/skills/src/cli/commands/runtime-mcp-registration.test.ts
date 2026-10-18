@@ -44,7 +44,7 @@ for (const mode of [...bootstrapModes, "profile", "environment-profile", "transi
 const guardedModes = ["atomic", "new", "race", "new-race", "cas-stat-race", "locked", "symlink", "parent-symlink", "home-ancestor-symlink", "hardlink",
   "invalid", "invalid-container", "backup-readback", "temp-write", "final-readback", "group-preserved", "group-refused",
   "acl-deny-directory", "acl-allow-directory", "acl-deny-file", "acl-allow-file", "acl-backup-inherit-allow", "acl-temp-inherit-allow", "acl-unknown", "acl-read-error",
-  "linux-acl-absent", "linux-acl-file", "linux-acl-directory", "linux-acl-default", "linux-acl-error", "linux-acl-unsupported"];
+  "linux-acl-absent", "linux-acl-file", "linux-acl-directory", "linux-acl-default", "linux-acl-ancestor-default", "linux-acl-create-parent-default", "linux-acl-error", "linux-acl-unsupported"];
 for (const agent of ["codex", "gemini", "pi", "opencode", "cursor", "windsurf"]) for (const mode of guardedModes) {
   test.skipIf(mode.startsWith("linux-acl-") && process.platform !== "linux")(`direct MCP config writes preserve originals and refuse unsafe changes: ${agent}/${mode}`, async () => {
     const root = mkdtempSync(join(tmpdir(), "skills-mcp-guarded-"));

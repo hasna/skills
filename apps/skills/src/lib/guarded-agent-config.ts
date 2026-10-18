@@ -65,6 +65,7 @@ function unchanged(before: Snapshot | null, current: Snapshot | null): boolean {
 
 function parentWitnesses(path: string): Array<{ path: string; info: BigIntStats }> {
   const home = canonicalSystemPath(homedir()), local = relative(home, path);
+  const creationParent = dirname(path);
   if (!isAbsolute(path) || resolve(path) !== path || !local || local === ".." || local.startsWith(".." + sep)) throw new Error();
   const parents: string[] = [];
   for (let ancestor = home; ; ancestor = dirname(ancestor)) {
@@ -75,6 +76,9 @@ function parentWitnesses(path: string): Array<{ path: string; info: BigIntStats 
   return parents.map(path => {
     if (!statOrMissing(path)) {
       if (!path.startsWith(home + sep)) throw new Error();
+      // Only the immediate parent initializes the new directory's ACL.
+      const parent = dirname(path);
+      assertNativePathAcl(parent, fs.lstatSync(parent, { bigint: true }), { allowDenyOnly: true, creationParent: true });
       fs.mkdirSync(path, { mode: 0o700 });
     }
     const info = fs.lstatSync(path, { bigint: true });
@@ -82,7 +86,7 @@ function parentWitnesses(path: string): Array<{ path: string; info: BigIntStats 
     const stickySystemParent = !privatePath && info.uid === 0n && (info.mode & 0o1000n) !== 0n;
     if (!info.isDirectory() || (privatePath ? info.uid !== owner() : info.uid !== owner() && info.uid !== 0n)
       || ((info.mode & 0o022n) !== 0n && !stickySystemParent)) throw new Error();
-    assertNativePathAcl(path, info, { allowDenyOnly: true });
+    assertNativePathAcl(path, info, { allowDenyOnly: true, creationParent: path === creationParent });
     return { path, info };
   });
 }
@@ -92,11 +96,13 @@ function verifyParents(parents: Array<{ path: string; info: BigIntStats }>) {
     const current = fs.lstatSync(parent.path, { bigint: true });
     if (!current.isDirectory() || parent.info.dev !== current.dev || parent.info.ino !== current.ino
       || parent.info.uid !== current.uid || parent.info.gid !== current.gid || parent.info.mode !== current.mode) throw new Error();
-    assertNativePathAcl(parent.path, current, { allowDenyOnly: true });
+    assertNativePathAcl(parent.path, current, { allowDenyOnly: true, creationParent: parent === parents[parents.length - 1] });
   }
 }
 
 function durableFile(path: string, bytes: Buffer, mode: number, gid?: bigint): Snapshot {
+  const parent = dirname(path);
+  assertNativePathAcl(parent, fs.lstatSync(parent, { bigint: true }), { allowDenyOnly: true, creationParent: true });
   const fd = fs.openSync(path, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
   try {
     const created = fs.fstatSync(fd, { bigint: true });

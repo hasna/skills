@@ -847,9 +847,10 @@ function hookProjectionRefusal(reason: string): never {
 /** Reuse the native ACL reader on a descriptor bound to the observed path.
  * File snapshots and parent identities remain the authority for bytes/modes. */
 // Access ACLs change effective permissions independently of mode/group. This
-// writer does not copy ACLs: require verified absence on supported Linux/glibc,
-// including default directory ACLs that could be inherited by newly made files.
-function hasNoLinuxAccessAcl(fd: number, directory: boolean): boolean {
+// writer does not copy ACLs: require verified absence on supported Linux/glibc.
+// A default ACL initializes direct children at creation, not existing descendants;
+// query it only for directories where the caller will create an object.
+function hasNoLinuxAccessAcl(fd: number, creationParent: boolean): boolean {
   try {
     const { dlopen, read, ptr } = require("bun:ffi") as typeof import("bun:ffi");
     const library = dlopen("libc.so.6", {
@@ -858,7 +859,7 @@ function hasNoLinuxAccessAcl(fd: number, directory: boolean): boolean {
     });
     try {
       const errno = library.symbols.__errno_location(); if (!errno) return false;
-      for (const attribute of ["system.posix_acl_access", ...(directory ? ["system.posix_acl_default"] : [])]) {
+      for (const attribute of ["system.posix_acl_access", ...(creationParent ? ["system.posix_acl_default"] : [])]) {
         const name = Buffer.from(attribute + "\0");
         // Query presence only. No attribute value is read or copied. ENODATA is
         // the only admitted result; unsupported ABI/filesystem/errors refuse.
@@ -869,8 +870,9 @@ function hasNoLinuxAccessAcl(fd: number, directory: boolean): boolean {
   } catch { return false; }
 }
 
-export function assertNativePathAcl(path: string, observed: BigIntStats, options: { allowDenyOnly?: boolean; descriptor?: number } = {}): void {
+export function assertNativePathAcl(path: string, observed: BigIntStats, options: { allowDenyOnly?: boolean; descriptor?: number; creationParent?: boolean } = {}): void {
   if (process.platform !== "darwin" && process.platform !== "linux") throw new Error("NATIVE_PATH_ACL_UNVERIFIED");
+  if (options.creationParent && !observed.isDirectory()) throw new Error("NATIVE_PATH_ACL_UNVERIFIED");
   // A file binds its full identity. A directory binds the object (dev, ino)
   // and its trust fields (uid, gid, mode) only: its times, link count and size
   // change whenever any process adds or removes an unrelated entry, such as in
@@ -882,7 +884,7 @@ export function assertNativePathAcl(path: string, observed: BigIntStats, options
   const fd = options.descriptor ?? openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
     | (observed.isDirectory() ? constants.O_DIRECTORY : 0));
   try {
-    if (identity(fstatSync(fd, { bigint: true })) !== identity(observed) || !(process.platform === "darwin" ? hasTrustedDarwinAcl(fd, options.allowDenyOnly ?? false) : hasNoLinuxAccessAcl(fd, observed.isDirectory()))
+    if (identity(fstatSync(fd, { bigint: true })) !== identity(observed) || !(process.platform === "darwin" ? hasTrustedDarwinAcl(fd, options.allowDenyOnly ?? false) : hasNoLinuxAccessAcl(fd, options.creationParent === true))
       || identity(fstatSync(fd, { bigint: true })) !== identity(observed)
       || identity(lstatSync(path, { bigint: true })) !== identity(observed)) throw new Error("NATIVE_PATH_ACL_UNVERIFIED");
   } finally { if (options.descriptor === undefined) closeSync(fd); }
