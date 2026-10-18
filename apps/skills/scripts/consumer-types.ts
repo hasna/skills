@@ -192,6 +192,20 @@ const fileQuote: Promise<RemoteRunQuote> = new SdkQuoteClient("fixture", "https:
 const invalidReceipt: RemoteRunApproval = { quoteReceipt: 3 };
 // @ts-expect-error Optional receipt presence does not make it a required string.
 const missingReceiptGuard: string = receiptQuote.quoteReceipt;
+import { RemotePrivateSkillHistoryClient as SdkHistoryClient, type PrivateSkillVersionHistory as SdkPrivateHistory } from "@hasna/skills/sdk";
+import { RemotePrivateSkillHistoryClient as RootHistoryClient, type PrivateSkillVersionHistory as RootPrivateHistory } from "@hasna/skills";
+declare const historyReader: SdkHistoryClient;
+declare const rootHistoryReader: RootHistoryClient;
+declare const privateHistory: SdkPrivateHistory;
+const privateHistoryPage: Promise<RootPrivateHistory> = historyReader.listVersions("44444444-4444-4444-8444-444444444444", { limit: 20 });
+const rootHistoryPage: Promise<SdkPrivateHistory> = rootHistoryReader.listVersions("44444444-4444-4444-8444-444444444444", { cursor: "55555555-5555-4555-8555-555555555555" });
+const privateCurrentVersion: string | null = privateHistory.currentVersion;
+// @ts-expect-error Metadata-only history cannot mutate private publications.
+historyReader.createSkill({ slug: "private-skill", displayName: "Private skill", confirm: true });
+// @ts-expect-error History rows are immutable metadata.
+privateHistory.versions.push(privateHistory.versions[0]!);
+// @ts-expect-error Page limits use numbers, not unchecked CLI strings.
+historyReader.listVersions("44444444-4444-4444-8444-444444444444", { limit: "20" });
 import type { PrivatePublishingCapability as SdkPublicationCapability } from "@hasna/skills/sdk";
 import type { PrivatePublishingCapability as RootPublicationCapability } from "@hasna/skills";
 declare const observedPublicationCapability: SdkPublicationCapability;

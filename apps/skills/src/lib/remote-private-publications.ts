@@ -123,7 +123,7 @@ export function checkedPublicationView(value: unknown, skillId: string, intentId
 }
 
 /** Deadline covers headers and EOF. Cancellation never awaits an untrusted cancel hook. */
-async function boundedJson(url: string, init: RequestInit, token: string, mutation: boolean, budget = 15000, signal?: AbortSignal, create = false): Promise<unknown> {
+async function boundedJson(url: string, init: RequestInit, token: string, mutation: boolean, budget = 15000, signal?: AbortSignal, create = false, readBinding?: { userId: string; organizationId: string; membershipId: string }): Promise<unknown> {
   const controller = new AbortController(); let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let response: Response | undefined;
   const timeout = new PrivatePublicationError(create ? "SKILL_CREATE_UNCONFIRMED" : "PUBLICATION_UNCONFIRMED",
@@ -135,7 +135,10 @@ async function boundedJson(url: string, init: RequestInit, token: string, mutati
     return await Promise.race([(async () => {
       if (signal?.aborted) throw timeout;
       response = await fetch(url, { ...init, redirect: "error", credentials: "omit", signal: controller.signal,
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` } });
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`,
+          ...(readBinding ? { "x-skills-user-id": readBinding.userId, "x-skills-workspace-id": readBinding.organizationId,
+            "x-skills-membership-id": readBinding.membershipId } : {}) } });
+      if (readBinding && response.ok && response.status !== 200) return invalid();
       const length = response.headers.get("content-length");
       if (length !== null && (!/^\d+$/.test(length) || Number(length) > 65536)) return invalid();
       reader = response.body?.getReader(); const chunks: Uint8Array[] = []; let size = 0;
@@ -168,6 +171,90 @@ async function boundedJson(url: string, init: RequestInit, token: string, mutati
     throw timeout;
   } finally { if (timer) clearTimeout(timer); if (abort) signal?.removeEventListener("abort", abort); controller.abort();
     if (reader) void reader.cancel().catch(() => {}); else void response?.body?.cancel().catch(() => {}); }
+}
+
+/** Metadata-only private history uses the existing interactive UUID route,
+ * distinct from the public slug/API-key version contract. */
+export interface PrivateSkillVersion { id: string; version: string; releasedAt: string | null; createdAt: string }
+export interface PrivateSkillVersionHistory {
+  organizationId: string; skillId: string; slug: string; currentVersion: string | null; currentVersionId: string | null;
+  versions: readonly PrivateSkillVersion[]; nextCursor: string | null;
+}
+export interface PrivateSkillVersionHistoryOptions { limit?: number; cursor?: string; timeoutMs?: number; signal?: AbortSignal }
+const historyInput = (): never => { throw new PrivatePublicationError("INVALID_PRIVATE_HISTORY_INPUT", "Provide a private skill UUID, limit from 1 to 50, and an optional UUID cursor; timeoutMs must be from 1 to 15000."); };
+const historyResponse = (): never => { throw new PrivatePublicationError("INVALID_PRIVATE_HISTORY_RESPONSE", "The server returned invalid private version history."); };
+const historyText = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 128 && !/[\p{Cc}\p{Cs}\u2028\u2029]/u.test(value);
+// Raw PostgreSQL timestamp text is metadata, not a JS Date: retain its exact
+// microseconds and offset. The existing publication timestamp contract stays separate.
+function historyDate(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const parts = /^(\d{4})-(\d{2})-(\d{2})(T| )(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-](\d{2})(?::(\d{2}))?)$/.exec(value);
+  if (!parts) return false;
+  const [, y, m, d, separator, h, minute, second, fraction, zone, offsetHour, offsetMinute] = parts;
+  // PostgreSQL ISO DateStyle uses a space and an hour-only or colon offset;
+  // existing JSON ISO values use T and Z or a colon offset.
+  if (separator === " " ? zone === "Z" || (fraction?.length ?? 0) > 6 : zone !== "Z" && offsetMinute === undefined) return false;
+  const year = Number(y), month = Number(m), day = Number(d);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return year > 0 && month >= 1 && month <= 12 && day >= 1 && day <= days[month - 1]!
+    && Number(h) <= 23 && Number(minute) <= 59 && Number(second) <= 59
+    && (zone === "Z" || (Number(offsetHour) <= 23 && Number(offsetMinute ?? 0) <= 59));
+}
+function privateHistory(value: unknown, organizationId: string, skillId: string, limit: number, cursor?: string): PrivateSkillVersionHistory {
+  if (!record(value) || value.organizationId !== organizationId || value.skillId !== skillId
+    || typeof value.slug !== "string" || !/^[a-z0-9-]+$/.test(value.slug)
+    || !(value.currentVersion === null || historyText(value.currentVersion))
+    || !(value.currentVersionId === null || publicationUuid(value.currentVersionId))
+    || (value.currentVersion === null) !== (value.currentVersionId === null)
+    || !(value.nextCursor === null || publicationUuid(value.nextCursor)) || !Array.isArray(value.versions) || value.versions.length > limit) return historyResponse();
+  const seen = new Set<string>(); let previous = cursor;
+  const versions = value.versions.map(row => {
+    if (!record(row) || !publicationUuid(row.id) || seen.has(row.id) || (previous !== undefined && row.id >= previous)
+      || !historyText(row.version) || !(row.releasedAt === null || historyDate(row.releasedAt)) || !historyDate(row.createdAt)
+      || (row.id === value.currentVersionId) !== (row.version === value.currentVersion)) return historyResponse();
+    seen.add(row.id); previous = row.id;
+    return Object.freeze({ id: row.id, version: row.version, releasedAt: row.releasedAt, createdAt: row.createdAt }) as PrivateSkillVersion;
+  });
+  if (value.nextCursor !== null && (!versions.length || value.nextCursor !== versions.at(-1)!.id)) return historyResponse();
+  return Object.freeze({ organizationId, skillId, slug: value.slug, currentVersion: value.currentVersion as string | null,
+    currentVersionId: value.currentVersionId as string | null, versions: Object.freeze(versions), nextCursor: value.nextCursor as string | null });
+}
+/** Read-only session consumer; permits viewer history without granting any publication action.
+ * Tokens stay in a private field and are never persisted or serialized. */
+export class RemotePrivateSkillHistoryClient {
+  readonly apiOrigin: string;
+  readonly organizationId: string;
+  readonly userId: string;
+  readonly membershipId: string;
+  #token: string;
+  constructor(apiUrl: string, session: RemoteWorkspaceSession) {
+    const checked = parseWorkspaceSession(session, { userId: session?.user?.id, membershipId: session?.user?.membershipId });
+    this.apiOrigin = normalizeSkillsApiOrigin(apiUrl); this.#token = checked.token;
+    this.organizationId = checked.organization.id; this.userId = checked.user.id; this.membershipId = checked.user.membershipId;
+    Object.freeze(this);
+  }
+  /** One page and one GET. Follow nextCursor explicitly; an error never prints partial history. */
+  async listVersions(skillId: string, options: PrivateSkillVersionHistoryOptions = {}): Promise<PrivateSkillVersionHistory> {
+    if (!publicationUuid(skillId) || (options.limit !== undefined && (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > 50))
+      || (options.cursor !== undefined && !publicationUuid(options.cursor))
+      || (options.timeoutMs !== undefined && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1 || options.timeoutMs > 15000))) return historyInput();
+    const limit = options.limit ?? 20, cursor = options.cursor;
+    const query = new URLSearchParams();
+    if (options.limit !== undefined) query.set("limit", String(limit));
+    if (cursor !== undefined) query.set("cursor", cursor);
+    const path = `/api/v1/skills/${skillId}/versions${query.size ? `?${query}` : ""}`;
+    let value: unknown;
+    try {
+      value = await boundedJson(skillsApiRequestUrl(this.apiOrigin, path), { method: "GET" }, this.#token, false,
+        options.timeoutMs, options.signal, false, this);
+    } catch (error) {
+      if (error instanceof PrivatePublicationError && error.code === "INVALID_PUBLICATION_RESPONSE") return historyResponse();
+      throw new PrivatePublicationError("PRIVATE_HISTORY_UNAVAILABLE", "Unable to read private version history. Check the selected server, current membership and fresh sign-in; no skill or credential was changed.", false,
+        error instanceof PrivatePublicationError ? error.status : undefined);
+    }
+    return privateHistory(value, this.organizationId, skillId, limit, cursor);
+  }
 }
 
 /** Explicit hosted contract, unrelated to registry publishSkill and its content revisions.
