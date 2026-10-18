@@ -16,7 +16,7 @@ import { codexNativeHookEnvelopeFromInput, CODEX_NATIVE_POLICY_FD_ENV } from "..
 import { planCodexNativeTrust, applyCodexNativeTrust, previewCodexNativeTrust } from "../../lib/codex-native-trust.js";
 import { HookDiagnosticError, hookChildError, hookFailureReason, isOptionalHookContextFailure, hookUnavailableContext } from "../../lib/hook-diagnostics.js";
 import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib/selection-cache.js";
-import { SESSION_CONTEXT_CHILD_CEILING_MS, takeSessionPinMigrationNotice } from "../../lib/session-reconciliation.js";
+import { MANAGED_HOOK_DEADLINE_MS, SESSION_CONTEXT_CHILD_CEILING_MS, takeSessionPinMigrationNotice } from "../../lib/session-reconciliation.js";
 import { captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4 } from "../../lib/claude-settings-witness.js";
 import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4, captureCodexSettingsV5, captureCodexSettingsV6 } from "../../lib/codex-settings-witness.js";
 import { captureClaudeMarketplaceRegistryV2 } from "../../lib/claude-marketplace-registry.js";
@@ -424,7 +424,7 @@ export function registerAgentIntegration(parent: Command): void {
     .option("--selection-profile <id>", "Selection profile to load")
     .description("Read native lifecycle JSON on stdin and return selected context")
     .action(async (options) => {
-      const deadline = Date.now() + 12_000;
+      const deadline = Date.now() + MANAGED_HOOK_DEADLINE_MS;
       // The installed blocking event must survive malformed JSON/input too.
       let event = options.agent === "hermes" && options.event === "pre_tool_call" ? "pre_tool_call" : "UserPromptSubmit";
       let selectionProfile: string | undefined;

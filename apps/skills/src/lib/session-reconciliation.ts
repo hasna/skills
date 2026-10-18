@@ -65,11 +65,12 @@ export function inspectSkillSession(sessionId: string, options: SelectionCacheOp
   };
 }
 
+/** The managed user-prompt hook's own deadline, measured from hook start. */
+export const MANAGED_HOOK_DEADLINE_MS = 12_000;
 /**
  * The managed context child's own ceiling. It stays above
  * SESSION_RENEWAL_TIMEOUT_MS so the parent never kills a renewal that is still
- * inside its own budget, and below the managed hook's 12-second deadline in
- * cli/commands/agent-integration.ts.
+ * inside its own budget, and below MANAGED_HOOK_DEADLINE_MS.
  */
 export const SESSION_CONTEXT_CHILD_CEILING_MS = 11_000;
 /**
