@@ -26,8 +26,12 @@ test("each managed-hook timeout sits inside the one that encloses it", () => {
   const hermesKillMs = Number(hermesKill![1]);
   expect(SESSION_RENEWAL_TIMEOUT_MS).toBeLessThan(SESSION_CONTEXT_CHILD_CEILING_MS);
   expect(SESSION_CONTEXT_CHILD_CEILING_MS).toBeLessThan(MANAGED_HOOK_DEADLINE_MS);
-  // The supervisor's timer starts before the hook process does, so equality
-  // leaves only process startup as margin; it must never be smaller.
+  // Currently equal (12 s each): zero headroom, not a margin. The supervisor's
+  // timer starts at spawn, before the hook sets its own deadline, so at the
+  // limit the supervisor kills the hook first, early by the hook's startup
+  // time, and no deadline diagnostic is written. Raising the supervisor timer
+  // changes installed bytes on stations (PLA8-00559); until then this only
+  // stops the gap from getting worse.
   expect(MANAGED_HOOK_DEADLINE_MS).toBeLessThanOrEqual(hermesKillMs);
   expect(hermesKillMs).toBeLessThan(hermesHookTimeoutMs);
   expect(SESSION_RENEWAL_TIMEOUT_MS).toBeLessThan(hermesKillMs);
