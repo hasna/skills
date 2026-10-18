@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.82
+
+### Patch Changes
+
+- Register Claude Code on a fresh first run (PLA8-00527). When `~/.claude.json` did not exist before `skills setup agents`, a successful native `claude mcp add` on Claude Code 2.1.302 creates it with the Skills entry plus Claude's first-run bootstrap keys. Skills now accepts exactly that no-preimage result, instead of refusing it with "Could not safely update the Claude user MCP configuration". Any key beyond the Skills entry and those bootstrap keys still refuses.
+- Add `skills publication versions <skill-uuid>`, a read-only page of a private skill's version history (PLA8-00526). It uses fresh interactive sign-in through a named customer profile or observed account and membership IDs, `--limit` 1–50 and `--cursor`. It returns the current version separately from the version rows, with exact creation and release dates (a missing release date stays null). It writes no credentials, creates no API key and does not retry automatically. `RemotePrivateSkillHistoryClient` and `PrivateSkillVersionHistory` are exported from the root and `./sdk`, via `RemoteSkillsAuthClient.openPrivateSkillHistory`. The public `skills versions <name>` command is unchanged.
+
 ## 0.10.81
 
 ### Patch Changes
