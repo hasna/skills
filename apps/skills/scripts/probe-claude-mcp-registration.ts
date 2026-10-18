@@ -2,7 +2,7 @@
 /** CI-only native CLI integration; deliberately outside unit-test discovery. */
 import { strict as assert } from "node:assert";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { userInfo } from "node:os";
 import { isDeepStrictEqual } from "node:util";
@@ -164,6 +164,101 @@ function configSummary(file: string, original: Buffer | null, nativeVocabulary: 
       && isDeepStrictEqual(after.mcpServers.skills.args, ["--stdio"]) };
 }
 
+// Read only output whose complete credential scan already passed. Diagnostics
+// project a fixed vocabulary; arbitrary errors/config/paths never leave here.
+function setupAdapterSummary(stdout: Uint8Array) {
+  const unavailable = () => ({ collection: "unavailable" as const, adapters: [] });
+  const agents = ["claude", "codex", "gemini", "pi", "opencode", "cursor", "windsurf"] as const;
+  const directReasons = [
+    ["ACCESS_METADATA_UNAVAILABLE", "configuration access metadata could not be verified or preserved"],
+    ["UNSAFE_PATH", "refused an unsafe or unowned configuration path"],
+    ["OWNERSHIP_UNAVAILABLE", "configuration ownership cannot be verified on this platform"],
+    ["LOCKED", "configuration is locked; no foreign lock was removed"],
+    ["INVALID_CONFIG", "existing configuration is invalid"],
+    ["BACKUP_FAILED", "could not preserve and verify the original configuration"],
+    ["WRITE_FAILED", "could not prepare the replacement configuration"],
+    ["CONFIG_CHANGED", "configuration or its path changed during registration"],
+    ["VERIFY_FAILED", "could not verify the committed configuration; retain the backup for recovery"],
+  ] as const;
+  try {
+    const value: unknown = JSON.parse(Buffer.from(stdout).toString("utf8"));
+    if (!value || typeof value !== "object" || !Array.isArray((value as { results?: unknown }).results)) return unavailable();
+    const results = (value as { results: unknown[] }).results;
+    if (results.length !== agents.length) return unavailable();
+    const seen = new Set<string>(), adapters = [];
+    for (const value of results) {
+      if (!value || typeof value !== "object") return unavailable();
+      const row = value as { agent?: unknown; success?: unknown; error?: unknown };
+      const agent = agents.find(agent => row.agent === agent);
+      if (!agent || seen.has(agent) || typeof row.success !== "boolean") return unavailable();
+      seen.add(agent);
+      const error = typeof row.error === "string" ? row.error : "";
+      const refusal = row.success ? "NONE" : agent === "claude" && error === "Could not safely update the Claude user MCP configuration; native admission or config checks refused the update"
+        ? "CLAUDE_NATIVE_OR_CONFIG_REFUSAL"
+        : directReasons.find(([, message]) => error.endsWith(": " + message))?.[0] ?? "OTHER_REFUSAL";
+      adapters.push({ agent, success: row.success, refusal });
+    }
+    return { collection: "complete" as const, adapters };
+  } catch { return unavailable(); }
+}
+
+// Metadata-only diagnostics run in the already admitted isolated child. They
+// never read xattr values or configure an agent, and cannot change acceptance.
+function syntheticAncestorAccessAudit(home: string) {
+  let stage = "platform", index = 0, role = "ancestor";
+  const rows = [], number = (value: unknown, min: number, max: number) =>
+    typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max ? value : null;
+  try {
+    if (process.platform !== "linux") return { collection: "failed", stage };
+    const paths: string[] = [];
+    for (let path = home; ; path = dirname(path)) {
+      if (paths.length === 64) return { collection: "failed", stage: "ancestor-bound" };
+      paths.unshift(path); if (dirname(path) === path) break;
+    }
+    stage = "ffi-binding";
+    const { dlopen, read, ptr } = require("bun:ffi") as typeof import("bun:ffi");
+    stage = "ffi-library";
+    const library = dlopen("libc.so.6", {
+      fgetxattr: { args: ["i32", "ptr", "ptr", "u64"], returns: "i64" },
+      __errno_location: { args: [], returns: "ptr" },
+    });
+    try {
+      stage = "errno-binding";
+      const errno = library.symbols.__errno_location();
+      if (!errno) return { collection: "failed", stage };
+      for (; index < paths.length; index++) {
+        role = index === paths.length - 1 ? "synthetic-home" : "ancestor";
+        const path = paths[index]!;
+        stage = "path-stat";
+        const before = lstatSync(path, { bigint: true });
+        if (!before.isDirectory()) return { collection: "failed", stage: "directory-kind", role, index };
+        const identity = (info: typeof before) => `${info.dev}:${info.ino}:${info.uid}:${info.gid}:${info.mode}`;
+        stage = "descriptor-open";
+        const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+        try {
+          stage = "descriptor-stat";
+          const descriptorIdentitySame = identity(before) === identity(fstatSync(fd, { bigint: true }));
+          const queries = [];
+          for (const attribute of ["access", "default"] as const) {
+            stage = attribute === "access" ? "access-query" : "default-query";
+            const name = Buffer.from(`system.posix_acl_${attribute}\0`);
+            const result = Number(library.symbols.fgetxattr(fd, ptr(name), null, 0));
+            queries.push({ stage, result: number(result, -1, 16 * 1024 * 1024), errno: number(read.i32(errno), 0, 4095) });
+          }
+          stage = "path-recheck";
+          rows.push({ role, index, descriptorIdentitySame,
+            descriptorIdentityStillSame: identity(before) === identity(fstatSync(fd, { bigint: true })),
+            pathIdentitySame: identity(before) === identity(lstatSync(path, { bigint: true })), queries });
+        } finally { closeSync(fd); }
+      }
+      return { collection: "complete", rows };
+    } finally { library.close(); }
+  } catch (error) {
+    return { collection: "failed", stage, role, index,
+      errno: number((error as { errno?: unknown } | null)?.errno, -4095, 4095), rows };
+  }
+}
+
 async function exercise(root: string, binary: string, skills: string, outerNamespace: string, uid: number) {
   stage = "isolation-uid";
   assert(process.getuid?.() === uid && process.geteuid?.() === uid && uid !== 0);
@@ -185,6 +280,7 @@ async function exercise(root: string, binary: string, skills: string, outerNames
   for (const kind of ["direct", "skills", "first-run-direct", "first-run-skills", "default-traffic-direct", "default-traffic-skills"] as const) {
     stage = `case-${kind}`;
     const f = fixture(root, kind, binary, kind === "direct" || kind === "skills", !kind.startsWith("default-traffic-"));
+    const accessMetadataAudit = kind.endsWith("skills") ? syntheticAncestorAccessAudit(f.env.HOME) : undefined;
     const selected = ["HASNA_PROFILE", "HASNA_HOME", "HASNA_CONFIG_HOME", "HASNA_SKILLS_API_URL", "SKILLS_API_URL"] as const;
     const args = ["mcp", "add", "-s", "user", ...selected.flatMap(key => ["--env", `${key}=${f.env[key]}`]),
       "--transport", "stdio", "skills", "--", "skills-mcp", "--stdio"];
@@ -202,6 +298,7 @@ async function exercise(root: string, binary: string, skills: string, outerNames
     const config = configSummary(f.config, f.original, nativeVocabulary);
     const diagnostic = nativeStderr.toString().replace(/\x1b\[[0-9;]*m/g, "").trim();
     results.push({ kind, nonessentialTrafficDisabled: Object.hasOwn(f.env, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"), commandExit: result.exit, commandTimedOut: result.timedOut,
+      ...(kind.endsWith("skills") ? { setupAdapters: setupAdapterSummary(result.stdout), accessMetadataAudit } : {}),
       nativeExit: native.exit, nativeTimedOut: native.timedOut, stdoutScan, stderrScan, nativeScans, config,
       nativeDiagnostic: /^(?:Error: )?MCP server skills already exists in user config$/.test(diagnostic)
         ? "DUPLICATE_USER_SERVER" : native.exit === 0 ? "NATIVE_SUCCESS" : "OTHER_NATIVE_REFUSAL" });
