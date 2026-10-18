@@ -2,7 +2,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { useDefaultTestTimeout } from "../test-preload.js";
 useDefaultTestTimeout();
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { captureDiscoveryByteSources, captureDiscoveryDirectories, captureDiscoveryPathSources, verifyAgentDiscovery, type AgentDiscoveryBinding, type DiscoverySource } from "./agent-discovery.js";
@@ -23,7 +23,7 @@ type Capture = "path-bytes" | "bytes" | "legacy";
 
 /** A retired (orphaned) and an active version of one enabled cache plugin,
  * each carrying the Claude-written version-root marker. */
-function fixture() {
+function fixture(markersPresent = true) {
   const home = mkdtempSync(join(tmpdir(), "skills-claude-orphan-marker-")); homes.push(home);
   const claude = join(home, ".claude"), parent = join(claude, "plugins/cache/market/plugin");
   const retired = join(parent, "1.0.0"), active = join(parent, "2.0.0");
@@ -33,15 +33,15 @@ function fixture() {
   for (const root of [retired, active]) {
     put(join(root, ".claude-plugin/plugin.json"), JSON.stringify({ name: "plugin", version: basename(root) }));
     mkdirSync(join(root, "skills"), { recursive: true });
-    put(join(root, ".orphaned_at"), timestamp);
+    if (markersPresent) put(join(root, ".orphaned_at"), timestamp);
   }
   const markers = [join(retired, ".orphaned_at"), join(active, ".orphaned_at")];
   const options = { home, dataDir: join(home, "skills-data"), projectDir: home, agents: ["claude" as const], command: "/fixture/skills" };
   const policy = () => JSON.parse(readFileSync(join(options.dataDir, "agent-policy.json"), "utf8")).bridge.discovery.claude;
   /** Review exactly as a reviewer would: markers captured by the selected tool. */
-  const install = (capture: Capture) => {
+  const install = (capture: Capture, bindMarkers = true) => {
     const files = [settings, registry, ...[retired, active].map(root => join(root, ".claude-plugin/plugin.json"))];
-    const markerSources: DiscoverySource[] = capture === "path-bytes" ? captureDiscoveryPathSources(markers)
+    const markerSources: DiscoverySource[] = !bindMarkers ? [] : capture === "path-bytes" ? captureDiscoveryPathSources(markers)
       : capture === "bytes" ? captureDiscoveryByteSources(markers)
       : markers.map(path => ({ path, sha256: sha(readFileSync(path, "utf8")) }));
     applyAgentIntegration(planAgentIntegration({ ...options, discoveryInputs: { version: 1, agents: [{
@@ -52,6 +52,56 @@ function fixture() {
   const check = () => assertManagedAgentBridge("claude", options);
   return { home, retired, active, markers, options, policy, install, check };
 }
+
+test("a Claude cleanup marker added after directory review preserves the managed bridge", () => {
+  const f = fixture(false), marker = f.markers[1]!;
+  f.install("path-bytes", false);
+  const policyPath = join(f.options.dataDir, "agent-policy.json"), before = readFileSync(policyPath, "utf8");
+  expect(() => f.check()).not.toThrow();
+  put(marker, timestamp);
+  expect(() => f.check()).not.toThrow();
+  put(marker, rewritten);
+  expect(() => f.check()).not.toThrow();
+  renameSync(marker, join(f.home, "preserved-marker"));
+  expect(() => f.check()).not.toThrow();
+  expect(readFileSync(policyPath, "utf8")).toBe(before);
+});
+
+test("legacy marker membership stays bound without accepting invalid or removed markers", () => {
+  const f = fixture(), policyPath = join(f.options.dataDir, "agent-policy.json"), marker = f.markers[1]!;
+  f.install("path-bytes", false);
+  // The pre-normalization serializer bound these four relative path/type rows.
+  // Recreate its synthetic fixture witness, never a live policy or rebind.
+  const oldRows = [[".claude-plugin", "directory"], [".claude-plugin/plugin.json", "file"], [".orphaned_at", "file"], ["skills", "directory"]];
+  const policy = JSON.parse(readFileSync(policyPath, "utf8"));
+  policy.bridge.discovery.claude.directories[0].sha256 = sha(oldRows.map(row => JSON.stringify(row) + "\n").join(""));
+  writeFileSync(policyPath, JSON.stringify(policy));
+  const before = readFileSync(policyPath, "utf8");
+  expect(() => f.check()).not.toThrow();
+  put(marker, rewritten);
+  expect(() => f.check()).not.toThrow();
+  put(marker, "not-a-timestamp");
+  expect(() => f.check()).toThrow("NATIVE_SKILL_DRIFT");
+  put(marker, timestamp); chmodSync(marker, 0o755);
+  expect(() => f.check()).toThrow("NATIVE_SKILL_DRIFT");
+  chmodSync(marker, 0o644); renameSync(marker, join(f.home, "preserved-legacy-marker"));
+  expect(() => f.check()).toThrow("directory membership changed");
+  expect(readFileSync(policyPath, "utf8")).toBe(before);
+});
+
+test("a marker replacement during validation cannot gain the directory exception", () => {
+  const f = fixture(false), marker = f.markers[1]!;
+  f.install("path-bytes", false);
+  put(marker, timestamp);
+  const uid = process.getuid!();
+  const mocked = spyOn(process, "getuid").mockImplementationOnce(() => {
+    put(join(f.home, "replacement-marker"), rewritten);
+    renameSync(join(f.home, "replacement-marker"), marker);
+    return uid;
+  });
+  try { expect(() => captureDiscoveryDirectories([f.active])).toThrow("changed during open"); }
+  finally { mocked.mockRestore(); }
+});
 
 test.each(["path-bytes", "bytes", "legacy"] as const)("a %s reviewed marker survives Claude rewriting its timestamp at every start", capture => {
   const f = fixture();
@@ -84,10 +134,37 @@ const mutations: Record<string, (marker: string, home: string) => void> = {
   "byte-order mark": marker => put(marker, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(timestamp)])),
   "non-ASCII digits": marker => put(marker, Buffer.alloc(13, 0xb1)),
   oversized: marker => put(marker, "1".repeat(33)),
+  executable: marker => chmodSync(marker, 0o755),
   symlink: (marker, home) => { put(join(home, "elsewhere"), timestamp); rmSync(marker); symlinkSync(join(home, "elsewhere"), marker); },
   directory: marker => { rmSync(marker); mkdirSync(marker); },
   removed: marker => rmSync(marker),
 };
+test.each(Object.keys(mutations).filter(name => name !== "removed"))("a newly added %s marker never gains the directory exception", name => {
+  const f = fixture(false), marker = f.markers[1]!;
+  f.install("path-bytes", false);
+  put(marker, timestamp);
+  mutations[name]!(marker, f.home);
+  expect(() => f.check()).toThrow("NATIVE_SKILL_DRIFT");
+  expect(() => captureDiscoveryDirectories([f.active])).toThrow();
+});
+
+test.each(["SKILL.md", "hooks/injected.ts", ".claude-plugin/extra.json", ".orphaned_at.tmp", "skills/.orphaned_at"])("cleanup metadata never hides new %s membership", path => {
+  const f = fixture(false);
+  f.install("path-bytes", false);
+  put(f.markers[1]!, timestamp);
+  expect(() => f.check()).not.toThrow();
+  put(join(f.active, path), timestamp);
+  expect(() => f.check()).toThrow("NATIVE_SKILL_DRIFT");
+});
+
+test("cleanup metadata never hides changed reviewed source bytes", () => {
+  const f = fixture(false);
+  f.install("path-bytes", false);
+  put(f.markers[1]!, timestamp);
+  put(join(f.active, ".claude-plugin/plugin.json"), JSON.stringify({ name: "plugin", version: "2.0.0", hooks: { SessionStart: [] } }));
+  expect(() => f.check()).toThrow("NATIVE_SKILL_DRIFT");
+});
+
 test.each(Object.keys(mutations))("a %s marker still refuses after review", name => {
   const f = fixture(), marker = f.markers[1]!;
   f.install("path-bytes");
