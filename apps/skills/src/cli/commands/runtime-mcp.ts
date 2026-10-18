@@ -1,10 +1,11 @@
 import chalk from "chalk";
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmdirSync, statSync, writeFileSync } from "fs";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmdirSync, statSync, writeFileSync, type BigIntStats } from "fs";
 import { randomUUID } from "node:crypto";
 import { homedir } from "os";
 import { dirname, isAbsolute, join } from "path";
 import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
 import { AGENT_TARGETS, resolveAgents, type AgentTarget } from "../../lib/installer.js";
+import { canonicalSystemPath } from "../../lib/agent-integration.js";
 import { skillsShellArgument } from "../../lib/credential-profile-command.js";
 import { skillsMcpRegistrationEnvironment } from "../../lib/mcp-registration-environment.js";
 
@@ -92,10 +93,13 @@ async function registerClaudeMcp(command: string, server: Record<string, unknown
   const desired = { type: "stdio", ...server, env: environment };
   try {
     const path = claudeUserConfigPath();
+    const firstRun = lstatSync(path, { throwIfNoEntry: false }) === undefined ? claudeFirstRunPathWitness(path) : undefined;
     // Preserve the active original before either the native CLI or our upsert.
     const before = withClaudeConfigLock(path, () => {
       if (claudeUserConfigPath() !== path) throw new Error();
+      firstRun?.();
       const bytes = readClaudeConfig(path);
+      if (firstRun && bytes !== null) throw new Error();
       if (bytes !== null) {
         const backup = `${path}.skills-mcp-${randomUUID()}.backup`;
         writeFileSync(backup, bytes, { flag: "wx", mode: 0o600 });
@@ -129,11 +133,11 @@ async function registerClaudeMcp(command: string, server: Record<string, unknown
     }
     return withClaudeConfigLock(path, () => {
       if (claudeUserConfigPath() !== path) throw new Error();
-      const current = readClaudeConfig(path);
+      const current = firstRun ? readClaudeFirstRunConfig(path, firstRun) : readClaudeConfig(path);
       const previous = parseClaudeConfig(before), data = parseClaudeConfig(current);
       if (exitCode === 0) {
         const actual = isPlainObject(data.mcpServers) ? data.mcpServers[MCP_SERVER_NAME] : undefined;
-        if (!claudeNativeConfigPreserved(previous, data)
+        if (!claudeNativeConfigPreserved(previous, data, firstRun !== undefined && before === null)
           || !isPlainObject(actual) || !isDeepStrictEqual({ ...actual, env: actual.env ?? {} }, desired)) throw new Error();
       } else {
         if (!cliUnavailable && (!duplicateAccepted || !isPlainObject(previous.mcpServers) || !previous.mcpServers[MCP_SERVER_NAME])) throw new Error();
@@ -147,7 +151,7 @@ async function registerClaudeMcp(command: string, server: Record<string, unknown
         if (!readFileSync(temporary).equals(next)) throw new Error();
         // Recheck the exact bytes and active-file selection immediately before
         // replacing the file while holding Claude's own lock directory.
-        const latest = readClaudeConfig(path);
+        const latest = firstRun ? readClaudeFirstRunConfig(path, firstRun) : readClaudeConfig(path);
         if (claudeUserConfigPath() !== path || (before === null ? latest !== null : latest === null || !latest.equals(before))) throw new Error();
         renameSync(temporary, path);
         if (!readFileSync(path).equals(next)) throw new Error();
@@ -176,12 +180,61 @@ function claudeUserConfigPath(): string {
 }
 
 function readClaudeConfig(path: string): Buffer | null {
-  if (!existsSync(path)) return null;
-  const info = lstatSync(path);
+  const info = lstatSync(path, { throwIfNoEntry: false });
+  if (info === undefined) return null;
   if (!info.isFile() || info.size > 16 * 1024 * 1024) throw new Error();
   const bytes = readFileSync(path);
   parseClaudeConfig(bytes);
   return bytes;
+}
+
+// Bind the containing path only for a truly absent first-run file. Directory
+// times deliberately stay out of the witness: Claude and our lock add entries.
+function claudeFirstRunPathWitness(path: string): () => void {
+  if (!process.getuid || constants.O_NOFOLLOW === undefined) throw new Error();
+  const uid = BigInt(process.getuid()), canonical = canonicalSystemPath(path);
+  const identity = (info: BigIntStats) => `${info.dev}:${info.ino}:${info.uid}:${info.gid}:${info.mode}`;
+  const directories: Array<{ path: string; identity: string }> = [];
+  for (let cursor = dirname(canonical); ; cursor = dirname(cursor)) {
+    directories.unshift({ path: cursor, identity: "" });
+    if (dirname(cursor) === cursor) break;
+  }
+  const verify = () => {
+    if (canonicalSystemPath(path) !== canonical) throw new Error();
+    for (const directory of directories) {
+      const info = lstatSync(directory.path, { bigint: true });
+      if (!info.isDirectory() || identity(info) !== directory.identity) throw new Error();
+    }
+  };
+  for (const directory of directories) {
+    let info = lstatSync(directory.path, { bigint: true, throwIfNoEntry: false });
+    if (!info) { mkdirSync(directory.path, { mode: 0o700 }); info = lstatSync(directory.path, { bigint: true }); }
+    if (!info.isDirectory() || (info.uid !== 0n && info.uid !== uid)
+      || ((info.mode & 0o022n) !== 0n && !(info.uid === 0n && (info.mode & 0o1000n) !== 0n))) throw new Error();
+    directory.identity = identity(info);
+  }
+  verify();
+  if (lstatSync(path, { throwIfNoEntry: false }) !== undefined) throw new Error();
+  return verify;
+}
+
+function readClaudeFirstRunConfig(path: string, verifyPath: () => void): Buffer | null {
+  verifyPath();
+  const before = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+  if (!before) return null;
+  const identity = (info: BigIntStats) => `${info.dev}:${info.ino}:${info.uid}:${info.gid}:${info.mode}:${info.nlink}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
+  if (!before.isFile() || before.nlink !== 1n || before.uid !== BigInt(process.getuid!())
+    || (before.mode & 0o022n) !== 0n || before.size > 16n * 1024n * 1024n) throw new Error();
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    if (identity(fstatSync(fd, { bigint: true })) !== identity(before)) throw new Error();
+    const bytes = Buffer.alloc(Number(before.size) + 1); let length = 0;
+    while (length < bytes.length) { const count = readSync(fd, bytes, length, bytes.length - length, null); if (!count) break; length += count; }
+    if (BigInt(length) !== before.size || identity(fstatSync(fd, { bigint: true })) !== identity(before)
+      || identity(lstatSync(path, { bigint: true })) !== identity(before)) throw new Error();
+    const content = bytes.subarray(0, length);
+    verifyPath(); parseClaudeConfig(content); return content;
+  } finally { closeSync(fd); }
 }
 
 function parseClaudeConfig(bytes: Buffer | null): Record<string, unknown> {
@@ -192,11 +245,14 @@ function parseClaudeConfig(bytes: Buffer | null): Record<string, unknown> {
 
 // Claude 2.1.302 initializes this metadata during a successful native add.
 // Only new fields may use this contract; every original field stays exact.
-function claudeNativeConfigPreserved(before: Record<string, unknown>, after: Record<string, unknown>): boolean {
+function claudeNativeConfigPreserved(before: Record<string, unknown>, after: Record<string, unknown>, firstRun = false): boolean {
   const previous = withoutClaudeSkills(before), current = withoutClaudeSkills(after);
   for (const key of Object.keys(current)) {
     if (Object.hasOwn(previous, key)) continue;
-    if (!isClaudeBootstrapAddition(key, current[key])) return false;
+    // Normal traffic initialization adds userID on a fresh Claude 2.1.302 home.
+    // Never extend existing-file admission with this first-run-only field.
+    if (!(firstRun && key === "userID" && typeof current[key] === "string" && /^[0-9a-f]{64}$/i.test(current[key]))
+      && !isClaudeBootstrapAddition(key, current[key])) return false;
     delete current[key];
   }
   return isDeepStrictEqual(previous, current);

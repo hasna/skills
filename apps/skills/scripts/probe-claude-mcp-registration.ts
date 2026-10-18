@@ -59,23 +59,26 @@ async function run(command: string[], cwd: string, env: Record<string, string>, 
   } finally { clearTimeout(timer); stop(); }
 }
 
-function fixture(root: string, name: string, binary: string) {
+function fixture(root: string, name: string, binary: string, seeded = true, disableNonessentialTraffic = true) {
   const directory = join(root, name);
   mkdirSync(directory, { mode: 0o700 });
   for (const part of ["home", "config", "cache", "state", "tmp", "cwd", "bin", "records"])
     mkdirSync(join(directory, part), { mode: 0o700 });
-  const config = join(directory, "config", ".claude.json");
-  const original = Buffer.from(JSON.stringify({ fixturePreserved: { value: "synthetic-only" },
-    mcpServers: { other: { type: "stdio", command: "fixture-other", args: [] } } }));
-  save(config, original); save(join(directory, "original.private.json"), original);
+  const config = join(directory, seeded ? "config" : "home", ".claude.json");
+  const original = seeded ? Buffer.from(JSON.stringify({ fixturePreserved: { value: "synthetic-only" },
+    mcpServers: { other: { type: "stdio", command: "fixture-other", args: [] } } })) : null;
+  if (original !== null) save(config, original);
+  else assert(!existsSync(config));
+  save(join(directory, "original.private.json"), original ?? "null");
+  assert(original === null ? !existsSync(config) : readFileSync(config).equals(original));
   const env = { HOME: join(directory, "home"), USERPROFILE: join(directory, "home"),
-    CLAUDE_CONFIG_DIR: join(directory, "config"), XDG_CONFIG_HOME: join(directory, "config"),
+    ...(seeded ? { CLAUDE_CONFIG_DIR: join(directory, "config") } : {}), XDG_CONFIG_HOME: join(directory, "config"),
     XDG_CACHE_HOME: join(directory, "cache"), XDG_STATE_HOME: join(directory, "state"),
     TMPDIR: join(directory, "tmp"), PATH: `${join(directory, "bin")}:${dirname(process.execPath)}:/usr/bin:/bin`,
     HASNA_HOME: join(directory, "home", ".hasna"), HASNA_CONFIG_HOME: join(directory, "home", "config"),
     HASNA_PROFILE: "claude-probe", HASNA_SKILLS_API_URL: ORIGIN, SKILLS_API_URL: ORIGIN,
     HASNA_STATION: "claude-mcp-probe-no-keychain", NO_COLOR: "1", TERM: "dumb",
-    BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", ...(disableNonessentialTraffic ? { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" } : {}),
     CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1", DISABLE_AUTOUPDATER: "1", DISABLE_UPDATES: "1" };
   // This wrapper can launch only this verified binary's version/add commands.
   // Native stdout/stderr stay private even when the Skills adapter refuses.
@@ -117,9 +120,9 @@ function capture(file: string, bytes: Uint8Array) {
   assert(scan.status === 0 && scan.complete); return scan;
 }
 
-function configSummary(file: string, original: Buffer, nativeVocabulary: Set<string>) {
+function configSummary(file: string, original: Buffer | null, nativeVocabulary: Set<string>) {
   const bytes = readFileSync(file); const scan = scanned(bytes); assert(scan.status === 0 && scan.complete);
-  const before = JSON.parse(original.toString()), after = JSON.parse(bytes.toString());
+  const before = original === null ? {} : JSON.parse(original.toString()), after = JSON.parse(bytes.toString());
   const selectors = after.mcpServers?.skills?.env ?? {};
   const outside = (data: Record<string, unknown>) => {
     const result = { ...data }, servers = { ...((data.mcpServers ?? {}) as object) } as Record<string, unknown>;
@@ -140,6 +143,8 @@ function configSummary(file: string, original: Buffer, nativeVocabulary: Set<str
   const bootstrapShape = {
     firstStartTimeUtcTimestamp: utcTimestamp(after.firstStartTime),
     startupVersionMatchesPinned: STARTUP_VERSION_FIELDS.some(key => nativeVocabulary.has(key) && after[key] === VERSION),
+    userIdCanonicalUuidV4: typeof after.userID === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(after.userID),
+    userIdHex64: typeof after.userID === "string" && /^[0-9a-f]{64}$/i.test(after.userID),
     machineIdHex64: typeof after.machineID === "string" && /^[0-9a-f]{64}$/i.test(after.machineID),
     opusProMigrationCompleteTrue: after.opusProMigrationComplete === true,
     sonnet1m45MigrationCompleteTrue: after.sonnet1m45MigrationComplete === true,
@@ -149,8 +154,9 @@ function configSummary(file: string, original: Buffer, nativeVocabulary: Set<str
     migrationVersionNonnegativeInteger: Number.isSafeInteger(after.migrationVersion) && after.migrationVersion >= 0,
   };
   return { scan, bootstrapShape, unrelatedConfigPreserved: isDeepStrictEqual(outside(before), outside(after)),
+    preimageAbsent: original === null,
     seededConfigPreserved: isDeepStrictEqual(before.fixturePreserved, after.fixturePreserved)
-      && isDeepStrictEqual(before.mcpServers.other, after.mcpServers?.other),
+      && isDeepStrictEqual(before.mcpServers?.other, after.mcpServers?.other),
     changedTopLevelFields: safeChanges,
     selectedProfilePreserved: selectors.HASNA_PROFILE === "claude-probe",
     selectedOriginPreserved: selectors.HASNA_SKILLS_API_URL === ORIGIN && selectors.SKILLS_API_URL === ORIGIN,
@@ -176,13 +182,13 @@ async function exercise(root: string, binary: string, skills: string, outerNames
   const nativeBytes = readFileSync(binary);
   const nativeVocabulary = new Set(STARTUP_VERSION_FIELDS.filter(name => nativeBytes.includes(Buffer.from(name))));
   const results = [];
-  for (const kind of ["direct", "skills"] as const) {
+  for (const kind of ["direct", "skills", "first-run-direct", "first-run-skills", "default-traffic-direct", "default-traffic-skills"] as const) {
     stage = `case-${kind}`;
-    const f = fixture(root, kind, binary);
+    const f = fixture(root, kind, binary, kind === "direct" || kind === "skills", !kind.startsWith("default-traffic-"));
     const selected = ["HASNA_PROFILE", "HASNA_HOME", "HASNA_CONFIG_HOME", "HASNA_SKILLS_API_URL", "SKILLS_API_URL"] as const;
     const args = ["mcp", "add", "-s", "user", ...selected.flatMap(key => ["--env", `${key}=${f.env[key]}`]),
       "--transport", "stdio", "skills", "--", "skills-mcp", "--stdio"];
-    const command = kind === "direct" ? [f.wrapper, ...args]
+    const command = kind.endsWith("direct") ? [f.wrapper, ...args]
       : [process.execPath, "--no-env-file", "--no-install", skills, "--profile", "claude-probe", "setup", "agents", "--json"];
     const result = await run(command, join(f.directory, "cwd"), f.env);
     const stdoutScan = capture(join(f.directory, "command.stdout"), result.stdout);
@@ -195,7 +201,7 @@ async function exercise(root: string, binary: string, skills: string, outerNames
     const native = JSON.parse(readFileSync(join(f.directory, "records", "add.json"), "utf8"));
     const config = configSummary(f.config, f.original, nativeVocabulary);
     const diagnostic = nativeStderr.toString().replace(/\x1b\[[0-9;]*m/g, "").trim();
-    results.push({ kind, commandExit: result.exit, commandTimedOut: result.timedOut,
+    results.push({ kind, nonessentialTrafficDisabled: Object.hasOwn(f.env, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"), commandExit: result.exit, commandTimedOut: result.timedOut,
       nativeExit: native.exit, nativeTimedOut: native.timedOut, stdoutScan, stderrScan, nativeScans, config,
       nativeDiagnostic: /^(?:Error: )?MCP server skills already exists in user config$/.test(diagnostic)
         ? "DUPLICATE_USER_SERVER" : native.exit === 0 ? "NATIVE_SUCCESS" : "OTHER_NATIVE_REFUSAL" });
