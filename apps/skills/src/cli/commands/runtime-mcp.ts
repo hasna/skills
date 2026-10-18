@@ -1,5 +1,5 @@
 import chalk from "chalk";
-import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmdirSync, statSync, writeFileSync, type BigIntStats } from "fs";
+import { closeSync, constants, existsSync, fchmodSync, fchownSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync, writeSync, type BigIntStats } from "fs";
 import { randomUUID } from "node:crypto";
 import { homedir } from "os";
 import { dirname, isAbsolute, join } from "path";
@@ -19,7 +19,12 @@ interface McpRegistrationResult {
   config?: string;
   command?: string;
   error?: string;
+  code?: string;
+  backup?: string;
+  rewrite?: string;
 }
+
+interface ClaudePreimage { bytes: Buffer; mode: number; uid: number; gid: number; nlink: number; backup: string }
 
 export async function handleMcp(options: { register?: string; json: boolean; apiUrl?: string }) {
   if (options.register) {
@@ -49,7 +54,7 @@ export async function handleMcp(options: { register?: string; json: boolean; api
         console.log(
           result.success
             ? chalk.green(`\u2713 Registered MCP server with ${label}`)
-            : chalk.red(`\u2717 ${agent}: ${result.error}`),
+            : chalk.red(`\u2717 ${agent}: ${result.error}${result.code ? ` [${result.code}]` : ""}`),
         );
       }
     }
@@ -94,6 +99,7 @@ async function registerClaudeMcp(command: string, server: Record<string, unknown
   try {
     const path = claudeUserConfigPath();
     const firstRun = lstatSync(path, { throwIfNoEntry: false }) === undefined ? claudeFirstRunPathWitness(path) : undefined;
+    let preimage: ClaudePreimage | undefined;
     // Preserve the active original before either the native CLI or our upsert.
     const before = withClaudeConfigLock(path, () => {
       if (claudeUserConfigPath() !== path) throw new Error();
@@ -101,9 +107,11 @@ async function registerClaudeMcp(command: string, server: Record<string, unknown
       const bytes = readClaudeConfig(path);
       if (firstRun && bytes !== null) throw new Error();
       if (bytes !== null) {
+        const info = lstatSync(path);
         const backup = `${path}.skills-mcp-${randomUUID()}.backup`;
         writeFileSync(backup, bytes, { flag: "wx", mode: 0o600 });
         if (!readFileSync(backup).equals(bytes)) throw new Error();
+        preimage = { bytes, mode: info.mode & 0o7777, uid: info.uid, gid: info.gid, nlink: info.nlink, backup };
       }
       return bytes;
     });
@@ -129,21 +137,39 @@ async function registerClaudeMcp(command: string, server: Record<string, unknown
       duplicateAccepted = exitCode === 1 && stdout.trim() === ""
         && (diagnostic === `MCP server ${MCP_SERVER_NAME} already exists in user config`
           || diagnostic === `Error: MCP server ${MCP_SERVER_NAME} already exists in user config`);
-      if (exitCode !== 0 && !duplicateAccepted) throw new Error();
+      // With a preserved original, a failed add is still checked below for a rewrite of its own.
+      if (exitCode !== 0 && !duplicateAccepted && !preimage) throw new Error();
     }
     return withClaudeConfigLock(path, () => {
       if (claudeUserConfigPath() !== path) throw new Error();
       const current = firstRun ? readClaudeFirstRunConfig(path, firstRun) : readClaudeConfig(path);
       const previous = parseClaudeConfig(before), data = parseClaudeConfig(current);
+      if (exitCode !== undefined && exitCode !== 0 && !duplicateAccepted) {
+        // A failed native add must not leave a rewrite of its own behind either.
+        if (!preimage || (current !== null && current.equals(preimage.bytes))) throw new Error();
+        const written = isPlainObject(data.mcpServers) ? data.mcpServers[MCP_SERVER_NAME] : undefined;
+        if (current === null || written === undefined || !claudeRewriteExplainedByNativeAdd(previous, data)) return claudeConfigLeft(path, preimage, cliCommand);
+        return restoreClaudePreimage(path, preimage, current, cliCommand);
+      }
       if (exitCode === 0) {
         const actual = isPlainObject(data.mcpServers) ? data.mcpServers[MCP_SERVER_NAME] : undefined;
         if (!claudeNativeConfigPreserved(previous, data, firstRun !== undefined && before === null)
-          || !isPlainObject(actual) || !isDeepStrictEqual({ ...actual, env: actual.env ?? {} }, desired)) throw new Error();
+          || !isPlainObject(actual) || !isDeepStrictEqual({ ...actual, env: actual.env ?? {} }, desired)) {
+          // A refusal must leave an existing file as the user had it. Restore
+          // only a rewrite our native add alone explains; a concurrent writer's
+          // change is left as found next to the preserved original.
+          if (!preimage || (current !== null && current.equals(preimage.bytes))) throw new Error();
+          if (current === null || actual === undefined || !claudeRewriteExplainedByNativeAdd(previous, data)) return claudeConfigLeft(path, preimage, cliCommand);
+          return restoreClaudePreimage(path, preimage, current, cliCommand);
+        }
       } else {
         if (!cliUnavailable && (!duplicateAccepted || !isPlainObject(previous.mcpServers) || !previous.mcpServers[MCP_SERVER_NAME])) throw new Error();
         // Do not overwrite any change made while awaiting the CLI, including
         // partial writes from a failed add or another Claude process.
-        if (before === null ? current !== null : current === null || !current.equals(before)) throw new Error();
+        if (before === null ? current !== null : current === null || !current.equals(before)) {
+          if (!preimage) throw new Error();
+          return claudeConfigLeft(path, preimage, cliCommand);
+        }
         data.mcpServers = { ...(data.mcpServers as Record<string, unknown> | undefined), [MCP_SERVER_NAME]: desired };
         const next = Buffer.from(`${JSON.stringify(data, null, 2)}\n`);
         const temporary = `${path}.skills-mcp-${randomUUID()}.tmp`;
@@ -162,6 +188,68 @@ async function registerClaudeMcp(command: string, server: Record<string, unknown
     return { agent: "claude", success: false, command: cliCommand,
       error: "Could not safely update the Claude user MCP configuration; native admission or config checks refused the update" };
   }
+}
+
+// Return the preserved original only when the live file is still exactly the
+// native rewrite we observed and its owner, group, mode and single link can be kept.
+function restoreClaudePreimage(path: string, preimage: ClaudePreimage, observed: Buffer, command: string): McpRegistrationResult {
+  if (preimage.uid !== process.getuid?.() || preimage.nlink !== 1 || constants.O_NOFOLLOW === undefined) {
+    return { agent: "claude", success: false, path, command, backup: preimage.backup, code: "CLAUDE_CONFIG_RESTORE_REFUSED",
+      error: `Claude's native update to ${path} did not pass verification, and the original cannot be restored with the same owner and links; the file was left as found and the original is preserved at ${preimage.backup}` };
+  }
+  // Keep the rewrite we are about to replace, so nothing in it can be lost.
+  const rewrite = `${path}.skills-mcp-${randomUUID()}.rewrite`;
+  writeFileSync(rewrite, observed, { flag: "wx", mode: 0o600 });
+  if (!readFileSync(rewrite).equals(observed)) throw new Error();
+  const temporary = `${path}.skills-mcp-${randomUUID()}.tmp`;
+  let renamed = false;
+  try {
+    const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    try {
+      for (let offset = 0; offset < preimage.bytes.length;) offset += writeSync(fd, preimage.bytes, offset);
+      fchownSync(fd, preimage.uid, preimage.gid);
+      fchmodSync(fd, preimage.mode);
+      fsyncSync(fd);
+    } finally { closeSync(fd); }
+    if (!readFileSync(temporary).equals(preimage.bytes)) throw new Error();
+    const latest = readClaudeConfig(path);
+    if (claudeUserConfigPath() !== path || latest === null || !latest.equals(observed)) return claudeConfigLeft(path, preimage, command, rewrite);
+    renameSync(temporary, path);
+    renamed = true;
+  } finally {
+    // Our own temporary copy of the user's config never outlives the attempt.
+    if (!renamed && lstatSync(temporary, { throwIfNoEntry: false })?.isFile()) unlinkSync(temporary);
+  }
+  const info = lstatSync(path);
+  if (!readFileSync(path).equals(preimage.bytes) || (info.mode & 0o7777) !== preimage.mode
+    || info.uid !== preimage.uid || info.gid !== preimage.gid) throw new Error();
+  return { agent: "claude", success: false, path, command, backup: preimage.backup, rewrite, code: "CLAUDE_CONFIG_RESTORED",
+    error: `Claude's native update to ${path} did not pass verification, so the skills MCP registration was refused and the original file was restored; its backup is kept at ${preimage.backup} and Claude's rewrite at ${rewrite}` };
+}
+
+// A rewrite is ours only if our add changed the skills entry and every other
+// difference is one Claude's native add makes: a measured key drop (2.1.302
+// dropped a user's theme) or new first-start keys. Any other change, including
+// another session removing a key such as a logout, is never reverted.
+function claudeRewriteExplainedByNativeAdd(before: Record<string, unknown>, after: Record<string, unknown>): boolean {
+  const skills = (data: Record<string, unknown>) => isPlainObject(data.mcpServers) ? data.mcpServers[MCP_SERVER_NAME] : undefined;
+  if (skills(after) === undefined || isDeepStrictEqual(skills(before), skills(after))) return false;
+  const previous = withoutClaudeSkills(before), current = withoutClaudeSkills(after);
+  for (const [key, value] of Object.entries(current)) {
+    if (Object.hasOwn(previous, key)) { if (!isDeepStrictEqual(previous[key], value)) return false; }
+    else if (!CLAUDE_NATIVE_FIRST_START_KEYS.has(key)) return false;
+  }
+  return Object.keys(previous).every(key => Object.hasOwn(current, key) || CLAUDE_NATIVE_DROPPED_KEYS.has(key));
+}
+
+const CLAUDE_NATIVE_DROPPED_KEYS = new Set(["theme"]);
+
+const CLAUDE_NATIVE_FIRST_START_KEYS = new Set(["firstStartTime", "firstStartVersion", "machineID", "userID", "opusProMigrationComplete",
+  "sonnet1m45MigrationComplete", "seenNotifications", "hasResetAutoModeOptInForDefaultOffer", "migrationVersion"]);
+
+function claudeConfigLeft(path: string, preimage: ClaudePreimage, command: string, rewrite?: string): McpRegistrationResult {
+  return { agent: "claude", success: false, path, command, backup: preimage.backup, ...(rewrite ? { rewrite } : {}), code: "CLAUDE_CONFIG_CHANGED_UNEXPECTEDLY",
+    error: `${path} changed during the update for a reason this command cannot attribute to its own Claude call, so it was left as found; the original is preserved at ${preimage.backup}${rewrite ? ` and the rewrite seen earlier at ${rewrite}` : ""}` };
 }
 
 // Claude Code 2.1.301: global config selection (v_/b), including the legacy
