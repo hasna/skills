@@ -26,7 +26,7 @@ import { Command } from ${JSON.stringify(require.resolve("commander"))};
 import { registerAgentIntegration } from ${JSON.stringify(resolve(import.meta.dir, "commands/agent-integration.ts"))};
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 if (process.argv[2] === "sync") {
-  await sleep(Number(process.env.SKILLS_TEST_SYNC_SLEEP ?? "0"));
+  await sleep(process.env.SKILLS_TEST_SYNC_SLEEP === "hang" ? 30_000 : Number(process.env.SKILLS_TEST_SYNC_SLEEP ?? "0"));
   process.stdout.write("{}");
 } else if (process.argv[2] === "context") {
   const at = process.argv.indexOf("--renewal-budget-ms"), budget = at < 0 ? "none" : process.argv[at + 1]!;
@@ -104,3 +104,28 @@ test("a hung context child on a Hermes first turn is reported by the hook before
   expect(result.stdout).not.toContain(SUPERVISOR_REFUSAL);
   expect(result.status).toBe(0);
 }, 60_000);
+
+// The low end of the window: a long sync leaves the context child little time.
+// The renewal shrinks with it and still reports its own code; nothing is left
+// for the Hermes supervisor to kill.
+test("after a long SessionStart sync, a small remainder still ends in the renewal's own timeout", async () => {
+  const s = await station(), longSync = { SKILLS_TEST_SYNC_SLEEP: "8500" };
+  for (const result of [await s.claude("SessionStart", longSync), await s.hermesFirstTurn(longSync)]) {
+    const budget = Number(result.budget);
+    expect(budget).toBeGreaterThan(0);
+    expect(budget).toBeLessThan(2_500);
+    expect(result.stdout).toContain("SESSION_RENEWAL_TIMEOUT");
+    expect(result.stdout).not.toContain(SUPERVISOR_REFUSAL);
+    expect(result.status).toBe(0);
+  }
+}, 90_000);
+
+test("a sync that never finishes is stopped by the hook, which reports it before any outer kill", async () => {
+  const s = await station(), hungSync = { SKILLS_TEST_SYNC_SLEEP: "hang" };
+  for (const result of [await s.claude("SessionStart", hungSync), await s.hermesFirstTurn(hungSync)]) {
+    expect(result.budget).toBe("not spawned");
+    expect(result.stdout).toContain("SKILLS_HOOK_TIMEOUT");
+    expect(result.stdout).not.toContain(SUPERVISOR_REFUSAL);
+    expect(result.status).toBe(0);
+  }
+}, 90_000);

@@ -42,15 +42,37 @@ test("each managed-hook timeout sits inside the one that encloses it, with its r
   expect(SESSION_RENEWAL_TIMEOUT_MS).toBeLessThan(hermesKillMs);
 });
 
+// Every remaining time falls in exactly one band, and each band has its own
+// outcome, so the sweep checks the low end instead of stopping there.
+// - no child: childMs <= 0; the hook reports SKILLS_HOOK_TIMEOUT without
+//   spawning the context child;
+// - no renewal: 0 < childMs <= the child reserve; the child is told a zero
+//   budget, so a stale pin reports SESSION_RENEWAL_TIMEOUT without an authority
+//   read, and a fresh pin still delivers cached context within childMs;
+// - renewal: the budget is positive and the child reserve fits inside childMs.
 test("context child limits keep every layer inside the time the hook has left", () => {
   // A full prompt window, after the hook's own startup, keeps the whole budget.
   expect(managedContextChildLimits(MANAGED_HOOK_DEADLINE_MS - 500).renewalBudgetMs).toBe(SESSION_RENEWAL_TIMEOUT_MS);
+  const bands = { noChild: 0, noRenewal: 0, renewal: 0 };
   for (let remaining = -1_000; remaining <= MANAGED_HOOK_DEADLINE_MS; remaining += 50) {
     const { childMs, renewalBudgetMs } = managedContextChildLimits(remaining);
     expect(childMs).toBeLessThanOrEqual(SESSION_CONTEXT_CHILD_CEILING_MS);
     expect(childMs + MANAGED_HOOK_EXIT_RESERVE_MS).toBeLessThanOrEqual(remaining);
-    expect(renewalBudgetMs).toBeGreaterThanOrEqual(0);
     expect(renewalBudgetMs).toBeLessThanOrEqual(SESSION_RENEWAL_TIMEOUT_MS);
-    if (renewalBudgetMs > 0) expect(renewalBudgetMs + SESSION_CONTEXT_CHILD_RESERVE_MS).toBeLessThanOrEqual(childMs);
+    if (childMs <= 0) {
+      bands.noChild++;
+      expect(renewalBudgetMs).toBe(0);
+    } else if (childMs <= SESSION_CONTEXT_CHILD_RESERVE_MS) {
+      bands.noRenewal++;
+      expect(renewalBudgetMs).toBe(0);
+    } else {
+      bands.renewal++;
+      expect(renewalBudgetMs).toBeGreaterThan(0);
+      expect(renewalBudgetMs + SESSION_CONTEXT_CHILD_RESERVE_MS).toBeLessThanOrEqual(childMs);
+    }
   }
+  // The sweep really reaches each band.
+  expect(bands.noChild).toBeGreaterThan(0);
+  expect(bands.noRenewal).toBeGreaterThan(0);
+  expect(bands.renewal).toBeGreaterThan(0);
 });
