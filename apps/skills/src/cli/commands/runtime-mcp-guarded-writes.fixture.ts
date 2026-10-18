@@ -29,7 +29,7 @@ Bun.spawnSync = (() => { throw Error("FIXTURE_PROCESS_REFUSED"); }) as typeof Bu
 for (const method of ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"] as const)
   (childProcess as unknown as Record<string, unknown>)[method] = () => { throw Error("FIXTURE_PROCESS_REFUSED"); };
 syncBuiltinESMExports();
-const { mock } = await import("bun:test");
+const { mock, spyOn } = await import("bun:test");
 // Resolve only this freshly-created sandbox before importing the target. The
 // owning path verifier still checks the synthetic HOME after mocks are bound.
 const root = fs.realpathSync(requestedRoot);
@@ -140,11 +140,22 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
         } };
       },
     };
-    mock.module("bun:ffi", () => abi);
-    // Prove both target import forms resolve the synthetic ABI, independently
-    // of production catch/refusal handling. Never load a native library here.
-    assert.equal((await import("bun:ffi")).dlopen, abi.dlopen);
-    assert.equal(require("bun:ffi").dlopen, abi.dlopen);
+    // Bun's built-in FFI module is a native default-export object. Spy on
+    // the exact functions its require consumer reads, rather than assume a
+    // module replacement changes intrinsic built-in import bindings.
+    const ffi = require("bun:ffi") as typeof abi;
+    const bindings = {
+      dlopen: spyOn(ffi, "dlopen").mockImplementation(abi.dlopen),
+      ptr: spyOn(ffi, "ptr").mockImplementation(abi.ptr),
+      i32: spyOn(ffi.read, "i32").mockImplementation(abi.read.i32),
+      readPtr: spyOn(ffi.read, "ptr").mockImplementation(abi.read.ptr),
+    };
+    // Binding checks remain outside production catch/refusal handling. A
+    // missing seam cannot be mistaken for a successful policy refusal.
+    for (const controlled of [await import("bun:ffi"), require("bun:ffi")] as Array<typeof abi>) {
+      assert.equal(controlled.dlopen, bindings.dlopen); assert.equal(controlled.ptr, bindings.ptr);
+      assert.equal(controlled.read.i32, bindings.i32); assert.equal(controlled.read.ptr, bindings.readPtr);
+    }
     Object.defineProperty(process, "platform", { ...platform, value: linuxAclMode ? "linux" : "darwin" });
   }
   let backupRead = false, replacements = 0, renameAttempts = 0, finalRead = false, raced = false, casRead = false;
