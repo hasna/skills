@@ -15,7 +15,7 @@ function sessionSelectionLabel(selection: SessionSelectionMetadata): string {
 export function selectedProfileId(explicit?: string): string {
   return explicit ?? process.env.HASNA_SKILLS_SELECTION_PROFILE ?? readManagedSkillPolicy()?.profileId ?? "default";
 }
-export interface ContextCommandOptions { selectionProfile?: string; cached?: boolean; autoReconcileSafe?: boolean; autoMigrateSessionPin?: boolean; json?: boolean; stdin?: boolean; session?: string; restore?: boolean; maxChars?: string; maxSkills?: string; file?: string }
+export interface ContextCommandOptions { selectionProfile?: string; cached?: boolean; autoReconcileSafe?: boolean; autoMigrateSessionPin?: boolean; renewalBudgetMs?: string; json?: boolean; stdin?: boolean; session?: string; restore?: boolean; maxChars?: string; maxSkills?: string; file?: string }
 export function contextResolverOptions(options: ContextCommandOptions): SelectionResolverOptions {
   if (!options.cached) return {};
   const configured = configuredSkillsApiUrl();
@@ -106,14 +106,20 @@ export function registerContextCommands(parent: Command): void {
     .option("--cached", "Use only an explicitly selected verified cache, at most 24 hours old", false)
     .option("--auto-reconcile-safe", "For managed hooks, renew authorized immutable session pins without adopting newer selected versions", false)
     .option("--auto-migrate-session-pin", "With --auto-reconcile-safe: when renewal is refused because the same profile moved on, migrate the pin to the current revision and retire changed or removed loaded skills; managed hooks name them once. A project lock at the input cwd keeps the refusal", false)
+    .option("--renewal-budget-ms <ms>", "With --auto-reconcile-safe: milliseconds this command may spend before its session pin renewal must finish, counted from when the command starts; the renewal never exceeds its own budget either")
     .option("--session <id>", "Keep the same skill versions across this session")
     .option("--restore", "Re-emit loaded session context after compaction or resume", false)
     .option("--max-chars <count>", "Optional maximum injected characters")
     .option("--max-skills <count>", "Maximum loaded skills", "3")
     .option("--json", "Return context and selection receipts as JSON", false)
     .action(async (prompt: string | undefined, options: ContextCommandOptions) => {
+      // A managed hook's budget counts from here, before the first context attempt.
+      const started = performance.now();
       try {
         if (options.autoReconcileSafe && !options.cached) throw new SkillSelectionError("INVALID_CONTEXT_INPUT", "--auto-reconcile-safe requires --cached.");
+        if (options.renewalBudgetMs !== undefined && !options.autoReconcileSafe) throw new SkillSelectionError("INVALID_CONTEXT_INPUT", "--renewal-budget-ms requires --auto-reconcile-safe.");
+        if (options.renewalBudgetMs !== undefined && !/^\d{1,6}$/.test(options.renewalBudgetMs)) throw new SkillSelectionError("INVALID_CONTEXT_INPUT", "--renewal-budget-ms must be a whole number of milliseconds.");
+        const renewalDeadline = options.renewalBudgetMs === undefined ? undefined : started + Number(options.renewalBudgetMs);
         if (options.autoMigrateSessionPin && !options.autoReconcileSafe) throw new SkillSelectionError("INVALID_CONTEXT_INPUT", "--auto-migrate-session-pin requires --auto-reconcile-safe.");
         const input = options.stdin ? parseSkillContextInput(await readContextStdin()) : { prompt: prompt ?? "" };
         input.profileId = selectedProfileId(options.selectionProfile ?? input.profileId);
@@ -129,7 +135,8 @@ export function registerContextCommands(parent: Command): void {
               || error.code !== "CACHED_PROFILE_EXPIRED" || !sessionId) throw error;
           // Session creation reads the project lock at input.cwd; a lock there
           // keeps today's refusal instead of migrating past the project's pin.
-          const renewal = await renewSkillSessionPin(sessionId, input.profileId!, { ...resolverOptions, migrate: options.autoMigrateSessionPin === true, projectDir: input.cwd });
+          const renewal = await renewSkillSessionPin(sessionId, input.profileId!, { ...resolverOptions, migrate: options.autoMigrateSessionPin === true, projectDir: input.cwd,
+            ...(renewalDeadline === undefined ? {} : { budgetMs: Math.floor(renewalDeadline - performance.now()) }) });
           if (renewal.outcome === "unchanged") throw error;
           result = await buildSkillContext(input, resolverOptions);
           if (renewal.outcome === "migrated") result = { ...result, sessionPinMigration: renewal.migration };

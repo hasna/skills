@@ -153,12 +153,17 @@ export function readSelectionJson<T>(path: string, maximumBytes = MAX_PROFILE_DO
 
 async function verifiedEntries(selection: ResolvedSkillSelection, bytes: Uint8Array, signal?: AbortSignal, deadline?: number): Promise<SkillBundleEntry[]> {
   if (`sha256:${sha256Hex(bytes)}` !== selection.bundleDigest) throw new SkillSelectionError("BUNDLE_DIGEST_MISMATCH", "The skill bundle does not match its selected digest.");
-  // Round up: the inspection deadline (now + remaining) must never fall before
-  // the caller's deadline, so an inner timeout is never reported early.
+  // Round up: the inspection deadline (now + remaining) never falls before the
+  // caller's deadline. The one exception is the per-bundle ceiling below, which
+  // can end a slow inspection before the caller's deadline (PLA8-00560).
   const remaining = deadline === undefined ? undefined : Math.ceil(deadline - performance.now());
   signal?.throwIfAborted();
   if (remaining !== undefined && remaining <= 0) throw new SkillBundleInspectionError("BUNDLE_TIMEOUT", "Bundle inspection deadline exceeded");
-  const bundle = await inspectSkillBundle(bytes, { signal, ...(remaining === undefined ? {} : { limits: { timeoutMs: remaining } }) });
+  // A per-bundle inspection limit is capped by its own hard ceiling. Seeding it
+  // with the whole renewal budget made any renewal budget above that ceiling
+  // throw BUNDLE_LIMIT, so the two budgets could not be sized independently.
+  const inspection = remaining === undefined ? {} : { limits: { timeoutMs: Math.min(remaining, SKILL_BUNDLE_INSPECTION_LIMITS.timeoutMs) } };
+  const bundle = await inspectSkillBundle(bytes, { signal, ...inspection });
   // Executable versions can ship README.md/CLAUDE.md, or only runtime files.
   // Cache validity is archive safety and exact identity; document reads decide
   // which documentation is available without executing the package.

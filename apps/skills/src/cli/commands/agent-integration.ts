@@ -16,7 +16,7 @@ import { codexNativeHookEnvelopeFromInput, CODEX_NATIVE_POLICY_FD_ENV } from "..
 import { planCodexNativeTrust, applyCodexNativeTrust, previewCodexNativeTrust } from "../../lib/codex-native-trust.js";
 import { HookDiagnosticError, hookChildError, hookFailureReason, isOptionalHookContextFailure, hookUnavailableContext } from "../../lib/hook-diagnostics.js";
 import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib/selection-cache.js";
-import { takeSessionPinMigrationNotice } from "../../lib/session-reconciliation.js";
+import { MANAGED_HOOK_DEADLINE_MS, managedContextChildLimits, takeSessionPinMigrationNotice } from "../../lib/session-reconciliation.js";
 import { captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4 } from "../../lib/claude-settings-witness.js";
 import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4, captureCodexSettingsV5, captureCodexSettingsV6 } from "../../lib/codex-settings-witness.js";
 import { captureClaudeMarketplaceRegistryV2 } from "../../lib/claude-marketplace-registry.js";
@@ -68,20 +68,24 @@ function withSessionPinMigrationNotice(agent: IntegrationAgent, event: string, i
 }
 
 async function contextForHook(input: unknown, profileId: string, cached: boolean, deadline: number): Promise<any> {
-  const remaining = deadline - Date.now();
-  if (remaining <= 0) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "context");
+  // The child's limit keeps time for this hook to report, and its renewal
+  // budget fits inside that limit, so a timeout is always reported by the
+  // innermost layer that hit it, including after SessionStart's sync.
+  const { childMs, renewalBudgetMs } = managedContextChildLimits(deadline - Date.now());
+  if (childMs <= 0) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "context");
   const args = ["context", "--stdin", "--json", "--selection-profile", profileId];
   if (cached) args.push("--cached", "--auto-reconcile-safe");
   // Default for every agent's managed hook: a refused renewal of the same
   // profile migrates the pin and names retired loaded skills once. Operators
   // keep the refusal with `skills config set sessionPinMigration off --global`.
   if (cached && sessionPinMigrationEnabled()) args.push("--auto-migrate-session-pin");
+  if (cached) args.push("--renewal-budget-ms", String(renewalBudgetMs));
   // Pinned flags, trusted cwd and allowlisted environment: a hostile project's
   // bunfig.toml, .env or BUN_OPTIONS must not reach the child on every prompt.
   const self = selfSpawnCommand(args);
   const child = Bun.spawn(self.command, { cwd: self.cwd, stdin: new Blob([JSON.stringify(input)]), stdout: "pipe", stderr: "pipe", env: { ...self.env, NO_COLOR: "1" } });
   let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, Math.min(6500, remaining));
+  const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, childMs);
   let result: any;
   let status: number;
   let output: string;
@@ -424,7 +428,7 @@ export function registerAgentIntegration(parent: Command): void {
     .option("--selection-profile <id>", "Selection profile to load")
     .description("Read native lifecycle JSON on stdin and return selected context")
     .action(async (options) => {
-      const deadline = Date.now() + 12_000;
+      const deadline = Date.now() + MANAGED_HOOK_DEADLINE_MS;
       // The installed blocking event must survive malformed JSON/input too.
       let event = options.agent === "hermes" && options.event === "pre_tool_call" ? "pre_tool_call" : "UserPromptSubmit";
       let selectionProfile: string | undefined;

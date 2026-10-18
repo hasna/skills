@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 import { buildCliFixture } from "./cli-build.fixture.js";
 import { selectionKey, sessionReceiptPath, writeSelectionJson } from "../lib/selection-cache.js";
+import { SESSION_RENEWAL_TIMEOUT_MS } from "../lib/session-reconciliation.js";
 import type { ResolvedSkillProfile } from "../types/skill-selection.js";
 
 const scratch = mkdtempSync(join(tmpdir(), "skills-renewal-budget-")), binary = join(scratch, "skills.js");
@@ -21,6 +22,9 @@ afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 // Production shape observed on the affected session: 806 selections, about
 // 561 KB resolved, 251 loaded, pinned for more than 24 hours.
 const SELECTIONS = 806, LOADED = 251, SESSION = "renewal-budget-session";
+// Authority latencies just past the renewal budget, derived from it so a budget
+// change cannot silently turn a timeout case into one that fits.
+const OVER_BUDGET_MS = SESSION_RENEWAL_TIMEOUT_MS + 300, PAST_BUDGET_MS = SESSION_RENEWAL_TIMEOUT_MS + 500;
 const hex = (value: string) => createHash("sha256").update(value).digest("hex");
 function fleetProfile(authority: string, revision: string, count = SELECTIONS): ResolvedSkillProfile {
   return {
@@ -102,7 +106,7 @@ function report(name: string, s: ReturnType<typeof station>, results: Array<{ co
 
 test("a definitive refusal is not re-resolved on every prompt and never interleaves with a budget timeout", async () => {
   // First resolve answers inside the budget; the next ones would exceed it.
-  const api = authority(current, [1300, 4300, 4300, 1300, 1300]);
+  const api = authority(current, [1300, OVER_BUDGET_MS, OVER_BUDGET_MS, 1300, 1300]);
   try {
     const s = station(api), results = await prompts(5, s);
     report("refused pin, variable authority latency", s, results);
@@ -123,7 +127,7 @@ test("with the managed hook's migration flag, a deterministic migration refusal 
     return profile;
   };
   // First resolve answers inside the budget; the next ones would exceed it.
-  const api = authority(rotated, [1300, 4300, 4300, 1300, 1300]);
+  const api = authority(rotated, [1300, OVER_BUDGET_MS, OVER_BUDGET_MS, 1300, 1300]);
   try {
     const s = station(api), results = await prompts(5, s, ["--auto-migrate-session-pin"]);
     report("refused pin and refused migration, variable authority latency", s, results);
@@ -136,7 +140,7 @@ test("with the managed hook's migration flag, a deterministic migration refusal 
 }, 60_000);
 
 test("with the migration flag, a budget timeout is still retried, not cached", async () => {
-  const api = authority(current, [4500]);
+  const api = authority(current, [PAST_BUDGET_MS]);
   try {
     const s = station(api), results = await prompts(2, s, ["--auto-migrate-session-pin"]);
     report("migration flag, authority slower than the renewal budget", s, results);
@@ -147,13 +151,33 @@ test("with the migration flag, a budget timeout is still retried, not cached", a
 }, 60_000);
 
 test("a renewal budget timeout has its own code and is retried, not cached", async () => {
-  const api = authority(current, [4500]);
+  const api = authority(current, [PAST_BUDGET_MS]);
   try {
     const s = station(api), results = await prompts(2, s);
     report("refused pin, authority slower than the renewal budget", s, results);
     expect(results.map(result => result.code)).toEqual(["SESSION_RENEWAL_TIMEOUT", "SESSION_RENEWAL_TIMEOUT"]);
     expect(api.resolves()).toBe(2);
     expect(readFileSync(s.receiptPath)).toEqual(s.before);
+  } finally { api.close(); }
+}, 60_000);
+
+test("a managed hook's smaller renewal budget makes the child report its own timeout inside it", async () => {
+  const api = authority(current, [PAST_BUDGET_MS]);
+  try {
+    const s = station(api), results = [await s.prompt(["--renewal-budget-ms", "3000"])];
+    report("renewal budget 3000 ms from the hook, authority slower than the default budget", s, results);
+    expect(results.map(result => result.code)).toEqual(["SESSION_RENEWAL_TIMEOUT"]);
+    expect(results[0]!.ms).toBeLessThan(5_000);
+    expect(readFileSync(s.receiptPath)).toEqual(s.before);
+  } finally { api.close(); }
+}, 60_000);
+
+test("an invalid renewal budget is refused before any authority read", async () => {
+  const api = authority(current, [1300]);
+  try {
+    const s = station(api), results = [await s.prompt(["--renewal-budget-ms", "9s"])];
+    expect(results.map(result => result.code)).toEqual(["INVALID_CONTEXT_INPUT"]);
+    expect(api.resolves()).toBe(0);
   } finally { api.close(); }
 }, 60_000);
 

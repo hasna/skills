@@ -65,8 +65,46 @@ export function inspectSkillSession(sessionId: string, options: SelectionCacheOp
   };
 }
 
-/** Fits inside the managed context child's 6.5-second ceiling, including CLI work. */
-export const SESSION_RENEWAL_TIMEOUT_MS = 4_000;
+/** The managed user-prompt hook's own deadline, measured from hook start. */
+export const MANAGED_HOOK_DEADLINE_MS = 12_000;
+/**
+ * The managed context child's own ceiling. It stays above
+ * SESSION_RENEWAL_TIMEOUT_MS so the parent never kills a renewal that is still
+ * inside its own budget, and below MANAGED_HOOK_DEADLINE_MS.
+ */
+export const SESSION_CONTEXT_CHILD_CEILING_MS = 11_000;
+/**
+ * Kept by the managed hook after its context child's limit: the hook's own
+ * startup before it set its deadline (an outer supervisor's timer was already
+ * running) and writing its diagnostic, so the hook reports before it is killed.
+ */
+export const MANAGED_HOOK_EXIT_RESERVE_MS = 1_000;
+/**
+ * Kept by the context child around its renewal: its own startup before the
+ * renewal deadline starts and writing its result. A renewal at a 9 s budget
+ * measured about 9.25 s of child time in cli.session-renewal-budget.test.ts.
+ */
+export const SESSION_CONTEXT_CHILD_RESERVE_MS = 1_000;
+/**
+ * Limits for one managed context child, from the time the hook has left. On a
+ * full prompt window the renewal keeps its whole budget; after a lifecycle
+ * sync has used part of the window, the renewal shrinks first, so each layer
+ * times out inside the one that encloses it and reports its own code.
+ */
+export function managedContextChildLimits(remainingMs: number): { childMs: number; renewalBudgetMs: number } {
+  const childMs = Math.min(SESSION_CONTEXT_CHILD_CEILING_MS, remainingMs - MANAGED_HOOK_EXIT_RESERVE_MS);
+  return { childMs, renewalBudgetMs: Math.max(0, Math.min(SESSION_RENEWAL_TIMEOUT_MS, childMs - SESSION_CONTEXT_CHILD_RESERVE_MS)) };
+}
+/**
+ * Renewal budget for one managed-hook prompt. A renewal re-reads every changed
+ * pinned selection at SESSION_RENEWAL_CONCURRENCY, so this has to cover the
+ * profile's real churn and not just the profile read. Measured on the live
+ * 831-selection profile with a pin carrying 807 selections, 85 of them changed:
+ * the exact-version reads alone took ~6.1 s cold and ~4.6 s warm, before the
+ * client, the two profile resolves and the receipt write. A 4-second budget sat
+ * inside that range, so one pin renewed or timed out on authority latency alone.
+ */
+export const SESSION_RENEWAL_TIMEOUT_MS = 9_000;
 /**
  * Only a real deadline or abort signal of the renewal reports the spent
  * budget: an AbortError or TimeoutError, a bundle inspection timeout or abort,
@@ -287,6 +325,12 @@ export interface SessionPinRenewalOptions extends SessionReconciliationOptions {
    * does not run.
    */
   projectDir?: string;
+  /**
+   * Managed hooks only: the time the caller has left for this renewal. The
+   * renewal uses the smaller of this and SESSION_RENEWAL_TIMEOUT_MS, so it
+   * reports its own SESSION_RENEWAL_TIMEOUT before an outer layer kills it.
+   */
+  budgetMs?: number;
 }
 
 /**
@@ -376,15 +420,18 @@ export async function renewSkillSessionPin(sessionId: string, profileId: string,
   if (refusal) {
     throw new SkillSelectionError("SESSION_RECONCILIATION_REQUIRED", `Renewal of this exact session pin was refused at ${refusal.recordedAt} by profile revision ${refusal.refusedRevision}; the existing pin is unchanged. The authority is asked again after ${refusal.expiresAt}, or sooner when the receipt or the synced profile revision changes. Review skills sessions reconcile for an intentional change.`);
   }
-  const deadline = performance.now() + SESSION_RENEWAL_TIMEOUT_MS;
+  const budgetMs = Math.min(SESSION_RENEWAL_TIMEOUT_MS, options.budgetMs ?? SESSION_RENEWAL_TIMEOUT_MS);
+  const deadline = performance.now() + budgetMs;
   const controller = new AbortController();
   // A spent renewal budget is not a network or HTTP failure of the authority.
   const timeoutError = () => new SkillSelectionError("SESSION_RENEWAL_TIMEOUT", "Skills session renewal did not finish within the managed hook renewal window; the existing pin is unchanged and the next prompt retries it.");
+  // A caller with no time left gets the same outcome without an authority read.
+  if (!(budgetMs > 0)) throw timeoutError();
   const budgetSpent = () => controller.signal.aborted || performance.now() >= deadline;
   const assertActive = () => { if (budgetSpent()) throw timeoutError(); };
   let rejectTimeout!: (error: Error) => void;
   const expired = new Promise<never>((_, reject) => { rejectTimeout = reject; });
-  const timer = setTimeout(() => { controller.abort(); rejectTimeout(timeoutError()); }, SESSION_RENEWAL_TIMEOUT_MS);
+  const timer = setTimeout(() => { controller.abort(); rejectTimeout(timeoutError()); }, budgetMs);
   // Set once the authenticated target passed identity checks; only refusals
   // from comparing the pin with this exact target may be remembered or migrated.
   let comparedTarget: ResolvedSkillProfile | undefined;
@@ -533,8 +580,9 @@ export async function renewSkillSessionPin(sessionId: string, profileId: string,
       recordRenewalRefusal(snapshot, profileId, comparedTarget.profileRevision, localRevision, now, options, RENEWAL_REFUSAL);
       throw error;
     }
-    // Inner deadlines are rounded up to the renewal deadline and never fire
-    // early, so a deadline signal from this renewal means its budget is spent.
+    // Inner deadlines are rounded up to the renewal deadline, so a deadline
+    // signal once the budget is spent is this renewal's timeout. A per-bundle
+    // inspection ceiling can fire earlier; it keeps its own code (PLA8-00560).
     if (budgetSpent() && renewalDeadlineSignal(error)) throw timeoutError();
     throw error;
   }
