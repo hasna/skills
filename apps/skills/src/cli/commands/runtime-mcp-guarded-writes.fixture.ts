@@ -1,4 +1,4 @@
-import { strict as assert } from "node:assert";
+import { AssertionError, strict as assert } from "node:assert";
 import fs from "node:fs";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
@@ -34,10 +34,11 @@ const root = canonicalSystemPath(requestedRoot);
 const { handleMcp } = await import("./runtime-mcp.js");
 const native = {
   openSync: fs.openSync, closeSync: fs.closeSync, readFileSync: fs.readFileSync,
-  writeFileSync: fs.writeFileSync, fstatSync: fs.fstatSync, fsyncSync: fs.fsyncSync, renameSync: fs.renameSync,
+  writeFileSync: fs.writeFileSync, fstatSync: fs.fstatSync, lstatSync: fs.lstatSync, fchownSync: fs.fchownSync, fsyncSync: fs.fsyncSync, renameSync: fs.renameSync,
 };
 const modes = ["atomic", "new", "race", "new-race", "cas-stat-race", "locked", "symlink", "parent-symlink", "home-ancestor-symlink", "hardlink",
-  "invalid", "invalid-container", "backup-readback", "temp-write", "final-readback"] as const;
+  "invalid", "invalid-container", "backup-readback", "temp-write", "final-readback", "group-preserved", "group-refused",
+  "acl-deny-directory", "acl-allow-directory", "acl-deny-file", "acl-allow-file", "acl-backup-inherit-allow", "acl-temp-inherit-allow", "acl-unknown", "acl-read-error"] as const;
 const receipts = [];
 assert(modes.some(mode => mode === requestedMode));
 // Native home resolution is established before module initialization. Each case
@@ -70,7 +71,59 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
   if (mode === "locked") {
     fs.mkdirSync(lock, { mode: 0o700 }); native.writeFileSync(join(lock, "foreign-owner"), "synthetic owner");
   }
-  const descriptors = new Map<number, string>(), synced = new Set<string>();
+  const descriptors = new Map<number, string>(), synced = new Set<string>(), written = new Set<string>();
+  const groupByInode = new Map<bigint, bigint>();
+  let groupChanges = 0, instrumentationFailures = 0;
+  const reflectGroup = <T extends { ino: number | bigint; gid: number | bigint }>(info: T): T => {
+    const gid = groupByInode.get(BigInt(info.ino));
+    if (gid !== undefined) Object.assign(info, { gid: typeof info.gid === "bigint" ? gid : Number(gid) });
+    return info;
+  };
+  const syntheticGid = mode.startsWith("group-") ? native.lstatSync(path, { bigint: true }).gid + 1n : undefined;
+  if (syntheticGid !== undefined) groupByInode.set(native.lstatSync(path, { bigint: true }).ino, syntheticGid);
+  const aclMode = mode.startsWith("acl-");
+  const emptyAclChecked = new Set<bigint>(); let aclCalls = 0;
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  if (aclMode) {
+    // Exercise the owning Darwin ACL reader's finite policy on Linux too.
+    // Synthetic ABI cells never load a native library or read a host ACL.
+    const { mock } = await import("bun:test");
+    const cells = new Map<number, BigUint64Array | Int32Array>(); let address = 100, errno = 2;
+    mock.module("bun:ffi", () => ({
+      ptr: (cell: BigUint64Array | Int32Array) => { cells.set(++address, cell); return address; },
+      read: { i32: () => errno, ptr: (pointer: number) => Number(cells.get(pointer)![0]) },
+      dlopen: () => {
+        let kind = "none";
+        return { close() {}, symbols: {
+          __error: () => 1, acl_valid: () => 0, acl_free: () => 0,
+          acl_get_fd: (fd: number) => {
+            aclCalls++; const target = descriptors.get(fd); errno = 2; kind = "none";
+            if (target === home && ["acl-deny-directory", "acl-allow-directory", "acl-unknown", "acl-read-error"].includes(mode))
+              kind = mode === "acl-deny-directory" ? "deny" : mode === "acl-read-error" ? "error" : mode === "acl-unknown" ? "unknown" : "allow";
+            if (target === path && ["acl-deny-file", "acl-allow-file"].includes(mode)) kind = mode === "acl-deny-file" ? "deny" : "allow";
+            if ((mode === "acl-backup-inherit-allow" && target?.endsWith(".backup"))
+              || (mode === "acl-temp-inherit-allow" && target?.endsWith(".tmp"))) kind = "allow";
+            if (kind === "error") { errno = 5; return 0; }
+            if (kind === "none") {
+              if (target?.endsWith(".backup") || target?.endsWith(".tmp")) {
+                const info = native.fstatSync(fd, { bigint: true }); if (info.size === 0n) emptyAclChecked.add(info.ino);
+              }
+              return 0;
+            }
+            return 2;
+          },
+          acl_get_entry: (_acl: number, selector: number, pointer: number) => {
+            if (selector === 0) { (cells.get(pointer) as BigUint64Array)[0] = 3n; return 0; }
+            errno = 22; return -1;
+          },
+          acl_get_tag_type: (_entry: number, pointer: number) => {
+            (cells.get(pointer) as Int32Array)[0] = kind === "deny" ? 2 : kind === "allow" ? 1 : 99; return 0;
+          },
+        } };
+      },
+    }));
+    Object.defineProperty(process, "platform", { ...platform, value: "darwin" });
+  }
   let backupRead = false, replacements = 0, renameAttempts = 0, finalRead = false, raced = false, casRead = false;
   const concurrent = Buffer.from(valid + (agent === "codex" ? "\n# concurrent writer\n" : " "));
   fs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
@@ -91,6 +144,10 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
     assert(target && resolve(target).startsWith(root + "/"));
     assert.notEqual(target, path); // The original is never opened for an in-place write.
     if (target.endsWith(".tmp")) { assert(backupRead || initiallyMissing); if (mode === "temp-write") throw Error("FIXTURE_WRITE_FAILURE"); }
+    if (aclMode && (target.endsWith(".backup") || target.endsWith(".tmp"))) {
+      assert.equal(typeof file, "number"); assert(emptyAclChecked.has(native.fstatSync(file as number, { bigint: true }).ino));
+    }
+    written.add(target);
     return native.writeFileSync(...args);
   }) as typeof fs.writeFileSync;
   fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {
@@ -110,7 +167,7 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
     return result;
   }) as typeof fs.readFileSync;
   fs.fstatSync = ((...args: Parameters<typeof fs.fstatSync>) => {
-    const result = native.fstatSync(...args);
+    const result = reflectGroup(native.fstatSync(...args));
     if (mode === "cas-stat-race" && descriptors.get(args[0]) === path && casRead && !raced) {
       // Modify the same inode after the final CAS descriptor stat, immediately
       // before readSnapshot observes the final pathname stat. Its old bytes must
@@ -120,6 +177,17 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
     }
     return result;
   }) as typeof fs.fstatSync;
+  fs.lstatSync = ((...args: Parameters<typeof fs.lstatSync>) => {
+    const info = native.lstatSync(...args); return info ? reflectGroup(info) : info;
+  }) as typeof fs.lstatSync;
+  fs.fchownSync = ((fd: number, uid: number, gid: number) => {
+    if (syntheticGid !== undefined && descriptors.get(fd)?.endsWith(".tmp")) {
+      groupChanges++; assert.equal(uid, -1); assert.equal(gid, Number(syntheticGid));
+      if (mode === "group-refused") throw Error("FIXTURE_GROUP_REFUSED");
+      groupByInode.set(native.fstatSync(fd, { bigint: true }).ino, syntheticGid); return;
+    }
+    return native.fchownSync(fd, uid, gid);
+  }) as typeof fs.fchownSync;
   fs.fsyncSync = ((fd: number) => {
     native.fsyncSync(fd);
     const target = descriptors.get(fd)!; synced.add(target);
@@ -140,12 +208,23 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
     native.renameSync(source, destination); replacements++;
     assert(native.readFileSync(path).equals(prepared));
   }) as typeof fs.renameSync;
+  // An assertion inside a writer callback must remain a test failure even if
+  // production catches it. Intentional injected I/O failures are plain Errors.
+  for (const method of ["openSync", "closeSync", "writeFileSync", "readFileSync", "fstatSync", "lstatSync", "fchownSync", "fsyncSync", "renameSync"] as const) {
+    const instrument = fs[method] as unknown as (...args: unknown[]) => unknown;
+    (fs as unknown as Record<string, unknown>)[method] = (...args: unknown[]) => {
+      try { return instrument(...args); }
+      catch (error) { if (error instanceof AssertionError) instrumentationFailures++; throw error; }
+    };
+  }
   syncBuiltinESMExports();
   const output = console.log, logs: string[] = [];
   console.log = (...values) => { logs.push(values.map(String).join(" ")); };
   try { await handleMcp({ register: agent, json: true, apiUrl: "http://127.0.0.1:9" }); }
-  finally { console.log = output; Object.assign(fs, native); syncBuiltinESMExports(); }
-  const success = mode === "atomic" || mode === "new";
+  finally { console.log = output; Object.assign(fs, native); Object.defineProperty(process, "platform", platform); syncBuiltinESMExports(); }
+  assert.equal(instrumentationFailures, 0);
+  if (aclMode) assert(aclCalls > 0);
+  const success = ["atomic", "new", "group-preserved", "acl-deny-directory"].includes(mode);
   const result = JSON.parse(logs.join("\n"));
   assert.equal(result.registered, success ? 1 : 0); assert.equal(result.results[0].success, success);
   assert.equal(process.exitCode ?? 0, success ? 0 : 1); process.exitCode = 0;
@@ -167,13 +246,21 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
     assert.deepEqual(agent === "opencode" ? server.command : server.args, agent === "opencode" ? ["skills-mcp", "--stdio"] : ["--stdio"]);
   } else {
     assert.equal(typeof result.results[0].error, "string"); assert(result.results[0].error.includes("safely update"));
-    const reason = mode === "locked" ? "locked" : ["symlink", "parent-symlink", "home-ancestor-symlink", "hardlink"].includes(mode) ? "unsafe"
-      : ["invalid", "invalid-container"].includes(mode) ? "invalid" : mode === "backup-readback" ? "preserve and verify"
-      : mode === "temp-write" ? "prepare" : mode === "final-readback" ? "verify the committed" : "changed";
+    const reason = mode === "locked" ? "locked" : ["symlink", "parent-symlink", "home-ancestor-symlink", "hardlink", "acl-allow-directory", "acl-deny-file", "acl-allow-file", "acl-unknown", "acl-read-error"].includes(mode) ? "unsafe"
+      : ["invalid", "invalid-container"].includes(mode) ? "invalid" : ["backup-readback", "acl-backup-inherit-allow"].includes(mode) ? "preserve and verify"
+      : ["temp-write", "group-refused", "acl-temp-inherit-allow"].includes(mode) ? "prepare" : mode === "final-readback" ? "verify the committed" : "changed";
     assert(result.results[0].error.includes(reason));
     if (mode === "final-readback") { assert.equal(replacements, 1); assert(finalRead); }
     else { assert.equal(replacements, 0); assert(native.readFileSync(path).equals(raced ? concurrent : original)); }
   }
+  if (!success && mode !== "final-readback") assert.equal(renameAttempts, 0);
+  if (mode.startsWith("group-")) {
+    assert.equal(groupChanges, 1);
+    if (success) assert.equal(reflectGroup(native.lstatSync(path, { bigint: true })).gid, syntheticGid);
+    else assert(![...written].some(file => file.endsWith(".tmp")));
+  }
+  if (mode === "acl-backup-inherit-allow") assert(![...written].some(file => file.endsWith(".backup")));
+  if (mode === "acl-temp-inherit-allow") assert(![...written].some(file => file.endsWith(".tmp")));
   if (mode === "cas-stat-race") { assert(casRead); assert(raced); assert.equal(renameAttempts, 0); assert.equal(replacements, 0); assert(native.readFileSync(path).equals(concurrent)); }
   if (mode === "locked") assert.equal(native.readFileSync(join(lock, "foreign-owner"), "utf8"), "synthetic owner");
   else assert(!fs.existsSync(lock));

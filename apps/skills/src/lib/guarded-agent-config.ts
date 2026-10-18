@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs, { type BigIntStats } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { canonicalSystemPath } from "./agent-integration.js";
+import { assertNativePathAcl, canonicalSystemPath } from "./agent-integration.js";
 
 type Refusal = "UNSAFE_PATH" | "OWNERSHIP_UNAVAILABLE" | "LOCKED" | "INVALID_CONFIG" | "BACKUP_FAILED"
   | "WRITE_FAILED" | "CONFIG_CHANGED" | "VERIFY_FAILED";
@@ -28,7 +28,7 @@ export function guardedAgentConfigRefusal(error: unknown): string {
 type Snapshot = { bytes: Buffer; info: BigIntStats };
 const owner = () => BigInt(process.getuid!());
 const sameNode = (a: BigIntStats, b: BigIntStats) =>
-  a.dev === b.dev && a.ino === b.ino && a.uid === b.uid && a.mode === b.mode && a.nlink === b.nlink;
+  a.dev === b.dev && a.ino === b.ino && a.uid === b.uid && a.gid === b.gid && a.mode === b.mode && a.nlink === b.nlink;
 
 function statOrMissing(path: string): BigIntStats | null {
   try { return fs.lstatSync(path, { bigint: true }); }
@@ -44,6 +44,9 @@ function readSnapshot(path: string): Snapshot | null {
   try {
     const before = fs.fstatSync(fd, { bigint: true });
     if (!sameNode(entry, before)) throw new Error();
+    // This writer does not copy file ACLs: refuse any extended file ACL,
+    // including deny entries, before preserving or replacing its bytes.
+    assertNativePathAcl(path, before, { descriptor: fd });
     const bytes = fs.readFileSync(fd), after = fs.fstatSync(fd, { bigint: true }), latest = statOrMissing(path);
     if (!latest || !sameNode(before, after) || !sameNode(after, latest)
       || after.size !== latest.size || after.mtimeNs !== latest.mtimeNs || after.ctimeNs !== latest.ctimeNs
@@ -78,6 +81,7 @@ function parentWitnesses(path: string): Array<{ path: string; info: BigIntStats 
     const stickySystemParent = !privatePath && info.uid === 0n && (info.mode & 0o1000n) !== 0n;
     if (!info.isDirectory() || (privatePath ? info.uid !== owner() : info.uid !== owner() && info.uid !== 0n)
       || ((info.mode & 0o022n) !== 0n && !stickySystemParent)) throw new Error();
+    assertNativePathAcl(path, info, { allowDenyOnly: true });
     return { path, info };
   });
 }
@@ -86,16 +90,33 @@ function verifyParents(parents: Array<{ path: string; info: BigIntStats }>) {
   for (const parent of parents) {
     const current = fs.lstatSync(parent.path, { bigint: true });
     if (!current.isDirectory() || parent.info.dev !== current.dev || parent.info.ino !== current.ino
-      || parent.info.uid !== current.uid || parent.info.mode !== current.mode) throw new Error();
+      || parent.info.uid !== current.uid || parent.info.gid !== current.gid || parent.info.mode !== current.mode) throw new Error();
+    assertNativePathAcl(parent.path, current, { allowDenyOnly: true });
   }
 }
 
-function durableFile(path: string, bytes: Buffer, mode: number): Snapshot {
+function durableFile(path: string, bytes: Buffer, mode: number, gid?: bigint): Snapshot {
   const fd = fs.openSync(path, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-  try { fs.writeFileSync(fd, bytes); fs.fchmodSync(fd, mode); fs.fsyncSync(fd); }
+  try {
+    const created = fs.fstatSync(fd, { bigint: true });
+    // Inherited ACLs can grant access despite 0600. Admit the empty file before
+    // any sensitive content, then recheck after group/mode preparation.
+    assertNativePathAcl(path, created, { descriptor: fd });
+    if (gid !== undefined && created.gid !== gid) {
+      if (!Number.isSafeInteger(Number(gid))) throw new Error();
+      fs.fchownSync(fd, -1, Number(gid));
+    }
+    fs.fchmodSync(fd, mode);
+    const prepared = fs.fstatSync(fd, { bigint: true });
+    if (prepared.uid !== owner() || (gid !== undefined && prepared.gid !== gid)
+      || Number(prepared.mode & 0o777n) !== mode) throw new Error();
+    assertNativePathAcl(path, prepared, { descriptor: fd });
+    fs.writeFileSync(fd, bytes); fs.fsyncSync(fd);
+  }
   finally { fs.closeSync(fd); }
   const saved = readSnapshot(path);
-  if (!saved || !saved.bytes.equals(bytes) || Number(saved.info.mode & 0o777n) !== mode) throw new Error();
+  if (!saved || !saved.bytes.equals(bytes) || Number(saved.info.mode & 0o777n) !== mode
+    || (gid !== undefined && saved.info.gid !== gid)) throw new Error();
   return saved;
 }
 
@@ -126,7 +147,7 @@ export function guardedAgentConfigWrite(path: string, transform: (current: Buffe
     refusal = "WRITE_FAILED";
     const temporary = path + ".skills-mcp-" + randomUUID() + ".tmp";
     const mode = original ? Number(original.info.mode & 0o777n) : 0o600;
-    const prepared = durableFile(temporary, next, mode);
+    const prepared = durableFile(temporary, next, mode, original?.info.gid);
     refusal = "CONFIG_CHANGED";
     verifyParents(parents);
     const currentLock = fs.lstatSync(lock.path, { bigint: true });

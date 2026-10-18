@@ -846,7 +846,7 @@ function hookProjectionRefusal(reason: string): never {
 
 /** Reuse the native ACL reader on a descriptor bound to the observed path.
  * File snapshots and parent identities remain the authority for bytes/modes. */
-function projectedHookAcl(path: string, observed: BigIntStats): void {
+export function assertNativePathAcl(path: string, observed: BigIntStats, options: { allowDenyOnly?: boolean; descriptor?: number } = {}): void {
   if (process.platform !== "darwin") return;
   // A file binds its full identity. A directory binds the object (dev, ino)
   // and its trust fields (uid, mode) only: its times, link count and size
@@ -854,15 +854,20 @@ function projectedHookAcl(path: string, observed: BigIntStats): void {
   // a shared TMPDIR or home. Replacing a bound descendant changes that
   // descendant's own identity, and recheck re-reads every ancestor's ACL.
   const identity = observed.isDirectory()
-    ? (stat: BigIntStats) => `${stat.dev}:${stat.ino}:${stat.uid}:${stat.mode}`
-    : (stat: BigIntStats) => `${stat.dev}:${stat.ino}:${stat.ctimeNs}:${stat.uid}:${stat.mode}:${stat.nlink}:${stat.size}:${stat.mtimeNs}`;
-  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
+    ? (stat: BigIntStats) => `${stat.dev}:${stat.ino}:${stat.uid}:${stat.gid}:${stat.mode}`
+    : (stat: BigIntStats) => `${stat.dev}:${stat.ino}:${stat.ctimeNs}:${stat.uid}:${stat.gid}:${stat.mode}:${stat.nlink}:${stat.size}:${stat.mtimeNs}`;
+  const fd = options.descriptor ?? openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
     | (observed.isDirectory() ? constants.O_DIRECTORY : 0));
   try {
-    if (identity(fstatSync(fd, { bigint: true })) !== identity(observed) || !hasTrustedDarwinAcl(fd, true)
+    if (identity(fstatSync(fd, { bigint: true })) !== identity(observed) || !hasTrustedDarwinAcl(fd, options.allowDenyOnly ?? false)
       || identity(fstatSync(fd, { bigint: true })) !== identity(observed)
-      || identity(lstatSync(path, { bigint: true })) !== identity(observed)) hookProjectionRefusal("EXECUTABLE_UNVERIFIED");
-  } finally { closeSync(fd); }
+      || identity(lstatSync(path, { bigint: true })) !== identity(observed)) throw new Error("NATIVE_PATH_ACL_UNVERIFIED");
+  } finally { if (options.descriptor === undefined) closeSync(fd); }
+}
+
+function projectedHookAcl(path: string, observed: BigIntStats): void {
+  try { assertNativePathAcl(path, observed, { allowDenyOnly: true }); }
+  catch { hookProjectionRefusal("EXECUTABLE_UNVERIFIED"); }
 }
 
 /** Only the final command leaf may be an alias. Bind its parent permissions,
