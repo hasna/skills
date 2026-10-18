@@ -38,7 +38,8 @@ const native = {
 };
 const modes = ["atomic", "new", "race", "new-race", "cas-stat-race", "locked", "symlink", "parent-symlink", "home-ancestor-symlink", "hardlink",
   "invalid", "invalid-container", "backup-readback", "temp-write", "final-readback", "group-preserved", "group-refused",
-  "acl-deny-directory", "acl-allow-directory", "acl-deny-file", "acl-allow-file", "acl-backup-inherit-allow", "acl-temp-inherit-allow", "acl-unknown", "acl-read-error"] as const;
+  "acl-deny-directory", "acl-allow-directory", "acl-deny-file", "acl-allow-file", "acl-backup-inherit-allow", "acl-temp-inherit-allow", "acl-unknown", "acl-read-error",
+  "linux-acl-absent", "linux-acl-file", "linux-acl-directory", "linux-acl-default", "linux-acl-error", "linux-acl-unsupported"] as const;
 const receipts = [];
 assert(modes.some(mode => mode === requestedMode));
 // Native home resolution is established before module initialization. Each case
@@ -81,21 +82,38 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
   };
   const syntheticGid = mode.startsWith("group-") ? native.lstatSync(path, { bigint: true }).gid + 1n : undefined;
   if (syntheticGid !== undefined) groupByInode.set(native.lstatSync(path, { bigint: true }).ino, syntheticGid);
-  const aclMode = mode.startsWith("acl-");
-  const emptyAclChecked = new Set<bigint>(); let aclCalls = 0;
+  const linuxAclMode = mode.startsWith("linux-acl-");
+  const aclMode = mode.startsWith("acl-") || linuxAclMode;
+  const emptyAclChecked = new Set<bigint>(); let aclCalls = 0, specificAclObserved = false;
   const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
   if (aclMode) {
     // Exercise the owning Darwin ACL reader's finite policy on Linux too.
     // Synthetic ABI cells never load a native library or read a host ACL.
     const { mock } = await import("bun:test");
-    const cells = new Map<number, BigUint64Array | Int32Array>(); let address = 100, errno = 2;
+    const cells = new Map<number, BigUint64Array | Int32Array | Buffer>(); let address = 100, errno = 2;
     mock.module("bun:ffi", () => ({
-      ptr: (cell: BigUint64Array | Int32Array) => { cells.set(++address, cell); return address; },
+      ptr: (cell: BigUint64Array | Int32Array | Buffer) => { cells.set(++address, cell); return address; },
       read: { i32: () => errno, ptr: (pointer: number) => Number(cells.get(pointer)![0]) },
       dlopen: () => {
         let kind = "none";
         return { close() {}, symbols: {
-          __error: () => 1, acl_valid: () => 0, acl_free: () => 0,
+          __error: () => 1, __errno_location: () => 1, acl_valid: () => 0, acl_free: () => 0,
+          fgetxattr: (fd: number, pointer: number) => {
+            aclCalls++; const target = descriptors.get(fd), attribute = (cells.get(pointer) as Buffer).toString("utf8").replace(/\0$/, ""); errno = 61;
+            if (!["system.posix_acl_access", "system.posix_acl_default"].includes(attribute)) { instrumentationFailures++; return 0n; }
+            if ((mode === "linux-acl-file" && target === path && attribute === "system.posix_acl_access")
+              || (mode === "linux-acl-directory" && target === home && attribute === "system.posix_acl_access")
+              || (mode === "linux-acl-default" && target === home && attribute === "system.posix_acl_default")) {
+              specificAclObserved = true; return 8n;
+            }
+            if (target === home && ["linux-acl-error", "linux-acl-unsupported"].includes(mode)) {
+              specificAclObserved = true; errno = mode === "linux-acl-error" ? 5 : 95; return -1n;
+            }
+            if (target?.endsWith(".backup") || target?.endsWith(".tmp")) {
+              const info = native.fstatSync(fd, { bigint: true }); if (info.size === 0n) emptyAclChecked.add(info.ino);
+            }
+            return -1n;
+          },
           acl_get_fd: (fd: number) => {
             aclCalls++; const target = descriptors.get(fd); errno = 2; kind = "none";
             if (target === home && ["acl-deny-directory", "acl-allow-directory", "acl-unknown", "acl-read-error"].includes(mode))
@@ -103,6 +121,7 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
             if (target === path && ["acl-deny-file", "acl-allow-file"].includes(mode)) kind = mode === "acl-deny-file" ? "deny" : "allow";
             if ((mode === "acl-backup-inherit-allow" && target?.endsWith(".backup"))
               || (mode === "acl-temp-inherit-allow" && target?.endsWith(".tmp"))) kind = "allow";
+            if (kind !== "none") specificAclObserved = true;
             if (kind === "error") { errno = 5; return 0; }
             if (kind === "none") {
               if (target?.endsWith(".backup") || target?.endsWith(".tmp")) {
@@ -122,7 +141,7 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
         } };
       },
     }));
-    Object.defineProperty(process, "platform", { ...platform, value: "darwin" });
+    Object.defineProperty(process, "platform", { ...platform, value: linuxAclMode ? "linux" : "darwin" });
   }
   let backupRead = false, replacements = 0, renameAttempts = 0, finalRead = false, raced = false, casRead = false;
   const concurrent = Buffer.from(valid + (agent === "codex" ? "\n# concurrent writer\n" : " "));
@@ -223,8 +242,8 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
   try { await handleMcp({ register: agent, json: true, apiUrl: "http://127.0.0.1:9" }); }
   finally { console.log = output; Object.assign(fs, native); Object.defineProperty(process, "platform", platform); syncBuiltinESMExports(); }
   assert.equal(instrumentationFailures, 0);
-  if (aclMode) assert(aclCalls > 0);
-  const success = ["atomic", "new", "group-preserved", "acl-deny-directory"].includes(mode);
+  if (aclMode) { assert(aclCalls > 0); if (mode !== "linux-acl-absent") assert(specificAclObserved); }
+  const success = ["atomic", "new", "group-preserved", "acl-deny-directory", "linux-acl-absent"].includes(mode);
   const result = JSON.parse(logs.join("\n"));
   assert.equal(result.registered, success ? 1 : 0); assert.equal(result.results[0].success, success);
   assert.equal(process.exitCode ?? 0, success ? 0 : 1); process.exitCode = 0;
@@ -246,7 +265,7 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
     assert.deepEqual(agent === "opencode" ? server.command : server.args, agent === "opencode" ? ["skills-mcp", "--stdio"] : ["--stdio"]);
   } else {
     assert.equal(typeof result.results[0].error, "string"); assert(result.results[0].error.includes("safely update"));
-    const reason = mode === "locked" ? "locked" : ["symlink", "parent-symlink", "home-ancestor-symlink", "hardlink", "acl-allow-directory", "acl-deny-file", "acl-allow-file", "acl-unknown", "acl-read-error"].includes(mode) ? "unsafe"
+    const reason = aclMode ? "access metadata" : mode === "locked" ? "locked" : ["symlink", "parent-symlink", "home-ancestor-symlink", "hardlink", "acl-allow-directory", "acl-deny-file", "acl-allow-file", "acl-unknown", "acl-read-error"].includes(mode) ? "unsafe"
       : ["invalid", "invalid-container"].includes(mode) ? "invalid" : ["backup-readback", "acl-backup-inherit-allow"].includes(mode) ? "preserve and verify"
       : ["temp-write", "group-refused", "acl-temp-inherit-allow"].includes(mode) ? "prepare" : mode === "final-readback" ? "verify the committed" : "changed";
     assert(result.results[0].error.includes(reason));

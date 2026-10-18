@@ -846,10 +846,33 @@ function hookProjectionRefusal(reason: string): never {
 
 /** Reuse the native ACL reader on a descriptor bound to the observed path.
  * File snapshots and parent identities remain the authority for bytes/modes. */
+// Access ACLs change effective permissions independently of mode/group. This
+// writer does not copy ACLs: require verified absence on supported Linux/glibc,
+// including default directory ACLs that could be inherited by newly made files.
+function hasNoLinuxAccessAcl(fd: number, directory: boolean): boolean {
+  try {
+    const { dlopen, read, ptr } = require("bun:ffi") as typeof import("bun:ffi");
+    const library = dlopen("libc.so.6", {
+      fgetxattr: { args: ["i32", "ptr", "ptr", "u64"], returns: "i64" },
+      __errno_location: { args: [], returns: "ptr" },
+    });
+    try {
+      const errno = library.symbols.__errno_location(); if (!errno) return false;
+      for (const attribute of ["system.posix_acl_access", ...(directory ? ["system.posix_acl_default"] : [])]) {
+        const name = Buffer.from(attribute + "\0");
+        // Query presence only. No attribute value is read or copied. ENODATA is
+        // the only admitted result; unsupported ABI/filesystem/errors refuse.
+        if (Number(library.symbols.fgetxattr(fd, ptr(name), null, 0)) !== -1 || read.i32(errno) !== 61) return false;
+      }
+      return true;
+    } finally { library.close(); }
+  } catch { return false; }
+}
+
 export function assertNativePathAcl(path: string, observed: BigIntStats, options: { allowDenyOnly?: boolean; descriptor?: number } = {}): void {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") throw new Error("NATIVE_PATH_ACL_UNVERIFIED");
   // A file binds its full identity. A directory binds the object (dev, ino)
-  // and its trust fields (uid, mode) only: its times, link count and size
+  // and its trust fields (uid, gid, mode) only: its times, link count and size
   // change whenever any process adds or removes an unrelated entry, such as in
   // a shared TMPDIR or home. Replacing a bound descendant changes that
   // descendant's own identity, and recheck re-reads every ancestor's ACL.
@@ -859,13 +882,15 @@ export function assertNativePathAcl(path: string, observed: BigIntStats, options
   const fd = options.descriptor ?? openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
     | (observed.isDirectory() ? constants.O_DIRECTORY : 0));
   try {
-    if (identity(fstatSync(fd, { bigint: true })) !== identity(observed) || !hasTrustedDarwinAcl(fd, options.allowDenyOnly ?? false)
+    if (identity(fstatSync(fd, { bigint: true })) !== identity(observed) || !(process.platform === "darwin" ? hasTrustedDarwinAcl(fd, options.allowDenyOnly ?? false) : hasNoLinuxAccessAcl(fd, observed.isDirectory()))
       || identity(fstatSync(fd, { bigint: true })) !== identity(observed)
       || identity(lstatSync(path, { bigint: true })) !== identity(observed)) throw new Error("NATIVE_PATH_ACL_UNVERIFIED");
   } finally { if (options.descriptor === undefined) closeSync(fd); }
 }
 
 function projectedHookAcl(path: string, observed: BigIntStats): void {
+  // Preserve the existing projection contract: only its Darwin inputs use ACL admission.
+  if (process.platform !== "darwin") return;
   try { assertNativePathAcl(path, observed, { allowDenyOnly: true }); }
   catch { hookProjectionRefusal("EXECUTABLE_UNVERIFIED"); }
 }

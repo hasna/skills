@@ -5,8 +5,9 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { assertNativePathAcl, canonicalSystemPath } from "./agent-integration.js";
 
 type Refusal = "UNSAFE_PATH" | "OWNERSHIP_UNAVAILABLE" | "LOCKED" | "INVALID_CONFIG" | "BACKUP_FAILED"
-  | "WRITE_FAILED" | "CONFIG_CHANGED" | "VERIFY_FAILED";
+  | "WRITE_FAILED" | "CONFIG_CHANGED" | "VERIFY_FAILED" | "ACCESS_METADATA_UNAVAILABLE";
 const messages: Record<Refusal, string> = {
+  ACCESS_METADATA_UNAVAILABLE: "configuration access metadata could not be verified or preserved",
   UNSAFE_PATH: "refused an unsafe or unowned configuration path",
   OWNERSHIP_UNAVAILABLE: "configuration ownership cannot be verified on this platform",
   LOCKED: "configuration is locked; no foreign lock was removed",
@@ -158,7 +159,9 @@ export function guardedAgentConfigWrite(path: string, transform: (current: Buffe
     try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
     const committed = readSnapshot(path);
     if (!committed || !sameNode(prepared.info, committed.info) || !committed.bytes.equals(next)) throw new Error();
-  } catch { throw new ConfigWriteRefusal(refusal); }
+  } catch (error) {
+    throw new ConfigWriteRefusal(error instanceof Error && error.message === "NATIVE_PATH_ACL_UNVERIFIED" ? "ACCESS_METADATA_UNAVAILABLE" : refusal);
+  }
   finally {
     // Only release the exact directory this invocation created; never recover a foreign lock.
     if (lock) {
