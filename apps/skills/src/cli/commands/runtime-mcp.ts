@@ -213,7 +213,7 @@ function restoreClaudePreimage(path: string, preimage: ClaudePreimage, observed:
     } finally { closeSync(fd); }
     if (!readFileSync(temporary).equals(preimage.bytes)) throw new Error();
     const latest = readClaudeConfig(path);
-    if (claudeUserConfigPath() !== path || latest === null || !latest.equals(observed)) return claudeConfigLeft(path, preimage, command);
+    if (claudeUserConfigPath() !== path || latest === null || !latest.equals(observed)) return claudeConfigLeft(path, preimage, command, rewrite);
     renameSync(temporary, path);
     renamed = true;
   } finally {
@@ -227,25 +227,29 @@ function restoreClaudePreimage(path: string, preimage: ClaudePreimage, observed:
     error: `Claude's native update to ${path} did not pass verification, so the skills MCP registration was refused and the original file was restored; its backup is kept at ${preimage.backup} and Claude's rewrite at ${rewrite}` };
 }
 
-// A rewrite is ours only if every difference from the preimage is one Claude's
-// native add makes: the skills entry, removed keys (2.1.302 dropped a user's
-// theme), or new first-start keys. A changed existing value or an unknown new
-// key could come from another Claude process and is never reverted.
+// A rewrite is ours only if our add changed the skills entry and every other
+// difference is one Claude's native add makes: a measured key drop (2.1.302
+// dropped a user's theme) or new first-start keys. Any other change, including
+// another session removing a key such as a logout, is never reverted.
 function claudeRewriteExplainedByNativeAdd(before: Record<string, unknown>, after: Record<string, unknown>): boolean {
+  const skills = (data: Record<string, unknown>) => isPlainObject(data.mcpServers) ? data.mcpServers[MCP_SERVER_NAME] : undefined;
+  if (skills(after) === undefined || isDeepStrictEqual(skills(before), skills(after))) return false;
   const previous = withoutClaudeSkills(before), current = withoutClaudeSkills(after);
   for (const [key, value] of Object.entries(current)) {
     if (Object.hasOwn(previous, key)) { if (!isDeepStrictEqual(previous[key], value)) return false; }
     else if (!CLAUDE_NATIVE_FIRST_START_KEYS.has(key)) return false;
   }
-  return true;
+  return Object.keys(previous).every(key => Object.hasOwn(current, key) || CLAUDE_NATIVE_DROPPED_KEYS.has(key));
 }
+
+const CLAUDE_NATIVE_DROPPED_KEYS = new Set(["theme"]);
 
 const CLAUDE_NATIVE_FIRST_START_KEYS = new Set(["firstStartTime", "firstStartVersion", "machineID", "userID", "opusProMigrationComplete",
   "sonnet1m45MigrationComplete", "seenNotifications", "hasResetAutoModeOptInForDefaultOffer", "migrationVersion"]);
 
-function claudeConfigLeft(path: string, preimage: ClaudePreimage, command: string): McpRegistrationResult {
-  return { agent: "claude", success: false, path, command, backup: preimage.backup, code: "CLAUDE_CONFIG_CHANGED_UNEXPECTEDLY",
-    error: `${path} changed during the update for a reason this command cannot attribute to its own Claude call, so it was left as found; the original is preserved at ${preimage.backup}` };
+function claudeConfigLeft(path: string, preimage: ClaudePreimage, command: string, rewrite?: string): McpRegistrationResult {
+  return { agent: "claude", success: false, path, command, backup: preimage.backup, ...(rewrite ? { rewrite } : {}), code: "CLAUDE_CONFIG_CHANGED_UNEXPECTEDLY",
+    error: `${path} changed during the update for a reason this command cannot attribute to its own Claude call, so it was left as found; the original is preserved at ${preimage.backup}${rewrite ? ` and the rewrite seen earlier at ${rewrite}` : ""}` };
 }
 
 // Claude Code 2.1.301: global config selection (v_/b), including the legacy

@@ -85,7 +85,7 @@ for (const [agent, path] of Object.entries(files)) {
     ? { theme: "system", mcp: { other: unrelated, skills: { type: "local", command: ["/old"], environment: { HASNA_PROFILE: "old-profile" } } } }
     : { retained: true, ...(agent === "claude" ? { projects: { "/owned/project": { trust: true } }, opaqueNativeState: unrelatedKey,
         ...(mode === "claude-native-bootstrap-existing" ? bootstrap : {}),
-        ...(["claude-native-bootstrap-existing-theme-drop", "claude-native-bootstrap-existing-exit1", "claude-native-bootstrap-existing-hardlink"].includes(mode!) ? { theme: "dark" } : {}),
+        ...(["claude-native-bootstrap-existing-theme-drop", "claude-native-bootstrap-existing-exit1", "claude-native-bootstrap-existing-hardlink", "claude-native-bootstrap-existing-exit1-no-add"].includes(mode!) ? { theme: "dark" } : {}),
         ...(mode === "claude-native-bootstrap-existing-userid-change" ? { userID: "1".repeat(64) } : {}),
         ...(mode === "claude-native-bootstrap-existing-change" ? { firstStartTime: "2026-10-16T00:00:00.000Z" } : {}) } : {}),
       mcpServers: { other: unrelated, ...(agent === "claude" && nativeFresh ? {} : { skills: { command: "/old", env: { HASNA_PROFILE: "old-profile" } } }) } }));
@@ -164,7 +164,11 @@ Bun.spawn = ((command: string[]) => {
       if (mode === "claude-native-bootstrap-unknown") data.unrecognizedNativeAddition = true;
       if (mode === "claude-native-bootstrap-existing-remove") delete data.retained;
       // Claude 2.1.302 measured on station01: a native add dropped the user's theme key.
-      if (["claude-native-bootstrap-existing-theme-drop", "claude-native-bootstrap-existing-exit1", "claude-native-bootstrap-existing-hardlink"].includes(mode!)) delete data.theme;
+      if (["claude-native-bootstrap-existing-theme-drop", "claude-native-bootstrap-existing-exit1", "claude-native-bootstrap-existing-hardlink", "claude-native-bootstrap-existing-exit1-no-add"].includes(mode!)) delete data.theme;
+      // Another session's logout removes a key in the same window: never restored.
+      if (mode === "claude-native-bootstrap-existing-concurrent-logout") delete data.opaqueNativeState;
+      // A failed add that rewrote the file without our entry is not ours to undo.
+      if (mode === "claude-native-bootstrap-existing-exit1-no-add") delete data.mcpServers.skills;
       // Another Claude session's save lands in the same rewrite: never ours to revert.
       if (mode === "claude-native-bootstrap-existing-concurrent") data.projects["/owned/project"] = { trust: true, concurrentSessionSave: true };
       if (mode === "claude-native-bootstrap-no-skills-entry") delete data.mcpServers.skills;
@@ -178,7 +182,7 @@ Bun.spawn = ((command: string[]) => {
       const target = join(root, "native-postimage.json"); write(target, JSON.stringify(data));
       if (mode === "claude-first-run-post-symlink") symlinkSync(target, files.claude!); else linkSync(target, files.claude!);
     } else write(files.claude!, JSON.stringify(data));
-    nativePostimage = readFileSync(files.claude!); status = ["claude-first-run-native-refusal-after-write", "claude-native-bootstrap-existing-exit1"].includes(mode!) ? 1 : 0;
+    nativePostimage = readFileSync(files.claude!); status = ["claude-first-run-native-refusal-after-write", "claude-native-bootstrap-existing-exit1", "claude-native-bootstrap-existing-exit1-no-add"].includes(mode!) ? 1 : 0;
     if (mode === "claude-first-run-late-lock") mkdirSync(`${files.claude}.lock`);
   }
   if (mode === "claude-drift") {
@@ -235,11 +239,12 @@ if (mode === "setup") {
 const refused = mode === "bad-url" || mode === "aliases";
 const admissionRefused = ["claude-policy-refused", "claude-blocked", "claude-unknown-refusal", "claude-spawn-refused"].includes(mode!);
 const claudeRefused = firstRunRefused || bootstrapRefused || admissionRefused || ["claude-drift", "claude-locked", "claude-late-lock"].includes(mode!);
-// Refused rewrites whose every difference a native add makes: our skills entry,
-// removed keys, or new first-start keys. The rest could be another writer's.
+// Refused rewrites whose every difference a native add makes: a changed skills
+// entry, the measured theme drop, or new first-start keys. The rest could be another writer's.
 const claudeRestored = bootstrapRefused && !["claude-native-bootstrap-unknown", "claude-native-bootstrap-unrelated-change",
   "claude-native-bootstrap-existing-change", "claude-native-bootstrap-existing-userid-change", "claude-native-bootstrap-no-skills-entry",
-  "claude-native-bootstrap-existing-concurrent", "claude-native-bootstrap-existing-hardlink"].includes(mode!);
+  "claude-native-bootstrap-existing-concurrent", "claude-native-bootstrap-existing-hardlink", "claude-native-bootstrap-existing-remove",
+  "claude-native-bootstrap-existing-concurrent-logout", "claude-native-bootstrap-existing-exit1-no-add"].includes(mode!);
 if (refused) {
   assert.equal(process.exitCode, 1); assert.equal(nativeCalls, 0);
   for (const [path, bytes] of originals) assert.equal(bytes === null ? !existsSync(path) : readFileSync(path).equals(bytes), true);

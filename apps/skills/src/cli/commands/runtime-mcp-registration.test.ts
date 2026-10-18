@@ -10,7 +10,8 @@ const firstRunModes = ["claude-first-run", "claude-first-run-no-userid", ...["in
 const bootstrapModes = ["claude-native-bootstrap", "claude-native-bootstrap-existing", "claude-native-bootstrap-unknown",
   "claude-native-bootstrap-existing-change", "claude-native-bootstrap-userid", "claude-native-bootstrap-existing-userid-change", "claude-native-bootstrap-existing-remove", "claude-native-bootstrap-unrelated-change",
   "claude-native-bootstrap-wrong-server", "claude-native-bootstrap-existing-theme-drop", "claude-native-bootstrap-no-skills-entry",
-  "claude-native-bootstrap-existing-exit1", "claude-native-bootstrap-existing-concurrent", "claude-native-bootstrap-existing-hardlink", ...["firstStartTime", "firstStartVersion", "machineID", "opusProMigrationComplete",
+  "claude-native-bootstrap-existing-exit1", "claude-native-bootstrap-existing-concurrent", "claude-native-bootstrap-existing-hardlink",
+  "claude-native-bootstrap-existing-concurrent-logout", "claude-native-bootstrap-existing-exit1-no-add", ...["firstStartTime", "firstStartVersion", "machineID", "opusProMigrationComplete",
     "sonnet1m45MigrationComplete", "seenNotifications", "hasResetAutoModeOptInForDefaultOffer", "migrationVersion"]
     .map(field => `claude-native-bootstrap-invalid-${field}`)];
 
