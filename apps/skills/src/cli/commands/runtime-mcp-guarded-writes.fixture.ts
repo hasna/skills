@@ -71,7 +71,7 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
     fs.mkdirSync(lock, { mode: 0o700 }); native.writeFileSync(join(lock, "foreign-owner"), "synthetic owner");
   }
   const descriptors = new Map<number, string>(), synced = new Set<string>();
-  let backupRead = false, replacements = 0, finalRead = false, raced = false, casRead = false;
+  let backupRead = false, replacements = 0, renameAttempts = 0, finalRead = false, raced = false, casRead = false;
   const concurrent = Buffer.from(valid + (agent === "codex" ? "\n# concurrent writer\n" : " "));
   fs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
     const [file] = args;
@@ -128,6 +128,7 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
     }
   }) as typeof fs.fsyncSync;
   fs.renameSync = ((...args: Parameters<typeof fs.renameSync>) => {
+    renameAttempts++; // Count entry before any fixture assertion can throw into the writer.
     const [source, destination] = args;
     assert.equal(destination, path); assert.equal(dirname(String(source)), dirname(path));
     assert(String(source).endsWith(".tmp")); assert(synced.has(String(source)));
@@ -173,7 +174,7 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
     if (mode === "final-readback") { assert.equal(replacements, 1); assert(finalRead); }
     else { assert.equal(replacements, 0); assert(native.readFileSync(path).equals(raced ? concurrent : original)); }
   }
-  if (mode === "cas-stat-race") { assert(casRead); assert(raced); assert.equal(replacements, 0); assert(native.readFileSync(path).equals(concurrent)); }
+  if (mode === "cas-stat-race") { assert(casRead); assert(raced); assert.equal(renameAttempts, 0); assert.equal(replacements, 0); assert(native.readFileSync(path).equals(concurrent)); }
   if (mode === "locked") assert.equal(native.readFileSync(join(lock, "foreign-owner"), "utf8"), "synthetic owner");
   else assert(!fs.existsSync(lock));
   if (mode === "symlink") { assert(fs.lstatSync(path).isSymbolicLink()); assert(native.readFileSync(foreign).equals(original)); }
