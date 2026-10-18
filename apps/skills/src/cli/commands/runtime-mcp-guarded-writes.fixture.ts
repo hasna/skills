@@ -29,9 +29,10 @@ Bun.spawnSync = (() => { throw Error("FIXTURE_PROCESS_REFUSED"); }) as typeof Bu
 for (const method of ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"] as const)
   (childProcess as unknown as Record<string, unknown>)[method] = () => { throw Error("FIXTURE_PROCESS_REFUSED"); };
 syncBuiltinESMExports();
-const { canonicalSystemPath } = await import("../../lib/agent-integration.js");
-const root = canonicalSystemPath(requestedRoot);
-const { handleMcp } = await import("./runtime-mcp.js");
+const { mock } = await import("bun:test");
+// Resolve only this freshly-created sandbox before importing the target. The
+// owning path verifier still checks the synthetic HOME after mocks are bound.
+const root = fs.realpathSync(requestedRoot);
 const native = {
   openSync: fs.openSync, closeSync: fs.closeSync, readFileSync: fs.readFileSync,
   writeFileSync: fs.writeFileSync, fstatSync: fs.fstatSync, lstatSync: fs.lstatSync, fchownSync: fs.fchownSync, fsyncSync: fs.fsyncSync, renameSync: fs.renameSync,
@@ -46,8 +47,7 @@ assert(modes.some(mode => mode === requestedMode));
 // runs in its own fresh child; changing HOME inside an initialized process is not isolation.
 for (const mode of modes.filter(mode => mode === requestedMode)) {
   const initiallyMissing = mode === "new" || mode === "new-race";
-  const home = canonicalSystemPath(homedir());
-  assert.equal(home, canonicalSystemPath(expectedHome));
+  const home = requestedMode === "home-ancestor-symlink" ? join(root, "home-alias", "nested") : join(root, "home");
   const path = join(home, ...paths[agent]!);
   const other = { command: "fixture-other", args: ["keep"], env: { KEEP: "synthetic" } };
   const container = agent === "opencode" ? "mcp" : "mcpServers";
@@ -89,9 +89,8 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
   if (aclMode) {
     // Exercise the owning Darwin ACL reader's finite policy on Linux too.
     // Synthetic ABI cells never load a native library or read a host ACL.
-    const { mock } = await import("bun:test");
     const cells = new Map<number, BigUint64Array | Int32Array | Buffer>(); let address = 100, errno = 2;
-    mock.module("bun:ffi", () => ({
+    const abi = {
       ptr: (cell: BigUint64Array | Int32Array | Buffer) => { cells.set(++address, cell); return address; },
       read: { i32: () => errno, ptr: (pointer: number) => Number(cells.get(pointer)![0]) },
       dlopen: () => {
@@ -140,7 +139,12 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
           },
         } };
       },
-    }));
+    };
+    mock.module("bun:ffi", () => abi);
+    // Prove both target import forms resolve the synthetic ABI, independently
+    // of production catch/refusal handling. Never load a native library here.
+    assert.equal((await import("bun:ffi")).dlopen, abi.dlopen);
+    assert.equal(require("bun:ffi").dlopen, abi.dlopen);
     Object.defineProperty(process, "platform", { ...platform, value: linuxAclMode ? "linux" : "darwin" });
   }
   let backupRead = false, replacements = 0, renameAttempts = 0, finalRead = false, raced = false, casRead = false;
@@ -236,7 +240,16 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
       catch (error) { if (error instanceof AssertionError) instrumentationFailures++; throw error; }
     };
   }
-  syncBuiltinESMExports();
+  // Bun documents syncBuiltinESMExports as a no-op. Bind the owning ACL
+  // helper's named fs imports to the same instrumented real-file operations
+  // before loading any target module; no policy function is mocked.
+  mock.module("node:fs", () => ({ ...fs, default: fs }));
+  const controlledFs = await import("node:fs");
+  for (const method of ["openSync", "closeSync", "fstatSync", "lstatSync", "fchownSync"] as const)
+    assert.equal(controlledFs[method], fs[method]);
+  const { canonicalSystemPath } = await import("../../lib/agent-integration.js");
+  assert.equal(canonicalSystemPath(homedir()), home);
+  const { handleMcp } = await import("./runtime-mcp.js");
   const output = console.log, logs: string[] = [];
   console.log = (...values) => { logs.push(values.map(String).join(" ")); };
   try { await handleMcp({ register: agent, json: true, apiUrl: "http://127.0.0.1:9" }); }
