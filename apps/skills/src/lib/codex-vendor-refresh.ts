@@ -3,7 +3,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { hashNativeJsonControls } from "./claude-settings-witness.js";
 import { codexAppDeclarationValid } from "./codex-plugin-skill-controls.js";
-import { CODEX_PLUGIN_ROOT_CAPABILITY_ENTRIES, codexPluginRootCapabilityEntry, isCodexSkillDocumentName } from "./codex-plugin-capability-paths.js";
+import { CODEX_PLUGIN_DEFAULT_SKILLS_PATHS, CODEX_PLUGIN_MANIFEST_KNOWN_KEYS, CODEX_PLUGIN_ROOT_CAPABILITY_ENTRIES, codexPluginRootCapabilityEntry, isCodexSkillDocumentName } from "./codex-plugin-capability-paths.js";
 
 /** OpenAI's own Codex plugin marketplaces, by their exact native names in Codex
  * 0.162.1. Only these hold vendor plugin copies; every other marketplace,
@@ -41,9 +41,9 @@ const OTHER_PLUGIN_CONTROLS: readonly string[] = Object.freeze(CODEX_PLUGIN_ROOT
  * metadata, the default skills root and the reviewed `.app.json` connector
  * declaration that every current vendor plugin has. Any other key (hooks,
  * commands, extensions, MCP servers, agents and unknown keys) refuses. */
-const VENDOR_MANIFEST_KEYS: readonly string[] = Object.freeze(["name", "version", "description", "author", "homepage", "repository", "license", "keywords", "interface", "skills", "apps"]);
+const VENDOR_MANIFEST_KEYS: readonly string[] = CODEX_PLUGIN_MANIFEST_KNOWN_KEYS;
 /** The default skills root, which vendor manifests spell out. */
-const DEFAULT_SKILLS_PATHS: readonly string[] = Object.freeze(["./skills", "./skills/"]);
+const DEFAULT_SKILLS_PATHS: readonly string[] = CODEX_PLUGIN_DEFAULT_SKILLS_PATHS;
 const VENDOR_APP_DECLARATION = "./.app.json";
 const MAX_SUBTREE_ENTRIES = 20000;
 const MAX_SUBTREE_DEPTH = 32;

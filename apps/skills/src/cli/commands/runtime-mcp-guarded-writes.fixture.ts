@@ -20,7 +20,7 @@ const paths: Record<string, string[]> = {
 };
 assert(Object.hasOwn(paths, agent));
 let networkCalls = 0;
-globalThis.fetch = (async () => { networkCalls++; throw Error("FIXTURE_NETWORK_REFUSED"); }) as typeof fetch;
+globalThis.fetch = (async () => { networkCalls++; throw Error("FIXTURE_NETWORK_REFUSED"); }) as unknown as typeof fetch;
 Bun.spawn = (() => { throw Error("FIXTURE_PROCESS_REFUSED"); }) as typeof Bun.spawn;
 Bun.spawnSync = (() => { throw Error("FIXTURE_PROCESS_REFUSED"); }) as typeof Bun.spawnSync;
 for (const method of ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"] as const)

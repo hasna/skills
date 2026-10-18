@@ -2,6 +2,7 @@ import { admitCorpusFixture, installCorpusInspectorFixture } from "./codex-corpu
 import { beforeEach, afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { captureCodexRemoteReceiptSnapshot } from "./codex-native-skill-catalog.js";
 import { tmpdir } from "node:os";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { applyAgentIntegration, assertManagedAgentBridge, planAgentIntegration } from "./agent-integration.js";
@@ -25,7 +26,7 @@ function fixture(namespace = "chrome", marketplace = "openai-bundled", server = 
   const manifest = { name: namespace, version: "26.908.70816", hooks: cleanup(server) };
   put(manifestPath, JSON.stringify(manifest)); put(document, "---\nname: browse\ndescription: Synthetic cleanup contract fixture\n---\nDisabled instructions\n");
   const read = (path: string) => readFileSync(path, "utf8");
-  const catalog = { version: "codex-cli 0.160.0", cwd: home, skills: [{ name: `${namespace}:browse`, path: document, enabled: false, pluginId: `${namespace}@${marketplace}` }], plugins: [{ id: `${namespace}@${marketplace}`, name: namespace, installed: true, enabled: true, localVersion: "26.908.70816" }] };
+  const catalog = { version: "codex-cli 0.160.0", cwd: home, remoteReceipts: captureCodexRemoteReceiptSnapshot(cache), skills: [{ name: `${namespace}:browse`, path: document, enabled: false, pluginId: `${namespace}@${marketplace}` }], plugins: [{ id: `${namespace}@${marketplace}`, name: namespace, installed: true, enabled: true, localVersion: "26.908.70816" }] };
   const review = () => reviewCodexPluginSkillControls(catalog, [document], cache, home, read, []);
   return { home, cache, parent, root, document, manifestPath, manifest, read, catalog, review };
 }
