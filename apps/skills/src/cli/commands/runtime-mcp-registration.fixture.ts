@@ -85,13 +85,15 @@ for (const [agent, path] of Object.entries(files)) {
     ? { theme: "system", mcp: { other: unrelated, skills: { type: "local", command: ["/old"], environment: { HASNA_PROFILE: "old-profile" } } } }
     : { retained: true, ...(agent === "claude" ? { projects: { "/owned/project": { trust: true } }, opaqueNativeState: unrelatedKey,
         ...(mode === "claude-native-bootstrap-existing" ? bootstrap : {}),
-        ...(mode === "claude-native-bootstrap-existing-theme-drop" ? { theme: "dark" } : {}),
+        ...(["claude-native-bootstrap-existing-theme-drop", "claude-native-bootstrap-existing-exit1", "claude-native-bootstrap-existing-hardlink"].includes(mode!) ? { theme: "dark" } : {}),
         ...(mode === "claude-native-bootstrap-existing-userid-change" ? { userID: "1".repeat(64) } : {}),
         ...(mode === "claude-native-bootstrap-existing-change" ? { firstStartTime: "2026-10-16T00:00:00.000Z" } : {}) } : {}),
       mcpServers: { other: unrelated, ...(agent === "claude" && nativeFresh ? {} : { skills: { command: "/old", env: { HASNA_PROFILE: "old-profile" } } }) } }));
 }
 if (mode === "claude-first-run-dangling-link") symlinkSync(join(root, "missing-native-config"), files.claude!);
 if (mode === "claude-native-bootstrap-existing-theme-drop") chmodSync(files.claude!, 0o640);
+// A second name for the same file: a rename restore would split it, so the restore is refused.
+if (mode === "claude-native-bootstrap-existing-hardlink") linkSync(files.claude!, join(root, "claude-hardlink.json"));
 const claudeModeBefore = firstRunMode ? undefined : lstatSync(files.claude!).mode & 0o7777;
 const originals = new Map(Object.values(files).map(path => [path, path === files.claude && firstRunMode ? null : readFileSync(path)]));
 // This obsolete fallback must remain untouched even when native add fails.
@@ -162,7 +164,9 @@ Bun.spawn = ((command: string[]) => {
       if (mode === "claude-native-bootstrap-unknown") data.unrecognizedNativeAddition = true;
       if (mode === "claude-native-bootstrap-existing-remove") delete data.retained;
       // Claude 2.1.302 measured on station01: a native add dropped the user's theme key.
-      if (mode === "claude-native-bootstrap-existing-theme-drop") delete data.theme;
+      if (["claude-native-bootstrap-existing-theme-drop", "claude-native-bootstrap-existing-exit1", "claude-native-bootstrap-existing-hardlink"].includes(mode!)) delete data.theme;
+      // Another Claude session's save lands in the same rewrite: never ours to revert.
+      if (mode === "claude-native-bootstrap-existing-concurrent") data.projects["/owned/project"] = { trust: true, concurrentSessionSave: true };
       if (mode === "claude-native-bootstrap-no-skills-entry") delete data.mcpServers.skills;
       if (mode === "claude-native-bootstrap-unrelated-change") data.mcpServers.other.args = ["native-drift"];
       if (mode === "claude-native-bootstrap-wrong-server") data.mcpServers.skills.env.HASNA_PROFILE = "wrong-profile";
@@ -174,7 +178,7 @@ Bun.spawn = ((command: string[]) => {
       const target = join(root, "native-postimage.json"); write(target, JSON.stringify(data));
       if (mode === "claude-first-run-post-symlink") symlinkSync(target, files.claude!); else linkSync(target, files.claude!);
     } else write(files.claude!, JSON.stringify(data));
-    nativePostimage = readFileSync(files.claude!); status = mode === "claude-first-run-native-refusal-after-write" ? 1 : 0;
+    nativePostimage = readFileSync(files.claude!); status = ["claude-first-run-native-refusal-after-write", "claude-native-bootstrap-existing-exit1"].includes(mode!) ? 1 : 0;
     if (mode === "claude-first-run-late-lock") mkdirSync(`${files.claude}.lock`);
   }
   if (mode === "claude-drift") {
@@ -231,6 +235,11 @@ if (mode === "setup") {
 const refused = mode === "bad-url" || mode === "aliases";
 const admissionRefused = ["claude-policy-refused", "claude-blocked", "claude-unknown-refusal", "claude-spawn-refused"].includes(mode!);
 const claudeRefused = firstRunRefused || bootstrapRefused || admissionRefused || ["claude-drift", "claude-locked", "claude-late-lock"].includes(mode!);
+// Refused rewrites whose every difference a native add makes: our skills entry,
+// removed keys, or new first-start keys. The rest could be another writer's.
+const claudeRestored = bootstrapRefused && !["claude-native-bootstrap-unknown", "claude-native-bootstrap-unrelated-change",
+  "claude-native-bootstrap-existing-change", "claude-native-bootstrap-existing-userid-change", "claude-native-bootstrap-no-skills-entry",
+  "claude-native-bootstrap-existing-concurrent", "claude-native-bootstrap-existing-hardlink"].includes(mode!);
 if (refused) {
   assert.equal(process.exitCode, 1); assert.equal(nativeCalls, 0);
   for (const [path, bytes] of originals) assert.equal(bytes === null ? !existsSync(path) : readFileSync(path).equals(bytes), true);
@@ -253,16 +262,19 @@ if (refused) {
       }
       if (bootstrapRefused) {
         assert(nativePostimage);
-        const backups = readdirSync(dirname(path)).filter(name => name.startsWith(basename(path) + ".skills-mcp-") && name.endsWith(".backup"));
+        const siblings = readdirSync(dirname(path)).filter(name => name.startsWith(basename(path) + ".skills-mcp-"));
+        const backups = siblings.filter(name => name.endsWith(".backup")), rewrites = siblings.filter(name => name.endsWith(".rewrite"));
         assert.equal(backups.length, 1); assert.equal(readFileSync(join(dirname(path), backups[0]!)).equals(originals.get(path)!), true);
-        assert.equal(readdirSync(dirname(path)).some(name => name.startsWith(basename(path) + ".skills-mcp-") && name.endsWith(".tmp")), false);
-        if (mode === "claude-native-bootstrap-no-skills-entry") {
-          // Without our own add in it, the rewrite is not ours to undo: left as found.
-          assert.equal(readFileSync(path).equals(nativePostimage), true);
-        } else {
-          // A refused native rewrite of an existing file is restored byte for byte, with its mode.
+        assert.equal(siblings.some(name => name.endsWith(".tmp")), false);
+        if (claudeRestored) {
+          // A refused rewrite our native add alone explains is restored byte for byte,
+          // with its mode, and the rewrite itself is kept beside it.
           assert.equal(readFileSync(path).equals(originals.get(path)!), true);
           assert.equal(lstatSync(path).mode & 0o7777, claudeModeBefore);
+          assert.equal(rewrites.length, 1); assert.equal(readFileSync(join(dirname(path), rewrites[0]!)).equals(nativePostimage), true);
+        } else {
+          // Anything another writer could have made, or a file that cannot be restored as it was, is left as found.
+          assert.equal(readFileSync(path).equals(nativePostimage), true); assert.equal(rewrites.length, 0);
         }
       } else if (mode === "claude-drift") {
         const expected = JSON.parse(originals.get(path)!.toString()); expected.concurrentNativeChange = true;
@@ -340,11 +352,12 @@ if (!["auth", "setup"].includes(mode!)) {
     assert.equal(claude.success, !claudeRefused);
     if (!claudeRefused) assert.equal(claude.path, files.claude);
     if (bootstrapRefused || mode === "claude-drift") {
-      const restored = bootstrapRefused && mode !== "claude-native-bootstrap-no-skills-entry";
-      assert.equal(claude.code, restored ? "CLAUDE_CONFIG_RESTORED" : "CLAUDE_CONFIG_CHANGED_UNEXPECTEDLY");
+      assert.equal(claude.code, claudeRestored ? "CLAUDE_CONFIG_RESTORED"
+        : mode === "claude-native-bootstrap-existing-hardlink" ? "CLAUDE_CONFIG_RESTORE_REFUSED" : "CLAUDE_CONFIG_CHANGED_UNEXPECTEDLY");
       assert.equal(claude.backup.startsWith(files.claude + ".skills-mcp-") && claude.backup.endsWith(".backup"), true);
       assert.equal(claude.error.includes(files.claude!) && claude.error.includes(claude.backup), true);
-      assert.equal(claude.error.includes("restored"), restored);
+      assert.equal(claude.error.includes("was restored"), claudeRestored);
+      assert.equal(claudeRestored ? claude.rewrite.endsWith(".rewrite") && claude.error.includes(claude.rewrite) : claude.rewrite === undefined, true);
     }
   }
 }
