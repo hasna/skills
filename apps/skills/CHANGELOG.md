@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.83
+
+### Patch Changes
+
+- Let ordinary Claude and Codex lifecycle work continue when an existing session's Skills profile conflicts with the current project lock, after native discovery and hook input checks pass. The hook returns a fixed advisory without skill payloads, keeps the existing session pin, and never fetches a replacement selection. Explicit `load`, `context` and `run` operations still refuse the conflict, and native safety, receipt integrity and malformed response failures remain strict.
+
 ## 0.10.82
 
 ### Patch Changes
