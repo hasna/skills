@@ -8,7 +8,10 @@ import { assertTestStartupIsolation } from "../../test-isolation.fixture.js";
 
 const requestedRoot = resolve(process.env.GUARDED_CONFIG_FIXTURE_ROOT!);
 assert(basename(requestedRoot).startsWith("skills-mcp-guarded-"));
-assert.equal(homedir(), join(requestedRoot, "home"));
+const requestedMode = process.argv[3]!;
+const expectedHome = requestedMode === "home-ancestor-symlink" ? join(requestedRoot, "home-alias", "nested") : join(requestedRoot, "home");
+assert.equal(homedir(), expectedHome);
+assert.equal(process.env.HASNA_PROFILE, "guarded-fixture");
 assert.equal(process.env.HASNA_SKILLS_API_URL, "http://127.0.0.1:9");
 assert.equal(process.env.SKILLS_API_URL, "http://127.0.0.1:9");
 assertTestStartupIsolation();
@@ -31,24 +34,18 @@ const root = canonicalSystemPath(requestedRoot);
 const { handleMcp } = await import("./runtime-mcp.js");
 const native = {
   openSync: fs.openSync, closeSync: fs.closeSync, readFileSync: fs.readFileSync,
-  writeFileSync: fs.writeFileSync, fsyncSync: fs.fsyncSync, renameSync: fs.renameSync,
+  writeFileSync: fs.writeFileSync, fstatSync: fs.fstatSync, fsyncSync: fs.fsyncSync, renameSync: fs.renameSync,
 };
-const modes = ["atomic", "new", "race", "new-race", "locked", "symlink", "parent-symlink", "home-ancestor-symlink", "hardlink",
+const modes = ["atomic", "new", "race", "new-race", "cas-stat-race", "locked", "symlink", "parent-symlink", "home-ancestor-symlink", "hardlink",
   "invalid", "invalid-container", "backup-readback", "temp-write", "final-readback"] as const;
 const receipts = [];
-for (const mode of modes) {
+assert(modes.some(mode => mode === requestedMode));
+// Native home resolution is established before module initialization. Each case
+// runs in its own fresh child; changing HOME inside an initialized process is not isolation.
+for (const mode of modes.filter(mode => mode === requestedMode)) {
   const initiallyMissing = mode === "new" || mode === "new-race";
-  let home = join(root, mode);
-  fs.mkdirSync(home, { mode: 0o700 });
-  if (mode === "home-ancestor-symlink") {
-    fs.mkdirSync(join(home, "nested"), { mode: 0o700 });
-    const alias = home + "-alias"; fs.symlinkSync(home, alias); home = join(alias, "nested");
-  }
-  process.env.HOME = home;
-  process.env.HASNA_HOME = join(home, ".hasna");
-  process.env.HASNA_CONFIG_HOME = join(home, "config");
-  process.env.HASNA_PROFILE = "guarded-fixture";
-  assert.equal(homedir(), home);
+  const home = canonicalSystemPath(homedir());
+  assert.equal(home, canonicalSystemPath(expectedHome));
   const path = join(home, ...paths[agent]!);
   const other = { command: "fixture-other", args: ["keep"], env: { KEEP: "synthetic" } };
   const container = agent === "opencode" ? "mcp" : "mcpServers";
@@ -74,7 +71,7 @@ for (const mode of modes) {
     fs.mkdirSync(lock, { mode: 0o700 }); native.writeFileSync(join(lock, "foreign-owner"), "synthetic owner");
   }
   const descriptors = new Map<number, string>(), synced = new Set<string>();
-  let backupRead = false, replacements = 0, finalRead = false, raced = false;
+  let backupRead = false, replacements = 0, finalRead = false, raced = false, casRead = false;
   const concurrent = Buffer.from(valid + (agent === "codex" ? "\n# concurrent writer\n" : " "));
   fs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
     const [file] = args;
@@ -100,6 +97,7 @@ for (const mode of modes) {
     const [file] = args;
     const target = typeof file === "number" ? descriptors.get(file) : String(file);
     const result = native.readFileSync(...args);
+    if (target === path && replacements === 0 && [...synced].some(file => file.endsWith(".tmp"))) casRead = true;
     if (target?.endsWith(".backup")) {
       if (mode === "backup-readback") return Buffer.from("fixture-corrupt-readback");
       const bytes = typeof result === "string" ? Buffer.from(result) : result;
@@ -111,6 +109,17 @@ for (const mode of modes) {
     }
     return result;
   }) as typeof fs.readFileSync;
+  fs.fstatSync = ((...args: Parameters<typeof fs.fstatSync>) => {
+    const result = native.fstatSync(...args);
+    if (mode === "cas-stat-race" && descriptors.get(args[0]) === path && casRead && !raced) {
+      // Modify the same inode after the final CAS descriptor stat, immediately
+      // before readSnapshot observes the final pathname stat. Its old bytes must
+      // not be accepted just because dev/ino/uid/mode/nlink remain unchanged.
+      assert(backupRead); assert.equal(replacements, 0);
+      native.writeFileSync(path, concurrent); raced = true;
+    }
+    return result;
+  }) as typeof fs.fstatSync;
   fs.fsyncSync = ((fd: number) => {
     native.fsyncSync(fd);
     const target = descriptors.get(fd)!; synced.add(target);
@@ -164,6 +173,7 @@ for (const mode of modes) {
     if (mode === "final-readback") { assert.equal(replacements, 1); assert(finalRead); }
     else { assert.equal(replacements, 0); assert(native.readFileSync(path).equals(raced ? concurrent : original)); }
   }
+  if (mode === "cas-stat-race") { assert(casRead); assert(raced); assert.equal(replacements, 0); assert(native.readFileSync(path).equals(concurrent)); }
   if (mode === "locked") assert.equal(native.readFileSync(join(lock, "foreign-owner"), "utf8"), "synthetic owner");
   else assert(!fs.existsSync(lock));
   if (mode === "symlink") { assert(fs.lstatSync(path).isSymbolicLink()); assert(native.readFileSync(foreign).equals(original)); }
@@ -178,4 +188,5 @@ for (const mode of modes) {
   receipts.push({ mode, success, originalPreserved: mode === "new" || mode === "final-readback" ? backupRead || mode === "new" : true });
 }
 assert.equal(networkCalls, 0);
-console.log(JSON.stringify({ agent, cases: receipts.length, networkCalls, syntheticOnly: true }));
+assert.equal(receipts.length, 1);
+console.log(JSON.stringify({ agent, mode: requestedMode, cases: receipts.length, networkCalls, syntheticOnly: true }));

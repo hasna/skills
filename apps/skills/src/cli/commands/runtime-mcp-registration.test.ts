@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { useDefaultTestTimeout } from "../../test-preload.js";
@@ -41,15 +41,22 @@ for (const mode of [...bootstrapModes, "profile", "environment-profile", "transi
   });
 }
 
-for (const agent of ["codex", "gemini", "pi", "opencode", "cursor", "windsurf"]) {
-  test("direct MCP config writes preserve originals and refuse unsafe changes: " + agent, async () => {
+const guardedModes = ["atomic", "new", "race", "new-race", "cas-stat-race", "locked", "symlink", "parent-symlink", "home-ancestor-symlink", "hardlink",
+  "invalid", "invalid-container", "backup-readback", "temp-write", "final-readback"];
+for (const agent of ["codex", "gemini", "pi", "opencode", "cursor", "windsurf"]) for (const mode of guardedModes) {
+  test(`direct MCP config writes preserve originals and refuse unsafe changes: ${agent}/${mode}`, async () => {
     const root = mkdtempSync(join(tmpdir(), "skills-mcp-guarded-"));
     for (const name of ["home", "tmp"]) mkdirSync(join(root, name), { mode: 0o700 });
+    let home = join(root, "home");
+    if (mode === "home-ancestor-symlink") {
+      mkdirSync(join(home, "nested"), { mode: 0o700 });
+      const alias = join(root, "home-alias"); symlinkSync(home, alias); home = join(alias, "nested");
+    }
     const child = Bun.spawn([process.execPath, "--no-env-file", "--no-install",
-      resolve(import.meta.dir, "runtime-mcp-guarded-writes.fixture.ts"), agent], {
+      resolve(import.meta.dir, "runtime-mcp-guarded-writes.fixture.ts"), agent, mode], {
       cwd: root, stdin: "ignore", stdout: "pipe", stderr: "pipe",
-      env: { HOME: join(root, "home"), TMPDIR: join(root, "tmp"), PATH: "/nonexistent-fixture-bin",
-        HASNA_HOME: join(root, "home", ".hasna"), HASNA_CONFIG_HOME: join(root, "home", "config"),
+      env: { HOME: home, TMPDIR: join(root, "tmp"), PATH: "/nonexistent-fixture-bin",
+        HASNA_HOME: join(home, ".hasna"), HASNA_CONFIG_HOME: join(home, "config"), HASNA_PROFILE: "guarded-fixture",
         HASNA_SKILLS_API_URL: "http://127.0.0.1:9", SKILLS_API_URL: "http://127.0.0.1:9",
         HASNA_STATION: "guarded-config-fixture", NO_COLOR: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
         GUARDED_CONFIG_FIXTURE_ROOT: root },
@@ -63,7 +70,7 @@ for (const agent of ["codex", "gemini", "pi", "opencode", "cursor", "windsurf"])
       const diagnostic = JSON.stringify({ exit: Number.isInteger(code) ? code : null,
         location: stderr.match(/runtime-mcp-guarded-writes\.fixture\.ts:[0-9]{1,7}:[0-9]{1,7}(?![0-9])/)?.[0] ?? "unavailable" });
       expect(timedOut, diagnostic).toBe(false); expect(stderr.length, diagnostic).toBe(0); expect(code, diagnostic).toBe(0);
-      expect(JSON.parse(stdout)).toEqual({ agent, cases: 14, networkCalls: 0, syntheticOnly: true });
+      expect(JSON.parse(stdout)).toEqual({ agent, mode, cases: 1, networkCalls: 0, syntheticOnly: true });
     } finally {
       clearTimeout(timer);
       if (child.exitCode === null) { child.kill("SIGKILL"); await child.exited; }

@@ -46,6 +46,7 @@ function readSnapshot(path: string): Snapshot | null {
     if (!sameNode(entry, before)) throw new Error();
     const bytes = fs.readFileSync(fd), after = fs.fstatSync(fd, { bigint: true }), latest = statOrMissing(path);
     if (!latest || !sameNode(before, after) || !sameNode(after, latest)
+      || after.size !== latest.size || after.mtimeNs !== latest.mtimeNs || after.ctimeNs !== latest.ctimeNs
       || before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs
       || BigInt(bytes.length) !== after.size) throw new Error();
     return { bytes, info: after };
