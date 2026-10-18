@@ -158,6 +158,44 @@ function configSummary(file: string, original: Buffer, nativeVocabulary: Set<str
       && isDeepStrictEqual(after.mcpServers.skills.args, ["--stdio"]) };
 }
 
+// Read only output whose complete credential scan already passed. Diagnostics
+// project a fixed vocabulary; arbitrary errors/config/paths never leave here.
+function setupAdapterSummary(stdout: Uint8Array) {
+  const unavailable = () => ({ collection: "unavailable" as const, adapters: [] });
+  const agents = ["claude", "codex", "gemini", "pi", "opencode", "cursor", "windsurf"] as const;
+  const directReasons = [
+    ["ACCESS_METADATA_UNAVAILABLE", "configuration access metadata could not be verified or preserved"],
+    ["UNSAFE_PATH", "refused an unsafe or unowned configuration path"],
+    ["OWNERSHIP_UNAVAILABLE", "configuration ownership cannot be verified on this platform"],
+    ["LOCKED", "configuration is locked; no foreign lock was removed"],
+    ["INVALID_CONFIG", "existing configuration is invalid"],
+    ["BACKUP_FAILED", "could not preserve and verify the original configuration"],
+    ["WRITE_FAILED", "could not prepare the replacement configuration"],
+    ["CONFIG_CHANGED", "configuration or its path changed during registration"],
+    ["VERIFY_FAILED", "could not verify the committed configuration; retain the backup for recovery"],
+  ] as const;
+  try {
+    const value: unknown = JSON.parse(Buffer.from(stdout).toString("utf8"));
+    if (!value || typeof value !== "object" || !Array.isArray((value as { results?: unknown }).results)) return unavailable();
+    const results = (value as { results: unknown[] }).results;
+    if (results.length !== agents.length) return unavailable();
+    const seen = new Set<string>(), adapters = [];
+    for (const value of results) {
+      if (!value || typeof value !== "object") return unavailable();
+      const row = value as { agent?: unknown; success?: unknown; error?: unknown };
+      const agent = agents.find(agent => row.agent === agent);
+      if (!agent || seen.has(agent) || typeof row.success !== "boolean") return unavailable();
+      seen.add(agent);
+      const error = typeof row.error === "string" ? row.error : "";
+      const refusal = row.success ? "NONE" : agent === "claude" && error === "Could not safely update the Claude user MCP configuration; native admission or config checks refused the update"
+        ? "CLAUDE_NATIVE_OR_CONFIG_REFUSAL"
+        : directReasons.find(([, message]) => error.endsWith(": " + message))?.[0] ?? "OTHER_REFUSAL";
+      adapters.push({ agent, success: row.success, refusal });
+    }
+    return { collection: "complete" as const, adapters };
+  } catch { return unavailable(); }
+}
+
 async function exercise(root: string, binary: string, skills: string, outerNamespace: string, uid: number) {
   stage = "isolation-uid";
   assert(process.getuid?.() === uid && process.geteuid?.() === uid && uid !== 0);
@@ -196,6 +234,7 @@ async function exercise(root: string, binary: string, skills: string, outerNames
     const config = configSummary(f.config, f.original, nativeVocabulary);
     const diagnostic = nativeStderr.toString().replace(/\x1b\[[0-9;]*m/g, "").trim();
     results.push({ kind, commandExit: result.exit, commandTimedOut: result.timedOut,
+      ...(kind === "skills" ? { setupAdapters: setupAdapterSummary(result.stdout) } : {}),
       nativeExit: native.exit, nativeTimedOut: native.timedOut, stdoutScan, stderrScan, nativeScans, config,
       nativeDiagnostic: /^(?:Error: )?MCP server skills already exists in user config$/.test(diagnostic)
         ? "DUPLICATE_USER_SERVER" : native.exit === 0 ? "NATIVE_SUCCESS" : "OTHER_NATIVE_REFUSAL" });
