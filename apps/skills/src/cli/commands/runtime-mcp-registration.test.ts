@@ -31,7 +31,7 @@ for (const mode of [...firstRunModes, ...bootstrapModes, "profile", "environment
       const diagnostic = JSON.stringify({ exit: Number.isInteger(code) ? code : null,
         location: stderr.match(/runtime-mcp-registration\.fixture\.ts:[0-9]{1,7}:[0-9]{1,7}(?![0-9])/)?.[0] ?? "unavailable" });
       // DIAGNOSTIC ONLY (PLA8-00581, not for merge): print a failing child's stderr with long token-like runs masked.
-      if (timedOut || stderr.length || code !== 0) console.log(`[pla8-00581] ` + JSON.stringify(stderr.replace(/[A-Za-z0-9+\/=_]{24,}/g, "<masked>").replace(/(sk|rk|pk)_(test|live)_[A-Za-z0-9]+|whsec_[A-Za-z0-9]+/g, "<masked>").slice(0, 6000)));
+      if (timedOut || stderr.length || code !== 0) console.log(`[pla8-00581 stdout] ` + JSON.stringify(stdout.replace(/[A-Za-z0-9+\/=_]{24,}/g, "<masked>").replace(/(sk|rk|pk)_(test|live)_[A-Za-z0-9]+|whsec_[A-Za-z0-9]+/g, "<masked>").slice(0, 6000))); console.log(`[pla8-00581] ` + JSON.stringify(stderr.replace(/[A-Za-z0-9+\/=_]{24,}/g, "<masked>").replace(/(sk|rk|pk)_(test|live)_[A-Za-z0-9]+|whsec_[A-Za-z0-9]+/g, "<masked>").slice(0, 6000)));
       expect(timedOut, diagnostic).toBe(false); expect(stderr.length, diagnostic).toBe(0); expect(code, diagnostic).toBe(0);
       const receipt = JSON.parse(stdout);
       expect(receipt).toMatchObject({ mode, unrelatedEntriesPreserved: true, credentialsUnchanged: true, credentialsNotDisclosed: true, networkCalls: 0 });
@@ -78,7 +78,7 @@ for (const agent of ["codex", "gemini", "pi", "opencode", "cursor", "windsurf"])
       const diagnostic = JSON.stringify({ exit: Number.isInteger(code) ? code : null,
         location: stderr.match(/runtime-mcp-guarded-writes\.fixture\.ts:[0-9]{1,7}:[0-9]{1,7}(?![0-9])/)?.[0] ?? "unavailable" });
       // DIAGNOSTIC ONLY (PLA8-00581, not for merge): print a failing child's stderr with long token-like runs masked.
-      if (timedOut || stderr.length || code !== 0) console.log(`[pla8-00581] ` + JSON.stringify(stderr.replace(/[A-Za-z0-9+\/=_]{24,}/g, "<masked>").replace(/(sk|rk|pk)_(test|live)_[A-Za-z0-9]+|whsec_[A-Za-z0-9]+/g, "<masked>").slice(0, 6000)));
+      if (timedOut || stderr.length || code !== 0) console.log(`[pla8-00581 stdout] ` + JSON.stringify(stdout.replace(/[A-Za-z0-9+\/=_]{24,}/g, "<masked>").replace(/(sk|rk|pk)_(test|live)_[A-Za-z0-9]+|whsec_[A-Za-z0-9]+/g, "<masked>").slice(0, 6000))); console.log(`[pla8-00581] ` + JSON.stringify(stderr.replace(/[A-Za-z0-9+\/=_]{24,}/g, "<masked>").replace(/(sk|rk|pk)_(test|live)_[A-Za-z0-9]+|whsec_[A-Za-z0-9]+/g, "<masked>").slice(0, 6000)));
       expect(timedOut, diagnostic).toBe(false); expect(stderr.length, diagnostic).toBe(0); expect(code, diagnostic).toBe(0);
       expect(JSON.parse(stdout)).toEqual({ agent, mode, cases: 1, networkCalls: 0, syntheticOnly: true });
     } finally {
