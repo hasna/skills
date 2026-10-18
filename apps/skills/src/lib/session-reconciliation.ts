@@ -65,8 +65,23 @@ export function inspectSkillSession(sessionId: string, options: SelectionCacheOp
   };
 }
 
-/** Fits inside the managed context child's 6.5-second ceiling, including CLI work. */
-export const SESSION_RENEWAL_TIMEOUT_MS = 4_000;
+/**
+ * The managed context child's own ceiling. It stays above
+ * SESSION_RENEWAL_TIMEOUT_MS so the parent never kills a renewal that is still
+ * inside its own budget, and below the managed hook's 12-second deadline in
+ * cli/commands/agent-integration.ts.
+ */
+export const SESSION_CONTEXT_CHILD_CEILING_MS = 11_000;
+/**
+ * Renewal budget for one managed-hook prompt. A renewal re-reads every changed
+ * pinned selection at SESSION_RENEWAL_CONCURRENCY, so this has to cover the
+ * profile's real churn and not just the profile read. Measured on the live
+ * 831-selection profile with a pin carrying 807 selections, 85 of them changed:
+ * the exact-version reads alone took ~6.1 s cold and ~4.6 s warm, before the
+ * client, the two profile resolves and the receipt write. A 4-second budget sat
+ * inside that range, so one pin renewed or timed out on authority latency alone.
+ */
+export const SESSION_RENEWAL_TIMEOUT_MS = 9_000;
 /**
  * Only a real deadline or abort signal of the renewal reports the spent
  * budget: an AbortError or TimeoutError, a bundle inspection timeout or abort,

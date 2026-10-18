@@ -158,7 +158,11 @@ async function verifiedEntries(selection: ResolvedSkillSelection, bytes: Uint8Ar
   const remaining = deadline === undefined ? undefined : Math.ceil(deadline - performance.now());
   signal?.throwIfAborted();
   if (remaining !== undefined && remaining <= 0) throw new SkillBundleInspectionError("BUNDLE_TIMEOUT", "Bundle inspection deadline exceeded");
-  const bundle = await inspectSkillBundle(bytes, { signal, ...(remaining === undefined ? {} : { limits: { timeoutMs: remaining } }) });
+  // A per-bundle inspection limit is capped by its own hard ceiling. Seeding it
+  // with the whole renewal budget made any renewal budget above that ceiling
+  // throw BUNDLE_LIMIT, so the two budgets could not be sized independently.
+  const inspection = remaining === undefined ? {} : { limits: { timeoutMs: Math.min(remaining, SKILL_BUNDLE_INSPECTION_LIMITS.timeoutMs) } };
+  const bundle = await inspectSkillBundle(bytes, { signal, ...inspection });
   // Executable versions can ship README.md/CLAUDE.md, or only runtime files.
   // Cache validity is archive safety and exact identity; document reads decide
   // which documentation is available without executing the package.

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { packSkillBundle, SkillBundleInspectionError } from "./skill-bundle.js";
 import { createHash } from "node:crypto";
-import { reconcileSkillSession, reconcileSkillSessionIfSafe, SESSION_RENEWAL_REFUSAL_TTL_MS, SESSION_RENEWAL_TIMEOUT_MS } from "./session-reconciliation.js";
+import { reconcileSkillSession, reconcileSkillSessionIfSafe, renewSkillSessionPin, SESSION_RENEWAL_REFUSAL_TTL_MS, SESSION_RENEWAL_TIMEOUT_MS } from "./session-reconciliation.js";
 import { activateSelectionProfile, cacheSelectionBundle, readSkillSessionSnapshot, selectionKey, sessionReceiptPath, skillSessionSnapshotBinding, SkillSelectionError, writeSelectionJson, writeSkillSession } from "./selection-cache.js";
 import { buildSkillContext } from "./skill-context.js";
 import type { ProfileClient } from "./profile-client.js";
@@ -317,3 +317,38 @@ test("before the deadline a deadline-shaped error is not relabelled", async () =
     await expect(reconcileSkillSessionIfSafe("session", "fleet", { ...f, client: { ...f.client, resolveProfile: async () => { throw error; } } }), name).rejects.toBe(error);
   }
 });
+
+// A stale pin forces one exact-version read per changed selection at
+// SESSION_RENEWAL_CONCURRENCY, which is the work that actually decides whether a
+// managed hook delivers context. The live profile is 831 selections and a
+// four-day-old pin carried 807, of which 85 had changed; the reads alone took
+// ~6.1 s cold. This models that shape without the network: 64 changed selections
+// x 300 ms at concurrency 4 = 16 batches = ~4.8 s, over the old 4-second budget
+// and inside the 9-second one. It asserts the delivered outcome, not that a call
+// succeeded: the pin must come back renewed, never SESSION_RENEWAL_TIMEOUT.
+test("a pin whose changed selections exceed the old 4-second budget still renews", async () => {
+  const root = mkdtempSync(join(tmpdir(), "skills-pin-renewal-churn-")); roots.push(root);
+  const source = join(root, "source"), cacheDir = join(root, "cache"); mkdirSync(source);
+  writeFileSync(join(source, "SKILL.md"), "---\nname: churn\ndescription: Churn\nkind: instruction\n---\nHistorical body.\n");
+  writeFileSync(join(source, "package.json"), JSON.stringify({ name: "churn", version: "1.0.0", skills: { kind: "instruction" } }));
+  const bundle = packSkillBundle(source);
+  const authority = "https://skills.example.com/api/v1";
+  const CHANGED = 64, READ_MS = 300;
+  const previous = (index: number) => ({ authority, workspaceId: "org-test", profileRevision: "old", slug: `skill-${index}`,
+    version: "1.0.0", bundleDigest: `sha256:${bundle.sha256}`, triggers: { keywords: ["churn"] }, authorizationEpoch: "e".repeat(32) });
+  const oldProfile: ResolvedSkillProfile = { authority, workspaceId: "org-test", profileId: "fleet", profileRevision: "old",
+    selections: Array.from({ length: CHANGED }, (_, index) => previous(index)) };
+  const target: ResolvedSkillProfile = { ...structuredClone(oldProfile), profileRevision: "current",
+    selections: oldProfile.selections.map(selection => ({ ...selection, version: "2.0.0", bundleDigest: `sha256:${"b".repeat(64)}`, profileRevision: "current" })) };
+  const old = { schemaVersion: 1 as const, verifiedAt: new Date(0).toISOString(), profile: oldProfile, sessionId: "session", generation: 7,
+    loaded: [selectionKey(oldProfile.selections[0]!)] };
+  writeSelectionJson(sessionReceiptPath("session", { cacheDir }), old);
+  const response = () => new Response(bundle.bytes, { headers: { "X-Skill-Authorization-Epoch": "e".repeat(32), "X-Skill-Version": "1.0.0", "X-Skill-Bundle-Sha256": bundle.sha256 } });
+  let reads = 0;
+  const client: ProfileClient = { authority, supportsPinRenewal: async () => true, resolveProfile: async () => target,
+    getBundle: async () => { reads++; await new Promise(resolve => setTimeout(resolve, READ_MS)); return response(); },
+    recordStation: async () => { throw Error("No station write permitted"); } };
+  const outcome = await renewSkillSessionPin("session", "fleet", { cacheDir, client }).catch(error => error);
+  expect(outcome).toEqual({ outcome: "renewed" });
+  expect(reads).toBe(CHANGED);
+}, 30_000);

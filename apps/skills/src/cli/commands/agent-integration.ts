@@ -16,7 +16,7 @@ import { codexNativeHookEnvelopeFromInput, CODEX_NATIVE_POLICY_FD_ENV } from "..
 import { planCodexNativeTrust, applyCodexNativeTrust, previewCodexNativeTrust } from "../../lib/codex-native-trust.js";
 import { HookDiagnosticError, hookChildError, hookFailureReason, isOptionalHookContextFailure, hookUnavailableContext } from "../../lib/hook-diagnostics.js";
 import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib/selection-cache.js";
-import { takeSessionPinMigrationNotice } from "../../lib/session-reconciliation.js";
+import { SESSION_CONTEXT_CHILD_CEILING_MS, takeSessionPinMigrationNotice } from "../../lib/session-reconciliation.js";
 import { captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4 } from "../../lib/claude-settings-witness.js";
 import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4, captureCodexSettingsV5, captureCodexSettingsV6 } from "../../lib/codex-settings-witness.js";
 import { captureClaudeMarketplaceRegistryV2 } from "../../lib/claude-marketplace-registry.js";
@@ -81,7 +81,7 @@ async function contextForHook(input: unknown, profileId: string, cached: boolean
   const self = selfSpawnCommand(args);
   const child = Bun.spawn(self.command, { cwd: self.cwd, stdin: new Blob([JSON.stringify(input)]), stdout: "pipe", stderr: "pipe", env: { ...self.env, NO_COLOR: "1" } });
   let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, Math.min(6500, remaining));
+  const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, Math.min(SESSION_CONTEXT_CHILD_CEILING_MS, remaining));
   let result: any;
   let status: number;
   let output: string;
