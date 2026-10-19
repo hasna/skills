@@ -41,7 +41,7 @@ for (const mode of registrationModes) {
   });
 }
 
-const diagnosticAgents = ["claude", "codex", "gemini", "pi", "opencode", "cursor", "windsurf"];
+const diagnosticAgents = ["claude", "codex", "gemini", "pi", "opencode", "cursor", "windsurf"] as const;
 const diagnosticResults = () => diagnosticAgents.map(agent => ({ agent, success: true, error: "", command: "private fixture command" }));
 const diagnosticInput = () => ({ mode: "claude-native-bootstrap", id: randomUUID(),
   logs: JSON.stringify({ results: diagnosticResults() }), exitMatches: false });
@@ -58,7 +58,7 @@ test("registration failure diagnostics expose exact known adapter refusals witho
     ["CONFIG_CHANGED", "configuration or its path changed during registration"],
     ["VERIFY_FAILED", "could not verify the committed configuration; retain the backup for recovery"],
     ["UPDATE_REFUSED", "configuration update was refused"],
-  ];
+  ] as const;
   for (const agent of diagnosticAgents) for (const [category, message] of categories) {
     const results = diagnosticResults(), result = results.find(entry => entry.agent === agent)!;
     result.success = false;
@@ -67,7 +67,7 @@ test("registration failure diagnostics expose exact known adapter refusals witho
     const input = { ...diagnosticInput(), logs: JSON.stringify({ results }) };
     const line = registrationFailureLine(input)!;
     const record = readRegistrationFailure(line + "\nprivate assertion output", input.mode, input.id)!;
-    expect(record.agents.map(entry => entry.agent)).toEqual(diagnosticAgents);
+    expect(record.agents.map(entry => entry.agent)).toEqual([...diagnosticAgents]);
     expect(record.agents.find(entry => entry.agent === agent)).toEqual({ agent, success: false,
       refusal: agent === "claude" ? "CLAUDE_REFUSED" : category, argsChecked: false, argsPresent: false, argsMatch: false });
     expect(line.includes(result.command)).toBe(false); expect(line.includes(result.error)).toBe(false);
