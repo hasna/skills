@@ -11,6 +11,7 @@ import { skillsMcpRegistrationEnvironment } from "../../lib/mcp-registration-env
 import { resolveSkillsFleet } from "../../lib/fleet-credentials.js";
 import { handleMcp } from "./runtime-mcp.js";
 import { assertTestStartupIsolation } from "../../test-isolation.fixture.js";
+import { registrationArgsMatch, registrationFailureLine } from "./runtime-mcp-registration-diagnostics.fixture.js";
 
 // Invoked only in a freshly created synthetic HOME. Never start an agent or dial a server.
 const root = resolve(process.env.REGISTRATION_FIXTURE_ROOT!);
@@ -245,6 +246,15 @@ const claudeRestored = bootstrapRefused && !["claude-native-bootstrap-unknown", 
   "claude-native-bootstrap-existing-change", "claude-native-bootstrap-existing-userid-change", "claude-native-bootstrap-no-skills-entry",
   "claude-native-bootstrap-existing-concurrent", "claude-native-bootstrap-existing-hardlink", "claude-native-bootstrap-existing-remove",
   "claude-native-bootstrap-existing-concurrent-logout", "claude-native-bootstrap-existing-exit1-no-add"].includes(mode!);
+const exitMatches = (process.exitCode ?? 0) === (refused || mode === "invalid-toml" || claudeRefused ? 1 : 0);
+const reportFailure = (args?: { agent: string; value: unknown }) => {
+  const line = registrationFailureLine({ mode: mode!, id: process.env.REGISTRATION_DIAGNOSTIC_ID ?? "",
+    logs: logs.join("\n"), exitMatches, args });
+  // Use the saved stderr writer, before the assertion throws. Captured logs
+  // and the assertion's raw values remain private to the parent process.
+  if (line) errors(line);
+};
+if (!exitMatches) reportFailure();
 if (refused) {
   assert.equal(process.exitCode, 1); assert.equal(nativeCalls, 0);
   for (const [path, bytes] of originals) assert.equal(bytes === null ? !existsSync(path) : readFileSync(path).equals(bytes), true);
@@ -315,6 +325,7 @@ if (refused) {
       }
     }
     const args = Array.isArray(server.command) ? server.command.slice(1) : server.args;
+    if (!registrationArgsMatch(args)) reportFailure({ agent, value: args });
     assert.deepEqual(args, ["--stdio"]); assert.equal(isMcpStdioMode(args!), true); assert.equal(isMcpStdioMode([]), false);
     const selectors = server.environment ?? server.env ?? {};
     for (const secret of [fleetKey, customerKey, unrelatedKey]) assert.equal(JSON.stringify(server).includes(secret), false);
