@@ -343,22 +343,27 @@ export function upgradeClaudeSettingsWitnessV4(previous: { path: string; hashMod
 //   - `permissions`: only Skill rules in allow/deny/ask, and
 //     additionalDirectories (added roots can carry their own skills);
 //   - `env`: only CLAUDE_CONFIG_DIR and variables whose names mention the same
-//     terms.
+//     terms;
+//   - settings that run a command the way a hook does (apiKeyHelper,
+//     awsAuthRefresh, awsCredentialExport, otelHeadersHelper, fileSuggestion)
+//     or select injected instructions (outputStyle, agent).
 // Everything else is not a discovery input and varies freely: any model value,
-// modelSettings, effort, other permission rules and modes, statusLine, other
-// environment, theme, tui, view and unknown preference keys. Malformed
-// permissions or env (not an object, a non-array rule list, a non-string rule)
-// stay bound whole. There is no model allow-list in v5. Skills-owned hook
-// entries stay bound: `skills hook install` rebinds the witness when it
-// rewrites them, and matching them by command text would accept a lookalike.
+// modelSettings, effort, other permission rules and modes, statusLine (the
+// owner's 2026-10-20 request names it as ordinary use), other environment,
+// theme, tui, view and unknown preference keys. Malformed permissions or env
+// (not an object, a non-array rule list, a non-string rule) stay bound whole.
+// There is no model allow-list in v5. Skills-owned hook entries stay bound:
+// `skills hook install` rebinds the witness when it rewrites them, and
+// matching them by command text would accept a lookalike.
 const V5_DISCOVERY_KEY = /skill|plugin|hook|marketplace/i;
+const V5_BOUND_KEYS: ReadonlySet<string> = new Set(["apiKeyHelper", "awsAuthRefresh", "awsCredentialExport", "otelHeadersHelper", "fileSuggestion", "outputStyle", "agent"]);
 const V5_DISCOVERY_ENV: ReadonlySet<string> = new Set(["CLAUDE_CONFIG_DIR"]);
 const V5_SKILL_RULE = /^Skill(?:\(|$)/;
 const V5_PERMISSION_LISTS: ReadonlySet<string> = new Set(["allow", "deny", "ask"]);
 function narrowedClaudeSettings(value: ObjectValue): ObjectValue {
   const entries: Array<[string, Value]> = [];
   for (const [key, child] of value.entries) {
-    if (V5_DISCOVERY_KEY.test(key)) { entries.push([key, child]); continue; }
+    if (V5_DISCOVERY_KEY.test(key) || V5_BOUND_KEYS.has(key)) { entries.push([key, child]); continue; }
     if (key === "permissions") {
       if (child.kind !== "object") { entries.push([key, child]); continue; }
       const kept: Array<[string, Value]> = [];

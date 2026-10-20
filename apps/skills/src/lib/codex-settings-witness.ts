@@ -447,24 +447,34 @@ export function upgradeCodexSettingsWitnessV5(previous: { path: string; hashMode
 }
 
 /** V7 binds only what can add, remove or redirect native skills, hooks or
- * plugins (owner request 2026-10-20: Codex rewrites config.toml on a model
- * change, a folder trust and its own notices, and that must not trip
- * discovery):
+ * plugins, or what a hook or the model's instructions run through (owner
+ * request 2026-10-20: Codex rewrites config.toml on a model change, a folder
+ * trust and its own notices, and that must not trip discovery):
  *   - every root key whose name mentions a skill, plugin, hook or marketplace
  *     (`hooks` without the native `hooks.state` trust ledger, `plugins`,
  *     `marketplaces`, `skills` without disable-only registrations, and any
  *     future key of that kind);
- *   - `[features]` flags with such a name, at the root and in each profile;
- *   - inside `[profiles.*]`, keys with such a name.
- * Model, effort, verbosity, service tier, providers, `[projects.*]` trust,
- * `[tui]`, `[notice]`, `notify`, MCP servers, sandbox and approval settings
- * and other unknown keys vary freely. Values are bound as parsed (numbers by
- * value, not spelling); malformed `features` or `profiles` stay bound whole.
- * V7 carries no hook dependency metadata: a review that must bind hook MCP
- * dependencies keeps V6. */
-const V7_DISCOVERY_KEY = /skill|plugin|hook|marketplace/i;
+ *   - `[mcp_servers.*]`, whole: a hook handler of type `mcp_tool` runs through
+ *     a named server, and a server can carry skills, so redirecting a server's
+ *     command or url redirects what a reviewed hook executes;
+ *   - instruction sources (`instructions`, `developer_instructions`,
+ *     `model_instructions_file`, `experimental_instructions_file`,
+ *     `project_doc_fallback_filenames`, `compact_prompt`,
+ *     `experimental_compact_prompt_file` and any key naming instructions);
+ *   - `[features]` flags with a skill, plugin, hook or marketplace name, at the
+ *     root and in each profile;
+ *   - inside `[profiles.*]`, keys of every kind above, so the profile selector
+ *     itself can stay free: every profile it can select is bound.
+ * Model, effort, verbosity, service tier, `model_provider` and
+ * `[model_providers.*]` (model routing), `[projects.*]` trust, `[tui]`,
+ * `[notice]`, `notify`, sandbox and approval settings and other unknown keys
+ * vary freely. Values are bound as parsed (numbers by value, not spelling);
+ * malformed `features` or `profiles` stay bound whole. V7 binds every MCP
+ * server, so it needs no hook dependency metadata; V6 keeps its own contract. */
+const V7_DISCOVERY_KEY = /skill|plugin|hook|marketplace|instruction/i;
+const V7_BOUND_KEYS: ReadonlySet<string> = new Set(["mcp_servers", "project_doc_fallback_filenames", "compact_prompt", "experimental_compact_prompt_file"]);
 function narrowedCodexConfig(config: Record<string, any>): Record<string, any> {
-  const pick = (table: Record<string, any>): Record<string, any> => Object.fromEntries(Object.entries(table).filter(([key]) => V7_DISCOVERY_KEY.test(key)));
+  const pick = (table: Record<string, any>): Record<string, any> => Object.fromEntries(Object.entries(table).filter(([key]) => V7_DISCOVERY_KEY.test(key) || V7_BOUND_KEYS.has(key)));
   const features = (table: Record<string, any>, target: Record<string, any>): void => {
     if (!Object.hasOwn(table, "features")) return;
     if (!isRecord(table.features)) { target.features = table.features; return; }

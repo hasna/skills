@@ -4,15 +4,19 @@
  *
  * A legacy full-file settings witness (raw bytes, claude-settings-v1..v4,
  * codex-settings-v1..v5) binds every field the narrowed projection
- * (claude-settings-v5, codex-settings-v7) binds, in full. So while the legacy
- * witness still verifies the current file, the narrowed digest of that file is
- * the narrowed digest of the reviewed state. The live hook records exactly that
- * observation, computed from the same bytes that matched the legacy witness.
+ * (claude-settings-v5, codex-settings-v7) binds, in full, with one exception:
+ * codex-settings-v3..v5 omit ordinary local stdio MCP servers, which V7 binds.
+ * So while the legacy witness still verifies the current file, the narrowed
+ * digest of that file is the narrowed digest of a state the legacy witness
+ * accepts (for V3-V5, with the local MCP servers present at that moment). The
+ * live hook records exactly that observation, computed from the same bytes
+ * that matched the legacy witness, so a later redirect of any MCP server is
+ * reported rather than adopted.
  * Later, when the legacy witness no longer matches (a model switch, an "always
  * allow" rule, Codex's own notices or folder trust), the change is accepted only
  * when the current narrowed digest equals the recorded one: a change to a hook,
- * plugin, marketplace, skill setting, Skill rule or added directory still
- * reports drift. Nothing is ever recorded from a file the legacy witness does
+ * plugin, marketplace, skill setting, Skill rule, added directory, MCP server,
+ * instruction source or command helper still reports drift. Nothing is ever recorded from a file the legacy witness does
  * not verify, so an unexplained change is never adopted.
  *
  * The ledger lives beside agent-policy.json in the Skills data directory, under
@@ -143,8 +147,10 @@ export function openNarrowedWitnessLedger(dataDir: string, options: { record: bo
       try {
         const mode = narrowedLegacyWitnessMode(source);
         if (!mode || !entries || !options.record) return;
-        // A recorded entry for this exact witness already holds the narrowed
-        // digest of its review: equal legacy digests imply equal narrowed ones.
+        // A recorded entry for this exact witness is kept as first observed:
+        // equal legacy digests imply equal narrowed ones, except for the local
+        // MCP servers codex-settings-v3..v5 omit, and those are never adopted
+        // from a later observation.
         const existing = find(source, mode);
         if (existing) return;
         const text = readSettings(source, mode);

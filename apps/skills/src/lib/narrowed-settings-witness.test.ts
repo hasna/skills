@@ -1,7 +1,7 @@
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import {
@@ -14,7 +14,7 @@ import {
 } from "./codex-settings-witness.js";
 import { NARROWED_WITNESS_LEDGER_FILE, narrowedLegacyWitnessMode, openNarrowedWitnessLedger } from "./narrowed-witness-ledger.js";
 import { assertAgentPolicyCollections } from "./agent-policy-limits.js";
-import { boundedDriftReason, clearNativeDriftReceipt, isNativeSkillDrift, NativeSkillPolicyRefusal, nativeDriftFailOpen, nativeDriftWarning, readNativeDriftReceipts, recordNativeDriftReceipt } from "./native-drift-receipt.js";
+import { boundedDriftReason, clearNativeDriftReceipt, isNativeSkillDrift, NATIVE_DRIFT_AGENT_NOTICE, NativeSkillPolicyRefusal, nativeDriftFailOpen, nativeDriftWarning, readNativeDriftReceipts, recordNativeDriftReceipt } from "./native-drift-receipt.js";
 import { renderOpenCodePlugin } from "./agent-adapters.js";
 import { renderHermesSupervisor } from "./agent-hermes.js";
 import { renderSumiPlugin } from "./agent-sumi.js";
@@ -68,8 +68,7 @@ test("claude-settings-v5 ignores every ordinary-use setting, including any model
     ["tui", value => { value.tui = "fullscreen"; }],
     ["view", value => { value.viewMode = "focus"; }],
     ["dialog acknowledgment", value => { value.skipDangerousModePermissionPrompt = true; }],
-    ["output style", value => { value.outputStyle = "Explanatory"; }],
-    ["api key helper", value => { value.apiKeyHelper = "/bin/key-helper"; }],
+    ["subagent status line", value => { value.subagentStatusLine = { type: "command", command: "/opt/other/status" }; }],
     ["unknown preference", value => { value.futurePreference = { anything: [1, 2.0] }; }],
   ];
   for (const [label, mutate] of ordinary) {
@@ -106,6 +105,14 @@ test("claude-settings-v5 binds every setting that can add, remove or redirect sk
     ["malformed rule list", value => { value.permissions.allow = "Skill(*)"; }],
     ["non-string rule", value => { value.permissions.allow.push({ rule: "Skill(*)" }); }],
     ["malformed env", value => { value.env = ["CLAUDE_CONFIG_DIR=/tmp"]; }],
+    // Settings that run a command the way a hook does, or select injected instructions.
+    ["api key helper", value => { value.apiKeyHelper = "/bin/key-helper"; }],
+    ["aws auth refresh", value => { value.awsAuthRefresh = "/bin/aws-refresh"; }],
+    ["aws credential export", value => { value.awsCredentialExport = "/bin/aws-export"; }],
+    ["otel headers helper", value => { value.otelHeadersHelper = "/bin/otel-headers"; }],
+    ["file suggestion", value => { value.fileSuggestion = { type: "command", command: "/bin/files" }; }],
+    ["output style", value => { value.outputStyle = "Explanatory"; }],
+    ["main agent", value => { value.agent = "foreign-agent"; }],
   ];
   const digests = new Set<string>([reviewed]);
   for (const [label, mutate] of discovery) {
@@ -180,7 +187,8 @@ test("codex-settings-v7 ignores what Codex rewrites on a model change, a folder 
     `${codexBase}\n[notice]\nhide_full_access_warning = true\n\n[notice.model_migrations]\n"gpt-5.1" = "gpt-5.2-codex"\n`,
     `${codexBase}\n[projects."/Users/someone/repo"]\ntrust_level = "trusted"\n`,
     `${codexBase}\n[tui]\nstatus_line = ["model"]\nscreen_reader_detection_done = true\n\n[tui.model_availability_nux]\n"gpt-5.2" = 3\n`,
-    `${codexBase}\n[mcp_servers.docs]\ncommand = "/opt/mcp/docs"\n\n[model_providers.other]\nbase_url = "https://example.invalid"\n`,
+    `${codexBase}\n[model_providers.other]\nbase_url = "https://example.invalid"\n`,
+    `profile = "fast"\n${codexBase}`,
     codexBase.replace('"stop:0:0" = { enabled = true, trusted_hash = "abc" }', '"stop:0:0" = { enabled = true, trusted_hash = "def" }'),
     `${codexBase}\n[[skills.config]]\nname = "vendor:skill"\nenabled = false\n`,
     codexBase.replace('model = "gpt-5.1-mini"', 'model = "gpt-5.2-mini"\nmodel_reasoning_effort = "low"'),
@@ -205,6 +213,17 @@ test("codex-settings-v7 binds hooks, plugins, marketplaces, enabling skill rules
     codexBase.replace('model = "gpt-5.1-mini"', 'model = "gpt-5.1-mini"\n\n[profiles.fast.features]\ncodex_hooks = false'),
     `plugin_roots = ["/opt/plugins"]\n${codexBase}`,
     `features = "all"\n${codexBase.replace("[features]\ncodex_hooks = true\nweb_search = true\n", "")}`,
+    // MCP servers, whole: an mcp_tool hook handler runs through a named server.
+    `${codexBase}\n[mcp_servers.docs]\ncommand = "/opt/mcp/docs"\n`,
+    `${codexBase}\n[mcp_servers.remote]\nurl = "https://mcp.example.invalid/a"\n`,
+    codexBase.replace('model = "gpt-5.1-mini"', 'model = "gpt-5.1-mini"\n\n[profiles.fast.mcp_servers.docs]\ncommand = "/opt/mcp/docs"'),
+    // Instruction sources, at the root and in a profile.
+    `developer_instructions = "Load native skill copies."\n${codexBase}`,
+    `model_instructions_file = "/tmp/instructions.md"\n${codexBase}`,
+    `experimental_instructions_file = "/tmp/instructions.md"\n${codexBase}`,
+    `project_doc_fallback_filenames = ["SKILL.md"]\n${codexBase}`,
+    `experimental_compact_prompt_file = "/tmp/compact.md"\n${codexBase}`,
+    codexBase.replace('model = "gpt-5.1-mini"', 'model = "gpt-5.1-mini"\nmodel_instructions_file = "/tmp/instructions.md"'),
   ];
   const digests = new Set([reviewed]);
   for (const [index, variant] of discovery.entries()) {
@@ -397,4 +416,73 @@ test("every adapter's drift envelope is one its native consumer accepts without 
     expect(result.hookSpecificOutput).toEqual({ hookEventName: nativeEvent, additionalContext: expect.stringContaining("Skills context is unavailable for this turn") });
   }
   expect(readNativeDriftReceipts(data).map(receipt => receipt.agent).sort()).toEqual(["claude", "codex", "cursor", "gemini", "hermes", "opencode", "sumi"]);
+});
+
+test("a redirected MCP server is never accepted through the ledger, whatever the legacy Codex witness", () => {
+  // Review finding (2026-10-20): an mcp_tool hook runs through a named server,
+  // so a server redirect must stay drift. Every legacy mode binds remote
+  // servers; raw bytes and V1/V2 also bind local stdio ones.
+  const reviewed = `${codexBase}\n[mcp_servers.remote]\nurl = "https://mcp.example.invalid/a"\n\n[mcp_servers.docs]\ncommand = "/opt/mcp/docs"\n`;
+  const modelChange = (text: string) => text.replace('model = "gpt-5.1"', 'model = "deepseek-flash"');
+  const remoteRedirect = (text: string) => text.replace("https://mcp.example.invalid/a", "https://attacker.example.invalid/a");
+  const localRedirect = (text: string) => text.replace('command = "/opt/mcp/docs"', 'command = "/tmp/other-docs"');
+  const witnesses = [
+    (path: string) => ({ path, sha256: sha(reviewed) }),
+    (path: string) => ({ path, hashMode: "codex-settings-v2" as const, sha256: codex.v2(reviewed) }),
+    (path: string) => ({ path, hashMode: "codex-settings-v5" as const, sha256: codex.v5(reviewed) }),
+  ];
+  for (const witness of witnesses) {
+    const root = scratch(), data = join(root, "data"), config = join(root, "home", ".codex", "config.toml");
+    mkdirSync(data); mkdirSync(join(root, "home", ".codex"), { recursive: true });
+    writeFileSync(config, reviewed);
+    const source = witness(config);
+    const observed = openNarrowedWitnessLedger(data); observed.observe(source); observed.flush();
+    expect(JSON.parse(readFileSync(join(data, NARROWED_WITNESS_LEDGER_FILE), "utf8")).entries).toHaveLength(1);
+    // Control: a model change alone is accepted.
+    writeFileSync(config, modelChange(reviewed));
+    expect(openNarrowedWitnessLedger(data).accepts(source)).toBe(true);
+    for (const redirect of [remoteRedirect, localRedirect, (text: string) => modelChange(remoteRedirect(text)), (text: string) => modelChange(localRedirect(text))]) {
+      writeFileSync(config, redirect(reviewed));
+      expect(openNarrowedWitnessLedger(data).accepts(source)).toBe(false);
+    }
+  }
+  // The documented exception: codex-settings-v3..v5 omit an ordinary local
+  // stdio server that V7 binds, so equal V5 digests need not mean equal V7 ones.
+  expect(codex.v5(localRedirect(reviewed))).toBe(codex.v5(reviewed));
+  expect(codex.v7(localRedirect(reviewed))).not.toBe(codex.v7(reviewed));
+});
+
+test("the real Sumi plugin accepts the drift envelope: the prompt proceeds and the warning reaches the model context", async () => {
+  const root = scratch(), data = join(root, "data"); mkdirSync(data);
+  const mode = join(root, "mode"), command = join(root, "fixture-skills"), pluginPath = join(root, "plugin.js");
+  writeFileSync(mode, "drift");
+  // The CLI's own fail-open builder; only the guard result is synthetic. The
+  // "refused" mode is the negative control: the same plugin rejects a block.
+  writeFileSync(command, `#!${process.execPath}
+import { readFileSync } from "node:fs";
+import { nativeDriftFailOpen } from ${JSON.stringify(resolve(import.meta.dir, "native-drift-receipt.ts"))};
+const input = JSON.parse(await Bun.stdin.text());
+const message = "NATIVE_SKILL_DRIFT: Native discovery input changed; run skills hook install with a fresh discovery review: /home/u/.config/sumi/sumi.json";
+console.log(JSON.stringify(readFileSync(${JSON.stringify(mode)}, "utf8") === "refused" ? { decision: "block", reason: message } : nativeDriftFailOpen(${JSON.stringify(data)}, "sumi", input.hook_event_name, input.hook_event_name, message)));
+`); chmodSync(command, 0o700);
+  writeFileSync(pluginPath, renderSumiPlugin(command, "engineering"));
+  const plugin = (await import(pluginPath)).default;
+  const hooks = new Map<string, (event: any) => Promise<void>>();
+  const register = async (name: string, callback: any) => { hooks.set(name, callback); return { dispose: async () => {} }; };
+  await plugin.setup({
+    session: { get: async ({ sessionID }: { sessionID: string }) => ({ id: sessionID, location: { directory: root } }), hook: register },
+    tool: { hook: register }, skill: { transform: async () => ({ dispose: async () => {} }) },
+  });
+  await hooks.get("prompt")!({ sessionID: "owner", prompt: { text: "continue the task" } });
+  const event = { sessionID: "owner", system: [] as Array<{ type: string; text: string }>, messages: [] };
+  await hooks.get("context")!(event);
+  expect(event.system).toHaveLength(1);
+  expect(event.system[0]!.text).toStartWith("Skills warning: native discovery changed; this prompt was not blocked");
+  expect(event.system[0]!.text).toContain("sumi.json");
+  expect(event.system[0]!.text).toContain(NATIVE_DRIFT_AGENT_NOTICE);
+  expect(readNativeDriftReceipts(data)).toEqual([expect.objectContaining({ agent: "sumi", status: "active", promptBlocked: false })]);
+  // The payload-skill guard of the same plugin still refuses under drift.
+  expect(() => hooks.get("execute.before")!({ tool: "skill", input: { id: "some-payload" } })).toThrow();
+  writeFileSync(mode, "refused");
+  await expect(hooks.get("prompt")!({ sessionID: "owner", prompt: { text: "again" } })).rejects.toThrow("Skills verification blocked this request");
 });

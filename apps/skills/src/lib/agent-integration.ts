@@ -12,6 +12,7 @@ import { captureCodexSemanticCacheWitness, codexLocalMarketplaceMapsPlugin, type
 import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
 import type { NativeDiscoveryWitnessChange, NativeDiscoveryWitnessKind, NativeDiscoveryWitnessTolerance } from "./native-discovery-witness-change.js";
 import { openNarrowedWitnessLedger } from "./narrowed-witness-ledger.js";
+import { NativeBridgeIntegrityRefusal, NativeSkillPolicyRefusal } from "./native-drift-receipt.js";
 import { CODEX_REMOTE_VENDOR_MARKETPLACES, codexVendorMarketplace, codexVendorPluginRefreshSafe, codexVendorSubtreeHookFree } from "./codex-vendor-refresh.js";
 import { isCodexNativeSkillDisabled } from "./codex-native-skill-catalog.js";
 import { codexPluginCacheSkillTree } from "./codex-node-modules.js";
@@ -2195,11 +2196,17 @@ interface ManagedBridgeOptions {
    * vendor copies and every other change still refuse. Install, trust, migrate
    * and sync never pass it. */
   codexPromptHook?: boolean;
-  /** Live prompt hooks only. A legacy full-file settings witness that no longer
-   * matches stays current when the narrowed digest recorded for its review is
-   * unchanged, and a matching one is recorded (narrowed-witness-ledger.ts).
+  /** Live lifecycle hooks only (prompt, session, subagent and tool events).
+   * - A legacy full-file settings witness that no longer matches stays current
+   *   when the narrowed digest recorded for its review is unchanged, and a
+   *   matching one is recorded (narrowed-witness-ledger.ts).
+   * - Anything that stops the skills-cli bridge from being verified is a
+   *   NativeBridgeIntegrityRefusal, and any other failure to verify native
+   *   discovery (a changed root alias, an unreadable settings file, an
+   *   inventory error) is reported as NATIVE_SKILL_DRIFT, so the hook can fail
+   *   open instead of blocking the prompt.
    * Install, trust, migrate, sync and upgrades never pass it. */
-  narrowedLegacyWitnesses?: boolean;
+  liveHook?: boolean;
 }
 
 /** Result of a guard call; both lists are empty unless the caller opted in.
@@ -2402,7 +2409,18 @@ export function codexPromptDriftWarning(report: ManagedBridgeReport): string | u
 /** Run before any prompt context load. Missing ownership or reappearing native
  * discovery files require repair; verified cache availability is not an override. */
 export function assertManagedAgentBridge(agent: IntegrationAgent, options: ManagedBridgeOptions = {}): ManagedBridgeReport {
-  return assertManagedAgentBridgeWithDiscovery(agent, options);
+  if (options.liveHook !== true) return assertManagedAgentBridgeWithDiscovery(agent, options);
+  try { return assertManagedAgentBridgeWithDiscovery(agent, options); }
+  catch (error) { throw liveHookGuardError(error); }
+}
+
+/** Live hooks only: a native discovery check that cannot complete is reported
+ * as drift rather than blocking the prompt. Tool-policy and bridge-integrity
+ * refusals, existing drift and an unresolvable runtime keep their own class. */
+function liveHookGuardError(error: unknown): unknown {
+  if (error instanceof NativeSkillPolicyRefusal || isDiscoveryRootUnresolved(error) || error instanceof SumiPathResolverError) return error;
+  if (error instanceof Error && error.message.startsWith("NATIVE_SKILL_DRIFT:")) return error;
+  return new Error(`NATIVE_SKILL_DRIFT: native discovery could not be verified: ${error instanceof Error ? error.message : String(error)}`);
 }
 
 /**
@@ -2427,16 +2445,30 @@ interface ManagedBridgeCustody {
 }
 function assertManagedBridgeCustody(agent: IntegrationAgent, options: ManagedBridgeOptions = {}, provenDiscovery?: AgentDiscoveryBinding): ManagedBridgeCustody {
   const home = resolve(options.home ?? homedir()), dataDir = options.dataDir ?? getDataDirReadOnly();
-  assertSafePath(join(dataDir, "agent-policy.json"));
-  const snapshot = readManagedSkillPolicySnapshot(dataDir);
-  if (!snapshot) throw new Error("NATIVE_SKILL_DRIFT: install the Skills bridge with skills hook install");
-  const binding = snapshot.value.bridge;
-  if (!binding || binding.version !== CLI_BRIDGE_VERSION || binding.digest !== CLI_BRIDGE_DIGEST || binding.home !== home || !Array.isArray(binding.agents) || !binding.agents.includes(agent)) throw new Error("NATIVE_SKILL_DRIFT: the managed Skills bridge binding is missing or incompatible; run skills hook install");
-  const aliases: AgentRootAlias[] = binding.rootAliases ?? [];
-  if (!Array.isArray(aliases)) throw new Error("NATIVE_SKILL_DRIFT: invalid root alias binding");
-  recheckRootAliases(aliases);
-  const expected = canonicalAgentPath(join(nativeAgentRoot(home, agent, options.projectDir ?? process.cwd()), CLI_BRIDGE_NAME), aliases);
-  if (!isOwnedCliBridge(expected, [expected])) throw new Error("NATIVE_SKILL_DRIFT: the native Skills bridge is missing or modified; repair it before continuing");
+  // Everything up to and including the bridge check decides whether the
+  // skills-cli bridge is verified; its refusals are bridge-integrity refusals
+  // (same messages), so a live tool call never loads an unverified bridge.
+  let binding: any, aliases: AgentRootAlias[], expected: string;
+  try {
+    assertSafePath(join(dataDir, "agent-policy.json"));
+    const snapshot = readManagedSkillPolicySnapshot(dataDir);
+    if (!snapshot) throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: install the Skills bridge with skills hook install");
+    binding = snapshot.value.bridge;
+    if (!binding || binding.version !== CLI_BRIDGE_VERSION || binding.digest !== CLI_BRIDGE_DIGEST || binding.home !== home || !Array.isArray(binding.agents) || !binding.agents.includes(agent)) throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: the managed Skills bridge binding is missing or incompatible; run skills hook install");
+    aliases = binding.rootAliases ?? [];
+    if (!Array.isArray(aliases)) throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: invalid root alias binding");
+    recheckRootAliases(aliases);
+    expected = canonicalAgentPath(join(nativeAgentRoot(home, agent, options.projectDir ?? process.cwd()), CLI_BRIDGE_NAME), aliases);
+    if (!isOwnedCliBridge(expected, [expected])) throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: the native Skills bridge is missing or modified; repair it before continuing");
+  } catch (error) {
+    // Strict callers keep every original error unchanged. A live hook that
+    // could not verify the bridge for any other reason (a changed root alias,
+    // an unreadable policy) treats it as an integrity refusal too.
+    if (options.liveHook === true && !(error instanceof NativeSkillPolicyRefusal) && !isDiscoveryRootUnresolved(error) && !(error instanceof SumiPathResolverError)) {
+      throw new NativeBridgeIntegrityRefusal(`NATIVE_SKILL_DRIFT: the native Skills bridge could not be verified: ${error instanceof Error ? error.message.replace(/^NATIVE_SKILL_DRIFT: /, "") : String(error)}`);
+    }
+    throw error;
+  }
   const roots = projectAncestorDirectories([options.projectDir ?? process.cwd(), ...(options.projectDirs ?? []), ...(agent === "hermes" && process.env.TERMINAL_CWD ? [process.cwd()] : [])]);
   const discovery: AgentDiscoveryBinding | undefined = provenDiscovery ?? binding.discovery?.[agent];
   assertProjectDiscovery(agent, [...roots], home, path => canonicalAgentPath(path, aliases), discovery);
@@ -2491,9 +2523,9 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
   if (agent === "hermes") {
     assertUnrepairableBridgeProtection(custody, agent);
   } else if (agent === "sumi") {
-    if (JSON.stringify(config.permissions?.filter((rule: any) => rule.action === "skill")) !== JSON.stringify(SUMI_SKILL_PERMISSIONS) || !isManagedSumiPlugin(readOptional(join(sumiConfigDirectory(home, process.env, options.projectDir ?? process.cwd()), "plugins", "skills-cli.js")), command, profile)) throw new Error("NATIVE_SKILL_DRIFT: Sumi bridge protection changed; run skills hook install");
+    if (JSON.stringify(config.permissions?.filter((rule: any) => rule.action === "skill")) !== JSON.stringify(SUMI_SKILL_PERMISSIONS) || !isManagedSumiPlugin(readOptional(join(sumiConfigDirectory(home, process.env, options.projectDir ?? process.cwd()), "plugins", "skills-cli.js")), command, profile)) throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: Sumi bridge protection changed; run skills hook install");
   } else if (agent === "opencode") {
-    if (JSON.stringify(config.permission?.skill) !== JSON.stringify({ "*": "deny", [CLI_BRIDGE_NAME]: "allow" }) || readOptional(join(home, ".config", "opencode", "plugins", "skills-cli.js")) !== renderOpenCodePlugin(command, profile)) throw new Error("NATIVE_SKILL_DRIFT: OpenCode bridge protection changed; run skills hook install");
+    if (JSON.stringify(config.permission?.skill) !== JSON.stringify({ "*": "deny", [CLI_BRIDGE_NAME]: "allow" }) || readOptional(join(home, ".config", "opencode", "plugins", "skills-cli.js")) !== renderOpenCodePlugin(command, profile)) throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: OpenCode bridge protection changed; run skills hook install");
   } else {
     const required: Record<string, any> = {}; configureHooks(required, agent, command, profile, true);
     for (const [event, entries] of Object.entries(required.hooks) as Array<[string, any[]]>) for (const entry of entries) {
@@ -2578,7 +2610,7 @@ function assertManagedNativeDiscovery(custody: ManagedBridgeCustody, agent: Inte
     return Array.isArray(binding.disabledBuiltins) && binding.disabledBuiltins.some((item: any) => item.path === entry.path && item.hash === entry.hash);
   };
   if (!discovery || discovery.agent !== agent) throw new Error("NATIVE_SKILL_DRIFT: native discovery coverage is missing; run skills hook install");
-  const narrowed = options.narrowedLegacyWitnesses === true ? openNarrowedWitnessLedger(dataDir) : undefined;
+  const narrowed = options.liveHook === true ? openNarrowedWitnessLedger(dataDir) : undefined;
   try {
     verifyAgentDiscovery(agent==="codex" ? {...discovery,codexDisabledPluginSkills:binding.codexPluginSkills ?? []} : discovery, options.codexDiscoveryRecovery, aliases, witnessTolerance, narrowed);
     if (agent === "sumi" && discovery.method === "reviewed") resolveAgentDiscovery({ home, agent, retainedReview: discovery, canonical: path => canonicalAgentPath(path, aliases) });

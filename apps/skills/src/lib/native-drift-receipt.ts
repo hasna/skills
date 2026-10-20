@@ -7,6 +7,12 @@
  * guard itself still throws: install, trust, migrate, sync and upgrades keep
  * refusing drift exactly as before. Tool-policy refusals (a native payload
  * skill instead of the skills-cli bridge) are not drift and keep blocking.
+ *
+ * A bridge that cannot be verified (missing, modified, or a binding that no
+ * longer names it) is a NativeBridgeIntegrityRefusal. A tool call that would
+ * load the bridge keeps being refused for it, because a payload written under
+ * the bridge's own name would otherwise load. The prompt, session or subagent
+ * still proceeds, and its notice tells the agent not to invoke the bridge.
  */
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
@@ -21,8 +27,18 @@ const AGENT = /^[a-z][a-z0-9-]{0,31}$/;
  * protection that keeps a drifted station safe, so it is never failed open. */
 export class NativeSkillPolicyRefusal extends Error {}
 
+/** The skills-cli bridge itself could not be verified: it is missing or
+ * modified, or the managed binding that names it is missing, incompatible or
+ * no longer resolves. A tool call that would load the bridge is refused; a
+ * prompt, session or subagent event fails open with NATIVE_DRIFT_BRIDGE_NOTICE. */
+export class NativeBridgeIntegrityRefusal extends NativeSkillPolicyRefusal {}
+
 export function isNativeSkillDrift(error: unknown): error is Error {
   return error instanceof Error && !(error instanceof NativeSkillPolicyRefusal) && error.message.startsWith("NATIVE_SKILL_DRIFT:");
+}
+
+export function isNativeBridgeIntegrityRefusal(error: unknown): error is NativeBridgeIntegrityRefusal {
+  return error instanceof NativeBridgeIntegrityRefusal;
 }
 
 /** Escape controls, format characters and line separators as \uXXXX so a path
@@ -45,6 +61,10 @@ export function nativeDriftWarning(agent: string, message: string, receiptPath: 
 
 /** Fixed agent-facing notice for the turn whose Skills context was omitted. */
 export const NATIVE_DRIFT_AGENT_NOTICE = "Skills context is unavailable for this turn because the station's native skill discovery changed; the change was reported to the operator. Continue the user's task. Load a selected skill explicitly with `skills load <slug>` if one is needed, and do not load native skill copies.";
+
+/** Fixed agent-facing notice when the skills-cli bridge itself is unverified:
+ * the bridge tool is refused this turn, so the agent uses the CLI instead. */
+export const NATIVE_DRIFT_BRIDGE_NOTICE = "Skills context is unavailable for this turn because the station's skills-cli bridge could not be verified; the change was reported to the operator. Continue the user's task, but do not invoke the skills-cli native skill until it is repaired. Run the `skills` command directly (for example `skills load <slug>`) if a skill is needed, and do not load native skill copies.";
 
 export interface NativeDriftReceipt {
   schema: typeof NATIVE_DRIFT_RECEIPT_SCHEMA;
@@ -143,17 +163,21 @@ export function readNativeDriftReceipts(dataDir: string): NativeDriftReceipt[] {
 }
 
 /** The non-blocking envelope for drift, in each native adapter's own shape. */
-export function nativeDriftFailOpen(dataDir: string, agent: string, event: string, nativeEvent: string, message: string): Record<string, unknown> {
+export function nativeDriftFailOpen(dataDir: string, agent: string, event: string, nativeEvent: string, message: string, options: { bridgeUnverified?: boolean } = {}): Record<string, unknown> {
   const receipt = recordNativeDriftReceipt(dataDir, agent, event, message);
   const warning = nativeDriftWarning(agent, message, receipt);
+  const notice = options.bridgeUnverified === true ? NATIVE_DRIFT_BRIDGE_NOTICE : NATIVE_DRIFT_AGENT_NOTICE;
   // Hermes accepts exactly {action: "continue"} on a tool call; its prompt hook
   // has a context channel only. The Sumi and OpenCode plugins read
-  // additionalContext only, so the warning travels there.
-  if (agent === "hermes") return event === "pre_tool_call" ? { action: "continue" } : { context: `${warning}\n\n${NATIVE_DRIFT_AGENT_NOTICE}` };
-  if (agent === "sumi" || agent === "opencode") return { hookSpecificOutput: { hookEventName: event, additionalContext: `${warning}\n\n${NATIVE_DRIFT_AGENT_NOTICE}` } };
+  // additionalContext only, so the warning travels there: those hosts show it
+  // to the model, not in a separate user-visible channel (the receipt and
+  // `skills hook drift` remain the operator's record).
+  if (agent === "hermes") return event === "pre_tool_call" ? { action: "continue" } : { context: `${warning}\n\n${notice}` };
+  if (agent === "sumi" || agent === "opencode") return { hookSpecificOutput: { hookEventName: event, additionalContext: `${warning}\n\n${notice}` } };
   if (agent === "cursor") return { continue: true, user_message: warning };
   // A tool call proceeds through the agent's normal permission flow: no
-  // decision is made for it either way.
+  // decision is made for it either way. An unverified bridge never reaches
+  // here on a tool call: the hook refuses that call instead.
   if (event === "PreToolUse" || event === "BeforeTool") return { systemMessage: warning };
-  return { systemMessage: warning, hookSpecificOutput: { hookEventName: agent === "gemini" ? nativeEvent : event, additionalContext: NATIVE_DRIFT_AGENT_NOTICE } };
+  return { systemMessage: warning, hookSpecificOutput: { hookEventName: agent === "gemini" ? nativeEvent : event, additionalContext: notice } };
 }

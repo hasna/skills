@@ -3469,13 +3469,16 @@ Live prompt, session, subagent and tool hooks no longer block on
 one warning naming the change and the repair command, and the hook records a
 receipt in `<skills-data>/native-drift/<agent>.json`; `skills hook drift --json`
 lists them. Invoking a native payload skill instead of the `skills-cli` bridge
-is still denied, and install, trust and migration still refuse drift.
+is still denied, and so is invoking the bridge while the bridge itself is
+missing or modified; install, trust and migration still refuse drift.
 
 `claude-settings-v5` and `codex-settings-v7` reviews bind only settings that can
-add, remove or redirect native skills, hooks or plugins, so a model switch, an
-"always allow" rule, a status line or Codex's folder trust and notices are not
-drift. Existing reviews keep verifying through a narrowed-witness ledger the live
-hook records while they still match. See
+add, remove or redirect native skills, hooks or plugins (and, for Codex, every
+MCP server and instruction source), so a model switch, an "always allow" rule, a
+status line or Codex's folder trust and notices are not drift. Existing Claude
+and Codex reviews keep verifying through a narrowed-witness ledger the live hook
+records while they still match; a station that had already drifted, V6 and Sumi
+witnesses still need one fresh review. See
 [docs/plugin-admission.md](docs/plugin-admission.md#narrowed-discovery-reviews-claude-settings-v5-and-codex-settings-v7).
 
 ### Reproduce a reviewed runtime dependency closure

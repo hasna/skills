@@ -19,7 +19,7 @@ import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib
 import { MANAGED_HOOK_DEADLINE_MS, managedContextChildLimits, takeSessionPinMigrationNotice } from "../../lib/session-reconciliation.js";
 import { captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4, captureClaudeSettingsV5 } from "../../lib/claude-settings-witness.js";
 import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4, captureCodexSettingsV5, captureCodexSettingsV6, captureCodexSettingsV7 } from "../../lib/codex-settings-witness.js";
-import { clearNativeDriftReceipt, isNativeSkillDrift, nativeDriftFailOpen, NativeSkillPolicyRefusal, readNativeDriftReceipts } from "../../lib/native-drift-receipt.js";
+import { clearNativeDriftReceipt, isNativeBridgeIntegrityRefusal, isNativeSkillDrift, nativeDriftFailOpen, NativeSkillPolicyRefusal, readNativeDriftReceipts } from "../../lib/native-drift-receipt.js";
 import { getDataDirReadOnly } from "../../lib/config.js";
 import { captureClaudeMarketplaceRegistryV2 } from "../../lib/claude-marketplace-registry.js";
 import { captureClaudeMarketplaceEntry } from "../../lib/claude-marketplace-entry-witness.js";
@@ -479,11 +479,12 @@ export function registerAgentIntegration(parent: Command): void {
         selectionProfile = selectedProfileId(options.selectionProfile);
         if (options.agent === "hermes" && event === "pre_tool_call") {
           // The tool policy is checked first and keeps blocking: refusing a
-          // native payload skill is what keeps a drifted station safe. Bridge
-          // drift itself fails open in the catch below.
+          // native payload skill is what keeps a drifted station safe. Other
+          // discovery drift fails open in the catch below; an unverified
+          // skills-cli bridge keeps blocking the call that would load it.
           try { assertHermesTool(input); }
           catch (error) { throw (error as Error).message.startsWith("NATIVE_SKILL_DRIFT:") ? new NativeSkillPolicyRefusal((error as Error).message) : error; }
-          assertManagedAgentBridge("hermes", { projectDirs: projects, profileId: selectionProfile, narrowedLegacyWitnesses: true });
+          assertManagedAgentBridge("hermes", { projectDirs: projects, profileId: selectionProfile, liveHook: true });
           clearNativeDriftReceipt(getDataDirReadOnly(), options.agent);
           await writeCliOutput(JSON.stringify({ action: "continue" }));
           return;
@@ -491,7 +492,7 @@ export function registerAgentIntegration(parent: Command): void {
         if ((options.agent === "claude" && event === "PreToolUse") || (options.agent === "gemini" && event === "BeforeTool")) {
           const skill = options.agent === "claude" ? input.tool_input?.skill : input.tool_input?.name;
           if (skill !== "skills-cli") throw new NativeSkillPolicyRefusal("NATIVE_SKILL_DRIFT: invoke only skills-cli; load selected payload instructions with skills load");
-          assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile, narrowedLegacyWitnesses: true });
+          assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile, liveHook: true });
           clearNativeDriftReceipt(getDataDirReadOnly(), options.agent);
           await writeCliOutput(JSON.stringify(options.agent === "claude" ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: "Verified Skills CLI bridge" } } : {}));
           return;
@@ -506,7 +507,7 @@ export function registerAgentIntegration(parent: Command): void {
         // configuration disables are exempt, and witness changes a vendor plugin
         // refresh provably makes warn. Enabled vendor copies, every other drift
         // and every other guard call still refuse.
-        const bridge = assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile, narrowedLegacyWitnesses: true, ...(codexNativePolicy ? { codexNativePolicy: { ...codexNativePolicy, deadlineMs: deadline } } : {}), ...(options.agent === "codex" ? { codexPromptHook: true } : {}) });
+        const bridge = assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile, liveHook: true, ...(codexNativePolicy ? { codexNativePolicy: { ...codexNativePolicy, deadlineMs: deadline } } : {}), ...(options.agent === "codex" ? { codexPromptHook: true } : {}) });
         clearNativeDriftReceipt(getDataDirReadOnly(), options.agent);
         if (options.agent === "codex") driftWarning = codexPromptDriftWarning(bridge);
         if (typeof input.prompt === "string") input.prompt = normalizeAgentHookPrompt(options.agent, nativeEvent, input.prompt);
@@ -565,9 +566,13 @@ export function registerAgentIntegration(parent: Command): void {
         // (owner request 2026-10-20): the Skills context is omitted for this
         // turn, one bounded warning is shown and a durable receipt is recorded.
         // The guard still throws for every other caller, and a tool-policy
-        // refusal (a native payload skill) keeps blocking below.
-        if (isNativeSkillDrift(error)) {
-          await writeCliOutput(JSON.stringify(nativeDriftFailOpen(getDataDirReadOnly(), options.agent, event, nativeEvent, error.message)));
+        // refusal (a native payload skill) keeps blocking below. An unverified
+        // skills-cli bridge fails open for a prompt, session or subagent (the
+        // notice says not to invoke the bridge), but the tool call that would
+        // load it is refused below.
+        const toolEvent = (options.agent === "claude" && event === "PreToolUse") || (options.agent === "gemini" && event === "BeforeTool") || (options.agent === "hermes" && event === "pre_tool_call");
+        if (isNativeSkillDrift(error) || (isNativeBridgeIntegrityRefusal(error) && !toolEvent)) {
+          await writeCliOutput(JSON.stringify(nativeDriftFailOpen(getDataDirReadOnly(), options.agent, event, nativeEvent, error.message, { bridgeUnverified: isNativeBridgeIntegrityRefusal(error) })));
           return;
         }
         // Native discovery refusals carry their own fixed text. An unresolvable
