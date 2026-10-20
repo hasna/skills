@@ -694,7 +694,9 @@ skills, hooks or plugins:
   (`instructions`, `developer_instructions`, `model_instructions_file`,
   `experimental_instructions_file`, `project_doc_fallback_filenames`,
   `compact_prompt`, `experimental_compact_prompt_file` and any key naming
-  instructions), `[features]` flags with a skill, plugin, hook or marketplace
+  instructions), every `[agents.*]` role table in full (a role's `config_file`
+  loads a layer whose `developer_instructions` reach subagents, and its
+  `description` is shown to the model), `[features]` flags with a skill, plugin, hook or marketplace
   name at the root and in each profile, and keys of each of those kinds inside
   `[profiles.*]`, so the `profile` selector itself can vary. Model, effort,
   verbosity, service tier, `model_provider` and `[model_providers.*]`,

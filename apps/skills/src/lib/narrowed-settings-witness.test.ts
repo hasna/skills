@@ -224,6 +224,9 @@ test("codex-settings-v7 binds hooks, plugins, marketplaces, enabling skill rules
     `project_doc_fallback_filenames = ["SKILL.md"]\n${codexBase}`,
     `experimental_compact_prompt_file = "/tmp/compact.md"\n${codexBase}`,
     codexBase.replace('model = "gpt-5.1-mini"', 'model = "gpt-5.1-mini"\nmodel_instructions_file = "/tmp/instructions.md"'),
+    // Subagent roles: config_file loads a layer with developer_instructions.
+    `${codexBase}\n[agents.reviewer]\nconfig_file = "/tmp/reviewer.toml"\n`,
+    `${codexBase}\n[agents.reviewer]\ndescription = "Loads native skill copies."\n`,
   ];
   const digests = new Set([reviewed]);
   for (const [index, variant] of discovery.entries()) {
@@ -320,6 +323,31 @@ test("the narrowed ledger records only a verified legacy match and accepts only 
   writeFileSync(settings, text({ ...base, model: "claude-opus-5-5" }));
   expect(openNarrowedWitnessLedger(data).accepts({ ...source, sha256: "b".repeat(64) })).toBe(false);
   expect(openNarrowedWitnessLedger(data).accepts({ ...source, hashMode: "claude-settings-v3" })).toBe(false);
+});
+
+test("concurrent hooks for different agents both keep their ledger observation", () => {
+  // Review finding (2026-10-20): flush() replaced the whole ledger, so a Claude
+  // and a Codex prompt at the same moment could drop one observation.
+  const root = scratch(), data = join(root, "data"), home = join(root, "home");
+  mkdirSync(data); mkdirSync(join(home, ".claude"), { recursive: true }); mkdirSync(join(home, ".codex"), { recursive: true });
+  const settings = join(home, ".claude", "settings.json"), config = join(home, ".codex", "config.toml");
+  writeFileSync(settings, text(base)); writeFileSync(config, codexBase);
+  const claudeSource = { path: settings, hashMode: "claude-settings-v4" as const, sha256: claude.v4(text(base)) };
+  const codexSource = { path: config, hashMode: "codex-settings-v5" as const, sha256: codex.v5(codexBase) };
+  // Both hooks open the empty ledger before either flushes.
+  const claudeHook = openNarrowedWitnessLedger(data), codexHook = openNarrowedWitnessLedger(data);
+  claudeHook.observe(claudeSource); codexHook.observe(codexSource);
+  claudeHook.flush(); codexHook.flush();
+  const entries = JSON.parse(readFileSync(join(data, NARROWED_WITNESS_LEDGER_FILE), "utf8")).entries;
+  expect(entries.map((entry: any) => entry.path).sort()).toEqual([settings, config].sort());
+  // A later observation of an already recorded witness keeps the first entry.
+  const again = openNarrowedWitnessLedger(data); again.observe(claudeSource); again.flush();
+  expect(JSON.parse(readFileSync(join(data, NARROWED_WITNESS_LEDGER_FILE), "utf8")).entries).toEqual(entries);
+  // Ordinary use is then accepted for both agents.
+  writeFileSync(settings, text({ ...base, model: "deepseek-flash" }));
+  writeFileSync(config, codexBase.replace('model = "gpt-5.1"', 'model = "gpt-5.2-codex"'));
+  const later = openNarrowedWitnessLedger(data);
+  expect([later.accepts(claudeSource), later.accepts(codexSource)]).toEqual([true, true]);
 });
 
 test("a malformed, oversized or linked ledger accepts nothing and is never overwritten", () => {

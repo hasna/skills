@@ -450,6 +450,9 @@ export function registerAgentIntegration(parent: Command): void {
       let event = options.agent === "hermes" && options.event === "pre_tool_call" ? "pre_tool_call" : "UserPromptSubmit";
       let selectionProfile: string | undefined;
       let verifiedContextBoundary = false;
+      // A tool call that would load the skills-cli bridge. Only this call is
+      // refused when the bridge cannot be verified; every other tool proceeds.
+      let bridgeToolCall = false;
       let nativeEvent = event;
       // Visible, non-blocking Codex notice for vendor-refresh witness changes.
       let driftWarning: string | undefined;
@@ -484,7 +487,8 @@ export function registerAgentIntegration(parent: Command): void {
           // skills-cli bridge keeps blocking the call that would load it.
           try { assertHermesTool(input); }
           catch (error) { throw (error as Error).message.startsWith("NATIVE_SKILL_DRIFT:") ? new NativeSkillPolicyRefusal((error as Error).message) : error; }
-          assertManagedAgentBridge("hermes", { projectDirs: projects, profileId: selectionProfile, liveHook: true });
+          bridgeToolCall = input.tool_name === "skill_view" && input.tool_input?.name === "skills-cli";
+          assertManagedAgentBridge("hermes", { projectDirs: projects, profileId: selectionProfile, liveHook: true, bridgeToolCall });
           clearNativeDriftReceipt(getDataDirReadOnly(), options.agent);
           await writeCliOutput(JSON.stringify({ action: "continue" }));
           return;
@@ -492,7 +496,8 @@ export function registerAgentIntegration(parent: Command): void {
         if ((options.agent === "claude" && event === "PreToolUse") || (options.agent === "gemini" && event === "BeforeTool")) {
           const skill = options.agent === "claude" ? input.tool_input?.skill : input.tool_input?.name;
           if (skill !== "skills-cli") throw new NativeSkillPolicyRefusal("NATIVE_SKILL_DRIFT: invoke only skills-cli; load selected payload instructions with skills load");
-          assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile, liveHook: true });
+          bridgeToolCall = true;
+          assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile, liveHook: true, bridgeToolCall });
           clearNativeDriftReceipt(getDataDirReadOnly(), options.agent);
           await writeCliOutput(JSON.stringify(options.agent === "claude" ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: "Verified Skills CLI bridge" } } : {}));
           return;
@@ -567,11 +572,10 @@ export function registerAgentIntegration(parent: Command): void {
         // turn, one bounded warning is shown and a durable receipt is recorded.
         // The guard still throws for every other caller, and a tool-policy
         // refusal (a native payload skill) keeps blocking below. An unverified
-        // skills-cli bridge fails open for a prompt, session or subagent (the
-        // notice says not to invoke the bridge), but the tool call that would
-        // load it is refused below.
-        const toolEvent = (options.agent === "claude" && event === "PreToolUse") || (options.agent === "gemini" && event === "BeforeTool") || (options.agent === "hermes" && event === "pre_tool_call");
-        if (isNativeSkillDrift(error) || (isNativeBridgeIntegrityRefusal(error) && !toolEvent)) {
+        // or shadowed skills-cli bridge fails open for a prompt, session,
+        // subagent or any other tool call (the notice says not to invoke the
+        // bridge), but the tool call that would load it is refused below.
+        if (isNativeSkillDrift(error) || (isNativeBridgeIntegrityRefusal(error) && !bridgeToolCall)) {
           await writeCliOutput(JSON.stringify(nativeDriftFailOpen(getDataDirReadOnly(), options.agent, event, nativeEvent, error.message, { bridgeUnverified: isNativeBridgeIntegrityRefusal(error) })));
           return;
         }

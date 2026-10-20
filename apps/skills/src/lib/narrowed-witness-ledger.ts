@@ -106,6 +106,15 @@ function readLedger(path: string): LedgerEntry[] | null {
   } catch { return null; } finally { closeSync(fd); }
 }
 
+/** Add entries not already recorded for the same exact witness and mode; a
+ * recorded entry keeps its first observation. Oldest entries fall off first. */
+function merge(base: readonly LedgerEntry[], additions: readonly LedgerEntry[]): LedgerEntry[] {
+  const same = (a: LedgerEntry, b: LedgerEntry) => a.path === b.path && a.hashMode === b.hashMode && a.sha256 === b.sha256 && a.narrowedMode === b.narrowedMode;
+  const result = [...base];
+  for (const entry of additions) if (!result.some(existing => same(existing, entry))) result.push(entry);
+  return result.sort((a, b) => a.recordedAt < b.recordedAt ? -1 : a.recordedAt > b.recordedAt ? 1 : 0).slice(-MAX_ENTRIES);
+}
+
 export interface NarrowedWitnessLedger {
   /** The legacy witness no longer matches: accept only when the current file's
    * narrowed digest equals the one recorded for this exact witness. */
@@ -124,7 +133,8 @@ export function openNarrowedWitnessLedger(dataDir: string, options: { record: bo
   const path = join(dataDir, NARROWED_WITNESS_LEDGER_FILE);
   let entries: LedgerEntry[] | null;
   try { entries = readLedger(path); } catch { entries = null; }
-  let dirty = false;
+  // Observations made by this hook, merged into the ledger as read at flush.
+  const added: LedgerEntry[] = [];
   const accepted: string[] = [];
   const key = (source: DiscoverySource) => [source.path, source.hashMode ?? "bytes", source.sha256];
   const find = (source: DiscoverySource, mode: NarrowedSettingsMode) => {
@@ -157,20 +167,26 @@ export function openNarrowedWitnessLedger(dataDir: string, options: { record: bo
         if (!legacyWitnessVerifies(source, text)) return;
         const narrowedSha256 = narrowedDigest(mode, text);
         const [entryPath, hashMode, sha256] = key(source) as [string, string, string];
-        entries = [...entries, { path: entryPath, hashMode, sha256, narrowedMode: mode, narrowedSha256, recordedAt: new Date().toISOString() }]
-          .sort((a, b) => a.recordedAt < b.recordedAt ? -1 : a.recordedAt > b.recordedAt ? 1 : 0).slice(-MAX_ENTRIES);
-        dirty = true;
+        const entry: LedgerEntry = { path: entryPath, hashMode, sha256, narrowedMode: mode, narrowedSha256, recordedAt: new Date().toISOString() };
+        entries = merge(entries, [entry]);
+        added.push(entry);
       } catch { /* an observation that cannot be proved is not recorded */ }
     },
     flush() {
-      if (!dirty || !entries || !options.record) return;
+      if (!added.length || !entries || !options.record) return;
       const temporary = join(dataDir, `.${NARROWED_WITNESS_LEDGER_FILE}.${process.pid}.${Date.now()}.tmp`);
       try {
         const current = lstatSync(path, { throwIfNoEntry: false });
         if (current && (!current.isFile() || current.isSymbolicLink())) return;
-        writeFileSync(temporary, `${JSON.stringify({ schema: SCHEMA, entries }, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+        // Another agent's hook may have recorded an entry since this one read
+        // the ledger: merge into the current file rather than replacing it. A
+        // file that has become unreadable or malformed is never overwritten.
+        const latest = readLedger(path);
+        if (!latest) return;
+        const merged = merge(latest, added);
+        writeFileSync(temporary, `${JSON.stringify({ schema: SCHEMA, entries: merged }, null, 2)}\n`, { mode: 0o600, flag: "wx" });
         renameSync(temporary, path);
-        dirty = false;
+        entries = merged; added.length = 0;
       } catch {
         // Best effort: the next verified prompt records it again.
         try { if (lstatSync(temporary, { throwIfNoEntry: false })?.isFile()) unlinkSync(temporary); } catch { /* left for the operator */ }

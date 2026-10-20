@@ -276,7 +276,7 @@ async function codexStation(options: { tables?: string; witness?: "v4" | "bytes"
 
 test("null control: an unchanged reviewed Codex station delivers context with no warning", async () => {
   const s = await codexStation();
-  for (const event of ["UserPromptSubmit", "SessionStart"]) expectDelivered((await s.hook(event)).value, event);
+  for (const event of ["UserPromptSubmit", "SessionStart", "SubagentStart"]) expectDelivered((await s.hook(event)).value, event);
   expect(s.receipt()).toBeNull();
 });
 
@@ -301,7 +301,7 @@ trust_level = "trusted"
 [tui]
 status_line = ["model", "context-remaining"]
 `);
-  for (const event of ["UserPromptSubmit", "SessionStart"]) expectDelivered((await s.hook(event)).value, event);
+  for (const event of ["UserPromptSubmit", "SessionStart", "SubagentStart"]) expectDelivered((await s.hook(event)).value, event);
   expect(s.receipt()).toBeNull();
 });
 
@@ -309,7 +309,7 @@ test("a new Codex hook or plugin is detected and reported, but the prompt is not
   const s = await codexStation();
   expectDelivered((await s.hook()).value);
   s.append(`[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "/opt/foreign/stop-hook"\n`);
-  for (const event of ["UserPromptSubmit", "SessionStart"]) {
+  for (const event of ["UserPromptSubmit", "SessionStart", "SubagentStart"]) {
     const result = await s.hook(event);
     expectReportedNotBlocked(result.value, result.stdout, s.config);
   }

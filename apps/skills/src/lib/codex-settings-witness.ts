@@ -461,6 +461,9 @@ export function upgradeCodexSettingsWitnessV5(previous: { path: string; hashMode
  *     `model_instructions_file`, `experimental_instructions_file`,
  *     `project_doc_fallback_filenames`, `compact_prompt`,
  *     `experimental_compact_prompt_file` and any key naming instructions);
+ *   - `[agents.*]`, whole: a role's `config_file` loads a config layer whose
+ *     `developer_instructions` reach subagents, and its `description` is shown
+ *     to the model;
  *   - `[features]` flags with a skill, plugin, hook or marketplace name, at the
  *     root and in each profile;
  *   - inside `[profiles.*]`, keys of every kind above, so the profile selector
@@ -472,7 +475,7 @@ export function upgradeCodexSettingsWitnessV5(previous: { path: string; hashMode
  * malformed `features` or `profiles` stay bound whole. V7 binds every MCP
  * server, so it needs no hook dependency metadata; V6 keeps its own contract. */
 const V7_DISCOVERY_KEY = /skill|plugin|hook|marketplace|instruction/i;
-const V7_BOUND_KEYS: ReadonlySet<string> = new Set(["mcp_servers", "project_doc_fallback_filenames", "compact_prompt", "experimental_compact_prompt_file"]);
+const V7_BOUND_KEYS: ReadonlySet<string> = new Set(["mcp_servers", "agents", "project_doc_fallback_filenames", "compact_prompt", "experimental_compact_prompt_file"]);
 function narrowedCodexConfig(config: Record<string, any>): Record<string, any> {
   const pick = (table: Record<string, any>): Record<string, any> => Object.fromEntries(Object.entries(table).filter(([key]) => V7_DISCOVERY_KEY.test(key) || V7_BOUND_KEYS.has(key)));
   const features = (table: Record<string, any>, target: Record<string, any>): void => {

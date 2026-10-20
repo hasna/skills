@@ -471,8 +471,12 @@ Retire native payloads before use. Legacy `skills-cli.md` files can shadow the
 bridge and must also be preserved and retired before proceeding. Only `skill_view(name:
 "skills-cli")` is allowed natively; author payloads with Skills CLI commands.
 Hermes itself fails open on `pre_llm_call` errors. A returned refusal is visible
-context, and the trusted pre-tool guard blocks drift and native skill fallback;
-this is not a claim that Hermes can prevent every model call after a failed
+context. The trusted pre-tool guard blocks native payload skills and a
+`skill_view(skills-cli)` call while the bridge is unverified or can be
+shadowed (a legacy `skills-cli.md`, a bridge-named copy, or an environment
+override above that leaves the effective discovery unchecked); other discovery
+drift is reported and recorded, not blocked, and other tools proceed. This is
+not a claim that Hermes can prevent every model call after a failed
 prompt hook or guarantee refusal if the native host/supervisor itself dies. Arbitrary project/plugin paths still require a discovery audit.
 
 Reviewed discovery can also bind `directories: [{ path, sha256 }]` alongside

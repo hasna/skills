@@ -8,11 +8,12 @@
  * refusing drift exactly as before. Tool-policy refusals (a native payload
  * skill instead of the skills-cli bridge) are not drift and keep blocking.
  *
- * A bridge that cannot be verified (missing, modified, or a binding that no
- * longer names it) is a NativeBridgeIntegrityRefusal. A tool call that would
- * load the bridge keeps being refused for it, because a payload written under
- * the bridge's own name would otherwise load. The prompt, session or subagent
- * still proceeds, and its notice tells the agent not to invoke the bridge.
+ * A bridge that cannot be verified (missing, modified, a binding that no
+ * longer names it, or a native copy that can resolve under its name) is a
+ * NativeBridgeIntegrityRefusal. The tool call that would load the bridge keeps
+ * being refused for it, because a payload written under the bridge's own name
+ * would otherwise load. The prompt, session, subagent and every other tool
+ * call still proceed, and the notice tells the agent not to invoke the bridge.
  */
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
@@ -176,8 +177,9 @@ export function nativeDriftFailOpen(dataDir: string, agent: string, event: strin
   if (agent === "sumi" || agent === "opencode") return { hookSpecificOutput: { hookEventName: event, additionalContext: `${warning}\n\n${notice}` } };
   if (agent === "cursor") return { continue: true, user_message: warning };
   // A tool call proceeds through the agent's normal permission flow: no
-  // decision is made for it either way. An unverified bridge never reaches
-  // here on a tool call: the hook refuses that call instead.
+  // decision is made for it either way. An unverified or shadowed bridge never
+  // reaches here on the tool call that would load it: the hook refuses that
+  // call instead. Any other tool (Hermes runs this hook for every tool) proceeds.
   if (event === "PreToolUse" || event === "BeforeTool") return { systemMessage: warning };
   return { systemMessage: warning, hookSpecificOutput: { hookEventName: agent === "gemini" ? nativeEvent : event, additionalContext: notice } };
 }
