@@ -86,6 +86,20 @@ export const MANAGED_HOOK_EXIT_RESERVE_MS = 1_000;
  */
 export const SESSION_CONTEXT_CHILD_RESERVE_MS = 1_000;
 /**
+ * SessionStart refreshes the station profile before its context. That
+ * refresh is bounded so it cannot use the window verified context needs: it
+ * ends by this budget, and always leaves SESSION_START_CONTEXT_RESERVE_MS of
+ * the hook's window (the context child's startup, a background renewal's
+ * bounded wait and the hook's report). A refresh that times out or cannot
+ * reach the authority is reported in one line, and the session uses its last
+ * verified profile within the usual 24-hour bound.
+ */
+export const SESSION_START_SYNC_BUDGET_MS = 5_000;
+export const SESSION_START_CONTEXT_RESERVE_MS = 6_000;
+export function sessionStartSyncBudget(remainingMs: number): number {
+  return Math.min(SESSION_START_SYNC_BUDGET_MS, remainingMs - SESSION_START_CONTEXT_RESERVE_MS);
+}
+/**
  * Limits for one managed context child, from the time the hook has left. On a
  * full prompt window the renewal keeps its whole budget; after a lifecycle
  * sync has used part of the window, the renewal shrinks first, so each layer
@@ -105,6 +119,19 @@ export function managedContextChildLimits(remainingMs: number): { childMs: numbe
  * inside that range, so one pin renewed or timed out on authority latency alone.
  */
 export const SESSION_RENEWAL_TIMEOUT_MS = 9_000;
+/**
+ * Budget of one background renewal (`skills sessions renew-background`),
+ * which managed hooks start instead of renewing on the prompt's critical
+ * path. It covers a large pin's historical reads on a slow authority; the
+ * authorization checks are the inline renewal's own.
+ */
+export const BACKGROUND_SESSION_RENEWAL_BUDGET_MS = 120_000;
+/**
+ * A root session's pin is renewed ahead of expiry once it is this old, while
+ * it is still valid, so an active session normally never reaches expiry and
+ * its prompts keep receiving context from the valid pin meanwhile.
+ */
+export const SESSION_RENEW_AHEAD_AGE_MS = 12 * 60 * 60 * 1000;
 /**
  * Only a real deadline or abort signal of the renewal reports the spent
  * budget: an AbortError or TimeoutError, a bundle inspection timeout or abort,
@@ -331,6 +358,17 @@ export interface SessionPinRenewalOptions extends SessionReconciliationOptions {
    * reports its own SESSION_RENEWAL_TIMEOUT before an outer layer kills it.
    */
   budgetMs?: number;
+  /**
+   * Background renewal only: the budget ceiling is
+   * BACKGROUND_SESSION_RENEWAL_BUDGET_MS instead of SESSION_RENEWAL_TIMEOUT_MS.
+   */
+  background?: boolean;
+  /**
+   * Renew once the pin is at least this old (default: only after it expired).
+   * Background renew-ahead passes SESSION_RENEW_AHEAD_AGE_MS. The renewal
+   * itself and every check it makes are unchanged; only when it may start is.
+   */
+  renewAfterMs?: number;
 }
 
 /**
@@ -407,10 +445,13 @@ export async function renewSkillSessionPin(sessionId: string, profileId: string,
   if (old.profile.profileId !== profileId) throw new SkillSelectionError("PROFILE_LOCK_MISMATCH", "The session is pinned to a different Skills profile.");
   const now = (options.now ?? Date.now)();
   const age = now - Date.parse(old.verifiedAt);
-  if (age >= 0 && age <= MAX_CACHED_PROFILE_AGE_MS) return { outcome: "unchanged" };
+  const renewAfterMs = options.renewAfterMs ?? MAX_CACHED_PROFILE_AGE_MS;
+  if (!Number.isFinite(renewAfterMs) || renewAfterMs <= 0 || renewAfterMs > MAX_CACHED_PROFILE_AGE_MS) throw new SkillSelectionError("INVALID_CONTEXT_BUDGET", "A session renewal threshold must be positive and within the cached profile age bound.");
+  if (age >= 0 && age <= renewAfterMs) return { outcome: "unchanged" };
   if (age < 0) throw new SkillSelectionError("INVALID_RECEIPT", "The session receipt has a future timestamp; inspect it before changing its pin.");
   // A pin that follows a project lock is exactly the renewal without migration.
-  const migrate = options.migrate === true && !pinFollowsProjectLock(old, options.projectDir);
+  // A pin renewed ahead of expiry is still valid and never migrates early.
+  const migrate = options.migrate === true && age > MAX_CACHED_PROFILE_AGE_MS && !pinFollowsProjectLock(old, options.projectDir);
   // A remembered refusal spares the authority read for a pin that will keep
   // refusing. With migration on, only a refusal of the migration itself
   // applies: a renewal refusal remembered while migration was off says nothing
@@ -420,7 +461,8 @@ export async function renewSkillSessionPin(sessionId: string, profileId: string,
   if (refusal) {
     throw new SkillSelectionError("SESSION_RECONCILIATION_REQUIRED", `Renewal of this exact session pin was refused at ${refusal.recordedAt} by profile revision ${refusal.refusedRevision}; the existing pin is unchanged. The authority is asked again after ${refusal.expiresAt}, or sooner when the receipt or the synced profile revision changes. Review skills sessions reconcile for an intentional change.`);
   }
-  const budgetMs = Math.min(SESSION_RENEWAL_TIMEOUT_MS, options.budgetMs ?? SESSION_RENEWAL_TIMEOUT_MS);
+  const ceilingMs = options.background ? BACKGROUND_SESSION_RENEWAL_BUDGET_MS : SESSION_RENEWAL_TIMEOUT_MS;
+  const budgetMs = Math.min(ceilingMs, options.budgetMs ?? ceilingMs);
   const deadline = performance.now() + budgetMs;
   const controller = new AbortController();
   // A spent renewal budget is not a network or HTTP failure of the authority.

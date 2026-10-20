@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { buildCliFixture } from "./cli-build.fixture.js";
 import { admitCorpusFixture, corpusInspectorPathFixture } from "../lib/codex-corpus.fixture.js";
 import { hermesHookDefinitions } from "../lib/agent-hermes.js";
-import { SESSION_RENEWAL_TIMEOUT_MS } from "../lib/session-reconciliation.js";
+import { MANAGED_HOOK_DEADLINE_MS, SESSION_RENEWAL_TIMEOUT_MS, SESSION_START_CONTEXT_RESERVE_MS } from "../lib/session-reconciliation.js";
 
 const scratch = mkdtempSync(join(tmpdir(), "skills-hook-nesting-"));
 const entry = join(scratch, "entry.ts"), binary = join(scratch, "skills.js"), executable = join(scratch, "skills");
@@ -105,27 +105,32 @@ test("a hung context child on a Hermes first turn is reported by the hook before
   expect(result.status).toBe(0);
 }, 60_000);
 
-// The low end of the window: a long sync leaves the context child little time.
-// The renewal shrinks with it and still reports its own code; nothing is left
-// for the Hermes supervisor to kill.
-test("after a long SessionStart sync, a small remainder still ends in the renewal's own timeout", async () => {
+// A long sync can no longer use the context child's share of the window: it
+// is stopped at its own budget, reported in one line, and the context child
+// still runs with the rest. Nothing is left for the Hermes supervisor to kill.
+const SYNC_NOTICE = "Skills profile refresh did not finish at session start [SKILLS_HOOK_TIMEOUT] (stage=sync)";
+test("a long SessionStart sync is stopped at its own budget and the context child keeps the rest of the window", async () => {
   const s = await station(), longSync = { SKILLS_TEST_SYNC_SLEEP: "8500" };
   for (const result of [await s.claude("SessionStart", longSync), await s.hermesFirstTurn(longSync)]) {
     const budget = Number(result.budget);
-    expect(budget).toBeGreaterThan(0);
-    expect(budget).toBeLessThan(2_500);
+    expect(budget).toBeGreaterThan(SESSION_START_CONTEXT_RESERVE_MS - 3_000);
+    expect(budget).toBeLessThan(SESSION_RENEWAL_TIMEOUT_MS);
+    expect(result.stdout).toContain(SYNC_NOTICE);
     expect(result.stdout).toContain("SESSION_RENEWAL_TIMEOUT");
     expect(result.stdout).not.toContain(SUPERVISOR_REFUSAL);
     expect(result.status).toBe(0);
+    expect(result.ms).toBeLessThan(MANAGED_HOOK_DEADLINE_MS + 1_500);
   }
 }, 90_000);
 
-test("a sync that never finishes is stopped by the hook, which reports it before any outer kill", async () => {
+test("a sync that never finishes is stopped by the hook, which reports it and still runs the context child before any outer kill", async () => {
   const s = await station(), hungSync = { SKILLS_TEST_SYNC_SLEEP: "hang" };
   for (const result of [await s.claude("SessionStart", hungSync), await s.hermesFirstTurn(hungSync)]) {
-    expect(result.budget).toBe("not spawned");
-    expect(result.stdout).toContain("SKILLS_HOOK_TIMEOUT");
+    expect(Number(result.budget)).toBeGreaterThan(0);
+    expect(result.stdout).toContain(SYNC_NOTICE);
+    expect(result.stdout).toContain("SESSION_RENEWAL_TIMEOUT");
     expect(result.stdout).not.toContain(SUPERVISOR_REFUSAL);
     expect(result.status).toBe(0);
+    expect(result.ms).toBeLessThan(MANAGED_HOOK_DEADLINE_MS + 1_500);
   }
 }, 90_000);

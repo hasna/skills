@@ -3,10 +3,11 @@ import type { Command } from "commander";
 import { readSync } from "node:fs";
 import { configuredSkillsApiUrl, normalizeSkillsApiOrigin, skillsApiRequestUrl } from "../../lib/fleet-credentials.js";
 import { buildSkillContext, type SkillContextInput } from "../../lib/skill-context.js";
-import { loadSelectedSkill, type SelectionResolverOptions } from "../../lib/selection-resolver.js";
-import { inspectSessionWriteLock, recoverSessionWriteLock, SkillSelectionError } from "../../lib/selection-cache.js";
+import { loadSelectedSkill, type ResolvedSelectionContext, type SelectionResolverOptions } from "../../lib/selection-resolver.js";
+import { inspectSessionWriteLock, readSkillSessionSnapshotIfExists, recoverSessionWriteLock, SkillSelectionError, type SkillSessionReceipt } from "../../lib/selection-cache.js";
 import { readManagedSkillPolicy } from "../../lib/managed-policy.js";
 import { inspectSkillSession, reconcileSkillSession, renewSkillSessionPin, SessionPinMigrationTimeout, type SessionPinMigration, type SessionReconciliationInput, type SessionSelectionMetadata } from "../../lib/session-reconciliation.js";
+import { awaitBackgroundRenewal, BACKGROUND_RENEWAL_WAIT_MS, backgroundRenewalError, readBackgroundRenewalState, renewalModeFor, runBackgroundRenewal, SessionRenewalInBackground, startBackgroundRenewal } from "../../lib/session-background-renewal.js";
 
 function sessionSelectionLabel(selection: SessionSelectionMetadata): string {
   return `${selection.slug}@${selection.version} ${selection.bundleDigest}`;
@@ -15,7 +16,7 @@ function sessionSelectionLabel(selection: SessionSelectionMetadata): string {
 export function selectedProfileId(explicit?: string): string {
   return explicit ?? process.env.HASNA_SKILLS_SELECTION_PROFILE ?? readManagedSkillPolicy()?.profileId ?? "default";
 }
-export interface ContextCommandOptions { selectionProfile?: string; cached?: boolean; autoReconcileSafe?: boolean; autoMigrateSessionPin?: boolean; renewalBudgetMs?: string; json?: boolean; stdin?: boolean; session?: string; restore?: boolean; maxChars?: string; maxSkills?: string; file?: string }
+export interface ContextCommandOptions { selectionProfile?: string; cached?: boolean; autoReconcileSafe?: boolean; autoMigrateSessionPin?: boolean; backgroundRenewal?: boolean; renewalBudgetMs?: string; json?: boolean; stdin?: boolean; session?: string; restore?: boolean; maxChars?: string; maxSkills?: string; file?: string }
 export function contextResolverOptions(options: ContextCommandOptions): SelectionResolverOptions {
   if (!options.cached) return {};
   const configured = configuredSkillsApiUrl();
@@ -30,9 +31,14 @@ export function registerContextCommands(parent: Command): void {
     .description("Inspect one session receipt without displaying payloads or changing its pin")
     .action(async (id: string, options: { json?: boolean }) => {
       try {
-        const result = inspectSkillSession(id);
+        // The last background renewal attempt is reported as metadata only.
+        const state = readBackgroundRenewalState(id);
+        const backgroundRenewal = state ? { status: state.status, mode: state.mode, pinVerifiedAt: state.pinVerifiedAt, startedAt: state.startedAt,
+          ...(state.finishedAt ? { finishedAt: state.finishedAt } : {}), ...(state.code ? { code: state.code } : {}) } : undefined;
+        const result = { ...inspectSkillSession(id), ...(backgroundRenewal ? { backgroundRenewal } : {}) };
         await writeCliOutput(options.json ? JSON.stringify(result) : [
           `${JSON.stringify(id)}: ${result.profileId} at ${result.profileRevision}`, `Receipt SHA256: ${result.receiptSha256}`,
+          ...(backgroundRenewal ? [`Background renewal (${backgroundRenewal.mode}): ${backgroundRenewal.status}${backgroundRenewal.code ? ` with ${backgroundRenewal.code}` : ""}, started ${backgroundRenewal.startedAt}${backgroundRenewal.finishedAt ? `, finished ${backgroundRenewal.finishedAt}` : ""}`] : []),
           ...result.selections.map(selection => `${selection.loaded ? "Loaded" : "Unloaded"}: ${sessionSelectionLabel(selection)}`),
         ].join("\n"));
       } catch (error) { reportContextError(error, options.json); }
@@ -57,6 +63,22 @@ export function registerContextCommands(parent: Command): void {
         const archivePath = recoverSessionWriteLock(id, options.reviewDigest);
         await writeCliOutput(options.json ? JSON.stringify({ sessionId: id, recovered: true, archivePath })
           : `Archived the stale lock at ${archivePath}. The session receipt was not changed.`);
+      } catch (error) { reportContextError(error, options.json); }
+    });
+  // Started detached by managed hooks only; it acts only for the exact lock
+  // operation that started it, so a stray invocation does nothing.
+  sessions.command("renew-background <id>", { hidden: true })
+    .requiredOption("--selection-profile <id>", "The session's pinned selection profile")
+    .requiredOption("--operation-id <uuid>", "The exact background renewal lock operation")
+    .option("--migrate", "For an expired pin, migrate a refused renewal of the same profile (the managed hook's setting)", false)
+    .option("--project-dir <dir>", "The prompt's directory; a project lock there keeps a refusal")
+    .option("--json", "Return the outcome as JSON", false)
+    .description("Renew one session pin in the background for a managed hook")
+    .action(async (id: string, options: { selectionProfile: string; operationId: string; migrate?: boolean; projectDir?: string; json?: boolean }) => {
+      try {
+        const result = await runBackgroundRenewal(id, options.selectionProfile, options.operationId, { migrate: options.migrate === true, projectDir: options.projectDir });
+        await writeCliOutput(options.json ? JSON.stringify(result) : `Background renewal ${result.status}${result.code ? ` (${result.code})` : ""}.`);
+        if (result.status === "failed") process.exitCode = 1;
       } catch (error) { reportContextError(error, options.json); }
     });
   sessions.command("reconcile <id>")
@@ -107,6 +129,7 @@ export function registerContextCommands(parent: Command): void {
     .option("--auto-reconcile-safe", "For managed hooks, renew authorized immutable session pins without adopting newer selected versions", false)
     .option("--auto-migrate-session-pin", "With --auto-reconcile-safe: when renewal is refused because the same profile moved on, migrate the pin to the current revision and retire changed or removed loaded skills; managed hooks name them once. A project lock at the input cwd keeps the refusal", false)
     .option("--renewal-budget-ms <ms>", "With --auto-reconcile-safe: milliseconds this command may spend before its session pin renewal must finish, counted from when the command starts; the renewal never exceeds its own budget either")
+    .option("--background-renewal", "With --auto-reconcile-safe (managed hooks): renew session pins in a detached background worker, ahead of expiry for root sessions; an expired pin waits a few seconds for it and otherwise delivers no payload", false)
     .option("--session <id>", "Keep the same skill versions across this session")
     .option("--restore", "Re-emit loaded session context after compaction or resume", false)
     .option("--max-chars <count>", "Optional maximum injected characters")
@@ -121,29 +144,73 @@ export function registerContextCommands(parent: Command): void {
         if (options.renewalBudgetMs !== undefined && !/^\d{1,6}$/.test(options.renewalBudgetMs)) throw new SkillSelectionError("INVALID_CONTEXT_INPUT", "--renewal-budget-ms must be a whole number of milliseconds.");
         const renewalDeadline = options.renewalBudgetMs === undefined ? undefined : started + Number(options.renewalBudgetMs);
         if (options.autoMigrateSessionPin && !options.autoReconcileSafe) throw new SkillSelectionError("INVALID_CONTEXT_INPUT", "--auto-migrate-session-pin requires --auto-reconcile-safe.");
+        if (options.backgroundRenewal && !options.autoReconcileSafe) throw new SkillSelectionError("INVALID_CONTEXT_INPUT", "--background-renewal requires --auto-reconcile-safe.");
         const input = options.stdin ? parseSkillContextInput(await readContextStdin()) : { prompt: prompt ?? "" };
         input.profileId = selectedProfileId(options.selectionProfile ?? input.profileId);
         input.cwd ??= process.cwd();
         input.sessionId = options.session ?? input.sessionId;
         input.restore ||= options.restore;
-        const resolverOptions = { ...contextResolverOptions(options), ...(options.maxChars === undefined ? {} : { maxChars: Number(options.maxChars) }), maxSkills: Number(options.maxSkills) };
+        let pinned: { receipt: SkillSessionReceipt; receiptSha256: string } | null = null;
+        const resolverOptions = { ...contextResolverOptions(options), ...(options.maxChars === undefined ? {} : { maxChars: Number(options.maxChars) }), maxSkills: Number(options.maxSkills),
+          ...(options.backgroundRenewal ? { onResolved: (resolved: ResolvedSelectionContext) => {
+            pinned = resolved.session && resolved.sessionSnapshot ? { receipt: resolved.session, receiptSha256: resolved.sessionSnapshot.receiptSha256 } : null;
+          } } : {}) };
         const sessionId = input.sessionId && (input.agentId ? `${input.sessionId}:${input.agentId}` : input.sessionId);
         let result: Awaited<ReturnType<typeof buildSkillContext>> & { sessionPinMigration?: SessionPinMigration };
         try { result = await buildSkillContext(input, resolverOptions); }
         catch (error) {
           if (!options.cached || !options.autoReconcileSafe || !(error instanceof SkillSelectionError)
               || error.code !== "CACHED_PROFILE_EXPIRED" || !sessionId) throw error;
-          // Session creation reads the project lock at input.cwd; a lock there
-          // keeps today's refusal instead of migrating past the project's pin.
-          const renewal = await renewSkillSessionPin(sessionId, input.profileId!, { ...resolverOptions, migrate: options.autoMigrateSessionPin === true, projectDir: input.cwd,
-            ...(renewalDeadline === undefined ? {} : { budgetMs: Math.floor(renewalDeadline - performance.now()) }) });
-          if (renewal.outcome === "unchanged") throw error;
-          result = await buildSkillContext(input, resolverOptions);
-          if (renewal.outcome === "migrated") result = { ...result, sessionPinMigration: renewal.migration };
+          // The expired pin is this session's own or, for a child that has no
+          // receipt yet, the parent pin it would inherit. With background
+          // renewal the renewal runs in a detached worker; this prompt waits a
+          // few seconds for it and never repeats it inline. Until it commits,
+          // an expired pin delivers nothing. Only when no worker can be
+          // started at all does the prompt renew inline, as before.
+          const target = options.backgroundRenewal ? expiredSessionPin(sessionId, input) : null;
+          if (options.backgroundRenewal && !target) throw error;
+          const launch = target ? startBackgroundRenewal({ sessionId: target.sessionId, profileId: input.profileId!, pinVerifiedAt: target.verifiedAt, receiptSha256: target.receiptSha256,
+            mode: "expired", migrate: options.autoMigrateSessionPin === true, projectDir: input.cwd }) : undefined;
+          if (target && launch && !(launch.status === "failed" && launch.notStarted)) {
+            if (launch.status === "failed") throw backgroundRenewalError(launch.state);
+            const waitMs = Math.min(BACKGROUND_RENEWAL_WAIT_MS, renewalDeadline === undefined ? BACKGROUND_RENEWAL_WAIT_MS : Math.floor(renewalDeadline - performance.now()));
+            const outcome = await awaitBackgroundRenewal(target.sessionId, target.verifiedAt, waitMs, {}, launch.operationId);
+            if (outcome.status === "running") throw new SessionRenewalInBackground();
+            if (outcome.status === "failed") throw backgroundRenewalError(outcome.state);
+            result = await buildSkillContext(input, resolverOptions);
+            if (outcome.status === "migrated" && outcome.state.migration && target.sessionId === sessionId) result = { ...result, sessionPinMigration: outcome.state.migration };
+          } else {
+            // Session creation reads the project lock at input.cwd; a lock there
+            // keeps today's refusal instead of migrating past the project's pin.
+            const renewal = await renewSkillSessionPin(sessionId, input.profileId!, { ...resolverOptions, migrate: options.autoMigrateSessionPin === true, projectDir: input.cwd,
+              ...(renewalDeadline === undefined ? {} : { budgetMs: Math.floor(renewalDeadline - performance.now()) }) });
+            if (renewal.outcome === "unchanged") throw error;
+            result = await buildSkillContext(input, resolverOptions);
+            if (renewal.outcome === "migrated") result = { ...result, sessionPinMigration: renewal.migration };
+          }
+        }
+        // A root session's valid pin is renewed ahead of expiry in the
+        // background; this prompt neither waits for it nor depends on it.
+        const current = pinned as { receipt: SkillSessionReceipt; receiptSha256: string } | null;
+        if (options.backgroundRenewal && sessionId && current && !current.receipt.parent && renewalModeFor(current.receipt.verifiedAt, Date.now()) === "ahead") {
+          try { startBackgroundRenewal({ sessionId, profileId: current.receipt.profile.profileId, pinVerifiedAt: current.receipt.verifiedAt, receiptSha256: current.receiptSha256, mode: "ahead" }); }
+          catch { /* best effort: the pin stays valid and expiry renews it */ }
         }
         await writeCliOutput(options.json ? JSON.stringify(result) : result.context);
       } catch (error) { reportContextError(error, options.json); }
     });
+}
+/**
+ * The expired session pin a context request depends on: the session's own
+ * receipt, or for a child without one the parent receipt it would inherit.
+ * Null when neither exists (a project lock or the station profile expired).
+ */
+function expiredSessionPin(sessionId: string, input: { sessionId?: string; agentId?: string; parentSessionId?: string | null }): { sessionId: string; verifiedAt: string; receiptSha256: string } | null {
+  const own = readSkillSessionSnapshotIfExists(sessionId);
+  if (own) return { sessionId, verifiedAt: own.receipt.verifiedAt, receiptSha256: own.sha256 };
+  const parentId = input.parentSessionId ?? (input.agentId ? input.sessionId : undefined);
+  const parent = parentId ? readSkillSessionSnapshotIfExists(parentId) : null;
+  return parent && parentId ? { sessionId: parentId, verifiedAt: parent.receipt.verifiedAt, receiptSha256: parent.sha256 } : null;
 }
 export function reportContextError(error: unknown, json = false): void {
   const storageFull = error instanceof Error && ["ENOSPC", "EDQUOT"].includes((error as NodeJS.ErrnoException).code ?? "");
@@ -152,9 +219,11 @@ export function reportContextError(error: unknown, json = false): void {
   const message = error instanceof SkillSelectionError ? error.message : storageFull
     ? "Skills could not save verified local state because the filesystem is full or its quota is exhausted. Free space through your approved recoverable cleanup process, then retry the same session."
     : "Skills context could not be loaded. Check authentication and the selected profile.";
-  // A fixed marker, never free text, says why a refusal outlived its migration.
+  // Fixed markers, never free text, say why a refusal outlived its migration
+  // and that a renewal continues in the background.
   const migration = error instanceof SessionPinMigrationTimeout ? error.migration : undefined;
-  if (json) console.log(JSON.stringify({ error: { code, message, ...(migration ? { migration } : {}) } }));
+  const renewal = error instanceof SessionRenewalInBackground ? error.renewal : undefined;
+  if (json) console.log(JSON.stringify({ error: { code, message, ...(migration ? { migration } : {}), ...(renewal ? { renewal } : {}) } }));
   else console.error(message);
   process.exitCode = 1;
 }
