@@ -7,6 +7,25 @@ import { installSumiPathsFixture } from "./sumi-paths.fixture.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { archiveNativeSkills, inventoryNativeSkills, parseNativeMigrationTargetManifest, selectNativeMigrationTargets, type NativeMigrationTargetManifest } from "./agent-integration.js";
 import { INTEGRATION_AGENTS } from "./agent-adapters.js";
+import { readdirSync as diagReaddir } from "node:fs"; // DIAG PLA8-00581 (not for merge)
+import { dirname as diagDirname } from "node:path"; // DIAG PLA8-00581 (not for merge)
+import { NATIVE_SKILL_ROOTS as DIAG_ROOTS } from "./native-discovery-roots.js"; // DIAG PLA8-00581 (not for merge)
+import { diagMask } from "../cli/commands/runtime-mcp-registration-diag.fixture.js"; // DIAG PLA8-00581 (not for merge)
+
+// DIAG PLA8-00581 (not for merge): print inventory entries that lie outside this fixture's root, with where
+// skill roots exist in every ancestor directory and the temp-directory values, so CI shows the extra entry.
+function diagForeign(test: string, inventory: Array<{ agent: string; path: string; vendor?: boolean; system?: boolean; bridge?: boolean }>, project: string): void {
+  const root = diagDirname(project);
+  const foreign = inventory.filter(entry => !entry.path.startsWith(root + "/"));
+  if (!foreign.length) return;
+  const ancestors: Record<string, string[]> = {};
+  for (let dir = diagDirname(root); ; dir = diagDirname(dir)) {
+    for (const [, rel] of DIAG_ROOTS) { try { const names = diagReaddir(join(dir, rel)); if (names.length) ancestors[join(dir, rel)] = names.slice(0, 20); } catch {} }
+    if (diagDirname(dir) === dir) break;
+  }
+  console.log(`[pla8-00581-inventory] ${diagMask(JSON.stringify({ test, count: inventory.length, root, tmpdir: tmpdir(), TMPDIR: process.env.TMPDIR ?? null,
+    foreign: foreign.map(entry => ({ agent: entry.agent, path: entry.path, vendor: entry.vendor ?? null, system: entry.system ?? null, bridge: entry.bridge ?? null })), ancestors }))}`);
+}
 
 useDefaultTestTimeout();
 const roots: string[] = [];
@@ -40,6 +59,7 @@ function fixture(count = 1): { root: string; home: string; project: string } {
 test("exact target manifest archives one reviewed skill and leaves unreviewed skills untouched", () => {
   const { root, home, project } = fixture(32);
   const inventory = inventoryNativeSkills(home, { projectDir: project });
+  diagForeign("native-target-manifest", inventory, project); // DIAG PLA8-00581 (not for merge)
   const target = inventory.find(entry => entry.path === resolve(project, ".codex", "skills", "reviewed-7"));
   expect(target).toBeDefined();
   const manifest = parseNativeMigrationTargetManifest(JSON.stringify({
@@ -71,6 +91,7 @@ test.each([
   writeFileSync(join(skill, "SKILL.md"), "# Synthetic reviewed migration fixture\n");
   writeFileSync(join(skill, "reference.txt"), "Synthetic companion file\n");
   const inventory = inventoryNativeSkills(home, { projectDir: project });
+  diagForeign("native-target-manifest", inventory, project); // DIAG PLA8-00581 (not for merge)
   expect(inventory).toHaveLength(2);
   const target = inventory.find(entry => entry.agent === agent && entry.path === skill)!;
   expect(target).toBeDefined();
@@ -98,6 +119,7 @@ test.each([
 test("target digest drift fails before creating an archive", () => {
   const { root, home, project } = fixture();
   const inventory = inventoryNativeSkills(home, { projectDir: project });
+  diagForeign("native-target-manifest", inventory, project); // DIAG PLA8-00581 (not for merge)
   const target = inventory[0]!;
   const manifest = parseNativeMigrationTargetManifest(JSON.stringify({
     schema: "hasna.skills-native-migration-targets.v1",
@@ -123,6 +145,7 @@ test("target manifests reject traversal, duplicates, and symlinked project roots
 test("direct SDK selection rejects traversal before creating a journal", () => {
   const { root, home, project } = fixture();
   const inventory = inventoryNativeSkills(home, { projectDir: project });
+  diagForeign("native-target-manifest", inventory, project); // DIAG PLA8-00581 (not for merge)
   const outside = inventory[0]!;
   const forged: NativeMigrationTargetManifest = {
     schema: "hasna.skills-native-migration-targets.v1", digest: "a".repeat(64),
@@ -136,6 +159,7 @@ test("direct SDK selection rejects traversal before creating a journal", () => {
 test("target selection rejects ambiguity, protected entries, and post-review changes", () => {
   const { home, project } = fixture();
   const inventory = inventoryNativeSkills(home, { projectDir: project });
+  diagForeign("native-target-manifest", inventory, project); // DIAG PLA8-00581 (not for merge)
   const target = inventory[0]!;
   const manifest = parseNativeMigrationTargetManifest(JSON.stringify({ schema: "hasna.skills-native-migration-targets.v1", targets: [{ agent: target.agent, projectRoot: resolve(project), path: ".codex/skills/reviewed-0", treeSha256: target.hash }] }));
   expect(() => selectNativeMigrationTargets([...inventory, { ...target }], manifest)).toThrow(/exactly once/);
