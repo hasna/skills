@@ -3462,6 +3462,22 @@ refuses native discovery or unknown control changes, and changes policy only.
 After explicit migration, ordinary supported local MCP updates require no
 coordinated policy write.
 
+### Native discovery drift is reported, not blocking
+
+Live prompt, session, subagent and tool hooks no longer block on
+`NATIVE_SKILL_DRIFT`. The turn proceeds without Skills context, the agent shows
+one warning naming the change and the repair command, and the hook records a
+receipt in `<skills-data>/native-drift/<agent>.json`; `skills hook drift --json`
+lists them. Invoking a native payload skill instead of the `skills-cli` bridge
+is still denied, and install, trust and migration still refuse drift.
+
+`claude-settings-v5` and `codex-settings-v7` reviews bind only settings that can
+add, remove or redirect native skills, hooks or plugins, so a model switch, an
+"always allow" rule, a status line or Codex's folder trust and notices are not
+drift. Existing reviews keep verifying through a narrowed-witness ledger the live
+hook records while they still match. See
+[docs/plugin-admission.md](docs/plugin-admission.md#narrowed-discovery-reviews-claude-settings-v5-and-codex-settings-v7).
+
 ### Reproduce a reviewed runtime dependency closure
 
 For an exact-version copyfile update, supply an owner-private absolute npm

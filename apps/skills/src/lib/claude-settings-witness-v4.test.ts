@@ -255,7 +255,7 @@ test("an explicit preserved-preimage upgrade moves v3 to v4 only when theme is t
   expect(() => assertManagedAgentBridge("claude", f)).toThrow("Native discovery input changed");
   // The default target remains v3, which refuses to re-witness a v3 review.
   expect(() => planAgentSettingsWitnessUpgrade({ ...options(current), targetClaudeVersion: undefined })).toThrow("exact legacy settings witness");
-  expect(() => planAgentSettingsWitnessUpgrade({ ...options(current), targetClaudeVersion: 5 as never })).toThrow("Invalid Claude witness target version");
+  expect(() => planAgentSettingsWitnessUpgrade({ ...options(current), targetClaudeVersion: 6 as never })).toThrow("Invalid Claude witness target version");
   expect(() => planAgentSettingsWitnessUpgrade({ ...options(current), agent: "codex" })).toThrow("Invalid Claude witness target version");
   const wrongPreimage = join(preservedDir, "other", "settings.json"); mkdirSync(join(preservedDir, "other"));
   writeFileSync(wrongPreimage, JSON.stringify({ ...JSON.parse(reviewedText), env: { CHANGED: "1" } }));
@@ -304,7 +304,7 @@ test("the policy schema accepts claude-settings-v4 only for a reviewed Claude se
   for (const [agent, method, path] of [["claude", "automatic", "/home/u/.claude/settings.json"], ["codex", "reviewed", "/home/u/.claude/settings.json"], ["claude", "reviewed", "/home/u/.claude/other.json"], ["claude", "reviewed", "relative/settings.json"]]) {
     expect(() => assertAgentPolicyCollections(policy(agent!, method!, path!))).toThrow();
   }
-  expect(() => assertAgentPolicyCollections({ bridge: { discovery: { claude: { agent: "claude", method: "reviewed", roots: [], sources: [{ path: "/home/u/.claude/settings.json", hashMode: "claude-settings-v5", sha256: "a".repeat(64) }] } } } })).toThrow();
+  expect(() => assertAgentPolicyCollections({ bridge: { discovery: { claude: { agent: "claude", method: "reviewed", roots: [], sources: [{ path: "/home/u/.claude/settings.json", hashMode: "claude-settings-v6", sha256: "a".repeat(64) }] } } } })).toThrow();
 });
 
 test("the CLI captures an explicit claude-settings-v4 witness and validates the rebind target", async () => {
@@ -319,7 +319,7 @@ test("the CLI captures an explicit claude-settings-v4 witness and validates the 
   const captured = await run(["hook", "witness", "--kind", "claude-settings-v4", "--path", settings, "--json"]);
   expect(captured.status).toBe(0);
   expect(JSON.parse(captured.stdout)).toEqual({ path: settings, hashMode: "claude-settings-v4", sha256: v4(text(base)) });
-  const refused = await run(["hook", "rebind-settings", "--agent", "claude", "--claude-witness-version", "5", "--reviewed-preimage", settings, "--expected-policy-sha256", "0".repeat(64), "--expected-settings-sha256", "0".repeat(64), "--json"]);
+  const refused = await run(["hook", "rebind-settings", "--agent", "claude", "--claude-witness-version", "6", "--reviewed-preimage", settings, "--expected-policy-sha256", "0".repeat(64), "--expected-settings-sha256", "0".repeat(64), "--json"]);
   expect(refused.status).toBe(1);
-  expect(refused.stderr.trim()).toBe("Claude witness version accepts 3 or 4");
+  expect(refused.stderr.trim()).toBe("Claude witness version accepts 3, 4 or 5");
 });

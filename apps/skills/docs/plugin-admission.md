@@ -408,9 +408,11 @@ What the software currently enforces is narrower:
   byte witness keeps its meaning. If the root reappears, its sources are
   checked again.
 - It is detection-only. Later checks re-hash the stored sources and re-walk any
-  reviewed `directories` witnesses. Drift makes the
-  Skills hooks refuse with `NATIVE_SKILL_DRIFT`; it does not stop, unload or
-  sandbox plugin code, which the native client keeps running.
+  reviewed `directories` witnesses. Drift makes the live
+  Skills hooks report `NATIVE_SKILL_DRIFT` (a warning, the Skills context
+  omitted for that turn and a drift receipt) without blocking the prompt;
+  install, trust and migration refuse it. It does not stop, unload or sandbox
+  plugin code, which the native client keeps running.
 - It is a tripwire, not a security boundary. A process running as the same user
   can rewrite the plugin files and the managed policy that holds the witnesses.
 
@@ -660,6 +662,71 @@ either explicit path:
 Install a runtime that recognizes `claude-settings-v4`, including any bundled
 copy of the verifier, before a policy carries it; an older runtime refuses the
 unknown hash mode.
+
+### Narrowed discovery reviews: `claude-settings-v5` and `codex-settings-v7`
+
+Earlier modes bind almost the whole settings file, so ordinary use tripped
+discovery drift: switching to any model not on a fixed list (for example
+`deepseek-flash` or `claude-opus-5-5`), an "always allow" rule, a status line,
+or Codex rewriting `config.toml` for a model change, a folder trust or its own
+notices. The narrowed modes bind only what can add, remove or redirect native
+skills, hooks or plugins:
+
+- `claude-settings-v5`: every top-level key whose name mentions a skill, plugin,
+  hook or marketplace, in full (`hooks`, `disableAllHooks`, `enabledPlugins`,
+  `extraKnownMarketplaces`, `pluginConfigs`, `disableBundledSkills`,
+  `syncClaudeAiSkills` and any future key of that kind); in `permissions`, only
+  `Skill` rules in `allow`/`deny`/`ask` and `additionalDirectories`; in `env`,
+  only `CLAUDE_CONFIG_DIR` and variables with such a name. Any model value,
+  `modelSettings`, effort, other permission rules and modes, `statusLine`, other
+  environment, `theme`, `tui`, view and unknown preference keys vary freely.
+  There is no model allow-list. Skills-owned hook entries stay bound: `skills
+  hook install` rebinds the witness when it rewrites them.
+- `codex-settings-v7`: every root key with such a name (`hooks` without the
+  native `hooks.state` trust ledger, `plugins`, `marketplaces`, `skills`
+  without disable-only registrations), `[features]` flags with such a name at
+  the root and in each profile, and such keys inside `[profiles.*]`. Model,
+  effort, verbosity, service tier, providers, `[projects.*]` trust, `[tui]`,
+  `[notice]`, `notify`, MCP servers and sandbox or approval settings vary
+  freely. V7 carries no hook MCP dependency metadata; a review that must bind
+  those keeps V6.
+
+Opt in through a fresh review (`skills hook witness --kind claude-settings-v5`
+or `--kind codex-settings-v7`) or a preserved-preimage upgrade
+(`skills hook rebind-settings --claude-witness-version 5` or
+`--codex-witness-version 7`). The upgrade accepts a raw or any earlier typed
+witness except Codex V6, proves the preimage in its original mode, and refuses
+when any narrowed field differs.
+
+Existing reviews keep verifying after an upgrade without a new review. A legacy
+full-file settings witness (raw bytes, `claude-settings-v1`–`v4`,
+`codex-settings-v1`–`v5`) binds everything the narrowed projection binds, so
+while it still matches, the narrowed digest of the current file is the narrowed
+digest of the reviewed state. The live hook records that observation, computed
+from the same bytes that matched, in `native-witness-narrowed.json` beside
+`agent-policy.json`. When the legacy witness later stops matching, the change is
+accepted only if the current narrowed digest equals the recorded one. Nothing is
+recorded from a file the legacy witness does not verify, and an entry is bound
+to the exact stored witness, so a station that had already drifted before the
+upgrade still needs a fresh review once. Install, trust, migrate and upgrade
+paths stay strict and do not consult the ledger.
+
+### Drift reports instead of blocking
+
+A live lifecycle hook (Claude, Codex, Gemini, Cursor, Sumi and Hermes prompt,
+session, subagent and tool events) no longer blocks on `NATIVE_SKILL_DRIFT`.
+For that turn it omits the Skills context, shows one bounded warning naming the
+drift and the repair command, and records
+`<skills-data>/native-drift/<agent>.json` (schema
+`hasna.skills.native-drift-receipt.v1`, mode 0600) with the full reason, first
+and last occurrence and a count. The next clean check marks the receipt
+`cleared`. `skills hook drift [--agent <agent>] [--json]` lists the receipts.
+New hooks, plugins and native copies are still detected and reported; they are
+never adopted silently. Two refusals keep blocking because they are policy, not
+drift: invoking a native payload skill instead of the `skills-cli` bridge
+(Claude `PreToolUse`, Gemini `BeforeTool`, Hermes `skill_view`/`skill_manage`),
+and `DISCOVERY_ROOT_UNRESOLVED`. Install, trust, migrate, sync and upgrade
+commands still refuse drift exactly as before.
 
 ## Verification and limits
 

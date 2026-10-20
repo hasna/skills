@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.85
+
+### Patch Changes
+
+- Native discovery drift no longer blocks a prompt, a session, a subagent or a tool call (owner request, 2026-10-20). When a live Claude, Codex, Gemini, Cursor, Sumi or Hermes hook finds `NATIVE_SKILL_DRIFT`, the turn proceeds without Skills context, the hook shows one bounded warning naming the drift and the repair command, and it records `<skills-data>/native-drift/<agent>.json` (schema `hasna.skills.native-drift-receipt.v1`, mode 0600) with the full reason, first and last occurrence and a count. The next clean check marks the receipt `cleared`; `skills hook drift [--agent <agent>] [--json]` lists the receipts. Drift is still detected and reported, never adopted silently. Invoking a native payload skill instead of the `skills-cli` bridge is still denied (Claude `PreToolUse`, Gemini `BeforeTool`, Hermes `skill_view`/`skill_manage`), `DISCOVERY_ROOT_UNRESOLVED` still blocks, and install, trust, migrate, sync and upgrade commands still refuse drift.
+- Add the narrowed `claude-settings-v5` and `codex-settings-v7` review witnesses. They bind only what can add, remove or redirect native skills, hooks or plugins: for Claude, every key that names a skill, plugin, hook or marketplace, `Skill` permission rules, `additionalDirectories` and `CLAUDE_CONFIG_DIR`; for Codex, `hooks` (without `hooks.state`), `plugins`, `marketplaces`, enabling `skills` entries and hook, plugin or skill feature flags at the root and in profiles. Any model (no allow-list), effort, other permission rules, status line, environment, theme, `tui`, folder trust, notices, MCP servers and unknown preferences vary freely. Opt in with `skills hook witness --kind claude-settings-v5|codex-settings-v7` or `skills hook rebind-settings --claude-witness-version 5` / `--codex-witness-version 7` with a preserved preimage.
+- Existing reviews keep verifying after the upgrade. While a legacy full-file settings witness (raw, `claude-settings-v1`–`v4`, `codex-settings-v1`–`v5`) still matches, the live hook records the narrowed digest of the same bytes in `native-witness-narrowed.json`; when it later stops matching, the change is accepted only if that narrowed digest is unchanged. Nothing is recorded from a file the legacy witness does not verify, so a station that had drifted before the upgrade needs one fresh review.
+- Carries #152 (I6-00270): the session renewal budget is sized for real pin churn (9 s renewal budget, 11 s context child ceiling).
+
 ## 0.10.84
 
 ### Patch Changes

@@ -5,12 +5,13 @@ import { codexNativeConfigEqual } from "./codex-native-config.js";
 import { reviewCodexPluginControls, reviewedCodexPluginSourceRoots, isReviewedCodexPluginInactive, isReviewedCodexPluginSkillDisabled, reviewedCodexPluginCapabilitiesUnchanged, disableReviewedCodexPluginNames, absentDisabledCodexPluginParent, classifyCodexPluginCacheDocument, codexRemoteInstallReceipt, mergeReconciledCodexPluginControls, unenrolledCodexPluginEvidence, codexPluginRootEvidence, codexPluginCapabilityChanges, enrolledCodexPluginStrictChanges, codexPreStartRemoteReceipt, codexPreStartReceiptChanged, codexStoredReceiptHeal, CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, type CodexPluginCacheDocumentIdentity, type ReviewedCodexSkillDenial, type CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
 import { verifyCodexNativeSkillPolicy, parseCodexNativeHookEnvelope, recordCodexNativePolicyAcceptance, type CodexNativeHookEnvelope, type ProcessInspector, type NativePolicyHelperRunner } from "./codex-native-skill-policy.js";
 import { codexPluginIsRemote, codexPluginSourceIsConfigControlled, projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
-import { upgradeCodexSettingsWitness, upgradeCodexSettingsWitnessV3, upgradeCodexSettingsWitnessV4, upgradeCodexSettingsWitnessV5, readCodexSettingsPreimage, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
-import { upgradeClaudeSettingsWitness, upgradeClaudeSettingsWitnessV4, hashNativeJsonControls } from "./claude-settings-witness.js";
+import { upgradeCodexSettingsWitness, upgradeCodexSettingsWitnessV3, upgradeCodexSettingsWitnessV4, upgradeCodexSettingsWitnessV5, upgradeCodexSettingsWitnessV7, readCodexSettingsPreimage, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
+import { upgradeClaudeSettingsWitness, upgradeClaudeSettingsWitnessV4, upgradeClaudeSettingsWitnessV5, hashNativeJsonControls } from "./claude-settings-witness.js";
 import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
 import { captureCodexSemanticCacheWitness, codexLocalMarketplaceMapsPlugin, type CodexSemanticCacheAppOnlyParent, type CodexSemanticCacheReviewedHookParent } from "./codex-semantic-cache-witness.js";
 import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
 import type { NativeDiscoveryWitnessChange, NativeDiscoveryWitnessKind, NativeDiscoveryWitnessTolerance } from "./native-discovery-witness-change.js";
+import { openNarrowedWitnessLedger } from "./narrowed-witness-ledger.js";
 import { CODEX_REMOTE_VENDOR_MARKETPLACES, codexVendorMarketplace, codexVendorPluginRefreshSafe, codexVendorSubtreeHookFree } from "./codex-vendor-refresh.js";
 import { isCodexNativeSkillDisabled } from "./codex-native-skill-catalog.js";
 import { codexPluginCacheSkillTree } from "./codex-node-modules.js";
@@ -1177,10 +1178,11 @@ function atomicWrite(path: string, content: string): void {
  * Runtime readers never relax the old witness. All other discovery sources,
  * unknown settings, native controls and policy bytes remain guarded.
  */
-export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "codex" | "sumi"; targetCodexVersion?: 2 | 3 | 4 | 5; targetClaudeVersion?: 3 | 4; reviewedPreimage: string; home?: string; dataDir?: string; projectDir?: string; expectedPolicySha256: string; expectedSettingsSha256: string }): AgentIntegrationPlan {
-  if (options.targetCodexVersion !== undefined && (options.agent !== "codex" || ![2, 3, 4, 5].includes(options.targetCodexVersion))) throw new Error("Invalid Codex witness target version");
-  // Claude v3 stays the default target; v4 (built-in theme presets) is opt-in.
-  if (options.targetClaudeVersion !== undefined && (options.agent !== "claude" || ![3, 4].includes(options.targetClaudeVersion))) throw new Error("Invalid Claude witness target version");
+export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "codex" | "sumi"; targetCodexVersion?: 2 | 3 | 4 | 5 | 7; targetClaudeVersion?: 3 | 4 | 5; reviewedPreimage: string; home?: string; dataDir?: string; projectDir?: string; expectedPolicySha256: string; expectedSettingsSha256: string }): AgentIntegrationPlan {
+  if (options.targetCodexVersion !== undefined && (options.agent !== "codex" || ![2, 3, 4, 5, 7].includes(options.targetCodexVersion))) throw new Error("Invalid Codex witness target version");
+  // Claude v3 stays the default target; v4 (built-in theme presets) and v5
+  // (the narrowed discovery projection) are opt-in.
+  if (options.targetClaudeVersion !== undefined && (options.agent !== "claude" || ![3, 4, 5].includes(options.targetClaudeVersion))) throw new Error("Invalid Claude witness target version");
   const home = resolve(options.home ?? homedir()), dataDir = options.dataDir ?? getDataDirReadOnly();
   const snapshot = readManagedSkillPolicySnapshot(dataDir);
   if (!snapshot || sha(snapshot.text) !== options.expectedPolicySha256) throw new Error("Managed policy preimage changed");
@@ -1200,7 +1202,7 @@ export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "co
   // and therefore stops matching as soon as Codex re-serializes the file it owns.
   const replaced: DiscoverySource[] = [previous];
   if (options.agent === "codex") {
-    if (previous.hashMode !== undefined && previous.hashMode !== "bytes" && previous.hashMode !== "codex-settings-v1" && !((options.targetCodexVersion === 3 || options.targetCodexVersion === 4 || options.targetCodexVersion === 5) && previous.hashMode === "codex-settings-v2") && !((options.targetCodexVersion === 4 || options.targetCodexVersion === 5) && previous.hashMode === "codex-settings-v3") && !(options.targetCodexVersion === 5 && previous.hashMode === "codex-settings-v4")) throw new Error("Codex settings witness upgrade requires an eligible preserved configuration witness");
+    if (previous.hashMode !== undefined && previous.hashMode !== "bytes" && previous.hashMode !== "codex-settings-v1" && !((options.targetCodexVersion === 3 || options.targetCodexVersion === 4 || options.targetCodexVersion === 5 || options.targetCodexVersion === 7) && previous.hashMode === "codex-settings-v2") && !((options.targetCodexVersion === 4 || options.targetCodexVersion === 5 || options.targetCodexVersion === 7) && previous.hashMode === "codex-settings-v3") && !((options.targetCodexVersion === 5 || options.targetCodexVersion === 7) && previous.hashMode === "codex-settings-v4") && !(options.targetCodexVersion === 7 && previous.hashMode === "codex-settings-v5")) throw new Error("Codex settings witness upgrade requires an eligible preserved configuration witness");
     const preimage = readCodexSettingsPreimage(options.reviewedPreimage);
     for (const source of binding.sources) {
       if (source === previous || source.path !== configPath) continue;
@@ -1224,9 +1226,13 @@ export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "co
   const next = options.agent === "sumi"
     ? upgradeSumiSettingsWitness(previous as Parameters<typeof upgradeSumiSettingsWitness>[0], options.reviewedPreimage)
     : options.agent === "claude"
-    ? options.targetClaudeVersion === 4
+    ? options.targetClaudeVersion === 5
+      ? upgradeClaudeSettingsWitnessV5(previous as Parameters<typeof upgradeClaudeSettingsWitnessV5>[0], options.reviewedPreimage)
+    : options.targetClaudeVersion === 4
       ? upgradeClaudeSettingsWitnessV4(previous as Parameters<typeof upgradeClaudeSettingsWitnessV4>[0], options.reviewedPreimage)
       : upgradeClaudeSettingsWitness(previous as Parameters<typeof upgradeClaudeSettingsWitness>[0], options.reviewedPreimage)
+    : options.targetCodexVersion === 7
+      ? upgradeCodexSettingsWitnessV7(previous as Parameters<typeof upgradeCodexSettingsWitnessV7>[0], options.reviewedPreimage)
     : options.targetCodexVersion === 5
       ? upgradeCodexSettingsWitnessV5(previous as Parameters<typeof upgradeCodexSettingsWitnessV5>[0], options.reviewedPreimage)
     : options.targetCodexVersion === 4
@@ -1778,7 +1784,7 @@ function verifyIntegrationPlanBeforeWrite(plan: AgentIntegrationPlan, assertCurr
     if (plan.cacheWitnessUpgrade) throw new Error("Independent witness upgrades cannot be combined implicitly");
     const upgrade = plan.settingsWitnessUpgrade;
     if (!plan.managedAgentChecks || !plan.observedPolicy?.before) throw new Error("Invalid settings witness upgrade plan");
-    const verified = planAgentSettingsWitnessUpgrade({ agent: upgrade.agent, ...(upgrade.agent === "codex" ? { targetCodexVersion: upgrade.toHashMode === "codex-settings-v5" ? 5 as const : upgrade.toHashMode === "codex-settings-v4" ? 4 as const : upgrade.toHashMode === "codex-settings-v3" ? 3 as const : 2 as const } : {}), ...(upgrade.agent === "claude" && upgrade.toHashMode === "claude-settings-v4" ? { targetClaudeVersion: 4 as const } : {}), reviewedPreimage: upgrade.reviewedPreimage, home: plan.managedAgentChecks.home, dataDir: plan.dataDir, expectedPolicySha256: sha(plan.observedPolicy.before), expectedSettingsSha256: upgrade.currentSettingsSha256 });
+    const verified = planAgentSettingsWitnessUpgrade({ agent: upgrade.agent, ...(upgrade.agent === "codex" ? { targetCodexVersion: upgrade.toHashMode === "codex-settings-v7" ? 7 as const : upgrade.toHashMode === "codex-settings-v5" ? 5 as const : upgrade.toHashMode === "codex-settings-v4" ? 4 as const : upgrade.toHashMode === "codex-settings-v3" ? 3 as const : 2 as const } : {}), ...(upgrade.agent === "claude" && upgrade.toHashMode === "claude-settings-v5" ? { targetClaudeVersion: 5 as const } : upgrade.agent === "claude" && upgrade.toHashMode === "claude-settings-v4" ? { targetClaudeVersion: 4 as const } : {}), reviewedPreimage: upgrade.reviewedPreimage, home: plan.managedAgentChecks.home, dataDir: plan.dataDir, expectedPolicySha256: sha(plan.observedPolicy.before), expectedSettingsSha256: upgrade.currentSettingsSha256 });
     if (JSON.stringify(verified.changes) !== JSON.stringify(plan.changes) || JSON.stringify(verified.settingsWitnessUpgrade) !== JSON.stringify(upgrade)) throw new Error("Settings witness upgrade plan changed");
     provenDiscovery = verified.discoveryBefore![0];
   }
@@ -2189,6 +2195,11 @@ interface ManagedBridgeOptions {
    * vendor copies and every other change still refuse. Install, trust, migrate
    * and sync never pass it. */
   codexPromptHook?: boolean;
+  /** Live prompt hooks only. A legacy full-file settings witness that no longer
+   * matches stays current when the narrowed digest recorded for its review is
+   * unchanged, and a matching one is recorded (narrowed-witness-ledger.ts).
+   * Install, trust, migrate, sync and upgrades never pass it. */
+  narrowedLegacyWitnesses?: boolean;
 }
 
 /** Result of a guard call; both lists are empty unless the caller opted in.
@@ -2567,14 +2578,15 @@ function assertManagedNativeDiscovery(custody: ManagedBridgeCustody, agent: Inte
     return Array.isArray(binding.disabledBuiltins) && binding.disabledBuiltins.some((item: any) => item.path === entry.path && item.hash === entry.hash);
   };
   if (!discovery || discovery.agent !== agent) throw new Error("NATIVE_SKILL_DRIFT: native discovery coverage is missing; run skills hook install");
+  const narrowed = options.narrowedLegacyWitnesses === true ? openNarrowedWitnessLedger(dataDir) : undefined;
   try {
-    verifyAgentDiscovery(agent==="codex" ? {...discovery,codexDisabledPluginSkills:binding.codexPluginSkills ?? []} : discovery, options.codexDiscoveryRecovery, aliases, witnessTolerance);
+    verifyAgentDiscovery(agent==="codex" ? {...discovery,codexDisabledPluginSkills:binding.codexPluginSkills ?? []} : discovery, options.codexDiscoveryRecovery, aliases, witnessTolerance, narrowed);
     if (agent === "sumi" && discovery.method === "reviewed") resolveAgentDiscovery({ home, agent, retainedReview: discovery, canonical: path => canonicalAgentPath(path, aliases) });
     if (discovery.method === "automatic") verifyAutomaticDiscoveryClosure(discovery, { home, canonical: path => canonicalAgentPath(path, aliases), change: "Configured native discovery roots changed", executable: binding.discoveryExecutables?.[agent], ...(witnessTolerance ? { witnessTolerance } : {}) });
   } catch (error) {
     if (isDiscoveryRootUnresolved(error)) throw error;
     throw new Error(`NATIVE_SKILL_DRIFT: ${(error as Error).message}`);
-  }
+  } finally { narrowed?.flush(); }
   let installationInputRoots:string[]=[];
   if (agent==="codex") {
     try {

@@ -126,9 +126,15 @@ test("a different gemini first on PATH shadows the recorded runtime and refuses 
   const named = `the "gemini" on this process's PATH resolves to ${JSON.stringify(shadowEntry)}, not the reviewed ${JSON.stringify(f.entry)}`;
   drift(f.run(shadowed, "claude-update"), named);
   drift(f.run(shadowed, "gemini-guard"), named);
-  const denied = f.hook(shadowed);
-  expect(denied.decision).toBe("deny"); expect(denied.continue).toBe(false);
-  drift({ error: denied.reason }, named);
+  // Drift no longer blocks the tool call (owner request 2026-10-20): it is
+  // reported with the same detail and recorded, while a missing runtime below
+  // (DISCOVERY_ROOT_UNRESOLVED) still blocks.
+  const reported = f.hook(shadowed) as { decision?: string; continue?: boolean; systemMessage?: string };
+  expect(reported.decision).toBeUndefined(); expect(reported.continue).not.toBe(false);
+  expect(reported.systemMessage).toStartWith("Skills warning: native discovery changed; this prompt was not blocked");
+  expect(reported.systemMessage).toContain(named);
+  const receipt = JSON.parse(readFileSync(join(f.home, "data", "native-drift", "gemini.json"), "utf8"));
+  drift({ error: `NATIVE_SKILL_DRIFT: ${receipt.reason}` }, named);
   // The shadow also refuses when the recorded launcher itself is gone.
   renameSync(f.launcher, `${f.launcher}.moved`);
   drift(f.run(shadowed, "claude-update"), named);

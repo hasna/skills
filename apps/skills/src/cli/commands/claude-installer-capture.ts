@@ -2,7 +2,7 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from "
 import { isAbsolute, resolve } from "node:path";
 import { captureClaudeMarketplaceRegistry, captureClaudeMarketplaceRegistryV2 } from "../../lib/claude-marketplace-registry.js";
 import { captureClaudePluginManifestFile } from "../../lib/claude-plugin-manifest-witness.js";
-import { captureClaudeSettings, captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4 } from "../../lib/claude-settings-witness.js";
+import { captureClaudeSettings, captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4, captureClaudeSettingsV5 } from "../../lib/claude-settings-witness.js";
 import { captureClaudeInstallerCandidate } from "../../lib/claude-prospective-review.js";
 import { captureDiscoveryDirectories, captureDiscoveryPathSources } from "../../lib/agent-discovery.js";
 import { captureManagedPluginRegistry } from "../../lib/plugin-discovery.js";
@@ -90,8 +90,9 @@ function capture(request: JsonObject): unknown {
       const capture = request.kind === "claude-settings-v1" ? captureClaudeSettings
         : request.kind === "claude-settings-v2" ? captureClaudeSettingsV2
         : request.kind === "claude-settings-v3" ? captureClaudeSettingsV3
-        : request.kind === "claude-settings-v4" ? captureClaudeSettingsV4 : null;
-      need(capture, "INVALID_SETTINGS_KIND: kind must be claude-settings-v1, claude-settings-v2, claude-settings-v3, or claude-settings-v4");
+        : request.kind === "claude-settings-v4" ? captureClaudeSettingsV4
+        : request.kind === "claude-settings-v5" ? captureClaudeSettingsV5 : null;
+      need(capture, "INVALID_SETTINGS_KIND: kind must be claude-settings-v1, claude-settings-v2, claude-settings-v3, claude-settings-v4, or claude-settings-v5");
       return captureOwned("settings", () => capture(request.path as string));
     }
     case "marketplace-registry": {

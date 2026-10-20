@@ -48,11 +48,12 @@ test("the real rebind CLI admits V5 and legacy targets to the exact policy preim
 
 test("the real rebind CLI refuses unsupported and malformed targets and foreign agents", async () => {
   const f = await fixture();
-  for (const version of ["1", "6", "05", "5.0", "5x", ""]) {
+  // 7 is the narrowed discovery projection; 6 carries hook sources and is never a rebind target.
+  for (const version of ["1", "6", "8", "05", "5.0", "5x", "7.0", ""]) {
     const result = await f.rebind(version);
     expect(result.exitCode).toBe(1);
     expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("Codex witness version accepts 2, 3, 4 or 5");
+    expect(result.stderr.trim()).toBe("Codex witness version accepts 2, 3, 4, 5 or 7");
   }
   const foreign = await f.rebind("5", "claude");
   expect(foreign.exitCode).toBe(1);

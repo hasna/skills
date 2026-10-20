@@ -334,6 +334,86 @@ export function upgradeClaudeSettingsWitnessV4(previous: { path: string; hashMod
   return { path: previous.path, hashMode: "claude-settings-v4", sha256 };
 }
 
+// v5 binds only what can add, remove or redirect native skills, hooks or
+// plugins (owner request 2026-10-20: ordinary use must not trip discovery):
+//   - every top-level key whose name mentions a skill, plugin, hook or
+//     marketplace, in full (hooks, disableAllHooks, enabledPlugins,
+//     extraKnownMarketplaces, pluginConfigs, disableBundledSkills,
+//     syncClaudeAiSkills and any future key of that kind);
+//   - `permissions`: only Skill rules in allow/deny/ask, and
+//     additionalDirectories (added roots can carry their own skills);
+//   - `env`: only CLAUDE_CONFIG_DIR and variables whose names mention the same
+//     terms.
+// Everything else is not a discovery input and varies freely: any model value,
+// modelSettings, effort, other permission rules and modes, statusLine, other
+// environment, theme, tui, view and unknown preference keys. Malformed
+// permissions or env (not an object, a non-array rule list, a non-string rule)
+// stay bound whole. There is no model allow-list in v5. Skills-owned hook
+// entries stay bound: `skills hook install` rebinds the witness when it
+// rewrites them, and matching them by command text would accept a lookalike.
+const V5_DISCOVERY_KEY = /skill|plugin|hook|marketplace/i;
+const V5_DISCOVERY_ENV: ReadonlySet<string> = new Set(["CLAUDE_CONFIG_DIR"]);
+const V5_SKILL_RULE = /^Skill(?:\(|$)/;
+const V5_PERMISSION_LISTS: ReadonlySet<string> = new Set(["allow", "deny", "ask"]);
+function narrowedClaudeSettings(value: ObjectValue): ObjectValue {
+  const entries: Array<[string, Value]> = [];
+  for (const [key, child] of value.entries) {
+    if (V5_DISCOVERY_KEY.test(key)) { entries.push([key, child]); continue; }
+    if (key === "permissions") {
+      if (child.kind !== "object") { entries.push([key, child]); continue; }
+      const kept: Array<[string, Value]> = [];
+      for (const [name, rules] of child.entries) {
+        if (name === "additionalDirectories") { kept.push([name, rules]); continue; }
+        if (!V5_PERMISSION_LISTS.has(name)) continue;
+        if (rules.kind !== "array") { kept.push([name, rules]); continue; }
+        const skillRules = rules.items.filter(rule => rule.kind !== "string" || V5_SKILL_RULE.test(rule.value));
+        if (skillRules.length) kept.push([name, { kind: "array", items: skillRules }]);
+      }
+      if (kept.length) entries.push([key, { kind: "object", entries: kept }]);
+      continue;
+    }
+    if (key === "env") {
+      if (child.kind !== "object") { entries.push([key, child]); continue; }
+      const kept = child.entries.filter(([name]) => V5_DISCOVERY_ENV.has(name) || V5_DISCOVERY_KEY.test(name));
+      if (kept.length) entries.push([key, { kind: "object", entries: kept }]);
+    }
+  }
+  return { kind: "object", entries };
+}
+function settingsDigestV5(text: string): string {
+  return createHash("sha256").update("hasna.skills.claude-settings.v5\0").update(JSON.stringify(canonical(narrowedClaudeSettings(parse(text))))).digest("hex");
+}
+/** Explicit v5 review: the narrowed discovery projection above. v1-v4
+ * witnesses keep their meaning; nothing selects v5 implicitly. */
+export function captureClaudeSettingsV5(path: string, budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }): { path: string; hashMode: "claude-settings-v5"; sha256: string } {
+  return { path, hashMode: "claude-settings-v5", sha256: settingsDigestV5(readNativeSettingsWitnessFile(path, budget)) };
+}
+export function hashClaudeSettingsReplacementV5(text: string, budget: ClaudeSettingsWitnessBudget): string {
+  need(typeof text === "string", "requires settings text");
+  const bytes = Buffer.byteLength(text);
+  need(bytes <= CLAUDE_SETTINGS_WITNESS_LIMITS.bytes && Number.isSafeInteger(budget.remaining) && budget.remaining >= bytes, "exceeds its byte limit");
+  budget.remaining -= bytes;
+  return settingsDigestV5(text);
+}
+/** Explicit upgrade from any prior witness (raw bytes, v1-v4) with an exact
+ * preserved preimage of its review. v5 binds a subset of what each earlier mode
+ * binds, so only a difference in settings v5 ignores is accepted; a change to a
+ * hook, plugin, marketplace, skill key, Skill rule, added directory or
+ * discovery environment variable still refuses. */
+export function upgradeClaudeSettingsWitnessV5(previous: { path: string; hashMode?: "bytes" | "claude-settings-v1" | "claude-settings-v2" | "claude-settings-v3" | "claude-settings-v4"; sha256: string }, reviewedSettingsPath: string): ReturnType<typeof captureClaudeSettingsV5> {
+  need(previous && Object.keys(previous).every(key => ["path", "hashMode", "sha256"].includes(key))
+    && (previous.hashMode === undefined || ["bytes", "claude-settings-v1", "claude-settings-v2", "claude-settings-v3", "claude-settings-v4"].includes(previous.hashMode))
+    && typeof previous.sha256 === "string" && /^[a-f0-9]{64}$/.test(previous.sha256), "requires an exact prior settings witness");
+  const budget = { remaining: 2 * CLAUDE_SETTINGS_WITNESS_LIMITS.bytes };
+  const before = readNativeSettingsWitnessFile(reviewedSettingsPath, budget), current = readNativeSettingsWitnessFile(previous.path, budget);
+  const beforeDigest = previous.hashMode === undefined || previous.hashMode === "bytes" ? createHash("sha256").update(before).digest("hex")
+    : settingsDigest(before, previous.hashMode === "claude-settings-v1" ? 1 : previous.hashMode === "claude-settings-v2" ? 2 : previous.hashMode === "claude-settings-v3" ? 3 : 4);
+  need(beforeDigest === previous.sha256, "reviewed preimage does not match the prior witness");
+  const sha256 = settingsDigestV5(current);
+  need(settingsDigestV5(before) === sha256, "discovery settings changed; explicit discovery review required");
+  return { path: previous.path, hashMode: "claude-settings-v5", sha256 };
+}
+
 /** Strict bounded JSON control witness; metadata exclusion must be explicit. */
 export function hashNativeJsonControls(text: string, excludedMetadata?: "version"): string {
   need(Buffer.byteLength(text) <= CLAUDE_SETTINGS_WITNESS_LIMITS.bytes, "exceeds its byte limit");

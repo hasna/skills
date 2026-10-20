@@ -31,6 +31,18 @@ const payload = (name: string) => `---\nname: ${name}\ndescription: Synthetic ve
 const put = (p: string, s: string) => { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, s); };
 const delivered = { SKILLS_TEST_CHILD_EXIT: "0", SKILLS_TEST_CHILD_STDOUT: JSON.stringify({ context: "Verified fixture context" }) };
 const REMOTE_ID = "plugins_synthetic_00_0000000000000000000";
+/** Drift no longer blocks (owner request 2026-10-20): the hook warns, omits the
+ * context and records the full drift text in the agent's receipt. */
+function driftReason(home: string, result: { value: any; stdout: string }, agent = "codex"): string {
+  expect(result.value.decision).toBeUndefined();
+  expect(result.value.continue).not.toBe(false);
+  expect(result.value.systemMessage).toStartWith("Skills warning: native discovery changed; this prompt was not blocked");
+  expect(result.stdout).not.toContain("Verified fixture context");
+  expect(result.stdout).not.toContain("Synthetic native instructions");
+  const receipt = JSON.parse(readFileSync(join(home, ".hasna", "skills", "native-drift", `${agent}.json`), "utf8"));
+  expect(receipt.status).toBe("active");
+  return `NATIVE_SKILL_DRIFT: ${receipt.reason}`;
+}
 
 /** A station shaped like station04: Skills hooks installed for every agent, then
  * a reviewed native catalog enrolled the remote `sites@openai-curated-remote`
@@ -71,15 +83,12 @@ async function station04() {
   return { home, cwd, config, copy, installed, hook, run, setConfig };
 }
 
-test("station04 replay from an isolated cwd: an enabled refreshed vendor skill blocks every Codex lifecycle event", async () => {
+test("station04 replay from an isolated cwd: an enabled refreshed vendor skill is reported on every Codex lifecycle event without blocking it", async () => {
   const f = await station04();
   for (const event of ["UserPromptSubmit", "SessionStart", "SubagentStart"]) {
     const result = await f.hook(event);
-    const reason = result.value.reason ?? result.value.stopReason ?? result.value.systemMessage;
-    expect(reason).toStartWith(`NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ${JSON.stringify(f.copy)}`);
-    expect(result.stdout).not.toContain("Synthetic native instructions");
-    if (event === "UserPromptSubmit") expect(result.value.decision).toBe("block");
-    if (event === "SessionStart") expect(result.value.continue).toBe(false);
+    expect(driftReason(f.home, result)).toStartWith(`NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ${JSON.stringify(f.copy)}`);
+    expect(result.value.systemMessage).toContain(JSON.stringify(f.copy));
   }
 });
 
@@ -105,33 +114,26 @@ test("station04 replay from an isolated cwd: a qualified-name disable delivers c
   expect(byPath.value.hookSpecificOutput.additionalContext).toContain("Verified fixture context");
   expect(byPath.stdout).not.toContain("Synthetic native instructions");
   // A whole-plugin table alone never retires a remote vendor copy: remote state
-  // can enable a locally disabled remote plugin. The copy still blocks.
+  // can enable a locally disabled remote plugin. The copy is still reported.
   f.setConfig(`[plugins."sites@openai-curated-remote"]\nenabled = false\n`);
   const byPlugin = await f.hook();
-  expect(byPlugin.value.decision).toBe("block");
-  expect(byPlugin.value.reason).toStartWith(`NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ${JSON.stringify(f.copy)}`);
-  expect(byPlugin.value.hookSpecificOutput).toBeUndefined();
-  expect(byPlugin.stdout).not.toContain("Synthetic native instructions");
-  // A later enabling rule brings the block back.
+  expect(driftReason(f.home, byPlugin)).toStartWith(`NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ${JSON.stringify(f.copy)}`);
+  // A later enabling rule brings the report back.
   f.setConfig(`[[skills.config]]\nname = "sites:sites-remix"\nenabled = false\n\n[[skills.config]]\nname = "sites:sites-remix"\nenabled = true\n`);
-  expect((await f.hook()).value.decision).toBe("block");
+  expect(driftReason(f.home, await f.hook())).toStartWith("NATIVE_SKILL_DRIFT: ");
 });
 
-test("a disabled vendor skill beside a user copy, or under a non-OpenAI marketplace, still blocks; Claude is unchanged", async () => {
+test("a disabled vendor skill beside a user copy, or under a non-OpenAI marketplace, is still reported; Claude is unchanged", async () => {
   const f = await station04();
   f.setConfig(`[[skills.config]]\nname = "sites:sites-remix"\nenabled = false\n`);
   put(join(f.home, ".agents", "skills", "user-copy", "SKILL.md"), payload("user-copy"));
-  const blocked = await f.hook();
-  expect(blocked.value.decision).toBe("block");
-  expect(blocked.value.reason).toStartWith(`NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ${JSON.stringify(join(f.home, ".agents", "skills", "user-copy"))}`);
+  expect(driftReason(f.home, await f.hook())).toStartWith(`NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ${JSON.stringify(join(f.home, ".agents", "skills", "user-copy"))}`);
   const g = await station04();
   const acme = join(g.home, ".codex", "plugins", "cache", "acme", "sites", "1.0.0");
   put(join(acme, ".codex-plugin", "plugin.json"), JSON.stringify({ name: "sites", version: "1.0.0" }));
   put(join(acme, "skills", "sites-remix", "SKILL.md"), payload("sites-remix"));
   g.setConfig(`[[skills.config]]\nname = "sites:sites-remix"\nenabled = false\n`);
-  const lookalike = await g.hook();
-  expect(lookalike.value.decision).toBe("block");
-  expect(lookalike.value.reason).toContain(JSON.stringify(join(acme, "skills", "sites-remix")));
+  expect(driftReason(g.home, await g.hook())).toContain(JSON.stringify(join(acme, "skills", "sites-remix")));
   const claude = await g.hook("UserPromptSubmit", "claude");
   expect(claude.value.systemMessage).toBeUndefined();
   expect(claude.value).toEqual({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: expect.stringContaining("Verified fixture context") } });
