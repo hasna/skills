@@ -3,8 +3,15 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { useDefaultTestTimeout } from "../../test-preload.js";
+import { diagEnvironment, diagMask } from "./runtime-mcp-registration-diag.fixture.js"; // DIAG PLA8-00581 (not for merge)
 
 useDefaultTestTimeout();
+
+// DIAG PLA8-00581 (not for merge): print a failing child's masked stderr, which carries its diag line.
+const diagPrint = (test: string, root: string, code: number | null, timedOut: boolean, stderr: string) => {
+  console.log(`[pla8-00581] ${diagMask(JSON.stringify({ test, exit: code, timedOut, stderrBytes: stderr.length, parent: diagEnvironment(root) }))}`);
+  for (const line of diagMask(stderr).split("\n")) if (line.trim()) console.log(`[pla8-00581] | ${line}`);
+};
 
 const firstRunModes = ["claude-first-run", "claude-first-run-no-userid", ...["invalid-userid", "unknown", "wrong-server", "unrelated-server", "concurrent-creator", "policy-refused", "native-refusal-after-write", "dangling-link", "config-dir-alias", "post-symlink", "post-hardlink", "parent-drift", "late-lock"].map(kind => `claude-first-run-${kind}`)];
 const bootstrapModes = ["claude-native-bootstrap", "claude-native-bootstrap-existing", "claude-native-bootstrap-unknown",
@@ -30,6 +37,7 @@ for (const mode of [...firstRunModes, ...bootstrapModes, "profile", "environment
       const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
       const diagnostic = JSON.stringify({ exit: Number.isInteger(code) ? code : null,
         location: stderr.match(/runtime-mcp-registration\.fixture\.ts:[0-9]{1,7}:[0-9]{1,7}(?![0-9])/)?.[0] ?? "unavailable" });
+      if (timedOut || stderr.length || code !== 0) diagPrint(mode, root, Number.isInteger(code) ? code : null, timedOut, stderr); // DIAG PLA8-00581 (not for merge)
       expect(timedOut, diagnostic).toBe(false); expect(stderr.length, diagnostic).toBe(0); expect(code, diagnostic).toBe(0);
       const receipt = JSON.parse(stdout);
       expect(receipt).toMatchObject({ mode, unrelatedEntriesPreserved: true, credentialsUnchanged: true, credentialsNotDisclosed: true, networkCalls: 0 });
@@ -75,6 +83,7 @@ for (const agent of ["codex", "gemini", "pi", "opencode", "cursor", "windsurf"])
       ]);
       const diagnostic = JSON.stringify({ exit: Number.isInteger(code) ? code : null,
         location: stderr.match(/runtime-mcp-guarded-writes\.fixture\.ts:[0-9]{1,7}:[0-9]{1,7}(?![0-9])/)?.[0] ?? "unavailable" });
+      if (timedOut || stderr.length || code !== 0) diagPrint(`${agent}/${mode}`, root, Number.isInteger(code) ? code : null, timedOut, stderr); // DIAG PLA8-00581 (not for merge)
       expect(timedOut, diagnostic).toBe(false); expect(stderr.length, diagnostic).toBe(0); expect(code, diagnostic).toBe(0);
       expect(JSON.parse(stdout)).toEqual({ agent, mode, cases: 1, networkCalls: 0, syntheticOnly: true });
     } finally {

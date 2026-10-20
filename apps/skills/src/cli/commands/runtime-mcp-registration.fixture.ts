@@ -11,6 +11,7 @@ import { skillsMcpRegistrationEnvironment } from "../../lib/mcp-registration-env
 import { resolveSkillsFleet } from "../../lib/fleet-credentials.js";
 import { handleMcp } from "./runtime-mcp.js";
 import { assertTestStartupIsolation } from "../../test-isolation.fixture.js";
+import { diagAfter, diagBefore, diagOnFailure } from "./runtime-mcp-registration-diag.fixture.js"; // DIAG PLA8-00581 (not for merge)
 
 // Invoked only in a freshly created synthetic HOME. Never start an agent or dial a server.
 const root = resolve(process.env.REGISTRATION_FIXTURE_ROOT!);
@@ -19,6 +20,9 @@ assert.equal(homedir(), join(root, "home"));
 assert.equal(process.env.TMPDIR, join(root, "tmp"));
 assertTestStartupIsolation();
 const mode = process.argv[2];
+// DIAG PLA8-00581 (not for merge): on a non-zero exit only, one masked JSON line on fd 2.
+const diag: Record<string, unknown> = { probe: "pla8-00581", mode };
+diagOnFailure(diag, root, () => homedir());
 const firstRunMode = mode?.startsWith("claude-first-run") ?? false;
 const firstRunRefused = firstRunMode && !["claude-first-run", "claude-first-run-no-userid"].includes(mode!);
 const preflightRefused = ["claude-first-run-dangling-link", "claude-first-run-config-dir-alias"].includes(mode!);
@@ -96,6 +100,7 @@ if (mode === "claude-native-bootstrap-existing-theme-drop") chmodSync(files.clau
 if (mode === "claude-native-bootstrap-existing-hardlink") linkSync(files.claude!, join(root, "claude-hardlink.json"));
 const claudeModeBefore = firstRunMode ? undefined : lstatSync(files.claude!).mode & 0o7777;
 const originals = new Map(Object.values(files).map(path => [path, path === files.claude && firstRunMode ? null : readFileSync(path)]));
+diag.before = diagBefore(files); // DIAG PLA8-00581 (not for merge)
 // This obsolete fallback must remain untouched even when native add fails.
 const inactiveClaude = join(homedir(), ".claude", ".mcp.json");
 write(inactiveClaude, JSON.stringify({ untouched: unrelatedKey }));
@@ -235,6 +240,7 @@ if (mode === "setup") {
   const program = new Command(); registerAccountCommands(program);
   await program.parseAsync(["login", "--url", origin, "--email", "fixture@example.invalid", "--code", "123456"], { from: "user" });
 } else await handleMcp({ register: "all", json: true });
+diag.after = diagAfter(files, logs.join("\n")); // DIAG PLA8-00581 (not for merge): before any outcome assertion
 
 const refused = mode === "bad-url" || mode === "aliases";
 const admissionRefused = ["claude-policy-refused", "claude-blocked", "claude-unknown-refusal", "claude-spawn-refused"].includes(mode!);
