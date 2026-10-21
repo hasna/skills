@@ -54,13 +54,26 @@ test("native child custody refuses missing parents, reused IDs and cross-root re
 test("native child writer retains the exact parent receipt precondition", async () => {
   const f = fixture();
   await buildSkillContext({ profileId: "engineering", sessionId: "root", parentSessionId: null }, f);
+  // The parent receipt changes during every resolve: the child is resolved
+  // once more from the current parent, then the refusal stands.
+  let resolves = 0;
   const client = { ...f.client, resolveProfile: async () => {
     const parent = readSkillSession("root", f)!;
-    writeSelectionJson(sessionReceiptPath("root", f), { ...parent, verifiedAt: "2026-10-04T01:00:00Z" });
+    writeSelectionJson(sessionReceiptPath("root", f), { ...parent, verifiedAt: `2026-10-04T01:0${++resolves}:00Z` });
     return f.profile;
   } };
   await expect(buildSkillContext({ profileId: "engineering", sessionId: "child", parentSessionId: "root" }, { ...f, client })).rejects.toMatchObject({ code: "SESSION_PARENT_CHANGED" });
+  expect(resolves).toBe(2);
   expect(readSkillSession("child", f)).toBeNull();
+  // A single change is absorbed: the child binds the parent receipt as it now is.
+  let once = 0;
+  const changesOnce = { ...f.client, resolveProfile: async () => {
+    if (once++ === 0) writeSelectionJson(sessionReceiptPath("root", f), { ...readSkillSession("root", f)!, verifiedAt: "2026-10-04T02:00:00Z" });
+    return f.profile;
+  } };
+  await buildSkillContext({ profileId: "engineering", sessionId: "child", parentSessionId: "root" }, { ...f, client: changesOnce });
+  expect(once).toBe(2);
+  expect(readSkillSession("child", f)?.verifiedAt).toBe("2026-10-04T02:00:00Z");
 });
 
 test("legacy composite child identity stays unchanged", async () => {

@@ -28,14 +28,21 @@ authority still renews.
 
 - A root session's pin is renewed ahead of expiry once it is twelve hours
   old. Its prompts keep receiving context from the still-valid pin, and the
-  worker never migrates it early.
+  worker never migrates it early (`renewSkillSessionPin` itself refuses to
+  migrate a pin that has not expired). A subagent's own pin is never renewed
+  ahead. While the last attempt for the current pin failed, each prompt
+  starts with one fixed line naming only its code, for example `Skills
+  session renewal ahead of expiry failed [SKILLS_API_UNAVAILABLE]`.
 - An expired pin (more than 24 hours) delivers no payload until a renewal
   commits. The prompt starts or joins the worker and waits at most three
   seconds. If the worker is still running, the hook reports
   `SESSION_RENEWAL_TIMEOUT` with a fixed `renewal: "background"` marker and
   says the renewal continues; a later prompt uses the renewed pin.
 - A subagent without its own receipt whose parent pin expired renews the
-  parent pin the same way, instead of an uncached authenticated read.
+  parent pin the same way, instead of an uncached authenticated read. A
+  subagent's prompt never migrates the parent pin: migration of a refused
+  renewal runs only from the parent's own prompts, under the project-lock
+  check of the parent's own directory.
 - A failed attempt reports its own code (for example `SKILLS_API_UNAVAILABLE`
   or `SESSION_RECONCILIATION_REQUIRED`). The same request is answered from
   that record for 30 seconds when expired, or 15 minutes when renewed ahead of
@@ -48,9 +55,13 @@ authority still renews.
   the commit is an exact receipt compare-and-swap. A lock whose worker is gone,
   never started, or is older than three minutes is taken over. The record is
   metadata, reported by `skills sessions show` as `backgroundRenewal`, and
-  never authorizes anything.
+  never authorizes anything. Only its validated fields are read back; it
+  records an outcome, never a migration's details, which stay in the
+  preserved reconciliation receipt and the session's migration notice.
 
-If no worker can be started, the prompt renews inline as before. Plain
+If no worker can be started, including a spawn that fails after launch (for
+example `EAGAIN`, which records the attempt as not started and releases its
+lock), the prompt renews inline as before. Plain
 `skills context --auto-reconcile-safe` without `--background-renewal` keeps the
 inline renewal.
 

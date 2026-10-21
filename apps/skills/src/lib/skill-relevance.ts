@@ -168,3 +168,53 @@ export function rankPromptRelevance(prompt: string, selections: readonly Resolve
   for (const entry of ranked) entry.weak = entry.priority === 1 && entry.score < best * WEAK_MATCH_FRACTION;
   return ranked.sort((a, b) => b.priority - a.priority || b.score - a.score || a.selection.slug.localeCompare(b.selection.slug));
 }
+
+/** At most this many weak prompt pointers are offered as load commands. */
+export const PROMPT_OFFER_LIMIT = 3;
+export type PromptOfferReason = "partial-match" | "common-word";
+export interface PromptOffer { selection: ResolvedSkillSelection; reason: PromptOfferReason; evidence: number }
+/**
+ * Selections the prompt points at too weakly to select, offered as `skills
+ * load` commands and never injected. Only trigger keywords count, never slug
+ * runs, and a selection the caller excludes (already selected, ranked or
+ * loaded) is skipped.
+ *
+ * - partial-match: all content words (at least SLUG_CONTENT_WORD_MIN_LENGTH
+ *   letters, two or more) of a multi-word keyword appear in the prompt, though
+ *   not as the phrase, and one of them discriminates in this profile
+ *   ("designs review" in "push the screens to the designs app for review").
+ * - common-word: a one-word keyword used by more than
+ *   DISCRIMINATING_WORD_MAX_SELECTIONS selections appears in the prompt.
+ *
+ * Partial matches rank before common words, then more matching keywords,
+ * then slug. A tie that does not fit the remaining offers is left out
+ * entirely: an alphabetical slug is no reason to prefer one.
+ */
+export function rankPromptOffers(prompt: string, selections: readonly ResolvedSkillSelection[], frequency = triggerWordFrequency(selections),
+  exclude: (selection: ResolvedSkillSelection) => boolean = () => false): PromptOffer[] {
+  const present = new Set(promptWords(prompt));
+  if (!present.size) return [];
+  const found: PromptOffer[] = [];
+  for (const selection of selections) {
+    if (!Array.isArray(selection.triggers?.keywords) || selection.triggers.keywords.length === 0 || exclude(selection)) continue;
+    let partial = 0, common = 0;
+    for (const phrase of selectionPhrases(selection).phrases) {
+      if (phrase.length > 1) {
+        const content = phrase.filter(word => word.length >= SLUG_CONTENT_WORD_MIN_LENGTH);
+        if (content.length >= 2 && content.every(word => present.has(word)) && content.some(word => (frequency.get(word) ?? 0) <= DISCRIMINATING_WORD_MAX_SELECTIONS)) partial++;
+      } else if (present.has(phrase[0]!) && (frequency.get(phrase[0]!) ?? 0) > DISCRIMINATING_WORD_MAX_SELECTIONS) common++;
+    }
+    if (partial) found.push({ selection, reason: "partial-match", evidence: partial });
+    else if (common) found.push({ selection, reason: "common-word", evidence: common });
+  }
+  found.sort((a, b) => Number(a.reason === "common-word") - Number(b.reason === "common-word") || b.evidence - a.evidence || a.selection.slug.localeCompare(b.selection.slug));
+  const offers: PromptOffer[] = [];
+  for (let start = 0; start < found.length && offers.length < PROMPT_OFFER_LIMIT;) {
+    let end = start;
+    while (end + 1 < found.length && found[end + 1]!.reason === found[start]!.reason && found[end + 1]!.evidence === found[start]!.evidence) end++;
+    if (end - start + 1 > PROMPT_OFFER_LIMIT - offers.length) break;
+    offers.push(...found.slice(start, end + 1));
+    start = end + 1;
+  }
+  return offers;
+}

@@ -33,6 +33,13 @@ import { sessionPinMigrationEnabled } from "../../lib/config.js";
 import { captureClaudeInstallerRequest, safeClaudeInstallerCaptureError } from "./claude-installer-capture.js";
 
 const RECOVERABLE_CONTEXT_CACHE_ERRORS = new Set(["CACHED_PROFILE_EXPIRED", "CACHED_PROFILE_MISSING", "CACHED_BUNDLE_MISSING"]);
+/**
+ * Instruction characters one managed hook injects at most. Selected skill
+ * bodies measured about 10–15 KB each, so one large body and a moderate
+ * second fit; a body that does not fit is offered as its `skills load`
+ * command instead of being injected.
+ */
+export const MANAGED_HOOK_CONTEXT_MAX_CHARS = 24_000;
 /** SessionStart refresh failures after which context still comes from the last verified profile. */
 const SESSION_START_SYNC_CONTINUES = new Set(["SKILLS_HOOK_TIMEOUT", "SKILLS_API_UNAVAILABLE"]);
 
@@ -77,7 +84,7 @@ async function contextForHook(input: unknown, profileId: string, cached: boolean
   // innermost layer that hit it, including after SessionStart's sync.
   const { childMs, renewalBudgetMs } = managedContextChildLimits(deadline - Date.now());
   if (childMs <= 0) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "context");
-  const args = ["context", "--stdin", "--json", "--selection-profile", profileId];
+  const args = ["context", "--stdin", "--json", "--selection-profile", profileId, "--max-chars", String(MANAGED_HOOK_CONTEXT_MAX_CHARS)];
   if (cached) args.push("--cached", "--auto-reconcile-safe");
   // Default for every agent's managed hook: a refused renewal of the same
   // profile migrates the pin and names retired loaded skills once. Operators

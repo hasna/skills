@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { DISCRIMINATING_WORD_MAX_SELECTIONS, rankPromptRelevance, selectionPhrases, slugAnchors, triggerWordFrequency } from "./skill-relevance.js";
+import { DISCRIMINATING_WORD_MAX_SELECTIONS, rankPromptOffers, rankPromptRelevance, selectionPhrases, slugAnchors, triggerWordFrequency } from "./skill-relevance.js";
 import type { ResolvedSkillSelection } from "../types/skill-selection.js";
 
 const selection = (slug: string, triggers?: ResolvedSkillSelection["triggers"], aliases?: string[]): ResolvedSkillSelection => ({
@@ -80,4 +80,43 @@ test("a match much weaker than the prompt's best is marked weak; comparable and 
   expect(weakOf("a meal plan and an event seating plan", plans)).toEqual([["event-seating-plan", false], ["meal-plan", false]]);
   // A named selection is never weak.
   expect(weakOf("Skills context is unavailable; use the reconcile skill", [repair, reconcile])).toEqual([["reconcile", false], ["session-reconciliation-repair", false]]);
+});
+
+// The fleet profile's designs-watch keywords; "review" is a trigger word of
+// more than the discriminating bound of selections there (34 measured).
+const DESIGNS_WATCH = selection("designs-watch", { keywords: ["Hasna designs", "designs review", "designs round", "designs watch", "designs-watch", "review pins", "screen review"] });
+const REVIEWERS = Array.from({ length: DISCRIMINATING_WORD_MAX_SELECTIONS + 1 }, (_, index) => selection(`review-user-${index}`, { keywords: ["review"] }));
+const offers = (prompt: string, selections: ResolvedSkillSelection[], exclude?: (entry: ResolvedSkillSelection) => boolean) =>
+  rankPromptOffers(prompt, selections, undefined, exclude).map(entry => [entry.selection.slug, entry.reason, entry.evidence]);
+
+test("a multi-word keyword whose words appear apart is offered, never selected", () => {
+  const all = [DESIGNS_WATCH, ...REVIEWERS];
+  const prompt = "push the new iPhone screens to the designs app for review";
+  expect(rankPromptRelevance(prompt, all)).toEqual([]);
+  expect(offers(prompt, all)).toEqual([["designs-watch", "partial-match", 1]]);
+  // The adjacent phrase still selects.
+  expect(rank("open the designs review for the new screens", all).map(([slug]) => slug)).toEqual(["designs-watch"]);
+  // Every content word must appear, and one of them must discriminate.
+  expect(offers("push the screens for review", all)).toEqual([]);
+  const common = [selection("check-review", { keywords: ["review check"] }), ...REVIEWERS, ...Array.from({ length: 4 }, (_, index) => selection(`check-user-${index}`, { keywords: ["check"] }))];
+  expect(offers("check this and review it", common).filter(([slug]) => slug === "check-review")).toEqual([]);
+});
+
+test("a common one-word keyword is offered only when the offer is not an arbitrary pick among ties", () => {
+  // Four selections share the common word: none is preferred, none is offered.
+  expect(offers("please review this patch", REVIEWERS)).toEqual([]);
+  // A selection whose two common words both appear is offered ahead of that tie.
+  const planner = selection("review-planner", { keywords: ["review", "plan"] });
+  const planners = Array.from({ length: 4 }, (_, index) => selection(`plan-user-${index}`, { keywords: ["plan"] }));
+  expect(offers("review the plan", [planner, ...REVIEWERS, ...planners])).toEqual([["review-planner", "common-word", 2]]);
+  // Partial matches rank ahead of common words.
+  expect(offers("review the plan and the designs app for review", [planner, DESIGNS_WATCH, ...REVIEWERS, ...planners]).map(([slug]) => slug)).toEqual(["designs-watch", "review-planner"]);
+});
+
+test("offers skip excluded selections, selections without keywords and disabled prompt matching", () => {
+  const all = [DESIGNS_WATCH, ...REVIEWERS, selection("event-seating-plan"), selection("quiet", { keywords: [] })];
+  const prompt = "push the new iPhone screens to the designs app for review, then plan the event seating";
+  expect(offers(prompt, all, entry => entry.slug === "designs-watch")).toEqual([]);
+  expect(offers(prompt, all).map(([slug]) => slug)).toEqual(["designs-watch"]);
+  expect(offers("", all)).toEqual([]);
 });

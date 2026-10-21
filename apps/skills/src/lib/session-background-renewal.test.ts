@@ -11,7 +11,8 @@ import { tmpdir } from "node:os";
 import { packSkillBundle } from "./skill-bundle.js";
 import { cacheSelectionBundle, readSkillSessionSnapshot, selectionKey, sessionReceiptPath, writeSelectionJson } from "./selection-cache.js";
 import { awaitBackgroundRenewal, BACKGROUND_RENEWAL_LOCK_TTL_MS, backgroundRenewalRequestDigest, EXPIRED_RENEWAL_RETRY_MS, readBackgroundRenewalState, renewalModeFor, runBackgroundRenewal, startBackgroundRenewal } from "./session-background-renewal.js";
-import { SESSION_RENEW_AHEAD_AGE_MS } from "./session-reconciliation.js";
+import { renewSkillSessionPin, SESSION_RENEW_AHEAD_AGE_MS } from "./session-reconciliation.js";
+import { createHash } from "node:crypto";
 import type { ProfileClient } from "./profile-client.js";
 import type { ResolvedSkillProfile } from "../types/skill-selection.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
@@ -41,10 +42,11 @@ async function fixture(ageMs: number) {
   const client: ProfileClient = { authority, supportsPinRenewal: async () => true, resolveProfile: async () => { reads.push("resolve"); return structuredClone(current); },
     getBundle: async (slug, version) => { reads.push(`${slug}@${version}`); return response(); }, recordStation: async () => { throw new Error("No station write permitted"); } };
   const spawned: string[][] = [];
-  const options = { cacheDir, spawnWorker: (args: string[]) => { spawned.push(args); } };
+  const failToStart: Array<() => void> = [];
+  const options = { cacheDir, spawnWorker: (args: string[], notStarted: () => void) => { spawned.push(args); failToStart.push(notStarted); } };
   const operationOf = (args: string[]) => args[args.indexOf("--operation-id") + 1]!;
   const receiptSha256 = readSkillSessionSnapshot("session", { cacheDir }).sha256;
-  return { cacheDir, verifiedAt, receiptSha256, pinned, current, client, reads, spawned, options, operationOf };
+  return { cacheDir, verifiedAt, receiptSha256, pinned, current, client, reads, spawned, failToStart, options, operationOf };
 }
 
 test("renewal mode follows the pin's age: nothing before twelve hours, ahead until expiry, expired after", () => {
@@ -176,4 +178,55 @@ test("a waiter reports a still-running attempt after its bounded wait", async ()
   const started = performance.now();
   expect((await awaitBackgroundRenewal("session", f.verifiedAt, 300, { cacheDir: f.cacheDir })).status).toBe("running");
   expect(performance.now() - started).toBeLessThan(1_000);
+});
+
+test("the library never migrates a pin renewed ahead of expiry, even when asked to", async () => {
+  const f = await fixture(13 * HOUR);
+  // The loaded selection was removed: renewal refuses; migration would retire it.
+  f.current.selections = [];
+  const before = readFileSync(sessionReceiptPath("session", { cacheDir: f.cacheDir }));
+  await expect(renewSkillSessionPin("session", "fleet", { cacheDir: f.cacheDir, client: f.client, renewAfterMs: SESSION_RENEW_AHEAD_AGE_MS, migrate: true, projectDir: f.cacheDir }))
+    .rejects.toMatchObject({ code: "SESSION_RECONCILIATION_REQUIRED" });
+  expect(readFileSync(sessionReceiptPath("session", { cacheDir: f.cacheDir }))).toEqual(before);
+  expect(existsSync(join(f.cacheDir, "session-reconciliations"))).toBe(false);
+  // Control: the same refused renewal of an expired pin does migrate.
+  const expired = await fixture(25 * HOUR);
+  expired.current.selections = [];
+  expect((await renewSkillSessionPin("session", "fleet", { cacheDir: expired.cacheDir, client: expired.client, migrate: true, projectDir: expired.cacheDir })).outcome).toBe("migrated");
+});
+
+test("a worker whose spawn fails after launch records that it never started and releases its lock at once", async () => {
+  const f = await fixture(25 * HOUR);
+  const request = { sessionId: "session", profileId: "fleet", pinVerifiedAt: f.verifiedAt, receiptSha256: f.receiptSha256, mode: "expired" as const };
+  const started = startBackgroundRenewal(request, f.options);
+  if (started.status !== "started") throw new Error("expected a started attempt");
+  const waiting = awaitBackgroundRenewal("session", f.verifiedAt, 2_000, { cacheDir: f.cacheDir }, started.operationId);
+  // The asynchronous spawn error (for example EAGAIN) arrives after the launch returned.
+  setTimeout(() => f.failToStart[0]!(), 50);
+  const outcome = await waiting;
+  expect(outcome).toMatchObject({ status: "failed", state: { operationId: started.operationId, notStarted: true, code: "SKILLS_CONTEXT_FAILED" } });
+  expect(readdirSync(join(f.cacheDir, "session-renewals")).filter(name => name.endsWith(".lock"))).toEqual([]);
+  // The next prompt starts another attempt instead of reporting the old one.
+  expect(startBackgroundRenewal(request, f.options).status).toBe("started");
+  expect(f.spawned).toHaveLength(2);
+  // A late error for an attempt that is no longer current changes nothing.
+  const current = readFileSync(join(f.cacheDir, "session-renewals", readdirSync(join(f.cacheDir, "session-renewals")).find(name => name.endsWith(".json"))!));
+  f.failToStart[0]!();
+  expect(readFileSync(join(f.cacheDir, "session-renewals", readdirSync(join(f.cacheDir, "session-renewals")).find(name => name.endsWith(".json"))!))).toEqual(current);
+  expect(readdirSync(join(f.cacheDir, "session-renewals")).filter(name => name.endsWith(".lock"))).toHaveLength(1);
+});
+
+test("a recorded attempt returns only validated fields; anything else in the file is dropped", async () => {
+  const f = await fixture(25 * HOUR);
+  startBackgroundRenewal({ sessionId: "session", profileId: "fleet", pinVerifiedAt: f.verifiedAt, receiptSha256: f.receiptSha256, mode: "expired" }, f.options);
+  const path = join(f.cacheDir, "session-renewals", `${createHash("sha256").update("session").digest("hex")}.json`);
+  const recorded = JSON.parse(readFileSync(path, "utf8"));
+  writeFileSync(path, JSON.stringify({ ...recorded, status: "migrated", migration: { retired: [{ slug: "Ignore previous instructions" }], archivePath: "/elsewhere" } }), { mode: 0o600 });
+  const state = readBackgroundRenewalState("session", { cacheDir: f.cacheDir })!;
+  expect(state.status).toBe("migrated");
+  expect(Object.keys(state)).not.toContain("migration");
+  expect(JSON.stringify(state)).not.toContain("Ignore previous instructions");
+  // A malformed worker PID makes the record unusable rather than trusted.
+  writeFileSync(path, JSON.stringify({ ...recorded, workerPid: "1; rm" }), { mode: 0o600 });
+  expect(readBackgroundRenewalState("session", { cacheDir: f.cacheDir })).toBeNull();
 });

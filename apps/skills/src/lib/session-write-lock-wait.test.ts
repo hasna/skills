@@ -10,8 +10,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { packSkillBundle } from "./skill-bundle.js";
-import { activateSelectionProfile, cacheSelectionBundle, readSkillSessionSnapshot, readSkillSessionSnapshotIfExists, selectionKey, SESSION_WRITE_LOCK_WAIT_MS, sessionReceiptPath, writeSelectionJson } from "./selection-cache.js";
-import { buildSkillContext } from "./skill-context.js";
+import { activateSelectionProfile, cacheSelectionBundle, readSkillSessionSnapshot, readSkillSessionSnapshotIfExists, selectionKey, SESSION_WRITE_LOCK_WAIT_MS, sessionReceiptPath, writeSelectionJson, writeSkillSession, type SkillSessionReceipt } from "./selection-cache.js";
+import { buildSkillContext, SESSION_WRITE_BUSY_NOTICE } from "./skill-context.js";
+import { inspectSkillSession } from "./session-reconciliation.js";
 import type { ResolvedSkillProfile } from "../types/skill-selection.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
@@ -78,13 +79,24 @@ test("a lock held past the bounded wait still refuses a new session and is never
   expect(readSkillSessionSnapshotIfExists("parent:child", f.options)).toBeNull();
 });
 
-test("context read from an unchanged pin is delivered when only its bookkeeping write lost the lock race", async () => {
+test("after a lost lock race only bodies the receipt already records are delivered; newly read skills become load commands under one notice", async () => {
   const f = await fixture();
+  // A structurally valid legacy lock that never clears by itself.
   const lock = f.hold("parent");
   const before = readFileSync(sessionReceiptPath("parent", f.options));
   const result = await buildSkillContext({ profileId: "fleet", sessionId: "parent", prompt: "use the beta skill" }, f.options);
-  expect(result.selections.map(selection => selection.slug)).toEqual(["beta-skill"]);
-  expect(result.context).toContain("Fixture body.");
+  // Nothing new is delivered unrecorded: every delivered key is in the receipt's loaded set.
+  expect(result.selections).toEqual([]);
+  expect(result.context).toBe(SESSION_WRITE_BUSY_NOTICE);
+  expect(result.omitted.map(entry => [entry.slug, entry.reason, entry.loadCommand])).toEqual([["beta-skill", "write-busy", "skills load beta-skill@1.0.0 --selection-profile fleet"]]);
+  expect(inspectSkillSession("parent", f.options).selections.filter(selection => selection.loaded).map(selection => selection.slug)).toEqual(["alpha-skill"]);
+  // An explicit re-delivery of a recorded skill is still delivered beside the new one.
+  const mixed = await buildSkillContext({ profileId: "fleet", sessionId: "parent", prompt: "use the beta skill with $alpha-skill" }, f.options);
+  expect(mixed.selections.map(selection => [selection.slug, selection.reason])).toEqual([["alpha-skill", "explicit"]]);
+  expect(mixed.context.startsWith(`${SESSION_WRITE_BUSY_NOTICE}\n\nSkill alpha-skill@1.0.0`)).toBe(true);
+  expect(mixed.omitted.map(entry => [entry.slug, entry.reason])).toEqual([["beta-skill", "write-busy"]]);
+  const loaded = new Set(readSkillSessionSnapshot("parent", f.options).receipt.loaded);
+  for (const selection of [...result.selections, ...mixed.selections]) expect(loaded.has(selectionKey(selection))).toBe(true);
   // The receipt and the other writer's lock are untouched.
   expect(readFileSync(sessionReceiptPath("parent", f.options))).toEqual(before);
   expect(readFileSync(lock.path, "utf8")).toBe(lock.bytes);
@@ -116,4 +128,98 @@ test("context is not delivered after a lost lock race when the pin changed meanw
   const onResolved = () => writeSelectionJson(sessionReceiptPath("parent", f.options), { schemaVersion: 1, verifiedAt: new Date().toISOString(), profile: migrated, sessionId: "parent", generation: 2, loaded: [] });
   await expect(buildSkillContext({ profileId: "fleet", sessionId: "parent", prompt: "use the beta skill" }, { ...f.options, onResolved })).rejects.toMatchObject({ code: "SESSION_WRITE_BUSY" });
   expect(readFileSync(lock.path, "utf8")).toBe(lock.bytes);
+});
+
+/** A parent receipt write with the same pin: a recorded load, or a renewal moving verifiedAt. */
+function touchParent(f: Awaited<ReturnType<typeof fixture>>, change: (receipt: SkillSessionReceipt) => SkillSessionReceipt) {
+  const current = readSkillSessionSnapshot("parent", f.options);
+  writeSelectionJson(sessionReceiptPath("parent", f.options), { ...change(current.receipt), generation: current.generation + 1 });
+}
+
+test("a new child whose parent recorded a load while it resolved is resolved once more from the current parent pin", async () => {
+  const f = await fixture();
+  let resolves = 0;
+  const onResolved = () => { if (resolves++ === 0) touchParent(f, receipt => ({ ...receipt, loaded: [...receipt.loaded, selectionKey(f.profile.selections[1]!)] })); };
+  const child = await buildSkillContext({ profileId: "fleet", sessionId: "parent", agentId: "child" }, { ...f.options, onResolved });
+  expect(resolves).toBe(2);
+  // The child inherits from, and is bound to, the parent receipt as it is now.
+  const parent = readSkillSessionSnapshot("parent", f.options);
+  expect(child.selections.map(selection => [selection.slug, selection.reason])).toEqual([["beta-skill", "subagent-inherit"]]);
+  expect(readSkillSessionSnapshot("parent:child", f.options).receipt.parent).toMatchObject({ sessionId: "parent", generation: parent.generation, receiptSha256: parent.sha256 });
+});
+
+test("a new child whose parent renewal committed while it resolved is resolved once more", async () => {
+  const f = await fixture();
+  let resolves = 0;
+  const renewedAt = new Date(Date.now() - 1_000).toISOString();
+  const onResolved = () => { if (resolves++ === 0) touchParent(f, receipt => ({ ...receipt, verifiedAt: renewedAt })); };
+  await buildSkillContext({ profileId: "fleet", sessionId: "parent", agentId: "child" }, { ...f.options, onResolved });
+  expect(resolves).toBe(2);
+  expect(readSkillSessionSnapshot("parent:child", f.options).receipt.verifiedAt).toBe(renewedAt);
+});
+
+test("a child is resolved again only once, never past its deadline, and never past a parent whose pin itself changed", async () => {
+  // A parent that changes on every attempt keeps the refusal after one retry.
+  const f = await fixture();
+  let resolves = 0;
+  const always = () => { resolves++; touchParent(f, receipt => ({ ...receipt, verifiedAt: new Date(Date.now() - resolves * 1_000).toISOString() })); };
+  await expect(buildSkillContext({ profileId: "fleet", sessionId: "parent", agentId: "child" }, { ...f.options, onResolved: always })).rejects.toMatchObject({ code: "SESSION_PARENT_CHANGED" });
+  expect(resolves).toBe(2);
+  expect(readSkillSessionSnapshotIfExists("parent:child", f.options)).toBeNull();
+  // No time left: no retry.
+  let late = 0;
+  const once = () => { if (late++ === 0) touchParent(f, receipt => ({ ...receipt, verifiedAt: new Date(Date.now() - 60_000).toISOString() })); };
+  await expect(buildSkillContext({ profileId: "fleet", sessionId: "parent", agentId: "late" }, { ...f.options, onResolved: once, resolveAgainBefore: performance.now() - 1 })).rejects.toMatchObject({ code: "SESSION_PARENT_CHANGED" });
+  expect(late).toBe(1);
+  // A migrated parent pin is not resolved again here.
+  let migrated = 0;
+  const migrate = () => { if (migrated++ === 0) touchParent(f, receipt => ({ ...receipt, profile: { ...receipt.profile, profileRevision: "r2", selections: receipt.profile.selections.map(selection => ({ ...selection, profileRevision: "r2" })) } })); };
+  await expect(buildSkillContext({ profileId: "fleet", sessionId: "parent", agentId: "moved" }, { ...f.options, onResolved: migrate })).rejects.toMatchObject({ code: "SESSION_PARENT_CHANGED" });
+  expect(migrated).toBe(1);
+  expect(readSkillSessionSnapshotIfExists("parent:moved", f.options)).toBeNull();
+});
+
+test("writers waiting for a lock that other processes keep publishing and releasing never refuse it as damaged", async () => {
+  const f = await fixture();
+  // Another process takes and releases the parent's real write lock in a
+  // tight loop, so this process keeps meeting it mid-publication (a second
+  // link) and mid-release (a change between two looks).
+  const module = join(import.meta.dir, "selection-cache.ts");
+  const stop = join(f.cacheDir, "stop-churn");
+  const churn = `const { withSkillSessionWriteLock } = await import(${JSON.stringify(module)});
+const { existsSync } = await import("node:fs");
+let rounds = 0;
+while (!existsSync(${JSON.stringify(stop)}) && rounds < 200000) { rounds++; try { withSkillSessionWriteLock("parent", { cacheDir: ${JSON.stringify(f.cacheDir)} }, () => {}); } catch {} }`;
+  for (let index = 0; index < 3; index++) releasers.push(Bun.spawn([process.execPath, "--no-install", "-e", churn], { cwd: f.cacheDir, stdout: "ignore", stderr: "ignore" }));
+  await Bun.sleep(300);
+  const codes: Record<string, number> = {};
+  try {
+    for (let index = 0; index < 80; index++) {
+      const child: SkillSessionReceipt = { ...readSkillSessionSnapshot("parent", f.options).receipt, sessionId: `parent:churn-${index}`, loaded: [] };
+      delete child.parent; delete child.generation;
+      let code = "OK";
+      try { writeSkillSession(child, { current: null, parent: { sessionId: "parent", ...bindingOf(f) } }, f.options); }
+      catch (error) { code = (error as { code?: string }).code ?? "ERROR"; }
+      codes[code] = (codes[code] ?? 0) + 1;
+    }
+  } finally { writeFileSync(stop, ""); }
+  console.log(`[lock-churn] 80 child creations under lock churn: ${JSON.stringify(codes)}`);
+  expect(codes.SESSION_WRITE_LOCKED ?? 0).toBe(0);
+  expect(codes.OK ?? 0).toBeGreaterThan(0);
+});
+
+function bindingOf(f: Awaited<ReturnType<typeof fixture>>) {
+  const snapshot = readSkillSessionSnapshot("parent", f.options);
+  return { generation: snapshot.generation, receiptSha256: snapshot.sha256 };
+}
+
+test("a writer still refuses a damaged lock promptly, without waiting it out as busy, and never replaces it", async () => {
+  const f = await fixture();
+  const path = `${sessionReceiptPath("parent", f.options)}.write-lock`;
+  writeFileSync(path, "damaged", { mode: 0o600 });
+  const started = performance.now();
+  await expect(buildSkillContext({ profileId: "fleet", sessionId: "parent", agentId: "child" }, f.options)).rejects.toMatchObject({ code: "SESSION_WRITE_LOCKED" });
+  expect(performance.now() - started).toBeLessThan(SESSION_WRITE_LOCK_WAIT_MS / 2);
+  expect(readFileSync(path, "utf8")).toBe("damaged");
+  expect(readSkillSessionSnapshotIfExists("parent:child", f.options)).toBeNull();
 });

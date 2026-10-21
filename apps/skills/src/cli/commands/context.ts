@@ -152,6 +152,7 @@ export function registerContextCommands(parent: Command): void {
         input.restore ||= options.restore;
         let pinned: { receipt: SkillSessionReceipt; receiptSha256: string } | null = null;
         const resolverOptions = { ...contextResolverOptions(options), ...(options.maxChars === undefined ? {} : { maxChars: Number(options.maxChars) }), maxSkills: Number(options.maxSkills),
+          ...(renewalDeadline === undefined ? {} : { resolveAgainBefore: renewalDeadline }),
           ...(options.backgroundRenewal ? { onResolved: (resolved: ResolvedSelectionContext) => {
             pinned = resolved.session && resolved.sessionSnapshot ? { receipt: resolved.session, receiptSha256: resolved.sessionSnapshot.receiptSha256 } : null;
           } } : {}) };
@@ -169,17 +170,25 @@ export function registerContextCommands(parent: Command): void {
           // started at all does the prompt renew inline, as before.
           const target = options.backgroundRenewal ? expiredSessionPin(sessionId, input) : null;
           if (options.backgroundRenewal && !target) throw error;
+          // A subagent may renew its parent's expired pin, but only the
+          // parent's own prompts migrate it, under the parent's project lock.
           const launch = target ? startBackgroundRenewal({ sessionId: target.sessionId, profileId: input.profileId!, pinVerifiedAt: target.verifiedAt, receiptSha256: target.receiptSha256,
-            mode: "expired", migrate: options.autoMigrateSessionPin === true, projectDir: input.cwd }) : undefined;
-          if (target && launch && !(launch.status === "failed" && launch.notStarted)) {
+            mode: "expired", migrate: options.autoMigrateSessionPin === true && target.sessionId === sessionId, projectDir: input.cwd }) : undefined;
+          let inline = !target || !launch || (launch.status === "failed" && launch.notStarted === true);
+          if (!inline && launch) {
             if (launch.status === "failed") throw backgroundRenewalError(launch.state);
             const waitMs = Math.min(BACKGROUND_RENEWAL_WAIT_MS, renewalDeadline === undefined ? BACKGROUND_RENEWAL_WAIT_MS : Math.floor(renewalDeadline - performance.now()));
-            const outcome = await awaitBackgroundRenewal(target.sessionId, target.verifiedAt, waitMs, {}, launch.operationId);
+            const outcome = await awaitBackgroundRenewal(target!.sessionId, target!.verifiedAt, waitMs, {}, launch.operationId);
             if (outcome.status === "running") throw new SessionRenewalInBackground();
-            if (outcome.status === "failed") throw backgroundRenewalError(outcome.state);
-            result = await buildSkillContext(input, resolverOptions);
-            if (outcome.status === "migrated" && outcome.state.migration && target.sessionId === sessionId) result = { ...result, sessionPinMigration: outcome.state.migration };
-          } else {
+            // A worker that failed to start after it was launched is renewed
+            // inline, exactly as one that could not be launched at all.
+            if (outcome.status === "failed" && outcome.state.notStarted) inline = true;
+            else if (outcome.status === "failed") throw backgroundRenewalError(outcome.state);
+          }
+          // After a background renewal, a migration's notice reaches the agent
+          // through the session's persisted migration notice, not this output.
+          if (!inline) result = await buildSkillContext(input, resolverOptions);
+          else {
             // Session creation reads the project lock at input.cwd; a lock there
             // keeps today's refusal instead of migrating past the project's pin.
             const renewal = await renewSkillSessionPin(sessionId, input.profileId!, { ...resolverOptions, migrate: options.autoMigrateSessionPin === true, projectDir: input.cwd,
@@ -191,14 +200,24 @@ export function registerContextCommands(parent: Command): void {
         }
         // A root session's valid pin is renewed ahead of expiry in the
         // background; this prompt neither waits for it nor depends on it.
+        // While its last attempt for this pin failed, one fixed line says so.
         const current = pinned as { receipt: SkillSessionReceipt; receiptSha256: string } | null;
         if (options.backgroundRenewal && sessionId && current && !current.receipt.parent && renewalModeFor(current.receipt.verifiedAt, Date.now()) === "ahead") {
-          try { startBackgroundRenewal({ sessionId, profileId: current.receipt.profile.profileId, pinVerifiedAt: current.receipt.verifiedAt, receiptSha256: current.receiptSha256, mode: "ahead" }); }
-          catch { /* best effort: the pin stays valid and expiry renews it */ }
+          let failed: string | undefined;
+          try {
+            const previous = readBackgroundRenewalState(sessionId);
+            if (previous?.mode === "ahead" && previous.status === "failed" && previous.pinVerifiedAt === current.receipt.verifiedAt) failed = previous.code ?? "SKILLS_CONTEXT_FAILED";
+            startBackgroundRenewal({ sessionId, profileId: current.receipt.profile.profileId, pinVerifiedAt: current.receipt.verifiedAt, receiptSha256: current.receiptSha256, mode: "ahead" });
+          } catch { /* best effort: the pin stays valid and expiry renews it */ }
+          if (failed) result = { ...result, context: [renewAheadFailedNotice(failed), result.context].filter(Boolean).join("\n\n") };
         }
         await writeCliOutput(options.json ? JSON.stringify(result) : result.context);
       } catch (error) { reportContextError(error, options.json); }
     });
+}
+/** One fixed line naming only the code of a failed renewal ahead of expiry. */
+export function renewAheadFailedNotice(code: string): string {
+  return `Skills session renewal ahead of expiry failed [${/^[A-Z][A-Z0-9_]{2,63}$/.test(code) ? code : "SKILLS_CONTEXT_FAILED"}]; context comes from this session's still-valid pin, and renewal is retried before it expires. If it keeps recurring, inspect the session with skills sessions show <session-id> --json.`;
 }
 /**
  * The expired session pin a context request depends on: the session's own

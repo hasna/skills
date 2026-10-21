@@ -608,8 +608,40 @@ export function recoverSessionWriteLock(sessionId: string, reviewDigest: string,
  */
 export const SESSION_WRITE_LOCK_WAIT_MS = 2_000;
 const SESSION_WRITE_LOCK_RETRY_MIN_MS = 25, SESSION_WRITE_LOCK_RETRY_MAX_MS = 100;
+/** The lock path's inode, timestamps and link count, or null when it is absent or unreadable. */
+function lockStatIdentity(path: string): string | null {
+  try {
+    const stat = lstatSync(path, { throwIfNoEntry: false });
+    return stat ? `${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.ctimeMs}:${stat.nlink}:${stat.size}` : null;
+  } catch { return null; }
+}
+/** Blocks this thread; used only inside bounded lock waits. */
 function sleepSync(ms: number): void {
   if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+const SESSION_LOCK_INSPECTIONS = 3;
+/**
+ * Inspect a session lock that may be mid-publication or mid-release, when it
+ * can briefly look invalid (a second link, or a change between two looks). An
+ * invalid lock is inspected again after a short pause: the same invalid lock
+ * (inode, timestamps, link count and size) seen twice in a row is refused with
+ * SESSION_WRITE_LOCKED, and one that keeps changing is reported as "changing",
+ * which a writer treats like a held lock.
+ */
+function inspectSessionLockSettled(sessionId: string, options: SelectionCacheOptions): SessionLockSnapshot | null | "changing" {
+  const path = `${sessionReceiptPath(sessionId, options)}.write-lock`;
+  let invalid: string | null | undefined;
+  for (let attempt = 0; attempt < SESSION_LOCK_INSPECTIONS; attempt++) {
+    try { return readSessionLock(sessionId, options); }
+    catch (error) {
+      if (!(error instanceof SkillSelectionError) || error.code !== "SESSION_WRITE_LOCKED") throw error;
+      const seen = lockStatIdentity(path);
+      if (seen !== null && seen === invalid) throw error;
+      invalid = seen;
+      sleepSync(SESSION_WRITE_LOCK_RETRY_MIN_MS);
+    }
+  }
+  return "changing";
 }
 /**
  * A context that writes nothing never takes the session write lock, so a
@@ -670,15 +702,17 @@ function withSessionWriteLocks<T>(sessionIds: string[], options: SelectionCacheO
           if ((retryError as NodeJS.ErrnoException).code !== "EEXIST") throw retryError;
         }
         // Only a readable, structurally valid lock is a delivery conflict.
-        // Symlinks, malformed ownership and changing markers remain hard.
-        const held = readSessionLock(lock.sessionId, options);
+        // Symlinks, malformed ownership and unbound publication links remain
+        // hard. A lock another writer is publishing or releasing that still
+        // looks invalid after a few inspections counts as held (busy).
+        const held = inspectSessionLockSettled(lock.sessionId, options);
         const remaining = waitUntil - performance.now();
         if (remaining <= 0) {
           if (!held) throw new SkillSelectionError("SESSION_WRITE_LOCK_CHANGED", "The session lock changed during acquisition.");
           throw new SkillSelectionError("SESSION_WRITE_BUSY", "Another Skills process owns a required session write lock; retry after it completes. A surviving legacy lock requires explicit recovery review.");
         }
         // A lock released since the last attempt is retried at once; a held
-        // one after a short jittered pause, within the bounded wait.
+        // or changing one after a short jittered pause, within the bounded wait.
         if (held) sleepSync(Math.min(remaining, SESSION_WRITE_LOCK_RETRY_MIN_MS + Math.floor(Math.random() * (SESSION_WRITE_LOCK_RETRY_MAX_MS - SESSION_WRITE_LOCK_RETRY_MIN_MS))));
       }
       owned.push(acquired);
@@ -720,7 +754,11 @@ function parentChanged(): never {
   throw new SkillSelectionError("SESSION_PARENT_CHANGED", "The parent Skills session changed while the child was resolving; resolve the child again from the current parent pin.");
 }
 
-/** Receipt creation and updates are exact-snapshot CAS operations. Child creation also fences its parent. */
+/**
+ * Receipt creation and updates are exact-snapshot CAS operations. Child
+ * creation also fences its parent. Under contention this blocks the calling
+ * thread for at most SESSION_WRITE_LOCK_WAIT_MS.
+ */
 export function writeSkillSession(receipt: SkillSessionReceipt, expected: SkillSessionWritePrecondition, options: SelectionCacheOptions = {}): void {
   validateSkillSessionReceipt(receipt, receipt.sessionId);
   if (expected.parent) validateSkillSessionBinding(expected.parent);
@@ -760,7 +798,11 @@ function archiveBytes(path: string, bytes: Uint8Array): void {
   try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
 }
 
-/** Preserve both sides before the single atomic replacement; failures retain recovery evidence. */
+/**
+ * Preserve both sides before the single atomic replacement; failures retain
+ * recovery evidence. Under contention this blocks the calling thread for at
+ * most SESSION_WRITE_LOCK_WAIT_MS.
+ */
 export function replaceSkillSession(expected: SkillSessionParentBinding, replacement: SkillSessionReceipt, plan: unknown, options: SelectionCacheOptions = {}, beforeCommit: () => void = () => {}) {
   validateSkillSessionReceipt(replacement, replacement.sessionId);
   const bytes = Buffer.from(`${JSON.stringify(replacement)}\n`);

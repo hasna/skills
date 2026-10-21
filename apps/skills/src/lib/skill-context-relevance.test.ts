@@ -161,3 +161,24 @@ test("on the fleet's word shapes, a generic run of slug words or a much weaker m
   expect(await f.slugs("prepare the run of show for the live event")).toEqual(["live-event-run-of-show"]);
   expect(await f.slugs("draft the grant compliance check for the foundation")).toEqual(["grant-compliance-check"]);
 });
+
+test("weak prompt pointers are offered as load commands after every other omission, never injected, and never unrelated domain skills", async () => {
+  const specs = SPECS.concat([
+    ["designs-watch", { keywords: ["Hasna designs", "designs review", "designs round", "designs watch", "designs-watch", "review pins", "screen review"] }],
+    ...Array.from({ length: 4 }, (_, index): Spec => [`review-user-${index}`, { keywords: ["review"] }]),
+  ]);
+  const f = await fixture(specs);
+  // Real-profile shape: the adjacent phrase is absent, so nothing is injected.
+  const designs = await f.select("push the new iPhone screens to the designs app for review");
+  expect(designs.selections).toEqual([]);
+  expect(designs.context).toBe("");
+  expect(designs.omitted.map(entry => [entry.slug, entry.reason, entry.loadCommand])).toEqual([["designs-watch", "partial-match", "skills load designs-watch@1.0.0 --selection-profile fleet"]]);
+  // The engineering prompt still injects only its two phrases, and offers no domain skill.
+  const engineering = await f.select(ENGINEERING);
+  expect(engineering.selections.map(selection => selection.slug).sort()).toEqual(["hook-drift-repair", "station-network"]);
+  for (const slug of UNRELATED) expect(engineering.omitted.map(entry => entry.slug)).not.toContain(slug);
+  expect(engineering.omitted.every(entry => ["common-word", "partial-match", "weak-match", "skill-limit", "ambiguous-match"].includes(entry.reason))).toBe(true);
+  // Offers follow the other omissions.
+  const mixed = await f.select("the quartz lamp and the grant compliance check, and push the screens to the designs app for review");
+  expect(mixed.omitted.map(entry => entry.reason)).toEqual([...Array(4).fill("ambiguous-match"), "partial-match"]);
+});

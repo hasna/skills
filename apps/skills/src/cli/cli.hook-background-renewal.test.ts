@@ -14,7 +14,7 @@
  */
 import { installSumiPathsFixture } from "../lib/sumi-paths.fixture.js";
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash, randomUUID } from "node:crypto";
@@ -23,6 +23,7 @@ import { admitCorpusFixture, corpusInspectorPathFixture } from "../lib/codex-cor
 import { packSkillBundle } from "../lib/skill-bundle.js";
 import { cacheSelectionBundle, readSkillSessionSnapshot, readSkillSessionSnapshotIfExists, selectionKey, sessionReceiptPath, writeSelectionJson } from "../lib/selection-cache.js";
 import type { ResolvedSkillProfile } from "../types/skill-selection.js";
+import { MANAGED_HOOK_CONTEXT_MAX_CHARS } from "./commands/agent-integration.js";
 
 const scratch = mkdtempSync(join(tmpdir(), "skills-hook-bg-renewal-")), binary = join(scratch, "skills.js"), executable = join(scratch, "skills");
 let bundle: ReturnType<typeof packSkillBundle>;
@@ -30,7 +31,9 @@ beforeAll(async () => {
   await buildCliFixture(resolve(import.meta.dir, "index.tsx"), binary);
   writeFileSync(executable, `#!/bin/sh\nexec '${process.execPath}' '${binary}' "$@"\n`, { mode: 0o700 });
   const source = join(scratch, "bundle-source"); mkdirSync(source);
-  writeFileSync(join(source, "SKILL.md"), "---\nname: fixture-skill\ndescription: Fixture\nkind: instruction\n---\nPinned fixture instructions.\n");
+  // A production-sized body (selected skills measured about 10-15 KB each).
+  const padding = Array.from({ length: 220 }, (_, line) => `Fixture instruction line ${line} keeps this body at a production size.`).join("\n");
+  writeFileSync(join(source, "SKILL.md"), `---\nname: fixture-skill\ndescription: Fixture\nkind: instruction\n---\nPinned fixture instructions.\n${padding}\n`);
   writeFileSync(join(source, "package.json"), JSON.stringify({ name: "fixture-skill", version: "1.0.0", skills: { kind: "instruction" } }));
   bundle = packSkillBundle(source);
 });
@@ -55,7 +58,8 @@ function profile(authority: string, revision: string, changed: number, current: 
 }
 
 interface Authority { origin: string; token: string; counts: () => { resolves: number; bundles: number }; close: () => void }
-function authority(changed: number, delays: { resolve: number; bundle: number }, status?: number): Authority {
+/** `removed`: a pinned selection the current profile no longer has, so renewal is refused and only migration can move the pin. */
+function authority(changed: number, delays: { resolve: number; bundle: number }, status?: number, removed?: number): Authority {
   const token = randomUUID();
   let resolves = 0, bundles = 0;
   const server = Bun.serve({
@@ -67,7 +71,9 @@ function authority(changed: number, delays: { resolve: number; bundle: number },
       if (status) return new Response("unavailable", { status });
       if (url.pathname === "/api/v1/profiles/fleet/resolve") {
         resolves++; await Bun.sleep(delays.resolve);
-        return Response.json(profile(`${url.origin}/api/v1`, "current-revision", changed, true));
+        const current = profile(`${url.origin}/api/v1`, "current-revision", changed, true);
+        if (removed !== undefined) current.selections.splice(removed, 1);
+        return Response.json(current);
       }
       const match = /^\/api\/v1\/skills\/(fixture-skill-(\d{4}))\/versions\/1\.0\.0\/bundle$/.exec(url.pathname);
       if (match && Number(match[2]) < changed) {
@@ -115,6 +121,9 @@ async function station(api: Authority, changed: number, ageMs: number) {
   };
   return { home, cacheDir, receiptPath, hook, verifiedAt: () => readSkillSessionSnapshot(SESSION, { cacheDir }).receipt.verifiedAt };
 }
+const SESSION_FAILURE = (code: string) => code.startsWith("SESSION_") || code === "SKILLS_HOOK_TIMEOUT";
+const percentile = (values: number[], p: number) => { const sorted = [...values].sort((a, b) => a - b); return sorted[Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1)]!; };
+const tally = (codes: string[]) => JSON.stringify(codes.reduce((counts, code) => ({ ...counts, [code]: (counts[code] ?? 0) + 1 }), {} as Record<string, number>));
 const report = (name: string, results: Array<{ code: string; ms: number }>) =>
   console.log(`[hook-background-renewal] ${name}: ${results.map(result => `${result.code} ${result.ms} ms`).join("; ")}`);
 
@@ -216,5 +225,124 @@ test("a prompt and eight subagents starting together all get context without wri
     for (let index = 0; index < 8; index++) expect(readSkillSessionSnapshotIfExists(`${SESSION}:burst-${index}`, { cacheDir: s.cacheDir })?.receipt.parent?.sessionId).toBe(SESSION);
     // The parent's read-only prompt did not rewrite its receipt.
     expect(readSkillSessionSnapshot(SESSION, { cacheDir: s.cacheDir }).sha256).toBe(before.sha256);
+  } finally { api.close(); }
+}, 90_000);
+
+test("a prompt that loads a new skill while eight subagents start gives every hook its context", async () => {
+  const api = authority(0, { resolve: 0, bundle: 0 });
+  try {
+    const s = await station(api, 0, 0);
+    const all: Array<{ code: string; ms: number; context: string }> = [];
+    for (let wave = 0; wave < 4; wave++) {
+      // fixture-skill-03xx is not loaded yet: the parent's prompt rewrites its
+      // receipt while its subagents fence that receipt for their own.
+      const results = await Promise.all([
+        s.hook("UserPromptSubmit", { prompt: `please continue with $fixture-skill-0${300 + wave}` }),
+        ...Array.from({ length: 8 }, (_, index) => s.hook("SubagentStart", { agent_id: `writer-${wave}-${index}` })),
+      ]);
+      all.push(...results);
+    }
+    const durations = all.map(result => result.ms);
+    console.log(`[hook-background-renewal] writer bursts x4: ${tally(all.map(result => result.code))}; p50 ${percentile(durations, 50)} ms, p95 ${percentile(durations, 95)} ms`);
+    expect(all.filter(result => SESSION_FAILURE(result.code))).toEqual([]);
+    expect(all.map(result => result.code)).toEqual(Array(36).fill("OK"));
+    // Every new load was recorded once in the parent receipt.
+    const loaded = readSkillSessionSnapshot(SESSION, { cacheDir: s.cacheDir }).receipt.loaded;
+    const pinned = profile(`${api.origin}/api/v1`, "pinned-revision", 0, false);
+    for (let wave = 0; wave < 4; wave++) expect(loaded.filter(key => key === selectionKey(pinned.selections[300 + wave]!))).toHaveLength(1);
+  } finally { api.close(); }
+}, 240_000);
+
+test("subagents starting while a renew-ahead commit lands are resolved again and get their context", async () => {
+  const api = authority(85, { resolve: 1_000, bundle: 400 });
+  try {
+    const s = await station(api, 85, 20 * HOUR);
+    const before = s.verifiedAt();
+    const all: Array<{ code: string; ms: number }> = [];
+    const deadline = Date.now() + 60_000;
+    let wave = 0, after = 0;
+    // Keep bursts going until two waves after the background commit.
+    while (Date.now() < deadline && after < 2) {
+      const results = await Promise.all([
+        s.hook("UserPromptSubmit", { prompt: "continue the current task" }),
+        ...Array.from({ length: 4 }, (_, index) => s.hook("SubagentStart", { agent_id: `ahead-${wave}-${index}` })),
+      ]);
+      all.push(...results);
+      wave++;
+      if (s.verifiedAt() !== before) after++;
+    }
+    console.log(`[hook-background-renewal] renew-ahead bursts: ${wave} waves, ${tally(all.map(result => result.code))}; p95 ${percentile(all.map(result => result.ms), 95)} ms`);
+    expect(Date.parse(s.verifiedAt())).toBeGreaterThan(Date.parse(before));
+    expect(all.filter(result => SESSION_FAILURE(result.code))).toEqual([]);
+  } finally { api.close(); }
+}, 240_000);
+
+test("a subagent's own pin past the renew-ahead age starts no background renewal; only a root session renews ahead", async () => {
+  const api = authority(0, { resolve: 0, bundle: 0 });
+  try {
+    const s = await station(api, 0, 20 * HOUR);
+    const child = `${SESSION}:aged-child`;
+    expect((await s.hook("SubagentStart", { agent_id: "aged-child" })).code).toBe("OK");
+    expect(readSkillSessionSnapshot(child, { cacheDir: s.cacheDir }).receipt.parent?.sessionId).toBe(SESSION);
+    // The child's own prompt reads its 20-hour pin.
+    const prompt = await s.hook("UserPromptSubmit", { agent_id: "aged-child" });
+    expect(prompt.code).toBe("OK");
+    const renewals = join(s.cacheDir, "session-renewals");
+    const childFiles = existsSync(renewals) ? readdirSync(renewals).filter(name => name.startsWith(hex(child))) : [];
+    expect(childFiles).toEqual([]);
+    // Control: the root session's own prompt does start one.
+    expect((await s.hook("UserPromptSubmit")).code).toBe("OK");
+    expect(readdirSync(renewals).filter(name => name.startsWith(hex(SESSION)))).not.toEqual([]);
+  } finally { api.close(); }
+}, 90_000);
+
+test("while a renewal ahead of expiry keeps failing, prompts say so in one line and still get context from the valid pin", async () => {
+  const api = authority(85, { resolve: 0, bundle: 0 }, 503);
+  try {
+    const s = await station(api, 85, 20 * HOUR);
+    const first = await s.hook("UserPromptSubmit");
+    expect(first.code).toBe("OK");
+    expect(first.context).not.toContain("renewal ahead of expiry failed");
+    const state = join(s.cacheDir, "session-renewals", `${hex(SESSION)}.json`);
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline && !(existsSync(state) && JSON.parse(readFileSync(state, "utf8")).status === "failed")) await Bun.sleep(200);
+    expect(JSON.parse(readFileSync(state, "utf8"))).toMatchObject({ mode: "ahead", status: "failed", code: "SKILLS_API_UNAVAILABLE" });
+    const next = await s.hook("UserPromptSubmit");
+    expect(next.code).toBe("OK");
+    expect(next.context).toContain("Skills session renewal ahead of expiry failed [SKILLS_API_UNAVAILABLE]; context comes from this session's still-valid pin");
+    expect(next.context.match(/renewal ahead of expiry failed/g)).toHaveLength(1);
+    expect(next.context).toContain("Pinned fixture instructions.");
+  } finally { api.close(); }
+}, 90_000);
+
+test("the managed hook injects at most its character budget and offers the rest as load commands", async () => {
+  const api = authority(0, { resolve: 0, bundle: 0 });
+  try {
+    const s = await station(api, 0, 0);
+    const result = await s.hook("UserPromptSubmit", { prompt: "use $fixture-skill-0001, $fixture-skill-0002 and $fixture-skill-0003 here" });
+    expect(result.code).toBe("OK");
+    // Each body is about 15 KB: one fits the budget, the others are offered.
+    expect(result.context.match(/Pinned fixture instructions\./g)).toHaveLength(1);
+    expect(result.context.match(/Additional selected skill fixture-skill-000[123]@1\.0\.0: skills load /g)).toHaveLength(2);
+    expect(result.context.length).toBeLessThan(MANAGED_HOOK_CONTEXT_MAX_CHARS + 1_000);
+  } finally { api.close(); }
+}, 60_000);
+
+test("a subagent of an expired parent renews the parent pin but never migrates it; the parent's own prompt does", async () => {
+  // A loaded selection was removed: renewal is refused, and only migration moves the pin.
+  const api = authority(0, { resolve: 0, bundle: 0 }, undefined, 17);
+  try {
+    const s = await station(api, 0, 25 * HOUR);
+    const before = readFileSync(s.receiptPath);
+    const child = await s.hook("SubagentStart", { agent_id: "expired-child" });
+    expect(child.code).toBe("SESSION_RECONCILIATION_REQUIRED");
+    expect(child.stdout).not.toContain("Pinned fixture instructions.");
+    expect(readFileSync(s.receiptPath)).toEqual(before);
+    expect(existsSync(join(s.cacheDir, "session-reconciliations"))).toBe(false);
+    // The parent's own prompt migrates under its own project lock check.
+    const parent = await s.hook("UserPromptSubmit");
+    expect(parent.code).toBe("OK");
+    expect(readSkillSessionSnapshot(SESSION, { cacheDir: s.cacheDir }).receipt.profile.profileRevision).toBe("current-revision");
+    expect(readdirSync(join(s.cacheDir, "session-reconciliations"))).toHaveLength(1);
   } finally { api.close(); }
 }, 90_000);

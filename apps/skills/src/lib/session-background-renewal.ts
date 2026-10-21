@@ -26,7 +26,7 @@ import {
 } from "./selection-cache.js";
 import {
   BACKGROUND_SESSION_RENEWAL_BUDGET_MS, renewSkillSessionPin, SESSION_RENEW_AHEAD_AGE_MS, SessionPinMigrationTimeout,
-  type SessionPinMigration, type SessionReconciliationOptions,
+  type SessionReconciliationOptions,
 } from "./session-reconciliation.js";
 import { selfSpawnCommand } from "./self-spawn.js";
 
@@ -42,6 +42,7 @@ export const AHEAD_RENEWAL_RETRY_MS = 15 * 60 * 1000;
 const POLL_INTERVAL_MS = 100;
 const STATE_MAX_BYTES = 64 * 1024;
 const CODE = /^[A-Z][A-Z0-9_]{2,63}$/;
+const OPERATION_ID = /^[a-f0-9-]{36}$/i;
 
 export type BackgroundRenewalMode = "expired" | "ahead";
 export type BackgroundRenewalStatus = "running" | "renewed" | "migrated" | "unchanged" | "failed";
@@ -52,7 +53,7 @@ export interface BackgroundRenewalState {
   pinVerifiedAt: string;
   mode: BackgroundRenewalMode; status: BackgroundRenewalStatus;
   startedAt: string; finishedAt?: string; workerPid?: number;
-  code?: string; migrationTimeout?: true; migration?: SessionPinMigration;
+  code?: string; migrationTimeout?: true;
   /** No worker could be started; such a record never delays the next attempt. */
   notStarted?: true;
   /**
@@ -74,8 +75,12 @@ export interface BackgroundRenewalRequest {
   projectDir?: string;
 }
 export interface BackgroundRenewalOptions extends SelectionCacheOptions {
-  /** Tests replace the detached worker; production spawns `skills sessions renew-background`. */
-  spawnWorker?: (args: string[]) => void;
+  /**
+   * Tests replace the detached worker; production spawns `skills sessions
+   * renew-background`. `notStarted` is called if the worker fails to start
+   * after this returns (an asynchronous spawn error such as EAGAIN).
+   */
+  spawnWorker?: (args: string[], notStarted: () => void) => void;
 }
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -95,7 +100,11 @@ function exactTimestamp(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value)) && new Date(Date.parse(value)).toISOString() === value;
 }
 
-/** The last recorded attempt for this session, or null when absent or not exact. */
+/**
+ * The last recorded attempt for this session, or null when absent or not
+ * exact. Only validated fields are returned; anything else in the file is
+ * dropped, so no unvalidated value reaches a caller's output.
+ */
 export function readBackgroundRenewalState(sessionId: string, options: SelectionCacheOptions = {}): BackgroundRenewalState | null {
   let snapshot;
   try { snapshot = readSelectionFileSnapshot(renewalPaths(sessionId, options).state, STATE_MAX_BYTES); } catch { return null; }
@@ -103,12 +112,20 @@ export function readBackgroundRenewalState(sessionId: string, options: Selection
   let value: BackgroundRenewalState;
   try { value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(snapshot.bytes)); } catch { return null; }
   if (!value || typeof value !== "object" || value.schemaVersion !== 1 || value.kind !== "session-pin-background-renewal"
-    || value.sessionId !== sessionId || typeof value.profileId !== "string" || typeof value.operationId !== "string"
+    || value.sessionId !== sessionId || typeof value.profileId !== "string" || value.profileId.length > 256 || typeof value.operationId !== "string" || !OPERATION_ID.test(value.operationId)
     || !exactTimestamp(value.pinVerifiedAt) || !exactTimestamp(value.startedAt) || (value.finishedAt !== undefined && !exactTimestamp(value.finishedAt))
     || !["expired", "ahead"].includes(value.mode) || !["running", "renewed", "migrated", "unchanged", "failed"].includes(value.status)
-    || (value.code !== undefined && !CODE.test(value.code)) || (value.notStarted !== undefined && value.notStarted !== true)
+    || (value.workerPid !== undefined && (!Number.isSafeInteger(value.workerPid) || value.workerPid <= 0))
+    || (value.code !== undefined && !CODE.test(value.code)) || (value.migrationTimeout !== undefined && value.migrationTimeout !== true)
+    || (value.notStarted !== undefined && value.notStarted !== true)
     || (value.requestDigest !== undefined && !SHA256.test(value.requestDigest))) return null;
-  return value;
+  return {
+    schemaVersion: 1, kind: "session-pin-background-renewal", sessionId, profileId: value.profileId, operationId: value.operationId,
+    pinVerifiedAt: value.pinVerifiedAt, mode: value.mode, status: value.status, startedAt: value.startedAt,
+    ...(value.finishedAt !== undefined ? { finishedAt: value.finishedAt } : {}), ...(value.workerPid !== undefined ? { workerPid: value.workerPid } : {}),
+    ...(value.code !== undefined ? { code: value.code } : {}), ...(value.migrationTimeout ? { migrationTimeout: true as const } : {}),
+    ...(value.notStarted ? { notStarted: true as const } : {}), ...(value.requestDigest !== undefined ? { requestDigest: value.requestDigest } : {}),
+  };
 }
 function writeState(state: BackgroundRenewalState, options: SelectionCacheOptions): void {
   writeSelectionJson(renewalPaths(state.sessionId, options).state, state);
@@ -172,27 +189,39 @@ export function startBackgroundRenewal(request: BackgroundRenewalRequest, option
   };
   const args = ["sessions", "renew-background", request.sessionId, "--selection-profile", request.profileId, "--operation-id", operationId,
     ...(request.mode === "expired" && request.migrate ? ["--migrate"] : []), ...(request.projectDir ? ["--project-dir", request.projectDir] : []), "--json"];
+  // A worker that never started records that, for this attempt only, and
+  // releases this attempt's lock, so a waiting prompt reports it at once and
+  // the next prompt can try again (or renew inline).
+  const notStarted = (synchronous: boolean): BackgroundRenewalState => {
+    const failed: BackgroundRenewalState = { ...running, status: "failed", code: "SKILLS_CONTEXT_FAILED", notStarted: true, finishedAt: new Date((options.now ?? Date.now)()).toISOString() };
+    try {
+      // Later, only while the record is still this attempt's, never worked on.
+      const recorded = synchronous ? null : readBackgroundRenewalState(request.sessionId, options);
+      if (synchronous || (recorded?.operationId === operationId && recorded.status === "running" && recorded.workerPid === undefined)) writeState(failed, options);
+    } catch { /* the lock below is still released */ }
+    try {
+      const current = readLock(request.sessionId, options);
+      if (current?.lock?.operationId === operationId) removeSelectionFileIfUnchanged(paths.lock, current);
+    } catch { /* a lock left behind expires after SPAWN_GRACE_MS */ }
+    return failed;
+  };
   try {
     writeState(running, options);
-    (options.spawnWorker ?? spawnDetachedWorker)(args);
+    (options.spawnWorker ?? spawnDetachedWorker)(args, () => { notStarted(false); });
   } catch {
-    const failed: BackgroundRenewalState = { ...running, status: "failed", code: "SKILLS_CONTEXT_FAILED", notStarted: true, finishedAt: new Date((options.now ?? Date.now)()).toISOString() };
-    try { writeState(failed, options); } catch { /* the refusal below still stands */ }
-    const current = readSelectionFileSnapshot(paths.lock);
-    if (current) removeSelectionFileIfUnchanged(paths.lock, current);
-    return { status: "failed", state: failed, notStarted: true };
+    return { status: "failed", state: notStarted(true), notStarted: true };
   }
   return { status: "started", operationId };
 }
 
-function spawnDetachedWorker(args: string[]): void {
+function spawnDetachedWorker(args: string[], notStarted: () => void): void {
   // Pinned flags, trusted cwd and the allowlisted environment, exactly as the
   // managed hook starts its context child. No stdio is shared, so the hook's
   // pipes close when the prompt's work is done, and the worker's own session
   // keeps it alive after the hook returns.
   const self = selfSpawnCommand(args);
   const child = spawn(self.command[0]!, self.command.slice(1), { cwd: self.cwd, env: { ...self.env, NO_COLOR: "1" }, detached: true, stdio: "ignore" });
-  child.on("error", () => { /* a worker that never started leaves a lock that expires */ });
+  child.on("error", notStarted);
   child.unref();
 }
 
@@ -252,7 +281,9 @@ export async function runBackgroundRenewal(sessionId: string, profileId: string,
       renewAfterMs: expired ? MAX_CACHED_PROFILE_AGE_MS : SESSION_RENEW_AHEAD_AGE_MS,
       migrate: expired && request.migrate === true, projectDir: request.projectDir,
     });
-    state = { ...state, status: outcome.outcome, ...(outcome.outcome === "migrated" ? { migration: outcome.migration } : {}) };
+    // A migration's details stay in its preserved reconciliation receipt and
+    // the session's migration notice; the state records the outcome only.
+    state = { ...state, status: outcome.outcome };
     return { status: outcome.outcome };
   } catch (error) {
     const storageFull = error instanceof Error && ["ENOSPC", "EDQUOT"].includes((error as NodeJS.ErrnoException).code ?? "");

@@ -1007,18 +1007,31 @@ selections selects nothing on its own; and a one-word slug counts as named
 only beside the word "skill". A prompt match scoring under half of the
 prompt's best match, and prompt matches tied at the last free slot, are
 offered as `skills load` commands instead of being injected or picked by name
-order.
+order. Weaker pointers are offered the same way, at most three and never
+injected: a multi-word keyword whose words all appear apart, one of them
+discriminating ("designs review" in "the designs app for review"), or a common
+one-word keyword; a tie that does not fit is left out.
 A session retains its loaded selections; compaction restores the two most
 recently loaded instructions, and a subagent receives its parent's most recent
 one, each followed by `skills load` commands for the next most recent. A
 read-only prompt does not rewrite the session receipt or take its write lock
 (a damaged lock still refuses), and receipt writers wait up to two seconds for
-another live writer's lock before refusing. Instructions that exceed the
-context budget produce an explicit `skills load` command. A hook never executes
+another live writer's lock before refusing; a lock another writer is
+publishing or releasing at that moment counts as held, not damaged. Every
+delivered body is recorded in the receipt: when only that write lost its lock
+race, skills the receipt already records are still delivered, and each newly
+read one is offered as its `skills load` command under one fixed
+`[SESSION_WRITE_BUSY]` line. A new subagent whose parent recorded a load or
+renewed its pin while the subagent resolved is resolved once more from the
+current parent pin. Managed hooks inject at most 24,000 instruction
+characters; instructions that exceed that or another context budget produce
+an explicit `skills load` command. A hook never executes
 a skill. Cached use is explicit and expires after 24 hours. Managed hooks renew
 session pins in a detached background worker (`docs/session-pin-renewal.md`),
-ahead of expiry for root sessions; an expired pin waits at most three seconds
-for its renewal and delivers nothing until it commits. When a session
+ahead of expiry for root sessions (a failed renewal ahead of expiry is named
+in one line while context comes from the still-valid pin); an expired pin
+waits at most three seconds for its renewal and delivers nothing until it
+commits. When a session
 receipt expires, the hook authenticates the current profile. If every loaded
 selection still has identical metadata and bundle digest, it archives the old
 receipt and advances that session to the current profile under an exact receipt

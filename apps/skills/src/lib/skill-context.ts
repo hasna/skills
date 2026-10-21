@@ -8,7 +8,7 @@ import { assertSessionWriteLockReadable, readSelectionFileSnapshot, readSkillSes
 import { MAX_PROFILE_DOCUMENT_BYTES } from "./profile-limits.js";
 import { readSelectedDocument } from "./selected-document.js";
 import { selectionMatchesName } from "./selection-aliases.js";
-import { rankPromptRelevance } from "./skill-relevance.js";
+import { rankPromptOffers, rankPromptRelevance, triggerWordFrequency } from "./skill-relevance.js";
 
 export interface SkillContextInput {
   prompt?: string;
@@ -25,8 +25,14 @@ export interface SkillContextInput {
 export interface SkillContextOptions extends SelectionResolverOptions {
   maxChars?: number;
   maxSkills?: number;
-  /** Called once with the resolved pin before any payload is read; metadata only. */
+  /** Called with the resolved pin before any payload is read (again if a new child is resolved again); metadata only. */
   onResolved?: (resolved: ResolvedSelectionContext) => void;
+  /**
+   * performance.now() time after which a new child whose parent receipt
+   * changed while it resolved is not resolved again (the managed hook passes
+   * its renewal deadline). Without it the single retry is unconditional.
+   */
+  resolveAgainBefore?: number;
 }
 export interface ContextSelectionReceipt extends ResolvedSkillSelection { reason: string }
 export interface SkillContextResult {
@@ -43,6 +49,12 @@ export interface SkillContextResult {
  */
 export const HISTORY_BODY_LIMITS: Readonly<Record<"subagent-inherit" | "session-restore", number>> = Object.freeze({ "subagent-inherit": 1, "session-restore": 2 });
 export const HISTORY_CANDIDATE_LIMIT = 10;
+/**
+ * The one fixed line that says a context was limited because this session's
+ * record could not be updated: newly read skills are offered as load commands
+ * instead of being delivered unrecorded.
+ */
+export const SESSION_WRITE_BUSY_NOTICE = "Skills context was limited [SESSION_WRITE_BUSY]: another Skills process was updating this session's record, so newly selected skills are listed as load commands instead of being delivered. Load them with those commands when the task needs them.";
 function pathMatch(pattern: string, path: string): boolean {
   // A tiny predictable glob subset: ** crosses directories, * does not. No regex from a profile.
   if (!pattern || pattern.length > 512) return false;
@@ -50,7 +62,31 @@ function pathMatch(pattern: string, path: string): boolean {
   return new RegExp(`^(?:${escaped})$`).test(path.replace(/\\/g, "/"));
 }
 interface Candidate { selection: ResolvedSkillSelection; reason: string; priority: number; score: number; recency?: number; weak?: boolean }
+/**
+ * Select and read context for one prompt, recording newly delivered skills in
+ * the session receipt.
+ *
+ * A new child's first receipt write fences its parent's exact receipt. When
+ * the parent recorded a load or committed a renewal while the child resolved
+ * (its pin itself unchanged), that write refuses with SESSION_PARENT_CHANGED;
+ * as the refusal prescribes, the child is resolved once more from the current
+ * parent pin. A parent whose pin changed (a migration or reconciliation), a
+ * second change, or no time left before options.resolveAgainBefore keeps the
+ * refusal.
+ *
+ * Receipt writes run synchronously and, under contention, block the calling
+ * thread for at most SESSION_WRITE_LOCK_WAIT_MS while they wait for another
+ * live writer's lock.
+ */
 export async function buildSkillContext(input: SkillContextInput, options: SkillContextOptions = {}): Promise<SkillContextResult> {
+  const first = await buildSkillContextOnce(input, options, true);
+  if (first !== RESOLVE_AGAIN) return first;
+  const again = await buildSkillContextOnce(input, options, false);
+  if (again === RESOLVE_AGAIN) throw new SkillSelectionError("SESSION_PARENT_CHANGED", "The parent Skills session changed while the child was resolving; resolve the child again from the current parent pin.");
+  return again;
+}
+const RESOLVE_AGAIN = Symbol("resolve-again");
+async function buildSkillContextOnce(input: SkillContextInput, options: SkillContextOptions, mayResolveAgain: boolean): Promise<SkillContextResult | typeof RESOLVE_AGAIN> {
   const prompt = input.prompt ?? "";
   if (prompt.length > 128 * 1024 || (input.paths?.length ?? 0) > 100 || (input.skills?.length ?? 0) > 100) {
     throw new SkillSelectionError("CONTEXT_INPUT_TOO_LARGE", "The Skills context input exceeds its size limit.");
@@ -83,7 +119,8 @@ export async function buildSkillContext(input: SkillContextInput, options: Skill
   const recency = (keys: readonly string[] | undefined) => new Map((keys ?? []).map((key, index) => [key, index]));
   const restoredOrder = input.restore ? recency(resolved.session?.loaded) : new Map<string, number>();
   const inheritedOrder = recency(resolved.inheritedLoaded);
-  const relevance = new Map(rankPromptRelevance(prompt, profile.selections).map(entry => [selectionKey(entry.selection), entry]));
+  const frequency = triggerWordFrequency(profile.selections);
+  const relevance = new Map(rankPromptRelevance(prompt, profile.selections, frequency).map(entry => [selectionKey(entry.selection), entry]));
   const paths = [...(input.paths ?? []), ...(input.cwd ? [input.cwd, resolve(input.cwd)] : [])];
   const ranked: Candidate[] = profile.selections.flatMap((selection): Candidate[] => {
     const key = selectionKey(selection);
@@ -105,8 +142,8 @@ export async function buildSkillContext(input: SkillContextInput, options: Skill
     historyOffered.set(candidate.reason, count + 1);
     return count < HISTORY_CANDIDATE_LIMIT;
   });
-  const sections: string[] = [];
-  const selections: ContextSelectionReceipt[] = [];
+  const delivered: Array<{ key: string; section: string }> = [];
+  let selections: ContextSelectionReceipt[] = [];
   const omitted: SkillContextResult["omitted"] = [];
   const historyBodies = new Map<string, number>();
   let chars = 0, ambiguous = false;
@@ -142,24 +179,25 @@ export async function buildSkillContext(input: SkillContextInput, options: Skill
     const entries = await readSelectedEntries(selection, resolved, resolverOptions);
     const { content } = readSelectedDocument(entries);
     const section = `Skill ${selection.slug}@${selection.version} (${selection.bundleDigest}; ${reason})\n${content}`;
-    if (maxChars !== undefined && chars + section.length + (sections.length ? 2 : 0) > maxChars) {
+    if (maxChars !== undefined && chars + section.length + (delivered.length ? 2 : 0) > maxChars) {
       omitted.push({ slug: selection.slug, version: selection.version, reason: "context-budget", loadCommand });
       continue;
     }
-    chars += section.length + (sections.length ? 2 : 0);
-    sections.push(section);
+    chars += section.length + (delivered.length ? 2 : 0);
+    delivered.push({ key: selectionKey(selection), section });
     selections.push({ ...selection, reason });
     loaded.add(selectionKey(selection));
     if (historyLimit !== undefined) historyBodies.set(reason, (historyBodies.get(reason) ?? 0) + 1);
   }
-  const context = sections.join("\n\n");
-  const receipt = {
-    schemaVersion: 1 as const,
-    id: createHash("sha256").update(JSON.stringify({ profile: profile.profileRevision, sessionId, selections, omitted })).digest("hex"),
-    profileId: profile.profileId, profileRevision: profile.profileRevision, authority: profile.authority,
-    workspaceId: profile.workspaceId, source: options.cached ? "verified-cache" as const : "api" as const,
-    ...(sessionId ? { sessionId } : {}), restored: Boolean(input.restore), chars: context.length, selections,
-  };
+  // Prompt evidence too weak to select anything is offered, never injected:
+  // a few load commands after every other omission.
+  const considered = new Set(ranked.map(candidate => selectionKey(candidate.selection)));
+  const offers = rankPromptOffers(prompt, profile.selections, frequency, selection => {
+    const key = selectionKey(selection);
+    return considered.has(key) || (!explicit.has(key) && loaded.has(key));
+  });
+  for (const offer of offers) omitted.push({ slug: offer.selection.slug, version: offer.selection.version, reason: offer.reason, loadCommand: `skills load ${offer.selection.slug}@${offer.selection.version} --selection-profile ${profile.profileId}` });
+  let notice: string | undefined;
   if (sessionId) {
     // A new session (root or child) records its pin. An existing session's
     // receipt changes only when this context loaded something new: a
@@ -169,12 +207,23 @@ export async function buildSkillContext(input: SkillContextInput, options: Skill
       try {
         writeSkillSession({ ...resolved.receipt, sessionId, loaded: [...loaded], ...(resolved.projectLock ? { projectLock: resolved.projectLock } : {}) }, { current: resolved.sessionSnapshot, parent: resolved.parentSnapshot }, options);
       } catch (error) {
+        if (mayResolveAgain && error instanceof SkillSelectionError && error.code === "SESSION_PARENT_CHANGED" && !resolved.session
+            && (options.resolveAgainBefore === undefined || performance.now() < options.resolveAgainBefore) && parentPinUnchanged(resolved, options)) return RESOLVE_AGAIN;
         // Only the bookkeeping write lost its lock race (another Skills
-        // process held the lock past the bounded wait). The context was read
-        // from this session's verified pin; while that pin is unchanged it is
-        // delivered, and the loaded-set update is left for a later prompt. A
-        // new session, a changed pin or any other failure keeps the refusal.
+        // process held the lock past the bounded wait), and this session's pin
+        // is unchanged. Every delivered body must be recorded in the receipt,
+        // which later reconciliation and migration notices rely on, so only
+        // bodies the receipt already records are delivered (an explicit or
+        // restored re-delivery). Each newly read skill is offered as a load
+        // command instead, under one fixed notice. A new session, a changed
+        // pin or any other failure keeps the refusal.
         if (!(error instanceof SkillSelectionError && error.code === "SESSION_WRITE_BUSY" && resolved.session && pinUnchanged(sessionId, resolved, options))) throw error;
+        const unrecorded = new Set(delivered.filter(entry => !previouslyLoaded.has(entry.key)).map(entry => entry.key));
+        omitted.unshift(...selections.filter(selection => unrecorded.has(selectionKey(selection))).map(selection => ({ slug: selection.slug, version: selection.version, reason: "write-busy",
+          loadCommand: `skills load ${selection.slug}@${selection.version} --selection-profile ${profile.profileId}` })));
+        selections = selections.filter(selection => !unrecorded.has(selectionKey(selection)));
+        delivered.splice(0, delivered.length, ...delivered.filter(entry => !unrecorded.has(entry.key)));
+        notice = SESSION_WRITE_BUSY_NOTICE;
       }
     } else {
       // Without a write, keep the checks the write would have made: damaged
@@ -185,7 +234,29 @@ export async function buildSkillContext(input: SkillContextInput, options: Skill
       if (!pinUnchanged(sessionId, resolved, options)) throw new SkillSelectionError("SESSION_CONTEXT_CONFLICT", "The Skills session receipt changed while context was loading; resolve context again without replacing the current pin.");
     }
   }
+  const context = [notice, ...delivered.map(entry => entry.section)].filter(Boolean).join("\n\n");
+  const receipt = {
+    schemaVersion: 1 as const,
+    id: createHash("sha256").update(JSON.stringify({ profile: profile.profileRevision, sessionId, selections, omitted })).digest("hex"),
+    profileId: profile.profileId, profileRevision: profile.profileRevision, authority: profile.authority,
+    workspaceId: profile.workspaceId, source: options.cached ? "verified-cache" as const : "api" as const,
+    ...(sessionId ? { sessionId } : {}), restored: Boolean(input.restore), chars: context.length, selections,
+  };
   return { context, selections, omitted, receipt };
+}
+
+/**
+ * Whether a new child's parent still holds the pin the child resolved from:
+ * only its loaded set, verification time or generation moved (a parent prompt
+ * recorded a load, or a renewal committed). A migrated or reconciled parent
+ * pin is not resolved again here.
+ */
+function parentPinUnchanged(resolved: ResolvedSelectionContext, options: SkillContextOptions): boolean {
+  if (!resolved.parentSnapshot) return false;
+  try {
+    const current = readSkillSessionSnapshotIfExists(resolved.parentSnapshot.sessionId, options);
+    return current !== null && isDeepStrictEqual(current.receipt.profile, resolved.receipt.profile);
+  } catch { return false; }
 }
 
 /**
