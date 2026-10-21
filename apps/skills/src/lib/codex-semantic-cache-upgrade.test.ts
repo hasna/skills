@@ -12,6 +12,7 @@ import { serializeManagedSkillPolicy, parseManagedSkillPolicy } from "./managed-
 import type { CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
 import { buildCliFixture } from "../cli/cli-build.fixture.js";
 import { CODEX_CAPABILITY_PATH_MUTATIONS, copyMaterialization } from "./codex-plugin-capability-paths.fixture.js";
+import { openNarrowedWitnessLedger } from "./narrowed-witness-ledger.js";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -230,6 +231,29 @@ test("explicit semantic migration retains legacy proof and accepts inert cache c
   expect(readFileSync(f.config, "utf8")).toBe(f.settings);
   const parsed = parseManagedSkillPolicy(plan.changes[0]!.after);
   expect(parsed.bridge.codexPluginSkills).toEqual(f.controls);
+});
+
+test("a live hook keeps a semantic-cache binding current through the narrowed ledger, but not a hook or plugin change", () => {
+  // Review finding (2026-10-20): the semantic-cache check required the exact
+  // legacy digest and ignored the live hook's ledger, so a folder trust or model
+  // change omitted Skills context on every prompt for this binding class.
+  const f = fixture();
+  put(join(f.skill.root, "assets/example.txt"), "Benign new asset"); f.addSkill("2.0.0"); f.addApp("2.0.0");
+  const next = planCodexSemanticCacheWitnessUpgrade(f.options).discoveryAfter![0]!;
+  const live = () => openNarrowedWitnessLedger(f.dataDir, { record: false });
+  const observed = openNarrowedWitnessLedger(f.dataDir);
+  verifyAgentDiscovery(next, undefined, undefined, undefined, observed); observed.flush();
+  writeFileSync(f.config, `model = "gpt-5.2-codex"\n${f.settings}\n[projects."/repo"]\ntrust_level = "trusted"\n`);
+  // Strict callers are unchanged; the live hook accepts the ordinary rewrite.
+  expect(() => verifyAgentDiscovery(next)).toThrow("Native discovery input changed");
+  expect(() => verifyAgentDiscovery(next, undefined, undefined, undefined, live())).not.toThrow();
+  for (const added of ['[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "/opt/foreign/stop"\n', '[plugins."foreign@market"]\nenabled = true\n', '[mcp_servers.remote]\nurl = "https://mcp.example.invalid/a"\n']) {
+    writeFileSync(f.config, `model = "gpt-5.2-codex"\n${f.settings}\n${added}`);
+    expect(() => verifyAgentDiscovery(next, undefined, undefined, undefined, live())).toThrow();
+  }
+  // A disable rule removed from config is still caught by the cache witness.
+  writeFileSync(f.config, `model = "gpt-5.2-codex"\n`);
+  expect(() => verifyAgentDiscovery(next, undefined, undefined, undefined, live())).toThrow();
 });
 
 test("retained installed-plugin review versions 0.160.0 and 0.162.0 support the same guarded cache contract", () => {

@@ -17,8 +17,10 @@ import { planCodexNativeTrust, applyCodexNativeTrust, previewCodexNativeTrust } 
 import { HookDiagnosticError, hookChildError, hookFailureReason, isOptionalHookContextFailure, hookUnavailableContext } from "../../lib/hook-diagnostics.js";
 import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib/selection-cache.js";
 import { MANAGED_HOOK_DEADLINE_MS, managedContextChildLimits, takeSessionPinMigrationNotice } from "../../lib/session-reconciliation.js";
-import { captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4 } from "../../lib/claude-settings-witness.js";
-import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4, captureCodexSettingsV5, captureCodexSettingsV6 } from "../../lib/codex-settings-witness.js";
+import { captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4, captureClaudeSettingsV5 } from "../../lib/claude-settings-witness.js";
+import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4, captureCodexSettingsV5, captureCodexSettingsV6, captureCodexSettingsV7 } from "../../lib/codex-settings-witness.js";
+import { clearNativeDriftReceipt, isNativeBridgeIntegrityRefusal, isNativeSkillDrift, nativeDriftFailOpen, NativeSkillPolicyRefusal, readNativeDriftReceipts } from "../../lib/native-drift-receipt.js";
+import { getDataDirReadOnly } from "../../lib/config.js";
 import { captureClaudeMarketplaceRegistryV2 } from "../../lib/claude-marketplace-registry.js";
 import { captureClaudeMarketplaceEntry } from "../../lib/claude-marketplace-entry-witness.js";
 import { reviewClaudeProspectiveCandidate, type ClaudeProspectiveReviewRequest } from "../../lib/claude-prospective-review.js";
@@ -215,7 +217,7 @@ export function registerAgentIntegration(parent: Command): void {
       process.exitCode = result.outcome === "refused" ? 2 : result.outcome === "error" ? 1 : 0;
     });
   hook.command("witness")
-    .requiredOption("--kind <kind>", "codex-settings-v6, executable-v1, sumi-settings-v1, claude-settings-v4, claude-settings-v3, claude-settings-v2, codex-settings-v5, codex-settings-v4, codex-settings-v3, codex-settings-v2, codex-settings-v1, claude-marketplace-registry-v2 or claude-marketplace-entry-v1")
+    .requiredOption("--kind <kind>", "claude-settings-v5 or codex-settings-v7 (narrowed discovery projections), codex-settings-v6, executable-v1, sumi-settings-v1, claude-settings-v4, claude-settings-v3, claude-settings-v2, codex-settings-v5, codex-settings-v4, codex-settings-v3, codex-settings-v2, codex-settings-v1, claude-marketplace-registry-v2 or claude-marketplace-entry-v1")
     .requiredOption("--path <path>", "Canonical absolute path to the reviewed settings, registry or .claude-plugin/marketplace.json file")
     .option("--reviewed-hook-sources <file>", "Bounded JSON array of raw path/sha256 witnesses; codex-settings-v6 only (the package derives complete hook membership)")
     .option("--marketplace <name>", "Exact marketplace name; claude-marketplace-entry-v1 only")
@@ -240,10 +242,10 @@ export function registerAgentIntegration(parent: Command): void {
         return;
       }
       if (options.marketplace !== undefined || options.plugin !== undefined) throw new Error("--marketplace and --plugin apply only to claude-marketplace-entry-v1");
-      const capture = options.kind === "sumi-settings-v1" ? captureSumiSettings : options.kind === "codex-settings-v5" ? captureCodexSettingsV5 : options.kind === "codex-settings-v4" ? captureCodexSettingsV4 : options.kind === "codex-settings-v3" ? captureCodexSettingsV3 : options.kind === "codex-settings-v2" ? captureCodexSettingsV2 : options.kind === "codex-settings-v1" ? captureCodexSettings : options.kind === "claude-settings-v4" ? captureClaudeSettingsV4 : options.kind === "claude-settings-v3" ? captureClaudeSettingsV3
+      const capture = options.kind === "claude-settings-v5" ? captureClaudeSettingsV5 : options.kind === "codex-settings-v7" ? captureCodexSettingsV7 : options.kind === "sumi-settings-v1" ? captureSumiSettings : options.kind === "codex-settings-v5" ? captureCodexSettingsV5 : options.kind === "codex-settings-v4" ? captureCodexSettingsV4 : options.kind === "codex-settings-v3" ? captureCodexSettingsV3 : options.kind === "codex-settings-v2" ? captureCodexSettingsV2 : options.kind === "codex-settings-v1" ? captureCodexSettings : options.kind === "claude-settings-v4" ? captureClaudeSettingsV4 : options.kind === "claude-settings-v3" ? captureClaudeSettingsV3
         : options.kind === "claude-settings-v2" ? captureClaudeSettingsV2
         : options.kind === "claude-marketplace-registry-v2" ? captureClaudeMarketplaceRegistryV2 : null;
-      if (!capture) throw new Error("Unsupported witness kind; select sumi-settings-v1, claude-settings-v4, claude-settings-v3, claude-settings-v2, codex-settings-v5, codex-settings-v4, codex-settings-v3, codex-settings-v2, codex-settings-v1, claude-marketplace-registry-v2 or claude-marketplace-entry-v1");
+      if (!capture) throw new Error("Unsupported witness kind; select claude-settings-v5, codex-settings-v7, sumi-settings-v1, claude-settings-v4, claude-settings-v3, claude-settings-v2, codex-settings-v5, codex-settings-v4, codex-settings-v3, codex-settings-v2, codex-settings-v1, claude-marketplace-registry-v2 or claude-marketplace-entry-v1");
       await writeCliOutput(JSON.stringify(capture(options.path), null, 2));
     });
   hook.command("capture-claude-installer")
@@ -307,17 +309,17 @@ export function registerAgentIntegration(parent: Command): void {
     .requiredOption("--reviewed-preimage <path>", "Exact preserved legacy settings.json, config.toml or sumi.json")
     .requiredOption("--expected-policy-sha256 <sha256>", "Exact current managed policy bytes")
     .requiredOption("--expected-settings-sha256 <sha256>", "Exact current native settings bytes")
-    .option("--codex-witness-version <version>", "Explicit target: 2 (legacy default) 3 (service tier and model-advertised effort), 4 (native availability UI counts), or 5 (schema-valid root status-line string vectors)")
-    .option("--claude-witness-version <version>", "Explicit target: 3 (default) or 4 (also permits a built-in top-level theme)")
+    .option("--codex-witness-version <version>", "Explicit target: 2 (legacy default) 3 (service tier and model-advertised effort), 4 (native availability UI counts), 5 (schema-valid root status-line string vectors), or 7 (the narrowed discovery projection)")
+    .option("--claude-witness-version <version>", "Explicit target: 3 (default), 4 (also permits a built-in top-level theme) or 5 (the narrowed discovery projection)")
     .option("--apply", "Apply the explicit semantic witness upgrade with preservation and readback", false)
     .option("--json", "Return the metadata-only plan or receipt", false)
     .description("Explicitly migrate a legacy native settings witness after proving only known preferences changed")
     .action(async (options) => {
       try {
         if (!["claude", "codex", "sumi"].includes(options.agent)) throw new Error("Settings witness rebind accepts claude, codex or sumi");
-        if (options.codexWitnessVersion !== undefined && !["2", "3", "4", "5"].includes(options.codexWitnessVersion)) throw new Error("Codex witness version accepts 2, 3, 4 or 5");
-        if (options.claudeWitnessVersion !== undefined && !["3", "4"].includes(options.claudeWitnessVersion)) throw new Error("Claude witness version accepts 3 or 4");
-        const plan = planAgentSettingsWitnessUpgrade({ ...(options.codexWitnessVersion !== undefined ? { targetCodexVersion: Number(options.codexWitnessVersion) as 2 | 3 | 4 | 5 } : {}), ...(options.claudeWitnessVersion !== undefined ? { targetClaudeVersion: Number(options.claudeWitnessVersion) as 3 | 4 } : {}), agent: options.agent, reviewedPreimage: options.reviewedPreimage, expectedPolicySha256: options.expectedPolicySha256, expectedSettingsSha256: options.expectedSettingsSha256 });
+        if (options.codexWitnessVersion !== undefined && !["2", "3", "4", "5", "7"].includes(options.codexWitnessVersion)) throw new Error("Codex witness version accepts 2, 3, 4, 5 or 7");
+        if (options.claudeWitnessVersion !== undefined && !["3", "4", "5"].includes(options.claudeWitnessVersion)) throw new Error("Claude witness version accepts 3, 4 or 5");
+        const plan = planAgentSettingsWitnessUpgrade({ ...(options.codexWitnessVersion !== undefined ? { targetCodexVersion: Number(options.codexWitnessVersion) as 2 | 3 | 4 | 5 | 7 } : {}), ...(options.claudeWitnessVersion !== undefined ? { targetClaudeVersion: Number(options.claudeWitnessVersion) as 3 | 4 | 5 } : {}), agent: options.agent, reviewedPreimage: options.reviewedPreimage, expectedPolicySha256: options.expectedPolicySha256, expectedSettingsSha256: options.expectedSettingsSha256 });
         const result = options.apply ? applyAgentIntegration(plan) : { changed: [], backups: [] };
         const receipt = { applied: options.apply, settingsWitnessUpgrade: plan.settingsWitnessUpgrade, ...result };
         await writeCliOutput(options.json ? JSON.stringify(receipt) : `Settings witness ${options.apply ? "upgraded" : "planned"} for ${options.agent}. Native configuration was not changed.`);
@@ -337,6 +339,21 @@ export function registerAgentIntegration(parent: Command): void {
         const receipt = options.apply ? applyCodexNativeTrust(plan, options.expectedPolicySha256) : previewCodexNativeTrust(plan);
         if (options.json) await writeCliOutput(JSON.stringify(receipt));
         else await writeCliOutput(`${options.apply ? "Bound" : "Planned"} ${receipt.digestsAfter.length} reviewed native executable digest(s) for ${receipt.platform} (before: ${receipt.digestsBefore.length}). Policy SHA-256 ${receipt.policySha256Before} -> ${receipt.policySha256After}.${options.apply ? receipt.backup ? ` Original preserved at ${receipt.backup.path} and read back.` : " No bytes changed." : " Use --apply with the same --expected-policy-sha256 to write."}`);
+      } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
+    });
+
+  hook.command("drift")
+    .option("--agent <agent>", "Show one agent's receipt")
+    .option("--json", "Output the receipts as JSON", false)
+    .description("Show the native discovery drift receipts the live hooks recorded (drift no longer blocks prompts)")
+    .action(async (options: { agent?: string; json: boolean }) => {
+      try {
+        if (options.agent !== undefined && !INTEGRATION_AGENTS.includes(options.agent as IntegrationAgent)) throw new Error(`Supported agents: ${INTEGRATION_AGENTS.join(", ")}`);
+        const receipts = readNativeDriftReceipts(getDataDirReadOnly()).filter(receipt => options.agent === undefined || receipt.agent === options.agent);
+        if (options.json) await writeCliOutput(JSON.stringify({ receipts }));
+        else await writeCliOutput(receipts.length
+          ? receipts.map(receipt => `${receipt.agent}: ${receipt.status} since ${receipt.firstSeenAt} (${receipt.occurrences} prompt${receipt.occurrences === 1 ? "" : "s"}, last ${receipt.lastSeenAt}${receipt.clearedAt ? `, cleared ${receipt.clearedAt}` : ""}). ${receipt.status === "active" ? `${receipt.reason} Repair: ${receipt.repair}.` : ""}`.trim()).join("\n")
+          : "No native discovery drift receipts.");
       } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
     });
 
@@ -433,6 +450,9 @@ export function registerAgentIntegration(parent: Command): void {
       let event = options.agent === "hermes" && options.event === "pre_tool_call" ? "pre_tool_call" : "UserPromptSubmit";
       let selectionProfile: string | undefined;
       let verifiedContextBoundary = false;
+      // A tool call that would load the skills-cli bridge. Only this call is
+      // refused when the bridge cannot be verified; every other tool proceeds.
+      let bridgeToolCall = false;
       let nativeEvent = event;
       // Visible, non-blocking Codex notice for vendor-refresh witness changes.
       let driftWarning: string | undefined;
@@ -461,15 +481,24 @@ export function registerAgentIntegration(parent: Command): void {
         }
         selectionProfile = selectedProfileId(options.selectionProfile);
         if (options.agent === "hermes" && event === "pre_tool_call") {
-          assertManagedAgentBridge("hermes", { projectDirs: projects, profileId: selectionProfile });
-          assertHermesTool(input);
+          // The tool policy is checked first and keeps blocking: refusing a
+          // native payload skill is what keeps a drifted station safe. Other
+          // discovery drift fails open in the catch below; an unverified
+          // skills-cli bridge keeps blocking the call that would load it.
+          try { assertHermesTool(input); }
+          catch (error) { throw (error as Error).message.startsWith("NATIVE_SKILL_DRIFT:") ? new NativeSkillPolicyRefusal((error as Error).message) : error; }
+          bridgeToolCall = input.tool_name === "skill_view" && input.tool_input?.name === "skills-cli";
+          assertManagedAgentBridge("hermes", { projectDirs: projects, profileId: selectionProfile, liveHook: true, bridgeToolCall });
+          clearNativeDriftReceipt(getDataDirReadOnly(), options.agent);
           await writeCliOutput(JSON.stringify({ action: "continue" }));
           return;
         }
         if ((options.agent === "claude" && event === "PreToolUse") || (options.agent === "gemini" && event === "BeforeTool")) {
-          assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile });
           const skill = options.agent === "claude" ? input.tool_input?.skill : input.tool_input?.name;
-          if (skill !== "skills-cli") throw new Error("NATIVE_SKILL_DRIFT: invoke only skills-cli; load selected payload instructions with skills load");
+          if (skill !== "skills-cli") throw new NativeSkillPolicyRefusal("NATIVE_SKILL_DRIFT: invoke only skills-cli; load selected payload instructions with skills load");
+          bridgeToolCall = true;
+          assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile, liveHook: true, bridgeToolCall });
+          clearNativeDriftReceipt(getDataDirReadOnly(), options.agent);
           await writeCliOutput(JSON.stringify(options.agent === "claude" ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: "Verified Skills CLI bridge" } } : {}));
           return;
         }
@@ -483,7 +512,8 @@ export function registerAgentIntegration(parent: Command): void {
         // configuration disables are exempt, and witness changes a vendor plugin
         // refresh provably makes warn. Enabled vendor copies, every other drift
         // and every other guard call still refuse.
-        const bridge = assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile, ...(codexNativePolicy ? { codexNativePolicy: { ...codexNativePolicy, deadlineMs: deadline } } : {}), ...(options.agent === "codex" ? { codexPromptHook: true } : {}) });
+        const bridge = assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile, liveHook: true, ...(codexNativePolicy ? { codexNativePolicy: { ...codexNativePolicy, deadlineMs: deadline } } : {}), ...(options.agent === "codex" ? { codexPromptHook: true } : {}) });
+        clearNativeDriftReceipt(getDataDirReadOnly(), options.agent);
         if (options.agent === "codex") driftWarning = codexPromptDriftWarning(bridge);
         if (typeof input.prompt === "string") input.prompt = normalizeAgentHookPrompt(options.agent, nativeEvent, input.prompt);
         // Validate every context field before a timeout or API refusal can be
@@ -535,6 +565,18 @@ export function registerAgentIntegration(parent: Command): void {
             if (options.agent === "gemini" && output.hookSpecificOutput) output.hookSpecificOutput.hookEventName = nativeEvent ?? event;
             await writeCliOutput(JSON.stringify({ systemMessage: driftWarning ? `${unavailable}\n${driftWarning}` : unavailable, ...output }));
           }
+          return;
+        }
+        // Native discovery drift never blocks the prompt, session or tool call
+        // (owner request 2026-10-20): the Skills context is omitted for this
+        // turn, one bounded warning is shown and a durable receipt is recorded.
+        // The guard still throws for every other caller, and a tool-policy
+        // refusal (a native payload skill) keeps blocking below. An unverified
+        // or shadowed skills-cli bridge fails open for a prompt, session,
+        // subagent or any other tool call (the notice says not to invoke the
+        // bridge), but the tool call that would load it is refused below.
+        if (isNativeSkillDrift(error) || (isNativeBridgeIntegrityRefusal(error) && !bridgeToolCall)) {
+          await writeCliOutput(JSON.stringify(nativeDriftFailOpen(getDataDirReadOnly(), options.agent, event, nativeEvent, error.message, { bridgeUnverified: isNativeBridgeIntegrityRefusal(error) })));
           return;
         }
         // Native discovery refusals carry their own fixed text. An unresolvable

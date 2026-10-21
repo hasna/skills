@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { captureClaudeSettingsV3 } from "./claude-settings-witness.js";
 import { hashClaudePluginManifest } from "./claude-plugin-manifest-witness.js";
 import { captureDiscoveryPathSources, classifyClaudeDiscoverySources, verifyAgentDiscovery, rebindAgentDiscovery, type AgentDiscoveryBinding } from "./agent-discovery.js";
+import { openNarrowedWitnessLedger } from "./narrowed-witness-ledger.js";
 const put=(path:string,text:string)=>{mkdirSync(dirname(path),{recursive:true});writeFileSync(path,text);};
 const hash=(path:string)=>createHash("sha256").update(readFileSync(path)).digest("hex");
 test("semantic manifest alone proves an absent retired version while preserving its original digest",()=>{
@@ -28,6 +29,31 @@ test("semantic manifest alone proves an absent retired version while preserving 
   renameSync(join(home,"preserved-old"),old);
   put(manifests[0]!,JSON.stringify({name:"changed-vendor"}));
   expect(()=>verifyAgentDiscovery(binding)).toThrow("Native discovery input changed");
+ } finally {rmSync(home,{recursive:true,force:true});}
+});
+test("a live hook keeps an absent retired Claude version verified through the narrowed ledger after a model change",()=>{
+ // Review finding (2026-10-20): the retired-version settings check required
+ // the exact legacy digest, so an ordinary model change made the whole binding
+ // drift on the live hook even when the narrowed review projection was unchanged.
+ const home=mkdtempSync(join(tmpdir(),"skills-retired-claude-ledger-"));
+ try {
+  const parent=join(home,".claude/plugins/cache/probe/vendor"),old=join(parent,"1.0.0"),active=join(parent,"2.0.0"),data=join(home,"data");
+  const settings=join(home,".claude/settings.json"),registry=join(home,".claude/plugins/installed_plugins.json");
+  mkdirSync(data);
+  put(settings,JSON.stringify({enabledPlugins:{"vendor@probe":true}}));
+  put(registry,JSON.stringify({version:2,plugins:{"vendor@probe":[{scope:"user",installPath:active,version:"2.0.0"}]}}));
+  const manifests=[old,active].map(root=>join(root,".claude-plugin/plugin.json"));
+  for(const path of manifests) put(path,JSON.stringify({name:"vendor"}));
+  const sources=[captureClaudeSettingsV3(settings),{path:registry,sha256:hash(registry)},...manifests.map(path=>({path,hashMode:"claude-plugin-manifest-v1" as const,sha256:hashClaudePluginManifest(readFileSync(path,"utf8"))}))];
+  const binding:AgentDiscoveryBinding={agent:"claude",method:"reviewed",roots:[old,active],sources};
+  const observed=openNarrowedWitnessLedger(data);verifyAgentDiscovery(binding,undefined,undefined,undefined,observed);observed.flush();
+  renameSync(old,join(home,"preserved-old"));
+  put(settings,JSON.stringify({enabledPlugins:{"vendor@probe":true},model:"deepseek-flash",permissions:{allow:["Bash(npm test)"]}}));
+  expect(()=>verifyAgentDiscovery(binding)).toThrow("Native discovery input changed");
+  expect(()=>verifyAgentDiscovery(binding,undefined,undefined,undefined,openNarrowedWitnessLedger(data,{record:false}))).not.toThrow();
+  // A plugin change is still drift on the live hook.
+  put(settings,JSON.stringify({enabledPlugins:{"vendor@probe":true,"other@probe":true},model:"deepseek-flash"}));
+  expect(()=>verifyAgentDiscovery(binding,undefined,undefined,undefined,openNarrowedWitnessLedger(data,{record:false}))).toThrow();
  } finally {rmSync(home,{recursive:true,force:true});}
 });
 test("retired Claude cache absence preserves its witness while active missing hooks and registration drift refuse",()=>{

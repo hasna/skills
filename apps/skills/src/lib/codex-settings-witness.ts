@@ -446,6 +446,104 @@ export function upgradeCodexSettingsWitnessV5(previous: { path: string; hashMode
   return { path: previous.path, hashMode: "codex-settings-v5", sha256 };
 }
 
+/** V7 binds only what can add, remove or redirect native skills, hooks or
+ * plugins, or what a hook or the model's instructions run through (owner
+ * request 2026-10-20: Codex rewrites config.toml on a model change, a folder
+ * trust and its own notices, and that must not trip discovery):
+ *   - every root key whose name mentions a skill, plugin, hook or marketplace
+ *     (`hooks` without the native `hooks.state` trust ledger, `plugins`,
+ *     `marketplaces`, `skills` without disable-only registrations, and any
+ *     future key of that kind);
+ *   - `[mcp_servers.*]`, whole: a hook handler of type `mcp_tool` runs through
+ *     a named server, and a server can carry skills, so redirecting a server's
+ *     command or url redirects what a reviewed hook executes;
+ *   - instruction sources (`instructions`, `developer_instructions`,
+ *     `model_instructions_file`, `experimental_instructions_file`,
+ *     `project_doc_fallback_filenames`, `compact_prompt`,
+ *     `experimental_compact_prompt_file` and any key naming instructions);
+ *   - `[agents.*]`, whole: a role's `config_file` loads a config layer whose
+ *     `developer_instructions` reach subagents, and its `description` is shown
+ *     to the model;
+ *   - `[features]` flags with a skill, plugin, hook or marketplace name, at the
+ *     root and in each profile;
+ *   - inside `[profiles.*]`, keys of every kind above, so the profile selector
+ *     itself can stay free: every profile it can select is bound.
+ * Model, effort, verbosity, service tier, `model_provider` and
+ * `[model_providers.*]` (model routing), `[projects.*]` trust, `[tui]`,
+ * `[notice]`, `notify`, sandbox and approval settings and other unknown keys
+ * vary freely. Values are bound as parsed (numbers by value, not spelling);
+ * malformed `features` or `profiles` stay bound whole. V7 binds every MCP
+ * server, so it needs no hook dependency metadata; V6 keeps its own contract. */
+const V7_DISCOVERY_KEY = /skill|plugin|hook|marketplace|instruction/i;
+const V7_BOUND_KEYS: ReadonlySet<string> = new Set(["mcp_servers", "agents", "project_doc_fallback_filenames", "compact_prompt", "experimental_compact_prompt_file"]);
+function narrowedCodexConfig(config: Record<string, any>): Record<string, any> {
+  const pick = (table: Record<string, any>): Record<string, any> => Object.fromEntries(Object.entries(table).filter(([key]) => V7_DISCOVERY_KEY.test(key) || V7_BOUND_KEYS.has(key)));
+  const features = (table: Record<string, any>, target: Record<string, any>): void => {
+    if (!Object.hasOwn(table, "features")) return;
+    if (!isRecord(table.features)) { target.features = table.features; return; }
+    const kept = pick(table.features);
+    if (Object.keys(kept).length) target.features = kept;
+  };
+  const result = pick(config);
+  features(config, result);
+  if (Object.hasOwn(config, "profiles")) {
+    if (!isRecord(config.profiles)) result.profiles = config.profiles;
+    else {
+      const profiles: Record<string, any> = {};
+      for (const [name, profile] of Object.entries(config.profiles)) {
+        if (!isRecord(profile)) { profiles[name] = profile; continue; }
+        const kept = pick(profile);
+        features(profile, kept);
+        if (Object.keys(kept).length) profiles[name] = kept;
+      }
+      if (Object.keys(profiles).length) result.profiles = profiles;
+    }
+  }
+  if (isRecord(result.hooks)) {
+    const declared = { ...result.hooks };
+    delete declared.state;
+    if (Object.keys(declared).length) result.hooks = declared;
+    else delete result.hooks;
+  }
+  if (isRecord(result.skills) && Array.isArray(result.skills.config)) {
+    const retained = result.skills.config.filter((entry: unknown) => !disablesOneSkill(entry));
+    const skills = { ...result.skills };
+    if (retained.length) skills.config = retained; else delete skills.config;
+    if (Object.keys(skills).length) result.skills = skills; else delete result.skills;
+  }
+  return result;
+}
+function settingsDigestV7(text: string): string {
+  need(Buffer.byteLength(text) <= 1024 * 1024);
+  let config: any;
+  try { config = Bun.TOML.parse(text); } catch { throw new Error("Invalid Codex settings witness"); }
+  need(isRecord(config));
+  return sha(`hasna.skills.codex-settings.v7\0${JSON.stringify(canonical(narrowedCodexConfig(config)))}`);
+}
+/** Explicit V7 review: the narrowed discovery projection above. Earlier modes
+ * keep their meaning; nothing selects V7 implicitly. */
+export function hashCodexSettingsReplacementV7(text: string, budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }): string {
+  need(Buffer.byteLength(text) <= 1024 * 1024 && budget.remaining >= Buffer.byteLength(text)); budget.remaining -= Buffer.byteLength(text);
+  return settingsDigestV7(text);
+}
+export function captureCodexSettingsV7(path: string, budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }): { path: string; hashMode: "codex-settings-v7"; sha256: string } {
+  return { path, hashMode: "codex-settings-v7", sha256: settingsDigestV7(readNativeSettingsWitnessFile(path, budget, "config.toml")) };
+}
+/** Prove the preserved original under its exact original contract (raw bytes or
+ * V1-V5), then require the same V7 projection. V7 binds a subset of what each
+ * of those modes binds, so only a difference in settings V7 ignores passes.
+ * V6 is not eligible: it binds hook MCP dependencies V7 does not carry. */
+export function upgradeCodexSettingsWitnessV7(previous: { path: string; hashMode?: "bytes" | "codex-settings-v1" | "codex-settings-v2" | "codex-settings-v3" | "codex-settings-v4" | "codex-settings-v5"; sha256: string }, reviewedSettingsPath: string): ReturnType<typeof captureCodexSettingsV7> {
+  need(previous && Object.keys(previous).every(key => ["path", "hashMode", "sha256"].includes(key)) && (previous.hashMode === undefined || ["bytes", "codex-settings-v1", "codex-settings-v2", "codex-settings-v3", "codex-settings-v4", "codex-settings-v5"].includes(previous.hashMode)) && /^[a-f0-9]{64}$/.test(previous.sha256));
+  const budget = { remaining: 2 * 1024 * 1024 };
+  const before = readNativeSettingsWitnessFile(reviewedSettingsPath, budget, "config.toml"), current = readNativeSettingsWitnessFile(previous.path, budget, "config.toml");
+  const original = previous.hashMode === "codex-settings-v5" ? settingsDigest(before, 5) : previous.hashMode === "codex-settings-v4" ? settingsDigest(before, 4) : previous.hashMode === "codex-settings-v3" ? settingsDigest(before, 3) : previous.hashMode === "codex-settings-v2" ? settingsDigest(before, 2) : previous.hashMode === "codex-settings-v1" ? hashCodexSettingsReplacementV1(before) : sha(before);
+  need(original === previous.sha256);
+  const sha256 = settingsDigestV7(current);
+  if (settingsDigestV7(before) !== sha256) throw new Error("Codex discovery settings outside the reviewed V7 contract changed; explicit discovery review required");
+  return { path: previous.path, hashMode: "codex-settings-v7", sha256 };
+}
+
 /** V6 keeps V5 display tolerances and binds routes referenced by the complete
  * independently reviewed native hook source population. No legacy migration. */
 export function captureCodexSettingsV6(path: string, reviewedSources: readonly CodexReviewedHookSource[], budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }, changes?: Map<string, string>): { path: string; hashMode: "codex-settings-v6"; sha256: string; hookSources: CodexReviewedHookSource[] } {

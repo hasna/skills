@@ -36,6 +36,17 @@ const freshReview = (config: string) => {
   return file;
 };
 const delivered = { SKILLS_TEST_CHILD_EXIT: "0", SKILLS_TEST_CHILD_STDOUT: JSON.stringify({ context: "Verified fixture context" }) };
+/** Drift no longer blocks the prompt (owner request 2026-10-20): the hook shows
+ * a warning, omits the context and records the full drift text in the agent's
+ * receipt, which is what the operator follows. */
+function driftReason(home: string, value: any): string {
+  expect(value.decision).toBeUndefined();
+  expect(value.systemMessage).toStartWith("Skills warning: native discovery changed; this prompt was not blocked");
+  expect(JSON.stringify(value)).not.toContain("Verified fixture context");
+  const receipt = JSON.parse(readFileSync(join(home, ".hasna", "skills", "native-drift", "codex.json"), "utf8"));
+  expect(receipt.status).toBe("active");
+  return `NATIVE_SKILL_DRIFT: ${receipt.reason}`;
+}
 
 /** Station02 shape: a reviewed Codex binding (typed V4 witness) with an enabled
  * local plugin that declares hooks, like the Hasna Codex bridge plugin. */
@@ -78,10 +89,9 @@ test("the drift refusal names remediation that works on a station whose configur
   put(join(parent, "1.0.2", ".codex-plugin", "plugin.json"), JSON.stringify({ name: "sites", version: "1.0.2", description: "Synthetic plugin" }));
   put(join(vendor, "SKILL.md"), payload("sites"));
 
-  const blocked = await s.hook();
-  expect(blocked.decision).toBe("block");
-  expect(blocked.reason).toBe(`NATIVE_SKILL_DRIFT: 2 unexpected native skill copies were found: ${JSON.stringify(user)}, ${JSON.stringify(vendor)}. For user and project copies, review skills migrate native --agent codex --project <working-directory> --include-unmanaged --json before continuing; it inventories that directory and its ancestors. Use --apply after reviewing the archive plan. Codex refreshes OpenAI marketplace copies on its own, so disable each in Codex instead: add [[skills.config]] with name = "sites:sites" and enabled = false to ${JSON.stringify(s.config)}. Codex then never loads it and the Codex prompt hook accepts it.`);
-  expect(blocked.reason).not.toContain("--include-vendor");
+  const blocked = driftReason(s.home, await s.hook());
+  expect(blocked).toBe(`NATIVE_SKILL_DRIFT: 2 unexpected native skill copies were found: ${JSON.stringify(user)}, ${JSON.stringify(vendor)}. For user and project copies, review skills migrate native --agent codex --project <working-directory> --include-unmanaged --json before continuing; it inventories that directory and its ancestors. Use --apply after reviewing the archive plan. Codex refreshes OpenAI marketplace copies on its own, so disable each in Codex instead: add [[skills.config]] with name = "sites:sites" and enabled = false to ${JSON.stringify(s.config)}. Codex then never loads it and the Codex prompt hook accepts it.`);
+  expect(blocked).not.toContain("--include-vendor");
 
   // The 0.10.72 hint refuses here: --include-vendor resolves configured plugins.
   const old = await s.run(["migrate", "native", "--agent", "codex", "--project", s.cwd, "--include-unmanaged", "--include-vendor", "--json"]);
@@ -97,12 +107,14 @@ test("the drift refusal names remediation that works on a station whose configur
   expect(existsSync(join(vendor, "SKILL.md"))).toBe(true);
 
   // The named Codex disable rule retires the vendor copy without a rebind.
-  const remaining = await s.hook();
-  expect(remaining.reason).toStartWith(`NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ${JSON.stringify(vendor)}. Codex refreshes OpenAI marketplace copies`);
+  const remaining = driftReason(s.home, await s.hook());
+  expect(remaining).toStartWith(`NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ${JSON.stringify(vendor)}. Codex refreshes OpenAI marketplace copies`);
   writeFileSync(s.config, `${readFileSync(s.config, "utf8").trimEnd()}\n\n[[skills.config]]\nname = "sites:sites"\nenabled = false\n`);
   const accepted = await s.hook();
   expect(accepted.decision).toBeUndefined();
   expect(accepted.reason).toBeUndefined();
+  expect(accepted.systemMessage).toBeUndefined();
+  expect(accepted.hookSpecificOutput.additionalContext).toContain("Verified fixture context");
 
   // A strict guard call (hook install reusing the saved review, as trust enrolment
   // also does) ignores the hand-added name rule, so it names a refreshed binding
@@ -132,11 +144,10 @@ test("on a reviewed binding, removing an enabling rule is followed by the named 
   put(join(parent, ".codex-remote-plugin-install.json"), JSON.stringify({ schema_version: 1, remote_plugin_id: "plugins_synthetic_00_0000000000000000000" }));
   put(join(parent, "1.0.2", ".codex-plugin", "plugin.json"), JSON.stringify({ name: "sites", version: "1.0.2", description: "Synthetic plugin" }));
   put(join(vendor, "SKILL.md"), payload("sites"));
-  const blocked = await s.hook();
-  expect(blocked.reason).toBe(`NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ${JSON.stringify(vendor)}. For other Codex plugin-cache copies, add [[skills.config]] with the exact path of each SKILL.md and enabled = false to ${JSON.stringify(s.config)}, or remove the plugin in Codex. First remove the [[skills.config]] rules there that enable skills; no path rule counts while one does. The reviewed binding records that file, so follow the edit with skills hook install --agent codex --discovery-inputs <reviewed-file> --apply, with a fresh discovery review.`);
+  expect(driftReason(s.home, await s.hook())).toBe(`NATIVE_SKILL_DRIFT: 1 unexpected native skill copies were found: ${JSON.stringify(vendor)}. For other Codex plugin-cache copies, add [[skills.config]] with the exact path of each SKILL.md and enabled = false to ${JSON.stringify(s.config)}, or remove the plugin in Codex. First remove the [[skills.config]] rules there that enable skills; no path rule counts while one does. The reviewed binding records that file, so follow the edit with skills hook install --agent codex --discovery-inputs <reviewed-file> --apply, with a fresh discovery review.`);
   // Follow it exactly: the edit alone changes the recorded configuration...
   writeFileSync(s.config, `${readFileSync(s.config, "utf8").replace(enabling, "").trimEnd()}\n\n[[skills.config]]\npath = ${JSON.stringify(join(vendor, "SKILL.md"))}\nenabled = false\n`);
-  expect((await s.hook()).reason).toBe(`NATIVE_SKILL_DRIFT: Native discovery input changed; run skills hook install with a fresh discovery review: ${s.config}`);
+  expect(driftReason(s.home, await s.hook())).toBe(`NATIVE_SKILL_DRIFT: Native discovery input changed; run skills hook install with a fresh discovery review: ${s.config}`);
   // ...and the named refreshed binding clears it for the hook and for strict callers.
   const refreshed = await s.run(["hook", "install", "--agent", "codex", "--discovery-inputs", freshReview(s.config), "--apply", "--json"]);
   expect([refreshed.status, refreshed.stderr]).toEqual([0, ""]);

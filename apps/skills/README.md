@@ -471,8 +471,12 @@ Retire native payloads before use. Legacy `skills-cli.md` files can shadow the
 bridge and must also be preserved and retired before proceeding. Only `skill_view(name:
 "skills-cli")` is allowed natively; author payloads with Skills CLI commands.
 Hermes itself fails open on `pre_llm_call` errors. A returned refusal is visible
-context, and the trusted pre-tool guard blocks drift and native skill fallback;
-this is not a claim that Hermes can prevent every model call after a failed
+context. The trusted pre-tool guard blocks native payload skills and a
+`skill_view(skills-cli)` call while the bridge is unverified or can be
+shadowed (a legacy `skills-cli.md`, a bridge-named copy, or an environment
+override above that leaves the effective discovery unchecked); other discovery
+drift is reported and recorded, not blocked, and other tools proceed. This is
+not a claim that Hermes can prevent every model call after a failed
 prompt hook or guarantee refusal if the native host/supervisor itself dies. Arbitrary project/plugin paths still require a discovery audit.
 
 Reviewed discovery can also bind `directories: [{ path, sha256 }]` alongside
@@ -3461,6 +3465,25 @@ Migration compares the original witness before projecting the new contract,
 refuses native discovery or unknown control changes, and changes policy only.
 After explicit migration, ordinary supported local MCP updates require no
 coordinated policy write.
+
+### Native discovery drift is reported, not blocking
+
+Live prompt, session, subagent and tool hooks no longer block on
+`NATIVE_SKILL_DRIFT`. The turn proceeds without Skills context, the agent shows
+one warning naming the change and the repair command, and the hook records a
+receipt in `<skills-data>/native-drift/<agent>.json`; `skills hook drift --json`
+lists them. Invoking a native payload skill instead of the `skills-cli` bridge
+is still denied, and so is invoking the bridge while the bridge itself is
+missing or modified; install, trust and migration still refuse drift.
+
+`claude-settings-v5` and `codex-settings-v7` reviews bind only settings that can
+add, remove or redirect native skills, hooks or plugins (and, for Codex, every
+MCP server and instruction source), so a model switch, an "always allow" rule, a
+status line or Codex's folder trust and notices are not drift. Existing Claude
+and Codex reviews keep verifying through a narrowed-witness ledger the live hook
+records while they still match; a station that had already drifted, V6 and Sumi
+witnesses still need one fresh review. See
+[docs/plugin-admission.md](docs/plugin-admission.md#narrowed-discovery-reviews-claude-settings-v5-and-codex-settings-v7).
 
 ### Reproduce a reviewed runtime dependency closure
 

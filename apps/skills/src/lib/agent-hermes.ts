@@ -1,6 +1,7 @@
 import { isAlias, parseDocument, visit } from "yaml";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { lstatSync, readFileSync, opendirSync } from "node:fs";
+import { NativeBridgeIntegrityRefusal } from "./native-drift-receipt.js";
 
 export interface HermesSupervisorBinding { path: string; runtime: string; sha256: string }
 export const HERMES_OPT_OUT = ".no-bundled-skills";
@@ -51,18 +52,22 @@ export function configureHermesHooks(text: string | null, supervisor: HermesSupe
   }
   return doc.toString({ lineWidth: 0 });
 }
+/** Every refusal here leaves the effective Hermes discovery unchecked (another
+ * project, home, bundled tree or project plugins), so a payload named skills-cli
+ * there could load through the bridge. They are bridge-integrity refusals: the
+ * live skill_view(skills-cli) call is refused while prompts still fail open. */
 export function assertHermesEnvironment(home: string): void {
   // Native Hermes sets this to its working directory before running hooks.
   // Admit that exact directory only: relative paths, aliases and a distinct
   // terminal project would change discovery without changing the hook cwd.
-  if (process.env.TERMINAL_CWD && process.env.TERMINAL_CWD !== process.cwd()) throw new Error("NATIVE_SKILL_DRIFT: Hermes TERMINAL_CWD must match the checked process working directory; review the effective project before using this adapter");
+  if (process.env.TERMINAL_CWD && process.env.TERMINAL_CWD !== process.cwd()) throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: Hermes TERMINAL_CWD must match the checked process working directory; review the effective project before using this adapter");
   for (const variable of ["HERMES_BUNDLED_PLUGINS", "HERMES_BUNDLED_SKILLS"] as const) {
     // Hermes accepts relative plugin overrides, including whitespace-only paths.
-    if (process.env[variable]) throw new Error(`NATIVE_SKILL_DRIFT: Hermes ${variable} requires a dedicated discovery adapter; unset it before using this adapter`);
+    if (process.env[variable]) throw new NativeBridgeIntegrityRefusal(`NATIVE_SKILL_DRIFT: Hermes ${variable} requires a dedicated discovery adapter; unset it before using this adapter`);
   }
   const selected = process.env.HERMES_HOME?.trim();
-  if (selected && (!isAbsolute(selected) || resolve(selected) !== join(resolve(home), ".hermes"))) throw new Error("NATIVE_SKILL_DRIFT: custom Hermes homes/profiles require their own reviewed bridge");
-  if (process.env.HERMES_ENABLE_PROJECT_PLUGINS?.trim() && !["0", "false", "no", "off"].includes(process.env.HERMES_ENABLE_PROJECT_PLUGINS.trim().toLowerCase())) throw new Error("NATIVE_SKILL_DRIFT: Hermes project plugins require a dedicated discovery review");
+  if (selected && (!isAbsolute(selected) || resolve(selected) !== join(resolve(home), ".hermes"))) throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: custom Hermes homes/profiles require their own reviewed bridge");
+  if (process.env.HERMES_ENABLE_PROJECT_PLUGINS?.trim() && !["0", "false", "no", "off"].includes(process.env.HERMES_ENABLE_PROJECT_PLUGINS.trim().toLowerCase())) throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: Hermes project plugins require a dedicated discovery review");
 }
 function read(path: string): string | null {
   for (let current = path; ; current = dirname(current)) { if (lstatSync(current, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error("NATIVE_SKILL_DRIFT: symlink Hermes protection input"); if (dirname(current) === current) break; }
@@ -90,19 +95,21 @@ export function assertHermesProtection(home: string, config: Record<string, any>
  * dependency directories that the normal SKILL.md index skips. Check the one
  * name admitted by the native tool guard without reading any candidate bytes.
  * Only support folders directly under a real skill descriptor are excluded,
- * matching Hermes is_skill_support_path. Every other bounded path is checked. */
+ * matching Hermes is_skill_support_path. Every other bounded path is checked.
+ * A found or unrulable shadow is a bridge-integrity refusal: the live
+ * skill_view(skills-cli) call is refused, while prompts still fail open. */
 export function assertNoHermesLegacyShadow(root: string): void {
   let entries = 0;
   for (let cursor = resolve(root); ; cursor = dirname(cursor)) {
-    if (lstatSync(cursor, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error("NATIVE_SKILL_DRIFT: symlink Hermes legacy discovery root");
+    if (lstatSync(cursor, { throwIfNoEntry: false })?.isSymbolicLink()) throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: symlink Hermes legacy discovery root");
     if (dirname(cursor) === cursor) break;
   }
   function scan(path: string, depth: number): void {
-    if (++entries > 10000 || depth > 64) throw new Error("NATIVE_SKILL_DRIFT: Hermes legacy discovery limit exceeded; review the root before continuing");
+    if (++entries > 10000 || depth > 64) throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: Hermes legacy discovery limit exceeded; review the root before continuing");
     const stat = lstatSync(path, { throwIfNoEntry: false }); if (!stat) return;
-    if (stat.isSymbolicLink()) throw new Error("NATIVE_SKILL_DRIFT: symlink Hermes legacy discovery input");
-    if (!stat.isDirectory()) { if (!stat.isFile()) throw new Error("NATIVE_SKILL_DRIFT: unsupported Hermes legacy discovery input"); return; }
-    if (lstatSync(join(path, "skills-cli.md"), { throwIfNoEntry: false })) throw new Error("NATIVE_SKILL_DRIFT: legacy Hermes skills-cli.md can shadow the owned bridge; preserve and retire it before continuing");
+    if (stat.isSymbolicLink()) throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: symlink Hermes legacy discovery input");
+    if (!stat.isDirectory()) { if (!stat.isFile()) throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: unsupported Hermes legacy discovery input"); return; }
+    if (lstatSync(join(path, "skills-cli.md"), { throwIfNoEntry: false })) throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: legacy Hermes skills-cli.md can shadow the owned bridge; preserve and retire it before continuing");
     const hasDescriptor = Boolean(lstatSync(join(path, "SKILL.md"), { throwIfNoEntry: false }));
     const directory = opendirSync(path);
     try {

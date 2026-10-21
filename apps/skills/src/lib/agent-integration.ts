@@ -5,12 +5,14 @@ import { codexNativeConfigEqual } from "./codex-native-config.js";
 import { reviewCodexPluginControls, reviewedCodexPluginSourceRoots, isReviewedCodexPluginInactive, isReviewedCodexPluginSkillDisabled, reviewedCodexPluginCapabilitiesUnchanged, disableReviewedCodexPluginNames, absentDisabledCodexPluginParent, classifyCodexPluginCacheDocument, codexRemoteInstallReceipt, mergeReconciledCodexPluginControls, unenrolledCodexPluginEvidence, codexPluginRootEvidence, codexPluginCapabilityChanges, enrolledCodexPluginStrictChanges, codexPreStartRemoteReceipt, codexPreStartReceiptChanged, codexStoredReceiptHeal, CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, type CodexPluginCacheDocumentIdentity, type ReviewedCodexSkillDenial, type CodexPluginSkillControl } from "./codex-plugin-skill-controls.js";
 import { verifyCodexNativeSkillPolicy, parseCodexNativeHookEnvelope, recordCodexNativePolicyAcceptance, type CodexNativeHookEnvelope, type ProcessInspector, type NativePolicyHelperRunner } from "./codex-native-skill-policy.js";
 import { codexPluginIsRemote, codexPluginSourceIsConfigControlled, projectCodexInstalledPluginEntries, projectCodexNativeSkillCatalog, type CodexNativeSkillCatalog } from "./codex-native-skill-catalog.js";
-import { upgradeCodexSettingsWitness, upgradeCodexSettingsWitnessV3, upgradeCodexSettingsWitnessV4, upgradeCodexSettingsWitnessV5, readCodexSettingsPreimage, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
-import { upgradeClaudeSettingsWitness, upgradeClaudeSettingsWitnessV4, hashNativeJsonControls } from "./claude-settings-witness.js";
+import { upgradeCodexSettingsWitness, upgradeCodexSettingsWitnessV3, upgradeCodexSettingsWitnessV4, upgradeCodexSettingsWitnessV5, upgradeCodexSettingsWitnessV7, readCodexSettingsPreimage, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
+import { upgradeClaudeSettingsWitness, upgradeClaudeSettingsWitnessV4, upgradeClaudeSettingsWitnessV5, hashNativeJsonControls } from "./claude-settings-witness.js";
 import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
 import { captureCodexSemanticCacheWitness, codexLocalMarketplaceMapsPlugin, type CodexSemanticCacheAppOnlyParent, type CodexSemanticCacheReviewedHookParent } from "./codex-semantic-cache-witness.js";
 import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
 import type { NativeDiscoveryWitnessChange, NativeDiscoveryWitnessKind, NativeDiscoveryWitnessTolerance } from "./native-discovery-witness-change.js";
+import { openNarrowedWitnessLedger } from "./narrowed-witness-ledger.js";
+import { NativeBridgeIntegrityRefusal, NativeSkillPolicyRefusal } from "./native-drift-receipt.js";
 import { CODEX_REMOTE_VENDOR_MARKETPLACES, codexVendorMarketplace, codexVendorPluginRefreshSafe, codexVendorSubtreeHookFree } from "./codex-vendor-refresh.js";
 import { isCodexNativeSkillDisabled } from "./codex-native-skill-catalog.js";
 import { codexPluginCacheSkillTree } from "./codex-node-modules.js";
@@ -27,7 +29,7 @@ import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderAgentHookCommand, renderOpenC
 import { assertCodexPathConfigEditable, CODEX_SKILL_CONFIG_SECTIONS, disableCodexBundledSkills, normalizeCodexInlinePathConfig } from "./agent-codex.js";
 
 import { sumiConfigDirectory, sumiConfigPath, sumiBridgeRoot, sumiSkillRoots, renderSumiPlugin, isManagedSumiPlugin, SUMI_SKILL_PERMISSIONS, SumiPathResolverError } from "./agent-sumi.js";
-import { HERMES_OPT_OUT, parseHermesConfig, configureHermesHooks, assertHermesProtection, renderHermesSupervisor, assertNoHermesLegacyShadow, type HermesSupervisorBinding } from "./agent-hermes.js";
+import { HERMES_OPT_OUT, parseHermesConfig, configureHermesHooks, assertHermesEnvironment, assertHermesProtection, renderHermesSupervisor, assertNoHermesLegacyShadow, type HermesSupervisorBinding } from "./agent-hermes.js";
 import type { CodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery.js";
 import { assertClaudeHookEventsReplacement, type ClaudeCoordinatedHookEvent } from "./claude-settings-witness.js";
 import { directAliasTarget, snapshot as hookFileSnapshot, trustedAncestorOwner, unchanged as hookFileUnchanged } from "./codex-hook-trust-files.js";
@@ -1177,10 +1179,11 @@ function atomicWrite(path: string, content: string): void {
  * Runtime readers never relax the old witness. All other discovery sources,
  * unknown settings, native controls and policy bytes remain guarded.
  */
-export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "codex" | "sumi"; targetCodexVersion?: 2 | 3 | 4 | 5; targetClaudeVersion?: 3 | 4; reviewedPreimage: string; home?: string; dataDir?: string; projectDir?: string; expectedPolicySha256: string; expectedSettingsSha256: string }): AgentIntegrationPlan {
-  if (options.targetCodexVersion !== undefined && (options.agent !== "codex" || ![2, 3, 4, 5].includes(options.targetCodexVersion))) throw new Error("Invalid Codex witness target version");
-  // Claude v3 stays the default target; v4 (built-in theme presets) is opt-in.
-  if (options.targetClaudeVersion !== undefined && (options.agent !== "claude" || ![3, 4].includes(options.targetClaudeVersion))) throw new Error("Invalid Claude witness target version");
+export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "codex" | "sumi"; targetCodexVersion?: 2 | 3 | 4 | 5 | 7; targetClaudeVersion?: 3 | 4 | 5; reviewedPreimage: string; home?: string; dataDir?: string; projectDir?: string; expectedPolicySha256: string; expectedSettingsSha256: string }): AgentIntegrationPlan {
+  if (options.targetCodexVersion !== undefined && (options.agent !== "codex" || ![2, 3, 4, 5, 7].includes(options.targetCodexVersion))) throw new Error("Invalid Codex witness target version");
+  // Claude v3 stays the default target; v4 (built-in theme presets) and v5
+  // (the narrowed discovery projection) are opt-in.
+  if (options.targetClaudeVersion !== undefined && (options.agent !== "claude" || ![3, 4, 5].includes(options.targetClaudeVersion))) throw new Error("Invalid Claude witness target version");
   const home = resolve(options.home ?? homedir()), dataDir = options.dataDir ?? getDataDirReadOnly();
   const snapshot = readManagedSkillPolicySnapshot(dataDir);
   if (!snapshot || sha(snapshot.text) !== options.expectedPolicySha256) throw new Error("Managed policy preimage changed");
@@ -1200,7 +1203,7 @@ export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "co
   // and therefore stops matching as soon as Codex re-serializes the file it owns.
   const replaced: DiscoverySource[] = [previous];
   if (options.agent === "codex") {
-    if (previous.hashMode !== undefined && previous.hashMode !== "bytes" && previous.hashMode !== "codex-settings-v1" && !((options.targetCodexVersion === 3 || options.targetCodexVersion === 4 || options.targetCodexVersion === 5) && previous.hashMode === "codex-settings-v2") && !((options.targetCodexVersion === 4 || options.targetCodexVersion === 5) && previous.hashMode === "codex-settings-v3") && !(options.targetCodexVersion === 5 && previous.hashMode === "codex-settings-v4")) throw new Error("Codex settings witness upgrade requires an eligible preserved configuration witness");
+    if (previous.hashMode !== undefined && previous.hashMode !== "bytes" && previous.hashMode !== "codex-settings-v1" && !((options.targetCodexVersion === 3 || options.targetCodexVersion === 4 || options.targetCodexVersion === 5 || options.targetCodexVersion === 7) && previous.hashMode === "codex-settings-v2") && !((options.targetCodexVersion === 4 || options.targetCodexVersion === 5 || options.targetCodexVersion === 7) && previous.hashMode === "codex-settings-v3") && !((options.targetCodexVersion === 5 || options.targetCodexVersion === 7) && previous.hashMode === "codex-settings-v4") && !(options.targetCodexVersion === 7 && previous.hashMode === "codex-settings-v5")) throw new Error("Codex settings witness upgrade requires an eligible preserved configuration witness");
     const preimage = readCodexSettingsPreimage(options.reviewedPreimage);
     for (const source of binding.sources) {
       if (source === previous || source.path !== configPath) continue;
@@ -1224,9 +1227,13 @@ export function planAgentSettingsWitnessUpgrade(options: { agent: "claude" | "co
   const next = options.agent === "sumi"
     ? upgradeSumiSettingsWitness(previous as Parameters<typeof upgradeSumiSettingsWitness>[0], options.reviewedPreimage)
     : options.agent === "claude"
-    ? options.targetClaudeVersion === 4
+    ? options.targetClaudeVersion === 5
+      ? upgradeClaudeSettingsWitnessV5(previous as Parameters<typeof upgradeClaudeSettingsWitnessV5>[0], options.reviewedPreimage)
+    : options.targetClaudeVersion === 4
       ? upgradeClaudeSettingsWitnessV4(previous as Parameters<typeof upgradeClaudeSettingsWitnessV4>[0], options.reviewedPreimage)
       : upgradeClaudeSettingsWitness(previous as Parameters<typeof upgradeClaudeSettingsWitness>[0], options.reviewedPreimage)
+    : options.targetCodexVersion === 7
+      ? upgradeCodexSettingsWitnessV7(previous as Parameters<typeof upgradeCodexSettingsWitnessV7>[0], options.reviewedPreimage)
     : options.targetCodexVersion === 5
       ? upgradeCodexSettingsWitnessV5(previous as Parameters<typeof upgradeCodexSettingsWitnessV5>[0], options.reviewedPreimage)
     : options.targetCodexVersion === 4
@@ -1778,7 +1785,7 @@ function verifyIntegrationPlanBeforeWrite(plan: AgentIntegrationPlan, assertCurr
     if (plan.cacheWitnessUpgrade) throw new Error("Independent witness upgrades cannot be combined implicitly");
     const upgrade = plan.settingsWitnessUpgrade;
     if (!plan.managedAgentChecks || !plan.observedPolicy?.before) throw new Error("Invalid settings witness upgrade plan");
-    const verified = planAgentSettingsWitnessUpgrade({ agent: upgrade.agent, ...(upgrade.agent === "codex" ? { targetCodexVersion: upgrade.toHashMode === "codex-settings-v5" ? 5 as const : upgrade.toHashMode === "codex-settings-v4" ? 4 as const : upgrade.toHashMode === "codex-settings-v3" ? 3 as const : 2 as const } : {}), ...(upgrade.agent === "claude" && upgrade.toHashMode === "claude-settings-v4" ? { targetClaudeVersion: 4 as const } : {}), reviewedPreimage: upgrade.reviewedPreimage, home: plan.managedAgentChecks.home, dataDir: plan.dataDir, expectedPolicySha256: sha(plan.observedPolicy.before), expectedSettingsSha256: upgrade.currentSettingsSha256 });
+    const verified = planAgentSettingsWitnessUpgrade({ agent: upgrade.agent, ...(upgrade.agent === "codex" ? { targetCodexVersion: upgrade.toHashMode === "codex-settings-v7" ? 7 as const : upgrade.toHashMode === "codex-settings-v5" ? 5 as const : upgrade.toHashMode === "codex-settings-v4" ? 4 as const : upgrade.toHashMode === "codex-settings-v3" ? 3 as const : 2 as const } : {}), ...(upgrade.agent === "claude" && upgrade.toHashMode === "claude-settings-v5" ? { targetClaudeVersion: 5 as const } : upgrade.agent === "claude" && upgrade.toHashMode === "claude-settings-v4" ? { targetClaudeVersion: 4 as const } : {}), reviewedPreimage: upgrade.reviewedPreimage, home: plan.managedAgentChecks.home, dataDir: plan.dataDir, expectedPolicySha256: sha(plan.observedPolicy.before), expectedSettingsSha256: upgrade.currentSettingsSha256 });
     if (JSON.stringify(verified.changes) !== JSON.stringify(plan.changes) || JSON.stringify(verified.settingsWitnessUpgrade) !== JSON.stringify(upgrade)) throw new Error("Settings witness upgrade plan changed");
     provenDiscovery = verified.discoveryBefore![0];
   }
@@ -2189,6 +2196,25 @@ interface ManagedBridgeOptions {
    * vendor copies and every other change still refuse. Install, trust, migrate
    * and sync never pass it. */
   codexPromptHook?: boolean;
+  /** Live lifecycle hooks only (prompt, session, subagent and tool events).
+   * - A legacy full-file settings witness that no longer matches stays current
+   *   when the narrowed digest recorded for its review is unchanged, and a
+   *   matching one is recorded (narrowed-witness-ledger.ts).
+   * - Anything that stops the skills-cli bridge from being verified is a
+   *   NativeBridgeIntegrityRefusal, and any other failure to verify native
+   *   discovery (a changed root alias, an unreadable settings file, an
+   *   inventory error) is reported as NATIVE_SKILL_DRIFT, so the hook can fail
+   *   open instead of blocking the prompt.
+   * Install, trust, migrate, sync and upgrades never pass it. */
+  liveHook?: boolean;
+  /** Live tool events that would load the skills-cli bridge (Claude
+   * Skill(skills-cli), Gemini activate_skill(skills-cli), Hermes
+   * skill_view(skills-cli)); requires liveHook. Before such a call proceeds,
+   * no native copy may be able to resolve under the bridge's own name, in any
+   * tier the agent searches, including after an earlier drift skipped the
+   * inventory. A found copy, or a check that cannot complete, is a
+   * NativeBridgeIntegrityRefusal. */
+  bridgeToolCall?: boolean;
 }
 
 /** Result of a guard call; both lists are empty unless the caller opted in.
@@ -2391,7 +2417,124 @@ export function codexPromptDriftWarning(report: ManagedBridgeReport): string | u
 /** Run before any prompt context load. Missing ownership or reappearing native
  * discovery files require repair; verified cache availability is not an override. */
 export function assertManagedAgentBridge(agent: IntegrationAgent, options: ManagedBridgeOptions = {}): ManagedBridgeReport {
-  return assertManagedAgentBridgeWithDiscovery(agent, options);
+  if (options.liveHook !== true) return assertManagedAgentBridgeWithDiscovery(agent, options);
+  let report: ManagedBridgeReport;
+  try { report = assertManagedAgentBridgeWithDiscovery(agent, options); }
+  catch (error) {
+    const classified = liveHookGuardError(error);
+    // Ordinary drift lets a bridge tool call proceed only when no native copy
+    // can resolve under the bridge's own name. The drift may have stopped the
+    // guard before its inventory, so run that inventory here. A copy refusal
+    // already classified every inventoried copy; only Gemini's extra tiers remain.
+    if (options.bridgeToolCall === true && isPlainNativeDrift(classified)) assertNoBridgeNameShadow(agent, options, error instanceof NativeSkillCopiesDriftError ? "extra" : "all");
+    throw classified;
+  }
+  // The verified inventory covered the agent's standard roots; check the tiers
+  // it does not inventory (Gemini's .agents/skills) before the call proceeds.
+  if (options.bridgeToolCall === true) assertNoBridgeNameShadow(agent, options, "extra");
+  return report;
+}
+
+function isPlainNativeDrift(error: unknown): boolean {
+  return error instanceof Error && !(error instanceof NativeSkillPolicyRefusal) && error.message.startsWith("NATIVE_SKILL_DRIFT:");
+}
+
+/** Whether a native skill directory can be invoked under the bridge's own
+ * name: its folder name or SKILL.md frontmatter name is skills-cli, compared
+ * case-insensitively (Gemini and Claude resolve the frontmatter name; a
+ * case-insensitive file system resolves the folder). Gemini's name
+ * sanitization is applied. A descriptor that exists but cannot be read or
+ * parsed counts as a possible shadow. A byte-identical owned bridge is not a
+ * shadow: loading it loads the bridge. */
+function bridgeNameShadow(directory: string): boolean {
+  const bridgeName = (value: string) => value.replace(/[:\\/<>*?"|]/g, "-").trim().toLowerCase() === CLI_BRIDGE_NAME;
+  let named = bridgeName(basename(directory));
+  if (!named) {
+    try {
+      const document = join(directory, "SKILL.md");
+      // Follow a linked descriptor the way the native loaders do, bounded.
+      const stat = statSync(document, { throwIfNoEntry: false });
+      if (!stat?.isFile()) return false;
+      if (stat.size > 1024 * 1024) return true;
+      // Non-blocking open: a descriptor swapped for a FIFO cannot stall the hook.
+      const descriptor = openSync(document, constants.O_RDONLY | constants.O_NONBLOCK);
+      let bytes: Buffer;
+      try {
+        const opened = fstatSync(descriptor);
+        if (!opened.isFile() || opened.size > 1024 * 1024) return true;
+        bytes = Buffer.alloc(opened.size); let length = 0;
+        while (length < bytes.length) { const count = readSync(descriptor, bytes, length, bytes.length - length, null); if (!count) break; length += count; }
+        bytes = bytes.subarray(0, length);
+      } finally { closeSync(descriptor); }
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
+      if (!match) return false;
+      let value: unknown;
+      try { value = (Bun.YAML.parse(match[1]!) as any)?.name; }
+      catch { return /skills.?cli/i.test(match[1]!); }
+      named = typeof value === "string" ? bridgeName(value) : value !== undefined && /skills.?cli/i.test(String(value));
+    } catch { return true; }
+  }
+  return named && !isOwnedCliBridge(directory, [directory]);
+}
+
+/** Gemini searches ~/.agents/skills and the workspace .gemini/skills and
+ * .agents/skills above its user ~/.gemini/skills bridge (workspace highest),
+ * loading <root>/SKILL.md and <root>/<dir>/SKILL.md. Only ~/.gemini/skills and
+ * project .gemini/skills are inventoried as drift, so check every tier for a
+ * bridge-named copy here (all project ancestors, a superset of the workspace). */
+function geminiBridgeShadows(home: string, projects: readonly string[]): string[] {
+  const roots = [join(home, ".agents", "skills"), ...projects.flatMap(project => [join(project, ".gemini", "skills"), join(project, ".agents", "skills")])];
+  const shadows: string[] = [];
+  let entries = 0;
+  for (const root of [...new Set(roots)]) {
+    const stat = statSync(root, { throwIfNoEntry: false });
+    if (!stat?.isDirectory()) continue;
+    if (bridgeNameShadow(root)) shadows.push(root);
+    for (const name of readdirSync(root)) {
+      if (++entries > 20000) throw new Error("Gemini skill tier entry limit exceeded");
+      if (name.startsWith(".") || name === "node_modules") continue;
+      const child = join(root, name);
+      if (statSync(child, { throwIfNoEntry: false })?.isDirectory() && bridgeNameShadow(child) && statSync(join(child, "SKILL.md"), { throwIfNoEntry: false })?.isFile()) shadows.push(child);
+    }
+  }
+  return shadows;
+}
+
+/** Live bridge tool calls only: refuse the call when a native copy can
+ * resolve under the skills-cli name. "all" re-runs the guard's inventory (an
+ * earlier drift may have skipped it); "extra" checks only the tiers that
+ * inventory does not cover. Any failure to complete is an integrity refusal. */
+function assertNoBridgeNameShadow(agent: IntegrationAgent, options: ManagedBridgeOptions, scope: "all" | "extra"): void {
+  try {
+    const home = resolve(options.home ?? homedir()), dataDir = options.dataDir ?? getDataDirReadOnly();
+    const projects = projectAncestorDirectories([options.projectDir ?? process.cwd(), ...(options.projectDirs ?? []), ...(agent === "hermes" && process.env.TERMINAL_CWD ? [process.cwd()] : [])]);
+    const shadows: string[] = [];
+    if (scope === "all") {
+      if (agent === "hermes") assertHermesEnvironment(home);
+      const binding = readManagedSkillPolicySnapshot(dataDir)?.value.bridge;
+      const aliases: AgentRootAlias[] = Array.isArray(binding?.rootAliases) ? binding.rootAliases : [];
+      recheckRootAliases(aliases);
+      const discovery: AgentDiscoveryBinding | undefined = binding?.discovery?.[agent];
+      const inventory = inventoryNativeSkills(home, { includeVendor: true, guardHermes: agent === "hermes", agents: [agent], projectDirs: projects, agentRoots: (discovery?.roots ?? []).map(path => ({ agent, path })), allowRootAliases: aliases.length > 0 });
+      shadows.push(...inventory.filter(entry => visibleToAgent(agent, entry) && !entry.bridge && bridgeNameShadow(entry.path)).map(entry => entry.path));
+    }
+    if (agent === "gemini") shadows.push(...geminiBridgeShadows(home, projects));
+    const unique = [...new Set(shadows)];
+    if (unique.length) throw new NativeBridgeIntegrityRefusal(`NATIVE_SKILL_DRIFT: ${unique.length} native skill ${unique.length === 1 ? "copy" : "copies"} can resolve under the skills-cli bridge name: ${nativeSkillPathList(unique)}. Preserve and retire ${unique.length === 1 ? "it" : "them"} with skills migrate native before invoking the bridge.`);
+  } catch (error) {
+    if (error instanceof NativeBridgeIntegrityRefusal) throw error;
+    throw new NativeBridgeIntegrityRefusal(`NATIVE_SKILL_DRIFT: a native copy under the skills-cli bridge name could not be ruled out: ${error instanceof Error ? error.message.replace(/^NATIVE_SKILL_DRIFT: /, "") : String(error)}`);
+  }
+}
+
+/** Live hooks only: a native discovery check that cannot complete is reported
+ * as drift rather than blocking the prompt. Tool-policy and bridge-integrity
+ * refusals, existing drift and an unresolvable runtime keep their own class. */
+function liveHookGuardError(error: unknown): unknown {
+  if (error instanceof NativeSkillPolicyRefusal || isDiscoveryRootUnresolved(error) || error instanceof SumiPathResolverError) return error;
+  if (error instanceof Error && error.message.startsWith("NATIVE_SKILL_DRIFT:")) return error;
+  return new Error(`NATIVE_SKILL_DRIFT: native discovery could not be verified: ${error instanceof Error ? error.message : String(error)}`);
 }
 
 /**
@@ -2416,16 +2559,30 @@ interface ManagedBridgeCustody {
 }
 function assertManagedBridgeCustody(agent: IntegrationAgent, options: ManagedBridgeOptions = {}, provenDiscovery?: AgentDiscoveryBinding): ManagedBridgeCustody {
   const home = resolve(options.home ?? homedir()), dataDir = options.dataDir ?? getDataDirReadOnly();
-  assertSafePath(join(dataDir, "agent-policy.json"));
-  const snapshot = readManagedSkillPolicySnapshot(dataDir);
-  if (!snapshot) throw new Error("NATIVE_SKILL_DRIFT: install the Skills bridge with skills hook install");
-  const binding = snapshot.value.bridge;
-  if (!binding || binding.version !== CLI_BRIDGE_VERSION || binding.digest !== CLI_BRIDGE_DIGEST || binding.home !== home || !Array.isArray(binding.agents) || !binding.agents.includes(agent)) throw new Error("NATIVE_SKILL_DRIFT: the managed Skills bridge binding is missing or incompatible; run skills hook install");
-  const aliases: AgentRootAlias[] = binding.rootAliases ?? [];
-  if (!Array.isArray(aliases)) throw new Error("NATIVE_SKILL_DRIFT: invalid root alias binding");
-  recheckRootAliases(aliases);
-  const expected = canonicalAgentPath(join(nativeAgentRoot(home, agent, options.projectDir ?? process.cwd()), CLI_BRIDGE_NAME), aliases);
-  if (!isOwnedCliBridge(expected, [expected])) throw new Error("NATIVE_SKILL_DRIFT: the native Skills bridge is missing or modified; repair it before continuing");
+  // Everything up to and including the bridge check decides whether the
+  // skills-cli bridge is verified; its refusals are bridge-integrity refusals
+  // (same messages), so a live tool call never loads an unverified bridge.
+  let binding: any, aliases: AgentRootAlias[], expected: string;
+  try {
+    assertSafePath(join(dataDir, "agent-policy.json"));
+    const snapshot = readManagedSkillPolicySnapshot(dataDir);
+    if (!snapshot) throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: install the Skills bridge with skills hook install");
+    binding = snapshot.value.bridge;
+    if (!binding || binding.version !== CLI_BRIDGE_VERSION || binding.digest !== CLI_BRIDGE_DIGEST || binding.home !== home || !Array.isArray(binding.agents) || !binding.agents.includes(agent)) throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: the managed Skills bridge binding is missing or incompatible; run skills hook install");
+    aliases = binding.rootAliases ?? [];
+    if (!Array.isArray(aliases)) throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: invalid root alias binding");
+    recheckRootAliases(aliases);
+    expected = canonicalAgentPath(join(nativeAgentRoot(home, agent, options.projectDir ?? process.cwd()), CLI_BRIDGE_NAME), aliases);
+    if (!isOwnedCliBridge(expected, [expected])) throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: the native Skills bridge is missing or modified; repair it before continuing");
+  } catch (error) {
+    // Strict callers keep every original error unchanged. A live hook that
+    // could not verify the bridge for any other reason (a changed root alias,
+    // an unreadable policy) treats it as an integrity refusal too.
+    if (options.liveHook === true && !(error instanceof NativeSkillPolicyRefusal) && !isDiscoveryRootUnresolved(error) && !(error instanceof SumiPathResolverError)) {
+      throw new NativeBridgeIntegrityRefusal(`NATIVE_SKILL_DRIFT: the native Skills bridge could not be verified: ${error instanceof Error ? error.message.replace(/^NATIVE_SKILL_DRIFT: /, "") : String(error)}`);
+    }
+    throw error;
+  }
   const roots = projectAncestorDirectories([options.projectDir ?? process.cwd(), ...(options.projectDirs ?? []), ...(agent === "hermes" && process.env.TERMINAL_CWD ? [process.cwd()] : [])]);
   const discovery: AgentDiscoveryBinding | undefined = provenDiscovery ?? binding.discovery?.[agent];
   assertProjectDiscovery(agent, [...roots], home, path => canonicalAgentPath(path, aliases), discovery);
@@ -2480,9 +2637,9 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
   if (agent === "hermes") {
     assertUnrepairableBridgeProtection(custody, agent);
   } else if (agent === "sumi") {
-    if (JSON.stringify(config.permissions?.filter((rule: any) => rule.action === "skill")) !== JSON.stringify(SUMI_SKILL_PERMISSIONS) || !isManagedSumiPlugin(readOptional(join(sumiConfigDirectory(home, process.env, options.projectDir ?? process.cwd()), "plugins", "skills-cli.js")), command, profile)) throw new Error("NATIVE_SKILL_DRIFT: Sumi bridge protection changed; run skills hook install");
+    if (JSON.stringify(config.permissions?.filter((rule: any) => rule.action === "skill")) !== JSON.stringify(SUMI_SKILL_PERMISSIONS) || !isManagedSumiPlugin(readOptional(join(sumiConfigDirectory(home, process.env, options.projectDir ?? process.cwd()), "plugins", "skills-cli.js")), command, profile)) throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: Sumi bridge protection changed; run skills hook install");
   } else if (agent === "opencode") {
-    if (JSON.stringify(config.permission?.skill) !== JSON.stringify({ "*": "deny", [CLI_BRIDGE_NAME]: "allow" }) || readOptional(join(home, ".config", "opencode", "plugins", "skills-cli.js")) !== renderOpenCodePlugin(command, profile)) throw new Error("NATIVE_SKILL_DRIFT: OpenCode bridge protection changed; run skills hook install");
+    if (JSON.stringify(config.permission?.skill) !== JSON.stringify({ "*": "deny", [CLI_BRIDGE_NAME]: "allow" }) || readOptional(join(home, ".config", "opencode", "plugins", "skills-cli.js")) !== renderOpenCodePlugin(command, profile)) throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: OpenCode bridge protection changed; run skills hook install");
   } else {
     const required: Record<string, any> = {}; configureHooks(required, agent, command, profile, true);
     for (const [event, entries] of Object.entries(required.hooks) as Array<[string, any[]]>) for (const entry of entries) {
@@ -2502,12 +2659,18 @@ function assertManagedAgentBridgeWithDiscovery(agent: IntegrationAgent, options:
   return assertManagedNativeDiscovery(custody, agent, options, collect);
 }
 
+/** Native copies an agent can load: its own roots, the shared .agents/skills
+ * tier for the agents that search it, and Claude roots for OpenCode and Sumi. */
+function visibleToAgent(agent: IntegrationAgent, entry: NativeSkillEntry): boolean {
+  return entry.agent === agent || (["codex", "gemini", "opencode", "hermes", "sumi"].includes(agent) && entry.path.includes(`${sep}.agents${sep}skills${sep}`)) || (["opencode", "sumi"].includes(agent) && entry.agent === "claude");
+}
+
 /** Native/discovery state is never repaired implicitly by reusing a review.
  * Share this validator with the full guard, including its live-hook-only policy
  * and vendor exceptions. Install callers pass neither exception. */
 function assertManagedNativeDiscovery(custody: ManagedBridgeCustody, agent: IntegrationAgent, options: ManagedBridgeOptions, collect?: CodexReconcileCollection): ManagedBridgeReport {
   const { home, dataDir, binding, aliases, expected, roots, discovery } = custody;
-  const visible = (entry: NativeSkillEntry) => entry.agent === agent || (["codex", "gemini", "opencode", "hermes", "sumi"].includes(agent) && entry.path.includes(`${sep}.agents${sep}skills${sep}`)) || (["opencode", "sumi"].includes(agent) && entry.agent === "claude");
+  const visible = (entry: NativeSkillEntry) => visibleToAgent(agent, entry);
   const codexPath = canonicalAgentPath(join(home, ".codex", "config.toml"), aliases);
   // Live Codex prompt hook only: tolerate a changed reviewed witness only when it
   // is provably a vendor plugin refresh (appended vendor disable rows or vendor
@@ -2567,14 +2730,16 @@ function assertManagedNativeDiscovery(custody: ManagedBridgeCustody, agent: Inte
     return Array.isArray(binding.disabledBuiltins) && binding.disabledBuiltins.some((item: any) => item.path === entry.path && item.hash === entry.hash);
   };
   if (!discovery || discovery.agent !== agent) throw new Error("NATIVE_SKILL_DRIFT: native discovery coverage is missing; run skills hook install");
+  const narrowed = options.liveHook === true ? openNarrowedWitnessLedger(dataDir) : undefined;
   try {
-    verifyAgentDiscovery(agent==="codex" ? {...discovery,codexDisabledPluginSkills:binding.codexPluginSkills ?? []} : discovery, options.codexDiscoveryRecovery, aliases, witnessTolerance);
+    verifyAgentDiscovery(agent==="codex" ? {...discovery,codexDisabledPluginSkills:binding.codexPluginSkills ?? []} : discovery, options.codexDiscoveryRecovery, aliases, witnessTolerance, narrowed);
     if (agent === "sumi" && discovery.method === "reviewed") resolveAgentDiscovery({ home, agent, retainedReview: discovery, canonical: path => canonicalAgentPath(path, aliases) });
     if (discovery.method === "automatic") verifyAutomaticDiscoveryClosure(discovery, { home, canonical: path => canonicalAgentPath(path, aliases), change: "Configured native discovery roots changed", executable: binding.discoveryExecutables?.[agent], ...(witnessTolerance ? { witnessTolerance } : {}) });
   } catch (error) {
-    if (isDiscoveryRootUnresolved(error)) throw error;
+    // A Hermes environment refusal keeps its bridge-integrity class.
+    if (isDiscoveryRootUnresolved(error) || error instanceof NativeBridgeIntegrityRefusal) throw error;
     throw new Error(`NATIVE_SKILL_DRIFT: ${(error as Error).message}`);
-  }
+  } finally { narrowed?.flush(); }
   let installationInputRoots:string[]=[];
   if (agent==="codex") {
     try {
@@ -2624,7 +2789,16 @@ function assertManagedNativeDiscovery(custody: ManagedBridgeCustody, agent: Inte
     // Strict callers (every guard call except the live Codex prompt hook) accept
     // no hand-added name rule, so they get the refreshed-binding step instead.
     const remediation = nativeSkillRemediation(agent, blocking, { cache: vendorCache, config: codexPath, aliases: aliases.length > 0, strict: options.codexPromptHook !== true, automatic: discovery.method === "automatic", toleratedChange: (witnessTolerance?.changes.length ?? 0) > 0, rules: codexConfig.skills?.config, enrolled: entry => (binding.codexPluginSkills ?? []).some((control: CodexPluginSkillControl) => entry.path.startsWith(control.pluginParent + sep)), keepsConfig: rows => { try { const text = readOptional(codexPath) ?? ""; return discoveryTextKeepsWitness(discovery, codexPath, `${text.trimEnd()}${text.trim() ? "\n\n" : ""}${rows.join("\n")}`); } catch { return false; } }, read: path => new TextDecoder("utf-8", { fatal: true }).decode(readNativeBytes(path, 1024 * 1024)) });
-    throw new NativeSkillCopiesDriftError(`NATIVE_SKILL_DRIFT: ${blocking.length} unexpected native skill copies were found: ${nativeSkillPathList(blocking.map(entry => entry.path))}. ${remediation}${adapterRefusal ? ` Native policy adapter refused: ${adapterRefusal}` : ""}`);
+    const message = `NATIVE_SKILL_DRIFT: ${blocking.length} unexpected native skill copies were found: ${nativeSkillPathList(blocking.map(entry => entry.path))}. ${remediation}${adapterRefusal ? ` Native policy adapter refused: ${adapterRefusal}` : ""}`;
+    // Live hooks: a copy that can resolve under the bridge's own name (a
+    // workspace Gemini copy outranks the user bridge; Hermes skill_view finds
+    // any skills-cli) would load through the allowed bridge call, so the bridge
+    // cannot be verified. Strict callers keep the copy refusal unchanged.
+    if (options.liveHook === true) {
+      const shadows = blocking.filter(entry => bridgeNameShadow(entry.path));
+      if (shadows.length) throw new NativeBridgeIntegrityRefusal(`${message} ${shadows.length === 1 ? "One copy" : `${shadows.length} copies`} can resolve under the skills-cli bridge name: ${nativeSkillPathList(shadows.map(entry => entry.path))}.`);
+    }
+    throw new NativeSkillCopiesDriftError(message);
   }
   recheckRootAliases(aliases);
   // The automatic closure can re-report a source verifyAgentDiscovery collected.
