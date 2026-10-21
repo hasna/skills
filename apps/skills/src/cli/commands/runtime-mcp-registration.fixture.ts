@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
@@ -19,6 +19,14 @@ assert.equal(homedir(), join(root, "home"));
 assert.equal(process.env.TMPDIR, join(root, "tmp"));
 assertTestStartupIsolation();
 const mode = process.argv[2];
+// Opt-in instruments (PLA8-00581), inert unless the parent forwards them: an unstubbed run in which
+// a real Claude CLI at this absolute path answers the native add, and one injected adapter fault.
+const nativeClaude = process.env.REGISTRATION_FIXTURE_NATIVE_CLAUDE;
+assert(nativeClaude === undefined || isAbsolute(nativeClaude));
+const [injectKind, injectAgent] = (process.env.REGISTRATION_FIXTURE_INJECT ?? "").split(":");
+assert(!injectKind || (["refuse", "args-absent", "args-wrong"].includes(injectKind)
+  && ["gemini", "pi", "opencode", "cursor", "windsurf"].includes(injectAgent!)));
+const realSpawn = Bun.spawn.bind(Bun);
 const firstRunMode = mode?.startsWith("claude-first-run") ?? false;
 const firstRunRefused = firstRunMode && !["claude-first-run", "claude-first-run-no-userid"].includes(mode!);
 const preflightRefused = ["claude-first-run-dangling-link", "claude-first-run-config-dir-alias"].includes(mode!);
@@ -77,18 +85,33 @@ const files: Record<string, string> = {
   windsurf: join(homedir(), ".windsurf", "mcp.json"),
 };
 const unrelated = { command: "/owned/other", args: ["keep"], env: { PRIVATE_FIXTURE: unrelatedKey } };
-const codexBefore = `model = "fixture-model"\n[mcp_servers.other]\ncommand = "/owned/other"\n[mcp_servers.other.env]\nKEEP = "yes"\n[mcp_servers.skills]\ncommand = "/old/skills"\n[mcp_servers.skills.env]\nHASNA_PROFILE = "old-profile"\nHASNA_SKILLS_API_URL = "http://127.0.0.1:9/old"\nSKILLS_API_URL = "http://127.0.0.1:9/conflict"\n[projects."/owned/project"]\ntrust_level = "trusted"\n`;
+// Each pre-existing registration is what its writer produces, args included (PLA8-00581). Without
+// args, an entry no adapter rewrote failed the args check exactly like a wrong value. Direct-file
+// agents carry this product's own entry shapes (registerMcpForAgent, registerCodexMcp, registerOpenCodeMcp).
+const codexBefore = `model = "fixture-model"\n[mcp_servers.other]\ncommand = "/owned/other"\n[mcp_servers.other.env]\nKEEP = "yes"\n[mcp_servers.skills]\ncommand = "/old/skills"\nargs = ["--stdio"]\n[mcp_servers.skills.env]\nHASNA_PROFILE = "old-profile"\nHASNA_SKILLS_API_URL = "http://127.0.0.1:9/old"\nSKILLS_API_URL = "http://127.0.0.1:9/conflict"\n[projects."/owned/project"]\ntrust_level = "trusted"\n`;
+// Claude's is the file Claude 2.1.305 itself writes (measured 2026-10-21, synthetic HOME) for
+// `claude mcp add -s user --env HASNA_PROFILE=old-profile --transport stdio skills -- /old --stdio`
+// into this config: same key order, these eight first-start keys (synthetic values), two-space JSON
+// and no trailing newline. 2.1.305 then refuses the product's add as a duplicate and leaves it byte for byte.
+const registeredByClaude2_1_305 = { firstStartTime: "2026-10-21T00:00:00.000Z", firstStartVersion: "2.1.305", machineID: "0".repeat(64),
+  opusProMigrationComplete: true, sonnet1m45MigrationComplete: true, seenNotifications: {}, hasResetAutoModeOptInForDefaultOffer: true, migrationVersion: 14 };
 for (const [agent, path] of Object.entries(files)) {
   if (agent === "claude" && firstRunMode) continue;
+  if (agent === "claude" && !nativeFresh) {
+    write(path, JSON.stringify({ retained: true, projects: { "/owned/project": { trust: true } }, opaqueNativeState: unrelatedKey,
+      mcpServers: { other: unrelated, skills: { type: "stdio", command: "/old", args: ["--stdio"], env: { HASNA_PROFILE: "old-profile" } } },
+      ...registeredByClaude2_1_305 }, null, 2));
+    continue;
+  }
   if (agent === "codex") write(path, mode === "invalid-toml" ? `broken = [${JSON.stringify(unrelatedKey)}\n` : codexBefore);
   else write(path, JSON.stringify(agent === "opencode"
-    ? { theme: "system", mcp: { other: unrelated, skills: { type: "local", command: ["/old"], environment: { HASNA_PROFILE: "old-profile" } } } }
+    ? { theme: "system", mcp: { other: unrelated, skills: { type: "local", command: ["/old", "--stdio"], enabled: true, environment: { HASNA_PROFILE: "old-profile" } } } }
     : { retained: true, ...(agent === "claude" ? { projects: { "/owned/project": { trust: true } }, opaqueNativeState: unrelatedKey,
         ...(mode === "claude-native-bootstrap-existing" ? bootstrap : {}),
         ...(["claude-native-bootstrap-existing-theme-drop", "claude-native-bootstrap-existing-exit1", "claude-native-bootstrap-existing-hardlink", "claude-native-bootstrap-existing-exit1-no-add"].includes(mode!) ? { theme: "dark" } : {}),
         ...(mode === "claude-native-bootstrap-existing-userid-change" ? { userID: "1".repeat(64) } : {}),
         ...(mode === "claude-native-bootstrap-existing-change" ? { firstStartTime: "2026-10-16T00:00:00.000Z" } : {}) } : {}),
-      mcpServers: { other: unrelated, ...(agent === "claude" && nativeFresh ? {} : { skills: { command: "/old", env: { HASNA_PROFILE: "old-profile" } } }) } }));
+      mcpServers: { other: unrelated, ...(agent === "claude" ? {} : { skills: { command: "/old", args: ["--stdio"], env: { HASNA_PROFILE: "old-profile" } } }) } }));
 }
 if (mode === "claude-first-run-dangling-link") symlinkSync(join(root, "missing-native-config"), files.claude!);
 if (mode === "claude-native-bootstrap-existing-theme-drop") chmodSync(files.claude!, 0o640);
@@ -103,6 +126,8 @@ const inactiveBefore = readFileSync(inactiveClaude);
 if (mode === "claude-legacy") write(join(homedir(), ".claude.json"), JSON.stringify({ modernInactive: unrelatedKey }));
 const modernBefore = mode === "claude-legacy" ? readFileSync(join(homedir(), ".claude.json")) : undefined;
 if (mode === "claude-locked") mkdirSync(`${files.claude}.lock`);
+// Injected fault: hold one adapter's guarded-writer lock, so its write is refused and its pre-seed stays.
+if (injectKind === "refuse") mkdirSync(`${files[injectAgent!]}.skills-mcp.lock`, { mode: 0o700 });
 const nativeArguments: string[][] = [];
 let duplicateRefused = false, optionBoundaryVerified = false;
 const nativeParser = () => new Command().exitOverride().configureOutput({ writeOut() {}, writeErr() {} })
@@ -112,6 +137,12 @@ const nativeParser = () => new Command().exitOverride().configureOutput({ writeO
 const broken = nativeParser().parse(["--env", "HASNA_PROFILE=customer", "skills", "--", "skills-mcp", "--stdio"], { from: "user" });
 assert.notEqual(broken.args[0], "skills");
 assert.equal(broken.opts().env.includes("skills"), true);
+// The full original must already be preserved and read back before add.
+const assertOriginalPreserved = () => {
+  const backups = readdirSync(dirname(files.claude!)).filter(name => name.startsWith(basename(files.claude!) + ".skills-mcp-") && name.endsWith(".backup"));
+  assert.equal(backups.length, firstRunMode ? 0 : 1);
+  if (!firstRunMode) assert.equal(readFileSync(join(dirname(files.claude!), backups[0]!)).equals(originals.get(files.claude!)!), true);
+};
 Bun.spawn = ((command: string[]) => {
   assert.equal(command[0], "claude"); nativeCalls++; nativeArguments.push(command);
   if (mode === "claude-unavailable") throw Object.assign(new Error(unrelatedKey), { code: "ENOENT" });
@@ -127,6 +158,21 @@ Bun.spawn = ((command: string[]) => {
     const split = item.indexOf("="); assert(split > 0); env[item.slice(0, split)] = item.slice(split + 1);
   }
   optionBoundaryVerified = true;
+  if (nativeClaude) {
+    // Unstubbed: the real CLI answers this exact argv, confined to the synthetic HOME, with
+    // no credentials and every proxied request sent to a closed loopback port.
+    assertOriginalPreserved();
+    const existing = existsSync(files.claude!) ? JSON.parse(readFileSync(files.claude!, "utf8")) : {};
+    const child = realSpawn([nativeClaude, ...command.slice(1)], { cwd: root, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+      env: { HOME: homedir(), TMPDIR: process.env.TMPDIR!, PATH: "/usr/bin:/bin", NO_COLOR: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        DISABLE_AUTOUPDATER: "1", HTTP_PROXY: "http://127.0.0.1:9", HTTPS_PROXY: "http://127.0.0.1:9",
+        ...Object.fromEntries(["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_CUSTOM_OAUTH_URL"].flatMap(key => process.env[key] ? [[key, process.env[key]!]] : [])) } });
+    return { stdout: child.stdout, stderr: child.stderr, exited: child.exited.then(status => {
+      duplicateRefused = status === 1 && Object.hasOwn(existing.mcpServers ?? {}, "skills");
+      nativePostimage = existsSync(files.claude!) ? readFileSync(files.claude!) : undefined;
+      return status;
+    }) };
+  }
   if (firstRunMode) assert.equal(lstatSync(files.claude!, { throwIfNoEntry: false }), undefined);
   if (mode === "claude-first-run-concurrent-creator") write(files.claude!, JSON.stringify({ concurrentNativeChange: true, mcpServers: {} }));
   const data = firstRunMode && mode !== "claude-first-run-concurrent-creator" ? { mcpServers: {} } as Record<string, any> : JSON.parse(readFileSync(files.claude!, "utf8"));
@@ -190,10 +236,7 @@ Bun.spawn = ((command: string[]) => {
     write(files.claude!, JSON.stringify(data));
   }
   if (mode === "claude-late-lock") mkdirSync(`${files.claude}.lock`);
-  // The full original must already be preserved and read back before add.
-  const backups = readdirSync(dirname(files.claude!)).filter(name => name.startsWith(basename(files.claude!) + ".skills-mcp-") && name.endsWith(".backup"));
-  assert.equal(backups.length, firstRunMode ? 0 : 1);
-  if (!firstRunMode) assert.equal(readFileSync(join(dirname(files.claude!), backups[0]!)).equals(originals.get(files.claude!)!), true);
+  assertOriginalPreserved();
   return { stdout: new Blob([stdout]).stream(), stderr: new Blob([stderr]).stream(),
     exited: Promise.resolve(status) };
 }) as unknown as typeof Bun.spawn;
@@ -201,6 +244,28 @@ Bun.spawn = ((command: string[]) => {
 const logs: string[] = [], output = console.log, errors = console.error;
 console.log = (...values: unknown[]) => { logs.push(values.map(String).join(" ")); };
 console.error = (...values: unknown[]) => { logs.push(values.map(String).join(" ")); };
+// Diagnostic vocabulary only, never admission: the guarded writer's fixed refusal texts (guarded-agent-config.ts).
+const guardedRefusals: Record<string, string> = Object.fromEntries(Object.entries({
+  ACCESS_METADATA_UNAVAILABLE: "configuration access metadata could not be verified or preserved",
+  UNSAFE_PATH: "refused an unsafe or unowned configuration path", OWNERSHIP_UNAVAILABLE: "configuration ownership cannot be verified on this platform",
+  LOCKED: "configuration is locked; no foreign lock was removed", INVALID_CONFIG: "existing configuration is invalid",
+  BACKUP_FAILED: "could not preserve and verify the original configuration", WRITE_FAILED: "could not prepare the replacement configuration",
+  CONFIG_CHANGED: "configuration or its path changed during registration",
+  VERIFY_FAILED: "could not verify the committed configuration; retain the backup for recovery",
+}).map(([code, text]) => [text, code]));
+type Outcome = { agent: string; success: boolean; code?: string; error?: string };
+const refusalCode = (entry: Outcome | undefined) => entry === undefined ? "NO_RESULT" : entry.agent === "claude" ? entry.code ?? "CLAUDE_REFUSED"
+  : guardedRefusals[entry.error?.slice(entry.error.lastIndexOf(": ") + 2) ?? ""] ?? "UNRECOGNIZED";
+// On failure, report every adapter's outcome on the real stderr, outside the console capture above.
+process.on("exit", code => {
+  if (code === 0) return;
+  let outcomes: unknown = "unavailable";
+  try {
+    outcomes = (JSON.parse(logs.join("\n")).results as Outcome[])
+      .map(entry => ({ agent: entry.agent, success: entry.success, ...(entry.success ? {} : { refusal: refusalCode(entry) }) }));
+  } catch {}
+  writeSync(2, `REGISTRATION_FIXTURE_OUTCOMES ${JSON.stringify({ mode, outcomes })}\n`);
+});
 if (!defaultMode) {
   process.env.HASNA_PROFILE = mode === "environment-profile" ? "customer" : "ambient-profile";
   selectCliSkillsCredentialProfile(mode === "environment-profile" ? undefined : "customer");
@@ -235,6 +300,15 @@ if (mode === "setup") {
   const program = new Command(); registerAccountCommands(program);
   await program.parseAsync(["login", "--url", origin, "--email", "fixture@example.invalid", "--code", "123456"], { from: "user" });
 } else await handleMcp({ register: "all", json: true });
+// Injected fault: after registration, one adapter's entry loses its args or carries a wrong value.
+if (injectKind === "args-absent" || injectKind === "args-wrong") {
+  const path = files[injectAgent!]!, parsed = JSON.parse(readFileSync(path, "utf8"));
+  const entry = injectAgent === "opencode" ? parsed.mcp.skills : parsed.mcpServers.skills;
+  if (Array.isArray(entry.command)) entry.command = injectKind === "args-absent" ? entry.command.slice(0, 1) : [entry.command[0], "--fixture-wrong"];
+  else if (injectKind === "args-absent") delete entry.args;
+  else entry.args = ["--fixture-wrong"];
+  writeFileSync(path, JSON.stringify(parsed));
+}
 
 const refused = mode === "bad-url" || mode === "aliases";
 const admissionRefused = ["claude-policy-refused", "claude-blocked", "claude-unknown-refusal", "claude-spawn-refused"].includes(mode!);
@@ -257,6 +331,7 @@ if (refused) {
   selectCliSkillsCredentialProfile(undefined);
   const { assertSkillsMcpConfigured } = await import("../../mcp/index.js");
   const { isMcpStdioMode } = await import("../../mcp/http.js");
+  const reported = ["auth", "setup"].includes(mode!) ? undefined : (JSON.parse(logs.join("\n")).results as Outcome[]);
   for (const [agent, path] of Object.entries(files)) {
     if (agent === "claude" && claudeRefused) {
       if (firstRunMode) {
@@ -288,6 +363,9 @@ if (refused) {
       continue;
     }
     if (agent === "codex" && mode === "invalid-toml") { assert.equal(readFileSync(path).equals(originals.get(path)!), true); continue; }
+    // A refused write leaves the pre-seed in place: name the adapter and its refusal before reading its file.
+    if (reported) assert.equal(reported.find(entry => entry.agent === agent)?.success, true,
+      `REGISTRATION_ADAPTER_REFUSED:${agent}:${refusalCode(reported.find(entry => entry.agent === agent))}`);
     let server: { type?: string; command: string | string[]; args?: string[]; env?: Record<string, string>; environment?: Record<string, string> };
     if (agent === "codex") {
       const parsed = Bun.TOML.parse(readFileSync(path, "utf8")) as any;
@@ -314,8 +392,12 @@ if (refused) {
         if (bootstrapMode || firstRunMode) for (const [key, value] of Object.entries(bootstrap)) assert.deepEqual(parsed[key], value);
       }
     }
-    const args = Array.isArray(server.command) ? server.command.slice(1) : server.args;
-    assert.deepEqual(args, ["--stdio"]); assert.equal(isMcpStdioMode(args!), true); assert.equal(isMcpStdioMode([]), false);
+    // An absent args key and a wrong value are different failures, each named (PLA8-00581).
+    // OpenCode carries args in its command array, so a bare command has none.
+    const args = Array.isArray(server.command) ? (server.command.length > 1 ? server.command.slice(1) : undefined) : server.args;
+    assert.notEqual(args, undefined, `REGISTRATION_ARGS_ABSENT:${agent}`);
+    assert.deepEqual(args, ["--stdio"], `REGISTRATION_ARGS_WRONG:${agent}`);
+    assert.equal(isMcpStdioMode(args!), true); assert.equal(isMcpStdioMode([]), false);
     const selectors = server.environment ?? server.env ?? {};
     for (const secret of [fleetKey, customerKey, unrelatedKey]) assert.equal(JSON.stringify(server).includes(secret), false);
     assert.equal(selectors.HASNA_PROFILE, expectedProfile);
