@@ -144,6 +144,36 @@ function atomicWrite(path: string, bytes: Uint8Array, mode: number, durable = fa
     if (durable) syncDirectory(dirname(path));
   } finally { try { unlinkSync(temporary); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; } }
 }
+/**
+ * Create a small private JSON file with exclusive, no-follow semantics. Returns
+ * false when the path already exists; never replaces anything.
+ */
+export function createExclusiveSelectionJson(path: string, value: unknown, maximumBytes = 4096): boolean {
+  const bytes = Buffer.from(`${JSON.stringify(value)}\n`);
+  if (bytes.length > maximumBytes) throw new SkillSelectionError("RECEIPT_TOO_LARGE", "The Skills selection record exceeds its size limit.");
+  assertRegularPath(path, true);
+  let fd: number;
+  try { fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") return false; throw error; }
+  try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
+  return true;
+}
+/** A small private regular file's bytes and identity, or null when it is absent. */
+export function readSelectionFileSnapshot(path: string, maximumBytes = 4096): { bytes: Uint8Array; sha256: string; mtimeMs: number; dev: number; ino: number } | null {
+  const before = lstatSync(path, { throwIfNoEntry: false });
+  if (!before) return null;
+  const bytes = readRegularFile(path, maximumBytes);
+  const after = lstatSync(path, { throwIfNoEntry: false });
+  if (!bytes || !after?.isFile() || after.dev !== before.dev || after.ino !== before.ino) return null;
+  return { bytes, sha256: sha256Hex(bytes), mtimeMs: after.mtimeMs, dev: after.dev, ino: after.ino };
+}
+/** Remove a small private file only while it still holds exactly the inspected bytes and inode. */
+export function removeSelectionFileIfUnchanged(path: string, expected: { sha256: string; dev: number; ino: number }): boolean {
+  const current = readSelectionFileSnapshot(path);
+  if (!current || current.sha256 !== expected.sha256 || current.dev !== expected.dev || current.ino !== expected.ino) return false;
+  try { unlinkSync(path); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+  return true;
+}
 export function readSelectionJson<T>(path: string, maximumBytes = MAX_PROFILE_DOCUMENT_BYTES): T | null {
   const bytes = readRegularFile(path, Math.min(maximumBytes, MAX_PROFILE_DOCUMENT_BYTES));
   if (!bytes) return null;
@@ -370,7 +400,20 @@ function processStart(pid: number): { state: "alive"; start: string } | { state:
   return { state: "unknown" };
 }
 
-function localLockIdentity(): Pick<SessionLockMarker, "host" | "bootId" | "pidNamespace" | "processStart"> | null {
+type LocalLockIdentity = Pick<SessionLockMarker, "host" | "bootId" | "pidNamespace" | "processStart">;
+/**
+ * This process's boot, namespace and start time cannot change while it runs.
+ * Probing them spawns sysctl and ps on macOS, so the first complete answer is
+ * kept for the life of the process; an unknown answer is probed again.
+ */
+let cachedLocalLockIdentity: { pid: number; identity: LocalLockIdentity } | undefined;
+function localLockIdentity(): LocalLockIdentity | null {
+  if (cachedLocalLockIdentity?.pid === process.pid) return { ...cachedLocalLockIdentity.identity };
+  const identity = probeLocalLockIdentity();
+  if (identity) cachedLocalLockIdentity = { pid: process.pid, identity: { ...identity } };
+  return identity;
+}
+function probeLocalLockIdentity(): LocalLockIdentity | null {
   const bootId = localBootId(), owner = processStart(process.pid);
   if (!bootId || owner.state !== "alive") return null;
   let pidNamespace: string | undefined;
@@ -555,10 +598,74 @@ export function recoverSessionWriteLock(sessionId: string, reviewDigest: string,
   if (!archivePath) throw new SkillSelectionError("SESSION_WRITE_LOCKED", "The lock is live, too recent, or changed during recovery; leave it in place and inspect again.");
   return archivePath;
 }
-function withSessionWriteLocks<T>(sessionIds: string[], options: SelectionCacheOptions, action: (assertOwned: () => void) => T): T {
+/**
+ * How long a receipt write waits for another live holder of a session write
+ * lock before it refuses with SESSION_WRITE_BUSY. Holders keep a lock only for
+ * one bounded receipt read-compare-write (or one archived replacement), so
+ * concurrent hooks of one session (a prompt and its subagents starting
+ * together) serialize instead of refusing. Waiting never replaces, recovers or
+ * ignores a lock: a held lock that outlives the wait still refuses.
+ */
+export const SESSION_WRITE_LOCK_WAIT_MS = 2_000;
+const SESSION_WRITE_LOCK_RETRY_MIN_MS = 25, SESSION_WRITE_LOCK_RETRY_MAX_MS = 100;
+/** The lock path's inode, timestamps and link count, or null when it is absent or unreadable. */
+function lockStatIdentity(path: string): string | null {
+  try {
+    const stat = lstatSync(path, { throwIfNoEntry: false });
+    return stat ? `${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.ctimeMs}:${stat.nlink}:${stat.size}` : null;
+  } catch { return null; }
+}
+/** Blocks this thread; used only inside bounded lock waits. */
+function sleepSync(ms: number): void {
+  if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+const SESSION_LOCK_INSPECTIONS = 3;
+/**
+ * Inspect a session lock that may be mid-publication or mid-release, when it
+ * can briefly look invalid (a second link, or a change between two looks). An
+ * invalid lock is inspected again after a short pause: the same invalid lock
+ * (inode, timestamps, link count and size) seen twice in a row is refused with
+ * SESSION_WRITE_LOCKED, and one that keeps changing is reported as "changing",
+ * which a writer treats like a held lock.
+ */
+function inspectSessionLockSettled(sessionId: string, options: SelectionCacheOptions): SessionLockSnapshot | null | "changing" {
+  const path = `${sessionReceiptPath(sessionId, options)}.write-lock`;
+  let invalid: string | null | undefined;
+  for (let attempt = 0; attempt < SESSION_LOCK_INSPECTIONS; attempt++) {
+    try { return readSessionLock(sessionId, options); }
+    catch (error) {
+      if (!(error instanceof SkillSelectionError) || error.code !== "SESSION_WRITE_LOCKED") throw error;
+      const seen = lockStatIdentity(path);
+      if (seen !== null && seen === invalid) throw error;
+      invalid = seen;
+      sleepSync(SESSION_WRITE_LOCK_RETRY_MIN_MS);
+    }
+  }
+  return "changing";
+}
+/**
+ * A context that writes nothing never takes the session write lock, so a
+ * live writer cannot make it wait or refuse. It still refuses, exactly as a
+ * writer would, when the lock path holds something that is not a structurally
+ * valid writer lock (SESSION_WRITE_LOCKED: damaged, foreign or unsafe state
+ * that needs recovery review). A lock that changes while it is inspected (a
+ * writer publishing or releasing it) is inspected again a few times first.
+ */
+export function assertSessionWriteLockReadable(sessionId: string, options: SelectionCacheOptions = {}): void {
+  for (let attempt = 0; ; attempt++) {
+    try { readSessionLock(sessionId, options); return; }
+    catch (error) {
+      if (attempt >= 2 || !(error instanceof SkillSelectionError) || error.code !== "SESSION_WRITE_LOCKED") throw error;
+      sleepSync(SESSION_WRITE_LOCK_RETRY_MIN_MS);
+    }
+  }
+}
+function withSessionWriteLocks<T>(sessionIds: string[], options: SelectionCacheOptions, action: (assertOwned: () => void) => T, waitMs = 0): T {
   const operationId = randomUUID();
   // Native identity probes can block. Finish them before creating any lock.
   const identity = localLockIdentity();
+  if (!Number.isFinite(waitMs) || waitMs < 0 || waitMs > SESSION_WRITE_LOCK_WAIT_MS) throw new SkillSelectionError("INVALID_CONTEXT_BUDGET", "A session write lock wait must be within its supported bound.");
+  const waitUntil = performance.now() + waitMs;
   const locks = [...new Set(sessionIds)].map(sessionId => ({ sessionId, path: `${sessionReceiptPath(sessionId, options)}.write-lock` }))
     .sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
   const owned: OwnedSessionLock[] = [];
@@ -574,10 +681,12 @@ function withSessionWriteLocks<T>(sessionIds: string[], options: SelectionCacheO
     for (const lock of locks) {
       assertRegularPath(lock.path, true);
       const marker: SessionLockMarker = { schemaVersion: identity ? 2 : 1, operationId, sessionId: lock.sessionId, pid: process.pid, ...identity };
-      let acquired: OwnedSessionLock;
-      try { acquired = publishSessionLock(lock.path, marker); }
-      catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      let acquired: OwnedSessionLock | undefined;
+      while (!acquired) {
+        try { acquired = publishSessionLock(lock.path, marker); break; }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        }
         try {
           const stale = readSessionLock(lock.sessionId, options);
           const receipt = stale && readSkillSessionSnapshotIfExists(lock.sessionId, options);
@@ -588,16 +697,23 @@ function withSessionWriteLocks<T>(sessionIds: string[], options: SelectionCacheO
           // A failed or ambiguous recovery never grants permission to replace the lock.
           if (recoveryError instanceof SkillSelectionError && recoveryError.code === "SESSION_LOCK_RECOVERY_INCOMPLETE") throw recoveryError;
         }
-        try { acquired = publishSessionLock(lock.path, marker); }
+        try { acquired = publishSessionLock(lock.path, marker); break; }
         catch (retryError) {
-          if ((retryError as NodeJS.ErrnoException).code === "EEXIST") {
-            // Only a readable, structurally valid lock is a delivery conflict.
-            // Symlinks, malformed ownership and changing markers remain hard.
-            if (!readSessionLock(lock.sessionId, options)) throw new SkillSelectionError("SESSION_WRITE_LOCK_CHANGED", "The session lock changed during acquisition.");
-            throw new SkillSelectionError("SESSION_WRITE_BUSY", "Another Skills process owns a required session write lock; retry after it completes. A surviving legacy lock requires explicit recovery review.");
-          }
-          throw retryError;
+          if ((retryError as NodeJS.ErrnoException).code !== "EEXIST") throw retryError;
         }
+        // Only a readable, structurally valid lock is a delivery conflict.
+        // Symlinks, malformed ownership and unbound publication links remain
+        // hard. A lock another writer is publishing or releasing that still
+        // looks invalid after a few inspections counts as held (busy).
+        const held = inspectSessionLockSettled(lock.sessionId, options);
+        const remaining = waitUntil - performance.now();
+        if (remaining <= 0) {
+          if (!held) throw new SkillSelectionError("SESSION_WRITE_LOCK_CHANGED", "The session lock changed during acquisition.");
+          throw new SkillSelectionError("SESSION_WRITE_BUSY", "Another Skills process owns a required session write lock; retry after it completes. A surviving legacy lock requires explicit recovery review.");
+        }
+        // A lock released since the last attempt is retried at once; a held
+        // or changing one after a short jittered pause, within the bounded wait.
+        if (held) sleepSync(Math.min(remaining, SESSION_WRITE_LOCK_RETRY_MIN_MS + Math.floor(Math.random() * (SESSION_WRITE_LOCK_RETRY_MAX_MS - SESSION_WRITE_LOCK_RETRY_MIN_MS))));
       }
       owned.push(acquired);
     }
@@ -613,8 +729,8 @@ function withSessionWriteLocks<T>(sessionIds: string[], options: SelectionCacheO
     }
   }
 }
-function withSessionWriteLock<T>(sessionId: string, options: SelectionCacheOptions, action: (assertOwned: () => void) => T): T {
-  return withSessionWriteLocks([sessionId], options, action);
+function withSessionWriteLock<T>(sessionId: string, options: SelectionCacheOptions, action: (assertOwned: () => void) => T, waitMs = 0): T {
+  return withSessionWriteLocks([sessionId], options, action, waitMs);
 }
 /**
  * Hold this session's receipt write lock for state that must change only with
@@ -638,7 +754,11 @@ function parentChanged(): never {
   throw new SkillSelectionError("SESSION_PARENT_CHANGED", "The parent Skills session changed while the child was resolving; resolve the child again from the current parent pin.");
 }
 
-/** Receipt creation and updates are exact-snapshot CAS operations. Child creation also fences its parent. */
+/**
+ * Receipt creation and updates are exact-snapshot CAS operations. Child
+ * creation also fences its parent. Under contention this blocks the calling
+ * thread for at most SESSION_WRITE_LOCK_WAIT_MS.
+ */
 export function writeSkillSession(receipt: SkillSessionReceipt, expected: SkillSessionWritePrecondition, options: SelectionCacheOptions = {}): void {
   validateSkillSessionReceipt(receipt, receipt.sessionId);
   if (expected.parent) validateSkillSessionBinding(expected.parent);
@@ -664,7 +784,7 @@ export function writeSkillSession(receipt: SkillSessionReceipt, expected: SkillS
       if (!sameSnapshot(parent, expected.parent)) parentChanged();
     }
     writeSelectionJson(sessionReceiptPath(receipt.sessionId, options), next);
-  });
+  }, SESSION_WRITE_LOCK_WAIT_MS);
 }
 
 function syncDirectory(path: string): void {
@@ -678,7 +798,11 @@ function archiveBytes(path: string, bytes: Uint8Array): void {
   try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
 }
 
-/** Preserve both sides before the single atomic replacement; failures retain recovery evidence. */
+/**
+ * Preserve both sides before the single atomic replacement; failures retain
+ * recovery evidence. Under contention this blocks the calling thread for at
+ * most SESSION_WRITE_LOCK_WAIT_MS.
+ */
 export function replaceSkillSession(expected: SkillSessionParentBinding, replacement: SkillSessionReceipt, plan: unknown, options: SelectionCacheOptions = {}, beforeCommit: () => void = () => {}) {
   validateSkillSessionReceipt(replacement, replacement.sessionId);
   const bytes = Buffer.from(`${JSON.stringify(replacement)}\n`);
@@ -711,5 +835,5 @@ export function replaceSkillSession(expected: SkillSessionParentBinding, replace
       throw new SkillSelectionError("SESSION_RECONCILIATION_INCOMPLETE", `Inspect sessions show and the preserved operation receipt at ${receiptPath} before any retry; replacement may already have committed.`);
     }
     return { archivePath, receiptPath, beforeSha256: before.sha256, afterSha256 };
-  });
+  }, SESSION_WRITE_LOCK_WAIT_MS);
 }

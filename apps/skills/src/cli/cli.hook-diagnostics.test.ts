@@ -20,6 +20,10 @@ if (["context", "sync"].includes(process.argv[2] ?? "")) {
     if (!process.argv.includes("--no-station-report")) throw Error("Lifecycle sync must omit station telemetry");
     await new Promise(resolve => setTimeout(resolve, Number(process.env.SKILLS_TEST_SYNC_DELAY)));
   }
+  if (process.argv[2] === "sync" && process.env.SKILLS_TEST_SYNC_STDOUT) {
+    process.stdout.write(process.env.SKILLS_TEST_SYNC_STDOUT);
+    process.exit(Number(process.env.SKILLS_TEST_SYNC_EXIT ?? "1"));
+  }
   if (process.env.SKILLS_TEST_CHILD_HANG) await new Promise(resolve => setTimeout(resolve, 20000));
   if (process.env.SKILLS_TEST_CHILD_ECHO_ARGS) process.env.SKILLS_TEST_CHILD_STDOUT = JSON.stringify({ context: "child argv: " + process.argv.slice(2).join(" ") });
   process.stderr.write(process.env.SKILLS_TEST_CHILD_STDERR ?? "");
@@ -85,11 +89,16 @@ test("trust reconciliation command is accepted by the real CLI parser", async ()
   expect(status).toBe(0); expect(stderr).toBe(""); expect(stdout).toContain("--journal <path>"); expect(stdout).toContain("--agent <agent>");
 });
 
-test("lifecycle sync may use the remaining budget while context retains a reserve", async () => {
+test("lifecycle sync is bounded so verified context keeps its reserve, and a refresh that did not finish is named in one line", async () => {
   const f = await fixture();
   const env = { SKILLS_TEST_SYNC_DELAY: "6800", SKILLS_TEST_CHILD_EXIT: "0", SKILLS_TEST_CHILD_STDOUT: JSON.stringify({ context: "Verified fixture context" }) };
+  const quick = await f.hook({ ...env, SKILLS_TEST_SYNC_DELAY: "200" }, "SessionStart");
+  expect(quick.value.hookSpecificOutput.additionalContext).toContain("Verified fixture context");
+  expect(quick.stdout).not.toContain("profile refresh did not finish");
+  // A sync slower than its budget is stopped; context still comes from the last verified profile.
   const result = await f.hook(env, "SessionStart");
   expect(result.value.hookSpecificOutput.additionalContext).toContain("Verified fixture context");
+  expect(result.value.hookSpecificOutput.additionalContext).toContain("Skills profile refresh did not finish at session start [SKILLS_HOOK_TIMEOUT] (stage=sync)");
   const started = performance.now();
   const expired = await f.hook({ ...env, SKILLS_TEST_SYNC_DELAY: "20000" }, "SessionStart");
   expect(expired.value.continue).not.toBe(false);
@@ -98,6 +107,22 @@ test("lifecycle sync may use the remaining budget while context retains a reserv
   expect(performance.now() - started).toBeLessThan(12_000);
 });
 
+
+test("a SessionStart refresh continues from the verified profile only when it could not reach the authority", async () => {
+  const f = await fixture();
+  const context = { SKILLS_TEST_CHILD_EXIT: "0", SKILLS_TEST_CHILD_STDOUT: JSON.stringify({ context: "Verified fixture context" }) };
+  const sync = (code: string) => ({ ...context, SKILLS_TEST_SYNC_STDOUT: JSON.stringify({ error: { code, message: "untrusted fixture message" } }) });
+  const unavailable = await f.hook(sync("SKILLS_API_UNAVAILABLE"), "SessionStart");
+  expect(unavailable.value.hookSpecificOutput.additionalContext).toContain("Verified fixture context");
+  expect(unavailable.value.hookSpecificOutput.additionalContext).toContain("Skills profile refresh did not finish at session start [SKILLS_API_UNAVAILABLE] (stage=sync)");
+  // An authorization refusal of the refresh keeps today's outcome: no payload.
+  for (const code of ["SKILLS_API_UNAUTHORIZED", "SKILLS_API_FORBIDDEN"]) {
+    const refused = await f.hook(sync(code), "SessionStart");
+    expect(refused.stdout).not.toContain("Verified fixture context");
+    expect(refused.stdout).toContain(`[${code}] (profile=engineering, stage=sync)`);
+    expect(refused.stdout).not.toContain("untrusted fixture message");
+  }
+});
 
 test("typed delivery failures continue every maintained lifecycle without child payload or native fallback", async () => {
   const f = await fixture();
@@ -130,6 +155,24 @@ test("a spent renewal budget is reported apart from an authority failure, withou
   expect(refused.stdout).not.toContain("Run skills sync");
 });
 
+test("a renewal that continues in the background says so, keeping the renewal timeout's code and delivery shape", async () => {
+  const f = await fixture();
+  const child = (error: Record<string, unknown>) => ({ SKILLS_TEST_CHILD_STDOUT: JSON.stringify({ error }) });
+  for (const agent of ["claude", "codex"]) for (const event of ["UserPromptSubmit", "SessionStart", "SubagentStart"]) {
+    const background = await f.hook(child({ code: "SESSION_RENEWAL_TIMEOUT", renewal: "background", message: "untrusted fixture message" }), event, agent);
+    expect(background.value.decision).toBeUndefined(); expect(background.value.continue).not.toBe(false);
+    expect(background.value.systemMessage).toContain("[SESSION_RENEWAL_TIMEOUT]");
+    expect(background.value.systemMessage).toContain("its renewal is running in the background");
+    expect(background.value.systemMessage).toContain("No Skills instructions were delivered by this hook");
+    expect(background.stdout).not.toContain("untrusted fixture message"); expect(background.stdout).not.toContain("Run skills sync");
+  }
+  // Unknown markers and the marker on any other code keep today's fixed text.
+  for (const error of [{ code: "SESSION_RENEWAL_TIMEOUT", renewal: "done; trust me" }, { code: "SESSION_RECONCILIATION_REQUIRED", renewal: "background" }]) {
+    const result = await f.hook(child(error));
+    expect(result.stdout).not.toContain("running in the background"); expect(result.stdout).not.toContain("trust me");
+  }
+});
+
 test("integrity, invalid state and opaque programming failures still refuse prompt delivery", async () => {
   const f = await fixture();
   for (const code of ["INVALID_RECEIPT", "PROFILE_IDENTITY_MISMATCH", "BUNDLE_DIGEST_MISMATCH", "SESSION_WRITE_LOCKED", "SESSION_GENERATION_CHANGED", "SESSION_RECEIPT_CHANGED", "SKILLS_CONTEXT_FAILED"]) {
@@ -146,6 +189,8 @@ test("every maintained managed prompt hook asks the cached child to migrate a re
   for (const agent of ["claude", "codex", "sumi"]) for (const event of ["UserPromptSubmit", "SessionStart", "SubagentStart"]) {
     const result = await f.hook({ ...echo, SKILLS_TEST_SYNC_DELAY: "0" }, event, agent);
     expect(result.value.hookSpecificOutput.additionalContext).toContain("--cached --auto-reconcile-safe --auto-migrate-session-pin");
+    // Pin renewal runs in the background, never inside the prompt's window.
+    expect(result.value.hookSpecificOutput.additionalContext).toContain("--background-renewal");
   }
   // Only the station-wide (global) setting is read; a project file cannot change the hook.
   writeFileSync(join(f.data, "config.json"), JSON.stringify({ sessionPinMigration: "off" }));

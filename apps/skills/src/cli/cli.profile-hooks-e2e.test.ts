@@ -502,10 +502,12 @@ for (const [savedProfile, configuredProfile] of [["fleet", "default"], ["default
       const receiptPath = join(sessions, readdirSync(sessions)[0]!);
       const before = readFileSync(receiptPath, "utf8");
       const { generation: originalGeneration, ...originalPin } = JSON.parse(before);
+      // Prompts, restores and subagents that load nothing new leave the
+      // parent receipt alone: same pin and same generation.
       const expectSamePin = () => {
         const { generation, ...currentPin } = json(receiptPath);
         expect(currentPin).toEqual(originalPin);
-        expect(generation).toBeGreaterThan(originalGeneration);
+        expect(generation).toBe(originalGeneration);
       };
       await install(configuredProfile);
       const requests = f.requests.length;
@@ -1023,11 +1025,20 @@ test("actual busy and malformed locks preserve exact receipts while distinguishi
     for (const agent of ["claude", "codex"] as const) for (const event of ["UserPromptSubmit", "SessionStart", "SubagentStart"]) {
       const result = await f.a.hook(agent, event, { prompt: "$review-code", source: "compact", ...(event === "SubagentStart" ? { agent_id: `${agent}-child` } : {}) });
       expect(result.decision).toBeUndefined(); expect(result.continue).not.toBe(false);
-      expect(result.systemMessage).toContain("SESSION_WRITE_BUSY"); expect(JSON.stringify(result)).not.toContain("Published");
+      if (event === "SubagentStart") {
+        // A new child records its pin under its parent's lock. A live writer
+        // holding it past the bounded wait is reported, with no payload.
+        expect(result.systemMessage).toContain("SESSION_WRITE_BUSY"); expect(JSON.stringify(result)).not.toContain("Published");
+      } else {
+        // The prompt and the restore load nothing new, so they write nothing
+        // and the live writer's lock does not block their verified context.
+        expect(result.systemMessage).toBeUndefined(); expect(result.hookSpecificOutput.additionalContext).toContain("Published 1.0.0");
+      }
       expect(readFileSync(receiptPath)).toEqual(before); expect(readFileSync(lockPath, "utf8")).toBe(lock);
     }
     const direct = await f.a.run(["context", "review", "--cached", "--session", "parent-session", "--json"]);
-    expect(direct.exitCode).toBe(1); expect(direct.stdout).toContain("SESSION_WRITE_BUSY");
+    expect(direct.exitCode).toBe(0); expect(direct.stdout).not.toContain("SESSION_WRITE_BUSY");
+    expect(readFileSync(receiptPath)).toEqual(before); expect(readFileSync(lockPath, "utf8")).toBe(lock);
     put(lockPath, "malformed lock");
     const refused = await f.a.hook("claude", "UserPromptSubmit", { prompt: "$review-code" });
     expect(refused.decision).toBe("block"); expect(refused.reason).toContain("SESSION_WRITE_LOCKED");
@@ -1043,13 +1054,26 @@ test("typed hosted delivery refusals continue with no payload and direct loads f
     const sessions = join(f.a.data, "selection-cache", "sessions"), receiptPath = join(sessions, readdirSync(sessions)[0]!);
     const expired = json(receiptPath); expired.verifiedAt = new Date(0).toISOString(); put(receiptPath, JSON.stringify(expired));
     const before = readFileSync(receiptPath);
+    // The background renewal records each failed attempt; the same request is
+    // answered from that record for a short window instead of asking the
+    // authority on every prompt. Let that window pass between status changes.
+    const renewals = join(f.a.data, "selection-cache", "session-renewals");
+    const passRetryWindow = () => {
+      for (const name of readdirSync(renewals).filter(name => name.endsWith(".json"))) {
+        const record = json(join(renewals, name)); record.finishedAt = new Date(Date.now() - 10 * 60_000).toISOString(); put(join(renewals, name), JSON.stringify(record));
+      }
+    };
     for (const [status, code] of [[401, "SKILLS_API_UNAUTHORIZED"], [403, "SKILLS_API_FORBIDDEN"], [404, "SKILLS_API_RESOURCE_UNAVAILABLE"], [410, "SKILLS_API_RESOURCE_UNAVAILABLE"], [429, "SKILLS_API_UNAVAILABLE"], [503, "SKILLS_API_UNAVAILABLE"]] as const) {
       f.refuseProfile(status);
+      if (existsSync(renewals)) passRetryWindow();
       for (const agent of ["claude", "codex"] as const) {
+        const requests = f.requests.length;
         const result = await f.a.hook(agent, "UserPromptSubmit", { prompt: "$review-code" });
         expect(result.decision).toBeUndefined(); expect(result.systemMessage).toContain(code);
         expect(JSON.stringify(result)).not.toContain("Published"); expect(JSON.stringify(result)).not.toContain("Untrusted refusal body");
         expect(readFileSync(receiptPath)).toEqual(before);
+        // The second agent's prompt within the window reuses the recorded failure.
+        if (agent === "codex") expect(f.requests.slice(requests).filter(route => route.endsWith("/profiles/engineering/resolve"))).toEqual([]);
       }
       const direct = await f.a.run(["load", "review-code", "--session", "parent-session", "--json"]);
       expect(direct.exitCode).toBe(1); expect(direct.stdout).toContain(code); expect(direct.stdout).not.toContain("Published");

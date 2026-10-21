@@ -16,7 +16,7 @@ import { codexNativeHookEnvelopeFromInput, CODEX_NATIVE_POLICY_FD_ENV } from "..
 import { planCodexNativeTrust, applyCodexNativeTrust, previewCodexNativeTrust } from "../../lib/codex-native-trust.js";
 import { HookDiagnosticError, hookChildError, hookFailureReason, isOptionalHookContextFailure, hookUnavailableContext } from "../../lib/hook-diagnostics.js";
 import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib/selection-cache.js";
-import { MANAGED_HOOK_DEADLINE_MS, managedContextChildLimits, takeSessionPinMigrationNotice } from "../../lib/session-reconciliation.js";
+import { MANAGED_HOOK_DEADLINE_MS, managedContextChildLimits, sessionStartSyncBudget, takeSessionPinMigrationNotice } from "../../lib/session-reconciliation.js";
 import { captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4, captureClaudeSettingsV5 } from "../../lib/claude-settings-witness.js";
 import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4, captureCodexSettingsV5, captureCodexSettingsV6, captureCodexSettingsV7 } from "../../lib/codex-settings-witness.js";
 import { clearNativeDriftReceipt, isNativeBridgeIntegrityRefusal, isNativeSkillDrift, nativeDriftFailOpen, NativeSkillPolicyRefusal, readNativeDriftReceipts } from "../../lib/native-drift-receipt.js";
@@ -33,6 +33,15 @@ import { sessionPinMigrationEnabled } from "../../lib/config.js";
 import { captureClaudeInstallerRequest, safeClaudeInstallerCaptureError } from "./claude-installer-capture.js";
 
 const RECOVERABLE_CONTEXT_CACHE_ERRORS = new Set(["CACHED_PROFILE_EXPIRED", "CACHED_PROFILE_MISSING", "CACHED_BUNDLE_MISSING"]);
+/**
+ * Instruction characters one managed hook injects at most. Selected skill
+ * bodies measured about 10–15 KB each, so one large body and a moderate
+ * second fit; a body that does not fit is offered as its `skills load`
+ * command instead of being injected.
+ */
+export const MANAGED_HOOK_CONTEXT_MAX_CHARS = 24_000;
+/** SessionStart refresh failures after which context still comes from the last verified profile. */
+const SESSION_START_SYNC_CONTINUES = new Set(["SKILLS_HOOK_TIMEOUT", "SKILLS_API_UNAVAILABLE"]);
 
 /** Called only after the configured native bridge has been verified. */
 function pinnedHookProfile(input: unknown, configuredProfile: string): string {
@@ -75,12 +84,15 @@ async function contextForHook(input: unknown, profileId: string, cached: boolean
   // innermost layer that hit it, including after SessionStart's sync.
   const { childMs, renewalBudgetMs } = managedContextChildLimits(deadline - Date.now());
   if (childMs <= 0) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "context");
-  const args = ["context", "--stdin", "--json", "--selection-profile", profileId];
+  const args = ["context", "--stdin", "--json", "--selection-profile", profileId, "--max-chars", String(MANAGED_HOOK_CONTEXT_MAX_CHARS)];
   if (cached) args.push("--cached", "--auto-reconcile-safe");
   // Default for every agent's managed hook: a refused renewal of the same
   // profile migrates the pin and names retired loaded skills once. Operators
   // keep the refusal with `skills config set sessionPinMigration off --global`.
   if (cached && sessionPinMigrationEnabled()) args.push("--auto-migrate-session-pin");
+  // Session pins renew in a detached background worker, never inside this
+  // prompt's window; an expired pin waits a few seconds for it at most.
+  if (cached) args.push("--background-renewal");
   if (cached) args.push("--renewal-budget-ms", String(renewalBudgetMs));
   // Pinned flags, trusted cwd and allowlisted environment: a hostile project's
   // bunfig.toml, .env or BUN_OPTIONS must not reach the child on every prompt.
@@ -456,6 +468,8 @@ export function registerAgentIntegration(parent: Command): void {
       let nativeEvent = event;
       // Visible, non-blocking Codex notice for vendor-refresh witness changes.
       let driftWarning: string | undefined;
+      // One fixed line when SessionStart's bounded profile refresh did not finish.
+      let syncNotice: string | undefined;
       try {
         if (agents(options.agent).length !== 1) throw new Error("A hook invocation requires one agent");
         // Keep the exact raw stdin bytes: the native policy adapter hashes them
@@ -522,19 +536,30 @@ export function registerAgentIntegration(parent: Command): void {
         verifiedContextBoundary = true;
         if (event === "SessionStart") {
           // Station reporting is telemetry, not profile authorization. Keep
-          // it on explicit sync, outside the blocking lifecycle path. Reserve
-          // two seconds of the existing total budget for verified context.
-          const remaining = deadline - Date.now() - 2_000;
-          if (remaining <= 0) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "sync");
-          const self = selfSpawnCommand(["sync", "--selection-profile", selectionProfile, "--no-station-report", "--json"]);
-          const refresh = Bun.spawn(self.command, { cwd: self.cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...self.env, NO_COLOR: "1" } });
-          let timedOut = false;
-          const timer = setTimeout(() => { timedOut = true; refresh.kill("SIGKILL"); }, remaining);
+          // it on explicit sync, outside the blocking lifecycle path. The
+          // refresh is bounded so verified context keeps its share of the
+          // window. A refresh that timed out or could not reach the authority
+          // is reported, and context is served from the last verified profile
+          // within its usual age bound.
           try {
-            const [stdout, , status] = await Promise.all([new Response(refresh.stdout).text(), new Response(refresh.stderr).text(), refresh.exited]);
-            if (timedOut) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "sync");
-            if (status !== 0) throw hookChildError(stdout, "sync");
-          } finally { clearTimeout(timer); }
+            const remaining = sessionStartSyncBudget(deadline - Date.now());
+            if (remaining <= 0) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "sync");
+            const self = selfSpawnCommand(["sync", "--selection-profile", selectionProfile, "--no-station-report", "--json"]);
+            const refresh = Bun.spawn(self.command, { cwd: self.cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...self.env, NO_COLOR: "1" } });
+            let timedOut = false;
+            const timer = setTimeout(() => { timedOut = true; refresh.kill("SIGKILL"); }, remaining);
+            try {
+              const [stdout, , status] = await Promise.all([new Response(refresh.stdout).text(), new Response(refresh.stderr).text(), refresh.exited]);
+              if (timedOut) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "sync");
+              if (status !== 0) throw hookChildError(stdout, "sync");
+            } finally { clearTimeout(timer); }
+          } catch (error) {
+            // Only a refresh that did not finish or could not reach the
+            // authority continues. An authorization refusal or any other
+            // failure keeps today's outcome.
+            if (!isOptionalHookContextFailure(error) || !SESSION_START_SYNC_CONTINUES.has(error.code)) throw error;
+            syncNotice = `Skills profile refresh did not finish at session start [${error.code}] (stage=sync). This session uses the last verified profile; the next session start retries the refresh.`;
+          }
         }
         // Existing sessions retain their profile when the managed default changes.
         // SessionStart refresh and the bridge guard above still use the configured
@@ -544,6 +569,7 @@ export function registerAgentIntegration(parent: Command): void {
         // renewal of the same profile migrates the pin unless the station opted out.
         const result = await contextForHook(input, selectionProfile, true, deadline);
         withSessionPinMigrationNotice(options.agent, event, input, result);
+        if (syncNotice) result.context = [syncNotice, result.context].filter(Boolean).join("\n\n");
         const output = hookContextOutput(event, result) as { hookSpecificOutput?: { hookEventName: string; additionalContext: string } };
         if (options.agent === "hermes") {
           await writeCliOutput(JSON.stringify({ context: output.hookSpecificOutput?.additionalContext ?? "" }));
@@ -555,7 +581,7 @@ export function registerAgentIntegration(parent: Command): void {
         }
       } catch (error) {
         if (verifiedContextBoundary && isOptionalHookContextFailure(error)) {
-          const unavailable = hookUnavailableContext(error, selectionProfile);
+          const unavailable = [syncNotice, hookUnavailableContext(error, selectionProfile)].filter(Boolean).join("\n");
           // These envelopes contain a fixed diagnostic only, never a child
           // payload or a receipt. Native skill tool checks are outside this path.
           if (options.agent === "cursor") await writeCliOutput(JSON.stringify({ continue: true, user_message: unavailable }));

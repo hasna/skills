@@ -237,7 +237,12 @@ test("a busy session lock refuses both reconciliation and ordinary context write
   const lock = `${sessionReceiptPath("root", f)}.write-lock`;
   writeFileSync(lock, "existing writer", { mode: 0o600 });
   await expect(reconcileSkillSession({ ...f.input, apply: true, ...approval(plan) }, f)).rejects.toMatchObject({ code: "SESSION_WRITE_LOCKED" });
-  await expect(buildSkillContext({ profileId: "legacy", sessionId: "root" }, { ...f, client: { ...f.client, resolveProfile: async () => f.old.profile } })).rejects.toMatchObject({ code: "SESSION_WRITE_LOCKED" });
+  const client = { ...f.client, resolveProfile: async () => f.old.profile };
+  // This lock is not a valid writer lock: a context that writes (here, a
+  // child session fencing its parent) refuses, and so does a read-only prompt,
+  // which never takes the lock but still refuses damaged lock state.
+  await expect(buildSkillContext({ profileId: "legacy", sessionId: "root", agentId: "child" }, { ...f, client })).rejects.toMatchObject({ code: "SESSION_WRITE_LOCKED" });
+  await expect(buildSkillContext({ profileId: "legacy", sessionId: "root" }, { ...f, client })).rejects.toMatchObject({ code: "SESSION_WRITE_LOCKED" });
   expect(readFileSync(lock, "utf8")).toBe("existing writer");
   expect(readFileSync(sessionReceiptPath("root", f))).toEqual(f.before);
 });

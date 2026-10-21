@@ -12,8 +12,58 @@ ordinary version upgrades. Every old selection must still be selected with the
 same policy and lifecycle epoch. Historical bundles must pass authenticated
 exact-version, epoch, digest and archive verification. A final profile read and
 the local receipt's existing generation/hash guard reject concurrent changes.
-The whole authorization shares a four-second deadline; failed authorization
-never refreshes the receipt or writes downloaded bundles into its cache.
+The whole authorization shares one deadline (nine seconds inline, two minutes
+in the background worker below); failed authorization never refreshes the
+receipt or writes downloaded bundles into its cache.
+
+## Background renewal on the managed hook
+
+Managed hooks pass `--background-renewal`, so no prompt runs a whole renewal
+inside its own window. The context child starts one detached worker per
+session (`skills sessions renew-background`, hidden) and the worker runs the
+same `renewSkillSessionPin`: the same authenticated reads, exact historical
+bundle checks, archive and receipt compare-and-swap, with a two-minute budget.
+A timed-out prompt no longer throws the work away, so a large pin on a slow
+authority still renews.
+
+- A root session's pin is renewed ahead of expiry once it is twelve hours
+  old. Its prompts keep receiving context from the still-valid pin, and the
+  worker never migrates it early (`renewSkillSessionPin` itself refuses to
+  migrate a pin that has not expired). A subagent's own pin is never renewed
+  ahead. While the last attempt for the current pin failed, each prompt
+  starts with one fixed line naming only its code, for example `Skills
+  session renewal ahead of expiry failed [SKILLS_API_UNAVAILABLE]`.
+- An expired pin (more than 24 hours) delivers no payload until a renewal
+  commits. The prompt starts or joins the worker and waits at most three
+  seconds. If the worker is still running, the hook reports
+  `SESSION_RENEWAL_TIMEOUT` with a fixed `renewal: "background"` marker and
+  says the renewal continues; a later prompt uses the renewed pin.
+- A subagent without its own receipt whose parent pin expired renews the
+  parent pin the same way, instead of an uncached authenticated read. A
+  subagent's prompt never migrates the parent pin: migration of a refused
+  renewal runs only from the parent's own prompts, under the project-lock
+  check of the parent's own directory.
+- A failed attempt reports its own code (for example `SKILLS_API_UNAVAILABLE`
+  or `SESSION_RECONCILIATION_REQUIRED`). The same request is answered from
+  that record for 30 seconds when expired, or 15 minutes when renewed ahead of
+  expiry, and then asked again. A request is the exact receipt bytes, the mode,
+  the migration setting and the prompt's directory, so a rewritten receipt,
+  migration turned back on or a prompt from another directory asks again at
+  once.
+- `selection-cache/session-renewals/` holds one lock and one state record per
+  session. The lock only avoids duplicate work; two workers stay safe because
+  the commit is an exact receipt compare-and-swap. A lock whose worker is gone,
+  never started, or is older than three minutes is taken over. The record is
+  metadata, reported by `skills sessions show` as `backgroundRenewal`, and
+  never authorizes anything. Only its validated fields are read back; it
+  records an outcome, never a migration's details, which stay in the
+  preserved reconciliation receipt and the session's migration notice.
+
+If no worker can be started, including a spawn that fails after launch (for
+example `EAGAIN`, which records the attempt as not started and releases its
+lock), the prompt renews inline as before. Plain
+`skills context --auto-reconcile-safe` without `--background-renewal` keeps the
+inline renewal.
 
 When that deadline is spent, the managed hook reports `SESSION_RENEWAL_TIMEOUT`.
 Only a real deadline or abort signal counts: an aborted or timed-out request,
@@ -105,7 +155,7 @@ Every failure other than a plain revision move keeps its existing refusal:
 identity mismatches, unreadable receipts, integrity checks, an unavailable
 authority and planner refusals. Session write-lock contention keeps its own
 `SESSION_WRITE_BUSY`, and the next prompt retries. A migration that cannot finish inside the
-four-second renewal deadline reports `SESSION_RECONCILIATION_REQUIRED` with a
+renewal deadline reports `SESSION_RECONCILIATION_REQUIRED` with a
 fixed `migration: "timeout"` marker, which the hook explains; the pin is
 unchanged and the next prompt retries. Outcomes that may already have committed
 keep `SESSION_RECONCILIATION_INCOMPLETE`. That includes a failure after the

@@ -22,21 +22,25 @@ export const HOOK_REFUSAL_REASON_CODES: readonly string[] = Object.freeze([
 export class HookDiagnosticError extends Error {
   /** Fixed marker: a refused renewal whose automatic pin migration ran out of budget. */
   readonly migration?: "timeout";
-  constructor(readonly code: string, readonly stage: "context" | "sync", migration?: "timeout") {
+  /** Fixed marker: an expired pin whose renewal continues in a background worker. */
+  readonly renewal?: "background";
+  constructor(readonly code: string, readonly stage: "context" | "sync", migration?: "timeout", renewal?: "background") {
     super("Skills hook operation failed");
     if (migration) this.migration = migration;
+    if (renewal) this.renewal = renewal;
   }
 }
 
 export function hookChildError(stdout: string, stage: "context" | "sync"): HookDiagnosticError {
   // Never propagate messages, stderr, paths or foreign response bodies. The
   // failure envelope is small even when successful sync receipts are large.
-  let code: unknown, migration: unknown;
+  let code: unknown, migration: unknown, renewal: unknown;
   if (stdout.length <= 16 * 1024) {
-    try { ({ code, migration } = JSON.parse(stdout)?.error ?? {}); } catch { /* fixed fallback below */ }
+    try { ({ code, migration, renewal } = JSON.parse(stdout)?.error ?? {}); } catch { /* fixed fallback below */ }
   }
   const owned = typeof code === "string" && CONTEXT_ERROR_CODES.has(code) ? code : "SKILLS_CONTEXT_FAILED";
-  return new HookDiagnosticError(owned, stage, owned === "SESSION_RECONCILIATION_REQUIRED" && migration === "timeout" ? "timeout" : undefined);
+  return new HookDiagnosticError(owned, stage, owned === "SESSION_RECONCILIATION_REQUIRED" && migration === "timeout" ? "timeout" : undefined,
+    owned === "SESSION_RENEWAL_TIMEOUT" && renewal === "background" ? "background" : undefined);
 }
 
 export function hookFailureReason(error: unknown, profileId?: string): string {
@@ -56,6 +60,9 @@ export function hookFailureReason(error: unknown, profileId?: string): string {
   }
   if (code === "SESSION_RECONCILIATION_REQUIRED") {
     return `${prefix} A loaded skill changed or was removed. Inspect this session with skills sessions show <session-id> --json, then review skills sessions reconcile for an intentional change. Sync alone does not change this pin. A refusal is re-checked with the authority within five minutes, or sooner after the receipt or the synced profile revision changes.`;
+  }
+  if (code === "SESSION_RENEWAL_TIMEOUT" && owned && error.renewal === "background") {
+    return `${prefix} This session's authorization expired, and its renewal is running in the background; no request was refused. The existing pin is unchanged, and a later prompt delivers context from the renewed pin as soon as the renewal commits. If it keeps recurring, inspect the session with skills sessions show <session-id> --json.`;
   }
   if (code === "SESSION_RENEWAL_TIMEOUT") {
     return `${prefix} Renewing this session's expired authorization did not finish within the hook's renewal window; no request was refused. Sync and diagnosis do not change this window. The existing pin is unchanged and the next prompt retries the renewal. If it keeps recurring, inspect the session with skills sessions show <session-id> --json and review skills sessions reconcile.`;

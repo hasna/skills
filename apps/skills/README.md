@@ -993,13 +993,45 @@ own bounded native client; it does not reload an existing agent session.
 Neither a receipt nor a config write proves an existing session adopted new rules;
 use the actual native session's supported acceptance path separately.
 
-At session start, the hook authenticates and refreshes the profile. Prompt hooks
+At session start, the hook authenticates and refreshes the profile within a
+five-second bound; a refresh that does not finish is named in one line and the
+session uses its last verified profile. Prompt hooks
 select complete skill instructions from that verified cache using explicit
 `$skill` references, profile keywords, paths and always-required selections.
-A session retains its loaded selections; compaction restores loaded instructions,
-and subagents inherit the parent's selection. Instructions that exceed the
-context budget produce an explicit `skills load` command. A hook never executes
-a skill. Cached use is explicit and expires after 24 hours. When a session
+A keyword matches as a phrase (its words adjacent and in order); a selection
+without keywords matches its whole slug as a phrase, or a shorter run of its
+slug words that has two words of three or more letters and the slug's
+least-used word ("seating plan" for event-seating-plan, never "run of" for
+live-event-run-of-show); a one-word trigger shared by more than three
+selections selects nothing on its own; and a one-word slug counts as named
+only beside the word "skill". A prompt match scoring under half of the
+prompt's best match, and prompt matches tied at the last free slot, are
+offered as `skills load` commands instead of being injected or picked by name
+order. Weaker pointers are offered the same way, at most three and never
+injected: a multi-word keyword whose words all appear apart, one of them
+discriminating ("designs review" in "the designs app for review"), or a common
+one-word keyword; a tie that does not fit is left out.
+A session retains its loaded selections; compaction restores the two most
+recently loaded instructions, and a subagent receives its parent's most recent
+one, each followed by `skills load` commands for the next most recent. A
+read-only prompt does not rewrite the session receipt or take its write lock
+(a damaged lock still refuses), and receipt writers wait up to two seconds for
+another live writer's lock before refusing; a lock another writer is
+publishing or releasing at that moment counts as held, not damaged. Every
+delivered body is recorded in the receipt: when only that write lost its lock
+race, skills the receipt already records are still delivered, and each newly
+read one is offered as its `skills load` command under one fixed
+`[SESSION_WRITE_BUSY]` line. A new subagent whose parent recorded a load or
+renewed its pin while the subagent resolved is resolved once more from the
+current parent pin. Managed hooks inject at most 24,000 instruction
+characters; instructions that exceed that or another context budget produce
+an explicit `skills load` command. A hook never executes
+a skill. Cached use is explicit and expires after 24 hours. Managed hooks renew
+session pins in a detached background worker (`docs/session-pin-renewal.md`),
+ahead of expiry for root sessions (a failed renewal ahead of expiry is named
+in one line while context comes from the still-valid pin); an expired pin
+waits at most three seconds for its renewal and delivers nothing until it
+commits. When a session
 receipt expires, the hook authenticates the current profile. If every loaded
 selection still has identical metadata and bundle digest, it archives the old
 receipt and advances that session to the current profile under an exact receipt
@@ -1019,7 +1051,7 @@ that lock in its receipt and is never migrated automatically, whatever
 directory it later prompts from. A session without that record is not migrated
 while a lock sits in the prompt's working directory or any ancestor. A loaded
 skill whose lifecycle epoch rotated while its bytes stayed the same also keeps
-the refusal. If the migration cannot finish within the four-second renewal window,
+the refusal. If the migration cannot finish within the renewal window,
 the hook reports `SESSION_RECONCILIATION_REQUIRED` with that reason and the next
 prompt retries. Turn this off station-wide with `skills config set
 sessionPinMigration off --global` (the key is refused without `--global`, and a
