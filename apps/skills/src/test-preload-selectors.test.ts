@@ -37,10 +37,18 @@ test("Sumi's own selectors are cleared, so Sumi resolves through the synthetic X
 });
 
 let previousConfigRoot: string | undefined;
+const SUMI_SENTINEL = "/nonexistent/skills-test-sumi-home-must-be-cleared";
 
 test("a selector root written by one test is gone before the next test", () => {
   previousConfigRoot = process.env.XDG_CONFIG_HOME;
-  const bridge = join(previousConfigRoot!, "sumi", "skills", "skills-cli");
+  // Never write unless the root is a temporary one: if the isolation is ever broken, this test must fail here
+  // rather than write a bridge into the account's real Sumi configuration.
+  if (!previousConfigRoot || !inside(tmpdir(), previousConfigRoot) || inside(operatingSystemAccountHome(), previousConfigRoot)) {
+    throw new Error(`refusing to write: XDG_CONFIG_HOME is not a temporary root (${previousConfigRoot ?? "unset"})`);
+  }
+  // A selector set inside one test must not reach the next one either.
+  process.env.SUMI_HOME = SUMI_SENTINEL;
+  const bridge = join(previousConfigRoot, "sumi", "skills", "skills-cli");
   mkdirSync(bridge, { recursive: true });
   writeFileSync(join(bridge, "SKILL.md"), "# synthetic bridge left by a test\n");
   expect(existsSync(bridge)).toBe(true);
@@ -49,6 +57,7 @@ test("a selector root written by one test is gone before the next test", () => {
 test("the next test sees a fresh selector root and none of the previous test's files", () => {
   expect(previousConfigRoot).toBeDefined();
   expect(process.env.XDG_CONFIG_HOME).not.toBe(previousConfigRoot);
+  expect(process.env.SUMI_HOME).toBeUndefined();
   // SKILLS_KEEP_TEST_FIXTURES=1 retains roots for inspection; the fresh root still holds.
   if (process.env.SKILLS_KEEP_TEST_FIXTURES !== "1") expect(existsSync(join(previousConfigRoot!, "sumi"))).toBe(false);
   expect(existsSync(join(process.env.XDG_CONFIG_HOME!, "sumi"))).toBe(false);
