@@ -1,0 +1,100 @@
+name: PLA8-00588 diagnostic (temporary, never merged)
+
+# Draft-PR-only diagnostic for the native-target-manifest inventory failures on runner image 20261018.
+# Prints the runner image and the XDG/SUMI selectors, runs the target file alone, then the full suite in the
+# release workflow's conditions, and prints any unexpected inventory entry. No credentials, no publish, no environment.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    if: github.repository == 'hasna/skills' && github.head_ref == 'diag-pla8-00588'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        copy: [1, 2, 3]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: maintenance_fixture
+          POSTGRES_DB: skills_maintenance_fixture
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U maintenance_fixture -d skills_maintenance_fixture"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+
+      - name: Runner image and selectors
+        run: |
+          echo "image=${ImageVersion:-unknown} os=${ImageOS:-unknown}"
+          for k in HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME XDG_STATE_HOME XDG_RUNTIME_DIR SUMI_HOME SUMI_CONFIG_DIR TMPDIR; do
+            if [ -n "${!k+x}" ]; then echo "$k=${!k}"; else echo "$k unset"; fi
+          done
+          for d in "$HOME/.config/sumi" "${XDG_CONFIG_HOME:-/nonexistent}/sumi" "$HOME/.hasna-internal/sumi" /tmp/.codex /tmp/.agents /tmp/.claude; do
+            if [ -e "$d" ]; then echo "exists: $d"; find "$d" -maxdepth 3 | head -20; else echo "absent: $d"; fi
+          done
+
+      - name: Install locked standalone Skills dependencies
+        working-directory: apps/skills
+        run: bun install --frozen-lockfile --ignore-scripts --backend copyfile
+
+      - name: Build
+        working-directory: apps/skills
+        run: |
+          umask 022
+          bun run build
+
+      - name: Target file alone
+        working-directory: apps/skills
+        continue-on-error: true
+        run: bun test --timeout 30000 src/lib/native-target-manifest.test.ts 2>&1 | grep -E 'PLA8-00588-DIAG|\(fail\)| pass$| fail$' || true
+
+      - name: Full suite (release conditions), unexpected entries only
+        working-directory: apps/skills
+        continue-on-error: true
+        env:
+          HASNA_SKILLS_MAINTENANCE_TEST_DATABASE_URL: postgres://maintenance_fixture@127.0.0.1:5432/skills_maintenance_fixture
+          HASNA_SKILLS_INSPECTION_TEST_DATABASE_URL: postgres://inspection_fixture@127.0.0.1:5432/skills_inspection_fixture
+          NO_COLOR: "1"
+        run: |
+          set -uo pipefail
+          bun -e '
+            import { SQL } from "bun";
+            const sql = new SQL(process.env.HASNA_SKILLS_MAINTENANCE_TEST_DATABASE_URL, { max: 1 });
+            try { await sql.unsafe("CREATE ROLE inspection_fixture LOGIN"); await sql.unsafe("CREATE DATABASE skills_inspection_fixture OWNER inspection_fixture"); } finally { await sql.close(); }
+          '
+          log="$RUNNER_TEMP/full.log"
+          bun test --timeout 30000 > "$log" 2>&1; echo "suite exit=$?"
+          grep -oE '^(##\[group\])?src/[^ ]+\.test\.ts:' "$log" | sed 's/^##\[group\]//' > "$RUNNER_TEMP/order.txt"
+          echo "files run: $(wc -l < "$RUNNER_TEMP/order.txt") target position: $(grep -n 'native-target-manifest' "$RUNNER_TEMP/order.txt" | cut -d: -f1)"
+          echo "first 110 files in order:"; head -n 110 "$RUNNER_TEMP/order.txt" | tr '\n' ' '; echo
+          grep -E 'PLA8-00588-DIAG' "$log" | head -3 || true
+          grep -E ' pass$| fail$' "$log" | tail -2 || true
+
+      - name: Selector roots after the suite
+        run: |
+          for d in "$HOME/.config/sumi" "${XDG_CONFIG_HOME:-/nonexistent}/sumi" /tmp/.codex /tmp/.agents /tmp/.claude; do
+            if [ -e "$d" ]; then echo "exists: $d"; find "$d" -maxdepth 3 | head -20; else echo "absent: $d"; fi
+          done

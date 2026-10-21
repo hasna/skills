@@ -71,6 +71,8 @@ test.each([
   writeFileSync(join(skill, "SKILL.md"), "# Synthetic reviewed migration fixture\n");
   writeFileSync(join(skill, "reference.txt"), "Synthetic companion file\n");
   const inventory = inventoryNativeSkills(home, { projectDir: project });
+  // PLA8-00588 diagnostic only (draft PR, never merged): name the unexpected entry and the selectors in effect.
+  if (inventory.length !== 2) console.log("PLA8-00588-DIAG " + JSON.stringify({ agent, entries: inventory.map(entry => ({ agent: entry.agent, path: entry.path })), env: Object.fromEntries(["XDG_CONFIG_HOME", "XDG_DATA_HOME", "SUMI_HOME", "SUMI_CONFIG_DIR", "HOME"].map(key => [key, process.env[key] ?? null])), cwd: process.cwd() }));
   expect(inventory).toHaveLength(2);
   const target = inventory.find(entry => entry.agent === agent && entry.path === skill)!;
   expect(target).toBeDefined();
