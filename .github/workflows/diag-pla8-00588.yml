@@ -86,12 +86,35 @@ jobs:
             try { await sql.unsafe("CREATE ROLE inspection_fixture LOGIN"); await sql.unsafe("CREATE DATABASE skills_inspection_fixture OWNER inspection_fixture"); } finally { await sql.close(); }
           '
           log="$RUNNER_TEMP/full.log"
-          bun test --timeout 30000 > "$log" 2>&1; echo "suite exit=$?"
-          grep -oE '^(##\[group\])?src/[^ ]+\.test\.ts:' "$log" | sed 's/^##\[group\]//' > "$RUNNER_TEMP/order.txt"
+          suite=0; bun test --timeout 30000 > "$log" 2>&1 || suite=$?; echo "suite exit=$suite"
+          grep -oE '^(##\[group\])?src/[^ ]+\.test\.ts:' "$log" | sed 's/^##\[group\]//' > "$RUNNER_TEMP/order.txt" || true
           echo "files run: $(wc -l < "$RUNNER_TEMP/order.txt") target position: $(grep -n 'native-target-manifest' "$RUNNER_TEMP/order.txt" | cut -d: -f1)"
           echo "first 110 files in order:"; head -n 110 "$RUNNER_TEMP/order.txt" | tr '\n' ' '; echo
           grep -E 'PLA8-00588-DIAG' "$log" | head -3 || true
           grep -E ' pass$| fail$' "$log" | tail -2 || true
+
+      - name: Which test files write the runner's real Sumi config
+        working-directory: apps/skills
+        continue-on-error: true
+        env:
+          HASNA_SKILLS_MAINTENANCE_TEST_DATABASE_URL: postgres://maintenance_fixture@127.0.0.1:5432/skills_maintenance_fixture
+          HASNA_SKILLS_INSPECTION_TEST_DATABASE_URL: postgres://inspection_fixture@127.0.0.1:5432/skills_inspection_fixture
+          NO_COLOR: "1"
+        run: |
+          set -uo pipefail
+          root="$XDG_CONFIG_HOME/sumi"
+          aside="$RUNNER_TEMP/sumi-aside"; mkdir -p "$aside"
+          [ -e "$root" ] && mv "$root" "$aside/after-full-suite"
+          n=0
+          while IFS= read -r f; do
+            n=$((n+1))
+            bun test --timeout 30000 "$f" > /dev/null 2>&1 || true
+            if [ -e "$root" ]; then
+              echo "WRITER $f: $(cd "$root" && find . -maxdepth 3 | sort | tr '\n' ' ')"
+              mv "$root" "$aside/$n"
+            fi
+          done < <(find src -name '*.test.ts' | sort)
+          echo "files checked: $n"
 
       - name: Selector roots after the suite
         run: |
