@@ -1,0 +1,42 @@
+name: Workflow permissions gate
+
+# Only the release-tag publish job of release-skills.yml may request an id-token (SH-00015). npm publishes
+# @hasna/skills through OIDC trusted publishing alone, so this check keeps a newly merged job from minting a publish
+# token. It runs on every pull request and on main, and is a required check on main.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  id-token-grants:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Only the release-tag publish job may request an id-token
+        run: ruby .github/scripts/id-token-gate.rb .github/workflows
+
+      - name: The gate refuses id-token grants anywhere else (negative controls)
+        shell: bash
+        run: |
+          set -euo pipefail
+          expect_refused() {
+            local label="$1" fixture="$2" dir
+            dir="$(mktemp -d)"
+            cp .github/workflows/*.yml "$dir/"
+            printf '%s\n' "$fixture" > "$dir/fixture.yml"
+            if ruby .github/scripts/id-token-gate.rb "$dir" > /dev/null; then echo "control $label: the gate ACCEPTED it"; exit 1; fi
+            echo "control $label: refused"
+          }
+          expect_refused job-grant $'on: workflow_dispatch\njobs:\n  sneak:\n    runs-on: ubuntu-latest\n    permissions:\n      id-token: write\n    steps:\n      - run: "true"'
+          expect_refused workflow-grant $'on: push\npermissions:\n  id-token: write\njobs:\n  sneak:\n    runs-on: ubuntu-latest\n    steps:\n      - run: "true"'
+          expect_refused write-all $'on: push\njobs:\n  sneak:\n    runs-on: ubuntu-latest\n    permissions: write-all\n    steps:\n      - run: "true"'
+          # The allowed shape outside release-skills.yml is still refused.
+          expect_refused lookalike $'on: push\njobs:\n  publish:\n    if: github.event_name == \'push\' && startsWith(github.ref, \'refs/tags/npm/skills/v\')\n    environment: npm-release-skills\n    runs-on: ubuntu-latest\n    permissions:\n      id-token: write\n    steps:\n      - run: "true"'
