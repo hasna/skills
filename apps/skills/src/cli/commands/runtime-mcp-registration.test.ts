@@ -27,35 +27,54 @@ function fixtureOutcomes(stderr: string): string {
       `${fixtureAgents.includes(String(agent)) ? agent : "?"}:${success === true ? "ok" : /^[A-Z_]{1,40}$/.test(String(refusal)) ? refusal : "?"}`).join(",");
   } catch { return "unavailable"; }
 }
+// The fixture's named check, matched against enumerated agents and uppercase refusal codes only.
+const fixtureCheck = (stderr: string) => stderr.match(
+  /\bREGISTRATION_(?:ADAPTER_REFUSED|ARGS_ABSENT|ARGS_WRONG):(?:claude|codex|gemini|pi|opencode|cursor|windsurf)(?::[A-Z_]{1,40})?(?![A-Za-z_:])/)?.[0] ?? "unavailable";
+
+async function runRegistrationFixture(mode: string, extraEnv: Record<string, string>) {
+  const root = mkdtempSync(join(tmpdir(), "skills-mcp-registration-"));
+  for (const name of ["home", "tmp"]) mkdirSync(join(root, name), { mode: 0o700 });
+  const child = Bun.spawn([process.execPath, "--no-env-file", "--no-install", resolve(import.meta.dir, "runtime-mcp-registration.fixture.ts"), mode], {
+    cwd: root, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+    env: { HOME: join(root, "home"), TMPDIR: join(root, "tmp"), PATH: "/nonexistent-fixture-bin", NO_COLOR: "1",
+      BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", REGISTRATION_FIXTURE_ROOT: root, ...extraEnv },
+  });
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 20_000);
+  try {
+    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    const diagnostic = JSON.stringify({ exit: Number.isInteger(code) ? code : null,
+      location: stderr.match(/runtime-mcp-registration\.fixture\.ts:[0-9]{1,7}:[0-9]{1,7}(?![0-9])/)?.[0] ?? "unavailable",
+      check: fixtureCheck(stderr), outcomes: fixtureOutcomes(stderr) });
+    return { stdout, stderr, code, timedOut, diagnostic };
+  } finally {
+    clearTimeout(timer);
+    // Only this test's freshly created child and synthetic files are owned here.
+    if (child.exitCode === null) { child.kill("SIGKILL"); await child.exited; }
+    rmSync(root, { recursive: true, force: true });
+  }
+}
 
 for (const mode of [...firstRunModes, ...bootstrapModes, "profile", "environment-profile", "transient", "default", "claude-native", "claude-config-dir", "claude-custom-oauth", "claude-legacy", "claude-unavailable", "claude-drift", "claude-locked", "claude-late-lock", "claude-policy-refused", "claude-blocked", "claude-unknown-refusal", "claude-spawn-refused", "setup", "auth", "gateway", "bad-url", "aliases", "invalid-toml"]) {
   test(`agent MCP registration preserves selection and stdio: ${mode}`, async () => {
-    const root = mkdtempSync(join(tmpdir(), "skills-mcp-registration-"));
-    for (const name of ["home", "tmp"]) mkdirSync(join(root, name), { mode: 0o700 });
-    const child = Bun.spawn([process.execPath, "--no-env-file", "--no-install", resolve(import.meta.dir, "runtime-mcp-registration.fixture.ts"), mode], {
-      cwd: root, stdin: "ignore", stdout: "pipe", stderr: "pipe",
-      env: { HOME: join(root, "home"), TMPDIR: join(root, "tmp"), PATH: "/nonexistent-fixture-bin", NO_COLOR: "1",
-        BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", REGISTRATION_FIXTURE_ROOT: root, ...instruments },
-    });
-    let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 20_000);
-    try {
-      const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-      const diagnostic = JSON.stringify({ exit: Number.isInteger(code) ? code : null,
-        location: stderr.match(/runtime-mcp-registration\.fixture\.ts:[0-9]{1,7}:[0-9]{1,7}(?![0-9])/)?.[0] ?? "unavailable",
-        outcomes: fixtureOutcomes(stderr) });
-      expect(timedOut, diagnostic).toBe(false); expect(stderr.length, diagnostic).toBe(0); expect(code, diagnostic).toBe(0);
-      const receipt = JSON.parse(stdout);
-      expect(receipt).toMatchObject({ mode, unrelatedEntriesPreserved: true, credentialsUnchanged: true, credentialsNotDisclosed: true, networkCalls: 0 });
-      const firstRunRefused = firstRunModes.includes(mode) && !["claude-first-run", "claude-first-run-no-userid"].includes(mode);
-      const bootstrapRefused = bootstrapModes.includes(mode) && !["claude-native-bootstrap", "claude-native-bootstrap-existing"].includes(mode);
-      expect(receipt.adapters).toBe(["bad-url", "aliases"].includes(mode) ? 0 : bootstrapRefused || firstRunRefused ? 6 : ["invalid-toml", "claude-drift", "claude-locked", "claude-late-lock", "claude-policy-refused", "claude-blocked", "claude-unknown-refusal", "claude-spawn-refused"].includes(mode) ? 6 : 7);
-    } finally {
-      clearTimeout(timer);
-      // Only this test's freshly created child and synthetic files are owned here.
-      if (child.exitCode === null) { child.kill("SIGKILL"); await child.exited; }
-      rmSync(root, { recursive: true, force: true });
-    }
+    const { stdout, stderr, code, timedOut, diagnostic } = await runRegistrationFixture(mode, instruments);
+    expect(timedOut, diagnostic).toBe(false); expect(stderr.length, diagnostic).toBe(0); expect(code, diagnostic).toBe(0);
+    const receipt = JSON.parse(stdout);
+    expect(receipt).toMatchObject({ mode, unrelatedEntriesPreserved: true, credentialsUnchanged: true, credentialsNotDisclosed: true, networkCalls: 0 });
+    const firstRunRefused = firstRunModes.includes(mode) && !["claude-first-run", "claude-first-run-no-userid"].includes(mode);
+    const bootstrapRefused = bootstrapModes.includes(mode) && !["claude-native-bootstrap", "claude-native-bootstrap-existing"].includes(mode);
+    expect(receipt.adapters).toBe(["bad-url", "aliases"].includes(mode) ? 0 : bootstrapRefused || firstRunRefused ? 6 : ["invalid-toml", "claude-drift", "claude-locked", "claude-late-lock", "claude-policy-refused", "claude-blocked", "claude-unknown-refusal", "claude-spawn-refused"].includes(mode) ? 6 : 7);
+  });
+}
+
+// Negative controls (PLA8-00581), in the mode the 0.10.84 release run failed: a refused write, an
+// absent args key and a wrong value each fail with their own named check, never all at one assertion.
+for (const [inject, check] of [["refuse:gemini", "REGISTRATION_ADAPTER_REFUSED:gemini:LOCKED"], ["args-absent:gemini", "REGISTRATION_ARGS_ABSENT:gemini"],
+  ["args-absent:opencode", "REGISTRATION_ARGS_ABSENT:opencode"], ["args-wrong:gemini", "REGISTRATION_ARGS_WRONG:gemini"]] as const) {
+  test(`agent MCP registration names the failing check: ${inject}`, async () => {
+    const { code, timedOut, diagnostic } = await runRegistrationFixture("claude-native-bootstrap-existing-remove", { REGISTRATION_FIXTURE_INJECT: inject });
+    expect(timedOut, diagnostic).toBe(false); expect(code, diagnostic).toBe(1);
+    expect(JSON.parse(diagnostic).check, diagnostic).toBe(check);
   });
 }
 

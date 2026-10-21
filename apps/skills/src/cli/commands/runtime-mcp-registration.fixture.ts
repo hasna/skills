@@ -85,18 +85,33 @@ const files: Record<string, string> = {
   windsurf: join(homedir(), ".windsurf", "mcp.json"),
 };
 const unrelated = { command: "/owned/other", args: ["keep"], env: { PRIVATE_FIXTURE: unrelatedKey } };
-const codexBefore = `model = "fixture-model"\n[mcp_servers.other]\ncommand = "/owned/other"\n[mcp_servers.other.env]\nKEEP = "yes"\n[mcp_servers.skills]\ncommand = "/old/skills"\n[mcp_servers.skills.env]\nHASNA_PROFILE = "old-profile"\nHASNA_SKILLS_API_URL = "http://127.0.0.1:9/old"\nSKILLS_API_URL = "http://127.0.0.1:9/conflict"\n[projects."/owned/project"]\ntrust_level = "trusted"\n`;
+// Each pre-existing registration is what its writer produces, args included (PLA8-00581). Without
+// args, an entry no adapter rewrote failed the args check exactly like a wrong value. Direct-file
+// agents carry this product's own entry shapes (registerMcpForAgent, registerCodexMcp, registerOpenCodeMcp).
+const codexBefore = `model = "fixture-model"\n[mcp_servers.other]\ncommand = "/owned/other"\n[mcp_servers.other.env]\nKEEP = "yes"\n[mcp_servers.skills]\ncommand = "/old/skills"\nargs = ["--stdio"]\n[mcp_servers.skills.env]\nHASNA_PROFILE = "old-profile"\nHASNA_SKILLS_API_URL = "http://127.0.0.1:9/old"\nSKILLS_API_URL = "http://127.0.0.1:9/conflict"\n[projects."/owned/project"]\ntrust_level = "trusted"\n`;
+// Claude's is the file Claude 2.1.305 itself writes (measured 2026-10-21, synthetic HOME) for
+// `claude mcp add -s user --env HASNA_PROFILE=old-profile --transport stdio skills -- /old --stdio`
+// into this config: same key order, these eight first-start keys (synthetic values), two-space JSON
+// and no trailing newline. 2.1.305 then refuses the product's add as a duplicate and leaves it byte for byte.
+const registeredByClaude2_1_305 = { firstStartTime: "2026-10-21T00:00:00.000Z", firstStartVersion: "2.1.305", machineID: "0".repeat(64),
+  opusProMigrationComplete: true, sonnet1m45MigrationComplete: true, seenNotifications: {}, hasResetAutoModeOptInForDefaultOffer: true, migrationVersion: 14 };
 for (const [agent, path] of Object.entries(files)) {
   if (agent === "claude" && firstRunMode) continue;
+  if (agent === "claude" && !nativeFresh) {
+    write(path, JSON.stringify({ retained: true, projects: { "/owned/project": { trust: true } }, opaqueNativeState: unrelatedKey,
+      mcpServers: { other: unrelated, skills: { type: "stdio", command: "/old", args: ["--stdio"], env: { HASNA_PROFILE: "old-profile" } } },
+      ...registeredByClaude2_1_305 }, null, 2));
+    continue;
+  }
   if (agent === "codex") write(path, mode === "invalid-toml" ? `broken = [${JSON.stringify(unrelatedKey)}\n` : codexBefore);
   else write(path, JSON.stringify(agent === "opencode"
-    ? { theme: "system", mcp: { other: unrelated, skills: { type: "local", command: ["/old"], environment: { HASNA_PROFILE: "old-profile" } } } }
+    ? { theme: "system", mcp: { other: unrelated, skills: { type: "local", command: ["/old", "--stdio"], enabled: true, environment: { HASNA_PROFILE: "old-profile" } } } }
     : { retained: true, ...(agent === "claude" ? { projects: { "/owned/project": { trust: true } }, opaqueNativeState: unrelatedKey,
         ...(mode === "claude-native-bootstrap-existing" ? bootstrap : {}),
         ...(["claude-native-bootstrap-existing-theme-drop", "claude-native-bootstrap-existing-exit1", "claude-native-bootstrap-existing-hardlink", "claude-native-bootstrap-existing-exit1-no-add"].includes(mode!) ? { theme: "dark" } : {}),
         ...(mode === "claude-native-bootstrap-existing-userid-change" ? { userID: "1".repeat(64) } : {}),
         ...(mode === "claude-native-bootstrap-existing-change" ? { firstStartTime: "2026-10-16T00:00:00.000Z" } : {}) } : {}),
-      mcpServers: { other: unrelated, ...(agent === "claude" && nativeFresh ? {} : { skills: { command: "/old", env: { HASNA_PROFILE: "old-profile" } } }) } }));
+      mcpServers: { other: unrelated, ...(agent === "claude" ? {} : { skills: { command: "/old", args: ["--stdio"], env: { HASNA_PROFILE: "old-profile" } } }) } }));
 }
 if (mode === "claude-first-run-dangling-link") symlinkSync(join(root, "missing-native-config"), files.claude!);
 if (mode === "claude-native-bootstrap-existing-theme-drop") chmodSync(files.claude!, 0o640);
@@ -316,6 +331,7 @@ if (refused) {
   selectCliSkillsCredentialProfile(undefined);
   const { assertSkillsMcpConfigured } = await import("../../mcp/index.js");
   const { isMcpStdioMode } = await import("../../mcp/http.js");
+  const reported = ["auth", "setup"].includes(mode!) ? undefined : (JSON.parse(logs.join("\n")).results as Outcome[]);
   for (const [agent, path] of Object.entries(files)) {
     if (agent === "claude" && claudeRefused) {
       if (firstRunMode) {
@@ -347,6 +363,9 @@ if (refused) {
       continue;
     }
     if (agent === "codex" && mode === "invalid-toml") { assert.equal(readFileSync(path).equals(originals.get(path)!), true); continue; }
+    // A refused write leaves the pre-seed in place: name the adapter and its refusal before reading its file.
+    if (reported) assert.equal(reported.find(entry => entry.agent === agent)?.success, true,
+      `REGISTRATION_ADAPTER_REFUSED:${agent}:${refusalCode(reported.find(entry => entry.agent === agent))}`);
     let server: { type?: string; command: string | string[]; args?: string[]; env?: Record<string, string>; environment?: Record<string, string> };
     if (agent === "codex") {
       const parsed = Bun.TOML.parse(readFileSync(path, "utf8")) as any;
@@ -373,8 +392,12 @@ if (refused) {
         if (bootstrapMode || firstRunMode) for (const [key, value] of Object.entries(bootstrap)) assert.deepEqual(parsed[key], value);
       }
     }
-    const args = Array.isArray(server.command) ? server.command.slice(1) : server.args;
-    assert.deepEqual(args, ["--stdio"]); assert.equal(isMcpStdioMode(args!), true); assert.equal(isMcpStdioMode([]), false);
+    // An absent args key and a wrong value are different failures, each named (PLA8-00581).
+    // OpenCode carries args in its command array, so a bare command has none.
+    const args = Array.isArray(server.command) ? (server.command.length > 1 ? server.command.slice(1) : undefined) : server.args;
+    assert.notEqual(args, undefined, `REGISTRATION_ARGS_ABSENT:${agent}`);
+    assert.deepEqual(args, ["--stdio"], `REGISTRATION_ARGS_WRONG:${agent}`);
+    assert.equal(isMcpStdioMode(args!), true); assert.equal(isMcpStdioMode([]), false);
     const selectors = server.environment ?? server.env ?? {};
     for (const secret of [fleetKey, customerKey, unrelatedKey]) assert.equal(JSON.stringify(server).includes(secret), false);
     assert.equal(selectors.HASNA_PROFILE, expectedProfile);
