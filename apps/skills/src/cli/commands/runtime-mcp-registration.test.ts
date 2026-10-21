@@ -15,6 +15,19 @@ const bootstrapModes = ["claude-native-bootstrap", "claude-native-bootstrap-exis
     "sonnet1m45MigrationComplete", "seenNotifications", "hasResetAutoModeOptInForDefaultOffer", "migrationVersion"]
     .map(field => `claude-native-bootstrap-invalid-${field}`)];
 
+// Opt-in instruments, forwarded only when set (PLA8-00581): never set by CI.
+const instruments = Object.fromEntries(["REGISTRATION_FIXTURE_NATIVE_CLAUDE", "REGISTRATION_FIXTURE_INJECT"]
+  .flatMap(key => process.env[key] ? [[key, process.env[key]!]] : []));
+const fixtureAgents = ["claude", "codex", "gemini", "pi", "opencode", "cursor", "windsurf"];
+// Project the child's failure-only outcome line onto enumerated agents and refusal codes; nothing else is shown.
+function fixtureOutcomes(stderr: string): string {
+  try {
+    const { outcomes } = JSON.parse(/^REGISTRATION_FIXTURE_OUTCOMES (\{.*\})$/m.exec(stderr)![1]!);
+    return (outcomes as Array<{ agent: unknown; success: unknown; refusal: unknown }>).map(({ agent, success, refusal }) =>
+      `${fixtureAgents.includes(String(agent)) ? agent : "?"}:${success === true ? "ok" : /^[A-Z_]{1,40}$/.test(String(refusal)) ? refusal : "?"}`).join(",");
+  } catch { return "unavailable"; }
+}
+
 for (const mode of [...firstRunModes, ...bootstrapModes, "profile", "environment-profile", "transient", "default", "claude-native", "claude-config-dir", "claude-custom-oauth", "claude-legacy", "claude-unavailable", "claude-drift", "claude-locked", "claude-late-lock", "claude-policy-refused", "claude-blocked", "claude-unknown-refusal", "claude-spawn-refused", "setup", "auth", "gateway", "bad-url", "aliases", "invalid-toml"]) {
   test(`agent MCP registration preserves selection and stdio: ${mode}`, async () => {
     const root = mkdtempSync(join(tmpdir(), "skills-mcp-registration-"));
@@ -22,14 +35,15 @@ for (const mode of [...firstRunModes, ...bootstrapModes, "profile", "environment
     const child = Bun.spawn([process.execPath, "--no-env-file", "--no-install", resolve(import.meta.dir, "runtime-mcp-registration.fixture.ts"), mode], {
       cwd: root, stdin: "ignore", stdout: "pipe", stderr: "pipe",
       env: { HOME: join(root, "home"), TMPDIR: join(root, "tmp"), PATH: "/nonexistent-fixture-bin", NO_COLOR: "1",
-        BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", REGISTRATION_FIXTURE_ROOT: root },
+        BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", REGISTRATION_FIXTURE_ROOT: root, ...instruments },
     });
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 20_000);
     try {
       const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
       const diagnostic = JSON.stringify({ exit: Number.isInteger(code) ? code : null,
-        location: stderr.match(/runtime-mcp-registration\.fixture\.ts:[0-9]{1,7}:[0-9]{1,7}(?![0-9])/)?.[0] ?? "unavailable" });
+        location: stderr.match(/runtime-mcp-registration\.fixture\.ts:[0-9]{1,7}:[0-9]{1,7}(?![0-9])/)?.[0] ?? "unavailable",
+        outcomes: fixtureOutcomes(stderr) });
       expect(timedOut, diagnostic).toBe(false); expect(stderr.length, diagnostic).toBe(0); expect(code, diagnostic).toBe(0);
       const receipt = JSON.parse(stdout);
       expect(receipt).toMatchObject({ mode, unrelatedEntriesPreserved: true, credentialsUnchanged: true, credentialsNotDisclosed: true, networkCalls: 0 });

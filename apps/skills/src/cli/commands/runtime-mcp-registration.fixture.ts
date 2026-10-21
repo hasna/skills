@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
@@ -19,6 +19,14 @@ assert.equal(homedir(), join(root, "home"));
 assert.equal(process.env.TMPDIR, join(root, "tmp"));
 assertTestStartupIsolation();
 const mode = process.argv[2];
+// Opt-in instruments (PLA8-00581), inert unless the parent forwards them: an unstubbed run in which
+// a real Claude CLI at this absolute path answers the native add, and one injected adapter fault.
+const nativeClaude = process.env.REGISTRATION_FIXTURE_NATIVE_CLAUDE;
+assert(nativeClaude === undefined || isAbsolute(nativeClaude));
+const [injectKind, injectAgent] = (process.env.REGISTRATION_FIXTURE_INJECT ?? "").split(":");
+assert(!injectKind || (["refuse", "args-absent", "args-wrong"].includes(injectKind)
+  && ["gemini", "pi", "opencode", "cursor", "windsurf"].includes(injectAgent!)));
+const realSpawn = Bun.spawn.bind(Bun);
 const firstRunMode = mode?.startsWith("claude-first-run") ?? false;
 const firstRunRefused = firstRunMode && !["claude-first-run", "claude-first-run-no-userid"].includes(mode!);
 const preflightRefused = ["claude-first-run-dangling-link", "claude-first-run-config-dir-alias"].includes(mode!);
@@ -103,6 +111,8 @@ const inactiveBefore = readFileSync(inactiveClaude);
 if (mode === "claude-legacy") write(join(homedir(), ".claude.json"), JSON.stringify({ modernInactive: unrelatedKey }));
 const modernBefore = mode === "claude-legacy" ? readFileSync(join(homedir(), ".claude.json")) : undefined;
 if (mode === "claude-locked") mkdirSync(`${files.claude}.lock`);
+// Injected fault: hold one adapter's guarded-writer lock, so its write is refused and its pre-seed stays.
+if (injectKind === "refuse") mkdirSync(`${files[injectAgent!]}.skills-mcp.lock`, { mode: 0o700 });
 const nativeArguments: string[][] = [];
 let duplicateRefused = false, optionBoundaryVerified = false;
 const nativeParser = () => new Command().exitOverride().configureOutput({ writeOut() {}, writeErr() {} })
@@ -112,6 +122,12 @@ const nativeParser = () => new Command().exitOverride().configureOutput({ writeO
 const broken = nativeParser().parse(["--env", "HASNA_PROFILE=customer", "skills", "--", "skills-mcp", "--stdio"], { from: "user" });
 assert.notEqual(broken.args[0], "skills");
 assert.equal(broken.opts().env.includes("skills"), true);
+// The full original must already be preserved and read back before add.
+const assertOriginalPreserved = () => {
+  const backups = readdirSync(dirname(files.claude!)).filter(name => name.startsWith(basename(files.claude!) + ".skills-mcp-") && name.endsWith(".backup"));
+  assert.equal(backups.length, firstRunMode ? 0 : 1);
+  if (!firstRunMode) assert.equal(readFileSync(join(dirname(files.claude!), backups[0]!)).equals(originals.get(files.claude!)!), true);
+};
 Bun.spawn = ((command: string[]) => {
   assert.equal(command[0], "claude"); nativeCalls++; nativeArguments.push(command);
   if (mode === "claude-unavailable") throw Object.assign(new Error(unrelatedKey), { code: "ENOENT" });
@@ -127,6 +143,21 @@ Bun.spawn = ((command: string[]) => {
     const split = item.indexOf("="); assert(split > 0); env[item.slice(0, split)] = item.slice(split + 1);
   }
   optionBoundaryVerified = true;
+  if (nativeClaude) {
+    // Unstubbed: the real CLI answers this exact argv, confined to the synthetic HOME, with
+    // no credentials and every proxied request sent to a closed loopback port.
+    assertOriginalPreserved();
+    const existing = existsSync(files.claude!) ? JSON.parse(readFileSync(files.claude!, "utf8")) : {};
+    const child = realSpawn([nativeClaude, ...command.slice(1)], { cwd: root, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+      env: { HOME: homedir(), TMPDIR: process.env.TMPDIR!, PATH: "/usr/bin:/bin", NO_COLOR: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        DISABLE_AUTOUPDATER: "1", HTTP_PROXY: "http://127.0.0.1:9", HTTPS_PROXY: "http://127.0.0.1:9",
+        ...Object.fromEntries(["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_CUSTOM_OAUTH_URL"].flatMap(key => process.env[key] ? [[key, process.env[key]!]] : [])) } });
+    return { stdout: child.stdout, stderr: child.stderr, exited: child.exited.then(status => {
+      duplicateRefused = status === 1 && Object.hasOwn(existing.mcpServers ?? {}, "skills");
+      nativePostimage = existsSync(files.claude!) ? readFileSync(files.claude!) : undefined;
+      return status;
+    }) };
+  }
   if (firstRunMode) assert.equal(lstatSync(files.claude!, { throwIfNoEntry: false }), undefined);
   if (mode === "claude-first-run-concurrent-creator") write(files.claude!, JSON.stringify({ concurrentNativeChange: true, mcpServers: {} }));
   const data = firstRunMode && mode !== "claude-first-run-concurrent-creator" ? { mcpServers: {} } as Record<string, any> : JSON.parse(readFileSync(files.claude!, "utf8"));
@@ -190,10 +221,7 @@ Bun.spawn = ((command: string[]) => {
     write(files.claude!, JSON.stringify(data));
   }
   if (mode === "claude-late-lock") mkdirSync(`${files.claude}.lock`);
-  // The full original must already be preserved and read back before add.
-  const backups = readdirSync(dirname(files.claude!)).filter(name => name.startsWith(basename(files.claude!) + ".skills-mcp-") && name.endsWith(".backup"));
-  assert.equal(backups.length, firstRunMode ? 0 : 1);
-  if (!firstRunMode) assert.equal(readFileSync(join(dirname(files.claude!), backups[0]!)).equals(originals.get(files.claude!)!), true);
+  assertOriginalPreserved();
   return { stdout: new Blob([stdout]).stream(), stderr: new Blob([stderr]).stream(),
     exited: Promise.resolve(status) };
 }) as unknown as typeof Bun.spawn;
@@ -201,6 +229,28 @@ Bun.spawn = ((command: string[]) => {
 const logs: string[] = [], output = console.log, errors = console.error;
 console.log = (...values: unknown[]) => { logs.push(values.map(String).join(" ")); };
 console.error = (...values: unknown[]) => { logs.push(values.map(String).join(" ")); };
+// Diagnostic vocabulary only, never admission: the guarded writer's fixed refusal texts (guarded-agent-config.ts).
+const guardedRefusals: Record<string, string> = Object.fromEntries(Object.entries({
+  ACCESS_METADATA_UNAVAILABLE: "configuration access metadata could not be verified or preserved",
+  UNSAFE_PATH: "refused an unsafe or unowned configuration path", OWNERSHIP_UNAVAILABLE: "configuration ownership cannot be verified on this platform",
+  LOCKED: "configuration is locked; no foreign lock was removed", INVALID_CONFIG: "existing configuration is invalid",
+  BACKUP_FAILED: "could not preserve and verify the original configuration", WRITE_FAILED: "could not prepare the replacement configuration",
+  CONFIG_CHANGED: "configuration or its path changed during registration",
+  VERIFY_FAILED: "could not verify the committed configuration; retain the backup for recovery",
+}).map(([code, text]) => [text, code]));
+type Outcome = { agent: string; success: boolean; code?: string; error?: string };
+const refusalCode = (entry: Outcome | undefined) => entry === undefined ? "NO_RESULT" : entry.agent === "claude" ? entry.code ?? "CLAUDE_REFUSED"
+  : guardedRefusals[entry.error?.slice(entry.error.lastIndexOf(": ") + 2) ?? ""] ?? "UNRECOGNIZED";
+// On failure, report every adapter's outcome on the real stderr, outside the console capture above.
+process.on("exit", code => {
+  if (code === 0) return;
+  let outcomes: unknown = "unavailable";
+  try {
+    outcomes = (JSON.parse(logs.join("\n")).results as Outcome[])
+      .map(entry => ({ agent: entry.agent, success: entry.success, ...(entry.success ? {} : { refusal: refusalCode(entry) }) }));
+  } catch {}
+  writeSync(2, `REGISTRATION_FIXTURE_OUTCOMES ${JSON.stringify({ mode, outcomes })}\n`);
+});
 if (!defaultMode) {
   process.env.HASNA_PROFILE = mode === "environment-profile" ? "customer" : "ambient-profile";
   selectCliSkillsCredentialProfile(mode === "environment-profile" ? undefined : "customer");
@@ -235,6 +285,15 @@ if (mode === "setup") {
   const program = new Command(); registerAccountCommands(program);
   await program.parseAsync(["login", "--url", origin, "--email", "fixture@example.invalid", "--code", "123456"], { from: "user" });
 } else await handleMcp({ register: "all", json: true });
+// Injected fault: after registration, one adapter's entry loses its args or carries a wrong value.
+if (injectKind === "args-absent" || injectKind === "args-wrong") {
+  const path = files[injectAgent!]!, parsed = JSON.parse(readFileSync(path, "utf8"));
+  const entry = injectAgent === "opencode" ? parsed.mcp.skills : parsed.mcpServers.skills;
+  if (Array.isArray(entry.command)) entry.command = injectKind === "args-absent" ? entry.command.slice(0, 1) : [entry.command[0], "--fixture-wrong"];
+  else if (injectKind === "args-absent") delete entry.args;
+  else entry.args = ["--fixture-wrong"];
+  writeFileSync(path, JSON.stringify(parsed));
+}
 
 const refused = mode === "bad-url" || mode === "aliases";
 const admissionRefused = ["claude-policy-refused", "claude-blocked", "claude-unknown-refusal", "claude-spawn-refused"].includes(mode!);
