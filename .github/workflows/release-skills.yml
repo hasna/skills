@@ -29,10 +29,14 @@ permissions:
   contents: read
 
 jobs:
-  publish:
-    if: github.repository == 'hasna/skills'
+  # A dispatch (the candidate build or a tag dry run) never enters npm-release-skills and holds no id-token: it
+  # runs in skills-candidate, which has no protection rules and nothing that can publish. Only a pushed release
+  # tag reaches npm-release-skills, whose deployment policy admits npm/skills/v* tags alone; a repository ruleset
+  # lets only the hasna-identity App create those tags (PLA8-00581, SH-00015). Both jobs run the same steps.
+  candidate:
+    if: github.repository == 'hasna/skills' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    services:
+    services: &release-services
       postgres:
         image: postgres:16
         env:
@@ -46,24 +50,34 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-    # Skills-only environment: the first-time creation of this environment and
-    # its required-reviewer protection is a repository configuration step owned
-    # by the chief engineering seat. The workflow names it; it does not create it.
-    environment: npm-release-skills
+    # No publish credential: no id-token permission, and an environment that is
+    # not npm-release-skills.
+    environment: skills-candidate
     timeout-minutes: 60
     permissions:
       contents: read
-      id-token: write
-    env:
+    env: &release-env
       NODE_OPTIONS: --max-old-space-size=14336
       # On a tag push this is the release tag. On a dispatch dry run it is the
       # `tag` input; without it the tag-dependent steps are skipped and nothing
       # can publish, because every publish step also requires a push event.
       RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
-    defaults:
+    defaults: &release-defaults
       run:
         shell: bash
-    steps:
+    steps: &release-steps
+      - name: Admit only a release tag push or a dispatch
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            workflow_dispatch) ;;
+            push) [[ "$REF" =~ ^refs/tags/npm/skills/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "refusing: $REF is not a release tag"; exit 1; } ;;
+            *) echo "refusing: event $EVENT_NAME"; exit 1 ;;
+          esac
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # A dispatch dry run of a tag checks out that tag; a push uses its own
@@ -374,3 +388,20 @@ jobs:
             }
             throw new Error(`@hasna/skills@${version} was not fully visible after ten minutes (${last})`);
           '
+
+  publish:
+    if: github.repository == 'hasna/skills' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/npm/skills/v')
+    runs-on: ubuntu-latest
+    services: *release-services
+    # Skills-only environment. Its deployment policy admits npm/skills/v* tags
+    # only, and only the hasna-identity App may create those tags. Changes to the
+    # environment or the ruleset are repository-protection changes owned by the
+    # engineering seat. The workflow names the environment; it does not create it.
+    environment: npm-release-skills
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    env: *release-env
+    defaults: *release-defaults
+    steps: *release-steps

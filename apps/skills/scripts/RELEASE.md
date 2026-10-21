@@ -7,6 +7,12 @@ The only publish path is the repository-root workflow
 `npm/skills/v<version>` and publishes with npm provenance over OIDC in the
 skills-only `npm-release-skills` environment. There is no npm token on that path.
 
+A dispatch (with or without a `tag`) runs as the workflow's `candidate` job in the
+`skills-candidate` environment, with no `id-token` permission and nothing that can
+publish. Only a pushed `npm/skills/v*` tag runs the `publish` job in
+`npm-release-skills`. That environment admits those tags alone, and a repository
+ruleset lets only the hasna-identity App create them.
+
 A dispatch without a `tag` runs the source and package gates, packs the built
 checkout with the workflow's pinned npm, and verifies that exact archive with
 the installed consumer fixture. It uploads `skills-candidate-<commit>-<attempt>`
