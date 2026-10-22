@@ -240,14 +240,55 @@ process.env["HASNA_STATION"] = NO_KEYCHAIN_ACCOUNT;
 // server setting; individual missing-authority tests override this with "".
 process.env["SKILLS_PUBLIC_BASE_URL"] = "http://127.0.0.1:8787";
 
+/**
+ * Native provider selectors point into the test's own temporary root, never the
+ * account's (PLA8-00588).
+ *
+ * The leak this closes: GitHub's ubuntu-24.04 runners export
+ * XDG_CONFIG_HOME=/home/runner/.config, and developer machines often export it
+ * too. The Sumi path resolver honours it, so a test that installed the Skills
+ * bridge for Sumi wrote sumi.json, plugins/ and skills/skills-cli into the real
+ * ~/.config/sumi, and a later test that inventories native skills found that
+ * bridge as a stray `sumi` entry. Which file ran first decided the result: runner
+ * image 20261018 reordered the files and the native-target-manifest tests failed
+ * on every release run, while image 20261012 ran them before the writer.
+ *
+ * Every XDG selector the resolvers read is set to a directory under a per-test
+ * root, the same shape as the data directory above. Sumi's own selectors are
+ * cleared rather than set: an explicit SUMI_CONFIG_DIR would outrank XDG and
+ * change what the Sumi tests measure, and with them unset every Sumi location
+ * already resolves inside the XDG roots. A file that sets or clears a selector
+ * itself still wins, because this beforeEach is registered first.
+ */
+function pointNativeDiscoverySelectorsAt(root: string): void {
+  for (const key of NATIVE_DISCOVERY_SELECTORS) {
+    if (key.startsWith("XDG_")) process.env[key] = join(root, key.toLowerCase());
+    else delete process.env[key];
+  }
+}
+
+// Fixed and never torn down, like the data-directory baseline: it covers module
+// scope and every hook outside a test body, and nothing writes to it in practice.
+const selectorBaseline = join(tmpdir(), "hasna-skills-test-selector-baseline");
+mkdirSync(selectorBaseline, { recursive: true });
+pointNativeDiscoverySelectorsAt(selectorBaseline);
+
 let current: string | null = null;
+let currentSelectors: string | null = null;
 
 beforeEach(() => {
   current = mkdtempSync(join(tmpdir(), "skills-test-home-"));
   process.env[DATA_DIR_ENV] = current;
+  currentSelectors = mkdtempSync(join(tmpdir(), "skills-test-selectors-"));
+  pointNativeDiscoverySelectorsAt(currentSelectors);
 });
 
 afterEach(() => {
+  if (currentSelectors) {
+    if (process.env.SKILLS_KEEP_TEST_FIXTURES !== "1") rmSync(currentSelectors, { recursive: true, force: true });
+    currentSelectors = null;
+    pointNativeDiscoverySelectorsAt(selectorBaseline);
+  }
   if (!current) return;
   if (process.env.SKILLS_KEEP_TEST_FIXTURES !== "1") rmSync(current, { recursive: true, force: true });
   current = null;
