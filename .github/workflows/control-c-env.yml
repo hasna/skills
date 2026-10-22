@@ -13,6 +13,6 @@ permissions:
 jobs:
   request-environment:
     runs-on: ubuntu-latest
-    environment: npm-release-skills
+    environment: npm-publish-skills
     steps:
       - run: echo "this step must never run"
