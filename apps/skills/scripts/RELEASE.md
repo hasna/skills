@@ -5,13 +5,28 @@
 The only publish path is the repository-root workflow
 `.github/workflows/release-skills.yml`. It runs for a pushed annotated tag named
 `npm/skills/v<version>` and publishes with npm provenance over OIDC in the
-skills-only `npm-release-skills` environment. There is no npm token on that path.
+skills-only `npm-publish-skills` environment. There is no npm token on that path.
 
 A dispatch (with or without a `tag`) runs as the workflow's `candidate` job in the
 `skills-candidate` environment, with no `id-token` permission and nothing that can
 publish. Only a pushed `npm/skills/v*` tag runs the `publish` job in
-`npm-release-skills`. That environment admits those tags alone, and a repository
-ruleset lets only the hasna-identity App create them.
+`npm-publish-skills`. That environment is configured to admit those tags alone
+and to require no reviewer, and the repository ruleset `npm-skills-release-tags`
+lets only the hasna-identity App create, update or delete them. Before checkout,
+a tag run refuses unless the tag is annotated by `hasna-identity[bot]` and the
+publishing environment, the retired environment and the ruleset read back as
+recorded. The tagger name is a consistency check, not proof; the ruleset is the
+control.
+
+`npm-release-skills` is retired. Every earlier `npm/skills/v*` tag carries a
+workflow whose dispatch requested it with `id-token: write`, so it keeps its
+required reviewer and admits no ref. Do not delete it: a dispatch naming a
+missing environment would recreate it without protection.
+
+To release, the App creates the annotated tag through the API (a tag object with
+tagger `hasna-identity[bot]`, then the ref) at the exact release commit on main,
+only after the dry-run archive digest, the independent exact-archive GO and the
+tag's `Packed-SHA256` agree. No other account can create the tag.
 
 A dispatch without a `tag` runs the source and package gates, packs the built
 checkout with the workflow's pinned npm, and verifies that exact archive with
@@ -136,8 +151,10 @@ which is why the workflow runs them explicitly before sealing. Dispatches cannot
 reach publication. Registry readback must match the accepted SHA-512 integrity
 and include provenance.
 
-For a dry run, dispatch `Release skills to npm` with the `tag` input: every step
-except publishing runs against that tag. The old
+For a dry run, dispatch `Release skills to npm` with the `tag` input. It checks
+out `refs/tags/<tag>` (never a branch of the same name) in the `candidate` job and
+runs the source, package, review-linkage and consumer steps against it; the
+tag-push protection check and the publish steps do not run on a dispatch. The old
 `apps/skills/.github/workflows/publish.yml` was retired by the same change:
 GitHub Actions only discovers workflows from the repository root, so it never
 ran, and it published on a bare `v*` tag with no review linkage.
