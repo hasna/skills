@@ -1,0 +1,18 @@
+name: Negative control (c) - branch run requesting npm-release-skills
+
+# SH-00015 engineering control (c), temporary, never merged: a run on a branch that requests the
+# npm-release-skills environment must be refused by its deployment policy (npm/skills/v* tags only).
+# No id-token, no secrets, no steps beyond an echo.
+on:
+  push:
+    branches: [control-c-npm-release-env]
+
+permissions:
+  contents: read
+
+jobs:
+  request-environment:
+    runs-on: ubuntu-latest
+    environment: npm-release-skills
+    steps:
+      - run: echo "this step must never run"
