@@ -20,8 +20,10 @@ control.
 
 `npm-release-skills` is retired. Every earlier `npm/skills/v*` tag carries a
 workflow whose dispatch requested it with `id-token: write`, so it keeps its
-required reviewer and admits no ref. Do not delete it: a dispatch naming a
-missing environment would recreate it without protection.
+required reviewer and admits only `npm/skills/v0.0.0-retired`, a tag under the
+App-only ruleset that is never created. (An empty custom policy list admits every
+ref, so it is not used.) Do not delete it: a dispatch naming a missing
+environment would recreate it without protection.
 
 To release, the App creates the annotated tag through the API (a tag object with
 tagger `hasna-identity[bot]`, then the ref) at the exact release commit on main,

@@ -36,7 +36,8 @@ jobs:
   #
   # npm-release-skills is retired, not reused: every earlier npm/skills/v* tag carries a workflow whose dispatch
   # requested it with id-token: write and checked out an arbitrary `tag` input. It keeps its required reviewer and
-  # admits no ref, so those old workflows can never reach a publish credential again.
+  # admits only npm/skills/v0.0.0-retired, a tag that is never created, so those old workflows can never reach a
+  # publish credential again.
   candidate:
     if: github.repository == 'hasna/skills' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -106,13 +107,16 @@ jobs:
           policies="$(api environments/npm-publish-skills/deployment-branch-policies)"
           jq -e '[.branch_policies[] | {name, type}] == [{"name": "npm/skills/v*", "type": "tag"}]' <<< "$policies" > /dev/null \
             || refuse "npm-publish-skills must admit npm/skills/v* tags only"
-          # The retired environment must stay closed: a required reviewer and no admitted ref at all.
+          # The retired environment must stay closed: a required reviewer, and a policy admitting only
+          # npm/skills/v0.0.0-retired, a tag under the App-only ruleset that is never created. (An empty custom
+          # policy list admits every ref, measured 2026-10-22, so it is not used.)
           retired="$(api environments/npm-release-skills)"
           jq -e '.can_admins_bypass == false and .deployment_branch_policy.custom_branch_policies == true
             and ([.protection_rules[]?.type] | index("required_reviewers"))' <<< "$retired" > /dev/null \
             || refuse "npm-release-skills must keep its reviewer and a custom policy"
-          [ "$(api environments/npm-release-skills/deployment-branch-policies | jq '.branch_policies | length')" = 0 ] \
-            || refuse "npm-release-skills must admit no ref"
+          api environments/npm-release-skills/deployment-branch-policies \
+            | jq -e '[.branch_policies[] | {name, type}] == [{"name": "npm/skills/v0.0.0-retired", "type": "tag"}]' > /dev/null \
+            || refuse "npm-release-skills must admit only the never-created npm/skills/v0.0.0-retired tag"
           ids="$(api 'rulesets?targets=tag' | jq -r '[.[] | select(.name == "npm-skills-release-tags" and .target == "tag" and .enforcement == "active") | .id] | @tsv')"
           [ -n "$ids" ] && [ "$(wc -w <<< "$ids" | tr -d ' ')" = 1 ] || refuse "exactly one active npm-skills-release-tags ruleset is required"
           ruleset="$(api "rulesets/$ids")"
