@@ -1,0 +1,28 @@
+name: Workflow permissions gate
+
+# Only the release-tag publish job of release-skills.yml may request an id-token (SH-00015). npm publishes
+# @hasna/skills through OIDC trusted publishing alone, so this check keeps a newly merged job from minting a publish
+# token. It runs on every pull request and on main. Its job, id-token-grants, is made a required status check on
+# main once this workflow exists there; until then it is advisory.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  id-token-grants:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Only the release-tag publish job may request an id-token
+        run: ruby .github/scripts/id-token-gate.rb .github/workflows
+
+      - name: The gate refuses every other grant for its stated reason (fixtures and mutants)
+        run: bash .github/scripts/id-token-gate-controls.sh

@@ -29,10 +29,19 @@ permissions:
   contents: read
 
 jobs:
-  publish:
-    if: github.repository == 'hasna/skills'
+  # A dispatch (the candidate build or a tag dry run) holds no id-token and enters no publishing environment: it
+  # runs in skills-candidate, which has no protection rules and nothing that can publish. Only a pushed release
+  # tag reaches npm-publish-skills, whose deployment policy admits npm/skills/v* tags alone; a repository ruleset
+  # lets only the hasna-identity App create those tags (PLA8-00581, SH-00015). Both jobs run the same steps.
+  #
+  # npm-release-skills is retired, not reused: every earlier npm/skills/v* tag carries a workflow whose dispatch
+  # requested it with id-token: write and checked out an arbitrary `tag` input. It keeps its required reviewer and
+  # admits only npm/skills/v0.0.0-retired, a tag that is never created, so those old workflows can never reach a
+  # publish credential again.
+  candidate:
+    if: github.repository == 'hasna/skills' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    services:
+    services: &release-services
       postgres:
         image: postgres:16
         env:
@@ -46,29 +55,84 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-    # Skills-only environment: the first-time creation of this environment and
-    # its required-reviewer protection is a repository configuration step owned
-    # by the chief engineering seat. The workflow names it; it does not create it.
-    environment: npm-release-skills
+    # No publish credential: no id-token permission, and no publishing environment.
+    environment: skills-candidate
     timeout-minutes: 60
     permissions:
       contents: read
-      id-token: write
-    env:
+    env: &release-env
       NODE_OPTIONS: --max-old-space-size=14336
       # On a tag push this is the release tag. On a dispatch dry run it is the
       # `tag` input; without it the tag-dependent steps are skipped and nothing
       # can publish, because every publish step also requires a push event.
       RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
-    defaults:
+    defaults: &release-defaults
       run:
         shell: bash
-    steps:
+    steps: &release-steps
+      - name: Admit only a release tag push or a dispatch
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            workflow_dispatch) ;;
+            push) [[ "$REF" =~ ^refs/tags/npm/skills/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "refusing: $REF is not a release tag"; exit 1; } ;;
+            *) echo "refusing: event $EVENT_NAME"; exit 1 ;;
+          esac
+
+      # Defence in depth for a tag push (SH-00015, engineering conditions 4 and 5): the tag must be annotated by the
+      # hasna-identity App, and the protection that admitted this run must still be the recorded one. Every read is
+      # public for this repository; the token only avoids rate limits. Any difference refuses before checkout.
+      - name: Require the App's release tag and the recorded release protection
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          api() { curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' "https://api.github.com/repos/hasna/skills/$1"; }
+          refuse() { echo "refusing: $1"; exit 1; }
+          ref="$(api "git/ref/tags/$REF_NAME")"
+          [ "$(jq -r .object.type <<< "$ref")" = tag ] || refuse "the release tag is not annotated"
+          tag="$(api "git/tags/$(jq -r .object.sha <<< "$ref")")"
+          [ "$(jq -r .tagger.name <<< "$tag")" = "hasna-identity[bot]" ] || refuse "the release tag was not created by the hasna-identity App"
+          envjson="$(api environments/npm-publish-skills)"
+          jq -e '.can_admins_bypass == false
+            and .deployment_branch_policy.protected_branches == false
+            and .deployment_branch_policy.custom_branch_policies == true
+            and ([.protection_rules[]?.type] | index("required_reviewers") | not)' <<< "$envjson" > /dev/null \
+            || refuse "npm-publish-skills differs from the recorded configuration"
+          policies="$(api environments/npm-publish-skills/deployment-branch-policies)"
+          jq -e '[.branch_policies[] | {name, type}] == [{"name": "npm/skills/v*", "type": "tag"}]' <<< "$policies" > /dev/null \
+            || refuse "npm-publish-skills must admit npm/skills/v* tags only"
+          # The retired environment must stay closed: a required reviewer, and a policy admitting only
+          # npm/skills/v0.0.0-retired, a tag under the App-only ruleset that is never created. (An empty custom
+          # policy list admits every ref, measured 2026-10-22, so it is not used.)
+          retired="$(api environments/npm-release-skills)"
+          jq -e '.can_admins_bypass == false and .deployment_branch_policy.custom_branch_policies == true
+            and ([.protection_rules[]?.type] | index("required_reviewers"))' <<< "$retired" > /dev/null \
+            || refuse "npm-release-skills must keep its reviewer and a custom policy"
+          api environments/npm-release-skills/deployment-branch-policies \
+            | jq -e '[.branch_policies[] | {name, type}] == [{"name": "npm/skills/v0.0.0-retired", "type": "tag"}]' > /dev/null \
+            || refuse "npm-release-skills must admit only the never-created npm/skills/v0.0.0-retired tag"
+          ids="$(api 'rulesets?targets=tag' | jq -r '[.[] | select(.name == "npm-skills-release-tags" and .target == "tag" and .enforcement == "active") | .id] | @tsv')"
+          [ -n "$ids" ] && [ "$(wc -w <<< "$ids" | tr -d ' ')" = 1 ] || refuse "exactly one active npm-skills-release-tags ruleset is required"
+          ruleset="$(api "rulesets/$ids")"
+          # Public reads omit bypass_actors, so the App-only bypass is verified at configuration time, not here.
+          jq -e '.conditions.ref_name.include == ["refs/tags/npm/skills/v*"]
+            and ((.conditions.ref_name.exclude // []) == [])
+            and ([.rules[].type] | (index("creation") and index("update") and index("deletion")))' <<< "$ruleset" > /dev/null \
+            || refuse "the npm-skills-release-tags ruleset differs from the recorded configuration"
+          echo "release tag and protection verified"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # A dispatch dry run of a tag checks out that tag; a push uses its own
-          # event SHA, which the next step requires to be the tag's commit.
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.sha }}
+          # A dispatch dry run of a tag checks out that tag, qualified as refs/tags/ so a branch of the same name
+          # can never be chosen instead; a push uses its own event SHA, which the next step requires to be the
+          # tag's commit.
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag != '' && format('refs/tags/{0}', inputs.tag) || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -374,3 +438,20 @@ jobs:
             }
             throw new Error(`@hasna/skills@${version} was not fully visible after ten minutes (${last})`);
           '
+
+  publish:
+    if: github.repository == 'hasna/skills' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/npm/skills/v')
+    runs-on: ubuntu-latest
+    services: *release-services
+    # Skills-only publishing environment. Its deployment policy admits npm/skills/v*
+    # tags only, and only the hasna-identity App may create those tags. Changes to
+    # the environment or the ruleset are repository-protection changes owned by the
+    # engineering seat. The workflow names the environment; it does not create it.
+    environment: npm-publish-skills
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    env: *release-env
+    defaults: *release-defaults
+    steps: *release-steps
