@@ -273,7 +273,7 @@ test("unknown Codex versions, other copies and a stale plan refuse without writi
   const root = refresh(station, "1.1.0", BUMPED);
   const enabled = ["manage-schedules", "organize-space", "publish-page"].map(name => station.skill(root, name));
   const before = station.snapshot();
-  for (const version of ["codex-cli 0.164.0", "codex-cli 0.158.0", "codex-cli 0.163.1"]) {
+  for (const version of ["codex-cli 0.164.1", "codex-cli 0.165.0", "codex-cli 0.158.0", "codex-cli 0.163.1"]) {
     expect(await station.run(true, station.catalog(enabled, { version }))).toMatchObject({ outcome: "refused", code: "CODEX_NATIVE_SKILL_CATALOG_UNSUPPORTED_VERSION" });
     expect(station.snapshot()).toEqual(before);
   }

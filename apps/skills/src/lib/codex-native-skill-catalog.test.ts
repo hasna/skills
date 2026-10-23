@@ -90,7 +90,7 @@ test("native capture closes on refused requests, validation failures, and unsupp
   }
 });
 
-for (const version of ["codex-cli 0.160.2", "codex-cli 0.161.1", "codex-cli 0.162.2", "codex-cli 0.163.1", "codex-cli 0.164.0", "codex-cli 0.163.0-alpha.1", "codex-cli 0.163.0+build.1", "codex-cli 0.162.0-alpha.1", "codex-cli 0.162.0+build.1", "codex-cli 0.159.3", "codex-cli 0.160.1-alpha.1", "codex-cli 0.160.10", "0.160.1"])
+for (const version of ["codex-cli 0.160.2", "codex-cli 0.161.1", "codex-cli 0.162.2", "codex-cli 0.163.1", "codex-cli 0.164.1", "codex-cli 0.165.0", "codex-cli 0.163.0-alpha.1", "codex-cli 0.163.0+build.1", "codex-cli 0.162.0-alpha.1", "codex-cli 0.162.0+build.1", "codex-cli 0.159.3", "codex-cli 0.160.1-alpha.1", "codex-cli 0.160.10", "0.160.1"])
   test(`native capture refuses the unmeasured neighbour ${JSON.stringify(version)} before any read`, async () => {
     let closed = 0, requested = 0;
     const rpc: CodexHookRpc = { version, request: async (method) => { requested++; return method === "skills/list" ? response() : installed; }, close: async () => { closed++; } };

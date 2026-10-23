@@ -34,6 +34,11 @@ const MEASURED_CODEX_CAPABILITIES: Readonly<Record<string, readonly CodexNativeC
   // native hook trust, catalog and plugin probes. Its new `[plugins._default]`
   // can disable an entry without `enabled`; reviewed inactivity stays explicit.
   "codex-cli 0.163.0": ["hooks", "qualified-skill-catalog", "installed-plugin-review"],
+  // rust-v0.164.0 (6aaac69) retains the Skills RPC contracts; hooks/list adds
+  // preModelRequest/postModelRequest event names. Exact native acceptance covers
+  // catalog controls, plugin identity and version-guarded configuration writes.
+  // This entry does not grant corpus admission or enroll any hook trust.
+  "codex-cli 0.164.0": ["hooks", "qualified-skill-catalog", "installed-plugin-review"],
 };
 
 /** `installed-plugin-review`: the 0.160 `plugin/installed` source identities and
