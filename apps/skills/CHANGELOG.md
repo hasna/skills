@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.87
+
+- Admit the exact Codex 0.164.0 hook, native skill catalog and installed-plugin contracts after isolated native acceptance. Preserve rejection of unreviewed versions, mismatched native handshakes and unadmitted corpus writes.
+
 ## 0.10.86
 
 ### Patch Changes
