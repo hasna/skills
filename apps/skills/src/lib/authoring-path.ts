@@ -1,11 +1,12 @@
 import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
 import { lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { INTEGRATION_AGENTS } from "./agent-adapters.js";
-import { agentDiscoveryConfigPath, resolveAgentDiscovery, verifyAgentDiscovery, type AgentDiscoveryBinding } from "./agent-discovery.js";
+import { agentDiscoveryConfigPath, discoveryExecutable, recordedDiscoveryExecutable, resolveAgentDiscoveryExclusionRoots, type AgentDiscoveryBinding } from "./agent-discovery.js";
 import { getDataDirReadOnly } from "./config.js";
 import { readManagedSkillPolicySnapshot } from "./managed-policy.js";
+import { openNarrowedWitnessLedger } from "./narrowed-witness-ledger.js";
 
 /**
  * Roots that an agent may discover as native instructions.  Portable Skills
@@ -52,7 +53,8 @@ export interface PortableAuthoringPathOptions {
 }
 
 function contains(root: string, path: string): boolean {
-  return path === root || path.startsWith(root + sep);
+  const boundary = root.endsWith(sep) ? root : root + sep;
+  return path === root || path.startsWith(boundary);
 }
 
 /** Read the same configured discovery contract as the native bridge. Unknown
@@ -66,36 +68,47 @@ function configuredRoots(home: string, explicitHome: boolean): string[] {
   const homePolicy = readManagedSkillPolicySnapshot(homeData);
   const configuredPolicy = !explicitHome && resolve(getDataDirReadOnly()) !== resolve(homeData)
     ? readManagedSkillPolicySnapshot(getDataDirReadOnly()) : null;
-  const policy = homePolicy ?? configuredPolicy;
-  const bridge = policy?.value.bridge;
-  if (bridge && (typeof bridge.home !== "string" || physicalPath(bridge.home) !== physicalPath(home))) {
-    throw new Error("Native discovery policy belongs to a different home; refusing portable authoring");
-  }
   const roots: string[] = [];
-  const admitBinding = (binding: AgentDiscoveryBinding): void => {
-    if (!INTEGRATION_AGENTS.includes(binding.agent) || !binding.sources.some(source => source.path === physicalPath(agentDiscoveryConfigPath(home, binding.agent)))) {
-      throw new Error("Native discovery policy does not bind the current account configuration");
+  const admitPolicy = (value: Record<string, any>, dataDir: string): void => {
+    const current = value.bridge;
+    if (!current) return;
+    if (typeof current.home !== "string" || physicalPath(current.home) !== physicalPath(home)) throw new Error("Native discovery policy belongs to a different home; refusing portable authoring");
+    // Root exclusion accepts physical aliases, but an unresolved or retargeted
+    // retained alias is not evidence of the current discovery arrangement.
+    for (const alias of current.rootAliases ?? []) {
+      if (physicalPath(alias.home) !== physicalPath(home) || !["claude", "codex"].includes(alias.agent)
+        || alias.alias !== join(alias.home, `.${alias.agent}`)
+        || realpathSync(alias.alias) !== alias.target) throw new Error("Native discovery root alias is unresolved or changed");
     }
-    verifyAgentDiscovery(binding); roots.push(...binding.roots);
+    const narrowed = openNarrowedWitnessLedger(dataDir, { record: false });
+    for (const [agent, binding] of Object.entries(current.discovery ?? {}) as Array<[string, AgentDiscoveryBinding]>) {
+      if (!INTEGRATION_AGENTS.includes(binding.agent) || agent !== binding.agent || !["automatic", "reviewed"].includes(binding.method)
+        || [...binding.roots, ...binding.sources.map(source => source.path)].some(path => !isAbsolute(path) || resolve(path) !== path)
+        || !binding.sources.some(source => source.path === physicalPath(agentDiscoveryConfigPath(home, binding.agent)))) {
+        throw new Error("Native discovery policy does not bind the current account configuration");
+      }
+      const recorded = current.discoveryExecutables?.[agent];
+      const onPath = discoveryExecutable(binding.agent);
+      const executable = recorded ? recordedDiscoveryExecutable(binding.agent, recorded) : onPath;
+      if (recorded && (!executable || executable.target !== recorded.target || onPath && onPath.target !== recorded.target)
+        || !executable && (binding.builtinNames?.length || binding.agent === "gemini" && binding.sources.some(source => basename(source.path) === "package.json"))) {
+        throw new Error("Native discovery runtime target is unresolved or changed");
+      }
+      roots.push(...resolveAgentDiscoveryExclusionRoots({ home, agent: binding.agent, canonical: physicalPath, retained: binding, executable, narrowed }));
+    }
   };
-  if (homePolicy && configuredPolicy?.value.bridge) {
-    if (physicalPath(configuredPolicy.value.bridge.home) !== physicalPath(home)) throw new Error("Native discovery policy belongs to a different home; refusing portable authoring");
-    for (const binding of Object.values(configuredPolicy.value.bridge.discovery ?? {}) as AgentDiscoveryBinding[]) {
-      admitBinding(binding);
-    }
-  }
+  if (homePolicy) admitPolicy(homePolicy.value, homeData);
+  if (configuredPolicy) admitPolicy(configuredPolicy.value, getDataDirReadOnly());
   for (const agent of INTEGRATION_AGENTS) {
-    const binding = bridge?.discovery?.[agent] as AgentDiscoveryBinding | undefined;
-    if (binding !== undefined) {
-      if (binding.agent !== agent) throw new Error("Invalid native discovery policy binding");
-      admitBinding(binding);
-      continue;
-    }
+    if (homePolicy?.value.bridge?.discovery?.[agent] !== undefined || configuredPolicy?.value.bridge?.discovery?.[agent] !== undefined) continue;
     const nativeHome = join(home, agent === "opencode" ? ".config/opencode" : `.${agent}`);
     // Absent agent configuration has only the known default roots. Do not
     // inspect another account's installed runtime through an ambient PATH.
-    if (!lstatSync(nativeHome, { throwIfNoEntry: false })) continue;
-    roots.push(...resolveAgentDiscovery({ home, agent, canonical: physicalPath }).roots);
+    const sumiConfigured = agent === "sumi" && (Bun.which("sumi-paths") !== null
+      || lstatSync(join(home, ".config/sumi"), { throwIfNoEntry: false }) !== undefined
+      || ["SUMI_HOME", "SUMI_CONFIG_DIR", "SUMI_CONFIG", "SUMI_CONFIG_CONTENT"].some(key => process.env[key] !== undefined));
+    if (!lstatSync(nativeHome, { throwIfNoEntry: false }) && !sumiConfigured) continue;
+    roots.push(...resolveAgentDiscoveryExclusionRoots({ home, agent, canonical: physicalPath }));
   }
   return roots;
 }

@@ -513,6 +513,12 @@ function narrowedCodexConfig(config: Record<string, any>): Record<string, any> {
   }
   return result;
 }
+/** Root exclusion uses the same discovery projection as V7, including every
+ * profile and instruction/MCP control, without creating a settings witness. */
+export function codexDiscoveryControlKeys(config: Record<string, any>): string[] {
+  return Object.keys(narrowedCodexConfig(config));
+}
+
 function settingsDigestV7(text: string): string {
   need(Buffer.byteLength(text) <= 1024 * 1024);
   let config: any;
