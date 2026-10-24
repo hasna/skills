@@ -1,7 +1,7 @@
 import { captureSumiSettings, hashSumiSettingsReplacement, SUMI_DISCOVERY_PROJECTION_FIELDS } from "./sumi-settings-witness.js";
 import { AGENT_POLICY_LIMITS } from "./agent-policy-limits.js";
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { lstatSync, opendirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { parseHermesConfig, assertHermesEnvironment } from "./agent-hermes.js";
@@ -20,9 +20,9 @@ import { hashManagedPluginRegistry, type ManagedPluginRegistrationWitness } from
 import { readPluginBinding } from "./plugin-admission.js";
 import { captureClaudeMarketplaceRegistry, captureClaudeMarketplaceRegistryV2 } from "./claude-marketplace-registry.js";
 import { captureClaudeMarketplaceEntry, claudeMarketplaceEntrySourceValid } from "./claude-marketplace-entry-witness.js";
-import { hashNativeJsonControls, captureClaudeSettings, captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4, captureClaudeSettingsV5, hashClaudeSettingsReplacement, hashClaudeSettingsReplacementV2, hashClaudeSettingsReplacementV3, hashClaudeSettingsReplacementV4, hashClaudeSettingsReplacementV5 } from "./claude-settings-witness.js";
+import { claudeDiscoveryControlKeys, readNativeDiscoveryWitnessFile, parseNativeJsonObject, hashNativeJsonControls, captureClaudeSettings, captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4, captureClaudeSettingsV5, hashClaudeSettingsReplacement, hashClaudeSettingsReplacementV2, hashClaudeSettingsReplacementV3, hashClaudeSettingsReplacementV4, hashClaudeSettingsReplacementV5 } from "./claude-settings-witness.js";
 import { assertCodexHookDiscoveryRecovery, verifiesCodexHookDiscoverySource, type CodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery.js";
-import { hashCodexSettingsReplacement, hashCodexSettingsReplacementV2, hashCodexSettingsReplacementV3, hashCodexSettingsReplacementV4, hashCodexSettingsReplacementV5, captureCodexSettingsV7, hashCodexSettingsReplacementV7, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
+import { hashCodexSettingsReplacement, hashCodexSettingsReplacementV2, hashCodexSettingsReplacementV3, hashCodexSettingsReplacementV4, hashCodexSettingsReplacementV5, captureCodexSettingsV7, hashCodexSettingsReplacementV7, codexDiscoveryControlKeys, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
 import { narrowedLegacyWitnessMode, type NarrowedWitnessLedger } from "./narrowed-witness-ledger.js";
 import { absentDisabledCodexPluginParent, reviewedDisabledCodexPluginParent, reviewedRetiredCodexRoot, reviewedCodexPluginCapabilitiesUnchanged, reviewedCodexPluginSourceRoots, type CodexPluginSkillControl, type CodexPluginSourceInput } from "./codex-plugin-skill-controls.js";
 import { sumiConfigDirectory, sumiConfigPath } from "./agent-sumi.js";
@@ -595,6 +595,14 @@ function verifyCodexSemanticCacheDiscovery(binding: AgentDiscoveryBinding, revie
  * matches (see narrowed-witness-ledger.ts), and a matching one is observed.
  * Every other change and every other failure throws as before. */
 export function verifyAgentDiscovery(binding: AgentDiscoveryBinding, codexRecovery?: CodexHookDiscoveryRecovery, reviewedRootAliases?: readonly { agent: IntegrationAgent; alias: string; target: string }[], witnessTolerance?: NativeDiscoveryWitnessTolerance, narrowed?: NarrowedWitnessLedger): void {
+  verifyDiscovery(binding, codexRecovery, reviewedRootAliases, witnessTolerance, narrowed);
+}
+
+/** Shared verifier. Only root exclusion can omit the already-derived primary
+ * configuration; every other source, directory, retirement and semantic proof
+ * keeps the native verifier's existing meaning. Native admission never passes
+ * this exemption and no binding or witness is rewritten. */
+function verifyDiscovery(binding: AgentDiscoveryBinding, codexRecovery?: CodexHookDiscoveryRecovery, reviewedRootAliases?: readonly { agent: IntegrationAgent; alias: string; target: string }[], witnessTolerance?: NativeDiscoveryWitnessTolerance, narrowed?: NarrowedWitnessLedger, rootExclusionConfig?: string): void {
   if (codexRecovery) assertCodexHookDiscoveryRecovery(binding, codexRecovery);
   if (!binding || !Array.isArray(binding.sources) || !Array.isArray(binding.roots) || binding.sources.length > AGENT_POLICY_LIMITS.discoverySources || binding.roots.length > AGENT_POLICY_LIMITS.discoveryRoots) throw new Error("Invalid native discovery binding");
   if (binding.agent === "hermes" && !binding.directories?.length) throw new Error("Hermes discovery requires directory membership coverage; run skills hook install with a fresh discovery review");
@@ -631,6 +639,7 @@ export function verifyAgentDiscovery(binding: AgentDiscoveryBinding, codexRecove
     if (source.hashMode === "claude-plugin-registry" && binding.agent !== "claude") throw new Error("Managed Claude registry witnesses cannot apply to another agent");
     if (source.format !== undefined && (!["json", "toml", "yaml"].includes(source.format) || !Array.isArray(source.fields) || !source.fields.length || source.fields.length > 64 || source.fields.some(field => typeof field !== "string" || !field))) throw new Error("Invalid native discovery projection");
     if (source.sha256 !== null && !/^[a-f0-9]{64}$/.test(source.sha256)) throw new Error("Invalid native discovery digest");
+    if (rootExclusionConfig !== undefined && source.path === rootExclusionConfig) { safe(source.path); continue; }
     if (semanticCache?.supersededSources.some(previous => isDeepStrictEqual(previous, source))) { safe(source.path); continue; }
     // Preserve the original full inventory witness as evidence, while the
     // positively attested installation role binds current source identity.
@@ -997,18 +1006,170 @@ export function discoveryTextKeepsWitness(binding: Pick<AgentDiscoveryBinding, "
 /** `executable` is the agent's runtime: omitted, it is resolved through PATH;
  * a value (or null for none) is used as given, so verification never depends
  * on the caller's PATH. */
-export function resolveAgentDiscovery(options: { home: string; agent: IntegrationAgent; reviewed?: ReviewedDiscoveryInputs; retainedReview?: AgentDiscoveryBinding; canonical?: (path: string) => string; executable?: DiscoveryExecutable | null }): AgentDiscoveryBinding {
+type DiscoveryOptions = { home: string; agent: IntegrationAgent; reviewed?: ReviewedDiscoveryInputs; retainedReview?: AgentDiscoveryBinding; canonical?: (path: string) => string; executable?: DiscoveryExecutable | null };
+export function resolveAgentDiscovery(options: DiscoveryOptions): AgentDiscoveryBinding {
+  return resolveDiscovery(options);
+}
+
+/** Read-only exclusion, not native admission. Retained roots remain excluded,
+ * while current supported controls are re-derived even when old settings or
+ * directory witnesses are stale. Non-enumerable executable inputs still need
+ * their existing review. No witness, policy or enrollment is written. */
+export function resolveAgentDiscoveryExclusionRoots(options: Omit<DiscoveryOptions, "reviewed" | "retainedReview"> & { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger }): readonly string[] {
+  const current = resolveDiscovery(options, options);
+  const roots = [...new Set([...(options.retained?.roots ?? []), ...current.roots])];
+  if (roots.length > AGENT_POLICY_LIMITS.discoveryRoots) throw new Error("Native discovery exclusion roots exceed their bound");
+  return roots;
+}
+
+function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger }): AgentDiscoveryBinding {
   const canonical = options.canonical ?? resolve, home = resolve(options.home), agent = options.agent;
   const sources: DiscoverySource[] = [], roots = new Set<string>(), builtinNames: string[] = [];
+  const budget = discoveryByteBudget();
+  let remainingEntries = AGENT_POLICY_LIMITS.discoveryDirectoryEntries;
+  const entries = (path: string): string[] => {
+    if (!exclusion) return readdirSync(path);
+    const directory = opendirSync(path), names: string[] = [];
+    try {
+      for (let entry; (entry = directory.readSync()) !== null;) {
+        if (--remainingEntries < 0) throw new Error("Native discovery exclusion enumeration exceeds its bound");
+        names.push(entry.name);
+      }
+    } finally { directory.closeSync(); }
+    return names;
+  };
   const witness = (path: string, format?: "json" | "toml" | "yaml", fields?: string[], hashMode?: DiscoverySource["hashMode"]) => {
     const source: DiscoverySource = { path: canonical(path), sha256: null, ...(format ? { format, fields } : {}), ...(hashMode ? { hashMode } : {}) };
-    source.sha256 = projected(source); sources.push(source); return read(source.path);
+    if (exclusion && sources.length >= AGENT_POLICY_LIMITS.discoverySources) throw new Error("Native discovery exclusion sources exceed their bound");
+    if (exclusion) safe(source.path);
+    const raw = exclusion && lstatSync(source.path, { throwIfNoEntry: false })
+      ? readNativeDiscoveryWitnessFile(source.path, budget) : null;
+    if (exclusion && raw !== null && (format === "json" || source.path.endsWith(".json"))) parseNativeJsonObject(raw);
+    source.sha256 = projected(source, undefined, exclusion ? budget : undefined); sources.push(source); return exclusion ? raw : read(source.path);
   };
   if (agent === "hermes") assertHermesEnvironment(home);
   const configPath = agentDiscoveryConfigPath(home, agent);
   const configText = witness(configPath, agent === "hermes" ? "yaml" : agent === "codex" ? "toml" : "json", agent === "hermes" ? ["skills", "plugins", "hooks"] : agent === "claude" ? ["enabledPlugins", "extraKnownMarketplaces"] : agent === "codex" ? [...CODEX_DISCOVERY_PROJECTION_FIELDS] : agent === "gemini" ? ["skills", "extensions", "security"] : agent === "opencode" ? ["plugin", "skills"] : agent === "sumi" ? [...SUMI_DISCOVERY_PROJECTION_FIELDS] : ["version"]);
   const config: any = configText === null ? {} : agent === "hermes" ? parseHermesConfig(configText) : parseConfig(configText, configPath, agent === "codex");
   const unresolved = (detail: string): never => { throw new Error(`Native discovery is unresolved (${agent}: ${detail}); provide a reviewed --discovery-inputs file`); };
+  let opaqueClosureVerified = false;
+  const verifyOpaqueClosure = (declarations: readonly string[]): void => {
+    if (opaqueClosureVerified) return;
+    const retained = exclusion?.retained;
+    // An opaque declaration alone does not establish its executable behavior.
+    // Reuse the supplied review's full source population, never infer a shell
+    // dependency graph or manufacture a replacement no-injection attestation.
+    if (!retained) return unresolved("opaque executable dependency closure is unavailable");
+    if (retained.method !== "reviewed" || !retained.sources.some(source => source.path !== canonical(configPath)
+      && !declarations.includes(source.path) && source.sha256 !== null && source.format === undefined && source.fields === undefined
+      && [undefined, "bytes", "path-bytes", "executable-v1"].includes(source.hashMode))) unresolved("opaque executable dependency closure is unavailable");
+    verifyDiscovery(retained, undefined, undefined, undefined, exclusion?.narrowed, canonical(configPath));
+    opaqueClosureVerified = true;
+  };
+  if (exclusion) {
+    // Strict JSON syntax and collection limits come from the owning witness
+    // adapter. Settings outside its discovery projection may vary freely.
+    if (configText !== null && agent !== "codex" && agent !== "hermes") parseNativeJsonObject(configText);
+    const object = (value: unknown): value is Record<string, any> => Boolean(value && typeof value === "object" && !Array.isArray(value));
+    const keys = (value: unknown, allowed: readonly string[], label: string): void => {
+      if (!object(value) || Object.keys(value).some(key => !allowed.includes(key))) unresolved(`unsupported ${label} controls`);
+    };
+    const paths = (value: unknown, label: string): string[] => {
+      if (!Array.isArray(value) || value.length > AGENT_POLICY_LIMITS.discoveryRoots || value.some(path => typeof path !== "string" || !path || path.length > AGENT_POLICY_LIMITS.pathCharacters || /[\0$]/.test(path))) unresolved(`malformed or unbounded ${label}`);
+      return value as string[];
+    };
+    const supported: Record<IntegrationAgent, readonly string[]> = {
+      claude: ["enabledPlugins", "extraKnownMarketplaces", "hooks", "disableAllHooks", "disableBundledSkills", "syncClaudeAiSkills", "permissions"],
+      codex: ["plugins", "marketplaces", "skills", "hooks"],
+      gemini: ["skills", "extensions", "hooks", "hooksConfig"],
+      opencode: ["plugin", "skills"], cursor: ["hooks"], hermes: ["skills", "plugins", "hooks"], sumi: ["skills", "plugin", "plugins", "hooks"],
+    };
+    const controls = agent === "claude" ? claudeDiscoveryControlKeys(configText ?? "{}")
+      : agent === "codex" ? codexDiscoveryControlKeys(config)
+      : Object.keys(config).filter(key => /skill|plugin|hook|marketplace|extension|instruction/i.test(key));
+    if (controls.some(key => !supported[agent].includes(key))) unresolved("unknown discovery controls have no root-exclusion adapter");
+    // A command can register roots dynamically. An existing exact or narrowed
+    // settings review is required for that non-enumerable input only.
+    if (config.hooks !== undefined && !object(config.hooks)) unresolved("hooks must be an object");
+    const hasHooks = controls.includes("hooks") && config.hooks !== undefined && Object.keys(config.hooks).length > 0;
+    if (hasHooks) {
+      const retained = exclusion.retained;
+      const settings = retained?.sources.filter(source => source.path === canonical(configPath)
+        && source.sha256 !== null && source.format === undefined && source.fields === undefined) ?? [];
+      if (retained?.method !== "reviewed" || !settings.length || !settings.every(source => {
+        try { return projected(source, undefined, budget) === source.sha256 || exclusion.narrowed?.accepts(source) === true; }
+        catch { return exclusion.narrowed?.accepts(source) === true; }
+      })) unresolved("non-enumerable hooks require a current settings review");
+    }
+    if (agent === "claude") {
+      if (config.enabledPlugins !== undefined && !object(config.enabledPlugins)) unresolved("enabledPlugins must be an object");
+      if (config.extraKnownMarketplaces !== undefined) {
+        if (!object(config.extraKnownMarketplaces) || Object.keys(config.extraKnownMarketplaces).length > 512) unresolved("malformed or unbounded extraKnownMarketplaces");
+        for (const market of Object.values(config.extraKnownMarketplaces) as any[]) {
+          keys(market, ["source", "autoUpdate"], "Claude marketplace");
+          keys(market.source, ["source", "path"], "Claude marketplace source");
+          if (market.source.source !== "directory") unresolved("non-local marketplace roots require a dedicated exclusion adapter");
+          for (const path of paths([market.source.path], "Claude marketplace source")) {
+            if (!isAbsolute(path)) unresolved("relative marketplace root"); roots.add(canonical(path));
+          }
+        }
+      }
+      if (config.permissions !== undefined) {
+        if (!object(config.permissions)) unresolved("permissions must be an object");
+        for (const name of ["allow", "deny", "ask"]) if (config.permissions[name] !== undefined
+          && (!Array.isArray(config.permissions[name]) || config.permissions[name].length > 1024 || config.permissions[name].some((rule: unknown) => typeof rule !== "string"))) unresolved("malformed permission rules");
+        if (config.permissions.additionalDirectories !== undefined) for (const path of paths(config.permissions.additionalDirectories, "additional directories")) {
+          if (!isAbsolute(path)) unresolved("relative additional directory"); roots.add(canonical(path));
+        }
+      }
+    }
+    if (agent === "opencode") {
+      if (config.skills !== undefined) keys(config.skills, ["paths", "urls"], "OpenCode skills");
+      for (const key of ["paths", "urls"]) if (config.skills?.[key] !== undefined) paths(config.skills[key], `OpenCode skill ${key}`);
+      if (config.plugin !== undefined && (!Array.isArray(config.plugin) || config.plugin.length > 512)) unresolved("malformed OpenCode plugins");
+    }
+    if (agent === "sumi") {
+      if (config.skills !== undefined) paths(config.skills, "Sumi skills");
+      for (const key of ["plugin", "plugins"]) if (config[key] !== undefined && (!Array.isArray(config[key]) || config[key].length > 512)) unresolved("malformed Sumi plugins");
+    }
+    if (agent === "hermes" && config.skills !== undefined) {
+      keys(config.skills, ["external_dirs"], "Hermes skills");
+      if (config.skills.external_dirs !== undefined) paths(typeof config.skills.external_dirs === "string" ? [config.skills.external_dirs] : config.skills.external_dirs, "Hermes external directories");
+    }
+    if (agent === "gemini") {
+      if (config.skills !== undefined) {
+        keys(config.skills, ["enabled", "disabled", "paths"], "Gemini skills");
+        for (const key of ["disabled", "paths"]) if (config.skills[key] !== undefined) paths(config.skills[key], `Gemini skill ${key}`);
+      }
+      if (config.extensions !== undefined && !object(config.extensions)) unresolved("extensions must be an object");
+    }
+    if (agent === "codex") {
+      for (const key of ["plugins", "marketplaces"]) if (config[key] !== undefined && !object(config[key])) unresolved(`malformed Codex ${key}`);
+      for (const value of Object.values(config.plugins ?? {})) keys(value, ["enabled"], "Codex plugin registration");
+      for (const value of Object.values(config.marketplaces ?? {})) keys(value, ["source_type", "source"], "Codex marketplace registration");
+      if (config.skills !== undefined) keys(config.skills, ["config", "bundled"], "Codex skills");
+      if (config.skills?.bundled !== undefined) {
+        keys(config.skills.bundled, ["enabled"], "Codex bundled skills");
+        if (typeof config.skills.bundled.enabled !== "boolean") unresolved("malformed Codex bundled skills");
+      }
+      if (config.skills?.config !== undefined) {
+        if (!Array.isArray(config.skills.config) || config.skills.config.length > 512) unresolved("malformed Codex skill configuration");
+        for (const row of config.skills.config) {
+          keys(row, ["path", "name", "enabled"], "Codex skill entry");
+          if (typeof row.enabled !== "boolean" || (row.path !== undefined) === (row.name !== undefined)
+            || row.name !== undefined && (typeof row.name !== "string" || !row.name.trim())) unresolved("malformed Codex skill entry");
+          if (row.path !== undefined) {
+            paths([row.path], "Codex skill path");
+            if (!isAbsolute(row.path)) unresolved("relative Codex skill path");
+            const path = canonical(row.path); roots.add(path.endsWith(`${sep}SKILL.md`) ? dirname(path) : path);
+          }
+        }
+      }
+    }
+    if (Object.keys(config.enabledPlugins ?? config.plugins ?? config.extensions ?? {}).length > 512) unresolved("unbounded native registrations");
+    if (hasHooks) verifyOpaqueClosure([]);
+  }
+
   if (options.reviewed && (options.reviewed.version !== 1 || !Array.isArray(options.reviewed.agents) || options.reviewed.agents.some(item => !item || typeof item !== "object") || new Set(options.reviewed.agents.map(item => item.agent)).size !== options.reviewed.agents.length)) throw new Error("Invalid --discovery-inputs version or agents");
   const review = options.reviewed?.agents.find(item => item.agent === agent);
   if (agent === "sumi") {
@@ -1022,7 +1183,7 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
     }
     for (const key of ["plugin", "plugins"]) if (config[key] !== undefined && !Array.isArray(config[key])) unresolved(`${key} must be an array`);
     const plugins = [join(directory, "plugin"), join(directory, "plugins")];
-    for (const path of plugins) { safe(path); if (lstatSync(path, { throwIfNoEntry: false })?.isDirectory()) for (const name of readdirSync(path).sort()) {
+    for (const path of plugins) { safe(path); if (lstatSync(path, { throwIfNoEntry: false })?.isDirectory()) for (const name of entries(path).sort()) {
       if (name === "skills-cli.js" && path === plugins[1]) continue;
       const target = join(path, name);
       if (!lstatSync(target).isFile()) unresolved("local plugin packages need a dedicated discovery adapter");
@@ -1030,7 +1191,7 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
     } }
     for (const root of roots) {
       safe(root);
-      if (lstatSync(root, { throwIfNoEntry: false })?.isDirectory() && readdirSync(root).some(name => name.endsWith(".md"))) unresolved("flat markdown skills require a dedicated native migration adapter");
+      if (lstatSync(root, { throwIfNoEntry: false })?.isDirectory() && entries(root).some(name => name.endsWith(".md"))) unresolved("flat markdown skills require a dedicated native migration adapter");
     }
   }
   if (agent === "hermes") {
@@ -1061,7 +1222,7 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
       if (!packageRoot) unresolved("installed Gemini package layout is not recognized");
       const builtinRoot = join(packageRoot!, "bundle/builtin"); safe(builtinRoot);
       if (!lstatSync(builtinRoot, { throwIfNoEntry: false })?.isDirectory()) unresolved("installed Gemini builtin root is missing");
-      for (const name of readdirSync(builtinRoot).sort()) {
+      for (const name of entries(builtinRoot).sort()) {
         const text = witness(join(builtinRoot, name, "SKILL.md"));
         const match = text?.match(/^---\r?\n[\s\S]*?^name:\s*([a-z0-9][a-z0-9-]*)\s*$/m);
         if (!match?.[1] || builtinNames.includes(match[1])) unresolved("installed Gemini builtin name is missing or ambiguous");
@@ -1153,17 +1314,35 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
 
   function plugin(root: string): void {
     root = canonical(root); safe(root);
+    if (exclusion) roots.add(root);
     const manifestPath = join(root, agent === "claude" ? ".claude-plugin/plugin.json" : ".codex-plugin/plugin.json");
     const raw = witness(manifestPath, undefined, undefined, agent === "claude" ? "claude-plugin-manifest-v1" : undefined); if (raw === null) unresolved("plugin manifest missing");
     const manifest = parseConfig(raw!, manifestPath);
+    if (exclusion && Object.keys(manifest).some(key => /skill|plugin|hook|marketplace|extension|instruction/i.test(key) && !["skills", "hooks"].includes(key))) unresolved("unknown plugin discovery controls");
     const hooks = witness(join(root, "hooks/hooks.json"));
-    if (manifest.hooks !== undefined || hooks !== null) unresolved("plugin hooks require a separate no-skill-injection review");
+    if (manifest.hooks !== undefined || hooks !== null) {
+      if (!exclusion || exclusion.retained?.method !== "reviewed") unresolved("plugin hooks require a separate no-skill-injection review");
+      const required = [manifestPath, ...(hooks !== null ? [join(root, "hooks/hooks.json")] : [])];
+      if (manifest.hooks !== undefined) {
+        if (typeof manifest.hooks !== "string") unresolved("unsupported plugin hooks target");
+        const hook = resolve(root, manifest.hooks);
+        if (!hook.startsWith(root + sep)) unresolved("plugin hooks target escapes its root");
+        required.push(hook);
+      }
+      for (const path of required) {
+        const saved = exclusion!.retained!.sources.filter(source => source.path === canonical(path)
+          && source.sha256 !== null && source.format === undefined && source.fields === undefined);
+        if (!saved.length || saved.some(source => projected(source, undefined, budget) !== source.sha256)) unresolved("plugin hooks require current independently reviewed sources");
+      }
+      verifyOpaqueClosure(required.map(path => canonical(path)));
+    }
     const commands = join(root, "commands"); safe(commands);
-    if (agent === "claude" && (manifest.commands !== undefined || (lstatSync(commands, { throwIfNoEntry: false })?.isDirectory() && readdirSync(commands).length))) unresolved("legacy command discovery requires retirement or a dedicated format adapter");
+    if (agent === "claude" && (manifest.commands !== undefined || (lstatSync(commands, { throwIfNoEntry: false })?.isDirectory() && entries(commands).length))) unresolved("legacy command discovery requires retirement or a dedicated format adapter");
     const rootSkill = witness(join(root, "SKILL.md"));
     if (rootSkill !== null) roots.add(root);
     const declared = manifest.skills === undefined ? ["./skills"] : typeof manifest.skills === "string" ? [manifest.skills] : manifest.skills;
-    if (!Array.isArray(declared) || declared.some(path => typeof path !== "string")) unresolved("unsupported plugin skill paths");
+    if (!Array.isArray(declared) || declared.some(path => typeof path !== "string")
+      || exclusion && (declared.length > AGENT_POLICY_LIMITS.discoveryRoots || declared.some(path => !path || path.length > AGENT_POLICY_LIMITS.pathCharacters || /[\0$]/.test(path)))) unresolved("unsupported plugin skill paths");
     if (agent === "claude") roots.add(join(root, "skills"));
     for (const value of declared) {
       const path = resolve(root, value);
@@ -1175,12 +1354,13 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
     const registrations = witness(join(home, ".claude/plugins/installed_plugins.json"));
     const installed = registrations === null ? {} : parseConfig(registrations, join(home, ".claude/plugins/installed_plugins.json")).plugins;
     const commands = canonical(join(home, ".claude/commands")); safe(commands);
-    if (lstatSync(commands, { throwIfNoEntry: false })?.isDirectory() && readdirSync(commands).length) unresolved("legacy home command discovery requires a dedicated format adapter");
+    if (lstatSync(commands, { throwIfNoEntry: false })?.isDirectory() && entries(commands).length) unresolved("legacy home command discovery requires a dedicated format adapter");
     for (const [id, enabled] of Object.entries(config.enabledPlugins ?? {})) {
       if (enabled === false) continue;
       if (enabled !== true) unresolved("unsupported plugin enablement");
       const matches = installed?.[id];
       if (!Array.isArray(matches) || matches.length !== 1 || typeof matches[0]?.installPath !== "string" || matches[0]?.scope !== "user") unresolved("enabled plugin registration is missing or ambiguous");
+      if (exclusion && (!isAbsolute(matches[0].installPath) || resolve(matches[0].installPath) !== matches[0].installPath || matches[0].installPath.length > AGENT_POLICY_LIMITS.pathCharacters)) unresolved("malformed plugin installation root");
       plugin(matches[0].installPath);
     }
   } else if (agent === "codex") {
@@ -1201,7 +1381,7 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
     if ((config.plugin?.length ?? 0) > 0 || config.skills?.urls?.length) unresolved("external plugin or remote skill source");
     for (const path of config.skills?.paths ?? []) { if (typeof path !== "string" || !isAbsolute(path)) unresolved("relative or malformed added skill root"); roots.add(path); }
     const localPlugins = join(home, ".config/opencode/plugins"); safe(localPlugins);
-    if (lstatSync(localPlugins, { throwIfNoEntry: false }) && readdirSync(localPlugins).some(name => name !== "skills-cli.js")) unresolved("additional local plugin hooks require review");
+    if (lstatSync(localPlugins, { throwIfNoEntry: false }) && entries(localPlugins).some(name => name !== "skills-cli.js")) unresolved("additional local plugin hooks require review");
   } else if (agent === "sumi") {
     if ((config.plugin?.length ?? 0) > 0 || (config.plugins?.length ?? 0) > 0 || sources.some(source => source.path !== canonical(configPath) && source.path !== canonical(join(sumiConfigDirectory(home), "sumi.jsonc")) && source.sha256 !== null)) unresolved("external or foreign local plugins require review");
   } else if (agent === "hermes") {
@@ -1216,7 +1396,7 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
     // Extension files under the normal directory are also inventoried. A linked
     // development extension must be reviewed instead of following its symlink.
     const directory = join(home, ".gemini/extensions"); safe(directory);
-    if (lstatSync(directory, { throwIfNoEntry: false })) for (const name of readdirSync(directory)) {
+    if (lstatSync(directory, { throwIfNoEntry: false })) for (const name of entries(directory)) {
       const root = join(directory, name); safe(root);
       if (!lstatSync(root)?.isDirectory()) continue;
       const raw = witness(join(root, "gemini-extension.json"));
@@ -1226,5 +1406,6 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
       roots.add(join(root, "skills"));
     }
   }
+  if (exclusion && roots.size > AGENT_POLICY_LIMITS.discoveryRoots) unresolved("native discovery roots exceed their bound");
   return { agent, roots: [...roots].sort(), sources, method: "automatic", ...(agent === "gemini" ? { builtinNames } : {}), ...(agent === "hermes" ? { directories: captureDiscoveryDirectories([join(home, ".hermes/plugins"), join(home, ".hermes/hermes-agent")].map(path => canonical(path))) } : {}) };
 }

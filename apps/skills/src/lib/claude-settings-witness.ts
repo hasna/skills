@@ -23,6 +23,13 @@ function parents(path: string): Array<[string, BigIntStats]> {
 }
 export function readNativeSettingsWitnessFile(path: string, budget: ClaudeSettingsWitnessBudget, filename: "settings.json" | "config.toml" | "sumi.json" | "marketplace.json" = "settings.json"): string {
   absolutePath(path); need(basename(path) === filename, `requires ${filename}`);
+  return readNativeDiscoveryWitnessFile(path, budget);
+}
+
+/** The same bounded, stable, strict-UTF8 read for root-exclusion inputs whose
+ * filenames are selected by the owning agent adapter rather than settings. */
+export function readNativeDiscoveryWitnessFile(path: string, budget: ClaudeSettingsWitnessBudget): string {
+  absolutePath(path);
   need(Number.isSafeInteger(budget.remaining) && budget.remaining >= 0, "has an invalid byte budget");
   const ancestors = parents(path), initial = lstatSync(path, { bigint: true });
   need(initial.isFile() && !initial.isSymbolicLink() && initial.size <= BigInt(CLAUDE_SETTINGS_WITNESS_LIMITS.bytes), "is not a bounded regular file");
@@ -385,6 +392,13 @@ function narrowedClaudeSettings(value: ObjectValue): ObjectValue {
   }
   return { kind: "object", entries };
 }
+/** Current discovery controls, parsed by the same bounded, duplicate-key-safe
+ * adapter as the v5 witness. Root exclusion consumes this without changing a
+ * stored review or accepting that review for native loading. */
+export function claudeDiscoveryControlKeys(text: string): string[] {
+  return narrowedClaudeSettings(parseNativeJsonObject(text)).entries.map(([key]) => key);
+}
+
 function settingsDigestV5(text: string): string {
   return createHash("sha256").update("hasna.skills.claude-settings.v5\0").update(JSON.stringify(canonical(narrowedClaudeSettings(parse(text))))).digest("hex");
 }
