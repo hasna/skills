@@ -10,7 +10,7 @@ import { upgradeCodexSettingsWitness, upgradeCodexSettingsWitnessV3, upgradeCode
 import { upgradeClaudeSettingsWitness, upgradeClaudeSettingsWitnessV4, upgradeClaudeSettingsWitnessV5, hashNativeJsonControls } from "./claude-settings-witness.js";
 import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
 import { captureCodexSemanticCacheWitness, codexLocalMarketplaceMapsPlugin, type CodexSemanticCacheAppOnlyParent, type CodexSemanticCacheReviewedHookParent } from "./codex-semantic-cache-witness.js";
-import { NATIVE_SKILL_ROOTS, nativeProjectAncestorDirectories } from "./native-discovery-roots.js";
+import { NATIVE_SKILL_ROOTS, nativeProjectAncestorDirectories, nativeSumiProjectSkillRoots } from "./native-discovery-roots.js";
 import type { NativeDiscoveryWitnessChange, NativeDiscoveryWitnessKind, NativeDiscoveryWitnessTolerance } from "./native-discovery-witness-change.js";
 import { openNarrowedWitnessLedger } from "./narrowed-witness-ledger.js";
 import { NativeBridgeIntegrityRefusal, NativeSkillPolicyRefusal } from "./native-drift-receipt.js";
@@ -363,8 +363,7 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
   for (const project of projectAncestorDirectories([...(options.projectDirs ?? []), ...(options.projectDir ? [options.projectDir] : [])])) {
     for (const [agent, path] of rootDefinitions) roots.push([agent, canonicalAgentPath(join(project, path), aliases)]);
     if (selectedAgents?.has("sumi")) {
-      for (const path of sumiSkillRoots(home, project)) roots.push(["sumi", canonicalAgentPath(path, aliases)]);
-      for (const directory of [".claude", ".agents"]) for (const name of ["skill", "skills"]) roots.push(["sumi", canonicalAgentPath(join(project, directory, name), aliases)]);
+      for (const path of nativeSumiProjectSkillRoots(home, project, sumiSkillRoots)) roots.push(["sumi", canonicalAgentPath(path, aliases)]);
     }
   }
   const installationInputs=options.codexInstallationInputRoots ?? [];

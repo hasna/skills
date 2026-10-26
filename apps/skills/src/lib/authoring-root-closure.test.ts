@@ -9,6 +9,8 @@ import { scaffoldPortableSkill } from "./portable-skills.js";
 import { prepareSkill } from "./prepare-skill.js";
 import { installSumiPathsFixture } from "./sumi-paths.fixture.js";
 import { resolveAgentDiscovery } from "./agent-discovery.js";
+import { sumiSkillRoots } from "./agent-sumi.js";
+import { inventoryNativeSkills } from "./agent-integration.js";
 
 useDefaultTestTimeout();
 
@@ -94,3 +96,52 @@ for (const root of [".agents/skills", ".cursor/skills"]) {
     } finally { process.chdir(cwd); }
   });
 }
+
+for (const root of [".agents/skill", ".claude/skill"]) {
+  test(`${root} supplemental project tier refuses direct and child-alias authoring`, () => {
+    const f = fixture(), project = join(f.home, "project"), child = join(project, "nested/work");
+    mkdirSync(child, { recursive: true });
+    const seeded = scaffoldPortableSkill("synthetic-existing", { homeDir: f.home, rootDir: f.corpus, kind: "instruction" });
+    const native = join(project, root), direct = join(native, "synthetic-direct"); mkdirSync(direct, { recursive: true });
+    writeFileSync(join(direct, "SKILL.md"), "---\nname: synthetic-direct\ndescription: Synthetic inventory fixture\n---\nSynthetic fixture.\n");
+    withSumi("sumi", f.home, () => {
+      expect(inventoryNativeSkills(f.home, { agents: ["sumi"], projectDir: child }).some(entry => entry.agent === "sumi" && entry.path === direct)).toBe(true);
+    });
+    symlinkSync(seeded.path, join(native, "synthetic-existing"));
+    const cwd = process.cwd(); process.chdir(child);
+    try {
+      expect(() => assertPortableAuthoringPath(join(native, "new"), { homeDir: f.home })).toThrow("native discovery root");
+      const manifest = join(seeded.path, "skill.json"), before = readFileSync(manifest);
+      expect(() => prepareSkill("synthetic-existing", { homeDir: f.home, rootDir: f.corpus, version: "1.0.1" })).toThrow("native discovery root");
+      expect(readFileSync(manifest).equals(before)).toBe(true);
+      expect(() => scaffoldPortableSkill("synthetic-private", { homeDir: f.home, rootDir: f.privateCorpus, kind: "instruction" })).not.toThrow();
+    } finally { process.chdir(cwd); }
+  });
+}
+
+test("Sumi's cwd-relative resolver root is excluded for every project ancestor", () => {
+  const f = fixture(), project = join(f.home, "project"), child = join(project, "nested/work");
+  mkdirSync(child, { recursive: true });
+  const seeded = scaffoldPortableSkill("synthetic-existing", { homeDir: f.home, rootDir: f.corpus, kind: "instruction" });
+  withSumi("sumi", f.home, () => {
+    const previous = process.env.SUMI_CONFIG_DIR, cwd = process.cwd();
+    process.env.SUMI_CONFIG_DIR = ".project-sumi"; process.chdir(child);
+    try {
+      const root = sumiSkillRoots(f.home, project)[0]!;
+      expect(root).toBe(join(project, ".project-sumi/skills"));
+      expect(root).not.toBe(sumiSkillRoots(f.home, child)[0]);
+      const direct = join(root, "synthetic-direct"); mkdirSync(direct, { recursive: true });
+      writeFileSync(join(direct, "SKILL.md"), "---\nname: synthetic-direct\ndescription: Synthetic inventory fixture\n---\nSynthetic fixture.\n");
+      expect(inventoryNativeSkills(f.home, { agents: ["sumi"], projectDir: child }).some(entry => entry.agent === "sumi" && entry.path === direct)).toBe(true);
+      symlinkSync(seeded.path, join(root, "synthetic-existing"));
+      expect(() => assertPortableAuthoringPath(join(root, "new"), { homeDir: f.home })).toThrow("native discovery root");
+      const manifest = join(seeded.path, "skill.json"), before = readFileSync(manifest);
+      expect(() => prepareSkill("synthetic-existing", { homeDir: f.home, rootDir: f.corpus, version: "1.0.1" })).toThrow("native discovery root");
+      expect(readFileSync(manifest).equals(before)).toBe(true);
+      expect(() => scaffoldPortableSkill("synthetic-private", { homeDir: f.home, rootDir: f.privateCorpus, kind: "instruction" })).not.toThrow();
+    } finally {
+      process.chdir(cwd);
+      if (previous === undefined) delete process.env.SUMI_CONFIG_DIR; else process.env.SUMI_CONFIG_DIR = previous;
+    }
+  });
+});

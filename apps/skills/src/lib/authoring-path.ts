@@ -1,4 +1,4 @@
-import { NATIVE_SKILL_ROOTS, nativeProjectAncestorDirectories } from "./native-discovery-roots.js";
+import { NATIVE_SKILL_ROOTS, nativeProjectAncestorDirectories, nativeSumiProjectSkillRoots } from "./native-discovery-roots.js";
 import { lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
@@ -8,6 +8,7 @@ import { getDataDirReadOnly } from "./config.js";
 import { readManagedSkillPolicySnapshot } from "./managed-policy.js";
 import { openNarrowedWitnessLedger } from "./narrowed-witness-ledger.js";
 import { assertHermesEnvironment } from "./agent-hermes.js";
+import { sumiSkillRoots } from "./agent-sumi.js";
 
 /**
  * Roots that an agent may discover as native instructions.  Portable Skills
@@ -73,6 +74,13 @@ function selectedNativeHomes(): Array<{ agent: "codex" | "claude"; path: string 
   return homes;
 }
 
+function sumiDiscoveryConfigured(home: string): boolean {
+  return Bun.which("sumi-paths", { PATH: process.env.PATH ?? "" }) !== null
+    || lstatSync(join(home, ".sumi"), { throwIfNoEntry: false }) !== undefined
+    || lstatSync(join(home, ".config/sumi"), { throwIfNoEntry: false }) !== undefined
+    || ["SUMI_HOME", "SUMI_CONFIG_DIR", "SUMI_CONFIG", "SUMI_CONFIG_CONTENT"].some(key => process.env[key] !== undefined);
+}
+
 /** Read the same configured discovery contract as the native bridge. Unknown
  * registrations must first be reviewed through Skills; they are not ignored
  * merely because the proposed destination has an ordinary directory name. */
@@ -120,9 +128,7 @@ function configuredRoots(home: string, explicitHome: boolean): string[] {
     const nativeHome = join(home, agent === "opencode" ? ".config/opencode" : `.${agent}`);
     // Absent agent configuration has only the known default roots. Do not
     // inspect another account's installed runtime through an ambient PATH.
-    const sumiConfigured = agent === "sumi" && (Bun.which("sumi-paths", { PATH: process.env.PATH ?? "" }) !== null
-      || lstatSync(join(home, ".config/sumi"), { throwIfNoEntry: false }) !== undefined
-      || ["SUMI_HOME", "SUMI_CONFIG_DIR", "SUMI_CONFIG", "SUMI_CONFIG_CONTENT"].some(key => process.env[key] !== undefined));
+    const sumiConfigured = agent === "sumi" && sumiDiscoveryConfigured(home);
     if (!lstatSync(nativeHome, { throwIfNoEntry: false }) && !sumiConfigured) continue;
     roots.push(...resolveAgentDiscoveryExclusionRoots({ home, agent, canonical: physicalPath }));
   }
@@ -146,8 +152,10 @@ export function assertPortableAuthoringPath(path: string, options: PortableAutho
   // Compare both sides physically: the destination may name the real target
   // of ~/.codex, without spelling any recognizable native path components.
   const contexts = [...new Set([home, ...nativeProjectAncestorDirectories([process.cwd()], physicalPath)])];
+  const resolveSumiRoots = sumiDiscoveryConfigured(home) ? sumiSkillRoots : () => [];
   const defaults = contexts.flatMap(context => [
     ...NATIVE_DISCOVERY_ROOTS.map(parts => join(context, ...parts)),
+    ...nativeSumiProjectSkillRoots(home, context, resolveSumiRoots),
     join(context, ".codex/plugins/cache"), join(context, ".claude/plugins/cache"),
     join(context, ".claude/plugins/synced"), join(context, ".claude/commands"), join(context, ".gemini/extensions"),
   ]);
