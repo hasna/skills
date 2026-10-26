@@ -276,7 +276,15 @@ test("a refused pin whose automatic migration ran out of budget says so, keeping
 
 test("Sumi native consumption verifies the actual CLI producer, bridge path and current disk custody",async()=>{
   const f=await fixture("sumi");
-  const bridgePath=join(sumiBridgeRoot(f.home,f.home,f.env),"skills-cli","SKILL.md");
+  // Native path discovery resolves its executable through ambient PATH.
+  // Scope both synchronous reads to this fixture's synthetic resolver.
+  const ambientPath=process.env.PATH;
+  const [bridgePath,configPath]=(()=>{
+    process.env.PATH=f.env.PATH;
+    try {return [join(sumiBridgeRoot(f.home,f.home,f.env),"skills-cli","SKILL.md"),sumiConfigPath(f.home,f.home,f.env)] as const}
+    finally {if(ambientPath === undefined) delete process.env.PATH;else process.env.PATH=ambientPath}
+  })();
+  expect(process.env.PATH).toBe(ambientPath);
   const content=CLI_BRIDGE_FILES["SKILL.md"]!.replace(/^---\n[\s\S]*?\n---\n/,""),description=/^description: (.+)$/m.exec(CLI_BRIDGE_FILES["SKILL.md"]!)![1]!;
   let nativeSkill:any={id:"skills-cli",name:"skills-cli",path:bridgePath,content,description};
   const digest=(value:string)=>createHash("sha256").update(value).digest("hex");
@@ -310,7 +318,7 @@ test("Sumi native consumption verifies the actual CLI producer, bridge path and 
     await hooks.get("prompt")({sessionID:"ordinary",prompt:{text:"ordinary"}});
     const event={sessionID:"ordinary",system:[] as any[]};await hooks.get("context")(event);expect(event.system[0]?.text).toContain("Skills warning: native discovery changed");
     writeFileSync(bridgePath,original);expect(readFileSync(bridgePath,"utf8")).toBe(original);await tool();
-    const configPath=sumiConfigPath(f.home,f.home,f.env),configOriginal=readFileSync(configPath,"utf8"),config=JSON.parse(configOriginal);
+    const configOriginal=readFileSync(configPath,"utf8"),config=JSON.parse(configOriginal);
     config.permissions=[];writeFileSync(configPath,JSON.stringify(config));
     expect((await before(descriptor)).value.decision).toBe("block");await expect(tool()).rejects.toThrow("Skills verification blocked");
     writeFileSync(configPath,configOriginal);expect(readFileSync(configPath,"utf8")).toBe(configOriginal);await tool();
