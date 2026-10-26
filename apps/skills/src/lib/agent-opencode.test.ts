@@ -14,7 +14,7 @@ setDefaultTimeout(30_000);
 const acceptsV2 = (plugin: any) => plugin !== null && typeof plugin === "object"
   && typeof plugin.id === "string" && (typeof plugin.setup === "function" || typeof plugin.effect === "function");
 
-async function fixture(failAt?: string) {
+async function fixture(failAt?: string, missingCommand = false) {
   const root = mkdtempSync(join(tmpdir(), "skills-opencode-v2-"));
   const log = join(root, "calls"), mode = join(root, "mode"), state = join(root, "state");
   writeFileSync(mode, "normal");
@@ -24,11 +24,12 @@ import { appendFileSync, readFileSync, writeFileSync, existsSync } from "node:fs
 const input = JSON.parse(await Bun.stdin.text());
 appendFileSync(${JSON.stringify(log)}, JSON.stringify({ input, args: process.argv.slice(2) }) + "\\n");
 const mode = readFileSync(${JSON.stringify(mode)}, "utf8");
-if (mode === "hang") await new Promise(() => {});
-if (mode === "delay") await Bun.sleep(150);
-if (mode === "exit") process.exit(1);
+if (mode === "hang") await new Promise(() => { setInterval(() => {}, 1000); });
+if (mode === "delay" || mode === "delay-exit") await Bun.sleep(150);
+if (mode === "exit" || mode === "delay-exit") { console.error("UNTRUSTED /private/path"); process.exit(1); }
 if (mode === "malformed") { console.log("bad-json"); process.exit(0); }
 if (mode === "large") { console.log("x".repeat(1048577)); process.exit(0); }
+if (["null","array","empty","unexpected"].includes(mode)) { console.log(JSON.stringify(mode === "null" ? null : mode === "array" ? [] : mode === "empty" ? {} : { context:"UNTRUSTED /private/path" })); process.exit(0); }
 if (mode === "block" || mode === "continue-false") { console.log(JSON.stringify({ decision:mode === "block" ? "block" : undefined, continue:false, reason:"UNTRUSTED /private/path" })); process.exit(0); }
 const selections = existsSync(${JSON.stringify(state)}) ? JSON.parse(readFileSync(${JSON.stringify(state)}, "utf8")) : {};
 if (input.prompt === "$owner-fixture") selections[input.session_id] = "Verified synthetic selection";
@@ -36,7 +37,7 @@ writeFileSync(${JSON.stringify(state)}, JSON.stringify(selections));
 console.log(JSON.stringify({nativeBridgeVerified: input.hook_event_name === "BeforeTool" && mode !== "bridge-warning",hookSpecificOutput:{hookEventName:mode === "wrong-event" ? "Wrong" : input.hook_event_name,additionalContext:mode === "wrong-context" ? 12 : selections[input.session_id] ?? ""}}));
 `);
   chmodSync(command, 0o700);
-  writeFileSync(pluginPath, renderOpenCodePlugin(command, "engineering"));
+  writeFileSync(pluginPath, renderOpenCodePlugin(missingCommand ? command + "-missing" : command, "engineering"));
   const plugin = (await import(pluginPath)).default;
   const hooks = new Map<string, any>(), disposed: string[] = [], removed: string[] = [];
   const register = async (name: string, callback: any) => {
@@ -116,9 +117,9 @@ test("session custody failures stop before running the child", async () => {
   await dispose();
 });
 
-test("malformed responses and explicit refusals block without exposing child output", async () => {
+test("explicit policy refusals block without exposing child output", async () => {
   const f = await fixture(), dispose = await f.plugin.setup(f.ctx);
-  for (const mode of ["block","continue-false","malformed","wrong-event","wrong-context","exit","large"]) {
+  for (const mode of ["block","continue-false"]) {
     writeFileSync(f.mode, mode);
     const event = {sessionID:mode,system:[] as Array<{type:string;text:string}>,messages:[]};
     let error: any;
@@ -129,6 +130,69 @@ test("malformed responses and explicit refusals block without exposing child out
     expect(event.system).toEqual([]);
   }
   await dispose();
+});
+
+test("optional context transport and response failures continue ordinary work with fixed diagnostics", async () => {
+  const f = await fixture(), dispose = await f.plugin.setup(f.ctx);
+  for (const mode of ["exit","malformed","wrong-event","wrong-context","large","null","array","unexpected","hang"]) {
+    writeFileSync(f.mode, mode);
+    await f.hooks.get("prompt")({sessionID:mode,prompt:{text:"genuine admitted prompt"}});
+    const event = {sessionID:mode,system:[] as Array<{type:string;text:string}>,messages:[{role:"user",content:"$owner-fixture"}]};
+    await f.hooks.get("context")(event);
+    expect(event.system).toHaveLength(1);
+    expect(event.system[0]!.text).toContain("Skills context is unavailable [SKILLS_HOOK_");
+    expect(event.system[0]!.text).toContain("Ordinary work may continue.");
+    expect(event.system[0]!.text).not.toContain("UNTRUSTED");
+    expect(event.system[0]!.text).not.toContain("/private/path");
+    expect(event.system[0]!.text).not.toContain(f.root);
+    expect(event.system[0]!.text.length).toBeLessThan(600);
+    expect(f.calls().at(-1).input.prompt).toBe("genuine admitted prompt");
+    writeFileSync(f.mode,"normal");
+    const retry={sessionID:mode,system:[] as Array<{type:string;text:string}>,messages:event.messages};
+    await f.hooks.get("context")(retry);
+    expect(retry.system).toEqual([]);
+    expect(f.calls().at(-1).input).toMatchObject({hook_event_name:"SessionStart",prompt:""});
+  }
+  // The owning hookContextOutput also returns exactly {} for valid empty
+  // delivery. Preserve that protocol alongside matched-event empty strings.
+  for(const mode of ["empty","normal"]) {
+    writeFileSync(f.mode,mode);
+    await f.hooks.get("prompt")({sessionID:mode,prompt:{text:"admitted empty context"}});
+    const event={sessionID:mode,system:[] as Array<{type:string;text:string}>,messages:[]};
+    await f.hooks.get("context")(event); await f.hooks.get("context")(event);
+    expect(event.system).toEqual([]);
+    expect(f.calls().at(-1).input).toMatchObject({hook_event_name:"UserPromptSubmit",prompt:""});
+  }
+  await dispose();
+  const missing=await fixture(undefined,true), stop=await missing.plugin.setup(missing.ctx);
+  await missing.hooks.get("prompt")({sessionID:"owner",prompt:{text:"ordinary prompt"}});
+  const event={sessionID:"owner",system:[] as Array<{type:string;text:string}>,messages:[]};
+  await missing.hooks.get("context")(event);
+  expect(event.system[0]!.text).toContain("[SKILLS_HOOK_SPAWN_FAILED]");
+  expect(event.system[0]!.text).not.toContain(missing.root);
+  await stop();
+});
+
+test("native tool and attachment verification fail closed on every unavailable child", async () => {
+  const f=await fixture(),dispose=await f.plugin.setup(f.ctx);
+  for(const mode of ["exit","malformed","wrong-event","wrong-context","large","null","array","empty","unexpected"]) {
+    writeFileSync(f.mode,mode);
+    await expect(f.hooks.get("execute.before")({sessionID:"owner",tool:"skill",input:{id:"skills-cli"}})).rejects.toThrow("Skills verification blocked");
+    await expect(f.hooks.get("prompt")({sessionID:"owner",prompt:{text:"",skills:[{id:"skills-cli"}]}})).rejects.toThrow("Skills verification blocked");
+  }
+  writeFileSync(f.mode,"hang");
+  const expectRefusal=(pending:Promise<unknown>)=>pending.then(() => { throw Error("Unexpected native acceptance"); }, (error:Error) => {
+    expect(error.message).toContain("Skills verification blocked");
+  });
+  await Promise.all([
+    expectRefusal(f.hooks.get("execute.before")({sessionID:"owner",tool:"skill",input:{id:"skills-cli"}})),
+    expectRefusal(f.hooks.get("prompt")({sessionID:"owner",prompt:{text:"",skills:[{id:"skills-cli"}]}})),
+  ]);
+  await dispose();
+  const missing=await fixture(undefined,true),stop=await missing.plugin.setup(missing.ctx);
+  await expect(missing.hooks.get("execute.before")({sessionID:"owner",tool:"skill",input:{id:"skills-cli"}})).rejects.toThrow("Skills verification blocked");
+  await expect(missing.hooks.get("prompt")({sessionID:"owner",prompt:{text:"",skills:[{id:"skills-cli"}]}})).rejects.toThrow("Skills verification blocked");
+  await stop();
 });
 
 test("setup failure cleans prior registrations and disposal cancels pending hook children", async () => {
@@ -191,5 +255,21 @@ test("same-session queued admissions include separators and preserve input arriv
   // separator would exceed the same character limit the CLI applies.
   await prompt("x".repeat(128*1024-1)); await prompt("");
   await expect(prompt("")).rejects.toThrow();
+  await dispose();
+});
+
+test("unavailable context consumes only captured admissions and retains newly arriving input", async () => {
+  const f=await fixture(),dispose=await f.plugin.setup(f.ctx);
+  const prompt=(text:string)=>f.hooks.get("prompt")({sessionID:"owner",prompt:{text}});
+  const context=()=>f.hooks.get("context")({sessionID:"owner",system:[] as Array<{type:string;text:string}>,messages:[]});
+  await prompt("captured before failure"); writeFileSync(f.mode,"delay-exit");
+  const pending=context();
+  for(let i=0;i<100;i++) { try { if(f.calls().length===1) break; } catch {} await Bun.sleep(5); }
+  expect(f.calls()).toHaveLength(1);
+  await prompt("arrived during failure"); await pending;
+  writeFileSync(f.mode,"normal"); await context();
+  expect(f.calls().at(-1).input).toMatchObject({hook_event_name:"SessionStart",prompt:"arrived during failure"});
+  await context();
+  expect(f.calls().at(-1).input).toMatchObject({hook_event_name:"UserPromptSubmit",prompt:""});
   await dispose();
 });

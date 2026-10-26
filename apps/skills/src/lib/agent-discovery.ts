@@ -1019,12 +1019,6 @@ export function resolveAgentDiscoveryExclusionRoots(options: Omit<DiscoveryOptio
   if (options.nativeHome !== undefined && (!["claude", "codex"].includes(options.agent) || !isAbsolute(options.nativeHome))) throw new Error("Unsupported native discovery exclusion home");
   const current = resolveDiscovery(options, options);
   const roots = [...new Set([...(options.retained?.roots ?? []), ...current.roots])];
-  if (options.agent === "claude" || options.agent === "codex") {
-    const nativeHome = options.nativeHome ?? join(options.home, `.${options.agent}`);
-    const nativeRoots = [join(nativeHome, "skills"), join(nativeHome, "plugins/cache")];
-    if (options.agent === "claude") nativeRoots.push(join(nativeHome, "plugins/synced"), join(nativeHome, "commands"));
-    roots.push(...nativeDiscoveryAliasTargets([...nativeRoots, ...current.roots], options.home));
-  }
   if (roots.length > AGENT_POLICY_LIMITS.discoveryRoots) throw new Error("Native discovery exclusion roots exceed their bound");
   return roots;
 }
@@ -1032,7 +1026,7 @@ export function resolveAgentDiscoveryExclusionRoots(options: Omit<DiscoveryOptio
 /** Metadata-only closure of aliases inside the selected native discovery
  * trees. Never search the account generally or load a payload/plugin. Each
  * resolved alias remains excluded while unrelated portable paths stay usable. */
-function nativeDiscoveryAliasTargets(roots: readonly string[], home: string): string[] {
+export function nativeDiscoveryAliasTargets(roots: readonly string[], home: string): string[] {
   const targets = new Set<string>(), visited = new Set<string>();
   let remaining = AGENT_POLICY_LIMITS.discoveryDirectoryEntries;
   const queue = roots.map(path => ({ path, parents: [] as string[] }));
