@@ -10,7 +10,7 @@ import { upgradeCodexSettingsWitness, upgradeCodexSettingsWitnessV3, upgradeCode
 import { upgradeClaudeSettingsWitness, upgradeClaudeSettingsWitnessV4, upgradeClaudeSettingsWitnessV5, hashNativeJsonControls } from "./claude-settings-witness.js";
 import { supportsCodexNativeCapability } from "./codex-native-compatibility.js";
 import { captureCodexSemanticCacheWitness, codexLocalMarketplaceMapsPlugin, type CodexSemanticCacheAppOnlyParent, type CodexSemanticCacheReviewedHookParent } from "./codex-semantic-cache-witness.js";
-import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
+import { NATIVE_SKILL_ROOTS, nativeProjectAncestorDirectories, nativeSumiProjectSkillRoots } from "./native-discovery-roots.js";
 import type { NativeDiscoveryWitnessChange, NativeDiscoveryWitnessKind, NativeDiscoveryWitnessTolerance } from "./native-discovery-witness-change.js";
 import { openNarrowedWitnessLedger } from "./narrowed-witness-ledger.js";
 import { NativeBridgeIntegrityRefusal, NativeSkillPolicyRefusal } from "./native-drift-receipt.js";
@@ -333,15 +333,7 @@ export function selectNativeMigrationTargets(inventory: NativeSkillEntry[], mani
 
 /** Native project discovery includes each ancestor; migration must inspect the same roots as hooks. */
 function projectAncestorDirectories(projects: string[]): string[] {
-  const directories = new Set<string>();
-  for (const project of projects) {
-    for (let path = canonicalSystemPath(project), depth = 0; ; depth++) {
-      if (depth >= 100) throw new Error("NATIVE_SKILL_DRIFT: project ancestor discovery limit exceeded");
-      directories.add(path);
-      const parent = dirname(path); if (parent === path) break; path = parent;
-    }
-  }
-  return [...directories];
+  return nativeProjectAncestorDirectories(projects, canonicalSystemPath);
 }
 
 /** Shared native discovery participates regardless of the selecting adapter. */
@@ -371,8 +363,7 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
   for (const project of projectAncestorDirectories([...(options.projectDirs ?? []), ...(options.projectDir ? [options.projectDir] : [])])) {
     for (const [agent, path] of rootDefinitions) roots.push([agent, canonicalAgentPath(join(project, path), aliases)]);
     if (selectedAgents?.has("sumi")) {
-      for (const path of sumiSkillRoots(home, project)) roots.push(["sumi", canonicalAgentPath(path, aliases)]);
-      for (const directory of [".claude", ".agents"]) for (const name of ["skill", "skills"]) roots.push(["sumi", canonicalAgentPath(join(project, directory, name), aliases)]);
+      for (const path of nativeSumiProjectSkillRoots(home, project, sumiSkillRoots)) roots.push(["sumi", canonicalAgentPath(path, aliases)]);
     }
   }
   const installationInputs=options.codexInstallationInputRoots ?? [];

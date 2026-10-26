@@ -1,13 +1,14 @@
-import { NATIVE_SKILL_ROOTS } from "./native-discovery-roots.js";
+import { NATIVE_SKILL_ROOTS, nativeProjectAncestorDirectories, nativeSumiProjectSkillRoots } from "./native-discovery-roots.js";
 import { lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { INTEGRATION_AGENTS } from "./agent-adapters.js";
-import { agentDiscoveryConfigPath, discoveryExecutable, recordedDiscoveryExecutable, resolveAgentDiscoveryExclusionRoots, type AgentDiscoveryBinding } from "./agent-discovery.js";
+import { agentDiscoveryConfigPath, discoveryExecutable, recordedDiscoveryExecutable, resolveAgentDiscoveryExclusionRoots, nativeDiscoveryAliasTargets, type AgentDiscoveryBinding } from "./agent-discovery.js";
 import { getDataDirReadOnly } from "./config.js";
 import { readManagedSkillPolicySnapshot } from "./managed-policy.js";
 import { openNarrowedWitnessLedger } from "./narrowed-witness-ledger.js";
 import { assertHermesEnvironment } from "./agent-hermes.js";
+import { sumiSkillRoots } from "./agent-sumi.js";
 
 /**
  * Roots that an agent may discover as native instructions.  Portable Skills
@@ -73,6 +74,13 @@ function selectedNativeHomes(): Array<{ agent: "codex" | "claude"; path: string 
   return homes;
 }
 
+function sumiDiscoveryConfigured(home: string): boolean {
+  return Bun.which("sumi-paths", { PATH: process.env.PATH ?? "" }) !== null
+    || lstatSync(join(home, ".sumi"), { throwIfNoEntry: false }) !== undefined
+    || lstatSync(join(home, ".config/sumi"), { throwIfNoEntry: false }) !== undefined
+    || ["SUMI_HOME", "SUMI_CONFIG_DIR", "SUMI_CONFIG", "SUMI_CONFIG_CONTENT"].some(key => process.env[key] !== undefined);
+}
+
 /** Read the same configured discovery contract as the native bridge. Unknown
  * registrations must first be reviewed through Skills; they are not ignored
  * merely because the proposed destination has an ordinary directory name. */
@@ -120,9 +128,7 @@ function configuredRoots(home: string, explicitHome: boolean): string[] {
     const nativeHome = join(home, agent === "opencode" ? ".config/opencode" : `.${agent}`);
     // Absent agent configuration has only the known default roots. Do not
     // inspect another account's installed runtime through an ambient PATH.
-    const sumiConfigured = agent === "sumi" && (Bun.which("sumi-paths") !== null
-      || lstatSync(join(home, ".config/sumi"), { throwIfNoEntry: false }) !== undefined
-      || ["SUMI_HOME", "SUMI_CONFIG_DIR", "SUMI_CONFIG", "SUMI_CONFIG_CONTENT"].some(key => process.env[key] !== undefined));
+    const sumiConfigured = agent === "sumi" && sumiDiscoveryConfigured(home);
     if (!lstatSync(nativeHome, { throwIfNoEntry: false }) && !sumiConfigured) continue;
     roots.push(...resolveAgentDiscoveryExclusionRoots({ home, agent, canonical: physicalPath }));
   }
@@ -145,18 +151,24 @@ export function assertPortableAuthoringPath(path: string, options: PortableAutho
   const selected = selectedNativeHomes();
   // Compare both sides physically: the destination may name the real target
   // of ~/.codex, without spelling any recognizable native path components.
-  const defaults = NATIVE_DISCOVERY_ROOTS.map(parts => join(home, ...parts));
-  defaults.push(join(home, ".codex/plugins/cache"), join(home, ".claude/plugins/cache"), join(home, ".claude/plugins/synced"), join(home, ".gemini/extensions"));
+  const contexts = [...new Set([home, ...nativeProjectAncestorDirectories([process.cwd()], physicalPath)])];
+  const resolveSumiRoots = sumiDiscoveryConfigured(home) ? sumiSkillRoots : () => [];
+  const defaults = contexts.flatMap(context => [
+    ...NATIVE_DISCOVERY_ROOTS.map(parts => join(context, ...parts)),
+    ...nativeSumiProjectSkillRoots(home, context, resolveSumiRoots),
+    join(context, ".codex/plugins/cache"), join(context, ".claude/plugins/cache"),
+    join(context, ".claude/plugins/synced"), join(context, ".claude/commands"), join(context, ".gemini/extensions"),
+  ]);
   // Each discovery subroot can itself be a symlink outside its native home.
   // Canonicalizing the home alone would leave that subroot's physical target
   // writable through an ordinary-looking path. Keep the same known skill and
   // plugin-cache roots as the default-home boundary, plus Claude's legacy
   // commands directory inspected by the owning discovery resolver.
   for (const value of selected) {
-    defaults.push(value.path, join(value.path, "skills"), join(value.path, "plugins/cache"));
+    defaults.push(join(value.path, "skills"), join(value.path, "plugins/cache"));
     if (value.agent === "claude") defaults.push(join(value.path, "plugins/synced"), join(value.path, "commands"));
   }
-  for (const root of defaults) {
+  for (const root of [...defaults, ...selected.map(value => value.path)]) {
     if (candidates.some(candidate => [resolve(root), physicalPath(root)].some(nativeRoot => contains(nativeRoot, candidate) || contains(candidate, nativeRoot)))) native ??= root;
   }
   if (native) {
@@ -172,6 +184,14 @@ export function assertPortableAuthoringPath(path: string, options: PortableAutho
   }
   for (const root of roots) {
     if (candidates.some(candidate => [resolve(root), physicalPath(root)].some(nativeRoot => contains(nativeRoot, candidate) || contains(candidate, nativeRoot)))) {
+      throw new Error(`Refusing portable Skills authoring below configured native discovery root: ${lexical}`);
+    }
+  }
+  // One alias closure covers the complete owned default inventory and every
+  // current/retained configured root, regardless of the provider label. This
+  // includes shared roots and providers without an enrollment adapter.
+  for (const root of nativeDiscoveryAliasTargets([...new Set([...defaults, ...roots])], home)) {
+    if (candidates.some(candidate => contains(root, candidate) || contains(candidate, root))) {
       throw new Error(`Refusing portable Skills authoring below configured native discovery root: ${lexical}`);
     }
   }
