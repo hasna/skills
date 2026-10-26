@@ -147,7 +147,15 @@ export function assertPortableAuthoringPath(path: string, options: PortableAutho
   // of ~/.codex, without spelling any recognizable native path components.
   const defaults = NATIVE_DISCOVERY_ROOTS.map(parts => join(home, ...parts));
   defaults.push(join(home, ".codex/plugins/cache"), join(home, ".claude/plugins/cache"), join(home, ".claude/plugins/synced"), join(home, ".gemini/extensions"));
-  defaults.push(...selected.map(value => value.path));
+  // Each discovery subroot can itself be a symlink outside its native home.
+  // Canonicalizing the home alone would leave that subroot's physical target
+  // writable through an ordinary-looking path. Keep the same known skill and
+  // plugin-cache roots as the default-home boundary, plus Claude's legacy
+  // commands directory inspected by the owning discovery resolver.
+  for (const value of selected) {
+    defaults.push(value.path, join(value.path, "skills"), join(value.path, "plugins/cache"));
+    if (value.agent === "claude") defaults.push(join(value.path, "plugins/synced"), join(value.path, "commands"));
+  }
   for (const root of defaults) {
     if (candidates.some(candidate => [resolve(root), physicalPath(root)].some(nativeRoot => contains(nativeRoot, candidate) || contains(candidate, nativeRoot)))) native ??= root;
   }

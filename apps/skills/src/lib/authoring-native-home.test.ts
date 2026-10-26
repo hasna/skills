@@ -12,9 +12,9 @@ function fixture() {
   const home = mkdtempSync(join(tmpdir(), "authoring-native-home-"));
   return { home, native: join(home, "native-user"), corpus: join(home, "private-corpus") };
 }
-function withOverride(key: string, value: string, run: () => void) {
+function withOverride(key: string, value: string | undefined, run: () => void) {
   const previous = process.env[key];
-  process.env[key] = value;
+  if (value === undefined) delete process.env[key]; else process.env[key] = value;
   try { run(); } finally {
     if (previous === undefined) delete process.env[key]; else process.env[key] = previous;
   }
@@ -24,6 +24,59 @@ function put(path: string, text: string) {
 }
 
 for (const variable of ["CODEX_HOME", "CLAUDE_CONFIG_DIR"]) {
+  for (const mode of ["equal", "alias", "unset"]) test(`${variable} protects default-home child aliases when override is ${mode}`, () => {
+    const f = fixture(), agent = variable === "CODEX_HOME" ? "codex" : "claude";
+    const native = join(f.home, `.${agent}`), external = join(f.home, "external-default-child"), alias = join(f.home, "default-alias");
+    mkdirSync(join(native, "skills"), { recursive: true }); mkdirSync(external);
+    put(join(external, "SKILL.md"), "---\nname: synthetic-existing\ndescription: Synthetic existing skill\n---\nFixture.\n");
+    symlinkSync(external, join(native, "skills/synthetic-existing")); symlinkSync(native, alias);
+    withOverride(variable, mode === "unset" ? undefined : mode === "equal" ? native : alias, () => {
+      expect(() => scaffoldPortableSkill("synthetic-probe", { homeDir: f.home, rootDir: external, kind: "instruction" })).toThrow("configured native discovery root");
+      expect(existsSync(join(external, "synthetic-probe"))).toBe(false);
+      expect(() => scaffoldPortableSkill("synthetic-private", { homeDir: f.home, rootDir: f.corpus, kind: "instruction" })).not.toThrow();
+      expect(() => assertPortableAuthoringPath(external + "-sibling/probe", { homeDir: f.home })).not.toThrow();
+    });
+  });
+  test(`${variable} excludes an existing child skill alias while private authoring remains available`, () => {
+    const f = fixture(), external = join(f.home, "external-child");
+    mkdirSync(join(f.native, "skills"), { recursive: true }); mkdirSync(external);
+    put(join(external, "SKILL.md"), "---\nname: synthetic-existing\ndescription: Synthetic existing skill\n---\nFixture.\n");
+    symlinkSync(external, join(f.native, "skills/synthetic-existing"));
+    withOverride(variable, f.native, () => {
+      expect(() => scaffoldPortableSkill("synthetic-probe", { homeDir: f.home, rootDir: external, kind: "instruction" })).toThrow("configured native discovery root");
+      expect(existsSync(join(external, "synthetic-probe"))).toBe(false);
+      expect(() => scaffoldPortableSkill("synthetic-private", { homeDir: f.home, rootDir: f.corpus, kind: "instruction" })).not.toThrow();
+      expect(() => assertPortableAuthoringPath(external + "-sibling/probe", { homeDir: f.home })).not.toThrow();
+    });
+  });
+  test(`${variable} refuses broken or cyclic child aliases`, () => {
+    for (const cyclic of [false, true]) {
+      const f = fixture(), skills = join(f.native, "skills"); mkdirSync(skills, { recursive: true });
+      symlinkSync(cyclic ? skills : join(f.home, "missing"), join(skills, "synthetic-link"));
+      withOverride(variable, f.native, () => {
+        expect(() => scaffoldPortableSkill("synthetic-probe", { homeDir: f.home, rootDir: f.corpus, kind: "instruction" })).toThrow();
+        expect(existsSync(f.corpus)).toBe(false);
+      });
+    }
+  });
+  test(`${variable} excludes physical targets of symlinked native discovery subroots`, () => {
+    const f = fixture();
+    const suffixes = variable === "CODEX_HOME" ? ["skills", "plugins/cache"] : ["skills", "plugins/cache", "plugins/synced", "commands"];
+    for (const [index, suffix] of suffixes.entries()) {
+      const external = join(f.home, `external-native-${index}`), lexical = join(f.native, suffix);
+      mkdirSync(external); mkdirSync(dirname(lexical), { recursive: true }); symlinkSync(external, lexical);
+      withOverride(variable, f.native, () => {
+        for (const rootDir of [lexical, external]) {
+          expect(() => scaffoldPortableSkill("synthetic-probe", { homeDir: f.home, rootDir, kind: "instruction" })).toThrow("native discovery root");
+          expect(existsSync(join(external, "synthetic-probe/SKILL.md"))).toBe(false);
+        }
+        expect(() => assertPortableAuthoringPath(join(external + "-sibling", "probe"), { homeDir: f.home })).not.toThrow();
+      });
+    }
+    withOverride(variable, f.native, () => {
+      expect(() => scaffoldPortableSkill("synthetic-private", { homeDir: f.home, rootDir: f.corpus, kind: "instruction" })).not.toThrow();
+    });
+  });
   test(`${variable} refuses native authoring before any payload or corpus creation`, () => {
     const f = fixture(), rootDir = join(f.native, "skills");
     withOverride(variable, f.native, () => {

@@ -1019,8 +1019,49 @@ export function resolveAgentDiscoveryExclusionRoots(options: Omit<DiscoveryOptio
   if (options.nativeHome !== undefined && (!["claude", "codex"].includes(options.agent) || !isAbsolute(options.nativeHome))) throw new Error("Unsupported native discovery exclusion home");
   const current = resolveDiscovery(options, options);
   const roots = [...new Set([...(options.retained?.roots ?? []), ...current.roots])];
+  if (options.agent === "claude" || options.agent === "codex") {
+    const nativeHome = options.nativeHome ?? join(options.home, `.${options.agent}`);
+    const nativeRoots = [join(nativeHome, "skills"), join(nativeHome, "plugins/cache")];
+    if (options.agent === "claude") nativeRoots.push(join(nativeHome, "plugins/synced"), join(nativeHome, "commands"));
+    roots.push(...nativeDiscoveryAliasTargets([...nativeRoots, ...current.roots], options.home));
+  }
   if (roots.length > AGENT_POLICY_LIMITS.discoveryRoots) throw new Error("Native discovery exclusion roots exceed their bound");
   return roots;
+}
+
+/** Metadata-only closure of aliases inside the selected native discovery
+ * trees. Never search the account generally or load a payload/plugin. Each
+ * resolved alias remains excluded while unrelated portable paths stay usable. */
+function nativeDiscoveryAliasTargets(roots: readonly string[], home: string): string[] {
+  const targets = new Set<string>(), visited = new Set<string>();
+  let remaining = AGENT_POLICY_LIMITS.discoveryDirectoryEntries;
+  const queue = roots.map(path => ({ path, parents: [] as string[] }));
+  for (let index = 0; index < queue.length; index++) {
+    const { path, parents } = queue[index]!;
+    if (path.length > AGENT_POLICY_LIMITS.pathCharacters || parents.length > AGENT_POLICY_LIMITS.discoveryPathSteps || --remaining < 0) throw new Error("Native discovery alias enumeration exceeds its bound");
+    const info = lstatSync(path, { throwIfNoEntry: false });
+    if (!info) { if (parents.length) throw new Error(`Native discovery alias input disappeared: ${path}`); continue; }
+    const physical = realpathSync(path);
+    if (info.isSymbolicLink()) targets.add(physical);
+    if (targets.size > AGENT_POLICY_LIMITS.discoveryRoots) throw new Error("Native discovery alias roots exceed their bound");
+    if (parents.includes(physical)) throw new Error(`Native discovery alias cycle: ${path}`);
+    if (visited.has(physical)) continue;
+    visited.add(physical);
+    const resolved = lstatSync(physical);
+    if (!resolved.isDirectory()) continue;
+    // Such a link makes account-wide traversal possible. Refuse it rather
+    // than scanning the account or mistaking a bounded prefix for closure.
+    const account = realpathSync(home);
+    if (physical === dirname(physical) || account === physical || account.startsWith(physical + sep)) throw new Error(`Native discovery alias expands to an account ancestor: ${path}`);
+    const directory = opendirSync(physical);
+    try {
+      for (let entry; (entry = directory.readSync()) !== null;) {
+        if (--remaining < 0) throw new Error("Native discovery alias enumeration exceeds its bound");
+        if (entry.isDirectory() || entry.isSymbolicLink()) queue.push({ path: join(physical, entry.name), parents: [...parents, physical] });
+      }
+    } finally { directory.closeSync(); }
+  }
+  return [...targets];
 }
 
 function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger; nativeHome?: string }): AgentDiscoveryBinding {
