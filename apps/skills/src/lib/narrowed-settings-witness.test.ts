@@ -18,6 +18,7 @@ import { boundedDriftReason, clearNativeDriftReceipt, isNativeSkillDrift, NATIVE
 import { renderOpenCodePlugin } from "./agent-adapters.js";
 import { renderHermesSupervisor } from "./agent-hermes.js";
 import { renderSumiPlugin } from "./agent-sumi.js";
+import { CLI_BRIDGE_FILES } from "./agent-bridge.js";
 
 useDefaultTestTimeout();
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -404,27 +405,46 @@ test("drift receipts are bounded, escaped, private and never create the app home
   expect(recordNativeDriftReceipt(data, "../x", "e", message)).toBeNull();
 });
 
-test("every adapter's drift envelope is one its native consumer accepts without refusing", () => {
+test("every adapter's drift envelope is one its native consumer accepts without refusing", async () => {
   const root = scratch(), data = join(root, "data"); mkdirSync(data);
   const message = "NATIVE_SKILL_DRIFT: Native discovery input changed; run skills hook install with a fresh discovery review: /home/u/.claude/settings.json";
-  // The exact acceptance checks the managed plugins and supervisor apply to a
-  // CLI result, read from the rendered sources so a contract change is noticed.
-  const opencode = renderOpenCodePlugin("/opt/skills", "default"), sumi = renderSumiPlugin("/opt/skills", "default"), hermes = renderHermesSupervisor("/opt/skills", "default");
-  expect(opencode).toContain('if (result.decision === "block" || result.continue === false) throw');
-  expect(opencode).toContain("result.hookSpecificOutput.hookEventName !== input.hook_event_name");
-  expect(sumi).toContain('if (result.decision === "block" || result.continue === false) throw');
-  expect(sumi).toContain("result.hookSpecificOutput.hookEventName !== input.hook_event_name");
+  const hermes = renderHermesSupervisor("/opt/skills", "default");
   expect(hermes).toContain('(output.action === "continue" && keys === "action")');
   expect(hermes).toContain('keys !== "context"');
-  const contextPlugin = (result: any, event: string) => {
-    if (result.decision === "block" || result.continue === false) return "refused";
-    if (Object.keys(result).length && (!result.hookSpecificOutput || result.hookSpecificOutput.hookEventName !== event)) return "invalid";
-    return result.hookSpecificOutput?.additionalContext ?? "";
-  };
-  for (const agent of ["sumi", "opencode"]) for (const event of ["SessionStart", "UserPromptSubmit", "SubagentStart"]) {
-    const text = contextPlugin(nativeDriftFailOpen(data, agent, event, event, message), event);
-    expect(text).toStartWith("Skills warning: native discovery changed");
-    expect(text).toContain("Skills context is unavailable for this turn");
+  // Load the actual generated consumers. The child response is the fixture
+  // boundary; duplicating their parser here would only test our imitation.
+  for (const agent of ["sumi", "opencode"] as const) {
+    const response = join(root, `${agent}-response.json`), command = join(root, `${agent}-skills`), path = join(root, `${agent}-plugin.js`);
+    writeFileSync(command, `#!${process.execPath} --no-install\nimport {readFileSync} from "node:fs";\nawait Bun.stdin.text();\nconsole.log(readFileSync(${JSON.stringify(response)},"utf8"));\n`);
+    chmodSync(command, 0o700);
+    writeFileSync(path, (agent === "sumi" ? renderSumiPlugin : renderOpenCodePlugin)(command, "default"));
+    const plugin = (await import(path)).default, hooks = new Map<string, any>();
+    const register = async (name: string, callback: any) => { hooks.set(name, callback); return { dispose: async () => { hooks.delete(name); } }; };
+    const nativeSkill = { id: "skills-cli", name: "skills-cli", path: join(root, "skills-cli", "SKILL.md"), content: CLI_BRIDGE_FILES["SKILL.md"]!.replace(/^---\n[\s\S]*?\n---\n/, ""), description: /^description: (.+)$/m.exec(CLI_BRIDGE_FILES["SKILL.md"]!)![1] };
+    const dispose = await plugin.setup({
+      session: { get: async ({ sessionID }: any) => ({ id: sessionID, location: { directory: root }, ...(sessionID === "child" ? { parentID: "parent" } : {}) }), hook: register },
+      tool: { hook: register }, skill: { list: async () => [nativeSkill], transform: async (callback: any) => { callback({ list: () => [nativeSkill], remove: () => {} }); return register("skills", callback); } },
+    });
+    try {
+      for (const [sessionID, event] of [["owner", "SessionStart"], ["owner", "UserPromptSubmit"], ["child", "SubagentStart"]] as const) {
+        writeFileSync(response, JSON.stringify(nativeDriftFailOpen(data, agent, event, event, message)));
+        const context = { sessionID, system: [] as Array<{ type: string; text: string }>, messages: [] };
+        await hooks.get("context")(context);
+        expect(context.system).toHaveLength(1);
+        expect(context.system[0]!.text).toStartWith("Skills warning: native discovery changed");
+        expect(context.system[0]!.text).toContain("Skills context is unavailable for this turn");
+      }
+      // These controls prove the consumer can refuse: accepting the warning
+      // must not accidentally admit a genuine policy denial or native payload.
+      for (const refusal of [{ decision: "block" }, { continue: false }]) {
+        writeFileSync(response, JSON.stringify({ ...refusal, reason: "UNTRUSTED /private/path" }));
+        const context = { sessionID: "owner", system: [] as Array<{ type: string; text: string }>, messages: [] };
+        await expect(hooks.get("context")(context)).rejects.toThrow("Skills verification blocked");
+        expect(context.system).toEqual([]);
+      }
+      await expect(Promise.resolve().then(() => hooks.get("execute.before")({ tool: "skill", input: { id: "foreign" } }))).rejects.toThrow("Skills verification blocked");
+      await expect(hooks.get("prompt")({ sessionID: "owner", prompt: { text: "ordinary prompt", skills: [{ id: "foreign" }] } })).rejects.toThrow("Skills verification blocked");
+    } finally { await dispose(); }
   }
   const tool = nativeDriftFailOpen(data, "hermes", "pre_tool_call", "pre_tool_call", message);
   expect(Object.keys(tool).sort().join(",")).toBe("action"); expect(tool.action).toBe("continue");

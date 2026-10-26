@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, lstatSync, realpathSync, statSync } from "node:fs";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
 import { HOOK_REFUSAL_REASON_CODES } from "./hook-diagnostics.js";
+import { MAX_SKILL_SESSION_ID_CHARS } from "./profile-limits.js";
 
 const SUMI_PATH_SELECTORS = ["SUMI_HOME", "SUMI_CONFIG_DIR", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME"] as const;
 const SUMI_PATH_KEYS = ["data", "cache", "config", "state"] as const;
@@ -139,14 +140,149 @@ export function sumiConfigPath(home: string, cwd = process.cwd(), env: NodeJS.Pr
 /** Native V2 plugin, not an OpenCode chat.message factory. Instructions enter
  * transient request context; prompts and the plugin carry no payload fallback. */
 export function renderSumiPlugin(command: string, profile: string): string {
-  return renderSumiPluginVersion(command, profile, 3);
+  return renderSumiPluginV4(command, profile);
 }
 
 /** Exact previous generator only: upgrades may replace this owned plugin, never
  * arbitrary plugin bytes. Native discovery and config checks still run first. */
 export function isManagedSumiPlugin(text: string | null, command: string, profile: string): boolean {
-  return text === renderSumiPlugin(command, profile) || text === renderSumiPluginVersion(command, profile, 2)
+  return text === renderSumiPlugin(command, profile) || text === renderSumiPluginVersion(command, profile, 3) || text === renderSumiPluginVersion(command, profile, 2)
     || text === renderSumiPluginVersion(command, profile, 1);
+}
+
+function renderSumiPluginV4(command: string, profile: string): string {
+  return `// Managed by @hasna/skills. Regenerate with skills hook install --agent sumi.
+import { spawn } from "node:child_process";
+import { isAbsolute } from "node:path";
+const command = ${JSON.stringify(command)};
+const profile = ${JSON.stringify(profile)};
+const maxSessionIdChars = ${MAX_SKILL_SESSION_ID_CHARS};
+function refusal(reasonCode) {
+  const error = new Error("Skills verification blocked this request. Review the Sumi Skills hook configuration, then retry." + (reasonCode ? " [" + reasonCode + "]" : ""));
+  error.name = "SkillsHookRefusal";
+  error.skillsHookRefusal = { version: 1, code: "SKILLS_HOOK_REFUSED", ...(reasonCode ? { reasonCode } : {}) };
+  return error;
+}
+const reasonCodes = new Set(${JSON.stringify(HOOK_REFUSAL_REASON_CODES)});
+function refusedResult(result) {
+  const reason = result.reason ?? result.stopReason ?? result.systemMessage;
+  if (typeof reason !== "string" || reason.length > 16384) return refusal();
+  if (reason.startsWith("NATIVE_SKILL_DRIFT:")) return refusal("NATIVE_SKILL_DRIFT");
+  const code = /^Skills context is unavailable \\[([A-Z_]+)\\]/.exec(reason)?.[1];
+  return refusal(reasonCodes.has(code) ? code : undefined);
+}
+export default {
+  id: "local.hasna-skills-cli",
+  async setup(ctx) {
+    if (!ctx?.session?.hook || !ctx?.session?.get || !ctx?.skill?.transform || !ctx?.tool?.hook) throw refusal();
+    const registrations = [], pending = new Set(), sessions = new Set(), notices = new Map();
+    let disposed = false;
+    function context(input) {
+      if (disposed) return Promise.reject(refusal());
+      // Match the context child's existing input bound before transport can
+      // classify an unavailable child. Invalid input is never optional.
+      const serialized = JSON.stringify(input);
+      if (Buffer.byteLength(serialized) > 256 * 1024) return Promise.reject(refusal("CONTEXT_INPUT_TOO_LARGE"));
+      return new Promise((resolve, reject) => {
+        const chunks = []; let bytes = 0, settled = false, child, timer;
+        const finish = () => { clearTimeout(timer); pending.delete(cancel); };
+        const deny = error => { if (settled) return; settled = true; finish(); reject(error ?? refusal()); };
+        const unavailable = code => {
+          if (settled) return;
+          if (disposed) return deny();
+          settled = true; finish();
+          resolve({ delivered: false, text: "Skills context is unavailable [SKILLS_HOOK_" + code + "]. No Skills instructions were delivered by this hook. Ordinary work may continue. Do not perform actions that depend on unavailable Skills instructions, including previously loaded instructions. Explicit skills load, context and run still require verification. Do not substitute native, unmanaged or stale payloads." });
+        };
+        const stop = code => { unavailable(code); child?.kill("SIGKILL"); };
+        const cancel = () => { deny(); child?.kill("SIGKILL"); };
+        try {
+          child = spawn(command, ["hook", "user-prompt", "--agent", "sumi", "--selection-profile", profile], { cwd: input.cwd, stdio: ["pipe", "pipe", "pipe"] });
+        } catch { unavailable("SPAWN_FAILED"); return; }
+        pending.add(cancel);
+        timer = setTimeout(() => stop("TIMEOUT"), 15000);
+        child.stdout.on("data", chunk => { if (settled) return; bytes += chunk.length; if (bytes > 1048576) stop("OUTPUT_LIMIT"); else chunks.push(chunk); });
+        child.stdout.on("error", () => stop("TRANSPORT_FAILED"));
+        child.stderr.on("data", () => {});
+        child.stderr.on("error", () => stop("TRANSPORT_FAILED"));
+        child.stdin.on("error", () => stop("TRANSPORT_FAILED"));
+        child.on("error", () => unavailable("SPAWN_FAILED"));
+        child.on("close", code => {
+          if (settled) return;
+          if (disposed) return deny();
+          if (code !== 0) return unavailable("CHILD_FAILED");
+          let result;
+          try { result = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
+          catch { unavailable("INVALID_RESPONSE"); return; }
+          if (!result || typeof result !== "object" || Array.isArray(result)) return unavailable("INVALID_RESPONSE");
+          // A supported policy refusal is an explicit status-0 envelope. Never
+          // turn that refusal, including session/receipt integrity, into context.
+          if (result.decision === "block" || result.continue === false) return deny(refusedResult(result));
+          const output = Object.keys(result).length === 0
+            ? { hookEventName: input.hook_event_name, additionalContext: "" }
+            : result.hookSpecificOutput;
+          if (!output || typeof output !== "object" || Array.isArray(output) || output.hookEventName !== input.hook_event_name || typeof output.additionalContext !== "string") return unavailable("INVALID_RESPONSE");
+          settled = true; finish();
+          resolve({ delivered: true, text: output.additionalContext });
+        });
+        try { child.stdin.end(serialized); } catch { stop("TRANSPORT_FAILED"); }
+      });
+    }
+    async function input(sessionID, prompt, first) {
+      if (disposed) throw refusal();
+      if (typeof sessionID !== "string" || !sessionID.trim() || sessionID.length > maxSessionIdChars) throw refusal("INVALID_SESSION");
+      let session;
+      try { session = await ctx.session.get({ sessionID }); } catch { throw refusal(); }
+      if (disposed || !session || session.id !== sessionID || typeof session.location?.directory !== "string" || !isAbsolute(session.location.directory) || session.location.directory.includes("\\0") || (session.parentID !== undefined && (typeof session.parentID !== "string" || !session.parentID.trim() || session.parentID.length > maxSessionIdChars)) || session.parentID === sessionID) throw refusal();
+      return { hook_event_name: first ? session.parentID ? "SubagentStart" : "SessionStart" : "UserPromptSubmit", cwd: session.location.directory, session_id: sessionID, parent_session_id: session.parentID ?? null, prompt, restore: true };
+    }
+    async function dispose() {
+      if (disposed) return;
+      disposed = true;
+      for (const cancel of pending) cancel();
+      sessions.clear(); notices.clear();
+      const results = await Promise.allSettled(registrations.reverse().map(registration => Promise.resolve().then(() => registration.dispose())));
+      if (results.some(result => result.status === "rejected")) throw refusal();
+    }
+    try {
+      registrations.push(await ctx.skill.transform(editor => {
+        for (const skill of editor.list()) if (skill.id !== "skills-cli" || skill.name !== "skills-cli") editor.remove(skill.id);
+      }));
+      registrations.push(await ctx.tool.hook("execute.before", event => {
+        if (disposed) throw refusal();
+        if (event.tool === "skill" && event.input?.id !== "skills-cli") throw refusal();
+      }));
+      registrations.push(await ctx.session.hook("prompt", async event => {
+        if (disposed || typeof event.prompt?.text !== "string") throw refusal();
+        if (event.prompt.text.length > 128 * 1024) throw refusal("CONTEXT_INPUT_TOO_LARGE");
+        if (event.prompt.skills !== undefined && (!Array.isArray(event.prompt.skills) || event.prompt.skills.some(skill => skill?.id !== "skills-cli"))) throw refusal();
+        const result = await context(await input(event.sessionID, event.prompt.text, !sessions.has(event.sessionID)));
+        if (disposed) throw refusal();
+        if (result.delivered) sessions.add(event.sessionID);
+        // Admission has no model-context output. Retain one fixed warning until
+        // delivery, never the prompt text or an unverified child payload.
+        else notices.set(event.sessionID, { text: result.text });
+      }));
+      registrations.push(await ctx.session.hook("context", async event => {
+        // Owner input is matched only at admission. History and checkpoints
+        // cannot introduce new selections, including after transport failure.
+        const notice = notices.get(event.sessionID);
+        const result = await context(await input(event.sessionID, "", !sessions.has(event.sessionID)));
+        if (disposed) throw refusal();
+        // An unavailable admission did not verify its requested selection.
+        // Report it for this turn instead of silently using restored old skills.
+        const text = notice?.text ?? result.text;
+        if (text) event.system.push({ type: "text", text });
+        if (notice && notices.get(event.sessionID) === notice) notices.delete(event.sessionID);
+        if (result.delivered && !notice) sessions.add(event.sessionID);
+      }));
+      return dispose;
+    } catch {
+      await dispose();
+      throw refusal();
+    }
+  },
+};
+`;
 }
 
 function renderSumiPluginVersion(command: string, profile: string, version: 1 | 2 | 3): string {
