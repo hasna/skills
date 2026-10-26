@@ -1015,14 +1015,15 @@ export function resolveAgentDiscovery(options: DiscoveryOptions): AgentDiscovery
  * while current supported controls are re-derived even when old settings or
  * directory witnesses are stale. Non-enumerable executable inputs still need
  * their existing review. No witness, policy or enrollment is written. */
-export function resolveAgentDiscoveryExclusionRoots(options: Omit<DiscoveryOptions, "reviewed" | "retainedReview"> & { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger }): readonly string[] {
+export function resolveAgentDiscoveryExclusionRoots(options: Omit<DiscoveryOptions, "reviewed" | "retainedReview"> & { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger; nativeHome?: string }): readonly string[] {
+  if (options.nativeHome !== undefined && (!["claude", "codex"].includes(options.agent) || !isAbsolute(options.nativeHome))) throw new Error("Unsupported native discovery exclusion home");
   const current = resolveDiscovery(options, options);
   const roots = [...new Set([...(options.retained?.roots ?? []), ...current.roots])];
   if (roots.length > AGENT_POLICY_LIMITS.discoveryRoots) throw new Error("Native discovery exclusion roots exceed their bound");
   return roots;
 }
 
-function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger }): AgentDiscoveryBinding {
+function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger; nativeHome?: string }): AgentDiscoveryBinding {
   const canonical = options.canonical ?? resolve, home = resolve(options.home), agent = options.agent;
   const sources: DiscoverySource[] = [], roots = new Set<string>(), builtinNames: string[] = [];
   const budget = discoveryByteBudget();
@@ -1048,7 +1049,11 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     source.sha256 = projected(source, undefined, exclusion ? budget : undefined); sources.push(source); return exclusion ? raw : read(source.path);
   };
   if (agent === "hermes") assertHermesEnvironment(home);
-  const configPath = agentDiscoveryConfigPath(home, agent);
+  // Authoring exclusion can inspect another effective native home without
+  // changing the home/configuration admitted by the native bridge.
+  const nativeHome = exclusion?.nativeHome ?? join(home, `.${agent}`);
+  const configPath = exclusion?.nativeHome === undefined ? agentDiscoveryConfigPath(home, agent)
+    : join(nativeHome, agent === "codex" ? "config.toml" : "settings.json");
   const configText = witness(configPath, agent === "hermes" ? "yaml" : agent === "codex" ? "toml" : "json", agent === "hermes" ? ["skills", "plugins", "hooks"] : agent === "claude" ? ["enabledPlugins", "extraKnownMarketplaces"] : agent === "codex" ? [...CODEX_DISCOVERY_PROJECTION_FIELDS] : agent === "gemini" ? ["skills", "extensions", "security"] : agent === "opencode" ? ["plugin", "skills"] : agent === "sumi" ? [...SUMI_DISCOVERY_PROJECTION_FIELDS] : ["version"]);
   const config: any = configText === null ? {} : agent === "hermes" ? parseHermesConfig(configText) : parseConfig(configText, configPath, agent === "codex");
   const unresolved = (detail: string): never => { throw new Error(`Native discovery is unresolved (${agent}: ${detail}); provide a reviewed --discovery-inputs file`); };
@@ -1351,9 +1356,9 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     }
   }
   if (agent === "claude") {
-    const registrations = witness(join(home, ".claude/plugins/installed_plugins.json"));
-    const installed = registrations === null ? {} : parseConfig(registrations, join(home, ".claude/plugins/installed_plugins.json")).plugins;
-    const commands = canonical(join(home, ".claude/commands")); safe(commands);
+    const registrations = witness(join(nativeHome, "plugins/installed_plugins.json"));
+    const installed = registrations === null ? {} : parseConfig(registrations, join(nativeHome, "plugins/installed_plugins.json")).plugins;
+    const commands = canonical(join(nativeHome, "commands")); safe(commands);
     if (lstatSync(commands, { throwIfNoEntry: false })?.isDirectory() && entries(commands).length) unresolved("legacy home command discovery requires a dedicated format adapter");
     for (const [id, enabled] of Object.entries(config.enabledPlugins ?? {})) {
       if (enabled === false) continue;

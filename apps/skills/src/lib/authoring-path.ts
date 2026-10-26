@@ -7,6 +7,7 @@ import { agentDiscoveryConfigPath, discoveryExecutable, recordedDiscoveryExecuta
 import { getDataDirReadOnly } from "./config.js";
 import { readManagedSkillPolicySnapshot } from "./managed-policy.js";
 import { openNarrowedWitnessLedger } from "./narrowed-witness-ledger.js";
+import { assertHermesEnvironment } from "./agent-hermes.js";
 
 /**
  * Roots that an agent may discover as native instructions.  Portable Skills
@@ -55,6 +56,21 @@ export interface PortableAuthoringPathOptions {
 function contains(root: string, path: string): boolean {
   const boundary = root.endsWith(sep) ? root : root + sep;
   return path === root || path.startsWith(boundary);
+}
+
+/** These overrides change native discovery even without a default home or a
+ * Skills bridge. Resolve relative Codex homes from the caller's cwd, as Codex
+ * does, and canonicalize aliases through physicalPath at the boundary. Claude's
+ * supported configuration-directory contract requires an absolute path. */
+function selectedNativeHomes(): Array<{ agent: "codex" | "claude"; path: string }> {
+  const homes: Array<{ agent: "codex" | "claude"; path: string }> = [];
+  for (const [agent, variable] of [["codex", "CODEX_HOME"], ["claude", "CLAUDE_CONFIG_DIR"]] as const) {
+    const value = process.env[variable];
+    if (value === undefined) continue;
+    if (!value || value.trim() !== value || /[\x00-\x1f\x7f]/.test(value) || agent === "claude" && !isAbsolute(value)) throw new Error(`Unsupported ${variable} for portable authoring`);
+    homes.push({ agent, path: resolve(value) });
+  }
+  return homes;
 }
 
 /** Read the same configured discovery contract as the native bridge. Unknown
@@ -125,18 +141,29 @@ export function assertPortableAuthoringPath(path: string, options: PortableAutho
   const candidates = [lexical, physical];
   let native = candidates.map(nativeRootMatch).find(Boolean);
   const home = resolve(options.homeDir ?? homedir());
+  if (process.env.HERMES_HOME !== undefined) assertHermesEnvironment(home);
+  const selected = selectedNativeHomes();
   // Compare both sides physically: the destination may name the real target
   // of ~/.codex, without spelling any recognizable native path components.
   const defaults = NATIVE_DISCOVERY_ROOTS.map(parts => join(home, ...parts));
   defaults.push(join(home, ".codex/plugins/cache"), join(home, ".claude/plugins/cache"), join(home, ".claude/plugins/synced"), join(home, ".gemini/extensions"));
+  defaults.push(...selected.map(value => value.path));
   for (const root of defaults) {
-    if (candidates.some(candidate => contains(resolve(root), candidate) || contains(physicalPath(root), candidate))) native ??= root;
+    if (candidates.some(candidate => [resolve(root), physicalPath(root)].some(nativeRoot => contains(nativeRoot, candidate) || contains(candidate, nativeRoot)))) native ??= root;
   }
   if (native) {
     throw new Error(`Refusing portable Skills authoring below native discovery root '${native}': ${lexical}. Set HASNA_SKILLS_DIR to a private authoring corpus outside native roots.`);
   }
-  for (const root of configuredRoots(home, options.homeDir !== undefined)) {
-    if (candidates.some(candidate => contains(resolve(root), candidate) || contains(physicalPath(root), candidate))) {
+  const roots = configuredRoots(home, options.homeDir !== undefined);
+  for (const value of selected) {
+    // The account's existing binding continues to protect its recorded roots.
+    // An override is another consumer, never a reason to rewrite that binding
+    // or reuse its opaque executable review for a different configuration.
+    if (physicalPath(value.path) === physicalPath(join(home, `.${value.agent}`))) continue;
+    roots.push(...resolveAgentDiscoveryExclusionRoots({ home, agent: value.agent, nativeHome: value.path, canonical: physicalPath, executable: null }));
+  }
+  for (const root of roots) {
+    if (candidates.some(candidate => [resolve(root), physicalPath(root)].some(nativeRoot => contains(nativeRoot, candidate) || contains(candidate, nativeRoot)))) {
       throw new Error(`Refusing portable Skills authoring below configured native discovery root: ${lexical}`);
     }
   }
