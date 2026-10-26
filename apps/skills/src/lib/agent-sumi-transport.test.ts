@@ -186,31 +186,32 @@ test("Sumi native bridge content is canonical at transform and current consumpti
 });
 
 
-test("native consumption rechecks canonical metadata and requires the strict child attestation",async()=>{
-  const f=await fixture(),dispose=await f.plugin.setup(f.ctx);
-  const tool=()=>f.hooks.get("execute.before")({sessionID:"owner",tool:"skill",input:{id:"skills-cli"}});
-  const attachment=()=>f.hooks.get("prompt")({sessionID:"owner",prompt:{text:"ordinary",skills:[{id:"skills-cli"}]}});
-  await tool();await attachment();
-  expect(f.calls().filter(call=>call.hook_event_name === "BeforeTool")).toHaveLength(2);
-  expect(f.calls()[0]).toMatchObject({delivery_phase:"native",prompt:"",tool_input:{id:"skills-cli"},native_skill:{id:"skills-cli",name:"skills-cli",path:f.nativeSkill.path}});
-  const originalCalls=f.calls().length;
-  for(const patch of [{content:"altered instructions"},{description:"altered description"},{autoinvoke:true},{name:"other"},{path:null}]) {
-    f.setRegistry([{...f.nativeSkill,...patch}]);
-    await expect(tool()).rejects.toThrow("Skills verification blocked");
-    await expect(attachment()).rejects.toThrow("Skills verification blocked");
+test("native tool and attachment consumers refuse independently of registry loading order",async()=>{
+  const f=await fixture();f.setRegistry([]);
+  const dispose=await f.plugin.setup(f.ctx);
+  // Sumi's post ConfigSkillPlugin adds native objects after our transform.
+  // Every native request must refuse even when that later object is canonical.
+  for(const skill of [f.nativeSkill,{...f.nativeSkill,content:"later native payload"},{...f.nativeSkill,description:"changed"},{...f.nativeSkill,autoinvoke:true}]) {
+    f.setRegistry([skill]);
+    for(const input of [{id:"skills-cli"},{id:"foreign"},{name:"skills-cli"},null]) {
+      let error:any;try {await f.hooks.get("execute.before")({sessionID:"owner",tool:"skill",input})}catch(value){error=value}
+      expect(error?.name).toBe("SkillsHookRefusal");
+      expect(error?.skillsHookRefusal).toEqual({version:1,code:"SKILLS_HOOK_REFUSED",reasonCode:"SUMI_NATIVE_SKILLS_UNSUPPORTED"});
+      expect(error?.message).toContain("Use skills load, skills context, or skills run through the Skills CLI.");
+      expect(error?.message.length).toBeLessThan(300);
+    }
+    for(const skills of [[{id:"skills-cli"}],[{id:"foreign"}],[null]]) {
+      await expect(f.hooks.get("prompt")({sessionID:"owner",prompt:{text:"ordinary",skills}})).rejects.toMatchObject({skillsHookRefusal:{reasonCode:"SUMI_NATIVE_SKILLS_UNSUPPORTED"}});
+    }
   }
-  for(const registry of [[],[f.nativeSkill,f.nativeSkill],null]) {
-    f.setRegistry(registry as any);await expect(tool()).rejects.toThrow("Skills verification blocked");
-  }
-  expect(f.calls()).toHaveLength(originalCalls);
-  f.setRegistry([f.nativeSkill]);
-  for(const mode of ["exit","malformed","large","empty","unverified","wrong-event","wrong-context","null","array","unexpected","block","continue-false","hang"]) {
-    writeFileSync(f.mode,mode);
-    const results=await Promise.allSettled([tool(),attachment()]);
-    for(const result of results) {expect(result.status).toBe("rejected");if(result.status === "rejected") expect(result.reason.name).toBe("SkillsHookRefusal")}
-  }
-  writeFileSync(f.mode,"empty-string");await tool();await attachment();
-  writeFileSync(f.mode,"normal");await tool();await dispose();
+  expect(f.calls()).toEqual([]);
+  f.ctx.skill.list=async()=>{throw Error("Native registry must not gate ordinary Skills context")};
+  await f.hooks.get("execute.before")({sessionID:"owner",tool:"bash",input:{command:"skills load owner-fixture"}});
+  await f.hooks.get("prompt")({sessionID:"owner",prompt:{text:"genuine owner selection",skills:[]}});
+  const event=f.event("owner");await f.hooks.get("context")(event);
+  expect(event.system).toEqual([{type:"text",text:"Verified fixture instructions"}]);
+  expect(f.calls().map(call=>[call.hook_event_name,call.prompt])).toEqual([["SessionStart","genuine owner selection"],["UserPromptSubmit",""]]);
+  await dispose();
 });
 
 test("transform removes altered body, description and autoinvoke without adopting native payloads",async()=>{

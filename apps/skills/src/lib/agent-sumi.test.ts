@@ -275,7 +275,7 @@ test("native prompt and request hooks preserve actual root, child and nested cus
   await expect(hooks.get("prompt")!({ sessionID: "root", prompt: { text: "review", skills: [{ id: "foreign" }] } })).rejects.toThrow("Skills verification blocked");
   await expect(hooks.get("execute.before")!({ tool: "skill", input: { id: "foreign" } })).rejects.toThrow("Skills verification blocked");
   await expect(hooks.get("execute.before")!({ tool: "skill", input: { name: "skills-cli" } })).rejects.toThrow("Skills verification blocked");
-  await hooks.get("execute.before")!({ sessionID: "root", tool: "skill", input: { id: "skills-cli" } });
+  await expect(hooks.get("execute.before")!({ sessionID: "root", tool: "skill", input: { id: "skills-cli" } })).rejects.toThrow("Use skills load, skills context, or skills run through the Skills CLI.");
   await hooks.get("execute.before")!({ tool: "read", input: {} });
   await cleanup(); expect(hooks.size).toBe(0);
 });

@@ -174,6 +174,11 @@ function refusal(reasonCode) {
   error.skillsHookRefusal = { version: 1, code: "SKILLS_HOOK_REFUSED", ...(reasonCode ? { reasonCode } : {}) };
   return error;
 }
+function nativeRefusal() {
+  const error = refusal("SUMI_NATIVE_SKILLS_UNSUPPORTED");
+  error.message = "Skills verification blocked native skill consumption in Sumi. Native skill tools and attachments are unsupported by this integration. Use skills load, skills context, or skills run through the Skills CLI.";
+  return error;
+}
 const reasonCodes = new Set(${JSON.stringify(HOOK_REFUSAL_REASON_CODES)});
 function refusedResult(result) {
   const reason = result.reason ?? result.stopReason ?? result.systemMessage;
@@ -185,7 +190,7 @@ function refusedResult(result) {
 export default {
   id: "local.hasna-skills-cli",
   async setup(ctx) {
-    if (!ctx?.session?.hook || !ctx?.session?.get || !ctx?.skill?.transform || !ctx?.skill?.list || !ctx?.tool?.hook) throw refusal();
+    if (!ctx?.session?.hook || !ctx?.session?.get || !ctx?.skill?.transform || !ctx?.tool?.hook) throw refusal();
     const registrations = [], pending = new Set(), sessions = new Set(), notices = new Map();
     let disposed = false;
     function context(input) {
@@ -195,13 +200,12 @@ export default {
       const serialized = JSON.stringify(input);
       if (Buffer.byteLength(serialized) > 256 * 1024) return Promise.reject(refusal("CONTEXT_INPUT_TOO_LARGE"));
       return new Promise((resolve, reject) => {
-        const optional = input.delivery_phase === "context";
         const chunks = []; let bytes = 0, settled = false, child, timer;
         const finish = () => { clearTimeout(timer); pending.delete(cancel); };
         const deny = error => { if (settled) return; settled = true; finish(); reject(error ?? refusal()); };
         const unavailable = code => {
           if (settled) return;
-          if (!optional || disposed) return deny();
+          if (disposed) return deny();
           settled = true; finish();
           resolve({ delivered: false, text: "Skills context is unavailable [SKILLS_HOOK_" + code + "]. No Skills instructions were delivered by this hook. Ordinary work may continue. Do not perform actions that depend on unavailable Skills instructions, including previously loaded instructions. Explicit skills load, context and run still require verification. Do not substitute native, unmanaged or stale payloads." });
         };
@@ -229,24 +233,23 @@ export default {
           // A supported policy refusal is an explicit status-0 envelope. Never
           // turn that refusal, including session/receipt integrity, into context.
           if (result.decision === "block" || result.continue === false) return deny(refusedResult(result));
-          const output = optional && Object.keys(result).length === 0
+          const output = Object.keys(result).length === 0
             ? { hookEventName: input.hook_event_name, additionalContext: "" }
             : result.hookSpecificOutput;
           if (!output || typeof output !== "object" || Array.isArray(output) || output.hookEventName !== input.hook_event_name || typeof output.additionalContext !== "string") return unavailable("INVALID_RESPONSE");
-          if (!optional && result.nativeBridgeVerified !== true) return deny();
           settled = true; finish();
           resolve({ delivered: true, text: output.additionalContext });
         });
         try { child.stdin.end(serialized); } catch { stop("TRANSPORT_FAILED"); }
       });
     }
-    async function input(sessionID, prompt, first, event) {
+    async function input(sessionID, prompt, first) {
       if (disposed) throw refusal();
       if (typeof sessionID !== "string" || !sessionID.trim() || sessionID.length > maxSessionIdChars) throw refusal("INVALID_SESSION");
       let session;
       try { session = await ctx.session.get({ sessionID }); } catch { throw refusal(); }
       if (disposed || !session || session.id !== sessionID || typeof session.location?.directory !== "string" || !isAbsolute(session.location.directory) || session.location.directory.includes("\\0") || (session.parentID !== undefined && (typeof session.parentID !== "string" || !session.parentID.trim() || session.parentID.length > maxSessionIdChars)) || session.parentID === sessionID) throw refusal();
-      return { hook_event_name: event ?? (first ? session.parentID ? "SubagentStart" : "SessionStart" : "UserPromptSubmit"), delivery_phase: event ? "native" : "context", cwd: session.location.directory, session_id: sessionID, parent_session_id: session.parentID ?? null, prompt, restore: true };
+      return { hook_event_name: first ? session.parentID ? "SubagentStart" : "SessionStart" : "UserPromptSubmit", delivery_phase: "context", cwd: session.location.directory, session_id: sessionID, parent_session_id: session.parentID ?? null, prompt, restore: true };
     }
     async function dispose() {
       if (disposed) return;
@@ -260,28 +263,18 @@ export default {
       registrations.push(await ctx.skill.transform(editor => {
         for (const skill of editor.list()) if (!canonicalSkill(skill)) editor.remove(skill.id);
       }));
-      async function verifyNativeBridge(sessionID) {
-        let skills;
-        try { skills = await ctx.skill.list(); } catch { throw refusal(); }
-        if (disposed || !Array.isArray(skills)) throw refusal();
-        const matches = skills.filter(skill => skill?.id === "skills-cli");
-        if (matches.length !== 1 || !canonicalSkill(matches[0])) throw refusal();
-        const skill = matches[0];
-        const metadata = { id: skill.id, name: skill.name, path: skill.path, contentSha256: digest(skill.content), descriptionSha256: digest(skill.description) };
-        await context({ ...await input(sessionID, "", false, "BeforeTool"), tool_input: { id: "skills-cli" }, native_skill: metadata });
-      }
       registrations.push(await ctx.tool.hook("execute.before", async event => {
         if (disposed) throw refusal();
-        if (event.tool !== "skill") return;
-        if (event.input?.id !== "skills-cli") throw refusal();
-        await verifyNativeBridge(event.sessionID);
+        // Sumi materializes a later mutable registry read, not a verified snapshot.
+        // Refuse before any await or native lookup, including the canonical bridge.
+        if (event.tool === "skill") throw nativeRefusal();
       }));
       registrations.push(await ctx.session.hook("prompt", async event => {
         if (disposed || typeof event.prompt?.text !== "string") throw refusal();
         if (event.prompt.text.length > 128 * 1024) throw refusal("CONTEXT_INPUT_TOO_LARGE");
-        if (event.prompt.skills !== undefined && (!Array.isArray(event.prompt.skills) || event.prompt.skills.some(skill => skill?.id !== "skills-cli"))) throw refusal();
-        // Attachments materialize after admission from the current registry.
-        if (event.prompt.skills?.length) await verifyNativeBridge(event.sessionID);
+        if (event.prompt.skills !== undefined && !Array.isArray(event.prompt.skills)) throw refusal();
+        // The native attachment consumer rereads by ID after this hook returns.
+        if (event.prompt.skills?.length) throw nativeRefusal();
         const result = await context(await input(event.sessionID, event.prompt.text, !sessions.has(event.sessionID)));
         if (disposed) throw refusal();
         if (result.delivered) sessions.add(event.sessionID);

@@ -274,7 +274,7 @@ test("a refused pin whose automatic migration ran out of budget says so, keeping
 });
 
 
-test("Sumi native consumption verifies the actual CLI producer, bridge path and current disk custody",async()=>{
+test("Sumi CLI descriptor custody remains strict while generated consumers refuse every native use",async()=>{
   const f=await fixture("sumi");
   // Native path discovery resolves its executable through ambient PATH.
   // Scope both synchronous reads to this fixture's synthetic resolver.
@@ -309,7 +309,8 @@ test("Sumi native consumption verifies the actual CLI producer, bridge path and 
   const tool=()=>hooks.get("execute.before")({sessionID:"owner",tool:"skill",input:{id:"skills-cli"}});
   const attachment=()=>hooks.get("prompt")({sessionID:"owner",prompt:{text:"ordinary",skills:[{id:"skills-cli"}]}});
   try {
-    await tool();await attachment();
+    await expect(tool()).rejects.toMatchObject({skillsHookRefusal:{reasonCode:"SUMI_NATIVE_SKILLS_UNSUPPORTED"}});
+    await expect(attachment()).rejects.toMatchObject({skillsHookRefusal:{reasonCode:"SUMI_NATIVE_SKILLS_UNSUPPORTED"}});
     nativeSkill={...nativeSkill,path:join(f.home,"other/SKILL.md")};await expect(tool()).rejects.toThrow("Skills verification blocked");await expect(attachment()).rejects.toThrow("Skills verification blocked");
     nativeSkill={...nativeSkill,path:bridgePath};
     const original=readFileSync(bridgePath,"utf8");expect(original).toBe(CLI_BRIDGE_FILES["SKILL.md"]!);
@@ -317,10 +318,10 @@ test("Sumi native consumption verifies the actual CLI producer, bridge path and 
     expect((await before(descriptor)).value.decision).toBe("block");await expect(tool()).rejects.toThrow("Skills verification blocked");await expect(attachment()).rejects.toThrow("Skills verification blocked");
     await hooks.get("prompt")({sessionID:"ordinary",prompt:{text:"ordinary"}});
     const event={sessionID:"ordinary",system:[] as any[]};await hooks.get("context")(event);expect(event.system[0]?.text).toContain("Skills warning: native discovery changed");
-    writeFileSync(bridgePath,original);expect(readFileSync(bridgePath,"utf8")).toBe(original);await tool();
+    writeFileSync(bridgePath,original);expect(readFileSync(bridgePath,"utf8")).toBe(original);await expect(tool()).rejects.toThrow("Use skills load, skills context, or skills run through the Skills CLI.");
     const configOriginal=readFileSync(configPath,"utf8"),config=JSON.parse(configOriginal);
     config.permissions=[];writeFileSync(configPath,JSON.stringify(config));
     expect((await before(descriptor)).value.decision).toBe("block");await expect(tool()).rejects.toThrow("Skills verification blocked");
-    writeFileSync(configPath,configOriginal);expect(readFileSync(configPath,"utf8")).toBe(configOriginal);await tool();
+    writeFileSync(configPath,configOriginal);expect(readFileSync(configPath,"utf8")).toBe(configOriginal);await expect(tool()).rejects.toThrow("Use skills load, skills context, or skills run through the Skills CLI.");
   } finally {await dispose()}
 });
