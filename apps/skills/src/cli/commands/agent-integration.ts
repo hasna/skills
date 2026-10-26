@@ -1,3 +1,4 @@
+import { openCodeContextDelivery } from "../../lib/opencode-hook-protocol.js";
 import { captureSumiSettings } from "../../lib/sumi-settings-witness.js";
 import { writeCliOutput } from "../output.js";
 import type { Command } from "commander";
@@ -10,7 +11,7 @@ import { normalizeHermesHookInput, assertHermesTool } from "../../lib/agent-herm
 import { parseSkillContextInput, selectedProfileId } from "./context.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, normalizeAgentHookEvent } from "../../lib/agent-adapters.js";
 import { detectedIntegrationAgents } from "../../lib/agent-install-selection.js";
-import { planAgentIntegration, planClaudeManagedHookProjection, planAgentSettingsWitnessUpgrade, planCodexSemanticCacheWitnessUpgrade, planReviewedArtifactMigration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, codexPromptDriftWarning, hookContextOutput, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, type IntegrationAgent } from "../../lib/agent-integration.js";
+import { planAgentIntegration, planClaudeManagedHookProjection, planAgentSettingsWitnessUpgrade, planCodexSemanticCacheWitnessUpgrade, planReviewedArtifactMigration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, assertOpenCodeNativeBridge, codexPromptDriftWarning, hookContextOutput, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, type IntegrationAgent } from "../../lib/agent-integration.js";
 import { enrollCodexNativeHooks, reconcileCodexNativeHooks } from "../../lib/agent-codex-trust.js";
 import { codexNativeHookEnvelopeFromInput, CODEX_NATIVE_POLICY_FD_ENV } from "../../lib/codex-native-skill-policy.js";
 import { planCodexNativeTrust, applyCodexNativeTrust, previewCodexNativeTrust } from "../../lib/codex-native-trust.js";
@@ -67,12 +68,13 @@ function pinnedHookProfile(input: unknown, configuredProfile: string): string {
  * Prepend a pending session pin migration notice to context the agent will
  * read, then mark it delivered. Cursor shows hook context only at session
  * start, and Sumi discards its prompt-admission output (its context call sends
- * an empty prompt), so those calls leave the notice pending.
+ * an empty prompt), so those calls leave the notice pending. OpenCode uses
+ * an explicit delivery phase, including for empty attachment-only admissions.
  */
-function withSessionPinMigrationNotice(agent: IntegrationAgent, event: string, input: unknown, result: { context: string }): void {
+export function withSessionPinMigrationNotice(agent: IntegrationAgent, event: string, input: unknown, result: { context: string }): void {
   try {
     const parsed = parseSkillContextInput(JSON.stringify(input));
-    if (!parsed.sessionId || (agent === "cursor" && event !== "SessionStart") || (agent === "sumi" && parsed.prompt !== "")) return;
+    if (!parsed.sessionId || (agent === "opencode" && !openCodeContextDelivery(input)) || (agent === "cursor" && event !== "SessionStart") || (agent === "sumi" && parsed.prompt !== "")) return;
     const notice = takeSessionPinMigrationNotice(parsed.agentId ? `${parsed.sessionId}:${parsed.agentId}` : parsed.sessionId);
     if (notice) result.context = [notice, result.context].filter(Boolean).join("\n\n");
   } catch { /* the notice stays pending; context delivery is unaffected */ }
@@ -507,6 +509,14 @@ export function registerAgentIntegration(parent: Command): void {
           await writeCliOutput(JSON.stringify({ action: "continue" }));
           return;
         }
+        if (options.agent === "opencode" && event === "BeforeTool") {
+          bridgeToolCall = true;
+          if (input.tool_input?.id !== "skills-cli") throw new NativeSkillPolicyRefusal("NATIVE_SKILL_DRIFT: invoke only the verified skills-cli bridge");
+          assertOpenCodeNativeBridge(input.native_skill, { projectDirs: projects, profileId: selectionProfile, liveHook: true, bridgeToolCall });
+          clearNativeDriftReceipt(getDataDirReadOnly(), options.agent);
+          await writeCliOutput(JSON.stringify({ nativeBridgeVerified: true, hookSpecificOutput: { hookEventName: event, additionalContext: "" } }));
+          return;
+        }
         if ((options.agent === "claude" && event === "PreToolUse") || (options.agent === "gemini" && event === "BeforeTool")) {
           const skill = options.agent === "claude" ? input.tool_input?.skill : input.tool_input?.name;
           if (skill !== "skills-cli") throw new NativeSkillPolicyRefusal("NATIVE_SKILL_DRIFT: invoke only skills-cli; load selected payload instructions with skills load");
@@ -601,7 +611,7 @@ export function registerAgentIntegration(parent: Command): void {
         // or shadowed skills-cli bridge fails open for a prompt, session,
         // subagent or any other tool call (the notice says not to invoke the
         // bridge), but the tool call that would load it is refused below.
-        if (isNativeSkillDrift(error) || (isNativeBridgeIntegrityRefusal(error) && !bridgeToolCall)) {
+        if ((isNativeSkillDrift(error) && !(options.agent === "opencode" && bridgeToolCall)) || (isNativeBridgeIntegrityRefusal(error) && !bridgeToolCall)) {
           await writeCliOutput(JSON.stringify(nativeDriftFailOpen(getDataDirReadOnly(), options.agent, event, nativeEvent, error.message, { bridgeUnverified: isNativeBridgeIntegrityRefusal(error) })));
           return;
         }
@@ -617,6 +627,7 @@ export function registerAgentIntegration(parent: Command): void {
         } else if (options.agent === "claude" && event === "PreToolUse") await writeCliOutput(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } }));
         else if (options.agent === "cursor") await writeCliOutput(JSON.stringify({ continue: false, user_message: reason }));
         else if (options.agent === "gemini") await writeCliOutput(JSON.stringify({ decision: "deny", continue: false, reason }));
+        else if (options.agent === "opencode" && event === "BeforeTool") await writeCliOutput(JSON.stringify({ decision: "block", reason }));
         else if (event === "UserPromptSubmit") await writeCliOutput(JSON.stringify({ decision: "block", reason }));
         else if (event === "SessionStart") await writeCliOutput(JSON.stringify({ continue: false, stopReason: reason, systemMessage: reason }));
         else await writeCliOutput(JSON.stringify({ systemMessage: reason, hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: "Required Skills context was unavailable. Report this to the parent before performing task actions." } }));

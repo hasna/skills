@@ -1,3 +1,5 @@
+import { renderOpenCodePlugin } from "./agent-opencode.js";
+export { renderOpenCodePlugin } from "./agent-opencode.js";
 export const INTEGRATION_AGENTS = ["claude", "codex", "gemini", "opencode", "cursor", "hermes", "sumi"] as const;
 export type IntegrationAgent = typeof INTEGRATION_AGENTS[number];
 export function renderAgentHookCommand(command: string, agent: IntegrationAgent, profileId: string, event: string): string {
@@ -8,7 +10,7 @@ export const AGENT_ADAPTERS = {
   claude: { root: ".claude/skills", config: ".claude/settings.json", events: ["UserPromptSubmit", "SessionStart", "SubagentStart"], promptContext: true },
   codex: { root: ".codex/skills", config: ".codex/hooks.json", events: ["UserPromptSubmit", "SessionStart", "SubagentStart"], promptContext: true },
   gemini: { root: ".gemini/skills", config: ".gemini/settings.json", events: ["BeforeAgent", "SessionStart"], promptContext: true },
-  opencode: { root: ".config/opencode/skills", config: ".config/opencode/opencode.json", events: ["chat.message"], promptContext: true },
+  opencode: { root: ".config/opencode/skills", config: ".config/opencode/opencode.json", events: ["prompt", "context"], promptContext: true },
   // Native Sumi roots are resolved by its dedicated read-only `sumi-paths`
   // command. Nulls are intentional: static defaults here bypass its resolver.
   sumi: { root: null, config: null, events: ["prompt", "context"], promptContext: true },
@@ -25,7 +27,7 @@ export function normalizeAgentHookEvent(agent: IntegrationAgent, event: string):
   return event;
 }
 
-export function renderOpenCodePlugin(command: string, profileId: string): string {
+export function renderLegacyOpenCodePlugin(command: string, profileId: string): string {
   // No package dependency, shell interpolation, provider call, or saved prompt.
   // OpenCode awaits chat.message; throwing refuses the message before its model call.
   return `// Managed by @hasna/skills. Regenerate with skills hook install --agent opencode.
@@ -76,4 +78,9 @@ export default async ({ directory }) => {
   };
 };
 `;
+}
+
+/** Recognize exact managed bytes only, including the shipped v1 generator. */
+export function isManagedOpenCodePlugin(text: string | null, command: string, profileId: string): boolean {
+  return text === renderOpenCodePlugin(command, profileId) || text === renderLegacyOpenCodePlugin(command, profileId);
 }
