@@ -1,11 +1,15 @@
 import { installSumiPathsFixture } from "../lib/sumi-paths.fixture.js";
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { buildCliFixture } from "./cli-build.fixture.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { admitCorpusFixture, corpusInspectorPathFixture } from "../lib/codex-corpus.fixture.js";
+import { createHash } from "node:crypto";
+import { renderSumiPlugin, sumiBridgeRoot, sumiConfigPath } from "../lib/agent-sumi.js";
+import { renderOpenCodePlugin } from "../lib/agent-opencode.js";
+import { CLI_BRIDGE_FILES } from "../lib/agent-bridge.js";
 
 useDefaultTestTimeout();
 const scratch = mkdtempSync(join(tmpdir(), "skills-hook-diagnostics-"));
@@ -37,19 +41,19 @@ if (["context", "sync"].includes(process.argv[2] ?? "")) {
 });
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
-async function fixture() {
+async function fixture(agent = "all") {
   const home = mkdtempSync(join(scratch, "home-")), data = join(home, ".hasna", "skills");
   mkdirSync(data, { recursive: true });
-  admitCorpusFixture(join(home, ".codex"));
-  const env = { PATH: `${installSumiPathsFixture(home)}:${corpusInspectorPathFixture()}:${dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, USERPROFILE: home, HASNA_HOME: join(home, ".hasna"), HASNA_SKILLS_DIR: data, NO_COLOR: "1", TMPDIR: scratch };
+  if (agent === "all" || agent === "codex") admitCorpusFixture(join(home, ".codex"));
+  const env = { PATH: `${installSumiPathsFixture(home)}:${corpusInspectorPathFixture()}:${dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, USERPROFILE: home, HASNA_HOME: join(home, ".hasna"), HASNA_SKILLS_DIR: data, SKILLS_API_URL: "http://127.0.0.1:9", HASNA_API_URL: "http://127.0.0.1:9", NO_COLOR: "1", TMPDIR: scratch };
   async function run(args: string[], childEnv: Record<string, string> = {}, input: unknown = {}) {
-    const child = Bun.spawn([process.execPath, "--no-env-file", binary, ...args], { cwd: home, env: { ...env, ...childEnv }, stdin: new Blob([JSON.stringify(input)]), stdout: "pipe", stderr: "pipe" });
+    const child = Bun.spawn([process.execPath, "--no-install", "--no-env-file", binary, ...args], { cwd: home, env: { ...env, ...childEnv }, stdin: new Blob([JSON.stringify(input)]), stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     expect(status).toBe(0); expect(stderr).toBe("");
     return { value: JSON.parse(stdout), stdout };
   }
-  await run(["hook", "install", "--agent", "all", "--selection-profile", "engineering", "--command", binary, "--apply", "--json"]);
-  return { data, run, hook: (childEnv: Record<string, string>, event = "UserPromptSubmit", agent = "claude") => run(["hook", "user-prompt", "--agent", agent, "--selection-profile", "engineering", "--event", event], childEnv, { hook_event_name: event, prompt: "test request" }) };
+  await run(["hook", "install", "--agent", agent, "--selection-profile", "engineering", "--command", binary, "--apply", "--json"]);
+  return { home, env, data, run, hook: (childEnv: Record<string, string>, event = "UserPromptSubmit", agent = "claude") => run(["hook", "user-prompt", "--agent", agent, "--selection-profile", "engineering", "--event", event], childEnv, { hook_event_name: event, prompt: "test request" }) };
 }
 
 test("hook diagnostics allow only known codes and never echo foreign child messages or stderr", async () => {
@@ -66,6 +70,51 @@ test("hook diagnostics allow only known codes and never echo foreign child messa
       if (event === "SessionStart") expect(result.value.continue).toBe(false);
       else expect(result.value.decision).toBe("block");
     }
+  }
+});
+
+test("child hard refusal is explicit for wrapper consumers while optional child warnings still deliver", async () => {
+  const failure = (code: string) => ({ SKILLS_TEST_CHILD_STDOUT: JSON.stringify({ error: { code, message: "UNTRUSTED /private/path" } }) });
+  for (const agent of ["sumi", "opencode"] as const) {
+    const f = await fixture(agent);
+    const hard = await f.hook(failure("SESSION_WRITE_LOCKED"), "SubagentStart", agent);
+    expect(hard.value.decision).toBe("block");
+    expect(hard.value.reason).toContain("[SESSION_WRITE_LOCKED]");
+    expect(hard.stdout).not.toContain("UNTRUSTED");
+    const response = join(scratch, `${agent}-child-response.json`), command = join(scratch, `${agent}-child-skills`), path = join(scratch, `${agent}-child-plugin.js`);
+    writeFileSync(command, `#!${process.execPath} --no-install\nimport {readFileSync} from "node:fs";\nawait Bun.stdin.text();\nconsole.log(readFileSync(${JSON.stringify(response)},"utf8"));\n`, { mode: 0o700 });
+    writeFileSync(path, (agent === "sumi" ? renderSumiPlugin : renderOpenCodePlugin)(command, "engineering"));
+    const hooks = new Map<string, any>(), plugin = (await import(path)).default;
+    const register = async (name: string, callback: any) => { hooks.set(name, callback); return { dispose: async () => { hooks.delete(name); } }; };
+    const nativeSkill = { id: "skills-cli", name: "skills-cli", path: join(scratch, "skills-cli", "SKILL.md"), content: CLI_BRIDGE_FILES["SKILL.md"]!.replace(/^---\n[\s\S]*?\n---\n/, ""), description: /^description: (.+)$/m.exec(CLI_BRIDGE_FILES["SKILL.md"]!)![1] };
+    const dispose = await plugin.setup({
+      session: { get: async ({ sessionID }: any) => ({ id: sessionID, parentID: "parent", location: { directory: scratch } }), hook: register },
+      tool: { hook: register }, skill: { list: async () => [nativeSkill], transform: async (callback: any) => { callback({ list: () => [nativeSkill], remove: () => {} }); return register("skills", callback); } },
+    });
+    try {
+      writeFileSync(response, JSON.stringify(hard.value));
+      const event = { sessionID: "hard-child", system: [] as Array<{ type: string; text: string }>, messages: [] };
+      await expect(hooks.get("context")(event)).rejects.toThrow("Skills verification blocked");
+      expect(event.system).toEqual([]);
+      for (const code of ["SESSION_RECONCILIATION_REQUIRED", "SESSION_WRITE_BUSY"]) {
+        const optional = await f.hook(failure(code), "SubagentStart", agent);
+        expect(optional.value.decision).toBeUndefined(); expect(optional.value.continue).toBeUndefined();
+        writeFileSync(response, JSON.stringify(optional.value));
+        const context = { sessionID: code, system: [] as Array<{ type: string; text: string }>, messages: [] };
+        await hooks.get("context")(context);
+        expect(context.system[0]?.text).toContain(`[${code}]`);
+        expect(context.system[0]?.text).toContain("Ordinary work may continue.");
+      }
+    } finally { await dispose(); }
+  }
+  // These harnesses keep their existing SubagentStart envelope, whose native
+  // lifecycle contract does not advertise a decision field here.
+  const compatibility = await fixture("sumi");
+  for (const agent of ["claude", "codex"]) {
+    const hard = await compatibility.run(["hook", "user-prompt", "--agent", agent, "--selection-profile", "engineering", "--event", "SubagentStart"], {}, { hook_event_name: "SubagentStart", cwd: "relative/path", prompt: "invalid cwd control" });
+    expect(Object.keys(hard.value).sort()).toEqual(["hookSpecificOutput", "systemMessage"]);
+    expect(hard.value.systemMessage).toContain("[SKILLS_HOOK_FAILED]");
+    expect(hard.value.hookSpecificOutput).toEqual({ hookEventName: "SubagentStart", additionalContext: "Required Skills context was unavailable. Report this to the parent before performing task actions." });
   }
 });
 
@@ -222,4 +271,48 @@ test("a refused pin whose automatic migration ran out of budget says so, keeping
   }
   const busy = await f.hook(child({ code: "SESSION_WRITE_BUSY", migration: "timeout" }));
   expect(busy.value.systemMessage).toContain("[SESSION_WRITE_BUSY]"); expect(busy.stdout).not.toContain("automatic migration");
+});
+
+
+test("Sumi native consumption verifies the actual CLI producer, bridge path and current disk custody",async()=>{
+  const f=await fixture("sumi");
+  const bridgePath=join(sumiBridgeRoot(f.home,f.home,f.env),"skills-cli","SKILL.md");
+  const content=CLI_BRIDGE_FILES["SKILL.md"]!.replace(/^---\n[\s\S]*?\n---\n/,""),description=/^description: (.+)$/m.exec(CLI_BRIDGE_FILES["SKILL.md"]!)![1]!;
+  let nativeSkill:any={id:"skills-cli",name:"skills-cli",path:bridgePath,content,description};
+  const digest=(value:string)=>createHash("sha256").update(value).digest("hex");
+  const descriptor={id:"skills-cli",name:"skills-cli",path:bridgePath,contentSha256:digest(content),descriptionSha256:digest(description)};
+  const before=(native_skill:any,tool_input:any={id:"skills-cli"})=>f.run(["hook","user-prompt","--agent","sumi","--selection-profile","engineering"],{}, {hook_event_name:"BeforeTool",delivery_phase:"native",session_id:"owner",cwd:f.home,prompt:"",tool_input,native_skill});
+  expect((await before(descriptor)).value.nativeBridgeVerified).toBe(true);
+  for(const patch of [{path:join(f.home,"other/SKILL.md")},{contentSha256:"0".repeat(64)},{descriptionSha256:"0".repeat(64)},{name:"other"}]) {
+    const result=await before({...descriptor,...patch});expect(result.value.decision).toBe("block");expect(result.value.nativeBridgeVerified).toBeUndefined();
+  }
+  expect((await before(descriptor,{id:"foreign"})).value.decision).toBe("block");
+  const command=join(f.home,"fixture-native-skills"),pluginPath=join(f.home,"fixture-plugin.js");
+  const childEnv={...f.env,SKILLS_TEST_CHILD_STDOUT:JSON.stringify({error:{code:"SESSION_WRITE_BUSY"}})};
+  const shellQuote=(value:string)=>"'"+value.replaceAll("'", "'\\''")+"'";
+  // Match run()'s exact environment. The test preload sets XDG selectors;
+  // inheriting those would deliberately resolve a different Sumi bridge root.
+  writeFileSync(command, `#!/bin/sh\nexec /usr/bin/env -i ${Object.entries(childEnv).map(([key,value])=>shellQuote(key+"="+value)).join(" ")} ${shellQuote(process.execPath)} --no-install --no-env-file ${shellQuote(binary)} "$@"\n`,{mode:0o700});
+  writeFileSync(pluginPath,renderSumiPlugin(command,"engineering"));
+  const plugin=(await import(pluginPath)).default,hooks=new Map<string,any>();
+  const register=async(name:string,callback:any)=>{hooks.set(name,callback);return {dispose:async()=>{hooks.delete(name)}}};
+  const dispose=await plugin.setup({session:{get:async({sessionID}:any)=>({id:sessionID,location:{directory:f.home}}),hook:register},tool:{hook:register},skill:{list:async()=>[nativeSkill],transform:async()=>({dispose:async()=>{}})}});
+  expect((await before(descriptor)).value).toEqual({nativeBridgeVerified:true,hookSpecificOutput:{hookEventName:"BeforeTool",additionalContext:""}});
+  const tool=()=>hooks.get("execute.before")({sessionID:"owner",tool:"skill",input:{id:"skills-cli"}});
+  const attachment=()=>hooks.get("prompt")({sessionID:"owner",prompt:{text:"ordinary",skills:[{id:"skills-cli"}]}});
+  try {
+    await tool();await attachment();
+    nativeSkill={...nativeSkill,path:join(f.home,"other/SKILL.md")};await expect(tool()).rejects.toThrow("Skills verification blocked");await expect(attachment()).rejects.toThrow("Skills verification blocked");
+    nativeSkill={...nativeSkill,path:bridgePath};
+    const original=readFileSync(bridgePath,"utf8");expect(original).toBe(CLI_BRIDGE_FILES["SKILL.md"]!);
+    writeFileSync(bridgePath,original+"Altered native payload.\n");
+    expect((await before(descriptor)).value.decision).toBe("block");await expect(tool()).rejects.toThrow("Skills verification blocked");await expect(attachment()).rejects.toThrow("Skills verification blocked");
+    await hooks.get("prompt")({sessionID:"ordinary",prompt:{text:"ordinary"}});
+    const event={sessionID:"ordinary",system:[] as any[]};await hooks.get("context")(event);expect(event.system[0]?.text).toContain("Skills warning: native discovery changed");
+    writeFileSync(bridgePath,original);expect(readFileSync(bridgePath,"utf8")).toBe(original);await tool();
+    const configPath=sumiConfigPath(f.home,f.home,f.env),configOriginal=readFileSync(configPath,"utf8"),config=JSON.parse(configOriginal);
+    config.permissions=[];writeFileSync(configPath,JSON.stringify(config));
+    expect((await before(descriptor)).value.decision).toBe("block");await expect(tool()).rejects.toThrow("Skills verification blocked");
+    writeFileSync(configPath,configOriginal);expect(readFileSync(configPath,"utf8")).toBe(configOriginal);await tool();
+  } finally {await dispose()}
 });

@@ -2430,11 +2430,19 @@ export function assertManagedAgentBridge(agent: IntegrationAgent, options: Manag
 /** Consumption-edge check: native registry content and path must name the
  * exact owned bridge, and live on-disk custody must still verify now. */
 export function assertOpenCodeNativeBridge(skill: unknown, options: ManagedBridgeOptions = {}): void {
-  const custody = assertManagedBridgeCustody("opencode", options);
+  assertNativeRegistryBridge("opencode", skill, options);
+}
+
+export function assertSumiNativeBridge(skill: unknown, options: ManagedBridgeOptions = {}): void {
+  assertNativeRegistryBridge("sumi", skill, options);
+}
+
+function assertNativeRegistryBridge(agent: "opencode" | "sumi", skill: unknown, options: ManagedBridgeOptions): void {
+  const custody = assertManagedBridgeCustody(agent, options);
   if (!isVerifiedOpenCodeSkillDescriptor(skill, join(custody.expected, "SKILL.md"))) {
-    throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: OpenCode resolved an unverified native Skills bridge");
+    throw new NativeBridgeIntegrityRefusal(`NATIVE_SKILL_DRIFT: ${agent === "opencode" ? "OpenCode" : "Sumi"} resolved an unverified native Skills bridge`);
   }
-  assertManagedAgentBridge("opencode", { ...options, liveHook: true, bridgeToolCall: true });
+  assertManagedAgentBridge(agent, { ...options, liveHook: true, bridgeToolCall: true });
 }
 
 function isPlainNativeDrift(error: unknown): boolean {

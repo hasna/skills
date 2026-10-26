@@ -519,7 +519,7 @@ console.log(JSON.stringify(readFileSync(${JSON.stringify(mode)}, "utf8") === "re
   const register = async (name: string, callback: any) => { hooks.set(name, callback); return { dispose: async () => {} }; };
   await plugin.setup({
     session: { get: async ({ sessionID }: { sessionID: string }) => ({ id: sessionID, location: { directory: root } }), hook: register },
-    tool: { hook: register }, skill: { transform: async () => ({ dispose: async () => {} }) },
+    tool: { hook: register }, skill: { list: async () => [], transform: async () => ({ dispose: async () => {} }) },
   });
   await hooks.get("prompt")!({ sessionID: "owner", prompt: { text: "continue the task" } });
   const event = { sessionID: "owner", system: [] as Array<{ type: string; text: string }>, messages: [] };
@@ -530,7 +530,7 @@ console.log(JSON.stringify(readFileSync(${JSON.stringify(mode)}, "utf8") === "re
   expect(event.system[0]!.text).toContain(NATIVE_DRIFT_AGENT_NOTICE);
   expect(readNativeDriftReceipts(data)).toEqual([expect.objectContaining({ agent: "sumi", status: "active", promptBlocked: false })]);
   // The payload-skill guard of the same plugin still refuses under drift.
-  expect(() => hooks.get("execute.before")!({ tool: "skill", input: { id: "some-payload" } })).toThrow();
+  await expect(hooks.get("execute.before")!({ tool: "skill", input: { id: "some-payload" } })).rejects.toThrow();
   writeFileSync(mode, "refused");
   await expect(hooks.get("prompt")!({ sessionID: "owner", prompt: { text: "again" } })).rejects.toThrow("Skills verification blocked this request");
 });
