@@ -103,7 +103,16 @@ function assertRegularPath(path: string, createParents = false): void {
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      if (createParents && index < segments.length - 1) mkdirSync(cursor, { mode: 0o700 });
+      if (createParents && index < segments.length - 1) {
+        try { mkdirSync(cursor, { mode: 0o700 }); }
+        catch (creationError) { if ((creationError as NodeJS.ErrnoException).code !== "EEXIST") throw creationError; }
+        // Another writer may have created this parent after our missing-path
+        // check. Accept only a real directory, including after our own mkdir.
+        const parent = lstatSync(cursor);
+        if (parent.isSymbolicLink() || !parent.isDirectory()) {
+          throw new SkillSelectionError("UNSAFE_CACHE_PATH", "Skills cache paths must not traverse symlinks or non-directories.");
+        }
+      }
     }
   }
 }
