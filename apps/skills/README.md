@@ -608,7 +608,16 @@ inventory entry outside the manifest remains untouched.
 
 `skills hook agents --json` reports the supported adapters and coverage limits.
 Claude and Codex have lifecycle context hooks; Gemini uses `BeforeAgent`, and
-OpenCode uses its awaited message plugin. Cursor receives selected context at
+OpenCode uses a v2 object plugin with awaited `prompt` and `context` hooks.
+The OpenCode adapter targets the v2.0.32 Promise plugin contract. Prompt
+admission stages genuine user text transiently. Request context matches that
+text and restores verified selections
+into transient system context without changing message history. Native skill
+tools and prompt attachments allow only `skills-cli`. Disposal removes hook
+registrations and cancels pending Skills hook children. Exact managed v1 plugin
+bytes remain recognizable for reviewed upgrades. The isolated contract tests
+do not establish adoption by an installed OpenCode process.
+Cursor receives selected context at
 session start and gates later prompt submission; its prompt hook does not
 inject context on the supported installed path. Other inventoried clients do
 not automatically gain a working prompt adapter.

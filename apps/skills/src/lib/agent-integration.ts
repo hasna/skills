@@ -1,3 +1,4 @@
+import { isVerifiedOpenCodeSkillDescriptor } from "./opencode-hook-protocol.js";
 import { upgradeSumiSettingsWitness, readSumiSettingsPreimage, SUMI_DISCOVERY_PROJECTION_FIELDS } from "./sumi-settings-witness.js";
 import { codexAdmissionReceipt, codexCorpusRootForPath, withCodexCorpusWrite, withCodexCorpusWriteAsync, type CodexAdmissionReceipt, type CodexCorpusAdmission, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
 import { connectCodexHookRpc, type CodexHookRpc } from "./codex-hook-rpc.js";
@@ -25,7 +26,7 @@ import { getDataDir, getDataDirReadOnly } from "./config.js";
 import { requiresCliSkillLoading, readManagedSkillPolicySnapshot, serializeManagedSkillPolicy, parseManagedSkillPolicy } from "./managed-policy.js";
 import { CLI_BRIDGE_NAME, CLI_BRIDGE_FILES, CLI_BRIDGE_DIGEST, CLI_BRIDGE_VERSION, isOwnedCliBridge } from "./agent-bridge.js";
 import { assertProjectDiscovery, rebaseCodexEnrolledCacheWitnesses, codexVendorConfigChangeOnly, discoveryTextKeepsWitness, discoveryExecutable, recordedDiscoveryExecutable, isDiscoveryRootUnresolved, resolveAgentDiscovery, verifyAgentDiscovery, verifyAutomaticDiscoveryClosure, type DiscoveryExecutable, rebindAgentDiscovery, captureDiscoveryDirectories, captureRetiredCodexDiscovery, projectNativeDiscoveryFields, codexSemanticCacheSourceRole, codexSemanticCacheDirectoryRole, assertCodexSemanticCacheHookSafety, type AgentDiscoveryBinding, type DiscoverySource, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
-import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderAgentHookCommand, renderOpenCodePlugin, type IntegrationAgent } from "./agent-adapters.js";
+import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderAgentHookCommand, renderOpenCodePlugin, isManagedOpenCodePlugin, type IntegrationAgent } from "./agent-adapters.js";
 import { assertCodexPathConfigEditable, CODEX_SKILL_CONFIG_SECTIONS, disableCodexBundledSkills, normalizeCodexInlinePathConfig } from "./agent-codex.js";
 
 import { sumiConfigDirectory, sumiConfigPath, sumiBridgeRoot, sumiSkillRoots, renderSumiPlugin, isManagedSumiPlugin, SUMI_SKILL_PERMISSIONS, SumiPathResolverError } from "./agent-sumi.js";
@@ -754,7 +755,7 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
       const pluginPath = join(home, ".config", "opencode", "plugins", "skills-cli.js"), pluginBefore = readOptional(pluginPath);
       const pluginAfter = renderOpenCodePlugin(command, profileId);
       const priorCommand = policy.bridge?.commands?.opencode;
-      const ownedPrevious = typeof priorCommand === "string" && typeof policy.profileId === "string" && pluginBefore === renderOpenCodePlugin(priorCommand, policy.bridge?.profiles?.opencode ?? policy.profileId);
+      const ownedPrevious = typeof priorCommand === "string" && typeof policy.profileId === "string" && isManagedOpenCodePlugin(pluginBefore, priorCommand, policy.bridge?.profiles?.opencode ?? policy.profileId);
       if (pluginBefore !== null && pluginBefore !== pluginAfter && !ownedPrevious) throw new Error("Refusing to overwrite a modified OpenCode Skills plugin; preserve and review it first");
       if (pluginBefore !== pluginAfter) changes.push({ path: pluginPath, before: pluginBefore, after: pluginAfter });
     } else configureHooks(config, agent, command, profileId, !nativeSkills.some(entry => entry.agent === agent && !entry.bridge));
@@ -2433,6 +2434,16 @@ export function assertManagedAgentBridge(agent: IntegrationAgent, options: Manag
   // it does not inventory (Gemini's .agents/skills) before the call proceeds.
   if (options.bridgeToolCall === true) assertNoBridgeNameShadow(agent, options, "extra");
   return report;
+}
+
+/** Consumption-edge check: native registry content and path must name the
+ * exact owned bridge, and live on-disk custody must still verify now. */
+export function assertOpenCodeNativeBridge(skill: unknown, options: ManagedBridgeOptions = {}): void {
+  const custody = assertManagedBridgeCustody("opencode", options);
+  if (!isVerifiedOpenCodeSkillDescriptor(skill, join(custody.expected, "SKILL.md"))) {
+    throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: OpenCode resolved an unverified native Skills bridge");
+  }
+  assertManagedAgentBridge("opencode", { ...options, liveHook: true, bridgeToolCall: true });
 }
 
 function isPlainNativeDrift(error: unknown): boolean {
