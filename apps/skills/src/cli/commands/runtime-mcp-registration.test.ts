@@ -1,3 +1,4 @@
+import { projectGuardedAgentConfigDiagnostic } from "../../lib/guarded-agent-config.js";
 import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,6 +28,22 @@ function fixtureOutcomes(stderr: string): string {
       `${fixtureAgents.includes(String(agent)) ? agent : "?"}:${success === true ? "ok" : /^[A-Z_]{1,40}$/.test(String(refusal)) ? refusal : "?"}`).join(",");
   } catch { return "unavailable"; }
 }
+function fixtureAccessMetadata(stderr: string): unknown[] {
+  try {
+    const { outcomes } = JSON.parse(/^REGISTRATION_FIXTURE_OUTCOMES (\{.*\})$/m.exec(stderr)![1]!);
+    return outcomes.flatMap((entry: any) => {
+      const accessMetadata = projectGuardedAgentConfigDiagnostic(entry.accessMetadata);
+      return fixtureAgents.includes(entry.agent) && accessMetadata ? [{ agent: entry.agent, ...accessMetadata }] : [];
+    });
+  } catch { return []; }
+}
+test("registration failure diagnostic forwards only bounded access metadata to the parent assertion", () => {
+  const known = { phase: "ORIGINAL_READ", pathRole: "ORIGINAL", predicate: "LINUX_QUERY_ERROR", attribute: "ACCESS", result: -1, errno: 5 };
+  const stderr = "REGISTRATION_FIXTURE_OUTCOMES " + JSON.stringify({ outcomes: [{ agent: "gemini", success: false, refusal: "ACCESS_METADATA_UNAVAILABLE", accessMetadata: { ...known, path: "/private/config", config: "withheld" } }, { agent: "foreign", accessMetadata: known }] });
+  expect(fixtureAccessMetadata(stderr)).toEqual([{ agent: "gemini", ...known }]);
+  expect(fixtureAccessMetadata("foreign output")).toEqual([]);
+});
+
 // The fixture's named check, matched against enumerated agents and uppercase refusal codes only.
 const fixtureCheck = (stderr: string) => stderr.match(
   /\bREGISTRATION_(?:ADAPTER_REFUSED|ARGS_ABSENT|ARGS_WRONG):(?:claude|codex|gemini|pi|opencode|cursor|windsurf)(?::[A-Z_]{1,40})?(?![A-Za-z_:])/)?.[0] ?? "unavailable";
@@ -45,7 +62,7 @@ async function runRegistrationFixture(mode: string, extraEnv: Record<string, str
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     const diagnostic = JSON.stringify({ exit: Number.isInteger(code) ? code : null,
       location: stderr.match(/runtime-mcp-registration\.fixture\.ts:[0-9]{1,7}:[0-9]{1,7}(?![0-9])/)?.[0] ?? "unavailable",
-      check: fixtureCheck(stderr), outcomes: fixtureOutcomes(stderr) });
+      check: fixtureCheck(stderr), outcomes: fixtureOutcomes(stderr), accessMetadata: fixtureAccessMetadata(stderr) });
     return { stdout, stderr, code, timedOut, diagnostic };
   } finally {
     clearTimeout(timer);

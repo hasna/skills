@@ -9,7 +9,7 @@ import { canonicalSystemPath } from "../../lib/agent-integration.js";
 import { skillsShellArgument } from "../../lib/credential-profile-command.js";
 import { skillsMcpRegistrationEnvironment } from "../../lib/mcp-registration-environment.js";
 
-import { guardedAgentConfigWrite, guardedAgentConfigRefusal } from "../../lib/guarded-agent-config.js";
+import { guardedAgentConfigWrite, guardedAgentConfigRefusal, guardedAgentConfigDiagnostic, type GuardedAgentConfigDiagnostic } from "../../lib/guarded-agent-config.js";
 
 const MCP_SERVER_NAME = "skills";
 const MCP_COMMAND_NAME = "skills-mcp";
@@ -24,6 +24,7 @@ interface McpRegistrationResult {
   code?: string;
   backup?: string;
   rewrite?: string;
+  accessMetadata?: GuardedAgentConfigDiagnostic;
 }
 
 interface ClaudePreimage { bytes: Buffer; mode: number; uid: number; gid: number; nlink: number; backup: string }
@@ -410,7 +411,7 @@ function registerCodexMcp(command: string, environment: Record<string, string>):
     });
     return { agent: "codex", success: true, path, config };
   } catch (err) {
-    return { agent: "codex", success: false, path, config, error: "Could not safely update the Codex MCP configuration: " + guardedAgentConfigRefusal(err) };
+    return { agent: "codex", success: false, path, config, error: "Could not safely update the Codex MCP configuration: " + guardedAgentConfigRefusal(err), ...(guardedAgentConfigDiagnostic(err) ? { accessMetadata: guardedAgentConfigDiagnostic(err) } : {}) };
   }
 }
 
@@ -441,7 +442,7 @@ function registerOpenCodeMcp(command: string, environment: Record<string, string
     });
     return { agent: "opencode", success: true, path, config };
   } catch (err) {
-    return { agent: "opencode", success: false, path, config, error: "Could not safely update the OpenCode MCP configuration: " + guardedAgentConfigRefusal(err) };
+    return { agent: "opencode", success: false, path, config, error: "Could not safely update the OpenCode MCP configuration: " + guardedAgentConfigRefusal(err), ...(guardedAgentConfigDiagnostic(err) ? { accessMetadata: guardedAgentConfigDiagnostic(err) } : {}) };
   }
 }
 
@@ -463,7 +464,7 @@ function registerJsonMcpServer(
     });
     return { agent, success: true, path, config };
   } catch (err) {
-    return { agent, success: false, path, config, error: "Could not safely update the agent MCP configuration: " + guardedAgentConfigRefusal(err) };
+    return { agent, success: false, path, config, error: "Could not safely update the agent MCP configuration: " + guardedAgentConfigRefusal(err), ...(guardedAgentConfigDiagnostic(err) ? { accessMetadata: guardedAgentConfigDiagnostic(err) } : {}) };
   }
 }
 

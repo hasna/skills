@@ -274,6 +274,20 @@ for (const mode of modes.filter(mode => mode === requestedMode)) {
   const result = JSON.parse(logs.join("\n"));
   assert.equal(result.registered, success ? 1 : 0); assert.equal(result.results[0].success, success);
   assert.equal(process.exitCode ?? 0, success ? 0 : 1); process.exitCode = 0;
+  if (linuxAclMode && !success) {
+    const diagnostic = result.results[0].accessMetadata;
+    assert(diagnostic); assert.equal(typeof diagnostic.phase, "string"); assert.equal(typeof diagnostic.pathRole, "string");
+    assert.deepEqual(Object.keys(diagnostic).filter(key => !["phase", "pathRole", "predicate", "attribute", "result", "errno"].includes(key)), []);
+    if (["linux-acl-error", "linux-acl-unsupported"].includes(mode)) {
+      assert.deepEqual(diagnostic, { phase: "PARENT_WITNESS", pathRole: "ANCESTOR", predicate: "LINUX_QUERY_ERROR", attribute: "ACCESS", result: -1, errno: mode === "linux-acl-error" ? 5 : 95 });
+    } else {
+      assert.equal(diagnostic.predicate, "LINUX_ACL_PRESENT"); assert.equal(diagnostic.result, 8);
+      assert.equal(diagnostic.attribute, mode === "linux-acl-file" || mode === "linux-acl-directory" ? "ACCESS" : "DEFAULT");
+      assert.equal(diagnostic.errno, undefined);
+    }
+  }
+  if (success) assert.equal(result.results[0].accessMetadata, undefined);
+
   if (success) {
     assert.equal(replacements, 1); assert(finalRead); assert(synced.has(dirname(path)));
     assert.equal(fs.statSync(path).mode & 0o777, mode === "new" ? 0o600 : 0o640);
