@@ -1015,14 +1015,56 @@ export function resolveAgentDiscovery(options: DiscoveryOptions): AgentDiscovery
  * while current supported controls are re-derived even when old settings or
  * directory witnesses are stale. Non-enumerable executable inputs still need
  * their existing review. No witness, policy or enrollment is written. */
-export function resolveAgentDiscoveryExclusionRoots(options: Omit<DiscoveryOptions, "reviewed" | "retainedReview"> & { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger }): readonly string[] {
+export function resolveAgentDiscoveryExclusionRoots(options: Omit<DiscoveryOptions, "reviewed" | "retainedReview"> & { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger; nativeHome?: string }): readonly string[] {
+  if (options.nativeHome !== undefined && (!["claude", "codex"].includes(options.agent) || !isAbsolute(options.nativeHome))) throw new Error("Unsupported native discovery exclusion home");
   const current = resolveDiscovery(options, options);
   const roots = [...new Set([...(options.retained?.roots ?? []), ...current.roots])];
+  if (options.agent === "claude" || options.agent === "codex") {
+    const nativeHome = options.nativeHome ?? join(options.home, `.${options.agent}`);
+    const nativeRoots = [join(nativeHome, "skills"), join(nativeHome, "plugins/cache")];
+    if (options.agent === "claude") nativeRoots.push(join(nativeHome, "plugins/synced"), join(nativeHome, "commands"));
+    roots.push(...nativeDiscoveryAliasTargets([...nativeRoots, ...current.roots], options.home));
+  }
   if (roots.length > AGENT_POLICY_LIMITS.discoveryRoots) throw new Error("Native discovery exclusion roots exceed their bound");
   return roots;
 }
 
-function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger }): AgentDiscoveryBinding {
+/** Metadata-only closure of aliases inside the selected native discovery
+ * trees. Never search the account generally or load a payload/plugin. Each
+ * resolved alias remains excluded while unrelated portable paths stay usable. */
+function nativeDiscoveryAliasTargets(roots: readonly string[], home: string): string[] {
+  const targets = new Set<string>(), visited = new Set<string>();
+  let remaining = AGENT_POLICY_LIMITS.discoveryDirectoryEntries;
+  const queue = roots.map(path => ({ path, parents: [] as string[] }));
+  for (let index = 0; index < queue.length; index++) {
+    const { path, parents } = queue[index]!;
+    if (path.length > AGENT_POLICY_LIMITS.pathCharacters || parents.length > AGENT_POLICY_LIMITS.discoveryPathSteps || --remaining < 0) throw new Error("Native discovery alias enumeration exceeds its bound");
+    const info = lstatSync(path, { throwIfNoEntry: false });
+    if (!info) { if (parents.length) throw new Error(`Native discovery alias input disappeared: ${path}`); continue; }
+    const physical = realpathSync(path);
+    if (info.isSymbolicLink()) targets.add(physical);
+    if (targets.size > AGENT_POLICY_LIMITS.discoveryRoots) throw new Error("Native discovery alias roots exceed their bound");
+    if (parents.includes(physical)) throw new Error(`Native discovery alias cycle: ${path}`);
+    if (visited.has(physical)) continue;
+    visited.add(physical);
+    const resolved = lstatSync(physical);
+    if (!resolved.isDirectory()) continue;
+    // Such a link makes account-wide traversal possible. Refuse it rather
+    // than scanning the account or mistaking a bounded prefix for closure.
+    const account = realpathSync(home);
+    if (physical === dirname(physical) || account === physical || account.startsWith(physical + sep)) throw new Error(`Native discovery alias expands to an account ancestor: ${path}`);
+    const directory = opendirSync(physical);
+    try {
+      for (let entry; (entry = directory.readSync()) !== null;) {
+        if (--remaining < 0) throw new Error("Native discovery alias enumeration exceeds its bound");
+        if (entry.isDirectory() || entry.isSymbolicLink()) queue.push({ path: join(physical, entry.name), parents: [...parents, physical] });
+      }
+    } finally { directory.closeSync(); }
+  }
+  return [...targets];
+}
+
+function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger; nativeHome?: string }): AgentDiscoveryBinding {
   const canonical = options.canonical ?? resolve, home = resolve(options.home), agent = options.agent;
   const sources: DiscoverySource[] = [], roots = new Set<string>(), builtinNames: string[] = [];
   const budget = discoveryByteBudget();
@@ -1048,7 +1090,11 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     source.sha256 = projected(source, undefined, exclusion ? budget : undefined); sources.push(source); return exclusion ? raw : read(source.path);
   };
   if (agent === "hermes") assertHermesEnvironment(home);
-  const configPath = agentDiscoveryConfigPath(home, agent);
+  // Authoring exclusion can inspect another effective native home without
+  // changing the home/configuration admitted by the native bridge.
+  const nativeHome = exclusion?.nativeHome ?? join(home, `.${agent}`);
+  const configPath = exclusion?.nativeHome === undefined ? agentDiscoveryConfigPath(home, agent)
+    : join(nativeHome, agent === "codex" ? "config.toml" : "settings.json");
   const configText = witness(configPath, agent === "hermes" ? "yaml" : agent === "codex" ? "toml" : "json", agent === "hermes" ? ["skills", "plugins", "hooks"] : agent === "claude" ? ["enabledPlugins", "extraKnownMarketplaces"] : agent === "codex" ? [...CODEX_DISCOVERY_PROJECTION_FIELDS] : agent === "gemini" ? ["skills", "extensions", "security"] : agent === "opencode" ? ["plugin", "skills"] : agent === "sumi" ? [...SUMI_DISCOVERY_PROJECTION_FIELDS] : ["version"]);
   const config: any = configText === null ? {} : agent === "hermes" ? parseHermesConfig(configText) : parseConfig(configText, configPath, agent === "codex");
   const unresolved = (detail: string): never => { throw new Error(`Native discovery is unresolved (${agent}: ${detail}); provide a reviewed --discovery-inputs file`); };
@@ -1351,9 +1397,9 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     }
   }
   if (agent === "claude") {
-    const registrations = witness(join(home, ".claude/plugins/installed_plugins.json"));
-    const installed = registrations === null ? {} : parseConfig(registrations, join(home, ".claude/plugins/installed_plugins.json")).plugins;
-    const commands = canonical(join(home, ".claude/commands")); safe(commands);
+    const registrations = witness(join(nativeHome, "plugins/installed_plugins.json"));
+    const installed = registrations === null ? {} : parseConfig(registrations, join(nativeHome, "plugins/installed_plugins.json")).plugins;
+    const commands = canonical(join(nativeHome, "commands")); safe(commands);
     if (lstatSync(commands, { throwIfNoEntry: false })?.isDirectory() && entries(commands).length) unresolved("legacy home command discovery requires a dedicated format adapter");
     for (const [id, enabled] of Object.entries(config.enabledPlugins ?? {})) {
       if (enabled === false) continue;
