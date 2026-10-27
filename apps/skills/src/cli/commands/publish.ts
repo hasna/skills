@@ -14,6 +14,7 @@ import { join } from "path";
 
 import chalk from "chalk";
 import type { Command } from "commander";
+import { writeCliOutput } from "../output.js";
 
 import {
   findPortableSkill,
@@ -101,13 +102,13 @@ export function registerPublish(parent: Command) {
           ...(options.version ? { version: options.version } : {}),
         });
         if (options.json) {
-          console.log(JSON.stringify(result, null, 2));
+          await writeCliOutput(JSON.stringify(result, null, 2));
           return;
         }
         printHuman(result);
       } catch (error) {
         if (options.json) {
-          console.log(JSON.stringify({
+          await writeCliOutput(JSON.stringify({
             error: (error as Error).message,
             ...(error instanceof RemoteSkillsPermissionError ? { code: error.code, status: error.status, permission: error.permission } : {}),
             ...(error instanceof PushSkillError && error.detail ? { detail: error.detail } : {}),

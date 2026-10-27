@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import type { Command } from "commander";
+import { writeCliOutput } from "../output.js";
 import {
   createRegistrySyncArtifact,
   writeRegistrySyncArtifact,
@@ -169,7 +170,7 @@ export function registerVersions(parent: Command) {
       const client = await createRemoteSkillsClient();
       if (!client) {
         const message = "No API key configured, so there is no instance to list versions from.";
-        if (options.json) console.log(JSON.stringify({ error: message }, null, 2));
+        if (options.json) await writeCliOutput(JSON.stringify({ error: message }, null, 2));
         else console.error(chalk.red(message));
         process.exitCode = 1;
         return;
@@ -177,7 +178,7 @@ export function registerVersions(parent: Command) {
       try {
         const versions = await client.listSkillVersions(name.trim());
         if (options.json) {
-          console.log(JSON.stringify({ slug: name.trim(), versions }, null, 2));
+          await writeCliOutput(JSON.stringify({ slug: name.trim(), versions }, null, 2));
           return;
         }
         if (!versions.length) {
@@ -191,7 +192,7 @@ export function registerVersions(parent: Command) {
         }
         console.log("");
       } catch (error) {
-        if (options.json) console.log(JSON.stringify({ error: (error as Error).message }, null, 2));
+        if (options.json) await writeCliOutput(JSON.stringify({ error: (error as Error).message }, null, 2));
         else console.error(chalk.red((error as Error).message));
         process.exitCode = 1;
       }
