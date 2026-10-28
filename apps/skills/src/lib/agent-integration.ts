@@ -1502,15 +1502,18 @@ export function assertCodexReconcileScope(plan: AgentIntegrationPlan, scope: { c
  * marketplace.json`, current bytes) that maps exactly `market`/`name` to a
  * plugin directory, and also binds that directory's exact manifest. A manifest
  * witness elsewhere that merely shares the plugin's name proves nothing. */
-function codexReviewedMarketplaceManifest(sources: DiscoverySource[], market: string, name: string): boolean {
+function codexReviewedMarketplaceManifest(sources: DiscoverySource[], market: string | undefined, name: string, expectedManifest?: string): boolean {
   const full = (source: DiscoverySource) => source.sha256 !== null && source.format === undefined && source.fields === undefined && source.reviewArtifact === undefined && (source.hashMode === undefined || source.hashMode === "bytes");
   for (const source of sources) {
     if (!full(source) || basename(source.path) !== "marketplace.json" || basename(dirname(source.path)) !== "plugins" || basename(dirname(dirname(source.path))) !== ".agents") continue;
-    let text: string | null; try { text = readOptional(source.path); } catch { continue; }
-    if (text === null || sha(text) !== source.sha256 || !codexLocalMarketplaceMapsPlugin(text, market, name)) continue;
+    let text: string | null; try { text = new TextDecoder("utf-8", { fatal: true }).decode(readNativeBytes(source.path, 1024 * 1024)); } catch { continue; }
+    if (text === null || sha(text) !== source.sha256) continue;
+    let marketplace: unknown;
+    try { marketplace = market ?? JSON.parse(text).name; } catch { continue; }
+    if (typeof marketplace !== "string" || !codexLocalMarketplaceMapsPlugin(text, marketplace, name)) continue;
     const row = (JSON.parse(text).plugins as Array<{ name: string; source: { path: string } }>).find(item => item.name === name)!;
     const manifest = join(dirname(dirname(dirname(source.path))), row.source.path, ".codex-plugin", "plugin.json");
-    if (sources.some(other => full(other) && other.path === manifest)) return true;
+    if ((expectedManifest === undefined || manifest === expectedManifest) && sources.some(other => full(other) && other.path === manifest)) return true;
   }
   return false;
 }
@@ -1521,6 +1524,36 @@ function codexRuntimePluginRoot(document: string, runtimeCache: string): string 
     if (lstatSync(join(root, ".codex-plugin/plugin.json"), { throwIfNoEntry: false })?.isFile()) return root;
   }
   return null;
+}
+/** A reviewed bundled copy needs the same source identity as automatic
+ * discovery: a current catalog mapping to its exact witnessed manifest and a
+ * declared skill root. The reviewed method label alone grants no exemption.
+ * Called only after verifyAgentDiscovery has checked all current witnesses. */
+function reviewedCodexBundledSkill(path: string, cache: string, discovery: AgentDiscoveryBinding): boolean {
+  if (discovery.agent !== "codex" || discovery.method !== "reviewed" || !discovery.roots.some(root => path.startsWith(root + sep))) return false;
+  try {
+    const root = codexRuntimePluginRoot(join(path, "SKILL.md"), cache);
+    if (!root) return false;
+    const manifestPath = join(root, ".codex-plugin/plugin.json");
+    const source = discovery.sources.find(source => source.path === manifestPath && source.sha256 !== null && source.format === undefined && source.fields === undefined && source.reviewArtifact === undefined && (source.hashMode === undefined || source.hashMode === "bytes"));
+    if (!source) return false;
+    const bytes = readNativeBytes(manifestPath, 1024 * 1024);
+    if (sha(bytes) !== source.sha256) return false;
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    hashNativeJsonControls(text);
+    const manifest = JSON.parse(text);
+    const declared = manifest.skills === undefined ? ["./skills"] : typeof manifest.skills === "string" ? [manifest.skills] : manifest.skills;
+    if (!Array.isArray(declared) || !declared.length || declared.some(value => typeof value !== "string")) return false;
+    if (!declared.some(value => {
+      const skillRoot = resolve(root, value);
+      return skillRoot.startsWith(root + sep) && (skillRoot.endsWith(sep + "SKILL.md") ? path === dirname(skillRoot) : path === skillRoot || path.startsWith(skillRoot + sep));
+    })) return false;
+    // Bundled marketplace sources may remain inventoried without installed or
+    // enabled plugin entries. Their exact path deny still makes them inert;
+    // the current full catalog and manifest witnesses supply source identity.
+    return typeof manifest.name === "string"
+      && codexReviewedMarketplaceManifest(discovery.sources, undefined, manifest.name, manifestPath);
+  } catch { return false; }
 }
 /** Read-only plan for `skills hook codex-reconcile`. Enumerates the plugin-cache
  * skills the strict guard refuses and the catalog skills Codex would load from
@@ -2718,16 +2751,19 @@ function assertManagedNativeDiscovery(custody: ManagedBridgeCustody, agent: Inte
     if (entry.path.startsWith(canonicalAgentPath(join(home, ".codex", "plugins", "cache"), aliases) + sep)) return true;
     // The Codex app can also materialize its bundled marketplace beneath its
     // runtime cache. Admit only an exact disabled skill inside a verified,
-    // automatically discovered plugin root; unrelated cache files still fail.
+    // automatically discovered plugin root, or its exact reviewed source proof.
+    // Unrelated cache files still fail.
     const runtimeCache = canonicalAgentPath(join(home, ".cache", "codex-runtimes"), aliases);
-    if (entry.path.startsWith(runtimeCache + sep) && discovery?.method === "automatic"
-      && discovery.roots.some(root => entry.path.startsWith(root + sep))) return true;
+    if (entry.path.startsWith(runtimeCache + sep) && discovery
+      && (discovery.method === "automatic" && discovery.roots.some(root => entry.path.startsWith(root + sep))
+        || reviewedCodexBundledSkill(entry.path, runtimeCache, discovery))) return true;
     // The Codex app may materialize enabled bundled plugins in this temporary
     // marketplace. Only an exact disabled skill under a verified automatic
-    // plugin root is inert; a new path or changed discovery source still fails.
+    // plugin root or exact reviewed source proof is inert.
     const bundledMarketplaces = canonicalAgentPath(join(home, ".codex", ".tmp", "bundled-marketplaces"), aliases);
-    if (entry.path.startsWith(bundledMarketplaces + sep) && discovery?.method === "automatic"
-      && discovery.roots.some(root => entry.path.startsWith(root + sep))) return true;
+    if (entry.path.startsWith(bundledMarketplaces + sep) && discovery
+      && (discovery.method === "automatic" && discovery.roots.some(root => entry.path.startsWith(root + sep))
+        || reviewedCodexBundledSkill(entry.path, bundledMarketplaces, discovery))) return true;
     if (!entry.path.startsWith(canonicalAgentPath(join(home, ".codex", "skills", ".system"), aliases) + sep)) return false;
     return Array.isArray(binding.disabledBuiltins) && binding.disabledBuiltins.some((item: any) => item.path === entry.path && item.hash === entry.hash);
   };
