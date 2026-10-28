@@ -1588,6 +1588,54 @@ The operation is read-only. It reads the policy and the stored witness paths
 and directories. It writes no file, cache, selection pin or policy, and it does
 not start Claude or change native state.
 
+### Disable only Claude context delivery hooks
+
+`skills hook disable-claude-context` previews removal of exact Skills-owned
+`SessionStart`, `UserPromptSubmit` and `SubagentStart` registrations. It requires
+an explicit physical settings path, its exact SHA-256 and `0600` mode, the exact
+Skills executable and its physical byte digest, and the registered selection
+profile. It compares complete commands produced by Skills' own renderer, never
+a command substring. Unsupported near matches refuse. Duplicate JSON keys,
+aliases, unsafe paths, and changed target/command witnesses refuse too.
+
+```sh
+skills hook disable-claude-context --settings /absolute/native/settings.json \
+  --expected-settings-sha256 <exact-settings-sha256> --expected-mode 0600 \
+  --skills-command /absolute/bin/skills \
+  --expected-command-sha256 <exact-command-sha256> \
+  --selection-profile <exact-profile> --json
+```
+
+The default preview writes nothing. Add `--apply --preimage-dir <new-absolute-dir>`
+to apply. The preservation directory's parent must already exist. Apply creates
+an exclusive private directory and reads back the exact original before changing
+settings. An existing directory is never reused. The operation preserves all
+other settings and handlers, including `PreToolUse` native Skill enforcement,
+unrelated empty groups, permissions, policy, profiles and sessions. JSON spacing
+is reserialized, while unknown numeric spellings remain intact.
+
+The result distinguishes `no-data` (an explicitly absent target, using `absent`
+for both expected hash and mode), `no-op` (a present file with no exact matches),
+`preview`, `applied`, and `ambiguous`. `plannedAfterSha256` describes the proposed
+bytes. `afterSha256` is unavailable until readback verifies an applied target.
+Apply uses a descriptor-held package lock and atomic file exchange, retaining
+both a private preimage and the displaced entry. Exchange is not compare-and-swap.
+A post-exchange race or failed verification returns `ambiguous`, exit 2,
+`mutationOccurred: true` and exact recovery paths. It never claims no write or
+blindly overwrites a concurrent edit during rollback. Failed staging and all
+preservation evidence remain for recovery.
+
+This command makes no hosted request and needs no credential. It can run from
+an exact reviewed task-scoped CLI artifact without installing it as the shared
+Skills command. Its lock file remains in the target directory. Removing context
+hooks can stale enrolled settings witnesses that bind those hooks. The operation
+reports `settingsWitness: not-renewed` and does not refresh or relax them.
+`PreToolUse` enforcement can therefore still refuse on a stale witness. This is
+a context-delivery shutdown, not admission recovery or permission to reactivate
+hooks. Linux uses `renameat2(RENAME_EXCHANGE)` and macOS uses
+`renamex_np(RENAME_SWAP)`; unsupported exchange or filesystem behavior refuses.
+
+
 ## Profiles, station sync and rollback
 
 ```bash
