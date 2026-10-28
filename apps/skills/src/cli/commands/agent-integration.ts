@@ -1,3 +1,4 @@
+import { disableClaudeHooks } from "../../lib/claude-hook-disable.js";
 import { openCodeContextDelivery } from "../../lib/opencode-hook-protocol.js";
 import { captureSumiSettings } from "../../lib/sumi-settings-witness.js";
 import { writeCliOutput } from "../output.js";
@@ -134,6 +135,29 @@ function agents(value: string): IntegrationAgent[] {
 
 export function registerAgentIntegration(parent: Command): void {
   const hook = parent.command("hook").description("Load selected Skills context through agent lifecycle hooks");
+  hook.command("disable-claude-context")
+    .requiredOption("--settings <path>", "Exact physical Claude settings.json path")
+    .requiredOption("--expected-settings-sha256 <sha256>", "Exact target byte digest, or absent")
+    .requiredOption("--expected-mode <mode>", "Exact target mode: 0600, or absent")
+    .requiredOption("--skills-command <path>", "Exact Skills executable named by the registrations")
+    .requiredOption("--expected-command-sha256 <sha256>", "Exact physical Skills command byte digest")
+    .requiredOption("--selection-profile <id>", "Exact profile named by the registrations")
+    .option("--preimage-dir <path>", "New private preservation directory, required for a changing apply")
+    .option("--apply", "Remove the exact registrations after preservation; default is preview", false)
+    .option("--json", "Return bounded metadata only", false)
+    .description("Disable only exact Skills-owned Claude context hooks, preserving native denial and policy")
+    .action(async (options: { settings: string; expectedSettingsSha256: string; expectedMode: "0600" | "absent";
+      skillsCommand: string; expectedCommandSha256: string; selectionProfile: string; preimageDir?: string; apply: boolean }) => {
+      try {
+        const result = disableClaudeHooks({ ...options, command: options.skillsCommand, profile: options.selectionProfile });
+        await writeCliOutput(JSON.stringify(result));
+        if (result.state === "ambiguous") process.exitCode = 2;
+      } catch (error) {
+        const code = error instanceof Error && /^CLAUDE_HOOK_DISABLE_[A-Z_]+$/.test(error.message)
+          ? error.message : "CLAUDE_HOOK_DISABLE_REFUSED";
+        console.error(code); process.exitCode = 1;
+      }
+    });
   hook.command("retain-review-artifact")
     .requiredOption("--kind <kind>", "Explicit artifact type: codex-native-catalog")
     .requiredOption("--source <path>", "Exact canonical absolute legacy reviewed artifact path")
