@@ -42,7 +42,8 @@ function installedProbe() {
   mkdirSync(dirname(entry), { recursive: true, mode: 0o700 });
   writeFileSync(entry, `import ${JSON.stringify(launchCwdApply)};
 console.log(JSON.stringify({ cwd: process.cwd(), dotenv: process.env.HOSTILE_DOTENV ?? null, bunOptions: process.env.BUN_OPTIONS ?? null,
-  nodeOptions: process.env.NODE_OPTIONS ?? null, proxy: process.env.HTTPS_PROXY ?? null, kept: process.env.HASNA_SKILLS_PROBE ?? null,
+  nodeOptions: process.env.NODE_OPTIONS ?? null, proxy: process.env.HTTPS_PROXY ?? null,
+  claudeConfigDir: process.env.CLAUDE_CONFIG_DIR ?? null, codexHome: process.env.CODEX_HOME ?? null, kept: process.env.HASNA_SKILLS_PROBE ?? null,
   launchCwd: process.env.HASNA_SKILLS_LAUNCH_CWD ?? null, argv: process.argv.slice(2) }));
 `, { mode: 0o755 });
   return { root, entry };
@@ -51,7 +52,8 @@ console.log(JSON.stringify({ cwd: process.cwd(), dotenv: process.env.HOSTILE_DOT
 test("self-spawned children get the pinned flags, the runtime root and the allowlisted environment, not the caller's cwd configuration", async () => {
   const hostile = hostileDirectory(), probe = installedProbe();
   const env = { HOME: process.env.HOME ?? "", PATH: process.env.PATH ?? "", BUN_OPTIONS: `--preload=${join(hostile.dir, "preload.js")}`,
-    NODE_OPTIONS: `--require=${join(hostile.dir, "preload.js")}`, HTTPS_PROXY: "http://127.0.0.1:9", HASNA_SKILLS_PROBE: "kept" };
+    NODE_OPTIONS: `--require=${join(hostile.dir, "preload.js")}`, HTTPS_PROXY: "http://127.0.0.1:9", HASNA_SKILLS_PROBE: "kept",
+    CLAUDE_CONFIG_DIR: join(probe.root, "custom claude"), CODEX_HOME: join(probe.root, "custom codex") };
   // Positive control: the previous `[process.execPath, process.argv[1], ...]` shape from the caller's directory.
   const control = Bun.spawnSync([process.execPath, probe.entry, "context"], { cwd: hostile.dir, env, stdout: "pipe", stderr: "pipe" });
   expect(control.exitCode).toBe(0);
@@ -62,11 +64,11 @@ test("self-spawned children get the pinned flags, the runtime root and the allow
   expect(self.cwd).toBe(realpathSync(probe.root));
   expect(selfSpawnRoot(probe.entry)).toBe(realpathSync(probe.root));
   expect(self.command).toEqual([process.execPath, "--config=/dev/null", "--no-env-file", "--no-macros", "--no-install", `--cwd=${realpathSync(probe.root)}`, probe.entry, "context", "--stdin", "--json"]);
-  expect(Object.keys(self.env).sort()).toEqual(["HASNA_SKILLS_LAUNCH_CWD", "HASNA_SKILLS_PROBE", "HOME", "PATH"]);
+  expect(Object.keys(self.env).sort()).toEqual(["CLAUDE_CONFIG_DIR", "CODEX_HOME", "HASNA_SKILLS_LAUNCH_CWD", "HASNA_SKILLS_PROBE", "HOME", "PATH"]);
   const child = Bun.spawnSync(self.command, { cwd: self.cwd, env: self.env, stdout: "pipe", stderr: "pipe" });
   expect(child.stderr.toString()).toBe("");
   expect(child.exitCode).toBe(0);
-  expect(JSON.parse(child.stdout.toString())).toEqual({ cwd: realpathSync(hostile.dir), dotenv: null, bunOptions: null, nodeOptions: null, proxy: null, kept: "kept", launchCwd: null, argv: ["context", "--stdin", "--json"] });
+  expect(JSON.parse(child.stdout.toString())).toEqual({ cwd: realpathSync(hostile.dir), dotenv: null, bunOptions: null, nodeOptions: null, proxy: null, claudeConfigDir: env.CLAUDE_CONFIG_DIR, codexHome: env.CODEX_HOME, kept: "kept", launchCwd: null, argv: ["context", "--stdin", "--json"] });
   expect(hostile.markers()).toBe(before);
 });
 
@@ -202,12 +204,13 @@ test("every installed package bin has an explicit matching environment role", ()
   expect(() => launcherProfileForBin("unknown", "bin/server.js")).toThrow("LAUNCHER_BIN_CONTRACT_INVALID");
 });
 
-test("V2 refuses profile, text, format and digest tampering", () => {
-  const state = pinnedLauncherState("/opt/bun", "/opt/runtime", "/opt/pkg/bin/index.js");
+test.each(["v2", "v3"] as const)("%s refuses profile, text, format and digest tampering", (format) => {
+  const state = pinnedLauncherState("/opt/bun", "/opt/runtime", "/opt/pkg/bin/index.js", { format, profile: "client" });
   const text = pinnedLauncherText(state);
-  expect(state).toMatchObject({ format: "v2", profile: "client" });
+  expect(state).toMatchObject({ format, profile: "client" });
   expect(parsePinnedLauncher(text.replace("environment-profile: client", "environment-profile: server"))).toBeNull();
   expect(parsePinnedLauncher(text.replace("environment-profile: client", "environment-profile: unknown"))).toBeNull();
+  expect(parsePinnedLauncher(text.replace(`pinned-launcher-${format}`, `pinned-launcher-${format === "v2" ? "v3" : "v2"}`))).toBeNull();
   expect(() => pinnedLauncherText({ ...state, profile: "server" })).toThrow("LAUNCHER_TEXT_DIGEST_MISMATCH");
   expect(() => pinnedLauncherText({ ...state, format: undefined })).toThrow("LAUNCHER_PROFILE_INVALID");
   expect(() => pinnedLauncherText({ ...state, sha256: "0".repeat(64) })).toThrow("LAUNCHER_TEXT_DIGEST_MISMATCH");
@@ -233,4 +236,56 @@ test("server database locator aliases preserve canonical precedence and generic 
   expect(resolveServerConfig({ HASNA_SKILLS_DATABASE_URL: "canonical.sqlite", SKILLS_DATABASE_URL: "skills.sqlite", DATABASE_URL: "generic.sqlite" }).databaseUrl).toBe("canonical.sqlite");
   expect(resolveServerConfig({ HASNA_SKILLS_DATABASE_URL: "", SKILLS_DATABASE_URL: "skills.sqlite", DATABASE_URL: "generic.sqlite" }).databaseUrl).toBe("skills.sqlite");
   expect(resolveServerConfig({ HASNA_SKILLS_DATABASE_URL: "", SKILLS_DATABASE_URL: "", DATABASE_URL: "generic.sqlite" }).databaseUrl).toBe("generic.sqlite");
+});
+
+// Captured from the pre-V3 renderer at 3f6cdb4, using the binding below.
+test.each([
+  ["client", "8a17e359407db3d432be75326069dc7a46ca2eba6b81d5d8a9155fb584fa1bf5"],
+  ["server", "c255cba5baa56ac299ad17814fb27b309f0de7268e355b3a77b97ca49a4bbb19"],
+] as const)("original V2 %s bytes parse, inspect and restore without changing their digest", (profile, digest) => {
+  const binding = { runtime: "/opt/bun", cwd: "/opt/runtime", entry: "/opt/pkg/bin/index.js", format: "v2" as const, profile };
+  const text = renderPinnedLauncher(binding);
+  expect(createHash("sha256").update(text).digest("hex")).toBe(digest);
+  expect(text).not.toContain("CLAUDE_CONFIG_DIR");
+  expect(parsePinnedLauncher(text)).toEqual(binding);
+  const state = { shape: "pinned" as const, runtime: binding.runtime, cwd: binding.cwd, target: binding.entry,
+    format: binding.format, profile, sha256: digest };
+  expect(pinnedLauncherText(state)).toBe(text);
+  const path = join(scratch("skills-v2-readback-"), "skills");
+  materializeLauncher(path, state);
+  expect(readFileSync(path, "utf8")).toBe(text);
+  expect(inspectLauncher(path)).toMatchObject({ kind: "pinned", format: "v2", profile, sha256: digest });
+  expect(launcherIs(path, state)).toBe(true);
+});
+
+test.each(["client", "server"] as const)("V3 %s launcher preserves the custom Claude root and ordinary arguments while rejecting unapproved environment", (profile) => {
+  const root = scratch("skills-v3-env-"), entry = join(root, "probe.ts"), launcher = join(root, "launcher");
+  const claudeRoot = join(root, "custom Claude's root $(touch marker)"), codexRoot = join(root, "custom codex");
+  const args = ["context", "--stdin", "--json", "space in argument", "quote'argument", "$(touch marker)", ""];
+  const env = { ...configuredEnvironment, HOME: root, CLAUDE_CONFIG_DIR: claudeRoot, CODEX_HOME: codexRoot,
+    CLAUDE_UNREVIEWED_OPTION: "rejected", UNREVIEWED_OPTION: "rejected", LD_PRELOAD: "", DYLD_INSERT_LIBRARIES: "/invalid" };
+  writeFileSync(entry, "console.log(JSON.stringify({env:process.env,argv:process.argv.slice(2)}));\n", { mode: 0o755 });
+  const state = pinnedLauncherState(realpathSync(process.execPath), root, entry, { format: "v3", profile });
+  materializeLauncher(launcher, state);
+  expect(parsePinnedLauncher(readFileSync(launcher, "utf8"))).toMatchObject({ format: "v3", profile });
+  const child = Bun.spawnSync([launcher, ...args], { cwd: root, env, stdout: "pipe", stderr: "pipe" });
+  expect(child.exitCode).toBe(0);
+  expect(child.stderr.toString()).toBe("");
+  const actual = JSON.parse(child.stdout.toString());
+  expect(actual.argv).toEqual(args);
+  expect(actual.env.CLAUDE_CONFIG_DIR).toBe(claudeRoot);
+  expect(actual.env.CODEX_HOME).toBe(codexRoot);
+  const expected = pinnedLauncherEnvironment(env, profile);
+  for (const [name, value] of Object.entries(expected)) expect(actual.env[name]).toBe(value);
+  for (const name of locatorNames) expect(actual.env[name]).toBe(profile === "server" ? env[name as keyof typeof env] : undefined);
+  for (const name of ["BUN_OPTIONS", "NODE_OPTIONS", "HTTPS_PROXY", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "CLAUDE_UNREVIEWED_OPTION", "UNREVIEWED_OPTION"]) expect(actual.env[name]).toBeUndefined();
+  expect(existsSync(join(root, "marker"))).toBe(false);
+});
+
+test("new pinned launchers default to V3 client while explicit legacy metadata retains its meaning", () => {
+  const binding = { runtime: "/opt/bun", cwd: "/opt/runtime", entry: "/opt/pkg/bin/index.js" };
+  expect(parsePinnedLauncher(renderPinnedLauncher(binding))).toEqual({ ...binding, format: "v3", profile: "client" });
+  expect(pinnedLauncherState(binding.runtime, binding.cwd, binding.entry)).toMatchObject({ format: "v3", profile: "client" });
+  expect(pinnedLauncherState(binding.runtime, binding.cwd, binding.entry, {})).toMatchObject({ format: "v1" });
+  expect(() => renderPinnedLauncher({ ...binding, format: "v4" as never })).toThrow("LAUNCHER_FORMAT_INVALID");
 });

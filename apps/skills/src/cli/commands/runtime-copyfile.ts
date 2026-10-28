@@ -80,7 +80,7 @@ function newLauncherState(item: LauncherRecord): LauncherState {
 // Bind a record's shape fields exactly: absent fields mean a legacy symlink;
 // a pinned shape needs its runtime, trusted directory and digest, and its
 // digest must be the digest of the text those fields render. Absent pinned
-// format/profile fields mean exact historical V1; V2 requires a bin-bound role.
+// format/profile fields mean exact historical V1; V2/V3 require a bin-bound role.
 function assertLauncherRecordShapes(item: LauncherRecord, expectedProfile: LauncherProfile): void {
   const hex = /^[a-f0-9]{64}$/;
   for (const side of ["old", "new"] as const) {
@@ -99,7 +99,7 @@ function assertLauncherRecordShapes(item: LauncherRecord, expectedProfile: Launc
     }
     const target = side === "old" ? item.oldTarget : item.newTarget;
     if (side === "old" && item.oldLinkTarget !== item.oldTarget) throw new Error("RECEIPT_LAUNCHER_SHAPE_INVALID");
-    if (format === "v2" && profile !== expectedProfile) throw new Error("RECEIPT_LAUNCHER_SHAPE_INVALID");
+    if ((format === "v2" || format === "v3") && profile !== expectedProfile) throw new Error("RECEIPT_LAUNCHER_SHAPE_INVALID");
     try {
       pinnedLauncherText({ runtime, cwd, target, sha256: sha, format, profile });
     } catch { throw new Error("RECEIPT_LAUNCHER_SHAPE_INVALID"); }
@@ -108,7 +108,7 @@ function assertLauncherRecordShapes(item: LauncherRecord, expectedProfile: Launc
 
 /** The pinned-launcher fields for a switch onto `target` under the given runtime version root. */
 function pinnedRecordFields(runtime: string, cwd: string, target: string, profile: LauncherProfile): Pick<LauncherRecord, "newShape" | "newRuntime" | "newCwd" | "newSha256" | "newFormat" | "newProfile"> {
-  const state = pinnedLauncherState(runtime, cwd, target, { format: "v2", profile });
+  const state = pinnedLauncherState(runtime, cwd, target, { format: "v3", profile });
   return { newShape: "pinned", newRuntime: state.runtime, newCwd: state.cwd, newSha256: state.sha256, newFormat: state.format, newProfile: state.profile };
 }
 
@@ -888,7 +888,7 @@ export function adoptCopyfileAliases(options: { homeDir?: string; pathValue?: st
         // symlink that already reaches the current entry (the shape an updater
         // before pinned launchers wrote, including for this very runtime) is
         // adopted like any other alias: same checks, backup, receipt and rollback.
-        if (actual === newTarget && launcher.kind === "pinned" && launcher.format === "v2"
+        if (actual === newTarget && launcher.kind === "pinned" && launcher.format === "v3"
           && launcher.profile === launcherProfileForBin(name, target)) continue;
         const chain = inspectAliasPackageChain(home, path, oldLinkTarget, actual, target);
         const source = validateAliasSource(home, name, actual);

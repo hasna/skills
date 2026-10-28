@@ -157,17 +157,19 @@ function asPrePinnedRollout(targetRoot: string): Map<string, string> {
   return links;
 }
 
-// Replay a .60 rollout: its new launchers are exact V1 bytes, and receipt
-// format/profile metadata is absent. Rebuild the synthetic preimage binding.
-function asV1Rollout(targetRoot: string): Map<string, string> {
+// Replay a pre-V3 rollout: V1 receipts omit metadata, while V2 binds the bin
+// profile. Rebuild the synthetic preimage binding without changing old bytes.
+function asLegacyRollout(targetRoot: string, format: "v1" | "v2"): Map<string, string> {
   const receiptPath = join(targetRoot, "rollout-receipt.json");
   const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
   const texts = new Map<string, string>();
   for (const item of receipt.launchers) {
-    const text = renderPinnedLauncher({ runtime: item.newRuntime, cwd: item.newCwd, entry: item.newTarget, format: "v1" });
+    const profile = launcherModule.launcherProfileForBin(basename(item.path), BIN[basename(item.path) as keyof typeof BIN]);
+    const text = renderPinnedLauncher({ runtime: item.newRuntime, cwd: item.newCwd, entry: item.newTarget, format, ...(format === "v2" ? { profile } : {}) });
     writeFileSync(item.path, text);
     item.newSha256 = createHash("sha256").update(text).digest("hex");
-    delete item.oldFormat; delete item.oldProfile; delete item.newFormat; delete item.newProfile;
+    if (format === "v1") { delete item.oldFormat; delete item.oldProfile; delete item.newFormat; delete item.newProfile; }
+    else { item.newFormat = format; item.newProfile = profile; }
     texts.set(item.path, text);
   }
   const manifestPath = join(targetRoot, "preimage", "manifest.json");
@@ -179,13 +181,14 @@ function asV1Rollout(targetRoot: string): Map<string, string> {
 }
 
 describe("exact-version copyfile runtime update", () => {
-  test("original V1 active fleet launchers upgrade to V2 bin roles and rollback byte-exact", async () => {
+  test.each(["v1", "v2"] as const)("original %s active fleet launchers upgrade to V3 bin roles and rollback byte-exact", async (format) => {
     const f = fixtureHome(), fixture = await serverWithArtifact();
     const oldTexts = new Map<string, string>();
     for (const dir of [f.localBin, f.bunBin]) for (const [name, bin] of Object.entries(BIN)) {
       const path = join(dir, name), text = renderPinnedLauncher({ runtime: realpathSync(process.execPath),
-        cwd: join(f.runtime, "0.10.6-copyfile"), entry: join(f.oldPackage, bin), format: "v1" });
-      const temp = `${path}.synthetic-v1`; writeFileSync(temp, text, { mode: 0o755 }); renameSync(temp, path);
+        cwd: join(f.runtime, "0.10.6-copyfile"), entry: join(f.oldPackage, bin), format,
+        ...(format === "v2" ? { profile: launcherModule.launcherProfileForBin(name, bin) } : {}) });
+      const temp = `${path}.synthetic-${format}`; writeFileSync(temp, text, { mode: 0o755 }); renameSync(temp, path);
       oldTexts.set(path, text);
     }
     try {
@@ -194,21 +197,21 @@ describe("exact-version copyfile runtime update", () => {
       const receipt = JSON.parse(readFileSync(join(f.runtime, "0.10.8-copyfile", "rollout-receipt.json"), "utf8"));
       for (const item of receipt.launchers) {
         const profile = launcherModule.launcherProfileForBin(basename(item.path), BIN[basename(item.path) as keyof typeof BIN]);
-        expect(item).toMatchObject({ oldFormat: "v1", newFormat: "v2", newProfile: profile });
+        expect(item).toMatchObject({ oldFormat: format, newFormat: "v3", newProfile: profile });
         expect(readFileSync(item.backupPath, "utf8")).toBe(oldTexts.get(item.path)!);
-        expect(inspectLauncher(item.path)).toMatchObject({ kind: "pinned", format: "v2", profile });
+        expect(inspectLauncher(item.path)).toMatchObject({ kind: "pinned", format: "v3", profile });
       }
       expect(rollbackCopyfileRuntime(String(result.receiptId), { homeDir: f.home })).toMatchObject({ rolledBack: true });
       for (const [path, text] of oldTexts) expect(readFileSync(path, "utf8")).toBe(text);
     } finally { fixture.server.stop(true); }
   });
 
-  test("old V1 rollout receipts without format metadata rollback and preserve exact V1 after-images", async () => {
+  test.each(["v1", "v2"] as const)("old %s rollout receipts rollback and preserve exact after-images", async (format) => {
     const f = fixtureHome(), fixture = await serverWithArtifact();
     try {
       const result = await updateCopyfileRuntime("0.10.8", { homeDir: f.home,
         pathValue: `${f.localBin}${delimiter}${f.bunBin}`, registryOrigin: fixture.server.url.origin });
-      const texts = asV1Rollout(join(f.runtime, "0.10.8-copyfile"));
+      const texts = asLegacyRollout(join(f.runtime, "0.10.8-copyfile"), format);
       expect(rollbackCopyfileRuntime(String(result.receiptId), { homeDir: f.home })).toMatchObject({ rolledBack: true });
       for (const [path, text] of texts) {
         expect(lstatSync(path).isSymbolicLink()).toBe(true);
@@ -217,17 +220,18 @@ describe("exact-version copyfile runtime update", () => {
     } finally { fixture.server.stop(true); }
   });
 
-  test("old V1 alias receipts without format metadata restore exact V1 prior launchers", async () => {
+  test.each(["v1", "v2"] as const)("old %s alias receipts restore exact prior launchers", async (format) => {
     const f = fixtureHome(), fixture = await serverWithArtifact();
     const pathValue = `${f.localBin}${delimiter}${f.bunBin}`;
     try {
       await updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue, registryOrigin: fixture.server.url.origin });
-      const root = join(f.runtime, "0.10.8-copyfile"), texts = asV1Rollout(root);
-      // Half the aliases still point to the previous .60 runtime, forcing an
-      // actual V1 rollback reconstruction rather than a same-state no-op.
+      const root = join(f.runtime, "0.10.8-copyfile"), texts = asLegacyRollout(root, format);
+      // Half the aliases still point to the previous runtime, forcing an
+      // actual legacy rollback reconstruction rather than a same-state no-op.
       for (const [name, bin] of Object.entries(BIN)) {
         const path = join(f.bunBin, name), text = renderPinnedLauncher({ runtime: realpathSync(process.execPath),
-          cwd: join(f.runtime, "0.10.6-copyfile"), entry: join(f.oldPackage, bin), format: "v1" });
+          cwd: join(f.runtime, "0.10.6-copyfile"), entry: join(f.oldPackage, bin), format,
+          ...(format === "v2" ? { profile: launcherModule.launcherProfileForBin(name, bin) } : {}) });
         writeFileSync(path, text); texts.set(path, text);
       }
       const adopted = adoptCopyfileAliases({ homeDir: f.home, pathValue });
@@ -241,7 +245,7 @@ describe("exact-version copyfile runtime update", () => {
           item.newProfile = "server";
           // Even a self-consistent server profile is refused for the client bin.
           item.newSha256 = launcherModule.pinnedLauncherState(item.newRuntime, item.newCwd, item.newTarget,
-            { format: "v2", profile: "server" }).sha256;
+            { format: "v3", profile: "server" }).sha256;
         } else if (tamper === "digest") item.newSha256 = "0".repeat(64);
         else delete item.newFormat;
         writeFileSync(receiptPath, `${JSON.stringify(changed, null, 2)}\n`);
@@ -249,10 +253,12 @@ describe("exact-version copyfile runtime update", () => {
         expect(launcherSnapshot(before.keys())).toEqual(before);
       }
       for (const item of receipt.aliases) {
-        // Reproduce a legacy alias receipt whose new state also used V1.
-        const text = renderPinnedLauncher({ runtime: item.newRuntime, cwd: item.newCwd, entry: item.newTarget, format: "v1" });
+        // Reproduce a legacy alias receipt whose new state also used that format.
+        const profile = launcherModule.launcherProfileForBin(basename(item.path), BIN[basename(item.path) as keyof typeof BIN]);
+        const text = renderPinnedLauncher({ runtime: item.newRuntime, cwd: item.newCwd, entry: item.newTarget, format, ...(format === "v2" ? { profile } : {}) });
         writeFileSync(item.path, text); item.newSha256 = createHash("sha256").update(text).digest("hex");
-        delete item.oldFormat; delete item.oldProfile; delete item.newFormat; delete item.newProfile;
+        if (format === "v1") { delete item.oldFormat; delete item.oldProfile; delete item.newFormat; delete item.newProfile; }
+        else { item.newFormat = format; item.newProfile = profile; }
       }
       writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
       expect(rollbackCopyfileAliases(String(adopted.receiptId), { homeDir: f.home, pathValue })).toMatchObject({ rolledBack: true, restoredAliasCount: 7 });
@@ -756,7 +762,7 @@ else { writeFileSync(${JSON.stringify(log)}, "unexpected"); process.exit(83); }
       expect(pinnedTarget(join(f.bunBin, "skills"))).toBe(join(targetPackage, BIN.skills));
       // The switched launcher is the exact fleet pinned shape for this runtime, cwd and entry.
       const pinnedBinding = parsePinnedLauncher(readFileSync(join(f.localBin, "skills"), "utf8"));
-      expect(pinnedBinding).toEqual({ runtime: realpathSync(process.execPath), cwd: targetRoot, entry: join(targetPackage, BIN.skills), format: "v2", profile: "client" });
+      expect(pinnedBinding).toEqual({ runtime: realpathSync(process.execPath), cwd: targetRoot, entry: join(targetPackage, BIN.skills), format: "v3", profile: "client" });
       expect(readFileSync(join(f.localBin, "skills"), "utf8")).toBe(renderPinnedLauncher(pinnedBinding!));
       expect(readFileSync(join(f.localBin, "skills"), "utf8")).toContain(`'${realpathSync(process.execPath)}' --config=/dev/null --no-env-file --no-macros --no-install '--cwd=${targetRoot}' '${join(targetPackage, BIN.skills)}' "$@"`);
       expect(readFileSync(join(f.localBin, "skills"), "utf8")).toContain('exec /usr/bin/env -i "$@"');
