@@ -2144,7 +2144,7 @@ on the exact entry, through `env -i` with an explicit environment allowlist:
 (`TERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `COLORTERM`, `COLUMNS`, `LINES`),
 `NO_COLOR`, `FORCE_COLOR`, `CI`, `EDITOR`, `VISUAL`, `PAGER`, `SSH_AUTH_SOCK`,
 the server settings `HOST`, `PORT`, `NODE_ENV`, `AGENT_ID` and
-`ECS_CONTAINER_METADATA_URI_V4`, the agent names `TERMINAL_CWD`, `CODEX_HOME`,
+`ECS_CONTAINER_METADATA_URI_V4`, the agent names `TERMINAL_CWD`, `CODEX_HOME`, `CLAUDE_CONFIG_DIR`,
 `HERMES_HOME` and `HERMES_ENABLE_PROJECT_PLUGINS`, and every name starting with
 `HASNA_`, `SKILLS_`, `SKILL_`, `MCP_`, `XDG_`, `LC_` or `AWS_`. Your `LC_ALL` passes
 through unchanged. Everything else never reaches the runtime, including `BUN_*`,
@@ -2152,7 +2152,7 @@ through unchanged. Everything else never reaches the runtime, including `BUN_*`,
 (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`). A `bunfig.toml`, `.env` or `tsconfig.json`
 in the directory you run a command from is never read.
 
-New launchers use the V2 format with an explicit environment profile. The CLI and
+New launchers use the V3 format, preserving `CLAUDE_CONFIG_DIR`, with an explicit environment profile. The CLI and
 MCP entries use the client profile, which excludes `DATABASE_URL`,
 `HASNA_SKILLS_DATABASE_URL` and `SKILLS_DATABASE_URL` even when their prefixes are
 otherwise allowed. The API server, worker, maintenance and migration entries use
@@ -2169,10 +2169,10 @@ directory first. The receipt records the old and new launcher shape of every pat
 the backup keeps the exact previous launcher (symlink text or pinned bytes), and
 `--rollback` restores it byte for byte. Codex hook trust, the Claude settings
 projection and `skills self-update` read a managed pinned launcher as the exact
-entry it runs and bind the launcher's own bytes as well. Existing V1 launchers
-remain recognized in their exact original format. Receipts without launcher
-format metadata restore V1 bytes; new receipts bind the V2 format and environment
-profile. An upgrade does not prevent rollback to the prior V1 launcher.
+entry it runs and bind the launcher's own bytes as well. Existing V1 and V2 launchers
+remain recognized in their exact original formats. Receipts without launcher
+format metadata restore V1 bytes; new receipts bind the V3 format and environment
+profile. An upgrade preserves byte-exact rollback to a prior V1 or V2 launcher.
 
 An updater from before pinned launchers (0.10.48 and earlier) writes bare symlinks,
 including when it installs a version that has them, and an exact-version update to
