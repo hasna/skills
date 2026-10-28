@@ -6,6 +6,7 @@ import { useDefaultTestTimeout } from "../test-preload.js";
 import { admitCorpusFixture } from "./codex-corpus.fixture.js";
 import { captureDiscoveryByteSources, captureDiscoveryDirectories } from "./agent-discovery.js";
 import { applyAgentIntegration, assertManagedAgentBridge, planAgentIntegration } from "./agent-integration.js";
+import { codexLocalMarketplaceMapsPlugin } from "./codex-semantic-cache-witness.js";
 
 useDefaultTestTimeout();
 const originalPath = process.env.PATH;
@@ -35,7 +36,7 @@ console.log(JSON.stringify({ schema: "codex-corpus-admission-status/v1", state: 
   const catalogNames = [...definitions.map(([name]) => name), ...(registered ? [] : registeredNames)];
   const documents: string[] = [], manifests: string[] = [];
   put(config, `[marketplaces."openai-bundled"]\nsource_type = "local"\nsource = ${JSON.stringify(market)}\n` + registeredNames.map(name => `[plugins."${name}@openai-bundled"]\nenabled = true\n`).join(""));
-  put(catalog, JSON.stringify({ interface: 1, name: "openai-bundled", plugins: catalogNames.map(name => ({ name, source: { source: "local", path: `./plugins/${name}` } })) }));
+  put(catalog, JSON.stringify({ interface: 1, name: "openai-bundled", plugins: catalogNames.map(name => ({ name, source: { source: "local", path: `./plugins/${name}` }, policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" }, category: name === "latex" ? "Education & Research" : "Productivity" })) }));
   definitions.forEach(([name, skills], index) => {
     const plugin = plugins[index]!, manifest = join(plugin, ".codex-plugin/plugin.json"); manifests.push(manifest);
     put(manifest, JSON.stringify({ name, skills: "./skills", ...(hooks ? { hooks: { hooks: { Stop: [] } } } : {}) }));
@@ -101,7 +102,7 @@ for (const source of ["manifest", "catalog", "declared-root", "mapping"]) test(`
   expect(f.guard).toThrow("NATIVE_SKILL_DRIFT");
 });
 
-for (const mutation of ["enabled", "plugin-config", "unknown", "manifest", "hook", "catalog", "unrelated"]) test(`reviewed bundled admission refuses ${mutation} drift`, () => {
+for (const mutation of ["enabled", "plugin-config", "unknown", "manifest", "hook", "catalog", "catalog-metadata", "unrelated"]) test(`reviewed bundled admission refuses ${mutation} drift`, () => {
   const f = fixture(false, true, false); f.install(); expect(f.guard).not.toThrow();
   if (mutation === "enabled") { const before = readFileSync(f.config, "utf8"), after = before.replace(`path = ${JSON.stringify(f.documents[0])}\nenabled = false`, `path = ${JSON.stringify(f.documents[0])}\nenabled = true`); expect(after).not.toBe(before); put(f.config, after); }
   if (mutation === "plugin-config") put(f.config, readFileSync(f.config, "utf8") + '\n[plugins."new@openai-bundled"]\nenabled = true\n');
@@ -109,5 +110,26 @@ for (const mutation of ["enabled", "plugin-config", "unknown", "manifest", "hook
   if (mutation === "unrelated") { put(join(f.home, ".codex/skills/unrelated/SKILL.md"), "Unrelated synthetic instructions\n"); }
   if (mutation === "manifest" || mutation === "hook") { const path = f.manifests[0]!, value = JSON.parse(readFileSync(path, "utf8")); if (mutation === "hook") value.hooks.hooks.Stop.push({ hooks: [{ type: "command", command: "synthetic-never-executed" }] }); else value.skills = "./different"; put(path, JSON.stringify(value)); }
   if (mutation === "catalog") put(f.catalog, readFileSync(f.catalog, "utf8") + "\n");
+  if (mutation === "catalog-metadata") { const catalog = JSON.parse(readFileSync(f.catalog, "utf8")); catalog.plugins[0].category = "Engineering"; put(f.catalog, JSON.stringify(catalog)); }
   expect(f.guard).toThrow("NATIVE_SKILL_DRIFT");
+});
+
+// These are the policy/category shapes in the captured bundled catalog. They
+// describe installation metadata, while the full current catalog still binds
+// every byte and the existing local-source identity check remains mandatory.
+test("local marketplace matching accepts reviewed policy/category metadata and the minimal schema", () => {
+  const catalog = (row: unknown) => JSON.stringify({ interface: { displayName: "Synthetic marketplace" }, name: "openai-bundled", plugins: [row] });
+  const row = { name: "computer-use", source: { source: "local", path: "./plugins/computer-use" } };
+  expect(codexLocalMarketplaceMapsPlugin(catalog(row), "openai-bundled", "computer-use")).toBe(true);
+  expect(codexLocalMarketplaceMapsPlugin(catalog({ ...row, policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" }, category: "Education & Research" }), "openai-bundled", "computer-use")).toBe(true);
+  for (const changed of [
+    { ...row, hooks: {} },
+    ...[null, [], {}, { installation: "AVAILABLE" }, { installation: "AVAILABLE", authentication: "ON_INSTALL", extra: true }, { installation: "FORCED", authentication: "ON_INSTALL" }, { installation: "AVAILABLE", authentication: "NONE" }].map(policy => ({ ...row, policy })),
+    ...[null, 1, [], "", " ", " label", "label ", "line\nbreak", "x".repeat(129)].map(category => ({ ...row, category })),
+    { ...row, source: { ...row.source, extra: true } },
+    { ...row, source: { source: "remote", path: "./plugins/computer-use" } },
+    { ...row, source: { source: "local", path: "../plugins/computer-use" } },
+  ]) expect(codexLocalMarketplaceMapsPlugin(catalog(changed), "openai-bundled", "computer-use")).toBe(false);
+  expect(codexLocalMarketplaceMapsPlugin(catalog(row), "different", "computer-use")).toBe(false);
+  expect(codexLocalMarketplaceMapsPlugin(catalog(row), "openai-bundled", "different")).toBe(false);
 });

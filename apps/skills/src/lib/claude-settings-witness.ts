@@ -399,6 +399,13 @@ export function claudeDiscoveryControlKeys(text: string): string[] {
   return narrowedClaudeSettings(parseNativeJsonObject(text)).entries.map(([key]) => key);
 }
 
+/** Discovery environment names from the same owning projection, without
+ * returning their values or treating ordinary environment as discovery. */
+export function claudeDiscoveryEnvironmentKeys(text: string): string[] {
+  const environment = narrowedClaudeSettings(parseNativeJsonObject(text)).entries.find(([key]) => key === "env")?.[1];
+  return environment?.kind === "object" ? environment.entries.map(([key]) => key) : [];
+}
+
 function settingsDigestV5(text: string): string {
   return createHash("sha256").update("hasna.skills.claude-settings.v5\0").update(JSON.stringify(canonical(narrowedClaudeSettings(parse(text))))).digest("hex");
 }

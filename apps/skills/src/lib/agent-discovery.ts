@@ -20,7 +20,7 @@ import { hashManagedPluginRegistry, type ManagedPluginRegistrationWitness } from
 import { readPluginBinding } from "./plugin-admission.js";
 import { captureClaudeMarketplaceRegistry, captureClaudeMarketplaceRegistryV2 } from "./claude-marketplace-registry.js";
 import { captureClaudeMarketplaceEntry, claudeMarketplaceEntrySourceValid } from "./claude-marketplace-entry-witness.js";
-import { claudeDiscoveryControlKeys, readNativeDiscoveryWitnessFile, parseNativeJsonObject, hashNativeJsonControls, captureClaudeSettings, captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4, captureClaudeSettingsV5, hashClaudeSettingsReplacement, hashClaudeSettingsReplacementV2, hashClaudeSettingsReplacementV3, hashClaudeSettingsReplacementV4, hashClaudeSettingsReplacementV5 } from "./claude-settings-witness.js";
+import { claudeDiscoveryControlKeys, claudeDiscoveryEnvironmentKeys, readNativeDiscoveryWitnessFile, parseNativeJsonObject, hashNativeJsonControls, captureClaudeSettings, captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4, captureClaudeSettingsV5, hashClaudeSettingsReplacement, hashClaudeSettingsReplacementV2, hashClaudeSettingsReplacementV3, hashClaudeSettingsReplacementV4, hashClaudeSettingsReplacementV5 } from "./claude-settings-witness.js";
 import { assertCodexHookDiscoveryRecovery, verifiesCodexHookDiscoverySource, type CodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery.js";
 import { hashCodexSettingsReplacement, hashCodexSettingsReplacementV2, hashCodexSettingsReplacementV3, hashCodexSettingsReplacementV4, hashCodexSettingsReplacementV5, captureCodexSettingsV7, hashCodexSettingsReplacementV7, codexDiscoveryControlKeys, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
 import { narrowedLegacyWitnessMode, type NarrowedWitnessLedger } from "./narrowed-witness-ledger.js";
@@ -1119,7 +1119,7 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
       return value as string[];
     };
     const supported: Record<IntegrationAgent, readonly string[]> = {
-      claude: ["enabledPlugins", "extraKnownMarketplaces", "hooks", "disableAllHooks", "disableBundledSkills", "syncClaudeAiSkills", "permissions"],
+      claude: ["enabledPlugins", "extraKnownMarketplaces", "pluginConfigs", "env", "hooks", "disableAllHooks", "disableBundledSkills", "syncClaudeAiSkills", "permissions"],
       codex: ["plugins", "marketplaces", "skills", "hooks"],
       gemini: ["skills", "extensions", "hooks", "hooksConfig"],
       opencode: ["plugin", "skills"], cursor: ["hooks"], hermes: ["skills", "plugins", "hooks"], sumi: ["skills", "plugin", "plugins", "hooks"],
@@ -1127,21 +1127,59 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     const controls = agent === "claude" ? claudeDiscoveryControlKeys(configText ?? "{}")
       : agent === "codex" ? codexDiscoveryControlKeys(config)
       : Object.keys(config).filter(key => /skill|plugin|hook|marketplace|extension|instruction/i.test(key));
-    if (controls.some(key => !supported[agent].includes(key))) unresolved("unknown discovery controls have no root-exclusion adapter");
+    const fieldKey = (key: string): string => /^[A-Za-z_$][A-Za-z0-9_$.-]{0,22}$/.test(key)
+      && !/(?:sk|rk|pk)_(?:live|test)_|whsec_/i.test(key) ? JSON.stringify(key) : "[withheld field key]";
+    const unsupportedFields = (names: readonly string[], label: string): never => unresolved(`unknown discovery controls have no root-exclusion adapter for ${label}${names.slice(0, 8).map(fieldKey).join(", ")}${names.length > 8 ? ", additional keys withheld" : ""} in ${quotedPath(canonical(configPath))}`);
+    const unsupportedControls = controls.filter(key => !supported[agent].includes(key));
+    if (unsupportedControls.length) unsupportedFields(unsupportedControls, "");
     // A command can register roots dynamically. An existing exact or narrowed
     // settings review is required for that non-enumerable input only.
     if (config.hooks !== undefined && !object(config.hooks)) unresolved("hooks must be an object");
     const hasHooks = controls.includes("hooks") && config.hooks !== undefined && Object.keys(config.hooks).length > 0;
-    if (hasHooks) {
+    let hasPluginConfigs = false, hasFunctionHookEnvironment = false;
+    const verifyCurrentOpaqueSettings = (label: string): void => {
       const retained = exclusion.retained;
       const settings = retained?.sources.filter(source => source.path === canonical(configPath)
         && source.sha256 !== null && source.format === undefined && source.fields === undefined) ?? [];
       if (retained?.method !== "reviewed" || !settings.length || !settings.every(source => {
         try { return projected(source, undefined, budget) === source.sha256 || exclusion.narrowed?.accepts(source) === true; }
         catch { return exclusion.narrowed?.accepts(source) === true; }
-      })) unresolved("non-enumerable hooks require a current settings review");
-    }
+      })) unresolved(`non-enumerable ${label} require a current settings review`);
+    };
+    if (hasHooks) verifyCurrentOpaqueSettings("hooks");
     if (agent === "claude") {
+      if (config.env !== undefined) {
+        if (!object(config.env) || Object.keys(config.env).length > 512) unresolved("malformed or unbounded Claude env controls");
+        const discoveryEnvironment = claudeDiscoveryEnvironmentKeys(configText ?? "{}");
+        const unsupportedEnvironment = discoveryEnvironment.filter(key => key !== "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS");
+        if (unsupportedEnvironment.length) unsupportedFields(unsupportedEnvironment, "env.");
+        hasFunctionHookEnvironment = discoveryEnvironment.includes("CLAUDE_CODE_ENABLE_FUNCTION_HOOKS");
+        if (hasFunctionHookEnvironment) {
+          if (!["0", "1"].includes(config.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS)) unresolved("malformed Claude env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS flag");
+          verifyCurrentOpaqueSettings("function-hook environment controls");
+        }
+      }
+      if (config.pluginConfigs !== undefined) {
+        if (!object(config.pluginConfigs) || Object.keys(config.pluginConfigs).length > 512) unresolved("malformed or unbounded Claude plugin configurations");
+        const optionString = (value: unknown): boolean => typeof value === "string" && value.length <= AGENT_POLICY_LIMITS.pathCharacters && !value.includes("\0");
+        for (const [id, entry] of Object.entries(config.pluginConfigs)) {
+          if (!id || id.length > AGENT_POLICY_LIMITS.pathCharacters || --remainingEntries < 0) unresolved("malformed or unbounded Claude plugin configuration");
+          keys(entry, ["options"], "Claude plugin configuration");
+          const values = (entry as Record<string, unknown>).options;
+          if (!object(values) || Object.keys(values).length > 512) unresolved("malformed or unbounded Claude plugin options");
+          for (const [key, value] of Object.entries(values)) {
+            if (!key || key.length > AGENT_POLICY_LIMITS.pathCharacters || --remainingEntries < 0) unresolved("malformed or unbounded Claude plugin option");
+            if (Array.isArray(value)) {
+              remainingEntries -= value.length;
+              if (value.length > 512 || remainingEntries < 0 || !value.every(optionString)) unresolved("malformed or unbounded Claude plugin option array");
+            } else if (!(optionString(value) || typeof value === "boolean" || typeof value === "number" && Number.isFinite(value))) unresolved("unsupported Claude plugin option value");
+          }
+        }
+        hasPluginConfigs = Object.keys(config.pluginConfigs).length > 0;
+        // Options can feed executable plugin controls. Keep their complete
+        // settings witness and the same reviewed closure required for hooks.
+        if (hasPluginConfigs) verifyCurrentOpaqueSettings("plugin configurations");
+      }
       if (config.enabledPlugins !== undefined && !object(config.enabledPlugins)) unresolved("enabledPlugins must be an object");
       if (config.extraKnownMarketplaces !== undefined) {
         if (!object(config.extraKnownMarketplaces) || Object.keys(config.extraKnownMarketplaces).length > 512) unresolved("malformed or unbounded extraKnownMarketplaces");
@@ -1207,7 +1245,7 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
       }
     }
     if (Object.keys(config.enabledPlugins ?? config.plugins ?? config.extensions ?? {}).length > 512) unresolved("unbounded native registrations");
-    if (hasHooks) verifyOpaqueClosure([]);
+    if (hasHooks || hasPluginConfigs || hasFunctionHookEnvironment) verifyOpaqueClosure([]);
   }
 
   if (options.reviewed && (options.reviewed.version !== 1 || !Array.isArray(options.reviewed.agents) || options.reviewed.agents.some(item => !item || typeof item !== "object") || new Set(options.reviewed.agents.map(item => item.agent)).size !== options.reviewed.agents.length)) throw new Error("Invalid --discovery-inputs version or agents");
