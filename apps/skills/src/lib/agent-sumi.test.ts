@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
+import { CLI_BRIDGE_FILES } from "./agent-bridge.js";
 import { renderSumiPlugin, isManagedSumiPlugin, sumiConfigDirectory, sumiPathPlan, SumiPathResolverError } from "./agent-sumi.js";
 import { applyAgentIntegration, assertManagedAgentBridge, inventoryNativeSkills, planAgentIntegration, planClaudeHookEventsUpdate } from "./agent-integration.js";
 import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
@@ -54,7 +55,7 @@ function fixture() {
   const bin = join(root, "test-bin"), response = join(root, "path-response.json"), envKeys = join(root, "path-env-keys.json");
   mkdirSync(bin, { mode: 0o700 });
   const executable = join(bin, "sumi-paths");
-  writeFileSync(executable, `#!${process.execPath}\nimport { readFileSync, writeFileSync } from "node:fs";\nconst args = process.argv.slice(2); const home = args[args.indexOf("--home") + 1]; const cwd = args[args.indexOf("--cwd") + 1];\nconst result = JSON.parse(readFileSync(${JSON.stringify(response)}, "utf8"));\nwriteFileSync(${JSON.stringify(envKeys)}, JSON.stringify(Object.keys(process.env).sort()));\nif (result.kind === "sumi-paths") { result.home = home; result.cwd = cwd; for (const group of [result.roots, result.legacyRoots, result.configFiles, result.skillRoots]) for (const key of Object.keys(group)) if (typeof group[key] === "string") group[key] = group[key].replaceAll("__HOME__", home); process.stdout.write(JSON.stringify(result)); }\nelse { process.stdout.write(JSON.stringify(result)); process.exitCode = 2; }\n`, { mode: 0o700 });
+  writeFileSync(executable, `#!${process.execPath} --no-install\nimport { readFileSync, writeFileSync } from "node:fs";\nconst args = process.argv.slice(2); const home = args[args.indexOf("--home") + 1]; const cwd = args[args.indexOf("--cwd") + 1];\nconst result = JSON.parse(readFileSync(${JSON.stringify(response)}, "utf8"));\nwriteFileSync(${JSON.stringify(envKeys)}, JSON.stringify(Object.keys(process.env).sort()));\nif (result.kind === "sumi-paths") { result.home = home; result.cwd = cwd; for (const group of [result.roots, result.legacyRoots, result.configFiles, result.skillRoots]) for (const key of Object.keys(group)) if (typeof group[key] === "string") group[key] = group[key].replaceAll("__HOME__", home); process.stdout.write(JSON.stringify(result)); }\nelse { process.stdout.write(JSON.stringify(result)); process.exitCode = 2; }\n`, { mode: 0o700 });
   chmodSync(executable, 0o700);
   providerResponses.set(root, response); setPathResponse(root, pathResponse(root));
   process.env.PATH = bin + ":" + (originalPath ?? "");
@@ -225,7 +226,7 @@ test("legacy Sumi plugin changes invalidate automatic and retained reviewed witn
 
 test("native prompt and request hooks preserve actual root, child and nested custody", async () => {
   const root = fixture(), log = join(root, "calls.jsonl"), command = join(root, "fixture-skills"), pluginPath = join(root, "plugin.js");
-  put(command, `#!${process.execPath}\nimport {appendFileSync} from "node:fs";\nconst input = await Bun.stdin.json(); appendFileSync(${JSON.stringify(log)}, JSON.stringify(input)+"\\n");\nif (input.prompt === "refuse") console.log(JSON.stringify({decision:"block",stopReason:"UNTRUSTED_STOP_REASON /private/path",message:"UNTRUSTED_MESSAGE"}));\nelse if (input.prompt === "malformed") console.log("invalid");\nelse console.log(JSON.stringify({hookSpecificOutput:{hookEventName:input.hook_event_name,additionalContext:input.session_id === "optional" ? "No Skills instructions were delivered by this hook. Ordinary work may continue." : "Verified fixture instructions"}}));\n`); chmodSync(command, 0o700);
+  put(command, `#!${process.execPath} --no-install\nimport {appendFileSync} from "node:fs";\nconst input = await Bun.stdin.json(); appendFileSync(${JSON.stringify(log)}, JSON.stringify(input)+"\\n");\nif (input.prompt === "refuse") console.log(JSON.stringify({decision:"block",stopReason:"UNTRUSTED_STOP_REASON /private/path",message:"UNTRUSTED_MESSAGE"}));\nelse if (input.prompt === "malformed") console.log("invalid");\nelse console.log(JSON.stringify({nativeBridgeVerified:input.hook_event_name === "BeforeTool",hookSpecificOutput:{hookEventName:input.hook_event_name,additionalContext:input.session_id === "optional" ? "No Skills instructions were delivered by this hook. Ordinary work may continue." : "Verified fixture instructions"}}));\n`); chmodSync(command, 0o700);
   put(pluginPath, renderSumiPlugin(command, "engineering"));
   const plugin = (await import(pluginPath)).default;
   const hooks = new Map<string, (event: any) => Promise<void>>();
@@ -235,10 +236,10 @@ test("native prompt and request hooks preserve actual root, child and nested cus
     child: { id: "child", parentID: "root", agent: "native-explore", location: { directory: root } },
     nested: { id: "nested", parentID: "child", location: { directory: root } },
   };
-  const skills = [{ id: "skills-cli", name: "skills-cli" }, { id: "foreign", name: "skills-cli" }, { id: "other", name: "other" }];
+  const skills = [{ id: "skills-cli", name: "skills-cli", path: join(root,"skills-cli/SKILL.md"), content: CLI_BRIDGE_FILES["SKILL.md"]!.replace(/^---\n[\s\S]*?\n---\n/, ""), description: /^description: (.+)$/m.exec(CLI_BRIDGE_FILES["SKILL.md"]!)![1] }, { id: "foreign", name: "skills-cli" }, { id: "other", name: "other" }];
   const removed: string[] = [];
   let failNativeRead = false;
-  const cleanup = await plugin.setup({ tool: { hook: async (name: string, callback: (event: any) => Promise<void>) => { hooks.set(name, callback); return { dispose: async () => hooks.delete(name) }; } }, session: { get: async ({ sessionID }: { sessionID: string }) => { if (failNativeRead) throw new Error("UNTRUSTED_HOST_DETAIL /private/custody"); return sessions[sessionID]; }, hook: async (name: string, callback: (event: any) => Promise<void>) => { hooks.set(name, callback); return { dispose: async () => hooks.delete(name) }; } }, skill: { transform: async (callback: (editor: any) => void) => { callback({ list: () => skills, remove: (id: string) => removed.push(id) }); return { dispose: async () => {} }; } } });
+  const cleanup = await plugin.setup({ tool: { hook: async (name: string, callback: (event: any) => Promise<void>) => { hooks.set(name, callback); return { dispose: async () => hooks.delete(name) }; } }, session: { get: async ({ sessionID }: { sessionID: string }) => { if (failNativeRead) throw new Error("UNTRUSTED_HOST_DETAIL /private/custody"); return sessions[sessionID]; }, hook: async (name: string, callback: (event: any) => Promise<void>) => { hooks.set(name, callback); return { dispose: async () => hooks.delete(name) }; } }, skill: { list: async () => skills, transform: async (callback: (editor: any) => void) => { callback({ list: () => skills, remove: (id: string) => removed.push(id) }); return { dispose: async () => {} }; } } });
   expect(removed).toEqual(["foreign", "other"]);
   for (const sessionID of ["root", "child", "nested"]) {
     const event = { sessionID, messageID: "message", prompt: { text: "review" }, delivery: "steer" };
@@ -253,7 +254,7 @@ test("native prompt and request hooks preserve actual root, child and nested cus
     ["SessionStart", "root", null], ["UserPromptSubmit", "root", null], ["SubagentStart", "child", "root"], ["UserPromptSubmit", "child", "root"], ["SubagentStart", "nested", "child"], ["UserPromptSubmit", "nested", "child"],
   ]);
   expect(calls.every(call => call.agent_id === undefined && call.restore === true)).toBe(true);
-  for (const text of ["refuse", "malformed", "native-error"]) {
+  for (const text of ["refuse", "native-error"]) {
     failNativeRead = text === "native-error";
     let refusal: any;
     try { await hooks.get("prompt")!({ sessionID: "root", prompt: { text } }); } catch (error) { refusal = error; }
@@ -264,14 +265,17 @@ test("native prompt and request hooks preserve actual root, child and nested cus
     expect(refusal?.cause).toBeUndefined();
   }
   failNativeRead = false;
-  await expect(hooks.get("prompt")!({ sessionID: "root", prompt: { text: "malformed" } })).rejects.toThrow();
+  await hooks.get("prompt")!({ sessionID: "root", prompt: { text: "malformed" } });
+  const unavailable = { sessionID: "root", system: [] as Array<{ type: string; text: string }>, messages: [] };
+  await hooks.get("context")!(unavailable);
+  expect(unavailable.system[0]?.text).toContain("[SKILLS_HOOK_INVALID_RESPONSE]");
   const request = { sessionID: "optional", system: [] as Array<{ type: string; text: string }>, messages: [{ role: "user", content: [{ type: "text", text: "optional" }] }] };
   await hooks.get("context")!(request);
   expect(JSON.stringify(request.system)).toContain("Ordinary work may continue");
   await expect(hooks.get("prompt")!({ sessionID: "root", prompt: { text: "review", skills: [{ id: "foreign" }] } })).rejects.toThrow("Skills verification blocked");
-  expect(() => hooks.get("execute.before")!({ tool: "skill", input: { id: "foreign" } })).toThrow("Skills verification blocked");
-  expect(() => hooks.get("execute.before")!({ tool: "skill", input: { name: "skills-cli" } })).toThrow("Skills verification blocked");
-  await hooks.get("execute.before")!({ tool: "skill", input: { id: "skills-cli" } });
+  await expect(hooks.get("execute.before")!({ tool: "skill", input: { id: "foreign" } })).rejects.toThrow("Skills verification blocked");
+  await expect(hooks.get("execute.before")!({ tool: "skill", input: { name: "skills-cli" } })).rejects.toThrow("Skills verification blocked");
+  await expect(hooks.get("execute.before")!({ sessionID: "root", tool: "skill", input: { id: "skills-cli" } })).rejects.toThrow("Use skills load, skills context, or skills run through the Skills CLI.");
   await hooks.get("execute.before")!({ tool: "read", input: {} });
   await cleanup(); expect(hooks.size).toBe(0);
 });

@@ -163,6 +163,16 @@ roots outside these published presence locations cannot be detected without a
 binding, selector or executable; specify `--agent sumi` for that case. This is
 a detection limit, not proof that Sumi is absent.
 
+The Sumi integration delivers selected instructions through the Skills CLI and
+transient prompt context. It refuses every native `skill` tool call and nonempty
+native skill attachment list, including `skills-cli`. Sumi currently rereads the
+mutable native registry after plugin hooks, so this integration cannot bind a
+verified descriptor to the content Sumi would consume. Use `skills load`,
+`skills context`, or `skills run` through the Skills CLI instead. Ordinary prompts
+and optional context availability continue to work. Restoring native consumption
+requires a supported Sumi check at the final materialization boundary or an
+immutable verified skill snapshot.
+
 Native migration includes the current directory, every ancestor, and the global
 agent directories. Use `--project /path/to/project` to include another project
 and its ancestors. This matches the prompt hook's project discovery, including

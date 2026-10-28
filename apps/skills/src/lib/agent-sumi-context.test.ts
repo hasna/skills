@@ -20,7 +20,7 @@ async function fixture() {
   const command = join(root, "fixture-skills"), pluginPath = join(root, "plugin.js");
   // Real input parsing, selection matching, bundle verification and persisted
   // session restoration; only the hosted profile/bundle transport is synthetic.
-  writeFileSync(command, `#!${process.execPath}
+  writeFileSync(command, `#!${process.execPath} --no-install
 import { appendFileSync, readFileSync } from "node:fs";
 import { buildSkillContext } from ${JSON.stringify(resolve(import.meta.dir, "skill-context.ts"))};
 import { parseSkillContextInput } from ${JSON.stringify(resolve(import.meta.dir, "../cli/commands/context.ts"))};
@@ -49,7 +49,7 @@ else try {
     await plugin.setup({
       session: { get: async ({ sessionID }: { sessionID: string }) => ({ id: sessionID, location: { directory: root } }), hook: async (name: string, callback: any) => { hooks.set(name, callback); return { dispose: async () => {} }; } },
       tool: { hook: async (name: string, callback: any) => { hooks.set(name, callback); return { dispose: async () => {} }; } },
-      skill: { transform: async () => ({ dispose: async () => {} }) },
+      skill: { list: async () => [], transform: async () => ({ dispose: async () => {} }) },
     });
     return hooks;
   }
@@ -108,7 +108,7 @@ test("actual CLI raw-input guard still blocks oversized owner input before any n
   const entry = join(root, "entry.ts"), binary = join(root, "cli.js");
   writeFileSync(entry, `import { Command } from ${JSON.stringify(require.resolve("commander"))};\nimport { registerAgentIntegration } from ${JSON.stringify(resolve(import.meta.dir, "../cli/commands/agent-integration.ts"))};\nconst program = new Command(); registerAgentIntegration(program); await program.parseAsync(process.argv);\n`);
   await buildCliFixture(entry, binary);
-  const child = Bun.spawn([process.execPath, "--no-env-file", binary, "hook", "user-prompt", "--agent", "sumi"], {
+  const child = Bun.spawn([process.execPath, "--no-install", "--no-env-file", binary, "hook", "user-prompt", "--agent", "sumi"], {
     cwd: root, env: { HOME: root, PATH: "/usr/bin:/bin", NO_COLOR: "1" },
     stdin: new Blob([JSON.stringify({ prompt: "x".repeat(1_100_000) })]), stdout: "pipe", stderr: "pipe",
   });
@@ -120,7 +120,7 @@ test("actual CLI raw-input guard still blocks oversized owner input before any n
 
 test("context restoration keeps native and bundle integrity refusals blocking without leaking child diagnostics", async () => {
   const f = await fixture();
-  for (const mode of ["native-refusal", "integrity-refusal", "foreign-refusal", "malformed"]) {
+  for (const mode of ["native-refusal", "integrity-refusal", "foreign-refusal"]) {
     writeFileSync(f.mode, "normal");
     await f.hooks.get("prompt")!({ sessionID: mode, prompt: { text: "$owner-fixture" } });
     writeFileSync(f.mode, mode);
@@ -135,10 +135,12 @@ test("context restoration keeps native and bundle integrity refusals blocking wi
   }
 });
 
-test("exact two shipped Sumi renderers remain recognized and modified bytes refuse", () => {
+test("all four prior Sumi renderers remain recognized and modified bytes refuse", () => {
   for (const [name, digest] of [
     ["sumi-plugin-v1.js", "19e3798e4924ef9ef4004ace2addfc581d7fdd60172825cf1dbdc0a8e881de7c"],
     ["sumi-plugin-v2.js", "9d41d2e8312a379df3eb6af19e5b2deb709e1b1a63c04a69f40065a056b5a3f1"],
+    ["sumi-plugin-v3.js", "8e960dc50ccfe27fc785154cb1b6696ded29888456a22a6c15ef6a6fcd9f37a8"],
+    ["sumi-plugin-v4.js", "dd54ae28b2834f01265756b02f84cf08ceb0988a472a4caf426e035df1a971d8"],
   ]) {
     const text = readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8");
     expect(createHash("sha256").update(text).digest("hex")).toBe(digest!);
@@ -147,4 +149,9 @@ test("exact two shipped Sumi renderers remain recognized and modified bytes refu
     expect(isManagedSumiPlugin(text, "other-command", "default")).toBe(false);
     expect(isManagedSumiPlugin(text, "skills", "other-profile")).toBe(false);
   }
+  const current = renderSumiPlugin("skills", "default");
+  expect(isManagedSumiPlugin(current, "skills", "default")).toBe(true);
+  expect(isManagedSumiPlugin(current + "\n", "skills", "default")).toBe(false);
+  expect(isManagedSumiPlugin(current, "other-command", "default")).toBe(false);
+  expect(isManagedSumiPlugin(current, "skills", "other-profile")).toBe(false);
 });

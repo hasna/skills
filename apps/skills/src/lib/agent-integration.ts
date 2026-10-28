@@ -844,29 +844,55 @@ function hookProjectionRefusal(reason: string): never {
 // writer does not copy ACLs: require verified absence on supported Linux/glibc.
 // A default ACL initializes direct children at creation, not existing descendants;
 // query it only for directories where the caller will create an object.
-function hasNoLinuxAccessAcl(fd: number, creationParent: boolean): boolean {
+export const NATIVE_ACL_PREDICATES = Object.freeze(["UNSUPPORTED_PLATFORM", "CREATION_PARENT_TYPE", "IDENTITY_BEFORE", "DARWIN_ACL", "LINUX_FFI_SETUP", "LINUX_ERRNO_POINTER", "LINUX_ACL_PRESENT", "LINUX_QUERY_ERROR", "LINUX_FFI_EXCEPTION", "LINUX_FFI_CLOSE", "IDENTITY_AFTER", "PATH_IDENTITY"] as const);
+export interface NativePathAclDiagnostic {
+  predicate: typeof NATIVE_ACL_PREDICATES[number];
+  attribute?: "ACCESS" | "DEFAULT";
+  result?: number;
+  errno?: number;
+}
+class NativePathAclRefusal extends Error {
+  constructor(readonly diagnostic: NativePathAclDiagnostic) { super("NATIVE_PATH_ACL_UNVERIFIED"); }
+}
+export function nativePathAclDiagnostic(error: unknown): NativePathAclDiagnostic | undefined {
+  return error instanceof NativePathAclRefusal ? { ...error.diagnostic } : undefined;
+}
+function hasNoLinuxAccessAcl(fd: number, creationParent: boolean, diagnostic: NativePathAclDiagnostic): boolean {
   try {
+    diagnostic.predicate = "LINUX_FFI_SETUP";
     const { dlopen, read, ptr } = require("bun:ffi") as typeof import("bun:ffi");
     const library = dlopen("libc.so.6", {
       fgetxattr: { args: ["i32", "ptr", "ptr", "u64"], returns: "i64" },
       __errno_location: { args: [], returns: "ptr" },
     });
     try {
+      diagnostic.predicate = "LINUX_ERRNO_POINTER";
       const errno = library.symbols.__errno_location(); if (!errno) return false;
       for (const attribute of ["system.posix_acl_access", ...(creationParent ? ["system.posix_acl_default"] : [])]) {
         const name = Buffer.from(attribute + "\0");
-        // Query presence only. No attribute value is read or copied. ENODATA is
-        // the only admitted result; unsupported ABI/filesystem/errors refuse.
-        if (Number(library.symbols.fgetxattr(fd, ptr(name), null, 0)) !== -1 || read.i32(errno) !== 61) return false;
+        diagnostic.predicate = "LINUX_FFI_EXCEPTION";
+        diagnostic.attribute = attribute === "system.posix_acl_access" ? "ACCESS" : "DEFAULT";
+        // Keep admission exact: only -1/ENODATA admits absence. Capture the
+        // native result before classifying it; no attribute value is read.
+        delete diagnostic.result; delete diagnostic.errno;
+        const result = Number(library.symbols.fgetxattr(fd, ptr(name), null, 0));
+        const code = result === -1 ? read.i32(errno) : undefined;
+        if (Number.isSafeInteger(result)) diagnostic.result = result;
+        if (result !== -1) { diagnostic.predicate = "LINUX_ACL_PRESENT"; return false; }
+        diagnostic.errno = code;
+        if (code !== 61) { diagnostic.predicate = "LINUX_QUERY_ERROR"; return false; }
       }
       return true;
-    } finally { library.close(); }
+    } finally {
+      try { library.close(); } catch (error) { diagnostic.predicate = "LINUX_FFI_CLOSE"; throw error; }
+    }
   } catch { return false; }
 }
 
 export function assertNativePathAcl(path: string, observed: BigIntStats, options: { allowDenyOnly?: boolean; descriptor?: number; creationParent?: boolean } = {}): void {
-  if (process.platform !== "darwin" && process.platform !== "linux") throw new Error("NATIVE_PATH_ACL_UNVERIFIED");
-  if (options.creationParent && !observed.isDirectory()) throw new Error("NATIVE_PATH_ACL_UNVERIFIED");
+  const refuse = (predicate: NativePathAclDiagnostic["predicate"]): never => { throw new NativePathAclRefusal({ predicate }); };
+  if (process.platform !== "darwin" && process.platform !== "linux") refuse("UNSUPPORTED_PLATFORM");
+  if (options.creationParent && !observed.isDirectory()) refuse("CREATION_PARENT_TYPE");
   // A file binds its full identity. A directory binds the object (dev, ino)
   // and its trust fields (uid, gid, mode) only: its times, link count and size
   // change whenever any process adds or removes an unrelated entry, such as in
@@ -878,9 +904,15 @@ export function assertNativePathAcl(path: string, observed: BigIntStats, options
   const fd = options.descriptor ?? openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
     | (observed.isDirectory() ? constants.O_DIRECTORY : 0));
   try {
-    if (identity(fstatSync(fd, { bigint: true })) !== identity(observed) || !(process.platform === "darwin" ? hasTrustedDarwinAcl(fd, options.allowDenyOnly ?? false) : hasNoLinuxAccessAcl(fd, options.creationParent === true))
-      || identity(fstatSync(fd, { bigint: true })) !== identity(observed)
-      || identity(lstatSync(path, { bigint: true })) !== identity(observed)) throw new Error("NATIVE_PATH_ACL_UNVERIFIED");
+    if (identity(fstatSync(fd, { bigint: true })) !== identity(observed)) refuse("IDENTITY_BEFORE");
+    if (process.platform === "darwin") {
+      if (!hasTrustedDarwinAcl(fd, options.allowDenyOnly ?? false)) refuse("DARWIN_ACL");
+    } else {
+      const diagnostic: NativePathAclDiagnostic = { predicate: "LINUX_FFI_SETUP" };
+      if (!hasNoLinuxAccessAcl(fd, options.creationParent === true, diagnostic)) throw new NativePathAclRefusal(diagnostic);
+    }
+    if (identity(fstatSync(fd, { bigint: true })) !== identity(observed)) refuse("IDENTITY_AFTER");
+    if (identity(lstatSync(path, { bigint: true })) !== identity(observed)) refuse("PATH_IDENTITY");
   } finally { if (options.descriptor === undefined) closeSync(fd); }
 }
 
@@ -2430,11 +2462,19 @@ export function assertManagedAgentBridge(agent: IntegrationAgent, options: Manag
 /** Consumption-edge check: native registry content and path must name the
  * exact owned bridge, and live on-disk custody must still verify now. */
 export function assertOpenCodeNativeBridge(skill: unknown, options: ManagedBridgeOptions = {}): void {
-  const custody = assertManagedBridgeCustody("opencode", options);
+  assertNativeRegistryBridge("opencode", skill, options);
+}
+
+export function assertSumiNativeBridge(skill: unknown, options: ManagedBridgeOptions = {}): void {
+  assertNativeRegistryBridge("sumi", skill, options);
+}
+
+function assertNativeRegistryBridge(agent: "opencode" | "sumi", skill: unknown, options: ManagedBridgeOptions): void {
+  const custody = assertManagedBridgeCustody(agent, options);
   if (!isVerifiedOpenCodeSkillDescriptor(skill, join(custody.expected, "SKILL.md"))) {
-    throw new NativeBridgeIntegrityRefusal("NATIVE_SKILL_DRIFT: OpenCode resolved an unverified native Skills bridge");
+    throw new NativeBridgeIntegrityRefusal(`NATIVE_SKILL_DRIFT: ${agent === "opencode" ? "OpenCode" : "Sumi"} resolved an unverified native Skills bridge`);
   }
-  assertManagedAgentBridge("opencode", { ...options, liveHook: true, bridgeToolCall: true });
+  assertManagedAgentBridge(agent, { ...options, liveHook: true, bridgeToolCall: true });
 }
 
 function isPlainNativeDrift(error: unknown): boolean {

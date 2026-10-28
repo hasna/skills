@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs, { type BigIntStats } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { assertNativePathAcl, canonicalSystemPath } from "./agent-integration.js";
+import { assertNativePathAcl, canonicalSystemPath, nativePathAclDiagnostic, NATIVE_ACL_PREDICATES, type NativePathAclDiagnostic } from "./agent-integration.js";
 
 type Refusal = "UNSAFE_PATH" | "OWNERSHIP_UNAVAILABLE" | "LOCKED" | "INVALID_CONFIG" | "BACKUP_FAILED"
   | "WRITE_FAILED" | "CONFIG_CHANGED" | "VERIFY_FAILED" | "ACCESS_METADATA_UNAVAILABLE";
@@ -18,8 +18,24 @@ const messages: Record<Refusal, string> = {
   VERIFY_FAILED: "could not verify the committed configuration; retain the backup for recovery",
 };
 
+const phases = ["PARENT_WITNESS", "ORIGINAL_READ", "BACKUP_PREPARE", "TRANSFORM", "TEMP_PREPARE", "PARENT_RECHECK", "CURRENT_READ", "COMMITTED_READ"] as const;
+const roles = ["ANCESTOR", "CREATION_PARENT", "ORIGINAL", "BACKUP", "TEMPORARY", "COMMITTED"] as const;
+type AccessTrace = { phase: typeof phases[number]; pathRole: typeof roles[number] };
+export type GuardedAgentConfigDiagnostic = AccessTrace & NativePathAclDiagnostic;
+export function projectGuardedAgentConfigDiagnostic(value: unknown): GuardedAgentConfigDiagnostic | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const input = value as Record<string, unknown>;
+  if (!phases.includes(input.phase as any) || !roles.includes(input.pathRole as any) || !NATIVE_ACL_PREDICATES.includes(input.predicate as any)) return;
+  return { phase: input.phase, pathRole: input.pathRole, predicate: input.predicate,
+    ...(["ACCESS", "DEFAULT"].includes(input.attribute as string) ? { attribute: input.attribute } : {}),
+    ...(Number.isSafeInteger(input.result) ? { result: input.result } : {}),
+    ...(Number.isSafeInteger(input.errno) ? { errno: input.errno } : {}) } as GuardedAgentConfigDiagnostic;
+}
 class ConfigWriteRefusal extends Error {
-  constructor(readonly code: Refusal) { super(messages[code]); }
+  constructor(readonly code: Refusal, readonly diagnostic?: GuardedAgentConfigDiagnostic) { super(messages[code]); }
+}
+export function guardedAgentConfigDiagnostic(error: unknown): GuardedAgentConfigDiagnostic | undefined {
+  return error instanceof ConfigWriteRefusal ? projectGuardedAgentConfigDiagnostic(error.diagnostic) : undefined;
 }
 
 export function guardedAgentConfigRefusal(error: unknown): string {
@@ -36,7 +52,7 @@ function statOrMissing(path: string): BigIntStats | null {
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
 }
 
-function readSnapshot(path: string): Snapshot | null {
+function readSnapshot(path: string, trace: AccessTrace, pathRole: AccessTrace["pathRole"]): Snapshot | null {
   const entry = statOrMissing(path);
   if (entry === null) return null;
   if (!entry.isFile() || entry.uid !== owner() || entry.nlink !== 1n || (entry.mode & 0o7000n) !== 0n
@@ -47,6 +63,7 @@ function readSnapshot(path: string): Snapshot | null {
     if (!sameNode(entry, before)) throw new Error();
     // This writer does not copy file ACLs: refuse any extended file ACL,
     // including deny entries, before preserving or replacing its bytes.
+    trace.pathRole = pathRole;
     assertNativePathAcl(path, before, { descriptor: fd });
     const bytes = fs.readFileSync(fd), after = fs.fstatSync(fd, { bigint: true }), latest = statOrMissing(path);
     if (!latest || !sameNode(before, after) || !sameNode(after, latest)
@@ -63,7 +80,7 @@ function unchanged(before: Snapshot | null, current: Snapshot | null): boolean {
     && before.info.ctimeNs === current.info.ctimeNs && before.bytes.equals(current.bytes);
 }
 
-function parentWitnesses(path: string): Array<{ path: string; info: BigIntStats }> {
+function parentWitnesses(path: string, trace: AccessTrace): Array<{ path: string; info: BigIntStats }> {
   const home = canonicalSystemPath(homedir()), local = relative(home, path);
   const creationParent = dirname(path);
   if (!isAbsolute(path) || resolve(path) !== path || !local || local === ".." || local.startsWith(".." + sep)) throw new Error();
@@ -78,6 +95,7 @@ function parentWitnesses(path: string): Array<{ path: string; info: BigIntStats 
       if (!path.startsWith(home + sep)) throw new Error();
       // Only the immediate parent initializes the new directory's ACL.
       const parent = dirname(path);
+      trace.pathRole = "CREATION_PARENT";
       assertNativePathAcl(parent, fs.lstatSync(parent, { bigint: true }), { allowDenyOnly: true, creationParent: true });
       fs.mkdirSync(path, { mode: 0o700 });
     }
@@ -86,28 +104,32 @@ function parentWitnesses(path: string): Array<{ path: string; info: BigIntStats 
     const stickySystemParent = !privatePath && info.uid === 0n && (info.mode & 0o1000n) !== 0n;
     if (!info.isDirectory() || (privatePath ? info.uid !== owner() : info.uid !== owner() && info.uid !== 0n)
       || ((info.mode & 0o022n) !== 0n && !stickySystemParent)) throw new Error();
+    trace.pathRole = path === creationParent ? "CREATION_PARENT" : "ANCESTOR";
     assertNativePathAcl(path, info, { allowDenyOnly: true, creationParent: path === creationParent });
     return { path, info };
   });
 }
 
-function verifyParents(parents: Array<{ path: string; info: BigIntStats }>) {
+function verifyParents(parents: Array<{ path: string; info: BigIntStats }>, trace: AccessTrace) {
   for (const parent of parents) {
     const current = fs.lstatSync(parent.path, { bigint: true });
     if (!current.isDirectory() || parent.info.dev !== current.dev || parent.info.ino !== current.ino
       || parent.info.uid !== current.uid || parent.info.gid !== current.gid || parent.info.mode !== current.mode) throw new Error();
+    trace.pathRole = parent === parents[parents.length - 1] ? "CREATION_PARENT" : "ANCESTOR";
     assertNativePathAcl(parent.path, current, { allowDenyOnly: true, creationParent: parent === parents[parents.length - 1] });
   }
 }
 
-function durableFile(path: string, bytes: Buffer, mode: number, gid?: bigint): Snapshot {
+function durableFile(path: string, bytes: Buffer, mode: number, gid: bigint | undefined, trace: AccessTrace, pathRole: AccessTrace["pathRole"]): Snapshot {
   const parent = dirname(path);
+  trace.pathRole = "CREATION_PARENT";
   assertNativePathAcl(parent, fs.lstatSync(parent, { bigint: true }), { allowDenyOnly: true, creationParent: true });
   const fd = fs.openSync(path, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
   try {
     const created = fs.fstatSync(fd, { bigint: true });
     // Inherited ACLs can grant access despite 0600. Admit the empty file before
     // any sensitive content, then recheck after group/mode preparation.
+    trace.pathRole = pathRole;
     assertNativePathAcl(path, created, { descriptor: fd });
     if (gid !== undefined && created.gid !== gid) {
       if (!Number.isSafeInteger(Number(gid))) throw new Error();
@@ -117,11 +139,12 @@ function durableFile(path: string, bytes: Buffer, mode: number, gid?: bigint): S
     const prepared = fs.fstatSync(fd, { bigint: true });
     if (prepared.uid !== owner() || (gid !== undefined && prepared.gid !== gid)
       || Number(prepared.mode & 0o777n) !== mode) throw new Error();
+    trace.pathRole = pathRole;
     assertNativePathAcl(path, prepared, { descriptor: fd });
     fs.writeFileSync(fd, bytes); fs.fsyncSync(fd);
   }
   finally { fs.closeSync(fd); }
-  const saved = readSnapshot(path);
+  const saved = readSnapshot(path, trace, pathRole);
   if (!saved || !saved.bytes.equals(bytes) || Number(saved.info.mode & 0o777n) !== mode
     || (gid !== undefined && saved.info.gid !== gid)) throw new Error();
   return saved;
@@ -129,6 +152,7 @@ function durableFile(path: string, bytes: Buffer, mode: number, gid?: bigint): S
 
 /** One transaction for the direct-file adapters. Failed evidence stays beside the original. */
 export function guardedAgentConfigWrite(path: string, transform: (current: Buffer | null) => string): void {
+  const trace: AccessTrace = { phase: "PARENT_WITNESS", pathRole: "ANCESTOR" };
   let refusal: Refusal = "UNSAFE_PATH", lock: { path: string; info: BigIntStats } | undefined;
   try {
     refusal = "OWNERSHIP_UNAVAILABLE";
@@ -137,36 +161,44 @@ export function guardedAgentConfigWrite(path: string, transform: (current: Buffe
     if (!isAbsolute(path) || resolve(path) !== path) throw new Error();
     // Reuse the owning macOS alias/ACL verifier; never hide arbitrary symlinks.
     path = canonicalSystemPath(path);
-    const parents = parentWitnesses(path);
+    const parents = parentWitnesses(path, trace);
     refusal = "LOCKED";
     const lockPath = path + ".skills-mcp.lock";
     fs.mkdirSync(lockPath, { mode: 0o700 });
     lock = { path: lockPath, info: fs.lstatSync(lockPath, { bigint: true }) };
     if (!lock.info.isDirectory() || lock.info.uid !== owner()) throw new Error();
     refusal = "UNSAFE_PATH";
-    const original = readSnapshot(path);
+    trace.phase = "ORIGINAL_READ";
+    const original = readSnapshot(path, trace, "ORIGINAL");
     refusal = "BACKUP_FAILED";
-    if (original) durableFile(path + ".skills-mcp-" + randomUUID() + ".backup", original.bytes, 0o600);
+    trace.phase = "BACKUP_PREPARE";
+    if (original) durableFile(path + ".skills-mcp-" + randomUUID() + ".backup", original.bytes, 0o600, undefined, trace, "BACKUP");
     refusal = "INVALID_CONFIG";
+    trace.phase = "TRANSFORM";
     const content = transform(original?.bytes ?? null);
     const next = Buffer.from(content.endsWith("\n") ? content : content + "\n");
     if (next.length > 16 * 1024 * 1024) throw new Error();
     refusal = "WRITE_FAILED";
     const temporary = path + ".skills-mcp-" + randomUUID() + ".tmp";
     const mode = original ? Number(original.info.mode & 0o777n) : 0o600;
-    const prepared = durableFile(temporary, next, mode, original?.info.gid);
+    trace.phase = "TEMP_PREPARE";
+    const prepared = durableFile(temporary, next, mode, original?.info.gid, trace, "TEMPORARY");
     refusal = "CONFIG_CHANGED";
-    verifyParents(parents);
+    trace.phase = "PARENT_RECHECK";
+    verifyParents(parents, trace);
     const currentLock = fs.lstatSync(lock.path, { bigint: true });
-    if (!sameNode(lock.info, currentLock) || !unchanged(original, readSnapshot(path))) throw new Error();
+    trace.phase = "CURRENT_READ";
+    if (!sameNode(lock.info, currentLock) || !unchanged(original, readSnapshot(path, trace, "ORIGINAL"))) throw new Error();
     fs.renameSync(temporary, path);
     refusal = "VERIFY_FAILED";
     const directory = fs.openSync(dirname(path), fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
     try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
-    const committed = readSnapshot(path);
+    trace.phase = "COMMITTED_READ";
+    const committed = readSnapshot(path, trace, "COMMITTED");
     if (!committed || !sameNode(prepared.info, committed.info) || !committed.bytes.equals(next)) throw new Error();
   } catch (error) {
-    throw new ConfigWriteRefusal(error instanceof Error && error.message === "NATIVE_PATH_ACL_UNVERIFIED" ? "ACCESS_METADATA_UNAVAILABLE" : refusal);
+    const diagnostic = nativePathAclDiagnostic(error);
+    throw new ConfigWriteRefusal(error instanceof Error && error.message === "NATIVE_PATH_ACL_UNVERIFIED" ? "ACCESS_METADATA_UNAVAILABLE" : refusal, diagnostic ? { ...trace, ...diagnostic } : undefined);
   }
   finally {
     // Only release the exact directory this invocation created; never recover a foreign lock.

@@ -9,6 +9,7 @@ import { Command } from "commander";
 import { selectCliSkillsCredentialProfile } from "../../lib/cli-credential-profile.js";
 import { skillsMcpRegistrationEnvironment } from "../../lib/mcp-registration-environment.js";
 import { resolveSkillsFleet } from "../../lib/fleet-credentials.js";
+import { projectGuardedAgentConfigDiagnostic } from "../../lib/guarded-agent-config.js";
 import { handleMcp } from "./runtime-mcp.js";
 import { assertTestStartupIsolation } from "../../test-isolation.fixture.js";
 
@@ -253,7 +254,7 @@ const guardedRefusals: Record<string, string> = Object.fromEntries(Object.entrie
   CONFIG_CHANGED: "configuration or its path changed during registration",
   VERIFY_FAILED: "could not verify the committed configuration; retain the backup for recovery",
 }).map(([code, text]) => [text, code]));
-type Outcome = { agent: string; success: boolean; code?: string; error?: string };
+type Outcome = { agent: string; success: boolean; code?: string; error?: string; accessMetadata?: unknown };
 const refusalCode = (entry: Outcome | undefined) => entry === undefined ? "NO_RESULT" : entry.agent === "claude" ? entry.code ?? "CLAUDE_REFUSED"
   : guardedRefusals[entry.error?.slice(entry.error.lastIndexOf(": ") + 2) ?? ""] ?? "UNRECOGNIZED";
 // On failure, report every adapter's outcome on the real stderr, outside the console capture above.
@@ -262,7 +263,8 @@ process.on("exit", code => {
   let outcomes: unknown = "unavailable";
   try {
     outcomes = (JSON.parse(logs.join("\n")).results as Outcome[])
-      .map(entry => ({ agent: entry.agent, success: entry.success, ...(entry.success ? {} : { refusal: refusalCode(entry) }) }));
+      .map(entry => ({ agent: entry.agent, success: entry.success, ...(entry.success ? {} : { refusal: refusalCode(entry) }),
+        ...(projectGuardedAgentConfigDiagnostic(entry.accessMetadata) ? { accessMetadata: projectGuardedAgentConfigDiagnostic(entry.accessMetadata) } : {}) }));
   } catch {}
   writeSync(2, `REGISTRATION_FIXTURE_OUTCOMES ${JSON.stringify({ mode, outcomes })}\n`);
 });
