@@ -10,11 +10,11 @@ function response(body: ReadableStream<Uint8Array>) {
   return new Response(body, { headers: { "Content-Type": "application/json" } });
 }
 function serve(create: (signal: AbortSignal) => Response) {
-  return spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+  return spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (url: URL | RequestInfo, init?: RequestInit) => {
     expect(new URL(String(url)).origin).toBe(origin);
     expect(init?.signal).toBeInstanceOf(AbortSignal);
     return create(init!.signal!);
-  });
+  }, { preconnect: () => {} }));
 }
 async function rejection(promise: Promise<unknown>): Promise<Error> {
   try { await promise; } catch (error) { return error as Error; }
