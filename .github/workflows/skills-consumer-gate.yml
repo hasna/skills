@@ -70,7 +70,7 @@ jobs:
         working-directory: apps/skills
         env:
           NO_COLOR: "1"
-        run: bun test --timeout 30000 src/mcp/package-tool-list.test.ts src/lib/mcp-zod-bundle.test.ts src/lib/release-candidate-archive.test.ts src/cli/commands/runtime-mcp-registration.test.ts src/cli/cli.private-skill-create.test.ts src/cli/cli.stray-arguments.test.ts src/cli/cli.private-skill-history.test.ts src/lib/private-skill-history.test.ts src/cli/cli.json-output.test.ts
+        run: bun test --timeout 30000 src/mcp/package-tool-list.test.ts src/lib/mcp-zod-bundle.test.ts src/lib/release-candidate-archive.test.ts src/cli/commands/runtime-mcp-registration.test.ts src/cli/cli.private-skill-create.test.ts src/cli/cli.stray-arguments.test.ts src/cli/cli.private-skill-history.test.ts src/lib/private-skill-history.test.ts src/cli/cli.json-output.test.ts src/lib/profile-response-errors.test.ts
 
       - name: Credential-free Claude 2.1.302 native MCP registration (network isolated)
         working-directory: apps/skills
