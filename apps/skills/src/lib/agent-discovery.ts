@@ -1166,7 +1166,7 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
           if (!id || id.length > AGENT_POLICY_LIMITS.pathCharacters || --remainingEntries < 0) unresolved("malformed or unbounded Claude plugin configuration");
           keys(entry, ["options"], "Claude plugin configuration");
           const values = (entry as Record<string, unknown>).options;
-          if (!object(values) || Object.keys(values).length > 512) unresolved("malformed or unbounded Claude plugin options");
+          if (!object(values) || Object.keys(values).length > 512) return unresolved("malformed or unbounded Claude plugin options");
           for (const [key, value] of Object.entries(values)) {
             if (!key || key.length > AGENT_POLICY_LIMITS.pathCharacters || --remainingEntries < 0) unresolved("malformed or unbounded Claude plugin option");
             if (Array.isArray(value)) {
