@@ -97,6 +97,7 @@ function validateSelection(value: unknown): asserts value is SkillSelection {
 export class HttpProfileClient implements ProfileClient {
   readonly authority: string;
   private origin: string;
+  private responseSignals = new WeakMap<Response, AbortSignal>();
   constructor(
     private key: string,
     origin: string,
@@ -114,6 +115,9 @@ export class HttpProfileClient implements ProfileClient {
     init: RequestInit = {},
   ): Promise<Response> {
     const requestUrl = skillsApiRequestUrl(this.origin, route);
+    const signal = this.signal
+      ? AbortSignal.any([this.signal, AbortSignal.timeout(15_000)])
+      : AbortSignal.timeout(15_000);
     let response: Response;
     try {
       response = await fetch(
@@ -122,7 +126,7 @@ export class HttpProfileClient implements ProfileClient {
           ...init,
           redirect: "error",
           credentials: "omit",
-          signal: this.signal ? AbortSignal.any([this.signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
+          signal,
           headers: {
             "Content-Type": "application/json",
             "User-Agent": `hasna-skills/${pkg.version}`,
@@ -143,21 +147,30 @@ export class HttpProfileClient implements ProfileClient {
       if (code) throw new SkillSelectionError(code, `Skills API request failed (HTTP ${response.status})`);
       throw new Error(`Skills API request failed (HTTP ${response.status})`);
     }
+    this.responseSignals.set(response, signal);
     return response;
   }
   private request(path: string, init: RequestInit = {}): Promise<Response> {
     return this.requestRoute(`/api/v1${path}`, init);
   }
   private async read(response: Response, limit = MAX_PROFILE_DOCUMENT_BYTES): Promise<unknown> {
+    // Headers do not end the request deadline. Keep each response's own signal,
+    // including when this client has multiple requests in flight.
+    const signal = this.responseSignals.get(response) ?? this.signal;
     try {
       return JSON.parse(
         new TextDecoder().decode(
-          await readBoundedResponse(response, limit, this.signal),
+          await readBoundedResponse(response, limit, signal),
         ),
       );
     } catch (error) {
-      if (this.signal?.aborted) throw unavailable(this.signal.reason ?? error, "The Skills API response was cut short");
+      const name = (error as { name?: unknown } | null)?.name;
+      if (signal?.aborted || name === "AbortError" || name === "TimeoutError") {
+        throw unavailable(signal?.aborted ? signal.reason ?? error : error, "The Skills API response was cut short");
+      }
       invalid();
+    } finally {
+      this.responseSignals.delete(response);
     }
   }
   async supportsPinRenewal(): Promise<boolean> {
