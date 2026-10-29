@@ -1040,9 +1040,24 @@ test("actual busy and malformed locks preserve exact receipts while distinguishi
     expect(direct.exitCode).toBe(0); expect(direct.stdout).not.toContain("SESSION_WRITE_BUSY");
     expect(readFileSync(receiptPath)).toEqual(before); expect(readFileSync(lockPath, "utf8")).toBe(lock);
     put(lockPath, "malformed lock");
-    const refused = await f.a.hook("claude", "UserPromptSubmit", { prompt: "$review-code" });
-    expect(refused.decision).toBe("block"); expect(refused.reason).toContain("SESSION_WRITE_LOCKED");
-    expect(readFileSync(receiptPath)).toEqual(before);
+    const malformedLock = readFileSync(lockPath);
+    for (const agent of ["claude", "codex"] as const) for (const event of ["UserPromptSubmit", "SessionStart", "SubagentStart"]) {
+      const unavailable = await f.a.hook(agent, event, { prompt: "$review-code", source: "compact", ...(event === "SubagentStart" ? { agent_id: `${agent}-child` } : {}) });
+      expect(unavailable.decision).toBeUndefined(); expect(unavailable.continue).not.toBe(false);
+      expect(unavailable.systemMessage).toContain("SESSION_WRITE_LOCKED");
+      expect(unavailable.hookSpecificOutput.additionalContext).toContain("No Skills instructions were delivered by this hook");
+      expect(JSON.stringify(unavailable)).not.toContain(f.versions[0]!.skillMd);
+      expect(JSON.stringify(unavailable)).not.toContain("Published 1.0.0");
+      expect(readFileSync(receiptPath)).toEqual(before); expect(readFileSync(lockPath)).toEqual(malformedLock);
+    }
+    // Only lifecycle delivery is optional: explicit operations still refuse
+    // the actual malformed lock without modifying it or its session receipt.
+    for (const operation of ["context", "load"]) {
+      const refused = await f.a.run([operation, "review-code", "--cached", "--session", "parent-session", "--selection-profile", "engineering", "--json"]);
+      expect(refused.exitCode).toBe(1); expect(refused.stdout).toContain("SESSION_WRITE_LOCKED");
+      expect(refused.stdout).not.toContain("Published 1.0.0");
+      expect(readFileSync(receiptPath)).toEqual(before); expect(readFileSync(lockPath)).toEqual(malformedLock);
+    }
   } finally { await f.close(); }
 });
 

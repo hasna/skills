@@ -85,7 +85,10 @@ const OPTIONAL_CONTEXT_FAILURES = new Set([
   "SKILLS_API_CREDENTIAL_UNAVAILABLE", "SKILLS_API_UNAVAILABLE", "SKILLS_API_UNAUTHORIZED", "SKILLS_API_FORBIDDEN", "SKILLS_API_RESOURCE_UNAVAILABLE",
   "CACHED_PROFILE_EXPIRED", "CACHED_PROFILE_MISSING", "CACHED_BUNDLE_MISSING",
   "PROFILE_LOCK_MISMATCH",
-  "SESSION_RECONCILIATION_REQUIRED", "SESSION_RENEWAL_TIMEOUT", "SESSION_WRITE_BUSY",
+  // A refused session lock withholds context, not the ordinary prompt. The
+  // lifecycle caller verifies native controls/input first; lock validation and
+  // explicit context/load/run remain strict and never repair the lock here.
+  "SESSION_RECONCILIATION_REQUIRED", "SESSION_RENEWAL_TIMEOUT", "SESSION_WRITE_BUSY", "SESSION_WRITE_LOCKED",
   "SESSION_PARENT_CHANGED", "SESSION_CONTEXT_CONFLICT", "SKILLS_HOOK_TIMEOUT",
 ]);
 export function isOptionalHookContextFailure(error: unknown): error is HookDiagnosticError {

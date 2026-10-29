@@ -410,8 +410,9 @@ test("every adapter's drift envelope is one its native consumer accepts without 
   // The exact acceptance checks the managed plugins and supervisor apply to a
   // CLI result, read from the rendered sources so a contract change is noticed.
   const opencode = renderOpenCodePlugin("/opt/skills", "default"), sumi = renderSumiPlugin("/opt/skills", "default"), hermes = renderHermesSupervisor("/opt/skills", "default");
-  expect(opencode).toContain('if (result.decision === "block" || result.continue === false) throw');
-  expect(opencode).toContain("result.hookSpecificOutput.hookEventName !== input.hook_event_name");
+  expect(opencode).toContain('if (result.decision === "block" || result.continue === false) return deny();');
+  expect(opencode).toContain('output.hookEventName !== input.hook_event_name || typeof output.additionalContext !== "string") return unavailable("INVALID_RESPONSE");');
+  expect(opencode).toContain('if (input.hook_event_name === "BeforeTool" && result.nativeBridgeVerified !== true) return deny();');
   expect(sumi).toContain('if (result.decision === "block" || result.continue === false) throw');
   expect(sumi).toContain("result.hookSpecificOutput.hookEventName !== input.hook_event_name");
   expect(hermes).toContain('(output.action === "continue" && keys === "action")');
