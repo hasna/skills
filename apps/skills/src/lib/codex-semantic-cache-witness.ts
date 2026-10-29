@@ -132,9 +132,17 @@ export function codexLocalMarketplaceMapsPlugin(text: string, marketplace: strin
     const rows = value.plugins.filter((row: unknown) => plainObject(row) && row.name === plugin);
     if (rows.length !== 1) return false;
     const row = rows[0] as Record<string, unknown>;
-    if (!exactKeys(row, ["name", "source"]) || !plainObject(row.source)
+    if (!exactKeys(row, ["name", "source"], ["policy", "category"]) || !plainObject(row.source)
       || !exactKeys(row.source, ["source", "path"]) || row.source.source !== "local"
       || typeof row.source.path !== "string" || !row.source.path.startsWith("./") || row.source.path.includes("\\")) return false;
+    // Current bundled catalogs attach these installation metadata fields.
+    // Unknown policy controls still need review; category remains inert label
+    // data. Callers retain their full current catalog witness and exact target.
+    if (row.policy !== undefined && (!plainObject(row.policy)
+      || !exactKeys(row.policy, ["installation", "authentication"])
+      || row.policy.installation !== "AVAILABLE" || row.policy.authentication !== "ON_INSTALL")) return false;
+    if (row.category !== undefined && (typeof row.category !== "string" || !row.category.length || row.category.length > 128
+      || row.category.trim() !== row.category || /[\x00-\x1f\x7f-\x9f]/.test(row.category))) return false;
     const parts = row.source.path.split("/");
     return parts[0] === "." && parts.length > 1 && parts.slice(1).every(part => /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(part))
       && parts.at(-1) === plugin;
