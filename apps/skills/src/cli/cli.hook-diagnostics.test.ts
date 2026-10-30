@@ -126,7 +126,7 @@ test("a SessionStart refresh continues from the verified profile only when it co
 
 test("typed delivery failures continue every maintained lifecycle without child payload or native fallback", async () => {
   const f = await fixture();
-  const unavailable = ["SKILLS_API_CREDENTIAL_UNAVAILABLE", "SKILLS_API_UNAVAILABLE", "SKILLS_API_UNAUTHORIZED", "SKILLS_API_FORBIDDEN", "SKILLS_API_RESOURCE_UNAVAILABLE", "PROFILE_LOCK_MISMATCH", "SESSION_RECONCILIATION_REQUIRED", "SESSION_RENEWAL_TIMEOUT", "SESSION_WRITE_BUSY", "SESSION_CONTEXT_CONFLICT", "SESSION_PARENT_CHANGED"];
+  const unavailable = ["SKILLS_API_CREDENTIAL_UNAVAILABLE", "SKILLS_API_UNAVAILABLE", "SKILLS_API_UNAUTHORIZED", "SKILLS_API_FORBIDDEN", "SKILLS_API_RESOURCE_UNAVAILABLE", "PROFILE_LOCK_MISMATCH", "SESSION_RECONCILIATION_REQUIRED", "SESSION_RENEWAL_TIMEOUT", "SESSION_WRITE_BUSY", "SESSION_WRITE_LOCKED", "SESSION_CONTEXT_CONFLICT", "SESSION_PARENT_CHANGED"];
   for (const agent of ["claude", "codex"]) for (const event of ["UserPromptSubmit", "SessionStart", "SubagentStart"]) for (const code of unavailable) {
     const result = await f.hook({ SKILLS_TEST_CHILD_STDOUT: JSON.stringify({ error: { code, message: "untrusted fixture message" }, context: "Forbidden fixture payload" }) }, event, agent);
     expect(result.value.decision).toBeUndefined(); expect(result.value.continue).not.toBe(false);
@@ -175,12 +175,21 @@ test("a renewal that continues in the background says so, keeping the renewal ti
 
 test("integrity, invalid state and opaque programming failures still refuse prompt delivery", async () => {
   const f = await fixture();
-  for (const code of ["INVALID_RECEIPT", "PROFILE_IDENTITY_MISMATCH", "BUNDLE_DIGEST_MISMATCH", "SESSION_WRITE_LOCKED", "SESSION_GENERATION_CHANGED", "SESSION_RECEIPT_CHANGED", "SKILLS_CONTEXT_FAILED"]) {
+  for (const code of ["INVALID_RECEIPT", "PROFILE_IDENTITY_MISMATCH", "BUNDLE_DIGEST_MISMATCH", "SESSION_GENERATION_CHANGED", "SESSION_RECEIPT_CHANGED", "SKILLS_CONTEXT_FAILED"]) {
     const result = await f.hook({ SKILLS_TEST_CHILD_STDOUT: JSON.stringify({ error: { code } }) });
     expect(result.value.decision).toBe("block"); expect(result.stdout).toContain(`[${code}]`);
   }
   const invalid = await f.run(["hook", "user-prompt", "--agent", "claude", "--selection-profile", "engineering"], { SKILLS_TEST_CHILD_HANG: "1" }, { prompt: 12 });
   expect(invalid.value.decision).toBe("block");
+  // A typed lock refusal must not make malformed input eligible for the
+  // optional-context path, which starts only after native/input verification.
+  for (const agent of ["claude", "codex"]) {
+    const invalidWithLock = await f.run(["hook", "user-prompt", "--agent", agent, "--selection-profile", "engineering"], {
+      SKILLS_TEST_CHILD_STDOUT: JSON.stringify({ error: { code: "SESSION_WRITE_LOCKED" } }),
+    }, { prompt: 12 });
+    expect(invalidWithLock.value.decision).toBe("block");
+    expect(invalidWithLock.stdout).not.toContain("Ordinary work may continue");
+  }
 });
 
 test("every maintained managed prompt hook asks the cached child to migrate a refused session pin unless the station turns it off", async () => {
