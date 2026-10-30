@@ -12,7 +12,7 @@ import { normalizeHermesHookInput, assertHermesTool } from "../../lib/agent-herm
 import { parseSkillContextInput, selectedProfileId } from "./context.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, normalizeAgentHookEvent } from "../../lib/agent-adapters.js";
 import { detectedIntegrationAgents } from "../../lib/agent-install-selection.js";
-import { planAgentIntegration, planClaudeManagedHookProjection, planAgentSettingsWitnessUpgrade, planCodexSemanticCacheWitnessUpgrade, planReviewedArtifactMigration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, assertOpenCodeNativeBridge, codexPromptDriftWarning, hookContextOutput, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, type IntegrationAgent } from "../../lib/agent-integration.js";
+import { planAgentIntegration, planClaudeManagedHookProjection, planAgentSettingsWitnessUpgrade, planCodexSemanticCacheWitnessUpgrade, planReviewedArtifactMigration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, assertOpenCodeNativeBridge, codexPromptDriftWarning, hookContextOutput, isAgentSubmittedPrompt, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, type IntegrationAgent } from "../../lib/agent-integration.js";
 import { enrollCodexNativeHooks, reconcileCodexNativeHooks } from "../../lib/agent-codex-trust.js";
 import { codexNativeHookEnvelopeFromInput, CODEX_NATIVE_POLICY_FD_ENV } from "../../lib/codex-native-skill-policy.js";
 import { planCodexNativeTrust, applyCodexNativeTrust, previewCodexNativeTrust } from "../../lib/codex-native-trust.js";
@@ -36,12 +36,47 @@ import { captureClaudeInstallerRequest, safeClaudeInstallerCaptureError } from "
 
 const RECOVERABLE_CONTEXT_CACHE_ERRORS = new Set(["CACHED_PROFILE_EXPIRED", "CACHED_PROFILE_MISSING", "CACHED_BUNDLE_MISSING"]);
 /**
- * Instruction characters one managed hook injects at most. Selected skill
- * bodies measured about 10–15 KB each, so one large body and a moderate
- * second fit; a body that does not fit is offered as its `skills load`
- * command instead of being injected.
+ * Characters one managed hook's additionalContext carries at most (owner
+ * request 2026-10-30: one prompt received 10-60 KB of skill bodies). The cap
+ * covers the whole injected text: skill bodies get the cap less a fixed
+ * reserve for the loading policy, notices and `skills load` offers, and the
+ * assembled text is clamped to the cap. A body that does not fit is offered as
+ * its `skills load` command instead of being injected. Operators may lower it
+ * with SKILLS_HOOK_CONTEXT_MAX_CHARS in the agent's environment, never raise it:
+ * a larger value keeps the default. The native hook command line that
+ * `skills hook install` writes is unchanged.
  */
-export const MANAGED_HOOK_CONTEXT_MAX_CHARS = 24_000;
+export const MANAGED_HOOK_CONTEXT_MAX_CHARS = 12_000;
+/** Skill bodies one managed hook injects at most; SKILLS_HOOK_CONTEXT_MAX_SKILLS can only lower it. */
+export const MANAGED_HOOK_CONTEXT_MAX_SKILLS = 2;
+/** Part of the cap kept for the policy, notices and up to ten load offers. */
+export const MANAGED_HOOK_CONTEXT_RESERVE_CHARS = 2_500;
+const HOOK_CONTEXT_CHARS_RANGE = [MANAGED_HOOK_CONTEXT_RESERVE_CHARS + 512, MANAGED_HOOK_CONTEXT_MAX_CHARS] as const;
+const HOOK_CONTEXT_SKILLS_RANGE = [1, MANAGED_HOOK_CONTEXT_MAX_SKILLS] as const;
+const HOOK_CONTEXT_TRUNCATED = "[Skills context truncated at the hook limit; read the rest with `skills load <slug>`.]";
+
+function boundedEnvInteger(name: string, fallback: number, [min, max]: readonly [number, number]): number {
+  const raw = process.env[name];
+  if (raw === undefined || !/^[0-9]{1,6}$/.test(raw.trim())) return fallback;
+  const value = Number(raw.trim());
+  return value >= min && value <= max ? value : fallback;
+}
+
+/** The effective hook limits: the defaults above, or a valid lower environment override. */
+export function managedHookContextLimits(): { maxChars: number; maxSkills: number; bodyChars: number } {
+  const maxChars = boundedEnvInteger("SKILLS_HOOK_CONTEXT_MAX_CHARS", MANAGED_HOOK_CONTEXT_MAX_CHARS, HOOK_CONTEXT_CHARS_RANGE);
+  const maxSkills = boundedEnvInteger("SKILLS_HOOK_CONTEXT_MAX_SKILLS", MANAGED_HOOK_CONTEXT_MAX_SKILLS, HOOK_CONTEXT_SKILLS_RANGE);
+  return { maxChars, maxSkills, bodyChars: maxChars - MANAGED_HOOK_CONTEXT_RESERVE_CHARS };
+}
+
+/** Clamp assembled hook context to the cap at a line boundary, with a fixed note. */
+export function capManagedHookContext(context: string, maxChars = managedHookContextLimits().maxChars): string {
+  if (context.length <= maxChars) return context;
+  const room = maxChars - HOOK_CONTEXT_TRUNCATED.length - 1;
+  const head = context.slice(0, Math.max(0, room));
+  const cut = head.lastIndexOf("\n");
+  return `${cut > 0 ? head.slice(0, cut) : head}\n${HOOK_CONTEXT_TRUNCATED}`;
+}
 /** SessionStart refresh failures after which context still comes from the last verified profile. */
 const SESSION_START_SYNC_CONTINUES = new Set(["SKILLS_HOOK_TIMEOUT", "SKILLS_API_UNAVAILABLE"]);
 
@@ -87,7 +122,8 @@ async function contextForHook(input: unknown, profileId: string, cached: boolean
   // innermost layer that hit it, including after SessionStart's sync.
   const { childMs, renewalBudgetMs } = managedContextChildLimits(deadline - Date.now());
   if (childMs <= 0) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "context");
-  const args = ["context", "--stdin", "--json", "--selection-profile", profileId, "--max-chars", String(MANAGED_HOOK_CONTEXT_MAX_CHARS)];
+  const limits = managedHookContextLimits();
+  const args = ["context", "--stdin", "--json", "--selection-profile", profileId, "--max-chars", String(limits.bodyChars), "--max-skills", String(limits.maxSkills)];
   if (cached) args.push("--cached", "--auto-reconcile-safe");
   // Default for every agent's managed hook: a refused renewal of the same
   // profile migrates the pin and names retired loaded skills once. Operators
@@ -568,6 +604,15 @@ export function registerAgentIntegration(parent: Command): void {
         // classified as optional delivery failure. No unchecked input continues.
         parseSkillContextInput(JSON.stringify(input));
         verifiedContextBoundary = true;
+        // A plugin-submitted message or task notification gets no skill
+        // context and no selection; SessionStart, SubagentStart and the
+        // PreToolUse bridge check above are unchanged.
+        if (event === "UserPromptSubmit" && isAgentSubmittedPrompt(input.prompt)) {
+          if (options.agent === "hermes") await writeCliOutput(JSON.stringify({ context: "" }));
+          else if (options.agent === "cursor") await writeCliOutput(JSON.stringify({ continue: true }));
+          else await writeCliOutput(JSON.stringify(driftWarning ? { systemMessage: driftWarning } : {}));
+          return;
+        }
         if (event === "SessionStart") {
           // Station reporting is telemetry, not profile authorization. Keep
           // it on explicit sync, outside the blocking lifecycle path. The
@@ -605,6 +650,7 @@ export function registerAgentIntegration(parent: Command): void {
         withSessionPinMigrationNotice(options.agent, event, input, result);
         if (syncNotice) result.context = [syncNotice, result.context].filter(Boolean).join("\n\n");
         const output = hookContextOutput(event, result) as { hookSpecificOutput?: { hookEventName: string; additionalContext: string } };
+        if (output.hookSpecificOutput) output.hookSpecificOutput.additionalContext = capManagedHookContext(output.hookSpecificOutput.additionalContext);
         if (options.agent === "hermes") {
           await writeCliOutput(JSON.stringify({ context: output.hookSpecificOutput?.additionalContext ?? "" }));
         } else if (options.agent === "cursor") {

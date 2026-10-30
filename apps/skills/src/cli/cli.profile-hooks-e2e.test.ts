@@ -16,6 +16,7 @@ import { publicPrincipal } from "../server/auth.js";
 import { packSkillBundle } from "../lib/skill-bundle.js";
 import { admitCorpusFixture, corpusInspectorPathFixture } from "../lib/codex-corpus.fixture.js";
 import { KernelLock } from "@hasna/contracts/kernel-lock";
+import { MANAGED_HOOK_CONTEXT_MAX_CHARS } from "./commands/agent-integration.js";
 
 useDefaultTestTimeout();
 const scratch = mkdtempSync(join(tmpdir(), "skills-profile-hooks-cli-")), binary = join(scratch, "skills.js"), executable = join(scratch, "skills");
@@ -273,7 +274,7 @@ test("built CLI flushes a complete large skill document through a pipe", async (
   } finally { await f.close(); }
 });
 
-test("configured prompt hook delivers both selected bodies when one exceeds the old default character budget", async () => {
+test("configured prompt hook offers a body over its cap while plain context still delivers both selected bodies", async () => {
   const f = await fixture();
   try {
     const slug = "synthetic-ios", version = "0.2.0", source = join(f.root, slug);
@@ -290,9 +291,12 @@ test("configured prompt hook delivers both selected bodies when one exceeds the 
     await f.a.ok(["sync", "--selection-profile", "engineering", "--json"]);
     const hook = await f.a.hook("claude", "UserPromptSubmit", { prompt: "review ios" });
     const context = hook.hookSpecificOutput.additionalContext as string;
+    // The managed hook caps its context (12000 characters by default): the
+    // 16 KB body is offered as its load command instead of being injected.
     expect(context).toContain(f.versions[0]!.skillMd);
-    expect(context).toContain(skillMd);
-    expect(context).not.toContain("Additional selected skill");
+    expect(context).not.toContain(skillMd);
+    expect(context).toContain(`Additional selected skill ${slug}@${version}: skills load ${slug}@${version}`);
+    expect(context.length).toBeLessThanOrEqual(MANAGED_HOOK_CONTEXT_MAX_CHARS);
     const receipt = await f.a.ok(["context", "--stdin", "--cached", "--json"], { stdin: { session_id: "fresh-large-context", prompt: "review ios" } });
     expect(receipt.selections.map((selection: any) => selection.slug).sort()).toEqual(["review-code", slug].sort());
     expect(receipt.omitted).toEqual([]);
