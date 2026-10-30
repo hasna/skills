@@ -41,17 +41,18 @@ const RECOVERABLE_CONTEXT_CACHE_ERRORS = new Set(["CACHED_PROFILE_EXPIRED", "CAC
  * covers the whole injected text: skill bodies get the cap less a fixed
  * reserve for the loading policy, notices and `skills load` offers, and the
  * assembled text is clamped to the cap. A body that does not fit is offered as
- * its `skills load` command instead of being injected. Operators may change it
- * with SKILLS_HOOK_CONTEXT_MAX_CHARS in the agent's environment; the native
- * hook command line that `skills hook install` writes is unchanged.
+ * its `skills load` command instead of being injected. Operators may lower it
+ * with SKILLS_HOOK_CONTEXT_MAX_CHARS in the agent's environment, never raise it:
+ * a larger value keeps the default. The native hook command line that
+ * `skills hook install` writes is unchanged.
  */
 export const MANAGED_HOOK_CONTEXT_MAX_CHARS = 12_000;
-/** Skill bodies one managed hook injects at most; SKILLS_HOOK_CONTEXT_MAX_SKILLS overrides it. */
+/** Skill bodies one managed hook injects at most; SKILLS_HOOK_CONTEXT_MAX_SKILLS can only lower it. */
 export const MANAGED_HOOK_CONTEXT_MAX_SKILLS = 2;
 /** Part of the cap kept for the policy, notices and up to ten load offers. */
 export const MANAGED_HOOK_CONTEXT_RESERVE_CHARS = 2_500;
-const HOOK_CONTEXT_CHARS_RANGE = [MANAGED_HOOK_CONTEXT_RESERVE_CHARS + 512, 64_000] as const;
-const HOOK_CONTEXT_SKILLS_RANGE = [1, 20] as const;
+const HOOK_CONTEXT_CHARS_RANGE = [MANAGED_HOOK_CONTEXT_RESERVE_CHARS + 512, MANAGED_HOOK_CONTEXT_MAX_CHARS] as const;
+const HOOK_CONTEXT_SKILLS_RANGE = [1, MANAGED_HOOK_CONTEXT_MAX_SKILLS] as const;
 const HOOK_CONTEXT_TRUNCATED = "[Skills context truncated at the hook limit; read the rest with `skills load <slug>`.]";
 
 function boundedEnvInteger(name: string, fallback: number, [min, max]: readonly [number, number]): number {
@@ -61,7 +62,7 @@ function boundedEnvInteger(name: string, fallback: number, [min, max]: readonly 
   return value >= min && value <= max ? value : fallback;
 }
 
-/** The effective hook limits: the defaults above, or a valid environment override. */
+/** The effective hook limits: the defaults above, or a valid lower environment override. */
 export function managedHookContextLimits(): { maxChars: number; maxSkills: number; bodyChars: number } {
   const maxChars = boundedEnvInteger("SKILLS_HOOK_CONTEXT_MAX_CHARS", MANAGED_HOOK_CONTEXT_MAX_CHARS, HOOK_CONTEXT_CHARS_RANGE);
   const maxSkills = boundedEnvInteger("SKILLS_HOOK_CONTEXT_MAX_SKILLS", MANAGED_HOOK_CONTEXT_MAX_SKILLS, HOOK_CONTEXT_SKILLS_RANGE);

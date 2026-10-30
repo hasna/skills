@@ -340,11 +340,12 @@ test("the managed hook never exceeds its cap or skill limit, including an operat
   const api = authority(0, { resolve: 0, bundle: 0 });
   try {
     const prompt = "use $fixture-skill-0001, $fixture-skill-0002, $fixture-skill-0003, $fixture-skill-0004 and $fixture-skill-0005 here";
-    const roomy = await station(api, 0, 0, { SKILLS_HOOK_CONTEXT_MAX_CHARS: "64000" });
+    const roomy = await station(api, 0, 0, { SKILLS_HOOK_CONTEXT_MAX_CHARS: "64000", SKILLS_HOOK_CONTEXT_MAX_SKILLS: "20" });
     const wide = await roomy.hook("UserPromptSubmit", { prompt });
-    // A large character budget still injects no more than two bodies.
-    expect(wide.context.match(/Pinned fixture instructions\./g)).toHaveLength(MANAGED_HOOK_CONTEXT_MAX_SKILLS);
-    expect(wide.context.length).toBeLessThanOrEqual(64_000);
+    // An override above the defaults is ignored: the 12000-character cap holds, so
+    // only one fixture body fits, exactly as with no override (the invalid case below).
+    expect(wide.context.match(/Pinned fixture instructions\./g)).toHaveLength(1);
+    expect(wide.context.length).toBeLessThanOrEqual(MANAGED_HOOK_CONTEXT_MAX_CHARS);
     const tight = await station(api, 0, 0, { SKILLS_HOOK_CONTEXT_MAX_CHARS: "4000", SKILLS_HOOK_CONTEXT_MAX_SKILLS: "1" });
     const narrow = await tight.hook("UserPromptSubmit", { prompt });
     expect(narrow.context.length).toBeLessThanOrEqual(4_000);
@@ -377,7 +378,7 @@ test("a subagent of an expired parent renews the parent pin but never migrates i
   } finally { api.close(); }
 }, 90_000);
 
-test("plugin-submitted messages and task notifications get no skill context or selection; typed prompts still select", async () => {
+test("plugin-submitted messages, other sessions' messages and task notifications get no skill context or selection; typed prompts still select", async () => {
   const api = authority(0, { resolve: 0, bundle: 0 });
   try {
     const s = await station(api, 0, 0);
@@ -387,6 +388,8 @@ test("plugin-submitted messages and task notifications get no skill context or s
       `[hasna:conversations:7f0c2a51-0000-4000-8000-000000000002]\n#general · from agent-y\n${typed}`,
       `The hasna-messages plugin sent a message:\n[hasna:messages:7f0c2a51-0000-4000-8000-000000000003]\n${typed}`,
       `<task-notification>\n<task-id>b1</task-id>\n<summary>${typed}</summary>\n</task-notification>`,
+      `Another Claude session sent a message:\n<cross-session-message from="session-z">\n${typed}\n</cross-session-message>`,
+      `Another Claude session sent a message:\n<agent-message from="bg-agent-1">\n${typed}\n</agent-message>`,
     ];
     for (const prompt of gated) {
       const before = readFileSync(s.receiptPath);
