@@ -44,8 +44,11 @@ test("agent-submitted prompts are recognised only by a marker at their start", a
   for (const prompt of ["[hasna:messages:abc]\nFrom x", "  \n[hasna:conversations:abc]\n#general", "The hasna-messages plugin sent a message:\n[hasna:messages:abc]\nbody",
     "<task-notification>\n<task-id>x</task-id>", "[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event.\n\n<task-notification>", "header line\n[hasna:messages:abc]",
     "Another Claude session sent a message:\n<agent-message from=\"bg-1\">\nbody\n</agent-message>", "Another Claude session sent a message:\n<cross-session-message from=\"s-2\">\nbody\n</cross-session-message>",
-    "  \n<cross-session-message from=\"s-3\">\nbody", "header line\n<agent-message from=\"bg-4\">"])
+    "  \n<cross-session-message from=\"s-3\">\nbody", "header line\n<agent-message from=\"bg-4\">",
+    "Another Claude session sent a message while you were working:\n<cross-session-message>\nbody", "A peer session sent a message while you were working:\nbody",
+    "The coordinator sent a message while you were working:\nbody", "The hasna-messages plugin sent a message while you were working:\nbody",
+    "[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]\nfrom #general", "<teammate-message teammate_id=\"t1\">\nbody\n</teammate-message>"])
     expect(isAgentSubmittedPrompt(prompt)).toBe(true);
-  for (const prompt of ["review the ios app", "what does hasna:messages do?", "see [hasna:messages:abc] above", "what does <agent-message from=x> mean?", "quote: Another Claude session sent a message:", `${"x".repeat(400)}<task-notification>`, `${"y".repeat(401)}\n[hasna:messages:abc]`, "", undefined, 42])
+  for (const prompt of ["review the ios app", "what does hasna:messages do?", "see [hasna:messages:abc] above", "what does <agent-message from=x> mean?", "quote: Another Claude session sent a message:", "The coordinator sent a message about the release and I want a summary", "tell me about <teammate-message> tags", `${"x".repeat(400)}<task-notification>`, `${"y".repeat(401)}\n[hasna:messages:abc]`, "", undefined, 42])
     expect(isAgentSubmittedPrompt(prompt)).toBe(false);
 });

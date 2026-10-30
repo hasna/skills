@@ -2868,13 +2868,17 @@ export function normalizeAgentHookPrompt(agent: IntegrationAgent, event: string,
  * merely mentions one of these markers later still selects skills.
  */
 const AGENT_SUBMITTED_PROMPT_WINDOW = 400;
+/** First lines Claude Code itself writes for a message from a peer session, the coordinator or a plugin. */
+const AGENT_MESSAGE_FIRST_LINE = /^(?:Another Claude session|A peer session|The coordinator|The [^\n]{1,80} plugin) sent a message(?: while you were working)?:$/;
+const AGENT_MESSAGE_LINE_PREFIXES = ["[hasna:messages:", "[hasna:conversations:", "<agent-message from=", "<cross-session-message", "<teammate-message"];
 export function isAgentSubmittedPrompt(prompt: unknown): boolean {
   if (typeof prompt !== "string") return false;
   const head = prompt.trim().slice(0, AGENT_SUBMITTED_PROMPT_WINDOW);
-  if (head.startsWith("[SYSTEM NOTIFICATION - NOT USER INPUT]") || head.startsWith("Another Claude session sent a message:")) return true;
+  if (head.startsWith("[SYSTEM NOTIFICATION - NOT USER INPUT]") || head.startsWith("[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]")) return true;
+  const lines = head.split("\n");
+  if (AGENT_MESSAGE_FIRST_LINE.test(lines[0]!.trim())) return true;
   if (head.includes("plugin sent a message:") || head.includes("<task-notification>")) return true;
-  return head.split("\n").some(line => line.startsWith("[hasna:messages:") || line.startsWith("[hasna:conversations:")
-    || line.startsWith("<agent-message from=") || line.startsWith("<cross-session-message from="));
+  return lines.some(line => AGENT_MESSAGE_LINE_PREFIXES.some(prefix => line.startsWith(prefix)));
 }
 
 export function hookContextOutput(event: string, result: { context: string; receipt?: unknown; omitted?: Array<{ slug: string; version: string; loadCommand: string }> }): Record<string, unknown> {

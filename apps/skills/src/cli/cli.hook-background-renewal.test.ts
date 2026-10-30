@@ -390,6 +390,10 @@ test("plugin-submitted messages, other sessions' messages and task notifications
       `<task-notification>\n<task-id>b1</task-id>\n<summary>${typed}</summary>\n</task-notification>`,
       `Another Claude session sent a message:\n<cross-session-message from="session-z">\n${typed}\n</cross-session-message>`,
       `Another Claude session sent a message:\n<agent-message from="bg-agent-1">\n${typed}\n</agent-message>`,
+      `The coordinator sent a message while you were working:\n${typed}`,
+      `The hasna-messages plugin sent a message while you were working:\n${typed}`,
+      `[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]\n${typed}`,
+      `<teammate-message teammate_id="t1">\n${typed}\n</teammate-message>`,
     ];
     for (const prompt of gated) {
       const before = readFileSync(s.receiptPath);
