@@ -12,7 +12,7 @@ import { normalizeHermesHookInput, assertHermesTool } from "../../lib/agent-herm
 import { parseSkillContextInput, selectedProfileId } from "./context.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, normalizeAgentHookEvent } from "../../lib/agent-adapters.js";
 import { detectedIntegrationAgents } from "../../lib/agent-install-selection.js";
-import { planAgentIntegration, planClaudeManagedHookProjection, planAgentSettingsWitnessUpgrade, planCodexSemanticCacheWitnessUpgrade, planReviewedArtifactMigration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, assertOpenCodeNativeBridge, codexPromptDriftWarning, hookContextOutput, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, type IntegrationAgent } from "../../lib/agent-integration.js";
+import { planAgentIntegration, planClaudeManagedHookProjection, planAgentSettingsWitnessUpgrade, planCodexSemanticCacheWitnessUpgrade, planReviewedArtifactMigration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, assertOpenCodeNativeBridge, codexPromptDriftWarning, hookContextOutput, isAgentSubmittedPrompt, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, type IntegrationAgent } from "../../lib/agent-integration.js";
 import { enrollCodexNativeHooks, reconcileCodexNativeHooks } from "../../lib/agent-codex-trust.js";
 import { codexNativeHookEnvelopeFromInput, CODEX_NATIVE_POLICY_FD_ENV } from "../../lib/codex-native-skill-policy.js";
 import { planCodexNativeTrust, applyCodexNativeTrust, previewCodexNativeTrust } from "../../lib/codex-native-trust.js";
@@ -603,6 +603,15 @@ export function registerAgentIntegration(parent: Command): void {
         // classified as optional delivery failure. No unchecked input continues.
         parseSkillContextInput(JSON.stringify(input));
         verifiedContextBoundary = true;
+        // A plugin-submitted message or task notification gets no skill
+        // context and no selection; SessionStart, SubagentStart and the
+        // PreToolUse bridge check above are unchanged.
+        if (event === "UserPromptSubmit" && isAgentSubmittedPrompt(input.prompt)) {
+          if (options.agent === "hermes") await writeCliOutput(JSON.stringify({ context: "" }));
+          else if (options.agent === "cursor") await writeCliOutput(JSON.stringify({ continue: true }));
+          else await writeCliOutput(JSON.stringify(driftWarning ? { systemMessage: driftWarning } : {}));
+          return;
+        }
         if (event === "SessionStart") {
           // Station reporting is telemetry, not profile authorization. Keep
           // it on explicit sync, outside the blocking lifecycle path. The

@@ -36,3 +36,12 @@ test("assembled hook context never exceeds the cap and short context is unchange
   const unbroken = "y".repeat(50_000);
   expect(capManagedHookContext(unbroken, 12_000).length).toBeLessThanOrEqual(12_000);
 });
+
+test("agent-submitted prompts are recognised only by a marker at their start", async () => {
+  const { isAgentSubmittedPrompt } = await import("../lib/agent-integration.js");
+  for (const prompt of ["[hasna:messages:abc]\nFrom x", "  \n[hasna:conversations:abc]\n#general", "The hasna-messages plugin sent a message:\n[hasna:messages:abc]\nbody",
+    "<task-notification>\n<task-id>x</task-id>", "[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event.\n\n<task-notification>", "header line\n[hasna:messages:abc]"])
+    expect(isAgentSubmittedPrompt(prompt)).toBe(true);
+  for (const prompt of ["review the ios app", "what does hasna:messages do?", "see [hasna:messages:abc] above", `${"x".repeat(400)}<task-notification>`, `${"y".repeat(401)}\n[hasna:messages:abc]`, "", undefined, 42])
+    expect(isAgentSubmittedPrompt(prompt)).toBe(false);
+});

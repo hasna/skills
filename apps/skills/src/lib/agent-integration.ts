@@ -2859,6 +2859,21 @@ export function normalizeAgentHookPrompt(agent: IntegrationAgent, event: string,
   return prompt;
 }
 
+/**
+ * Prompts that a plugin or the harness submitted rather than a person typed
+ * (owner request 2026-10-30: about 7 of 1,500 turns in one session were typed).
+ * Only the start of the trimmed prompt is read, so an ordinary prompt that
+ * merely mentions one of these markers later still selects skills.
+ */
+const AGENT_SUBMITTED_PROMPT_WINDOW = 400;
+export function isAgentSubmittedPrompt(prompt: unknown): boolean {
+  if (typeof prompt !== "string") return false;
+  const head = prompt.trim().slice(0, AGENT_SUBMITTED_PROMPT_WINDOW);
+  if (head.startsWith("[SYSTEM NOTIFICATION - NOT USER INPUT]")) return true;
+  if (head.includes("plugin sent a message:") || head.includes("<task-notification>")) return true;
+  return head.split("\n").some(line => line.startsWith("[hasna:messages:") || line.startsWith("[hasna:conversations:"));
+}
+
 export function hookContextOutput(event: string, result: { context: string; receipt?: unknown; omitted?: Array<{ slug: string; version: string; loadCommand: string }> }): Record<string, unknown> {
   if (!HOOK_EVENTS.includes(event as ContextHookEvent)) throw new Error(`Unsupported context hook event: ${event}`);
   const omitted = result.omitted?.slice(0, 10).map(entry => `Additional selected skill ${entry.slug}@${entry.version}: ${entry.loadCommand}`).join("\n");
