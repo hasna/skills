@@ -1041,8 +1041,9 @@ A load is recorded on the session the command names, whoever runs it, so running
 another session's command marks that session as having loaded the skill, and its
 later prompts offer it no pointer. Where the session store can't be written or is
 full, as in a Codex sandbox, a load still returns its content and says it wasn't
-recorded: compaction won't restore that skill and the session won't be told if
-it's retired. An agent or subagent with no way to run a command can't use a
+recorded, unless the bundle isn't cached and the cache can't be written either, in
+which case it refuses. Compaction won't restore an unrecorded skill and the session
+won't be told if it's retired. An agent or subagent with no way to run a command can't use a
 pointer.
 
 A session retains its loaded selections; compaction restores the two most
