@@ -16,7 +16,7 @@ function sessionSelectionLabel(selection: SessionSelectionMetadata): string {
 export function selectedProfileId(explicit?: string): string {
   return explicit ?? process.env.HASNA_SKILLS_SELECTION_PROFILE ?? readManagedSkillPolicy()?.profileId ?? "default";
 }
-export interface ContextCommandOptions { selectionProfile?: string; cached?: boolean; autoReconcileSafe?: boolean; autoMigrateSessionPin?: boolean; backgroundRenewal?: boolean; renewalBudgetMs?: string; json?: boolean; stdin?: boolean; session?: string; restore?: boolean; maxChars?: string; maxSkills?: string; file?: string; minPromptPhraseWords?: string; inheritedBodies?: string }
+export interface ContextCommandOptions { selectionProfile?: string; cached?: boolean; cacheFirst?: boolean; pointerCacheFirst?: boolean; autoReconcileSafe?: boolean; autoMigrateSessionPin?: boolean; backgroundRenewal?: boolean; renewalBudgetMs?: string; json?: boolean; stdin?: boolean; session?: string; restore?: boolean; maxChars?: string; maxSkills?: string; file?: string; minPromptPhraseWords?: string; inheritedBodies?: string }
 export function contextResolverOptions(options: ContextCommandOptions): SelectionResolverOptions {
   if (!options.cached) return {};
   const configured = configuredSkillsApiUrl();
@@ -110,15 +110,17 @@ export function registerContextCommands(parent: Command): void {
     .description("Load an exact API-selected skill and return its version/digest receipt")
     .option("--selection-profile <id>", "Selection profile (separate from the credential --profile)")
     .option("--cached", "Use only an explicitly selected verified cache, at most 24 hours old", false)
+    .option("--cache-first", "Read the verified cache while it can serve this load, and the Skills service after that", false)
     .option("--session <id>", "Pin this load to a session")
     .option("--file <path>", "Read an exact bundle file (default: SKILL.md, README.md, then CLAUDE.md)")
     .option("--json", "Return content and provenance as JSON", false)
     .action(async (skill: string, options: ContextCommandOptions) => {
       try {
         const result = await loadSelectedSkill(skill, selectedProfileId(options.selectionProfile), {
-          ...contextResolverOptions(options), projectDir: process.cwd(), sessionId: options.session, file: options.file,
+          ...contextResolverOptions({ ...options, cached: options.cached || options.cacheFirst }), cacheFirst: options.cacheFirst && !options.cached,
+          projectDir: process.cwd(), sessionId: options.session, file: options.file,
         });
-        if (!result.sessionRecorded) process.stderr.write("Skills: this load was not recorded on its session, because the session store could not be updated here. The content below is complete.\n");
+        if (result.sessionRecorded === false) process.stderr.write("Skills: this load was not recorded on its session, because the session store could not be updated here. The content is complete, but compaction won't restore it and this session won't be told if the skill is retired.\n");
         await writeCliOutput(options.json ? JSON.stringify(result) : result.content);
       } catch (error) { reportContextError(error, options.json); }
     });
@@ -137,6 +139,7 @@ export function registerContextCommands(parent: Command): void {
     .option("--max-skills <count>", "Maximum loaded skills", "3")
     .option("--min-prompt-phrase-words <count>", "Offer an unnamed prompt match as a load command instead of injecting it unless a matched phrase has at least this many words")
     .option("--inherited-bodies <count>", "Skill bodies a subagent receives from its parent's loaded skills; the rest are offered as load commands")
+    .option("--pointer-cache-first", "Print load commands with --cache-first even when this context isn't read from the cache", false)
     .option("--json", "Return context and selection receipts as JSON", false)
     .action(async (prompt: string | undefined, options: ContextCommandOptions) => {
       // A managed hook's budget counts from here, before the first context attempt.
@@ -160,6 +163,7 @@ export function registerContextCommands(parent: Command): void {
         const resolverOptions = { ...contextResolverOptions(options), ...(options.maxChars === undefined ? {} : { maxChars: Number(options.maxChars) }), maxSkills: Number(options.maxSkills),
           ...(options.minPromptPhraseWords === undefined ? {} : { minPromptPhraseWords: Number(options.minPromptPhraseWords) }),
           ...(options.inheritedBodies === undefined ? {} : { inheritedBodies: Number(options.inheritedBodies) }),
+          ...(options.pointerCacheFirst ? { pointerCacheFirst: true } : {}),
           ...(renewalDeadline === undefined ? {} : { resolveAgainBefore: renewalDeadline }),
           ...(options.backgroundRenewal ? { onResolved: (resolved: ResolvedSelectionContext) => {
             pinned = resolved.session && resolved.sessionSnapshot ? { receipt: resolved.session, receiptSha256: resolved.sessionSnapshot.receiptSha256 } : null;

@@ -11,9 +11,9 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } 
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { packSkillBundle } from "./skill-bundle.js";
-import { activateSelectionProfile, cacheSelectionBundle, readSkillSessionSnapshot, selectionKey, sessionReceiptPath, writeSelectionJson } from "./selection-cache.js";
+import { activateSelectionProfile, SkillSelectionError, cacheSelectionBundle, readSkillSessionSnapshot, selectionKey, sessionReceiptPath, writeSelectionJson } from "./selection-cache.js";
 import { buildSkillContext } from "./skill-context.js";
-import { loadSelectedSkill } from "./selection-resolver.js";
+import { isUnwritableStore, loadSelectedSkill } from "./selection-resolver.js";
 import type { ResolvedSkillProfile, ResolvedSkillSelection } from "../types/skill-selection.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
@@ -173,7 +173,7 @@ test("weak prompt pointers are offered as load commands after every other omissi
   const designs = await f.select("push the new iPhone screens to the designs app for review");
   expect(designs.selections).toEqual([]);
   expect(designs.context).toBe("");
-  expect(designs.omitted.map(entry => [entry.slug, entry.reason, entry.loadCommand])).toEqual([["designs-watch", "partial-match", "skills load designs-watch@1.0.0 --selection-profile fleet --cached"]]);
+  expect(designs.omitted.map(entry => [entry.slug, entry.reason, entry.loadCommand])).toEqual([["designs-watch", "partial-match", "skills load designs-watch@1.0.0 --selection-profile fleet --cache-first"]]);
   // The engineering prompt still injects only its two phrases, and offers no domain skill.
   const engineering = await f.select(ENGINEERING);
   expect(engineering.selections.map(selection => selection.slug).sort()).toEqual(["hook-drift-repair", "station-network"]);
@@ -193,7 +193,7 @@ test("a minimum phrase length offers one-word matches, keeps names and phrases, 
   const oneWord = await select("the login page fails");
   expect(oneWord.selections).toEqual([]);
   expect(oneWord.omitted.map(entry => [entry.slug, entry.reason])).toEqual([["login", "weak-match"]]);
-  expect(oneWord.omitted[0]!.loadCommand).toBe("skills load login@1.0.0 --selection-profile fleet --cached");
+  expect(oneWord.omitted[0]!.loadCommand).toBe("skills load login@1.0.0 --selection-profile fleet --cache-first");
   expect(oneWord.context).not.toContain("Fixture body");
   // A phrase of two words reaches the score.
   expect((await select("look at the hook drift on this station")).selections.map(entry => entry.slug)).toEqual(["hook-drift-repair"]);
@@ -212,7 +212,7 @@ test("zero inherited bodies gives a subagent its parent's skills as load command
   expect(child.context).not.toContain("Fixture body");
   expect(child.omitted.map(entry => entry.slug).sort()).toEqual(["hook-drift-repair", "reconcile"]);
   // Each pointer names the child's own session, so it loads the pinned version and is recorded there.
-  expect(child.omitted.every(entry => entry.loadCommand === `skills load ${entry.slug}@1.0.0 --selection-profile fleet --cached --session parent:child-pointers`)).toBe(true);
+  expect(child.omitted.every(entry => entry.loadCommand === `skills load ${entry.slug}@1.0.0 --selection-profile fleet --cache-first --session parent:child-pointers`)).toBe(true);
   const receipt = readSkillSessionSnapshot("parent:child-pointers", { cacheDir: f.cacheDir }).receipt;
   expect(receipt.parent?.sessionId).toBe("parent");
   expect(receipt.loaded).toEqual([]);
@@ -286,4 +286,31 @@ test("a load whose session store can't be written still returns its content and 
     expect(result.sessionRecorded).toBe(false);
   } finally { for (const path of stores) chmodSync(path, 0o700); }
   expect(readSkillSessionSnapshot("readonly-store", { cacheDir: f.cacheDir }).receipt.loaded).toEqual(before);
+});
+
+test("a cache-first load reads the cache while the pin is fresh, and says so when neither the cache nor the service can serve it", async () => {
+  const f = await fixture([["one-skill", { keywords: ["alpha beta"] }]]);
+  await buildSkillContext({ profileId: "fleet", prompt: "", sessionId: "aging" }, f.options);
+  const calls: string[] = [];
+  const unreachable = new Proxy({}, { get: (_target, name) => () => { calls.push(String(name)); throw new SkillSelectionError("SKILLS_API_UNAVAILABLE", "unreachable"); } }) as never;
+  const options = { ...f.options, cached: false, cacheFirst: true, client: unreachable, sessionId: "aging" };
+  const fresh = await loadSelectedSkill("one-skill@1.0.0", "fleet", options);
+  expect(fresh.receipt.source).toBe("verified-cache");
+  // A cache bound to another authority is an identity failure: it never falls back to the service.
+  await expect(loadSelectedSkill("one-skill@1.0.0", "fleet", { ...options, authority: "https://other.example.com/api/v1" })).rejects.toBeInstanceOf(SkillSelectionError);
+  expect(calls).toEqual([]);
+  const path = sessionReceiptPath("aging", { cacheDir: f.cacheDir });
+  const receipt = readSkillSessionSnapshot("aging", { cacheDir: f.cacheDir }).receipt;
+  writeSelectionJson(path, { ...receipt, verifiedAt: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString() });
+  await expect(loadSelectedSkill("one-skill@1.0.0", "fleet", options)).rejects.toMatchObject({ code: "CACHED_PROFILE_EXPIRED", message: expect.stringContaining("can't be reached") });
+  expect(calls.length).toBeGreaterThan(0);
+});
+
+test("a load names the session store as unwritable for a sandbox and for a full disk, and for nothing else", () => {
+  for (const code of ["EACCES", "EPERM", "EROFS", "ENOSPC", "EDQUOT"]) {
+    expect(isUnwritableStore(Object.assign(new Error("store"), { code }))).toBe(true);
+    expect(isUnwritableStore(Object.assign(new Error("wrapped"), { cause: Object.assign(new Error("store"), { code }) }))).toBe(true);
+  }
+  expect(isUnwritableStore(Object.assign(new Error("store"), { code: "EIO" }))).toBe(false);
+  expect(isUnwritableStore(new SkillSelectionError("SESSION_WRITE_LOCKED", "damaged"))).toBe(false);
 });

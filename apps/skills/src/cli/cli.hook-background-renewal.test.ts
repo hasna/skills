@@ -206,7 +206,7 @@ test("security control: an expired pin whose authority is down delivers no paylo
   } finally { api.close(); }
 }, 60_000);
 
-test("a prompt and eight subagents starting together all get context without write-lock refusals", async () => {
+test("a prompt and eight subagents starting together all answer without write-lock refusals", async () => {
   const api = authority(0, { resolve: 0, bundle: 0 });
   try {
     const s = await station(api, 0, 0);

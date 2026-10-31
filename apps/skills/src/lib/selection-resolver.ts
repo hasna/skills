@@ -16,6 +16,8 @@ import {
 export interface SelectionResolverOptions extends SelectionCacheOptions {
   client?: ProfileClient;
   cached?: boolean;
+  /** Read the verified cache while it can serve a load, and the service after that. */
+  cacheFirst?: boolean;
   /** Explicit cached authority binding, checked even when no credential is read. */
   authority?: string;
   workspaceId?: string;
@@ -178,29 +180,62 @@ function unknownNameRefusal(slug: string, profile: ResolvedSkillProfile): string
   return `Skill '${slug}' is not selected by this Skills profile or project lock.${hint} `
     + `Read the accepted names with 'skills search <term>' or 'skills list --all --json'; accept one with 'skills pin <name>'. ${ACCEPTED_FORM}`;
 }
+/** Refusals that mean the verified cache can't serve a read, not that the read is wrong. Identity and integrity failures never fall back. */
+export const RECOVERABLE_CACHE_ERRORS: ReadonlySet<string> = new Set(["CACHED_PROFILE_EXPIRED", "CACHED_PROFILE_MISSING", "CACHED_BUNDLE_MISSING"]);
+
+/**
+ * Load one selected skill. With cacheFirst it reads the verified cache while that
+ * can serve this load, which works with no network, and the Skills service after
+ * that, as the managed hook does. A subagent inherits its parent's verifiedAt and
+ * gets no renewal of its own, so a pointer it holds outlives the cache's limit.
+ */
 export async function loadSelectedSkill(spec: string, profileId: string, options: SelectionResolverOptions & { file?: string } = {}) {
-  const context = await resolveSelectionContext(profileId, options);
+  if (!options.cacheFirst) return readSelectedSkill(spec, profileId, options);
+  const { cacheFirst: _cacheFirst, cached: _cached, authority, ...service } = options;
+  try {
+    return await readSelectedSkill(spec, profileId, { ...service, authority, cached: true });
+  } catch (cacheError) {
+    if (!(cacheError instanceof SkillSelectionError) || !RECOVERABLE_CACHE_ERRORS.has(cacheError.code)) throw cacheError;
+    try {
+      return await readSelectedSkill(spec, profileId, service);
+    } catch (serviceError) {
+      if (!(serviceError instanceof SkillSelectionError) || serviceError.code !== "SKILLS_API_UNAVAILABLE") throw serviceError;
+      throw new SkillSelectionError(cacheError.code, "The verified cache can't serve this load and the Skills service can't be reached from here, so it has to run where the network is available. `skills sync` doesn't renew a session's pin.");
+    }
+  }
+}
+async function readSelectedSkill(spec: string, profileId: string, options: SelectionResolverOptions & { file?: string }) {
+  const context = await resolveSelectionContext(profileId, options).catch((error: unknown) => {
+    // `skills sync` doesn't touch a session's pin, so the general remedy can't help here.
+    if (options.cached && options.sessionId && error instanceof SkillSelectionError && error.code === "CACHED_PROFILE_EXPIRED" && readSkillSessionSnapshotIfExists(options.sessionId, options)) {
+      throw new SkillSelectionError("CACHED_PROFILE_EXPIRED", "This session's Skills pin was verified too long ago to read from the cache. Run the same command without --cached: that keeps the pin but needs the network and sign-in. `skills sync` doesn't renew a session's pin.");
+    }
+    throw error;
+  });
   const selection = exactProfileSelection(spec, context.receipt.profile);
   const entries = await readSelectedEntries(selection, context, options);
   const { file, content } = readSelectedDocument(entries, options.file);
   const receipt = { ...selection, file, source: options.cached ? "verified-cache" : "api", verifiedAt: context.receipt.verifiedAt };
-  const sessionRecorded = options.sessionId ? recordSessionLoad(options.sessionId, selection, context, options) : true;
-  return { content, selection, receipt, sessionRecorded };
+  const sessionRecorded = options.sessionId ? recordSessionLoad(options.sessionId, selection, context, options) : undefined;
+  return { content, selection, receipt, ...(sessionRecorded === undefined ? {} : { sessionRecorded }) };
 }
 
 /** How many times one load re-reads a receipt that other loads changed under the same pin. */
 const SESSION_LOAD_RECORD_ATTEMPTS = 8;
-const UNWRITABLE_CODES = new Set(["EACCES", "EPERM", "EROFS"]);
-function isUnwritableStore(error: unknown): boolean {
+const UNWRITABLE_CODES = new Set(["EACCES", "EPERM", "EROFS", "ENOSPC", "EDQUOT"]);
+/** A session store that this process can't write: a sandbox, or a full disk or quota. */
+export function isUnwritableStore(error: unknown): boolean {
   for (let cause = error as any, depth = 0; cause && depth < 4; cause = cause.cause, depth++) if (UNWRITABLE_CODES.has(cause.code)) return true;
   return false;
 }
 /**
  * Record a load on its session. The content is already read and verified for
- * this pin, so bookkeeping that can't finish doesn't discard it. Parallel loads
- * under the same pin merge, a store this process can't write (a sandbox) and a
- * lock held past its wait leave the load unrecorded, and a pin that changed
- * still refuses, because the content no longer belongs to the session's pin.
+ * this pin, so a record that can't be written doesn't discard it. Parallel loads
+ * under the same pin merge. A store this process can't write (a sandbox) and a
+ * lock held past its wait leave the load unrecorded and return false, because
+ * compaction restore and retirement notices read this record, and the caller
+ * has to say so. Every path refuses a pin that changed, because the content no
+ * longer belongs to the session's pin.
  */
 function recordSessionLoad(sessionId: string, selection: ResolvedSkillSelection, context: ResolvedSelectionContext, options: SelectionResolverOptions): boolean {
   const key = selectionKey(selection);
@@ -215,12 +250,15 @@ function recordSessionLoad(sessionId: string, selection: ResolvedSkillSelection,
       writeSkillSession(session, { current: snapshot, parent: context.parentSnapshot }, options);
       return true;
     } catch (error) {
-      if (isUnwritableStore(error) || (error instanceof SkillSelectionError && error.code === "SESSION_WRITE_BUSY")) return false;
-      if (!(error instanceof SkillSelectionError) || error.code !== "SESSION_CONTEXT_CONFLICT") throw error;
+      const blocked = isUnwritableStore(error) || (error instanceof SkillSelectionError && error.code === "SESSION_WRITE_BUSY");
+      if (!blocked && !(error instanceof SkillSelectionError && error.code === "SESSION_CONTEXT_CONFLICT")) throw error;
       const current = readSkillSessionSnapshotIfExists(sessionId, options);
-      if (!current || !isDeepStrictEqual(current.receipt.profile, context.receipt.profile)) throw error;
+      if (current ? !isDeepStrictEqual(current.receipt.profile, context.receipt.profile) : !blocked) {
+        throw new SkillSelectionError("SESSION_CONTEXT_CONFLICT", "The Skills session's pin changed while this skill was loading, so its content no longer belongs to that pin. Load it again.");
+      }
+      if (blocked) return false;
       // The write merges this load with whatever the current receipt has loaded.
-      snapshot = skillSessionSnapshotBinding(current);
+      snapshot = skillSessionSnapshotBinding(current!);
     }
   }
   return false;

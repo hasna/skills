@@ -32,6 +32,8 @@ export interface SkillContextOptions extends SelectionResolverOptions {
    * affected. Unset, every counted match may be injected.
    */
   minPromptPhraseWords?: number;
+  /** Print load pointers with --cache-first even though this context didn't come from the cache: a managed hook that fell back to the service. */
+  pointerCacheFirst?: boolean;
   /** Bodies a child session receives from its parent's loaded skills; the rest are offered. Unset, HISTORY_BODY_LIMITS applies. */
   inheritedBodies?: number;
   /** Called with the resolved pin before any payload is read (again if a new child is resolved again); metadata only. */
@@ -161,12 +163,12 @@ async function buildSkillContextOnce(input: SkillContextInput, options: SkillCon
     historyOffered.set(candidate.reason, count + 1);
     return count < HISTORY_CANDIDATE_LIMIT;
   });
-  // A pointer loads what this session is pinned to, from the same place this
-  // context came from. Without the session, a profile that moved on refuses the
-  // pinned version. Without --cached, a sandbox with no network can't run it,
-  // though the hook that printed it read the same bytes from the verified cache.
+  // A pointer loads what this session is pinned to. Without the session, a profile
+  // that moved on refuses the pinned version. --cache-first lets a sandbox with no
+  // network run it from the verified cache the hook read, and lets a pointer that
+  // outlives the cache's limit, as a subagent's can, still load from the service.
   const pointerSession = sessionId && /^[A-Za-z0-9._:@][A-Za-z0-9._:@-]{0,255}$/.test(sessionId) ? ` --session ${sessionId}` : "";
-  const pointerCache = options.cached ? " --cached" : "";
+  const pointerCache = options.cached || options.pointerCacheFirst ? " --cache-first" : "";
   const loadCommandFor = (selection: ResolvedSkillSelection) => `skills load ${selection.slug}@${selection.version} --selection-profile ${profile.profileId}${pointerCache}${pointerSession}`;
   const delivered: Array<{ key: string; section: string }> = [];
   let selections: ContextSelectionReceipt[] = [];

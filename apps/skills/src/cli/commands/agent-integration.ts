@@ -1,3 +1,4 @@
+import { RECOVERABLE_CACHE_ERRORS } from "../../lib/selection-resolver.js";
 import { disableClaudeHooks } from "../../lib/claude-hook-disable.js";
 import { openCodeContextDelivery } from "../../lib/opencode-hook-protocol.js";
 import { captureSumiSettings } from "../../lib/sumi-settings-witness.js";
@@ -34,7 +35,7 @@ import { selfSpawnCommand } from "../../lib/self-spawn.js";
 import { sessionPinMigrationEnabled } from "../../lib/config.js";
 import { captureClaudeInstallerRequest, safeClaudeInstallerCaptureError } from "./claude-installer-capture.js";
 
-const RECOVERABLE_CONTEXT_CACHE_ERRORS = new Set(["CACHED_PROFILE_EXPIRED", "CACHED_PROFILE_MISSING", "CACHED_BUNDLE_MISSING"]);
+const RECOVERABLE_CONTEXT_CACHE_ERRORS = RECOVERABLE_CACHE_ERRORS;
 /**
  * Characters one managed hook's additionalContext carries at most (owner
  * request 2026-10-30: one prompt received 10-60 KB of skill bodies). The cap
@@ -153,6 +154,9 @@ async function contextForHook(agent: IntegrationAgent, input: unknown, profileId
   const limits = managedHookContextLimits();
   const args = ["context", "--stdin", "--json", "--selection-profile", profileId, "--max-chars", String(limits.bodyChars), "--max-skills", String(limits.maxSkills), ...managedHookSelectionArgs(agent)];
   if (cached) args.push("--cached", "--auto-reconcile-safe");
+  // Falling back from the cache for this context doesn't change what a pointer
+  // should do when the agent runs it, possibly in a sandbox with no network.
+  else args.push("--pointer-cache-first");
   // Default for every agent's managed hook: a refused renewal of the same
   // profile migrates the pin and names retired loaded skills once. Operators
   // keep the refusal with `skills config set sessionPinMigration off --global`.

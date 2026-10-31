@@ -525,7 +525,9 @@ for (const [savedProfile, configuredProfile] of [["fleet", "default"], ["default
       const offered = await f.a.hook("claude", "SubagentStart", { agent_id: "offered-child" });
       expect(offered.hookSpecificOutput.additionalContext).not.toContain(f.versions[0]!.skillMd);
       expect(offered.hookSpecificOutput.additionalContext).toContain(`Additional selected skill review-code@${f.versions[0]!.version}:`);
-      // A child that asks for it by name loads it at the parent's pin.
+      // A child that asks for it by name loads it at the parent's pin. Only
+      // OpenCode's adapter sends a prompt at a subagent's start; Claude Code's
+      // real payload has the shape of offered-child above.
       const child = await f.a.hook("claude", "SubagentStart", { agent_id: "mixed-child", prompt: "$review-code" });
       expect(child.hookSpecificOutput.additionalContext).toContain(f.versions[0]!.skillMd);
       expectSamePin();
@@ -1444,7 +1446,7 @@ test("a subagent's pointer loads the parent's pinned version after the profile m
     await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[1]!.file, "--if-match", created.revision, "--json"]);
     await f.a.ok(["sync", "--selection-profile", "engineering", "--json"]);
     const started = await f.a.hook("claude", "SubagentStart", { session_id: "pin-parent", agent_id: "pin-child" });
-    const pointer = /skills load (review-code@1\.0\.0 --selection-profile engineering --cached --session pin-parent:pin-child)/.exec(started.hookSpecificOutput.additionalContext)?.[1];
+    const pointer = /skills load (review-code@1\.0\.0 --selection-profile engineering --cache-first --session pin-parent:pin-child)/.exec(started.hookSpecificOutput.additionalContext)?.[1];
     expect(pointer).toBeDefined();
     const sessionsBefore = join(f.a.data, "selection-cache", "sessions");
     expect(readdirSync(sessionsBefore).map(name => json(join(sessionsBefore, name))).find(receipt => receipt.sessionId === "pin-parent:pin-child")!.loaded).toEqual([]);
@@ -1457,6 +1459,29 @@ test("a subagent's pointer loads the parent's pinned version after the profile m
     // Control: without the session the same version is refused once the profile has moved on.
     const unpinned = await f.a.run(["load", "review-code@1.0.0", "--selection-profile", "engineering", "--json"]);
     expect(unpinned.exitCode).toBe(1);
+    // A pin too old for the cache: the printed command still loads the pinned version, from
+    // the service. Only an explicit --cached refuses, and it names the step that works.
+    const childPath = readdirSync(sessions).map(name => join(sessions, name)).find(path => json(path).sessionId === "pin-parent:pin-child")!;
+    const aged = json(childPath); aged.verifiedAt = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(); put(childPath, JSON.stringify(aged));
+    const served = await f.a.ok(["load", ...pointer!.split(" "), "--json"]);
+    expect(served.content).toBe(f.versions[0]!.skillMd);
+    expect(served.receipt.source).toBe("api");
+    const strict = await f.a.run(["load", ...pointer!.split(" ").map(part => part === "--cache-first" ? "--cached" : part), "--json"]);
+    expect(strict.exitCode).toBe(1);
+    expect(strict.stdout).toContain("without --cached");
+  } finally { await f.close(); }
+});
+
+test("a hook that fell back from the cache still prints a cache-first pointer, and a direct call prints a plain one", async () => {
+  const f = await fixture();
+  try {
+    await f.a.install();
+    await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+    // Nothing is synced, so this hook's cached read has no profile and it falls back to the service.
+    const hooked = await f.a.hook("claude", "UserPromptSubmit", { session_id: "no-cache", prompt: "review again" });
+    expect(hooked.hookSpecificOutput.additionalContext).toContain("skills load review-code@1.0.0 --selection-profile engineering --cache-first --session no-cache");
+    const direct = await f.a.ok(["context", "review again", "--selection-profile", "engineering", "--min-prompt-phrase-words", "2", "--json"]);
+    expect(direct.omitted.map((entry: { loadCommand: string }) => entry.loadCommand)).toEqual(["skills load review-code@1.0.0 --selection-profile engineering"]);
   } finally { await f.close(); }
 });
 
@@ -1486,7 +1511,8 @@ test("a subagent's own <parent>:<agent> pin migrates through SubagentStart witho
     const pin = (await legacyExpiredPinsAfterUpgrade(f, ["parent-session"]))[0]!;
     // Recreate the parent's original fresh pin, start the child from it, then expire both.
     put(pin.receiptPath, JSON.stringify({ ...pin.old, verifiedAt: new Date().toISOString() }));
-    // A subagent is offered its parent's skills, so this child loads its own by name.
+    // A subagent is offered its parent's skills, so this child loads its own by
+    // name, through the prompt that only OpenCode's adapter sends at a start.
     await f.a.hook("claude", "SubagentStart", { agent_id: "child-agent", prompt: "$review-code" });
     const sessions = join(f.a.data, "selection-cache", "sessions");
     const childPath = readdirSync(sessions).map(name => join(sessions, name)).find(path => json(path).sessionId === "parent-session:child-agent")!;

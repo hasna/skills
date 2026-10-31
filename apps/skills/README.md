@@ -1027,18 +1027,34 @@ skill", a two-word keyword or `triggers.always` to arrive as a body.
 `SKILLS_HOOK_PROMPT_MIN_PHRASE_WORDS` can raise that length, never lower it.
 Sumi's plugin and Cursor's prompt hook discard a prompt call's output, so a
 pointer could not reach their models, and they keep the plain selection. Each
-`skills load` command a session is offered names that session and reads from the
-same verified cache the hook used, so it loads the pinned version, works in a
-sandbox with no network, and is recorded on the session. Where the session store
-can't be written, a load still returns its content and says it wasn't recorded.
-An agent or subagent with no way to run a command can't use a pointer.
+`skills load` command a session is offered names that session and carries
+`--cache-first`, so it loads the pinned version from the verified cache the hook
+used, which works in a sandbox with no network. Once the cache can't serve it it
+loads from the Skills service. That happens when the pin was last verified over
+24 hours ago, which is common for a subagent, since it inherits its parent's time
+and no hook renews its own pin. With no network as well, the load refuses and says
+so, and `skills sync` doesn't renew a session's pin. Like a body the hook delivers
+from the cache, a cached load doesn't ask the service whether the selection is
+still current.
+
+A load is recorded on the session the command names, whoever runs it, so running
+another session's command marks that session as having loaded the skill, and its
+later prompts offer it no pointer. Where the session store can't be written or is
+full, as in a Codex sandbox, a load still returns its content and says it wasn't
+recorded: compaction won't restore that skill and the session won't be told if
+it's retired. An agent or subagent with no way to run a command can't use a
+pointer.
+
 A session retains its loaded selections; compaction restores the two most
 recently loaded instructions, followed by `skills load` commands for the next
 most recent. A subagent started by a managed hook is offered its parent's
-loaded skills as `skills load` commands and gets a body only for one it names,
-matches by a phrase, or that `triggers.always` or a path selects; a direct
-`skills context` call, and Sumi's and Cursor's hooks, give it its parent's most
-recent one as a body. A
+loaded skills as `skills load` commands, and gets a body at its start only for a
+skill that `triggers.always` or a path selects. Claude Code's and Codex's
+subagent start carries no prompt, so naming a skill in a subagent's brief doesn't
+deliver its body there. OpenCode's adapter does pass the subagent's first prompt,
+so there it also gets a body for a skill it names or matches by a phrase. A
+direct `skills context` call, and Sumi's and Cursor's hooks, give it its parent's
+most recent one as a body. A
 read-only prompt does not rewrite the session receipt or take its write lock
 (a damaged lock still refuses), and receipt writers wait up to two seconds for
 another live writer's lock before refusing; a lock another writer is
