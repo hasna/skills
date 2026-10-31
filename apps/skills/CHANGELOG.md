@@ -3,9 +3,10 @@
 ## Unreleased
 
 - Managed prompt hooks inject an unnamed prompt match only for a phrase of two or more words, and offer anything weaker as a `skills load` command. A body no longer arrives on one matched word in a long prompt, or on several such words added together. A profile with a one-word keyword such as `keywords: ["pdf"]` installed through `skills hook install` now gets a pointer on "make a pdf"; to get the body, use `$pdf`, "the pdf skill", a two-word keyword or `triggers.always`. `SKILLS_HOOK_PROMPT_MIN_PHRASE_WORDS` can raise the length and never lower it. `skills context` called directly behaves as before unless given `--min-prompt-phrase-words`.
-- A subagent started by a managed hook is offered its parent's loaded skills as `skills load` commands instead of receiving the most recent one's body, because its start carries no prompt to match. It still gets a body for a skill it names or matches by a phrase. Its pin inheritance doesn't change. `--inherited-bodies` sets this for a direct `skills context` call.
-- Sumi's managed hook keeps the earlier selection for now. Its plugin discards its prompt admission output, so a pointer could not reach the model.
-- Each `skills load` command offered within a session now names that session with `--session`, so it loads the version the session is pinned to, even after the profile moved on, and the load is recorded on that session.
+- A subagent started by a managed hook is offered its parent's loaded skills as `skills load` commands instead of receiving the most recent one's body, because its start carries no prompt to match. It still gets a body for a skill it names, matches by a phrase, or that `triggers.always` or a path selects. Its pin inheritance doesn't change. `--inherited-bodies` sets this for a direct `skills context` call.
+- Sumi's and Cursor's managed hooks keep the earlier selection for now. Each discards a prompt call's output, so a pointer could not reach the model.
+- Each `skills load` command offered within a session now names that session with `--session`, and adds `--cached` when the context came from the verified cache. It loads the version the session is pinned to even after the profile moved on, works in a sandbox with no network, and the load is recorded on that session.
+- `skills load --session` no longer throws away content it has read when its record can't be written. Parallel loads under one pin all succeed and are all recorded. A session store it can't write, or a lock held past its wait, leaves the load unrecorded, with one line on stderr and `sessionRecorded: false` in `--json`. A pin that changed still refuses.
 
 ## 0.10.88
 

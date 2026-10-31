@@ -65,10 +65,11 @@ test("the hook's phrase length defaults to two words and an environment override
   }
 });
 
-test("Sumi's hook passes no selection flags, because its plugin discards the admission output a pointer would need", () => {
+test("Sumi's and Cursor's hooks pass no selection flags, because a prompt call's output can't reach their models", () => {
   delete process.env.SKILLS_HOOK_PROMPT_MIN_PHRASE_WORDS;
   expect(managedHookSelectionArgs("sumi")).toEqual([]);
-  for (const agent of ["claude", "codex", "opencode", "cursor"] as const) {
+  expect(managedHookSelectionArgs("cursor")).toEqual([]);
+  for (const agent of ["claude", "codex", "opencode"] as const) {
     expect(managedHookSelectionArgs(agent)).toEqual(["--min-prompt-phrase-words", "2", "--inherited-bodies", "0"]);
   }
 });

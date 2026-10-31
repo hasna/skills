@@ -1,4 +1,5 @@
 /** One resolution path for API-selected content. Local drafts cannot shadow a published selection. */
+import { isDeepStrictEqual } from "node:util";
 import { createProfileClient, type ProfileClient } from "./profile-client.js";
 import type { ResolvedSkillProfile, ResolvedSkillSelection } from "../types/skill-selection.js";
 import type { SkillBundleEntry } from "./skill-bundle.js";
@@ -183,15 +184,46 @@ export async function loadSelectedSkill(spec: string, profileId: string, options
   const entries = await readSelectedEntries(selection, context, options);
   const { file, content } = readSelectedDocument(entries, options.file);
   const receipt = { ...selection, file, source: options.cached ? "verified-cache" : "api", verifiedAt: context.receipt.verifiedAt };
-  if (options.sessionId) {
-    const session: SkillSessionReceipt = {
-      ...context.receipt, sessionId: options.sessionId,
-      loaded: [...new Set([...(context.session?.loaded ?? []), selectionKey(selection)])],
-      ...(context.projectLock ? { projectLock: context.projectLock } : {}),
-    };
-    writeSkillSession(session, { current: context.sessionSnapshot, parent: context.parentSnapshot }, options);
+  const sessionRecorded = options.sessionId ? recordSessionLoad(options.sessionId, selection, context, options) : true;
+  return { content, selection, receipt, sessionRecorded };
+}
+
+/** How many times one load re-reads a receipt that other loads changed under the same pin. */
+const SESSION_LOAD_RECORD_ATTEMPTS = 8;
+const UNWRITABLE_CODES = new Set(["EACCES", "EPERM", "EROFS"]);
+function isUnwritableStore(error: unknown): boolean {
+  for (let cause = error as any, depth = 0; cause && depth < 4; cause = cause.cause, depth++) if (UNWRITABLE_CODES.has(cause.code)) return true;
+  return false;
+}
+/**
+ * Record a load on its session. The content is already read and verified for
+ * this pin, so bookkeeping that can't finish doesn't discard it. Parallel loads
+ * under the same pin merge, a store this process can't write (a sandbox) and a
+ * lock held past its wait leave the load unrecorded, and a pin that changed
+ * still refuses, because the content no longer belongs to the session's pin.
+ */
+function recordSessionLoad(sessionId: string, selection: ResolvedSkillSelection, context: ResolvedSelectionContext, options: SelectionResolverOptions): boolean {
+  const key = selectionKey(selection);
+  let snapshot = context.sessionSnapshot;
+  for (let attempt = 0; attempt < SESSION_LOAD_RECORD_ATTEMPTS; attempt++) {
+    try {
+      const session: SkillSessionReceipt = {
+        ...context.receipt, sessionId,
+        loaded: [...new Set([...(context.session?.loaded ?? []), key])],
+        ...(context.projectLock ? { projectLock: context.projectLock } : {}),
+      };
+      writeSkillSession(session, { current: snapshot, parent: context.parentSnapshot }, options);
+      return true;
+    } catch (error) {
+      if (isUnwritableStore(error) || (error instanceof SkillSelectionError && error.code === "SESSION_WRITE_BUSY")) return false;
+      if (!(error instanceof SkillSelectionError) || error.code !== "SESSION_CONTEXT_CONFLICT") throw error;
+      const current = readSkillSessionSnapshotIfExists(sessionId, options);
+      if (!current || !isDeepStrictEqual(current.receipt.profile, context.receipt.profile)) throw error;
+      // The write merges this load with whatever the current receipt has loaded.
+      snapshot = skillSessionSnapshotBinding(current);
+    }
   }
-  return { content, selection, receipt };
+  return false;
 }
 
 /** Pin the resolved profile metadata without copying a definition into the project. */

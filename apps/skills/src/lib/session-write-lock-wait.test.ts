@@ -88,7 +88,7 @@ test("after a lost lock race only bodies the receipt already records are deliver
   // Nothing new is delivered unrecorded: every delivered key is in the receipt's loaded set.
   expect(result.selections).toEqual([]);
   expect(result.context).toBe(SESSION_WRITE_BUSY_NOTICE);
-  expect(result.omitted.map(entry => [entry.slug, entry.reason, entry.loadCommand])).toEqual([["beta-skill", "write-busy", "skills load beta-skill@1.0.0 --selection-profile fleet --session parent"]]);
+  expect(result.omitted.map(entry => [entry.slug, entry.reason, entry.loadCommand])).toEqual([["beta-skill", "write-busy", "skills load beta-skill@1.0.0 --selection-profile fleet --cached --session parent"]]);
   expect(inspectSkillSession("parent", f.options).selections.filter(selection => selection.loaded).map(selection => selection.slug)).toEqual(["alpha-skill"]);
   // An explicit re-delivery of a recorded skill is still delivered beside the new one.
   const mixed = await buildSkillContext({ profileId: "fleet", sessionId: "parent", prompt: "use the beta skill with $alpha-skill" }, f.options);

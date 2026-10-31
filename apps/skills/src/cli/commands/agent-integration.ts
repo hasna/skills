@@ -87,13 +87,13 @@ export function managedHookPromptMinPhraseWords(): number {
 
 /**
  * The selection flags one agent's managed hook passes to its context child.
- * Sumi's plugin discards the output of its prompt admission call and asks for
- * context with an empty prompt, so a pointer could never reach its model: it
- * would turn a delivered body into nothing. Sumi keeps the plain selection until
- * its plugin can carry pointers.
+ * Sumi's plugin and Cursor's prompt hook both discard the output of a prompt
+ * call and only deliver what a later call restores, so a pointer could never
+ * reach their models: it would turn a delivered body into nothing. They keep the
+ * plain selection until they can carry pointers.
  */
 export function managedHookSelectionArgs(agent: IntegrationAgent): string[] {
-  if (agent === "sumi") return [];
+  if (agent === "sumi" || agent === "cursor") return [];
   return ["--min-prompt-phrase-words", String(managedHookPromptMinPhraseWords()), "--inherited-bodies", String(MANAGED_HOOK_INHERITED_BODIES)];
 }
 

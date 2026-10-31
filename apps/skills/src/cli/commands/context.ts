@@ -118,6 +118,7 @@ export function registerContextCommands(parent: Command): void {
         const result = await loadSelectedSkill(skill, selectedProfileId(options.selectionProfile), {
           ...contextResolverOptions(options), projectDir: process.cwd(), sessionId: options.session, file: options.file,
         });
+        if (!result.sessionRecorded) process.stderr.write("Skills: this load was not recorded on its session, because the session store could not be updated here. The content below is complete.\n");
         await writeCliOutput(options.json ? JSON.stringify(result) : result.content);
       } catch (error) { reportContextError(error, options.json); }
     });

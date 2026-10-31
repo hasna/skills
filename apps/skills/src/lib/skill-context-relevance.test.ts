@@ -7,12 +7,13 @@
  * "named" from anywhere in a prompt.
  */
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { packSkillBundle } from "./skill-bundle.js";
 import { activateSelectionProfile, cacheSelectionBundle, readSkillSessionSnapshot, selectionKey, sessionReceiptPath, writeSelectionJson } from "./selection-cache.js";
 import { buildSkillContext } from "./skill-context.js";
+import { loadSelectedSkill } from "./selection-resolver.js";
 import type { ResolvedSkillProfile, ResolvedSkillSelection } from "../types/skill-selection.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
@@ -172,7 +173,7 @@ test("weak prompt pointers are offered as load commands after every other omissi
   const designs = await f.select("push the new iPhone screens to the designs app for review");
   expect(designs.selections).toEqual([]);
   expect(designs.context).toBe("");
-  expect(designs.omitted.map(entry => [entry.slug, entry.reason, entry.loadCommand])).toEqual([["designs-watch", "partial-match", "skills load designs-watch@1.0.0 --selection-profile fleet"]]);
+  expect(designs.omitted.map(entry => [entry.slug, entry.reason, entry.loadCommand])).toEqual([["designs-watch", "partial-match", "skills load designs-watch@1.0.0 --selection-profile fleet --cached"]]);
   // The engineering prompt still injects only its two phrases, and offers no domain skill.
   const engineering = await f.select(ENGINEERING);
   expect(engineering.selections.map(selection => selection.slug).sort()).toEqual(["hook-drift-repair", "station-network"]);
@@ -192,7 +193,7 @@ test("a minimum phrase length offers one-word matches, keeps names and phrases, 
   const oneWord = await select("the login page fails");
   expect(oneWord.selections).toEqual([]);
   expect(oneWord.omitted.map(entry => [entry.slug, entry.reason])).toEqual([["login", "weak-match"]]);
-  expect(oneWord.omitted[0]!.loadCommand).toBe("skills load login@1.0.0 --selection-profile fleet");
+  expect(oneWord.omitted[0]!.loadCommand).toBe("skills load login@1.0.0 --selection-profile fleet --cached");
   expect(oneWord.context).not.toContain("Fixture body");
   // A phrase of two words reaches the score.
   expect((await select("look at the hook drift on this station")).selections.map(entry => entry.slug)).toEqual(["hook-drift-repair"]);
@@ -211,7 +212,7 @@ test("zero inherited bodies gives a subagent its parent's skills as load command
   expect(child.context).not.toContain("Fixture body");
   expect(child.omitted.map(entry => entry.slug).sort()).toEqual(["hook-drift-repair", "reconcile"]);
   // Each pointer names the child's own session, so it loads the pinned version and is recorded there.
-  expect(child.omitted.every(entry => entry.loadCommand === `skills load ${entry.slug}@1.0.0 --selection-profile fleet --session parent:child-pointers`)).toBe(true);
+  expect(child.omitted.every(entry => entry.loadCommand === `skills load ${entry.slug}@1.0.0 --selection-profile fleet --cached --session parent:child-pointers`)).toBe(true);
   const receipt = readSkillSessionSnapshot("parent:child-pointers", { cacheDir: f.cacheDir }).receipt;
   expect(receipt.parent?.sessionId).toBe("parent");
   expect(receipt.loaded).toEqual([]);
@@ -256,4 +257,33 @@ test("several one-word matches don't add up to a phrase under the minimum phrase
   const managed = await buildSkillContext({ profileId: "fleet", prompt: text }, { ...f.options, minPromptPhraseWords: 2 });
   expect(managed.selections).toEqual([]);
   expect(managed.omitted.map(entry => [entry.slug, entry.reason])).toEqual([["effect-and-rollback", "weak-match"]]);
+});
+
+test("a held-back one-word total at a phrase's score doesn't end the tie, so no slug order picks a body", async () => {
+  const f = await fixture([["aa-phrase", { keywords: ["sigma tau"] }], ["bb-words", { keywords: ["alpha1", "alpha2"] }], ["cc-phrase", { keywords: ["kappa lambda"] }], ["dd-phrase", { keywords: ["mu nu"] }]]);
+  const result = await buildSkillContext({ profileId: "fleet", prompt: "sigma tau alpha1 alpha2 kappa lambda mu nu" }, { ...f.options, minPromptPhraseWords: 2, maxSkills: 2 });
+  expect(result.selections).toEqual([]);
+  expect(result.omitted.map(entry => [entry.slug, entry.reason])).toEqual([["aa-phrase", "ambiguous-match"], ["bb-words", "weak-match"], ["cc-phrase", "ambiguous-match"], ["dd-phrase", "ambiguous-match"]]);
+});
+
+test("parallel loads under one pin all return their content and are all recorded", async () => {
+  const f = await fixture([["one-skill", { keywords: ["alpha beta"] }], ["two-skill", { keywords: ["gamma delta"] }], ["three-skill", { keywords: ["epsilon zeta"] }], ["four-skill", { keywords: ["eta theta"] }]]);
+  await buildSkillContext({ profileId: "fleet", prompt: "", sessionId: "parallel" }, f.options);
+  const results = await Promise.all(["one-skill", "two-skill", "three-skill", "four-skill"].map(slug => loadSelectedSkill(`${slug}@1.0.0`, "fleet", { ...f.options, sessionId: "parallel" })));
+  expect(results.every(result => result.sessionRecorded && result.content.includes("Fixture body"))).toBe(true);
+  expect(readSkillSessionSnapshot("parallel", { cacheDir: f.cacheDir }).receipt.loaded).toHaveLength(4);
+});
+
+test("a load whose session store can't be written still returns its content and says it wasn't recorded", async () => {
+  const f = await fixture([["one-skill", { keywords: ["alpha beta"] }]]);
+  await buildSkillContext({ profileId: "fleet", prompt: "", sessionId: "readonly-store" }, f.options);
+  const before = readSkillSessionSnapshot("readonly-store", { cacheDir: f.cacheDir }).receipt.loaded;
+  const stores = [join(f.cacheDir, "sessions"), join(f.cacheDir, "session-locks")].filter(path => existsSync(path));
+  for (const path of stores) chmodSync(path, 0o500);
+  try {
+    const result = await loadSelectedSkill("one-skill@1.0.0", "fleet", { ...f.options, sessionId: "readonly-store" });
+    expect(result.content).toContain("Fixture body");
+    expect(result.sessionRecorded).toBe(false);
+  } finally { for (const path of stores) chmodSync(path, 0o700); }
+  expect(readSkillSessionSnapshot("readonly-store", { cacheDir: f.cacheDir }).receipt.loaded).toEqual(before);
 });

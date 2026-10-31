@@ -1444,7 +1444,7 @@ test("a subagent's pointer loads the parent's pinned version after the profile m
     await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[1]!.file, "--if-match", created.revision, "--json"]);
     await f.a.ok(["sync", "--selection-profile", "engineering", "--json"]);
     const started = await f.a.hook("claude", "SubagentStart", { session_id: "pin-parent", agent_id: "pin-child" });
-    const pointer = /skills load (review-code@1\.0\.0 --selection-profile engineering --session pin-parent:pin-child)/.exec(started.hookSpecificOutput.additionalContext)?.[1];
+    const pointer = /skills load (review-code@1\.0\.0 --selection-profile engineering --cached --session pin-parent:pin-child)/.exec(started.hookSpecificOutput.additionalContext)?.[1];
     expect(pointer).toBeDefined();
     const sessionsBefore = join(f.a.data, "selection-cache", "sessions");
     expect(readdirSync(sessionsBefore).map(name => json(join(sessionsBefore, name))).find(receipt => receipt.sessionId === "pin-parent:pin-child")!.loaded).toEqual([]);

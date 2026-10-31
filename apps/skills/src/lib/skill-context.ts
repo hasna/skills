@@ -161,10 +161,13 @@ async function buildSkillContextOnce(input: SkillContextInput, options: SkillCon
     historyOffered.set(candidate.reason, count + 1);
     return count < HISTORY_CANDIDATE_LIMIT;
   });
-  // A pointer loads what this session is pinned to, and the load is recorded on
-  // it. Without the session, a profile that moved on refuses the pinned version.
-  const pointerSession = sessionId && /^[A-Za-z0-9._:@-]{1,256}$/.test(sessionId) ? ` --session ${sessionId}` : "";
-  const loadCommandFor = (selection: ResolvedSkillSelection) => `skills load ${selection.slug}@${selection.version} --selection-profile ${profile.profileId}${pointerSession}`;
+  // A pointer loads what this session is pinned to, from the same place this
+  // context came from. Without the session, a profile that moved on refuses the
+  // pinned version. Without --cached, a sandbox with no network can't run it,
+  // though the hook that printed it read the same bytes from the verified cache.
+  const pointerSession = sessionId && /^[A-Za-z0-9._:@][A-Za-z0-9._:@-]{0,255}$/.test(sessionId) ? ` --session ${sessionId}` : "";
+  const pointerCache = options.cached ? " --cached" : "";
+  const loadCommandFor = (selection: ResolvedSkillSelection) => `skills load ${selection.slug}@${selection.version} --selection-profile ${profile.profileId}${pointerCache}${pointerSession}`;
   const delivered: Array<{ key: string; section: string }> = [];
   let selections: ContextSelectionReceipt[] = [];
   const omitted: SkillContextResult["omitted"] = [];
@@ -190,10 +193,13 @@ async function buildSkillContextOnce(input: SkillContextInput, options: SkillCon
       // is offered as a load command instead.
       const candidate = candidates[index]!;
       let end = index;
-      while (end + 1 < candidates.length && candidates[end + 1]!.reason === "prompt" && candidates[end + 1]!.priority === candidate.priority && candidates[end + 1]!.score === candidate.score && !candidates[end + 1]!.weak) end++;
-      const tied = candidates.slice(index, end + 1).filter(entry => explicit.has(selectionKey(entry.selection)) || !loaded.has(selectionKey(entry.selection)));
+      while (end + 1 < candidates.length && candidates[end + 1]!.reason === "prompt" && candidates[end + 1]!.priority === candidate.priority && candidates[end + 1]!.score === candidate.score) end++;
+      // A held-back entry at the same score doesn't end the tie: an alphabetical
+      // slug is no more of a reason to prefer one body when it sits between them.
+      const block = candidates.slice(index, end + 1).filter(entry => explicit.has(selectionKey(entry.selection)) || !loaded.has(selectionKey(entry.selection)));
+      const tied = block.filter(entry => !entry.weak);
       if (tied.length > maxSkills - selections.length) {
-        for (const entry of tied) omitted.push({ slug: entry.selection.slug, version: entry.selection.version, reason: "ambiguous-match", loadCommand: loadCommandFor(entry.selection) });
+        for (const entry of block) omitted.push({ slug: entry.selection.slug, version: entry.selection.version, reason: entry.weak ? "weak-match" : "ambiguous-match", loadCommand: loadCommandFor(entry.selection) });
         ambiguous = true;
         index = end;
         continue;
