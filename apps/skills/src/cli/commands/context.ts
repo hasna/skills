@@ -16,7 +16,7 @@ function sessionSelectionLabel(selection: SessionSelectionMetadata): string {
 export function selectedProfileId(explicit?: string): string {
   return explicit ?? process.env.HASNA_SKILLS_SELECTION_PROFILE ?? readManagedSkillPolicy()?.profileId ?? "default";
 }
-export interface ContextCommandOptions { selectionProfile?: string; cached?: boolean; autoReconcileSafe?: boolean; autoMigrateSessionPin?: boolean; backgroundRenewal?: boolean; renewalBudgetMs?: string; json?: boolean; stdin?: boolean; session?: string; restore?: boolean; maxChars?: string; maxSkills?: string; file?: string }
+export interface ContextCommandOptions { selectionProfile?: string; cached?: boolean; autoReconcileSafe?: boolean; autoMigrateSessionPin?: boolean; backgroundRenewal?: boolean; renewalBudgetMs?: string; json?: boolean; stdin?: boolean; session?: string; restore?: boolean; maxChars?: string; maxSkills?: string; file?: string; minPromptScore?: string; inheritedBodies?: string }
 export function contextResolverOptions(options: ContextCommandOptions): SelectionResolverOptions {
   if (!options.cached) return {};
   const configured = configuredSkillsApiUrl();
@@ -134,6 +134,8 @@ export function registerContextCommands(parent: Command): void {
     .option("--restore", "Re-emit loaded session context after compaction or resume", false)
     .option("--max-chars <count>", "Optional maximum injected characters")
     .option("--max-skills <count>", "Maximum loaded skills", "3")
+    .option("--min-prompt-score <score>", "Offer an unnamed prompt match below this relevance score as a load command instead of injecting it (two matched words score 200)")
+    .option("--inherited-bodies <count>", "Skill bodies a subagent receives from its parent's loaded skills; the rest are offered as load commands")
     .option("--json", "Return context and selection receipts as JSON", false)
     .action(async (prompt: string | undefined, options: ContextCommandOptions) => {
       // A managed hook's budget counts from here, before the first context attempt.
@@ -145,6 +147,9 @@ export function registerContextCommands(parent: Command): void {
         const renewalDeadline = options.renewalBudgetMs === undefined ? undefined : started + Number(options.renewalBudgetMs);
         if (options.autoMigrateSessionPin && !options.autoReconcileSafe) throw new SkillSelectionError("INVALID_CONTEXT_INPUT", "--auto-migrate-session-pin requires --auto-reconcile-safe.");
         if (options.backgroundRenewal && !options.autoReconcileSafe) throw new SkillSelectionError("INVALID_CONTEXT_INPUT", "--background-renewal requires --auto-reconcile-safe.");
+        for (const [flag, value] of [["--min-prompt-score", options.minPromptScore], ["--inherited-bodies", options.inheritedBodies]] as const) {
+          if (value !== undefined && !/^\d{1,6}$/.test(value)) throw new SkillSelectionError("INVALID_CONTEXT_INPUT", `${flag} must be a whole number of at most six digits.`);
+        }
         const input = options.stdin ? parseSkillContextInput(await readContextStdin()) : { prompt: prompt ?? "" };
         input.profileId = selectedProfileId(options.selectionProfile ?? input.profileId);
         input.cwd ??= process.cwd();
@@ -152,6 +157,8 @@ export function registerContextCommands(parent: Command): void {
         input.restore ||= options.restore;
         let pinned: { receipt: SkillSessionReceipt; receiptSha256: string } | null = null;
         const resolverOptions = { ...contextResolverOptions(options), ...(options.maxChars === undefined ? {} : { maxChars: Number(options.maxChars) }), maxSkills: Number(options.maxSkills),
+          ...(options.minPromptScore === undefined ? {} : { minPromptScore: Number(options.minPromptScore) }),
+          ...(options.inheritedBodies === undefined ? {} : { inheritedBodies: Number(options.inheritedBodies) }),
           ...(renewalDeadline === undefined ? {} : { resolveAgainBefore: renewalDeadline }),
           ...(options.backgroundRenewal ? { onResolved: (resolved: ResolvedSelectionContext) => {
             pinned = resolved.session && resolved.sessionSnapshot ? { receipt: resolved.session, receiptSha256: resolved.sessionSnapshot.receiptSha256 } : null;

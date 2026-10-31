@@ -60,7 +60,7 @@ async function fixture(documentSuffix = "", enrolled = true) {
     const bundle = packSkillBundle(source);
     const published = await store.publishSkill({ principal, slug: "review-code", displayName: "Review code", description: "E2E fixture", category: "Development Tools", tags: ["review"], source: "custom", kind: "instruction", version, skillMd, expectedRevisionId: previous, bundle: { sha256: bundle.sha256, byteSize: bundle.bytes.length, contentType: "application/gzip", storageKind: "db", bytes: bundle.bytes } });
     previous = published.revisionId;
-    const selection = { slug: "review-code", version, bundleDigest: `sha256:${bundle.sha256}`, triggers: { keywords: ["review"] } };
+    const selection = { slug: "review-code", version, bundleDigest: `sha256:${bundle.sha256}`, triggers: { keywords: ["review", "review this patch", "review ios"] } };
     const file = join(root, `profile-${version}.json`); put(file, JSON.stringify({ selections: [selection] })); versions.push({ version, file, selection, skillMd });
   }
   let handler: SkillsFetchHandler | undefined;
@@ -285,7 +285,7 @@ test("configured prompt hook offers a body over its cap while plain context stil
     const bundle = packSkillBundle(source);
     await f.store.publishSkill({ principal: f.principal, slug, displayName: "Synthetic iOS", description: "Large context fixture", category: "Development Tools", tags: [], source: "custom", kind: "instruction", version, skillMd, bundle: { sha256: bundle.sha256, byteSize: bundle.bytes.length, contentType: "application/gzip", storageKind: "db", bytes: bundle.bytes } });
     const profile = join(f.root, "two-selected-large-profile.json");
-    put(profile, JSON.stringify({ selections: [f.versions[0]!.selection, { slug, version, bundleDigest: `sha256:${bundle.sha256}`, triggers: { keywords: ["ios"] } }] }));
+    put(profile, JSON.stringify({ selections: [f.versions[0]!.selection, { slug, version, bundleDigest: `sha256:${bundle.sha256}`, triggers: { keywords: ["review ios"] } }] }));
     await f.a.install();
     await f.a.ok(["profiles", "set", "engineering", "--file", profile, "--json"]);
     await f.a.ok(["sync", "--selection-profile", "engineering", "--json"]);
@@ -369,7 +369,7 @@ test("built CLI performs profile CAS/rollback, two-station sync, pinned hook res
     expect(json(join(f.a.project, ".skills", "selection.lock.json")).profile.profileRevision).toBe(created.revision);
     for (const [station, agent] of [[f.a, "claude"], [f.b, "codex"]] as const) {
       const restored = await station.hook(agent, "SessionStart", { source: "compact" }); expect(restored.hookSpecificOutput.hookEventName).toBe("SessionStart"); expect(restored.hookSpecificOutput.additionalContext).toContain(v1.skillMd); expect(restored.hookSpecificOutput.additionalContext).not.toContain(v2.skillMd);
-      const child = await station.hook(agent, "SubagentStart", { agent_id: "child-one", agent_type: "explorer" }); expect(child.hookSpecificOutput.hookEventName).toBe("SubagentStart"); expect(child.hookSpecificOutput.additionalContext).toContain(v1.skillMd);
+      const child = await station.hook(agent, "SubagentStart", { agent_id: "child-one", agent_type: "explorer" }); expect(child.hookSpecificOutput.hookEventName).toBe("SubagentStart"); expect(child.hookSpecificOutput.additionalContext).not.toContain(v1.skillMd); expect(child.hookSpecificOutput.additionalContext).toContain("Additional selected skill review-code@1.0.0: skills load review-code@1.0.0");
     }
     const rollback = await f.a.ok(["profiles", "set", "engineering", "--file", saved, "--if-match", updated.revision, "--json"]); expect(rollback.revision).not.toBe(updated.revision); expect(rollback.selections).toEqual(created.selections);
     await f.b.ok(["sync", "--json"]); expect((await f.b.ok(["load", "review-code@1.0.0", "--json"])).content).toBe(v1.skillMd);
@@ -522,7 +522,9 @@ for (const [savedProfile, configuredProfile] of [["fleet", "default"], ["default
       expect(restored.hookSpecificOutput.additionalContext).toContain(f.versions[0]!.skillMd);
       expect(restored.hookSpecificOutput.additionalContext).not.toContain(f.versions[1]!.skillMd);
       const child = await f.a.hook("claude", "SubagentStart", { agent_id: "mixed-child" });
-      expect(child.hookSpecificOutput.additionalContext).toContain(f.versions[0]!.skillMd);
+      // A subagent is offered the pinned parent's skill at the pinned version, not given its body.
+      expect(child.hookSpecificOutput.additionalContext).not.toContain(f.versions[0]!.skillMd);
+      expect(child.hookSpecificOutput.additionalContext).toContain(`Additional selected skill review-code@${f.versions[0]!.version}:`);
       expectSamePin();
       const fresh = await f.a.hook("claude", "UserPromptSubmit", { session_id: "new-session", prompt: "review this patch" });
       expect(fresh.hookSpecificOutput.additionalContext).toContain(f.versions[1]!.skillMd);
@@ -537,8 +539,10 @@ for (const [savedProfile, configuredProfile] of [["fleet", "default"], ["default
       const freshReceipt = readdirSync(sessions).map(name => json(join(sessions, name))).find(receipt => receipt.sessionId === "new-session");
       put(receiptPath, JSON.stringify({ ...freshReceipt, sessionId: "parent-session", generation: json(receiptPath).generation + 1 }));
       const retainedChild = await f.a.hook("claude", "SubagentStart", { agent_id: "mixed-child", restore: true });
-      expect(retainedChild.hookSpecificOutput.additionalContext).toContain(f.versions[0]!.skillMd);
+      // The child loaded nothing of its own, so a restore brings no body, and it never adopts the parent's new revision.
+      expect(retainedChild.hookSpecificOutput.additionalContext).not.toContain(f.versions[0]!.skillMd);
       expect(retainedChild.hookSpecificOutput.additionalContext).not.toContain(f.versions[1]!.skillMd);
+      expect(retainedChild.hookSpecificOutput.additionalContext).not.toContain(`review-code@${f.versions[1]!.version}`);
       put(receiptPath, parentBeforeChange);
       // Expiry must authorize the old pinned profile, never silently adopt the
       // newly configured one or use its already warm cache on authentication failure.
@@ -818,7 +822,7 @@ test("managed prompt hook refuses new native copies and missing or modified brid
     rmSync(bridge);
     expect(expectDriftReported(await f.a.hook("claude", "UserPromptSubmit", { prompt: "review again" }), f.a.data, "claude")).toContain("bridge is missing or modified");
     put(bridge, original);
-    const loaded = await f.a.hook("claude", "UserPromptSubmit", { prompt: "review the repaired setup" });
+    const loaded = await f.a.hook("claude", "UserPromptSubmit", { prompt: "review this patch, the repaired setup" });
     expect(loaded.hookSpecificOutput.additionalContext).toContain("Published 1.0.0");
     expect(loaded.systemMessage).toBeUndefined();
     expect(json(join(f.a.data, "native-drift", "claude.json")).status).toBe("cleared");
@@ -1399,6 +1403,36 @@ test("a removed loaded skill is retired by migration while identity and integrit
   } finally { await f.close(); }
 });
 
+test("the managed prompt hook offers a one-word match and injects a named or phrase match, while plain context keeps delivering it", async () => {
+  const f = await fixture();
+  try {
+    await f.a.install();
+    await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+    await f.a.ok(["sync", "--selection-profile", "engineering", "--json"]);
+    const body = f.versions[0]!.skillMd;
+    const oneWord = await f.a.hook("claude", "UserPromptSubmit", { session_id: "word", prompt: "review again" });
+    expect(oneWord.hookSpecificOutput.additionalContext).not.toContain(body);
+    expect(oneWord.hookSpecificOutput.additionalContext).toContain("Additional selected skill review-code@1.0.0: skills load review-code@1.0.0");
+    // Control: the same prompt through plain `skills context` still selects it.
+    expect((await f.a.ok(["context", "review again", "--selection-profile", "engineering", "--cached", "--json"])).context).toContain(body);
+    const phrase = await f.a.hook("claude", "UserPromptSubmit", { session_id: "phrase", prompt: "review this patch" });
+    expect(phrase.hookSpecificOutput.additionalContext).toContain(body);
+    const named = await f.a.hook("claude", "UserPromptSubmit", { session_id: "named", prompt: "run review-code now" });
+    expect(named.hookSpecificOutput.additionalContext).toContain(body);
+    const explicit = await f.a.hook("claude", "UserPromptSubmit", { session_id: "explicit", prompt: "$review-code" });
+    expect(explicit.hookSpecificOutput.additionalContext).toContain(body);
+    // A raised threshold holds a phrase back too; a lowered one changes nothing.
+    const raised = await f.a.hook("claude", "UserPromptSubmit", { session_id: "raised", prompt: "review this patch" }, { SKILLS_HOOK_PROMPT_MIN_SCORE: "999" });
+    expect(raised.hookSpecificOutput.additionalContext).not.toContain(body);
+    const lowered = await f.a.hook("claude", "UserPromptSubmit", { session_id: "lowered", prompt: "review again" }, { SKILLS_HOOK_PROMPT_MIN_SCORE: "1" });
+    expect(lowered.hookSpecificOutput.additionalContext).not.toContain(body);
+    // A subagent's start has no prompt: it is offered the parent's skill, not given its body.
+    const child = await f.a.hook("claude", "SubagentStart", { session_id: "phrase", agent_id: "pointer-child" });
+    expect(child.hookSpecificOutput.additionalContext).not.toContain(body);
+    expect(child.hookSpecificOutput.additionalContext).toContain("Additional selected skill review-code@1.0.0: skills load review-code@1.0.0");
+  } finally { await f.close(); }
+});
+
 test("a subagent's own <parent>:<agent> pin migrates through SubagentStart without changing the parent pin", async () => {
   const f = await fixture();
   try {
@@ -1406,7 +1440,8 @@ test("a subagent's own <parent>:<agent> pin migrates through SubagentStart witho
     const pin = (await legacyExpiredPinsAfterUpgrade(f, ["parent-session"]))[0]!;
     // Recreate the parent's original fresh pin, start the child from it, then expire both.
     put(pin.receiptPath, JSON.stringify({ ...pin.old, verifiedAt: new Date().toISOString() }));
-    await f.a.hook("claude", "SubagentStart", { agent_id: "child-agent" });
+    // A subagent is offered its parent's skills, so this child loads its own by name.
+    await f.a.hook("claude", "SubagentStart", { agent_id: "child-agent", prompt: "$review-code" });
     const sessions = join(f.a.data, "selection-cache", "sessions");
     const childPath = readdirSync(sessions).map(name => join(sessions, name)).find(path => json(path).sessionId === "parent-session:child-agent")!;
     const child = json(childPath); child.verifiedAt = new Date(0).toISOString(); put(childPath, JSON.stringify(child));

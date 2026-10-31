@@ -51,6 +51,16 @@ export const MANAGED_HOOK_CONTEXT_MAX_CHARS = 12_000;
 export const MANAGED_HOOK_CONTEXT_MAX_SKILLS = 2;
 /** Part of the cap kept for the policy, notices and up to ten load offers. */
 export const MANAGED_HOOK_CONTEXT_RESERVE_CHARS = 2_500;
+/**
+ * A managed hook injects an unnamed prompt match only at this score: a phrase
+ * of two or more words. A one-word trigger says little about a turn's subject,
+ * more so in long text ("effect", "rollback", "handoff"), so it is offered as a
+ * load command instead (FAO-00144). SKILLS_HOOK_PROMPT_MIN_SCORE can only raise it.
+ */
+export const MANAGED_HOOK_PROMPT_MIN_SCORE = 200;
+/** A subagent's start carries no prompt to match against, so its parent's skills are offered, not injected. */
+export const MANAGED_HOOK_INHERITED_BODIES = 0;
+const HOOK_PROMPT_SCORE_RANGE = [MANAGED_HOOK_PROMPT_MIN_SCORE, 999_999] as const;
 const HOOK_CONTEXT_CHARS_RANGE = [MANAGED_HOOK_CONTEXT_RESERVE_CHARS + 512, MANAGED_HOOK_CONTEXT_MAX_CHARS] as const;
 const HOOK_CONTEXT_SKILLS_RANGE = [1, MANAGED_HOOK_CONTEXT_MAX_SKILLS] as const;
 const HOOK_CONTEXT_TRUNCATED = "[Skills context truncated at the hook limit; read the rest with `skills load <slug>`.]";
@@ -67,6 +77,11 @@ export function managedHookContextLimits(): { maxChars: number; maxSkills: numbe
   const maxChars = boundedEnvInteger("SKILLS_HOOK_CONTEXT_MAX_CHARS", MANAGED_HOOK_CONTEXT_MAX_CHARS, HOOK_CONTEXT_CHARS_RANGE);
   const maxSkills = boundedEnvInteger("SKILLS_HOOK_CONTEXT_MAX_SKILLS", MANAGED_HOOK_CONTEXT_MAX_SKILLS, HOOK_CONTEXT_SKILLS_RANGE);
   return { maxChars, maxSkills, bodyChars: maxChars - MANAGED_HOOK_CONTEXT_RESERVE_CHARS };
+}
+
+/** The effective prompt score: the default above, or a valid higher environment override. */
+export function managedHookPromptMinScore(): number {
+  return boundedEnvInteger("SKILLS_HOOK_PROMPT_MIN_SCORE", MANAGED_HOOK_PROMPT_MIN_SCORE, HOOK_PROMPT_SCORE_RANGE);
 }
 
 /** Clamp assembled hook context to the cap at a line boundary, with a fixed note. */
@@ -123,7 +138,8 @@ async function contextForHook(input: unknown, profileId: string, cached: boolean
   const { childMs, renewalBudgetMs } = managedContextChildLimits(deadline - Date.now());
   if (childMs <= 0) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "context");
   const limits = managedHookContextLimits();
-  const args = ["context", "--stdin", "--json", "--selection-profile", profileId, "--max-chars", String(limits.bodyChars), "--max-skills", String(limits.maxSkills)];
+  const args = ["context", "--stdin", "--json", "--selection-profile", profileId, "--max-chars", String(limits.bodyChars), "--max-skills", String(limits.maxSkills),
+    "--min-prompt-score", String(managedHookPromptMinScore()), "--inherited-bodies", String(MANAGED_HOOK_INHERITED_BODIES)];
   if (cached) args.push("--cached", "--auto-reconcile-safe");
   // Default for every agent's managed hook: a refused renewal of the same
   // profile migrates the pin and names retired loaded skills once. Operators

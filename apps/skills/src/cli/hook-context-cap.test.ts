@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
-import { capManagedHookContext, managedHookContextLimits, MANAGED_HOOK_CONTEXT_MAX_CHARS, MANAGED_HOOK_CONTEXT_MAX_SKILLS, MANAGED_HOOK_CONTEXT_RESERVE_CHARS } from "./commands/agent-integration.js";
+import { capManagedHookContext, managedHookContextLimits, managedHookPromptMinScore, MANAGED_HOOK_PROMPT_MIN_SCORE, MANAGED_HOOK_CONTEXT_MAX_CHARS, MANAGED_HOOK_CONTEXT_MAX_SKILLS, MANAGED_HOOK_CONTEXT_RESERVE_CHARS } from "./commands/agent-integration.js";
 
-const names = ["SKILLS_HOOK_CONTEXT_MAX_CHARS", "SKILLS_HOOK_CONTEXT_MAX_SKILLS"] as const;
+const names = ["SKILLS_HOOK_CONTEXT_MAX_CHARS", "SKILLS_HOOK_CONTEXT_MAX_SKILLS", "SKILLS_HOOK_PROMPT_MIN_SCORE"] as const;
 const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
 afterEach(() => { for (const name of names) { if (saved[name] === undefined) delete process.env[name]; else process.env[name] = saved[name]; } });
 
@@ -51,4 +51,16 @@ test("agent-submitted prompts are recognised only by a marker at their start", a
     expect(isAgentSubmittedPrompt(prompt)).toBe(true);
   for (const prompt of ["review the ios app", "what does hasna:messages do?", "see [hasna:messages:abc] above", "what does <agent-message from=x> mean?", "quote: Another Claude session sent a message:", "The coordinator sent a message about the release and I want a summary", "tell me about <teammate-message> tags", `${"x".repeat(400)}<task-notification>`, `${"y".repeat(401)}\n[hasna:messages:abc]`, "", undefined, 42])
     expect(isAgentSubmittedPrompt(prompt)).toBe(false);
+});
+
+test("the hook's prompt score defaults to a two-word phrase and an environment override can only raise it", () => {
+  delete process.env.SKILLS_HOOK_PROMPT_MIN_SCORE;
+  expect(MANAGED_HOOK_PROMPT_MIN_SCORE).toBe(200);
+  expect(managedHookPromptMinScore()).toBe(200);
+  process.env.SKILLS_HOOK_PROMPT_MIN_SCORE = "300";
+  expect(managedHookPromptMinScore()).toBe(300);
+  for (const value of ["199", "100", "0", "-1", "2e3", "two", "", "1000000"]) {
+    process.env.SKILLS_HOOK_PROMPT_MIN_SCORE = value;
+    expect(managedHookPromptMinScore()).toBe(200);
+  }
 });
