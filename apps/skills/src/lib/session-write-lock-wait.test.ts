@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { packSkillBundle } from "./skill-bundle.js";
 import { activateSelectionProfile, cacheSelectionBundle, readSkillSessionSnapshot, readSkillSessionSnapshotIfExists, selectionKey, SESSION_WRITE_LOCK_WAIT_MS, sessionReceiptPath, writeSelectionJson, writeSkillSession, type SkillSessionReceipt } from "./selection-cache.js";
 import { buildSkillContext, SESSION_WRITE_BUSY_NOTICE } from "./skill-context.js";
+import { loadSelectedSkill } from "./selection-resolver.js";
 import { inspectSkillSession } from "./session-reconciliation.js";
 import type { ResolvedSkillProfile } from "../types/skill-selection.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
@@ -88,7 +89,7 @@ test("after a lost lock race only bodies the receipt already records are deliver
   // Nothing new is delivered unrecorded: every delivered key is in the receipt's loaded set.
   expect(result.selections).toEqual([]);
   expect(result.context).toBe(SESSION_WRITE_BUSY_NOTICE);
-  expect(result.omitted.map(entry => [entry.slug, entry.reason, entry.loadCommand])).toEqual([["beta-skill", "write-busy", "skills load beta-skill@1.0.0 --selection-profile fleet"]]);
+  expect(result.omitted.map(entry => [entry.slug, entry.reason, entry.loadCommand])).toEqual([["beta-skill", "write-busy", "skills load beta-skill@1.0.0 --selection-profile fleet --cache-first --session parent"]]);
   expect(inspectSkillSession("parent", f.options).selections.filter(selection => selection.loaded).map(selection => selection.slug)).toEqual(["alpha-skill"]);
   // An explicit re-delivery of a recorded skill is still delivered beside the new one.
   const mixed = await buildSkillContext({ profileId: "fleet", sessionId: "parent", prompt: "use the beta skill with $alpha-skill" }, f.options);
@@ -128,6 +129,24 @@ test("context is not delivered after a lost lock race when the pin changed meanw
   const onResolved = () => writeSelectionJson(sessionReceiptPath("parent", f.options), { schemaVersion: 1, verifiedAt: new Date().toISOString(), profile: migrated, sessionId: "parent", generation: 2, loaded: [] });
   await expect(buildSkillContext({ profileId: "fleet", sessionId: "parent", prompt: "use the beta skill" }, { ...f.options, onResolved })).rejects.toMatchObject({ code: "SESSION_WRITE_BUSY" });
   expect(readFileSync(lock.path, "utf8")).toBe(lock.bytes);
+});
+
+test("a load whose record is stuck behind a lock refuses when the pin moved during the wait, and otherwise returns its content", async () => {
+  const f = await fixture();
+  const bundleOptions = { ...f.options, sessionId: "parent" };
+  // Still the same pin: the lock outlasts the wait, and the content comes back unrecorded.
+  const held = f.hold("parent");
+  const kept = await loadSelectedSkill("alpha-skill@1.0.0", "fleet", bundleOptions);
+  expect(kept.content).toContain("Fixture body.");
+  expect(kept.sessionRecorded).toBe(false);
+  rmSync(held.path);
+  // Another writer moves the pin while this load waits on its lock.
+  const migrated = { ...f.profile, profileRevision: "r2", selections: f.profile.selections.map(selection => ({ ...selection, profileRevision: "r2" })) };
+  const staged = `${sessionReceiptPath("parent", f.options)}.staged`;
+  writeSelectionJson(staged, { schemaVersion: 1, verifiedAt: new Date().toISOString(), profile: migrated, sessionId: "parent", generation: 2, loaded: [] });
+  f.hold("parent");
+  releasers.push(Bun.spawn([process.execPath, "--no-install", "-e", `await Bun.sleep(300); require("node:fs").renameSync(${JSON.stringify(staged)}, ${JSON.stringify(sessionReceiptPath("parent", f.options))});`], { stdout: "ignore", stderr: "ignore" }));
+  await expect(loadSelectedSkill("alpha-skill@1.0.0", "fleet", bundleOptions)).rejects.toMatchObject({ code: "SESSION_CONTEXT_CONFLICT" });
 });
 
 /** A parent receipt write with the same pin: a recorded load, or a renewal moving verifiedAt. */

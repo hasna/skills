@@ -206,7 +206,7 @@ test("security control: an expired pin whose authority is down delivers no paylo
   } finally { api.close(); }
 }, 60_000);
 
-test("a prompt and eight subagents starting together all get context without write-lock refusals", async () => {
+test("a prompt and eight subagents starting together all answer without write-lock refusals", async () => {
   const api = authority(0, { resolve: 0, bundle: 0 });
   try {
     const s = await station(api, 0, 0);
@@ -229,7 +229,7 @@ test("a prompt and eight subagents starting together all get context without wri
   } finally { api.close(); }
 }, 90_000);
 
-test("a prompt that loads a new skill while eight subagents start gives every hook its context", async () => {
+test("a prompt that loads a new skill while eight subagents start answers every hook without a lock refusal", async () => {
   const api = authority(0, { resolve: 0, bundle: 0 });
   try {
     const s = await station(api, 0, 0);
@@ -246,7 +246,9 @@ test("a prompt that loads a new skill while eight subagents start gives every ho
     const durations = all.map(result => result.ms);
     console.log(`[hook-background-renewal] writer bursts x4: ${tally(all.map(result => result.code))}; p50 ${percentile(durations, 50)} ms, p95 ${percentile(durations, 95)} ms`);
     expect(all.filter(result => SESSION_FAILURE(result.code))).toEqual([]);
-    expect(all.map(result => result.code)).toEqual(Array(36).fill("OK"));
+    // Each wave is one prompt, which loads by name, and eight subagents, which are offered the parent's skills.
+    expect(all.map(result => result.code)).toEqual(Array.from({ length: 36 }, (_, index) => index % 9 === 0 ? "OK" : "EMPTY"));
+    expect(all.filter((_, index) => index % 9 !== 0).every(result => result.context.includes("Additional selected skill"))).toBe(true);
     // Every new load was recorded once in the parent receipt.
     const loaded = readSkillSessionSnapshot(SESSION, { cacheDir: s.cacheDir }).receipt.loaded;
     const pinned = profile(`${api.origin}/api/v1`, "pinned-revision", 0, false);
@@ -283,7 +285,9 @@ test("a subagent's own pin past the renew-ahead age starts no background renewal
   try {
     const s = await station(api, 0, 20 * HOUR);
     const child = `${SESSION}:aged-child`;
-    expect((await s.hook("SubagentStart", { agent_id: "aged-child" })).code).toBe("OK");
+    const started = await s.hook("SubagentStart", { agent_id: "aged-child" });
+    expect(started.code).toBe("EMPTY");
+    expect(started.context).toContain("Additional selected skill");
     expect(readSkillSessionSnapshot(child, { cacheDir: s.cacheDir }).receipt.parent?.sessionId).toBe(SESSION);
     // The child's own prompt reads its 20-hour pin.
     const prompt = await s.hook("UserPromptSubmit", { agent_id: "aged-child" });

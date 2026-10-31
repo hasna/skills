@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
-import { capManagedHookContext, managedHookContextLimits, MANAGED_HOOK_CONTEXT_MAX_CHARS, MANAGED_HOOK_CONTEXT_MAX_SKILLS, MANAGED_HOOK_CONTEXT_RESERVE_CHARS } from "./commands/agent-integration.js";
+import { capManagedHookContext, managedHookContextLimits, managedHookPromptMinPhraseWords, managedHookSelectionArgs, MANAGED_HOOK_PROMPT_MIN_PHRASE_WORDS, MANAGED_HOOK_CONTEXT_MAX_CHARS, MANAGED_HOOK_CONTEXT_MAX_SKILLS, MANAGED_HOOK_CONTEXT_RESERVE_CHARS } from "./commands/agent-integration.js";
 
-const names = ["SKILLS_HOOK_CONTEXT_MAX_CHARS", "SKILLS_HOOK_CONTEXT_MAX_SKILLS"] as const;
+const names = ["SKILLS_HOOK_CONTEXT_MAX_CHARS", "SKILLS_HOOK_CONTEXT_MAX_SKILLS", "SKILLS_HOOK_PROMPT_MIN_PHRASE_WORDS"] as const;
 const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
 afterEach(() => { for (const name of names) { if (saved[name] === undefined) delete process.env[name]; else process.env[name] = saved[name]; } });
 
@@ -51,4 +51,25 @@ test("agent-submitted prompts are recognised only by a marker at their start", a
     expect(isAgentSubmittedPrompt(prompt)).toBe(true);
   for (const prompt of ["review the ios app", "what does hasna:messages do?", "see [hasna:messages:abc] above", "what does <agent-message from=x> mean?", "quote: Another Claude session sent a message:", "The coordinator sent a message about the release and I want a summary", "tell me about <teammate-message> tags", `${"x".repeat(400)}<task-notification>`, `${"y".repeat(401)}\n[hasna:messages:abc]`, "", undefined, 42])
     expect(isAgentSubmittedPrompt(prompt)).toBe(false);
+});
+
+test("the hook's phrase length defaults to two words and an environment override can only raise it", () => {
+  delete process.env.SKILLS_HOOK_PROMPT_MIN_PHRASE_WORDS;
+  expect(MANAGED_HOOK_PROMPT_MIN_PHRASE_WORDS).toBe(2);
+  expect(managedHookPromptMinPhraseWords()).toBe(2);
+  process.env.SKILLS_HOOK_PROMPT_MIN_PHRASE_WORDS = "3";
+  expect(managedHookPromptMinPhraseWords()).toBe(3);
+  for (const value of ["1", "0", "-1", "2e1", "two", "", "17", "1000000"]) {
+    process.env.SKILLS_HOOK_PROMPT_MIN_PHRASE_WORDS = value;
+    expect(managedHookPromptMinPhraseWords()).toBe(2);
+  }
+});
+
+test("Sumi's and Cursor's hooks pass no selection flags, because a prompt call's output can't reach their models", () => {
+  delete process.env.SKILLS_HOOK_PROMPT_MIN_PHRASE_WORDS;
+  expect(managedHookSelectionArgs("sumi")).toEqual([]);
+  expect(managedHookSelectionArgs("cursor")).toEqual([]);
+  for (const agent of ["claude", "codex", "opencode"] as const) {
+    expect(managedHookSelectionArgs(agent)).toEqual(["--min-prompt-phrase-words", "2", "--inherited-bodies", "0"]);
+  }
 });

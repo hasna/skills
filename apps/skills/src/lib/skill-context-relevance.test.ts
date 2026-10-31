@@ -7,12 +7,13 @@
  * "named" from anywhere in a prompt.
  */
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { packSkillBundle } from "./skill-bundle.js";
-import { activateSelectionProfile, cacheSelectionBundle, readSkillSessionSnapshot, selectionKey, sessionReceiptPath, writeSelectionJson } from "./selection-cache.js";
+import { activateSelectionProfile, SkillSelectionError, cacheSelectionBundle, readSkillSessionSnapshot, selectionKey, sessionReceiptPath, writeSelectionJson } from "./selection-cache.js";
 import { buildSkillContext } from "./skill-context.js";
+import { isUnwritableStore, loadSelectedSkill } from "./selection-resolver.js";
 import type { ResolvedSkillProfile, ResolvedSkillSelection } from "../types/skill-selection.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
@@ -172,7 +173,7 @@ test("weak prompt pointers are offered as load commands after every other omissi
   const designs = await f.select("push the new iPhone screens to the designs app for review");
   expect(designs.selections).toEqual([]);
   expect(designs.context).toBe("");
-  expect(designs.omitted.map(entry => [entry.slug, entry.reason, entry.loadCommand])).toEqual([["designs-watch", "partial-match", "skills load designs-watch@1.0.0 --selection-profile fleet"]]);
+  expect(designs.omitted.map(entry => [entry.slug, entry.reason, entry.loadCommand])).toEqual([["designs-watch", "partial-match", "skills load designs-watch@1.0.0 --selection-profile fleet --cache-first"]]);
   // The engineering prompt still injects only its two phrases, and offers no domain skill.
   const engineering = await f.select(ENGINEERING);
   expect(engineering.selections.map(selection => selection.slug).sort()).toEqual(["hook-drift-repair", "station-network"]);
@@ -181,4 +182,135 @@ test("weak prompt pointers are offered as load commands after every other omissi
   // Offers follow the other omissions.
   const mixed = await f.select("the quartz lamp and the grant compliance check, and push the screens to the designs app for review");
   expect(mixed.omitted.map(entry => entry.reason)).toEqual([...Array(4).fill("ambiguous-match"), "partial-match"]);
+});
+
+test("a minimum phrase length offers one-word matches, keeps names and phrases, and leaves the default unchanged", async () => {
+  const f = await fixture();
+  const managed = { ...f.options, minPromptPhraseWords: 2 };
+  const select = (prompt: string) => buildSkillContext({ profileId: "fleet", prompt }, managed);
+  // One discriminating word: injected by default, offered once the hook asks for a phrase.
+  expect(await f.slugs("the login page fails")).toEqual(["login"]);
+  const oneWord = await select("the login page fails");
+  expect(oneWord.selections).toEqual([]);
+  expect(oneWord.omitted.map(entry => [entry.slug, entry.reason])).toEqual([["login", "weak-match"]]);
+  expect(oneWord.omitted[0]!.loadCommand).toBe("skills load login@1.0.0 --selection-profile fleet --cache-first");
+  expect(oneWord.context).not.toContain("Fixture body");
+  // A phrase of two words reaches the score.
+  expect((await select("look at the hook drift on this station")).selections.map(entry => entry.slug)).toEqual(["hook-drift-repair"]);
+  // A complete name is never held back by the score, nor is an explicit request.
+  expect((await select("run hook-drift-repair now")).selections.map(entry => entry.slug)).toEqual(["hook-drift-repair"]);
+  expect((await select("use the reconcile skill")).selections.map(entry => entry.slug)).toEqual(["reconcile"]);
+  expect((await select("please use $reconcile here")).selections.map(entry => [entry.slug, entry.reason])).toEqual([["reconcile", "explicit"]]);
+});
+
+test("zero inherited bodies gives a subagent its parent's skills as load commands, and its pin is unchanged", async () => {
+  const f = await fixture();
+  const parent = await f.select("$reconcile and $hook-drift-repair", { sessionId: "parent" });
+  expect(parent.selections.map(selection => selection.slug).sort()).toEqual(["hook-drift-repair", "reconcile"]);
+  const child = await buildSkillContext({ profileId: "fleet", prompt: "", sessionId: "parent", agentId: "child-pointers" }, { ...f.options, inheritedBodies: 0 });
+  expect(child.selections).toEqual([]);
+  expect(child.context).not.toContain("Fixture body");
+  expect(child.omitted.map(entry => entry.slug).sort()).toEqual(["hook-drift-repair", "reconcile"]);
+  // Each pointer names the child's own session, so it loads the pinned version and is recorded there.
+  expect(child.omitted.every(entry => entry.loadCommand === `skills load ${entry.slug}@1.0.0 --selection-profile fleet --cache-first --session parent:child-pointers`)).toBe(true);
+  const receipt = readSkillSessionSnapshot("parent:child-pointers", { cacheDir: f.cacheDir }).receipt;
+  expect(receipt.parent?.sessionId).toBe("parent");
+  expect(receipt.loaded).toEqual([]);
+  // A child that names one of them, or matches it by a phrase, still gets that body.
+  const named = await buildSkillContext({ profileId: "fleet", prompt: "$reconcile please", sessionId: "parent", agentId: "child-named" }, { ...f.options, inheritedBodies: 0 });
+  expect(named.selections.map(selection => [selection.slug, selection.reason])).toEqual([["reconcile", "explicit"]]);
+  expect(named.omitted.map(entry => entry.slug)).toEqual(["hook-drift-repair"]);
+  const phrase = await buildSkillContext({ profileId: "fleet", prompt: "see the hook drift", sessionId: "parent", agentId: "child-phrase" }, { ...f.options, inheritedBodies: 0, minPromptPhraseWords: 2 });
+  expect(phrase.selections.map(selection => [selection.slug, selection.reason])).toEqual([["hook-drift-repair", "prompt"]]);
+  // The same child with the default keeps today's one body.
+  const another = await f.select("", { sessionId: "parent", agentId: "child-default" });
+  expect(another.selections.map(selection => selection.reason)).toEqual(["subagent-inherit"]);
+});
+
+test("a negative or fractional phrase length or inherited body limit is refused", async () => {
+  const f = await fixture();
+  for (const limits of [{ minPromptPhraseWords: -1 }, { minPromptPhraseWords: 1.5 }, { inheritedBodies: -1 }, { inheritedBodies: 0.5 }]) {
+    await expect(buildSkillContext({ profileId: "fleet", prompt: "x" }, { ...f.options, ...limits })).rejects.toMatchObject({ code: "INVALID_CONTEXT_BUDGET" });
+  }
+});
+
+test("long task text that uses a one-word trigger's word gets no body under the hook's phrase length, but the same words do by default", async () => {
+  const f = await fixture([["effect", { keywords: ["effect"] }], ["rollback", { keywords: ["rollback"] }], ["handoff", { keywords: ["handoff"] }],
+    ["marketing", { keywords: ["marketing"] }], ["missing-invoices", { keywords: ["missing invoices"] }]]);
+  const text = "The change takes effect after the ship. Rollback is the flag ship. Keep the checkout handoff bound to the original workspace, and the marketing site reads the same price.";
+  const managed = await buildSkillContext({ profileId: "fleet", prompt: text }, { ...f.options, minPromptPhraseWords: 2, maxSkills: 2 });
+  expect(managed.selections).toEqual([]);
+  expect(managed.omitted.map(entry => entry.reason)).toEqual(["weak-match", "weak-match", "weak-match", "weak-match"]);
+  // Control: the check can fail. Without the score these are real prompt matches.
+  const plain = await buildSkillContext({ profileId: "fleet", prompt: text }, { ...f.options, maxSkills: 4 });
+  expect(plain.selections.map(selection => selection.slug).sort()).toEqual(["effect", "handoff", "marketing", "rollback"]);
+  // A phrase in the same text is still on the subject.
+  const phrase = await buildSkillContext({ profileId: "fleet", prompt: `${text} Send the missing invoices.` }, { ...f.options, minPromptPhraseWords: 2, maxSkills: 2 });
+  expect(phrase.selections.map(selection => selection.slug)).toEqual(["missing-invoices"]);
+});
+
+test("several one-word matches don't add up to a phrase under the minimum phrase length", async () => {
+  const f = await fixture([["effect-and-rollback", { keywords: ["effect", "rollback"] }], ["missing-invoices", { keywords: ["missing invoices"] }]]);
+  const text = "the change takes effect after the rollback";
+  // Control: by default the two words reach a body.
+  expect((await f.select(text)).selections.map(selection => selection.slug)).toEqual(["effect-and-rollback"]);
+  const managed = await buildSkillContext({ profileId: "fleet", prompt: text }, { ...f.options, minPromptPhraseWords: 2 });
+  expect(managed.selections).toEqual([]);
+  expect(managed.omitted.map(entry => [entry.slug, entry.reason])).toEqual([["effect-and-rollback", "weak-match"]]);
+});
+
+test("a held-back one-word total at a phrase's score doesn't end the tie, so no slug order picks a body", async () => {
+  const f = await fixture([["aa-phrase", { keywords: ["sigma tau"] }], ["bb-words", { keywords: ["alpha1", "alpha2"] }], ["cc-phrase", { keywords: ["kappa lambda"] }], ["dd-phrase", { keywords: ["mu nu"] }]]);
+  const result = await buildSkillContext({ profileId: "fleet", prompt: "sigma tau alpha1 alpha2 kappa lambda mu nu" }, { ...f.options, minPromptPhraseWords: 2, maxSkills: 2 });
+  expect(result.selections).toEqual([]);
+  expect(result.omitted.map(entry => [entry.slug, entry.reason])).toEqual([["aa-phrase", "ambiguous-match"], ["bb-words", "weak-match"], ["cc-phrase", "ambiguous-match"], ["dd-phrase", "ambiguous-match"]]);
+});
+
+test("parallel loads under one pin all return their content and are all recorded", async () => {
+  const f = await fixture([["one-skill", { keywords: ["alpha beta"] }], ["two-skill", { keywords: ["gamma delta"] }], ["three-skill", { keywords: ["epsilon zeta"] }], ["four-skill", { keywords: ["eta theta"] }]]);
+  await buildSkillContext({ profileId: "fleet", prompt: "", sessionId: "parallel" }, f.options);
+  const results = await Promise.all(["one-skill", "two-skill", "three-skill", "four-skill"].map(slug => loadSelectedSkill(`${slug}@1.0.0`, "fleet", { ...f.options, sessionId: "parallel" })));
+  expect(results.every(result => result.sessionRecorded && result.content.includes("Fixture body"))).toBe(true);
+  expect(readSkillSessionSnapshot("parallel", { cacheDir: f.cacheDir }).receipt.loaded).toHaveLength(4);
+});
+
+test("a load whose session store can't be written still returns its content and says it wasn't recorded", async () => {
+  const f = await fixture([["one-skill", { keywords: ["alpha beta"] }]]);
+  await buildSkillContext({ profileId: "fleet", prompt: "", sessionId: "readonly-store" }, f.options);
+  const before = readSkillSessionSnapshot("readonly-store", { cacheDir: f.cacheDir }).receipt.loaded;
+  const stores = [join(f.cacheDir, "sessions"), join(f.cacheDir, "session-locks")].filter(path => existsSync(path));
+  for (const path of stores) chmodSync(path, 0o500);
+  try {
+    const result = await loadSelectedSkill("one-skill@1.0.0", "fleet", { ...f.options, sessionId: "readonly-store" });
+    expect(result.content).toContain("Fixture body");
+    expect(result.sessionRecorded).toBe(false);
+  } finally { for (const path of stores) chmodSync(path, 0o700); }
+  expect(readSkillSessionSnapshot("readonly-store", { cacheDir: f.cacheDir }).receipt.loaded).toEqual(before);
+});
+
+test("a cache-first load reads the cache while the pin is fresh, and says so when neither the cache nor the service can serve it", async () => {
+  const f = await fixture([["one-skill", { keywords: ["alpha beta"] }]]);
+  await buildSkillContext({ profileId: "fleet", prompt: "", sessionId: "aging" }, f.options);
+  const calls: string[] = [];
+  const unreachable = new Proxy({}, { get: (_target, name) => () => { calls.push(String(name)); throw new SkillSelectionError("SKILLS_API_UNAVAILABLE", "unreachable"); } }) as never;
+  const options = { ...f.options, cached: false, cacheFirst: true, client: unreachable, sessionId: "aging" };
+  const fresh = await loadSelectedSkill("one-skill@1.0.0", "fleet", options);
+  expect(fresh.receipt.source).toBe("verified-cache");
+  // A cache bound to another authority is an identity failure: it never falls back to the service.
+  await expect(loadSelectedSkill("one-skill@1.0.0", "fleet", { ...options, authority: "https://other.example.com/api/v1" })).rejects.toBeInstanceOf(SkillSelectionError);
+  expect(calls).toEqual([]);
+  const path = sessionReceiptPath("aging", { cacheDir: f.cacheDir });
+  const receipt = readSkillSessionSnapshot("aging", { cacheDir: f.cacheDir }).receipt;
+  writeSelectionJson(path, { ...receipt, verifiedAt: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString() });
+  await expect(loadSelectedSkill("one-skill@1.0.0", "fleet", options)).rejects.toMatchObject({ code: "CACHED_PROFILE_EXPIRED", message: expect.stringContaining("can't be reached") });
+  expect(calls.length).toBeGreaterThan(0);
+});
+
+test("a load names the session store as unwritable for a sandbox and for a full disk, and for nothing else", () => {
+  for (const code of ["EACCES", "EPERM", "EROFS", "ENOSPC", "EDQUOT"]) {
+    expect(isUnwritableStore(Object.assign(new Error("store"), { code }))).toBe(true);
+    expect(isUnwritableStore(Object.assign(new Error("wrapped"), { cause: Object.assign(new Error("store"), { code }) }))).toBe(true);
+  }
+  expect(isUnwritableStore(Object.assign(new Error("store"), { code: "EIO" }))).toBe(false);
+  expect(isUnwritableStore(new SkillSelectionError("SESSION_WRITE_LOCKED", "damaged"))).toBe(false);
 });

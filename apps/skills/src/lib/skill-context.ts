@@ -25,6 +25,17 @@ export interface SkillContextInput {
 export interface SkillContextOptions extends SelectionResolverOptions {
   maxChars?: number;
   maxSkills?: number;
+  /**
+   * An unnamed prompt match whose longest matched phrase has fewer words than
+   * this is offered as a load command instead of being injected, however many
+   * such words matched. Named, explicit, path and required selections are not
+   * affected. Unset, every counted match may be injected.
+   */
+  minPromptPhraseWords?: number;
+  /** Print load pointers with --cache-first even though this context didn't come from the cache: a managed hook that fell back to the service. */
+  pointerCacheFirst?: boolean;
+  /** Bodies a child session receives from its parent's loaded skills; the rest are offered. Unset, HISTORY_BODY_LIMITS applies. */
+  inheritedBodies?: number;
   /** Called with the resolved pin before any payload is read (again if a new child is resolved again); metadata only. */
   onResolved?: (resolved: ResolvedSelectionContext) => void;
   /**
@@ -98,6 +109,12 @@ async function buildSkillContextOnce(input: SkillContextInput, options: SkillCon
   if ((maxChars !== undefined && (!Number.isInteger(maxChars) || maxChars < 512 || maxChars > 64_000)) || !Number.isInteger(maxSkills) || maxSkills < 1 || maxSkills > 20) {
     throw new SkillSelectionError("INVALID_CONTEXT_BUDGET", "Context limits must be 512–64000 characters and 1–20 skills.");
   }
+  const minPromptPhraseWords = options.minPromptPhraseWords ?? 0;
+  const inheritedBodies = options.inheritedBodies ?? HISTORY_BODY_LIMITS["subagent-inherit"];
+  if (!Number.isInteger(minPromptPhraseWords) || minPromptPhraseWords < 0 || !Number.isInteger(inheritedBodies) || inheritedBodies < 0) {
+    throw new SkillSelectionError("INVALID_CONTEXT_BUDGET", "The prompt phrase and inherited body limits must be whole numbers of 0 or more.");
+  }
+  const historyBodyLimits: Readonly<Record<string, number>> = { ...HISTORY_BODY_LIMITS, "subagent-inherit": inheritedBodies };
   const profileId = input.profileId ?? "default";
   const sessionId = input.sessionId ? (input.agentId ? `${input.sessionId}:${input.agentId}` : input.sessionId) : undefined;
   if (input.parentSessionId !== undefined) {
@@ -125,14 +142,18 @@ async function buildSkillContextOnce(input: SkillContextInput, options: SkillCon
   const ranked: Candidate[] = profile.selections.flatMap((selection): Candidate[] => {
     const key = selectionKey(selection);
     if (restoredOrder.has(key)) return [{ selection, reason: "session-restore", priority: 6, score: 2000, recency: restoredOrder.get(key)! }];
-    if (inheritedOrder.has(key)) return [{ selection, reason: "subagent-inherit", priority: 6, score: 2000, recency: inheritedOrder.get(key)! }];
+    const inherited: Candidate | undefined = inheritedOrder.has(key) ? { selection, reason: "subagent-inherit", priority: 6, score: 2000, recency: inheritedOrder.get(key)! } : undefined;
+    // With no inherited bodies, a child's own request for this skill still counts; only otherwise is it offered.
+    if (inherited && inheritedBodies > 0) return [inherited];
     if (explicit.has(key)) return [{ selection, reason: "explicit", priority: 5, score: 1000 }];
     if (selection.triggers?.always) return [{ selection, reason: "profile-required", priority: 4, score: 900 }];
     const matchedPath = selection.triggers?.paths?.some((pattern) => paths.some((path) => pathMatch(pattern, path)));
     if (matchedPath) return [{ selection, reason: "path", priority: 3, score: 500 }];
     // Keyword strength cannot overtake names or explicit rules.
     const match = relevance.get(key);
-    return match ? [{ selection, reason: "prompt", priority: match.priority, score: match.score, weak: match.weak }] : [];
+    const weak = match !== undefined && (match.weak || (match.priority === 1 && !match.phrases.some(phrase => phrase.split(" ").length >= minPromptPhraseWords)));
+    if (match && !(inherited && weak)) return [{ selection, reason: "prompt", priority: match.priority, score: match.score, weak }];
+    return inherited ? [inherited] : [];
   }).sort((a, b) => b.priority - a.priority || (b.recency ?? -1) - (a.recency ?? -1) || b.score - a.score || a.selection.slug.localeCompare(b.selection.slug));
   // Only the most recent history is offered again.
   const historyOffered = new Map<string, number>();
@@ -142,6 +163,13 @@ async function buildSkillContextOnce(input: SkillContextInput, options: SkillCon
     historyOffered.set(candidate.reason, count + 1);
     return count < HISTORY_CANDIDATE_LIMIT;
   });
+  // A pointer loads what this session is pinned to. Without the session, a profile
+  // that moved on refuses the pinned version. --cache-first lets a sandbox with no
+  // network run it from the verified cache the hook read, and lets a pointer that
+  // outlives the cache's limit, as a subagent's can, still load from the service.
+  const pointerSession = sessionId && /^[A-Za-z0-9._:@][A-Za-z0-9._:@-]{0,255}$/.test(sessionId) ? ` --session ${sessionId}` : "";
+  const pointerCache = options.cached || options.pointerCacheFirst ? " --cache-first" : "";
+  const loadCommandFor = (selection: ResolvedSkillSelection) => `skills load ${selection.slug}@${selection.version} --selection-profile ${profile.profileId}${pointerCache}${pointerSession}`;
   const delivered: Array<{ key: string; section: string }> = [];
   let selections: ContextSelectionReceipt[] = [];
   const omitted: SkillContextResult["omitted"] = [];
@@ -150,12 +178,12 @@ async function buildSkillContextOnce(input: SkillContextInput, options: SkillCon
   for (let index = 0; index < candidates.length; index++) {
     const { selection, reason } = candidates[index]!;
     if (!input.restore && !explicit.has(selectionKey(selection)) && loaded.has(selectionKey(selection))) continue;
-    const loadCommand = `skills load ${selection.slug}@${selection.version} --selection-profile ${profile.profileId}`;
+    const loadCommand = loadCommandFor(selection);
     // Weaker prompt matches never fill slots a dropped, stronger tie left free.
     if (selections.length >= maxSkills || (ambiguous && reason === "prompt")) { omitted.push({ slug: selection.slug, version: selection.version, reason: "skill-limit", loadCommand }); continue; }
     // A much weaker match than the prompt's best is offered, not injected.
     if (candidates[index]!.weak) { omitted.push({ slug: selection.slug, version: selection.version, reason: "weak-match", loadCommand }); continue; }
-    const historyLimit = HISTORY_BODY_LIMITS[reason as keyof typeof HISTORY_BODY_LIMITS];
+    const historyLimit = historyBodyLimits[reason];
     if (historyLimit !== undefined) {
       const delivered = historyBodies.get(reason) ?? 0;
       if (delivered >= historyLimit) { omitted.push({ slug: selection.slug, version: selection.version, reason: "skill-limit", loadCommand }); continue; }
@@ -167,10 +195,13 @@ async function buildSkillContextOnce(input: SkillContextInput, options: SkillCon
       // is offered as a load command instead.
       const candidate = candidates[index]!;
       let end = index;
-      while (end + 1 < candidates.length && candidates[end + 1]!.reason === "prompt" && candidates[end + 1]!.priority === candidate.priority && candidates[end + 1]!.score === candidate.score && !candidates[end + 1]!.weak) end++;
-      const tied = candidates.slice(index, end + 1).filter(entry => explicit.has(selectionKey(entry.selection)) || !loaded.has(selectionKey(entry.selection)));
+      while (end + 1 < candidates.length && candidates[end + 1]!.reason === "prompt" && candidates[end + 1]!.priority === candidate.priority && candidates[end + 1]!.score === candidate.score) end++;
+      // A held-back entry at the same score doesn't end the tie: an alphabetical
+      // slug is no more of a reason to prefer one body when it sits between them.
+      const block = candidates.slice(index, end + 1).filter(entry => explicit.has(selectionKey(entry.selection)) || !loaded.has(selectionKey(entry.selection)));
+      const tied = block.filter(entry => !entry.weak);
       if (tied.length > maxSkills - selections.length) {
-        for (const entry of tied) omitted.push({ slug: entry.selection.slug, version: entry.selection.version, reason: "ambiguous-match", loadCommand: `skills load ${entry.selection.slug}@${entry.selection.version} --selection-profile ${profile.profileId}` });
+        for (const entry of block) omitted.push({ slug: entry.selection.slug, version: entry.selection.version, reason: entry.weak ? "weak-match" : "ambiguous-match", loadCommand: loadCommandFor(entry.selection) });
         ambiguous = true;
         index = end;
         continue;
@@ -196,7 +227,7 @@ async function buildSkillContextOnce(input: SkillContextInput, options: SkillCon
     const key = selectionKey(selection);
     return considered.has(key) || (!explicit.has(key) && loaded.has(key));
   });
-  for (const offer of offers) omitted.push({ slug: offer.selection.slug, version: offer.selection.version, reason: offer.reason, loadCommand: `skills load ${offer.selection.slug}@${offer.selection.version} --selection-profile ${profile.profileId}` });
+  for (const offer of offers) omitted.push({ slug: offer.selection.slug, version: offer.selection.version, reason: offer.reason, loadCommand: loadCommandFor(offer.selection) });
   let notice: string | undefined;
   if (sessionId) {
     // A new session (root or child) records its pin. An existing session's
@@ -220,7 +251,7 @@ async function buildSkillContextOnce(input: SkillContextInput, options: SkillCon
         if (!(error instanceof SkillSelectionError && error.code === "SESSION_WRITE_BUSY" && resolved.session && pinUnchanged(sessionId, resolved, options))) throw error;
         const unrecorded = new Set(delivered.filter(entry => !previouslyLoaded.has(entry.key)).map(entry => entry.key));
         omitted.unshift(...selections.filter(selection => unrecorded.has(selectionKey(selection))).map(selection => ({ slug: selection.slug, version: selection.version, reason: "write-busy",
-          loadCommand: `skills load ${selection.slug}@${selection.version} --selection-profile ${profile.profileId}` })));
+          loadCommand: loadCommandFor(selection) })));
         selections = selections.filter(selection => !unrecorded.has(selectionKey(selection)));
         delivered.splice(0, delivered.length, ...delivered.filter(entry => !unrecorded.has(entry.key)));
         notice = SESSION_WRITE_BUSY_NOTICE;

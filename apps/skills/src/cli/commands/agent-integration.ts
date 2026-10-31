@@ -1,3 +1,4 @@
+import { RECOVERABLE_CACHE_ERRORS } from "../../lib/selection-resolver.js";
 import { disableClaudeHooks } from "../../lib/claude-hook-disable.js";
 import { openCodeContextDelivery } from "../../lib/opencode-hook-protocol.js";
 import { captureSumiSettings } from "../../lib/sumi-settings-witness.js";
@@ -34,7 +35,7 @@ import { selfSpawnCommand } from "../../lib/self-spawn.js";
 import { sessionPinMigrationEnabled } from "../../lib/config.js";
 import { captureClaudeInstallerRequest, safeClaudeInstallerCaptureError } from "./claude-installer-capture.js";
 
-const RECOVERABLE_CONTEXT_CACHE_ERRORS = new Set(["CACHED_PROFILE_EXPIRED", "CACHED_PROFILE_MISSING", "CACHED_BUNDLE_MISSING"]);
+const RECOVERABLE_CONTEXT_CACHE_ERRORS = RECOVERABLE_CACHE_ERRORS;
 /**
  * Characters one managed hook's additionalContext carries at most (owner
  * request 2026-10-30: one prompt received 10-60 KB of skill bodies). The cap
@@ -51,6 +52,17 @@ export const MANAGED_HOOK_CONTEXT_MAX_CHARS = 12_000;
 export const MANAGED_HOOK_CONTEXT_MAX_SKILLS = 2;
 /** Part of the cap kept for the policy, notices and up to ten load offers. */
 export const MANAGED_HOOK_CONTEXT_RESERVE_CHARS = 2_500;
+/**
+ * A managed hook injects an unnamed prompt match only for a phrase of at least
+ * this many words. A one-word trigger says little about a turn's subject, more
+ * so in long text ("effect", "rollback", "handoff"), and several of them don't
+ * add up to a phrase, so such a match is offered as a load command instead
+ * (FAO-00144). SKILLS_HOOK_PROMPT_MIN_PHRASE_WORDS can only raise it.
+ */
+export const MANAGED_HOOK_PROMPT_MIN_PHRASE_WORDS = 2;
+/** A subagent's start carries no prompt to match against, so its parent's skills are offered, not injected. */
+export const MANAGED_HOOK_INHERITED_BODIES = 0;
+const HOOK_PROMPT_PHRASE_WORDS_RANGE = [MANAGED_HOOK_PROMPT_MIN_PHRASE_WORDS, 16] as const;
 const HOOK_CONTEXT_CHARS_RANGE = [MANAGED_HOOK_CONTEXT_RESERVE_CHARS + 512, MANAGED_HOOK_CONTEXT_MAX_CHARS] as const;
 const HOOK_CONTEXT_SKILLS_RANGE = [1, MANAGED_HOOK_CONTEXT_MAX_SKILLS] as const;
 const HOOK_CONTEXT_TRUNCATED = "[Skills context truncated at the hook limit; read the rest with `skills load <slug>`.]";
@@ -67,6 +79,23 @@ export function managedHookContextLimits(): { maxChars: number; maxSkills: numbe
   const maxChars = boundedEnvInteger("SKILLS_HOOK_CONTEXT_MAX_CHARS", MANAGED_HOOK_CONTEXT_MAX_CHARS, HOOK_CONTEXT_CHARS_RANGE);
   const maxSkills = boundedEnvInteger("SKILLS_HOOK_CONTEXT_MAX_SKILLS", MANAGED_HOOK_CONTEXT_MAX_SKILLS, HOOK_CONTEXT_SKILLS_RANGE);
   return { maxChars, maxSkills, bodyChars: maxChars - MANAGED_HOOK_CONTEXT_RESERVE_CHARS };
+}
+
+/** The effective phrase length: the default above, or a valid higher environment override. */
+export function managedHookPromptMinPhraseWords(): number {
+  return boundedEnvInteger("SKILLS_HOOK_PROMPT_MIN_PHRASE_WORDS", MANAGED_HOOK_PROMPT_MIN_PHRASE_WORDS, HOOK_PROMPT_PHRASE_WORDS_RANGE);
+}
+
+/**
+ * The selection flags one agent's managed hook passes to its context child.
+ * Sumi's plugin and Cursor's prompt hook both discard the output of a prompt
+ * call and only deliver what a later call restores, so a pointer could never
+ * reach their models: it would turn a delivered body into nothing. They keep the
+ * plain selection until they can carry pointers.
+ */
+export function managedHookSelectionArgs(agent: IntegrationAgent): string[] {
+  if (agent === "sumi" || agent === "cursor") return [];
+  return ["--min-prompt-phrase-words", String(managedHookPromptMinPhraseWords()), "--inherited-bodies", String(MANAGED_HOOK_INHERITED_BODIES)];
 }
 
 /** Clamp assembled hook context to the cap at a line boundary, with a fixed note. */
@@ -116,15 +145,18 @@ export function withSessionPinMigrationNotice(agent: IntegrationAgent, event: st
   } catch { /* the notice stays pending; context delivery is unaffected */ }
 }
 
-async function contextForHook(input: unknown, profileId: string, cached: boolean, deadline: number): Promise<any> {
+async function contextForHook(agent: IntegrationAgent, input: unknown, profileId: string, cached: boolean, deadline: number): Promise<any> {
   // The child's limit keeps time for this hook to report, and its renewal
   // budget fits inside that limit, so a timeout is always reported by the
   // innermost layer that hit it, including after SessionStart's sync.
   const { childMs, renewalBudgetMs } = managedContextChildLimits(deadline - Date.now());
   if (childMs <= 0) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "context");
   const limits = managedHookContextLimits();
-  const args = ["context", "--stdin", "--json", "--selection-profile", profileId, "--max-chars", String(limits.bodyChars), "--max-skills", String(limits.maxSkills)];
+  const args = ["context", "--stdin", "--json", "--selection-profile", profileId, "--max-chars", String(limits.bodyChars), "--max-skills", String(limits.maxSkills), ...managedHookSelectionArgs(agent)];
   if (cached) args.push("--cached", "--auto-reconcile-safe");
+  // Falling back from the cache for this context doesn't change what a pointer
+  // should do when the agent runs it, possibly in a sandbox with no network.
+  else args.push("--pointer-cache-first");
   // Default for every agent's managed hook: a refused renewal of the same
   // profile migrates the pin and names retired loaded skills once. Operators
   // keep the refusal with `skills config set sessionPinMigration off --global`.
@@ -154,7 +186,7 @@ async function contextForHook(input: unknown, profileId: string, cached: boolean
     // authenticated loaded-selection comparison. Missing cache still gets an
     // authenticated read; identity and integrity failures never use fallback.
     if (cached && RECOVERABLE_CONTEXT_CACHE_ERRORS.has(failure.code)) {
-      return contextForHook(input, profileId, false, deadline);
+      return contextForHook(agent, input, profileId, false, deadline);
     }
     throw failure;
   }
@@ -646,7 +678,7 @@ export function registerAgentIntegration(parent: Command): void {
         selectionProfile = pinnedHookProfile(input, selectionProfile);
         // An expired snapshot renews when its pin is still authorized; a refused
         // renewal of the same profile migrates the pin unless the station opted out.
-        const result = await contextForHook(input, selectionProfile, true, deadline);
+        const result = await contextForHook(options.agent as IntegrationAgent, input, selectionProfile, true, deadline);
         withSessionPinMigrationNotice(options.agent, event, input, result);
         if (syncNotice) result.context = [syncNotice, result.context].filter(Boolean).join("\n\n");
         const output = hookContextOutput(event, result) as { hookSpecificOutput?: { hookEventName: string; additionalContext: string } };
