@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
-import { capManagedHookContext, managedHookContextLimits, managedHookPromptMinScore, MANAGED_HOOK_PROMPT_MIN_SCORE, MANAGED_HOOK_CONTEXT_MAX_CHARS, MANAGED_HOOK_CONTEXT_MAX_SKILLS, MANAGED_HOOK_CONTEXT_RESERVE_CHARS } from "./commands/agent-integration.js";
+import { capManagedHookContext, managedHookContextLimits, managedHookPromptMinPhraseWords, managedHookSelectionArgs, MANAGED_HOOK_PROMPT_MIN_PHRASE_WORDS, MANAGED_HOOK_CONTEXT_MAX_CHARS, MANAGED_HOOK_CONTEXT_MAX_SKILLS, MANAGED_HOOK_CONTEXT_RESERVE_CHARS } from "./commands/agent-integration.js";
 
-const names = ["SKILLS_HOOK_CONTEXT_MAX_CHARS", "SKILLS_HOOK_CONTEXT_MAX_SKILLS", "SKILLS_HOOK_PROMPT_MIN_SCORE"] as const;
+const names = ["SKILLS_HOOK_CONTEXT_MAX_CHARS", "SKILLS_HOOK_CONTEXT_MAX_SKILLS", "SKILLS_HOOK_PROMPT_MIN_PHRASE_WORDS"] as const;
 const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
 afterEach(() => { for (const name of names) { if (saved[name] === undefined) delete process.env[name]; else process.env[name] = saved[name]; } });
 
@@ -53,14 +53,22 @@ test("agent-submitted prompts are recognised only by a marker at their start", a
     expect(isAgentSubmittedPrompt(prompt)).toBe(false);
 });
 
-test("the hook's prompt score defaults to a two-word phrase and an environment override can only raise it", () => {
-  delete process.env.SKILLS_HOOK_PROMPT_MIN_SCORE;
-  expect(MANAGED_HOOK_PROMPT_MIN_SCORE).toBe(200);
-  expect(managedHookPromptMinScore()).toBe(200);
-  process.env.SKILLS_HOOK_PROMPT_MIN_SCORE = "300";
-  expect(managedHookPromptMinScore()).toBe(300);
-  for (const value of ["199", "100", "0", "-1", "2e3", "two", "", "1000000"]) {
-    process.env.SKILLS_HOOK_PROMPT_MIN_SCORE = value;
-    expect(managedHookPromptMinScore()).toBe(200);
+test("the hook's phrase length defaults to two words and an environment override can only raise it", () => {
+  delete process.env.SKILLS_HOOK_PROMPT_MIN_PHRASE_WORDS;
+  expect(MANAGED_HOOK_PROMPT_MIN_PHRASE_WORDS).toBe(2);
+  expect(managedHookPromptMinPhraseWords()).toBe(2);
+  process.env.SKILLS_HOOK_PROMPT_MIN_PHRASE_WORDS = "3";
+  expect(managedHookPromptMinPhraseWords()).toBe(3);
+  for (const value of ["1", "0", "-1", "2e1", "two", "", "17", "1000000"]) {
+    process.env.SKILLS_HOOK_PROMPT_MIN_PHRASE_WORDS = value;
+    expect(managedHookPromptMinPhraseWords()).toBe(2);
+  }
+});
+
+test("Sumi's hook passes no selection flags, because its plugin discards the admission output a pointer would need", () => {
+  delete process.env.SKILLS_HOOK_PROMPT_MIN_PHRASE_WORDS;
+  expect(managedHookSelectionArgs("sumi")).toEqual([]);
+  for (const agent of ["claude", "codex", "opencode", "cursor"] as const) {
+    expect(managedHookSelectionArgs(agent)).toEqual(["--min-prompt-phrase-words", "2", "--inherited-bodies", "0"]);
   }
 });

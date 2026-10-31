@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Managed prompt hooks inject an unnamed prompt match only for a phrase of two or more words, and offer anything weaker as a `skills load` command. A body no longer arrives on one matched word in a long prompt, or on several such words added together. A profile with a one-word keyword such as `keywords: ["pdf"]` installed through `skills hook install` now gets a pointer on "make a pdf"; to get the body, use `$pdf`, "the pdf skill", a two-word keyword or `triggers.always`. `SKILLS_HOOK_PROMPT_MIN_PHRASE_WORDS` can raise the length and never lower it. `skills context` called directly behaves as before unless given `--min-prompt-phrase-words`.
+- A subagent started by a managed hook is offered its parent's loaded skills as `skills load` commands instead of receiving the most recent one's body, because its start carries no prompt to match. It still gets a body for a skill it names or matches by a phrase. Its pin inheritance doesn't change. `--inherited-bodies` sets this for a direct `skills context` call.
+- Sumi's managed hook keeps the earlier selection for now. Its plugin discards its prompt admission output, so a pointer could not reach the model.
+- Each `skills load` command offered within a session now names that session with `--session`, so it loads the version the session is pinned to, even after the profile moved on, and the load is recorded on that session.
+
 ## 0.10.88
 
 - Publishes every 0.10.86 and 0.10.87 change listed below, together with the 0.10.84 and 0.10.85 changes that 0.10.86 carries. Neither 0.10.86 nor 0.10.87 reached npm, and the latest published release before this one is 0.10.83, so this is the first npm release since 0.10.83. 0.10.87 was not tagged: its release review found that this changelog did not yet list the changes merged after #162.

@@ -229,7 +229,7 @@ test("a prompt and eight subagents starting together all get context without wri
   } finally { api.close(); }
 }, 90_000);
 
-test("a prompt that loads a new skill while eight subagents start gives every hook its context", async () => {
+test("a prompt that loads a new skill while eight subagents start answers every hook without a lock refusal", async () => {
   const api = authority(0, { resolve: 0, bundle: 0 });
   try {
     const s = await station(api, 0, 0);

@@ -521,10 +521,13 @@ for (const [savedProfile, configuredProfile] of [["fleet", "default"], ["default
       const restored = await f.a.hook("claude", "SessionStart", { source: "resume" });
       expect(restored.hookSpecificOutput.additionalContext).toContain(f.versions[0]!.skillMd);
       expect(restored.hookSpecificOutput.additionalContext).not.toContain(f.versions[1]!.skillMd);
-      const child = await f.a.hook("claude", "SubagentStart", { agent_id: "mixed-child" });
       // A subagent is offered the pinned parent's skill at the pinned version, not given its body.
-      expect(child.hookSpecificOutput.additionalContext).not.toContain(f.versions[0]!.skillMd);
-      expect(child.hookSpecificOutput.additionalContext).toContain(`Additional selected skill review-code@${f.versions[0]!.version}:`);
+      const offered = await f.a.hook("claude", "SubagentStart", { agent_id: "offered-child" });
+      expect(offered.hookSpecificOutput.additionalContext).not.toContain(f.versions[0]!.skillMd);
+      expect(offered.hookSpecificOutput.additionalContext).toContain(`Additional selected skill review-code@${f.versions[0]!.version}:`);
+      // A child that asks for it by name loads it at the parent's pin.
+      const child = await f.a.hook("claude", "SubagentStart", { agent_id: "mixed-child", prompt: "$review-code" });
+      expect(child.hookSpecificOutput.additionalContext).toContain(f.versions[0]!.skillMd);
       expectSamePin();
       const fresh = await f.a.hook("claude", "UserPromptSubmit", { session_id: "new-session", prompt: "review this patch" });
       expect(fresh.hookSpecificOutput.additionalContext).toContain(f.versions[1]!.skillMd);
@@ -539,10 +542,8 @@ for (const [savedProfile, configuredProfile] of [["fleet", "default"], ["default
       const freshReceipt = readdirSync(sessions).map(name => json(join(sessions, name))).find(receipt => receipt.sessionId === "new-session");
       put(receiptPath, JSON.stringify({ ...freshReceipt, sessionId: "parent-session", generation: json(receiptPath).generation + 1 }));
       const retainedChild = await f.a.hook("claude", "SubagentStart", { agent_id: "mixed-child", restore: true });
-      // The child loaded nothing of its own, so a restore brings no body, and it never adopts the parent's new revision.
-      expect(retainedChild.hookSpecificOutput.additionalContext).not.toContain(f.versions[0]!.skillMd);
+      expect(retainedChild.hookSpecificOutput.additionalContext).toContain(f.versions[0]!.skillMd);
       expect(retainedChild.hookSpecificOutput.additionalContext).not.toContain(f.versions[1]!.skillMd);
-      expect(retainedChild.hookSpecificOutput.additionalContext).not.toContain(`review-code@${f.versions[1]!.version}`);
       put(receiptPath, parentBeforeChange);
       // Expiry must authorize the old pinned profile, never silently adopt the
       // newly configured one or use its already warm cache on authentication failure.
@@ -668,7 +669,7 @@ test("built Gemini hook selects the user's request after its native SessionStart
   const f = await fixture();
   try {
     const selections = [];
-    for (const [slug, length, keywords] of [["skills-author", 7500, ["skills", "skill", "authoring", "workspace"]], ["backup-verify", 1000, ["backup", "verify"]]] as const) {
+    for (const [slug, length, keywords] of [["skills-author", 7500, ["skills", "skill authoring", "authoring workspace"]], ["backup-verify", 1000, ["backup", "backup verify"]]] as const) {
       const source = join(f.root, slug), skillMd = `---\nname: ${slug}\ndescription: A synthetic procedure\nkind: instruction\n---\n${"x".repeat(length)}\n`;
       put(join(source, "SKILL.md"), skillMd);
       put(join(source, "package.json"), JSON.stringify({ name: slug, version: "1.0.0", skills: { kind: "instruction" } }));
@@ -1422,14 +1423,59 @@ test("the managed prompt hook offers a one-word match and injects a named or phr
     const explicit = await f.a.hook("claude", "UserPromptSubmit", { session_id: "explicit", prompt: "$review-code" });
     expect(explicit.hookSpecificOutput.additionalContext).toContain(body);
     // A raised threshold holds a phrase back too; a lowered one changes nothing.
-    const raised = await f.a.hook("claude", "UserPromptSubmit", { session_id: "raised", prompt: "review this patch" }, { SKILLS_HOOK_PROMPT_MIN_SCORE: "999" });
+    const raised = await f.a.hook("claude", "UserPromptSubmit", { session_id: "raised", prompt: "review this patch" }, { SKILLS_HOOK_PROMPT_MIN_PHRASE_WORDS: "4" });
     expect(raised.hookSpecificOutput.additionalContext).not.toContain(body);
-    const lowered = await f.a.hook("claude", "UserPromptSubmit", { session_id: "lowered", prompt: "review again" }, { SKILLS_HOOK_PROMPT_MIN_SCORE: "1" });
+    const lowered = await f.a.hook("claude", "UserPromptSubmit", { session_id: "lowered", prompt: "review again" }, { SKILLS_HOOK_PROMPT_MIN_PHRASE_WORDS: "1" });
     expect(lowered.hookSpecificOutput.additionalContext).not.toContain(body);
     // A subagent's start has no prompt: it is offered the parent's skill, not given its body.
     const child = await f.a.hook("claude", "SubagentStart", { session_id: "phrase", agent_id: "pointer-child" });
     expect(child.hookSpecificOutput.additionalContext).not.toContain(body);
     expect(child.hookSpecificOutput.additionalContext).toContain("Additional selected skill review-code@1.0.0: skills load review-code@1.0.0");
+  } finally { await f.close(); }
+});
+
+test("a subagent's pointer loads the parent's pinned version after the profile moved on, and the load is recorded on its session", async () => {
+  const f = await fixture();
+  try {
+    await f.a.install();
+    const created = await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+    await f.a.ok(["sync", "--selection-profile", "engineering", "--json"]);
+    await f.a.hook("claude", "UserPromptSubmit", { session_id: "pin-parent", prompt: "$review-code" });
+    await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[1]!.file, "--if-match", created.revision, "--json"]);
+    await f.a.ok(["sync", "--selection-profile", "engineering", "--json"]);
+    const started = await f.a.hook("claude", "SubagentStart", { session_id: "pin-parent", agent_id: "pin-child" });
+    const pointer = /skills load (review-code@1\.0\.0 --selection-profile engineering --session pin-parent:pin-child)/.exec(started.hookSpecificOutput.additionalContext)?.[1];
+    expect(pointer).toBeDefined();
+    const sessionsBefore = join(f.a.data, "selection-cache", "sessions");
+    expect(readdirSync(sessionsBefore).map(name => json(join(sessionsBefore, name))).find(receipt => receipt.sessionId === "pin-parent:pin-child")!.loaded).toEqual([]);
+    // Run the command exactly as the hook printed it.
+    const loaded = await f.a.ok(["load", ...pointer!.split(" "), "--json"]);
+    expect(loaded.content).toBe(f.versions[0]!.skillMd);
+    const sessions = join(f.a.data, "selection-cache", "sessions");
+    const child = readdirSync(sessions).map(name => json(join(sessions, name))).find(receipt => receipt.sessionId === "pin-parent:pin-child")!;
+    expect(child.loaded).toHaveLength(1);
+    // Control: without the session the same version is refused once the profile has moved on.
+    const unpinned = await f.a.run(["load", "review-code@1.0.0", "--selection-profile", "engineering", "--json"]);
+    expect(unpinned.exitCode).toBe(1);
+  } finally { await f.close(); }
+});
+
+test("Sumi's managed hook keeps delivering a one-word match and a parent's skill, since its plugin can't carry a pointer", async () => {
+  const f = await fixture();
+  try {
+    await f.a.install();
+    await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+    await f.a.ok(["sync", "--selection-profile", "engineering", "--json"]);
+    const body = f.versions[0]!.skillMd;
+    const sumi = (text: string, session: string, extra: Record<string, unknown> = {}) => f.a.ok(["hook", "user-prompt", "--agent", "sumi", "--selection-profile", "engineering"],
+      { stdin: { cwd: f.a.project, hook_event_name: "UserPromptSubmit", session_id: session, parent_session_id: null, prompt: text, ...extra } });
+    // The plugin discards admission's output and restores on the next call with an empty prompt.
+    await sumi("review again", "sumi-root");
+    const delivered = await sumi("", "sumi-root", { restore: true });
+    expect(delivered.hookSpecificOutput.additionalContext).toContain(body);
+    // Control: the same sequence on Claude offers it instead.
+    const offered = await f.a.hook("claude", "UserPromptSubmit", { session_id: "claude-root", prompt: "review again" });
+    expect(offered.hookSpecificOutput.additionalContext).not.toContain(body);
   } finally { await f.close(); }
 });
 

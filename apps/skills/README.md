@@ -1019,10 +1019,22 @@ offered as `skills load` commands instead of being injected or picked by name
 order. Weaker pointers are offered the same way, at most three and never
 injected: a multi-word keyword whose words all appear apart, one of them
 discriminating ("designs review" in "the designs app for review"), or a common
-one-word keyword; a tie that does not fit is left out.
+one-word keyword; a tie that does not fit is left out. Managed prompt hooks are
+stricter than a direct `skills context` call: they inject an unnamed prompt
+match only for a phrase of two or more words, and offer anything weaker as a
+`skills load` command, so a `keywords: ["pdf"]` selection needs `$pdf`, "the pdf
+skill", a two-word keyword or `triggers.always` to arrive as a body.
+`SKILLS_HOOK_PROMPT_MIN_PHRASE_WORDS` can raise that length, never lower it.
+Sumi's plugin discards its prompt admission output, so a pointer could not reach
+its model, and Sumi keeps the plain selection. Each `skills load` command a
+session is offered names that session, so it loads the pinned version and is
+recorded there.
 A session retains its loaded selections; compaction restores the two most
-recently loaded instructions, and a subagent receives its parent's most recent
-one, each followed by `skills load` commands for the next most recent. A
+recently loaded instructions, followed by `skills load` commands for the next
+most recent. A subagent started by a managed hook is offered its parent's
+loaded skills as `skills load` commands and gets a body only for one it names
+or matches by a phrase; a direct `skills context` call, and Sumi's hook, give it
+its parent's most recent one as a body. A
 read-only prompt does not rewrite the session receipt or take its write lock
 (a damaged lock still refuses), and receipt writers wait up to two seconds for
 another live writer's lock before refusing; a lock another writer is

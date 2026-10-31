@@ -183,9 +183,9 @@ test("weak prompt pointers are offered as load commands after every other omissi
   expect(mixed.omitted.map(entry => entry.reason)).toEqual([...Array(4).fill("ambiguous-match"), "partial-match"]);
 });
 
-test("a minimum prompt score offers one-word matches, keeps names and phrases, and leaves the default unchanged", async () => {
+test("a minimum phrase length offers one-word matches, keeps names and phrases, and leaves the default unchanged", async () => {
   const f = await fixture();
-  const managed = { ...f.options, minPromptScore: 200 };
+  const managed = { ...f.options, minPromptPhraseWords: 2 };
   const select = (prompt: string) => buildSkillContext({ profileId: "fleet", prompt }, managed);
   // One discriminating word: injected by default, offered once the hook asks for a phrase.
   expect(await f.slugs("the login page fails")).toEqual(["login"]);
@@ -210,7 +210,8 @@ test("zero inherited bodies gives a subagent its parent's skills as load command
   expect(child.selections).toEqual([]);
   expect(child.context).not.toContain("Fixture body");
   expect(child.omitted.map(entry => entry.slug).sort()).toEqual(["hook-drift-repair", "reconcile"]);
-  expect(child.omitted.every(entry => entry.loadCommand.startsWith(`skills load ${entry.slug}@1.0.0`))).toBe(true);
+  // Each pointer names the child's own session, so it loads the pinned version and is recorded there.
+  expect(child.omitted.every(entry => entry.loadCommand === `skills load ${entry.slug}@1.0.0 --selection-profile fleet --session parent:child-pointers`)).toBe(true);
   const receipt = readSkillSessionSnapshot("parent:child-pointers", { cacheDir: f.cacheDir }).receipt;
   expect(receipt.parent?.sessionId).toBe("parent");
   expect(receipt.loaded).toEqual([]);
@@ -218,31 +219,41 @@ test("zero inherited bodies gives a subagent its parent's skills as load command
   const named = await buildSkillContext({ profileId: "fleet", prompt: "$reconcile please", sessionId: "parent", agentId: "child-named" }, { ...f.options, inheritedBodies: 0 });
   expect(named.selections.map(selection => [selection.slug, selection.reason])).toEqual([["reconcile", "explicit"]]);
   expect(named.omitted.map(entry => entry.slug)).toEqual(["hook-drift-repair"]);
-  const phrase = await buildSkillContext({ profileId: "fleet", prompt: "see the hook drift", sessionId: "parent", agentId: "child-phrase" }, { ...f.options, inheritedBodies: 0, minPromptScore: 200 });
+  const phrase = await buildSkillContext({ profileId: "fleet", prompt: "see the hook drift", sessionId: "parent", agentId: "child-phrase" }, { ...f.options, inheritedBodies: 0, minPromptPhraseWords: 2 });
   expect(phrase.selections.map(selection => [selection.slug, selection.reason])).toEqual([["hook-drift-repair", "prompt"]]);
   // The same child with the default keeps today's one body.
   const another = await f.select("", { sessionId: "parent", agentId: "child-default" });
   expect(another.selections.map(selection => selection.reason)).toEqual(["subagent-inherit"]);
 });
 
-test("a negative or fractional score or inherited body limit is refused", async () => {
+test("a negative or fractional phrase length or inherited body limit is refused", async () => {
   const f = await fixture();
-  for (const limits of [{ minPromptScore: -1 }, { minPromptScore: 1.5 }, { inheritedBodies: -1 }, { inheritedBodies: 0.5 }]) {
+  for (const limits of [{ minPromptPhraseWords: -1 }, { minPromptPhraseWords: 1.5 }, { inheritedBodies: -1 }, { inheritedBodies: 0.5 }]) {
     await expect(buildSkillContext({ profileId: "fleet", prompt: "x" }, { ...f.options, ...limits })).rejects.toMatchObject({ code: "INVALID_CONTEXT_BUDGET" });
   }
 });
 
-test("long task text that uses a one-word trigger's word gets no body under the hook's score, but the same words do by default", async () => {
+test("long task text that uses a one-word trigger's word gets no body under the hook's phrase length, but the same words do by default", async () => {
   const f = await fixture([["effect", { keywords: ["effect"] }], ["rollback", { keywords: ["rollback"] }], ["handoff", { keywords: ["handoff"] }],
     ["marketing", { keywords: ["marketing"] }], ["missing-invoices", { keywords: ["missing invoices"] }]]);
   const text = "The change takes effect after the ship. Rollback is the flag ship. Keep the checkout handoff bound to the original workspace, and the marketing site reads the same price.";
-  const managed = await buildSkillContext({ profileId: "fleet", prompt: text }, { ...f.options, minPromptScore: 200, maxSkills: 2 });
+  const managed = await buildSkillContext({ profileId: "fleet", prompt: text }, { ...f.options, minPromptPhraseWords: 2, maxSkills: 2 });
   expect(managed.selections).toEqual([]);
   expect(managed.omitted.map(entry => entry.reason)).toEqual(["weak-match", "weak-match", "weak-match", "weak-match"]);
   // Control: the check can fail. Without the score these are real prompt matches.
   const plain = await buildSkillContext({ profileId: "fleet", prompt: text }, { ...f.options, maxSkills: 4 });
   expect(plain.selections.map(selection => selection.slug).sort()).toEqual(["effect", "handoff", "marketing", "rollback"]);
   // A phrase in the same text is still on the subject.
-  const phrase = await buildSkillContext({ profileId: "fleet", prompt: `${text} Send the missing invoices.` }, { ...f.options, minPromptScore: 200, maxSkills: 2 });
+  const phrase = await buildSkillContext({ profileId: "fleet", prompt: `${text} Send the missing invoices.` }, { ...f.options, minPromptPhraseWords: 2, maxSkills: 2 });
   expect(phrase.selections.map(selection => selection.slug)).toEqual(["missing-invoices"]);
+});
+
+test("several one-word matches don't add up to a phrase under the minimum phrase length", async () => {
+  const f = await fixture([["effect-and-rollback", { keywords: ["effect", "rollback"] }], ["missing-invoices", { keywords: ["missing invoices"] }]]);
+  const text = "the change takes effect after the rollback";
+  // Control: by default the two words reach a body.
+  expect((await f.select(text)).selections.map(selection => selection.slug)).toEqual(["effect-and-rollback"]);
+  const managed = await buildSkillContext({ profileId: "fleet", prompt: text }, { ...f.options, minPromptPhraseWords: 2 });
+  expect(managed.selections).toEqual([]);
+  expect(managed.omitted.map(entry => [entry.slug, entry.reason])).toEqual([["effect-and-rollback", "weak-match"]]);
 });

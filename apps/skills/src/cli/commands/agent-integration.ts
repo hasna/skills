@@ -52,15 +52,16 @@ export const MANAGED_HOOK_CONTEXT_MAX_SKILLS = 2;
 /** Part of the cap kept for the policy, notices and up to ten load offers. */
 export const MANAGED_HOOK_CONTEXT_RESERVE_CHARS = 2_500;
 /**
- * A managed hook injects an unnamed prompt match only at this score: a phrase
- * of two or more words. A one-word trigger says little about a turn's subject,
- * more so in long text ("effect", "rollback", "handoff"), so it is offered as a
- * load command instead (FAO-00144). SKILLS_HOOK_PROMPT_MIN_SCORE can only raise it.
+ * A managed hook injects an unnamed prompt match only for a phrase of at least
+ * this many words. A one-word trigger says little about a turn's subject, more
+ * so in long text ("effect", "rollback", "handoff"), and several of them don't
+ * add up to a phrase, so such a match is offered as a load command instead
+ * (FAO-00144). SKILLS_HOOK_PROMPT_MIN_PHRASE_WORDS can only raise it.
  */
-export const MANAGED_HOOK_PROMPT_MIN_SCORE = 200;
+export const MANAGED_HOOK_PROMPT_MIN_PHRASE_WORDS = 2;
 /** A subagent's start carries no prompt to match against, so its parent's skills are offered, not injected. */
 export const MANAGED_HOOK_INHERITED_BODIES = 0;
-const HOOK_PROMPT_SCORE_RANGE = [MANAGED_HOOK_PROMPT_MIN_SCORE, 999_999] as const;
+const HOOK_PROMPT_PHRASE_WORDS_RANGE = [MANAGED_HOOK_PROMPT_MIN_PHRASE_WORDS, 16] as const;
 const HOOK_CONTEXT_CHARS_RANGE = [MANAGED_HOOK_CONTEXT_RESERVE_CHARS + 512, MANAGED_HOOK_CONTEXT_MAX_CHARS] as const;
 const HOOK_CONTEXT_SKILLS_RANGE = [1, MANAGED_HOOK_CONTEXT_MAX_SKILLS] as const;
 const HOOK_CONTEXT_TRUNCATED = "[Skills context truncated at the hook limit; read the rest with `skills load <slug>`.]";
@@ -79,9 +80,21 @@ export function managedHookContextLimits(): { maxChars: number; maxSkills: numbe
   return { maxChars, maxSkills, bodyChars: maxChars - MANAGED_HOOK_CONTEXT_RESERVE_CHARS };
 }
 
-/** The effective prompt score: the default above, or a valid higher environment override. */
-export function managedHookPromptMinScore(): number {
-  return boundedEnvInteger("SKILLS_HOOK_PROMPT_MIN_SCORE", MANAGED_HOOK_PROMPT_MIN_SCORE, HOOK_PROMPT_SCORE_RANGE);
+/** The effective phrase length: the default above, or a valid higher environment override. */
+export function managedHookPromptMinPhraseWords(): number {
+  return boundedEnvInteger("SKILLS_HOOK_PROMPT_MIN_PHRASE_WORDS", MANAGED_HOOK_PROMPT_MIN_PHRASE_WORDS, HOOK_PROMPT_PHRASE_WORDS_RANGE);
+}
+
+/**
+ * The selection flags one agent's managed hook passes to its context child.
+ * Sumi's plugin discards the output of its prompt admission call and asks for
+ * context with an empty prompt, so a pointer could never reach its model: it
+ * would turn a delivered body into nothing. Sumi keeps the plain selection until
+ * its plugin can carry pointers.
+ */
+export function managedHookSelectionArgs(agent: IntegrationAgent): string[] {
+  if (agent === "sumi") return [];
+  return ["--min-prompt-phrase-words", String(managedHookPromptMinPhraseWords()), "--inherited-bodies", String(MANAGED_HOOK_INHERITED_BODIES)];
 }
 
 /** Clamp assembled hook context to the cap at a line boundary, with a fixed note. */
@@ -131,15 +144,14 @@ export function withSessionPinMigrationNotice(agent: IntegrationAgent, event: st
   } catch { /* the notice stays pending; context delivery is unaffected */ }
 }
 
-async function contextForHook(input: unknown, profileId: string, cached: boolean, deadline: number): Promise<any> {
+async function contextForHook(agent: IntegrationAgent, input: unknown, profileId: string, cached: boolean, deadline: number): Promise<any> {
   // The child's limit keeps time for this hook to report, and its renewal
   // budget fits inside that limit, so a timeout is always reported by the
   // innermost layer that hit it, including after SessionStart's sync.
   const { childMs, renewalBudgetMs } = managedContextChildLimits(deadline - Date.now());
   if (childMs <= 0) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "context");
   const limits = managedHookContextLimits();
-  const args = ["context", "--stdin", "--json", "--selection-profile", profileId, "--max-chars", String(limits.bodyChars), "--max-skills", String(limits.maxSkills),
-    "--min-prompt-score", String(managedHookPromptMinScore()), "--inherited-bodies", String(MANAGED_HOOK_INHERITED_BODIES)];
+  const args = ["context", "--stdin", "--json", "--selection-profile", profileId, "--max-chars", String(limits.bodyChars), "--max-skills", String(limits.maxSkills), ...managedHookSelectionArgs(agent)];
   if (cached) args.push("--cached", "--auto-reconcile-safe");
   // Default for every agent's managed hook: a refused renewal of the same
   // profile migrates the pin and names retired loaded skills once. Operators
@@ -170,7 +182,7 @@ async function contextForHook(input: unknown, profileId: string, cached: boolean
     // authenticated loaded-selection comparison. Missing cache still gets an
     // authenticated read; identity and integrity failures never use fallback.
     if (cached && RECOVERABLE_CONTEXT_CACHE_ERRORS.has(failure.code)) {
-      return contextForHook(input, profileId, false, deadline);
+      return contextForHook(agent, input, profileId, false, deadline);
     }
     throw failure;
   }
@@ -662,7 +674,7 @@ export function registerAgentIntegration(parent: Command): void {
         selectionProfile = pinnedHookProfile(input, selectionProfile);
         // An expired snapshot renews when its pin is still authorized; a refused
         // renewal of the same profile migrates the pin unless the station opted out.
-        const result = await contextForHook(input, selectionProfile, true, deadline);
+        const result = await contextForHook(options.agent as IntegrationAgent, input, selectionProfile, true, deadline);
         withSessionPinMigrationNotice(options.agent, event, input, result);
         if (syncNotice) result.context = [syncNotice, result.context].filter(Boolean).join("\n\n");
         const output = hookContextOutput(event, result) as { hookSpecificOutput?: { hookEventName: string; additionalContext: string } };
