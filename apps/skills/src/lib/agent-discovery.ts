@@ -1659,13 +1659,51 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     if (text === null) return null;
     try { return codexPluginHookHandlers(parseConfig(text, path)); } catch { return null; }
   };
-  function plugin(root: string, codex?: { marketplace: string; name: string; source: string }): void {
+  // An entry with `strict: false` is the manifest when the fetched plugin has
+  // none (the swift-lsp case): the entry may declare skills, hooks, commands,
+  // agents, MCP and LSP servers inline, so a physical file inventory alone
+  // cannot describe it. The catalog is read at use time and deliberately not
+  // bound as a source: marketplaces refresh on their own, and
+  // `claude-marketplace-entry-v1` is admitted only for explicit reviews. Every
+  // run re-reads the entry, so a new inline hook refuses here rather than
+  // drifting past a binding, and an unreadable or ambiguous entry refuses.
+  const claudeMarketplaceManifest = (id: string | undefined): Record<string, unknown> => {
+    const split = id === undefined ? -1 : id.lastIndexOf("@");
+    const plugin = split > 0 ? id!.slice(0, split) : "", marketplace = split > 0 ? id!.slice(split + 1) : "";
+    if (!plugin || !marketplace) unresolved("plugin manifest missing without a marketplace entry");
+    const registryPath = join(nativeHome, "plugins/known_marketplaces.json");
+    const registryText = read(registryPath);
+    if (registryText === null) unresolved("plugin marketplace registry is missing");
+    const registry = parseConfig(registryText!, registryPath);
+    const location = registry?.[marketplace]?.installLocation;
+    if (typeof location !== "string" || /[\x00-\x1f\x7f]/.test(location) || !isAbsolute(location) || resolve(location) !== location) unresolved("plugin marketplace installation location is missing");
+    const catalogPath = join(location as string, ".claude-plugin/marketplace.json");
+    const catalogText = read(catalogPath);
+    if (catalogText === null) unresolved("plugin marketplace catalog is missing");
+    const catalog = parseConfig(catalogText!, catalogPath);
+    const entries = Array.isArray(catalog?.plugins) ? catalog.plugins.filter((entry: any) => entry && entry.name === plugin) : [];
+    if (entries.length !== 1) unresolved("plugin marketplace entry is missing or ambiguous");
+    if (entries[0].strict !== false) unresolved("plugin manifest missing");
+    const manifest: Record<string, unknown> = {};
+    for (const key of ["skills", "hooks", "commands", "agents", "mcpServers", "lspServers"]) {
+      if (entries[0][key] !== undefined) manifest[key] = entries[0][key];
+    }
+    return manifest;
+  };
+
+  function plugin(root: string, codex?: { marketplace: string; name: string; source: string }, id?: string): void {
     root = canonical(root); safe(root);
+    if (!lstatSync(root, { throwIfNoEntry: false })) unresolved("plugin installation root is missing");
     if (exclusion) roots.add(root);
     const manifestPath = join(root, agent === "claude" ? ".claude-plugin/plugin.json" : ".codex-plugin/plugin.json");
     const raw = witness(manifestPath, undefined, undefined, agent === "claude" ? "claude-plugin-manifest-v1" : undefined);
-    if (raw === null && !reviewedManifestAbsence(root, manifestPath)) unresolved("plugin manifest missing");
-    const manifest = raw === null ? {} : parseConfig(raw, manifestPath);
+    // Two accepted reasons for a missing manifest: the retained review still
+    // pins the path absent (main's reviewed-absence path), or a Claude
+    // marketplace entry declares the plugin with `strict: false` and supplies
+    // its controls (this PR's path). Non-Claude agents keep refusing.
+    const reviewPinsAbsence = raw === null && reviewedManifestAbsence(root, manifestPath);
+    if (raw === null && !reviewPinsAbsence && agent !== "claude") unresolved("plugin manifest missing");
+    const manifest = raw !== null ? parseConfig(raw, manifestPath) : reviewPinsAbsence ? {} : claudeMarketplaceManifest(id);
     if (exclusion && Object.keys(manifest).some(key => /skill|plugin|hook|marketplace|extension|instruction/i.test(key) && !["skills", "hooks"].includes(key))) unresolved("unknown plugin discovery controls");
     const hooks = witness(join(root, "hooks/hooks.json"));
     if (manifest.hooks !== undefined || hooks !== null) reviewRemedy(canonical(hooks !== null ? join(root, "hooks/hooks.json") : manifestPath), () => {
@@ -1778,7 +1816,7 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
         if (prior !== undefined && prior !== version) unresolved("enabled plugin registration is missing or ambiguous");
         rootsByPath.set(pluginRoot, version);
       }
-      for (const root of rootsByPath.keys()) plugin(root);
+      for (const root of rootsByPath.keys()) plugin(root, undefined, id);
     }
   } else if (agent === "codex") {
     for (const [id, value] of Object.entries(config.plugins ?? {}) as Array<[string, any]>) {
