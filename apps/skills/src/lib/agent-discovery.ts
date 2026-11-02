@@ -1647,26 +1647,23 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
   // An entry with `strict: false` is the manifest when the fetched plugin has
   // none (the swift-lsp case): the entry may declare skills, hooks, commands,
   // agents, MCP and LSP servers inline, so a physical file inventory alone
-  // cannot describe it. The catalog is read at use time and deliberately not
-  // bound as a source: marketplaces refresh on their own, and
-  // `claude-marketplace-entry-v1` is admitted only for explicit reviews. Every
-  // run re-reads the entry, so a new inline hook refuses here rather than
-  // drifting past a binding, and an unreadable or ambiguous entry refuses.
-  // Both inputs are bound, because either can change what loads: the registry
-  // row routes the plugin id to one catalog install location, and the entry
-  // digest covers its identity, source, strict flag and every injection field
-  // (skills, hooks, commands, agents, MCP and LSP servers). A later redirect to
-  // a different catalog, or a refresh that changes the entry, changes a digest
-  // and refuses the older binding instead of sliding past it.
+  // cannot describe it. Both inputs that can change what loads are bound: the
+  // registry row that routes the plugin id to one catalog install location
+  // (claude-marketplace-registry-v2, lastUpdated normalized), and the entry
+  // (claude-marketplace-entry-v1, covering identity, source, strict and every
+  // injection field). A later redirect to a different catalog, or a refresh
+  // that changes the entry, changes a digest and refuses the older binding
+  // instead of sliding past it. Both modes are admitted in a live binding.
+  // An unreadable, duplicated or non-strict entry refuses here.
   const bindCatalogEntry = (path: string, marketplace: string, plugin: string): void => {
     if (sources.length >= AGENT_POLICY_LIMITS.discoverySources) throw new Error("Native discovery sources exceed their bound");
-    const witness = captureClaudeMarketplaceEntry(path, marketplace, plugin);
+    const witness = captureClaudeMarketplaceEntry(path, marketplace, plugin, budget);
     sources.push({ path: witness.path, sha256: witness.sha256, hashMode: witness.hashMode, marketplace: witness.marketplace, plugin: witness.plugin });
   };
   const bindMarketplaceRegistry = (path: string): void => {
     if (sources.some(source => source.path === path && source.hashMode === "claude-marketplace-registry-v2")) return;
     if (sources.length >= AGENT_POLICY_LIMITS.discoverySources) throw new Error("Native discovery sources exceed their bound");
-    const witness = captureClaudeMarketplaceRegistryV2(path);
+    const witness = captureClaudeMarketplaceRegistryV2(path, budget);
     sources.push({ path: witness.path, sha256: witness.sha256, hashMode: witness.hashMode });
   };
 
