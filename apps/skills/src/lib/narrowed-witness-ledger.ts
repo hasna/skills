@@ -4,8 +4,11 @@
  *
  * A legacy full-file settings witness (raw bytes, claude-settings-v1..v4,
  * codex-settings-v1..v5) binds every field the narrowed projection
- * (claude-settings-v5, codex-settings-v7) binds, in full, with one exception:
- * codex-settings-v3..v5 omit ordinary local stdio MCP servers, which V7 binds.
+ * (claude-settings-v5, codex-settings-v7, codex-settings-v8) binds, in full,
+ * with two exceptions: codex-settings-v3..v5 omit ordinary local stdio MCP
+ * servers, which V7 and V8 bind; and V8 leaves a marketplace entry's own
+ * `last_updated` scalar free, which a public v8-only entry records under its
+ * own mode.
  * So while the legacy witness still verifies the current file, the narrowed
  * digest of that file is the narrowed digest of a state the legacy witness
  * accepts (for V3-V5, with the local MCP servers present at that moment). The
@@ -15,9 +18,15 @@
  * Later, when the legacy witness no longer matches (a model switch, an "always
  * allow" rule, Codex's own notices or folder trust), the change is accepted only
  * when the current narrowed digest equals the recorded one: a change to a hook,
- * plugin, marketplace, skill setting, Skill rule, added directory, MCP server,
- * instruction source or command helper still reports drift. Nothing is ever recorded from a file the legacy witness does
+ * plugin, marketplace entry or its fields, skill setting, Skill rule, added
+ * directory, MCP server, instruction source or command helper still reports
+ * drift. Nothing is ever recorded from a file the legacy witness does
  * not verify, so an unexplained change is never adopted.
+ * An entry recorded before V8 existed keeps its own mode: `accepts` resolves the
+ * entry first and computes its digest under the entry's recorded mode, with a
+ * V8 entry preferred when both exist. That is what lets a station that had
+ * already drifted off a field V7 ignores stay accepted, instead of demanding a
+ * fresh review because the ledger's preferred mode moved.
  *
  * The ledger lives beside agent-policy.json in the Skills data directory, under
  * the same owner and permissions: it adds no trust the policy file does not
@@ -30,9 +39,9 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, renameS
 import { basename, dirname, join } from "node:path";
 import type { DiscoverySource } from "./agent-discovery.js";
 import { hashClaudeSettingsReplacement, hashClaudeSettingsReplacementV2, hashClaudeSettingsReplacementV3, hashClaudeSettingsReplacementV4, hashClaudeSettingsReplacementV5, readNativeSettingsWitnessFile } from "./claude-settings-witness.js";
-import { codexSettingsToleratesScreenReaderReceipt, hashCodexSettingsReplacement, hashCodexSettingsReplacementV2, hashCodexSettingsReplacementV3, hashCodexSettingsReplacementV4, hashCodexSettingsReplacementV5, hashCodexSettingsReplacementV7, type CodexReceiptSettingsMode } from "./codex-settings-witness.js";
+import { codexSettingsToleratesScreenReaderReceipt, hashCodexSettingsReplacement, hashCodexSettingsReplacementV2, hashCodexSettingsReplacementV3, hashCodexSettingsReplacementV4, hashCodexSettingsReplacementV5, hashCodexSettingsReplacementV7, hashCodexSettingsReplacementV8, type CodexReceiptSettingsMode } from "./codex-settings-witness.js";
 
-export type NarrowedSettingsMode = "claude-settings-v5" | "codex-settings-v7";
+export type NarrowedSettingsMode = "claude-settings-v5" | "codex-settings-v7" | "codex-settings-v8";
 export const NARROWED_WITNESS_LEDGER_FILE = "native-witness-narrowed.json";
 const SCHEMA = "hasna.skills.narrowed-witness-ledger.v1";
 const MAX_ENTRIES = 64, MAX_BYTES = 256 * 1024;
@@ -49,10 +58,10 @@ export function narrowedLegacyWitnessMode(source: DiscoverySource): NarrowedSett
   if (typeof source.sha256 !== "string" || !HEX.test(source.sha256)) return null;
   const name = basename(source.path), parent = basename(dirname(source.path)), mode = source.hashMode;
   if (mode !== undefined && CLAUDE_LEGACY.has(mode)) return name === "settings.json" ? "claude-settings-v5" : null;
-  if (mode !== undefined && CODEX_LEGACY.has(mode)) return name === "config.toml" ? "codex-settings-v7" : null;
+  if (mode !== undefined && CODEX_LEGACY.has(mode)) return name === "config.toml" ? "codex-settings-v8" : null;
   if (mode === undefined || mode === "bytes") {
     if (name === "settings.json" && parent === ".claude") return "claude-settings-v5";
-    if (name === "config.toml" && parent === ".codex") return "codex-settings-v7";
+    if (name === "config.toml" && parent === ".codex") return "codex-settings-v8";
   }
   return null;
 }
@@ -62,7 +71,7 @@ function readSettings(source: DiscoverySource, mode: NarrowedSettingsMode): stri
   return readNativeSettingsWitnessFile(source.path, budget(), mode === "claude-settings-v5" ? "settings.json" : "config.toml");
 }
 function narrowedDigest(mode: NarrowedSettingsMode, text: string): string {
-  return mode === "claude-settings-v5" ? hashClaudeSettingsReplacementV5(text, budget()) : hashCodexSettingsReplacementV7(text, budget());
+  return mode === "claude-settings-v5" ? hashClaudeSettingsReplacementV5(text, budget()) : mode === "codex-settings-v8" ? hashCodexSettingsReplacementV8(text, budget()) : hashCodexSettingsReplacementV7(text, budget());
 }
 /** Whether `text` is verified by the legacy witness exactly as discovery
  * verification would accept it (Codex's screen-reader receipt included). */
@@ -98,7 +107,7 @@ function readLedger(path: string): LedgerEntry[] | null {
     for (const entry of value.entries) {
       if (!entry || typeof entry !== "object" || Object.keys(entry).length !== 6 || typeof entry.path !== "string" || !entry.path.startsWith("/") || entry.path.length > 4096
         || typeof entry.hashMode !== "string" || !(entry.hashMode === "bytes" || CLAUDE_LEGACY.has(entry.hashMode) || CODEX_LEGACY.has(entry.hashMode))
-        || typeof entry.sha256 !== "string" || !HEX.test(entry.sha256) || !["claude-settings-v5", "codex-settings-v7"].includes(entry.narrowedMode)
+        || typeof entry.sha256 !== "string" || !HEX.test(entry.sha256) || !["claude-settings-v5", "codex-settings-v7", "codex-settings-v8"].includes(entry.narrowedMode)
         || typeof entry.narrowedSha256 !== "string" || !HEX.test(entry.narrowedSha256) || typeof entry.recordedAt !== "string" || entry.recordedAt.length > 64) return null;
       entries.push(entry);
     }
@@ -146,11 +155,20 @@ export function openNarrowedWitnessLedger(dataDir: string, options: { record: bo
     accepts(source) {
       try {
         const mode = narrowedLegacyWitnessMode(source);
-        const entry = mode ? find(source, mode) : undefined;
-        if (!mode || !entry) return false;
-        if (narrowedDigest(mode, readSettings(source, mode)) !== entry.narrowedSha256) return false;
-        accepted.push(source.path);
-        return true;
+        if (!mode) return false;
+        // Try the recorded modes in priority order and judge each entry by its
+        // own mode: an entry recorded under the earlier V7 mode stays usable,
+        // while a V8 entry recorded beside it leads. Ledger order is oldest
+        // first, so returning the first match would let the v7 entry shadow it.
+        const modes: NarrowedSettingsMode[] = mode === "codex-settings-v8" ? ["codex-settings-v8", "codex-settings-v7"] : [mode];
+        for (const candidate of modes) {
+          const entry = find(source, candidate);
+          if (!entry) continue;
+          if (narrowedDigest(candidate, readSettings(source, candidate)) !== entry.narrowedSha256) continue;
+          accepted.push(source.path);
+          return true;
+        }
+        return false;
       } catch { return false; }
     },
     observe(source) {

@@ -21,7 +21,7 @@ import { HookDiagnosticError, hookChildError, hookFailureReason, isOptionalHookC
 import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib/selection-cache.js";
 import { MANAGED_HOOK_DEADLINE_MS, managedContextChildLimits, sessionStartSyncBudget, takeSessionPinMigrationNotice } from "../../lib/session-reconciliation.js";
 import { captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4, captureClaudeSettingsV5 } from "../../lib/claude-settings-witness.js";
-import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4, captureCodexSettingsV5, captureCodexSettingsV6, captureCodexSettingsV7 } from "../../lib/codex-settings-witness.js";
+import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4, captureCodexSettingsV5, captureCodexSettingsV6, captureCodexSettingsV7, captureCodexSettingsV8 } from "../../lib/codex-settings-witness.js";
 import { clearNativeDriftReceipt, isNativeBridgeIntegrityRefusal, isNativeSkillDrift, nativeDriftFailOpen, NativeSkillPolicyRefusal, readNativeDriftReceipts } from "../../lib/native-drift-receipt.js";
 import { getDataDirReadOnly } from "../../lib/config.js";
 import { captureClaudeMarketplaceRegistryV2 } from "../../lib/claude-marketplace-registry.js";
@@ -323,7 +323,7 @@ export function registerAgentIntegration(parent: Command): void {
       process.exitCode = result.outcome === "refused" ? 2 : result.outcome === "error" ? 1 : 0;
     });
   hook.command("witness")
-    .requiredOption("--kind <kind>", "claude-settings-v5 or codex-settings-v7 (narrowed discovery projections), codex-settings-v6, executable-v1, sumi-settings-v1, claude-settings-v4, claude-settings-v3, claude-settings-v2, codex-settings-v5, codex-settings-v4, codex-settings-v3, codex-settings-v2, codex-settings-v1, claude-marketplace-registry-v2 or claude-marketplace-entry-v1")
+    .requiredOption("--kind <kind>", "claude-settings-v5, codex-settings-v7 or codex-settings-v8 (narrowed discovery projections; v8 frees only a marketplace's own last_updated), codex-settings-v6, executable-v1, sumi-settings-v1, claude-settings-v4, claude-settings-v3, claude-settings-v2, codex-settings-v5, codex-settings-v4, codex-settings-v3, codex-settings-v2, codex-settings-v1, claude-marketplace-registry-v2 or claude-marketplace-entry-v1")
     .requiredOption("--path <path>", "Canonical absolute path to the reviewed settings, registry or .claude-plugin/marketplace.json file")
     .option("--reviewed-hook-sources <file>", "Bounded JSON array of raw path/sha256 witnesses; codex-settings-v6 only (the package derives complete hook membership)")
     .option("--marketplace <name>", "Exact marketplace name; claude-marketplace-entry-v1 only")
@@ -348,10 +348,10 @@ export function registerAgentIntegration(parent: Command): void {
         return;
       }
       if (options.marketplace !== undefined || options.plugin !== undefined) throw new Error("--marketplace and --plugin apply only to claude-marketplace-entry-v1");
-      const capture = options.kind === "claude-settings-v5" ? captureClaudeSettingsV5 : options.kind === "codex-settings-v7" ? captureCodexSettingsV7 : options.kind === "sumi-settings-v1" ? captureSumiSettings : options.kind === "codex-settings-v5" ? captureCodexSettingsV5 : options.kind === "codex-settings-v4" ? captureCodexSettingsV4 : options.kind === "codex-settings-v3" ? captureCodexSettingsV3 : options.kind === "codex-settings-v2" ? captureCodexSettingsV2 : options.kind === "codex-settings-v1" ? captureCodexSettings : options.kind === "claude-settings-v4" ? captureClaudeSettingsV4 : options.kind === "claude-settings-v3" ? captureClaudeSettingsV3
+      const capture = options.kind === "claude-settings-v5" ? captureClaudeSettingsV5 : options.kind === "codex-settings-v8" ? captureCodexSettingsV8 : options.kind === "codex-settings-v7" ? captureCodexSettingsV7 : options.kind === "sumi-settings-v1" ? captureSumiSettings : options.kind === "codex-settings-v5" ? captureCodexSettingsV5 : options.kind === "codex-settings-v4" ? captureCodexSettingsV4 : options.kind === "codex-settings-v3" ? captureCodexSettingsV3 : options.kind === "codex-settings-v2" ? captureCodexSettingsV2 : options.kind === "codex-settings-v1" ? captureCodexSettings : options.kind === "claude-settings-v4" ? captureClaudeSettingsV4 : options.kind === "claude-settings-v3" ? captureClaudeSettingsV3
         : options.kind === "claude-settings-v2" ? captureClaudeSettingsV2
         : options.kind === "claude-marketplace-registry-v2" ? captureClaudeMarketplaceRegistryV2 : null;
-      if (!capture) throw new Error("Unsupported witness kind; select claude-settings-v5, codex-settings-v7, sumi-settings-v1, claude-settings-v4, claude-settings-v3, claude-settings-v2, codex-settings-v5, codex-settings-v4, codex-settings-v3, codex-settings-v2, codex-settings-v1, claude-marketplace-registry-v2 or claude-marketplace-entry-v1");
+      if (!capture) throw new Error("Unsupported witness kind; select claude-settings-v5, codex-settings-v8, codex-settings-v7, sumi-settings-v1, claude-settings-v4, claude-settings-v3, claude-settings-v2, codex-settings-v5, codex-settings-v4, codex-settings-v3, codex-settings-v2, codex-settings-v1, claude-marketplace-registry-v2 or claude-marketplace-entry-v1");
       await writeCliOutput(JSON.stringify(capture(options.path), null, 2));
     });
   hook.command("capture-claude-installer")
@@ -415,7 +415,7 @@ export function registerAgentIntegration(parent: Command): void {
     .requiredOption("--reviewed-preimage <path>", "Exact preserved legacy settings.json, config.toml or sumi.json")
     .requiredOption("--expected-policy-sha256 <sha256>", "Exact current managed policy bytes")
     .requiredOption("--expected-settings-sha256 <sha256>", "Exact current native settings bytes")
-    .option("--codex-witness-version <version>", "Explicit target: 2 (legacy default) 3 (service tier and model-advertised effort), 4 (native availability UI counts), 5 (schema-valid root status-line string vectors), or 7 (the narrowed discovery projection)")
+    .option("--codex-witness-version <version>", "Explicit target: 2 (legacy default) 3 (service tier and model-advertised effort), 4 (native availability UI counts), 5 (schema-valid root status-line string vectors), 7 (the narrowed discovery projection), or 8 (the narrowed projection that frees only a marketplace's own last_updated)")
     .option("--claude-witness-version <version>", "Explicit target: 3 (default), 4 (also permits a built-in top-level theme) or 5 (the narrowed discovery projection)")
     .option("--apply", "Apply the explicit semantic witness upgrade with preservation and readback", false)
     .option("--json", "Return the metadata-only plan or receipt", false)
@@ -423,9 +423,9 @@ export function registerAgentIntegration(parent: Command): void {
     .action(async (options) => {
       try {
         if (!["claude", "codex", "sumi"].includes(options.agent)) throw new Error("Settings witness rebind accepts claude, codex or sumi");
-        if (options.codexWitnessVersion !== undefined && !["2", "3", "4", "5", "7"].includes(options.codexWitnessVersion)) throw new Error("Codex witness version accepts 2, 3, 4, 5 or 7");
+        if (options.codexWitnessVersion !== undefined && !["2", "3", "4", "5", "7", "8"].includes(options.codexWitnessVersion)) throw new Error("Codex witness version accepts 2, 3, 4, 5, 7 or 8");
         if (options.claudeWitnessVersion !== undefined && !["3", "4", "5"].includes(options.claudeWitnessVersion)) throw new Error("Claude witness version accepts 3, 4 or 5");
-        const plan = planAgentSettingsWitnessUpgrade({ ...(options.codexWitnessVersion !== undefined ? { targetCodexVersion: Number(options.codexWitnessVersion) as 2 | 3 | 4 | 5 | 7 } : {}), ...(options.claudeWitnessVersion !== undefined ? { targetClaudeVersion: Number(options.claudeWitnessVersion) as 3 | 4 | 5 } : {}), agent: options.agent, reviewedPreimage: options.reviewedPreimage, expectedPolicySha256: options.expectedPolicySha256, expectedSettingsSha256: options.expectedSettingsSha256 });
+        const plan = planAgentSettingsWitnessUpgrade({ ...(options.codexWitnessVersion !== undefined ? { targetCodexVersion: Number(options.codexWitnessVersion) as 2 | 3 | 4 | 5 | 7 | 8 } : {}), ...(options.claudeWitnessVersion !== undefined ? { targetClaudeVersion: Number(options.claudeWitnessVersion) as 3 | 4 | 5 } : {}), agent: options.agent, reviewedPreimage: options.reviewedPreimage, expectedPolicySha256: options.expectedPolicySha256, expectedSettingsSha256: options.expectedSettingsSha256 });
         const result = options.apply ? applyAgentIntegration(plan) : { changed: [], backups: [] };
         const receipt = { applied: options.apply, settingsWitnessUpgrade: plan.settingsWitnessUpgrade, ...result };
         await writeCliOutput(options.json ? JSON.stringify(receipt) : `Settings witness ${options.apply ? "upgraded" : "planned"} for ${options.agent}. Native configuration was not changed.`);
