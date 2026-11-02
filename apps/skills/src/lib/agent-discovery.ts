@@ -1448,12 +1448,14 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
       if (enabled !== true) unresolved("unsupported plugin enablement");
       const registrations = installed?.[id];
       if (!Array.isArray(registrations) || registrations.length === 0) unresolved("enabled plugin registration is missing or ambiguous");
-      // Claude registers a plugin per scope: user, and project with its own
-      // projectPath. A plugin may be installed in both, and the two scopes can
-      // hold different versions and install paths, so every distinct valid root
-      // is excluded instead of refusing the native arrangement. Ambiguity stays
-      // for malformed rows, unknown scopes, a repeated scope and one root that
-      // claims two versions.
+      // Claude registers a plugin once per native scope: user and managed
+      // without a project, project and local with the project they belong to
+      // (measured with `claude plugin install --scope local` and the schema's
+      // "required for project/local scopes"). A plugin may hold several scopes
+      // and they can carry different versions and install paths, so every
+      // distinct valid root is excluded instead of refusing the native
+      // arrangement. Ambiguity stays for malformed rows, unknown scopes, a
+      // repeated scope and one root that claims two different versions.
       const scopes = new Set<string>();
       const rootsByPath = new Map<string, string>();
       for (const registration of registrations) {
@@ -1461,14 +1463,14 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
         const row = registration as Record<string, unknown>;
         const projectPath = row.projectPath;
         let scope: string;
-        if (row.scope === "user") {
+        if (row.scope === "user" || row.scope === "managed") {
           if (projectPath !== undefined && projectPath !== null) unresolved("enabled plugin registration is missing or ambiguous");
-          scope = "user";
-        } else if (row.scope === "project") {
+          scope = row.scope;
+        } else if (row.scope === "project" || row.scope === "local") {
           if (typeof projectPath !== "string") unresolved("enabled plugin registration is missing or ambiguous");
           const projectRoot = projectPath as string;
           if (/[\x00-\x1f\x7f]/.test(projectRoot) || !isAbsolute(projectRoot) || resolve(projectRoot) !== projectRoot || projectRoot.length > AGENT_POLICY_LIMITS.pathCharacters) unresolved("enabled plugin registration is missing or ambiguous");
-          scope = `project\0${projectRoot}`;
+          scope = `${row.scope}\0${projectRoot}`;
         } else {
           // The continue is unreachable after unresolved(), but it keeps `scope`
           // definitely assigned for the checks below.
@@ -1480,11 +1482,11 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
         if (typeof installPath !== "string") unresolved("malformed plugin installation root");
         const pluginRoot = installPath as string;
         if (/[\x00-\x1f\x7f]/.test(pluginRoot) || !isAbsolute(pluginRoot) || resolve(pluginRoot) !== pluginRoot || pluginRoot.length > AGENT_POLICY_LIMITS.pathCharacters) unresolved("malformed plugin installation root");
-        // Two scopes may share one install root only while they agree on its
-        // version; a non-string version keeps its own identity instead of
-        // collapsing to a common empty value, and JSON encoding keeps distinct
-        // values such as 1 and [1] from sharing one identity.
-        const version = typeof row.version === "string" ? `string:${row.version}` : `other:${JSON.stringify(row.version)}`;
+        // The native schema types version as an optional string, so an absent
+        // version is legal and any other type is malformed native data. Two
+        // forms leave nothing for two different values to alias into.
+        const version = row.version === undefined ? "absent" : typeof row.version === "string" ? `string:${row.version}` : null;
+        if (version === null) return unresolved("malformed plugin registration version");
         const prior = rootsByPath.get(pluginRoot);
         if (prior !== undefined && prior !== version) unresolved("enabled plugin registration is missing or ambiguous");
         rootsByPath.set(pluginRoot, version);
