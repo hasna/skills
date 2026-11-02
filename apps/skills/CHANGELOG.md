@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.90
+
+- Claude Code 2.1.314 and 2.1.316 are accepted as measured user-scope writers for a directory settings marketplace in the prospective review, as 2.1.302 was. Measured against 2.1.302 in an isolated HOME (a directory marketplace add, then install and update), all three gave the same normalized post-states and CLI JSON. Neighbouring, pre-release, build and four-part versions, and project scope, are still refused.
+
 ## 0.10.89
 
 - Admit the exact Codex 0.166.0 hook, native skill catalog and installed-plugin contracts, so `skills hook native-catalog`, `skills hook trust` and installed-plugin review stop refusing it with `CODEX_HOOK_TRUST_NATIVE_UNSUPPORTED_VERSION`. The managed prompt hook does not check the Codex version and is unchanged. The npm `@openai/codex-darwin-arm64` 0.166.0 binary (sha256 `39acf979729dd290f9a24ee38b2914e036c91b65952872e28ae2a6b88a7db7c1`, the copy installed on station04) generates the same app-server schemas as 0.165.0 for every method and notification Skills uses (`initialize`, `configWarning`, `config/read`, `config/batchWrite`, `experimentalFeature/list`, `skills/list`, `plugin/installed`, `plugin/install`) except `hooks/list`, which adds an optional `threadId` parameter and a nullable `environmentId` on each hook, measured as null for a user hook. Skills reads hooks through a fixed set of fields, so it does not use the new one. Its new client methods are `account/gcp/setup`, `accountSession/list` and `accountSession/switch`. The native acceptance tests (catalog name and path controls, local plugin installation with exact disabled-plugin controls, hook discovery with paginated features and version-guarded config writes, and native hook trust enrollment and recovery) pass on it as on 0.165.0. Neighbouring releases such as 0.166.1, 0.167.0 and 0.166.0 prereleases still refuse, and native corpus admission is still required separately.
