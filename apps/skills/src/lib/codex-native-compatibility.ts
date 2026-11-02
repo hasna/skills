@@ -44,6 +44,13 @@ const MEASURED_CODEX_CAPABILITIES: Readonly<Record<string, readonly CodexNativeC
   // version-guarded config writes, native catalog controls and installed-plugin
   // identity. Corpus admission and hook trust stay separately required.
   "codex-cli 0.165.0": ["hooks", "qualified-skill-catalog", "installed-plugin-review"],
+  // codex-cli 0.166.0 (npm @openai/codex-darwin-arm64 binary sha256 39acf979)
+  // keeps 0.165.0's schemas for every method Skills calls except hooks/list,
+  // which adds an optional threadId parameter and a nullable environmentId per
+  // hook (null for user hooks); Skills reads hooks through a fixed projection.
+  // It passed the same native acceptance as 0.165.0. Corpus admission and hook
+  // trust stay separately required.
+  "codex-cli 0.166.0": ["hooks", "qualified-skill-catalog", "installed-plugin-review"],
 };
 
 /** `installed-plugin-review`: the 0.160 `plugin/installed` source identities and
