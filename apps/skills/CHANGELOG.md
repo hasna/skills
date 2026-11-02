@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add `codex-settings-v8`, the narrowed Codex discovery projection with one scalar free: a marketplace entry's own `last_updated`, when it is a string or number. Codex rewrites that timestamp on its own schedule; V7 binds it, so a timestamp-only write reported drift and blocked prompts on a v7 receipt. Every other marketplace field, the entry name, a non-scalar value and the table itself stay bound, so an added, removed, renamed or redirected marketplace still reports drift. V7 keeps its shipped meaning; V8 is selected by a fresh review (`skills hook witness --kind codex-settings-v8`) or a preserved-preimage upgrade (`skills hook rebind-settings --codex-witness-version 8`, which also accepts a preserved V7 witness). The narrowed-witness ledger records V8 for a Codex legacy witness it observes, and an entry recorded earlier under V7 stays usable and is judged by its own recorded mode. The projection now builds every table through own-property construction, so a marketplace entry or profile literally named `__proto__` is bound in V7 and V8 instead of being silently dropped.
+
 ## 0.10.93
 
 - `skills hook codex-reconcile` runs where `~/.codex` is a symlink recorded as a root alias in the Skills bridge binding. Its custody step checked those recorded aliases, but its plan was then built without them, so discovery read through the symlink and every preview refused with `Refusing symlink native discovery input: ~/.codex`; a curated Codex plugin update that ships skills could never be enrolled on such a host. The plan now resolves through the recorded aliases, as the other internal callers already do. The apply, its versioned-write confirmation and its restore address Codex's configuration by the path Codex reports for its user layer, which Codex keeps lexical (`~/.codex/config.toml`) under an alias. Without a recorded alias the two paths are the same and nothing changes (#195).

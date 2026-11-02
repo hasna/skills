@@ -9,8 +9,8 @@ import {
   hashClaudeSettingsReplacementV4, hashClaudeSettingsReplacementV5, upgradeClaudeSettingsWitnessV5,
 } from "./claude-settings-witness.js";
 import {
-  captureCodexSettingsV7, hashCodexSettingsReplacement, hashCodexSettingsReplacementV2, hashCodexSettingsReplacementV3, hashCodexSettingsReplacementV4,
-  hashCodexSettingsReplacementV5, hashCodexSettingsReplacementV7, upgradeCodexSettingsWitnessV7,
+  captureCodexSettingsV7, captureCodexSettingsV8, hashCodexSettingsReplacement, hashCodexSettingsReplacementV2, hashCodexSettingsReplacementV3, hashCodexSettingsReplacementV4,
+  hashCodexSettingsReplacementV5, hashCodexSettingsReplacementV7, hashCodexSettingsReplacementV8, upgradeCodexSettingsWitnessV7, upgradeCodexSettingsWitnessV8,
 } from "./codex-settings-witness.js";
 import { NARROWED_WITNESS_LEDGER_FILE, narrowedLegacyWitnessMode, openNarrowedWitnessLedger } from "./narrowed-witness-ledger.js";
 import { assertAgentPolicyCollections } from "./agent-policy-limits.js";
@@ -177,6 +177,7 @@ model = "gpt-5.1-mini"
 const codex = {
   v1: (t: string) => hashCodexSettingsReplacement(t), v2: (t: string) => hashCodexSettingsReplacementV2(t), v3: (t: string) => hashCodexSettingsReplacementV3(t),
   v4: (t: string) => hashCodexSettingsReplacementV4(t), v5: (t: string) => hashCodexSettingsReplacementV5(t), v7: (t: string) => hashCodexSettingsReplacementV7(t),
+  v8: (t: string) => hashCodexSettingsReplacementV8(t),
 };
 
 test("codex-settings-v7 ignores what Codex rewrites on a model change, a folder trust and its notices", () => {
@@ -239,6 +240,47 @@ test("codex-settings-v7 binds hooks, plugins, marketplaces, enabling skill rules
   expect(() => codex.v7("= invalid")).toThrow("Invalid Codex settings witness");
 });
 
+test("codex-settings-v8 frees only a marketplace entry's last_updated; v7 keeps binding it", () => {
+  const bridge = '[marketplaces.hasna-internal-bridge]\nsource_type = "local"\nsource = "/opt/bridge"';
+  const reviewed = codex.v8(codexBase);
+  const withStamp = (stamp: string) => codexBase.replace(bridge, `${bridge}\nlast_updated = "${stamp}"`);
+  // V8 ignores the client's own timestamp, at the root and in a profile, as a string or number.
+  expect(codex.v8(withStamp("2026-11-02T10:00:00Z"))).toBe(reviewed);
+  expect(codex.v8(withStamp("2026-11-03T23:59:59Z"))).toBe(codex.v8(withStamp("2026-11-02T10:00:00Z")));
+  const numeric = (stamp: number) => codexBase.replace('source = "/opt/bridge"', `source = "/opt/bridge"\nlast_updated = ${stamp}`);
+  expect(codex.v8(numeric(1762082400))).toBe(codex.v8(numeric(1762168800)));
+  const profile = (stamp: string) => `${codexBase}\n[profiles.fast.marketplaces.extra]\nsource = "/opt/extra"\nlast_updated = "${stamp}"\n`;
+  expect(codex.v8(profile("a"))).toBe(codex.v8(profile("b")));
+  // V7 keeps its shipped meaning: the same timestamp is still bound there.
+  expect(codex.v7(withStamp("2026-11-02T10:00:00Z"))).not.toBe(codex.v7(codexBase));
+  expect(codex.v7(profile("a"))).not.toBe(codex.v7(profile("b")));
+  // Every other marketplace fact stays bound in v8: fields, names, new entries, non-scalars.
+  expect(codex.v8(codexBase.replace('source_type = "local"', 'source_type = "git"'))).not.toBe(reviewed);
+  expect(codex.v8(`${codexBase}\n[marketplaces.other]\nlast_updated = "x"\n`)).not.toBe(reviewed);
+  expect(codex.v8(codexBase.replace("[marketplaces.hasna-internal-bridge]", "[marketplaces.renamed]"))).not.toBe(reviewed);
+  expect(codex.v8(codexBase.replace('source = "/opt/bridge"', 'source = "/opt/bridge"\nlast_updated = { at = "x" }'))).not.toBe(codex.v8(withStamp("x")));
+  // V8 binds a subset of V7, so equal v7 digests imply equal v8 digests.
+  for (const [a, b] of [[codexBase, withStamp("x")], [withStamp("a"), withStamp("b")], [profile("a"), profile("b")]]) {
+    if (codex.v7(a!) === codex.v7(b!)) expect(codex.v8(a!)).toBe(codex.v8(b!));
+  }
+});
+
+test("the narrowed projections bind a marketplace entry or profile named __proto__", () => {
+  const base = codexBase;
+  const withProto = (source: string) => `${base}\n[marketplaces."__proto__"]\nsource_type = "local"\nsource = "${source}"\n`;
+  for (const mode of [codex.v7, codex.v8]) {
+    expect(mode(withProto("/opt/first"))).not.toBe(mode(base));
+    expect(mode(withProto("/tmp/attacker-skills"))).not.toBe(mode(withProto("/opt/first")));
+    const profile = (source: string) => `${base}\n[profiles.fast.marketplaces."__proto__"]\nsource = "${source}"\n`;
+    expect(mode(profile("/opt/a"))).not.toBe(mode(profile("/tmp/b")));
+    // A profile itself named __proto__ carries discovered keys; the shipped
+    // assignment-based rebuild dropped it, so both modes must now bind it.
+    const namedProfile = (file: string) => `${base}\n[profiles."__proto__"]\nmodel_instructions_file = "${file}"\n`;
+    expect(mode(namedProfile("/tmp/a"))).not.toBe(mode(namedProfile("/tmp/b")));
+    expect(mode(namedProfile("/tmp/a"))).not.toBe(mode(base));
+  }
+});
+
 test("every legacy Codex mode binds what v7 binds: equal legacy digests imply equal v7 digests", () => {
   const variants = [codexBase, "", 'model = "gpt-5.1"\n', `service_tier = "fast"\n${codexBase}`, `${codexBase}\n[tui]\nstatus_line = ["model"]\n`,
     codexBase.replace("codex_hooks = true", "codex_hooks = false"), `${codexBase}\n[[skills.config]]\nname = "a:b"\nenabled = false\n`,
@@ -271,15 +313,33 @@ test("explicit v5 and v7 upgrades prove the preserved preimage and refuse any di
   expect(() => upgradeCodexSettingsWitnessV7({ path: config, hashMode: "codex-settings-v6" as never, sha256: "a".repeat(64) }, configPreimage)).toThrow();
   writeFileSync(config, `${codexBase}\n[plugins."x@y"]\nenabled = true\n`);
   expect(() => upgradeCodexSettingsWitnessV7({ path: config, hashMode: "codex-settings-v5", sha256: codex.v5(codexBase) }, configPreimage)).toThrow("outside the reviewed V7 contract");
+
+  // V8 accepts the same preserved preimages plus a preserved v7 witness, and
+  // proves its own projection the same way: a marketplace timestamp that V8
+  // ignores passes, and a redirect V8 binds does not.
+  writeFileSync(config, codexBase);
+  for (const previous of [{ path: config, hashMode: "codex-settings-v5" as const, sha256: codex.v5(codexBase) }, { path: config, hashMode: "codex-settings-v7" as const, sha256: codex.v7(codexBase) }, { path: config, sha256: sha(codexBase) }]) {
+    expect(upgradeCodexSettingsWitnessV8(previous, configPreimage)).toEqual({ path: config, hashMode: "codex-settings-v8", sha256: codex.v8(codexBase) });
+  }
+  expect(captureCodexSettingsV8(config).sha256).toBe(codex.v8(codexBase));
+  expect(() => upgradeCodexSettingsWitnessV8({ path: config, hashMode: "codex-settings-v6" as never, sha256: "a".repeat(64) }, configPreimage)).toThrow();
+  const bridge = '[marketplaces.hasna-internal-bridge]\nsource_type = "local"\nsource = "/opt/bridge"';
+  writeFileSync(config, codexBase.replace(bridge, `${bridge}\nlast_updated = "2026-11-02T10:00:00Z"`));
+  expect(upgradeCodexSettingsWitnessV8({ path: config, hashMode: "codex-settings-v5", sha256: codex.v5(codexBase) }, configPreimage)).toEqual({ path: config, hashMode: "codex-settings-v8", sha256: codex.v8(codexBase) });
+  expect(() => upgradeCodexSettingsWitnessV7({ path: config, hashMode: "codex-settings-v5", sha256: codex.v5(codexBase) }, configPreimage)).toThrow("outside the reviewed V7 contract");
+  writeFileSync(config, codexBase.replace('source = "/opt/bridge"', 'source = "/tmp/other"'));
+  expect(() => upgradeCodexSettingsWitnessV8({ path: config, hashMode: "codex-settings-v5", sha256: codex.v5(codexBase) }, configPreimage)).toThrow("outside the reviewed V8 contract");
 });
 
-test("the policy schema accepts v5 and v7 only for their reviewed agent configuration", () => {
+test("the policy schema accepts v5, v7 and v8 only for their reviewed agent configuration", () => {
   const policy = (agent: string, method: string, path: string, hashMode: string) => ({ bridge: { discovery: { [agent]: { agent, method, roots: [], sources: [{ path, hashMode, sha256: "a".repeat(64) }] } } } });
   expect(() => assertAgentPolicyCollections(policy("claude", "reviewed", "/home/u/.claude/settings.json", "claude-settings-v5"))).not.toThrow();
   expect(() => assertAgentPolicyCollections(policy("codex", "reviewed", "/home/u/.codex/config.toml", "codex-settings-v7"))).not.toThrow();
+  expect(() => assertAgentPolicyCollections(policy("codex", "reviewed", "/home/u/.codex/config.toml", "codex-settings-v8"))).not.toThrow();
   for (const [agent, method, path, mode] of [["claude", "automatic", "/home/u/.claude/settings.json", "claude-settings-v5"], ["codex", "reviewed", "/home/u/.claude/settings.json", "claude-settings-v5"], ["claude", "reviewed", "/home/u/.claude/other.json", "claude-settings-v5"],
     ["codex", "automatic", "/home/u/.codex/config.toml", "codex-settings-v7"], ["claude", "reviewed", "/home/u/.codex/config.toml", "codex-settings-v7"], ["codex", "reviewed", "/home/u/.codex/other.toml", "codex-settings-v7"],
-    ["claude", "reviewed", "/home/u/.claude/settings.json", "claude-settings-v6"], ["codex", "reviewed", "/home/u/.codex/config.toml", "codex-settings-v8"]]) {
+    ["claude", "reviewed", "/home/u/.claude/settings.json", "claude-settings-v6"], ["codex", "automatic", "/home/u/.codex/config.toml", "codex-settings-v8"],
+    ["claude", "reviewed", "/home/u/.codex/config.toml", "codex-settings-v8"], ["codex", "reviewed", "/home/u/.codex/other.toml", "codex-settings-v8"]]) {
     expect(() => assertAgentPolicyCollections(policy(agent!, method!, path!, mode!))).toThrow();
   }
 });
@@ -348,6 +408,41 @@ test("concurrent hooks for different agents both keep their ledger observation",
   writeFileSync(config, codexBase.replace('model = "gpt-5.1"', 'model = "gpt-5.2-codex"'));
   const later = openNarrowedWitnessLedger(data);
   expect([later.accepts(claudeSource), later.accepts(codexSource)]).toEqual([true, true]);
+  // The fleet's real case: a legacy v5 witness observed through the v8 ledger,
+  // then Codex rewrites a marketplace's own timestamp. That is accepted; a
+  // marketplace redirect is not.
+  const bridge = '[marketplaces.hasna-internal-bridge]\nsource_type = "local"\nsource = "/opt/bridge"';
+  writeFileSync(config, codexBase.replace(bridge, `${bridge}\nlast_updated = "2026-11-02T10:00:00Z"`));
+  expect(openNarrowedWitnessLedger(data).accepts(codexSource)).toBe(true);
+  writeFileSync(config, codexBase.replace('source = "/opt/bridge"', 'source = "/tmp/other"'));
+  expect(openNarrowedWitnessLedger(data).accepts(codexSource)).toBe(false);
+});
+
+test("a ledger entry recorded under v7 stays usable after the preferred mode moves to v8", () => {
+  const root = scratch(), data = join(root, "data"), home = join(root, "home");
+  mkdirSync(data); mkdirSync(join(home, ".codex"), { recursive: true });
+  const config = join(home, ".codex", "config.toml"); writeFileSync(config, codexBase);
+  const source = { path: config, hashMode: "codex-settings-v5" as const, sha256: codex.v5(codexBase) };
+  // The shipped code recorded this entry under v7; the file then drifted on a
+  // field v7 ignores (a model switch), which the entry is there to accept.
+  writeFileSync(join(data, NARROWED_WITNESS_LEDGER_FILE), JSON.stringify({ schema: "hasna.skills.narrowed-witness-ledger.v1", entries: [{ path: config, hashMode: "codex-settings-v5", sha256: source.sha256, narrowedMode: "codex-settings-v7", narrowedSha256: codex.v7(codexBase), recordedAt: "2026-10-01T00:00:00.000Z" }] }));
+  writeFileSync(config, codexBase.replace('model = "gpt-5.1"', 'model = "gpt-6.1-sol"'));
+  expect(openNarrowedWitnessLedger(data).accepts(source)).toBe(true);
+  // Judged under its own v7 mode, a marketplace redirect is still refused.
+  writeFileSync(config, codexBase.replace('source = "/opt/bridge"', 'source = "/tmp/other"'));
+  expect(openNarrowedWitnessLedger(data).accepts(source)).toBe(false);
+  // A fresh observation records v8 alongside, and v8 leads from then on.
+  writeFileSync(config, codexBase);
+  const observe = openNarrowedWitnessLedger(data); observe.observe(source); observe.flush();
+  const modes = JSON.parse(readFileSync(join(data, NARROWED_WITNESS_LEDGER_FILE), "utf8")).entries.map((entry: any) => entry.narrowedMode).sort();
+  expect(modes).toEqual(["codex-settings-v7", "codex-settings-v8"]);
+  // The older v7 entry sorts first, so finding the first match would let it
+  // shadow the v8 record: a timestamp-only rewrite is accepted only through
+  // v8, and a redirect stays refused.
+  writeFileSync(config, codexBase.replace('source = "/opt/bridge"', 'source = "/opt/bridge"\nlast_updated = "2026-11-02T10:00:00Z"'));
+  expect(openNarrowedWitnessLedger(data).accepts(source)).toBe(true);
+  writeFileSync(config, codexBase.replace('source = "/opt/bridge"', 'source = "/tmp/other"'));
+  expect(openNarrowedWitnessLedger(data).accepts(source)).toBe(false);
 });
 
 test("a malformed, oversized or linked ledger accepts nothing and is never overwritten", () => {
@@ -375,7 +470,7 @@ test("a malformed, oversized or linked ledger accepts nothing and is never overw
   rmSync(ledger);
   writeFileSync(config, `${codexBase}\n[tui]\nscreen_reader_detection_done = true\n`);
   const receipt = openNarrowedWitnessLedger(data); receipt.observe(source); receipt.flush();
-  expect(JSON.parse(readFileSync(ledger, "utf8")).entries[0].narrowedSha256).toBe(codex.v7(codexBase));
+  expect(JSON.parse(readFileSync(ledger, "utf8")).entries[0].narrowedSha256).toBe(codex.v8(codexBase));
 });
 
 test("drift receipts are bounded, escaped, private and never create the app home", () => {
