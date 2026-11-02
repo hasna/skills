@@ -156,8 +156,26 @@ test("a managed registration without a project resolves", () => {
   expect(roots(home)).toContain(join(home, "plugins", "managed"));
 });
 
-test("a managed registration carrying a projectPath is refused", () => {
+test("a managed registration carrying a projectPath resolves as one effective scope", () => {
+  // The schema makes projectPath optional and requires it only for project and
+  // local, so a managed row carrying one is permitted; the path is validated
+  // and does not split the scope.
   const { home } = setup(home => ({ "fixture@market": [{ scope: "managed", projectPath: join(home, "project"), installPath: pluginRoot(home, "managed-path"), version: "1.0.0" }] }));
+  expect(roots(home)).toContain(join(home, "plugins", "managed-path"));
+});
+
+test("two user registrations with different projectPaths are still one effective scope", () => {
+  const { home } = setup(home => ({
+    "fixture@market": [
+      { scope: "user", projectPath: join(home, "project-a"), installPath: pluginRoot(home, "user-path-a"), version: "1.0.0" },
+      { scope: "user", projectPath: join(home, "project-b"), installPath: pluginRoot(home, "user-path-b"), version: "1.0.0" },
+    ],
+  }));
+  expect(() => roots(home)).toThrow("enabled plugin registration is missing or ambiguous");
+});
+
+test("a user registration carrying a relative projectPath is refused", () => {
+  const { home } = setup(home => ({ "fixture@market": [{ scope: "user", projectPath: "project", installPath: pluginRoot(home, "user-relative-path"), version: "1.0.0" }] }));
   expect(() => roots(home)).toThrow("enabled plugin registration is missing or ambiguous");
 });
 
@@ -272,9 +290,16 @@ test("an absent version and a string version on one install root are refused", (
   expect(() => roots(home)).toThrow("enabled plugin registration is missing or ambiguous");
 });
 
-test("a user registration carrying a projectPath is refused", () => {
-  const { home } = setup(home => ({ "fixture@market": [{ scope: "user", projectPath: join(home, "project"), installPath: pluginRoot(home, "user-project-path"), version: "1.0.0" }] }));
-  expect(() => roots(home)).toThrow("enabled plugin registration is missing or ambiguous");
+test("a user registration carrying a projectPath resolves as one effective scope", () => {
+  const { home } = setup(home => {
+    const installPath = pluginRoot(home, "user-project-path");
+    return { "fixture@market": [
+      { scope: "user", projectPath: join(home, "project"), installPath, version: "1.0.0" },
+      { scope: "project", projectPath: join(home, "project"), installPath, version: "1.0.0" },
+    ] };
+  });
+  const resolved = roots(home);
+  expect(resolved.filter(root => root === join(home, "plugins", "user-project-path"))).toHaveLength(1);
 });
 
 test("a relative install path is refused", () => {
