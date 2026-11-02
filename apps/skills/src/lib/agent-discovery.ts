@@ -1446,10 +1446,42 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     for (const [id, enabled] of Object.entries(config.enabledPlugins ?? {})) {
       if (enabled === false) continue;
       if (enabled !== true) unresolved("unsupported plugin enablement");
-      const matches = installed?.[id];
-      if (!Array.isArray(matches) || matches.length !== 1 || typeof matches[0]?.installPath !== "string" || matches[0]?.scope !== "user") unresolved("enabled plugin registration is missing or ambiguous");
-      if (exclusion && (!isAbsolute(matches[0].installPath) || resolve(matches[0].installPath) !== matches[0].installPath || matches[0].installPath.length > AGENT_POLICY_LIMITS.pathCharacters)) unresolved("malformed plugin installation root");
-      plugin(matches[0].installPath);
+      const registrations = installed?.[id];
+      if (!Array.isArray(registrations) || registrations.length === 0) unresolved("enabled plugin registration is missing or ambiguous");
+      // Claude registers a plugin per scope: user, and project with its own
+      // projectPath. A plugin may be installed in both, and the two scopes can
+      // hold different versions and install paths, so every distinct valid root
+      // is excluded instead of refusing the native arrangement. Ambiguity stays
+      // for malformed rows, unknown scopes, a repeated scope and one root that
+      // claims two versions.
+      const scopes = new Set<string>();
+      const rootsByPath = new Map<string, string>();
+      for (const registration of registrations) {
+        if (!registration || typeof registration !== "object" || Array.isArray(registration)) unresolved("enabled plugin registration is missing or ambiguous");
+        const row = registration as Record<string, unknown>;
+        const projectPath = row.projectPath;
+        let scope: string;
+        if (row.scope === "user") {
+          if (projectPath !== undefined && projectPath !== null) unresolved("enabled plugin registration is missing or ambiguous");
+          scope = "user";
+        } else if (row.scope === "project") {
+          if (typeof projectPath !== "string") unresolved("enabled plugin registration is missing or ambiguous");
+          const projectRoot = projectPath as string;
+          if (!isAbsolute(projectRoot) || resolve(projectRoot) !== projectRoot || projectRoot.length > AGENT_POLICY_LIMITS.pathCharacters) unresolved("enabled plugin registration is missing or ambiguous");
+          scope = `project\0${projectRoot}`;
+        } else { unresolved("enabled plugin registration is missing or ambiguous"); continue; }
+        if (scopes.has(scope)) unresolved("enabled plugin registration is missing or ambiguous");
+        scopes.add(scope);
+        const installPath = row.installPath;
+        if (typeof installPath !== "string") unresolved("malformed plugin installation root");
+        const pluginRoot = installPath as string;
+        if (!isAbsolute(pluginRoot) || resolve(pluginRoot) !== pluginRoot || pluginRoot.length > AGENT_POLICY_LIMITS.pathCharacters) unresolved("malformed plugin installation root");
+        const version = typeof row.version === "string" ? row.version : "";
+        const prior = rootsByPath.get(pluginRoot);
+        if (prior !== undefined && prior !== version) unresolved("enabled plugin registration is missing or ambiguous");
+        rootsByPath.set(pluginRoot, version);
+      }
+      for (const root of rootsByPath.keys()) plugin(root);
     }
   } else if (agent === "codex") {
     for (const [id, value] of Object.entries(config.plugins ?? {}) as Array<[string, any]>) {
