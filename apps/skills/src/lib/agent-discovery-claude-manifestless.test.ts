@@ -1,8 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
-import { resolveAgentDiscoveryExclusionRoots } from "./agent-discovery.js";
+import { resolveAgentDiscovery, resolveAgentDiscoveryExclusionRoots, verifyAgentDiscovery } from "./agent-discovery.js";
+import { hashClaudeMarketplaceEntry } from "./claude-marketplace-entry-witness.js";
 
 // A fetched plugin may have no .claude-plugin/plugin.json when its marketplace
 // entry declares `strict: false`: the entry is then the manifest and may carry
@@ -119,4 +120,30 @@ test("an absent installation root refuses", () => {
   const { home } = setup({ strict: false });
   rmSync(join(home, "plugins", "fixture-plugin"), { recursive: true, force: true });
   expect(() => roots(home)).toThrow("plugin installation root is missing");
+});
+
+test("a manifestless plugin binds its marketplace entry as a live witness", () => {
+  const { home, marketplace } = setup({ strict: false, skills: ["./skills-a"] });
+  const binding = resolveAgentDiscovery({ home, agent: "claude" });
+  const entries = binding.sources.filter(source => source.hashMode === "claude-marketplace-entry-v1");
+  expect(entries).toHaveLength(1);
+  expect(entries[0].marketplace).toBe("fixture-market");
+  expect(entries[0].plugin).toBe("fixture-plugin");
+  const text = readFileSync(join(marketplace, ".claude-plugin/marketplace.json"), "utf8");
+  expect(entries[0].sha256).toBe(hashClaudeMarketplaceEntry(text, { marketplace: "fixture-market", plugin: "fixture-plugin" }));
+  // The live binding is verifiable: a live entry witness carries a content
+  // digest, so the reviewed-only gate would refuse this binding.
+  expect(() => verifyAgentDiscovery(binding)).not.toThrow();
+});
+
+test("a catalog refresh that changes the entry changes the bound digest", () => {
+  const { home, marketplace } = setup({ strict: false, skills: ["./skills-a"] });
+  const digest = () => resolveAgentDiscovery({ home, agent: "claude" }).sources
+    .find(source => source.hashMode === "claude-marketplace-entry-v1")!.sha256;
+  const before = digest();
+  put(join(marketplace, ".claude-plugin/marketplace.json"), JSON.stringify({
+    name: "fixture-market",
+    plugins: [{ name: "fixture-plugin", source: "./plugin", strict: false, skills: ["./skills-b"] }],
+  }));
+  expect(digest()).not.toBe(before);
 });
