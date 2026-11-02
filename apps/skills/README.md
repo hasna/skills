@@ -1916,9 +1916,12 @@ working directory and independently configured Secrets `/v1` authority. Its
 any bound field requires reviewing a fresh template. These are explicit local
 execution grants; selection sync does not distribute or implicitly approve them.
 
-The CLI validates the complete binding before fetching values through
-`@hasna/secrets`. It resolves current values for each run, checks returned keys
-and expiry, and injects only the declared variables into the child process.
+The CLI validates the complete binding before fetching values through the
+`@hasna/secrets` SDK when it is installed beside Skills, and otherwise through
+the installed `secrets` CLI (`secrets get <key> --plaintext`, read into memory
+only; Skills passes it no credential). It resolves current values for each run,
+checks returned keys (and expiry, which only the SDK reports), and injects only
+the declared variables into the child process.
 Missing, extra, stale or mismatched bindings refuse execution; a failing vault
 read never falls back to an ambient value or a local vault. Wrapping `skills run`
 in `secrets exec` alone does not bind a declared variable. Runtime controls such

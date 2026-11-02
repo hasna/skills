@@ -1,7 +1,7 @@
 /** Explicit, value-free grants for a selected local execution. Never read bindings from a skill bundle. */
 import { constants, closeSync, fstatSync, openSync, readSync, realpathSync } from "node:fs";
 import { hostname as stationHostname } from "node:os";
-import { createSecretsClientFromEnv } from "@hasna/secrets/sdk";
+import { defaultFleetGatewayBaseUrl, resolveConfiguredClientAuthority, toV1BaseUrl } from "@hasna/contracts";
 import type { ResolvedSkillSelection } from "../types/skill-selection.js";
 import { SkillSelectionError } from "./selection-cache.js";
 
@@ -23,9 +23,122 @@ export interface SelectedSecretScope {
   profileId: string;
   cwd: string;
 }
-export function selectedSecretBindingsTemplate(scope: SelectedSecretScope, names: string[], createClient: () => SelectedSecretsClient = createSecretsClientFromEnv): SelectedSecretBindings {
+/** A client factory may resolve asynchronously, as the default runtime-loaded one does. */
+export type SelectedSecretsClientFactory = () => SelectedSecretsClient | Promise<SelectedSecretsClient>;
+
+/** The SDK is a separately installed package; it is resolved at call time and never bundled (see the build's --external). */
+const SECRETS_SDK_SPECIFIER = "@hasna/secrets/sdk";
+const SECRETS_CLI = "secrets";
+const CLI_TIMEOUT_MS = 15_000;
+const CLI_VALUE_MAX_BYTES = 16_384;
+type SecretsSdkModule = { createSecretsClientFromEnv: () => SelectedSecretsClient };
+export interface SecretsCliResult { status: number | null; stdout: Uint8Array }
+export interface DefaultSecretsClientDependencies {
+  /** Load the @hasna/secrets SDK. A module-not-found error for that package means "not installed". */
+  importSdk: () => Promise<unknown>;
+  /** Absolute path of the installed `secrets` CLI on PATH, or null. */
+  findCli: () => string | null;
+  /**
+   * The Secrets authority the CLI will use, from the URL-only part of the shared @hasna/contracts resolver
+   * (HASNA_SECRETS_API_URL, the Keychain api-url item, the credentials file, else the fleet gateway: the
+   * order `secrets --help` documents). It reads no credential.
+   */
+  resolveAuthority: () => string;
+  /** Run the CLI with these arguments only: no credential is added to argv or env, and stderr is discarded. */
+  runCli: (executable: string, args: string[], options: { timeoutMs: number; maxBytes: number; signal?: AbortSignal }) => Promise<SecretsCliResult>;
+}
+
+function sdkNotInstalled(error: unknown): boolean {
+  const failure = error as { code?: unknown; message?: unknown } | null;
+  return !!failure && (failure.code === "ERR_MODULE_NOT_FOUND" || failure.code === "MODULE_NOT_FOUND") &&
+    typeof failure.message === "string" && /['"]@hasna\/secrets(?:\/[^'"]*)?['"]/.test(failure.message);
+}
+
+/** Canonical Secrets /v1 authority, the same shape a binding must carry. */
+function canonicalAuthority(value: unknown): value is string {
+  if (!identifier(value)) return false;
+  try {
+    const url = new URL(value);
+    return (url.protocol === "https:" || (url.protocol === "http:" && ["127.0.0.1", "[::1]", "localhost"].includes(url.hostname))) &&
+      !url.username && !url.password && !url.search && !url.hash && url.pathname.endsWith("/v1") && url.href === value;
+  } catch { return false; }
+}
+
+async function defaultRunCli(executable: string, args: string[], options: { timeoutMs: number; maxBytes: number; signal?: AbortSignal }): Promise<SecretsCliResult> {
+  // The CLI resolves its own credential from this process's environment, exactly as it would for an
+  // operator. Nothing is added: no flag, no variable, no value.
+  const proc = Bun.spawn([executable, ...args], { env: process.env, stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+  const stop = () => { try { proc.kill(); } catch { /* already exited */ } };
+  const timer = setTimeout(stop, options.timeoutMs);
+  options.signal?.addEventListener("abort", stop, { once: true });
+  try {
+    const chunks: Uint8Array[] = [];
+    let size = 0, overflow = false;
+    for await (const chunk of proc.stdout) {
+      size += chunk.byteLength;
+      if (size > options.maxBytes) { overflow = true; stop(); chunk.fill(0); break; }
+      chunks.push(chunk);
+    }
+    const status = await proc.exited;
+    const stdout = new Uint8Array(overflow ? 0 : size);
+    let offset = 0;
+    for (const chunk of chunks) { if (!overflow) stdout.set(chunk, offset); offset += chunk.byteLength; chunk.fill(0); }
+    return { status: overflow || options.signal?.aborted ? null : status, stdout };
+  } finally { clearTimeout(timer); options.signal?.removeEventListener("abort", stop); }
+}
+
+export const defaultSecretsClientDependencies: Readonly<DefaultSecretsClientDependencies> = Object.freeze({
+  importSdk: () => import(SECRETS_SDK_SPECIFIER),
+  findCli: () => Bun.which(SECRETS_CLI, { PATH: process.env.PATH ?? "" }),
+  resolveAuthority: () => resolveConfiguredClientAuthority("secrets", process.env)?.baseUrl ?? toV1BaseUrl(defaultFleetGatewayBaseUrl("secrets")),
+  runCli: defaultRunCli,
+});
+
+/** A client over the installed `secrets` CLI. Values travel from its stdout into memory only; failures never echo output. */
+function createCliSecretsClient(dependencies: DefaultSecretsClientDependencies): SelectedSecretsClient {
+  const executable = dependencies.findCli();
+  if (!executable) throw new Error("SECRETS_CLI_UNAVAILABLE");
+  const baseUrl = dependencies.resolveAuthority();
+  if (!canonicalAuthority(baseUrl)) throw new Error("SECRETS_CLI_AUTHORITY_INVALID");
+  return {
+    baseUrl,
+    async getSecret({ key }, init) {
+      if (!identifier(key) || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(key)) throw new Error("SECRETS_CLI_KEY_INVALID");
+      const signal = init?.signal ?? undefined;
+      // Documented: `secrets get <key> --plaintext` writes the bare value to a non-TTY stdout.
+      const result = await dependencies.runCli(executable, ["get", key, "--plaintext"], { timeoutMs: CLI_TIMEOUT_MS, maxBytes: CLI_VALUE_MAX_BYTES, ...(signal ? { signal } : {}) });
+      try {
+        if (result.status !== 0) throw new Error("SECRETS_CLI_READ_FAILED");
+        let value: string;
+        try { value = new TextDecoder("utf8", { fatal: true }).decode(result.stdout); }
+        catch { throw new Error("SECRETS_CLI_READ_FAILED"); }
+        // The CLI reports no expiry, so none is checked on this path.
+        return { key, value, expires_at: null };
+      } finally { result.stdout.fill(0); }
+    },
+  };
+}
+
+/**
+ * The default execution Secrets client. The @hasna/secrets SDK is used when it is installed, with its own
+ * credential resolver; otherwise the installed `secrets` CLI, with its own. Neither path reads or forwards
+ * the other's credential. With neither, the factory throws and the caller refuses with LOCAL_SECRET_UNAVAILABLE.
+ */
+export async function createDefaultSecretsClient(dependencies: DefaultSecretsClientDependencies = defaultSecretsClientDependencies): Promise<SelectedSecretsClient> {
+  let sdk: unknown;
+  try { sdk = await dependencies.importSdk(); }
+  catch (error) {
+    if (!sdkNotInstalled(error)) throw new Error("SECRETS_SDK_UNAVAILABLE");
+    return createCliSecretsClient(dependencies);
+  }
+  const factory = record(sdk) ? (sdk as Partial<SecretsSdkModule>).createSecretsClientFromEnv : undefined;
+  if (typeof factory !== "function") throw new Error("SECRETS_SDK_UNAVAILABLE");
+  return factory();
+}
+
+export async function selectedSecretBindingsTemplate(scope: SelectedSecretScope, names: string[], createClient: SelectedSecretsClientFactory = createDefaultSecretsClient): Promise<SelectedSecretBindings> {
   let secretsAuthority: string;
-  try { secretsAuthority = createClient().baseUrl; }
+  try { secretsAuthority = (await createClient()).baseUrl; }
   catch { return refuse("LOCAL_SECRET_UNAVAILABLE", "Configure the Secrets CLI authority and authentication before preparing execution bindings."); }
   const { authority, workspaceId, profileRevision, slug, version, bundleDigest } = scope.selection;
   return {
@@ -97,10 +210,10 @@ export function validateSelectedSecretBindings(value: unknown, scope: SelectedSe
   return structuredClone(value) as unknown as SelectedSecretBindings;
 }
 
-export async function resolveSelectedSecrets(bindings: SelectedSecretBindings, createClient: () => SelectedSecretsClient = createSecretsClientFromEnv): Promise<Record<string, string>> {
+export async function resolveSelectedSecrets(bindings: SelectedSecretBindings, createClient: SelectedSecretsClientFactory = createDefaultSecretsClient): Promise<Record<string, string>> {
   if (!Object.keys(bindings.bindings).length) return {};
   let client: SelectedSecretsClient;
-  try { client = createClient(); }
+  try { client = await createClient(); }
   catch { return refuse("LOCAL_SECRET_UNAVAILABLE", "The configured Secrets client could not authenticate. No ambient credential fallback was attempted."); }
   if (client.baseUrl !== bindings.secretsAuthority) return refuse("SECRET_BINDING_AUTHORITY_MISMATCH", "The configured Secrets authority differs from the reviewed binding. No secret was requested.");
   const env: Record<string, string> = {};
