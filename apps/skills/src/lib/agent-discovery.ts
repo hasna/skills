@@ -1464,7 +1464,9 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
         const projectPath = row.projectPath;
         let scope: string;
         if (row.scope === "user" || row.scope === "managed") {
-          if (projectPath !== undefined && projectPath !== null) unresolved("enabled plugin registration is missing or ambiguous");
+          // `projectPath` is an optional string in the native schema, so an
+          // explicit null is malformed data for a scope that carries none.
+          if (projectPath !== undefined) unresolved("enabled plugin registration is missing or ambiguous");
           scope = row.scope;
         } else if (row.scope === "project" || row.scope === "local") {
           if (typeof projectPath !== "string") unresolved("enabled plugin registration is missing or ambiguous");
