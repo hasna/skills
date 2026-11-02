@@ -3,8 +3,15 @@ name: Skills packed consumer gate
 # Packed-archive consumer acceptance for @hasna/skills that installs and runs
 # floating third-party packages (the MCP SDK, zod releases, npm layouts). It is
 # deliberately separate from release-skills.yml: no environment, no id-token,
-# read-only contents. The publish job never runs these layouts. Its one secret is
-# the read-only NPM_RELEASE_READ_TOKEN, held by the install step alone (SH-00052).
+# read-only contents. The publish job never runs these layouts.
+#
+# Two jobs (SH-00052). @hasna/secrets is a restricted package, so the frozen install needs the read-only
+# NPM_RELEASE_READ_TOKEN. The runner holds every secret a job references for the whole job, so the token lives in a
+# job that runs only lockfile-pinned code and this pull request's own code:
+# - build: the credential-isolated install, typecheck, build, the unit tests and the Claude registration probe on the
+#   locked tree, the prepack gates that resolve nothing outside the lockfile, and the pack. It uploads only the
+#   packed tarball and its sha256, never an installed tree, because this repository's artifacts are public.
+# - consumer: no secret at all. Everything that resolves packages outside the lockfile runs here, from the tarball.
 on:
   pull_request:
     paths:
@@ -20,13 +27,15 @@ permissions:
   contents: read
 
 jobs:
-  consumer-gate:
+  build:
     if: github.repository == 'hasna/skills'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     defaults:
       run:
         shell: bash
+    outputs:
+      commit: ${{ steps.pack.outputs.commit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -44,14 +53,6 @@ jobs:
           # release job's, and code under test here is not trusted to leave
           # ~/.bun/bin/bun untouched.
           no-cache: true
-
-      - name: Install and verify the CI npm toolchain
-        run: |
-          set -euo pipefail
-          npm_prefix="$(mktemp -d "$RUNNER_TEMP/npm-toolchain.XXXXXX")"
-          npm install --global --prefix "$npm_prefix" npm@11.19.0
-          test "$("$npm_prefix/bin/npm" --version)" = 11.19.0
-          echo "$npm_prefix/bin" >> "$GITHUB_PATH"
 
       - name: Install locked standalone Skills dependencies (credential isolated)
         working-directory: apps/skills
@@ -174,14 +175,23 @@ jobs:
           NO_COLOR: "1"
         run: bun test --timeout 30000 src/mcp/package-tool-list.test.ts src/lib/mcp-zod-bundle.test.ts src/lib/release-candidate-archive.test.ts src/cli/commands/runtime-mcp-registration.test.ts src/cli/cli.private-skill-create.test.ts src/cli/cli.stray-arguments.test.ts src/cli/cli.private-skill-history.test.ts src/lib/private-skill-history.test.ts src/cli/cli.json-output.test.ts src/lib/profile-response-errors.test.ts
 
+      # Stays in this job: the Claude Code archive it runs is pinned by version, SHA-1 and sha512 integrity, checked
+      # before anything runs, so it resolves nothing floating, and the probe imports the scanner of the restricted
+      # @hasna/secrets package, which only the locked tree here holds.
       - name: Credential-free Claude 2.1.302 native MCP registration (network isolated)
         working-directory: apps/skills
         run: bun --no-env-file --no-install scripts/probe-claude-mcp-registration.ts
 
-      - name: Run package-owned prepack gates
+      # The package's prepack is verify:generated, verify:release and verify:consumer-types. The first two run here on
+      # the locked tree; verify:consumer-types resolves floating packages, so the consumer job runs it on the tarball.
+      - name: Run the package-owned prepack gates that resolve nothing outside the lockfile
         working-directory: apps/skills
-        run: bun run prepack
+        run: |
+          set -euo pipefail
+          bun run verify:generated
+          bun run verify:release
 
+      # Packed with the npm that ships with the pinned Node, so this job fetches nothing outside the lockfile.
       - name: Pack the archive
         id: pack
         working-directory: apps/skills
@@ -197,14 +207,95 @@ jobs:
             if (!Array.isArray(packed) || packed.length !== 1) throw new Error("expected exactly one packed archive");
             console.log(packed[0].filename);
           ')"
-          echo "archive=$destination/$archive" >> "$GITHUB_OUTPUT"
-          echo "sha256=$(sha256sum "$destination/$archive" | cut -d " " -f 1)" >> "$GITHUB_OUTPUT"
+          (cd "$destination" && sha256sum "$archive" > packed.sha256)
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Retain only the packed archive and its hash
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: skills-gate-packed-${{ steps.pack.outputs.commit }}
+          path: |
+            ${{ runner.temp }}/skills-gate-archive/*.tgz
+            ${{ runner.temp }}/skills-gate-archive/packed.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  # No secret, no token, nothing installed from the lockfile. Every step here that resolves packages does so outside
+  # the lockfile, which is why it is in this job:
+  # - the npm toolchain install (npm@11.19.0 for the npm-split layouts);
+  # - verify:consumer-types installs the tarball as an anonymous consumer: the package's own dependency ranges and the
+  #   pinned TypeScript and type packages, resolved from the registry at run time;
+  # - verify:consumer-mcp installs the tarball in bun and npm layouts with floating MCP SDK and zod releases and runs
+  #   the installed MCP server.
+  consumer:
+    if: github.repository == 'hasna/skills'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+          no-cache: true
+
+      - name: Install and verify the CI npm toolchain
+        run: |
+          set -euo pipefail
+          npm_prefix="$(mktemp -d "$RUNNER_TEMP/npm-toolchain.XXXXXX")"
+          npm install --global --prefix "$npm_prefix" npm@11.19.0
+          test "$("$npm_prefix/bin/npm" --version)" = 11.19.0
+          echo "$npm_prefix/bin" >> "$GITHUB_PATH"
+
+      - name: Require the build job's commit
+        env:
+          BUILT_COMMIT: ${{ needs.build.outputs.commit }}
+        run: test "$(git rev-parse HEAD)" = "$BUILT_COMMIT"
+
+      - name: Restore the packed archive of this exact commit
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: skills-gate-packed-${{ needs.build.outputs.commit }}
+          path: ${{ runner.temp }}/skills-gate-archive
+
+      - name: Verify the packed archive against its recorded sha256
+        id: archive
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/skills-gate-archive"
+          shopt -s nullglob
+          archives=(hasna-skills-*.tgz)
+          test "${#archives[@]}" -eq 1
+          test "$(wc -l < packed.sha256)" -eq 1
+          sha256sum --check --strict packed.sha256
+          read -r sha256 name < packed.sha256
+          test "$name" = "${archives[0]}"
+          echo "archive=$RUNNER_TEMP/skills-gate-archive/$name" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Installed consumer types for the packed archive (anonymous install, floating ranges)
+        working-directory: apps/skills
+        env:
+          ARCHIVE: ${{ steps.archive.outputs.archive }}
+          ARCHIVE_SHA256: ${{ steps.archive.outputs.sha256 }}
+        run: bun run verify:consumer-types --archive "$ARCHIVE" --sha256 "$ARCHIVE_SHA256"
 
       - name: Packed MCP consumer layouts (bun floor and latest, npm split zod 4.3.5, 3.25.76 and 4.1.13)
         working-directory: apps/skills
         env:
-          ARCHIVE: ${{ steps.pack.outputs.archive }}
-          ARCHIVE_SHA256: ${{ steps.pack.outputs.sha256 }}
+          ARCHIVE: ${{ steps.archive.outputs.archive }}
+          ARCHIVE_SHA256: ${{ steps.archive.outputs.sha256 }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/skills-consumer-gate"

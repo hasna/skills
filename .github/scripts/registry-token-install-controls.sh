@@ -11,7 +11,7 @@ root="$(mktemp -d)"
 step="$root/step.sh"
 ruby -ryaml -e '
   w = YAML.load_file(ARGV[0])
-  s = w["jobs"]["consumer-gate"]["steps"].find { |x| x["name"] == "Install locked standalone Skills dependencies (credential isolated)" }
+  s = w["jobs"]["build"]["steps"].find { |x| x["name"] == "Install locked standalone Skills dependencies (credential isolated)" }
   abort "install step not found" unless s
   File.write(ARGV[1], s["run"])
 ' .github/workflows/skills-consumer-gate.yml "$step"
