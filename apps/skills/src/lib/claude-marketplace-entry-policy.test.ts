@@ -141,8 +141,8 @@ test("refused reviews and apply-time drift write nothing", () => {
   state = snapshot(paths.home);
   for (const [entry, reason] of [
     [{ ...scoped, sha256: "0".repeat(64) }, `Native discovery input changed; run skills hook install with a fresh discovery review: ${paths.marketplace}`],
-    [{ ...scoped, plugin: "swift lsp" }, "Claude marketplace entry witnesses require explicit reviewed Claude discovery of one named entry"],
-    [{ ...scoped, path: paths.marketplace.replace(".claude-plugin/marketplace.json", "marketplace.json") }, "Claude marketplace entry witnesses require explicit reviewed Claude discovery of one named entry"],
+    [{ ...scoped, plugin: "swift lsp" }, "Claude marketplace entry witnesses require Claude discovery of one named entry"],
+    [{ ...scoped, path: paths.marketplace.replace(".claude-plugin/marketplace.json", "marketplace.json") }, "Claude marketplace entry witnesses require Claude discovery of one named entry"],
     [{ ...scoped, managedPlugins: [] }, "Claude marketplace entry witnesses require an exact reviewed entry without synthetic changes"],
     [{ ...scoped, format: "json", fields: ["plugins"] }, "Explicit discovery reviews require full source-file hashes"],
   ] as Array<[Entry, string]>) expect(() => planAgentIntegration({ ...options, discoveryInputs: review(entry) })).toThrow(reason);
