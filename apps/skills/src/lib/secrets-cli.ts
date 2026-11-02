@@ -10,7 +10,7 @@
  */
 import { accessSync, constants, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { defaultFleetGatewayBaseUrl, resolveConfiguredClientAuthority, toV1BaseUrl } from "@hasna/contracts/client";
 
 type Env = Record<string, string | undefined>;
@@ -94,6 +94,31 @@ function projectFolders(working: string, home: string): string[] {
 }
 
 /**
+ * Whether a candidate comes from a project folder's node_modules. Three readings, any one of which refuses:
+ * - its real folder or real path lies in that node_modules, with the node_modules itself resolved too, so a
+ *   committed `node_modules -> elsewhere` symlink and a case-only spelling (NODE_MODULES on a
+ *   case-insensitive volume) are seen;
+ * - the same against the unresolved node_modules path;
+ * - its PATH entry, read as written, passes through a folder named node_modules (in any case) whose own
+ *   parent resolves to a project folder: this catches a `.bin` that is itself a symlink out of node_modules.
+ */
+function comesFromProjectModules(candidate: string, folder: string, real: string, projects: string[]): boolean {
+  for (const project of projects) {
+    const modules = join(project, "node_modules");
+    let modulesReal = modules;
+    try { modulesReal = realpathSync(modules); } catch { /* absent: the unresolved path is the only reading */ }
+    if (isWithin(folder, modules) || isWithin(real, modules) || isWithin(folder, modulesReal) || isWithin(real, modulesReal)) return true;
+  }
+  for (let ancestor = dirname(candidate); dirname(ancestor) !== ancestor; ancestor = dirname(ancestor)) {
+    if (basename(ancestor).toLowerCase() !== "node_modules") continue;
+    let parent: string;
+    try { parent = realpathSync(dirname(ancestor)); } catch { continue; }
+    if (projects.includes(parent)) return true;
+  }
+  return false;
+}
+
+/**
  * Find the `secrets` CLI without trusting the working folder. Skills runs from whatever folder an agent
  * hook starts it in, often a cloned repository, so:
  * - only absolute, non-empty PATH entries are searched, in order; a relative entry such as "." or
@@ -104,7 +129,8 @@ function projectFolders(working: string, home: string): string[] {
  * - a candidate is also refused when its folder or its real path lies in the node_modules of the working
  *   folder or of any parent of it below the user's home: bun run from a workspace subfolder puts every
  *   ancestor's node_modules/.bin on PATH, and a hoisted or planted `secrets` bin there resolves outside
- *   the working folder itself;
+ *   the working folder itself; a symlinked node_modules or .bin, and a case-only spelling, are read
+ *   through as well (comesFromProjectModules);
  * - a refusal throws SecretsCliLocationError and nothing further is searched.
  * A working folder that is the user's home or one of its ancestors ("/" for a launchd job) is not a
  * checkout: everything the user installed lies below it, so the inside-the-working-folder check is not
@@ -126,11 +152,8 @@ export function locateSecretsCli(env: Env = process.env, context: { cwd?: string
     }
     let folder: string;
     try { folder = realpathSync(dirname(candidate)); } catch { throw new SecretsCliLocationError("the folder that holds it could not be resolved"); }
-    for (const project of projectFolders(working, home)) {
-      const modules = join(project, "node_modules");
-      if (isWithin(folder, modules) || isWithin(real, modules)) {
-        throw new SecretsCliLocationError("it comes from the node_modules of the working folder or a parent of it, where a checkout could have placed it");
-      }
+    if (comesFromProjectModules(candidate, folder, real, projectFolders(working, home))) {
+      throw new SecretsCliLocationError("it comes from the node_modules of the working folder or a parent of it, where a checkout could have placed it");
     }
     return candidate;
   }

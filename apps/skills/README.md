@@ -2032,7 +2032,7 @@ Both fallbacks look for `secrets` only in absolute `PATH` entries, and refuse
 one whose real path lies inside the working folder (unless that folder is your
 home or above it), or that comes from the `node_modules` of the working folder or
 of any parent of it below your home (where `bun run` and `npm run` add every
-ancestor's `node_modules/.bin`), so a checkout cannot plant its own `secrets`
+ancestor's `node_modules/.bin`; a symlinked `node_modules` or `.bin` is read through), so a checkout cannot plant its own `secrets`
 through `.` or a `node_modules/.bin`. Absolute `PATH` entries elsewhere are trusted, as your
 shell trusts them.
 

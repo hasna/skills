@@ -158,3 +158,55 @@ test("a retained runtime under the user's home stays usable from a checkout belo
 });
 
 function dirnameOf(file: string) { return file.slice(0, file.lastIndexOf("/")); }
+
+test("a committed symlink node_modules -> elsewhere in a parent folder is refused (N1 review B1)", () => {
+  const repo = directory(), home = directory(), outside = directory();
+  const cwd = join(repo, "apps/x");
+  mkdirSync(cwd, { recursive: true });
+  plant(join(repo, "nm_real/.bin"));
+  symlinkSync(join(repo, "nm_real"), join(repo, "node_modules"));
+  locationRefusal(() => locateSecretsCli({ PATH: `${repo}/node_modules/.bin` }, { cwd, home }));
+  // node_modules pointing outside the repository entirely.
+  const repo2 = directory();
+  const cwd2 = join(repo2, "apps/x");
+  mkdirSync(cwd2, { recursive: true });
+  plant(join(outside, "elsewhere/.bin"));
+  symlinkSync(join(outside, "elsewhere"), join(repo2, "node_modules"));
+  locationRefusal(() => locateSecretsCli({ PATH: `${repo2}/node_modules/.bin` }, { cwd: cwd2, home }));
+});
+
+test("a node_modules/.bin that is itself a symlink out of node_modules is refused (N1 review B1)", () => {
+  const repo = directory(), home = directory();
+  const cwd = join(repo, "apps/x");
+  mkdirSync(cwd, { recursive: true });
+  plant(join(repo, "tools"));
+  mkdirSync(join(repo, "node_modules"), { recursive: true });
+  symlinkSync("../tools", join(repo, "node_modules/.bin"));
+  locationRefusal(() => locateSecretsCli({ PATH: `${repo}/node_modules/.bin` }, { cwd, home }));
+  // A .bin file linking to a file outside the project is refused too.
+  const repo2 = directory(), outside = directory();
+  const cwd2 = join(repo2, "apps/x");
+  mkdirSync(cwd2, { recursive: true });
+  const target = plant(join(outside, "bin"));
+  mkdirSync(join(repo2, "node_modules/.bin"), { recursive: true });
+  symlinkSync(target, join(repo2, "node_modules/.bin/secrets"));
+  locationRefusal(() => locateSecretsCli({ PATH: `${repo2}/node_modules/.bin` }, { cwd: cwd2, home }));
+});
+
+test("a case-only spelling NODE_MODULES is refused on a case-insensitive volume (N1 review B1)", () => {
+  const repo = directory(), home = directory();
+  const cwd = join(repo, "apps/x");
+  mkdirSync(cwd, { recursive: true });
+  plant(join(repo, "NODE_MODULES/.bin"));
+  if (!existsSync(join(repo, "node_modules/.bin/secrets"))) return; // case-sensitive volume: the lowercase entry doesn't exist
+  locationRefusal(() => locateSecretsCli({ PATH: `${repo}/node_modules/.bin` }, { cwd, home }));
+  locationRefusal(() => locateSecretsCli({ PATH: `${repo}/NODE_MODULES/.bin` }, { cwd, home }));
+});
+
+test("the user's own ~/node_modules/.bin stays usable from a checkout below home (home is not a project folder)", () => {
+  const home = directory();
+  const installed = plant(join(home, "node_modules/.bin"));
+  const cwd = join(home, "code/repo/apps/x");
+  mkdirSync(cwd, { recursive: true });
+  expect(locateSecretsCli({ PATH: `${home}/node_modules/.bin` }, { cwd, home })).toBe(installed);
+});
