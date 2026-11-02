@@ -161,7 +161,11 @@ test("a managed registration carrying a projectPath resolves as one effective sc
   // local, so a managed row carrying one is permitted; the path is validated
   // and does not split the scope.
   const { home } = setup(home => ({ "fixture@market": [{ scope: "managed", projectPath: join(home, "project"), installPath: pluginRoot(home, "managed-path"), version: "1.0.0" }] }));
-  expect(roots(home)).toContain(join(home, "plugins", "managed-path"));
+  const resolved = roots(home);
+  expect(resolved).toContain(join(home, "plugins", "managed-path"));
+  // The carried path names the scope only; it never becomes an exclusion root.
+  expect(resolved).not.toContain(join(home, "project"));
+  expect(resolved.some(root => within(root, join(home, "project", "scratch", "skill")))).toBe(false);
 });
 
 test("two user registrations with different projectPaths are still one effective scope", () => {
@@ -300,6 +304,9 @@ test("a user registration carrying a projectPath resolves as one effective scope
   });
   const resolved = roots(home);
   expect(resolved.filter(root => root === join(home, "plugins", "user-project-path"))).toHaveLength(1);
+  // The carried path names the scope only; it never becomes an exclusion root.
+  expect(resolved).not.toContain(join(home, "project"));
+  expect(resolved.some(root => within(root, join(home, "project", "scratch", "skill")))).toBe(false);
 });
 
 test("a relative install path is refused", () => {
