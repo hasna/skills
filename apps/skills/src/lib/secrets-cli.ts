@@ -18,6 +18,9 @@ const SECRETS_SDK_SPECIFIER = "@hasna/secrets/sdk";
 const SECRETS_CLI = "secrets";
 const CLI_TIMEOUT_MS = 15_000;
 const CLI_VALUE_MAX_BYTES = 16_384;
+const CLI_METADATA_MAX_BYTES = 1_048_576;
+const CLI_METADATA_PAGE = 200; // the CLI's own MAX_LIST_LIMIT
+const CLI_METADATA_MAX_PAGES = 50;
 /** A vault key as the bindings contract accepts it; never starts with "-", so it can't be read as a flag. */
 const VAULT_KEY = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 
@@ -135,6 +138,49 @@ export const defaultSecretsClientDependencies: Readonly<DefaultSecretsClientDepe
   resolveAuthority: () => resolveConfiguredClientAuthority("secrets", process.env)?.baseUrl ?? toV1BaseUrl(defaultFleetGatewayBaseUrl("secrets")),
   runCli: defaultRunCli,
 });
+
+export interface SecretsCliMetadata { expires_at: string | null; updated_at: string | null }
+
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The expiry of one vault item through the documented metadata listing `secrets list <key> --json`, whose compact
+ * items carry key, type, label, expires_at and updated_at and never the value (`get --plaintext` reports no expiry,
+ * `get --check` only length and sha256). The listing returns the key itself and the keys below it, so it is paged
+ * until the exact key appears; this is the lookup the CLI uses for its own metadata. An unset expiry is null in
+ * the listing, as it is in the SDK's result. Throws a value-free error code when the item, or an expires_at that is
+ * null or a string, cannot be established.
+ */
+export async function readSecretMetadataWithCli(executable: string, key: string, dependencies: Pick<DefaultSecretsClientDependencies, "runCli">,
+  options: { signal?: AbortSignal; env?: Env } = {}): Promise<SecretsCliMetadata> {
+  if (typeof key !== "string" || key.length > 2048 || !VAULT_KEY.test(key)) throw new Error("SECRETS_CLI_KEY_INVALID");
+  const unavailable = () => new Error("SECRETS_CLI_METADATA_UNAVAILABLE");
+  let cursor = 0;
+  for (let page = 0; page < CLI_METADATA_MAX_PAGES; page++) {
+    const result = await dependencies.runCli(executable, ["list", key, "--json", "--limit", String(CLI_METADATA_PAGE), "--cursor", String(cursor)], {
+      timeoutMs: CLI_TIMEOUT_MS, maxBytes: CLI_METADATA_MAX_BYTES, ...(options.signal ? { signal: options.signal } : {}), ...(options.env ? { env: options.env } : {}),
+    });
+    let envelope: unknown;
+    try {
+      if (result.status !== 0) throw unavailable();
+      envelope = JSON.parse(new TextDecoder("utf8", { fatal: true }).decode(result.stdout));
+    } catch { throw unavailable(); } finally { result.stdout.fill(0); }
+    if (!record(envelope) || !Array.isArray(envelope.items) || typeof envelope.has_more !== "boolean" ||
+        !(envelope.next_cursor === null || Number.isSafeInteger(envelope.next_cursor))) throw unavailable();
+    const entry = envelope.items.find(item => record(item) && item.key === key) as Record<string, unknown> | undefined;
+    if (entry) {
+      const expires = entry.expires_at, updated = entry.updated_at ?? null;
+      if (!(expires === null || typeof expires === "string") || !(updated === null || typeof updated === "string")) throw unavailable();
+      return { expires_at: expires, updated_at: updated };
+    }
+    const next = envelope.next_cursor as number | null;
+    if (!envelope.has_more || next === null || next <= cursor) break;
+    cursor = next;
+  }
+  throw unavailable();
+}
 
 /**
  * One value through the documented `secrets get <key> --plaintext`, which writes the bare value to a

@@ -1920,8 +1920,11 @@ The CLI validates the complete binding before fetching values through the
 `@hasna/secrets` SDK when it is installed beside Skills, and otherwise through
 the installed `secrets` CLI (`secrets get <key> --plaintext`, read into memory
 only; Skills passes it no credential). It resolves current values for each run,
-checks returned keys (and expiry, which only the SDK reports), and injects only
-the declared variables into the child process.
+checks returned keys and expiry, and injects only the declared variables into
+the child process. On the CLI path the expiry comes from the item's metadata
+(`secrets list <key> --json`, read before and after the value); an expired,
+malformed or unreadable expiry, or an item that changed between the reads,
+refuses the run exactly as the SDK path does.
 Missing, extra, stale or mismatched bindings refuse execution; a failing vault
 read never falls back to an ambient value or a local vault. Wrapping `skills run`
 in `secrets exec` alone does not bind a declared variable. Runtime controls such

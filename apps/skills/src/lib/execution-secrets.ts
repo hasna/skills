@@ -1,7 +1,7 @@
 /** Explicit, value-free grants for a selected local execution. Never read bindings from a skill bundle. */
 import { constants, closeSync, fstatSync, openSync, readSync, realpathSync } from "node:fs";
 import { hostname as stationHostname } from "node:os";
-import { defaultSecretsClientDependencies, isSecretsSdkNotInstalled, readSecretWithCli, type DefaultSecretsClientDependencies } from "./secrets-cli.js";
+import { defaultSecretsClientDependencies, isSecretsSdkNotInstalled, readSecretMetadataWithCli, readSecretWithCli, type DefaultSecretsClientDependencies } from "./secrets-cli.js";
 import type { ResolvedSkillSelection } from "../types/skill-selection.js";
 import { SkillSelectionError } from "./selection-cache.js";
 
@@ -38,7 +38,20 @@ function canonicalAuthority(value: unknown): value is string {
   } catch { return false; }
 }
 
-/** A client over the installed `secrets` CLI. Values travel from its stdout into memory only; failures never echo output. */
+/** The one expiry rule for every Secrets client, SDK or CLI: no expiry, or a parseable instant still in the future. */
+export function secretExpiryUsable(expiresAt: unknown, now = Date.now()): boolean {
+  if (expiresAt == null) return true;
+  if (typeof expiresAt !== "string") return false;
+  const instant = Date.parse(expiresAt);
+  return Number.isFinite(instant) && instant > now;
+}
+
+/**
+ * A client over the installed `secrets` CLI. Values travel from its stdout into memory only; failures never echo output.
+ * `get --plaintext` reports no expiry, so the item's expiry is read from the metadata listing before and after the
+ * value, and a change between the two refuses: the expiry returned is the one of the value read. resolveSelectedSecrets
+ * then applies secretExpiryUsable to it, as it does to the SDK's.
+ */
 function createCliSecretsClient(dependencies: DefaultSecretsClientDependencies): SelectedSecretsClient {
   const executable = dependencies.findCli();
   if (!executable) throw new Error("SECRETS_CLI_UNAVAILABLE");
@@ -48,9 +61,12 @@ function createCliSecretsClient(dependencies: DefaultSecretsClientDependencies):
     baseUrl,
     async getSecret({ key }, init) {
       const signal = init?.signal ?? undefined;
-      const value = await readSecretWithCli(executable, key, dependencies, signal ? { signal } : {});
-      // The CLI reports no expiry, so none is checked on this path.
-      return { key, value, expires_at: null };
+      const options = signal ? { signal } : {};
+      const before = await readSecretMetadataWithCli(executable, key, dependencies, options);
+      const value = await readSecretWithCli(executable, key, dependencies, options);
+      const after = await readSecretMetadataWithCli(executable, key, dependencies, options);
+      if (before.expires_at !== after.expires_at || before.updated_at !== after.updated_at) throw new Error("SECRETS_CLI_SECRET_CHANGED");
+      return { key, value, expires_at: after.expires_at };
     },
   };
 }
@@ -158,7 +174,7 @@ export async function resolveSelectedSecrets(bindings: SelectedSecretBindings, c
     for (const [name, key] of Object.entries(bindings.bindings)) {
       const secret = await client.getSecret({ key }, { signal });
       if (secret.key !== key || typeof secret.value !== "string" || !secret.value || secret.value.includes("\0") || Buffer.byteLength(secret.value) > 16_384 ||
-          (secret.expires_at != null && (!Number.isFinite(Date.parse(secret.expires_at)) || Date.parse(secret.expires_at) <= Date.now()))) throw new Error();
+          !secretExpiryUsable(secret.expires_at)) throw new Error();
       env[name] = secret.value;
     }
     return env;
