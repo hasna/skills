@@ -1,7 +1,7 @@
 /** Explicit, value-free grants for a selected local execution. Never read bindings from a skill bundle. */
 import { constants, closeSync, fstatSync, openSync, readSync, realpathSync } from "node:fs";
 import { hostname as stationHostname } from "node:os";
-import { defaultFleetGatewayBaseUrl, resolveConfiguredClientAuthority, toV1BaseUrl } from "@hasna/contracts";
+import { defaultSecretsClientDependencies, isSecretsSdkNotInstalled, readSecretWithCli, type DefaultSecretsClientDependencies } from "./secrets-cli.js";
 import type { ResolvedSkillSelection } from "../types/skill-selection.js";
 import { SkillSelectionError } from "./selection-cache.js";
 
@@ -25,34 +25,8 @@ export interface SelectedSecretScope {
 }
 /** A client factory may resolve asynchronously, as the default runtime-loaded one does. */
 export type SelectedSecretsClientFactory = () => SelectedSecretsClient | Promise<SelectedSecretsClient>;
-
-/** The SDK is a separately installed package; it is resolved at call time and never bundled (see the build's --external). */
-const SECRETS_SDK_SPECIFIER = "@hasna/secrets/sdk";
-const SECRETS_CLI = "secrets";
-const CLI_TIMEOUT_MS = 15_000;
-const CLI_VALUE_MAX_BYTES = 16_384;
+export { defaultSecretsClientDependencies, type DefaultSecretsClientDependencies, type SecretsCliResult } from "./secrets-cli.js";
 type SecretsSdkModule = { createSecretsClientFromEnv: () => SelectedSecretsClient };
-export interface SecretsCliResult { status: number | null; stdout: Uint8Array }
-export interface DefaultSecretsClientDependencies {
-  /** Load the @hasna/secrets SDK. A module-not-found error for that package means "not installed". */
-  importSdk: () => Promise<unknown>;
-  /** Absolute path of the installed `secrets` CLI on PATH, or null. */
-  findCli: () => string | null;
-  /**
-   * The Secrets authority the CLI will use, from the URL-only part of the shared @hasna/contracts resolver
-   * (HASNA_SECRETS_API_URL, the Keychain api-url item, the credentials file, else the fleet gateway: the
-   * order `secrets --help` documents). It reads no credential.
-   */
-  resolveAuthority: () => string;
-  /** Run the CLI with these arguments only: no credential is added to argv or env, and stderr is discarded. */
-  runCli: (executable: string, args: string[], options: { timeoutMs: number; maxBytes: number; signal?: AbortSignal }) => Promise<SecretsCliResult>;
-}
-
-function sdkNotInstalled(error: unknown): boolean {
-  const failure = error as { code?: unknown; message?: unknown } | null;
-  return !!failure && (failure.code === "ERR_MODULE_NOT_FOUND" || failure.code === "MODULE_NOT_FOUND") &&
-    typeof failure.message === "string" && /['"]@hasna\/secrets(?:\/[^'"]*)?['"]/.test(failure.message);
-}
 
 /** Canonical Secrets /v1 authority, the same shape a binding must carry. */
 function canonicalAuthority(value: unknown): value is string {
@@ -64,36 +38,6 @@ function canonicalAuthority(value: unknown): value is string {
   } catch { return false; }
 }
 
-async function defaultRunCli(executable: string, args: string[], options: { timeoutMs: number; maxBytes: number; signal?: AbortSignal }): Promise<SecretsCliResult> {
-  // The CLI resolves its own credential from this process's environment, exactly as it would for an
-  // operator. Nothing is added: no flag, no variable, no value.
-  const proc = Bun.spawn([executable, ...args], { env: process.env, stdin: "ignore", stdout: "pipe", stderr: "ignore" });
-  const stop = () => { try { proc.kill(); } catch { /* already exited */ } };
-  const timer = setTimeout(stop, options.timeoutMs);
-  options.signal?.addEventListener("abort", stop, { once: true });
-  try {
-    const chunks: Uint8Array[] = [];
-    let size = 0, overflow = false;
-    for await (const chunk of proc.stdout) {
-      size += chunk.byteLength;
-      if (size > options.maxBytes) { overflow = true; stop(); chunk.fill(0); break; }
-      chunks.push(chunk);
-    }
-    const status = await proc.exited;
-    const stdout = new Uint8Array(overflow ? 0 : size);
-    let offset = 0;
-    for (const chunk of chunks) { if (!overflow) stdout.set(chunk, offset); offset += chunk.byteLength; chunk.fill(0); }
-    return { status: overflow || options.signal?.aborted ? null : status, stdout };
-  } finally { clearTimeout(timer); options.signal?.removeEventListener("abort", stop); }
-}
-
-export const defaultSecretsClientDependencies: Readonly<DefaultSecretsClientDependencies> = Object.freeze({
-  importSdk: () => import(SECRETS_SDK_SPECIFIER),
-  findCli: () => Bun.which(SECRETS_CLI, { PATH: process.env.PATH ?? "" }),
-  resolveAuthority: () => resolveConfiguredClientAuthority("secrets", process.env)?.baseUrl ?? toV1BaseUrl(defaultFleetGatewayBaseUrl("secrets")),
-  runCli: defaultRunCli,
-});
-
 /** A client over the installed `secrets` CLI. Values travel from its stdout into memory only; failures never echo output. */
 function createCliSecretsClient(dependencies: DefaultSecretsClientDependencies): SelectedSecretsClient {
   const executable = dependencies.findCli();
@@ -103,18 +47,10 @@ function createCliSecretsClient(dependencies: DefaultSecretsClientDependencies):
   return {
     baseUrl,
     async getSecret({ key }, init) {
-      if (!identifier(key) || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(key)) throw new Error("SECRETS_CLI_KEY_INVALID");
       const signal = init?.signal ?? undefined;
-      // Documented: `secrets get <key> --plaintext` writes the bare value to a non-TTY stdout.
-      const result = await dependencies.runCli(executable, ["get", key, "--plaintext"], { timeoutMs: CLI_TIMEOUT_MS, maxBytes: CLI_VALUE_MAX_BYTES, ...(signal ? { signal } : {}) });
-      try {
-        if (result.status !== 0) throw new Error("SECRETS_CLI_READ_FAILED");
-        let value: string;
-        try { value = new TextDecoder("utf8", { fatal: true }).decode(result.stdout); }
-        catch { throw new Error("SECRETS_CLI_READ_FAILED"); }
-        // The CLI reports no expiry, so none is checked on this path.
-        return { key, value, expires_at: null };
-      } finally { result.stdout.fill(0); }
+      const value = await readSecretWithCli(executable, key, dependencies, signal ? { signal } : {});
+      // The CLI reports no expiry, so none is checked on this path.
+      return { key, value, expires_at: null };
     },
   };
 }
@@ -128,7 +64,7 @@ export async function createDefaultSecretsClient(dependencies: DefaultSecretsCli
   let sdk: unknown;
   try { sdk = await dependencies.importSdk(); }
   catch (error) {
-    if (!sdkNotInstalled(error)) throw new Error("SECRETS_SDK_UNAVAILABLE");
+    if (!isSecretsSdkNotInstalled(error)) throw new Error("SECRETS_SDK_UNAVAILABLE");
     return createCliSecretsClient(dependencies);
   }
   const factory = record(sdk) ? (sdk as Partial<SecretsSdkModule>).createSecretsClientFromEnv : undefined;

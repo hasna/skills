@@ -2015,11 +2015,15 @@ never falls through to another identity: if it cannot be honoured, the command
 fails rather than acting as a different principal.
 
 `HASNA_SKILLS_API_KEY_REF` names a *vault item*, not a key, so it resolves in two
-steps: the item is fetched through the `@hasna/secrets` SDK on each call, which
-means a rotated item is picked up without a restart — and which means the SDK has
-to be installed in the process. Every way that fetch can fail (SDK absent, vault
-unreachable, item missing or empty) is terminal and exits non-zero; a pointer
-never falls through to another tier, and never to the local corpus.
+steps: the item is fetched on each call, which means a rotated item is picked up
+without a restart. It is fetched through the `@hasna/secrets` SDK when that is
+installed beside Skills, and otherwise through the installed `secrets` CLI
+(`secrets get <key> --plaintext`, read into memory only, in the caller's
+unchanged environment); the runtime `skills self-update` installs has no SDK,
+because `@hasna/secrets` is restricted on npm. Every way that fetch can fail (no
+SDK and no CLI, vault unreachable, item missing or empty, a Secrets bootstrap
+that is itself a pointer) is terminal and exits non-zero; a pointer never falls
+through to another tier, and never to the local corpus.
 
 For a durable reference without a raw Skills key, the same
 `HASNA_SKILLS_API_KEY_REF` field can be stored in the owner-only canonical or
