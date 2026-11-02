@@ -342,7 +342,9 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
   if (typeof candidate.marketplace !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(candidate.marketplace)) refuse("invalid candidate marketplace");
   if (!Array.isArray(candidate.plugins) || candidate.plugins.length < 1 || candidate.plugins.length > 32) refuse("candidate must select between one and 32 plugins from one marketplace");
   if (candidate.functionHooksEnv !== undefined && candidate.functionHooksEnv !== "1") refuse("function-hook environment mutation only supports the explicit value 1");
-  const settingsMarketplaceWriterVersions = ["2.1.276", "2.1.278", "2.1.282", "2.1.287", "2.1.293", "2.1.296", "2.1.299", "2.1.300", "2.1.301", "2.1.302"];
+  // 2.1.314 and 2.1.316 gave the same normalized post-states and CLI JSON as 2.1.302 for a directory
+  // marketplace add, install and update in an isolated HOME (Files f_YFWMFBsQ6S, f_Ri0EmTXxpR, f_8YsNAu35NP).
+  const settingsMarketplaceWriterVersions = ["2.1.276", "2.1.278", "2.1.282", "2.1.287", "2.1.293", "2.1.296", "2.1.299", "2.1.300", "2.1.301", "2.1.302", "2.1.314", "2.1.316"];
   const nativeVersion = request.native.executable.version;
   const measuredSettingsWriter = settingsMarketplaceWriterVersions.some(version => nativeVersion === version || nativeVersion === `${version} (Claude Code)`);
   if (hasOwn(candidate, "settingsMarketplaceSource") && (candidate.settingsMarketplaceSource !== "directory" || request.scope.kind !== "user"
