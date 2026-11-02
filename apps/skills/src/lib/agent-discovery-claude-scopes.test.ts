@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { resolveAgentDiscoveryExclusionRoots } from "./agent-discovery.js";
 
-// A Claude plugin is registered once per scope. The user scope is global and a
-// project scope carries its own projectPath; the same plugin may be installed in
-// both, and in several projects, with different versions and install paths
-// (measured on station02). The exclusion reader must accept that native shape
-// while keeping malformed or genuinely conflicting registrations refused.
+// A Claude plugin is registered once per native scope. user and managed carry
+// no project; project and local carry the project they belong to. The same
+// plugin may be installed in several scopes, in several projects, with
+// different versions and install paths (measured on station02, and with
+// `claude plugin install --scope local` on 2.1.314). The exclusion reader must
+// accept that native shape while keeping malformed or genuinely conflicting
+// registrations refused.
 const scratch: string[] = [];
 afterEach(() => { for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 function put(path: string, text: string): void { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text); }
@@ -73,8 +75,10 @@ test("an ancestor projectPath is accepted and excludes only the plugin root", ()
   expect(resolved).toContain(join(home, "plugins", "ancestor"));
   // The projectPath only identifies the scope; it never becomes an exclusion
   // root, so an ancestor such as / cannot swallow unrelated destinations.
+  // `within("/", x)` is false for every path that is not itself "/", so the
+  // direct claim is that the ancestor is absent from the roots.
   for (const root of resolved) expect(within(home, root)).toBe(true);
-  expect(resolved.some(root => within(root, join(tmpdir(), "elsewhere", "skill")))).toBe(false);
+  expect(resolved).not.toContain(sep);
 });
 
 test("a symlinked projectPath is accepted and stays inert", () => {
@@ -91,6 +95,70 @@ test("a symlinked projectPath is accepted and stays inert", () => {
   for (const destination of [join(home, "linked-project", "scratch", "skill"), join(home, "real-project", "scratch", "skill")]) {
     expect(resolved.some(root => within(root, destination))).toBe(false);
   }
+});
+
+test("a local registration with its projectPath resolves", () => {
+  const { home } = setup(home => ({ "fixture@market": [{ scope: "local", projectPath: join(home, "project"), installPath: pluginRoot(home, "local-only"), version: "1.0.0" }] }));
+  const resolved = roots(home);
+  expect(resolved).toContain(join(home, "plugins", "local-only"));
+  const destination = join(home, "project", "scratch", "skill");
+  expect(resolved.some(root => within(root, destination))).toBe(false);
+});
+
+test("local and project registrations sharing one install root resolve to one root", () => {
+  // Measured native shape: installing the same plugin with --scope local and
+  // then --scope project writes the same cache installPath and version under
+  // both scopes, each with its own projectPath.
+  const { home } = setup(home => {
+    const installPath = pluginRoot(home, "local-and-project");
+    return { "fixture@market": [
+      { scope: "local", projectPath: join(home, "project"), installPath, version: "1.0.0" },
+      { scope: "project", projectPath: join(home, "project"), installPath, version: "1.0.0" },
+    ] };
+  });
+  const resolved = roots(home);
+  expect(resolved.filter(root => root === join(home, "plugins", "local-and-project"))).toHaveLength(1);
+});
+
+test("local and user registrations with distinct roots resolve to both", () => {
+  const { home } = setup(home => ({
+    "fixture@market": [
+      { scope: "user", installPath: pluginRoot(home, "user-with-local"), version: "1.0.0" },
+      { scope: "local", projectPath: join(home, "project"), installPath: pluginRoot(home, "local-beside-user"), version: "2.0.0" },
+    ],
+  }));
+  const resolved = roots(home);
+  for (const name of ["user-with-local", "local-beside-user"]) expect(resolved).toContain(join(home, "plugins", name));
+});
+
+test("a local registration without its projectPath is refused", () => {
+  const { home } = setup(home => ({ "fixture@market": [{ scope: "local", installPath: pluginRoot(home, "local-no-path"), version: "1.0.0" }] }));
+  expect(() => roots(home)).toThrow("enabled plugin registration is missing or ambiguous");
+});
+
+test("a repeated local registration for the same projectPath is refused", () => {
+  const { home } = setup(home => ({
+    "fixture@market": [
+      { scope: "local", projectPath: join(home, "project"), installPath: pluginRoot(home, "local-dupe-a"), version: "1.0.0" },
+      { scope: "local", projectPath: join(home, "project"), installPath: pluginRoot(home, "local-dupe-b"), version: "1.0.0" },
+    ],
+  }));
+  expect(() => roots(home)).toThrow("enabled plugin registration is missing or ambiguous");
+});
+
+test("a local projectPath that is relative is refused", () => {
+  const { home } = setup(home => ({ "fixture@market": [{ scope: "local", projectPath: "project", installPath: pluginRoot(home, "local-bad-path"), version: "1.0.0" }] }));
+  expect(() => roots(home)).toThrow("enabled plugin registration is missing or ambiguous");
+});
+
+test("a managed registration without a project resolves", () => {
+  const { home } = setup(home => ({ "fixture@market": [{ scope: "managed", installPath: pluginRoot(home, "managed"), version: "1.0.0" }] }));
+  expect(roots(home)).toContain(join(home, "plugins", "managed"));
+});
+
+test("a managed registration carrying a projectPath is refused", () => {
+  const { home } = setup(home => ({ "fixture@market": [{ scope: "managed", projectPath: join(home, "project"), installPath: pluginRoot(home, "managed-path"), version: "1.0.0" }] }));
+  expect(() => roots(home)).toThrow("enabled plugin registration is missing or ambiguous");
 });
 
 test("identical user and project registrations resolve without a duplicate root", () => {
@@ -145,8 +213,8 @@ test("a projectPath carrying a control character is refused", () => {
 
 test("an unknown registration scope is refused, including beside a valid row", () => {
   for (const rows of [
-    [{ scope: "local", installPath: "PLACEHOLDER", version: "1.0.0" }],
-    [{ scope: "user", installPath: "PLACEHOLDER", version: "1.0.0" }, { scope: "local", installPath: "PLACEHOLDER", version: "1.0.0" }],
+    [{ scope: "global", installPath: "PLACEHOLDER", version: "1.0.0" }],
+    [{ scope: "user", installPath: "PLACEHOLDER", version: "1.0.0" }, { scope: "global", installPath: "PLACEHOLDER", version: "1.0.0" }],
   ]) {
     const { home } = setup(home => {
       const installPath = pluginRoot(home, "unknown-scope");
@@ -167,23 +235,31 @@ test("one install path claiming two string versions is refused", () => {
   expect(() => roots(home)).toThrow("enabled plugin registration is missing or ambiguous");
 });
 
-test("one install path claiming two non-string versions is refused", () => {
-  const { home } = setup(home => {
-    const installPath = pluginRoot(home, "numeric-conflict");
-    return { "fixture@market": [
-      { scope: "user", installPath, version: 1 },
-      { scope: "project", projectPath: join(home, "project"), installPath, version: 2 },
-    ] };
-  });
-  expect(() => roots(home)).toThrow("enabled plugin registration is missing or ambiguous");
+test("a version that is not a string is refused under the native schema", () => {
+  for (const version of [1, [1], { v: 1 }, null, true]) {
+    const { home } = setup(home => ({ "fixture@market": [{ scope: "user", installPath: pluginRoot(home, "bad-version"), version }] }));
+    expect(() => roots(home)).toThrow("malformed plugin registration version");
+  }
 });
 
-test("one install path claiming versions that stringify alike but differ is refused", () => {
+test("an absent version is legal and agrees with another absent version", () => {
   const { home } = setup(home => {
-    const installPath = pluginRoot(home, "identity-conflict");
+    const installPath = pluginRoot(home, "absent-version");
     return { "fixture@market": [
-      { scope: "user", installPath, version: 1 },
-      { scope: "project", projectPath: join(home, "project"), installPath, version: [1] },
+      { scope: "user", installPath },
+      { scope: "project", projectPath: join(home, "project"), installPath },
+    ] };
+  });
+  const resolved = roots(home);
+  expect(resolved.filter(root => root === join(home, "plugins", "absent-version"))).toHaveLength(1);
+});
+
+test("an absent version and a string version on one install root are refused", () => {
+  const { home } = setup(home => {
+    const installPath = pluginRoot(home, "absent-versus-string");
+    return { "fixture@market": [
+      { scope: "user", installPath },
+      { scope: "project", projectPath: join(home, "project"), installPath, version: "1.0.0" },
     ] };
   });
   expect(() => roots(home)).toThrow("enabled plugin registration is missing or ambiguous");
