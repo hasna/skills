@@ -10,7 +10,7 @@
  */
 import { accessSync, constants, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, isAbsolute, resolve, sep } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { defaultFleetGatewayBaseUrl, resolveConfiguredClientAuthority, toV1BaseUrl } from "@hasna/contracts";
 
 type Env = Record<string, string | undefined>;
@@ -78,6 +78,22 @@ function isWithin(child: string, parent: string): boolean {
 }
 
 /**
+ * The folders whose node_modules a package runner may put on PATH for this working folder: the folder itself
+ * and each parent above it, stopping before the user's home (home and its parents hold the user's own
+ * installs, such as a retained runtime under ~/.hasna/secrets/runtime/<version>/node_modules). bun run and
+ * npm run add node_modules/.bin from every one of these when started in a workspace subfolder.
+ */
+function projectFolders(working: string, home: string): string[] {
+  const folders: string[] = [];
+  for (let folder = working; ; folder = dirname(folder)) {
+    if (home !== "" && isWithin(home, folder)) break;
+    folders.push(folder);
+    if (dirname(folder) === folder) break;
+  }
+  return folders;
+}
+
+/**
  * Find the `secrets` CLI without trusting the working folder. Skills runs from whatever folder an agent
  * hook starts it in, often a cloned repository, so:
  * - only absolute, non-empty PATH entries are searched, in order; a relative entry such as "." or
@@ -85,6 +101,10 @@ function isWithin(child: string, parent: string): boolean {
  * - the first executable regular file named `secrets` decides: a candidate whose path is not already in
  *   resolved form ("/a/../b") is refused, and so is one whose real path lies inside the real working folder
  *   (npx, npm run and bun run put the checkout's own node_modules/.bin on PATH as an absolute entry);
+ * - a candidate is also refused when its folder or its real path lies in the node_modules of the working
+ *   folder or of any parent of it below the user's home: bun run from a workspace subfolder puts every
+ *   ancestor's node_modules/.bin on PATH, and a hoisted or planted `secrets` bin there resolves outside
+ *   the working folder itself;
  * - a refusal throws SecretsCliLocationError and nothing further is searched.
  * A working folder that is the user's home or one of its ancestors ("/" for a launchd job) is not a
  * checkout: everything the user installed lies below it, so the inside-the-working-folder check is not
@@ -103,6 +123,14 @@ export function locateSecretsCli(env: Env = process.env, context: { cwd?: string
     const workingHoldsHome = home !== "" && isWithin(home, working);
     if (!workingHoldsHome && isWithin(real, working)) {
       throw new SecretsCliLocationError("it lies inside the working folder, where a checkout could have placed it");
+    }
+    let folder: string;
+    try { folder = realpathSync(dirname(candidate)); } catch { throw new SecretsCliLocationError("the folder that holds it could not be resolved"); }
+    for (const project of projectFolders(working, home)) {
+      const modules = join(project, "node_modules");
+      if (isWithin(folder, modules) || isWithin(real, modules)) {
+        throw new SecretsCliLocationError("it comes from the node_modules of the working folder or a parent of it, where a checkout could have placed it");
+      }
     }
     return candidate;
   }

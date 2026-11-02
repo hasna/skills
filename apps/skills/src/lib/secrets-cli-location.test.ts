@@ -106,3 +106,55 @@ test("a directory or a non-executable file named secrets is not a candidate", ()
   expect(locateSecretsCli({ PATH: `${outside}/a:${outside}/b:${outside}/c` }, { cwd, home })).toBe(legit);
   expect(existsSync(legit)).toBe(true);
 });
+
+test("bun run from a workspace subfolder: a bin in a parent's node_modules/.bin is refused (N1)", () => {
+  const repo = directory(), home = directory(), outside = directory();
+  const cwd = join(repo, "apps/x");
+  mkdirSync(cwd, { recursive: true });
+  // A hoisted dependency bin: repo/node_modules/.bin/secrets is a symlink into repo/node_modules/<pkg>, outside cwd.
+  const hoisted = plant(join(repo, "node_modules/evil-pkg/bin"));
+  mkdirSync(join(repo, "node_modules/.bin"), { recursive: true });
+  symlinkSync(hoisted, join(repo, "node_modules/.bin/secrets"));
+  plant(join(outside, "bin"));
+  const error = locationRefusal(() => locateSecretsCli({ PATH: `${cwd}/node_modules/.bin:${repo}/node_modules/.bin:${outside}/bin` }, { cwd, home }));
+  expect(error.reason).toContain("node_modules of the working folder or a parent");
+  expect(error.message).not.toContain(repo);
+  // A plain file planted in the parent's node_modules/.bin is refused the same way.
+  const repo2 = directory();
+  const cwd2 = join(repo2, "packages/y");
+  mkdirSync(cwd2, { recursive: true });
+  plant(join(repo2, "node_modules/.bin"));
+  locationRefusal(() => locateSecretsCli({ PATH: `${repo2}/node_modules/.bin` }, { cwd: cwd2, home }));
+  // Control: from the same subfolder, a CLI outside the project is used.
+  const legit = join(outside, "bin/secrets");
+  expect(locateSecretsCli({ PATH: `${outside}/bin` }, { cwd, home })).toBe(legit);
+});
+
+test("a PATH entry elsewhere that resolves into a parent's node_modules is refused (N1)", () => {
+  const repo = directory(), home = directory(), outside = directory();
+  const cwd = join(repo, "apps/x");
+  mkdirSync(cwd, { recursive: true });
+  const planted = plant(join(repo, "node_modules/some-pkg/bin"));
+  mkdirSync(join(outside, "bin"));
+  symlinkSync(planted, join(outside, "bin/secrets"));
+  locationRefusal(() => locateSecretsCli({ PATH: `${outside}/bin` }, { cwd, home }));
+});
+
+test("a retained runtime under the user's home stays usable from a checkout below home (N1 control)", () => {
+  const home = directory();
+  // The retained runtime layout: ~/.local/bin/secrets -> ~/.hasna/secrets/runtime/<v>/node_modules/@hasna/secrets/bin/secrets.
+  const runtime = plant(join(home, ".hasna/secrets/runtime/0.6.5-copyfile/node_modules/@hasna/secrets/bin"));
+  mkdirSync(join(home, ".local/bin"), { recursive: true });
+  symlinkSync(runtime, join(home, ".local/bin/secrets"));
+  // The checkout sits below ~/.hasna too, so ~/.hasna is one of the working folder's parents.
+  const cwd = join(home, ".hasna/repos/worktrees/org/repo/apps/x");
+  mkdirSync(cwd, { recursive: true });
+  expect(locateSecretsCli({ PATH: `${home}/.local/bin` }, { cwd, home })).toBe(join(home, ".local/bin/secrets"));
+  // Its runtime is also accepted when reached directly through its own bin folder.
+  expect(locateSecretsCli({ PATH: dirnameOf(runtime) }, { cwd, home })).toBe(runtime);
+  // But a node_modules directly under one of those parents is project-injected and refused.
+  plant(join(home, ".hasna/repos/worktrees/org/repo/node_modules/.bin"));
+  locationRefusal(() => locateSecretsCli({ PATH: `${home}/.hasna/repos/worktrees/org/repo/node_modules/.bin` }, { cwd, home }));
+});
+
+function dirnameOf(file: string) { return file.slice(0, file.lastIndexOf("/")); }

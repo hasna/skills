@@ -2030,8 +2030,10 @@ through to another tier, and never to the local corpus.
 
 Both fallbacks look for `secrets` only in absolute `PATH` entries, and refuse
 one whose real path lies inside the working folder (unless that folder is your
-home or above it), so a checkout cannot plant its own `secrets` through `.` or
-its `node_modules/.bin`. Absolute `PATH` entries elsewhere are trusted, as your
+home or above it), or that comes from the `node_modules` of the working folder or
+of any parent of it below your home (where `bun run` and `npm run` add every
+ancestor's `node_modules/.bin`), so a checkout cannot plant its own `secrets`
+through `.` or a `node_modules/.bin`. Absolute `PATH` entries elsewhere are trusted, as your
 shell trusts them.
 
 For a durable reference without a raw Skills key, the same
