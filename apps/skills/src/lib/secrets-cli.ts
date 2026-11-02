@@ -14,7 +14,6 @@ import { basename, delimiter, dirname, isAbsolute, join, resolve, sep } from "no
 import { defaultFleetGatewayBaseUrl, resolveConfiguredClientAuthority, toV1BaseUrl } from "@hasna/contracts/client";
 
 type Env = Record<string, string | undefined>;
-const SECRETS_SDK_SPECIFIER = "@hasna/secrets/sdk";
 const SECRETS_CLI = "secrets";
 const CLI_TIMEOUT_MS = 15_000;
 const CLI_VALUE_MAX_BYTES = 16_384;
@@ -184,7 +183,9 @@ async function defaultRunCli(executable: string, args: string[], options: Secret
 }
 
 export const defaultSecretsClientDependencies: Readonly<DefaultSecretsClientDependencies> = Object.freeze({
-  importSdk: () => import(SECRETS_SDK_SPECIFIER),
+  // A string literal, so the client boundary scan can resolve it. The builds keep @hasna/secrets external, and
+  // bin/mcp.js may name it only as a dynamic import (scripts/consumer-archive.ts).
+  importSdk: () => import("@hasna/secrets/sdk"),
   findCli: (env: Env = process.env) => locateSecretsCli(env),
   resolveAuthority: () => resolveConfiguredClientAuthority("secrets", process.env)?.baseUrl ?? toV1BaseUrl(defaultFleetGatewayBaseUrl("secrets")),
   runCli: defaultRunCli,
