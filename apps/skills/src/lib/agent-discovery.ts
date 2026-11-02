@@ -1058,6 +1058,19 @@ export function nativeDiscoveryAliasTargets(roots: readonly string[], home: stri
   return [...targets];
 }
 
+/** Whether a full-file Codex settings witness binds each named root control
+ * of the V7 discovery projection (codexDiscoveryControlKeys) in full. Raw
+ * bytes, V1 and V2 bind every such key; V7 is that projection. V3-V6 omit
+ * ordinary local stdio MCP servers (V6 keeps only those its hooks use), so
+ * they bind `mcp_servers` only partly and every other such key in full. */
+function codexSettingsWitnessBindsControls(source: DiscoverySource, controls: readonly string[]): boolean {
+  switch (source.hashMode) {
+    case undefined: case "bytes": case "codex-settings-v1": case "codex-settings-v2": case "codex-settings-v7": return true;
+    case "codex-settings-v3": case "codex-settings-v4": case "codex-settings-v5": case "codex-settings-v6": return !controls.includes("mcp_servers");
+    default: return false;
+  }
+}
+
 function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger; nativeHome?: string }): AgentDiscoveryBinding {
   const canonical = options.canonical ?? resolve, home = resolve(options.home), agent = options.agent;
   const sources: DiscoverySource[] = [], roots = new Set<string>(), builtinNames: string[] = [];
@@ -1092,9 +1105,15 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
   const configText = witness(configPath, agent === "hermes" ? "yaml" : agent === "codex" ? "toml" : "json", agent === "hermes" ? ["skills", "plugins", "hooks"] : agent === "claude" ? ["enabledPlugins", "extraKnownMarketplaces"] : agent === "codex" ? [...CODEX_DISCOVERY_PROJECTION_FIELDS] : agent === "gemini" ? ["skills", "extensions", "security"] : agent === "opencode" ? ["plugin", "skills"] : agent === "sumi" ? [...SUMI_DISCOVERY_PROJECTION_FIELDS] : ["version"]);
   const config: any = configText === null ? {} : agent === "hermes" ? parseHermesConfig(configText) : parseConfig(configText, configPath, agent === "codex");
   const unresolved = (detail: string): never => { throw new Error(`Native discovery is unresolved (${agent}: ${detail}); provide a reviewed --discovery-inputs file`); };
-  let opaqueClosureVerified = false;
+  let retainedReviewVerified = false;
+  // Every retained source except the primary configuration (which the caller
+  // checks against its own settings witness) must still verify.
+  const verifyRetainedReview = (retained: AgentDiscoveryBinding): void => {
+    if (retainedReviewVerified) return;
+    verifyDiscovery(retained, undefined, undefined, undefined, exclusion?.narrowed, canonical(configPath));
+    retainedReviewVerified = true;
+  };
   const verifyOpaqueClosure = (declarations: readonly string[]): void => {
-    if (opaqueClosureVerified) return;
     const retained = exclusion?.retained;
     // An opaque declaration alone does not establish its executable behavior.
     // Reuse the supplied review's full source population, never infer a shell
@@ -1103,8 +1122,7 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     if (retained.method !== "reviewed" || !retained.sources.some(source => source.path !== canonical(configPath)
       && !declarations.includes(source.path) && source.sha256 !== null && source.format === undefined && source.fields === undefined
       && [undefined, "bytes", "path-bytes", "executable-v1"].includes(source.hashMode))) unresolved("opaque executable dependency closure is unavailable");
-    verifyDiscovery(retained, undefined, undefined, undefined, exclusion?.narrowed, canonical(configPath));
-    opaqueClosureVerified = true;
+    verifyRetainedReview(retained);
   };
   if (exclusion) {
     // Strict JSON syntax and collection limits come from the owning witness
@@ -1130,22 +1148,40 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     const fieldKey = (key: string): string => /^[A-Za-z_$][A-Za-z0-9_$.-]{0,22}$/.test(key)
       && !/(?:sk|rk|pk)_(?:live|test)_|whsec_/i.test(key) ? JSON.stringify(key) : "[withheld field key]";
     const unsupportedFields = (names: readonly string[], label: string): never => unresolved(`unknown discovery controls have no root-exclusion adapter for ${label}${names.slice(0, 8).map(fieldKey).join(", ")}${names.length > 8 ? ", additional keys withheld" : ""} in ${quotedPath(canonical(configPath))}`);
+    // The retained explicit review of this exact configuration file: every
+    // full-file settings witness of it still verifies, directly or through the
+    // narrowed ledger (a codex-settings-v7 or claude-settings-v5 digest). A
+    // direct match also has to satisfy `bindsWhole`, when given.
+    const currentSettingsReview = (bindsWhole?: (source: DiscoverySource) => boolean): AgentDiscoveryBinding | null => {
+      const retained = exclusion.retained;
+      const settings = retained?.sources.filter(source => source.path === canonical(configPath)
+        && source.sha256 !== null && source.format === undefined && source.fields === undefined) ?? [];
+      return retained?.method === "reviewed" && settings.length && settings.every(source => {
+        try { if (projected(source, undefined, budget) === source.sha256 && (bindsWhole?.(source) ?? true)) return true; }
+        catch { /* only the narrowed ledger can still accept this witness */ }
+        return exclusion.narrowed?.accepts(source) === true;
+      }) ? retained : null;
+    };
+    const verifyCurrentOpaqueSettings = (label: string): void => {
+      if (!currentSettingsReview()) unresolved(`non-enumerable ${label} require a current settings review`);
+    };
     const unsupportedControls = controls.filter(key => !supported[agent].includes(key));
-    if (unsupportedControls.length) unsupportedFields(unsupportedControls, "");
+    if (unsupportedControls.length) {
+      // No adapter derives roots from these Codex controls (MCP servers,
+      // instruction sources, agent roles, profiles, features). The explicit
+      // review that `skills hook install --discovery-inputs` retained already
+      // covers them while its witness binds each one whole and still matches;
+      // its reviewed roots are unioned into the exclusion. A changed file, a
+      // witness that omits one of these controls, or no review keeps refusing.
+      const reviewed = agent === "codex" ? currentSettingsReview(source => codexSettingsWitnessBindsControls(source, unsupportedControls)) : null;
+      if (!reviewed) unsupportedFields(unsupportedControls, "");
+      verifyRetainedReview(reviewed!);
+    }
     // A command can register roots dynamically. An existing exact or narrowed
     // settings review is required for that non-enumerable input only.
     if (config.hooks !== undefined && !object(config.hooks)) unresolved("hooks must be an object");
     const hasHooks = controls.includes("hooks") && config.hooks !== undefined && Object.keys(config.hooks).length > 0;
     let hasPluginConfigs = false, hasFunctionHookEnvironment = false;
-    const verifyCurrentOpaqueSettings = (label: string): void => {
-      const retained = exclusion.retained;
-      const settings = retained?.sources.filter(source => source.path === canonical(configPath)
-        && source.sha256 !== null && source.format === undefined && source.fields === undefined) ?? [];
-      if (retained?.method !== "reviewed" || !settings.length || !settings.every(source => {
-        try { return projected(source, undefined, budget) === source.sha256 || exclusion.narrowed?.accepts(source) === true; }
-        catch { return exclusion.narrowed?.accepts(source) === true; }
-      })) unresolved(`non-enumerable ${label} require a current settings review`);
-    };
     if (hasHooks) verifyCurrentOpaqueSettings("hooks");
     if (agent === "claude") {
       if (config.env !== undefined) {

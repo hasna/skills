@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.91
+
+- `skills prepare`, `skills port` and the other portable authoring writers no longer refuse a Codex `config.toml` with an `[mcp_servers.*]` table (or another Codex control without a root-exclusion adapter, such as an instruction source, `[agents.*]`, a profile or a feature flag) when the explicit review that `skills hook install --discovery-inputs` retained still binds that file. They refused with "unknown discovery controls have no root-exclusion adapter for \"mcp_servers\" … provide a reviewed --discovery-inputs file", which these commands could not satisfy because they take no such option. The review counts only while its settings witness of `config.toml` still matches, directly or through the recorded narrowed digest, and every other source it retained still verifies; its reviewed roots stay excluded. A witness that does not bind the control in full does not count: `codex-settings-v3` to `v6` omit ordinary local stdio MCP servers, so they still refuse while `mcp_servers` is present, and raw bytes, `codex-settings-v1`, `v2` and `v7` cover it. A changed file, a stale retained source or no review still refuses. Native admission, hook install and the live hooks are unchanged.
+
 ## 0.10.90
 
 - Claude Code 2.1.314 and 2.1.316 are accepted as measured user-scope writers for a directory settings marketplace in the prospective review, as 2.1.302 was. Measured against 2.1.302 in an isolated HOME (a directory marketplace add, then install and update), all three gave the same normalized post-states and CLI JSON. Neighbouring, pre-release, build and four-part versions, and project scope, are still refused.
