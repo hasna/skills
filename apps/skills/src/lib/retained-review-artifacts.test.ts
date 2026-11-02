@@ -20,7 +20,12 @@ function fixture() {
   mkdirSync(dirname(sourcePath), { mode: 0o700 }); writeFileSync(sourcePath, text, { mode: 0o600 });
   const binding: AgentDiscoveryBinding = { agent: "codex", method: "reviewed", roots: [], sources: captureDiscoveryByteSources([sourcePath]) };
   const artifacts = [{ kind: "codex-native-catalog" as const, path: sourcePath, sha256: sha(text) }];
-  return { home, dataDir, sourcePath, text, binding, artifacts };
+  // Project discovery walks up from the project dir, and every option here is
+  // passed straight through. Without this the walk starts at process.cwd(),
+  // which for a checkout under a developer's home reaches their real
+  // ~/.codex/config.toml and refuses with NATIVE_SKILL_DRIFT. The sandbox is
+  // the only project this test has, so name it instead of inheriting a cwd.
+  return { home, dataDir, sourcePath, text, binding, artifacts, projectDir: home };
 }
 function station() {
   const f = fixture(), configPath = join(f.home, ".codex", "config.toml");
