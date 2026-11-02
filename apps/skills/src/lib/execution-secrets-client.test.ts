@@ -151,6 +151,8 @@ test("the installed CLI is run with the caller's environment unchanged and no cr
   writeFileSync(join(bin, "secrets"), `#!/bin/sh
 printf '%s\\n' "$@" >> "$SH48_FIXTURE_LOG/argv"
 /usr/bin/env | /usr/bin/cut -d= -f1 | /usr/bin/sort > "$SH48_FIXTURE_LOG/env-names"
+printf '%s' "\${FIXTURE_CALLER_KEY-unset}" > "$SH48_FIXTURE_LOG/caller-key"
+printf '%s' "\${FIXTURE_CALLER_SENTINEL-unset}" > "$SH48_FIXTURE_LOG/caller-sentinel"
 [ "$1" = get ] && [ "$2" = fixture/app/live/token ] && [ "$3" = --plaintext ] && exec /bin/cat "$SH48_FIXTURE_VALUE"
 [ "$1" = list ] && [ "$2" = fixture/app/live/token ] && [ "$3" = --json ] && { printf '%s' '${listing([metadata("fixture/app/live/token")])}'; exit 0; }
 exit 2
@@ -158,11 +160,19 @@ exit 2
   chmodSync(join(bin, "secrets"), 0o700);
   const saved = { ...process.env };
   try {
-    for (const name of Object.keys(process.env)) if (/^HASNA_|SECRETS_/.test(name)) delete process.env[name];
-    process.env.PATH = `${bin}:/usr/bin:/bin`;
-    process.env.SH48_FIXTURE_LOG = log;
-    process.env.SH48_FIXTURE_VALUE = valueFile;
-    process.env.HASNA_SECRETS_API_URL = "https://vault.example.com/";
+    // The caller is this fixture, not the process that runs the suite. A harness
+    // exporting ANTHROPIC_API_KEY or a similar variable must not be read as a
+    // credential the CLI projected, so the environment is replaced with an
+    // explicit synthetic one instead of being scrubbed by name pattern.
+    for (const name of Object.keys(process.env)) delete process.env[name];
+    Object.assign(process.env, {
+      PATH: `${bin}:/usr/bin:/bin`,
+      HOME: directory(),
+      SH48_FIXTURE_LOG: log,
+      SH48_FIXTURE_VALUE: valueFile,
+      HASNA_SECRETS_API_URL: "https://vault.example.com/",
+      FIXTURE_CALLER_SENTINEL: "synthetic-caller-value",
+    });
     const deps: DefaultSecretsClientDependencies = { ...defaultSecretsClientDependencies, importSdk: notInstalled };
     expect(deps.findCli()).toBe(join(bin, "secrets"));
     const client = await createDefaultSecretsClient(deps);
@@ -176,8 +186,50 @@ exit 2
     // No credential is projected: only the authority variable the caller itself set is present.
     expect(names.filter(name => /KEY|TOKEN|PASSWORD|CREDENTIAL/i.test(name))).toEqual([]);
     expect(names.filter(name => name.startsWith("HASNA_"))).toEqual(["HASNA_SECRETS_API_URL"]);
+    // The caller's own harmless sentinel reaches the child unchanged, and the
+    // deliberately absent credential-shaped name stays absent.
+    expect(readFileSync(join(log, "caller-sentinel"), "utf8")).toBe("synthetic-caller-value");
+    expect(readFileSync(join(log, "caller-key"), "utf8")).toBe("unset");
     // A non-zero exit is a refusal, never a value.
     await expect(client.getSecret({ key: "fixture/app/live/other" }).then(() => "resolved", () => "refused")).resolves.toBe("refused");
+  } finally {
+    for (const name of Object.keys(process.env)) if (!(name in saved)) delete process.env[name];
+    Object.assign(process.env, saved);
+  }
+});
+
+test("a caller-provided credential-shaped variable reaches the CLI unchanged and the CLI adds none", async () => {
+  const bin = directory(), log = directory();
+  const valueFile = join(log, "value");
+  writeFileSync(valueFile, VALUE, { mode: 0o600 });
+  writeFileSync(join(bin, "secrets"), `#!/bin/sh
+printf '%s\\n' "$@" >> "$SH48_FIXTURE_LOG/argv"
+/usr/bin/env | /usr/bin/cut -d= -f1 | /usr/bin/sort > "$SH48_FIXTURE_LOG/env-names"
+printf '%s' "\${FIXTURE_CALLER_KEY-unset}" > "$SH48_FIXTURE_LOG/caller-key"
+[ "$1" = get ] && [ "$2" = fixture/app/live/token ] && [ "$3" = --plaintext ] && exec /bin/cat "$SH48_FIXTURE_VALUE"
+[ "$1" = list ] && [ "$2" = fixture/app/live/token ] && [ "$3" = --json ] && { printf '%s' '${listing([metadata("fixture/app/live/token")])}'; exit 0; }
+exit 2
+`, { mode: 0o700 });
+  chmodSync(join(bin, "secrets"), 0o700);
+  const saved = { ...process.env };
+  try {
+    for (const name of Object.keys(process.env)) delete process.env[name];
+    Object.assign(process.env, {
+      PATH: `${bin}:/usr/bin:/bin`,
+      HOME: directory(),
+      SH48_FIXTURE_LOG: log,
+      SH48_FIXTURE_VALUE: valueFile,
+      HASNA_SECRETS_API_URL: "https://vault.example.com/",
+      FIXTURE_CALLER_KEY: "synthetic-not-a-credential",
+    });
+    const deps: DefaultSecretsClientDependencies = { ...defaultSecretsClientDependencies, importSdk: notInstalled };
+    const client = await createDefaultSecretsClient(deps);
+    expect(await client.getSecret({ key: "fixture/app/live/token" })).toEqual({ key: "fixture/app/live/token", value: VALUE, expires_at: null });
+    const names = readFileSync(join(log, "env-names"), "utf8").trim().split("\n");
+    // The caller's own credential-shaped name is passed through unchanged; the
+    // CLI neither strips it nor adds a second one of its own.
+    expect(readFileSync(join(log, "caller-key"), "utf8")).toBe("synthetic-not-a-credential");
+    expect(names.filter(name => /KEY|TOKEN|PASSWORD|CREDENTIAL/i.test(name))).toEqual(["FIXTURE_CALLER_KEY"]);
   } finally {
     for (const name of Object.keys(process.env)) if (!(name in saved)) delete process.env[name];
     Object.assign(process.env, saved);
