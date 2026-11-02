@@ -103,8 +103,8 @@ export interface SelectedLocalRunOptions {
   env?: Record<string, string>;
   /** Explicit value-free vault grants; mutually exclusive with env. */
   secretBindings?: SelectedSecretBindings;
-  /** SDK injection seam. The default uses the independently configured Secrets SDK. */
-  createSecretsClient?: () => SelectedSecretsClient;
+  /** SDK injection seam. The default uses the independently configured Secrets SDK when installed, else the installed `secrets` CLI. */
+  createSecretsClient?: () => SelectedSecretsClient | Promise<SelectedSecretsClient>;
   /** Disable network authorization for explicit cached execution; declared secrets then need caller bindings. */
   sharedExecutionGrants?: boolean;
   /** SDK seam for current shared authorization; responses still undergo exact binding validation. */
@@ -117,7 +117,7 @@ export async function prepareSelectedSecretBindings(selected: ResolvedSelectedRu
   if (kind !== "executable" && !declaredOperation(manifest)) throw new SkillSelectionError("INSTRUCTION_SKILL", "Instruction skills do not accept execution secret bindings.");
   const names = declaredSecretNames(manifest.runtime?.env);
   if (!names.length) throw new SkillSelectionError("NO_DECLARED_SECRETS", "This selected executable does not declare any environment references.");
-  return selectedSecretBindingsTemplate({ selection: selected.selection, profileId: selected.profileId, cwd }, names);
+  return await selectedSecretBindingsTemplate({ selection: selected.selection, profileId: selected.profileId, cwd }, names);
 }
 export async function executeSelectedLocal(selected: ResolvedSelectedRun, options: SelectedLocalRunOptions = {}) {
   const selection = structuredClone(selected.selection), profileId = selected.profileId;

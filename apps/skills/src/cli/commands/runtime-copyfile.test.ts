@@ -69,9 +69,9 @@ function fixtureHome() {
   return { home, runtime, oldPackage, localBin, bunBin, externalBin, configs };
 }
 
-async function serverWithArtifact(dependencies: Record<string, string> = {}, optionalDependencies: Record<string, string> = {}, entryBody: (name: string) => string = name => `console.log("0.10.8 ${name}");`, version = "0.10.8", prerequisites?: { declaration: unknown; entry: string | null }) {
+async function serverWithArtifact(dependencies: Record<string, string> = {}, optionalDependencies: Record<string, string> = {}, entryBody: (name: string) => string = name => `console.log("0.10.8 ${name}");`, version = "0.10.8", prerequisites?: { declaration: unknown; entry: string | null }, devDependencies: Record<string, string> = {}) {
   const artifact = await new Bun.Archive({
-    "package/package.json": JSON.stringify({ name: "@hasna/skills", version, bin: BIN, dependencies, ...(Object.keys(optionalDependencies).length ? { optionalDependencies } : {}), ...(prerequisites ? { skillsRuntimePrerequisites: prerequisites.declaration } : {}) }),
+    "package/package.json": JSON.stringify({ name: "@hasna/skills", version, bin: BIN, dependencies, ...(Object.keys(optionalDependencies).length ? { optionalDependencies } : {}), ...(Object.keys(devDependencies).length ? { devDependencies } : {}), ...(prerequisites ? { skillsRuntimePrerequisites: prerequisites.declaration } : {}) }),
     "package/README.md": "Synthetic package fixture.\n",
     ...Object.fromEntries(Object.entries(BIN).map(([name, file]) => [`package/${file}`, `#!/usr/bin/env bun\n${entryBody(name)}\n`])),
     ...(prerequisites?.entry !== null && prerequisites?.entry !== undefined ? { "package/dist/runtime-prerequisites.js": prerequisites.entry } : {}),
@@ -364,11 +364,13 @@ process.exit(code);
 
   test.each([
     { dependencies: { "is-odd": "3.0.1" } },
-    { dependencies: { "@hasna/contracts": "1.3.5", "@hasna/secrets": "0.4.2" } },
+    // The shipped manifest: public Hasna dependencies only. @hasna/secrets is restricted on npm and is a
+    // development dependency, which a consumer's install never fetches.
+    { dependencies: { "@hasna/contracts": "1.3.5", "@hasna/events": "0.1.18" }, devDependencies: { "@hasna/secrets": "0.4.2" } },
     { dependencies: {}, optionalDependencies: { "fsevents": "2.3.3" } },
-  ] as { dependencies: Record<string, string>; optionalDependencies?: Record<string, string> }[])("reviewed full required closure succeeds under force-actual inspection: %j", async ({ dependencies, optionalDependencies }) => {
+  ] as { dependencies: Record<string, string>; optionalDependencies?: Record<string, string>; devDependencies?: Record<string, string> }[])("reviewed full required closure succeeds under force-actual inspection: %j", async ({ dependencies, optionalDependencies, devDependencies }) => {
     const reviewed = fixtureHome(), consumer = fixtureHome();
-    const fixture = await serverWithArtifact(dependencies, optionalDependencies);
+    const fixture = await serverWithArtifact(dependencies, optionalDependencies, undefined, undefined, undefined, devDependencies);
     try {
       await updateCopyfileRuntime("0.10.8", { homeDir: reviewed.home, pathValue: `${reviewed.localBin}${delimiter}${reviewed.bunBin}`, registryOrigin: fixture.server.url.origin, minReleaseAge: 7, minReleaseAgeExclude: ["@hasna/*"] });
       const bytes = readFileSync(join(reviewed.runtime, "0.10.8-copyfile", "install-lock.json"));
@@ -376,37 +378,63 @@ process.exit(code);
       const result = await updateCopyfileRuntime("0.10.8", { homeDir: consumer.home, pathValue: `${consumer.localBin}${delimiter}${consumer.bunBin}`, registryOrigin: fixture.server.url.origin, minReleaseAge: 7, minReleaseAgeExclude: ["@hasna/*"], reviewedLock: path, reviewedLockSha256: createHash("sha256").update(bytes).digest("hex") });
       expect(result.updated).toBe(true);
       if (dependencies["is-odd"]) expect(existsSync(join(consumer.runtime, "0.10.8-copyfile", "node_modules", "is-number", "package.json"))).toBe(true);
-      else if (dependencies["@hasna/secrets"]) expect(JSON.parse(readFileSync(join(consumer.runtime, "0.10.8-copyfile", "node_modules", "@hasna", "skills", "node_modules", "@hasna", "secrets", "package.json"), "utf8")).version).toBe("0.4.2");
+      else if (dependencies["@hasna/events"]) {
+        expect(JSON.parse(readFileSync(join(consumer.runtime, "0.10.8-copyfile", "node_modules", "@hasna", "events", "package.json"), "utf8")).version).toBe("0.1.18");
+        expect(JSON.parse(readFileSync(join(consumer.runtime, "0.10.8-copyfile", "install-lock.json"), "utf8")).packages).not.toHaveProperty("node_modules/@hasna/secrets");
+        expect(existsSync(join(consumer.runtime, "0.10.8-copyfile", "node_modules", "@hasna", "secrets"))).toBe(false);
+      }
       expect(rollbackCopyfileRuntime(String(result.receiptId), { homeDir: consumer.home })).toMatchObject({ rolledBack: true });
     } finally { fixture.server.stop(true); }
   }, 120_000);
 
-  test("real npm conflicting Hasna dependency versions retain nested closure without changing archive payload", async () => {
+  test("real npm conflicting dependency versions retain nested closure without changing archive payload", async () => {
     const f = fixtureHome();
-    const fixture = await serverWithArtifact({ "@hasna/contracts": "1.3.5", "@hasna/secrets": "0.4.2" });
+    // @hasna/contracts 1.3.5 requires zod ^3.25.76 while the package pins zod 4, so npm nests a second zod.
+    const fixture = await serverWithArtifact({ "@hasna/contracts": "1.3.5", "zod": "4.3.6" });
     try {
       const result = await updateCopyfileRuntime("0.10.8", {
         homeDir: f.home, pathValue: `${f.localBin}${delimiter}${f.bunBin}`,
         registryOrigin: fixture.server.url.origin, minReleaseAge: 7,
-        minReleaseAgeExclude: ["@hasna/contracts", "@hasna/secrets"],
+        minReleaseAgeExclude: ["@hasna/contracts"],
       });
       const target = join(f.runtime, "0.10.8-copyfile");
       const packageRoot = join(target, "node_modules", "@hasna", "skills");
-      const nestedSecrets = join(packageRoot, "node_modules", "@hasna", "secrets");
-      expect(JSON.parse(readFileSync(join(nestedSecrets, "package.json"), "utf8")).version).toBe("0.4.2");
-      expect(lstatSync(join(packageRoot, "node_modules", ".bin", "secrets")).isSymbolicLink()).toBe(true);
       const lock = JSON.parse(readFileSync(join(target, "install-lock.json"), "utf8"));
-      expect(lock.packages["node_modules/@hasna/skills/node_modules/@hasna/secrets"].version).toBe("0.4.2");
+      const nestedLocation = Object.keys(lock.packages).find(location => location.endsWith("/node_modules/zod") && lock.packages[location].version.startsWith("3."));
+      expect(nestedLocation).toBeDefined();
+      expect(Object.keys(lock.packages).filter(location => /(^|\/)node_modules\/zod$/.test(location)).map(location => lock.packages[location].version.split(".")[0]).sort()).toEqual(["3", "4"]);
+      const nested = join(target, nestedLocation!);
+      expect(JSON.parse(readFileSync(join(nested, "package.json"), "utf8")).version).toBe(lock.packages[nestedLocation!].version);
       const receipt = JSON.parse(readFileSync(join(target, "rollout-receipt.json"), "utf8"));
       expect(receipt.tarballIntegrity).toBe(fixture.integrity);
       expect(receipt.runtimeTreeSha256).toMatch(/^[a-f0-9]{64}$/);
       for (const [path, content] of f.configs) expect(readFileSync(path, "utf8")).toBe(content);
       expect(pinnedTarget(join(f.localBin, "skills"))).toBe(join(packageRoot, BIN.skills));
-      const original = readFileSync(join(nestedSecrets, "package.json"));
-      writeFileSync(join(nestedSecrets, "package.json"), Buffer.concat([original, Buffer.from("\n ")]));
+      const original = readFileSync(join(nested, "package.json"));
+      writeFileSync(join(nested, "package.json"), Buffer.concat([original, Buffer.from("\n ")]));
       expect(() => rollbackCopyfileRuntime(String(result.receiptId), { homeDir: f.home })).toThrow("ACTIVE_RUNTIME_TREE_DRIFT");
-      writeFileSync(join(nestedSecrets, "package.json"), original);
+      writeFileSync(join(nested, "package.json"), original);
       expect(rollbackCopyfileRuntime(String(result.receiptId), { homeDir: f.home })).toMatchObject({ rolledBack: true });
+    } finally { fixture.server.stop(true); }
+  }, 120_000);
+
+  // A package that the anonymous registry cannot serve (as @hasna/secrets has been since it became
+  // restricted) is fatal to the closure install when the manifest requires it, and also when the
+  // manifest only lists it as optional: npm install --package-lock-only drops the unfetchable optional
+  // entry and npm ci then refuses the lock as out of sync. Skills therefore declares @hasna/secrets as a
+  // development dependency, which a consumer install never fetches.
+  test.each([
+    { field: "dependencies" },
+    { field: "optionalDependencies" },
+  ] as const)("an unavailable package in $field still fails the closure install before switching", async ({ field }) => {
+    const f = fixtureHome();
+    const unavailable = { "@hasna/skills-sh00048-unpublished-fixture": "0.0.1" };
+    const fixture = await serverWithArtifact(field === "dependencies" ? unavailable : {}, field === "optionalDependencies" ? unavailable : {});
+    try {
+      await expect(updateCopyfileRuntime("0.10.8", { homeDir: f.home, pathValue: `${f.localBin}${delimiter}${f.bunBin}`, registryOrigin: fixture.server.url.origin, minReleaseAge: 7, minReleaseAgeExclude: ["@hasna/*"] })).rejects.toThrow("DEPENDENCY_GRAPH_INSTALL_FAILED");
+      expect(realpathSync(join(f.localBin, "skills"))).toBe(join(f.oldPackage, BIN.skills));
+      expect(existsSync(join(f.runtime, "0.10.8-copyfile"))).toBe(false);
+      for (const [path, content] of f.configs) expect(readFileSync(path, "utf8")).toBe(content);
     } finally { fixture.server.stop(true); }
   }, 120_000);
 

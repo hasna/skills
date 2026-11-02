@@ -1916,9 +1916,12 @@ working directory and independently configured Secrets `/v1` authority. Its
 any bound field requires reviewing a fresh template. These are explicit local
 execution grants; selection sync does not distribute or implicitly approve them.
 
-The CLI validates the complete binding before fetching values through
-`@hasna/secrets`. It resolves current values for each run, checks returned keys
-and expiry, and injects only the declared variables into the child process.
+The CLI validates the complete binding before fetching values through the
+`@hasna/secrets` SDK when it is installed beside Skills, and otherwise through
+the installed `secrets` CLI (`secrets get <key> --plaintext`, read into memory
+only; Skills passes it no credential). It resolves current values for each run,
+checks returned keys (and expiry, which only the SDK reports), and injects only
+the declared variables into the child process.
 Missing, extra, stale or mismatched bindings refuse execution; a failing vault
 read never falls back to an ambient value or a local vault. Wrapping `skills run`
 in `secrets exec` alone does not bind a declared variable. Runtime controls such
@@ -2012,11 +2015,15 @@ never falls through to another identity: if it cannot be honoured, the command
 fails rather than acting as a different principal.
 
 `HASNA_SKILLS_API_KEY_REF` names a *vault item*, not a key, so it resolves in two
-steps: the item is fetched through the `@hasna/secrets` SDK on each call, which
-means a rotated item is picked up without a restart — and which means the SDK has
-to be installed in the process. Every way that fetch can fail (SDK absent, vault
-unreachable, item missing or empty) is terminal and exits non-zero; a pointer
-never falls through to another tier, and never to the local corpus.
+steps: the item is fetched on each call, which means a rotated item is picked up
+without a restart. It is fetched through the `@hasna/secrets` SDK when that is
+installed beside Skills, and otherwise through the installed `secrets` CLI
+(`secrets get <key> --plaintext`, read into memory only, in the caller's
+unchanged environment); the runtime `skills self-update` installs has no SDK,
+because `@hasna/secrets` is restricted on npm. Every way that fetch can fail (no
+SDK and no CLI, vault unreachable, item missing or empty, a Secrets bootstrap
+that is itself a pointer) is terminal and exits non-zero; a pointer never falls
+through to another tier, and never to the local corpus.
 
 For a durable reference without a raw Skills key, the same
 `HASNA_SKILLS_API_KEY_REF` field can be stored in the owner-only canonical or
@@ -3604,14 +3611,18 @@ lists them. Invoking a native payload skill instead of the `skills-cli` bridge
 is still denied, and so is invoking the bridge while the bridge itself is
 missing or modified; install, trust and migration still refuse drift.
 
-`claude-settings-v5` and `codex-settings-v7` reviews bind only settings that can
-add, remove or redirect native skills, hooks or plugins (and, for Codex, every
-MCP server and instruction source), so a model switch, an "always allow" rule, a
-status line or Codex's folder trust and notices are not drift. Existing Claude
-and Codex reviews keep verifying through a narrowed-witness ledger the live hook
-records while they still match; a station that had already drifted, V6 and Sumi
-witnesses still need one fresh review. See
-[docs/plugin-admission.md](docs/plugin-admission.md#narrowed-discovery-reviews-claude-settings-v5-and-codex-settings-v7).
+`claude-settings-v5`, `codex-settings-v7` and `codex-settings-v8` reviews bind
+only settings that can add, remove or redirect native skills, hooks or plugins
+(and, for Codex, every MCP server and instruction source), so a model switch, an
+"always allow" rule, a status line or Codex's folder trust and notices are not
+drift. `codex-settings-v8` additionally leaves a marketplace entry's own
+`last_updated` free, so Codex rewriting that timestamp is not drift either.
+V7 keeps its shipped meaning; V8 is a new mode for a fresh review or a
+preserved-preimage upgrade. Existing Claude and Codex reviews keep verifying
+through a narrowed-witness ledger the live hook records while they still match;
+a station that had already drifted, V6 and Sumi witnesses still need one fresh
+review. See
+[docs/plugin-admission.md](docs/plugin-admission.md#narrowed-discovery-reviews-claude-settings-v5-codex-settings-v7-and-codex-settings-v8).
 
 ### Reproduce a reviewed runtime dependency closure
 

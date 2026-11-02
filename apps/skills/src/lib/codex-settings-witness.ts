@@ -476,7 +476,12 @@ export function upgradeCodexSettingsWitnessV5(previous: { path: string; hashMode
  * server, so it needs no hook dependency metadata; V6 keeps its own contract. */
 const V7_DISCOVERY_KEY = /skill|plugin|hook|marketplace|instruction/i;
 const V7_BOUND_KEYS: ReadonlySet<string> = new Set(["mcp_servers", "agents", "project_doc_fallback_filenames", "compact_prompt", "experimental_compact_prompt_file"]);
-function narrowedCodexConfig(config: Record<string, any>): Record<string, any> {
+/** V7 keeps a marketplace entry's own timestamp bound; V8 is the same
+ * projection with only that scalar free. No other difference is allowed. */
+interface CodexNarrowedProjection { marketplaceTimestamps: "bound" | "free" }
+const CODEX_PROJECTION_V7: CodexNarrowedProjection = { marketplaceTimestamps: "bound" };
+const CODEX_PROJECTION_V8: CodexNarrowedProjection = { marketplaceTimestamps: "free" };
+function narrowedCodexConfig(config: Record<string, any>, projection: CodexNarrowedProjection = CODEX_PROJECTION_V7): Record<string, any> {
   const pick = (table: Record<string, any>): Record<string, any> => Object.fromEntries(Object.entries(table).filter(([key]) => V7_DISCOVERY_KEY.test(key) || V7_BOUND_KEYS.has(key)));
   const features = (table: Record<string, any>, target: Record<string, any>): void => {
     if (!Object.hasOwn(table, "features")) return;
@@ -484,19 +489,35 @@ function narrowedCodexConfig(config: Record<string, any>): Record<string, any> {
     const kept = pick(table.features);
     if (Object.keys(kept).length) target.features = kept;
   };
+  // V8 drops only a marketplace entry's own `last_updated` when it is a string
+  // or number: Codex rewrites that timestamp on its own schedule and it cannot
+  // add, remove or redirect a skill, hook or plugin. The entry name, every
+  // other field, a non-scalar value and the table itself stay bound. Every
+  // rebuild below goes through Object.fromEntries, which defines own
+  // properties, so an entry or profile literally named `__proto__` stays in the
+  // projection instead of being swallowed by the inherited setter.
+  const marketplaces = (target: Record<string, any>): void => {
+    if (projection.marketplaceTimestamps === "bound" || !Object.hasOwn(target, "marketplaces") || !isRecord(target.marketplaces)) return;
+    target.marketplaces = Object.fromEntries(Object.entries(target.marketplaces).map(([name, entry]) => {
+      const stamp = isRecord(entry) && Object.hasOwn(entry, "last_updated") && (typeof entry.last_updated === "string" || typeof entry.last_updated === "number");
+      return [name, stamp ? Object.fromEntries(Object.entries(entry).filter(([key]) => key !== "last_updated")) : entry];
+    }));
+  };
   const result = pick(config);
+  marketplaces(result);
   features(config, result);
   if (Object.hasOwn(config, "profiles")) {
     if (!isRecord(config.profiles)) result.profiles = config.profiles;
     else {
-      const profiles: Record<string, any> = {};
+      const profiles: Array<[string, any]> = [];
       for (const [name, profile] of Object.entries(config.profiles)) {
-        if (!isRecord(profile)) { profiles[name] = profile; continue; }
+        if (!isRecord(profile)) { profiles.push([name, profile]); continue; }
         const kept = pick(profile);
+        marketplaces(kept);
         features(profile, kept);
-        if (Object.keys(kept).length) profiles[name] = kept;
+        if (Object.keys(kept).length) profiles.push([name, kept]);
       }
-      if (Object.keys(profiles).length) result.profiles = profiles;
+      if (profiles.length) result.profiles = Object.fromEntries(profiles);
     }
   }
   if (isRecord(result.hooks)) {
@@ -548,6 +569,46 @@ export function upgradeCodexSettingsWitnessV7(previous: { path: string; hashMode
   const sha256 = settingsDigestV7(current);
   if (settingsDigestV7(before) !== sha256) throw new Error("Codex discovery settings outside the reviewed V7 contract changed; explicit discovery review required");
   return { path: previous.path, hashMode: "codex-settings-v7", sha256 };
+}
+
+/** V8 is V7 with one row made free: a marketplace entry's own `last_updated`
+ * scalar. Codex rewrites that timestamp on its own schedule, and a timestamp
+ * cannot add, remove or redirect a skill, hook or plugin. Everything else V7
+ * binds, V8 binds: entry names, every other marketplace field, a non-scalar
+ * value, the table itself, hooks, plugins, MCP servers, instruction sources,
+ * features and profiles.
+ * V7 keeps its original meaning, so a receipt captured under V7 still verifies
+ * exactly as it did; V8 exists only so a newly reviewed policy can choose the
+ * projection that ignores the timestamp. */
+function settingsDigestV8(text: string): string {
+  need(Buffer.byteLength(text) <= 1024 * 1024);
+  let config: any;
+  try { config = Bun.TOML.parse(text); } catch { throw new Error("Invalid Codex settings witness"); }
+  need(isRecord(config));
+  return sha(`hasna.skills.codex-settings.v8\0${JSON.stringify(canonical(narrowedCodexConfig(config, CODEX_PROJECTION_V8)))}`);
+}
+/** Explicit V8 review: the V7 projection with a marketplace's own timestamp
+ * free. Earlier modes keep their meaning; nothing selects V8 implicitly. */
+export function hashCodexSettingsReplacementV8(text: string, budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }): string {
+  need(Buffer.byteLength(text) <= 1024 * 1024 && budget.remaining >= Buffer.byteLength(text)); budget.remaining -= Buffer.byteLength(text);
+  return settingsDigestV8(text);
+}
+export function captureCodexSettingsV8(path: string, budget: ClaudeSettingsWitnessBudget = { remaining: 256 * 1024 * 1024 }): { path: string; hashMode: "codex-settings-v8"; sha256: string } {
+  return { path, hashMode: "codex-settings-v8", sha256: settingsDigestV8(readNativeSettingsWitnessFile(path, budget, "config.toml")) };
+}
+/** Prove the preserved original under its exact original contract (raw bytes or
+ * V1-V7), then require the same V8 projection. V8 binds a subset of what each
+ * of those modes binds, so only a difference in settings V8 ignores passes.
+ * V6 is not eligible: it binds hook MCP dependencies V8 does not carry. */
+export function upgradeCodexSettingsWitnessV8(previous: { path: string; hashMode?: "bytes" | "codex-settings-v1" | "codex-settings-v2" | "codex-settings-v3" | "codex-settings-v4" | "codex-settings-v5" | "codex-settings-v7"; sha256: string }, reviewedSettingsPath: string): ReturnType<typeof captureCodexSettingsV8> {
+  need(previous && Object.keys(previous).every(key => ["path", "hashMode", "sha256"].includes(key)) && (previous.hashMode === undefined || ["bytes", "codex-settings-v1", "codex-settings-v2", "codex-settings-v3", "codex-settings-v4", "codex-settings-v5", "codex-settings-v7"].includes(previous.hashMode)) && /^[a-f0-9]{64}$/.test(previous.sha256));
+  const budget = { remaining: 2 * 1024 * 1024 };
+  const before = readNativeSettingsWitnessFile(reviewedSettingsPath, budget, "config.toml"), current = readNativeSettingsWitnessFile(previous.path, budget, "config.toml");
+  const original = previous.hashMode === "codex-settings-v7" ? settingsDigestV7(before) : previous.hashMode === "codex-settings-v5" ? settingsDigest(before, 5) : previous.hashMode === "codex-settings-v4" ? settingsDigest(before, 4) : previous.hashMode === "codex-settings-v3" ? settingsDigest(before, 3) : previous.hashMode === "codex-settings-v2" ? settingsDigest(before, 2) : previous.hashMode === "codex-settings-v1" ? hashCodexSettingsReplacementV1(before) : sha(before);
+  need(original === previous.sha256);
+  const sha256 = settingsDigestV8(current);
+  if (settingsDigestV8(before) !== sha256) throw new Error("Codex discovery settings outside the reviewed V8 contract changed; explicit discovery review required");
+  return { path: previous.path, hashMode: "codex-settings-v8", sha256 };
 }
 
 /** V6 keeps V5 display tolerances and binds routes referenced by the complete

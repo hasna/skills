@@ -1,7 +1,7 @@
 /** Explicit, value-free grants for a selected local execution. Never read bindings from a skill bundle. */
 import { constants, closeSync, fstatSync, openSync, readSync, realpathSync } from "node:fs";
 import { hostname as stationHostname } from "node:os";
-import { createSecretsClientFromEnv } from "@hasna/secrets/sdk";
+import { defaultSecretsClientDependencies, isSecretsSdkNotInstalled, readSecretWithCli, type DefaultSecretsClientDependencies } from "./secrets-cli.js";
 import type { ResolvedSkillSelection } from "../types/skill-selection.js";
 import { SkillSelectionError } from "./selection-cache.js";
 
@@ -23,9 +23,58 @@ export interface SelectedSecretScope {
   profileId: string;
   cwd: string;
 }
-export function selectedSecretBindingsTemplate(scope: SelectedSecretScope, names: string[], createClient: () => SelectedSecretsClient = createSecretsClientFromEnv): SelectedSecretBindings {
+/** A client factory may resolve asynchronously, as the default runtime-loaded one does. */
+export type SelectedSecretsClientFactory = () => SelectedSecretsClient | Promise<SelectedSecretsClient>;
+export { defaultSecretsClientDependencies, type DefaultSecretsClientDependencies, type SecretsCliResult } from "./secrets-cli.js";
+type SecretsSdkModule = { createSecretsClientFromEnv: () => SelectedSecretsClient };
+
+/** Canonical Secrets /v1 authority, the same shape a binding must carry. */
+function canonicalAuthority(value: unknown): value is string {
+  if (!identifier(value)) return false;
+  try {
+    const url = new URL(value);
+    return (url.protocol === "https:" || (url.protocol === "http:" && ["127.0.0.1", "[::1]", "localhost"].includes(url.hostname))) &&
+      !url.username && !url.password && !url.search && !url.hash && url.pathname.endsWith("/v1") && url.href === value;
+  } catch { return false; }
+}
+
+/** A client over the installed `secrets` CLI. Values travel from its stdout into memory only; failures never echo output. */
+function createCliSecretsClient(dependencies: DefaultSecretsClientDependencies): SelectedSecretsClient {
+  const executable = dependencies.findCli();
+  if (!executable) throw new Error("SECRETS_CLI_UNAVAILABLE");
+  const baseUrl = dependencies.resolveAuthority();
+  if (!canonicalAuthority(baseUrl)) throw new Error("SECRETS_CLI_AUTHORITY_INVALID");
+  return {
+    baseUrl,
+    async getSecret({ key }, init) {
+      const signal = init?.signal ?? undefined;
+      const value = await readSecretWithCli(executable, key, dependencies, signal ? { signal } : {});
+      // The CLI reports no expiry, so none is checked on this path.
+      return { key, value, expires_at: null };
+    },
+  };
+}
+
+/**
+ * The default execution Secrets client. The @hasna/secrets SDK is used when it is installed, with its own
+ * credential resolver; otherwise the installed `secrets` CLI, with its own. Neither path reads or forwards
+ * the other's credential. With neither, the factory throws and the caller refuses with LOCAL_SECRET_UNAVAILABLE.
+ */
+export async function createDefaultSecretsClient(dependencies: DefaultSecretsClientDependencies = defaultSecretsClientDependencies): Promise<SelectedSecretsClient> {
+  let sdk: unknown;
+  try { sdk = await dependencies.importSdk(); }
+  catch (error) {
+    if (!isSecretsSdkNotInstalled(error)) throw new Error("SECRETS_SDK_UNAVAILABLE");
+    return createCliSecretsClient(dependencies);
+  }
+  const factory = record(sdk) ? (sdk as Partial<SecretsSdkModule>).createSecretsClientFromEnv : undefined;
+  if (typeof factory !== "function") throw new Error("SECRETS_SDK_UNAVAILABLE");
+  return factory();
+}
+
+export async function selectedSecretBindingsTemplate(scope: SelectedSecretScope, names: string[], createClient: SelectedSecretsClientFactory = createDefaultSecretsClient): Promise<SelectedSecretBindings> {
   let secretsAuthority: string;
-  try { secretsAuthority = createClient().baseUrl; }
+  try { secretsAuthority = (await createClient()).baseUrl; }
   catch { return refuse("LOCAL_SECRET_UNAVAILABLE", "Configure the Secrets CLI authority and authentication before preparing execution bindings."); }
   const { authority, workspaceId, profileRevision, slug, version, bundleDigest } = scope.selection;
   return {
@@ -97,10 +146,10 @@ export function validateSelectedSecretBindings(value: unknown, scope: SelectedSe
   return structuredClone(value) as unknown as SelectedSecretBindings;
 }
 
-export async function resolveSelectedSecrets(bindings: SelectedSecretBindings, createClient: () => SelectedSecretsClient = createSecretsClientFromEnv): Promise<Record<string, string>> {
+export async function resolveSelectedSecrets(bindings: SelectedSecretBindings, createClient: SelectedSecretsClientFactory = createDefaultSecretsClient): Promise<Record<string, string>> {
   if (!Object.keys(bindings.bindings).length) return {};
   let client: SelectedSecretsClient;
-  try { client = createClient(); }
+  try { client = await createClient(); }
   catch { return refuse("LOCAL_SECRET_UNAVAILABLE", "The configured Secrets client could not authenticate. No ambient credential fallback was attempted."); }
   if (client.baseUrl !== bindings.secretsAuthority) return refuse("SECRET_BINDING_AUTHORITY_MISMATCH", "The configured Secrets authority differs from the reviewed binding. No secret was requested.");
   const env: Record<string, string> = {};

@@ -86,6 +86,7 @@ import { selectedCliSkillsCredentialProfile } from "./cli-credential-profile.js"
 import { isSkillsLocalOptIn, selectsSkillsLocalMode, SKILLS_LOCAL_OPT_IN_ENV_KEYS } from "./local-opt-in.js";
 import { SKILLS_PRODUCT_DEFAULT_ORIGIN } from "./product-default.js";
 import { skillsApiUrlEnvironment } from "./credential-profile-command.js";
+import { defaultSecretsClientDependencies, isSecretsSdkInstalled, readSecretWithCli, type DefaultSecretsClientDependencies } from "./secrets-cli.js";
 
 /** The app slug: the Keychain service, the `~/.hasna/<app>` folder, the gateway path. */
 export const SKILLS_APP = "skills";
@@ -109,6 +110,8 @@ export const SKILLS_API_KEY_ENV = SKILLS_API_KEY_ENV_KEYS[0] as string;
 export interface SkillsFleetOptions {
   /** Tier-1 credential inputs and the Keychain-tier controls (a fake runner in tests). */
   credentials?: CredentialChainOptions;
+  /** How a vault pointer reaches Hasna Secrets when the SDK is absent (a stand-in CLI in tests). */
+  secretsAccess?: Pick<DefaultSecretsClientDependencies, "importSdk" | "findCli" | "runCli">;
 }
 
 /**
@@ -685,6 +688,14 @@ export async function resolveSkillsConnection(
   }
 
   let completed: ResolvedCredential;
+  const secretsAccess = options.secretsAccess ?? defaultSecretsClientDependencies;
+  if (!(await isSecretsSdkInstalled(secretsAccess))) {
+    // The Skills runtime that `skills self-update` installs has no @hasna/secrets (restricted on npm),
+    // so contracts' completion would refuse every pointer. Complete it through the installed CLI instead.
+    const apiKey = await completePointerWithSecretsCli(pointer, snapshotEnv, secretsAccess);
+    assertFilesUnchanged();
+    return { ...fleet, apiKey, apiKeyPointer: null };
+  }
   try {
     // A deliberate Secrets URL and bootstrap override fully select the vault.
     // Use the captured values in that case so the shared Secrets client does
@@ -705,6 +716,38 @@ export async function resolveSkillsConnection(
   }
   assertFilesUnchanged();
   return { ...fleet, apiKey: completed.apiKey, apiKeyPointer: null };
+}
+
+/**
+ * Complete a vault pointer through the installed `secrets` CLI, used only when the @hasna/secrets SDK is
+ * absent from the Skills runtime tree. Like contracts' completion it is TERMINAL: any failure refuses,
+ * naming the pointer and the vault item, and never falls through to a literal, disk or Keychain key.
+ * It keeps contracts' guard that the Secrets bootstrap credential is not itself a vault pointer. The
+ * CLI gets the same environment contracts would use, unchanged, and resolves its own credential.
+ */
+async function completePointerWithSecretsCli(pointer: ResolvedCredential, env: Env,
+  access: Pick<DefaultSecretsClientDependencies, "findCli" | "runCli">): Promise<string> {
+  const pointerEnvKey = credentialPointerEnvKey(SKILLS_APP);
+  const vaultKey = pointer.pointerVaultKey;
+  const refuse = (reason: string): never => {
+    throw new SkillsFleetCredentialError(
+      // The vault item identifier is credential-routing material and is redacted, as for contracts' refusals.
+      `${pointerEnvKey} (from ${pointer.source}) names vault item '${REDACTED_VAULT_REFERENCE}', but ${reason}. ` +
+        `A vault pointer is TERMINAL and never falls through to a literal or disk credential.`,
+    );
+  };
+  if (!vaultKey) refuse("the resolver carried no vault item key");
+  let recursive: boolean;
+  try { recursive = resolveCredential("secrets", env)?.tier === "pointer"; }
+  catch { return refuse("the Secrets bootstrap credential could not be resolved"); }
+  if (recursive) refuse("the Secrets bootstrap credential is itself a vault pointer; configure an independent bootstrap credential");
+  const executable = access.findCli(env);
+  if (!executable) refuse("the @hasna/secrets SDK is not installed with Skills and no `secrets` CLI is on PATH");
+  let value: string;
+  try { value = await readSecretWithCli(executable!, vaultKey!, access, { env }); }
+  catch { return refuse("the `secrets` CLI could not read it (the item, the vault or its credential is unavailable)"); }
+  if (!value.trim() || /[\x00-\x20\x7f]/.test(value)) refuse("the item it holds is empty or not a usable API key");
+  return value;
 }
 
 /** The usable API key, or throw naming what is missing. Use on every send path. */
