@@ -1761,8 +1761,9 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
         if (/[\x00-\x1f\x7f]/.test(pluginRoot) || !isAbsolute(pluginRoot) || resolve(pluginRoot) !== pluginRoot || pluginRoot.length > AGENT_POLICY_LIMITS.pathCharacters) unresolved("malformed plugin installation root");
         // Two scopes may share one install root only while they agree on its
         // version; a non-string version keeps its own identity instead of
-        // collapsing to a common empty value.
-        const version = typeof row.version === "string" ? `string:${row.version}` : `other:${String(row.version)}`;
+        // collapsing to a common empty value, and JSON encoding keeps distinct
+        // values such as 1 and [1] from sharing one identity.
+        const version = typeof row.version === "string" ? `string:${row.version}` : `other:${JSON.stringify(row.version)}`;
         const prior = rootsByPath.get(pluginRoot);
         if (prior !== undefined && prior !== version) unresolved("enabled plugin registration is missing or ambiguous");
         rootsByPath.set(pluginRoot, version);

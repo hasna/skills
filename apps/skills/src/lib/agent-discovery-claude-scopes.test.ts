@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { resolveAgentDiscoveryExclusionRoots } from "./agent-discovery.js";
@@ -65,6 +65,32 @@ test("a project-only registration resolves and leaves unrelated project paths au
   expect(resolved).toContain(join(home, "plugins", "project-only"));
   const destination = join(home, "project", "scratch", "skill");
   expect(resolved.some(root => within(root, destination))).toBe(false);
+});
+
+test("an ancestor projectPath is accepted and excludes only the plugin root", () => {
+  const { home } = setup(home => ({ "fixture@market": [{ scope: "project", projectPath: sep, installPath: pluginRoot(home, "ancestor"), version: "1.0.0" }] }));
+  const resolved = roots(home);
+  expect(resolved).toContain(join(home, "plugins", "ancestor"));
+  // The projectPath only identifies the scope; it never becomes an exclusion
+  // root, so an ancestor such as / cannot swallow unrelated destinations.
+  for (const root of resolved) expect(within(home, root)).toBe(true);
+  expect(resolved.some(root => within(root, join(tmpdir(), "elsewhere", "skill")))).toBe(false);
+});
+
+test("a symlinked projectPath is accepted and stays inert", () => {
+  const { home } = setup(home => {
+    const target = join(home, "real-project");
+    mkdirSync(target, { recursive: true });
+    const link = join(home, "linked-project");
+    symlinkSync(target, link);
+    return { "fixture@market": [{ scope: "project", projectPath: link, installPath: pluginRoot(home, "symlinked-project"), version: "1.0.0" }] };
+  });
+  const resolved = roots(home);
+  expect(resolved).toContain(join(home, "plugins", "symlinked-project"));
+  // Neither the link nor its target becomes authorable or excluded.
+  for (const destination of [join(home, "linked-project", "scratch", "skill"), join(home, "real-project", "scratch", "skill")]) {
+    expect(resolved.some(root => within(root, destination))).toBe(false);
+  }
 });
 
 test("identical user and project registrations resolve without a duplicate root", () => {
@@ -147,6 +173,17 @@ test("one install path claiming two non-string versions is refused", () => {
     return { "fixture@market": [
       { scope: "user", installPath, version: 1 },
       { scope: "project", projectPath: join(home, "project"), installPath, version: 2 },
+    ] };
+  });
+  expect(() => roots(home)).toThrow("enabled plugin registration is missing or ambiguous");
+});
+
+test("one install path claiming versions that stringify alike but differ is refused", () => {
+  const { home } = setup(home => {
+    const installPath = pluginRoot(home, "identity-conflict");
+    return { "fixture@market": [
+      { scope: "user", installPath, version: 1 },
+      { scope: "project", projectPath: join(home, "project"), installPath, version: [1] },
     ] };
   });
   expect(() => roots(home)).toThrow("enabled plugin registration is missing or ambiguous");
