@@ -1150,14 +1150,18 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     const unsupportedFields = (names: readonly string[], label: string): never => unresolved(`unknown discovery controls have no root-exclusion adapter for ${label}${names.slice(0, 8).map(fieldKey).join(", ")}${names.length > 8 ? ", additional keys withheld" : ""} in ${quotedPath(canonical(configPath))}`);
     // The retained explicit review of this exact configuration file: every
     // full-file settings witness of it still verifies, directly or through the
-    // narrowed ledger (a codex-settings-v7 or claude-settings-v5 digest). A
-    // direct match also has to satisfy `bindsWhole`, when given.
+    // narrowed ledger (a codex-settings-v7 or claude-settings-v5 digest). On
+    // either path the witness also has to satisfy `bindsWhole`, when given: a
+    // witness mode that never recorded a control can't cover it through the
+    // ledger either, because the live hook records the ledger digest from
+    // whatever file it observes.
     const currentSettingsReview = (bindsWhole?: (source: DiscoverySource) => boolean): AgentDiscoveryBinding | null => {
       const retained = exclusion.retained;
       const settings = retained?.sources.filter(source => source.path === canonical(configPath)
         && source.sha256 !== null && source.format === undefined && source.fields === undefined) ?? [];
       return retained?.method === "reviewed" && settings.length && settings.every(source => {
-        try { if (projected(source, undefined, budget) === source.sha256 && (bindsWhole?.(source) ?? true)) return true; }
+        if (!(bindsWhole?.(source) ?? true)) return false;
+        try { if (projected(source, undefined, budget) === source.sha256) return true; }
         catch { /* only the narrowed ledger can still accept this witness */ }
         return exclusion.narrowed?.accepts(source) === true;
       }) ? retained : null;
