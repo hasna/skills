@@ -745,7 +745,10 @@ function assertMarketplaceBinding(binding: AgentDiscoveryBinding, source: Discov
   if ((source.hashMode === "codex-settings-v1" || source.hashMode === "codex-settings-v2" || (source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4" || source.hashMode === "codex-settings-v5" || source.hashMode === "codex-settings-v6" || source.hashMode === "codex-settings-v7" || source.hashMode === "codex-settings-v8")) && (binding.agent !== "codex" || binding.method !== "reviewed" || basename(source.path) !== "config.toml")) throw new Error("Codex settings witnesses require explicit reviewed Codex configuration");
   if ((source.hashMode === "claude-settings-v1" || source.hashMode === "claude-settings-v2" || (source.hashMode === "claude-settings-v3" || source.hashMode === "claude-settings-v4" || source.hashMode === "claude-settings-v5")) && (binding.agent !== "claude" || binding.method !== "reviewed" || basename(source.path) !== "settings.json")) throw new Error("Claude settings witnesses require explicit reviewed Claude configuration");
   if ((source.hashMode === "claude-marketplace-registry" || source.hashMode === "claude-marketplace-registry-v2") && (binding.agent !== "claude" || binding.method !== "reviewed")) throw new Error("Claude marketplace witnesses require explicit reviewed Claude discovery");
-  if (source.hashMode === "claude-marketplace-entry-v1" && (binding.agent !== "claude" || binding.method !== "reviewed" || !claudeMarketplaceEntrySourceValid(source))) throw new Error("Claude marketplace entry witnesses require explicit reviewed Claude discovery of one named entry");
+  // A live binding may carry the entry as well: the digest is content-based, so
+  // a catalog refresh that changes what the plugin loads changes the binding,
+  // and a hook policy is only ever written from an explicit review.
+  if (source.hashMode === "claude-marketplace-entry-v1" && (binding.agent !== "claude" || !claudeMarketplaceEntrySourceValid(source))) throw new Error("Claude marketplace entry witnesses require Claude discovery of one named entry");
 }
 /** Typed settings classifications a planned write may adopt into the reviewed baseline. */
 const ADOPTABLE_SETTINGS_MATCHES: readonly CodexSettingsWitnessMatch[] = Object.freeze(["exact", "screen-reader-receipt"]);
@@ -1408,6 +1411,19 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
   // `claude-marketplace-entry-v1` is admitted only for explicit reviews. Every
   // run re-reads the entry, so a new inline hook refuses here rather than
   // drifting past a binding, and an unreadable or ambiguous entry refuses.
+  // The catalog is bound as one `claude-marketplace-entry-v1` witness: that
+  // digest covers the entry's identity, source, strict flag and every injection
+  // field (skills, hooks, commands, agents, MCP and LSP servers), so a refresh
+  // that changes what the plugin loads changes the binding rather than sliding
+  // past it. The registry only selects the catalog path, and a redirect that
+  // keeps the entry's content has identical loading semantics, so it is read
+  // and validated but not bound.
+  const bindCatalogEntry = (path: string, marketplace: string, plugin: string): void => {
+    if (sources.length >= AGENT_POLICY_LIMITS.discoverySources) throw new Error("Native discovery sources exceed their bound");
+    const witness = captureClaudeMarketplaceEntry(path, marketplace, plugin);
+    sources.push({ path: witness.path, sha256: witness.sha256, hashMode: witness.hashMode, marketplace: witness.marketplace, plugin: witness.plugin });
+  };
+
   const claudeMarketplaceManifest = (id: string | undefined): Record<string, unknown> => {
     const split = id === undefined ? -1 : id.lastIndexOf("@");
     const plugin = split > 0 ? id!.slice(0, split) : "", marketplace = split > 0 ? id!.slice(split + 1) : "";
@@ -1425,6 +1441,9 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     const entries = Array.isArray(catalog?.plugins) ? catalog.plugins.filter((entry: any) => entry && entry.name === plugin) : [];
     if (entries.length !== 1) unresolved("plugin marketplace entry is missing or ambiguous");
     if (entries[0].strict !== false) unresolved("plugin manifest missing");
+    // Bind the entry that decides loading only after it is known to exist and
+    // be unique, so the witness's own refusals never replace this contract.
+    bindCatalogEntry(catalogPath, marketplace, plugin);
     const manifest: Record<string, unknown> = {};
     for (const key of ["skills", "hooks", "commands", "agents", "mcpServers", "lspServers"]) {
       if (entries[0][key] !== undefined) manifest[key] = entries[0][key];
