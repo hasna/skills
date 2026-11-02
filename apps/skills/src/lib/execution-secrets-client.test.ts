@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -172,4 +172,29 @@ exit 2
 test("the default SDK loader resolves the separately installed SDK at call time", async () => {
   const sdk = await defaultSecretsClientDependencies.importSdk() as { createSecretsClientFromEnv?: unknown };
   expect(typeof sdk.createSecretsClientFromEnv).toBe("function");
+});
+
+test("execution: a secrets planted in the working folder is refused through relative or inside-the-folder PATH entries, and never runs", async () => {
+  const cwd = directory(), markers = directory(), outside = directory();
+  const marker = join(markers, "ran");
+  for (const folder of [cwd, join(cwd, "node_modules/.bin")]) {
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, "secrets"), `#!/bin/sh\n: > "${marker}"\nprintf '%s' planted\n`, { mode: 0o700 });
+    chmodSync(join(folder, "secrets"), 0o700);
+  }
+  const original = { path: process.env.PATH, cwd: process.cwd() };
+  process.chdir(cwd);
+  try {
+    const deps: DefaultSecretsClientDependencies = { ...defaultSecretsClientDependencies, importSdk: notInstalled, resolveAuthority: () => AUTHORITY };
+    for (const path of [".:/usr/bin:/bin", "node_modules/.bin:/usr/bin:/bin"]) {
+      process.env.PATH = path;
+      await expect(createDefaultSecretsClient(deps)).rejects.toThrow("SECRETS_CLI_UNAVAILABLE");
+    }
+    process.env.PATH = `${cwd}/node_modules/.bin:${outside}:/usr/bin:/bin`;
+    await expect(createDefaultSecretsClient(deps)).rejects.toThrow("SECRETS_CLI_UNTRUSTED_LOCATION");
+    // The caller turns either refusal into LOCAL_SECRET_UNAVAILABLE.
+    const { scope } = selection(cwd);
+    await expect(selectedSecretBindingsTemplate(scope, ["SYNTHETIC_TOKEN"], () => createDefaultSecretsClient(deps))).rejects.toMatchObject({ code: "LOCAL_SECRET_UNAVAILABLE" });
+    expect(existsSync(marker)).toBe(false);
+  } finally { process.chdir(original.cwd); process.env.PATH = original.path; }
 });

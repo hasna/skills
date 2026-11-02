@@ -86,7 +86,7 @@ import { selectedCliSkillsCredentialProfile } from "./cli-credential-profile.js"
 import { isSkillsLocalOptIn, selectsSkillsLocalMode, SKILLS_LOCAL_OPT_IN_ENV_KEYS } from "./local-opt-in.js";
 import { SKILLS_PRODUCT_DEFAULT_ORIGIN } from "./product-default.js";
 import { skillsApiUrlEnvironment } from "./credential-profile-command.js";
-import { defaultSecretsClientDependencies, isSecretsSdkInstalled, readSecretWithCli, type DefaultSecretsClientDependencies } from "./secrets-cli.js";
+import { defaultSecretsClientDependencies, isSecretsSdkInstalled, readSecretWithCli, SecretsCliLocationError, type DefaultSecretsClientDependencies } from "./secrets-cli.js";
 
 /** The app slug: the Keychain service, the `~/.hasna/<app>` folder, the gateway path. */
 export const SKILLS_APP = "skills";
@@ -741,8 +741,14 @@ async function completePointerWithSecretsCli(pointer: ResolvedCredential, env: E
   try { recursive = resolveCredential("secrets", env)?.tier === "pointer"; }
   catch { return refuse("the Secrets bootstrap credential could not be resolved"); }
   if (recursive) refuse("the Secrets bootstrap credential is itself a vault pointer; configure an independent bootstrap credential");
-  const executable = access.findCli(env);
-  if (!executable) refuse("the @hasna/secrets SDK is not installed with Skills and no `secrets` CLI is on PATH");
+  let executable: string | null;
+  try { executable = access.findCli(env); }
+  catch (error) {
+    return refuse(error instanceof SecretsCliLocationError
+      ? `the \`secrets\` CLI found on PATH was not run: ${error.reason}`
+      : "the `secrets` CLI could not be located");
+  }
+  if (!executable) refuse("the @hasna/secrets SDK is not installed with Skills and no `secrets` CLI is on an absolute PATH entry");
   let value: string;
   try { value = await readSecretWithCli(executable!, vaultKey!, access, { env }); }
   catch { return refuse("the `secrets` CLI could not read it (the item, the vault or its credential is unavailable)"); }

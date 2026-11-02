@@ -8,6 +8,9 @@
  * never in argv, the console, an error or a log, the caller's environment is passed unchanged, the
  * CLI's stderr is discarded and every buffer that held the value is zeroed.
  */
+import { accessSync, constants, realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { delimiter, isAbsolute, resolve, sep } from "node:path";
 import { defaultFleetGatewayBaseUrl, resolveConfiguredClientAuthority, toV1BaseUrl } from "@hasna/contracts";
 
 type Env = Record<string, string | undefined>;
@@ -23,7 +26,11 @@ export interface SecretsCliRunOptions { timeoutMs: number; maxBytes: number; sig
 export interface DefaultSecretsClientDependencies {
   /** Load the @hasna/secrets SDK. A module-not-found error for that package means "not installed". */
   importSdk: () => Promise<unknown>;
-  /** Absolute path of the installed `secrets` CLI on the PATH of `env` (default: this process), or null. */
+  /**
+   * Absolute path of the installed `secrets` CLI on the PATH of `env` (default: this process), or null.
+   * Throws SecretsCliLocationError when the first `secrets` found is in a place it must not run from
+   * (see locateSecretsCli); a caller treats that exactly like a missing CLI and never searches further.
+   */
   findCli: (env?: Env) => string | null;
   /**
    * The Secrets authority the CLI will use, from the URL-only part of the shared @hasna/contracts resolver
@@ -46,6 +53,57 @@ export function isSecretsSdkNotInstalled(error: unknown): boolean {
 export async function isSecretsSdkInstalled(dependencies: Pick<DefaultSecretsClientDependencies, "importSdk"> = defaultSecretsClientDependencies): Promise<boolean> {
   try { await dependencies.importSdk(); return true; }
   catch (error) { return !isSecretsSdkNotInstalled(error); }
+}
+
+/** The `secrets` found on PATH is in a place it must not run from. The message names the reason only, never a path. */
+export class SecretsCliLocationError extends Error {
+  readonly code = "SECRETS_CLI_UNTRUSTED_LOCATION";
+  constructor(readonly reason: string) {
+    super(`SECRETS_CLI_UNTRUSTED_LOCATION: ${reason}`);
+    this.name = "SecretsCliLocationError";
+  }
+}
+
+function isExecutableFile(candidate: string): boolean {
+  try { if (!statSync(candidate).isFile()) return false; accessSync(candidate, constants.X_OK); return true; }
+  catch { return false; }
+}
+
+/** `child` is `parent` or lies below it. Both are real, absolute paths; the separator stops /a/bc counting as under /a/b. */
+function isWithin(child: string, parent: string): boolean {
+  return child === parent || child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
+}
+
+/**
+ * Find the `secrets` CLI without trusting the working folder. Skills runs from whatever folder an agent
+ * hook starts it in, often a cloned repository, so:
+ * - only absolute, non-empty PATH entries are searched, in order; a relative entry such as "." or
+ *   "node_modules/.bin" would resolve against that folder, so it is skipped;
+ * - the first executable regular file named `secrets` decides: a candidate whose path is not already in
+ *   resolved form ("/a/../b") is refused, and so is one whose real path lies inside the real working folder
+ *   (npx, npm run and bun run put the checkout's own node_modules/.bin on PATH as an absolute entry);
+ * - a refusal throws SecretsCliLocationError and nothing further is searched.
+ * A working folder that is the user's home or one of its ancestors ("/" for a launchd job) is not a
+ * checkout: everything the user installed lies below it, so the inside-the-working-folder check is not
+ * applied there. Absolute PATH entries elsewhere are trusted, as a shell trusts them.
+ */
+export function locateSecretsCli(env: Env = process.env, context: { cwd?: string; home?: string } = {}): string | null {
+  for (const entry of (env.PATH ?? "").split(delimiter)) {
+    if (!entry || !isAbsolute(entry)) continue;
+    const candidate = entry.endsWith("/") ? entry + SECRETS_CLI : `${entry}/${SECRETS_CLI}`;
+    if (!isExecutableFile(candidate)) continue;
+    if (resolve(candidate) !== candidate) throw new SecretsCliLocationError("the PATH entry that holds it is not in resolved form");
+    let real: string, working: string, home: string;
+    try { real = realpathSync(candidate); } catch { throw new SecretsCliLocationError("its real location could not be read"); }
+    try { working = realpathSync(context.cwd ?? process.cwd()); } catch { throw new SecretsCliLocationError("the working folder could not be resolved"); }
+    try { home = realpathSync(context.home ?? homedir()); } catch { home = ""; }
+    const workingHoldsHome = home !== "" && isWithin(home, working);
+    if (!workingHoldsHome && isWithin(real, working)) {
+      throw new SecretsCliLocationError("it lies inside the working folder, where a checkout could have placed it");
+    }
+    return candidate;
+  }
+  return null;
 }
 
 async function defaultRunCli(executable: string, args: string[], options: SecretsCliRunOptions): Promise<SecretsCliResult> {
@@ -73,7 +131,7 @@ async function defaultRunCli(executable: string, args: string[], options: Secret
 
 export const defaultSecretsClientDependencies: Readonly<DefaultSecretsClientDependencies> = Object.freeze({
   importSdk: () => import(SECRETS_SDK_SPECIFIER),
-  findCli: (env: Env = process.env) => Bun.which(SECRETS_CLI, { PATH: env.PATH ?? "" }),
+  findCli: (env: Env = process.env) => locateSecretsCli(env),
   resolveAuthority: () => resolveConfiguredClientAuthority("secrets", process.env)?.baseUrl ?? toV1BaseUrl(defaultFleetGatewayBaseUrl("secrets")),
   runCli: defaultRunCli,
 });

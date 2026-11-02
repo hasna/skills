@@ -2025,6 +2025,12 @@ SDK and no CLI, vault unreachable, item missing or empty, a Secrets bootstrap
 that is itself a pointer) is terminal and exits non-zero; a pointer never falls
 through to another tier, and never to the local corpus.
 
+Both fallbacks look for `secrets` only in absolute `PATH` entries, and refuse
+one whose real path lies inside the working folder (unless that folder is your
+home or above it), so a checkout cannot plant its own `secrets` through `.` or
+its `node_modules/.bin`. Absolute `PATH` entries elsewhere are trusted, as your
+shell trusts them.
+
 For a durable reference without a raw Skills key, the same
 `HASNA_SKILLS_API_KEY_REF` field can be stored in the owner-only canonical or
 selected-profile credentials file, alongside its `HASNA_SKILLS_API_URL` and

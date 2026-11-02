@@ -1,5 +1,5 @@
 import { afterAll, afterEach, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REDACTED_VAULT_REFERENCE, resolveSkillsConnection, SkillsFleetCredentialError, type SkillsFleetOptions } from "./fleet-credentials.js";
@@ -132,4 +132,52 @@ test("non-pointer tiers are unchanged and never consult the SDK or the CLI", asy
   expect(connection?.apiKey).toBe(LITERAL);
   expect(connection?.apiKeyTier).toBe("env");
   expect(calls).toEqual({ importSdk: 0, findCli: 0, runCli: 0 });
+});
+
+/** A `secrets` planted in a checkout: it leaves a marker if it ever runs and prints a value that must never become a key. */
+function plantedCli(folder: string, marker: string) {
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, "secrets"), `#!/bin/sh\n: > "${marker}"\nprintf '%s' "${LITERAL}"\n`, { mode: 0o700 });
+  chmodSync(join(folder, "secrets"), 0o700);
+}
+async function inWorkingFolder<T>(cwd: string, run: () => Promise<T>): Promise<T> {
+  const original = process.cwd();
+  process.chdir(cwd);
+  try { return await run(); } finally { process.chdir(original); }
+}
+
+for (const [label, pathFor] of [
+  ["'.'", (_cwd: string) => ".:/usr/bin:/bin"],
+  ["a relative 'node_modules/.bin'", (_cwd: string) => "node_modules/.bin:/usr/bin:/bin"],
+  ["an absolute entry inside the working folder", (cwd: string) => `${cwd}/node_modules/.bin:/usr/bin:/bin`],
+] as const) {
+  test(`pointer, SDK absent: a secrets planted in the checkout and reached through ${label} is refused and never runs`, async () => {
+    const cwd = directory(), markers = directory();
+    const marker = join(markers, "ran");
+    plantedCli(cwd, marker);
+    plantedCli(join(cwd, "node_modules/.bin"), marker);
+    const env = pointerEnv(pathFor(cwd));
+    const { calls, deps } = counting({ importSdk: absent });
+    const error = await inWorkingFolder(cwd, () => refusal(resolveSkillsConnection(env, { secretsAccess: deps })));
+    expect(error).toBeInstanceOf(SkillsFleetCredentialError);
+    expect(error.message).toContain("TERMINAL");
+    expect(error.message).not.toContain(LITERAL);
+    expect(error.message).not.toContain(cwd);
+    expect(calls.runCli).toBe(0);
+    expect(existsSync(marker)).toBe(false);
+  });
+}
+
+test("pointer, SDK absent: from a checkout holding a planted secrets, a CLI on an absolute entry outside it completes the pointer", async () => {
+  const cwd = directory(), markers = directory();
+  const marker = join(markers, "ran");
+  plantedCli(cwd, marker);
+  plantedCli(join(cwd, "node_modules/.bin"), marker);
+  const cli = standInCli();
+  const env = pointerEnv(`.:node_modules/.bin::${cli.bin}:/usr/bin:/bin`);
+  const { calls, deps } = counting({ importSdk: absent });
+  const connection = await inWorkingFolder(cwd, () => resolveSkillsConnection(env, { secretsAccess: deps }));
+  expect(connection?.apiKey).toBe(VALUE);
+  expect(calls.runCli).toBe(1);
+  expect(existsSync(marker)).toBe(false);
 });
