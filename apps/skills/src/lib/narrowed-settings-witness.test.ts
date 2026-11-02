@@ -576,6 +576,39 @@ test("a redirected MCP server is never accepted through the ledger, whatever the
   expect(codex.v7(localRedirect(reviewed))).not.toBe(codex.v7(reviewed));
 });
 
+test("an MCP redirect after a v7 observation is never laundered into a fresh v8 entry", () => {
+  // Review finding (Switcher, 2026-11-02): codex-settings-v3..v5 omit local
+  // stdio servers, so the legacy witness still verifies after one is
+  // redirected. A hook that finds a v7 entry for the witness must not record a
+  // fresh v8 entry from that later file: v8 binds the redirected server, and
+  // the next legacy drift would then be accepted through it, hiding the
+  // redirect. The v8 entry may only repeat the state the v7 entry observed.
+  const reviewed = `${codexBase}\n[mcp_servers.docs]\ncommand = "/opt/mcp/docs"\n`;
+  const redirected = reviewed.replace('command = "/opt/mcp/docs"', 'command = "/tmp/other-docs"');
+  const modelChange = (text: string) => text.replace('model = "gpt-5.1"', 'model = "deepseek-flash"');
+  const root = scratch(), data = join(root, "data"), config = join(root, "home", ".codex", "config.toml");
+  mkdirSync(data); mkdirSync(join(root, "home", ".codex"), { recursive: true });
+  writeFileSync(config, reviewed);
+  const source = { path: config, hashMode: "codex-settings-v5" as const, sha256: codex.v5(reviewed) };
+  // The shipped 0.10.89 hook observed the reviewed file under v7. The legacy
+  // witness still verifies after the redirect, so it alone cannot notice it.
+  expect(codex.v5(redirected)).toBe(source.sha256);
+  writeFileSync(join(data, NARROWED_WITNESS_LEDGER_FILE), JSON.stringify({ schema: "hasna.skills.narrowed-witness-ledger.v1", entries: [{ path: config, hashMode: "codex-settings-v5", sha256: source.sha256, narrowedMode: "codex-settings-v7", narrowedSha256: codex.v7(reviewed), recordedAt: "2026-11-01T00:00:00.000Z" }] }));
+  writeFileSync(config, redirected);
+  const hook = openNarrowedWitnessLedger(data); hook.observe(source); hook.flush();
+  expect(JSON.parse(readFileSync(join(data, NARROWED_WITNESS_LEDGER_FILE), "utf8")).entries.map((entry: any) => entry.narrowedMode)).toEqual(["codex-settings-v7"]);
+  // The next legacy drift is refused, so the redirect is still reported.
+  writeFileSync(config, modelChange(redirected));
+  expect(openNarrowedWitnessLedger(data).accepts(source)).toBe(false);
+  // Control: with no redirect since the v7 observation, v8 is recorded and the
+  // same model switch is accepted.
+  writeFileSync(config, reviewed);
+  const clean = openNarrowedWitnessLedger(data); clean.observe(source); clean.flush();
+  expect(JSON.parse(readFileSync(join(data, NARROWED_WITNESS_LEDGER_FILE), "utf8")).entries.map((entry: any) => entry.narrowedMode).sort()).toEqual(["codex-settings-v7", "codex-settings-v8"]);
+  writeFileSync(config, modelChange(reviewed));
+  expect(openNarrowedWitnessLedger(data).accepts(source)).toBe(true);
+});
+
 test("the real Sumi plugin accepts the drift envelope: the prompt proceeds and the warning reaches the model context", async () => {
   const root = scratch(), data = join(root, "data"); mkdirSync(data);
   const mode = join(root, "mode"), command = join(root, "fixture-skills"), pluginPath = join(root, "plugin.js");

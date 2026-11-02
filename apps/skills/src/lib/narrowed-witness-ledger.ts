@@ -14,7 +14,9 @@
  * accepts (for V3-V5, with the local MCP servers present at that moment). The
  * live hook records exactly that observation, computed from the same bytes
  * that matched the legacy witness, so a later redirect of any MCP server is
- * reported rather than adopted.
+ * reported rather than adopted. When a V7 entry already saw the witness, V8 is
+ * recorded only while the file still matches that V7 observation, so a server
+ * redirected in between is reported as well.
  * Later, when the legacy witness no longer matches (a model switch, an "always
  * allow" rule, Codex's own notices or folder trust), the change is accepted only
  * when the current narrowed digest equals the recorded one: a change to a hook,
@@ -183,6 +185,16 @@ export function openNarrowedWitnessLedger(dataDir: string, options: { record: bo
         if (existing) return;
         const text = readSettings(source, mode);
         if (!legacyWitnessVerifies(source, text)) return;
+        // V8 widens V7 with the local stdio MCP servers that codex-settings-v3..v5
+        // omit, so the legacy witness keeps verifying after such a server is
+        // redirected. When a V7 entry already saw this exact witness, record V8
+        // only while the file is still the state that entry observed: otherwise a
+        // redirect that happened after the V7 observation would be adopted into
+        // the wider projection, and the next legacy drift would accept it.
+        if (mode === "codex-settings-v8") {
+          const prior = find(source, "codex-settings-v7");
+          if (prior && narrowedDigest("codex-settings-v7", text) !== prior.narrowedSha256) return;
+        }
         const narrowedSha256 = narrowedDigest(mode, text);
         const [entryPath, hashMode, sha256] = key(source) as [string, string, string];
         const entry: LedgerEntry = { path: entryPath, hashMode, sha256, narrowedMode: mode, narrowedSha256, recordedAt: new Date().toISOString() };
