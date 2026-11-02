@@ -741,7 +741,11 @@ that matched, in `native-witness-narrowed.json` beside `agent-policy.json`.
 New observations for a Codex legacy witness record `codex-settings-v8`, which
 also frees a marketplace's own `last_updated`; an entry recorded earlier under
 `codex-settings-v7` stays usable and is judged by its own recorded mode, so the
-mode moving forward does not strand a station that had already drifted.
+mode moving forward does not strand a station that had already drifted. When a
+V7 entry already saw the same witness, V8 is recorded only while the file still
+matches that V7 observation: a local stdio MCP server that `codex-settings-v3`–`v5`
+omit and that was redirected in between is reported rather than adopted along
+with the wider projection.
 When the legacy witness later stops matching, the change is accepted only if the
 current narrowed digest equals the recorded one; the first observation is never
 replaced, so a local MCP server added after it is reported once the legacy
