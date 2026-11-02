@@ -26,3 +26,15 @@ jobs:
 
       - name: The gate refuses every other grant for its stated reason (fixtures and mutants)
         run: bash .github/scripts/id-token-gate-controls.sh
+
+      # SH-00052: the read-only npm token for the restricted @hasna/secrets package reaches the credential-isolated
+      # install steps alone, never a publish job, a later step or an environment dump. Read-only file checks; this
+      # job holds no secret.
+      - name: Only the credential-isolated install steps may hold the npm read token
+        run: ruby .github/scripts/registry-token-gate.rb .github/workflows
+
+      - name: The registry-token gate refuses every other placement for its stated reason (fixtures and mutants)
+        run: bash .github/scripts/registry-token-gate-controls.sh
+
+      - name: The install step fails closed, isolates the token and cleans up (stub bun, synthetic token)
+        run: bash .github/scripts/registry-token-install-controls.sh

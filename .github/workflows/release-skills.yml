@@ -11,6 +11,15 @@ name: Release skills to npm
 #
 # workflow_dispatch is the dry run: pass the release tag to exercise every step,
 # including the review-linkage preflight, without publishing. It never publishes.
+#
+# Three jobs (SH-00052). @hasna/secrets is a restricted package, so the frozen install needs the read-only
+# NPM_RELEASE_READ_TOKEN, and this repository is public, so nothing that crosses jobs may hold an installed tree:
+# - build holds the token in its install step and runs only lockfile-pinned code and this checkout's own code. It
+#   uploads only the packed tarball, its sha256 and, for a tag, the release-review receipt, named by the commit.
+# - consumer has no secret. It installs the packed tarball as an anonymous consumer, which resolves the package's
+#   floating dependency ranges from the registry, and retains the candidate archive on a tagless dispatch.
+# - publish has the id-token and the publishing environment, no registry token and no install. It verifies the
+#   tarball against its hash, the review receipt and the tag's Packed-SHA256, publishes it and reads it back.
 on:
   push:
     tags:
@@ -29,19 +38,22 @@ permissions:
   contents: read
 
 jobs:
-  # A dispatch (the candidate build or a tag dry run) holds no id-token and enters no publishing environment: it
-  # runs in skills-candidate, which has no protection rules and nothing that can publish. Only a pushed release
-  # tag reaches npm-publish-skills, whose deployment policy admits npm/skills/v* tags alone; a repository ruleset
-  # lets only the hasna-identity App create those tags (PLA8-00581, SH-00015). Both jobs run the same steps.
+  # Builds and packs on every dispatch and release tag push. It holds the registry read token in its install step
+  # alone, has no id-token, no environment and read-only contents, and runs nothing that resolves packages outside
+  # the lockfile: the installed-consumer checks run in the consumer job instead.
+  #
+  # A dispatch (the candidate build or a tag dry run) never reaches publish. Only a pushed release tag reaches
+  # npm-publish-skills, whose deployment policy admits npm/skills/v* tags alone; a repository ruleset lets only the
+  # hasna-identity App create those tags (PLA8-00581, SH-00015).
   #
   # npm-release-skills is retired, not reused: every earlier npm/skills/v* tag carries a workflow whose dispatch
   # requested it with id-token: write and checked out an arbitrary `tag` input. It keeps its required reviewer and
   # admits only npm/skills/v0.0.0-retired, a tag that is never created, so those old workflows can never reach a
   # publish credential again.
-  candidate:
-    if: github.repository == 'hasna/skills' && github.event_name == 'workflow_dispatch'
+  build:
+    if: github.repository == 'hasna/skills'
     runs-on: ubuntu-latest
-    services: &release-services
+    services:
       postgres:
         image: postgres:16
         env:
@@ -55,8 +67,6 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-    # No publish credential: no id-token permission, and no publishing environment.
-    environment: skills-candidate
     timeout-minutes: 60
     permissions:
       contents: read
@@ -64,13 +74,14 @@ jobs:
       NODE_OPTIONS: --max-old-space-size=14336
       # On a tag push this is the release tag. On a dispatch dry run it is the
       # `tag` input; without it the tag-dependent steps are skipped and nothing
-      # can publish, because every publish step also requires a push event.
+      # can publish, because the publish job also requires a push event.
       RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
     defaults: &release-defaults
       run:
         shell: bash
-    steps: &release-steps
-      - name: Admit only a release tag push or a dispatch
+    steps:
+      - &admit-step
+        name: Admit only a release tag push or a dispatch
         env:
           EVENT_NAME: ${{ github.event_name }}
           REF: ${{ github.ref }}
@@ -85,7 +96,8 @@ jobs:
       # Defence in depth for a tag push (SH-00015, engineering conditions 4 and 5): the tag must be annotated by the
       # hasna-identity App, and the protection that admitted this run must still be the recorded one. Every read is
       # public for this repository; the token only avoids rate limits. Any difference refuses before checkout.
-      - name: Require the App's release tag and the recorded release protection
+      - &release-protection-step
+        name: Require the App's release tag and the recorded release protection
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -127,16 +139,18 @@ jobs:
             || refuse "the npm-skills-release-tags ruleset differs from the recorded configuration"
           echo "release tag and protection verified"
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - &release-checkout-step
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # A dispatch dry run of a tag checks out that tag, qualified as refs/tags/ so a branch of the same name
           # can never be chosen instead; a push uses its own event SHA, which the next step requires to be the
-          # tag's commit.
+          # tag's commit. Every job checks out this same ref; the packed archive is named by its commit.
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag != '' && format('refs/tags/{0}', inputs.tag) || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Require the exact release commit on protected main
+      - &release-commit-step
+        name: Require the exact release commit on protected main
         if: github.event_name == 'push'
         env:
           GH_READ_TOKEN: ${{ github.token }}
@@ -163,17 +177,23 @@ jobs:
             }
           '
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - &release-node-step
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
-          registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - &release-bun-step
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.3.14"
+          # No job here restores or saves a toolchain cache: a cache is shared with pull request runs.
+          no-cache: true
 
-      - name: Install and verify the CI npm toolchain
+      # The npm that packs the archive: an exact version, the same in every job, so the Packed-SHA256 a candidate
+      # records is the one a tag run reproduces. In the build job it is the only package fetched outside the lockfile.
+      - &npm-toolchain-step
+        name: Install and verify the CI npm toolchain
         run: |
           set -euo pipefail
           npm_prefix="$(mktemp -d "$RUNNER_TEMP/npm-toolchain.XXXXXX")"
@@ -181,7 +201,8 @@ jobs:
           test "$("$npm_prefix/bin/npm" --version)" = 11.19.0
           echo "$npm_prefix/bin" >> "$GITHUB_PATH"
 
-      - name: Bind the release tag to the skills manifest
+      - &bind-tag-step
+        name: Bind the release tag to the skills manifest
         id: version
         if: env.RELEASE_TAG != ''
         run: |
@@ -204,7 +225,8 @@ jobs:
             appendFileSync(process.env.GITHUB_OUTPUT, "version=" + version + "\n");
           '
 
-      - name: Reject an already-published version or an inconclusive registry lookup
+      - &reject-published-step
+        name: Reject an already-published version or an inconclusive registry lookup
         if: env.RELEASE_TAG != ''
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
@@ -224,9 +246,110 @@ jobs:
           '
 
       # This source checkout is standalone; its pinned graph belongs to apps/skills.
-      - name: Install locked standalone Skills dependencies
+      - name: Install locked standalone Skills dependencies (credential isolated)
         working-directory: apps/skills
-        run: bun install --frozen-lockfile --ignore-scripts --backend copyfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_RELEASE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The one step in its job that holds a registry credential (SH-00052).
+          # @hasna/secrets is a restricted package, so the frozen install needs an authenticated read.
+          # NPM_RELEASE_READ_TOKEN is a read-only granular token for that package alone, stored as a
+          # repository Actions secret. Fork and Dependabot pull requests receive no secrets: an empty
+          # value fails closed here instead of falling back to an anonymous install that would 404 and
+          # read as a broken lockfile rather than a missing credential.
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::NPM_RELEASE_READ_TOKEN is empty or unset. The frozen install needs this read-only repository Actions secret to read the restricted @hasna/secrets package; fork and Dependabot pull requests receive no secrets."
+            exit 1
+          fi
+          # The credential reaches bun only through a throwaway HOME/.npmrc: bun 1.3.14 ignores an
+          # npmrc named by NPM_CONFIG_USERCONFIG and honours HOME/.npmrc (measured in hasna/apps
+          # H10-02274). The value is written by the shell builtin printf, so it never sits in a
+          # process argv, and the file is removed when this step exits, on failure as on success.
+          # Shell command tracing is never enabled in this step.
+          cred_home="$(mktemp -d "${RUNNER_TEMP%/}/npm-read-home.XXXXXX")"
+          trap 'rm -f "$cred_home/.npmrc"' EXIT
+          umask 077
+          chmod 700 "$cred_home"
+          {
+            printf 'registry=https://registry.npmjs.org/\n'
+            printf '//registry.npmjs.org/:_authToken=%s\n' "$NODE_AUTH_TOKEN"
+          } > "$cred_home/.npmrc"
+          chmod 600 "$cred_home/.npmrc"
+          cache_dir="$(mktemp -d "${RUNNER_TEMP%/}/bun-install-cache.XXXXXX")"
+          # `env -u NODE_AUTH_TOKEN`: bun expands ${VAR} references inside a committed .npmrc, so the
+          # variable is kept out of bun's environment and the literal auth line above is the only
+          # route by which the value reaches the registry. The registry is pinned three ways.
+          HOME="$cred_home" \
+          BUN_INSTALL_CACHE_DIR="$cache_dir" \
+          BUN_CONFIG_REGISTRY="https://registry.npmjs.org/" \
+            env -u NODE_AUTH_TOKEN bun install --frozen-lockfile --ignore-scripts --backend copyfile --registry https://registry.npmjs.org/
+          # Nothing the install left behind may carry the credential to a later step or job: no
+          # .npmrc under node_modules or the install cache, and no file containing the token bytes.
+          # The scan reads the value from its environment only and prints counts, never a value; an
+          # unreadable path or an empty scan fails rather than passing.
+          SCAN_ROOTS="node_modules:$cache_dir" python3 -I - <<'PYEOF'
+          import os
+          import sys
+
+          token = os.environ.get("NODE_AUTH_TOKEN", "").encode()
+          if not token:
+              print("::error::the token is empty in the scan")
+              sys.exit(1)
+          errors, npmrc, hits = [], [], []
+          files = links = 0
+          chunk = 1 << 20
+
+          def on_error(exc):
+              errors.append(str(exc))
+
+          for root in os.environ["SCAN_ROOTS"].split(":"):
+              if not os.path.isdir(root):
+                  errors.append("%s: not a directory" % root)
+                  continue
+              for dirpath, _dirnames, filenames in os.walk(root, onerror=on_error):
+                  for name in filenames:
+                      path = os.path.join(dirpath, name)
+                      if name == ".npmrc":
+                          npmrc.append(path)
+                          continue
+                      if os.path.islink(path):
+                          links += 1
+                          continue
+                      files += 1
+                      try:
+                          with open(path, "rb") as handle:
+                              tail = b""
+                              while True:
+                                  piece = handle.read(chunk)
+                                  if not piece:
+                                      break
+                                  blob = tail + piece
+                                  if token in blob:
+                                      hits.append(path)
+                                      break
+                                  tail = blob[-(len(token) - 1):] if len(token) > 1 else b""
+                      except OSError as exc:
+                          errors.append("%s: %s" % (path, exc))
+
+          if errors:
+              print("::error::could not read %d path(s) after the install; an unreadable scan is not a pass" % len(errors))
+              for line in errors[:10]:
+                  print(line)
+              sys.exit(1)
+          if npmrc:
+              print("::error::the installed tree contains %d .npmrc path(s)" % len(npmrc))
+              for path in npmrc[:10]:
+                  print(path)
+              sys.exit(1)
+          if files == 0:
+              print("::error::scanned 0 files after the install; the coverage this step claims was never established")
+              sys.exit(1)
+          if hits:
+              print("::error::%d installed file(s) contain the registry token" % len(hits))
+              sys.exit(1)
+          print("scanned %d files (%d symlinks skipped) after the install: no .npmrc, no token bytes" % (files, links))
+          PYEOF
 
       - name: Scan changed source lines for credentials
         working-directory: apps/skills
@@ -307,17 +430,189 @@ jobs:
           grep -F '(pass) PostgreSQL enrollment has no initialization writes and retains atomic CAS, audit, replay and rollback' "$test_log"
           grep -F '(pass) isolated PostgreSQL inspection is bounded, ordered, sanitized and enforced read-only' "$test_log"
 
-      - name: Run package-owned prepack gates before sealing the archive
+      # The package's prepack is verify:generated, verify:release and verify:consumer-types. The first two run here on
+      # the locked tree. verify:consumer-types installs the packed archive as an anonymous consumer, which resolves the
+      # package's floating dependency ranges, so it runs in the consumer job, on these exact packed bytes.
+      - name: Run the package-owned prepack gates that resolve nothing outside the lockfile
         working-directory: apps/skills
-        run: bun run prepack
+        run: |
+          set -euo pipefail
+          bun run verify:generated
+          bun run verify:release
 
-      - name: Retain the verified candidate archive for independent review
-        if: github.event_name == 'workflow_dispatch' && env.RELEASE_TAG == ''
+      - name: Pack the candidate archive
+        if: env.RELEASE_TAG == ''
         working-directory: apps/skills
         run: |
           set -euo pipefail
           umask 022
+          mkdir -p "$RUNNER_TEMP/skills-packed"
+          npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP/skills-packed" > "$RUNNER_TEMP/skills-pack.json"
+
+      # The gate. It reads the annotated tag's linkage fields, packs this exact
+      # checkout and refuses unless the recorded Packed-SHA256 matches. The
+      # publish job cannot run unless this job succeeded.
+      #
+      # The resolved release tag is passed explicitly. The preflight falls back to
+      # GITHUB_REF_NAME, which on a workflow_dispatch dry run is the dispatch ref
+      # (the branch), so without this argument a documented dry run would fail on
+      # refs/tags/<branch> instead of checking the tag under review. Push runs
+      # pass github.ref_name; dry runs pass the `tag` input. An empty value cannot
+      # silently fall back: the preflight refuses a `--tag` with no value.
+      - name: Verify the linked independent release review for the release tag
+        id: review
+        if: env.RELEASE_TAG != ''
+        working-directory: apps/skills
+        run: |
+          set -euo pipefail
+          archive_dir="$RUNNER_TEMP/skills-packed"
+          mkdir -p "$archive_dir"
+          review_log="$RUNNER_TEMP/skills-release-review.log"
+          bun run verify:release-review --tag "$RELEASE_TAG" --pack-destination "$archive_dir" > "$review_log"
+          ARCHIVE_DIR="$archive_dir" REVIEW_LOG="$review_log" node --input-type=module -e '
+            const { existsSync, readFileSync, writeFileSync } = await import("node:fs");
+            const { join } = await import("node:path");
+            const receipt = JSON.parse(readFileSync(process.env.REVIEW_LOG, "utf8").split("\n")[0]);
+            if (receipt.schema !== "hasna.skills.release-review-linkage.v1"
+              || !/^hasna-skills-\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\.tgz$/.test(receipt.packed_filename)
+              || !/^[a-f0-9]{64}$/.test(receipt.packed_sha256)
+              || typeof receipt.packed_integrity !== "string"
+              || !receipt.packed_integrity.startsWith("sha512-")
+              || !existsSync(join(process.env.ARCHIVE_DIR, receipt.packed_filename))) {
+              throw new Error("the reviewed archive receipt is invalid");
+            }
+            writeFileSync(join(process.env.ARCHIVE_DIR, "release-review.json"), JSON.stringify(receipt) + "\n", { flag: "wx", mode: 0o600 });
+            console.log(JSON.stringify(receipt));
+          '
+
+      # What leaves this job is the packed tarball, its sha256 and, for a tag, the review receipt: public content and
+      # a small report, never an installed tree. The artifact is named by the commit, and every job that downloads it
+      # asks for the name its own checkout gives, so a tree from another commit is never found.
+      - name: Bind the packed archive to this commit
+        id: packed
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/skills-packed"
+          shopt -s nullglob
+          archives=(hasna-skills-*.tgz)
+          test "${#archives[@]}" -eq 1
+          sha256sum "${archives[0]}" > packed.sha256
+          cat packed.sha256
+          echo "commit=$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Retain the packed archive and its hash
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: skills-packed-${{ steps.packed.outputs.commit }}
+          path: |
+            ${{ runner.temp }}/skills-packed/*.tgz
+            ${{ runner.temp }}/skills-packed/packed.sha256
+            ${{ runner.temp }}/skills-packed/release-review.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  # No secret. Everything that resolves packages outside the lockfile runs here, from the packed tarball:
+  # verify:consumer-types installs the archive as an anonymous consumer (the package's own dependency ranges, the
+  # pinned TypeScript and type packages) and the candidate retention runs that same consumer check. This job has no
+  # registry token, no id-token and no environment, so code fetched here can reach no credential.
+  consumer:
+    if: github.repository == 'hasna/skills'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env: *release-env
+    defaults: *release-defaults
+    steps:
+      - *admit-step
+      - *release-checkout-step
+      - *release-node-step
+      - *release-bun-step
+      - *npm-toolchain-step
+
+      - &restore-packed-step
+        name: Read this checkout's commit
+        id: head
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - &download-packed-step
+        name: Restore the packed archive of this exact commit
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: skills-packed-${{ steps.head.outputs.commit }}
+          path: ${{ runner.temp }}/skills-packed
+
+      - &verify-packed-step
+        name: Verify the packed archive against its recorded sha256
+        id: archive
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/skills-packed"
+          shopt -s nullglob
+          archives=(hasna-skills-*.tgz)
+          test "${#archives[@]}" -eq 1
+          test "$(wc -l < packed.sha256)" -eq 1
+          sha256sum --check --strict packed.sha256
+          read -r sha256 name < packed.sha256
+          test "$name" = "${archives[0]}"
+          echo "archive=$RUNNER_TEMP/skills-packed/$name" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the exact retained release archive as an installed consumer
+        if: env.RELEASE_TAG != ''
+        working-directory: apps/skills
+        env:
+          REVIEWED_ARCHIVE: ${{ steps.archive.outputs.archive }}
+          REVIEWED_SHA256: ${{ steps.archive.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/skills-consumer"
+          bun run verify:consumer-types --archive "$REVIEWED_ARCHIVE" --sha256 "$REVIEWED_SHA256" --receipt "$RUNNER_TEMP/skills-consumer/consumer-receipt.json"
+
+      - name: Retain the installed consumer receipt
+        if: env.RELEASE_TAG != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: skills-consumer-receipt-${{ steps.head.outputs.commit }}
+          path: ${{ runner.temp }}/skills-consumer/consumer-receipt.json
+          if-no-files-found: error
+          retention-days: 7
+
+      # The candidate retention packs this checkout itself and runs the installed-consumer check on its own pack. The
+      # build outputs come from the packed tarball (only bin/, dist/ and native/, none of them tracked), and the
+      # retained archive must then be byte-identical to the one the build job packed.
+      - name: Stage the packed build outputs for the candidate retention
+        if: github.event_name == 'workflow_dispatch' && env.RELEASE_TAG == ''
+        env:
+          PACKED_ARCHIVE: ${{ steps.archive.outputs.archive }}
+        run: |
+          set -euo pipefail
+          umask 022
+          cd apps/skills
+          for path in bin dist native/kernel-lock-acl-darwin; do test ! -e "$path"; done
+          tar -xzf "$PACKED_ARCHIVE" --strip-components=1 package/bin package/dist package/native
+          test -z "$(git ls-files bin dist native)"
+          git diff --exit-code HEAD --
+
+      - name: Retain the verified candidate archive for independent review
+        if: github.event_name == 'workflow_dispatch' && env.RELEASE_TAG == ''
+        working-directory: apps/skills
+        env:
+          PACKED_SHA256: ${{ steps.archive.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          umask 022
           bun run scripts/retain-candidate-archive.ts --destination "$RUNNER_TEMP/skills-candidate-archive"
+          node --input-type=module -e '
+            const { readFileSync } = await import("node:fs");
+            const receipt = JSON.parse(readFileSync(process.env.RUNNER_TEMP + "/skills-candidate-archive/candidate-receipt.json", "utf8"));
+            if (receipt.sha256 !== process.env.PACKED_SHA256) {
+              throw new Error("the retained candidate archive differs from the archive the build job packed");
+            }
+            console.log("retained candidate archive equals the build job archive: " + receipt.sha256);
+          '
 
       - name: Upload only the verified candidate archive and receipts
         if: github.event_name == 'workflow_dispatch' && env.RELEASE_TAG == ''
@@ -332,65 +627,87 @@ jobs:
           compression-level: 0
           retention-days: 7
 
-      # The gate. It reads the annotated tag's linkage fields, packs this exact
-      # checkout and refuses unless the recorded Packed-SHA256 matches. The
-      # publish step below cannot run unless this step succeeded.
-      #
-      # The resolved release tag is passed explicitly. The preflight falls back to
-      # GITHUB_REF_NAME, which on a workflow_dispatch dry run is the dispatch ref
-      # (the branch), so without this argument a documented dry run would fail on
-      # refs/tags/<branch> instead of checking the tag under review. Push runs
-      # pass github.ref_name; dry runs pass the `tag` input. An empty value cannot
-      # silently fall back: the preflight refuses a `--tag` with no value.
-      - name: Verify the linked independent release review for the release tag
+  publish:
+    if: github.repository == 'hasna/skills' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/npm/skills/v')
+    needs: [build, consumer]
+    runs-on: ubuntu-latest
+    # Skills-only publishing environment. Its deployment policy admits npm/skills/v*
+    # tags only, and only the hasna-identity App may create those tags. Changes to
+    # the environment or the ruleset are repository-protection changes owned by the
+    # engineering seat. The workflow names the environment; it does not create it.
+    # This job holds no registry token and installs nothing: it publishes the archive the build job packed.
+    environment: npm-publish-skills
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env: *release-env
+    defaults: *release-defaults
+    steps:
+      - *admit-step
+      - *release-protection-step
+      - *release-checkout-step
+      - *release-commit-step
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - *release-bun-step
+      - *npm-toolchain-step
+      - *bind-tag-step
+      - *reject-published-step
+      - *restore-packed-step
+      - *download-packed-step
+      - *verify-packed-step
+
+      - name: Restore the installed consumer receipt of this exact commit
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: skills-consumer-receipt-${{ steps.head.outputs.commit }}
+          path: ${{ runner.temp }}/skills-consumer
+
+      # The build job's receipt is not trusted alone: the archive must also carry the Packed-SHA256 recorded in the
+      # App's annotated tag, read here from this job's own checkout.
+      - name: Bind the archive to the review receipt and the release tag's Packed-SHA256
         id: review
-        if: env.RELEASE_TAG != ''
-        working-directory: apps/skills
+        env:
+          PACKED_ARCHIVE: ${{ steps.archive.outputs.archive }}
+          PACKED_SHA256: ${{ steps.archive.outputs.sha256 }}
         run: |
           set -euo pipefail
-          archive_dir="$(mktemp -d "$RUNNER_TEMP/skills-reviewed-archive.XXXXXX")"
-          review_log="$RUNNER_TEMP/skills-release-review.log"
-          bun run verify:release-review --tag "$RELEASE_TAG" --pack-destination "$archive_dir" > "$review_log"
-          ARCHIVE_DIR="$archive_dir" REVIEW_LOG="$review_log" node --input-type=module -e '
-            const { appendFileSync, readFileSync, writeFileSync } = await import("node:fs");
-            const { join } = await import("node:path");
-            const receipt = JSON.parse(readFileSync(process.env.REVIEW_LOG, "utf8").split("\n")[0]);
+          tag_sha256="$(git for-each-ref --format='%(contents)' "refs/tags/$RELEASE_TAG" | sed -n 's/^Packed-SHA256: \([a-f0-9]\{64\}\)$/\1/p')"
+          test "$(wc -l <<< "$tag_sha256")" -eq 1
+          test "$tag_sha256" = "$PACKED_SHA256"
+          node --input-type=module -e '
+            const { appendFileSync, readFileSync } = await import("node:fs");
+            const { basename } = await import("node:path");
+            const receiptPath = process.env.RUNNER_TEMP + "/skills-packed/release-review.json";
+            const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
             if (receipt.schema !== "hasna.skills.release-review-linkage.v1"
-              || !/^hasna-skills-\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\.tgz$/.test(receipt.packed_filename)
-              || !/^[a-f0-9]{64}$/.test(receipt.packed_sha256)
-              || typeof receipt.packed_integrity !== "string"
-              || !receipt.packed_integrity.startsWith("sha512-")) {
-              throw new Error("the reviewed archive receipt is invalid");
+              || receipt.packed_sha256 !== process.env.PACKED_SHA256
+              || receipt.packed_filename !== basename(process.env.PACKED_ARCHIVE)
+              || typeof receipt.packed_integrity !== "string" || !receipt.packed_integrity.startsWith("sha512-")) {
+              throw new Error("the review receipt does not describe this archive");
             }
-            const receiptPath = join(process.env.RUNNER_TEMP, "skills-release-review.json");
-            writeFileSync(receiptPath, JSON.stringify(receipt) + "\n", { flag: "wx", mode: 0o600 });
-            appendFileSync(process.env.GITHUB_OUTPUT, `integrity=${receipt.packed_integrity}\nsha256=${receipt.packed_sha256}\narchive=${join(process.env.ARCHIVE_DIR, receipt.packed_filename)}\nreceipt=${receiptPath}\n`);
-            console.log(JSON.stringify(receipt));
+            appendFileSync(process.env.GITHUB_OUTPUT, `integrity=${receipt.packed_integrity}\nreceipt=${receiptPath}\n`);
+            console.log("archive, review receipt and release tag agree: " + receipt.packed_sha256);
           '
 
-      - name: Verify the exact retained release archive as an installed consumer
-        id: consumer
-        if: env.RELEASE_TAG != '' && steps.review.outcome == 'success'
-        working-directory: apps/skills
-        env:
-          REVIEWED_ARCHIVE: ${{ steps.review.outputs.archive }}
-          REVIEWED_SHA256: ${{ steps.review.outputs.sha256 }}
-        run: |
-          set -euo pipefail
-          bun run verify:consumer-types --archive "$REVIEWED_ARCHIVE" --sha256 "$REVIEWED_SHA256" --receipt "$RUNNER_TEMP/skills-consumer-archive.json"
-
       - name: Publish the accepted archive via OIDC
-        if: github.event_name == 'push' && steps.review.outcome == 'success' && steps.consumer.outcome == 'success'
+        if: github.event_name == 'push' && steps.review.outcome == 'success'
         working-directory: apps/skills
         env:
-          REVIEWED_ARCHIVE: ${{ steps.review.outputs.archive }}
+          REVIEWED_ARCHIVE: ${{ steps.archive.outputs.archive }}
           REVIEW_RECEIPT: ${{ steps.review.outputs.receipt }}
         run: |
           set -euo pipefail
-          bun run scripts/publish-reviewed-archive.ts --archive "$REVIEWED_ARCHIVE" --review-receipt "$REVIEW_RECEIPT" --consumer-receipt "$RUNNER_TEMP/skills-consumer-archive.json"
+          bun run scripts/publish-reviewed-archive.ts --archive "$REVIEWED_ARCHIVE" --review-receipt "$REVIEW_RECEIPT" --consumer-receipt "$RUNNER_TEMP/skills-consumer/consumer-receipt.json"
 
       - name: Verify the published version, integrity and provenance attestations
-        if: github.event_name == 'push' && steps.review.outcome == 'success' && steps.consumer.outcome == 'success'
+        if: github.event_name == 'push' && steps.review.outcome == 'success'
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
           EXPECTED_INTEGRITY: ${{ steps.review.outputs.integrity }}
@@ -438,20 +755,3 @@ jobs:
             }
             throw new Error(`@hasna/skills@${version} was not fully visible after ten minutes (${last})`);
           '
-
-  publish:
-    if: github.repository == 'hasna/skills' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/npm/skills/v')
-    runs-on: ubuntu-latest
-    services: *release-services
-    # Skills-only publishing environment. Its deployment policy admits npm/skills/v*
-    # tags only, and only the hasna-identity App may create those tags. Changes to
-    # the environment or the ruleset are repository-protection changes owned by the
-    # engineering seat. The workflow names the environment; it does not create it.
-    environment: npm-publish-skills
-    timeout-minutes: 60
-    permissions:
-      contents: read
-      id-token: write
-    env: *release-env
-    defaults: *release-defaults
-    steps: *release-steps

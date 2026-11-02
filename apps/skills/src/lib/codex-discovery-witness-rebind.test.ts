@@ -97,6 +97,35 @@ test("a stranded reviewed Codex station rebinds only after the exact-preimage pr
   expect(() => assertManagedAgentBridge("codex", f)).not.toThrow();
 });
 
+test("a preserved v7 witness rebinds to v8 and tolerates only a marketplace timestamp", () => {
+  const f = station();
+  const reviewedText = `${readFileSync(f.configPath, "utf8")}\n[marketplaces.hasna-internal-bridge]\nsource_type = "local"\nsource = "/opt/bridge"\n`;
+  writeFileSync(f.configPath, reviewedText);
+  const preimage = reviewed(f);
+  const policy = () => sha(readFileSync(f.policyPath, "utf8"));
+  const plan7 = planAgentSettingsWitnessUpgrade({ ...f, agent: "codex", reviewedPreimage: preimage, expectedPolicySha256: policy(), expectedSettingsSha256: sha(reviewedText), targetCodexVersion: 7 });
+  expect(plan7.settingsWitnessUpgrade?.toHashMode).toBe("codex-settings-v7");
+  applyAgentIntegration(plan7);
+  expect(f.configWitnesses()[0].hashMode).toBe("codex-settings-v7");
+
+  // Codex rewrites only the marketplace timestamp: V7 reports drift.
+  const stamped = reviewedText.replace('source = "/opt/bridge"', 'source = "/opt/bridge"\nlast_updated = "2026-11-02T10:00:00Z"');
+  writeFileSync(f.configPath, stamped);
+  expect(() => assertManagedAgentBridge("codex", f)).toThrow("Native discovery input changed");
+
+  const plan8 = planAgentSettingsWitnessUpgrade({ ...f, agent: "codex", reviewedPreimage: preimage, expectedPolicySha256: policy(), expectedSettingsSha256: sha(stamped), targetCodexVersion: 8 });
+  expect(plan8.settingsWitnessUpgrade?.fromHashMode).toBe("codex-settings-v7");
+  expect(plan8.settingsWitnessUpgrade?.toHashMode).toBe("codex-settings-v8");
+  applyAgentIntegration(plan8);
+  expect(f.configWitnesses()[0].hashMode).toBe("codex-settings-v8");
+  expect(() => assertManagedAgentBridge("codex", f)).not.toThrow();
+  // The next rewrite of that timestamp stays accepted; a redirect does not.
+  writeFileSync(f.configPath, reviewedText.replace('source = "/opt/bridge"', 'source = "/opt/bridge"\nlast_updated = "2026-11-03T23:59:59Z"'));
+  expect(() => assertManagedAgentBridge("codex", f)).not.toThrow();
+  writeFileSync(f.configPath, reviewedText.replace('source = "/opt/bridge"', 'source = "/tmp/attacker"'));
+  expect(() => assertManagedAgentBridge("codex", f)).toThrow("Native discovery input changed");
+});
+
 test("the rebind refuses an unexplained witness, a wrong preimage and any real change", () => {
   const f = station(), preimage = reviewed(f);
   const reviewedText = readFileSync(f.configPath, "utf8");

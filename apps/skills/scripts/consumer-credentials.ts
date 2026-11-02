@@ -2,14 +2,17 @@
 import { strict as assert } from "node:assert";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 // Exercise the published credential provider from an ordinary production-only
-// install. A successful CLI/SDK import cannot prove lazy vault-pointer loading.
-// Only registry installation uses the network; the child intercepts every
-// application request and uses synthetic credentials in a private test HOME.
+// install. @hasna/secrets is restricted on npm and is not in the published
+// install closure, so the consumer tree has no Secrets SDK: a vault pointer must
+// complete through the installed `secrets` CLI, here a stand-in that checks its
+// exact argv. Only registry installation uses the network; the child intercepts
+// every application request and subprocess and uses synthetic credentials in a
+// private test HOME.
 const root = resolve(import.meta.dir, "..");
 const workspace = await mkdtemp(join(tmpdir(), "skills-consumer-credentials-"));
 await chmod(workspace, 0o700);
@@ -88,7 +91,15 @@ import { syncBuiltinESMExports } from "node:module";
 const record = (operation) => appendFileSync(process.env.CREDENTIAL_PROOF_JOURNAL, JSON.stringify({ operation }) + "\\n");
 const refuse = (reason) => { record("unexpected:" + reason); throw new Error("Consumer fixture refused " + reason); };
 const refuseProcess = () => refuse("subprocess, including Keychain access");
-Bun.spawn = refuseProcess; Bun.spawnSync = refuseProcess;
+// The one subprocess allowed: the stand-in Secrets CLI, with exactly the documented read.
+const spawn = Bun.spawn;
+Bun.spawn = (command, options) => {
+  const argv = Array.isArray(command) ? command : command?.cmd;
+  if (!Array.isArray(argv) || argv[0] !== process.env.CREDENTIAL_PROOF_CLI
+      || JSON.stringify(argv.slice(1)) !== JSON.stringify(["get", "fixture/skills/api-key", "--plaintext"])) return refuseProcess();
+  return spawn(command, options);
+};
+Bun.spawnSync = refuseProcess;
 for (const method of ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"]) childProcess[method] = refuseProcess;
 syncBuiltinESMExports();
 const fetchEmbedded = globalThis.fetch;
@@ -104,13 +115,6 @@ globalThis.fetch = async (input, init) => {
     record("embedded-resource");
     return fetchEmbedded(request);
   }
-  if (url.origin === "https://vault.example.test" && url.pathname === "/v1/secrets/get"
-      && url.searchParams.get("key") === "fixture/skills/api-key") {
-    if (request.headers.get("authorization") !== "Bearer " + process.env.CREDENTIAL_PROOF_BOOTSTRAP) return refuse("vault bootstrap");
-    record("vault-get");
-    return Response.json(process.env.CREDENTIAL_PROOF_DENY === "1" ? { error: "fixture denied" }
-      : { value: process.env.CREDENTIAL_PROOF_VALUE }, { status: process.env.CREDENTIAL_PROOF_DENY === "1" ? 403 : 200 });
-  }
   if (url.origin !== "https://skills.example.test" || url.search) return refuse("application authority");
   if (request.headers.get("authorization") !== "Bearer " + process.env.CREDENTIAL_PROOF_VALUE) return refuse("Skills credential or fallback");
   if (url.pathname === "/api/auth/whoami") {
@@ -125,8 +129,20 @@ globalThis.fetch = async (input, init) => {
   }
   return refuse("application route");
 };\n`, { mode: 0o600 });
+  // The stand-in `secrets` CLI. It records the read and the NAMES of its environment, and prints the value.
+  const cliDirectory = join(workspace, "secrets-cli");
+  await mkdir(cliDirectory, { mode: 0o700 });
+  const cliPath = join(cliDirectory, "secrets"), cliEnvNames = join(workspace, "secrets-cli-env-names");
+  await writeFile(cliPath, `#!/bin/sh
+[ "$#" = 3 ] && [ "$1" = get ] && [ "$2" = fixture/skills/api-key ] && [ "$3" = --plaintext ] || exit 64
+printf '{"operation":"vault-cli-get"}\\n' >> "$CREDENTIAL_PROOF_JOURNAL"
+/usr/bin/env | /usr/bin/cut -d= -f1 | /usr/bin/sort > "${cliEnvNames}"
+[ "$CREDENTIAL_PROOF_DENY" = 1 ] && exit 1
+printf '%s' "$CREDENTIAL_PROOF_VALUE"
+`, { mode: 0o700 });
+  await chmod(cliPath, 0o700);
   const bootstrap = randomUUID(), secret = randomUUID(), staleLiteral = randomUUID();
-  const childEnv = { ...env, HOME: home, HASNA_HOME: join(home, ".hasna"), HASNA_PROFILE: "consumer-proof",
+  const childEnv = { ...env, PATH: `${cliDirectory}:${env.PATH}`, CREDENTIAL_PROOF_CLI: cliPath, HOME: home, HASNA_HOME: join(home, ".hasna"), HASNA_PROFILE: "consumer-proof",
     HASNA_SKILLS_API_URL: "https://skills.example.test", HASNA_SECRETS_API_URL: "https://vault.example.test",
     HASNA_SECRETS_API_KEY_OVERRIDE: bootstrap, HASNA_SKILLS_API_KEY: staleLiteral,
     CREDENTIAL_PROOF_BOOTSTRAP: bootstrap, CREDENTIAL_PROOF_VALUE: secret,
@@ -152,22 +168,30 @@ globalThis.fetch = async (input, init) => {
     assert.deepEqual(operations.filter(operation => operation !== "embedded-resource"), expectedRequests,
       `${name}: incorrect provider request sequence`);
     assert.equal(await readFile(credentialFile, "utf8"), credentialBytes, `${name}: credential file changed`);
+    if (operations.includes("vault-cli-get")) {
+      const caseEnv: Record<string, string> = { ...childEnv, ...overrides };
+      const names = (await readFile(cliEnvNames, "utf8")).trim().split("\n");
+      assert.deepEqual(names.filter(entry => !(entry in caseEnv) && !["PWD", "SHLVL", "_", "OLDPWD"].includes(entry)), [],
+        `${name}: the Secrets CLI received an environment variable the caller did not set`);
+      await rm(cliEnvNames);
+    }
     console.log(`PASS ${name}`);
   };
   await runCase("an unconfigured named profile refuses without native credentials or network", false, [],
     { HASNA_PROFILE: "unconfigured-proof", HASNA_SKILLS_API_KEY: "" });
-  await runCase("production install resolves the credential-file vault pointer", true, ["vault-get", "identity", "capabilities"]);
-  await runCase("a rotated vault value is resolved on the next invocation", true, ["vault-get", "identity", "capabilities"],
+  // The published install closure carries no Secrets SDK, anywhere in the consumer tree.
+  assert(!Object.hasOwn(installedMetadata.dependencies ?? {}, "@hasna/secrets") && !Object.hasOwn(installedMetadata.optionalDependencies ?? {}, "@hasna/secrets")
+    && !Object.hasOwn(installedMetadata.peerDependencies ?? {}, "@hasna/secrets"), "The published manifest must not install @hasna/secrets");
+  for (const location of [join(workspace, "node_modules/@hasna/secrets"), join(packageRoot, "node_modules/@hasna/secrets")])
+    assert(!existsSync(location), "The production consumer tree must not contain @hasna/secrets");
+  await runCase("production install resolves the credential-file vault pointer through the secrets CLI", true, ["vault-cli-get", "identity", "capabilities"]);
+  await runCase("a rotated vault value is resolved on the next invocation", true, ["vault-cli-get", "identity", "capabilities"],
     { CREDENTIAL_PROOF_VALUE: randomUUID() });
-  await runCase("vault denial never uses a competing literal credential", false, ["vault-get"], { CREDENTIAL_PROOF_DENY: "1" });
-  const secretsDirectory = join(workspace, "node_modules/@hasna/secrets");
-  const providerPath = relative(await realpath(workspace), await realpath(secretsDirectory));
-  assert(providerPath && providerPath !== ".." && !providerPath.startsWith("../") && !isAbsolute(providerPath),
-    "The credential provider must belong to the production consumer tree");
-  const secretsMetadata = JSON.parse(await readFile(join(secretsDirectory, "package.json"), "utf8"));
-  assert.equal(secretsMetadata.name, "@hasna/secrets");
-  assert.equal(secretsMetadata.version, installedMetadata.dependencies["@hasna/secrets"]);
-  await rename(secretsDirectory, join(workspace, "held-secrets-package"));
-  await runCase("an unavailable installed provider remains terminal", false, []);
-  console.log("Verified packed production-only Skills credential provider; no live credentials or application requests used.");
+  await runCase("vault denial never uses a competing literal credential", false, ["vault-cli-get"], { CREDENTIAL_PROOF_DENY: "1" });
+  await rename(cliDirectory, join(workspace, "held-secrets-cli"));
+  // The toolchain directory can hold the station's real `secrets`; the terminal case needs a PATH with none.
+  const noCliPath = "/usr/bin:/bin";
+  assert.equal(Bun.which("secrets", { PATH: noCliPath }), null, "The terminal case needs a PATH without a secrets CLI");
+  await runCase("an unavailable secrets CLI remains terminal", false, [], { PATH: noCliPath });
+  console.log("Verified packed production-only Skills credential provider: no Secrets SDK installed, pointer completed through the secrets CLI; no live credentials or application requests used.");
 } finally { await rm(workspace, { recursive: true, force: true }); }
