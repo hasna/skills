@@ -29,6 +29,11 @@ test("bin/mcp.js imports only the MCP SDK, bundles one zod and contains the pack
   expect(() => assertMcpBinarySurface('import { readFileSync } from "node:fs";\n' + ZOD_CORE + HANDLER)).toThrow("not bundle it");
   expect(() => assertMcpBinarySurface(sdk + HANDLER)).toThrow("exactly one zod; found 0");
   expect(() => assertMcpBinarySurface(sdk + ZOD_CORE + ZOD_CORE.replace("version", "version2") + HANDLER)).toThrow("exactly one zod; found 2");
+  // The optional @hasna/secrets SDK may be named, but only as a dynamic import (SH-00048).
+  expect(() => assertMcpBinarySurface(sdk + 'const load = () => import("@hasna/secrets/sdk");\n' + ZOD_CORE + HANDLER)).not.toThrow();
+  expect(() => assertMcpBinarySurface(sdk + 'import { createSecretsClientFromEnv } from "@hasna/secrets/sdk";\n' + ZOD_CORE + HANDLER)).toThrow("it imports @hasna/secrets/sdk");
+  expect(() => assertMcpBinarySurface(sdk + 'const load = () => import("@hasna/secrets");\n' + ZOD_CORE + HANDLER)).toThrow("it imports @hasna/secrets");
+  expect(() => assertMcpBinarySurface(sdk + 'const load = () => import("zod");\n' + ZOD_CORE + HANDLER)).toThrow("it imports zod");
   expect(() => assertMcpBinarySurface(sdk + ZOD_CORE)).toThrow("must contain the package-zod tools/list handler");
   expect(CONSUMER_CHECKS).toContain("mcp-binary-surface");
 });

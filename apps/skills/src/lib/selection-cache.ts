@@ -1,7 +1,7 @@
 /** Immutable, credential-authority/workspace scoped objects. Authoring corpus is never read or written. */
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, readSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname, isAbsolute, join, parse, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -291,7 +291,24 @@ export function assertFreshCachedProfile(receipt: CachedSelectionProfile, option
     throw new SkillSelectionError("CACHED_PROFILE_EXPIRED", "The cached Skills profile has expired; authenticate and sync it again.");
   }
 }
-export function projectSelectionLockPath(projectDir: string): string { return join(resolve(projectDir), ".skills", SELECTION_LOCK_FILE); }
+/**
+ * The project directory as the filesystem resolves it. A session's working
+ * folder may legitimately reach its project through a symlink: on macOS /tmp
+ * is a symlink to /private/tmp, and a workspace may be opened through an alias.
+ * Only the caller's own base is resolved once; every component below it,
+ * including `.skills` and the lock file, keeps the symlink refusal, and a base
+ * that cannot be resolved keeps the previous logical path so the refusal still
+ * applies to it.
+ */
+function resolvedProjectDir(projectDir: string): string {
+  const absolute = resolve(projectDir);
+  try { return realpathSync(absolute); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return absolute;
+    throw error;
+  }
+}
+export function projectSelectionLockPath(projectDir: string): string { return join(resolvedProjectDir(projectDir), ".skills", SELECTION_LOCK_FILE); }
 export function readProjectSelection(projectDir: string): CachedSelectionProfile | null {
   return readProjectSelectionSnapshot(projectDir)?.receipt ?? null;
 }

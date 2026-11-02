@@ -11,16 +11,21 @@ export const CONSUMER_CHECKS = [
 
 const runtimeModules = new Set([...builtinModules, ...builtinModules.map(name => `node:${name}`), "bun", "bun:sqlite"]);
 const isMcpSdk = (path: string) => path === "@modelcontextprotocol/sdk" || path.startsWith("@modelcontextprotocol/sdk/");
+// The optional @hasna/secrets SDK (SH-00048): the binary loads it with import() only where a secret is resolved,
+// and falls back to the `secrets` CLI when it isn't installed, so it may appear, but only as a dynamic import.
+const OPTIONAL_DYNAMIC_IMPORTS = new Set(["@hasna/secrets/sdk"]);
 
 /**
  * Static, offline check of the built bin/mcp.js; it executes nothing. The
  * binary bundles everything except the MCP SDK: it imports the SDK and nothing
- * else outside the runtime, and embeds exactly one zod. It must also contain
+ * else outside the runtime except the optional @hasna/secrets SDK, and that one only through import(); it embeds
+ * exactly one zod. It must also contain
  * the package-zod tools/list handler; that is a name check only, and the
  * handler's behavior is covered by src/mcp/package-tool-list.test.ts.
  */
 export function assertMcpBinarySurface(source: string): void {
   const imports = new Bun.Transpiler({ loader: "js" }).scanImports(source.replace(/^#!.*\n/, ""))
+    .filter(entry => !(entry.kind === "dynamic-import" && OPTIONAL_DYNAMIC_IMPORTS.has(entry.path)))
     .map(entry => entry.path).filter(path => !runtimeModules.has(path));
   const foreign = [...new Set(imports.filter(path => !isMcpSdk(path)))];
   if (foreign.length) throw new Error(`bin/mcp.js must bundle everything except the MCP SDK; it imports ${foreign.join(", ")}`);
