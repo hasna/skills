@@ -3613,14 +3613,18 @@ lists them. Invoking a native payload skill instead of the `skills-cli` bridge
 is still denied, and so is invoking the bridge while the bridge itself is
 missing or modified; install, trust and migration still refuse drift.
 
-`claude-settings-v5` and `codex-settings-v7` reviews bind only settings that can
-add, remove or redirect native skills, hooks or plugins (and, for Codex, every
-MCP server and instruction source), so a model switch, an "always allow" rule, a
-status line or Codex's folder trust and notices are not drift. Existing Claude
-and Codex reviews keep verifying through a narrowed-witness ledger the live hook
-records while they still match; a station that had already drifted, V6 and Sumi
-witnesses still need one fresh review. See
-[docs/plugin-admission.md](docs/plugin-admission.md#narrowed-discovery-reviews-claude-settings-v5-and-codex-settings-v7).
+`claude-settings-v5`, `codex-settings-v7` and `codex-settings-v8` reviews bind
+only settings that can add, remove or redirect native skills, hooks or plugins
+(and, for Codex, every MCP server and instruction source), so a model switch, an
+"always allow" rule, a status line or Codex's folder trust and notices are not
+drift. `codex-settings-v8` additionally leaves a marketplace entry's own
+`last_updated` free, so Codex rewriting that timestamp is not drift either.
+V7 keeps its shipped meaning; V8 is a new mode for a fresh review or a
+preserved-preimage upgrade. Existing Claude and Codex reviews keep verifying
+through a narrowed-witness ledger the live hook records while they still match;
+a station that had already drifted, V6 and Sumi witnesses still need one fresh
+review. See
+[docs/plugin-admission.md](docs/plugin-admission.md#narrowed-discovery-reviews-claude-settings-v5-codex-settings-v7-and-codex-settings-v8).
 
 ### Reproduce a reviewed runtime dependency closure
 
