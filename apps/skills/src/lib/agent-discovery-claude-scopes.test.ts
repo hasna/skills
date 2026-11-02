@@ -161,6 +161,13 @@ test("a managed registration carrying a projectPath is refused", () => {
   expect(() => roots(home)).toThrow("enabled plugin registration is missing or ambiguous");
 });
 
+test("a user or managed registration carrying a null projectPath is refused", () => {
+  for (const scope of ["user", "managed"]) {
+    const { home } = setup(home => ({ "fixture@market": [{ scope, projectPath: null, installPath: pluginRoot(home, `null-path-${scope}`), version: "1.0.0" }] }));
+    expect(() => roots(home)).toThrow("enabled plugin registration is missing or ambiguous");
+  }
+});
+
 test("identical user and project registrations resolve without a duplicate root", () => {
   const { home } = setup(home => {
     const installPath = pluginRoot(home, "shared");
