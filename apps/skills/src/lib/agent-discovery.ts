@@ -1467,16 +1467,23 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
         } else if (row.scope === "project") {
           if (typeof projectPath !== "string") unresolved("enabled plugin registration is missing or ambiguous");
           const projectRoot = projectPath as string;
-          if (!isAbsolute(projectRoot) || resolve(projectRoot) !== projectRoot || projectRoot.length > AGENT_POLICY_LIMITS.pathCharacters) unresolved("enabled plugin registration is missing or ambiguous");
+          if (/[\x00-\x1f\x7f]/.test(projectRoot) || !isAbsolute(projectRoot) || resolve(projectRoot) !== projectRoot || projectRoot.length > AGENT_POLICY_LIMITS.pathCharacters) unresolved("enabled plugin registration is missing or ambiguous");
           scope = `project\0${projectRoot}`;
-        } else { unresolved("enabled plugin registration is missing or ambiguous"); continue; }
+        } else {
+          // The continue is unreachable after unresolved(), but it keeps `scope`
+          // definitely assigned for the checks below.
+          unresolved("enabled plugin registration is missing or ambiguous"); continue;
+        }
         if (scopes.has(scope)) unresolved("enabled plugin registration is missing or ambiguous");
         scopes.add(scope);
         const installPath = row.installPath;
         if (typeof installPath !== "string") unresolved("malformed plugin installation root");
         const pluginRoot = installPath as string;
-        if (!isAbsolute(pluginRoot) || resolve(pluginRoot) !== pluginRoot || pluginRoot.length > AGENT_POLICY_LIMITS.pathCharacters) unresolved("malformed plugin installation root");
-        const version = typeof row.version === "string" ? row.version : "";
+        if (/[\x00-\x1f\x7f]/.test(pluginRoot) || !isAbsolute(pluginRoot) || resolve(pluginRoot) !== pluginRoot || pluginRoot.length > AGENT_POLICY_LIMITS.pathCharacters) unresolved("malformed plugin installation root");
+        // Two scopes may share one install root only while they agree on its
+        // version; a non-string version keeps its own identity instead of
+        // collapsing to a common empty value.
+        const version = typeof row.version === "string" ? `string:${row.version}` : `other:${String(row.version)}`;
         const prior = rootsByPath.get(pluginRoot);
         if (prior !== undefined && prior !== version) unresolved("enabled plugin registration is missing or ambiguous");
         rootsByPath.set(pluginRoot, version);
