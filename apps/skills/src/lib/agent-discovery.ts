@@ -1721,17 +1721,23 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
         if (!registration || typeof registration !== "object" || Array.isArray(registration)) unresolved("enabled plugin registration is missing or ambiguous");
         const row = registration as Record<string, unknown>;
         const projectPath = row.projectPath;
+        // `projectPath` is an optional string in the native schema, required for
+        // project and local and permitted elsewhere. Where present it is
+        // validated as a path, but only project and local use it to tell two
+        // registrations apart; a user or managed row stays one effective scope
+        // whatever path it carries.
+        const projectRoot = (): string => {
+          if (typeof projectPath !== "string") unresolved("enabled plugin registration is missing or ambiguous");
+          const root = projectPath as string;
+          if (/[\x00-\x1f\x7f]/.test(root) || !isAbsolute(root) || resolve(root) !== root || root.length > AGENT_POLICY_LIMITS.pathCharacters) unresolved("enabled plugin registration is missing or ambiguous");
+          return root;
+        };
         let scope: string;
         if (row.scope === "user" || row.scope === "managed") {
-          // `projectPath` is an optional string in the native schema, so an
-          // explicit null is malformed data for a scope that carries none.
-          if (projectPath !== undefined) unresolved("enabled plugin registration is missing or ambiguous");
+          if (projectPath !== undefined) projectRoot();
           scope = row.scope;
         } else if (row.scope === "project" || row.scope === "local") {
-          if (typeof projectPath !== "string") unresolved("enabled plugin registration is missing or ambiguous");
-          const projectRoot = projectPath as string;
-          if (/[\x00-\x1f\x7f]/.test(projectRoot) || !isAbsolute(projectRoot) || resolve(projectRoot) !== projectRoot || projectRoot.length > AGENT_POLICY_LIMITS.pathCharacters) unresolved("enabled plugin registration is missing or ambiguous");
-          scope = `${row.scope}\0${projectRoot}`;
+          scope = `${row.scope}\0${projectRoot()}`;
         } else {
           // The continue is unreachable after unresolved(), but it keeps `scope`
           // definitely assigned for the checks below.
