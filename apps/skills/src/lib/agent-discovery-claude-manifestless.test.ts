@@ -122,7 +122,7 @@ test("an absent installation root refuses", () => {
   expect(() => roots(home)).toThrow("plugin installation root is missing");
 });
 
-test("a manifestless plugin binds its marketplace entry as a live witness", () => {
+test("a manifestless plugin binds its marketplace entry and its registry as live witnesses", () => {
   const { home, marketplace } = setup({ strict: false, skills: ["./skills-a"] });
   const binding = resolveAgentDiscovery({ home, agent: "claude" });
   const entries = binding.sources.filter(source => source.hashMode === "claude-marketplace-entry-v1");
@@ -131,9 +131,33 @@ test("a manifestless plugin binds its marketplace entry as a live witness", () =
   expect(entries[0].plugin).toBe("fixture-plugin");
   const text = readFileSync(join(marketplace, ".claude-plugin/marketplace.json"), "utf8");
   expect(entries[0].sha256).toBe(hashClaudeMarketplaceEntry(text, { marketplace: "fixture-market", plugin: "fixture-plugin" }));
+  // The registry row that routes the plugin id to its catalog is bound too.
+  expect(binding.sources.filter(source => source.hashMode === "claude-marketplace-registry-v2")).toHaveLength(1);
   // The live binding is verifiable: a live entry witness carries a content
   // digest, so the reviewed-only gate would refuse this binding.
   expect(() => verifyAgentDiscovery(binding)).not.toThrow();
+});
+
+test("a registry redirect to a different catalog refuses the older binding", () => {
+  const { home } = setup({ strict: false, skills: ["./skills-a"] });
+  const binding = resolveAgentDiscovery({ home, agent: "claude" });
+  const other = join(home, "marketplaces", "fixture-market-b");
+  put(join(other, ".claude-plugin/marketplace.json"), JSON.stringify({
+    name: "fixture-market",
+    plugins: [{ name: "fixture-plugin", source: "./plugin", strict: false, skills: ["./skills-b"] }],
+  }));
+  put(join(home, ".claude/plugins/known_marketplaces.json"), JSON.stringify({
+    "fixture-market": { source: { source: "directory", path: other }, installLocation: other, lastUpdated: "2026-11-02T00:00:00.000Z" },
+  }));
+  // The catalog the old binding recorded is untouched; only the registry route
+  // moved, so the registry witness is what must refuse it.
+  expect(() => verifyAgentDiscovery(binding)).toThrow();
+  expect(roots(home)).toContain(join(home, "plugins", "fixture-plugin", "skills-b"));
+});
+
+test("an entry declaring an unmodelled loading control is refused", () => {
+  const { home } = setup({ strict: false, settings: { env: { FIXTURE: "1" } } });
+  expect(() => roots(home)).toThrow("unsupported loading control");
 });
 
 test("a catalog refresh that changes the entry changes the bound digest", () => {
