@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { builtinModules } from "node:module";
 import { tmpdir } from "node:os";
@@ -45,13 +45,25 @@ function assertBundledSurfaces(producerRoot: string): void {
   const scanner = new Bun.Transpiler({ loader: "js" });
   // bin/mcp.js bundles everything except the MCP SDK, zod included; its
   // tools/list converts schemas with that bundled zod (mcp/package-tool-list.ts).
+  // The optional, private @hasna/secrets stays external (SH-00058) and is only
+  // ever loaded lazily, by a dynamic import of its SDK entry.
+  const lazySecrets = (entry: { path: string; kind: string }) => entry.kind === "dynamic-import" && entry.path === "@hasna/secrets/sdk";
   for (const file of ["dist/index.js", "dist/storage.js", "dist/sdk/index.js", "dist/admin-contract.js", "dist/runtime-prerequisites.js", "bin/mcp.js"]) {
     const imports = scanner.scanImports(readFileSync(join(producerRoot, file), "utf8").replace(/^#!.*\n/, ""));
-    expect(imports.filter(entry => !builtins.has(entry.path) && !(file === "bin/mcp.js" &&
+    expect(imports.filter(entry => !builtins.has(entry.path) && !lazySecrets(entry) && !(file === "bin/mcp.js" &&
       (entry.path === "@modelcontextprotocol/sdk" || entry.path.startsWith("@modelcontextprotocol/sdk/"))))).toEqual([]);
   }
   expect(scanner.scanImports('import { KernelLock } from "@hasna/contracts/kernel-lock";')
     .filter(entry => !builtins.has(entry.path))).toHaveLength(1);
+  expect(scanner.scanImports('import "@hasna/secrets"; await import("@hasna/secrets/sdk");').map(lazySecrets)).toEqual([false, true]);
+  for (const directory of ["bin", "dist"]) {
+    for (const entry of readdirSync(join(producerRoot, directory), { recursive: true }) as string[]) {
+      if (!entry.endsWith(".js")) continue;
+      const imports = scanner.scanImports(readFileSync(join(producerRoot, directory, entry), "utf8").replace(/^#!.*\n/, ""));
+      expect(imports.filter(item => (item.path === "@hasna/secrets" || item.path.startsWith("@hasna/secrets/")) && !lazySecrets(item))
+        .map(item => `${directory}/${entry} ${item.kind} ${item.path}`)).toEqual([]);
+    }
+  }
   const scratch = mkdtempSync(join(tmpdir(), "skills-bundled-sdk-consumer-"));
   chmodSync(scratch, 0o700);
   try {
@@ -66,14 +78,14 @@ function assertBundledSurfaces(producerRoot: string): void {
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 }
 
-releaseArtifactTest("two clean builds produce byte-identical npm packs and an isolated production install resolves vault credentials", () => {
+releaseArtifactTest("two clean builds produce byte-identical npm packs and an isolated production install resolves vault credentials", async () => {
   expect(npmExecutable).not.toBeNull();
   expect(nodeExecutable).not.toBeNull();
   const scratch = mkdtempSync(join(tmpdir(), "skills-release-artifact-"));
   chmodSync(scratch, 0o700);
   try {
     const producer = join(scratch, "producer");
-    const excludedRoots = new Set(["bin", "dist", "native", "node_modules", ".turbo"]);
+    const excludedRoots = new Set(["bin", "dist", "native", "node_modules", ".turbo", "THIRD_PARTY_NOTICES"]);
     cpSync(packageRoot, producer, {
       recursive: true,
       filter(source) {
@@ -105,6 +117,19 @@ releaseArtifactTest("two clean builds produce byte-identical npm packs and an is
     const lockHash = sha256(join(producer, "bun.lock"));
     run([process.execPath, "--no-env-file", "install", "--frozen-lockfile", "--ignore-scripts", `--config=${bunfig}`], producer, env);
     expect(sha256(join(producer, "bun.lock"))).toBe(lockHash);
+    // The registry refuses the optional, private @hasna/secrets anonymously
+    // (SH-00058), and the build inlines its client. Place the exact locked
+    // tarball the CI install step fetched, checked against bun.lock.
+    const { privatePackageOverrides } = await import(join(packageRoot, "scripts/private-package-overrides.ts"));
+    const { integrityOf, lockedTarball, PRIVATE_PACKAGES } = await import(join(packageRoot, "scripts/fetch-locked-private.mjs"));
+    const privateTarballs = privatePackageOverrides() as Record<string, string>;
+    expect(Object.keys(privateTarballs)).toEqual(PRIVATE_PACKAGES);
+    for (const [name, specifier] of Object.entries(privateTarballs)) {
+      const tarball = specifier.slice("file:".length);
+      expect(integrityOf(readFileSync(tarball))).toBe(lockedTarball(readFileSync(join(producer, "bun.lock"), "utf8"), name).integrity);
+      mkdirSync(join(producer, "node_modules", name), { recursive: true });
+      run(["tar", "-xzf", tarball, "-C", join(producer, "node_modules", name), "--strip-components=1"], producer, env);
+    }
     run([process.execPath, "--no-env-file", "run", "verify:producer"], producer, env);
 
     const firstPackDir = join(scratch, "pack-one");
@@ -118,13 +143,16 @@ releaseArtifactTest("two clean builds produce byte-identical npm packs and an is
     const secondArchive = packInto(secondPackDir, producer, env);
     expect(sha256(secondArchive)).toBe(sha256(firstArchive));
 
-    const consumerProof = run([process.execPath, "--no-env-file", join(producer, "scripts/consumer-credentials.ts"), secondArchive], producer, env);
-    expect(consumerProof.split("\n").filter(line => line.startsWith("PASS "))).toHaveLength(5);
+    const consumerProof = run([process.execPath, "--no-env-file", join(producer, "scripts/consumer-credentials.ts"), secondArchive], producer,
+      { ...env, SKILLS_PRIVATE_TARBALLS: process.env.SKILLS_PRIVATE_TARBALLS ?? "" });
+    expect(consumerProof.split("\n").filter(line => line.startsWith("PASS "))).toHaveLength(6);
+    const anonymousProof = run([process.execPath, "--no-env-file", join(producer, "scripts/consumer-anonymous.ts"), secondArchive], producer, env);
+    expect(anonymousProof.split("\n").filter(line => line.startsWith("PASS "))).toHaveLength(5);
 
     // The outer npm pack ships these exact standalone-lock artifacts. Promote
     // only after reproducibility AND every installed-consumer check succeeds;
     // a failing credential or isolation proof leaves existing outputs intact.
-    for (const directory of ["bin", "dist", "native"]) {
+    for (const directory of ["bin", "dist", "native", "THIRD_PARTY_NOTICES"]) {
       rmSync(join(packageRoot, directory), { recursive: true, force: true });
       cpSync(join(producer, directory), join(packageRoot, directory), { recursive: true });
     }

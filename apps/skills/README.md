@@ -1919,6 +1919,10 @@ execution grants; selection sync does not distribute or implicitly approve them.
 The CLI validates the complete binding before fetching values through
 `@hasna/secrets`. It resolves current values for each run, checks returned keys
 and expiry, and injects only the declared variables into the child process.
+`@hasna/secrets` is an optional dependency: an install with access to it gets it
+automatically, and an install without that access, such as an anonymous one,
+refuses vault bindings and says to install `@hasna/secrets` with access to it.
+Skills loads it only when a binding needs it; nothing else depends on it.
 Missing, extra, stale or mismatched bindings refuse execution; a failing vault
 read never falls back to an ambient value or a local vault. Wrapping `skills run`
 in `secrets exec` alone does not bind a declared variable. Runtime controls such
@@ -2014,9 +2018,10 @@ fails rather than acting as a different principal.
 `HASNA_SKILLS_API_KEY_REF` names a *vault item*, not a key, so it resolves in two
 steps: the item is fetched through the `@hasna/secrets` SDK on each call, which
 means a rotated item is picked up without a restart — and which means the SDK has
-to be installed in the process. Every way that fetch can fail (SDK absent, vault
-unreachable, item missing or empty) is terminal and exits non-zero; a pointer
-never falls through to another tier, and never to the local corpus.
+to be installed in the process. It is an optional dependency that only an install
+with access to `@hasna/secrets` receives. Every way that fetch can fail (SDK
+absent, vault unreachable, item missing or empty) is terminal and exits non-zero;
+a pointer never falls through to another tier, and never to the local corpus.
 
 For a durable reference without a raw Skills key, the same
 `HASNA_SKILLS_API_KEY_REF` field can be stored in the owner-only canonical or

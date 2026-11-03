@@ -5,14 +5,21 @@ import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { privatePackageOverrides } from "./private-package-overrides.js";
 
 // Exercise the published credential provider from an ordinary production-only
 // install. A successful CLI/SDK import cannot prove lazy vault-pointer loading.
 // Only registry installation uses the network; the child intercepts every
 // application request and uses synthetic credentials in a private test HOME.
+// @hasna/secrets is an optional, private dependency (SH-00058): the full
+// consumer installs it from the locked tarball, and an anonymous consumer, to
+// whom the registry refuses it, must refuse a vault pointer and name it.
 const root = resolve(import.meta.dir, "..");
 const workspace = await mkdtemp(join(tmpdir(), "skills-consumer-credentials-"));
 await chmod(workspace, 0o700);
+// A sibling, so no ancestor of the anonymous consumer holds the full consumer's @hasna/secrets.
+const anonymousWorkspace = await mkdtemp(join(tmpdir(), "skills-consumer-credentials-anonymous-"));
+await chmod(anonymousWorkspace, 0o700);
 for (let parent = dirname(workspace); ; parent = dirname(parent)) {
   assert(!existsSync(join(parent, "node_modules/@hasna/secrets")), "Consumer fixture has an ambient Secrets package ancestor");
   if (dirname(parent) === parent) break;
@@ -66,15 +73,23 @@ try {
     assert.equal(rows[0].filename, `hasna-skills-${rows[0].version}.tgz`);
     archive = join(workspace, rows[0].filename);
   }
-  await writeFile(join(workspace, "package.json"), JSON.stringify({ private: true,
-    dependencies: { "@hasna/skills": `file:${archive}` } }));
-  const bunfig = join(workspace, "bunfig.toml");
-  // Exact Hasna package names are publisher-exempt; unrelated packages retain the seven-day gate.
-  await writeFile(bunfig, `[install]\nregistry = "https://registry.npmjs.org"\nminimumReleaseAge = 604800\nminimumReleaseAgeExcludes = ["@hasna/skills", "@hasna/contracts", "@hasna/events", "@hasna/secrets"]\n`);
-  const installed = await run([process.execPath, "--no-env-file", "install", "--production", "--ignore-scripts",
-    "--backend=copyfile", "--linker=hoisted", `--config=${bunfig}`], workspace, env);
-  assert.equal(installed.status, 0, "Production-only consumer installation failed");
-  const packageRoot = join(workspace, "node_modules/@hasna/skills");
+  assert(privatePackageOverrides()["@hasna/secrets"], "The vault-pointer proof needs SKILLS_PRIVATE_TARBALLS naming the locked @hasna/secrets tarball");
+  const install = async (directory: string, manifest: object, label: string) => {
+    await writeFile(join(directory, "package.json"), JSON.stringify(manifest));
+    const bunfig = join(directory, "bunfig.toml");
+    // Exact Hasna package names are publisher-exempt; unrelated packages retain the seven-day gate.
+    await writeFile(bunfig, `[install]\nregistry = "https://registry.npmjs.org"\nminimumReleaseAge = 604800\nminimumReleaseAgeExcludes = ["@hasna/skills", "@hasna/contracts", "@hasna/events", "@hasna/secrets"]\n`);
+    const installed = await run([process.execPath, "--no-env-file", "install", "--production", "--ignore-scripts",
+      "--backend=copyfile", "--linker=hoisted", `--config=${bunfig}`], directory, env);
+    assert.equal(installed.status, 0, `${label} installation failed`);
+    return join(directory, "node_modules/@hasna/skills");
+  };
+  // Private packages come from the locked tarballs the CI install step fetched, never with a token.
+  const packageRoot = await install(workspace, { private: true,
+    dependencies: { "@hasna/skills": `file:${archive}` }, overrides: privatePackageOverrides() }, "Production-only consumer");
+  const anonymousRoot = await install(anonymousWorkspace, { private: true,
+    dependencies: { "@hasna/skills": `file:${archive}` } }, "Anonymous production-only consumer");
+  assert(!existsSync(join(anonymousWorkspace, "node_modules/@hasna/secrets/package.json")), "The anonymous consumer installed @hasna/secrets");
   const installedMetadata = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
   const credentialDirectory = join(home, ".hasna/skills/config");
   await mkdir(credentialDirectory, { recursive: true, mode: 0o700 });
@@ -131,10 +146,11 @@ globalThis.fetch = async (input, init) => {
     HASNA_SECRETS_API_KEY_OVERRIDE: bootstrap, HASNA_SKILLS_API_KEY: staleLiteral,
     CREDENTIAL_PROOF_BOOTSTRAP: bootstrap, CREDENTIAL_PROOF_VALUE: secret,
     CREDENTIAL_PROOF_JOURNAL: join(workspace, "requests.jsonl") };
-  const runCase = async (name: string, success: boolean, expectedRequests: string[], overrides: Record<string, string> = {}) => {
+  const runCase = async (name: string, success: boolean, expectedRequests: string[], overrides: Record<string, string> = {},
+    consumerRoot = packageRoot, refusal: string[] = []) => {
     await writeFile(childEnv.CREDENTIAL_PROOF_JOURNAL, "", { mode: 0o600 });
     const result = await run([process.execPath, "--no-env-file", "--no-install", "--preload", preload,
-      join(packageRoot, "bin/index.js"), "auth", "whoami", "--json"], workspace, { ...childEnv, ...overrides }, 20_000);
+      join(consumerRoot, "bin/index.js"), "auth", "whoami", "--json"], resolve(consumerRoot, "../../.."), { ...childEnv, ...overrides }, 20_000);
     for (const value of [bootstrap, secret, staleLiteral, "fixture/skills/api-key", overrides.CREDENTIAL_PROOF_VALUE].filter(Boolean))
       assert(!(result.stdout + result.stderr).includes(value!), "Consumer exposed a synthetic credential");
     assert.equal(result.stderr, "", `${name}: unexpected stderr`);
@@ -145,7 +161,10 @@ globalThis.fetch = async (input, init) => {
       assert.equal(payload.userId, "fixture-user");
       assert.equal(payload.orgId, "fixture-workspace");
       assert.equal(payload.authSource, credentialFile);
-    } else assert.equal(payload.code, "MISSING_API_CREDENTIAL", `${name}: incorrect terminal refusal`);
+    } else {
+      assert.equal(payload.code, "MISSING_API_CREDENTIAL", `${name}: incorrect terminal refusal`);
+      for (const fragment of refusal) assert(String(payload.error).includes(fragment), `${name}: the refusal does not say: ${fragment}`);
+    }
     const journal = (await readFile(childEnv.CREDENTIAL_PROOF_JOURNAL, "utf8")).trim();
     const operations: string[] = journal ? journal.split("\n").map(line => JSON.parse(line).operation) : [];
     assert(operations.filter(operation => operation === "embedded-resource").length <= 1, "Unexpected embedded resource count");
@@ -160,14 +179,19 @@ globalThis.fetch = async (input, init) => {
   await runCase("a rotated vault value is resolved on the next invocation", true, ["vault-get", "identity", "capabilities"],
     { CREDENTIAL_PROOF_VALUE: randomUUID() });
   await runCase("vault denial never uses a competing literal credential", false, ["vault-get"], { CREDENTIAL_PROOF_DENY: "1" });
+  await runCase("an anonymous install refuses a vault pointer, naming the missing @hasna/secrets", false, [], {}, anonymousRoot,
+    ["the secrets SDK (@hasna/secrets) is not installed", "A vault pointer is TERMINAL", "install it with access to it"]);
   const secretsDirectory = join(workspace, "node_modules/@hasna/secrets");
   const providerPath = relative(await realpath(workspace), await realpath(secretsDirectory));
   assert(providerPath && providerPath !== ".." && !providerPath.startsWith("../") && !isAbsolute(providerPath),
     "The credential provider must belong to the production consumer tree");
   const secretsMetadata = JSON.parse(await readFile(join(secretsDirectory, "package.json"), "utf8"));
   assert.equal(secretsMetadata.name, "@hasna/secrets");
-  assert.equal(secretsMetadata.version, installedMetadata.dependencies["@hasna/secrets"]);
+  assert.equal(secretsMetadata.version, installedMetadata.optionalDependencies["@hasna/secrets"]);
   await rename(secretsDirectory, join(workspace, "held-secrets-package"));
   await runCase("an unavailable installed provider remains terminal", false, []);
   console.log("Verified packed production-only Skills credential provider; no live credentials or application requests used.");
-} finally { await rm(workspace, { recursive: true, force: true }); }
+} finally {
+  await rm(workspace, { recursive: true, force: true });
+  await rm(anonymousWorkspace, { recursive: true, force: true });
+}

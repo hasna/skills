@@ -26,6 +26,10 @@ test("bin/mcp.js imports only the MCP SDK, bundles one zod and contains the pack
   expect(() => assertMcpBinarySurface('#!/usr/bin/env bun\nconst sdk = await import("@modelcontextprotocol/sdk/server/stdio.js");\n' + ZOD_CORE + HANDLER)).not.toThrow();
   expect(() => assertMcpBinarySurface(sdk + 'import { z } from "zod";\n' + HANDLER)).toThrow("bundle everything except the MCP SDK; it imports zod");
   expect(() => assertMcpBinarySurface(sdk + 'import "zod/v4";\n' + ZOD_CORE + HANDLER)).toThrow("it imports zod/v4");
+  // The optional, private @hasna/secrets may only be loaded lazily, by its SDK entry (SH-00058).
+  expect(() => assertMcpBinarySurface(sdk + 'const load = () => import("@hasna/secrets/sdk");\n' + ZOD_CORE + HANDLER)).not.toThrow();
+  expect(() => assertMcpBinarySurface(sdk + 'import { createSecretsClientFromEnv } from "@hasna/secrets/sdk";\n' + ZOD_CORE + HANDLER)).toThrow("it imports @hasna/secrets/sdk");
+  expect(() => assertMcpBinarySurface(sdk + 'const load = () => import("@hasna/secrets");\n' + ZOD_CORE + HANDLER)).toThrow("it imports @hasna/secrets");
   expect(() => assertMcpBinarySurface('import { readFileSync } from "node:fs";\n' + ZOD_CORE + HANDLER)).toThrow("not bundle it");
   expect(() => assertMcpBinarySurface(sdk + HANDLER)).toThrow("exactly one zod; found 0");
   expect(() => assertMcpBinarySurface(sdk + ZOD_CORE + ZOD_CORE.replace("version", "version2") + HANDLER)).toThrow("exactly one zod; found 2");

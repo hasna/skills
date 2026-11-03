@@ -364,7 +364,9 @@ process.exit(code);
 
   test.each([
     { dependencies: { "is-odd": "3.0.1" } },
-    { dependencies: { "@hasna/contracts": "1.3.5", "@hasna/secrets": "0.4.2" } },
+    // Skills' own shape since SH-00058: the private @hasna/secrets is optional, so an
+    // anonymous self-update installs without it.
+    { dependencies: { "@hasna/contracts": "1.3.5" }, optionalDependencies: { "@hasna/secrets": "0.4.2" } },
     { dependencies: {}, optionalDependencies: { "fsevents": "2.3.3" } },
   ] as { dependencies: Record<string, string>; optionalDependencies?: Record<string, string> }[])("reviewed full required closure succeeds under force-actual inspection: %j", async ({ dependencies, optionalDependencies }) => {
     const reviewed = fixtureHome(), consumer = fixtureHome();
@@ -376,7 +378,11 @@ process.exit(code);
       const result = await updateCopyfileRuntime("0.10.8", { homeDir: consumer.home, pathValue: `${consumer.localBin}${delimiter}${consumer.bunBin}`, registryOrigin: fixture.server.url.origin, minReleaseAge: 7, minReleaseAgeExclude: ["@hasna/*"], reviewedLock: path, reviewedLockSha256: createHash("sha256").update(bytes).digest("hex") });
       expect(result.updated).toBe(true);
       if (dependencies["is-odd"]) expect(existsSync(join(consumer.runtime, "0.10.8-copyfile", "node_modules", "is-number", "package.json"))).toBe(true);
-      else if (dependencies["@hasna/secrets"]) expect(JSON.parse(readFileSync(join(consumer.runtime, "0.10.8-copyfile", "node_modules", "@hasna", "skills", "node_modules", "@hasna", "secrets", "package.json"), "utf8")).version).toBe("0.4.2");
+      else if (optionalDependencies?.["@hasna/secrets"]) {
+        expect(existsSync(join(consumer.runtime, "0.10.8-copyfile", "node_modules", "@hasna", "contracts", "package.json"))).toBe(true);
+        for (const at of [["@hasna", "secrets"], ["@hasna", "skills", "node_modules", "@hasna", "secrets"]])
+          expect(existsSync(join(consumer.runtime, "0.10.8-copyfile", "node_modules", ...at, "package.json"))).toBe(false);
+      }
       expect(rollbackCopyfileRuntime(String(result.receiptId), { homeDir: consumer.home })).toMatchObject({ rolledBack: true });
     } finally { fixture.server.stop(true); }
   }, 120_000);

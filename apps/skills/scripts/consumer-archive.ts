@@ -15,12 +15,15 @@ const isMcpSdk = (path: string) => path === "@modelcontextprotocol/sdk" || path.
 /**
  * Static, offline check of the built bin/mcp.js; it executes nothing. The
  * binary bundles everything except the MCP SDK: it imports the SDK and nothing
- * else outside the runtime, and embeds exactly one zod. It must also contain
+ * else outside the runtime, and embeds exactly one zod. The one exception is
+ * the optional, private @hasna/secrets, which stays external and is only loaded
+ * lazily, by a dynamic import of its SDK entry (SH-00058). It must also contain
  * the package-zod tools/list handler; that is a name check only, and the
  * handler's behavior is covered by src/mcp/package-tool-list.test.ts.
  */
 export function assertMcpBinarySurface(source: string): void {
   const imports = new Bun.Transpiler({ loader: "js" }).scanImports(source.replace(/^#!.*\n/, ""))
+    .filter(entry => !(entry.kind === "dynamic-import" && entry.path === "@hasna/secrets/sdk"))
     .map(entry => entry.path).filter(path => !runtimeModules.has(path));
   const foreign = [...new Set(imports.filter(path => !isMcpSdk(path)))];
   if (foreign.length) throw new Error(`bin/mcp.js must bundle everything except the MCP SDK; it imports ${foreign.join(", ")}`);
