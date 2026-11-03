@@ -5,7 +5,7 @@
  *
  * Usage:
  *   skills mcp          # Start MCP server on stdio
- *   skills-mcp          # Direct binary
+ *   skills-mcp          # Direct binary: stdio when an agent host pipes stdin, else HTTP
  *   skills-mcp --http   # Streamable HTTP on 127.0.0.1:8836
  */
 
@@ -26,8 +26,8 @@ Options:
   -V, --version  output the version number
   -h, --help     display help for command
   --invitation-recovery --stdio  expose only anonymous invitation recovery tools
-  --stdio        run newline-delimited JSON-RPC for agent hosts
-  --http         run Streamable HTTP transport on 127.0.0.1 (default; port 8836)
+  --stdio        run newline-delimited JSON-RPC for agent hosts (default when stdin is a pipe)
+  --http         run Streamable HTTP transport on 127.0.0.1 (default otherwise; port 8836)
   --port <n>     HTTP port (--http or MCP_HTTP=1)`);
 }
 
@@ -88,12 +88,13 @@ async function main() {
     catch { console.error("Invitation recovery requires only --invitation-recovery --stdio and an explicit Skills API URL, without incompatible modes. No session was initialized."); process.exitCode = 1; }
     return;
   }
-  const { isMcpStdioMode, parseMcpHttpPort, startSkillsMcpHttpServer } = await import("./http.js");
-  if (isMcpStdioMode(args)) {
+  const { selectMcpTransport, parseMcpHttpPort, startSkillsMcpHttpServer } = await import("./http.js");
+  if (selectMcpTransport(args) === "stdio") {
     await startMcpStdio();
     return;
   }
-  // Default: shared Streamable HTTP server (one process per MCP, many agents).
+  // Shared Streamable HTTP server (one process per MCP, many agents): asked
+  // for explicitly, or started from a terminal or a service manager.
   assertSkillsMcpConfigured();
   const port = parseMcpHttpPort(args);
   await startSkillsMcpHttpServer({ port, hostname: "127.0.0.1" });
