@@ -51,7 +51,8 @@ test("a missing plugin.json still refuses when the entry is strict true or does 
 
 test("the marketplace entry must agree with the registration and stay inside the marketplace root", () => {
   const cases: Array<[EntryOptions, string]> = [
-    [{ version: "2.0.0" }, "entry version differs from the registration"],
+    [{ version: "2.0.0" }, "entry version is missing or differs from the registration"],
+    [{ version: null }, "entry version is missing or differs from the registration"],
     [{ source: "../outside" }, "entry source is not a path inside the marketplace root"],
     [{ source: "./" }, "entry source is not a path inside the marketplace root"],
     [{ source: { source: "github", repo: "example/swift-lsp" } }, "entry source is not a path inside the marketplace root"],
@@ -59,9 +60,6 @@ test("the marketplace entry must agree with the registration and stay inside the
     [{ extra: { injected: true } }, "unknown key"],
   ];
   for (const [entry, reason] of cases) expect(() => exclusion(strictFalseHome(entry).home)).toThrow(reason);
-  // An entry without a version is admitted: Claude names the cache folder from
-  // the registration, which the cache-path check already binds.
-  expect(() => exclusion(strictFalseHome({ version: null }).home)).not.toThrow();
 });
 
 test("the registration must name the cache path of its marketplace, plugin and version", () => {
@@ -117,6 +115,17 @@ test("one user row and a project row: both roots are reviewed", () => {
   expect(exclusion(registrationHome([{ scope: "user", installPath: user }]))).toContain(join(user, "skills"));
   // Two rows at the same root are reviewed once.
   expect(exclusion(registrationHome([{ scope: "user", installPath: user }, { scope: "local", installPath: user, projectPath: base }]))).toContain(join(user, "skills"));
+});
+
+test("native admission keeps refusing more than one registration row", () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "claude-plugin-roots-")));
+  const user = manifestPlugin(join(base, "user/fixture/1")), project = manifestPlugin(join(base, "project/fixture/1"));
+  for (const extra of [{ scope: "project", installPath: project, projectPath: base }, { scope: "local", installPath: project, projectPath: base }]) {
+    const home = registrationHome([{ scope: "user", installPath: user }, extra]);
+    expect(() => resolveAgentDiscovery({ home, agent: "claude", executable: null })).toThrow("enabled plugin registration is missing or ambiguous");
+    expect(exclusion(home)).toContain(join(project, "skills"));
+  }
+  expect(() => resolveAgentDiscovery({ home: registrationHome([{ scope: "user", installPath: user }]), agent: "claude", executable: null })).not.toThrow();
 });
 
 test("registration rows refuse with no user row, two user rows, an unknown scope or a failed row", () => {

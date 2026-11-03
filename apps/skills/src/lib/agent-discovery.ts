@@ -1420,7 +1420,7 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     try { hashClaudeMarketplaceEntry(text!, { marketplace, plugin: name }); } catch (error) { refuse(String((error as Error)?.message ?? error).replace(/^Claude marketplace entry witness /, "")); }
     const catalog = parseConfig(text!, path), entry = (catalog.plugins as any[]).find(item => object(item) && item.name === name);
     if (entry.strict !== false) refuse("entry is not strict false");
-    if (entry.version !== undefined && entry.version !== registration.version) refuse("entry version differs from the registration");
+    if (entry.version !== registration.version) refuse("entry version is missing or differs from the registration");
     const pluginRoot = object(catalog.metadata) && typeof catalog.metadata.pluginRoot === "string" ? catalog.metadata.pluginRoot : ".";
     if (typeof entry.source !== "string" || !resolve(marketRoot, pluginRoot, entry.source).startsWith(marketRoot + sep)) refuse("entry source is not a path inside the marketplace root");
     return { manifest: entry, path };
@@ -1483,6 +1483,9 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
       if (!Array.isArray(matches) || matches.length > AGENT_POLICY_LIMITS.discoveryRoots
         || matches.filter(row => row?.scope === "user").length !== 1
         || matches.some(row => typeof row?.installPath !== "string" || !["user", "project", "local"].includes(row?.scope))) unresolved("enabled plugin registration is missing or ambiguous");
+      // Native admission keeps its single-user-row rule; only authoring
+      // exclusion reviews the extra scopes.
+      if (!exclusion && (matches.length !== 1 || matches[0]?.scope !== "user")) unresolved("enabled plugin registration is missing or ambiguous");
       const reviewedRows = new Set<string>();
       for (const row of matches) {
         if (reviewedRows.has(`${row.installPath}\0${row.version}`)) continue;
