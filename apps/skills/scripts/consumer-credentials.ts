@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { privatePackageOverrides } from "./private-package-overrides.js";
 
 // Exercise the published credential provider from an ordinary production-only
 // install. A successful CLI/SDK import cannot prove lazy vault-pointer loading.
@@ -66,8 +67,9 @@ try {
     assert.equal(rows[0].filename, `hasna-skills-${rows[0].version}.tgz`);
     archive = join(workspace, rows[0].filename);
   }
+  // Private packages come from the locked tarballs the CI install step fetched, never with a token.
   await writeFile(join(workspace, "package.json"), JSON.stringify({ private: true,
-    dependencies: { "@hasna/skills": `file:${archive}` } }));
+    dependencies: { "@hasna/skills": `file:${archive}` }, overrides: privatePackageOverrides() }));
   const bunfig = join(workspace, "bunfig.toml");
   // Exact Hasna package names are publisher-exempt; unrelated packages retain the seven-day gate.
   await writeFile(bunfig, `[install]\nregistry = "https://registry.npmjs.org"\nminimumReleaseAge = 604800\nminimumReleaseAgeExcludes = ["@hasna/skills", "@hasna/contracts", "@hasna/events", "@hasna/secrets"]\n`);

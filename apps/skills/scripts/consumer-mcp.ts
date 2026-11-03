@@ -34,6 +34,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 
 import { assertMcpBinarySurface, parseConsumerArguments, stageConsumerArchive } from "./consumer-archive.js";
+import { privatePackageOverrides } from "./private-package-overrides.js";
 
 export type McpZodCase = { label: string; installer: "bun" | "npm"; zodSpec: string };
 export type McpZodResult = {
@@ -229,9 +230,10 @@ export async function verifyInstalledMcpZod(options: {
   const consumer = join(options.root, `mcp-zod-${testCase.label}`);
   const home = join(consumer, "home");
   await mkdir(home, { recursive: true, mode: 0o700 });
-  // The root owns zod, as an application with its own frozen lock does.
+  // The root owns zod, as an application with its own frozen lock does. Private
+  // packages come from the locked tarballs the CI install step fetched, never with a token.
   await writeFile(join(consumer, "package.json"), JSON.stringify({ private: true, type: "module",
-    dependencies: { "@hasna/skills": `file:${options.archive}`, zod: testCase.zodSpec } }));
+    dependencies: { "@hasna/skills": `file:${options.archive}`, zod: testCase.zodSpec }, overrides: privatePackageOverrides() }));
   if (testCase.installer === "bun") await installWithBun(consumer, options.root, home);
   else await installWithNpm(consumer, options.root, home);
 
