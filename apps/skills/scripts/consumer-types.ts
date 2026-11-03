@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { assertInstalledBinaries, assertInstalledIdentity, assertMcpBinarySurface, completeConsumerArchive, parseConsumerArguments, stageConsumerArchive } from "./consumer-archive.js";
+import { installReadAuth } from "./registry-read-auth.js";
 
 // Check the public distribution against its declared dependencies, independently
 // of workspace overrides and skipLibCheck. npm's lifecycle is disabled in the
@@ -669,7 +670,11 @@ console.log("Installed bundle SDK runtime: 17 assertions passed.");
   const installConfig = join(workspace, "install.bunfig.toml");
   // Exact Hasna package names are publisher-exempt; unrelated packages retain the seven-day gate.
   await writeFile(installConfig, `[install]\nregistry = "https://registry.npmjs.org"\nminimumReleaseAge = 604800\nminimumReleaseAgeExcludes = ["@hasna/skills", "@hasna/contracts", "@hasna/events", "@hasna/secrets"]\n`, { mode: 0o600 });
-  await run([process.execPath, "--no-env-file", "install", "--ignore-scripts", `--config=${installConfig}`], workspace);
+  // The CI read token, when given, reaches this install command only (registry-read-auth.ts).
+  const auth = installReadAuth({});
+  if (auth.npmrc) await writeFile(join(workspace, ".npmrc"), auth.npmrc, { mode: 0o600 });
+  await run([process.execPath, "--no-env-file", "install", "--ignore-scripts", `--config=${installConfig}`], workspace, auth.env);
+  await rm(join(workspace, ".npmrc"), { force: true });
   assertInstalledIdentity(JSON.parse(await readFile(join(workspace, "node_modules/@hasna/skills/package.json"), "utf8")), metadata.version);
   await assertInstalledBinaries(join(workspace, "node_modules/@hasna/skills"), metadata.bin);
   // Prove the pins held before tsc runs: a floating resolution must fail here

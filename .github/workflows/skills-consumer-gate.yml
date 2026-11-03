@@ -2,8 +2,11 @@ name: Skills packed consumer gate
 
 # Packed-archive consumer acceptance for @hasna/skills that installs and runs
 # floating third-party packages (the MCP SDK, zod releases, npm layouts). It is
-# deliberately separate from release-skills.yml: no environment, no secrets, no
-# id-token, read-only contents. The publish job never runs these layouts.
+# deliberately separate from release-skills.yml: no environment, no id-token,
+# read-only contents. Its one secret, the read-only npm token for the private
+# @hasna/secrets, reaches only install commands: the dependency install below
+# and each consumer fixture's install (scripts/registry-read-auth.ts), never
+# the code under test. The publish job never runs these layouts.
 on:
   pull_request:
     paths:
@@ -54,7 +57,19 @@ jobs:
 
       - name: Install locked standalone Skills dependencies
         working-directory: apps/skills
-        run: bun install --frozen-lockfile --ignore-scripts --backend copyfile
+        env:
+          NPM_READ_TOKEN: ${{ secrets.NPM_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The private @hasna/secrets needs the read-only token. bun reads this
+          # folder's .npmrc, which holds only the literal ${NPM_READ_TOKEN}
+          # reference: bun expands it from this step's environment, the value
+          # is never written, and the file goes when the step ends.
+          test -n "$NPM_READ_TOKEN" || { echo "::error::NPM_READ_TOKEN is not available to this run"; exit 1; }
+          trap 'rm -f .npmrc' EXIT
+          umask 077
+          printf '%s\n' '//registry.npmjs.org/:_authToken=${NPM_READ_TOKEN}' > .npmrc
+          bun install --frozen-lockfile --ignore-scripts --backend copyfile
 
       - name: Typecheck
         working-directory: apps/skills
@@ -78,6 +93,9 @@ jobs:
 
       - name: Run package-owned prepack gates
         working-directory: apps/skills
+        env:
+          # Passed on only to verify:consumer-types' install command (scripts/registry-read-auth.ts).
+          NPM_READ_TOKEN: ${{ secrets.NPM_READ_TOKEN }}
         run: bun run prepack
 
       - name: Pack the archive
@@ -103,6 +121,8 @@ jobs:
         env:
           ARCHIVE: ${{ steps.pack.outputs.archive }}
           ARCHIVE_SHA256: ${{ steps.pack.outputs.sha256 }}
+          # Passed on only to each consumer's install commands (scripts/registry-read-auth.ts).
+          NPM_READ_TOKEN: ${{ secrets.NPM_READ_TOKEN }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/skills-consumer-gate"

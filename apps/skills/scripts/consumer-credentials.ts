@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { installReadAuth } from "./registry-read-auth.js";
 
 // Exercise the published credential provider from an ordinary production-only
 // install. A successful CLI/SDK import cannot prove lazy vault-pointer loading.
@@ -71,8 +72,12 @@ try {
   const bunfig = join(workspace, "bunfig.toml");
   // Exact Hasna package names are publisher-exempt; unrelated packages retain the seven-day gate.
   await writeFile(bunfig, `[install]\nregistry = "https://registry.npmjs.org"\nminimumReleaseAge = 604800\nminimumReleaseAgeExcludes = ["@hasna/skills", "@hasna/contracts", "@hasna/events", "@hasna/secrets"]\n`);
+  // The CI read token, when given, reaches this install command only (registry-read-auth.ts).
+  const auth = installReadAuth(env);
+  if (auth.npmrc) await writeFile(join(workspace, ".npmrc"), auth.npmrc, { mode: 0o600 });
   const installed = await run([process.execPath, "--no-env-file", "install", "--production", "--ignore-scripts",
-    "--backend=copyfile", "--linker=hoisted", `--config=${bunfig}`], workspace, env);
+    "--backend=copyfile", "--linker=hoisted", `--config=${bunfig}`], workspace, auth.env);
+  await rm(join(workspace, ".npmrc"), { force: true });
   assert.equal(installed.status, 0, "Production-only consumer installation failed");
   const packageRoot = join(workspace, "node_modules/@hasna/skills");
   const installedMetadata = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
