@@ -173,6 +173,29 @@ jobs:
         with:
           bun-version: "1.3.14"
 
+      # This source checkout is standalone; its pinned graph belongs to apps/skills.
+      # The only step that holds NPM_READ_TOKEN, Andrei's full-access npm token,
+      # which the private @hasna/secrets needs. It runs before any test, build or
+      # third-party package code in this job: a locked install with no lifecycle
+      # scripts, then a builtins-only Node script that fetches the locked private
+      # tarballs, checked against bun.lock, so later consumer fixtures install them
+      # from a file without the token. bun reads this folder's .npmrc, which holds
+      # only the literal ${NPM_READ_TOKEN} reference; the value is never written,
+      # and the file goes when the step ends.
+      - name: Install locked standalone Skills dependencies
+        working-directory: apps/skills
+        env:
+          NPM_READ_TOKEN: ${{ secrets.NPM_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$NPM_READ_TOKEN" || { echo "::error::NPM_READ_TOKEN is not available to this run"; exit 1; }
+          trap 'rm -f .npmrc' EXIT
+          umask 077
+          printf '%s\n' '//registry.npmjs.org/:_authToken=${NPM_READ_TOKEN}' > .npmrc
+          bun install --frozen-lockfile --ignore-scripts --backend copyfile
+          node scripts/fetch-locked-private.mjs --out "$RUNNER_TEMP/skills-private-tarballs"
+          echo "SKILLS_PRIVATE_TARBALLS=$RUNNER_TEMP/skills-private-tarballs/private-tarballs.json" >> "$GITHUB_ENV"
+
       - name: Install and verify the CI npm toolchain
         run: |
           set -euo pipefail
@@ -222,23 +245,6 @@ jobs:
               throw new Error("Registry lookup failed: HTTP " + response.status);
             }
           '
-
-      # This source checkout is standalone; its pinned graph belongs to apps/skills.
-      - name: Install locked standalone Skills dependencies
-        working-directory: apps/skills
-        env:
-          NPM_READ_TOKEN: ${{ secrets.NPM_READ_TOKEN }}
-        run: |
-          set -euo pipefail
-          # The private @hasna/secrets needs the read-only token. bun reads this
-          # folder's .npmrc, which holds only the literal ${NPM_READ_TOKEN}
-          # reference: bun expands it from this step's environment, the value
-          # is never written, and the file goes when the step ends.
-          test -n "$NPM_READ_TOKEN" || { echo "::error::NPM_READ_TOKEN is not available to this run"; exit 1; }
-          trap 'rm -f .npmrc' EXIT
-          umask 077
-          printf '%s\n' '//registry.npmjs.org/:_authToken=${NPM_READ_TOKEN}' > .npmrc
-          bun install --frozen-lockfile --ignore-scripts --backend copyfile
 
       - name: Scan changed source lines for credentials
         working-directory: apps/skills
@@ -321,9 +327,6 @@ jobs:
 
       - name: Run package-owned prepack gates before sealing the archive
         working-directory: apps/skills
-        env:
-          # Passed on only to verify:consumer-types' install command (scripts/registry-read-auth.ts).
-          NPM_READ_TOKEN: ${{ secrets.NPM_READ_TOKEN }}
         run: bun run prepack
 
       - name: Retain the verified candidate archive for independent review
@@ -390,8 +393,6 @@ jobs:
         env:
           REVIEWED_ARCHIVE: ${{ steps.review.outputs.archive }}
           REVIEWED_SHA256: ${{ steps.review.outputs.sha256 }}
-          # Passed on only to verify:consumer-types' install command (scripts/registry-read-auth.ts).
-          NPM_READ_TOKEN: ${{ secrets.NPM_READ_TOKEN }}
         run: |
           set -euo pipefail
           bun run verify:consumer-types --archive "$REVIEWED_ARCHIVE" --sha256 "$REVIEWED_SHA256" --receipt "$RUNNER_TEMP/skills-consumer-archive.json"

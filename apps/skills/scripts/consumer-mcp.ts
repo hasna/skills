@@ -34,7 +34,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 
 import { assertMcpBinarySurface, parseConsumerArguments, stageConsumerArchive } from "./consumer-archive.js";
-import { installReadAuth } from "./registry-read-auth.js";
+import { privatePackageOverrides } from "./private-package-overrides.js";
 
 export type McpZodCase = { label: string; installer: "bun" | "npm"; zodSpec: string };
 export type McpZodResult = {
@@ -194,13 +194,9 @@ async function installWithBun(consumer: string, root: string, home: string): Pro
   const config = join(consumer, "install.bunfig.toml");
   // Exact Hasna package names are publisher-exempt; unrelated packages retain the seven-day gate.
   await writeFile(config, `[install]\nregistry = "https://registry.npmjs.org"\nminimumReleaseAge = 604800\nminimumReleaseAgeExcludes = ${JSON.stringify(PUBLISHER_EXEMPT)}\n`, { mode: 0o600 });
-  // The CI read token, when given, reaches these two install commands only (registry-read-auth.ts).
-  const auth = installReadAuth(env), npmrc = join(consumer, ".npmrc");
-  if (auth.npmrc) await writeFile(npmrc, auth.npmrc, { mode: 0o600 });
-  await run([process.execPath, "--no-env-file", "install", "--ignore-scripts", `--config=${config}`], consumer, auth.env);
+  await run([process.execPath, "--no-env-file", "install", "--ignore-scripts", `--config=${config}`], consumer, env);
   const lock = sha256(readFileSync(join(consumer, "bun.lock")));
-  await run([process.execPath, "--no-env-file", "install", "--frozen-lockfile", "--ignore-scripts", `--config=${config}`], consumer, auth.env);
-  await rm(npmrc, { force: true });
+  await run([process.execPath, "--no-env-file", "install", "--frozen-lockfile", "--ignore-scripts", `--config=${config}`], consumer, env);
   assert.equal(sha256(readFileSync(join(consumer, "bun.lock"))), lock, "The frozen MCP consumer lock changed");
 }
 
@@ -213,15 +209,12 @@ async function installWithNpm(consumer: string, root: string, home: string): Pro
     HOME: home, TMPDIR: consumer, NO_COLOR: "1", NPM_CONFIG_CACHE: join(root, "npm-cache"),
     NPM_CONFIG_USERCONFIG: join(consumer, "user.npmrc"), NPM_CONFIG_GLOBALCONFIG: join(consumer, "global.npmrc"),
     NPM_CONFIG_AUDIT: "false", NPM_CONFIG_FUND: "false", NPM_CONFIG_UPDATE_NOTIFIER: "false" };
-  // The CI read token, when given, reaches these two install commands only (registry-read-auth.ts).
-  const auth = installReadAuth(env);
-  await writeFile(env.NPM_CONFIG_USERCONFIG, "registry=https://registry.npmjs.org/\n" + auth.npmrc, { mode: 0o600 });
+  await writeFile(env.NPM_CONFIG_USERCONFIG, "registry=https://registry.npmjs.org/\n", { mode: 0o600 });
   await writeFile(env.NPM_CONFIG_GLOBALCONFIG, "", { mode: 0o600 });
   const age = ["--min-release-age=7", ...PUBLISHER_EXEMPT.map(name => `--min-release-age-exclude=${name}`)];
-  await run([npm, "install", "--package-lock-only", "--ignore-scripts", ...age], consumer, auth.env);
+  await run([npm, "install", "--package-lock-only", "--ignore-scripts", ...age], consumer, env);
   const lock = sha256(readFileSync(join(consumer, "package-lock.json")));
-  await run([npm, "ci", "--ignore-scripts", ...age], consumer, auth.env);
-  await writeFile(env.NPM_CONFIG_USERCONFIG, "registry=https://registry.npmjs.org/\n", { mode: 0o600 });
+  await run([npm, "ci", "--ignore-scripts", ...age], consumer, env);
   assert.equal(sha256(readFileSync(join(consumer, "package-lock.json"))), lock, "npm ci changed the MCP consumer lock");
 }
 
@@ -237,9 +230,10 @@ export async function verifyInstalledMcpZod(options: {
   const consumer = join(options.root, `mcp-zod-${testCase.label}`);
   const home = join(consumer, "home");
   await mkdir(home, { recursive: true, mode: 0o700 });
-  // The root owns zod, as an application with its own frozen lock does.
+  // The root owns zod, as an application with its own frozen lock does. Private
+  // packages come from the locked tarballs the CI install step fetched, never with a token.
   await writeFile(join(consumer, "package.json"), JSON.stringify({ private: true, type: "module",
-    dependencies: { "@hasna/skills": `file:${options.archive}`, zod: testCase.zodSpec } }));
+    dependencies: { "@hasna/skills": `file:${options.archive}`, zod: testCase.zodSpec }, overrides: privatePackageOverrides() }));
   if (testCase.installer === "bun") await installWithBun(consumer, options.root, home);
   else await installWithNpm(consumer, options.root, home);
 
