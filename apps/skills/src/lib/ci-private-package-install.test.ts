@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "yaml";
@@ -11,6 +11,7 @@ import { parse } from "yaml";
 // step fetched and checked, never with the token.
 const repo = join(import.meta.dir, "../../../..");
 const scripts = join(repo, "apps/skills/scripts");
+// The workflows that may hold the token; every other workflow must not mention it.
 const workflows = ["skills-consumer-gate.yml", "release-skills.yml"];
 // The secret's name only, built so a scanner doesn't read it as an assignment of a value.
 const SECRET_NAME = ["NPM", "READ", "TOKEN"].join("_");
@@ -29,7 +30,7 @@ const TOKEN_STEP_LINES = [
 // A step that runs any of these runs tests, builds or third-party package code.
 const RUNS_UNTRUSTED = /\b(bun (run|test|x)|bunx|npx|npm |pnpm|yarn)\b|bun -e|bun --no/;
 
-type Step = { name?: string; uses?: string; run?: string; env?: Record<string, string>; "working-directory"?: string };
+type Step = { name?: string; uses?: string; run?: string; env?: Record<string, string>; with?: Record<string, unknown>; "working-directory"?: string };
 type Job = { env?: Record<string, string>; steps: Step[] };
 
 function jobs(file: string): Array<[string, Job]> {
@@ -41,23 +42,43 @@ function jobs(file: string): Array<[string, Job]> {
 const runLines = (run = "") => run.split("\n").map(line => line.trim()).filter(line => line && !line.startsWith("#"));
 
 describe("only the locked dependency install step holds the npm token", () => {
+  test("no other workflow mentions the token", () => {
+    const all = readdirSync(join(repo, ".github/workflows")).filter(name => /\.ya?ml$/.test(name));
+    expect(all.length).toBeGreaterThan(workflows.length);
+    for (const name of all) {
+      const mentions = readFileSync(join(repo, ".github/workflows", name), "utf8").includes(SECRET_NAME);
+      expect(mentions, name).toBe(workflows.includes(name));
+    }
+  });
   for (const file of workflows) {
     test(file, () => {
       for (const [job, body] of jobs(file)) {
         const label = `${file} ${job}`;
         expect(body.env?.[SECRET_NAME], label).toBeUndefined();
+        // Every job that holds the token names an environment, so the token can be an environment secret.
+        expect(typeof (body as { environment?: unknown }).environment, label).toBe("string");
         const holders = body.steps.filter(step => JSON.stringify(step).includes(SECRET_NAME));
         expect(holders.map(step => step.name), label).toEqual([TOKEN_STEP]);
         const [step] = holders;
         expect(step!.env, label).toEqual({ [SECRET_NAME]: "${{ secrets.NPM_READ_TOKEN }}" });
         expect(step!["working-directory"], label).toBe("apps/skills");
         expect(runLines(step!.run), label).toEqual(TOKEN_STEP_LINES);
-        // Before it, only pinned actions and inline admission checks; nothing that runs packages or tests.
+        // No other step in the job reads any secret.
+        for (const other of body.steps) if (other !== step) expect(JSON.stringify(other), `${label}: ${other.name}`).not.toMatch(/\$\{\{[^}]*\bsecrets\b/);
+        // Before it, only pinned actions and inline admission checks: nothing that runs packages or tests,
+        // no toolchain restored from or saved to the Actions cache, and nothing that changes later steps' environment.
         const at = body.steps.indexOf(step!);
         for (const before of body.steps.slice(0, at)) {
-          if (before.uses) expect(before.uses, label).toMatch(/@[0-9a-f]{40}( |$)/);
-          expect(before.run ?? "", `${label}: ${before.name}`).not.toMatch(RUNS_UNTRUSTED);
+          const where = `${label}: ${before.name ?? before.uses}`;
+          if (before.uses) expect(before.uses, where).toMatch(/@[0-9a-f]{40}( |$)/);
+          if (before.uses?.startsWith("oven-sh/setup-bun@")) expect(before.with?.["no-cache"], where).toBe(true);
+          if (before.uses?.startsWith("actions/setup-node@")) expect(before.with?.["package-manager-cache"], where).toBe(false);
+          if (before.uses) expect(before.uses, where).toMatch(/^(actions\/checkout|actions\/setup-node|oven-sh\/setup-bun)@/);
+          expect(before.run ?? "", where).not.toMatch(RUNS_UNTRUSTED);
+          expect(before.run ?? "", where).not.toMatch(/GITHUB_ENV|GITHUB_PATH|NPM_CONFIG_|BUN_CONFIG_|NODE_OPTIONS/);
+          expect(Object.keys(before.env ?? {}).filter(key => /^(NPM_CONFIG_|BUN_CONFIG_|NODE_OPTIONS)/.test(key)), where).toEqual([]);
         }
+        expect(body.steps.slice(0, at).some(before => before.uses?.startsWith("oven-sh/setup-bun@")), label).toBe(true);
         expect(body.steps.slice(at + 1).some(after => RUNS_UNTRUSTED.test(after.run ?? "")), label).toBe(true);
       }
     });

@@ -2,8 +2,8 @@ name: Skills packed consumer gate
 
 # Packed-archive consumer acceptance for @hasna/skills that installs and runs
 # floating third-party packages (the MCP SDK, zod releases, npm layouts). It is
-# deliberately separate from release-skills.yml: no environment, no id-token,
-# read-only contents. Its one secret, the full-access npm token the private
+# deliberately separate from release-skills.yml: no publishing environment, no
+# id-token, read-only contents. Its one secret, the full-access npm token the private
 # @hasna/secrets needs, reaches only the locked dependency install step, which
 # runs before any test or third-party code. The consumer fixtures install
 # @hasna/secrets from the tarball that step fetched, without the token
@@ -25,6 +25,10 @@ permissions:
 jobs:
   consumer-gate:
     if: github.repository == 'hasna/skills'
+    # Holds no deployment and no id-token. The environment exists so the npm token
+    # can be an environment secret that only jobs naming it can read, never a run
+    # of an older head that predates it.
+    environment: skills-consumer-gate
     runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:
