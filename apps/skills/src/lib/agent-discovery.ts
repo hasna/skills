@@ -19,7 +19,7 @@ import { hashClaudePluginManifest, projectReviewedClaudePluginManifest } from ".
 import { hashManagedPluginRegistry, type ManagedPluginRegistrationWitness } from "./plugin-discovery.js";
 import { readPluginBinding } from "./plugin-admission.js";
 import { captureClaudeMarketplaceRegistry, captureClaudeMarketplaceRegistryV2 } from "./claude-marketplace-registry.js";
-import { captureClaudeMarketplaceEntry, claudeMarketplaceEntrySourceValid } from "./claude-marketplace-entry-witness.js";
+import { captureClaudeMarketplaceEntry, claudeMarketplaceEntrySourceValid, hashClaudeMarketplaceEntry } from "./claude-marketplace-entry-witness.js";
 import { claudeDiscoveryControlKeys, claudeDiscoveryEnvironmentKeys, readNativeDiscoveryWitnessFile, parseNativeJsonObject, hashNativeJsonControls, captureClaudeSettings, captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4, captureClaudeSettingsV5, hashClaudeSettingsReplacement, hashClaudeSettingsReplacementV2, hashClaudeSettingsReplacementV3, hashClaudeSettingsReplacementV4, hashClaudeSettingsReplacementV5 } from "./claude-settings-witness.js";
 import { assertCodexHookDiscoveryRecovery, verifiesCodexHookDiscoverySource, type CodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery.js";
 import { hashCodexSettingsReplacement, hashCodexSettingsReplacementV2, hashCodexSettingsReplacementV3, hashCodexSettingsReplacementV4, hashCodexSettingsReplacementV5, captureCodexSettingsV7, hashCodexSettingsReplacementV7, codexDiscoveryControlKeys, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
@@ -1390,12 +1390,50 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     return { ...supplied, roots: [...new Set([...roots, ...supplied.roots])].sort(), sources: unique, ...(agent === "gemini" ? { builtinNames } : {}) };
   }
 
-  function plugin(root: string): void {
+  // A marketplace-defined Claude plugin ("strict": false) may ship no
+  // plugin.json: Claude Code then takes its components from the marketplace
+  // entry. Authoring exclusion accepts that entry as the manifest only when the
+  // registration, the cache path, the known marketplace and the entry agree,
+  // the entry says strict exactly false, and its source is a relative path
+  // inside the marketplace root. Anything else keeps the missing-manifest
+  // refusal. Native admission is unchanged: it keeps its reviewed
+  // claude-marketplace-entry-v1 route.
+  function claudeMarketplaceManifest(root: string, registration: { id: string; version: unknown }): { manifest: Record<string, unknown>; path: string } {
+    const split = registration.id.lastIndexOf("@"), name = registration.id.slice(0, split), marketplace = registration.id.slice(split + 1);
+    const refuse = (reason: string): never => unresolved(`plugin manifest missing and its marketplace entry is not admissible: ${reason}`);
+    const object = (value: unknown): value is Record<string, any> => Boolean(value && typeof value === "object" && !Array.isArray(value));
+    if (split < 1 || typeof registration.version !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/.test(registration.version) || registration.version.includes("..")) refuse("registration version");
+    const cache = canonical(join(nativeHome, "plugins/cache", marketplace, name, registration.version as string));
+    if (root !== cache) refuse("installation root is not the registered cache path");
+    const knownPath = join(nativeHome, "plugins/known_marketplaces.json"), known = witness(knownPath);
+    if (known === null) refuse("no known marketplaces");
+    const registered = parseConfig(known!, knownPath)[marketplace];
+    const location = object(registered) ? registered.installLocation : undefined;
+    if (typeof location !== "string" || !isAbsolute(location) || resolve(location) !== location) refuse("marketplace location");
+    const marketRoot = canonical(location); safe(marketRoot);
+    const path = join(marketRoot, ".claude-plugin/marketplace.json");
+    if (!claudeMarketplaceEntrySourceValid({ path, marketplace, plugin: name })) refuse("marketplace or plugin name");
+    const text = witness(path);
+    if (text === null) refuse("marketplace catalog missing");
+    // The entry witness validates the marketplace name, every key, the
+    // renames map and that exactly one entry carries this name.
+    try { hashClaudeMarketplaceEntry(text!, { marketplace, plugin: name }); } catch (error) { refuse(String((error as Error)?.message ?? error).replace(/^Claude marketplace entry witness /, "")); }
+    const catalog = parseConfig(text!, path), entry = (catalog.plugins as any[]).find(item => object(item) && item.name === name);
+    if (entry.strict !== false) refuse("entry is not strict false");
+    if (entry.version !== undefined && entry.version !== registration.version) refuse("entry version differs from the registration");
+    const pluginRoot = object(catalog.metadata) && typeof catalog.metadata.pluginRoot === "string" ? catalog.metadata.pluginRoot : ".";
+    if (typeof entry.source !== "string" || !resolve(marketRoot, pluginRoot, entry.source).startsWith(marketRoot + sep)) refuse("entry source is not a path inside the marketplace root");
+    return { manifest: entry, path };
+  }
+  function plugin(root: string, registration?: { id: string; version: unknown }): void {
     root = canonical(root); safe(root);
     if (exclusion) roots.add(root);
-    const manifestPath = join(root, agent === "claude" ? ".claude-plugin/plugin.json" : ".codex-plugin/plugin.json");
-    const raw = witness(manifestPath, undefined, undefined, agent === "claude" ? "claude-plugin-manifest-v1" : undefined); if (raw === null) unresolved("plugin manifest missing");
-    const manifest = parseConfig(raw!, manifestPath);
+    const pluginManifestPath = join(root, agent === "claude" ? ".claude-plugin/plugin.json" : ".codex-plugin/plugin.json");
+    const raw = witness(pluginManifestPath, undefined, undefined, agent === "claude" ? "claude-plugin-manifest-v1" : undefined);
+    if (raw === null && !(agent === "claude" && exclusion && registration)) unresolved("plugin manifest missing");
+    const entry = raw === null ? claudeMarketplaceManifest(root, registration!) : undefined;
+    const manifestPath = entry?.path ?? pluginManifestPath;
+    const manifest = entry?.manifest ?? parseConfig(raw!, manifestPath);
     if (exclusion && Object.keys(manifest).some(key => /skill|plugin|hook|marketplace|extension|instruction/i.test(key) && !["skills", "hooks"].includes(key))) unresolved("unknown plugin discovery controls");
     const hooks = witness(join(root, "hooks/hooks.json"));
     if (manifest.hooks !== undefined || hooks !== null) {
@@ -1437,9 +1475,21 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
       if (enabled === false) continue;
       if (enabled !== true) unresolved("unsupported plugin enablement");
       const matches = installed?.[id];
-      if (!Array.isArray(matches) || matches.length !== 1 || typeof matches[0]?.installPath !== "string" || matches[0]?.scope !== "user") unresolved("enabled plugin registration is missing or ambiguous");
-      if (exclusion && (!isAbsolute(matches[0].installPath) || resolve(matches[0].installPath) !== matches[0].installPath || matches[0].installPath.length > AGENT_POLICY_LIMITS.pathCharacters)) unresolved("malformed plugin installation root");
-      plugin(matches[0].installPath);
+      // Claude keeps one row per scope that installed a plugin: the user row
+      // loads everywhere, a project or local row inside its project. Take
+      // exactly one user row and review every row's root through the same
+      // manifest review, so a project install stays inside the review rather
+      // than being ignored; any row that fails it refuses.
+      if (!Array.isArray(matches) || matches.length > AGENT_POLICY_LIMITS.discoveryRoots
+        || matches.filter(row => row?.scope === "user").length !== 1
+        || matches.some(row => typeof row?.installPath !== "string" || !["user", "project", "local"].includes(row?.scope))) unresolved("enabled plugin registration is missing or ambiguous");
+      const reviewedRows = new Set<string>();
+      for (const row of matches) {
+        if (reviewedRows.has(`${row.installPath}\0${row.version}`)) continue;
+        reviewedRows.add(`${row.installPath}\0${row.version}`);
+        if (exclusion && (!isAbsolute(row.installPath) || resolve(row.installPath) !== row.installPath || row.installPath.length > AGENT_POLICY_LIMITS.pathCharacters)) unresolved("malformed plugin installation root");
+        plugin(row.installPath, { id, version: row.version });
+      }
     }
   } else if (agent === "codex") {
     for (const [id, value] of Object.entries(config.plugins ?? {}) as Array<[string, any]>) {
