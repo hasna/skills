@@ -266,6 +266,14 @@ export async function cacheSelectionBundle(selection: ResolvedSkillSelection, re
 function profilePath(profileId: string, options: SelectionCacheOptions): string {
   return join(selectionCacheRoot(options), "profiles", `${hash(profileId)}.json`);
 }
+/**
+ * Marker held while one managed hook on this station refreshes this profile at
+ * session start, beside the profile pointer. It only orders concurrent session
+ * starts; the pointer and bundles are still written atomically and verified.
+ */
+export function profileRefreshLockPath(profileId: string, options: SelectionCacheOptions = {}): string {
+  return join(selectionCacheRoot(options), "profiles", `${hash(profileId)}.refresh.lock`);
+}
 export function activateSelectionProfile(profile: ResolvedSkillProfile, options: SelectionCacheOptions = {}): CachedSelectionProfile {
   validateResolvedProfile(profile);
   const receipt: CachedSelectionProfile = { schemaVersion: 1, verifiedAt: new Date((options.now ?? Date.now)()).toISOString(), profile };
