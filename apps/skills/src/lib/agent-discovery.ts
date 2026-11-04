@@ -1390,12 +1390,23 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     return { ...supplied, roots: [...new Set([...roots, ...supplied.roots])].sort(), sources: unique, ...(agent === "gemini" ? { builtinNames } : {}) };
   }
 
+  // A marketplace-defined Claude plugin may ship without a manifest and use the
+  // default layout. Exclusion accepts that absence only where the retained
+  // explicit review covers this root and still pins the manifest path absent.
+  const reviewedManifestAbsence = (root: string, manifestPath: string): boolean => {
+    const retained = exclusion?.retained;
+    if (agent !== "claude" || retained?.method !== "reviewed" || ![join(root, "skills"), root].some(path => retained.roots.includes(path))) return false;
+    const saved = retained.sources.filter(source => source.path === canonical(manifestPath) && source.hashMode === "path-bytes"
+      && source.sha256 !== null && source.format === undefined && source.fields === undefined && source.managedPlugins === undefined);
+    return saved.length > 0 && saved.every(source => projected(source, undefined, budget) === source.sha256);
+  };
   function plugin(root: string): void {
     root = canonical(root); safe(root);
     if (exclusion) roots.add(root);
     const manifestPath = join(root, agent === "claude" ? ".claude-plugin/plugin.json" : ".codex-plugin/plugin.json");
-    const raw = witness(manifestPath, undefined, undefined, agent === "claude" ? "claude-plugin-manifest-v1" : undefined); if (raw === null) unresolved("plugin manifest missing");
-    const manifest = parseConfig(raw!, manifestPath);
+    const raw = witness(manifestPath, undefined, undefined, agent === "claude" ? "claude-plugin-manifest-v1" : undefined);
+    if (raw === null && !reviewedManifestAbsence(root, manifestPath)) unresolved("plugin manifest missing");
+    const manifest = raw === null ? {} : parseConfig(raw, manifestPath);
     if (exclusion && Object.keys(manifest).some(key => /skill|plugin|hook|marketplace|extension|instruction/i.test(key) && !["skills", "hooks"].includes(key))) unresolved("unknown plugin discovery controls");
     const hooks = witness(join(root, "hooks/hooks.json"));
     if (manifest.hooks !== undefined || hooks !== null) {
